@@ -4,6 +4,8 @@
 # labelled "unit", process-level tests "integration"; verify scripts select by label.
 add_subdirectory(compat)
 add_subdirectory(core)
+add_subdirectory(sched)
+add_subdirectory(io)
 if(FROST_BUILD_UI)
     add_subdirectory(app)
 endif()
