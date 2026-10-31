@@ -36,10 +36,10 @@ JOBS="${FROST_JOBS:-$(nproc)}"
 # shellcheck source=/dev/null
 source "${FROST_SDK:-$HOME/sdk}/env.sh"
 
-# Mirror the tree. build/ and .git/ stay out: the mirror keeps its own build
+# Mirror the tree. build/, .git/ and .claude/ (agent worktrees) stay out: the mirror keeps its own build
 # trees (protected from --delete because they are excluded).
 mkdir -p "$MIRROR"
-rsync -a --delete --exclude '/build/' --exclude '/.git/' "$SOURCE/" "$MIRROR/"
+rsync -a --delete --exclude '/build/' --exclude '/.git/' --exclude '/.claude/' "$SOURCE/" "$MIRROR/"
 cd "$MIRROR"
 
 summary=()

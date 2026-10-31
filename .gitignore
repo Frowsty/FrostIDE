@@ -5,6 +5,9 @@
 /.idea/
 /.vscode/
 /.cache/
+# Claude Code agent worktrees and local settings.
+/.claude/worktrees/
+/.claude/settings.local.json
 CMakeUserPresets.json
 compile_commands.json
 # Tool logs written into the working directory.
