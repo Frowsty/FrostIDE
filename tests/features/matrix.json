@@ -203,12 +203,19 @@
   "inspection_counts": {
     "description": "Spike S9 records the baseline counts of the pinned LLVM here; the M7, M9 and M13 exits gate on the targets (PLAN.md section 6.1).",
     "s9_baseline": {
-      "recorded": null,
-      "llvm_version": null,
-      "clang_warning_groups": null,
-      "clang_tidy_checks": null,
-      "csa_checkers": null,
-      "method": "Spike S9 (PLAN.md M0): configurable warning groups from LLVM's diagnostic tables (diagtool tree, or clang-tblgen -gen-clang-diag-groups over the 23.1.x sources), primary tidy checks from `clang-tidy -checks=* --list-checks` with aliases removed, CSA checkers from `clang -cc1 -analyzer-checker-help`. Recorded by hand; featurecheck generate keeps it."
+      "recorded": "2026-10-31",
+      "llvm_version": "23.1.4",
+      "clang_warning_groups": 1157,
+      "clang_tidy_checks": 406,
+      "csa_checkers": 112,
+      "method": "Spike S9 (PLAN.md M0): configurable warning groups from LLVM's diagnostic tables (diagtool tree, or clang-tblgen -gen-clang-diag-groups over the 23.1.x sources), primary tidy checks from `clang-tidy -checks=* --list-checks` with aliases removed, CSA checkers from `clang -cc1 -analyzer-checker-help`. Recorded by hand; featurecheck generate keeps it.",
+      "detail": {
+        "clang_warning_groups": "1202 groups in `diagtool tree`; 1157 own at least one diagnostic themselves or through a group below them (the gated count); 45 are GCC-compatibility no-ops",
+        "clang_warning_diagnostics": "2236 with a flag, 56 without (`diagtool list-warnings`)",
+        "clang_tidy_checks": "602 listed by `clang-tidy -checks=* --list-checks`; 162 aliases (97 of them clang-analyzer-*); 406 primary checks outside clang-analyzer-* (the gated count)",
+        "csa_checkers": "112 stable (the gated count), 44 alpha, 49 developer"
+      },
+      "source": "docs/adr/0001-toolchain-and-spikes-s4-s5-s9.md (spike S9)"
     },
     "targets": {
       "M7": {
