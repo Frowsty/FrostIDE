@@ -11,6 +11,11 @@
 #   default  linux-clang Debug (clang + libstdc++ 14, the Linux floor)
 #   --full   additionally ASan+UBSan (Debug) and TSan (RelWithDebInfo)
 #
+# Tests labelled `stress` (long concurrency runs) are skipped in the Debug
+# configuration and run in the --full configurations. FROST_JOBS caps build
+# parallelism (default: nproc), so concurrent work streams stay inside the
+# WSL memory cap.
+#
 # The last line of output is a summary for the commit verification footer,
 # e.g. "wsl: debug 45/45, asan 45/45, tsan 45/45". Exit status is non-zero if
 # any configuration fails to build or has a failing test.
@@ -27,6 +32,7 @@ done
 
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MIRROR="${FROST_MIRROR:-$HOME/frost-src}"
+JOBS="${FROST_JOBS:-$(nproc)}"
 # shellcheck source=/dev/null
 source "${FROST_SDK:-$HOME/sdk}/env.sh"
 
@@ -40,21 +46,23 @@ summary=()
 status=0
 
 # Configures, builds and tests one preset pair; appends "<label> passed/total" to the summary.
+# Extra arguments are passed to ctest (e.g. -LE stress).
 run_config() {
     local label="$1" configure="$2" preset="$3"
+    shift 3
     echo "=== $label: configure ($configure)"
     if ! cmake --preset "$configure" > "build-$label.log" 2>&1; then
         tail -30 "build-$label.log"
         summary+=("$label configure-failed"); status=1; return
     fi
     echo "=== $label: build ($preset)"
-    if ! cmake --build --preset "$preset" -j "$(nproc)" >> "build-$label.log" 2>&1; then
+    if ! cmake --build --preset "$preset" -j "$JOBS" >> "build-$label.log" 2>&1; then
         grep -E 'error|FAILED' "build-$label.log" | head -40
         summary+=("$label build-failed"); status=1; return
     fi
     echo "=== $label: test ($preset)"
     local out
-    out="$(ctest --preset "$preset" 2>&1)" || status=1
+    out="$(ctest --preset "$preset" "$@" 2>&1)" || status=1
     echo "$out" | tail -15
     # ctest prints "100% tests passed out of 45" or "98% tests passed, 1 tests failed out of 45".
     local line total failed=0
@@ -67,7 +75,7 @@ run_config() {
     summary+=("$label $((total - failed))/$total")
 }
 
-run_config debug linux-clang linux-clang-debug
+run_config debug linux-clang linux-clang-debug -LE stress
 if [[ $FULL -eq 1 ]]; then
     run_config asan linux-clang-asan linux-clang-asan
     run_config tsan linux-clang-tsan linux-clang-tsan

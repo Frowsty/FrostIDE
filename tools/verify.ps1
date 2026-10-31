@@ -10,6 +10,8 @@
 #   2. -Full adds the Release build and the ASan configuration.
 #   3. Repository checks: frost-lint and the licence check (when present).
 #   4. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), --full with -Full.
+# Tests labelled `stress` are skipped in the Debug configuration and run in the
+# -Full configurations.
 # The final line is the summary for the commit footer, e.g.
 #   "Verified: win debug 45/45, wsl debug 44/44, lint ok"
 # and the exit status is non-zero if any step failed.
@@ -23,7 +25,7 @@ param(
     [string]$BuildDir = '',
     # Ext4 mirror directory inside WSL (passed to verify.sh as FROST_MIRROR).
     [string]$WslMirror = '',
-    # Parallel compile jobs; kept moderate because commit memory can be scarce.
+    # Parallel compile jobs on both sides; kept moderate because commit memory can be scarce.
     [int]$Jobs = 8
 )
 
@@ -54,7 +56,8 @@ function Get-CtestCounts([string[]]$Output) {
 }
 
 # Configures, builds and tests one Windows configuration.
-function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [string]$Dir) {
+# $CtestArgs are extra ctest arguments (e.g. -LE stress).
+function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [string]$Dir, [string[]]$CtestArgs = @()) {
     $configureArgs = @('--preset', $Preset)
     if ($Dir) { $configureArgs += @('-B', $Dir) } else { $Dir = Join-Path $repo "build\$Preset" }
     if (-not (Invoke-Step "$Label configure" { cmake @configureArgs | Out-Host })) {
@@ -64,7 +67,7 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
         $script:summary.Add("win $Label build-failed"); $script:failed = $true; return
     }
     Write-Host "=== $Label test"
-    $out = & ctest --test-dir $Dir -C $Config --output-on-failure 2>&1 | ForEach-Object { "$_" }
+    $out = & ctest --test-dir $Dir -C $Config --output-on-failure @CtestArgs 2>&1 | ForEach-Object { "$_" }
     $ok = ($LASTEXITCODE -eq 0)
     $out | Select-Object -Last 15 | Out-Host
     $counts = Get-CtestCounts $out
@@ -73,7 +76,7 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     if (-not $ok) { $script:failed = $true }
 }
 
-Test-WindowsConfig 'debug' 'win-clangcl' 'Debug' $BuildDir
+Test-WindowsConfig 'debug' 'win-clangcl' 'Debug' $BuildDir @('-LE', 'stress')
 if ($Full) {
     Test-WindowsConfig 'release' 'win-clangcl' 'Release' $BuildDir
     $asanDir = ''
@@ -96,8 +99,8 @@ if (-not $WindowsOnly) {
     $verifyArgs = @()
     if ($Full) { $verifyArgs += '--full' }
     $wslScript = '/mnt/' + $repo.Substring(0, 1).ToLowerInvariant() + ($repo.Substring(2) -replace '\\', '/') + '/tools/verify.sh'
-    $envPrefix = ''
-    if ($WslMirror) { $envPrefix = "FROST_MIRROR=$WslMirror " }
+    $envPrefix = "FROST_JOBS=$Jobs "
+    if ($WslMirror) { $envPrefix += "FROST_MIRROR=$WslMirror " }
     Write-Host "=== wsl $wslScript"
     $wslOut = & wsl.exe -d Ubuntu-24.04 -- bash -c "$envPrefix bash '$wslScript' $($verifyArgs -join ' ')" 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0) { $failed = $true }
