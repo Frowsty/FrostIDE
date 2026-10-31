@@ -7,6 +7,7 @@ frost_add_test(core_tests
         assert_ignore_tu.cpp
         assert_observe_tu.cpp
         assert_quick_tu.cpp
+        clock_test.cpp
         error_test.cpp
         strong_type_test.cpp
     DEPS frost::core)
