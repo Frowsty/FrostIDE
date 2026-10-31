@@ -1,0 +1,33 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "pcre2:x64-fixture@10.49",
+  "packages": [
+    {
+      "name": "pcre2",
+      "SPDXID": "SPDXRef-port",
+      "versionInfo": "10.49",
+      "downloadLocation": "git+https://example.invalid/pcre2",
+      "licenseConcluded": "BSD-3-Clause WITH PCRE2-exception",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:vcpkg/pcre2@10.49?triplet=x64-fixture"
+        }
+      ]
+    },
+    {
+      "name": "pcre2:x64-fixture",
+      "SPDXID": "SPDXRef-binary",
+      "versionInfo": "0000000000000000000000000000000000000000000000000000000000000000",
+      "downloadLocation": "NONE",
+      "licenseConcluded": "BSD-3-Clause WITH PCRE2-exception",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}

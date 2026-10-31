@@ -23,6 +23,9 @@ if(WIN32)
     # The version resource carries the project version; the manifest comes from the root CMakeLists.txt.
     configure_file(resources/windows/frost.rc.in ${CMAKE_CURRENT_BINARY_DIR}/frost.rc @ONLY)
     list(APPEND frost_sources ${CMAKE_CURRENT_BINARY_DIR}/frost.rc)
+    # The manifest is pulled in by a resource statement, which rc depfiles do not list.
+    set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/frost.rc PROPERTIES
+        OBJECT_DEPENDS ${FROST_MANIFEST_PATH})
 endif()
 
 frost_add_executable(frost LAYER app WIN32

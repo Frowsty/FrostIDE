@@ -40,9 +40,20 @@ TEST(FunctionRef, ReferencesTargetInsteadOfCopying) {
 }
 
 TEST(FunctionRef, ConvertsReturnType) {
-    // The target returns int; the signature asks for long long.
-    frost::function_ref<long long()> ref([] { return 7; });
+    // The target returns int; the signature asks for long long. The lambda is named
+    // so it outlives the function_ref (binding a temporary would dangle).
+    auto seven = [] { return 7; };
+    frost::function_ref<long long()> ref(seven);
     EXPECT_EQ(ref(), 7LL);
+}
+
+TEST(FunctionRef, VoidSignatureDiscardsResult) {
+    int calls = 0;
+    auto counted = [&calls] { return ++calls; };
+    frost::function_ref<void()> ref(counted);
+    ref();
+    ref();
+    EXPECT_EQ(calls, 2);
 }
 
 TEST(FunctionRef, ForwardsReferenceArguments) {

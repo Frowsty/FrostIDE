@@ -8,9 +8,13 @@
 #include "frost/app/main_window.hpp"
 
 #include <QApplication>
+#include <QDeadlineTimer>
+#include <QEventLoop>
 #include <QGuiApplication>
 #include <QWidget>
+#include <QWindow>
 
+#include <chrono>
 #include <format>
 #include <string>
 #include <string_view>
@@ -20,6 +24,25 @@
 #endif
 
 namespace frost::app {
+namespace {
+
+// Pumps events until `widget` has a native window that the platform reports as
+// exposed, or `timeout` passes. Returns whether it was exposed.
+bool waitForExposed(QWidget& widget, std::chrono::milliseconds timeout) {
+    const QDeadlineTimer deadline(timeout);
+    while (true) {
+        const QWindow* handle = widget.windowHandle();
+        if (handle != nullptr && handle->isExposed()) {
+            return true;
+        }
+        if (deadline.hasExpired()) {
+            return false;
+        }
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+}
+
+} // namespace
 
 bool SelfTestReport::passed() const noexcept {
     for (const auto& check : checks) {
@@ -40,7 +63,8 @@ std::string SelfTestReport::format() const {
             ++failed;
         }
     }
-    out += failed == 0 ? std::string("selftest: PASSED\n") : std::format("selftest: FAILED ({} required checks)\n", failed);
+    out += failed == 0 ? std::string("selftest: PASSED\n")
+                       : std::format("selftest: FAILED ({} required checks)\n", failed);
     return out;
 }
 
@@ -117,19 +141,29 @@ std::vector<SelfTestCheck> runGuiChecks() {
     // even on the offscreen platform, which does not touch DPI settings itself.
     const bool pmv2 = AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
                                                    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != FALSE;
-    checks.push_back({"dpi-awareness", pmv2, true,
-                      pmv2 ? "per-monitor v2" : "thread is not per-monitor v2 DPI aware"});
+    checks.push_back({"dpi-awareness", pmv2, true, pmv2 ? "per-monitor v2" : "thread is not per-monitor v2 DPI aware"});
 #endif
 
     MainWindow window;
     window.show();
-    QApplication::processEvents();
-    const bool shown = window.isVisible() && window.windowTitle() == QStringLiteral("FrostIDE") &&
-                       window.centralWidget() != nullptr;
+    // show() sets isVisible() synchronously; exposure proves the platform plugin
+    // created a native window and delivered its expose event.
+    const bool exposed = waitForExposed(window, std::chrono::seconds(5));
+    const bool contents = window.windowTitle() == QStringLiteral("FrostIDE") && window.centralWidget() != nullptr;
     window.close();
     QApplication::processEvents();
-    checks.push_back({"main-window", shown && !window.isVisible(), true,
-                      shown ? "main window created, shown and closed" : "main window failed to show"});
+    const bool closed = !window.isVisible();
+    std::string detail;
+    if (!exposed) {
+        detail = "main window was not exposed within 5 s";
+    } else if (!contents) {
+        detail = "main window is missing its title or central widget";
+    } else if (!closed) {
+        detail = "main window did not close";
+    } else {
+        detail = "main window exposed and closed";
+    }
+    checks.push_back({"main-window", exposed && contents && closed, true, std::move(detail)});
     return checks;
 }
 

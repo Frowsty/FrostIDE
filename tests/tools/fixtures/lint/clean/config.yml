@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# A clean YAML file for the frost-lint tests.
+key: value#TODO:not-a-comment

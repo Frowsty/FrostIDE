@@ -4,8 +4,9 @@
 # current PowerShell session only. Dot-source it:  . tools\env.ps1
 #
 # It also points every cache that would otherwise land on the system drive
-# (NuGet, vcpkg downloads and binary cache, sccache, .NET) at the SDK drive,
-# and turns off tool telemetry. Nothing is persisted machine-wide.
+# (NuGet, vcpkg downloads and binary cache, sccache, .NET) at the SDK root or,
+# for the vcpkg binary cache, at <SDK drive>\vcpkg-cache, and turns off tool
+# telemetry. Nothing is persisted machine-wide.
 
 param(
     # Must match the -SdkRoot given to bootstrap.ps1.
@@ -35,7 +36,7 @@ $env:FROST_QT_ROOT = Join-Path $SdkRoot "qt\$($lock.qt.version)\msvc2022_64"
 $env:VCPKG_ROOT = Join-Path $SdkRoot 'vcpkg'
 $env:VCPKG_DISABLE_METRICS = '1'
 $env:VCPKG_DOWNLOADS = Join-Path $SdkRoot '_downloads\vcpkg'
-$env:VCPKG_DEFAULT_BINARY_CACHE = 'E:\vcpkg-cache'
+$env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path (Split-Path -Qualifier $SdkRoot) 'vcpkg-cache'
 $env:DOTNET_ROOT = Join-Path $SdkRoot "dotnet-$($lock.windows.dotnet.version)"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'

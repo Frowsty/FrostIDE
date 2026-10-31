@@ -54,6 +54,18 @@ TEST(CommandLine, RejectsUnknownOption) {
     EXPECT_NE(parsed.error().message().find("--verison"), std::string::npos);
 }
 
+TEST(CommandLine, RejectsSingleDashTypos) {
+    for (const std::string_view typo : {"-version", "-h", "-"}) {
+        const auto parsed = parse({typo});
+        ASSERT_FALSE(parsed.has_value()) << typo;
+        EXPECT_EQ(parsed.error().code(), frost::ErrorCode::InvalidArgument) << typo;
+    }
+    // After "--", a leading dash is part of a path.
+    const auto parsed = parse({"--", "-odd-name.cpp"});
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->paths, (std::vector<std::string>{"-odd-name.cpp"}));
+}
+
 TEST(CommandLine, RejectsConflictingModes) {
     EXPECT_FALSE(parse({"--version", "--selftest"}).has_value());
     // Repeating the same mode is harmless.

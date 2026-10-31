@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# REUSE annotations for the clean frost-lint fixture.
+version = 1
+
+[[annotations]]
+path = ["**/*.md", "**/*.json", "data/**", "tests/**/fixtures/**"]
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"

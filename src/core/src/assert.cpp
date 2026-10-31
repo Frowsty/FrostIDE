@@ -21,11 +21,12 @@ const char* kindName(Kind kind) noexcept {
     return "contract";
 }
 
-// Writes the violation to stderr. Uses only async-signal-tolerant stdio calls
-// because a violation may be detected while the process is already unhealthy.
+// Writes the violation to stderr and flushes it. stdio is not async-signal-safe,
+// so a violation detected inside a signal handler could block on the stdio lock.
+// TODO(M1): the crash reporter writes with WriteFile/write(2) instead.
 void defaultHandler(const Violation& violation) noexcept {
-    std::fprintf(stderr, "FrostIDE %s violated: %s\n  at %s:%u in %s\n", kindName(violation.kind),
-                 violation.expression, violation.where.file_name(), static_cast<unsigned>(violation.where.line()),
+    std::fprintf(stderr, "FrostIDE %s violated: %s\n  at %s:%u in %s\n", kindName(violation.kind), violation.expression,
+                 violation.where.file_name(), static_cast<unsigned>(violation.where.line()),
                  violation.where.function_name());
     std::fflush(stderr);
 }
