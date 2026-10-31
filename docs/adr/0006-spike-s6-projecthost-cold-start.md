@@ -30,7 +30,7 @@ post-reboot cold start, which is measured under B23's cold conditions in M2. Thr
 parallel. Fixture: the 4-TU v143 project from ADR 0005; the request evaluates it and runs the wrapper target
 `FrostGetClCommandLines`.
 
-| Phase (ms since process start, median of 11 runs) | Time |
+| Phase (ms since process start, a typical run of 14) | Time |
 |---|---|
 | `Main` entered | 40 |
 | MSBuildLocator registered VS | 60 |
@@ -38,8 +38,8 @@ parallel. Fixture: the 4-TU v143 project from ADR 0005; the request evaluates it
 | First request dispatched | 274 |
 | Project evaluated (first evaluation in the process) | 996 |
 | Design-time build done (GetClCommandLines wrapper) | 1417 |
-| **End-to-end, launch → response (driver-measured)** | **p50 1.48 s**, max 1.69 s |
-| Second request in the same process (other configuration) | p50 95 ms |
+| **End-to-end, launch → response (driver-measured, 14 runs)** | **p50 1.49 s**, max 1.69 s |
+| Second request in the same process (other configuration, 8 runs) | p50 95 ms |
 
 For comparison, `MSBuild.exe -getTargetResult` on the same fixture takes 358 ms per process (ADR 0005). That
 points to JIT in our host's first evaluation (about 0.7 s), which pre-warming hides.
