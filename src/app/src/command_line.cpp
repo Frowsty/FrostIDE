@@ -16,7 +16,7 @@ std::string_view usageText() noexcept {
            "  --help               Print this help and exit.\n"
            "  --selftest           Run the built-in self-test offscreen and exit with its status.\n"
            "  --selftest=onscreen  Run the self-test with a visible window.\n"
-           "  --                   Treat every following argument as a path.\n";
+           "  --                   Treat every following argument as a path (also one starting with '-').\n";
 }
 
 Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
@@ -32,7 +32,9 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
     };
 
     for (const std::string_view arg : args) {
-        if (pathsOnly || !arg.starts_with("--")) {
+        // Anything starting with '-' is an option, so typos such as -version or -h are
+        // reported; a path that starts with '-' must follow "--".
+        if (pathsOnly || !arg.starts_with('-')) {
             result.paths.emplace_back(arg);
             continue;
         }

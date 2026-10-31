@@ -45,22 +45,34 @@ ViolationHandler setViolationHandler(ViolationHandler handler) noexcept;
 void reportViolation(const Violation& violation) noexcept;
 [[noreturn]] void reportViolationAndAbort(const Violation& violation) noexcept;
 
+namespace detail {
+// Converts the checked condition to bool. It takes exactly one argument, so
+// FROST_PRE(ok, "message") is a compile error rather than a comma expression
+// that is always true; commas inside template arguments, as in
+// FROST_PRE(std::is_same_v<A, B>), still parse as one argument.
+template<class T>
+[[nodiscard]] constexpr bool condition(const T& value) noexcept(noexcept(static_cast<bool>(value))) {
+    return static_cast<bool>(value);
+}
+} // namespace detail
+
 } // namespace frost::contracts
 
 #if FROST_CONTRACT_SEMANTIC == 0
-#define FROST_CONTRACT_CHECK_(kind, ...) static_cast<void>(sizeof(static_cast<bool>(__VA_ARGS__)))
+#define FROST_CONTRACT_CHECK_(kind, ...) static_cast<void>(sizeof(::frost::contracts::detail::condition(__VA_ARGS__)))
 #elif FROST_CONTRACT_SEMANTIC == 1
-#define FROST_CONTRACT_CHECK_(kind, ...)                                                                              \
-    (static_cast<bool>(__VA_ARGS__)                                                                                   \
-         ? static_cast<void>(0)                                                                                       \
+#define FROST_CONTRACT_CHECK_(kind, ...)                                                                               \
+    (::frost::contracts::detail::condition(__VA_ARGS__)                                                                \
+         ? static_cast<void>(0)                                                                                        \
          : ::frost::contracts::reportViolation({kind, #__VA_ARGS__, std::source_location::current()}))
 #elif FROST_CONTRACT_SEMANTIC == 2
-#define FROST_CONTRACT_CHECK_(kind, ...)                                                                              \
-    (static_cast<bool>(__VA_ARGS__)                                                                                   \
-         ? static_cast<void>(0)                                                                                       \
+#define FROST_CONTRACT_CHECK_(kind, ...)                                                                               \
+    (::frost::contracts::detail::condition(__VA_ARGS__)                                                                \
+         ? static_cast<void>(0)                                                                                        \
          : ::frost::contracts::reportViolationAndAbort({kind, #__VA_ARGS__, std::source_location::current()}))
 #elif FROST_CONTRACT_SEMANTIC == 3
-#define FROST_CONTRACT_CHECK_(kind, ...) (static_cast<bool>(__VA_ARGS__) ? static_cast<void>(0) : __builtin_trap())
+#define FROST_CONTRACT_CHECK_(kind, ...)                                                                               \
+    (::frost::contracts::detail::condition(__VA_ARGS__) ? static_cast<void>(0) : __builtin_trap())
 #else
 #error "FROST_CONTRACT_SEMANTIC must be 0 (ignore), 1 (observe), 2 (enforce) or 3 (quick_enforce)"
 #endif

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # toolchain_probe (PLAN.md section 2.1): proves on every supported compiler that
-#  - the C++26 allowlist compiles and behaves (allowlist_test, a normal unit test), and
+#  - the C++26 allowlist compiles and behaves (allowlist_test, a normal unit test),
+#  - in ASan builds, the sanitizer really instruments the code (sanitizer_test), and
 #  - banned constructs are rejected by the compiler under our warning flags.
 # Each banned fixture is an EXCLUDE_FROM_ALL object library built with the same
 # options as production code; its test builds it and passes only if the build log
@@ -10,8 +11,9 @@
 # expansion statements (`template for`) and `export module` units without complaint.
 
 frost_add_test(toolchain_probe_tests
-    SOURCES allowlist_test.cpp
+    SOURCES allowlist_test.cpp sanitizer_test.cpp
     DEPS frost::compat)
+target_include_directories(toolchain_probe_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
 # Adds a compile-fail probe: builds banned/<name>.cpp and expects `regex` in the output.
 function(frost_add_banned_probe name regex)

@@ -55,20 +55,41 @@ std::vector<std::string> utf8Arguments([[maybe_unused]] int argc, [[maybe_unused
     return args;
 }
 
+// Restores the attached console's output code page when main returns. The
+// console belongs to the parent shell, so leaving it on UTF-8 would change the
+// user's terminal after frost exits. Lives in main's frame (no globals).
+struct ConsoleCodePageRestorer {
+    unsigned previous = 0; // 0: nothing to restore.
+    ConsoleCodePageRestorer() = default;
+    ConsoleCodePageRestorer(const ConsoleCodePageRestorer&) = delete ("restores exactly once");
+    ConsoleCodePageRestorer& operator=(const ConsoleCodePageRestorer&) = delete ("restores exactly once");
+    ~ConsoleCodePageRestorer() {
+#ifdef _WIN32
+        if (previous != 0) {
+            std::fflush(stdout);
+            std::fflush(stderr);
+            SetConsoleOutputCP(previous);
+        }
+#endif
+    }
+};
+
 // frost is a GUI-subsystem program on Windows, so it has no console of its own.
 // When started from a terminal without redirection, attach to the parent's
 // console so --version and --selftest output is visible. Redirected handles
-// (pipes, files) already work and are left alone.
-void attachParentConsoleIfNeeded() {
+// (pipes, files) already work and are left alone. The console's previous code
+// page is recorded in `restorer`.
+void attachParentConsoleIfNeeded([[maybe_unused]] ConsoleCodePageRestorer& restorer) {
 #ifdef _WIN32
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out != nullptr && out != INVALID_HANDLE_VALUE && GetFileType(out) != FILE_TYPE_UNKNOWN) {
         return;
     }
-    if (AttachConsole(ATTACH_PARENT_PROCESS) != FALSE) {
+    if (restorer.previous == 0 && AttachConsole(ATTACH_PARENT_PROCESS) != FALSE) {
         FILE* stream = nullptr;
-        freopen_s(&stream, "CONOUT$", "w", stdout);
-        freopen_s(&stream, "CONOUT$", "w", stderr);
+        _wfreopen_s(&stream, L"CONOUT$", L"w", stdout);
+        _wfreopen_s(&stream, L"CONOUT$", L"w", stderr);
+        restorer.previous = GetConsoleOutputCP();
         SetConsoleOutputCP(CP_UTF8);
     }
 #endif
@@ -82,27 +103,28 @@ void print(FILE* stream, std::string_view text) {
 } // namespace
 
 int main(int argc, char** argv) {
+    ConsoleCodePageRestorer consoleCodePage;
     const std::vector<std::string> args = utf8Arguments(argc, argv);
     const std::vector<std::string_view> views(args.begin(), args.end());
     auto parsed = frost::app::parseCommandLine(views);
     if (!parsed) {
-        attachParentConsoleIfNeeded();
+        attachParentConsoleIfNeeded(consoleCodePage);
         print(stderr, std::format("frost: {}\n\n{}", parsed.error().message(), frost::app::usageText()));
         return 2;
     }
 
     switch (parsed->mode) {
     case frost::app::Mode::Version:
-        attachParentConsoleIfNeeded();
+        attachParentConsoleIfNeeded(consoleCodePage);
         print(stdout, std::format("FrostIDE {} ({}, Qt {}, {})\n", frost::build_info::kVersion,
                                   frost::build_info::kCompiler, qVersion(), frost::build_info::kSystem));
         return 0;
     case frost::app::Mode::Help:
-        attachParentConsoleIfNeeded();
+        attachParentConsoleIfNeeded(consoleCodePage);
         print(stdout, frost::app::usageText());
         return 0;
     case frost::app::Mode::SelfTest: {
-        attachParentConsoleIfNeeded();
+        attachParentConsoleIfNeeded(consoleCodePage);
         // Offscreen by default so the self-test runs headless (packaging smoke tests, WSL).
         if (!parsed->selfTestOnScreen && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
             qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -116,8 +138,7 @@ int main(int argc, char** argv) {
         print(stdout, report.format());
         return report.passed() ? 0 : 1;
     }
-    case frost::app::Mode::Gui:
-        break;
+    case frost::app::Mode::Gui: break;
     }
 
     QApplication app(argc, argv);

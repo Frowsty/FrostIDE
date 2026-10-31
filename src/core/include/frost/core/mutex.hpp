@@ -32,8 +32,8 @@ namespace frost {
 class FROST_CAPABILITY("mutex") Mutex {
 public:
     constexpr Mutex() noexcept = default;
-    Mutex(const Mutex&) = delete("a mutex guards one object and cannot be copied");
-    Mutex& operator=(const Mutex&) = delete("a mutex guards one object and cannot be copied");
+    Mutex(const Mutex&) = delete ("a mutex guards one object and cannot be copied");
+    Mutex& operator=(const Mutex&) = delete ("a mutex guards one object and cannot be copied");
 
     void lock() FROST_ACQUIRE() { m_mutex.lock(); }
     void unlock() FROST_RELEASE() { m_mutex.unlock(); }
@@ -52,8 +52,8 @@ class FROST_SCOPED_CAPABILITY LockGuard {
 public:
     explicit LockGuard(Mutex& mutex) FROST_ACQUIRE(mutex) : m_mutex(mutex) { m_mutex.lock(); }
     ~LockGuard() FROST_RELEASE() { m_mutex.unlock(); }
-    LockGuard(const LockGuard&) = delete("scoped locks are not transferable");
-    LockGuard& operator=(const LockGuard&) = delete("scoped locks are not transferable");
+    LockGuard(const LockGuard&) = delete ("scoped locks are not transferable");
+    LockGuard& operator=(const LockGuard&) = delete ("scoped locks are not transferable");
 
 private:
     Mutex& m_mutex;
@@ -65,8 +65,8 @@ class FROST_SCOPED_CAPABILITY UniqueLock {
 public:
     explicit UniqueLock(Mutex& mutex) FROST_ACQUIRE(mutex) : m_lock(mutex.native()) {}
     ~UniqueLock() FROST_RELEASE() = default;
-    UniqueLock(const UniqueLock&) = delete("scoped locks are not transferable");
-    UniqueLock& operator=(const UniqueLock&) = delete("scoped locks are not transferable");
+    UniqueLock(const UniqueLock&) = delete ("scoped locks are not transferable");
+    UniqueLock& operator=(const UniqueLock&) = delete ("scoped locks are not transferable");
 
     [[nodiscard]] std::unique_lock<std::mutex>& native() noexcept { return m_lock; }
 

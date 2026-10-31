@@ -3,33 +3,49 @@
 # verify.ps1: FrostIDE's local verification gate (there is no CI; PLAN.md
 # section 6.4 and the definition of done in CLAUDE.md).
 #
-#   powershell -ExecutionPolicy Bypass -File tools\verify.ps1 [-Full] [-WindowsOnly] [-BuildDir build\win-clangcl]
+#   powershell -ExecutionPolicy Bypass -File tools\verify.ps1 [-Quick | -Full] [-WindowsOnly]
+#              [-BuildDir build\win-clangcl] [-WslMirror ~/frost-src-x] [-Jobs 8]
 #
 # Steps:
-#   1. Windows: configure win-clangcl, build Debug, run ctest.
-#   2. -Full adds the Release build and the ASan configuration.
-#   3. Repository checks: frost-lint and the licence check (when present).
-#   4. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), --full with -Full.
-# Tests labelled `stress` are skipped in the Debug configuration and run in the
-# -Full configurations.
+#   1. Windows: configure win-clangcl, build Debug, run ctest (tests labelled
+#      `stress` are skipped in Debug).
+#   2. -Full adds Release and the ASan configuration (RelWithDebInfo), with every label.
+#   3. Repository checks: clang-format on tracked C/C++ files, frost-lint and the
+#      licence check. A check whose tool does not exist yet is reported as
+#      "not-run", never silently dropped.
+#   4. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), with --full under -Full.
+#      The repository checks are not repeated there (same tree).
+# -Quick is the default and only names that choice explicitly.
+#
 # The final line is the summary for the commit footer, e.g.
-#   "Verified: win debug 45/45, wsl debug 44/44, lint ok"
-# and the exit status is non-zero if any step failed.
+#   "Verified: win debug 63/64 (1 skipped), wsl debug 62/63 (1 skipped), format ok, frost_lint ok"
+# Skipped tests are never counted as passed. Exit status: 0 only if every step
+# that ran succeeded (skips and not-run checks do not fail the gate, but are visible).
 
 [CmdletBinding()]
 param(
+    [switch]$Quick,
     [switch]$Full,
     [switch]$WindowsOnly,
     # Build directory for the win-clangcl configuration. Separate directories let
     # several work streams verify concurrently without sharing a Ninja tree.
     [string]$BuildDir = '',
-    # Ext4 mirror directory inside WSL (passed to verify.sh as FROST_MIRROR).
+    # Ext4 mirror directory inside WSL (verify.sh's FROST_MIRROR). The default is a
+    # per-source-tree directory chosen by verify.sh, so worktrees never share one.
     [string]$WslMirror = '',
     # Parallel compile jobs on both sides; kept moderate because commit memory can be scarce.
     [int]$Jobs = 8
 )
 
-$ErrorActionPreference = 'Stop'
+# 'Continue', not 'Stop': under Windows PowerShell 5.1 a native command's stderr
+# line becomes an error record, and 'Stop' would abort the gate on the first
+# warning that ctest, cmake or wsl.exe prints. Failures are detected through
+# exit codes instead.
+$ErrorActionPreference = 'Continue'
+if ($Quick -and $Full) {
+    Write-Host 'verify.ps1: -Quick and -Full are mutually exclusive'
+    exit 2
+}
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'env.ps1')
 Set-Location $repo
@@ -37,39 +53,43 @@ Set-Location $repo
 $summary = New-Object System.Collections.Generic.List[string]
 $failed = $false
 
-# Runs a native command, streaming its output; returns $true when it exits with 0.
-function Invoke-Step([string]$Name, [scriptblock]$Command) {
-    Write-Host "=== $Name"
-    & $Command
-    return ($LASTEXITCODE -eq 0)
+# Runs a native command with stderr merged into stdout, echoing every line;
+# returns the lines as strings. $LASTEXITCODE is the command's exit code.
+function Invoke-Native([scriptblock]$Command) {
+    $lines = @(& $Command 2>&1 | ForEach-Object { "$_" })
+    $lines | Out-Host
+    return , $lines
 }
 
-# Parses ctest's "N% tests passed[, F tests failed] out of T" line into "passed/total".
+# Parses ctest output into "passed/total" plus "(n skipped)". Skipped tests are
+# listed under "The following tests did not run:" and are not counted as passed.
 function Get-CtestCounts([string[]]$Output) {
     $line = $Output | Where-Object { $_ -match 'tests passed.* out of \d+' } | Select-Object -Last 1
     if (-not $line) { return $null }
     $total = [int]([regex]::Match($line, 'out of (\d+)').Groups[1].Value)
-    $failedMatch = [regex]::Match($line, '(\d+) tests failed')
     $failedCount = 0
+    $failedMatch = [regex]::Match($line, '(\d+) tests failed')
     if ($failedMatch.Success) { $failedCount = [int]$failedMatch.Groups[1].Value }
-    return "$($total - $failedCount)/$total"
+    $skipped = @($Output | Where-Object { $_ -match '^\s*\d+ - .+\((Skipped|Disabled)\)\s*$' }).Count
+    $text = "$($total - $failedCount - $skipped)/$total"
+    if ($skipped -gt 0) { $text += " ($skipped skipped)" }
+    return $text
 }
 
-# Configures, builds and tests one Windows configuration.
-# $CtestArgs are extra ctest arguments (e.g. -LE stress).
+# Configures, builds and tests one Windows configuration. $CtestArgs are extra
+# ctest arguments (e.g. -LE stress).
 function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [string]$Dir, [string[]]$CtestArgs = @()) {
     $configureArgs = @('--preset', $Preset)
     if ($Dir) { $configureArgs += @('-B', $Dir) } else { $Dir = Join-Path $repo "build\$Preset" }
-    if (-not (Invoke-Step "$Label configure" { cmake @configureArgs | Out-Host })) {
-        $script:summary.Add("win $Label configure-failed"); $script:failed = $true; return
-    }
-    if (-not (Invoke-Step "$Label build" { cmake --build $Dir --config $Config -j $Jobs | Out-Host })) {
-        $script:summary.Add("win $Label build-failed"); $script:failed = $true; return
-    }
+    Write-Host "=== $Label configure"
+    $null = Invoke-Native { cmake @configureArgs }
+    if ($LASTEXITCODE -ne 0) { $script:summary.Add("win $Label configure-failed"); $script:failed = $true; return }
+    Write-Host "=== $Label build"
+    $null = Invoke-Native { cmake --build $Dir --config $Config -j $Jobs }
+    if ($LASTEXITCODE -ne 0) { $script:summary.Add("win $Label build-failed"); $script:failed = $true; return }
     Write-Host "=== $Label test"
-    $out = & ctest --test-dir $Dir -C $Config --output-on-failure @CtestArgs 2>&1 | ForEach-Object { "$_" }
+    $out = Invoke-Native { ctest --test-dir $Dir -C $Config --output-on-failure @CtestArgs }
     $ok = ($LASTEXITCODE -eq 0)
-    $out | Select-Object -Last 15 | Out-Host
     $counts = Get-CtestCounts $out
     if (-not $counts) { $counts = 'no-results'; $ok = $false }
     $script:summary.Add("win $Label $counts")
@@ -81,32 +101,57 @@ if ($Full) {
     Test-WindowsConfig 'release' 'win-clangcl' 'Release' $BuildDir
     $asanDir = ''
     if ($BuildDir) { $asanDir = "$BuildDir-asan" }
-    Test-WindowsConfig 'asan' 'win-clangcl-asan' 'Debug' $asanDir
+    Test-WindowsConfig 'asan' 'win-clangcl-asan' 'RelWithDebInfo' $asanDir
 }
 
-# Repository checks, run when the tools exist (they arrive during M0).
-$python = Join-Path $env:FROST_SDK 'py\Scripts\python.exe'
-$checks = @()
-foreach ($tool in @('frost_lint.py', 'licensecheck.py')) {
-    $path = Join-Path $PSScriptRoot $tool
-    if (Test-Path $path) {
-        if (Invoke-Step $tool { & $python $path --repo $repo | Out-Host }) { $checks += "$($tool -replace '\.py$','') ok" }
-        else { $checks += "$($tool -replace '\.py$','') FAILED"; $failed = $true }
-    }
+# Repository checks.
+$checks = New-Object System.Collections.Generic.List[string]
+
+# clang-format: every tracked C/C++ file must already be formatted. The banned-
+# construct fixtures are excluded because clang-format cannot parse them.
+Write-Host '=== format'
+$clangFormat = Join-Path $env:FROST_LLVM_ROOT 'bin\clang-format.exe'
+$sources = @(git ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' | Where-Object { $_ -notlike 'tests/toolchain_probe/banned/*' })
+$unformatted = New-Object System.Collections.Generic.List[string]
+foreach ($source in $sources) {
+    $null = & $clangFormat --dry-run --Werror $source 2>&1
+    if ($LASTEXITCODE -ne 0) { $unformatted.Add($source) }
 }
+if ($unformatted.Count -eq 0) { $checks.Add('format ok') }
+else {
+    $unformatted | ForEach-Object { Write-Host "needs clang-format: $_" }
+    $checks.Add("format FAILED ($($unformatted.Count) files)"); $failed = $true
+}
+
+# Python checks, run when the tool exists (they arrive during M0).
+$python = Join-Path $env:FROST_SDK 'py\Scripts\python.exe'
+foreach ($tool in @('frost_lint.py', 'licensecheck.py')) {
+    $name = $tool -replace '\.py$', ''
+    $path = Join-Path $PSScriptRoot $tool
+    if (-not (Test-Path $path)) { $checks.Add("$name not-run"); continue }
+    Write-Host "=== $name"
+    $null = Invoke-Native { & $python -I $path --repo $repo }
+    if ($LASTEXITCODE -eq 0) { $checks.Add("$name ok") } else { $checks.Add("$name FAILED"); $failed = $true }
+}
+# TODO(M1): clang-tidy on changed files (PLAN.md section 6.4).
+$checks.Add('tidy not-run')
 
 if (-not $WindowsOnly) {
-    $verifyArgs = @()
-    if ($Full) { $verifyArgs += '--full' }
     $wslScript = '/mnt/' + $repo.Substring(0, 1).ToLowerInvariant() + ($repo.Substring(2) -replace '\\', '/') + '/tools/verify.sh'
-    $envPrefix = "FROST_JOBS=$Jobs "
-    if ($WslMirror) { $envPrefix += "FROST_MIRROR=$WslMirror " }
+    # --exec runs env(1) directly, without a shell re-parsing the arguments, so the
+    # mirror path needs no quoting. verify.sh expands a leading "~/" itself.
+    $wslArgs = @('-d', 'Ubuntu-24.04', '--exec', 'env', "FROST_JOBS=$Jobs")
+    if ($WslMirror) { $wslArgs += "FROST_MIRROR=$WslMirror" }
+    $wslArgs += @('bash', $wslScript, '--no-checks')
+    if ($Full) { $wslArgs += '--full' }
     Write-Host "=== wsl $wslScript"
-    $wslOut = & wsl.exe -d Ubuntu-24.04 -- bash -c "$envPrefix bash '$wslScript' $($verifyArgs -join ' ')" 2>&1 | ForEach-Object { "$_" }
+    $wslOut = Invoke-Native { wsl.exe @wslArgs }
     if ($LASTEXITCODE -ne 0) { $failed = $true }
-    $wslOut | Select-Object -Last 20 | Out-Host
     $wslLine = $wslOut | Where-Object { $_ -match '^wsl: ' } | Select-Object -Last 1
-    if ($wslLine) { $summary.Add(($wslLine -replace '^wsl: ', 'wsl ')) } else { $summary.Add('wsl no-results'); $failed = $true }
+    # "wsl: debug 63/63, asan 64/64" becomes "wsl debug 63/63, wsl asan 64/64".
+    if ($wslLine) {
+        foreach ($item in (($wslLine -replace '^wsl: ', '') -split ', ')) { $summary.Add("wsl $item") }
+    } else { $summary.Add('wsl no-results'); $failed = $true }
 }
 
 $line = 'Verified: ' + (($summary + $checks) -join ', ')

@@ -10,6 +10,8 @@
 // constinit global without an exit-time destructor (startup hygiene, PLAN.md 2.1).
 #pragma once
 
+#include "frost/core/assert.hpp"
+
 #include <atomic>
 #include <chrono>
 
@@ -62,8 +64,11 @@ public:
         return SystemTime(Duration(m_system.load(std::memory_order_acquire)));
     }
 
-    // Moves both clocks forward by `delta` (which must not be negative).
+    // Moves both clocks forward by `delta`. Precondition: delta >= 0. The two
+    // clocks advance in two separate atomic steps, so a concurrent reader may
+    // briefly see steady time advanced before system time.
     void advance(Duration delta) noexcept {
+        FROST_PRE(delta >= Duration::zero());
         m_steady.fetch_add(delta.count(), std::memory_order_acq_rel);
         m_system.fetch_add(delta.count(), std::memory_order_acq_rel);
     }

@@ -2,8 +2,10 @@
 //
 // The built-in self-test behind `frost --selftest`. It verifies, inside the
 // real executable, the properties that unit tests cannot see: the embedded
-// manifest's effects (UTF-8 code page, long-path awareness, per-monitor v2
-// DPI awareness) and that the Qt GUI stack can create and show the main window.
+// manifest and its effects (UTF-8 code page and per-monitor v2 DPI awareness are
+// required; long-path awareness is required in the manifest, and its effect is
+// reported for information because it also needs the system LongPathsEnabled
+// policy), and that the Qt GUI stack can create, expose and close the main window.
 // Packaging smoke tests (PLAN.md section 2.2) run it from each extracted package.
 #pragma once
 
@@ -13,10 +15,10 @@
 namespace frost::app {
 
 struct SelfTestCheck {
-    std::string name;   // Stable identifier, e.g. "utf8-code-page".
-    bool ok = false;    // Whether the property holds.
+    std::string name;     // Stable identifier, e.g. "utf8-code-page".
+    bool ok = false;      // Whether the property holds.
     bool required = true; // Required checks decide the exit status; others are informational.
-    std::string detail; // Human-readable explanation (always set).
+    std::string detail;   // Human-readable explanation (always set).
 };
 
 struct SelfTestReport {

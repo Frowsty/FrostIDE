@@ -12,6 +12,7 @@
 #include <windows.h>
 #else
 #include <sys/wait.h>
+
 #include <unistd.h>
 #endif
 
@@ -81,8 +82,8 @@ ProcessResult runProcess(const std::filesystem::path& program, const std::vector
     startup.hStdError = writeEnd;
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     PROCESS_INFORMATION info{};
-    const BOOL started = CreateProcessW(program.c_str(), commandLine.data(), nullptr, nullptr, TRUE,
-                                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info);
+    const BOOL started = CreateProcessW(program.c_str(), commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                        nullptr, nullptr, &startup, &info);
     CloseHandle(writeEnd);
     if (started == FALSE) {
         result.startError = "CreateProcessW failed with error " + std::to_string(GetLastError());

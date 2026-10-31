@@ -19,7 +19,7 @@
 
 namespace frost {
 
-template <class Tag, std::unsigned_integral Rep>
+template<class Tag, std::unsigned_integral Rep>
 class StrongIndex {
 public:
     using rep_type = Rep;
@@ -41,7 +41,9 @@ public:
         return StrongIndex(static_cast<Rep>(index.m_value - count));
     }
     // Distance from b to a; the caller guarantees a >= b.
-    friend constexpr Rep operator-(StrongIndex a, StrongIndex b) noexcept { return static_cast<Rep>(a.m_value - b.m_value); }
+    friend constexpr Rep operator-(StrongIndex a, StrongIndex b) noexcept {
+        return static_cast<Rep>(a.m_value - b.m_value);
+    }
 
     constexpr StrongIndex& operator+=(Rep count) noexcept {
         m_value = static_cast<Rep>(m_value + count);
@@ -76,15 +78,18 @@ using ByteColumn = StrongIndex<struct ByteColumnTag, std::uint32_t>;
 } // namespace frost
 
 // Strong indices hash like their representation, so they can key unordered containers.
-template <class Tag, class Rep>
+template<class Tag, class Rep>
 struct std::hash<frost::StrongIndex<Tag, Rep>> {
-    std::size_t operator()(frost::StrongIndex<Tag, Rep> index) const noexcept { return std::hash<Rep>{}(index.value()); }
+    std::size_t operator()(frost::StrongIndex<Tag, Rep> index) const noexcept {
+        return std::hash<Rep>{}(index.value());
+    }
 };
 
 // Strong indices format as their value: std::format("{}", ByteOffset{7}) == "7".
-template <class Tag, class Rep>
+template<class Tag, class Rep>
 struct std::formatter<frost::StrongIndex<Tag, Rep>> : std::formatter<Rep> {
-    auto format(frost::StrongIndex<Tag, Rep> index, std::format_context& ctx) const {
+    template<class FormatContext>
+    auto format(frost::StrongIndex<Tag, Rep> index, FormatContext& ctx) const {
         return std::formatter<Rep>::format(index.value(), ctx);
     }
 };

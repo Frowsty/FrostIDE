@@ -90,3 +90,23 @@ if(DEFINED VCPKG_CRT_LINKAGE AND DEFINED ENV{VCPKG_ROOT})
     file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _frost_vcpkg_root)
     include("${_frost_vcpkg_root}/scripts/toolchains/windows.cmake")
 endif()
+
+# AddressSanitizer link inputs. clang-cl adds these itself only when it drives the
+# link; CMake links with lld-link directly, so they are passed explicitly. These
+# are the same three inputs `clang-cl -fsanitize=address -###` shows for /MD:
+# the runtime import library, the SEH interceptor and the whole-archive thunk.
+# The root CMakeLists.txt adds them for FROST_SANITIZE=address; port builds for
+# the x64-windows-clangcl-asan triplet (VCPKG_C_FLAGS contains -fsanitize=address)
+# get them here, including in CMake's own try_compile checks.
+string(REGEX MATCH "^[0-9]+" _frost_llvm_major "${_frost_llvm_version}")
+set(FROST_ASAN_RUNTIME_DIR "${FROST_LLVM_ROOT}/lib/clang/${_frost_llvm_major}/lib/windows")
+set(FROST_ASAN_LINK_OPTIONS
+    "${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.lib"
+    "/INCLUDE:__asan_seh_interceptor"
+    "/WHOLEARCHIVE:${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+if("${VCPKG_C_FLAGS}" MATCHES "-fsanitize=address")
+    list(JOIN FROST_ASAN_LINK_OPTIONS "\" \"" _frost_asan_link)
+    string(APPEND CMAKE_EXE_LINKER_FLAGS_INIT " \"${_frost_asan_link}\"")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS_INIT " \"${_frost_asan_link}\"")
+    string(APPEND CMAKE_MODULE_LINKER_FLAGS_INIT " \"${_frost_asan_link}\"")
+endif()

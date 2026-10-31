@@ -8,7 +8,10 @@
 #include <gtest/gtest.h>
 
 #include <format>
+#include <iterator>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -62,9 +65,38 @@ TEST(Error, FormatsThroughStdFormat) {
 }
 
 TEST(Error, ToStringCoversEveryCode) {
-    EXPECT_EQ(frost::toString(frost::ErrorCode::Cancelled), "Cancelled");
-    EXPECT_EQ(frost::toString(frost::ErrorCode::Internal), "Internal");
+    using enum frost::ErrorCode;
+    // Every enumerator, in declaration order; Internal is the last one.
+    const std::pair<frost::ErrorCode, std::string_view> expected[] = {
+        {Unknown, "Unknown"},
+        {InvalidArgument, "InvalidArgument"},
+        {NotFound, "NotFound"},
+        {AlreadyExists, "AlreadyExists"},
+        {PermissionDenied, "PermissionDenied"},
+        {IoError, "IoError"},
+        {Corrupt, "Corrupt"},
+        {Unsupported, "Unsupported"},
+        {OutOfRange, "OutOfRange"},
+        {Cancelled, "Cancelled"},
+        {Timeout, "Timeout"},
+        {Busy, "Busy"},
+        {Internal, "Internal"},
+    };
+    static_assert(static_cast<int>(Internal) + 1 == std::size(expected), "update this table with ErrorCode");
+    for (const auto& [code, name] : expected) {
+        EXPECT_EQ(frost::toString(code), name);
+    }
     EXPECT_EQ(frost::toString(static_cast<frost::ErrorCode>(999)), "ErrorCode(?)");
+}
+
+TEST(Error, IsFormattableInsideContainers) {
+    // std::formattable requires format() to accept any format context, which is
+    // what range and tuple formatting instantiate it with.
+    static_assert(std::formattable<frost::Error, char>);
+#if defined(__cpp_lib_format_ranges)
+    const std::vector<frost::Error> errors{frost::Error(frost::ErrorCode::Busy, "x")};
+    EXPECT_NE(std::format("{}", errors).find("Busy: x"), std::string::npos);
+#endif // libstdc++ 14 has no range formatting; the concept check above still runs.
 }
 
 TEST(Error, EqualityComparesCodeAndMessage) {

@@ -38,7 +38,7 @@ enum class ErrorCode : std::uint16_t {
     Internal,         // A FrostIDE bug: an invariant did not hold.
 };
 
-// Returns the enumerator name ("NotFound"), or "ErrorCode(<n>)" for unknown values.
+// Returns the enumerator name ("NotFound"), or "ErrorCode(?)" for values outside the enumeration.
 [[nodiscard]] std::string_view toString(ErrorCode code) noexcept;
 
 class [[nodiscard]] Error {
@@ -73,7 +73,7 @@ private:
 };
 
 // The result type of every fallible FrostIDE API.
-template <class T>
+template<class T>
 using Result = std::expected<T, Error>;
 
 // Shorthand for the error branch: `return frost::fail(ErrorCode::NotFound, "no project file");`
@@ -85,9 +85,10 @@ using Result = std::expected<T, Error>;
 } // namespace frost
 
 // Formats an Error with describe(), so `std::format("{}", error)` works in logs.
-template <>
+template<>
 struct std::formatter<frost::Error> : std::formatter<std::string_view> {
-    auto format(const frost::Error& error, std::format_context& ctx) const {
+    template<class FormatContext>
+    auto format(const frost::Error& error, FormatContext& ctx) const {
         return std::formatter<std::string_view>::format(error.describe(), ctx);
     }
 };

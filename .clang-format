@@ -6,7 +6,8 @@ Standard: Latest
 IndentWidth: 4
 ColumnLimit: 120
 AccessModifierOffset: -4
-AllowShortFunctionsOnASingleLine: Inline
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
 AllowShortLambdasOnASingleLine: All
 AlwaysBreakTemplateDeclarations: Yes
 BreakBeforeBraces: Attach
@@ -22,9 +23,16 @@ IncludeCategories:
     Priority: 3
   - Regex: '^<[a-z_]+>$'
     Priority: 4
+  # Win32: <windows.h> must precede every other SDK header (shellapi.h, ...).
+  - Regex: '^<windows\.h>$'
+    Priority: 5
+  - Regex: '^<[A-Za-z0-9_]+\.h>$'
+    Priority: 6
   - Regex: '.*'
     Priority: 3
 InsertNewlineAtEOF: true
 NamespaceIndentation: None
 SortIncludes: CaseSensitive
 SpaceAfterTemplateKeyword: false
+# clang-format 23 has no rule for C++26 `= delete("reason")` and prints it as
+# `= delete ("reason")`; that spelling is accepted rather than fighting the tool.

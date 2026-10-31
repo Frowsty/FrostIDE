@@ -26,6 +26,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
+# `powershell -File` passes "-Only llvm,qt" as the single string 'llvm,qt'
+# (only -Command parses comma lists), so split every element on commas.
+$Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Lock = Get-Content -Raw -Path (Join-Path $RepoRoot 'sdk\sdk.lock.json') | ConvertFrom-Json
 $Downloads = Join-Path $SdkRoot '_downloads'
@@ -108,8 +112,18 @@ function Install-Archive([string]$Name) {
     Write-Host "[$Name] installed to $dest"
 }
 
-# Creates the tooling venv ($SdkRoot\py) with pinned packages (aqtinstall for
-# listing Qt, py7zr for qt-fetch.py).
+# Runs a native command whose stderr is expected noise (git's "no tag" message,
+# for instance) and returns its stdout. Under Windows PowerShell 5.1 with
+# $ErrorActionPreference = 'Stop', any stderr line from a native command becomes
+# a terminating error even when redirected, so the preference is relaxed in this
+# function's scope only. Callers check $LASTEXITCODE.
+function Invoke-NativeQuiet([scriptblock]$Command) {
+    $ErrorActionPreference = 'Continue'
+    return (& $Command 2>$null)
+}
+
+# Creates the tooling venv ($SdkRoot\py) that runs qt-fetch.py and the repository
+# checks. Every tool uses the standard library only, so nothing is pip-installed.
 function Install-PythonTools {
     $venv = Join-Path $SdkRoot 'py'
     $python = Join-Path $venv 'Scripts\python.exe'
@@ -118,51 +132,52 @@ function Install-PythonTools {
         & python -m venv $venv
         if ($LASTEXITCODE -ne 0) { throw 'python -m venv failed (is Python 3.10+ on PATH?)' }
     }
-    $packages = @("aqtinstall==$($Lock.python.aqtinstall)", "py7zr==$($Lock.python.py7zr)")
-    & $python -m pip install --disable-pip-version-check --quiet @packages
-    if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
     Write-Host "[python] venv ready: $(& $python --version)"
 }
 
-# Installs the pinned Qt subset with tools/qt-fetch.py into $SdkRoot\qt.
+# Installs the pinned Qt subset with tools/qt-fetch.py into $SdkRoot\qt; the
+# script reads the repository, archives and hashes from the lock file itself.
 function Install-Qt {
     $python = Join-Path $SdkRoot 'py\Scripts\python.exe'
-    $qt = $Lock.qt.windows
-    $fetchArgs = @(
-        (Join-Path $PSScriptRoot 'qt-fetch.py'),
-        '--repository', $qt.repository,
-        '--package', $qt.package,
-        '--archives', ($qt.archives -join ','),
-        '--dest', (Join-Path $SdkRoot 'qt'),
-        '--cache', (Join-Path $Downloads 'qt')
-    )
-    if ($qt.updatesSha256) { $fetchArgs += @('--updates-sha256', $qt.updatesSha256) }
-    & $python @fetchArgs
+    & $python -I (Join-Path $PSScriptRoot 'qt-fetch.py') `
+        --lock (Join-Path $RepoRoot 'sdk\sdk.lock.json') --platform windows `
+        --dest (Join-Path $SdkRoot 'qt') --cache (Join-Path $Downloads 'qt')
     if ($LASTEXITCODE -ne 0) { throw 'qt-fetch.py failed' }
 }
 
-# Clones vcpkg at the pinned tag into $SdkRoot\vcpkg and builds vcpkg.exe.
+# Clones vcpkg at the pinned tag into $SdkRoot\vcpkg and builds vcpkg.exe. When
+# the pin moves, the checkout follows and vcpkg.exe is rebuilt, because the tool
+# version is part of the tag. The tag must be the commit vcpkg.json names as its
+# builtin-baseline, so port versions and the tool always agree.
 function Install-Vcpkg {
     $root = Join-Path $SdkRoot 'vcpkg'
+    $exe = Join-Path $root 'vcpkg.exe'
     $tag = $Lock.vcpkg.tag
     if (-not (Test-Path (Join-Path $root '.git'))) {
         Write-Host "[vcpkg] cloning $tag"
         & git clone --quiet --depth 1 --branch $tag $Lock.vcpkg.repository $root
         if ($LASTEXITCODE -ne 0) { throw 'git clone of vcpkg failed' }
     } else {
-        $current = (& git -C $root describe --tags --exact-match 2>$null)
+        $current = Invoke-NativeQuiet { git -C $root describe --tags --exact-match }
         if ($current -ne $tag) {
             Write-Host "[vcpkg] moving from '$current' to $tag"
             & git -C $root fetch --quiet --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"
-            & git -C $root checkout --quiet $tag
+            if ($LASTEXITCODE -ne 0) { throw "vcpkg fetch of $tag failed" }
+            & git -C $root -c advice.detachedHead=false checkout --quiet $tag
             if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout of $tag failed" }
+            if (Test-Path $exe) { Remove-Item -Force $exe }
         }
     }
-    if (-not (Test-Path (Join-Path $root 'vcpkg.exe'))) {
+    $head = (& git -C $root rev-parse HEAD)
+    $baseline = (Get-Content -Raw -Path (Join-Path $RepoRoot 'vcpkg.json') | ConvertFrom-Json).'builtin-baseline'
+    if ($head -ne $baseline) {
+        throw "vcpkg tag $tag is commit $head, but vcpkg.json's builtin-baseline is $baseline; bump them together"
+    }
+    if (-not (Test-Path $exe)) {
         & (Join-Path $root 'bootstrap-vcpkg.bat') -disableMetrics
         if ($LASTEXITCODE -ne 0) { throw 'bootstrap-vcpkg.bat failed' }
     }
-    Write-Host "[vcpkg] ready at $root ($tag)"
+    Write-Host "[vcpkg] ready at $root ($tag, $head)"
 }
 
 # Verifies that the pinned MSVC toolset and Windows SDK exist. They come from a

@@ -6,7 +6,6 @@
 // and from one longer than MAX_PATH (260 characters) on Windows.
 
 #include "support/process_runner.hpp"
-
 #include <gtest/gtest.h>
 
 #include <filesystem>

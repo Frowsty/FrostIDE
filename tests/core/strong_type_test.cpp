@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <format>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -40,6 +41,13 @@ TEST(StrongIndex, DistinctTypesDoNotMix) {
     static_assert(!std::convertible_to<std::uint64_t, frost::ByteOffset>);
     static_assert(!std::equality_comparable_with<frost::ByteOffset, frost::Utf16Offset>);
     static_assert(sizeof(frost::LineIndex) == sizeof(std::uint32_t));
+}
+
+TEST(StrongIndex, IsFormattableInsideContainers) {
+    static_assert(std::formattable<frost::ByteOffset, char>);
+#if defined(__cpp_lib_format_ranges)
+    EXPECT_EQ(std::format("{}", std::vector{frost::ByteOffset{1}, frost::ByteOffset{2}}), "[1, 2]");
+#endif // libstdc++ 14 has no range formatting; the concept check above still runs.
 }
 
 } // namespace

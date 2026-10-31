@@ -19,9 +19,9 @@ static_assert(__cpp_deleted_function >= 202403L, "= delete(\"reason\") (P2573)")
 static_assert(__cpp_static_assert >= 202306L, "user-generated static_assert messages (P2741)");
 
 // Pack indexing: types and values.
-template <typename... Ts>
+template<typename... Ts>
 using First = Ts...[0];
-template <auto... Vs>
+template<auto... Vs>
 constexpr auto kSecond = Vs...[1];
 
 TEST(ToolchainProbe, PackIndexing) {
@@ -49,7 +49,7 @@ TEST(ToolchainProbe, PlaceholderVariables) {
 
 // = delete with a reason.
 int takesLong(long value) { return static_cast<int>(value); }
-int takesLong(int) = delete("pass a long to avoid the implicit conversion");
+int takesLong(int) = delete ("pass a long to avoid the implicit conversion");
 
 TEST(ToolchainProbe, DeletedFunctionWithReason) {
     EXPECT_EQ(takesLong(5L), 5);

@@ -13,9 +13,7 @@ include_guard(GLOBAL)
 # MSVC-style flags for clang-cl. Never -Wall: clang-cl reads it as -Weverything.
 set(FROST_CLANGCL_WARNINGS
     /W4 /WX
-    -Wconversion -Wshadow -Wthread-safety
-    # MSVC-compatibility noise that /W4 enables under clang-cl and that does not apply to us.
-    -Wno-c++98-compat -Wno-c++98-compat-pedantic)
+    -Wconversion -Wshadow -Wthread-safety)
 
 # GCC-style flags for clang on Linux.
 set(FROST_CLANG_WARNINGS
