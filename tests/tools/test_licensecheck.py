@@ -153,6 +153,18 @@ class QtUsageTest(TempDirTestCase):
         self.assertIn("src/CMakeLists.txt:2: Qt module Broken", messages[0])
         self.assertIn("needs an ADR", messages[0])
 
+    def test_private_module_package_has_the_module_licence(self) -> None:
+        _write(self.repo / "src" / "CMakeLists.txt",
+               "# QRhi lives in the private Gui package.\nfind_package(Qt6 COMPONENTS GuiPrivate)\n"
+               "find_package(Qt6GuiPrivate)\ntarget_link_libraries(a PRIVATE Qt6::GuiPrivate)\n")
+        self.assertEqual(self._messages(), [])
+
+    def test_unknown_private_module_still_needs_an_adr(self) -> None:
+        _write(self.repo / "src" / "CMakeLists.txt", "# Unknown.\nfind_package(Qt6 COMPONENTS FrobnicatePrivate)\n")
+        messages = self._messages()
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Frobnicate has no known licence", messages[0])
+
     def test_unknown_module_needs_an_adr(self) -> None:
         _write(self.repo / "src" / "CMakeLists.txt", "# Unknown.\ntarget_link_libraries(a PRIVATE Qt6::Frobnicate)\n")
         messages = self._messages()

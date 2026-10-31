@@ -3,6 +3,42 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-10-31: M0 spike S1 (branch `m0/s1`)
+
+### Done
+- **Probes.** `tests/perf/probes` holds `frost::perf_probes`, in the diag layer, Windows parts only.
+  - Desktop Duplication with a frame marker and pixel samples.
+  - DWM timing and a vblank clock.
+  - The `ISessionState` precheck.
+  - Frame analysis, delay-validation logic and a JSON report.
+
+  It has 67 headless unit tests. It was validated by injected 8 and 25 ms delays (errors +0.12 and -0.57 ms) and
+  by stalls and cadence.
+- **Spike tools.** `tests/perf/s1` holds:
+  - `s1_probe_validate`;
+  - `s1_editor`, in the app layer: the raster QGlyphRun view and a QRhiWidget D3D11 glyph atlas, with 10
+    headless tests;
+  - `s1_first_frame`;
+  - `run-s1.ps1`.
+
+  They are Windows only, built only with `WIN32 AND FROST_BUILD_UI`, and never run by CTest.
+- **ADR 0007.** At 5120x1392 the raster backend fails B6 CPU: p99 9.4 ms with full repaint, 7.9 ms with
+  scroll-blit and 6.7 ms with fill only. QRhi uses p99 1.0 ms. B5 passes on both.
+  frost.exe B1 warm is p50 246 ms and p99 344 ms, which fails; the cold proxy is p50 331 ms.
+
+### Next
+- User decision on ADR 0007 (QRhi editor backend in M1). Then independent review and merge of `m0/s1`.
+- When m0/io lands, port `tests/perf/s1/child_process.cpp` to `IProcessLauncher`.
+
+### Blockers
+- None. DWM ETW needs elevation, so it is deferred (ADR 0007).
+
+### Questions for the user
+- Approve the QRhiWidget backend as M1's default editor renderer (ADR 0007, decision 1)?
+- B6 "missed ≤1 %" cannot pass on this desktop while video, Wallpaper Engine and GPU load run. Should gate runs
+  happen on a quiet desktop, or should the gate be relative to a same-session baseline? A budget change needs your
+  approval.
+
 ## 2026-10-31: M0 bootstrap, session 1
 
 ### Done
