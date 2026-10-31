@@ -47,12 +47,13 @@ Result<FoundOutput> findOutput(int x, int y) {
     }
     for (UINT a = 0;; ++a) {
         ComPtr<IDXGIAdapter1> adapter;
-        if (factory->EnumAdapters1(a, &adapter) == DXGI_ERROR_NOT_FOUND) {
+        // NOT_FOUND ends the list; any other failure (a device lost mid-enumeration) leaves a null pointer.
+        if (FAILED(factory->EnumAdapters1(a, &adapter))) {
             break;
         }
         for (UINT o = 0;; ++o) {
             ComPtr<IDXGIOutput> output;
-            if (adapter->EnumOutputs(o, &output) == DXGI_ERROR_NOT_FOUND) {
+            if (FAILED(adapter->EnumOutputs(o, &output))) {
                 break;
             }
             DXGI_OUTPUT_DESC desc{};

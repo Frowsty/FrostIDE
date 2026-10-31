@@ -211,6 +211,17 @@ void buildQuads(const TextModel& model, const TextFont& font, const GlyphAtlas& 
     }
 }
 
+bool fitQuads(std::vector<QuadInstance>& quads, std::size_t capacity) {
+    if (quads.size() <= capacity) {
+        return false;
+    }
+    // Move the trailing marker quads into the last slots that fit, then cut.
+    constexpr auto kMarker = static_cast<std::ptrdiff_t>(perf::kMarkerCells);
+    std::copy(quads.end() - kMarker, quads.end(), quads.begin() + (static_cast<std::ptrdiff_t>(capacity) - kMarker));
+    quads.resize(capacity);
+    return true;
+}
+
 RasterView::RasterView(const TextModel& model, const TextFont& font, const Theme& theme)
     : m_model(model), m_font(font), m_theme(theme), m_cache(font, 4096, 1024) {
     // Every pixel is painted, so Qt need not erase first.
@@ -244,6 +255,9 @@ void RasterView::paintEvent(QPaintEvent* event) {
     state.scrollPx = static_cast<double>(std::llround(state.scrollPx));
     paintRaster(painter, m_model, m_cache, m_font, m_theme, state, size(), event->region());
     painter.end();
+    if (m_state.injectDelayMs > 0) {
+        perf::win::spinUntil(perf::win::qpcNow() + perf::win::qpcRate().fromMs(m_state.injectDelayMs));
+    }
     logPaint(m_state.marker, begin, perf::win::qpcNow());
 }
 

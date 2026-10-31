@@ -21,6 +21,11 @@ bool isAbsolute(const std::wstring& path) {
     return (path.size() >= 3 && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) || path.starts_with(L"\\\\");
 }
 
+std::wstring parentDirectory(const std::wstring& path) {
+    const auto slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+}
+
 } // namespace
 
 Result<ChildProcess> ChildProcess::launch(const LaunchOptions& options) {
@@ -33,6 +38,18 @@ Result<ChildProcess> ChildProcess::launch(const LaunchOptions& options) {
     }
     std::vector<wchar_t> mutableLine(commandLine.begin(), commandLine.end());
     mutableLine.push_back(L'\0');
+    const std::wstring directory = parentDirectory(options.executable);
+
+    ChildProcess child;
+    child.m_job = CreateJobObjectW(nullptr, nullptr);
+    if (child.m_job == nullptr) {
+        return fail(ErrorCode::IoError, "CreateJobObjectW failed with error " + std::to_string(GetLastError()));
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (SetInformationJobObject(child.m_job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) == 0) {
+        return fail(ErrorCode::IoError, "SetInformationJobObject failed with error " + std::to_string(GetLastError()));
+    }
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -46,36 +63,51 @@ Result<ChildProcess> ChildProcess::launch(const LaunchOptions& options) {
         startup.dwY = static_cast<DWORD>(options.windowPosition->second);
     }
     PROCESS_INFORMATION info{};
-    ChildProcess child;
+    // Suspended until it is in the job, so it cannot escape it; resuming costs microseconds.
     child.m_startTicks = perf::win::qpcNow();
     if (CreateProcessW(options.executable.c_str(), mutableLine.data(), nullptr, nullptr, FALSE,
-                       CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &startup, &info) == 0) {
+                       CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED, nullptr,
+                       directory.empty() ? nullptr : directory.c_str(), &startup, &info) == 0) {
         return fail(ErrorCode::IoError, "CreateProcessW failed with error " + std::to_string(GetLastError()));
     }
-    CloseHandle(info.hThread);
     child.m_process = info.hProcess;
     child.m_pid = info.dwProcessId;
+    if (AssignProcessToJobObject(child.m_job, info.hProcess) == 0) {
+        const DWORD error = GetLastError();
+        TerminateProcess(info.hProcess, 1);
+        CloseHandle(info.hThread);
+        return fail(ErrorCode::IoError, "AssignProcessToJobObject failed with error " + std::to_string(error));
+    }
+    ResumeThread(info.hThread);
+    CloseHandle(info.hThread);
     return child;
 }
 
 ChildProcess::ChildProcess(ChildProcess&& other) noexcept
-    : m_process(std::exchange(other.m_process, nullptr)), m_pid(other.m_pid), m_startTicks(other.m_startTicks) {}
+    : m_process(std::exchange(other.m_process, nullptr)), m_job(std::exchange(other.m_job, nullptr)),
+      m_pid(other.m_pid), m_startTicks(other.m_startTicks) {}
 
 ChildProcess& ChildProcess::operator=(ChildProcess&& other) noexcept {
     if (this != &other) {
-        if (m_process != nullptr) {
-            CloseHandle(m_process);
-        }
+        close();
         m_process = std::exchange(other.m_process, nullptr);
+        m_job = std::exchange(other.m_job, nullptr);
         m_pid = other.m_pid;
         m_startTicks = other.m_startTicks;
     }
     return *this;
 }
 
-ChildProcess::~ChildProcess() {
+ChildProcess::~ChildProcess() { close(); }
+
+void ChildProcess::close() noexcept {
     if (m_process != nullptr) {
         CloseHandle(m_process);
+        m_process = nullptr;
+    }
+    if (m_job != nullptr) {
+        CloseHandle(m_job); // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE ends a child still running.
+        m_job = nullptr;
     }
 }
 
@@ -84,7 +116,9 @@ std::optional<std::uint32_t> ChildProcess::wait(std::uint32_t timeoutMs) const {
         return std::nullopt;
     }
     DWORD code = 0;
-    GetExitCodeProcess(m_process, &code);
+    if (GetExitCodeProcess(m_process, &code) == 0) {
+        return std::nullopt;
+    }
     return static_cast<std::uint32_t>(code);
 }
 

@@ -72,8 +72,13 @@ void RhiView::repaintNow(const QRegion& /*dirty*/) { repaint(); }
 void RhiView::initialize(QRhiCommandBuffer* /*cb*/) {
     // Called again when the backing texture is recreated (resize); D3D11 render
     // pass descriptors stay compatible, so the pipeline is kept.
-    if (!m_pipeline && !createPipeline()) {
-        m_pipeline.reset();
+    if (!m_pipeline) {
+        // B1 context: runtime HLSL compilation is part of the first frame here.
+        const std::int64_t start = perf::win::qpcNow();
+        if (!createPipeline()) {
+            m_pipeline.reset();
+        }
+        m_pipelineMs = perf::win::qpcRate().toMs(perf::win::qpcNow() - start);
     }
 }
 
@@ -157,7 +162,10 @@ void RhiView::render(QRhiCommandBuffer* cb) {
         const std::array<float, 4> frame{static_cast<float>(size.width()), static_cast<float>(size.height()), 0, 0};
         updates->updateDynamicBuffer(m_uniforms.get(), 0, sizeof(frame), frame.data());
         buildQuads(m_model, m_font, m_atlas, m_theme, m_state, size, m_quads);
-        count = std::min(m_quads.size(), m_instanceCapacity);
+        if (fitQuads(m_quads, m_instanceCapacity)) {
+            ++m_truncatedFrames;
+        }
+        count = m_quads.size();
         if (count > 0) {
             updates->updateDynamicBuffer(m_instances.get(), 0, static_cast<quint32>(count * sizeof(QuadInstance)),
                                          m_quads.data());
@@ -176,6 +184,9 @@ void RhiView::render(QRhiCommandBuffer* cb) {
         cb->draw(4, static_cast<quint32>(count));
     }
     cb->endPass();
+    if (m_state.injectDelayMs > 0) {
+        perf::win::spinUntil(perf::win::qpcNow() + perf::win::qpcRate().fromMs(m_state.injectDelayMs));
+    }
     logPaint(m_state.marker, begin, perf::win::qpcNow());
 }
 

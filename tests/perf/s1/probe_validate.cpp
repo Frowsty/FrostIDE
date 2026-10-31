@@ -4,14 +4,15 @@
 // delays (PLAN.md section 7, M0 spike S1; ADR 0007).
 //
 // A small topmost GDI window (no Qt; it never takes focus) paints a frame
-// marker. Two phases, about 12 s on screen in total:
+// marker. Three phases, about 17 s on screen in total:
 //   A. Latency. For each injected delay D in {0, 8, 25} ms, `--trials` times
 //      (interleaved): wait for a vblank, wait a phase spread evenly over one
 //      refresh period, take the trigger time, wait D, paint the next marker and
 //      flush. The Desktop Duplication probe reports when the marker reached the
 //      screen. The mean latency must shift by D within 1.5 ms, no trial may be
-//      seen before its flush or later than 3 refresh periods after it, and none
-//      may be lost (frost/perf/probe_validation.hpp).
+//      seen before its flush or later than 4 refresh periods after it (the
+//      default ValidationTolerance::maxResidualPeriods), and none may be lost
+//      (frost/perf/probe_validation.hpp).
 //   B. Stalls and cadence. A steady animation paints one frame per vblank for
 //      720 frames (5 s), with 10 stalls each of 8 ms and 25 ms. At least 60 % of
 //      each must be measured, the median screen interval of each stall length must
@@ -20,13 +21,14 @@
 //      exactly one refresh per frame step, so a frame the desktop dropped costs one
 //      missed refresh (cadence consistency >= 95 %). DWM's refresh period must
 //      match the measured vblank interval.
-// The fraction of frames the desktop dropped in phase B is reported as the
-// environment floor: it is a property of the machine (other windows composing),
-// not of the probe.
+//   C. Environment floor. The same animation for another 720 frames without any
+//      stall. The refreshes it missed are reported as the environment floor: a
+//      property of the machine (other windows making DWM skip compositions), not
+//      of the probe, and free of the stalls phase B injects on purpose.
 //
 //   s1_probe_validate [--out report.json] [--trials N] [--diagnose]
-// Exit status: 0 validated, 1 validation failed, 2 setup error, 3 invalid session
-// (locked, remote or monitor off; the run is neither pass nor fail).
+// Exit status: 0 validated, 1 validation failed, 2 setup error, 3 invalid run
+// (locked, remote, monitor off, access lost or capture failure; neither pass nor fail).
 
 #include "frost/perf/frame_analysis.hpp"
 #include "frost/perf/frame_marker.hpp"
@@ -43,6 +45,7 @@
 #include <cstdio>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,7 +65,8 @@ constexpr int kMarkerY = 8;
 constexpr int kCellPx = 4;
 constexpr std::array<double, 3> kDelaysMs{0.0, 8.0, 25.0};
 constexpr int kSteadyFrames = 720;
-constexpr int kStallEvery = 36; // Frames 18, 54, ...: 20 stalls, alternating 8 and 25 ms.
+constexpr int kFloorFrames = 720; // Phase C, after phase B.
+constexpr int kStallEvery = 36;   // Frames 18, 54, ...: 20 stalls, alternating 8 and 25 ms.
 constexpr std::array<double, 2> kStallMs{8.0, 25.0};
 constexpr double kMinCadenceConsistency = 0.95;
 // A stalled frame is unmeasured only when the desktop drops it; at the measured
@@ -342,7 +346,7 @@ int run(const Options& options) {
     const std::int64_t phaseAEnd = qpcNow();
     const ValidationReport latency = evaluateDelayTrials(trials, periodMs, rate);
 
-    // Phase B: one frame per vblank with injected stalls.
+    // Phases B and C: one frame per vblank, with injected stalls in phase B only.
     settle(50.0);
     std::vector<AppFrame> frames;
     std::vector<StallProbe> stalls;
@@ -350,8 +354,12 @@ int run(const Options& options) {
     std::vector<double> vblankIntervals;
     const std::uint32_t firstSeq = seq;
     const std::int64_t phaseBStart = qpcNow();
+    std::int64_t phaseCStart = 0;
     std::int64_t lastVBlank = 0;
-    for (int frame = 0; frame < kSteadyFrames; ++frame) {
+    for (int frame = 0; frame < kSteadyFrames + kFloorFrames; ++frame) {
+        if (frame == kSteadyFrames) {
+            phaseCStart = qpcNow(); // Phase C: the same animation, no stalls.
+        }
         MarkerWindow::pump();
         auto vblank = clock->wait();
         if (!vblank) {
@@ -362,7 +370,7 @@ int run(const Options& options) {
         }
         lastVBlank = *vblank;
         const auto frameSeq = firstSeq + static_cast<std::uint32_t>(frame);
-        if (frame % kStallEvery == kStallEvery / 2) {
+        if (frame < kSteadyFrames && frame % kStallEvery == kStallEvery / 2) {
             const double stallMs = kStallMs[static_cast<std::size_t>(frame / kStallEvery) % kStallMs.size()];
             stalls.push_back(StallProbe{frameSeq, stallMs, std::nullopt});
             stallAffected.push_back(frameSeq);
@@ -372,7 +380,7 @@ int run(const Options& options) {
         window.paint(static_cast<std::uint16_t>(frameSeq));
         frames.push_back(AppFrame{frameSeq, qpcNow(), *vblank});
     }
-    const std::int64_t phaseBEnd = qpcNow();
+    const std::int64_t phaseCEnd = qpcNow();
     settle(100.0);
     (*probe)->stop();
     const SessionVerdict after = precheck(session);
@@ -402,14 +410,16 @@ int run(const Options& options) {
                                        cadence.consistent, cadence.intervals));
     }
 
-    // Phase B content statistics: the environment floor for any one-frame-per-vblank window.
+    // Phase C content statistics: the environment floor for a one-frame-per-vblank
+    // window, with no injected stall in the span.
+    const std::uint32_t floorSeq = firstSeq + static_cast<std::uint32_t>(kSteadyFrames);
     std::vector<ScreenUpdate> steadyUpdates;
     for (const ScreenUpdate& update : updates) {
-        if (update.marker && *update.marker >= static_cast<std::uint16_t>(firstSeq)) {
+        if (update.marker && *update.marker >= static_cast<std::uint16_t>(floorSeq)) {
             steadyUpdates.push_back(update);
         }
     }
-    const ContentStats steady = analyseContent(steadyUpdates, phaseBStart, phaseBEnd + rate.fromMs(50.0), period, rate);
+    const ContentStats steady = analyseContent(steadyUpdates, phaseCStart, phaseCEnd + rate.fromMs(50.0), period, rate);
     // WaitForVBlank wake-ups against DWM's grid: the phase must be small and stable
     // for the vblank-quantised screen times to be on the real refresh grid.
     std::vector<double> wakePhases;
@@ -433,11 +443,13 @@ int run(const Options& options) {
     if (accessLost > 0) {
         problems.push_back(std::format("desktop duplication lost access {} times", accessLost));
     }
-    if (auto failure = (*probe)->failure()) {
-        problems.push_back(*failure);
+    const std::optional<std::string> captureFailure = (*probe)->failure();
+    if (captureFailure) {
+        problems.push_back("capture failed: " + *captureFailure);
     }
 
-    const bool invalid = !after.valid || accessLost > 0;
+    // No screen data, like a lost session: the run is neither pass nor fail.
+    const bool invalid = !after.valid || accessLost > 0 || captureFailure.has_value();
     const char* status = invalid ? "invalid" : (problems.empty() ? "pass" : "fail");
     json.field("status", status);
     json.key("sessionStart");
@@ -454,7 +466,10 @@ int run(const Options& options) {
     json.key("vblankIntervalMs").value(vblanks);
     json.key("vblankWakePhaseMs").value(wake);
     json.field("phaseASeconds", rate.toMs(phaseAEnd - phaseAStart) / 1000.0);
-    json.field("phaseBSeconds", rate.toMs(phaseBEnd - phaseBStart) / 1000.0);
+    json.field("phaseBSeconds", rate.toMs(phaseCStart - phaseBStart) / 1000.0);
+    json.field("phaseCSeconds", rate.toMs(phaseCEnd - phaseCStart) / 1000.0);
+    // The causal bound every phase A trial's screen - drawn must meet.
+    json.field("residualBoundMs", ValidationTolerance{}.maxResidualPeriods * periodMs);
     json.key("delays").beginArray();
     for (const DelayResult& result : latency.delays) {
         writeDelay(json, result);
@@ -501,8 +516,9 @@ int run(const Options& options) {
     }
     std::printf("  cadence: %zu/%zu intervals consistent, %zu frames dropped by the desktop\n", cadence.consistent,
                 cadence.intervals, cadence.dropped);
-    std::printf("  environment floor: %zu updates, %zu refreshes, missed %.1f %%, max interval %.2f ms\n",
-                steady.updates, steady.refreshes, 100.0 * steady.missedFraction, steady.maxIntervalMs);
+    std::printf(
+        "  environment floor (phase C, no stalls): %zu updates, %zu refreshes, missed %.1f %%, max interval %.2f ms\n",
+        steady.updates, steady.refreshes, 100.0 * steady.missedFraction, steady.maxIntervalMs);
     for (const std::string& problem : problems) {
         std::printf("  problem: %s\n", problem.c_str());
     }

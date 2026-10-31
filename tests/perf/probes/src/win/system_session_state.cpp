@@ -92,23 +92,34 @@ ULONG CALLBACK onDisplayState(PVOID context, ULONG type, PVOID setting) {
 }
 
 void readDisplayPower(SessionFacts& facts) {
-    DisplayStateWait wait;
-    wait.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (wait.ready == nullptr) {
+    /* The callback context lives on the heap. PowerSettingUnregisterNotification
+       is not documented to wait for a callback already in flight, so after a
+       timeout the state (and its event) is deliberately leaked: a late callback
+       then writes to live memory. A few bytes per timed-out precheck, which only
+       happens when the power manager does not answer within 500 ms. */
+    auto* wait = new DisplayStateWait;
+    wait->ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (wait->ready == nullptr) {
+        delete wait;
         return;
     }
     DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS parameters{};
     parameters.Callback = &onDisplayState;
-    parameters.Context = &wait;
+    parameters.Context = wait;
     HPOWERNOTIFY registration = nullptr;
+    bool answered = false;
     if (PowerSettingRegisterNotification(&kConsoleDisplayState, DEVICE_NOTIFY_CALLBACK, &parameters, &registration) ==
         ERROR_SUCCESS) {
-        WaitForSingleObject(wait.ready, 500);
-        // Unregistering waits for a callback in flight, so `wait` outlives every callback.
+        answered = WaitForSingleObject(wait->ready, 500) == WAIT_OBJECT_0;
         PowerSettingUnregisterNotification(registration);
     }
-    CloseHandle(wait.ready);
-    switch (wait.state.load(std::memory_order_acquire)) {
+    const int state = wait->state.load(std::memory_order_acquire);
+    if (answered || registration == nullptr) {
+        // The one callback has run (or none was registered), so nothing can touch `wait` again.
+        CloseHandle(wait->ready);
+        delete wait;
+    }
+    switch (state) {
     case 0: facts.consoleDisplay = DisplayPower::Off; break;
     case 1: facts.consoleDisplay = DisplayPower::On; break;
     case 2: facts.consoleDisplay = DisplayPower::Dimmed; break;
@@ -125,12 +136,13 @@ Result<void> readOutputs(SessionFacts& facts) {
     }
     for (UINT a = 0;; ++a) {
         ComPtr<IDXGIAdapter1> adapter;
-        if (factory->EnumAdapters1(a, &adapter) == DXGI_ERROR_NOT_FOUND) {
+        // NOT_FOUND ends the list; any other failure (a device lost mid-enumeration) leaves a null pointer.
+        if (FAILED(factory->EnumAdapters1(a, &adapter))) {
             break;
         }
         for (UINT o = 0;; ++o) {
             ComPtr<IDXGIOutput> output;
-            if (adapter->EnumOutputs(o, &output) == DXGI_ERROR_NOT_FOUND) {
+            if (FAILED(adapter->EnumOutputs(o, &output))) {
                 break;
             }
             DXGI_OUTPUT_DESC desc{};

@@ -44,7 +44,8 @@ private:
 };
 
 // Keeps the display and system awake while alive (SetThreadExecutionState with
-// ES_DISPLAY_REQUIRED). Not copyable; restores the default when destroyed.
+// ES_DISPLAY_REQUIRED). Not copyable; restores the default when destroyed. The
+// execution state is per thread, so destroy it on the thread that created it.
 class DisplayRequiredGuard {
 public:
     DisplayRequiredGuard() noexcept;

@@ -66,6 +66,9 @@ struct ViewState {
     double scrollPx = 0; // Top of the view in document pixels.
     std::uint16_t marker = 0;
     bool fillOnly = false; // Baseline mode: background and marker only, no text.
+    // Probe validation: after drawing, the paint (raster paintEvent, RHI render)
+    // spins this long on the GUI thread, a known delay the probes must measure.
+    double injectDelayMs = 0;
 };
 
 // The first visible line and the pixel offset of its top for a scroll position.
@@ -138,9 +141,16 @@ struct QuadInstance {
     std::uint32_t rgba;
 };
 
-// Fills `out` with the quads of one frame (glyphs of visible lines and the marker).
+// Fills `out` with the quads of one frame: glyphs of the visible lines, then the
+// kMarkerCells marker quads last.
 void buildQuads(const TextModel& model, const TextFont& font, const GlyphAtlas& atlas, const Theme& theme,
                 const ViewState& state, QSize view, std::vector<QuadInstance>& out);
+
+// Shrinks `quads` (as buildQuads left them) to at most `capacity` instances while
+// keeping the trailing marker quads, so a frame with too many glyphs loses glyphs,
+// never its marker. Returns true when glyph quads were dropped. Precondition:
+// capacity >= kMarkerCells and quads.size() >= kMarkerCells. O(kMarkerCells).
+bool fitQuads(std::vector<QuadInstance>& quads, std::size_t capacity);
 
 // One completed paint (raster paintEvent or RHI render), in QPC ticks.
 struct PaintRecord {
@@ -158,9 +168,10 @@ public:
     [[nodiscard]] virtual QWidget* widget() = 0;
     virtual void setState(const ViewState& state) = 0;
     [[nodiscard]] virtual const ViewState& state() const = 0;
-    // Repaints synchronously: paint plus flush (raster) or render plus present (RHI).
-    // `dirty` limits the raster repaint (empty = everything); the RHI view always
-    // renders the full frame.
+    // Repaints now. Raster paints and flushes before returning; QRhiWidget does not
+    // render inside repaint(), so the RHI view renders and presents on the window's
+    // next update (the paint log records when). `dirty` limits the raster repaint
+    // (empty = everything); the RHI view always renders the full frame.
     virtual void repaintNow(const QRegion& dirty) = 0;
     [[nodiscard]] const std::vector<PaintRecord>& paints() const noexcept { return m_paints; }
 
@@ -184,9 +195,9 @@ public:
 
     [[nodiscard]] const GlyphRunCache& cache() const noexcept { return m_cache; }
 
-    // Scroll-blit mode: a full repaint after a scroll of less than the view height
-    // moves the backing store (QWidget::scroll) and paints only the exposed strip
-    // and the marker. The flush still covers the whole view.
+    // Scroll-blit mode: a full repaint after a scroll of less than half the view
+    // height moves the backing store (QWidget::scroll) and paints only the exposed
+    // strip and the marker. The flush still covers the whole view.
     void setScrollBlit(bool enabled) noexcept { m_scrollBlit = enabled; }
 
 protected:
@@ -215,6 +226,12 @@ public:
     // The most recent pipeline or resource error (empty when rendering works).
     [[nodiscard]] const QString& error() const noexcept { return m_error; }
     [[nodiscard]] std::size_t lastQuadCount() const noexcept { return m_quads.size(); }
+    // Frames whose glyph quads did not fit the instance buffer (the marker is
+    // always kept; glyphs beyond the capacity are dropped and counted here).
+    [[nodiscard]] std::size_t truncatedFrames() const noexcept { return m_truncatedFrames; }
+    // Milliseconds initialize() spent creating the pipeline (HLSL compiled at run
+    // time; a shipping build would load precompiled .qsb shaders). 0 before then.
+    [[nodiscard]] double pipelineMs() const noexcept { return m_pipelineMs; }
 
 protected:
     void initialize(QRhiCommandBuffer* cb) override;
@@ -238,6 +255,8 @@ private:
     std::unique_ptr<QRhiShaderResourceBindings> m_bindings;
     std::unique_ptr<QRhiGraphicsPipeline> m_pipeline;
     std::size_t m_instanceCapacity = 0;
+    std::size_t m_truncatedFrames = 0;
+    double m_pipelineMs = 0;
     bool m_staticUploaded = false;
     QString m_error;
 };

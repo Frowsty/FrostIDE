@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // s1_first_frame: B1 (first frame, empty workspace) for frost.exe, measured on
-// screen (ADR 0007).
+// screen (ADR 0007). The same harness measures s1_editor --first-frame, whose
+// window has frost.exe's size, to give each editor backend's own B1.
 //
-//   s1_first_frame --exe <absolute path to frost.exe> [--mode warm|cold] [--runs N]
-//                  [--out report.json]
+//   s1_first_frame --exe <absolute path to frost.exe> [--args "<child arguments>"]
+//                  [--mode warm|cold] [--runs N] [--out report.json]
 //
-// Each launch starts frost.exe through CreateProcessW (child_process.hpp) with its
-// first window placed by STARTF_USEPOSITION in the middle of the primary work
-// area and shown without activation, over a solid topmost backdrop window of our
-// own (so a video or animated wallpaper behind it cannot fake a change). A window
+// Each launch starts the target through CreateProcessW (child_process.hpp; --args
+// is passed verbatim, already quoted) with its first window placed by
+// STARTF_USEPOSITION in the middle of the primary work area and shown without
+// activation, over a solid topmost backdrop window of our own (so a video or
+// animated wallpaper behind it cannot fake a change). A window
 // shown without activation by a background process opens below the foreground
 // window, where it is not on screen; so a WinEvent hook (EVENT_OBJECT_CREATE, out
 // of context) makes each new top-level window of the child topmost as soon as it
@@ -22,17 +24,20 @@
 //   settled       the first present in which at least four samples are within 6
 //                 levels of the colour the window shows once idle;
 //   window seen   when EnumWindows first returned a visible, uncloaked window of
-//                 the process (polled every 2 ms; context only).
+//                 the process (polled between Sleep(1) calls, so every 1 to 16 ms
+//                 depending on the system timer resolution; context only).
 // The window is closed with WM_CLOSE 700 ms after it appeared. Times are from the
 // QPC reading just before CreateProcessW to the present's display vblank.
 //
-// --mode warm launches the build-tree frost.exe once to prime the file cache and
-// then N times. --mode cold copies frost.exe and its DLLs into a fresh directory
+// --mode warm launches the build-tree target once to prime the file cache and
+// then N times. --mode cold copies the target and its DLLs into a fresh directory
 // next to it with unbuffered I/O (COPY_FILE_NO_BUFFERING) before each launch, so
 // FrostIDE's own binaries are read from disk and have no prefetch trace; system
 // DLLs stay cached. A true post-reboot cold start is not possible from an agent
 // session (no reboot, and a standby-list purge needs elevation), so "cold" here
-// is that proxy. Exit codes: 0 valid, 2 setup error, 3 invalid session.
+// is that proxy; it also pays Defender's first scan of the new files. Exit codes:
+// 0 valid, 2 setup error, 3 invalid run (session, access lost or capture failure;
+// the report says which).
 
 #include "frost/perf/frame_analysis.hpp"
 #include "frost/perf/json_writer.hpp"
@@ -123,6 +128,7 @@ private:
 
 struct Options {
     std::wstring exe;
+    std::wstring arguments; // --args, verbatim.
     bool cold = false;
     int runs = 8;
     std::wstring out;
@@ -136,6 +142,8 @@ Options parseOptions() {
         const std::wstring arg = argv[i];
         if (arg == L"--exe" && i + 1 < count) {
             options.exe = argv[++i];
+        } else if (arg == L"--args" && i + 1 < count) {
+            options.arguments = argv[++i];
         } else if (arg == L"--mode" && i + 1 < count) {
             options.cold = std::wstring(argv[++i]) == L"cold";
         } else if (arg == L"--runs" && i + 1 < count) {
@@ -290,8 +298,9 @@ private:
 
 class Runner {
 public:
-    Runner(DuplicationProbe& probe, std::vector<ScreenPoint> samples, std::pair<int, int> position)
-        : m_probe(probe), m_samples(std::move(samples)), m_position(position) {}
+    Runner(DuplicationProbe& probe, std::vector<ScreenPoint> samples, std::pair<int, int> position,
+           std::wstring arguments)
+        : m_probe(probe), m_samples(std::move(samples)), m_position(position), m_arguments(std::move(arguments)) {}
 
     LaunchResult launch(const std::filesystem::path& exe, bool cold, bool priming) {
         LaunchResult result;
@@ -300,6 +309,7 @@ public:
         const TickRate rate = qpcRate();
         frost::s1::LaunchOptions request;
         request.executable = exe.wstring();
+        request.arguments = m_arguments;
         request.windowPosition = m_position;
         auto child = frost::s1::ChildProcess::launch(request);
         if (!child) {
@@ -421,6 +431,7 @@ private:
     DuplicationProbe& m_probe;
     std::vector<ScreenPoint> m_samples;
     std::pair<int, int> m_position;
+    std::wstring m_arguments;
 };
 
 int run(const Options& options) {
@@ -430,6 +441,12 @@ int run(const Options& options) {
     json.beginObject();
     json.field("tool", "s1_first_frame");
     json.field("mode", options.cold ? "cold-proxy" : "warm");
+    const auto utf8 = [](const std::wstring& text) {
+        const std::u8string bytes = std::filesystem::path(text).u8string(); // UTF-16 to UTF-8, no code page.
+        return std::string(bytes.begin(), bytes.end());
+    };
+    json.field("target", utf8(std::filesystem::path(options.exe).filename().wstring()));
+    json.field("arguments", utf8(options.arguments));
     const auto fail = [&](const char* status, const std::string& reason, int code) {
         json.field("status", status);
         json.field("reason", reason);
@@ -474,7 +491,7 @@ int run(const Options& options) {
     (*probe)->start();
     pumpFor(400.0); // The backdrop is drawn and captured.
 
-    Runner runner(**probe, samples, {x, y});
+    Runner runner(**probe, samples, {x, y}, options.arguments);
     std::vector<LaunchResult> results;
     const std::filesystem::path coldRoot = exe.parent_path().parent_path() / L"s1-cold";
     if (!options.cold) {
@@ -503,14 +520,26 @@ int run(const Options& options) {
     pumpFor(200.0);
     (*probe)->stop();
     const std::uint32_t lost = (*probe)->accessLost();
+    const std::optional<std::string> captureFailure = (*probe)->failure();
     const SessionVerdict after = precheck(session);
     std::error_code ignored;
     std::filesystem::remove(coldRoot, ignored); // Only when empty.
+    std::string reason;
+    if (!after.valid) {
+        reason = after.problems.empty() ? std::string("the session became invalid") : after.problems.front();
+    } else if (lost != 0) {
+        reason = "Desktop Duplication access was lost";
+    } else if (captureFailure) {
+        reason = "capture failed: " + *captureFailure;
+    }
+    const bool valid = reason.empty();
 
     std::vector<double> firstFrames;
     std::vector<double> settled;
     std::vector<double> seen;
-    json.field("status", after.valid && lost == 0 ? "valid" : "invalid");
+    json.field("status", valid ? "valid" : "invalid");
+    json.field("reason", reason);
+    json.field("captureFailure", captureFailure.value_or(std::string()));
     json.key("sessionStart");
     writeVerdict(json, before);
     json.key("sessionEnd");
@@ -556,7 +585,10 @@ int run(const Options& options) {
             std::printf("  launch problem: %s\n", r.problem.c_str());
         }
     }
-    return after.valid && lost == 0 ? 0 : 3;
+    if (!valid) {
+        std::printf("  INVALID: %s\n", reason.c_str());
+    }
+    return valid ? 0 : 3;
 }
 
 } // namespace

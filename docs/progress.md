@@ -12,32 +12,55 @@ what is next, blockers and open questions for the user.
   - The `ISessionState` precheck.
   - Frame analysis, delay-validation logic and a JSON report.
 
-  It has 67 headless unit tests. It was validated by injected 8 and 25 ms delays (errors +0.12 and -0.57 ms) and
-  by stalls and cadence.
+  It has 67 headless unit tests. On a GDI window it was validated by injected 8 and 25 ms delays (errors +0.12
+  and -0.57 ms) and by stalls and cadence.
 - **Spike tools.** `tests/perf/s1` holds:
   - `s1_probe_validate`;
-  - `s1_editor`, in the app layer: the raster QGlyphRun view and a QRhiWidget D3D11 glyph atlas, with 10
+  - `s1_editor`, in the app layer: the raster QGlyphRun view and a QRhiWidget D3D11 glyph atlas, with 16
     headless tests;
   - `s1_first_frame`;
   - `run-s1.ps1`.
 
   They are Windows only, built only with `WIN32 AND FROST_BUILD_UI`, and never run by CTest.
-- **ADR 0007.** At 5120x1392 the raster backend fails B6 CPU: p99 9.4 ms with full repaint, 7.9 ms with
-  scroll-blit and 6.7 ms with fill only. QRhi uses p99 1.0 ms. B5 passes on both.
-  frost.exe B1 warm is p50 246 ms and p99 344 ms, which fails; the cold proxy is p50 331 ms.
+- **ADR 0007** (run 2, under load, n=1 per configuration). At 5120x1392 the raster backend fails B6 CPU: p99
+  9.4 ms with full repaint, 7.9 ms with scroll-blit and 6.7 ms with fill only. QRhi passes B6 CPU (p99 1.0 ms) but
+  fails the interval (20.8 ms with text) and missed (6.7 %) criteria. S1 is not yet shown to pass for QRhi, and
+  QRhi's B1 is unmeasured. B5 passes on both. frost.exe B1 warm is p50 246 ms and p99 344 ms (= max of 8), which
+  fails; the cold proxy is p50 331 ms.
+- **Review round 1** (code and method):
+  - Verdicts need samples: a gate without enough samples is null ("not measured"). Runs with too few decoded
+    markers or a capture failure are invalid (exit 3) in `s1_editor` and `s1_first_frame`.
+  - `s1_probe_validate` adds phase C, a stall-free environment floor.
+  - New probe validations for both Qt backends: `s1_editor --validate-delays` (the delay spun inside the paint or
+    `QRhiWidget::render`, so the flip-model swap chain is covered) and `--inject-cpu-ms` (a known GUI-thread spin
+    the UI-CPU probe must see within 10 %).
+  - `s1_editor --first-frame` gives each backend's own B1 through `s1_first_frame --args`.
+  - The child launcher runs in the executable's directory, in a kill-on-close job.
+  - DXGI enumeration stops on any failure; the display-state wait no longer outlives its context; the RHI view
+    keeps the marker quads when glyphs overflow; the cycle-meter test is robust under load.
+  - `run-s1.ps1` is now one suite: the validations, five interleaved rounds of all seven configurations, B1 for
+    frost.exe and both backends (20 warm launches each for frost.exe and QRhi), and a min/median/max summary.
+    `-DryRun` prints the plan (47 steps, estimated 9:35 on screen).
+  - The ADR text is qualified as above; the Debug validation report and a DWM counter dump are kept with the raw
+    data (`s1-run1`).
 
 ### Next
-- User decision on ADR 0007 (QRhi editor backend in M1). Then independent review and merge of `m0/s1`.
+- The quiet-window run, arranged with the user (nothing else on screen, no builds):
+  `powershell -ExecutionPolicy Bypass -File tests\perf\s1\run-s1.ps1 -BuildDir build\s1 -OutDir <dir>`, after a
+  Release build of `s1_probe_validate s1_editor s1_first_frame frost`. Its summary replaces ADR 0007's tables.
+- Then the user decision on ADR 0007 (QRhi editor backend in M1), independent review and merge of `m0/s1`.
 - When m0/io lands, port `tests/perf/s1/child_process.cpp` to `IProcessLauncher`.
 
 ### Blockers
-- None. DWM ETW needs elevation, so it is deferred (ADR 0007).
+- The quiet-window run needs the user to free the screen for about 10 minutes.
+- DWM ETW needs elevation, so it is deferred (ADR 0007).
 
 ### Questions for the user
-- Approve the QRhiWidget backend as M1's default editor renderer (ADR 0007, decision 1)?
-- B6 "missed ≤1 %" cannot pass on this desktop while video, Wallpaper Engine and GPU load run. Should gate runs
-  happen on a quiet desktop, or should the gate be relative to a same-session baseline? A budget change needs your
-  approval.
+- When can the quiet-window run take the screen (about 10 minutes)?
+- Approve the QRhiWidget backend as M1's default editor renderer (ADR 0007, decision 1) once that run confirms it?
+- In two runs under load, no backend reached B6's "missed ≤1 %" while video, Wallpaper Engine and GPU load ran.
+  Should gate runs happen on a quiet desktop, or be reported against a same-session environmental floor? A budget
+  change needs your approval.
 
 ## 2026-10-31: M0 bootstrap, session 1
 

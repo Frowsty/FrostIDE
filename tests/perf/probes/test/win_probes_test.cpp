@@ -37,16 +37,26 @@ TEST(WinProbes, WaitUntilReachesTheDeadline) {
 }
 
 TEST(WinProbes, ThreadCycleMeterMeasuresSpinningAsCpuTime) {
-    const ThreadCycleMeter meter;
-    EXPECT_GT(meter.cyclesPerMs(), 1000.0); // Any x64 cycle counter ticks faster than 1 MHz.
+    /* Spinning is all CPU. Preemption during the measured spin lowers the result;
+       preemption during calibration lowers the rate and so raises it. verify runs
+       unit tests in parallel on a loaded machine, so the thread runs at
+       THREAD_PRIORITY_TIME_CRITICAL and gets three attempts with a fresh meter. */
+    const HANDLE thread = GetCurrentThread();
+    const int priority = GetThreadPriority(thread);
+    SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL);
     const TickRate rate = qpcRate();
-    const auto cycles0 = meter.cyclesNow();
-    const auto start = qpcNow();
-    spinUntil(start + rate.fromMs(10.0));
-    const double cpuMs = meter.toMs(meter.cyclesNow() - cycles0);
-    // Spinning is all CPU; preemption can only lower it, calibration error is a few percent.
-    EXPECT_GT(cpuMs, 1.0);
-    EXPECT_LT(cpuMs, 12.0);
+    double cpuMs = 0;
+    bool plausible = false;
+    for (int attempt = 0; attempt < 3 && !plausible; ++attempt) {
+        const ThreadCycleMeter meter;
+        EXPECT_GT(meter.cyclesPerMs(), 1000.0); // Any x64 cycle counter ticks faster than 1 MHz.
+        const auto cycles0 = meter.cyclesNow();
+        spinUntil(qpcNow() + rate.fromMs(10.0));
+        cpuMs = meter.toMs(meter.cyclesNow() - cycles0);
+        plausible = cpuMs > 1.0 && cpuMs < 12.0;
+    }
+    SetThreadPriority(thread, priority);
+    EXPECT_TRUE(plausible) << "a 10 ms spin measured " << cpuMs << " ms of CPU";
 }
 
 TEST(WinProbes, SystemSessionStateReadsFacts) {

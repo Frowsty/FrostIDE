@@ -41,6 +41,8 @@ find_package(Qt6 ${FROST_QT_VERSION} EXACT REQUIRED COMPONENTS GuiPrivate)
 set(s1_editor_sources
     editor/corpus.cpp
     editor/corpus.hpp
+    editor/gates.cpp
+    editor/gates.hpp
     editor/rhi_view.cpp
     editor/views.cpp
     editor/views.hpp)
