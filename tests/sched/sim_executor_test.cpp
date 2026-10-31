@@ -2,7 +2,8 @@
 //
 // Tests for SimExecutor: virtual-time timers (jumps, exact deadlines, equal
 // deadlines, cancellation in virtual time), lane priority and aging identical
-// to the pool's policy, join() driving the simulator, shutdown draining, and
+// to the pool's policy, join() driving the simulator, shutdown draining, a ready
+// handle outliving the simulator, a second take of a result failing, and
 // determinism (same seed, same trace, on every platform; different seeds,
 // different interleavings).
 
@@ -12,6 +13,7 @@
 #include "frost/sched/task.hpp"
 
 #include "sched/sim_scenario.hpp"
+#include "support/crash_dialogs.hpp"
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -183,6 +185,31 @@ TEST(SimExecutor, ShutdownDrainsWithoutMovingTime) {
     } // The destructor drains the last one.
     EXPECT_EQ(cutShort, 6);
     EXPECT_EQ(sawStop, 6);
+}
+
+Task<int> fortyTwo() { co_return 42; }
+
+// The destructor drains, so the handle is ready and join() must not touch the destroyed simulator.
+TEST(SimExecutor, AReadyHandleOutlivesTheSimulator) {
+    JoinHandle<int> handle;
+    {
+        SimExecutor sim;
+        handle = sim.spawn(Lane::UserVisible, fortyTwo());
+    }
+    ASSERT_TRUE(handle.ready());
+    EXPECT_EQ(handle.join(), 42);
+}
+
+TEST(SimExecutorDeathTest, TakingAResultTwiceIsAContractViolation) {
+    EXPECT_DEATH(
+        {
+            frost::test::disableCrashDialogs();
+            SimExecutor sim;
+            JoinHandle<int> handle = sim.spawn(Lane::UserVisible, fortyTwo());
+            (void)handle.join();
+            (void)handle.join();
+        },
+        "assertion violated: m_value.has_value\\(\\)");
 }
 
 TEST(SimExecutor, SameSeedGivesTheSameTrace) {

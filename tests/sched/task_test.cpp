@@ -3,7 +3,8 @@
 // Tests for Task<T>: lazy start, values, void and move-only results,
 // composition, symmetric transfer (deep chains in constant stack), and the
 // exception policy at the task boundary (Result tasks get ErrorCode::Internal;
-// other tasks abort through the contract-violation handler).
+// other tasks abort through the contract-violation handler), and awaiting a
+// completed task being a contract violation.
 
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/task.hpp"
@@ -170,6 +171,24 @@ TEST(TaskDeathTest, ExceptionInNonResultTaskAborts) {
             (void)syncWait(throwsInPlainTask());
         },
         "no exception escapes a Task body \\(caught: boom\\)");
+}
+
+Task<int> fortyTwo() { co_return 42; }
+
+Task<int> awaitTwice(Task<int>& inner) {
+    const int first = co_await inner;
+    const int second = co_await inner; // The task has completed: a contract violation.
+    co_return first + second;
+}
+
+TEST(TaskDeathTest, AwaitingACompletedTaskIsAContractViolation) {
+    EXPECT_DEATH(
+        {
+            frost::test::disableCrashDialogs();
+            Task<int> inner = fortyTwo();
+            (void)syncWait(awaitTwice(inner));
+        },
+        "precondition violated: valid\\(\\) && !m_handle.done\\(\\)");
 }
 
 } // namespace

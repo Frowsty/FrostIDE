@@ -4,7 +4,8 @@
 // priority and aging on a single worker, the Background+Idle cap (with
 // Interactive work still running), work stealing, cancellation before start and
 // during a run, timers on the system clock and on a ManualClock, shutdown with
-// pending work, and lost-wakeup hunting.
+// pending work (and with a sleep whose deadline just passed), a ready handle
+// outliving the pool, and lost-wakeup hunting.
 
 #include "frost/core/clock.hpp"
 #include "frost/sched/lane_policy.hpp"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -361,6 +363,60 @@ TEST(ThreadPool, TimersFollowAnInjectedClock) {
     pool.notifyClockChanged();
     EXPECT_EQ(handle.join(), deadline);
     EXPECT_TRUE(expired);
+}
+
+// A test clock that counts its reads, so a test can tell when the timer thread
+// has computed its next wait and gone to sleep.
+class CountingClock final : public frost::IClock {
+public:
+    [[nodiscard]] SteadyTime steadyNow() const noexcept override {
+        // Acq_rel/acquire: the test thread polls reads() while the pool's threads read the time.
+        m_reads.fetch_add(1, std::memory_order_acq_rel);
+        return SteadyTime(Duration(m_now.load(std::memory_order_acquire)));
+    }
+    [[nodiscard]] SystemTime systemNow() const noexcept override { return SystemTime{}; }
+    void advance(Duration delta) noexcept { m_now.fetch_add(delta.count(), std::memory_order_acq_rel); }
+    [[nodiscard]] int reads() const noexcept { return m_reads.load(std::memory_order_acquire); }
+
+private:
+    mutable std::atomic<int> m_reads{0};
+    std::atomic<Duration::rep> m_now{0};
+};
+
+Task<bool> sleepUntilDeadline(IScheduler& scheduler, frost::IClock::SteadyTime deadline) {
+    co_return co_await scheduler.sleepUntil(deadline);
+}
+
+// The shutdown flush reports every pending sleep as cut short (false), even one
+// whose deadline has passed but which the timer thread had not collected yet.
+TEST(ThreadPool, ShutdownCutsShortASleepWhoseDeadlineHasJustPassed) {
+    CountingClock clock;
+    auto pool = std::make_unique<ThreadPool>(ThreadPoolOptions{.workerCount = 2, .clock = &clock});
+    // The timer thread reads the clock once at start, then waits for a timer.
+    ASSERT_TRUE(waitFor([&] { return clock.reads() >= 1; }));
+    const frost::IClock::SteadyTime deadline{std::chrono::hours(1)};
+    JoinHandle<bool> handle = pool->spawn(Lane::Background, sleepUntilDeadline(*pool, deadline));
+    // Read 2: the sleep checks its deadline. Reads 3 and 4: the timer thread
+    // checks for due timers and computes its wait (up to an hour of real time).
+    ASSERT_TRUE(waitFor([&] { return clock.reads() >= 4; }));
+    clock.advance(std::chrono::hours(2)); // Past the deadline, without notifyClockChanged().
+    if (clock.reads() != 4) {
+        GTEST_SKIP() << "the timer thread woke spuriously and collected the timer itself";
+    }
+    pool.reset(); // Shutdown flushes the timer although its deadline has passed.
+    EXPECT_FALSE(handle.join());
+}
+
+// shutdown() drains, so once the pool is gone every handle is ready, and
+// join() must take the result without touching the destroyed pool.
+TEST(ThreadPool, AReadyHandleOutlivesThePool) {
+    JoinHandle<int> handle;
+    {
+        ThreadPool pool(ThreadPoolOptions{.workerCount = 2});
+        handle = pool.spawn(Lane::Interactive, quick(42));
+    }
+    ASSERT_TRUE(handle.ready());
+    EXPECT_EQ(handle.join(), 42);
 }
 
 Task<void> detachedWork(std::atomic<int>& counter) {

@@ -60,10 +60,10 @@ struct Op {
     bool throws = false;
 };
 
+// State the scenario's tasks share. Declared before the SimExecutor (which
+// drains its tasks when destroyed), so it outlives every task that uses it.
 struct Context {
-    explicit Context(SimExecutor& executor) : sim(executor) {}
-
-    SimExecutor& sim;
+    SimExecutor* sim = nullptr; // Set right after the simulator is constructed.
     std::vector<std::string> log;
     std::vector<std::string> violations;
     LatestWins latest;
@@ -99,9 +99,9 @@ inline int expectedChain(int depth, int value) {
 
 // Sleeps until now + ms and checks the virtual-time contract.
 inline Task<bool> checkedSleep(Context& ctx, int ms, std::stop_token token, std::string who) {
-    const IClock::SteadyTime deadline = ctx.sim.steadyNow() + std::chrono::milliseconds(ms);
-    const bool expired = co_await ctx.sim.sleepUntil(deadline, std::move(token));
-    const IClock::SteadyTime now = ctx.sim.steadyNow();
+    const IClock::SteadyTime deadline = ctx.sim->steadyNow() + std::chrono::milliseconds(ms);
+    const bool expired = co_await ctx.sim->sleepUntil(deadline, std::move(token));
+    const IClock::SteadyTime now = ctx.sim->steadyNow();
     if (expired) {
         ctx.check(now == deadline, who + ": expired sleep resumed off its deadline");
     } else {
@@ -113,7 +113,7 @@ inline Task<bool> checkedSleep(Context& ctx, int ms, std::stop_token token, std:
 inline Task<Result<int>> child(Context& ctx, std::string name, Lane lane, int value, int sleepMs, bool throws,
                                std::stop_token token) {
     ++ctx.bodiesRun;
-    ctx.check(ctx.sim.currentLane() == lane, name + ": child started on the wrong lane");
+    ctx.check(ctx.sim->currentLane() == lane, name + ": child started on the wrong lane");
     ctx.log.push_back(name + " start");
     if (sleepMs > 0) {
         const bool expired = co_await checkedSleep(ctx, sleepMs, token, name);
@@ -151,8 +151,8 @@ inline Task<int> root(Context& ctx, int id, std::vector<Op> plan) {
         switch (op.kind) {
         case OpKind::Compute: checksum += co_await computeChain(op.value % 4, op.value); break;
         case OpKind::Hop:
-            co_await ctx.sim.schedule(op.lane);
-            ctx.check(ctx.sim.currentLane() == op.lane, name + ": hop resumed on the wrong lane");
+            co_await ctx.sim->schedule(op.lane);
+            ctx.check(ctx.sim->currentLane() == op.lane, name + ": hop resumed on the wrong lane");
             ctx.log.push_back(name + " hop " + std::string(toString(op.lane)));
             break;
         case OpKind::Sleep:
@@ -164,11 +164,11 @@ inline Task<int> root(Context& ctx, int id, std::vector<Op> plan) {
             const std::stop_token token = op.stop == StopMode::None ? std::stop_token{} : source.get_token();
             ++ctx.spawned;
             JoinHandle<Result<int>> handle =
-                ctx.sim.spawn(op.lane, child(ctx, name + "c", op.lane, op.value, op.sleepMs, op.throws, token), token);
+                ctx.sim->spawn(op.lane, child(ctx, name + "c", op.lane, op.value, op.sleepMs, op.throws, token), token);
             if (op.stop == StopMode::RightAfterSpawn) {
                 source.request_stop();
             } else if (op.stop == StopMode::AfterAYield) {
-                co_await ctx.sim.schedule(op.lane);
+                co_await ctx.sim->schedule(op.lane);
                 source.request_stop();
             }
             const Result<int> result = co_await handle;
@@ -190,7 +190,7 @@ inline Task<int> root(Context& ctx, int id, std::vector<Op> plan) {
         }
         case OpKind::Latest: {
             const LatestWins::Ticket ticket = ctx.latest.next();
-            ctx.sim.spawn(Lane::Interactive, latestRequest(ctx, ticket, op.sleepMs)).detach();
+            ctx.sim->spawn(Lane::Interactive, latestRequest(ctx, ticket, op.sleepMs)).detach();
             break;
         }
         }
@@ -280,8 +280,9 @@ inline ScenarioResult runScenario(std::uint64_t workloadSeed, std::uint64_t simS
     ScenarioResult out;
     const std::vector<std::vector<Op>> plans = generatePlans(workloadSeed);
     {
+        Context ctx;
         SimExecutor sim(SimOptions{.seed = simSeed, .recordTrace = true});
-        Context ctx(sim);
+        ctx.sim = &sim;
         std::vector<JoinHandle<int>> roots;
         for (std::size_t r = 0; r < plans.size(); ++r) {
             roots.push_back(sim.spawn(kLanes[r % kLaneCount], root(ctx, static_cast<int>(r), plans[r])));

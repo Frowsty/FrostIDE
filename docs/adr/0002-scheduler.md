@@ -44,6 +44,9 @@ lane)`, `clock()`, `currentLane()`, `stopToken()`, `addTimer`/`cancelTimer`, and
 - `spawn` starts a refcounted runner frame (two references: the frame and the handle) and returns a
   `JoinHandle<T>` that can be awaited, `join()`ed from a non-worker thread, or `detach()`ed. A join state
   machine (Pending → Awaiting/Blocking → Done) on one atomic makes completion and awaiting race-free.
+  A result can be taken once; a second take is a contract violation, not a moved-from value.
+- Lifetime: shutdown drains, so every handle is ready once its scheduler is gone. A ready handle may
+  outlive its scheduler, and `join()` then only takes the result. A pending handle must not outlive it.
 - `spawn(lane, task, token)` (T must be `Result<U>` or `void`) skips the body if `token` is stopped before
   the task starts: the handle reports `cancelledBeforeStart()`, and the result is `ErrorCode::Cancelled`
   (for `void`, nothing). Cancellation while running is cooperative: tasks check their token, and sleeps
@@ -81,6 +84,10 @@ Dispatching a lane resets its counter.
   clamped to `[1, workers − 1]` so one worker is always free of low-lane work. Slots are reserved with a CAS
   on `m_lowRunning` before taking low-lane work and released when the segment ends; a suspended coroutine
   (sleeping, awaiting I/O or a join) holds no slot.
+- **"Cores" means logical threads**: PLAN.md's "cores−4" is read as `hardware_concurrency − 4`, the same
+  unit as the N−1 workers. On an SMT machine a worker running Interactive work may therefore share a
+  physical core with a Background segment on its sibling thread. This is revisited with the M1 load
+  measurements (indexing while typing), where a physical-core cap can be compared against it.
 - **Parking**: idle workers spin (`kSpinRounds = 16` rounds of 32 `pause` instructions with a full search
   each), then park on an event count (`m_epoch`, `std::atomic::wait`). A producer bumps and notifies only if
   a worker is parked and the work is runnable under the cap; a worker that takes work while more eligible
@@ -109,6 +116,14 @@ release/acquire. That only strengthens the paper's orderings, and on x86-64 both
 `ChaseLevDeque.PushPublishesElementContentsToThieves` demonstrates it: with the paper's orderings under TSan
 it reports a race; with the strengthening it is clean.
 
+The flip side: the TSan runs check the strengthened variant, so they cannot check the fence-based
+publication path that release builds use. Those orderings (exactly figure 1 of Lê et al.) are checked by
+reasoning, recorded beside each atomic, and by tests on real hardware such as
+`ChaseLevDeque.LastElementGoesToExactlyOneTaker` and the long owner-plus-thieves stress run, until the
+TODO(M1) Relacy-style model check covers them. x86-64 reorders only a store with a later load, so these
+tests can catch a missing seq_cst fence in `pop()`/`steal()` but not a too-weak release or acquire; an arm64
+leg (PLAN.md, 1.x) would.
+
 ### SimExecutor
 One dispatcher, no threads, driven by the test (`step`, `runUntilIdle`, `runUntil`, `runFor`, or
 `JoinHandle::join()`). Each dispatch asks a `LaneSelector` for the lane and picks one ready element of that
@@ -125,7 +140,7 @@ All locked state uses `frost::Mutex` with `FROST_GUARDED_BY`: the injection queu
 timer map, and `LatestWins`. Atomics are used only where the comment beside them explains the ordering.
 
 ### Tests
-- `sched_tests` (unit, every configuration): 56 tests over the deque, the lane policy, tasks, the pool,
+- `sched_tests` (unit, every configuration): 61 tests over the deque, the lane policy, tasks, the pool,
   SimExecutor and LatestWins.
 - `sched_stress_tests` (label `stress`; skipped in Debug, run in Release, ASan and TSan): 10k SimExecutor
   seeds with an invariant and lane-policy oracle per seed and a determinism re-check on every 97th; the
@@ -182,7 +197,7 @@ skipped leaves never ran, and results and cancellations add up.
 | Linux ASan+UBSan (Debug) | 2.4 s | 15.7 s | 0.8 s | 19.3 s |
 | Linux Release | 0.1 s | 4.7 s | 0.4 s | 5.2 s |
 
-The TSan and ASan unit runs (56 tests) take 0.6 s and 1.7 s.
+The TSan and ASan unit runs (56 tests at the time) took 0.6 s and 1.7 s.
 
 ## Consequences
 - Every scheduling decision except within-lane order is shared code (`LaneSelector`), so SimExecutor

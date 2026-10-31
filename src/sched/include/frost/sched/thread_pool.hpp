@@ -160,6 +160,7 @@ private:
     void wakeOne() noexcept;
     void finishUnit() noexcept;
     void signalExit() noexcept;
+    // Moves due timers (all of them when `all`, the shutdown flush) from m_timers to `due`.
     void collectDueTimers(std::vector<DueTimer>& due, bool all) FROST_REQUIRES(m_timerMutex);
 
     const IClock* m_clock;

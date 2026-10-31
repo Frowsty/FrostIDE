@@ -102,10 +102,13 @@ public:
         }
     }
 
-    // Moves the result out. Precondition: the body has completed.
+    // Moves the result out. Precondition: the body has completed and the result
+    // was not taken before (checked: a second take is a contract violation).
     [[nodiscard]] T take() {
         FROST_ASSERT(m_value.has_value());
-        return std::move(*m_value);
+        T value = std::move(*m_value);
+        m_value.reset();
+        return value;
     }
 
 private:
@@ -154,7 +157,7 @@ public:
     [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(m_handle); }
 
     // Awaiting starts the body (symmetric transfer) and yields its result.
-    // Precondition: valid() and not awaited before.
+    // Precondition: valid() and not awaited before (a completed task is detected).
     struct Awaiter {
         Handle handle;
         [[nodiscard]] bool await_ready() const noexcept { return false; }
@@ -165,11 +168,11 @@ public:
         T await_resume() const { return handle.promise().take(); }
     };
     [[nodiscard]] Awaiter operator co_await() & noexcept {
-        FROST_PRE(valid());
+        FROST_PRE(valid() && !m_handle.done());
         return Awaiter{m_handle};
     }
     [[nodiscard]] Awaiter operator co_await() && noexcept {
-        FROST_PRE(valid());
+        FROST_PRE(valid() && !m_handle.done());
         return Awaiter{m_handle};
     }
 

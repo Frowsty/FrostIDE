@@ -246,9 +246,12 @@ struct JoinStorage {
             m_value.emplace(std::unexpected(Error(ErrorCode::Cancelled, "cancelled before start")));
         }
     }
+    // Moves the result out; a second take is a contract violation (not a moved-from value).
     [[nodiscard]] T takeValue() {
         FROST_ASSERT(m_value.has_value());
-        return std::move(*m_value);
+        T value = std::move(*m_value);
+        m_value.reset();
+        return value;
     }
     std::optional<T> m_value;
     bool m_cancelled = false;
@@ -346,6 +349,8 @@ JoinFrame<T> runJoined(Task<T> task, std::stop_token token) {
 // The single consumer of a spawned task's result. Move-only. Destroying it (or
 // detach()) gives up the result; the task keeps running. Thread safety: one
 // thread uses a JoinHandle at a time; it may race freely with the task finishing.
+// Lifetime: a ready handle may outlive its scheduler (every handle is ready once
+// its scheduler has shut down); a pending one must not (see join()).
 template<class T>
 class [[nodiscard]] JoinHandle {
 public:
@@ -387,13 +392,22 @@ public:
     // Waits for the result and moves it out. On a caller-driven scheduler
     // (SimExecutor) it runs the scheduler until the task is done; otherwise it
     // blocks the thread. The handle stays valid (ready() is true afterwards), but
-    // the result can be taken only once, by join() or co_await. Preconditions:
-    // valid(); not on a ThreadPool worker when blocking; on a caller-driven
-    // scheduler, the task must be able to finish (an idle scheduler with the task
-    // pending is a contract violation, i.e. a deadlock).
+    // the result can be taken only once, by join() or co_await (a second take is
+    // a contract violation). Preconditions: valid(); not on a ThreadPool worker
+    // when blocking; on a caller-driven scheduler, the task must be able to
+    // finish (an idle scheduler with the task pending is a contract violation,
+    // i.e. a deadlock).
+    // Lifetime: a ready handle may outlive its scheduler (shutdown drains, so
+    // every handle is ready once the scheduler is gone) and join() then only
+    // takes the result. A pending handle must not outlive its scheduler.
     T join() {
         FROST_PRE(valid());
         detail::JoinPromise<T>& promise = m_frame.promise();
+        // Acquire: pairs with the producer's exchange to Done. A finished task needs
+        // no scheduler, which may already be destroyed, so it is never touched here.
+        if (promise.m_state.load(std::memory_order_acquire) == detail::kJoinDone) {
+            return promise.takeValue();
+        }
         if (promise.m_scheduler != nullptr && promise.m_scheduler->callerDriven()) {
             while (promise.m_state.load(std::memory_order_acquire) != detail::kJoinDone) {
                 const bool progressed = promise.m_scheduler->driveOne();

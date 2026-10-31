@@ -26,7 +26,8 @@
 // fence-based publication of slots in the paper looks like a data race on the
 // payload. TSan builds therefore also make the slot accesses release/acquire.
 // That only strengthens the paper's orderings, so its correctness argument
-// still holds; on x86-64 both variants compile to the same plain moves.
+// still holds; on x86-64 both variants compile to the same plain moves. The
+// price: TSan cannot check the release build's fence-based path (ADR 0002).
 #if defined(__SANITIZE_THREAD__)
 #define FROST_SCHED_TSAN 1
 #elif defined(__has_feature)

@@ -509,7 +509,9 @@ void ThreadPool::collectDueTimers(std::vector<DueTimer>& due, bool all) {
             break;
         }
         TimerRequest& request = *it->second;
-        request.expired = reached;
+        // The shutdown flush cuts every sleep short, as documented in shutdown(), even
+        // one whose deadline has passed but which the timer thread had not collected yet.
+        request.expired = reached && !all;
         due.emplace_back(request.handle, request.lane);
         m_timers.erase(it);
     }
