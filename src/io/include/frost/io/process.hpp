@@ -1,0 +1,225 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// IProcessLauncher: the only way FrostIDE starts child processes (CLAUDE.md,
+// PLAN.md sections 3.5 and 6.5), plus the process handle it returns and the
+// runToCompletion convenience.
+//
+/*
+ * Launch rules (PLAN.md section 3.5, trust model):
+ *   - The executable is an absolute path. Relative names fail with
+ *     InvalidArgument; the launcher never searches PATH, the current directory
+ *     or the project directory. Callers resolve tools from detection results.
+ *   - Arguments are UTF-8 and reach the child exactly: on Windows they are
+ *     quoted with the inverse of the MSVC CRT / CommandLineToArgvW parsing
+ *     rules (appendWindowsArgument below); on POSIX they are passed as argv.
+ *   - Windows batch files (.bat, .cmd) are refused with Unsupported: cmd.exe
+ *     re-parses their command line with different rules, so argument quoting
+ *     cannot be made safe here (the "BatBadBut" class of injection bugs).
+ *     TODO(M2): a dedicated cmd.exe launcher with cmd-specific escaping for
+ *     vcvarsall.bat and friends.
+ *   - Only the child's three standard handles are inherited: Windows passes an
+ *     explicit PROC_THREAD_ATTRIBUTE_HANDLE_LIST; POSIX opens every descriptor
+ *     with O_CLOEXEC and the child closes everything above 2 before exec.
+ *   - TODO(M1): log the resolved executable, working directory and arguments
+ *     (PLAN.md 3.5 requires it) once frost::core has logging.
+ *
+ * Pipes. Streams configured as Stdio::Pipe are connected to the IProcess:
+ * writeStdin/readStdout/readStderr block until done (the asio reactor that
+ * makes them asynchronous arrives in M1). A caller that reads only one pipe
+ * while the child fills the other deadlocks; communicate() and
+ * runToCompletion() drain all pipes together and are the safe default.
+ * TODO(M1): async pipe I/O on the reactor (IOCP / epoll).
+ *
+ * Process tree. With killOnClose (the default) the child is contained: on
+ * Windows it starts inside a new Job Object with
+ * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; on POSIX it leads a new process group.
+ * terminate() then ends the whole tree, and destroying the IProcess ends
+ * whatever is still running in it. Without killOnClose only the child itself
+ * is terminated and destroying the IProcess leaves it running.
+ * TODO(M1): supervision with restart and backoff (PLAN.md section 3.1).
+ */
+#pragma once
+
+#include "frost/core/clock.hpp"
+#include "frost/core/error.hpp"
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace frost::io {
+
+// How one of the child's standard streams is connected.
+enum class Stdio : unsigned char {
+    Inherit,         // The parent's handle (or the null device if the parent has none, e.g. a GUI process).
+    Null,            // The null device: reads see EOF, writes are discarded.
+    Pipe,            // A pipe to the IProcess.
+    MergeIntoStdout, // stderr only: the same handle as the child's stdout (like 2>&1).
+};
+
+struct ProcessSpec {
+    std::string executable{};             // Absolute path (UTF-8).
+    std::vector<std::string> arguments{}; // argv[1..]; argv[0] is always the executable path.
+    std::string workingDirectory{};       // Absolute path, or empty to use the parent's current directory.
+
+    // Start from an empty environment instead of a copy of the parent's.
+    bool cleanEnvironment = false;
+    // Applied in order on top of the parent's (or the empty) environment: a value sets the
+    // variable, nullopt removes it. Names are case-insensitive on Windows, as the OS treats them.
+    std::vector<std::pair<std::string, std::optional<std::string>>> environment{};
+
+    Stdio stdinMode = Stdio::Null;
+    Stdio stdoutMode = Stdio::Pipe;
+    Stdio stderrMode = Stdio::Pipe;
+
+    // Contain the child's process tree (see the header comment).
+    bool killOnClose = true;
+};
+
+// The exit code reported after terminate(): 128 + SIGKILL, the POSIX shell's
+// convention, so Windows and POSIX agree.
+inline constexpr int kTerminatedExitCode = 137;
+
+struct ExitStatus {
+    // Windows: the process exit code (DWORD bits as int, so NTSTATUS crashes are negative).
+    // POSIX: the exit status, or 128 + the signal number if a signal ended the process.
+    int exitCode = 0;
+    // POSIX: the signal that ended the process, 0 if it exited. Always 0 on Windows.
+    int signal = 0;
+
+    friend bool operator==(const ExitStatus&, const ExitStatus&) = default;
+};
+
+// What communicate() and runToCompletion() return.
+struct ProcessResult {
+    int exitCode = 0; // As ExitStatus::exitCode.
+    int signal = 0;   // As ExitStatus::signal.
+    std::string stdoutBytes{};
+    std::string stderrBytes{};
+};
+
+using ProcessId = std::uint32_t;
+
+/*
+ * A running (or finished) child process. Owned through std::unique_ptr, so,
+ * unlike the reference-passed seams, it has a public virtual destructor.
+ * Destruction closes the pipes and, with killOnClose, ends the process tree.
+ *
+ * Thread safety: operations on different streams (stdin, stdout, stderr) and
+ * wait()/terminate() may run concurrently from different threads; operations
+ * on the same stream must not. communicate() must not overlap any other call.
+ */
+class IProcess {
+public:
+    virtual ~IProcess() = default;
+    IProcess(const IProcess&) = delete ("a process has exactly one owner");
+    IProcess& operator=(const IProcess&) = delete ("a process has exactly one owner");
+
+    [[nodiscard]] virtual ProcessId pid() const noexcept = 0;
+
+    // Writes all of `bytes` to the child's stdin, blocking while the pipe is full.
+    // Errors: InvalidArgument (stdin is not a pipe or was closed), IoError (the child closed it).
+    [[nodiscard]] virtual Result<void> writeStdin(std::string_view bytes) = 0;
+    // Closes the parent's end of the stdin pipe, so the child sees EOF. Idempotent.
+    virtual void closeStdin() noexcept = 0;
+
+    // Reads up to buffer.size() bytes, blocking until at least one byte or EOF;
+    // returns 0 at EOF. Errors: InvalidArgument (not a pipe), IoError.
+    [[nodiscard]] virtual Result<std::size_t> readStdout(std::span<char> buffer) = 0;
+    [[nodiscard]] virtual Result<std::size_t> readStderr(std::span<char> buffer) = 0;
+
+    // Waits for the process to exit (forever when `timeout` is nullopt) and returns its
+    // status; later calls return the same status. Errors: Timeout (still running), IoError.
+    [[nodiscard]] virtual Result<ExitStatus> wait(std::optional<IClock::Duration> timeout = std::nullopt) = 0;
+
+    // Forcefully ends the process (or its tree, with killOnClose) with kTerminatedExitCode
+    // or SIGKILL. Succeeds if it has already exited. Does not wait; call wait() afterwards.
+    [[nodiscard]] virtual Result<void> terminate() = 0;
+
+    /*
+     * Writes `stdinData` to the stdin pipe and closes it, reads stdout and stderr
+     * until EOF, and waits for exit, all concurrently and bounded by `timeout` from
+     * the call. Streams that are not pipes contribute no bytes. If the child closes
+     * stdin early the rest of `stdinData` is dropped (not an error). When the deadline
+     * passes the process (tree) is terminated and reaped, and the call fails with
+     * Timeout; the partial output is discarded.
+     * Errors: InvalidArgument (stdinData given but stdin is not a pipe), Timeout, IoError.
+     */
+    [[nodiscard]] virtual Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) = 0;
+
+protected:
+    IProcess() = default;
+};
+
+class IProcessLauncher {
+public:
+    // Starts a process. Errors: InvalidArgument (see validateProcessSpec), Unsupported
+    // (batch files on Windows), NotFound (no such executable or working directory),
+    // PermissionDenied (not executable), IoError. Thread-safe.
+    [[nodiscard]] virtual Result<std::unique_ptr<IProcess>> launch(const ProcessSpec& spec) = 0;
+
+protected:
+    constexpr IProcessLauncher() noexcept = default;
+    constexpr IProcessLauncher(const IProcessLauncher&) noexcept = default;
+    constexpr IProcessLauncher& operator=(const IProcessLauncher&) noexcept = default;
+    ~IProcessLauncher() = default;
+};
+
+// The process-wide real launcher (CreateProcessW on Windows, posix_spawn on Linux).
+// Stateless and thread-safe.
+[[nodiscard]] IProcessLauncher& realProcessLauncher() noexcept;
+
+// launch() followed by communicate(): the safe way to run a tool and collect its
+// output. Both pipes are drained concurrently, so arbitrarily large output works.
+// Errors: those of launch() and communicate(), with the executable as context.
+[[nodiscard]] Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec,
+                                                    std::string_view stdinData, IClock::Duration timeout);
+
+// Whether this platform applies the Windows path and batch-file rules in validateProcessSpec.
+#ifdef _WIN32
+inline constexpr bool kWindowsProcessRules = true;
+#else
+inline constexpr bool kWindowsProcessRules = false;
+#endif
+
+/*
+ * The checks every launcher (real and scripted) applies before starting anything:
+ * an absolute, NUL-free executable path; a working directory that is empty or
+ * absolute; NUL-free arguments; environment names that are non-empty and free of
+ * '=' and NUL, values free of NUL; MergeIntoStdout only for stderr; and, with
+ * `windowsRules`, Windows path syntax and no .bat/.cmd executable (Unsupported).
+ * Errors: InvalidArgument, Unsupported.
+ */
+[[nodiscard]] Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules = kWindowsProcessRules);
+
+/*
+ * Appends `argument` to a Windows command line so that the MSVC CRT's argv
+ * parser and CommandLineToArgvW both yield it unchanged. This is the exact
+ * inverse of the rules in Microsoft's "Parsing C++ command-line arguments"
+ * (https://learn.microsoft.com/en-us/cpp/cpp/main-function-command-line-args,
+ * section "Parsing C++ command-line arguments") and the CommandLineToArgvW
+ * reference (https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw):
+ * arguments are separated by spaces or tabs; a double-quoted span may contain
+ * them; backslashes are literal unless they precede a double quote, where
+ * 2n backslashes + quote yield n backslashes and a delimiter, and 2n+1 yield
+ * n backslashes and a literal quote. So: arguments that are non-empty and
+ * contain no space, tab, newline, vertical tab or quote are appended as is;
+ * all others are wrapped in quotes, each quote is preceded by twice the
+ * backslashes before it plus one, and backslashes before the closing quote are
+ * doubled. Does not add a separating space. Pure and portable (UTF-8 in and
+ * out), so it is unit-tested on every platform.
+ */
+void appendWindowsArgument(std::string& commandLine, std::string_view argument);
+
+// The full Windows command line for `executable` and `arguments`: the executable
+// quoted as argv[0] (whose parsing rules differ: no escapes, so it must not contain
+// a quote) followed by each argument. Errors: InvalidArgument (quote in the executable).
+[[nodiscard]] Result<std::string> buildWindowsCommandLine(std::string_view executable,
+                                                          const std::vector<std::string>& arguments);
+
+} // namespace frost::io
