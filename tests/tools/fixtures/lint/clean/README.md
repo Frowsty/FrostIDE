@@ -1,0 +1,1 @@
+# Clean frost-lint fixture

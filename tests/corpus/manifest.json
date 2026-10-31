@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "description": "Third-party corpora for budgets, spikes and differential tests (PLAN.md section 4, Corpora). They are test inputs only: never linked, never committed, never consulted as source (clean-room rule). tools/corpus_fetch.py shallow-fetches each pinned commit into E:\\corpus\\<id> on Windows or ~/corpus/<id> on Linux and verifies HEAD equals the pinned SHA. Pins were resolved with `git ls-remote` on 2026-10-31; 'tag_object' is the annotated tag's own object where the tag is annotated. 'approx_size_mb' is the repository size GitHub reported on 2026-10-31 (full history), a rough guide to the download; corpus_fetch.py prints the checked-out size. R1 (FrostIDE itself), R4 (synth-xl), R5, S50, F1 and F2 are generated or local and have no entry here.",
+  "corpora": [
+    {
+      "id": "R2a",
+      "name": "Notepad++",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus.git",
+      "tag": "v8.9.8.1",
+      "tag_object": null,
+      "sha": "dd40fe45598791e9aa38f3aeb200e10fb3d6338a",
+      "release": "Latest GitHub release on 2026-10-31 (Notepad++ release 8.9.8.1, published 2026-09-24).",
+      "licence": "GPL-3.0-or-later",
+      "approx_size_mb": 326,
+      "prerequisites": "Windows with VS 2022 Build Tools, Desktop development with C++ (v143) and a Windows 10/11 SDK; MSBuild solution.",
+      "purpose": "Mid-size Desktop C++ v143 MSBuild solution: spike S2 (-getTargetResult:GetClCommandLines latency), MSBuild model, build and project-open differentials."
+    },
+    {
+      "id": "R2b",
+      "name": "microsoft/terminal (OpenConsole host projects)",
+      "url": "https://github.com/microsoft/terminal.git",
+      "tag": "v1.25.2733.0",
+      "tag_object": "643609c3f9e022c9fb44366a43f5ebb8567f9722",
+      "sha": "dc8ae365847d41f62d1ebca93815bb00959bc12f",
+      "release": "Latest GitHub release on 2026-10-31 that is not a pre-release (Windows Terminal v1.25.2733.0, published 2026-10-02); v1.26.2734.0 is a preview.",
+      "licence": "MIT",
+      "approx_size_mb": 178,
+      "prerequisites": "Windows with VS 2022 Build Tools (v143) and Windows SDK 10.0.22621. Only the OpenConsole host projects are used; the full solution needs the UWP workload and is opt-in.",
+      "purpose": "Large MSBuild solution: B3 warm reopen to L1, B4 fingerprint validation, B23 first project streamed."
+    },
+    {
+      "id": "R3",
+      "name": "llvm-project",
+      "url": "https://github.com/llvm/llvm-project.git",
+      "tag": "llvmorg-23.1.4",
+      "tag_object": "f2c432f21b5e6f96157b1720857b472dc487fa49",
+      "sha": "7a941dfb2877a0b8cf30323fefa85ad019e0b0f5",
+      "release": "LLVM 23.1.4, the pinned toolchain release (sdk/sdk.lock.json); the commit matches the one the pinned binaries report.",
+      "licence": "Apache-2.0 WITH LLVM-exception",
+      "approx_size_mb": 4380,
+      "prerequisites": "CMake and Ninja from the pinned SDK, Python 3, the pinned Clang. R3 configures with Ninja; R3s is the same checkout configured with the \"Visual Studio 18 2026\" generator (v145, needs VS 2026 Build Tools). Several GB of free space on E: (Windows) or ext4 (WSL).",
+      "purpose": "Large CMake corpus for most budgets (B1-B26), the clangd index spike S7, File API and compile-database differentials; R3s exercises the VS generator."
+    }
+  ]
+}

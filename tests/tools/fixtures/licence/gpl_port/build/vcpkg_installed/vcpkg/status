@@ -1,0 +1,18 @@
+Package: gplport
+Version: 1.0
+Architecture: x64-fixture
+Multi-Arch: same
+Abi: 0000000000000000000000000000000000000000000000000000000000000000
+Status: install ok installed
+
+Package: zlib
+Feature: extra
+Architecture: x64-fixture
+Multi-Arch: same
+Status: install ok installed
+
+Package: removed
+Version: 1.0
+Architecture: x64-fixture
+Multi-Arch: same
+Status: purge ok not-installed

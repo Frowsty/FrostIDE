@@ -10,11 +10,12 @@
 #   1. Windows: configure win-clangcl, build Debug, run ctest (tests labelled
 #      `stress` are skipped in Debug).
 #   2. -Full adds Release and the ASan configuration (RelWithDebInfo), with every label.
-#   3. Repository checks: clang-format on tracked C/C++ files, frost-lint and the
-#      licence check. A check whose tool does not exist yet is reported as
-#      "not-run", never silently dropped.
+#   3. Repository checks: clang-format on tracked C/C++ files, frost-lint, the
+#      licence check (Windows build trees) and the feature-matrix check. A check
+#      whose tool does not exist yet is reported as "not-run", never silently dropped.
 #   4. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), with --full under -Full.
-#      The repository checks are not repeated there (same tree).
+#      The tree checks are not repeated there (same tree); the licence check is,
+#      because it inspects the Linux build trees and Qt.
 # -Quick is the default and only names that choice explicitly.
 #
 # The final line is the summary for the commit footer, e.g.
@@ -107,25 +108,29 @@ if ($Full) {
 # Repository checks.
 $checks = New-Object System.Collections.Generic.List[string]
 
-# clang-format: every tracked C/C++ file must already be formatted. The banned-
-# construct fixtures are excluded because clang-format cannot parse them.
+# clang-format: every tracked C/C++ file must already be formatted. Fixtures are
+# excluded: they are byte-exact inputs, and clang-format cannot parse the
+# banned-construct probes.
 Write-Host '=== format'
 $clangFormat = Join-Path $env:FROST_LLVM_ROOT 'bin\clang-format.exe'
-$sources = @(git ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' | Where-Object { $_ -notlike 'tests/toolchain_probe/banned/*' })
+$sources = @(git ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' |
+    Where-Object { $_ -notlike 'tests/toolchain_probe/banned/*' -and $_ -notlike 'tests/*/fixtures/*' })
 $unformatted = New-Object System.Collections.Generic.List[string]
 foreach ($source in $sources) {
     $null = & $clangFormat --dry-run --Werror $source 2>&1
     if ($LASTEXITCODE -ne 0) { $unformatted.Add($source) }
 }
-if ($unformatted.Count -eq 0) { $checks.Add('format ok') }
+# An empty list (git failing) must fail, not pass vacuously.
+if ($sources.Count -eq 0) { $checks.Add('format FAILED (no files listed)'); $failed = $true }
+elseif ($unformatted.Count -eq 0) { $checks.Add('format ok') }
 else {
     $unformatted | ForEach-Object { Write-Host "needs clang-format: $_" }
     $checks.Add("format FAILED ($($unformatted.Count) files)"); $failed = $true
 }
 
-# Python checks, run when the tool exists (they arrive during M0).
+# Python checks, run when the tool exists. featurecheck.py defaults to its `check` command.
 $python = Join-Path $env:FROST_SDK 'py\Scripts\python.exe'
-foreach ($tool in @('frost_lint.py', 'licensecheck.py')) {
+foreach ($tool in @('frost_lint.py', 'licensecheck.py', 'featurecheck.py')) {
     $name = $tool -replace '\.py$', ''
     $path = Join-Path $PSScriptRoot $tool
     if (-not (Test-Path $path)) { $checks.Add("$name not-run"); continue }

@@ -13,9 +13,10 @@
 # The PowerShell spellings -Quick and -Full are accepted too.
 #
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
-# configuration and run in the --full configurations. Repository checks
-# (clang-format, frost-lint, licence check) run unless --no-checks is given;
-# verify.ps1 passes it because it has already checked the same tree.
+# configuration and run in the --full configurations. Afterwards the licence
+# check inspects the Linux build trees and Qt; the tree checks (clang-format,
+# frost-lint, the feature-matrix check) also run unless --no-checks is given,
+# which verify.ps1 passes because it has already checked the same tree.
 #
 # Environment:
 #   FROST_MIRROR  mirror directory (a leading "~/" is expanded). Default:
@@ -116,21 +117,38 @@ if [[ $FULL -eq 1 ]]; then
     run_config tsan linux-clang-tsan linux-clang-tsan
 fi
 
+# Runs tools/<name>.py on the mirror (which has no .git: frost-lint then walks it,
+# honouring .gitignore) and appends "<name> ok|FAILED|not-run" to the summary.
+# stderr goes to stdout because verify.ps1 (PowerShell 5.1) captures both.
+run_check() {
+    local name="$1"
+    if [[ ! -f "tools/$name.py" ]]; then summary+=("$name not-run"); return; fi
+    echo "=== check: $name"
+    if python3 -I "tools/$name.py" --repo "$MIRROR" 2>&1; then summary+=("$name ok"); else summary+=("$name FAILED"); status=1; fi
+}
+
 if [[ $CHECKS -eq 1 ]]; then
-    # clang-format on tracked C/C++ files (the banned-construct fixtures cannot be parsed).
+    # clang-format on the tracked C/C++ files (the list comes from the source tree's
+    # git; the mirror has the same contents). Fixtures are excluded: they are
+    # byte-exact inputs, and clang-format cannot parse the banned-construct probes.
+    echo "=== check: format"
+    # An empty list (git failing, e.g. on safe.directory) must fail, not pass vacuously.
+    sources="$(git -C "$SOURCE" ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' |
+        grep -Ev '^tests/toolchain_probe/banned/|^tests/[^/]+/fixtures/' || true)"
     unformatted=0
     while IFS= read -r file; do
-        if ! clang-format --dry-run --Werror "$SOURCE/$file" > /dev/null 2>&1; then
+        if ! clang-format --dry-run --Werror "$MIRROR/$file" > /dev/null 2>&1; then
             echo "needs clang-format: $file"
             unformatted=$((unformatted + 1))
         fi
-    done < <(git -C "$SOURCE" ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' | grep -v '^tests/toolchain_probe/banned/' || true)
-    if ((unformatted == 0)); then summary+=("format ok"); else summary+=("format FAILED ($unformatted files)"); status=1; fi
-    for tool in frost_lint licensecheck; do
-        if [[ ! -f "$SOURCE/tools/$tool.py" ]]; then summary+=("$tool not-run"); continue; fi
-        if python3 -I "$SOURCE/tools/$tool.py" --repo "$SOURCE"; then summary+=("$tool ok"); else summary+=("$tool FAILED"); status=1; fi
-    done
+    done <<< "$sources"
+    if [[ -z "$sources" ]]; then summary+=("format FAILED (no files listed)"); status=1
+    elif ((unformatted == 0)); then summary+=("format ok")
+    else summary+=("format FAILED ($unformatted files)"); status=1; fi
+    run_check frost_lint
+    run_check featurecheck
 fi
+run_check licensecheck
 
 echo "wsl: $(IFS=,; echo "${summary[*]}" | sed 's/,/, /g')"
 exit $status
