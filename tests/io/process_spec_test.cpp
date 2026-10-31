@@ -61,12 +61,70 @@ TEST(ProcessSpec, RelativeExecutablesAreRejected) {
 }
 
 TEST(ProcessSpec, BatchFilesAreRefusedOnWindows) {
-    for (const char* exe :
-         {"C:\\x\\build.bat", "C:\\x\\BUILD.CMD", "C:\\x\\a.Bat", "C:\\x\\run.cmd. ", "C:\\x\\run.bat..."}) {
+    // Every spelling that Win32 resolves to a .bat or .cmd file: the launcher starts the
+    // normalised path, so trailing separators, "." and ".." must not hide the extension.
+    for (const char* exe : {"C:\\x\\build.bat", "C:\\x\\BUILD.CMD", "C:\\x\\a.Bat", "C:\\x\\run.cmd. ",
+                            "C:\\x\\run.bat...", "C:\\d\\t.bat\\", "C:/d/t.bat/", "C:\\d\\t.bat\\.",
+                            "C:\\d\\t.bat\\x\\..", "C:\\d\\t.bat\\\\", "C:\\d\\t.bat\\.\\x\\..\\."}) {
         EXPECT_EQ(validate(specFor(exe), true), ErrorCode::Unsupported) << exe;
     }
+    // Device-namespace spellings are refused outright (the OS would normalise them), as a
+    // batch file when the given spelling already says so.
+    for (const char* exe : {"\\\\.\\C:\\d\\t.bat", "//./C:/d/t.bat"}) {
+        EXPECT_EQ(validate(specFor(exe), true), ErrorCode::Unsupported) << exe;
+    }
+    for (const char* exe : {"\\\\.\\C:\\d\\t.bat\\.", "\\\\.\\C:\\tools\\git.exe", "//./C:/tools/git.exe"}) {
+        EXPECT_EQ(validate(specFor(exe), true), ErrorCode::InvalidArgument) << exe;
+    }
+    const auto device = frost::io::validateProcessSpec(specFor("\\\\.\\C:\\d\\t.bat\\."), true).error().message();
+    EXPECT_NE(device.find("device namespace"), std::string::npos) << device;
+    // Not batch files: other extensions, stream syntax (CreateProcessW does not run them through
+    // cmd.exe; the integration test proves it) and extensionless names.
+    for (const char* exe : {"C:\\d\\t.batx", "C:\\d\\t.cmdline", "C:\\d\\t.bat::$DATA", "C:\\d\\t.bat:", "C:\\d\\tbat",
+                            "C:\\x\\batman.exe"}) {
+        EXPECT_EQ(validate(specFor(exe), true), ErrorCode::Unknown) << exe;
+    }
     EXPECT_EQ(validate(specFor("/x/build.bat"), false), ErrorCode::Unknown); // An ordinary file on POSIX.
-    EXPECT_EQ(validate(specFor("C:\\x\\batman.exe"), true), ErrorCode::Unknown);
+}
+
+TEST(ProcessSpec, WindowsNamesAreCheckedOnTheExecutableAndDirectory) {
+    EXPECT_EQ(validate(specFor("C:\\tools\\CON.exe"), true), ErrorCode::InvalidArgument);
+    EXPECT_EQ(validate(specFor("C:\\tools.\\x.exe"), true), ErrorCode::InvalidArgument);
+    ProcessSpec spec = specFor("C:\\tools\\x.exe");
+    spec.workingDirectory = "C:\\work \\dir";
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+    spec.workingDirectory = "\\\\.\\C:\\work";
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+    spec.workingDirectory = "C:\\work\\dir";
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unknown);
+}
+
+TEST(ProcessSpec, WindowsCommandLineMustBeBuildable) {
+    // argv[0] has no escape syntax, so a quote in the executable cannot be represented.
+    EXPECT_EQ(validate(specFor("C:\\a\"b\\x.exe"), true), ErrorCode::InvalidArgument);
+    EXPECT_EQ(validate(specFor("/a\"b/x"), false), ErrorCode::Unknown); // Just a character on POSIX.
+
+    // CreateProcessW takes at most 32,767 UTF-16 units including the terminator.
+    ProcessSpec spec = specFor("C:\\x.exe"); // Command line: "C:\x.exe" plus " " and the argument.
+    const std::size_t fixed = std::string_view("\"C:\\x.exe\" ").size();
+    spec.arguments = {std::string(32766 - fixed, 'a')};
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unknown); // 32,766 units: the longest allowed.
+    spec.arguments = {std::string(32767 - fixed, 'a')};
+    const auto tooLong = frost::io::validateProcessSpec(spec, true);
+    ASSERT_FALSE(tooLong.has_value());
+    EXPECT_EQ(tooLong.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_NE(tooLong.error().message().find("32766"), std::string::npos) << tooLong.error().message();
+    // Units, not bytes: 16,000 three-byte characters (48,000 bytes) are 16,000 units.
+    std::string wide;
+    for (int i = 0; i < 16000; ++i) {
+        wide += "\xE6\xB5\x8B"; // U+6D4B, one UTF-16 unit.
+    }
+    spec.arguments = {wide};
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unknown);
+    // POSIX passes argv directly; CreateProcessW's limit does not apply.
+    ProcessSpec posix = specFor("/bin/x");
+    posix.arguments = {std::string(40000, 'a')};
+    EXPECT_EQ(validate(posix, false), ErrorCode::Unknown);
 }
 
 TEST(ProcessSpec, OtherFieldsAreChecked) {

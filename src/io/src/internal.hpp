@@ -5,11 +5,15 @@
 // Not installed; nothing outside src/io includes this.
 #pragma once
 
+#include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #ifdef _WIN32
@@ -39,6 +43,25 @@ inline constexpr std::string_view kAtomicTempMarker = ".frost-tmp-";
 // Errors with the operation-specific refinements documented in file_system.hpp.
 [[nodiscard]] Error isADirectoryError(std::string_view operation, std::string_view path);
 [[nodiscard]] Error notADirectoryError(std::string_view operation, std::string_view path);
+
+// Whether `path` names a Windows batch file (.bat or .cmd, ASCII case-insensitive),
+// ignoring trailing dots and spaces, which Win32 strips from names.
+[[nodiscard]] bool isBatchFileName(std::string_view path) noexcept;
+
+// CreateProcessW's command-line limit in UTF-16 units, including the terminator.
+inline constexpr std::size_t kMaxWindowsCommandLineUnits = 32767;
+
+// The steady-clock time `timeout` from now, saturated at time_point::max() so that
+// a huge timeout (IClock::Duration::max() as "no limit") never overflows.
+[[nodiscard]] inline std::chrono::steady_clock::time_point deadlineAfter(IClock::Duration timeout) noexcept {
+    using TimePoint = std::chrono::steady_clock::time_point;
+    static_assert(std::is_same_v<TimePoint::duration, IClock::Duration>, "steady_clock ticks in nanoseconds");
+    const TimePoint now = std::chrono::steady_clock::now();
+    if (timeout <= IClock::Duration::zero()) {
+        return now;
+    }
+    return timeout >= TimePoint::max() - now ? TimePoint::max() : now + timeout;
+}
 
 #ifdef _WIN32
 

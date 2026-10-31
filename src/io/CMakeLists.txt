@@ -23,3 +23,7 @@ endif()
 frost_add_library(io LAYER io
     SOURCES ${frost_io_sources}
     DEPS frost::core)
+if(WIN32)
+    # BCryptGenRandom: unpredictable pipe names (process_win.cpp).
+    target_link_libraries(frost_io PRIVATE bcrypt)
+endif()

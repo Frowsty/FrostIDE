@@ -13,9 +13,12 @@
  * needs anyway. The client (child) end is an ordinary synchronous handle, as
  * console programs expect. The same construction is used by Rust's standard
  * library (library/std/src/sys/pal/windows/pipe.rs, MIT/Apache-2.0); this is
- * an independent implementation of the idea. PIPE_REJECT_REMOTE_CLIENTS and
- * FILE_FLAG_FIRST_PIPE_INSTANCE keep other machines and name squatters out;
- * the client end is opened immediately, so the single instance is taken.
+ * an independent implementation of the idea. Each name carries 128 random bits
+ * from the system RNG, the pipe's DACL admits only the current user,
+ * PIPE_REJECT_REMOTE_CLIENTS keeps other machines out, and
+ * FILE_FLAG_FIRST_PIPE_INSTANCE defeats name squatters; the client end is
+ * opened immediately, so the single instance is taken before anyone else
+ * could connect.
  */
 
 #include "frost/io/os_error.hpp"
@@ -29,10 +32,15 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <format>
+#include <memory>
 #include <vector>
 
 #include <windows.h>
+
+#include <bcrypt.h>
+#include <sddl.h>
 
 namespace frost::io {
 namespace {
@@ -41,8 +49,6 @@ using detail::UniqueHandle;
 
 // Pipe buffer size in bytes, each direction; also the communicate() read chunk.
 constexpr DWORD kPipeBufferBytes = 64 * 1024;
-// CreateProcessW's command-line limit in UTF-16 units, including the terminator.
-constexpr std::size_t kMaxCommandLineUnits = 32767;
 // How long communicate() waits for a terminated process to disappear before returning Timeout.
 constexpr DWORD kReapGraceMs = 5000;
 
@@ -66,16 +72,77 @@ struct PipePair {
     UniqueHandle child;
 };
 
+// Frees memory that Win32 allocated with LocalAlloc (SDDL conversions).
+struct LocalFreeDeleter {
+    void operator()(void* memory) const noexcept { LocalFree(memory); }
+};
+
+/*
+ * A security descriptor whose DACL grants full access to the current user (the
+ * process token's user SID) and to nobody else, so other users' processes cannot
+ * open a pipe even if they learn its name. "D:P" is a protected DACL (nothing is
+ * inherited from the pipe file system's default).
+ */
+Result<std::unique_ptr<void, LocalFreeDeleter>> currentUserOnlyDescriptor() {
+    HANDLE rawToken = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &rawToken) == FALSE) {
+        return std::unexpected(lastWin32Error("OpenProcessToken"));
+    }
+    const UniqueHandle token(rawToken);
+    DWORD size = 0;
+    GetTokenInformation(token.get(), TokenUser, nullptr, 0, &size);
+    std::vector<std::byte> buffer(size);
+    if (size == 0 || GetTokenInformation(token.get(), TokenUser, buffer.data(), size, &size) == FALSE) {
+        return std::unexpected(lastWin32Error("GetTokenInformation(TokenUser)"));
+    }
+    wchar_t* rawSid = nullptr;
+    if (ConvertSidToStringSidW(reinterpret_cast<const TOKEN_USER*>(buffer.data())->User.Sid, &rawSid) == FALSE) {
+        return std::unexpected(lastWin32Error("ConvertSidToStringSidW"));
+    }
+    const std::unique_ptr<wchar_t, LocalFreeDeleter> sid(rawSid);
+    const std::wstring sddl = std::format(L"D:P(A;;GA;;;{})", sid.get());
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr) ==
+        FALSE) {
+        return std::unexpected(lastWin32Error("ConvertStringSecurityDescriptorToSecurityDescriptorW"));
+    }
+    return std::unique_ptr<void, LocalFreeDeleter>(descriptor);
+}
+
+// 128 random bits as hex, from the system RNG, so pipe names cannot be predicted.
+Result<std::wstring> randomHex() {
+    std::array<unsigned char, 16> bytes{};
+    if (const NTSTATUS status =
+            BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(bytes.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        status < 0) {
+        return fail(ErrorCode::IoError,
+                    std::format("BCryptGenRandom failed (NTSTATUS {:#x})", static_cast<std::uint32_t>(status)));
+    }
+    std::wstring out;
+    for (const unsigned char b : bytes) {
+        out += std::format(L"{:02x}", b);
+    }
+    return out;
+}
+
 // `parentReads` selects the direction: true for the child's stdout/stderr, false for its stdin.
 Result<PipePair> createPipe(bool parentReads) {
+    auto descriptor = currentUserOnlyDescriptor();
+    if (!descriptor) {
+        return std::unexpected(std::move(descriptor.error()));
+    }
+    SECURITY_ATTRIBUTES serverSecurity{sizeof(SECURITY_ATTRIBUTES), descriptor->get(), FALSE};
     for (int attempt = 0;; ++attempt) {
-        const std::wstring name = std::format(L"\\\\.\\pipe\\frost-io-{}-{}-{}", detail::currentProcessId(),
-                                              detail::nextUniqueId(), GetTickCount64());
+        auto suffix = randomHex();
+        if (!suffix) {
+            return std::unexpected(std::move(suffix.error()));
+        }
+        const std::wstring name = std::format(L"\\\\.\\pipe\\frost-io-{}-{}", detail::currentProcessId(), *suffix);
         const DWORD openMode = (parentReads ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND) | FILE_FLAG_OVERLAPPED |
                                FILE_FLAG_FIRST_PIPE_INSTANCE;
         UniqueHandle server(CreateNamedPipeW(
             name.c_str(), openMode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
-            kPipeBufferBytes, kPipeBufferBytes, 0, nullptr));
+            kPipeBufferBytes, kPipeBufferBytes, 0, &serverSecurity));
         if (!server.valid()) {
             const DWORD error = GetLastError();
             // FIRST_PIPE_INSTANCE reports a taken name as ERROR_ACCESS_DENIED; try another name.
@@ -258,6 +325,42 @@ Error workingDirectoryError(const ProcessSpec& spec, const std::string& normaliz
     return win32Error(ERROR_DIRECTORY, "launch", spec.executable).withContext("working directory '" + normalized + "'");
 }
 
+/*
+ * Defence in depth for the batch-file refusal (see process.hpp): CreateProcessW
+ * resolves a non-verbatim application name the way GetFullPathNameW does
+ * (resolving "." and "..", dropping trailing dots and spaces) and decides on
+ * cmd.exe from the result, so the check runs on exactly that string. A \\?\ name
+ * is used literally and was already checked by validateProcessSpec.
+ */
+Result<void> checkNotBatch(const std::wstring& applicationName, const std::string& executable) {
+    std::wstring resolved = applicationName;
+    if (!applicationName.starts_with(L"\\\\?\\")) {
+        DWORD size = MAX_PATH;
+        for (;;) {
+            resolved.assign(size, L'\0');
+            const DWORD length = GetFullPathNameW(applicationName.c_str(), size, resolved.data(), nullptr);
+            if (length == 0) {
+                return std::unexpected(lastWin32Error("GetFullPathNameW", executable));
+            }
+            if (length < size) {
+                resolved.resize(length);
+                break;
+            }
+            size = length; // Too small: `length` includes the terminator.
+        }
+    }
+    auto utf8 = fromWide(resolved);
+    if (!utf8) {
+        return std::unexpected(std::move(utf8.error()).withContext("executable"));
+    }
+    if (detail::isBatchFileName(*utf8)) {
+        return fail(ErrorCode::Unsupported,
+                    std::format("'{}' resolves to the batch file '{}'; batch files are not launched directly",
+                                executable, *utf8));
+    }
+    return {};
+}
+
 class WindowsProcess final : public IProcess {
 public:
     WindowsProcess(UniqueHandle process, UniqueHandle job, ProcessId pid, UniqueHandle in, UniqueHandle out,
@@ -411,7 +514,7 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
     if (!stdinData.empty() && !m_in.pipe.valid()) {
         return fail(ErrorCode::InvalidArgument, "communicate: stdin data given but stdin is not an open pipe");
     }
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto deadline = detail::deadlineAfter(timeout);
 
     struct Channel {
         Stream* stream = nullptr;
@@ -586,6 +689,10 @@ public:
         if (!applicationName) {
             return std::unexpected(std::move(applicationName.error()));
         }
+        if (auto notBatch = checkNotBatch(*applicationName, spec.executable); !notBatch) {
+            return std::unexpected(std::move(notBatch.error()));
+        }
+        // validateProcessSpec has checked that the command line builds and fits the limit.
         auto utf8CommandLine = buildWindowsCommandLine(*executable, spec.arguments);
         if (!utf8CommandLine) {
             return std::unexpected(std::move(utf8CommandLine.error()));
@@ -593,11 +700,6 @@ public:
         auto commandLine = toWide(*utf8CommandLine);
         if (!commandLine) {
             return std::unexpected(std::move(commandLine.error()).withContext("command line"));
-        }
-        if (commandLine->size() >= kMaxCommandLineUnits) {
-            return fail(ErrorCode::InvalidArgument,
-                        std::format("command line for '{}' is {} UTF-16 units; Windows allows {}", spec.executable,
-                                    commandLine->size(), kMaxCommandLineUnits - 1));
         }
         std::string normalizedDirectory;
         std::wstring workingDirectory;

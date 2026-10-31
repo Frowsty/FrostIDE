@@ -4,23 +4,29 @@
 // io_test_child.cpp): exact argv round trips (spaces, quotes, backslashes,
 // empty and non-ASCII arguments), exit codes, stdin piping, more than 1 MB on
 // both output pipes at once, timeouts with termination, environment overrides,
-// working directories, handle inheritance and the absolute-path rule.
+// working directories, handle inheritance, the absolute-path and batch-file
+// rules, process-tree containment and concurrent launches.
 
+#include "frost/core/mutex.hpp"
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -29,11 +35,14 @@
 #include <windows.h>
 #else
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 
 #include <csignal>
 #include <cstdlib>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #endif
 
@@ -180,6 +189,25 @@ TEST(RealProcessLauncher, ArgumentsRoundTripExactly) {
 #endif
 }
 
+/*
+ * Lets a copy of io_test_child, started from another directory, find the DLLs that
+ * the build deploys next to the original (the ASan runtime in ASan builds): the
+ * original's directory goes on the copy's PATH, part of the loader's search order.
+ * PATH rather than copying the DLLs, so it also works from directories beyond
+ * MAX_PATH. POSIX executables need nothing (sanitizer runtimes are linked statically).
+ */
+void findChildDlls(ProcessSpec& spec) {
+#ifdef _WIN32
+    const std::string directory(frost::io::parentPath(childPath()));
+    std::wstring path(32767, L'\0');
+    const DWORD length = GetEnvironmentVariableW(L"PATH", path.data(), static_cast<DWORD>(path.size()));
+    path.resize(length < path.size() ? length : 0);
+    spec.environment.emplace_back("PATH", directory + ";" + frost::io::fromWide(path).value());
+#else
+    static_cast<void>(spec);
+#endif
+}
+
 TEST(RealProcessLauncher, ExecutableInADirectoryWithSpacesAndNonAscii) {
     const ScratchDir dir("proc-exe ünï 测试");
     std::error_code error;
@@ -190,8 +218,10 @@ TEST(RealProcessLauncher, ExecutableInADirectoryWithSpacesAndNonAscii) {
     ASSERT_FALSE(error) << error.message();
     ProcessSpec spec = childSpec({"argv", "x y"});
     spec.executable = frost::io::fromStdPath(target).value();
+    findChildDlls(spec);
     const auto result = run(spec);
     ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << "the copied child did not run: " << result->stderrBytes;
     EXPECT_EQ(reportedArguments(result->stdoutBytes, "crt"), (std::vector<std::string>{"x y"}));
 }
 
@@ -223,8 +253,10 @@ TEST(RealProcessLauncher, ExecutableBeyondMaxPath) {
     ASSERT_GT(copy.size(), 300u);
     ProcessSpec spec = childSpec({"argv", "long"});
     spec.executable = copy;
+    findChildDlls(spec);
     const auto result = run(spec);
     ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << "the copied child did not run: " << result->stderrBytes;
     EXPECT_EQ(reportedArguments(result->stdoutBytes, "crt"), (std::vector<std::string>{"long"}));
 }
 
@@ -528,14 +560,308 @@ TEST(RealProcessLauncher, OnlyTheStandardHandlesAreInherited) {
 
 #ifdef _WIN32
 TEST(RealProcessLauncher, BatchFilesAreRefused) {
+    // Real batch files, so a spelling that slipped through would visibly run cmd.exe.
     const ScratchDir dir("proc-bat");
-    for (const char* name : {"build.bat", "BUILD.CMD", "run.cmd. "}) {
-        ProcessSpec spec;
-        spec.executable = dir.join(name);
-        const auto result = frost::io::realProcessLauncher().launch(spec);
-        ASSERT_FALSE(result.has_value()) << name;
-        EXPECT_EQ(result.error().code(), ErrorCode::Unsupported) << name;
+    for (const char* name : {"t.bat", "T.CMD"}) {
+        ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(dir.join(name), "@echo INJECTED\r\n").has_value());
     }
+    const std::string d = dir.path();
+    std::string slashed = d;
+    std::ranges::replace(slashed, '\\', '/');
+    for (const std::string& exe :
+         {d + "\\t.bat", d + "\\T.CMD", d + "\\t.BAT", d + "\\t.bat.", d + "\\t.bat. ", d + "\\t.bat\\",
+          slashed + "/t.bat/", d + "\\t.bat\\.", d + "\\t.bat\\x\\..", "\\\\.\\" + d + "\\t.bat\\.",
+          "\\\\.\\" + d + "\\t.bat", "\\\\?\\" + d + "\\t.bat", "\\\\?\\" + d + "\\t.bat.", d + "\\T.CMD\\."}) {
+        ProcessSpec spec;
+        spec.executable = exe;
+        const auto result = frost::io::realProcessLauncher().launch(spec);
+        ASSERT_FALSE(result.has_value()) << exe;
+        EXPECT_TRUE(result.error().code() == ErrorCode::Unsupported ||
+                    result.error().code() == ErrorCode::InvalidArgument)
+            << exe << ": " << result.error().describe();
+    }
+    // Spellings that do not name the batch file (another name, or stream syntax that
+    // CreateProcessW does not hand to cmd.exe) fail to start or start something else,
+    // but never run the script.
+    for (const std::string& exe :
+         {d + "\\t.batx", d + "\\t.cmdline", d + "\\t.bat::$DATA", d + "\\t.bat:", d + "\\t"}) {
+        ProcessSpec spec;
+        spec.executable = exe;
+        spec.stderrMode = Stdio::MergeIntoStdout;
+        const auto result = run(spec, {}, 30s);
+        if (result.has_value()) {
+            EXPECT_EQ(result->stdoutBytes.find("INJECTED"), std::string::npos) << exe;
+        }
+    }
+}
+#endif
+
+// Observes a process's exit without being its parent (a SYNCHRONIZE handle or a pidfd).
+// Opened while the process is known to be alive, so the id cannot have been reused.
+class ProcessWatch {
+public:
+    explicit ProcessWatch(frost::io::ProcessId pid) {
+#ifdef _WIN32
+        m_handle = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid);
+#else
+        m_fd = static_cast<int>(syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0));
+#endif
+    }
+    ~ProcessWatch() {
+#ifdef _WIN32
+        if (m_handle != nullptr) {
+            CloseHandle(m_handle);
+        }
+#else
+        if (m_fd >= 0) {
+            close(m_fd);
+        }
+#endif
+    }
+    ProcessWatch(const ProcessWatch&) = delete ("owns a handle");
+    ProcessWatch& operator=(const ProcessWatch&) = delete ("owns a handle");
+
+    [[nodiscard]] bool valid() const noexcept {
+#ifdef _WIN32
+        return m_handle != nullptr;
+#else
+        return m_fd >= 0;
+#endif
+    }
+
+    // Whether the process has ended, or ends within `timeout`.
+    [[nodiscard]] bool exitsWithin(std::chrono::milliseconds timeout) const {
+#ifdef _WIN32
+        return WaitForSingleObject(m_handle, static_cast<DWORD>(timeout.count())) == WAIT_OBJECT_0;
+#else
+        pollfd entry{m_fd, POLLIN, 0};
+        return poll(&entry, 1, static_cast<int>(timeout.count())) == 1;
+#endif
+    }
+
+    // Cleanup for failed expectations and for processes the test owns.
+    void kill() const {
+#ifdef _WIN32
+        TerminateProcess(m_handle, 1);
+#else
+        syscall(SYS_pidfd_send_signal, m_fd, SIGKILL, nullptr, 0);
+#endif
+    }
+
+private:
+#ifdef _WIN32
+    HANDLE m_handle = nullptr;
+#else
+    int m_fd = -1;
+#endif
+};
+
+// Reads the child's "grandchild <pid>" line from its stdout pipe; 0 if it never comes.
+frost::io::ProcessId readGrandchildPid(frost::io::IProcess& process) {
+    std::string text;
+    std::array<char, 256> buffer{};
+    while (text.find('\n') == std::string::npos) {
+        const auto got = process.readStdout(buffer);
+        if (!got || *got == 0) {
+            break;
+        }
+        text.append(buffer.data(), *got);
+    }
+    constexpr std::string_view prefix = "grandchild ";
+    if (!text.starts_with(prefix)) {
+        ADD_FAILURE() << "unexpected child output: " << text;
+        return 0;
+    }
+    return static_cast<frost::io::ProcessId>(std::stoul(text.substr(prefix.size())));
+}
+
+TEST(RealProcessLauncher, TerminateEndsTheWholeTree) {
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild", "wait"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+    EXPECT_FALSE(grandchild.exitsWithin(0ms));
+    ASSERT_TRUE((*process)->terminate().has_value());
+    EXPECT_EQ((*process)->wait(30s).value().exitCode, frost::io::kTerminatedExitCode);
+    EXPECT_TRUE(grandchild.exitsWithin(30s)) << "terminate() left the grandchild running";
+    grandchild.kill();
+}
+
+TEST(RealProcessLauncher, DestroyingTheProcessEndsTheWholeTree) {
+    // The child exits at once; only the containment (job object / process group) still
+    // reaches the grandchild it left behind.
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild", "exit"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+    EXPECT_EQ((*process)->wait(30s).value().exitCode, 0);
+    EXPECT_FALSE(grandchild.exitsWithin(200ms));
+    process->reset();
+    EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the destructor left the grandchild running";
+    grandchild.kill();
+}
+
+TEST(RealProcessLauncher, WithoutKillOnCloseTheChildOutlivesItsProcessObject) {
+    ProcessSpec spec = childSpec({"sleep", "60000"});
+    spec.killOnClose = false;
+    auto process = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = (*process)->pid();
+    const ProcessWatch child(pid);
+    ASSERT_TRUE(child.valid());
+    process->reset();
+    EXPECT_FALSE(child.exitsWithin(500ms)) << "the destructor ended a child launched without killOnClose";
+    child.kill();
+    EXPECT_TRUE(child.exitsWithin(30s));
+#ifndef _WIN32
+    // Still this process's child: reap it.
+    int status = 0;
+    EXPECT_EQ(waitpid(static_cast<pid_t>(pid), &status, 0), static_cast<pid_t>(pid));
+#endif
+}
+
+TEST(RealProcessLauncher, GrandchildHoldingStdoutDoesNotHangCommunicate) {
+    // The child exits, but its grandchild keeps the stdout pipe open, so EOF never arrives:
+    // communicate must give up at its deadline and end the tree.
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild", "exit"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+    const auto start = std::chrono::steady_clock::now();
+    const auto result = (*process)->communicate({}, 2s);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::Timeout) << result.error().describe();
+    EXPECT_GE(elapsed, 1500ms);
+    EXPECT_LT(elapsed, 30s);
+    EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the timeout left the grandchild running";
+    grandchild.kill();
+}
+
+TEST(RealProcessLauncher, ConcurrentLaunchesDoNotLeakPipeEnds) {
+    // Pipe ends made for one launch must never reach a child started at the same time by
+    // another thread. A leaked stdin or stdout write end in one of the long-lived sleepers
+    // would hold back a quick child's EOF for 60 s, so its run would time out.
+    constexpr int kThreads = 4;
+    constexpr int kRounds = 4;
+    frost::Mutex mutex;
+    std::vector<std::unique_ptr<frost::io::IProcess>> sleepers;
+    std::vector<std::string> failures;
+    const auto start = std::chrono::steady_clock::now();
+    {
+        std::vector<std::jthread> threads;
+        for (int t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&, t] {
+                for (int round = 0; round < kRounds; ++round) {
+                    ProcessSpec sleeperSpec = childSpec({"sleep", "60000"});
+                    sleeperSpec.stdinMode = Stdio::Pipe;
+                    auto sleeper = frost::io::realProcessLauncher().launch(sleeperSpec);
+                    ProcessSpec quick = childSpec({"tee"});
+                    quick.stdinMode = Stdio::Pipe;
+                    const std::string input = std::format("thread {} round {}\n", t, round);
+                    const auto result = run(quick, input, 20s);
+                    const frost::LockGuard lock(mutex);
+                    if (!sleeper) {
+                        failures.push_back("sleeper: " + sleeper.error().describe());
+                    } else {
+                        sleepers.push_back(std::move(*sleeper));
+                    }
+                    if (!result) {
+                        failures.push_back("quick: " + result.error().describe());
+                    } else if (result->stdoutBytes != input || result->stderrBytes != input) {
+                        failures.push_back("quick: wrong output for " + input);
+                    }
+                }
+            });
+        }
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_TRUE(failures.empty()) << failures.size()
+                                  << " failures, first: " << (failures.empty() ? "" : failures.front());
+    EXPECT_EQ(sleepers.size(), static_cast<std::size_t>(kThreads * kRounds));
+    EXPECT_LT(elapsed, 50s);
+    sleepers.clear(); // killOnClose ends them.
+}
+
+TEST(RealProcessLauncher, MaximalTimeoutsMeanNoDeadline) {
+    // now() + Duration::max() would overflow; the deadline saturates instead.
+    const auto result = run(childSpec({"exit", "3"}), {}, frost::IClock::Duration::max());
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 3);
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"exit", "4"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    EXPECT_EQ((*process)->wait(frost::IClock::Duration::max()).value().exitCode, 4);
+}
+
+#ifndef _WIN32
+// Runs `body` with descriptor 0 replaced by `fd` (closed when `fd` is negative), then restores it.
+template<class Body>
+void withStdin(int fd, Body body) {
+    const int saved = fcntl(0, F_DUPFD_CLOEXEC, 3);
+    if (fd < 0) {
+        close(0);
+    } else {
+        ASSERT_EQ(dup2(fd, 0), 0);
+    }
+    body();
+    if (saved >= 0) {
+        dup2(saved, 0);
+        close(saved);
+    } else {
+        close(0);
+    }
+}
+
+std::string identityOf(const char* path) {
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    EXPECT_GE(fd, 0) << path;
+    std::string identity = fileIdentity(fd);
+    close(fd);
+    return identity;
+}
+
+TEST(RealProcessLauncher, InheritedStdinFallsBackToTheNullDevice) {
+    const std::string nullIdentity = identityOf("/dev/null");
+    ProcessSpec spec = childSpec({"probe-handle", "stdin", nullIdentity});
+    spec.stdinMode = Stdio::Inherit;
+
+    // A closed descriptor 0: the child still gets a valid stdin. (The launcher's own pipes
+    // must not land on descriptor 0 meanwhile.)
+    std::optional<frost::Result<ProcessResult>> closed;
+    withStdin(-1, [&] { closed = run(spec); });
+    ASSERT_TRUE(closed->has_value()) << closed->error().describe();
+    EXPECT_EQ((*closed)->stdoutBytes, "inherited\n");
+
+    // A terminal: in its own process group (killOnClose) the child is a background job of
+    // that terminal and its first read would stop it (SIGTTIN), so it gets the null device...
+    const int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+    ASSERT_GE(master, 0);
+    ASSERT_EQ(grantpt(master), 0);
+    ASSERT_EQ(unlockpt(master), 0);
+    const int terminal = open(ptsname(master), O_RDWR | O_NOCTTY | O_CLOEXEC);
+    ASSERT_GE(terminal, 0);
+    ASSERT_EQ(isatty(terminal), 1);
+    const std::string terminalIdentity = fileIdentity(terminal);
+    std::optional<frost::Result<ProcessResult>> contained;
+    withStdin(terminal, [&] { contained = run(spec); });
+    // ...while a child in this process's group shares the terminal.
+    ProcessSpec shared = childSpec({"probe-handle", "stdin", terminalIdentity});
+    shared.stdinMode = Stdio::Inherit;
+    shared.killOnClose = false;
+    std::optional<frost::Result<ProcessResult>> sharedResult;
+    withStdin(terminal, [&] { sharedResult = run(shared); });
+    close(terminal);
+    close(master);
+    ASSERT_TRUE(contained->has_value()) << contained->error().describe();
+    EXPECT_EQ((*contained)->stdoutBytes, "inherited\n");
+    ASSERT_TRUE(sharedResult->has_value()) << sharedResult->error().describe();
+    EXPECT_EQ((*sharedResult)->stdoutBytes, "inherited\n");
 }
 #endif
 

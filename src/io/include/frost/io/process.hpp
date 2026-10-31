@@ -56,7 +56,11 @@ namespace frost::io {
 
 // How one of the child's standard streams is connected.
 enum class Stdio : unsigned char {
-    Inherit,         // The parent's handle (or the null device if the parent has none, e.g. a GUI process).
+    // The parent's handle, or the null device if the parent has none (a GUI process, a closed
+    // descriptor). POSIX with killOnClose: a terminal stdin is replaced by the null device too,
+    // because the child's new process group is a background group of that terminal and its
+    // first read would stop it (SIGTTIN); terminal stdout/stderr are kept.
+    Inherit,
     Null,            // The null device: reads see EOF, writes are discarded.
     Pipe,            // A pipe to the IProcess.
     MergeIntoStdout, // stderr only: the same handle as the child's stdout (like 2>&1).
@@ -189,10 +193,13 @@ inline constexpr bool kWindowsProcessRules = false;
 
 /*
  * The checks every launcher (real and scripted) applies before starting anything:
- * an absolute, NUL-free executable path; a working directory that is empty or
- * absolute; NUL-free arguments; environment names that are non-empty and free of
- * '=' and NUL, values free of NUL; MergeIntoStdout only for stderr; and, with
- * `windowsRules`, Windows path syntax and no .bat/.cmd executable (Unsupported).
+ * an absolute executable path that normalizePath accepts; a working directory
+ * that is empty or likewise absolute and valid; NUL-free arguments; environment
+ * names that are non-empty and free of '=' and NUL, values free of NUL;
+ * MergeIntoStdout only for stderr. With `windowsRules` also: Windows path syntax;
+ * no .bat/.cmd executable (Unsupported), judged on both the given and the
+ * normalised spelling, since "dir\t.bat\." starts dir\t.bat; no quote in the
+ * executable; and a command line under CreateProcessW's 32,767-unit limit.
  * Errors: InvalidArgument, Unsupported.
  */
 [[nodiscard]] Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules = kWindowsProcessRules);

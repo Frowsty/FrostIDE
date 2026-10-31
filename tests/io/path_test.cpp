@@ -26,20 +26,57 @@ std::string normalized(std::string_view path, PathStyle style) {
 TEST(Path, WindowsAbsoluteForms) {
     for (const std::string_view path :
          {"C:\\", "C:\\dir", "c:/dir/file.txt", "Z:/", "\\\\server\\share", "\\\\server\\share\\dir",
-          "//server/share/dir", "\\\\?\\C:\\dir", "\\\\?\\UNC\\server\\share\\x", "\\\\?\\Volume{01234567}\\x",
-          "\\\\.\\pipe\\name", "\\\\.\\NUL"}) {
+          "//server/share/dir", "\\\\?\\C:\\dir", "\\\\?\\UNC\\server\\share\\x", "\\\\?\\Volume{01234567}\\x"}) {
         EXPECT_TRUE(frost::io::isAbsolutePath(path, kWin)) << path;
     }
 }
 
 TEST(Path, WindowsNonAbsoluteForms) {
     // Relative, drive-relative ("C:dir" uses the drive's current directory), rooted on the
-    // current drive ("\dir"), incomplete UNC, ambiguous device spellings and embedded NULs.
+    // current drive ("\dir"), incomplete UNC, ambiguous and device-namespace spellings, NULs.
     for (const std::string_view path : std::initializer_list<std::string_view>{
              "", "dir", "dir\\file", ".\\x", "..\\x", "C:", "C:dir", "\\dir", "/dir", "\\\\server", "\\\\server\\",
-             "\\\\\\share", "//?/C:/x", "//./pipe/x", "\\\\?/C:\\x", std::string_view("C:\\a\0b", 6)}) {
+             "\\\\\\share", "//?/C:/x", "//./pipe/x", "\\\\?/C:\\x", "\\\\.\\pipe\\name", "\\\\.\\NUL",
+             "\\\\.\\C:\\a\\..\\x", std::string_view("C:\\a\0b", 6)}) {
         EXPECT_FALSE(frost::io::isAbsolutePath(path, kWin)) << path;
     }
+}
+
+TEST(Path, DevicePathsAreRejected) {
+    // The OS normalises \\.\ paths ("\\.\C:\a\..\x" opens C:\x), so no string check would
+    // see the path actually opened.
+    for (const std::string_view path : {"\\\\.\\pipe\\frost", "\\\\.\\C:\\a\\..\\..\\x", "\\\\.\\C:\\t.bat\\."}) {
+        const auto result = frost::io::normalizePath(path, kWin);
+        ASSERT_FALSE(result.has_value()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+        EXPECT_NE(result.error().message().find("device namespace"), std::string::npos) << result.error().message();
+        EXPECT_FALSE(frost::io::extendedLengthPath(path).has_value()) << path;
+    }
+}
+
+TEST(Path, NamesWin32WouldRewriteAreRejected) {
+    // Trailing dots and spaces (Win32 strips them) and reserved device names (Win32 maps
+    // them to devices), in any component of a drive or UNC path.
+    for (const std::string_view path : {"C:\\trail.",     "C:\\trail ",      "C:\\dir.\\x",
+                                        "C:\\dir \\x",    "C:\\...",         "\\\\srv\\share\\x.",
+                                        "C:\\CON",        "C:\\a\\con",      "C:\\a\\Con.txt",
+                                        "C:\\NUL.tar.gz", "C:\\aux\\x",      "C:\\PRN",
+                                        "C:\\COM1",       "C:\\lpt9.log",    "C:\\COM0",
+                                        "C:\\LPT0",       "C:\\COM\xC2\xB9", "C:\\LPT\xC2\xB3.txt",
+                                        "C:\\CON .txt",   "C:\\CON:stream",  "\\\\srv\\share\\NUL"}) {
+        const auto result = frost::io::normalizePath(path, kWin);
+        ASSERT_FALSE(result.has_value()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << path;
+    }
+    // Names that merely resemble them are ordinary.
+    for (const std::string_view path : {"C:\\CONSOLE", "C:\\COM10", "C:\\COMX", "C:\\LPT", "C:\\nul_", "C:\\a.b",
+                                        "C:\\.hidden", "C:\\x\\.git", "C:\\a..b", "C:\\con_fig.txt", "C:\\t.batx"}) {
+        EXPECT_TRUE(frost::io::normalizePath(path, kWin).has_value()) << path;
+    }
+    // A ".." or "." is resolved before the check, so it never counts as a trailing dot.
+    EXPECT_EQ(normalized("C:\\a\\.\\b\\..", kWin), "C:\\a");
+    // POSIX has no such names.
+    EXPECT_EQ(normalized("/tmp/trail./CON", kPosix), "/tmp/trail./CON");
 }
 
 TEST(Path, PosixAbsoluteForms) {
@@ -61,14 +98,20 @@ TEST(Path, NormalizesWindowsSeparatorsAndDots) {
     EXPECT_EQ(normalized("//server/share/a/../b", kWin), "\\\\server\\share\\b");
     EXPECT_EQ(normalized("\\\\server\\share", kWin), "\\\\server\\share\\");
     EXPECT_EQ(normalized("\\\\server\\share\\..", kWin), "\\\\server\\share\\");
-    // Names are kept literally: trailing dots and spaces, reserved device names.
-    EXPECT_EQ(normalized("C:\\dir.\\name \\NUL", kWin), "C:\\dir.\\name \\NUL");
 }
 
-TEST(Path, VerbatimAndDevicePathsAreNotTouched) {
-    EXPECT_EQ(normalized("\\\\?\\C:\\a\\..\\b", kWin), "\\\\?\\C:\\a\\..\\b");
-    EXPECT_EQ(normalized("\\\\?\\UNC\\srv\\sh\\.\\x", kWin), "\\\\?\\UNC\\srv\\sh\\.\\x");
-    EXPECT_EQ(normalized("\\\\.\\pipe\\frost", kWin), "\\\\.\\pipe\\frost");
+TEST(Path, VerbatimPathsAreTakenLiterally) {
+    // The escape hatch: names Win32 would rewrite are allowed exactly as written.
+    EXPECT_EQ(normalized("\\\\?\\C:\\dir.\\name \\NUL", kWin), "\\\\?\\C:\\dir.\\name \\NUL");
+    EXPECT_EQ(normalized("\\\\?\\UNC\\srv\\sh\\x", kWin), "\\\\?\\UNC\\srv\\sh\\x");
+    EXPECT_EQ(normalized("\\\\?\\C:\\", kWin), "\\\\?\\C:\\");
+    // But components that are not names would make the literal path differ from any check on it.
+    for (const std::string_view path : {"\\\\?\\C:\\a\\..\\b", "\\\\?\\UNC\\srv\\sh\\.\\x", "\\\\?\\C:\\t.bat\\",
+                                        "\\\\?\\C:\\a\\\\b", "\\\\?\\C:\\t.bat\\.", "\\\\?\\C:\\a\\.."}) {
+        const auto result = frost::io::normalizePath(path, kWin);
+        ASSERT_FALSE(result.has_value()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << path;
+    }
 }
 
 TEST(Path, NormalizesPosixButKeepsDotDot) {
@@ -99,7 +142,6 @@ TEST(Path, ExtendedLengthForm) {
     EXPECT_EQ(frost::io::extendedLengthPath("\\\\srv\\share\\x").value(), "\\\\?\\UNC\\srv\\share\\x");
     EXPECT_EQ(frost::io::extendedLengthPath("//srv/share").value(), "\\\\?\\UNC\\srv\\share\\");
     EXPECT_EQ(frost::io::extendedLengthPath("\\\\?\\C:\\x").value(), "\\\\?\\C:\\x");
-    EXPECT_EQ(frost::io::extendedLengthPath("\\\\.\\pipe\\p").value(), "\\\\.\\pipe\\p");
     const auto relative = frost::io::extendedLengthPath("dir\\x");
     ASSERT_FALSE(relative.has_value());
     EXPECT_EQ(relative.error().code(), ErrorCode::InvalidArgument);

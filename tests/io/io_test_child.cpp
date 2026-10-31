@@ -21,6 +21,9 @@
 //                      CompareObjectHandles; POSIX: "<st_dev>:<st_ino>" of a file).
 //                      Checking identity, not just validity, matters: the child's own
 //                      handles can have the same numeric value.
+//   grandchild wait|exit  starts a copy of itself as "sleep 60000" that shares these standard
+//                      handles, prints "grandchild <pid>", then sleeps 60 s (wait) or exits 0
+//                      (exit), leaving the grandchild behind holding stdout open
 //
 // It deliberately uses only the OS and C runtime, not frost::io, so it is an
 // independent oracle for the launcher's quoting, environment and directory handling.
@@ -43,9 +46,15 @@
 #include <shellapi.h>
 #else
 #include <sys/stat.h>
+#include <sys/types.h>
+
+#include <climits>
 
 #include <fcntl.h>
+#include <spawn.h>
 #include <unistd.h>
+
+extern char** environ; // Declared by POSIX, but by no header.
 #endif
 
 namespace {
@@ -111,6 +120,49 @@ std::string toUtf8(const wchar_t* wide) {
 }
 
 #endif
+
+// Starts "<this program> sleep 60000" with this process's standard handles and returns
+// its process id, or 0 on failure. Deliberately not through frost::io (see the header).
+unsigned long spawnSleepingCopy() {
+#ifdef _WIN32
+    std::wstring self(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
+    if (length == 0 || length >= self.size()) {
+        return 0;
+    }
+    self.resize(length);
+    std::wstring commandLine = L"\"" + self + L"\" sleep 60000";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION info{};
+    // bInheritHandles = TRUE: the standard handles this process inherited are still inheritable.
+    if (CreateProcessW(self.c_str(), commandLine.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup,
+                       &info) == FALSE) {
+        return 0;
+    }
+    CloseHandle(info.hThread);
+    CloseHandle(info.hProcess);
+    return info.dwProcessId;
+#else
+    char self[PATH_MAX + 1] = {};
+    const ssize_t length = readlink("/proc/self/exe", self, PATH_MAX);
+    if (length <= 0) {
+        return 0;
+    }
+    std::string sleepMode = "sleep";
+    std::string duration = "60000";
+    char* argv[] = {self, sleepMode.data(), duration.data(), nullptr};
+    pid_t pid = 0;
+    if (posix_spawn(&pid, self, nullptr, nullptr, argv, environ) != 0) {
+        return 0;
+    }
+    return static_cast<unsigned long>(pid);
+#endif
+}
 
 int run(const std::vector<std::string>& args) {
     if (args.size() < 2) {
@@ -207,7 +259,10 @@ int run(const std::vector<std::string>& args) {
             return 3;
         }
         const auto compare = reinterpret_cast<CompareFn>(reinterpret_cast<void*>(proc));
-        const bool same = compare(own, handle) != FALSE;
+        // OpenEventW returns a free handle value. If that is the probed value N, slot N was
+        // empty, so nothing was inherited there; comparing the handle with itself would
+        // wrongly report that it was.
+        const bool same = own != handle && compare(own, handle) != FALSE;
         CloseHandle(own);
         line(same ? "inherited" : "not inherited");
 #else
@@ -216,6 +271,19 @@ int run(const std::vector<std::string>& args) {
                           std::to_string(info.st_dev) + ":" + std::to_string(info.st_ino) == args[3];
         line(same ? "inherited" : "not inherited");
 #endif
+        return 0;
+    }
+    if (mode == "grandchild" && args.size() == 3 && (args[2] == "wait" || args[2] == "exit")) {
+        const unsigned long pid = spawnSleepingCopy();
+        if (pid == 0) {
+            line("spawn failed");
+            return 3;
+        }
+        line("grandchild " + std::to_string(pid));
+        std::fflush(stdout);
+        if (args[2] == "wait") {
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+        }
         return 0;
     }
     std::fputs("io_test_child: unknown mode or wrong argument count\n", stderr);

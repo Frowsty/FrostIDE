@@ -195,7 +195,7 @@ public:
             }
             return remember(statusFromSiginfo(info));
         }
-        const auto deadline = std::chrono::steady_clock::now() + *timeout;
+        const auto deadline = detail::deadlineAfter(*timeout);
         auto pause = std::chrono::milliseconds(1);
         for (;;) {
             info = siginfo_t{};
@@ -287,7 +287,7 @@ Result<ProcessResult> PosixProcess::communicate(std::string_view stdinData, IClo
     if (!stdinData.empty() && !m_in.valid()) {
         return fail(ErrorCode::InvalidArgument, "communicate: stdin data given but stdin is not an open pipe");
     }
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto deadline = detail::deadlineAfter(timeout);
     const auto timedOut = [&]() -> Result<ProcessResult> {
         static_cast<void>(terminate());
         static_cast<void>(wait(kReapGrace));
@@ -414,15 +414,36 @@ struct PipeEnds {
     UniqueFd child;
 };
 
+// Moves `fd` to a number above 2 if it landed on a standard descriptor (possible when this
+// process closed one), so the child's dup2 actions onto 0-2 cannot clobber it.
+Result<UniqueFd> aboveStdio(UniqueFd fd) {
+    if (fd.get() > STDERR_FILENO) {
+        return fd;
+    }
+    const int moved = ::fcntl(fd.get(), F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (moved < 0) {
+        return std::unexpected(errnoError(errno, "fcntl(F_DUPFD_CLOEXEC)"));
+    }
+    return UniqueFd(moved);
+}
+
 Result<PipeEnds> createPipe(bool parentReads) {
     int fds[2];
     if (::pipe2(fds, O_CLOEXEC) != 0) {
         return std::unexpected(errnoError(errno, "pipe2"));
     }
-    UniqueFd readEnd(fds[0]);
-    UniqueFd writeEnd(fds[1]);
-    PipeEnds ends{parentReads ? std::move(readEnd) : std::move(writeEnd),
-                  parentReads ? std::move(writeEnd) : std::move(readEnd)};
+    UniqueFd rawRead(fds[0]);
+    UniqueFd rawWrite(fds[1]);
+    auto readEnd = aboveStdio(std::move(rawRead));
+    if (!readEnd) {
+        return std::unexpected(std::move(readEnd.error()));
+    }
+    auto writeEnd = aboveStdio(std::move(rawWrite));
+    if (!writeEnd) {
+        return std::unexpected(std::move(writeEnd.error()));
+    }
+    PipeEnds ends{parentReads ? std::move(*readEnd) : std::move(*writeEnd),
+                  parentReads ? std::move(*writeEnd) : std::move(*readEnd)};
     const int flags = ::fcntl(ends.parent.get(), F_GETFL);
     if (flags < 0 || ::fcntl(ends.parent.get(), F_SETFL, flags | O_NONBLOCK) != 0) {
         return std::unexpected(errnoError(errno, "fcntl(O_NONBLOCK)"));
@@ -447,6 +468,30 @@ struct SpawnAttributes {
     SpawnAttributes& operator=(const SpawnAttributes&) = delete ("owns a posix_spawnattr_t");
 };
 
+// Whether this process has descriptor `fd` open.
+bool isOpen(int fd) noexcept { return ::fcntl(fd, F_GETFD) != -1 || errno != EBADF; }
+
+/*
+ * What Stdio::Inherit means for standard descriptor `target` (see process.hpp):
+ * the null device if this process has no such descriptor, and for a terminal
+ * stdin when the child leads its own process group (killOnClose). That group
+ * is a background group of the terminal, so the child's first read would stop
+ * it with SIGTTIN. Inherited terminal stdout and stderr stay: background
+ * writes are allowed unless the terminal has TOSTOP set.
+ */
+Stdio effectiveMode(Stdio mode, int target, bool ownGroup) noexcept {
+    if (mode != Stdio::Inherit) {
+        return mode;
+    }
+    if (!isOpen(target)) {
+        return Stdio::Null;
+    }
+    if (target == STDIN_FILENO && ownGroup && ::isatty(target) == 1) {
+        return Stdio::Null;
+    }
+    return Stdio::Inherit;
+}
+
 // Adds the file action for one standard stream. `pipe` is the child end for Stdio::Pipe.
 int addStreamAction(posix_spawn_file_actions_t& actions, Stdio mode, int target, const UniqueFd& pipe) noexcept {
     switch (mode) {
@@ -467,12 +512,15 @@ public:
         if (auto valid = validateProcessSpec(spec, /*windowsRules=*/false); !valid) {
             return std::unexpected(std::move(valid.error()));
         }
+        // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.
+        const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO, spec.killOnClose);
+        const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO, spec.killOnClose);
+        const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO, spec.killOnClose);
         PipeEnds in;
         PipeEnds out;
         PipeEnds err;
-        for (auto [mode, ends, parentReads] :
-             {std::tuple{spec.stdinMode, &in, false}, std::tuple{spec.stdoutMode, &out, true},
-              std::tuple{spec.stderrMode, &err, true}}) {
+        for (auto [mode, ends, parentReads] : {std::tuple{stdinMode, &in, false}, std::tuple{stdoutMode, &out, true},
+                                               std::tuple{stderrMode, &err, true}}) {
             if (mode == Stdio::Pipe) {
                 auto pipe = createPipe(parentReads);
                 if (!pipe) {
@@ -483,12 +531,12 @@ public:
         }
 
         SpawnActions actions;
-        int rc = addStreamAction(actions.actions, spec.stdinMode, STDIN_FILENO, in.child);
+        int rc = addStreamAction(actions.actions, stdinMode, STDIN_FILENO, in.child);
         if (rc == 0) {
-            rc = addStreamAction(actions.actions, spec.stdoutMode, STDOUT_FILENO, out.child);
+            rc = addStreamAction(actions.actions, stdoutMode, STDOUT_FILENO, out.child);
         }
         if (rc == 0) {
-            rc = addStreamAction(actions.actions, spec.stderrMode, STDERR_FILENO, err.child);
+            rc = addStreamAction(actions.actions, stderrMode, STDERR_FILENO, err.child);
         }
         // Belt and braces: descriptors other code opened without O_CLOEXEC are not inherited either.
         if (rc == 0) {

@@ -12,12 +12,15 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <format>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
+#include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
 
 #include <windows.h>
@@ -29,6 +32,7 @@
 
 namespace {
 
+using namespace std::chrono_literals;
 using namespace std::string_literals;
 using frost::ErrorCode;
 using frost::io::DirEntry;
@@ -309,6 +313,144 @@ TEST(RealFileSystem, PathsBeyondMaxPath) {
     ASSERT_TRUE(fs().removeFile(file).has_value());
     EXPECT_FALSE(fs().exists(file).value());
     // ScratchDir removes the deep tree through the same API.
+}
+
+#ifdef _WIN32
+TEST(RealFileSystem, NamesWin32WouldRewriteAreRefused) {
+    const ScratchDir dir("fs-names");
+    for (const char* name : {"trail.", "trail ", "CON", "nul.txt", "COM1.log", "Aux .c"}) {
+        const std::string path = dir.path() + "\\" + name;
+        const auto result = fs().writeFileAtomic(path, "x");
+        ASSERT_FALSE(result.has_value()) << name;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << name;
+        EXPECT_EQ(fs().createDirectories(path + "\\sub").error().code(), ErrorCode::InvalidArgument) << name;
+    }
+    EXPECT_TRUE(fs().listDirectory(dir.path()).value().empty());
+
+    // The explicit \\?\ form is the escape hatch: it names exactly the file written.
+    ASSERT_TRUE(dir.path().size() > 3 && dir.path()[1] == ':') << dir.path();
+    const std::string verbatim = "\\\\?\\" + dir.path() + "\\trail.";
+    ASSERT_TRUE(fs().writeFileAtomic(verbatim, "literal").has_value());
+    EXPECT_EQ(fs().readFile(verbatim).value(), "literal");
+    EXPECT_EQ(fs().listDirectory(dir.path()).value(), (std::vector<DirEntry>{{"trail.", FileType::Regular}}));
+    ASSERT_TRUE(fs().removeFile(verbatim).has_value());
+}
+
+TEST(RealFileSystem, ReadFileRefusesDevices) {
+    // Only reachable through \\?\ now, but a device must never be "read to the end".
+    const auto result = fs().readFile("\\\\?\\NUL");
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << result.error().describe();
+}
+
+// Creates a directory junction with cmd.exe's mklink (junctions, unlike symlinks, need no privilege).
+void makeJunction(const std::string& link, const std::string& target) {
+    std::array<wchar_t, MAX_PATH> system{};
+    const UINT length = GetSystemDirectoryW(system.data(), MAX_PATH);
+    ASSERT_GT(length, 0u);
+    frost::io::ProcessSpec spec;
+    spec.executable = frost::io::fromWide(std::wstring_view(system.data(), length)).value() + "\\cmd.exe";
+    spec.arguments = {"/c", "mklink", "/J", link, target};
+    spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+    const auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "", 120s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stdoutBytes;
+}
+
+// A symbolic link, or false where creating one needs a privilege this process lacks
+// (no Developer Mode, not elevated).
+bool makeSymlink(const std::string& link, const std::string& target, bool directory) {
+    const DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE | (directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0);
+    if (CreateSymbolicLinkW(frost::io::toWide(link).value().c_str(), frost::io::toWide(target).value().c_str(),
+                            flags) == FALSE) {
+        const DWORD error = GetLastError();
+        EXPECT_EQ(error, static_cast<DWORD>(ERROR_PRIVILEGE_NOT_HELD)) << "CreateSymbolicLinkW failed: " << error;
+        return false;
+    }
+    return true;
+}
+#else
+TEST(RealFileSystem, ReadFileRefusesFifosAndDevicesWithoutBlocking) {
+    // A FIFO without a writer would block open() and read() forever; devices never end.
+    const ScratchDir dir("fs-fifo");
+    const std::string fifo = dir.join("fifo");
+    ASSERT_EQ(mkfifo(fifo.c_str(), 0600), 0);
+    for (const std::string& path : {fifo, "/dev/zero"s, "/dev/null"s}) {
+        const auto result = fs().readFile(path);
+        ASSERT_FALSE(result.has_value()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << path;
+        EXPECT_NE(result.error().message().find("not a regular file"), std::string::npos) << path;
+    }
+}
+
+TEST(RealFileSystem, NewFilesGetTheUmaskMode) {
+    const ScratchDir dir("fs-umask");
+    const mode_t saved = umask(027);
+    const std::string file = dir.join("new.txt");
+    const auto written = fs().writeFileAtomic(file, "x");
+    umask(saved);
+    ASSERT_TRUE(written.has_value()) << written.error().describe();
+    struct stat info{};
+    ASSERT_EQ(stat(file.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 07777, 0640u); // 0666 & ~027, as open(O_CREAT) would give.
+}
+#endif
+
+TEST(RealFileSystem, LinksAreRemovedWithoutFollowingThem) {
+    const ScratchDir dir("fs-links");
+    const std::string target = dir.join("target");
+    ASSERT_TRUE(fs().createDirectories(target).has_value());
+    const std::string kept = frost::io::joinPath(target, "keep.txt").value();
+    ASSERT_TRUE(fs().writeFileAtomic(kept, "kept").has_value());
+    const std::string gone = dir.join("gone");
+    ASSERT_TRUE(fs().createDirectories(gone).has_value());
+
+    std::vector<std::string> directoryLinks;
+    std::vector<std::string> fileLinks;
+    std::vector<std::string> danglingLinks;
+#ifdef _WIN32
+    ASSERT_NO_FATAL_FAILURE(makeJunction(dir.join("junction"), target));
+    directoryLinks.push_back(dir.join("junction"));
+    ASSERT_NO_FATAL_FAILURE(makeJunction(dir.join("dangling-junction"), gone));
+    danglingLinks.push_back(dir.join("dangling-junction"));
+    if (makeSymlink(dir.join("dirlink"), target, true)) {
+        directoryLinks.push_back(dir.join("dirlink"));
+        ASSERT_TRUE(makeSymlink(dir.join("filelink"), kept, false));
+        fileLinks.push_back(dir.join("filelink"));
+    }
+#else
+    ASSERT_EQ(symlink(target.c_str(), dir.join("dirlink").c_str()), 0);
+    directoryLinks.push_back(dir.join("dirlink"));
+    ASSERT_EQ(symlink(kept.c_str(), dir.join("filelink").c_str()), 0);
+    fileLinks.push_back(dir.join("filelink"));
+    ASSERT_EQ(symlink(gone.c_str(), dir.join("dangling").c_str()), 0);
+    danglingLinks.push_back(dir.join("dangling"));
+#endif
+    ASSERT_TRUE(fs().removeDirectory(gone).has_value());
+
+    // listDirectory reports the links themselves; status follows them.
+    for (const DirEntry& entry : fs().listDirectory(dir.path()).value()) {
+        EXPECT_EQ(entry.type, entry.name == "target" ? FileType::Directory : FileType::Symlink) << entry.name;
+    }
+    for (const std::string& link : directoryLinks) {
+        EXPECT_EQ(fs().status(link).value().type, FileType::Directory) << link;
+        EXPECT_EQ(fs().listDirectory(link).value(), (std::vector<DirEntry>{{"keep.txt", FileType::Regular}}));
+        // Not a directory to removeDirectory (as rmdir on a POSIX symlink), never emptied...
+        EXPECT_EQ(fs().removeDirectory(link).error().code(), ErrorCode::InvalidArgument) << link;
+        // ...and removeFile removes the link, not the target or its contents.
+        ASSERT_TRUE(fs().removeFile(link).has_value()) << link;
+        EXPECT_FALSE(fs().exists(link).value()) << link;
+    }
+    for (const std::string& link : fileLinks) {
+        EXPECT_EQ(fs().readFile(link).value(), "kept");
+        ASSERT_TRUE(fs().removeFile(link).has_value()) << link;
+    }
+    for (const std::string& link : danglingLinks) {
+        EXPECT_FALSE(fs().exists(link).value()) << link; // status follows the link: NotFound.
+        ASSERT_TRUE(fs().removeFile(link).has_value()) << link;
+    }
+    EXPECT_EQ(fs().readFile(kept).value(), "kept");
+    EXPECT_EQ(fs().listDirectory(dir.path()).value(), (std::vector<DirEntry>{{"target", FileType::Directory}}));
 }
 
 } // namespace

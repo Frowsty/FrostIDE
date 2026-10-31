@@ -11,8 +11,10 @@
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
+#include <string_view>
 #include <vector>
 
 #include <dirent.h>
@@ -33,6 +35,17 @@ Result<std::string> checkedPath(std::string_view path) {
         return fail(ErrorCode::InvalidArgument, "not an absolute path: '" + std::string(path) + "'");
     }
     return std::string(path);
+}
+
+// A final ".." names the parent, not an entry: removeFile and removeDirectory refuse it
+// (rmdir would report ENOTEMPTY, unlink EISDIR), as writeFileAtomic and MemFs do.
+Result<void> checkEntryName(std::string_view checked, std::string_view operation, std::string_view path) {
+    auto normalized = normalizePath(checked, PathStyle::Posix);
+    if (normalized && fileName(*normalized, PathStyle::Posix) == "..") {
+        return fail(ErrorCode::InvalidArgument,
+                    std::string(operation) + " '" + std::string(path) + "': '..' is not an entry name");
+    }
+    return {};
 }
 
 IClock::SystemTime toSystemTime(const timespec& time) noexcept {
@@ -59,9 +72,48 @@ bool isDirectory(const std::string& path) noexcept {
 
 // ENOTDIR means either "the target is not a directory" or "a prefix component is
 // not one"; only the first is reported as InvalidArgument, the second is NotFound.
+// lstat: a symlink is itself "not a directory", wherever it points.
 bool existsAsNonDirectory(const std::string& path) noexcept {
     struct stat info{};
-    return ::stat(path.c_str(), &info) == 0 && !S_ISDIR(info.st_mode);
+    return ::lstat(path.c_str(), &info) == 0 && !S_ISDIR(info.st_mode);
+}
+
+/*
+ * The process umask, for the mode of newly created files. umask(2) can only be
+ * read by setting it, which races with other threads creating files, so the
+ * value comes from /proc/self/status (Linux >= 4.7); 022 if that is unavailable.
+ */
+mode_t processUmask() noexcept {
+    const UniqueFd fd(::open("/proc/self/status", O_RDONLY | O_CLOEXEC));
+    if (!fd.valid()) {
+        return 022;
+    }
+    std::array<char, 4096> buffer{};
+    std::size_t used = 0;
+    while (used < buffer.size()) {
+        const ssize_t got = ::read(fd.get(), buffer.data() + used, buffer.size() - used);
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+        if (got <= 0) {
+            break;
+        }
+        used += static_cast<std::size_t>(got);
+    }
+    const std::string_view status(buffer.data(), used);
+    const std::size_t at = status.find("\nUmask:");
+    if (at == std::string_view::npos) {
+        return 022;
+    }
+    mode_t mask = 0;
+    bool any = false;
+    for (std::size_t i = at + 7; i < status.size() && status[i] != '\n'; ++i) {
+        if (status[i] >= '0' && status[i] <= '7') {
+            mask = static_cast<mode_t>(mask * 8 + static_cast<mode_t>(status[i] - '0'));
+            any = true;
+        }
+    }
+    return any ? (mask & 0777) : 022;
 }
 
 // Writes all of `data`, retrying on EINTR and short writes. Returns 0 or an errno value.
@@ -90,7 +142,9 @@ public:
         if (!checked) {
             return std::unexpected(std::move(checked.error()));
         }
-        UniqueFd fd(::open(checked->c_str(), O_RDONLY | O_CLOEXEC));
+        // O_NONBLOCK: opening a FIFO without a writer would otherwise block forever. O_NOCTTY:
+        // opening a terminal must not make it our controlling terminal.
+        UniqueFd fd(::open(checked->c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY));
         if (!fd.valid()) {
             return std::unexpected(errnoError(errno, "readFile", path));
         }
@@ -100,6 +154,14 @@ public:
         }
         if (S_ISDIR(info.st_mode)) {
             return std::unexpected(detail::isADirectoryError("readFile", path));
+        }
+        // FIFOs, sockets and devices (/dev/zero never ends) are not files to read whole.
+        if (!S_ISREG(info.st_mode)) {
+            return fail(ErrorCode::InvalidArgument, "readFile '" + std::string(path) + "': not a regular file");
+        }
+        const int flags = ::fcntl(fd.get(), F_GETFL);
+        if (flags < 0 || ::fcntl(fd.get(), F_SETFL, flags & ~O_NONBLOCK) != 0) {
+            return std::unexpected(errnoError(errno, "readFile", path));
         }
         // One spare byte lets the final zero-byte read land without reallocating.
         std::string out;
@@ -136,8 +198,11 @@ public:
             return fail(ErrorCode::InvalidArgument, "writeFileAtomic '" + std::string(path) + "': not a file path");
         }
         // Keep an existing target's permission bits; a new file gets 0666 minus the umask.
+        // The temp file is created 0600 and only gets that final mode once its content is
+        // complete, so no other user can open it while it is being written.
         struct stat existing{};
         const bool hadTarget = ::stat(target->c_str(), &existing) == 0 && S_ISREG(existing.st_mode);
+        const mode_t finalMode = hadTarget ? (existing.st_mode & 07777) : (0666 & ~processUmask());
 
         std::string tempPath;
         UniqueFd fd;
@@ -148,7 +213,7 @@ public:
                 return std::unexpected(std::move(candidate.error()));
             }
             tempPath = std::move(*candidate);
-            fd.reset(::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666));
+            fd.reset(::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600));
             if (!fd.valid() && (errno != EEXIST || attempt >= 16)) {
                 return std::unexpected(errnoError(errno, "writeFileAtomic: create temp file for", path));
             }
@@ -160,11 +225,11 @@ public:
             ::unlink(tempPath.c_str());
             return std::unexpected(std::move(error));
         };
-        if (hadTarget && ::fchmod(fd.get(), existing.st_mode & 07777) != 0) {
-            return abandon(errnoError(errno, "writeFileAtomic: copy permissions for", path));
-        }
         if (const int error = writeAll(fd.get(), data); error != 0) {
             return abandon(errnoError(error, "writeFileAtomic: write temp file for", path));
+        }
+        if (::fchmod(fd.get(), finalMode) != 0) {
+            return abandon(errnoError(errno, "writeFileAtomic: set permissions for", path));
         }
         if (::fsync(fd.get()) != 0) {
             return abandon(errnoError(errno, "writeFileAtomic: flush temp file for", path));
@@ -301,6 +366,9 @@ public:
         if (!checked) {
             return std::unexpected(std::move(checked.error()));
         }
+        if (auto entry = checkEntryName(*checked, "removeFile", path); !entry) {
+            return entry;
+        }
         if (::unlink(checked->c_str()) != 0) {
             const int error = errno;
             // Linux reports EISDIR, POSIX allows EPERM for directories.
@@ -316,6 +384,9 @@ public:
         auto checked = checkedPath(path);
         if (!checked) {
             return std::unexpected(std::move(checked.error()));
+        }
+        if (auto entry = checkEntryName(*checked, "removeDirectory", path); !entry) {
+            return entry;
         }
         if (::rmdir(checked->c_str()) != 0) {
             const int error = errno;

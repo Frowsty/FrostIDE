@@ -186,9 +186,57 @@ TEST(MemFs, WindowsStyleTreeOnAnyPlatform) {
     EXPECT_EQ(fs.listDirectory("C:\\Users\\dev\\proj").value(),
               (std::vector<DirEntry>{{"main.cpp", FileType::Regular}}));
     EXPECT_EQ(fs.listDirectory("C:\\").value(), (std::vector<DirEntry>{{"Users", FileType::Directory}}));
-    ASSERT_TRUE(fs.writeFileAtomic("\\\\server\\share\\x.txt", "unc").has_value()); // UNC roots exist implicitly.
-    EXPECT_EQ(fs.readFile("//server/share/x.txt").value(), "unc");
+    EXPECT_EQ(fs.readFile("c:\\users\\dev\\proj\\main.cpp").error().code(), ErrorCode::NotFound); // Case-sensitive...
+    EXPECT_EQ(fs.readFile("c:\\Users\\dev\\proj\\main.cpp").value(), "int main() {}"); // ...except the drive.
     EXPECT_EQ(fs.readFile("/Users/dev/proj/main.cpp").error().code(), ErrorCode::InvalidArgument); // Not absolute.
+    // Names Win32 would rewrite are refused, as by the real file system.
+    EXPECT_EQ(fs.writeFileAtomic("C:\\Users\\trail.", "x").error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(fs.writeFileAtomic("C:\\Users\\NUL.txt", "x").error().code(), ErrorCode::InvalidArgument);
+}
+
+TEST(MemFs, OnlyAddedRootsExist) {
+    frost::ManualClock clock;
+    MemFs fs(clock, PathStyle::Windows);
+    EXPECT_TRUE(fs.exists("C:\\").value());
+    EXPECT_FALSE(fs.exists("Z:\\").value());
+    EXPECT_EQ(fs.status("Z:\\").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(fs.listDirectory("Z:\\").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(fs.writeFileAtomic("Z:\\x.txt", "x").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(fs.createDirectories("Z:\\a\\b").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(fs.writeFileAtomic("\\\\server\\share\\x.txt", "unc").error().code(), ErrorCode::NotFound);
+
+    fs.addRoot("z:/");
+    fs.addRoot("\\\\server\\share");
+    ASSERT_TRUE(fs.createDirectories("Z:\\a\\b").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic("\\\\server\\share\\x.txt", "unc").has_value());
+    EXPECT_EQ(fs.readFile("//server/share/x.txt").value(), "unc");
+    EXPECT_EQ(fs.removeDirectory("Z:\\").error().code(), ErrorCode::PermissionDenied);
+    EXPECT_TRUE(fs.listDirectory("\\\\server\\other\\").error().code() == ErrorCode::NotFound);
+
+    MemFs posix(clock, PathStyle::Posix);
+    EXPECT_TRUE(posix.exists("/").value());
+}
+
+TEST_F(MemFsTest, PosixDotDotResolvesThroughExistingDirectoriesOnly) {
+    ASSERT_TRUE(iface.writeFileAtomic("/proj/a.txt", "a").has_value());
+    // Like the kernel: "/proj/src/.." is /proj because /proj/src exists.
+    EXPECT_EQ(iface.readFile("/proj/src/../a.txt").value(), "a");
+    EXPECT_EQ(iface.readFile("/proj/src/../../proj/a.txt").value(), "a");
+    EXPECT_EQ(iface.readFile("/../../proj/a.txt").value(), "a"); // ".." at the root stays there.
+    // Not through a missing directory or through a file (ENOENT / ENOTDIR).
+    EXPECT_EQ(iface.readFile("/proj/missing/../a.txt").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(iface.readFile("/proj/a.txt/../a.txt").error().code(), ErrorCode::NotFound);
+    EXPECT_FALSE(iface.exists("/proj/missing/../a.txt").value());
+    ASSERT_TRUE(iface.writeFileAtomic("/proj/src/../b.txt", "b").has_value());
+    EXPECT_EQ(iface.readFile("/proj/b.txt").value(), "b");
+    EXPECT_EQ(iface.listDirectory("/proj/src/..").value().size(), 3u); // a.txt, b.txt, src.
+    // A final ".." names a directory, never an entry to create or remove.
+    for (const char* path : {"/proj/src/..", "/proj/.."}) {
+        EXPECT_EQ(iface.writeFileAtomic(path, "x").error().code(), ErrorCode::InvalidArgument) << path;
+        EXPECT_EQ(iface.removeFile(path).error().code(), ErrorCode::InvalidArgument) << path;
+        EXPECT_EQ(iface.removeDirectory(path).error().code(), ErrorCode::InvalidArgument) << path;
+    }
+    EXPECT_TRUE(iface.exists("/proj/src").value());
 }
 
 TEST(MemFs, ConcurrentWritersDoNotInterfere) {

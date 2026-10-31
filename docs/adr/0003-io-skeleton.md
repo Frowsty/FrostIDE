@@ -29,12 +29,18 @@ Constraints that shaped the design:
   is not valid Unicode are skipped by `listDirectory` (TODO(M1): report them).
 - Every path given to `IFileSystem` or `IProcessLauncher` must be absolute in the platform's syntax; relative
   paths fail with `InvalidArgument` and are never resolved against the current directory. Windows accepts
-  drive (`C:\`), UNC (`\\server\share\`), verbatim (`\\?\`) and device (`\\.\`) roots; drive-relative
-  (`C:x`), rooted (`\x`) and incomplete UNC forms are rejected.
-- Windows normalisation turns `/` into `\`, collapses repeated separators, removes `.` and resolves `..`
-  lexically (never above the root), and keeps trailing dots and spaces (they are significant under `\\?\`).
-  Verbatim and device paths are passed through untouched. POSIX normalisation keeps `..` (symlinks make it
-  non-lexical).
+  drive (`C:\`), UNC (`\\server\share\`) and verbatim (`\\?\`) roots; drive-relative (`C:x`), rooted (`\x`)
+  and incomplete UNC forms are rejected. Device-namespace paths (`\\.\`) are rejected too: the OS
+  normalises them (`\\.\C:\d\t.bat\.` opens `C:\d\t.bat`), so no check on the string would see the file
+  actually opened.
+- The invariant behind the path rules: the string frost::io checks is the file the OS opens. Windows
+  normalisation turns `/` into `\`, collapses repeated separators, removes `.` and resolves `..` lexically
+  (never above the root), as `GetFullPathNameW` does. Components that Win32 would rewrite are refused in
+  drive and UNC paths rather than created literally under `\\?\`: names ending in a dot or a space (Win32
+  strips them) and reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9` and the superscript
+  forms, with or without an extension). An explicit `\\?\` path is the escape hatch for such names; it is
+  passed literally but may not contain empty, `.` or `..` components. POSIX normalisation keeps `..`
+  (symlinks make it non-lexical); the kernel resolves it against the real tree.
 - On Windows every file-system call uses the extended-length form (`\\?\C:\...`, `\\?\UNC\server\share\...`),
   so MAX_PATH never applies to frost::io, whatever `LongPathsEnabled` says. Only wide (`...W`) APIs are used.
 
@@ -54,19 +60,38 @@ directory where a file is → AlreadyExists).
   exclusively), flushes it (`FlushFileBuffers` / `fsync`), then replaces the target atomically:
   `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` on Windows, `rename` plus a best-effort
   `fsync` of the directory on POSIX. On any failure the temp file is removed and the old content is intact.
-  POSIX keeps the target's permission bits; Windows does not carry over attributes, ACLs, alternate streams
-  or hard links (the SaveManager owns that policy in M1). TODO(M1): sweep stale temp files left by crashes.
+  POSIX keeps the target's permission bits (new files get `0666 & ~umask`); the temp file is created `0600`
+  and receives its final mode only after its content is written, so a partially written file is never
+  readable by others. Windows does not carry over attributes, ACLs, alternate streams or hard links (the
+  SaveManager owns that policy in M1). TODO(M1): sweep stale temp files left by crashes.
+- `readFile` reads regular files only: FIFOs, sockets and devices fail with InvalidArgument without
+  blocking (POSIX opens with `O_NONBLOCK | O_NOCTTY` and checks `fstat` before reading; Windows checks
+  `GetFileType`).
+- Links: `listDirectory` reports symlinks and Windows junctions as `Symlink`; `status` follows them.
+  `removeFile` removes such an entry itself on both platforms, never its target (Windows uses
+  `RemoveDirectoryW` for directory links, which deletes only the reparse point), and `removeDirectory`
+  refuses a link with InvalidArgument, as `rmdir` does on POSIX. So a recursive delete that removes
+  `Symlink` entries with `removeFile` never descends into, or empties, a link's target.
 - `realFileSystem()` is a stateless, thread-safe, `constinit` singleton.
 - `MemFs` implements the same contract in memory with mtimes from an `IClock`, either path style on any
   platform, and fault injection per operation, path and count (including the rename step of an atomic write,
-  so the "old content survives" path is testable). It is case-sensitive even in Windows style
+  so the "old content survives" path is testable). It refuses what the real implementations refuse: the
+  Windows name rules above, POSIX `..` through a missing directory or a file (resolved against the tree, as
+  the kernel does), a final `..` as an entry to create or remove, and roots that do not exist (only `/` or
+  `C:\` exists until `addRoot`). It is case-sensitive apart from drive letters, even in Windows style
   (TODO(M2): case-insensitive mode for Windows-style trees).
 
 ### IProcessLauncher
 - `ProcessSpec`: absolute executable, UTF-8 arguments, optional absolute working directory, a clean or
   inherited environment plus ordered overrides (value sets, `nullopt` removes; names case-insensitive on
   Windows), and per-stream `Inherit`/`Null`/`Pipe` (plus `MergeIntoStdout` for stderr). Every launcher
-  validates specs with the same `validateProcessSpec`.
+  validates specs with the same `validateProcessSpec`, including the Windows-only checks that
+  `CreateProcessW` would otherwise fail later (no quote in the executable, a command line under 32,767
+  UTF-16 units), so the scripted double refuses exactly what the real launcher refuses.
+- `Inherit` never hands a child an invalid stream: a closed parent descriptor (or a GUI parent without
+  standard handles) becomes the null device. On POSIX with `killOnClose` a terminal stdin also becomes the
+  null device, because the child's new process group is a background job of that terminal and its first
+  read would stop it with SIGTTIN; terminal stdout/stderr are kept.
 - `IProcess` exposes `pid`, blocking `writeStdin`/`closeStdin`/`readStdout`/`readStderr`, `wait(timeout)`,
   `terminate`, and `communicate(stdin, timeout)`, which feeds stdin and drains both outputs concurrently on
   one thread, bounded by the deadline; on timeout it terminates and reaps the process and returns Timeout.
@@ -77,9 +102,14 @@ directory where a file is → AlreadyExists).
   `process.hpp`), `STARTUPINFOEXW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (only the three std handles are
   inherited) and `PROC_THREAD_ATTRIBUTE_JOB_LIST` (the child starts inside a kill-on-close Job Object when
   `killOnClose`), `CREATE_UNICODE_ENVIRONMENT`, and `CREATE_NO_WINDOW` only when the parent has no console.
-  Pipes are uniquely named, overlapped, local-only named pipes, so `communicate` can wait on all of them
-  with `WaitForMultipleObjects`. `.bat`/`.cmd` executables are refused with Unsupported because `cmd.exe`
-  re-parses the command line with different rules ("BatBadBut"); TODO(M2): a dedicated cmd launcher.
+  Pipes are overlapped, local-only (`PIPE_REJECT_REMOTE_CLIENTS`), single-instance named pipes, so
+  `communicate` can wait on all of them with `WaitForMultipleObjects`. Their names carry 128 random bits
+  from `BCryptGenRandom` and their DACL grants access to the current user's SID only, so another process
+  can neither predict a name nor connect first. `.bat`/`.cmd` executables are refused with Unsupported
+  because `cmd.exe` re-parses the command line with different rules ("BatBadBut"). The check runs on the
+  given spelling, on the normalised path the launcher starts, and, just before `CreateProcessW`, on
+  `GetFullPathNameW` of the application name, so trailing separators, dots, spaces or `x\..` cannot hide
+  the extension. TODO(M2): a dedicated cmd launcher.
 - Linux: `posix_spawn` (never `posix_spawnp`) with `pipe2(O_CLOEXEC)` pipes, `addclosefrom_np(3)` and
   `addchdir_np` (glibc ≥ 2.34; Ubuntu 24.04 ships 2.39), default signal mask and dispositions, and a new
   process group when `killOnClose`. `wait` uses `waitid(WNOWAIT)` (with a pidfd where available) so the
@@ -88,6 +118,8 @@ directory where a file is → AlreadyExists).
   error value, never a signal.
 - `terminate()` reports exit code `kTerminatedExitCode` (137 = 128 + SIGKILL) on both platforms; POSIX also
   reports the signal.
+- Deadlines saturate: `timeout` values up to `Duration::max()` mean "effectively no deadline" instead of
+  overflowing `steady_clock::now() + timeout`.
 - Not yet: logging of the resolved launch (PLAN.md 3.5; TODO(M1) once core has logging), async pipes on the
   reactor (TODO(M1)), supervision with restart (TODO(M1)).
 

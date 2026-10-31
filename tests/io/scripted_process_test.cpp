@@ -104,6 +104,31 @@ TEST(ScriptedProcessLauncher, ValidatesLikeTheRealLauncher) {
     EXPECT_FALSE(launcher.launches()[0].launched);
 }
 
+#ifdef _WIN32
+TEST(ScriptedProcessLauncher, AppliesTheWindowsCommandLineChecks) {
+    // What CreateProcessW cannot start must not "succeed" in tests either.
+    ScriptedProcessLauncher launcher;
+    launcher.expect(ScriptedProcess{});
+    ProcessSpec quote = gitStatus();
+    quote.executable = "C:\\to\"ols\\git.exe";
+    ProcessSpec tooLong = gitStatus();
+    tooLong.arguments = {std::string(40000, 'a')};
+    ProcessSpec batch = gitStatus();
+    batch.executable = "C:\\tools\\build.bat\\.";
+    ProcessSpec device = gitStatus();
+    device.executable = "\\\\.\\C:\\tools\\git.exe";
+    for (const ProcessSpec& spec : {quote, tooLong, batch, device}) {
+        const auto result = launcher.launch(spec);
+        ASSERT_FALSE(result.has_value()) << spec.executable;
+        EXPECT_TRUE(result.error().code() == ErrorCode::InvalidArgument ||
+                    result.error().code() == ErrorCode::Unsupported)
+            << result.error().describe();
+    }
+    EXPECT_EQ(launcher.pendingScripts(), 1u);
+    EXPECT_EQ(launcher.launches().size(), 4u);
+}
+#endif
+
 TEST(ScriptedProcessLauncher, UnexpectedAndUnscriptedLaunchesFail) {
     ScriptedProcessLauncher launcher;
     EXPECT_EQ(launcher.launch(gitStatus()).error().code(), ErrorCode::NotFound);

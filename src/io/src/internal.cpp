@@ -4,6 +4,7 @@
 
 #include "internal.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <format>
 
@@ -50,6 +51,19 @@ Error isADirectoryError(std::string_view operation, std::string_view path) {
 
 Error notADirectoryError(std::string_view operation, std::string_view path) {
     return Error(ErrorCode::InvalidArgument, std::format("{} '{}': not a directory", operation, path));
+}
+
+bool isBatchFileName(std::string_view path) noexcept {
+    while (!path.empty() && (path.back() == '.' || path.back() == ' ')) {
+        path.remove_suffix(1);
+    }
+    if (path.size() < 4) {
+        return false;
+    }
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+    std::string extension(path.substr(path.size() - 4));
+    std::ranges::transform(extension, extension.begin(), lower);
+    return extension == ".bat" || extension == ".cmd";
 }
 
 } // namespace frost::io::detail

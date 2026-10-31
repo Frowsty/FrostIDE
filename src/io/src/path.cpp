@@ -7,7 +7,9 @@
 
 #include "frost/io/utf.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <format>
 #include <vector>
 
 namespace frost::io {
@@ -108,7 +110,10 @@ Root parseRoot(std::string_view path, PathStyle style) noexcept {
     return parseWindowsRoot(path);
 }
 
-bool isAbsoluteRoot(RootKind kind) noexcept { return kind != RootKind::None && kind != RootKind::Invalid; }
+// Device paths are recognised (for a precise error message) but not supported as absolute paths.
+bool isAbsoluteRoot(RootKind kind) noexcept {
+    return kind != RootKind::None && kind != RootKind::Invalid && kind != RootKind::Device;
+}
 
 Result<void> checkNoNul(std::string_view path) {
     if (path.find('\0') != std::string_view::npos) {
@@ -156,6 +161,83 @@ Result<std::string> notAbsolute(std::string_view path) {
     return fail(ErrorCode::InvalidArgument, "not an absolute path: '" + std::string(path) + "'");
 }
 
+char asciiUpper(char c) noexcept { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; }
+
+bool equalsAsciiUpper(std::string_view text, std::string_view upper) noexcept {
+    return text.size() == upper.size() && std::ranges::equal(text, upper, {}, asciiUpper);
+}
+
+/*
+ * Whether `component` is a Windows reserved device name, with or without an
+ * extension: CON, PRN, AUX, NUL, COM0-COM9, LPT0-LPT9 and the superscript forms
+ * COM¹ COM² COM³ LPT¹ LPT² LPT³ (Microsoft, "Naming Files, Paths, and Namespaces";
+ * 0 is included as a conservative superset). Win32 maps "C:\dir\CON.txt" to the
+ * console device, while the \\?\ form frost::io uses would create a real file
+ * that most other programs cannot open.
+ */
+bool isReservedDeviceName(std::string_view component) noexcept {
+    std::string_view base = component.substr(0, component.find_first_of(".:"));
+    while (!base.empty() && base.back() == ' ') {
+        base.remove_suffix(1); // Win32 ignores trailing spaces before the extension.
+    }
+    if (equalsAsciiUpper(base, "CON") || equalsAsciiUpper(base, "PRN") || equalsAsciiUpper(base, "AUX") ||
+        equalsAsciiUpper(base, "NUL")) {
+        return true;
+    }
+    if (base.size() < 4 ||
+        !(equalsAsciiUpper(base.substr(0, 3), "COM") || equalsAsciiUpper(base.substr(0, 3), "LPT"))) {
+        return false;
+    }
+    const std::string_view suffix = base.substr(3);
+    // A digit, or U+00B9, U+00B2, U+00B3 (superscript one, two, three) in UTF-8.
+    return (suffix.size() == 1 && suffix[0] >= '0' && suffix[0] <= '9') || suffix == "\xC2\xB9" ||
+           suffix == "\xC2\xB2" || suffix == "\xC2\xB3";
+}
+
+/*
+ * Drive and UNC paths reach Win32 in the \\?\ form, which skips Win32's own
+ * name rewriting. Names that the rewriting would change are therefore refused
+ * rather than created literally: a trailing dot or space (Win32 strips them, so
+ * "a." and "a" are the same file to every other program) and reserved device
+ * names. An explicit \\?\ path is the escape hatch for such names.
+ */
+Result<void> checkWin32Components(const std::vector<std::string_view>& parts, std::string_view path) {
+    for (const std::string_view part : parts) {
+        if (part.back() == '.' || part.back() == ' ') {
+            return fail(
+                ErrorCode::InvalidArgument,
+                std::format("path component '{}' ends with a dot or space, which Win32 strips: '{}'", part, path));
+        }
+        if (isReservedDeviceName(part)) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("path component '{}' is a reserved Windows device name: '{}'", part, path));
+        }
+    }
+    return {};
+}
+
+// A \\?\ path is passed to the file system literally, so components that are not
+// names at all (empty, "." or "..") would mean something different to every check
+// made on the string. They are refused.
+Result<void> checkVerbatimComponents(std::string_view rest, std::string_view path) {
+    if (rest.empty()) {
+        return {};
+    }
+    std::size_t i = 0;
+    for (;;) {
+        const std::size_t end = componentEnd(rest, i, /*backslashOnly=*/true);
+        const std::string_view part = rest.substr(i, end - i);
+        if (part.empty() || part == "." || part == "..") {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("\\\\?\\ path has an empty, '.' or '..' component: '{}'", path));
+        }
+        if (end >= rest.size()) {
+            return {};
+        }
+        i = end + 1;
+    }
+}
+
 } // namespace
 
 bool isAbsolutePath(std::string_view path, PathStyle style) noexcept {
@@ -170,19 +252,33 @@ Result<std::string> normalizePath(std::string_view path, PathStyle style) {
     switch (root.kind) {
     case RootKind::None:
     case RootKind::Invalid: return notAbsolute(path);
-    case RootKind::Verbatim:
-    case RootKind::Device: return std::string(path); // Literal by definition.
+    case RootKind::Device:
+        return fail(ErrorCode::InvalidArgument,
+                    "Win32 device namespace paths (\\\\.\\...) are not supported: '" + std::string(path) + "'");
+    case RootKind::Verbatim: {
+        if (auto ok = checkVerbatimComponents(path.substr(root.length), path); !ok) {
+            return std::unexpected(std::move(ok.error()));
+        }
+        return std::string(path); // Literal by definition.
+    }
     case RootKind::Posix:
         return joinComponents("/", splitComponents(path.substr(1), style, /*resolveDotDot=*/false), '/');
     case RootKind::Drive: {
-        std::string prefix{path[0], ':', '\\'};
-        return joinComponents(std::move(prefix), splitComponents(path.substr(3), style, true), '\\');
+        const std::vector<std::string_view> parts = splitComponents(path.substr(3), style, true);
+        if (auto ok = checkWin32Components(parts, path); !ok) {
+            return std::unexpected(std::move(ok.error()));
+        }
+        return joinComponents(std::string{path[0], ':', '\\'}, parts, '\\');
     }
     case RootKind::Unc: {
         // Rebuild the root with backslashes: "\\server\share\".
         const std::vector<std::string_view> rootParts = splitComponents(path.substr(0, root.length), style, false);
         std::string prefix = "\\\\" + std::string(rootParts[0]) + "\\" + std::string(rootParts[1]) + "\\";
-        return joinComponents(std::move(prefix), splitComponents(path.substr(root.length), style, true), '\\');
+        const std::vector<std::string_view> parts = splitComponents(path.substr(root.length), style, true);
+        if (auto ok = checkWin32Components(parts, path); !ok) {
+            return std::unexpected(std::move(ok.error()));
+        }
+        return joinComponents(std::move(prefix), parts, '\\');
     }
     }
     return notAbsolute(path);
@@ -196,7 +292,7 @@ Result<std::string> extendedLengthPath(std::string_view path) {
     switch (parseWindowsRoot(path).kind) {
     case RootKind::Drive: return "\\\\?\\" + *normalized;
     case RootKind::Unc: return "\\\\?\\UNC\\" + normalized->substr(2);
-    default: return normalized; // Verbatim and device paths are already in their final form.
+    default: return normalized; // Verbatim paths are already in their final form.
     }
 }
 

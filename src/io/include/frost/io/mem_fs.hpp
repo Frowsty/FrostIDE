@@ -9,9 +9,17 @@
  * against MemFs behaves the same on disk:
  *   - Paths must be absolute under the MemFs's PathStyle (native by default)
  *     and are normalised with normalizePath, so "C:/a" and "C:\a" are the same
- *     file. Roots ("/", "C:\", "\\server\share\") always exist. Names are
- *     case-sensitive in both styles. TODO(M2): optional case-insensitive
- *     lookups for Windows-style trees, matching NTFS.
+ *     file and Windows-style names are refused exactly as on disk. POSIX ".."
+ *     is resolved the way the kernel does, through existing directories only
+ *     ("/a/b/../c" needs /a/b; otherwise NotFound), and a final ".." is not an
+ *     entry name for writeFileAtomic, removeFile and removeDirectory
+ *     (InvalidArgument), as with the real implementation.
+ *   - Only "/" (POSIX) or "C:\" (Windows) exists initially; other roots (drives,
+ *     "\\server\share\") exist once addRoot() is called, so code that assumes a
+ *     drive is present fails here as it would on a machine without it. Drive
+ *     letters are case-insensitive; other names are case-sensitive in both
+ *     styles. TODO(M2): optional case-insensitive lookups for Windows-style
+ *     trees, matching NTFS.
  *   - Errors use the same codes and refinements as file_system.hpp.
  *   - writeFileAtomic runs the same protocol as the real one: it creates a
  *     visible ".<name>.frost-tmp-*" entry, fills it, then renames it over the
@@ -43,6 +51,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -80,6 +89,10 @@ public:
     // `path` must be absolute (or empty for "any path"); a relative path is a contract violation.
     void injectFault(FsOp op, std::string_view path, ErrorCode code, std::uint32_t count = 1);
 
+    // Makes `root` ("D:\", "\\server\share\", ...) exist, empty. Precondition: `root`
+    // is a root path under this MemFs's style. Adding an existing root does nothing.
+    void addRoot(std::string_view root);
+
     // Number of injected faults not yet triggered.
     [[nodiscard]] std::size_t pendingFaults() const;
 
@@ -101,14 +114,20 @@ private:
         std::uint32_t remaining;
     };
 
-    // Normalises `path` under m_style; InvalidArgument for relative paths.
+    // Normalises `path` under m_style (drive letters upper-cased); InvalidArgument for
+    // relative paths. Pure: the key faults are matched against.
     [[nodiscard]] Result<std::string> normalize(std::string_view path) const;
+    // The tree key for `path`: normalize() plus POSIX ".." resolution against the tree.
+    // `entryTarget`: the operation names an entry to create or remove, so a final ".." is refused.
+    [[nodiscard]] Result<std::string> resolve(std::string_view path, std::string_view operation, bool entryTarget)
+        FROST_REQUIRES(m_mutex);
     // Consumes a matching fault and returns its error, if any.
     [[nodiscard]] Result<void> takeFault(FsOp op, const std::string& path, std::string_view original)
         FROST_REQUIRES(m_mutex);
-    // The node at `path`, or nullptr. Roots are reported as directories through isRoot().
+    // The node at `path`, or nullptr. Roots are tracked in m_roots, not as nodes.
     [[nodiscard]] Node* find(const std::string& path) FROST_REQUIRES(m_mutex);
-    [[nodiscard]] bool isRoot(std::string_view path) const noexcept;
+    // Whether `path` has the syntax of a root ("/", "C:\", "\\server\share\"), existing or not.
+    [[nodiscard]] bool isRootPath(std::string_view path) const noexcept;
     // Whether `path` names an existing directory (roots included).
     [[nodiscard]] bool isDirectory(const std::string& path) FROST_REQUIRES(m_mutex);
     // Stamps the parent directory of `path` (if it is not a root) with the current time.
@@ -119,6 +138,7 @@ private:
     mutable Mutex m_mutex;
     // Keyed by normalised path; std::map keeps listings sorted and deterministic.
     std::map<std::string, Node, std::less<>> m_nodes FROST_GUARDED_BY(m_mutex);
+    std::set<std::string, std::less<>> m_roots FROST_GUARDED_BY(m_mutex);
     std::deque<Fault> m_faults FROST_GUARDED_BY(m_mutex);
 };
 

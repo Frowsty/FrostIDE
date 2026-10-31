@@ -47,6 +47,23 @@ bool isDirectory(const std::wstring& widePath) noexcept {
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+// Whether the entry at `widePath` is itself (not following it) a symbolic link or a junction,
+// the reparse points listDirectory reports as FileType::Symlink. Other reparse points
+// (OneDrive placeholders, deduplicated files) are ordinary files and directories.
+bool isLink(const std::wstring& widePath) noexcept {
+    const UniqueHandle handle(CreateFileW(widePath.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!handle.valid()) {
+        return false;
+    }
+    FILE_ATTRIBUTE_TAG_INFO info{};
+    if (GetFileInformationByHandleEx(handle.get(), FileAttributeTagInfo, &info, sizeof(info)) == FALSE) {
+        return false;
+    }
+    return (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+           (info.ReparseTag == IO_REPARSE_TAG_SYMLINK || info.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
+}
+
 // Outcome of creating one directory, for createDirectories' walk.
 enum class MkdirOutcome : unsigned char { Done, ParentMissing, Failed };
 
@@ -67,6 +84,10 @@ public:
                 return std::unexpected(detail::isADirectoryError("readFile", path));
             }
             return std::unexpected(win32Error(error, "readFile", path));
+        }
+        // Pipes and character devices (reachable through explicit \\?\ paths) never end.
+        if (GetFileType(file.get()) != FILE_TYPE_DISK) {
+            return fail(ErrorCode::InvalidArgument, "readFile '" + std::string(path) + "': not a regular file");
         }
         LARGE_INTEGER size{};
         if (GetFileSizeEx(file.get(), &size) == FALSE) {
@@ -308,6 +329,14 @@ public:
         }
         if (DeleteFileW(wide->c_str()) == FALSE) {
             const DWORD error = GetLastError();
+            if (error == ERROR_ACCESS_DENIED && isLink(*wide)) {
+                // A directory symlink or junction: RemoveDirectoryW removes the link itself,
+                // never the target or its contents, which is what POSIX unlink does.
+                if (RemoveDirectoryW(wide->c_str()) == FALSE) {
+                    return std::unexpected(lastWin32Error("removeFile", path));
+                }
+                return {};
+            }
             if (error == ERROR_ACCESS_DENIED && isDirectory(*wide)) {
                 return std::unexpected(detail::isADirectoryError("removeFile", path));
             }
@@ -320,6 +349,10 @@ public:
         auto wide = toWin32Path(path);
         if (!wide) {
             return std::unexpected(std::move(wide.error()));
+        }
+        // A link is removed with removeFile, as on POSIX (where rmdir on a symlink fails).
+        if (isLink(*wide)) {
+            return std::unexpected(detail::notADirectoryError("removeDirectory", path));
         }
         if (RemoveDirectoryW(wide->c_str()) == FALSE) {
             const DWORD error = GetLastError();

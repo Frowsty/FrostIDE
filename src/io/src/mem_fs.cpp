@@ -34,11 +34,63 @@ Error notFound(std::string_view operation, std::string_view path) {
     return Error(ErrorCode::NotFound, std::format("{} '{}': no such file or directory", operation, path));
 }
 
+// The default root of a fresh MemFs: "/" or "C:\".
+std::string defaultRoot(PathStyle style) { return style == PathStyle::Windows ? "C:\\" : "/"; }
+
 } // namespace
 
-MemFs::MemFs(const IClock& clock, PathStyle style) : m_clock(clock), m_style(style) {}
+MemFs::MemFs(const IClock& clock, PathStyle style) : m_clock(clock), m_style(style) {
+    LockGuard lock(m_mutex);
+    m_roots.insert(defaultRoot(style));
+}
 
-Result<std::string> MemFs::normalize(std::string_view path) const { return normalizePath(path, m_style); }
+Result<std::string> MemFs::normalize(std::string_view path) const {
+    auto normalized = normalizePath(path, m_style);
+    // Drive letters are case-insensitive on Windows ("c:\" is "C:\").
+    if (normalized && m_style == PathStyle::Windows && normalized->size() >= 2 && (*normalized)[1] == ':' &&
+        (*normalized)[0] >= 'a' && (*normalized)[0] <= 'z') {
+        (*normalized)[0] = static_cast<char>((*normalized)[0] - 'a' + 'A');
+    }
+    return normalized;
+}
+
+Result<std::string> MemFs::resolve(std::string_view path, std::string_view operation, bool entryTarget) {
+    auto normalized = normalize(path);
+    if (!normalized) {
+        return normalized;
+    }
+    if (m_style == PathStyle::Windows) {
+        return normalized; // normalizePath already resolved ".." lexically, as Win32 does.
+    }
+    // POSIX keeps "..": the kernel resolves it against the real tree, so it only works through
+    // existing directories ("/a/b/../c" needs /a/b). Without symlinks that is exactly this walk.
+    if (entryTarget && fileName(*normalized, m_style) == "..") {
+        return fail(ErrorCode::InvalidArgument, std::format("{} '{}': '..' is not an entry name", operation, path));
+    }
+    if (normalized->find("..") == std::string::npos) {
+        return normalized;
+    }
+    std::string current = "/";
+    std::string_view rest = std::string_view(*normalized).substr(1);
+    while (!rest.empty()) {
+        const std::size_t end = rest.find('/');
+        const std::string_view part = rest.substr(0, end);
+        rest.remove_prefix(end == std::string_view::npos ? rest.size() : end + 1);
+        if (part == "..") {
+            if (!isDirectory(current)) {
+                return std::unexpected(notFound(operation, path)); // ENOENT, or ENOTDIR (also NotFound).
+            }
+            const std::string_view parent = parentPath(current, m_style);
+            current = parent.empty() ? current : std::string(parent);
+            continue;
+        }
+        if (current.back() != '/') {
+            current += '/';
+        }
+        current += part;
+    }
+    return current;
+}
 
 Result<void> MemFs::takeFault(FsOp op, const std::string& path, std::string_view original) {
     for (auto it = m_faults.begin(); it != m_faults.end(); ++it) {
@@ -59,13 +111,13 @@ MemFs::Node* MemFs::find(const std::string& path) {
     return it == m_nodes.end() ? nullptr : &it->second;
 }
 
-bool MemFs::isRoot(std::string_view path) const noexcept {
+bool MemFs::isRootPath(std::string_view path) const noexcept {
     return isAbsolutePath(path, m_style) && parentPath(path, m_style).empty();
 }
 
 bool MemFs::isDirectory(const std::string& path) {
-    if (isRoot(path)) {
-        return true;
+    if (isRootPath(path)) {
+        return m_roots.contains(path);
     }
     const Node* node = find(path);
     return node != nullptr && node->type == FileType::Directory;
@@ -78,12 +130,19 @@ void MemFs::touchParent(std::string_view path) {
     }
 }
 
+void MemFs::addRoot(std::string_view root) {
+    auto key = normalize(root);
+    FROST_PRE(key.has_value() && isRootPath(*key));
+    LockGuard lock(m_mutex);
+    m_roots.insert(std::move(*key));
+}
+
 Result<std::string> MemFs::readFile(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "readFile", /*entryTarget=*/false);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::Read, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
@@ -98,11 +157,11 @@ Result<std::string> MemFs::readFile(std::string_view path) {
 }
 
 Result<void> MemFs::writeFileAtomic(std::string_view path, std::string_view data) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "writeFileAtomic", /*entryTarget=*/true);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::Write, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
@@ -138,15 +197,18 @@ Result<void> MemFs::writeFileAtomic(std::string_view path, std::string_view data
 }
 
 Result<FileStatus> MemFs::status(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "status", /*entryTarget=*/false);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::Status, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
-    if (isRoot(*key)) {
+    if (isRootPath(*key)) {
+        if (!m_roots.contains(*key)) {
+            return std::unexpected(notFound("status", path));
+        }
         return FileStatus{FileType::Directory, 0, {}};
     }
     const Node* node = find(*key);
@@ -158,11 +220,11 @@ Result<FileStatus> MemFs::status(std::string_view path) {
 }
 
 Result<std::vector<DirEntry>> MemFs::listDirectory(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "listDirectory", /*entryTarget=*/false);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::List, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
@@ -189,11 +251,11 @@ Result<std::vector<DirEntry>> MemFs::listDirectory(std::string_view path) {
 }
 
 Result<void> MemFs::createDirectories(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "createDirectories", /*entryTarget=*/false);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::CreateDirectories, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
@@ -208,6 +270,9 @@ Result<void> MemFs::createDirectories(std::string_view path) {
         if (isDirectory(component)) {
             continue;
         }
+        if (isRootPath(component)) {
+            return fail(ErrorCode::NotFound, std::format("createDirectories '{}': the root does not exist", path));
+        }
         if (find(component) != nullptr) {
             return fail(ErrorCode::AlreadyExists,
                         std::format("createDirectories '{}': '{}' exists and is not a directory", path, component));
@@ -219,18 +284,18 @@ Result<void> MemFs::createDirectories(std::string_view path) {
 }
 
 Result<void> MemFs::removeFile(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "removeFile", /*entryTarget=*/true);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::RemoveFile, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
     if (isDirectory(*key)) {
         return std::unexpected(detail::isADirectoryError("removeFile", path));
     }
-    if (m_nodes.erase(*key) == 0) {
+    if (isRootPath(*key) || m_nodes.erase(*key) == 0) {
         return std::unexpected(notFound("removeFile", path));
     }
     touchParent(*key);
@@ -238,15 +303,18 @@ Result<void> MemFs::removeFile(std::string_view path) {
 }
 
 Result<void> MemFs::removeDirectory(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "removeDirectory", /*entryTarget=*/true);
     if (!key) {
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::RemoveEmptyDirectory, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
-    if (isRoot(*key)) {
+    if (isRootPath(*key)) {
+        if (!m_roots.contains(*key)) {
+            return std::unexpected(notFound("removeDirectory", path));
+        }
         return fail(ErrorCode::PermissionDenied, std::format("removeDirectory '{}': cannot remove a root", path));
     }
     const Node* node = find(*key);
@@ -267,11 +335,14 @@ Result<void> MemFs::removeDirectory(std::string_view path) {
 }
 
 Result<bool> MemFs::exists(std::string_view path) {
-    auto key = normalize(path);
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "exists", /*entryTarget=*/false);
     if (!key) {
+        if (key.error().code() == ErrorCode::NotFound) {
+            return false; // A ".." through a missing directory, like status().
+        }
         return std::unexpected(std::move(key.error()));
     }
-    LockGuard lock(m_mutex);
     if (auto fault = takeFault(FsOp::Exists, *key, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }

@@ -5,8 +5,10 @@
 
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/utf.hpp"
 
-#include <algorithm>
+#include "internal.hpp"
+
 #include <format>
 
 namespace frost::io {
@@ -16,21 +18,10 @@ Result<void> invalid(std::string message) { return fail(ErrorCode::InvalidArgume
 
 bool hasNul(std::string_view text) noexcept { return text.find('\0') != std::string_view::npos; }
 
-// ASCII lower-casing for extension checks; non-ASCII bytes pass through.
-char asciiLower(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
-
-// Whether `path` names a batch file as CreateProcessW would see it. Win32 path
-// normalisation strips trailing dots and spaces, so "x.bat. " also runs x.bat.
-bool isBatchFile(std::string_view path) noexcept {
-    while (!path.empty() && (path.back() == '.' || path.back() == ' ')) {
-        path.remove_suffix(1);
-    }
-    if (path.size() < 4) {
-        return false;
-    }
-    std::string extension(path.substr(path.size() - 4));
-    std::ranges::transform(extension, extension.begin(), asciiLower);
-    return extension == ".bat" || extension == ".cmd";
+// "\\.\..." is absolute to Win32 but refused by normalizePath with its own, more precise message.
+bool isDeviceNamespace(std::string_view path, bool windowsRules) noexcept {
+    return windowsRules && path.size() >= 4 && (path[0] == '\\' || path[0] == '/') &&
+           (path[1] == '\\' || path[1] == '/') && path[2] == '.' && (path[3] == '\\' || path[3] == '/');
 }
 
 } // namespace
@@ -40,23 +31,57 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
     if (hasNul(spec.executable)) {
         return invalid("executable path contains a NUL character");
     }
-    if (!isAbsolutePath(spec.executable, style)) {
+    if (!isAbsolutePath(spec.executable, style) && !isDeviceNamespace(spec.executable, windowsRules)) {
         return invalid(std::format("executable must be an absolute path, got '{}' (FrostIDE never searches PATH "
                                    "or the current directory; PLAN.md 3.5)",
                                    spec.executable));
     }
-    if (windowsRules && isBatchFile(spec.executable)) {
+    const auto batchFile = [&spec] {
         return fail(ErrorCode::Unsupported,
                     std::format("'{}' is a batch file; cmd.exe re-parses batch command lines, so they are not "
                                 "launched directly",
                                 spec.executable));
+    };
+    // Checked on the given spelling first, so "run.cmd." is reported as a batch file rather
+    // than as a name with a trailing dot...
+    if (windowsRules && detail::isBatchFileName(spec.executable)) {
+        return batchFile();
     }
-    if (!spec.workingDirectory.empty() && !isAbsolutePath(spec.workingDirectory, style)) {
-        return invalid(std::format("working directory must be an absolute path, got '{}'", spec.workingDirectory));
+    // ...and on the normalised one, which is what the launchers start: "dir\t.bat\" and
+    // "dir\t.bat\x\.." both normalise to "dir\t.bat".
+    auto executable = normalizePath(spec.executable, style);
+    if (!executable) {
+        return std::unexpected(std::move(executable.error()).withContext("executable"));
+    }
+    if (windowsRules && detail::isBatchFileName(*executable)) {
+        return batchFile();
+    }
+    if (!spec.workingDirectory.empty()) {
+        if (!isAbsolutePath(spec.workingDirectory, style) && !isDeviceNamespace(spec.workingDirectory, windowsRules)) {
+            return invalid(std::format("working directory must be an absolute path, got '{}'", spec.workingDirectory));
+        }
+        if (auto directory = normalizePath(spec.workingDirectory, style); !directory) {
+            return std::unexpected(std::move(directory.error()).withContext("working directory"));
+        }
     }
     for (const std::string& argument : spec.arguments) {
         if (hasNul(argument)) {
             return invalid("argument contains a NUL character");
+        }
+    }
+    if (windowsRules) {
+        // The command line must be buildable and fit CreateProcessW's limit.
+        auto commandLine = buildWindowsCommandLine(*executable, spec.arguments);
+        if (!commandLine) {
+            return std::unexpected(std::move(commandLine.error()));
+        }
+        auto units = utf8ToUtf16(*commandLine);
+        if (!units) {
+            return std::unexpected(std::move(units.error()).withContext("command line"));
+        }
+        if (units->size() >= detail::kMaxWindowsCommandLineUnits) {
+            return invalid(std::format("command line for '{}' is {} UTF-16 units; Windows allows {}", spec.executable,
+                                       units->size(), detail::kMaxWindowsCommandLineUnits - 1));
         }
     }
     for (const auto& [name, value] : spec.environment) {

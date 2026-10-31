@@ -19,16 +19,20 @@
  *   C:\dir or C:/dir           drive-absolute
  *   \\server\share\dir         UNC (either separator)
  *   \\?\...                    verbatim (extended-length), taken literally
- *   \\.\...                    Win32 device namespace (pipes, devices), taken literally
  * Rejected as not absolute: "dir", "C:dir" (relative to the drive's current
  * directory), "\dir" (relative to the current drive), "\\server" without a
- * share, and the ambiguous "//?/" and "//./" spellings. normalizePath turns
- * separators into "\", collapses repeats, drops "." and resolves ".."
- * lexically, stopping at the root, as GetFullPathNameW does. Unlike
- * GetFullPathNameW it keeps trailing dots and spaces in names and does not
- * treat reserved names (CON, NUL, ...) specially: the extended form passes
- * names to the file system literally, so "a." stays "a.". Verbatim and device
- * paths are returned unchanged.
+ * share, and the ambiguous "//?/" and "//./" spellings. Win32 device namespace
+ * paths ("\\.\...") are rejected too: the OS normalises them ("\\.\C:\a\..\x"
+ * opens C:\x), so a check made on the string would not see the path opened.
+ * normalizePath turns separators into "\", collapses repeats, drops "." and
+ * resolves ".." lexically, stopping at the root, as GetFullPathNameW does.
+ * Because frost::io then hands the result to Win32 in the \\?\ form, which
+ * skips Win32's own name rewriting, it refuses (InvalidArgument) names that
+ * the rewriting would change: components ending in a dot or a space, and
+ * reserved device names (CON, PRN, AUX, NUL, COM0-9, LPT0-9 and the
+ * superscript-digit forms, with or without an extension). Verbatim paths are
+ * returned unchanged, so they are the escape hatch for such names, but they
+ * must not contain empty, "." or ".." components.
  *
  * Extended-length form (Windows). Win32 file APIs limit ordinary paths to
  * MAX_PATH (260) UTF-16 units unless both the application manifest and the
@@ -65,11 +69,12 @@ inline constexpr PathStyle kNativePathStyle = PathStyle::Posix;
 [[nodiscard]] bool isAbsolutePath(std::string_view path, PathStyle style = kNativePathStyle) noexcept;
 
 // Validates that `path` is absolute and NUL-free and returns it normalised.
-// Errors: InvalidArgument for relative paths, embedded NULs or malformed roots.
+// Errors: InvalidArgument for relative paths, embedded NULs, malformed roots,
+// device paths and (Windows) the names described above.
 [[nodiscard]] Result<std::string> normalizePath(std::string_view path, PathStyle style = kNativePathStyle);
 
 // Windows rules: the normalised extended-length spelling of `path` ("\\?\C:\a",
-// "\\?\UNC\server\share\a"); verbatim and device paths are returned unchanged.
+// "\\?\UNC\server\share\a"); verbatim paths are returned unchanged.
 // Portable (UTF-8 in, UTF-8 out) so the rules are testable everywhere.
 // Errors: as normalizePath.
 [[nodiscard]] Result<std::string> extendedLengthPath(std::string_view path);
