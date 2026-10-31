@@ -1,6 +1,6 @@
 # ADR 0006: Spike S6, ProjectHost cold start
 
-- Status: accepted (fixture). The R2b and R2a design-time builds are pending the corpus fetch.
+- Status: accepted (fixture). The corpora are fetched; the R2a/R2b design-time builds are pending the user's approval to execute their MSBuild logic on this machine.
 - Date: 2026-10-31
 - Plan reference: PLAN.md section 2 ("MSBuild / .vcxproj", path (b)), budget B23, D3, M0 spike S6
 

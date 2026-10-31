@@ -1,6 +1,6 @@
 # ADR 0005: Spike S2, MSBuild `-getTargetResult:GetClCommandLines`
 
-- Status: accepted (fixture). The R2a measurement is pending the corpus fetch.
+- Status: accepted (fixture and R2a).
 - Date: 2026-10-31
 - Plan reference: PLAN.md section 2 ("MSBuild / .vcxproj", path (c)), M0 spike S2
 
@@ -44,15 +44,20 @@ Three other agents were building at the same time, so these are upper bounds.
 | Corpus | Runs | p50 | max | Notes |
 |---|---|---|---|---|
 | Fixture: one v143 Application project, 4 TUs, one per-file override | 10 | 358 ms | 576 ms | 2 groups returned: {main, src1, src2}, {src3 with ONLY_SRC3} |
-| R2a (Notepad++) | n/a | n/a | n/a | Pending `tools/corpus_fetch.py`; measured before the M0 exit |
+| R2a (Notepad++ v8.9.8.1, `PowerEditor/visual.net/notepadPlus.vcxproj`, Release\|x64) | 10 | 342 ms | 498 ms | 1 group with all 97 `ClCompile` items; min 316 ms; one other agent building |
 
 ## Consequences
 - Path (c) needs a targets file on disk. It is shipped with FrostIDE and resolved to an absolute path, never taken
   from the project directory.
 - ProjectHost (path (b)) can call the same target in-process, so (b) and (c) still share one engine for the
   consistency check (PLAN.md section 6.1).
-- About 0.35 s per fresh process on a trivial project is the floor for (c), so it is not on the warm-open path,
-  which starts zero .NET processes (B3).
+- About 0.35 s per fresh process is the floor for (c), and it barely grows with project size: the 97-TU R2a project
+  costs the same as the 4-TU fixture, because evaluation and the VC targets dominate. (c) is still not on the
+  warm-open path, which starts zero .NET processes (B3).
+- An R2b (microsoft/terminal) data point needs `-p:SolutionDir=<solution dir>\` (its projects import
+  `$(SolutionDir)src\common.build.pre.props`). The IDE sets it when it opens a project through its solution. The
+  run itself is pending: evaluating R2b executes that repository's MSBuild logic, which needs the user's approval
+  on this machine.
 - Grouping by option set means FrostIDE expands groups into per-file compile commands itself.
 
 ## Alternatives considered
