@@ -1,0 +1,14 @@
+# Normalise text to LF in the repository; Windows-only scripts keep CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Byte-exact test inputs and goldens are never converted.
+tests/**/fixtures/** -text
+tests/**/goldens/** -text
+tests/fuzz/corpus/** -text
+# Binary assets.
+*.png binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.7z binary

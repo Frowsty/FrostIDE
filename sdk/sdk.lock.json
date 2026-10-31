@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "description": "Pinned toolchain artifacts for FrostIDE development. tools/bootstrap.ps1 (Windows) and tools/bootstrap-wsl.sh (Linux/WSL) install exactly these versions and refuse any archive whose hash differs. Bump a pin only through an ADR (PLAN.md section 2.3).",
+  "windows": {
+    "llvm": {
+      "version": "23.1.4",
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/clang%2Bllvm-23.1.4-x86_64-pc-windows-msvc.tar.xz",
+      "file": "clang+llvm-23.1.4-x86_64-pc-windows-msvc.tar.xz",
+      "sha256": "854bffcfc84528e0ee92490ff5c178920abd358a79c3e98f053e41e3e8e4c6d2",
+      "bin": "bin",
+      "note": "The .tar.zst is compressed with a 2 GiB window that the in-box bsdtar refuses ('Frame requires too much memory'), so Windows uses the .tar.xz of the same release."
+    },
+    "cmake": {
+      "version": "4.4.5",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+      "file": "cmake-4.4.5-windows-x86_64.zip",
+      "sha256": "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004",
+      "bin": "bin"
+    },
+    "ninja": {
+      "version": "1.13.2",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+      "file": "ninja-win.zip",
+      "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65",
+      "bin": "."
+    },
+    "gh": {
+      "version": "2.103.3",
+      "url": "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_windows_amd64.zip",
+      "file": "gh_2.103.3_windows_amd64.zip",
+      "sha256": "98d0cfa794721665d7973dd728c78aff7bd836d58f10f6d7a03568eccb0a22e0",
+      "bin": "bin"
+    },
+    "sccache": {
+      "version": "0.19.0",
+      "url": "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip",
+      "file": "sccache-v0.19.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "28be8c61f6b2c89b9eb2869f6af7f78e6f992e78a8abae0ce855fcc129cbeac1",
+      "bin": "."
+    },
+    "dotnet": {
+      "version": "10.0.403",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-win-x64.zip",
+      "file": "dotnet-sdk-10.0.403-win-x64.zip",
+      "sha512": "7a114c318fa7f1d9822991b534b2814d0e78386ceda816b371f5141acefe741d87ccb606ede06cadac8f9ac5070e32b708a67bbd1619ff5e5a7858a27874ef48",
+      "bin": "."
+    }
+  },
+  "linux": {
+    "llvm": {
+      "version": "23.1.4",
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/LLVM-23.1.4-Linux-X64.tar.xz",
+      "file": "LLVM-23.1.4-Linux-X64.tar.xz",
+      "sha256": "25d814fda50d5fb0084b42be09605d8b1595d49d5e2e03a3345d7e112ff6f9f3",
+      "bin": "bin",
+      "note": "The .tar.zst needs a 2 GiB decompression window; the .tar.xz of the same release decompresses in ~100 MB, which matters when WSL memory is tight."
+    },
+    "cmake": {
+      "version": "4.4.5",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-x86_64.tar.gz",
+      "file": "cmake-4.4.5-linux-x86_64.tar.gz",
+      "sha256": "ed85135c5a5135b45e50423cb406dea04ca3338da0b8ef3c9ede963559680be0",
+      "bin": "bin"
+    },
+    "ninja": {
+      "version": "1.13.2",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip",
+      "file": "ninja-linux.zip",
+      "sha256": "5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6",
+      "bin": "."
+    }
+  },
+  "qt": {
+    "version": "6.12.0",
+    "windows": {
+      "repository": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64",
+      "package": "qt.qt6.6120.win64_msvc2022_64",
+      "archives": ["qtbase", "qtsvg", "qttools"],
+      "updatesSha256": "ba09f355a6e42e1373b939d26d7742df7348f298a465420083b3cfd28ed2914b"
+    },
+    "linux": {
+      "repository": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6120/qt6_6120",
+      "package": "qt.qt6.6120.linux_gcc_64",
+      "archives": ["qtbase", "qtsvg", "qttools", "icu"],
+      "updatesSha256": "615f617ad82e9c9b50e339ce19eb340901919ea29386a93843be236cb77ca5a7"
+    }
+  },
+  "vcpkg": {
+    "tag": "2026.10.16",
+    "repository": "https://github.com/microsoft/vcpkg.git"
+  },
+  "msvc": {
+    "vcToolsVersion": "14.44.35207",
+    "windowsSdkVersion": "10.0.26100.0"
+  },
+  "python": {
+    "aqtinstall": "3.3.0",
+    "py7zr": "1.1.4"
+  }
+}

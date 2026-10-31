@@ -1,0 +1,129 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Entry point of frost, the FrostIDE executable.
+//
+// Start-up order matters for the budgets in PLAN.md section 4 (B1 first frame):
+// arguments are parsed before Qt exists, so --version, --help and --selftest
+// never initialise the GUI stack they do not need.
+
+#include "frost/app/command_line.hpp"
+#include "frost/app/main_window.hpp"
+#include "frost/app/selftest.hpp"
+#include "frost/core/build_info.hpp"
+
+#include <QApplication>
+
+#include <cstdio>
+#include <format>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+
+#include <shellapi.h>
+#endif
+
+namespace {
+
+// Returns the process arguments (without the program name) as UTF-8.
+// On Windows they come from the wide command line, so they are correct even if
+// the UTF-8 code page from the manifest is not in effect.
+std::vector<std::string> utf8Arguments([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
+    std::vector<std::string> args;
+#ifdef _WIN32
+    int count = 0;
+    LPWSTR* wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (wide == nullptr) {
+        return args;
+    }
+    for (int i = 1; i < count; ++i) {
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, nullptr, 0, nullptr, nullptr);
+        std::string arg(static_cast<std::size_t>(bytes > 0 ? bytes - 1 : 0), '\0');
+        if (bytes > 1) {
+            WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, arg.data(), bytes, nullptr, nullptr);
+        }
+        args.push_back(std::move(arg));
+    }
+    LocalFree(wide);
+#else
+    for (int i = 1; i < argc; ++i) {
+        args.emplace_back(argv[i]);
+    }
+#endif
+    return args;
+}
+
+// frost is a GUI-subsystem program on Windows, so it has no console of its own.
+// When started from a terminal without redirection, attach to the parent's
+// console so --version and --selftest output is visible. Redirected handles
+// (pipes, files) already work and are left alone.
+void attachParentConsoleIfNeeded() {
+#ifdef _WIN32
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != nullptr && out != INVALID_HANDLE_VALUE && GetFileType(out) != FILE_TYPE_UNKNOWN) {
+        return;
+    }
+    if (AttachConsole(ATTACH_PARENT_PROCESS) != FALSE) {
+        FILE* stream = nullptr;
+        freopen_s(&stream, "CONOUT$", "w", stdout);
+        freopen_s(&stream, "CONOUT$", "w", stderr);
+        SetConsoleOutputCP(CP_UTF8);
+    }
+#endif
+}
+
+void print(FILE* stream, std::string_view text) {
+    std::fwrite(text.data(), 1, text.size(), stream);
+    std::fflush(stream);
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::vector<std::string> args = utf8Arguments(argc, argv);
+    const std::vector<std::string_view> views(args.begin(), args.end());
+    auto parsed = frost::app::parseCommandLine(views);
+    if (!parsed) {
+        attachParentConsoleIfNeeded();
+        print(stderr, std::format("frost: {}\n\n{}", parsed.error().message(), frost::app::usageText()));
+        return 2;
+    }
+
+    switch (parsed->mode) {
+    case frost::app::Mode::Version:
+        attachParentConsoleIfNeeded();
+        print(stdout, std::format("FrostIDE {} ({}, Qt {}, {})\n", frost::build_info::kVersion,
+                                  frost::build_info::kCompiler, qVersion(), frost::build_info::kSystem));
+        return 0;
+    case frost::app::Mode::Help:
+        attachParentConsoleIfNeeded();
+        print(stdout, frost::app::usageText());
+        return 0;
+    case frost::app::Mode::SelfTest: {
+        attachParentConsoleIfNeeded();
+        // Offscreen by default so the self-test runs headless (packaging smoke tests, WSL).
+        if (!parsed->selfTestOnScreen && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+            qputenv("QT_QPA_PLATFORM", "offscreen");
+        }
+        frost::app::SelfTestReport report;
+        report.checks = frost::app::runProcessChecks();
+        QApplication app(argc, argv);
+        for (auto& check : frost::app::runGuiChecks()) {
+            report.checks.push_back(std::move(check));
+        }
+        print(stdout, report.format());
+        return report.passed() ? 0 : 1;
+    }
+    case frost::app::Mode::Gui:
+        break;
+    }
+
+    QApplication app(argc, argv);
+    QApplication::setApplicationName(QStringLiteral("FrostIDE"));
+    QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
+    frost::app::MainWindow window;
+    window.show();
+    return QApplication::exec();
+}

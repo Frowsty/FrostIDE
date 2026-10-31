@@ -1,0 +1,15 @@
+# Build trees and IDE state.
+/build/
+/out/
+/.vs/
+/.idea/
+/.vscode/
+/.cache/
+CMakeUserPresets.json
+compile_commands.json
+# Tool logs written into the working directory.
+aqtinstall.log
+*.log
+# Python bytecode from tools/.
+__pycache__/
+*.pyc

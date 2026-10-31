@@ -1,0 +1,85 @@
+{
+  "version": 10,
+  "$comment": "FrostIDE presets. Run tools/env.ps1 (Windows) or source ~/sdk/env.sh (WSL) first so VCPKG_ROOT, FROST_LLVM_ROOT and FROST_QT_ROOT are set.",
+  "cmakeMinimumRequired": { "major": 4, "minor": 0, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "CMAKE_PREFIX_PATH": "$env{FROST_QT_ROOT}",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "win-clangcl",
+      "displayName": "Windows, clang-cl + MSVC STL",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/windows-clangcl.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-clangcl",
+        "VCPKG_HOST_TRIPLET": "x64-windows-clangcl"
+      }
+    },
+    {
+      "name": "win-clangcl-asan",
+      "displayName": "Windows, clang-cl, AddressSanitizer",
+      "inherits": "win-clangcl",
+      "cacheVariables": { "FROST_SANITIZE": "address" }
+    },
+    {
+      "name": "linux-clang",
+      "displayName": "Linux, clang + libstdc++ 14",
+      "inherits": "base",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-clang.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
+        "VCPKG_HOST_TRIPLET": "x64-linux-clang"
+      }
+    },
+    {
+      "name": "linux-clang-asan",
+      "displayName": "Linux, clang, ASan + UBSan",
+      "inherits": "linux-clang",
+      "cacheVariables": { "FROST_SANITIZE": "address;undefined" }
+    },
+    {
+      "name": "linux-clang-tsan",
+      "displayName": "Linux, clang, ThreadSanitizer",
+      "inherits": "linux-clang",
+      "cacheVariables": { "FROST_SANITIZE": "thread" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "win-clangcl-debug", "configurePreset": "win-clangcl", "configuration": "Debug" },
+    { "name": "win-clangcl-release", "configurePreset": "win-clangcl", "configuration": "Release" },
+    { "name": "win-clangcl-asan", "configurePreset": "win-clangcl-asan", "configuration": "Debug" },
+    { "name": "linux-clang-debug", "configurePreset": "linux-clang", "configuration": "Debug" },
+    { "name": "linux-clang-release", "configurePreset": "linux-clang", "configuration": "Release" },
+    { "name": "linux-clang-asan", "configurePreset": "linux-clang-asan", "configuration": "Debug" },
+    { "name": "linux-clang-tsan", "configurePreset": "linux-clang-tsan", "configuration": "RelWithDebInfo" }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": { "outputOnFailure": true, "shortProgress": true },
+      "execution": { "noTestsAction": "error", "timeout": 300 }
+    },
+    { "name": "win-clangcl-debug", "inherits": "test-base", "configurePreset": "win-clangcl", "configuration": "Debug" },
+    { "name": "win-clangcl-release", "inherits": "test-base", "configurePreset": "win-clangcl", "configuration": "Release" },
+    { "name": "win-clangcl-asan", "inherits": "test-base", "configurePreset": "win-clangcl-asan", "configuration": "Debug" },
+    { "name": "linux-clang-debug", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "Debug" },
+    { "name": "linux-clang-release", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "Release" },
+    { "name": "linux-clang-asan", "inherits": "test-base", "configurePreset": "linux-clang-asan", "configuration": "Debug" },
+    { "name": "linux-clang-tsan", "inherits": "test-base", "configurePreset": "linux-clang-tsan", "configuration": "RelWithDebInfo" }
+  ]
+}

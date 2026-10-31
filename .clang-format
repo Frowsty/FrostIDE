@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# FrostIDE C++ style (PLAN.md section 6.5): LLVM base, 4-space indent, 120 columns.
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: Latest
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+DerivePointerAlignment: false
+PointerAlignment: Left
+FixNamespaceComments: true
+IncludeBlocks: Regroup
+IncludeCategories:
+  # The file's own header first, then frost headers, then third-party, then the standard library.
+  - Regex: '^"frost/'
+    Priority: 2
+  - Regex: '^<(Q|gtest|gmock|benchmark)'
+    Priority: 3
+  - Regex: '^<[a-z_]+>$'
+    Priority: 4
+  - Regex: '.*'
+    Priority: 3
+InsertNewlineAtEOF: true
+NamespaceIndentation: None
+SortIncludes: CaseSensitive
+SpaceAfterTemplateKeyword: false

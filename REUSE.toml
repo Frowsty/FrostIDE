@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# REUSE 3.x annotations for files that cannot carry an SPDX header comment
+# (JSON, Markdown, byte-exact fixtures and goldens, fuzz corpora, binary assets).
+# frost-lint checks that every such file is covered by an entry here or by a .license sidecar.
+version = 1
+
+[[annotations]]
+path = ["**/*.json", "**/*.md", "LICENSE", "NOTICE", ".gitignore", ".gitattributes", ".clang-tidy"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["tests/**/fixtures/**", "tests/**/goldens/**", "tests/fuzz/corpus/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["resources/**/*.png", "resources/**/*.ico", "resources/**/*.svg"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"
