@@ -8,10 +8,12 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDeadlineTimer>
+#include <QEventLoop>
 #include <QLabel>
 #include <QMenuBar>
 #include <QStatusBar>
-
+#include <QWindow>
 #include <gtest/gtest.h>
 
 namespace {
@@ -27,7 +29,14 @@ TEST(MainWindow, HasTitleMenuAndStatusBar) {
 TEST(MainWindow, ShowsAndClosesThroughExitAction) {
     frost::app::MainWindow window;
     window.show();
-    QApplication::processEvents();
+    // isVisible() turns true synchronously in show(); exposure means the platform
+    // plugin created and exposed a native window.
+    const QDeadlineTimer deadline(5000);
+    while (!(window.windowHandle() != nullptr && window.windowHandle()->isExposed()) && !deadline.hasExpired()) {
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    ASSERT_NE(window.windowHandle(), nullptr);
+    EXPECT_TRUE(window.windowHandle()->isExposed());
     EXPECT_TRUE(window.isVisible());
     window.findChild<QAction*>(QStringLiteral("actionExit"))->trigger();
     QApplication::processEvents();

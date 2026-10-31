@@ -6,8 +6,9 @@
 #pragma once
 
 #ifdef _WIN32
-#include <stdlib.h>
 #include <windows.h>
+
+#include <stdlib.h>
 #endif
 
 namespace frost::test {

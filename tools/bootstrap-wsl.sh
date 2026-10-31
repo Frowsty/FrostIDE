@@ -6,15 +6,16 @@
 #
 # Two phases, because only the first needs root:
 #   sudo-less root phase:  wsl -d Ubuntu-24.04 -u root -- bash tools/bootstrap-wsl.sh --system
-#       apt packages: libstdc++ 14 (the floor), zstd, Qt's X11/xcb runtime
-#       libraries, python3-venv, rsync, gdb.
+#       apt packages: libstdc++ 14 (the floor), zstd, bsdtar, Qt's X11/xcb
+#       runtime libraries, python3-venv, rsync, gdb.
 #   user phase:            wsl -d Ubuntu-24.04 -- bash tools/bootstrap-wsl.sh
 #       LLVM, CMake and Ninja from sdk/sdk.lock.json into ~/sdk (ext4, not
 #       /mnt/e, because builds on the 9P mount are several times slower), Qt
 #       through tools/qt-fetch.py, vcpkg at the pinned tag, and ~/sdk/env.sh.
 #
 # Archives are taken from the Windows download cache (/mnt/e/sdk/_downloads)
-# when present, otherwise downloaded; every archive is SHA-256 checked.
+# when present, otherwise downloaded. Every archive, Qt's included, is checked
+# against the SHA-256 pinned in the lock file.
 
 set -euo pipefail
 
@@ -45,9 +46,10 @@ system_phase() {
     apt-get update -q
     # libstdc++-14-dev: the C++ standard library floor for clang.
     # zstd, xz-utils: decompressors for the pinned archives.
+    # libarchive-tools: bsdtar, which tools/qt-fetch.py uses to extract Qt's .7z archives.
     # libxcb*, libxkbcommon*, libfontconfig, libgl/egl: Qt's xcb and offscreen platform plugins.
     apt-get install -y -q --no-install-recommends \
-        g++-14 libstdc++-14-dev zstd xz-utils zip unzip rsync gdb python3-venv pkg-config make \
+        g++-14 libstdc++-14-dev zstd xz-utils libarchive-tools zip unzip rsync gdb python3-venv pkg-config make \
         libgl-dev libegl-dev libglib2.0-0t64 libdbus-1-3 libfontconfig1 libfreetype6 \
         libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb1 libxcb-cursor0 libxcb-icccm4 \
         libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
@@ -113,27 +115,35 @@ install_archive() {
     echo "[$name] installed to $dest"
 }
 
-# Installs the pinned Qt subset for Linux with tools/qt-fetch.py.
+# Installs the pinned Qt subset for Linux with tools/qt-fetch.py, which reads
+# the repository, archives and hashes from the lock file and extracts with bsdtar.
 install_qt() {
-    local venv="$SDK/py"
-    if [[ ! -x "$venv/bin/python" ]]; then python3 -m venv "$venv"; fi
-    "$venv/bin/python" -m pip install --disable-pip-version-check --quiet "py7zr==$(lock_get python.py7zr)"
-    local pin
-    pin="$(lock_get qt.linux.updatesSha256)"
-    "$venv/bin/python" "$REPO_ROOT/tools/qt-fetch.py" \
-        --repository "$(lock_get qt.linux.repository)" \
-        --package "$(lock_get qt.linux.package)" \
-        --archives "$(lock_get qt.linux.archives)" \
-        --dest "$SDK/qt" --cache "$SDK/_downloads/qt" \
-        ${pin:+--updates-sha256 "$pin"}
+    python3 -I "$REPO_ROOT/tools/qt-fetch.py" --lock "$LOCK" --platform linux \
+        --dest "$SDK/qt" --cache "$SDK/_downloads/qt"
 }
 
 # Clones vcpkg at the pinned tag into $SDK/vcpkg and builds the vcpkg binary.
+# When the pin moves, the checkout follows and the binary is rebuilt (the tool
+# version is part of the tag). The tag must be vcpkg.json's builtin-baseline.
 install_vcpkg() {
-    local tag root="$SDK/vcpkg"
+    local tag root="$SDK/vcpkg" current head baseline
     tag="$(lock_get vcpkg.tag)"
     if [[ ! -d "$root/.git" ]]; then
         git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" "$(lock_get vcpkg.repository)" "$root"
+    else
+        current="$(git -C "$root" describe --tags --exact-match 2> /dev/null || true)"
+        if [[ "$current" != "$tag" ]]; then
+            echo "[vcpkg] moving from '$current' to $tag"
+            git -C "$root" fetch --quiet --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
+            git -C "$root" -c advice.detachedHead=false checkout --quiet "$tag"
+            rm -f "$root/vcpkg"
+        fi
+    fi
+    head="$(git -C "$root" rev-parse HEAD)"
+    baseline="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["builtin-baseline"])' "$REPO_ROOT/vcpkg.json")"
+    if [[ "$head" != "$baseline" ]]; then
+        echo "error: vcpkg tag $tag is commit $head, but vcpkg.json's builtin-baseline is $baseline; bump them together" >&2
+        exit 1
     fi
     if [[ ! -x "$root/vcpkg" ]]; then "$root/bootstrap-vcpkg.sh" -disableMetrics; fi
     # bootstrap-vcpkg.sh can report missing prerequisites and still exit 0.

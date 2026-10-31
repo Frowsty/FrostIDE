@@ -30,31 +30,32 @@ using std::function_ref;
 
 namespace frost {
 
-template <class Signature>
+template<class Signature>
 class function_ref;
 
-template <class R, class... Args>
+// The thunks call std::invoke_r<R>, which (like std::function_ref) discards the
+// target's result when R is void and converts it to R otherwise.
+template<class R, class... Args>
 class function_ref<R(Args...)> {
 public:
     // Binds a function pointer. The pointer itself is stored, so it may be a temporary.
-    template <class F>
+    template<class F>
         requires std::is_function_v<F> && std::is_invocable_r_v<R, F*, Args...>
     function_ref(F* function) noexcept // NOLINT(google-explicit-constructor): implicit like std::function_ref
-        : m_bound{.function = reinterpret_cast<void (*)()>(function)},
-          m_thunk([](Bound bound, Args... args) -> R {
-              return std::invoke(reinterpret_cast<F*>(bound.function), std::forward<Args>(args)...);
+        : m_bound{.function = reinterpret_cast<void (*)()>(function)}, m_thunk([](Bound bound, Args... args) -> R {
+              return std::invoke_r<R>(reinterpret_cast<F*>(bound.function), std::forward<Args>(args)...);
           }) {}
 
     // Binds any other callable object by address; the object must outlive the function_ref.
-    template <class F>
-        requires(!std::is_same_v<std::remove_cvref_t<F>, function_ref> && !std::is_member_pointer_v<std::remove_cvref_t<F>> &&
-                 !std::is_function_v<std::remove_reference_t<F>> &&
+    template<class F>
+        requires(!std::is_same_v<std::remove_cvref_t<F>, function_ref> &&
+                 !std::is_member_pointer_v<std::remove_cvref_t<F>> && !std::is_function_v<std::remove_reference_t<F>> &&
                  std::is_invocable_r_v<R, std::remove_reference_t<F>&, Args...>)
     function_ref(F&& callable) noexcept // NOLINT(google-explicit-constructor)
         : m_bound{.object = const_cast<void*>(static_cast<const void*>(std::addressof(callable)))},
           m_thunk([](Bound bound, Args... args) -> R {
               using Object = std::remove_reference_t<F>;
-              return std::invoke(*static_cast<Object*>(bound.object), std::forward<Args>(args)...);
+              return std::invoke_r<R>(*static_cast<Object*>(bound.object), std::forward<Args>(args)...);
           }) {}
 
     function_ref(const function_ref&) noexcept = default;

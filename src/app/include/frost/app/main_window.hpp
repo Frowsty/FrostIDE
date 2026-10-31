@@ -17,8 +17,8 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
-    MainWindow(const MainWindow&) = delete("QObject instances have identity and cannot be copied");
-    MainWindow& operator=(const MainWindow&) = delete("QObject instances have identity and cannot be copied");
+    MainWindow(const MainWindow&) = delete ("QObject instances have identity and cannot be copied");
+    MainWindow& operator=(const MainWindow&) = delete ("QObject instances have identity and cannot be copied");
 };
 
 } // namespace frost::app

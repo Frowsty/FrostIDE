@@ -8,10 +8,13 @@
 
 #include "assert_semantics.hpp"
 #include "support/crash_dialogs.hpp"
-
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <csignal>
+#include <cstdlib>
+#include <thread>
 
 namespace {
 
@@ -29,6 +32,13 @@ int enforcedDivide(int a, int b) {
     return a / b;
 }
 
+// A checked function whose body is harmless after a failed check, so a death can
+// only come from the contract machinery (not from, say, a division by zero).
+int enforcedIdentity(int value) {
+    FROST_PRE(value > 0);
+    return value;
+}
+
 TEST(Contracts, PassingChecksHaveNoEffect) {
     EXPECT_EQ(enforcedDivide(10, 2), 5);
     FROST_ASSERT(1 + 1 == 2);
@@ -36,12 +46,20 @@ TEST(Contracts, PassingChecksHaveNoEffect) {
 }
 
 TEST(ContractsDeathTest, EnforceAbortsWithDiagnostic) {
-    EXPECT_DEATH(
+    // std::abort: SIGABRT on POSIX, exit code 3 on Windows. Under "observe" the
+    // process would survive and the death assertion would fail.
+#if defined(_WIN32)
+    const auto aborted = testing::ExitedWithCode(3);
+#else
+    const auto aborted = testing::KilledBySignal(SIGABRT);
+#endif
+    EXPECT_EXIT(
         {
             frost::test::disableCrashDialogs();
-            (void)enforcedDivide(1, 0);
+            (void)enforcedIdentity(-1);
+            std::exit(0);
         },
-        "precondition violated: b != 0");
+        aborted, "precondition violated: value > 0");
 }
 
 TEST(Contracts, ObserveCallsHandlerAndContinues) {
@@ -59,14 +77,24 @@ TEST(Contracts, IgnoreDoesNotEvaluateCondition) {
     EXPECT_EQ(frost::test::checkIgnored(true), 0);
 }
 
-TEST(ContractsDeathTest, QuickEnforceTraps) {
+TEST(ContractsDeathTest, QuickEnforceTrapsWithoutHandler) {
     frost::test::checkQuickEnforced(true);
-    EXPECT_DEATH(
+    // __builtin_trap: SIGILL on x86-64 Linux, STATUS_ILLEGAL_INSTRUCTION on Windows.
+    // The handler is never called, so "violated" must not appear in the output.
+#if defined(_WIN32)
+    const auto trapped = testing::ExitedWithCode(static_cast<int>(0xC000001D));
+#else
+    const auto trapped = testing::KilledBySignal(SIGILL);
+#endif
+    // The trap runs on its own thread: on Windows, gtest wraps the test body in an
+    // SEH handler that would turn a trap on this thread into a normal exit(1).
+    EXPECT_EXIT(
         {
             frost::test::disableCrashDialogs();
-            frost::test::checkQuickEnforced(false);
+            std::thread([] { frost::test::checkQuickEnforced(false); }).join();
+            std::exit(0);
         },
-        "");
+        trapped, testing::Not(testing::HasSubstr("violated")));
 }
 
 TEST(Contracts, SetHandlerReturnsPrevious) {

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tests for the clock seam: SystemClock is monotonic, ManualClock moves only
-// when advanced, and both are usable through IClock&.
+// forward and only when advanced, and both are usable through IClock&.
 
 #include "frost/core/clock.hpp"
 
+#include "support/crash_dialogs.hpp"
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -38,6 +39,23 @@ TEST(Clock, SettingSystemTimeLeavesSteadyTimeAlone) {
     clock.setSystemTime(frost::IClock::SystemTime(10s));
     EXPECT_EQ(clock.systemNow().time_since_epoch(), 10s);
     EXPECT_EQ(clock.steadyNow().time_since_epoch(), 1s);
+}
+
+TEST(ClockDeathTest, ManualClockRejectsNegativeAdvance) {
+    // Steady time never goes backwards; advance() enforces that as a precondition.
+    frost::ManualClock clock;
+    EXPECT_DEATH(
+        {
+            frost::test::disableCrashDialogs();
+            clock.advance(-1ns);
+        },
+        "precondition violated: delta >= Duration::zero");
+}
+
+TEST(Clock, ManualClockAcceptsZeroAdvance) {
+    frost::ManualClock clock;
+    clock.advance(0ns);
+    EXPECT_EQ(clock.steadyNow().time_since_epoch(), 0ns);
 }
 
 TEST(Clock, ImplementationsAreTriviallyDestructible) {

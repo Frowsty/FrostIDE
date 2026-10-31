@@ -1,0 +1,118 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "qtbase",
+  "packages": [
+    {
+      "name": "qtbase",
+      "SPDXID": "SPDXRef-Package-qtbase-0123456789ab",
+      "licenseDeclared": "NOASSERTION",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "Core",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-Core-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "Gui",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-Gui-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "Widgets",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-Widgets-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "Test",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-Test-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "Network",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-Network-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "DBus",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-DBus-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "XcbQpaPrivate",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-XcbQpaPrivate-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "WaylandClient",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-WaylandClient-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "EntryPointPrivate",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-module-EntryPointPrivate-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR BSD-3-Clause",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR BSD-3-Clause",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "QWindowsIntegrationPlugin",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-plugin-QWindowsIntegrationPlugin-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "QOffscreenIntegrationPlugin",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-plugin-QOffscreenIntegrationPlugin-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "QMinimalIntegrationPlugin",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-plugin-QMinimalIntegrationPlugin-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "QXcbIntegrationPlugin",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-plugin-QXcbIntegrationPlugin-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "QWaylandIntegrationPlugin",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-plugin-QWaylandIntegrationPlugin-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "name": "QIbusPlatformInputContextPlugin",
+      "SPDXID": "SPDXRef-Package-qtbase-qt-plugin-QIbusPlatformInputContextPlugin-0123456789ab",
+      "licenseDeclared": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "licenseConcluded": "LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "downloadLocation": "NOASSERTION"
+    }
+  ]
+}

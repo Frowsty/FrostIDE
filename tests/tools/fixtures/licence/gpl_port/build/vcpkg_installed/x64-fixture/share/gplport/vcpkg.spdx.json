@@ -1,0 +1,33 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "gplport:x64-fixture@1.0",
+  "packages": [
+    {
+      "name": "gplport",
+      "SPDXID": "SPDXRef-port",
+      "versionInfo": "1.0",
+      "downloadLocation": "git+https://example.invalid/gplport",
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:vcpkg/gplport@1.0?triplet=x64-fixture"
+        }
+      ]
+    },
+    {
+      "name": "gplport:x64-fixture",
+      "SPDXID": "SPDXRef-binary",
+      "versionInfo": "0000000000000000000000000000000000000000000000000000000000000000",
+      "downloadLocation": "NONE",
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}

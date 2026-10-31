@@ -1,0 +1,33 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "llvmish:x64-fixture@23.1.4",
+  "packages": [
+    {
+      "name": "llvmish",
+      "SPDXID": "SPDXRef-port",
+      "versionInfo": "23.1.4",
+      "downloadLocation": "git+https://example.invalid/llvmish",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:vcpkg/llvmish@23.1.4?triplet=x64-fixture"
+        }
+      ]
+    },
+    {
+      "name": "llvmish:x64-fixture",
+      "SPDXID": "SPDXRef-binary",
+      "versionInfo": "0000000000000000000000000000000000000000000000000000000000000000",
+      "downloadLocation": "NONE",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}

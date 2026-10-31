@@ -2,10 +2,13 @@
 # REUSE 3.x annotations for files that cannot carry an SPDX header comment
 # (JSON, Markdown, byte-exact fixtures and goldens, fuzz corpora, binary assets).
 # frost-lint checks that every such file is covered by an entry here or by a .license sidecar.
+# Files with comment syntax (frost-lint's SOURCE_SYNTAX table, including .clang-format and
+# .clang-tidy) carry their own SPDX header instead. Paths use REUSE 3.x globs: `*` stays in
+# one directory, `**` crosses directories and `**/` also matches files at the root.
 version = 1
 
 [[annotations]]
-path = ["**/*.json", "**/*.md", "LICENSE", "NOTICE", ".gitignore", ".gitattributes", ".clang-tidy"]
+path = ["**/*.json", "**/*.md", "LICENSE", "NOTICE", ".gitignore", ".gitattributes"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
