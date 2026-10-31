@@ -8,7 +8,8 @@
 # Steps:
 #   1. Windows: configure win-clangcl, build Debug, run ctest.
 #   2. -Full adds the Release build and the ASan configuration.
-#   3. Repository checks: frost-lint and the licence check (when present).
+#   3. Repository checks (when present): frost-lint, the licence check and the
+#      feature-matrix check (featurecheck.py defaults to its `check` command).
 #   4. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), --full with -Full.
 # Tests labelled `stress` are skipped in the Debug configuration and run in the
 # -Full configurations.
@@ -87,7 +88,7 @@ if ($Full) {
 # Repository checks, run when the tools exist (they arrive during M0).
 $python = Join-Path $env:FROST_SDK 'py\Scripts\python.exe'
 $checks = @()
-foreach ($tool in @('frost_lint.py', 'licensecheck.py')) {
+foreach ($tool in @('frost_lint.py', 'licensecheck.py', 'featurecheck.py')) {
     $path = Join-Path $PSScriptRoot $tool
     if (Test-Path $path) {
         if (Invoke-Step $tool { & $python $path --repo $repo | Out-Host }) { $checks += "$($tool -replace '\.py$','') ok" }

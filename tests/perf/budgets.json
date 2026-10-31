@@ -1,0 +1,530 @@
+{
+  "schemaVersion": 1,
+  "description": "FrostIDE performance budgets, the source of truth named by PLAN.md section 4. Every row of the section 4 budgets table appears here; the plan_* fields repeat the table cells verbatim and tests/tools/test_budgets.py fails when they drift. Changing a budget needs an ADR and user approval (PLAN.md section 4, Enforcement). Code on a budgeted path cites its ID ('// Budget: B5.') and frost-lint checks the ID exists here. Units: ms, s, min, MB, GB, percent, count. A target's 'max' is the upper bound for its percentile; 'goal' is an aspiration that does not gate.",
+  "source": "PLAN.md section 4 (Performance budgets)",
+  "defaults": {
+    "memory": "Private bytes; the working set is recorded alongside.",
+    "cold": "After a reboot or a standby-list purge (RAMMap -Et), with Defender and Dev Drive state recorded per sample.",
+    "warm": "The same run repeated with binaries and inputs already in the file cache.",
+    "rigs": {
+      "REF-W1": "The dev machine: 24 threads, 32 GB, RTX 4070 SUPER, 5120x1440 @ 144 Hz, sources on E:. Budgets apply as stated.",
+      "REF-L1": "The B-suite on REF-W1 inside a Job Object (4 cores, 8 GB cap), a 2560x1440 window on a 60 Hz display mode, WARP for any GPU path. Budgets x1.5.",
+      "WSL": "WSL Ubuntu 24.04 on REF-W1, sources on ext4. Gates instruction counts and a wall-clock smoke at 2x budget; absolute Linux numbers on bare metal are untested."
+    },
+    "scale": { "REF-L1": 1.5, "WSL-smoke": 2.0 },
+    "measurement": "ETW markers (input, paint end, flush end, availability levels FirstPresent, FirstHighlight, Interactive, IndexMapped, InputToPaint, FlushEnd); DWM composition timing and a Desktop Duplication probe for on-screen timing (PresentMon only for the QRhi backend); an optional SendInput + photon probe; clangd.fileStatus and LSP markers for L2/L3; frost-bench scripts through the automation endpoint.",
+    "full_run": "tools/perf.ps1 -Full on REF-W1 (started by the user or by Claude in a session, never by a CI service): 20 samples, Mann-Whitney U at p<0.01, a p50 regression above 5% fails. Runs only when the session-state precheck passes and aborts on input; an invalid or aborted run is marked invalid, not red, and never enters the history.",
+    "wsl_leg": "tools/verify.sh -Perf gates on instruction counts (fail above +3%) and on wall-clock smoke (fail at 2x budget).",
+    "history": "Results go to a perf-history SQLite file outside the repository (E:\\FrostBuilds\\perf). perf.ps1 -Smoke runs before committing text, render, sched, storage or startup changes."
+  },
+  "budgets": [
+    {
+      "id": "B1",
+      "metric": "First frame",
+      "plan_metric": "First frame, warm / cold",
+      "plan_target": "p50 150 / 400 ms; p99 250 / 600 ms",
+      "plan_corpus": "empty, R3",
+      "plan_gate": "M1",
+      "variants": ["warm", "cold"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "variant": "warm", "percentile": "p50", "max": 150, "unit": "ms" },
+        { "variant": "cold", "percentile": "p50", "max": 400, "unit": "ms" },
+        { "variant": "warm", "percentile": "p99", "max": 250, "unit": "ms" },
+        { "variant": "cold", "percentile": "p99", "max": 600, "unit": "ms" }
+      ],
+      "corpus": ["empty", "R3"],
+      "level": "L0",
+      "preconditions": "Launch with no project (empty) and with R3 reopened. Warm and cold as in defaults. Part of the S1 gate (B6 plus B5 and warm B1).",
+      "method": "Process start to the ETW FirstPresent marker; the DWM composition timing and Desktop Duplication probes confirm the frame reached the screen.",
+      "gate": [{ "milestone": "M1" }]
+    },
+    {
+      "id": "B2",
+      "metric": "Highlighted active tab",
+      "plan_metric": "Highlighted active tab, warm",
+      "plan_target": "p99 300 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M2",
+      "variants": ["warm"],
+      "percentiles": ["p99"],
+      "targets": [{ "variant": "warm", "percentile": "p99", "max": 300, "unit": "ms" }],
+      "corpus": ["R3"],
+      "preconditions": "Warm reopen of R3 with an editor tab restored.",
+      "method": "Process start to the ETW FirstHighlight marker for the active tab (T0 highlighting painted).",
+      "gate": [{ "milestone": "M2" }]
+    },
+    {
+      "id": "B3",
+      "metric": "Warm reopen to L1",
+      "plan_metric": "Warm reopen to L1 (unchanged tree, all fingerprints valid, zero .NET processes)",
+      "plan_target": "p50 700 ms; p99 1 s",
+      "plan_corpus": "R2b, R3, R4-L",
+      "plan_gate": "M2",
+      "variants": ["warm"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 700, "unit": "ms" },
+        { "percentile": "p99", "max": 1, "unit": "s" }
+      ],
+      "corpus": ["R2b", "R3", "R4-L"],
+      "level": "L1",
+      "preconditions": "Unchanged tree; every ProjectModelCache fingerprint valid; the run asserts that zero .NET processes start.",
+      "method": "Process start to the ETW Interactive marker (L1: trees, editors, Go to File, T0).",
+      "gate": [{ "milestone": "M2" }]
+    },
+    {
+      "id": "B4",
+      "metric": "Fingerprint validation",
+      "plan_metric": "Fingerprint validation",
+      "plan_target": "p50 150 / 300 ms; p99 300 / 600 ms",
+      "plan_corpus": "R2b / R4-L",
+      "plan_gate": "M2",
+      "variants": ["R2b", "R4-L"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "corpus": "R2b", "percentile": "p50", "max": 150, "unit": "ms" },
+        { "corpus": "R4-L", "percentile": "p50", "max": 300, "unit": "ms" },
+        { "corpus": "R2b", "percentile": "p99", "max": 300, "unit": "ms" },
+        { "corpus": "R4-L", "percentile": "p99", "max": 600, "unit": "ms" }
+      ],
+      "corpus": ["R2b", "R4-L"],
+      "preconditions": "Warm open of an unchanged tree with a populated ProjectModelCache.",
+      "method": "In-process timing of the native validation of every (project, config, platform, toolchain) fingerprint record.",
+      "gate": [{ "milestone": "M2" }]
+    },
+    {
+      "id": "B5",
+      "metric": "Keystroke to paint end",
+      "plan_metric": "Keystroke → paint end (ETW), soft wrap off and on",
+      "plan_target": "p50 3 ms (target 2); p99 8 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M1",
+      "variants": ["soft wrap off", "soft wrap on"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 3, "goal": 2, "unit": "ms" },
+        { "percentile": "p99", "max": 8, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Typing in an R3 source file, once with soft wrap off and once with it on; both must meet the targets. Part of the S1 gate.",
+      "method": "ETW input marker to the paint-end marker (InputToPaint).",
+      "gate": [{ "milestone": "M1" }]
+    },
+    {
+      "id": "B6",
+      "metric": "10 s fling",
+      "plan_metric": "10 s fling: UI CPU per frame ≤5 ms p99; missed compositions ≤1%; no content interval >16.7 ms",
+      "plan_target": "as stated",
+      "plan_corpus": "5120x1440 @ 144 Hz",
+      "plan_gate": "M1",
+      "variants": [],
+      "percentiles": ["p99", "max"],
+      "targets": [
+        { "quantity": "UI CPU per frame", "percentile": "p99", "max": 5, "unit": "ms" },
+        { "quantity": "missed compositions", "percentile": null, "max": 1, "unit": "percent" },
+        { "quantity": "content interval", "percentile": "max", "max": 16.7, "unit": "ms" }
+      ],
+      "corpus": ["5120x1440 @ 144 Hz"],
+      "preconditions": "A 10 s fling scroll in a 5120x1440 window at 144 Hz in the logged-in interactive session (session-state precheck passed). Part of the S1 gate.",
+      "method": "DWM composition timing (DwmGetCompositionTimingInfo, DWM ETW events) and the Desktop Duplication capture probe; PresentMon only to compare the QRhi backend.",
+      "gate": [{ "milestone": "M1" }]
+    },
+    {
+      "id": "B7",
+      "metric": "Go to File",
+      "plan_metric": "Go to File (≤16 ms p50 at 500k files)",
+      "plan_target": "p50 15 ms; p99 50 ms",
+      "plan_corpus": "R3, R4-XL",
+      "plan_gate": "M2",
+      "variants": [],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 15, "unit": "ms" },
+        { "percentile": "p99", "max": 50, "unit": "ms" },
+        { "corpus": "R4-XL", "percentile": "p50", "max": 16, "unit": "ms", "note": "at 500k files" }
+      ],
+      "corpus": ["R3", "R4-XL"],
+      "preconditions": "Project open at L1; R4-XL has at least 500k files.",
+      "method": "Keystroke in the Go to File popup to the first result list painted (ETW markers).",
+      "gate": [{ "milestone": "M2" }]
+    },
+    {
+      "id": "B8",
+      "metric": "Completion",
+      "plan_metric": "Completion",
+      "plan_target": "p50 60 ms; p95 150 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M3",
+      "variants": [],
+      "percentiles": ["p50", "p95"],
+      "targets": [
+        { "percentile": "p50", "max": 60, "unit": "ms" },
+        { "percentile": "p95", "max": 150, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Active TU at L3 (preamble built).",
+      "method": "Completion request to the popup painted, from LSP and ETW markers.",
+      "gate": [{ "milestone": "M3" }]
+    },
+    {
+      "id": "B9",
+      "metric": "Go to definition",
+      "plan_metric": "Go to definition",
+      "plan_target": "p50 40 ms; p95 100 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M3",
+      "variants": [],
+      "percentiles": ["p50", "p95"],
+      "targets": [
+        { "percentile": "p50", "max": 40, "unit": "ms" },
+        { "percentile": "p95", "max": 100, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Active TU at L3.",
+      "method": "Request to the target editor painted, from LSP and ETW markers.",
+      "gate": [{ "milestone": "M3" }]
+    },
+    {
+      "id": "B10",
+      "metric": "Find Usages, first result",
+      "plan_metric": "Find Usages, first result",
+      "plan_target": "p50 150 ms; p99 300 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M3",
+      "variants": [],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 150, "unit": "ms" },
+        { "percentile": "p99", "max": 300, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Index loaded.",
+      "method": "Request to the first result painted in the Find window, from LSP and ETW markers.",
+      "gate": [{ "milestone": "M3" }]
+    },
+    {
+      "id": "B11",
+      "metric": "T1 diagnostics after an edit",
+      "plan_metric": "T1 diagnostics after an edit",
+      "plan_target": "p50 500 ms; p95 1.5 s",
+      "plan_corpus": "R3",
+      "plan_gate": "M3",
+      "variants": [],
+      "percentiles": ["p50", "p95"],
+      "targets": [
+        { "percentile": "p50", "max": 500, "unit": "ms" },
+        { "percentile": "p95", "max": 1.5, "unit": "s" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Active TU at L3.",
+      "method": "Edit to clangd's publishDiagnostics for the new version painted (LSP and ETW markers).",
+      "gate": [{ "milestone": "M3" }]
+    },
+    {
+      "id": "B12",
+      "metric": "T2 per file",
+      "plan_metric": "T2 per file, warm / cancel",
+      "plan_target": "p50 10 s / p99 200 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M7",
+      "variants": ["warm", "cancel"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "variant": "warm", "percentile": "p50", "max": 10, "unit": "s" },
+        { "variant": "cancel", "percentile": "p99", "max": 200, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "frost-analyzer with a warm PCH cache; cancel is measured from an edit or cancel request to the analysis stopping.",
+      "method": "frost-analyzer job markers.",
+      "gate": [{ "milestone": "M7" }]
+    },
+    {
+      "id": "B13",
+      "metric": "Find in Files first hit",
+      "plan_metric": "Find in Files first hit, unindexed / indexed",
+      "plan_target": "p50 300 / 100 ms; p99 600 / 200 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M2 / M13",
+      "variants": ["unindexed", "indexed"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "variant": "unindexed", "percentile": "p50", "max": 300, "unit": "ms" },
+        { "variant": "indexed", "percentile": "p50", "max": 100, "unit": "ms" },
+        { "variant": "unindexed", "percentile": "p99", "max": 600, "unit": "ms" },
+        { "variant": "indexed", "percentile": "p99", "max": 200, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Unindexed: prioritized streaming search; indexed: the trigram index (M13).",
+      "method": "Search request to the first hit painted (ETW markers).",
+      "gate": [{ "milestone": "M2", "variant": "unindexed" }, { "milestone": "M13", "variant": "indexed" }]
+    },
+    {
+      "id": "B14",
+      "metric": "git status with fsmonitor",
+      "plan_metric": "git status with fsmonitor",
+      "plan_target": "p50 150 ms; p99 300 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M5",
+      "variants": [],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 150, "unit": "ms" },
+        { "percentile": "p99", "max": 300, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "fsmonitor enabled on the R3 working tree.",
+      "method": "Wall time of `git status --porcelain=v2 -z` as run by the VCS service.",
+      "gate": [{ "milestone": "M5" }]
+    },
+    {
+      "id": "B15",
+      "metric": "F1 first screen",
+      "plan_metric": "F1 first screen (private bytes +≤64 MB; line index ≤2 s)",
+      "plan_target": "p50 150 ms; p99 300 ms",
+      "plan_corpus": "F1",
+      "plan_gate": "M1",
+      "variants": [],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 150, "unit": "ms" },
+        { "percentile": "p99", "max": 300, "unit": "ms" },
+        { "quantity": "private bytes increase", "percentile": null, "max": 64, "unit": "MB" },
+        { "quantity": "line index complete", "percentile": null, "max": 2, "unit": "s" }
+      ],
+      "corpus": ["F1"],
+      "preconditions": "Opening F1, the 2 GB file.",
+      "method": "Open request to the first screen of text painted (ETW markers); private bytes before and after; line index completion marker.",
+      "gate": [{ "milestone": "M1" }]
+    },
+    {
+      "id": "B16",
+      "metric": "F5 to breakpoint / step",
+      "plan_metric": "F5 → breakpoint (up-to-date check included, compilation excluded) / step",
+      "plan_target": "p50 1.0 s / 60 ms; p99 1.5 s / 100 ms",
+      "plan_corpus": "R1",
+      "plan_gate": "M6",
+      "variants": ["breakpoint", "step"],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "variant": "breakpoint", "percentile": "p50", "max": 1.0, "unit": "s" },
+        { "variant": "step", "percentile": "p50", "max": 60, "unit": "ms" },
+        { "variant": "breakpoint", "percentile": "p99", "max": 1.5, "unit": "s" },
+        { "variant": "step", "percentile": "p99", "max": 100, "unit": "ms" }
+      ],
+      "corpus": ["R1"],
+      "preconditions": "The build up-to-date check is included; compilation is excluded.",
+      "method": "F5 to the stopped event with the editor at the breakpoint; step request to the next stopped event painted (DAP and ETW markers).",
+      "gate": [{ "milestone": "M6" }]
+    },
+    {
+      "id": "B17",
+      "metric": "Terminal echo",
+      "plan_metric": "Terminal echo",
+      "plan_target": "p99 10 ms",
+      "plan_corpus": "—",
+      "plan_gate": "M4",
+      "variants": [],
+      "percentiles": ["p99"],
+      "targets": [{ "percentile": "p99", "max": 10, "unit": "ms" }],
+      "corpus": [],
+      "preconditions": "A shell running in the integrated terminal.",
+      "method": "Keystroke to the echoed character painted in TerminalView (ETW markers).",
+      "gate": [{ "milestone": "M4" }]
+    },
+    {
+      "id": "B18",
+      "metric": "getDiagnostics baseline / openDiff visible",
+      "plan_metric": "getDiagnostics baseline / openDiff visible",
+      "plan_target": "p99 50 / 100 ms",
+      "plan_corpus": "R1",
+      "plan_gate": "M5",
+      "variants": ["getDiagnostics baseline", "openDiff visible"],
+      "percentiles": ["p99"],
+      "targets": [
+        { "variant": "getDiagnostics baseline", "percentile": "p99", "max": 50, "unit": "ms" },
+        { "variant": "openDiff visible", "percentile": "p99", "max": 100, "unit": "ms" }
+      ],
+      "corpus": ["R1"],
+      "preconditions": "The Claude Code IDE bridge connected (C1).",
+      "method": "MCP request to response (getDiagnostics) and to the diff view painted (openDiff), from bridge and ETW markers.",
+      "gate": [{ "milestone": "M5" }]
+    },
+    {
+      "id": "B19",
+      "metric": "UI process memory",
+      "plan_metric": "UI process, no project / R3 (children excluded)",
+      "plan_target": "≤80 / ≤250 MB",
+      "plan_corpus": "—",
+      "plan_gate": "M1 / M3",
+      "variants": ["no project", "R3"],
+      "percentiles": [],
+      "targets": [
+        { "variant": "no project", "percentile": null, "max": 80, "unit": "MB" },
+        { "variant": "R3", "percentile": null, "max": 250, "unit": "MB" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "Child processes (engines, helpers) excluded.",
+      "method": "Private bytes of the UI process (working set recorded alongside).",
+      "gate": [{ "milestone": "M1", "variant": "no project" }, { "milestone": "M3", "variant": "R3" }]
+    },
+    {
+      "id": "B20",
+      "metric": "Exit to process gone",
+      "plan_metric": "Exit to process gone",
+      "plan_target": "p50 150 ms; p99 300 ms",
+      "plan_corpus": "R3",
+      "plan_gate": "M1",
+      "variants": [],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "percentile": "p50", "max": 150, "unit": "ms" },
+        { "percentile": "p99", "max": 300, "unit": "ms" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "R3 open.",
+      "method": "Exit request to the process handle signalled.",
+      "gate": [{ "milestone": "M1" }]
+    },
+    {
+      "id": "B21",
+      "metric": "Stalls over 50 ms in a 10-minute script",
+      "plan_metric": "Stalls >50 ms in a 10-minute script (the script grows each milestone)",
+      "plan_target": "0",
+      "plan_corpus": "R3",
+      "plan_gate": "M1",
+      "variants": [],
+      "percentiles": [],
+      "targets": [{ "quantity": "UI-thread stalls over 50 ms", "percentile": null, "max": 0, "unit": "count" }],
+      "corpus": ["R3"],
+      "preconditions": "The 10-minute scripted session; the script grows each milestone.",
+      "method": "The 50 ms stall watchdog counts UI-thread stalls during the script.",
+      "gate": [{ "milestone": "M1" }]
+    },
+    {
+      "id": "B22",
+      "metric": "Engine crash to recovered",
+      "plan_metric": "Engine crash → recovered",
+      "plan_target": "p99 2 s, no UI stall",
+      "plan_corpus": "R3",
+      "plan_gate": "M3",
+      "variants": [],
+      "percentiles": ["p99"],
+      "targets": [
+        { "percentile": "p99", "max": 2, "unit": "s" },
+        { "quantity": "UI-thread stalls over 50 ms", "percentile": null, "max": 0, "unit": "count" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "An engine (e.g. clangd) is killed while R3 is open.",
+      "method": "Kill to the supervisor's recovered state with state replayed; the stall watchdog must report no UI stall.",
+      "gate": [{ "milestone": "M3" }]
+    },
+    {
+      "id": "B23",
+      "metric": "First-ever open of a new root",
+      "plan_metric": "First-ever open of a new root. **Trees** are measured in restricted mode: the File System view plus the native-reader Solution or CMake target tree. For R3, a build directory already configured with the `client-frostide` query is required; without one, only the File System view is promised. **First project streamed** is measured after trust: the trust click is excluded from the timing, and ProjectHost cold start is included. budgets.json records these preconditions.",
+      "plan_target": "p50 1.5 s / 3 s (final value set by S6)",
+      "plan_corpus": "R3 / R2b",
+      "plan_gate": "M2",
+      "variants": ["trees", "first project streamed"],
+      "percentiles": ["p50"],
+      "targets": [
+        { "variant": "trees", "corpus": "R3", "percentile": "p50", "max": 1.5, "unit": "s", "note": "final value set by S6" },
+        { "variant": "first project streamed", "corpus": "R2b", "percentile": "p50", "max": 3, "unit": "s", "note": "final value set by S6" }
+      ],
+      "corpus": ["R3", "R2b"],
+      "level": "L1",
+      "preconditions": "Trees: measured in restricted mode; the File System view plus the native-reader Solution or CMake target tree. For R3 a build directory already configured with the client-frostide File API query is required; without one only the File System view is promised. First project streamed: measured after trust; the trust click is excluded from the timing and ProjectHost cold start is included.",
+      "method": "Open request to the trees painted, and to the first project streamed from ProjectHost (ETW markers).",
+      "gate": [{ "milestone": "M2" }]
+    },
+    {
+      "id": "B24",
+      "metric": "L2 warm",
+      "plan_metric": "L2 warm: first workspace/symbol and cross-file definition from the persisted index",
+      "plan_target": "M3: S7 baseline ×1.2; M13: p50 2 s, p99 3 s",
+      "plan_corpus": "R3",
+      "plan_gate": "M3, M13",
+      "variants": [],
+      "percentiles": ["p50", "p99"],
+      "targets": [
+        { "gate": "M3", "percentile": "p50", "max": null, "relative": "S7 baseline x1.2", "unit": "s" },
+        { "gate": "M13", "percentile": "p50", "max": 2, "unit": "s" },
+        { "gate": "M13", "percentile": "p99", "max": 3, "unit": "s" }
+      ],
+      "corpus": ["R3"],
+      "level": "L2",
+      "preconditions": "Warm reopen with the persisted index; first workspace/symbol query and a cross-file definition.",
+      "method": "clangd.fileStatus and LSP markers. The M3 value is S7's measured baseline times 1.2 (spike S7 sets it).",
+      "gate": [{ "milestone": "M3" }, { "milestone": "M13" }]
+    },
+    {
+      "id": "B25",
+      "metric": "L3 active TU ready",
+      "plan_metric": "L3: typical active TU to clangd.fileStatus idle with semantic tokens",
+      "plan_target": "p50 3 s",
+      "plan_corpus": "R3 TU set",
+      "plan_gate": "M3",
+      "variants": [],
+      "percentiles": ["p50"],
+      "targets": [{ "percentile": "p50", "max": 3, "unit": "s" }],
+      "corpus": ["R3 TU set"],
+      "level": "L3",
+      "preconditions": "A typical TU from the R3 TU set opened warm; heavy cold preambles (2-20 s) are tracked, not gated.",
+      "method": "Open to clangd.fileStatus idle with semantic tokens painted.",
+      "gate": [{ "milestone": "M3" }]
+    },
+    {
+      "id": "B26",
+      "metric": "Process-tree memory",
+      "plan_metric": "Process-tree memory, peak / idle",
+      "plan_target": "≤8 / ≤4 GB; REF-L1 ≤5 GB peak",
+      "plan_corpus": "R3",
+      "plan_gate": "M3; REF-L1 at M13",
+      "variants": ["peak", "idle"],
+      "percentiles": [],
+      "targets": [
+        { "variant": "peak", "percentile": null, "max": 8, "unit": "GB" },
+        { "variant": "idle", "percentile": null, "max": 4, "unit": "GB" },
+        { "variant": "peak", "rig": "REF-L1", "percentile": null, "max": 5, "unit": "GB" }
+      ],
+      "corpus": ["R3"],
+      "preconditions": "R3 open with every engine running; the ResourceGovernor active.",
+      "method": "Sum of private bytes over the UI process and its children.",
+      "gate": [{ "milestone": "M3" }, { "milestone": "M13", "rig": "REF-L1" }]
+    },
+    {
+      "id": "B27",
+      "metric": "Installed size",
+      "plan_metric": "Installed size, including LLVM components",
+      "plan_target": "≤400 MB",
+      "plan_corpus": "packages",
+      "plan_gate": "M5",
+      "variants": [],
+      "percentiles": [],
+      "targets": [{ "percentile": null, "max": 400, "unit": "MB" }],
+      "corpus": ["packages"],
+      "preconditions": "A package (portable archive, later MSI and AppImage) including its LLVM components.",
+      "method": "Installed size on disk.",
+      "gate": [{ "milestone": "M5" }]
+    },
+    {
+      "id": "B28",
+      "metric": "Dev loop",
+      "plan_metric": "Dev loop: one-.cpp change to rebuilt and linked / `verify -Quick`",
+      "plan_target": "p50 20 s / p50 5 min",
+      "plan_corpus": "R1",
+      "plan_gate": "M0",
+      "variants": ["one-.cpp rebuild", "verify -Quick"],
+      "percentiles": ["p50"],
+      "targets": [
+        { "variant": "one-.cpp rebuild", "percentile": "p50", "max": 20, "unit": "s" },
+        { "variant": "verify -Quick", "percentile": "p50", "max": 5, "unit": "min" }
+      ],
+      "corpus": ["R1"],
+      "preconditions": "FrostIDE itself (R1) on REF-W1; the Debug build uses sccache (PLAN.md section 6.4).",
+      "method": "Wall time from a one-.cpp change to the rebuilt, linked target; wall time of tools/verify.ps1 -Quick.",
+      "gate": [{ "milestone": "M0" }]
+    }
+  ]
+}

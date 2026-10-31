@@ -14,11 +14,12 @@
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
 # configuration and run in the --full configurations. FROST_JOBS caps build
 # parallelism (default: nproc), so concurrent work streams stay inside the
-# WSL memory cap.
+# WSL memory cap. Afterwards the repository checks (frost-lint, the licence
+# check, the feature-matrix check) run on the mirror.
 #
 # The last line of output is a summary for the commit verification footer,
-# e.g. "wsl: debug 45/45, asan 45/45, tsan 45/45". Exit status is non-zero if
-# any configuration fails to build or has a failing test.
+# e.g. "wsl: debug 45/45, asan 45/45, tsan 45/45, wsl-checks ok". Exit status is
+# non-zero if any configuration fails to build, has a failing test, or a check fails.
 
 set -euo pipefail
 
@@ -79,6 +80,24 @@ run_config debug linux-clang linux-clang-debug -LE stress
 if [[ $FULL -eq 1 ]]; then
     run_config asan linux-clang-asan linux-clang-asan
     run_config tsan linux-clang-tsan linux-clang-tsan
+fi
+
+# Repository checks (PLAN.md 6.3 "Checks"): the same tools verify.ps1 runs on Windows,
+# here on the mirror, which has no .git (frost-lint then walks it, honouring .gitignore)
+# and the Linux build trees and Qt SBOM. Summarised as one "wsl-checks" item. Their stderr
+# summaries go to stdout: verify.ps1 (PowerShell 5.1) turns captured stderr into errors.
+failed_checks=()
+ran_checks=0
+for tool in frost_lint.py licensecheck.py featurecheck.py; do
+    [[ -f "tools/$tool" ]] || continue
+    echo "=== check: $tool"
+    ran_checks=$((ran_checks + 1))
+    if ! python3 "tools/$tool" --repo "$MIRROR" 2>&1; then failed_checks+=("${tool%.py}"); status=1; fi
+done
+if [[ ${#failed_checks[@]} -gt 0 ]]; then
+    summary+=("wsl-checks FAILED (${failed_checks[*]})")
+elif [[ $ran_checks -gt 0 ]]; then
+    summary+=("wsl-checks ok")
 fi
 
 echo "wsl: $(IFS=,; echo "${summary[*]}" | sed 's/,/, /g')"
