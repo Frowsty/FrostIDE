@@ -1,2 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
-# Tests for frost::sched (added by the scheduler slice).
+#
+# Tests for frost::sched, split by label because labels apply per executable:
+#   sched_tests         unit:   deque, policy, Task, ThreadPool, SimExecutor, LatestWins
+#   sched_stress_tests  stress: 10k SimExecutor seeds and the 1M-task real-pool run
+#                       (default scale in -Full gates; FROST_STRESS_FULL=1 selects the M0 exit scale)
+#   sched_perf_tests    perf:   interactive dispatch p99 (asserted only in optimised, unsanitised builds)
+frost_add_test(sched_tests
+    SOURCES
+        deque_test.cpp
+        lane_policy_test.cpp
+        latest_wins_test.cpp
+        sim_executor_test.cpp
+        task_test.cpp
+        thread_pool_test.cpp
+    DEPS frost::sched
+    LABELS unit)
+target_include_directories(sched_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+frost_add_test(sched_stress_tests
+    SOURCES
+        stress_test.cpp
+    DEPS frost::sched
+    LABELS stress)
+target_include_directories(sched_stress_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+frost_add_test(sched_perf_tests
+    SOURCES
+        dispatch_perf_test.cpp
+    DEPS frost::sched
+    LABELS perf)
+target_include_directories(sched_perf_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
