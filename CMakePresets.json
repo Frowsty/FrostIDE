@@ -32,7 +32,12 @@
       "name": "win-clangcl-asan",
       "displayName": "Windows, clang-cl, AddressSanitizer (RelWithDebInfo: clang-cl rejects ASan with /MDd)",
       "inherits": "win-clangcl",
-      "cacheVariables": { "FROST_SANITIZE": "address", "VCPKG_TARGET_TRIPLET": "x64-windows-clangcl-asan" }
+      "$comment": "Own vcpkg tree: a manifest install removes every package outside its plan, so two triplets sharing one tree would delete each other's libraries.",
+      "cacheVariables": {
+        "FROST_SANITIZE": "address",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-clangcl-asan",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed-asan"
+      }
     },
     {
       "name": "linux-clang",

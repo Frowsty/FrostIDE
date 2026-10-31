@@ -13,8 +13,10 @@
 #   updatesSha256   SHA-256 of the repository's Updates.xml;
 #   archiveSha256   SHA-256 of every archive file, keyed by archive name.
 # An archive without a pin, or whose SHA-256 differs from its pin, is refused.
-# The SHA-1 that download.qt.io publishes next to each archive is checked too,
-# but only to tell a corrupt download from a changed one; it is not trusted.
+# A cached archive that matches its pin is used as is. Only a fresh download is
+# also checked against the SHA-1 that download.qt.io publishes next to it, to
+# tell a corrupt download from a changed archive; that SHA-1 is never trusted
+# on its own and never decides whether a pinned cache file is replaced.
 #
 # Extraction uses bsdtar (libarchive): the in-box tar.exe on Windows, the
 # libarchive-tools package on Linux. Its output was compared file by file with
@@ -31,9 +33,10 @@
 #   python -I qt-fetch.py --lock sdk/sdk.lock.json --platform windows
 #                         --dest E:\sdk\qt --cache E:\sdk\_downloads\qt
 #   python -I qt-fetch.py ... --discover
-#     Bumping Qt (PLAN.md section 2.3, D20): downloads the archives the lock
-#     names without enforcing the archive pins, installs nothing, and prints the
-#     archiveSha256 block to review and paste into the lock file.
+#     Bumping Qt (PLAN.md section 2.3, D20): enforces neither the Updates.xml
+#     pin nor the archive pins, downloads the archives the lock's prefixes
+#     select, installs nothing, and prints the updatesSha256 and archiveSha256
+#     values to review and paste into the lock file.
 
 import argparse
 import hashlib
@@ -166,7 +169,9 @@ def main() -> int:
 
     updates = http_get(repo + "/Updates.xml")
     updates_hash = hashlib.sha256(updates).hexdigest()
-    if updates_hash != updates_pin:
+    if updates_hash != updates_pin and args.discover:
+        print(f"note: Updates.xml changed: SHA-256 {updates_hash} (pinned {updates_pin})", file=sys.stderr)
+    elif updates_hash != updates_pin:
         print(f"error: Updates.xml SHA-256 {updates_hash} != pinned {updates_pin}", file=sys.stderr)
         return 1
 
@@ -197,19 +202,28 @@ def main() -> int:
     for archive in selected:
         url = f"{repo}/{package_name}/{version}{archive}"
         local = os.path.join(args.cache, f"{version}{archive}")
-        sha1_published = http_get(url + ".sha1").decode().split()[0].lower()
-        if not os.path.exists(local) or file_digest(local, "sha1") != sha1_published:
+        pinned = None if args.discover else archive_pins[archive]
+        if pinned is not None:
+            cached_ok = os.path.exists(local) and file_digest(local, "sha256") == pinned
+        else:
+            # --discover has no pin to trust; it reuses a cached file the published
+            # SHA-1 vouches for, since its output is reviewed before anything is pinned.
+            sha1_published = http_get(url + ".sha1").decode().split()[0].lower()
+            cached_ok = os.path.exists(local) and file_digest(local, "sha1") == sha1_published
+        if not cached_ok:
             print(f"[qt] downloading {archive}")
             download_to(url, local)
-        sha1 = file_digest(local, "sha1")
-        if sha1 != sha1_published:
-            print(f"error: {archive} SHA-1 {sha1} != published {sha1_published} (corrupt download)", file=sys.stderr)
-            return 1
+            sha1_published = http_get(url + ".sha1").decode().split()[0].lower()
+            sha1 = file_digest(local, "sha1")
+            if sha1 != sha1_published:
+                print(f"error: {archive} SHA-1 {sha1} != published {sha1_published} (corrupt download)",
+                      file=sys.stderr)
+                return 1
         sha256 = file_digest(local, "sha256")
-        if not args.discover and sha256 != archive_pins[archive]:
-            print(f"error: {archive} SHA-256 {sha256} != pinned {archive_pins[archive]}", file=sys.stderr)
+        if pinned is not None and sha256 != pinned:
+            print(f"error: {archive} SHA-256 {sha256} != pinned {pinned}", file=sys.stderr)
             return 1
-        record["archives"][archive] = {"sha1": sha1, "sha256": sha256}
+        record["archives"][archive] = {"sha1": file_digest(local, "sha1"), "sha256": sha256}
 
     if args.discover:
         pins = {name: entry["sha256"] for name, entry in record["archives"].items()}

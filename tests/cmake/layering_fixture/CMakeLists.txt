@@ -32,3 +32,5 @@ frost_add_library(bad_wrapper LAYER io INTERFACE THIRD_PARTY qt_wrapper)
 # 5. An upward link added afterwards with a raw target_link_libraries.
 frost_add_library(bad_raw LAYER core INTERFACE)
 target_link_libraries(frost_bad_raw INTERFACE frost::ok_io)
+# 6 and 7: directory-scoped imported targets (see sub/CMakeLists.txt).
+add_subdirectory(sub)

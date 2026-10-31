@@ -142,15 +142,43 @@ function(_frost_check_layer_graph)
             if(item MATCHES "^\\$<LINK_ONLY:([^>]+)>$")
                 set(item "${CMAKE_MATCH_1}")
             endif()
-            if(item MATCHES "^\\$<")
+            if(item MATCHES "^\\$<" OR item IN_LIST seen)
+                continue()
+            endif()
+            list(APPEND seen "${item}")
+            # Qt is recognised by name before resolving: this check runs in the
+            # top-level scope, where an imported target created in a subdirectory
+            # (find_package there without GLOBAL) cannot be resolved.
+            if(item MATCHES "^Qt6?::")
+                if(NOT layer MATCHES "^(ui|app)$")
+                    _frost_layer_error("layering violation: ${target} (layer ${layer}) reaches Qt (${item}) "
+                                       "through its link graph")
+                endif()
                 continue()
             endif()
             _frost_resolve_target("${item}" real)
-            if(NOT real OR real IN_LIST seen OR real STREQUAL target)
+            if(NOT real)
+                # Plain names (shell32, pthread) are system libraries. A namespaced
+                # name that does not resolve here hides its link graph from the check.
+                if(item MATCHES "::")
+                    _frost_layer_error("${target} links ${item}, which is not visible from the top-level directory, "
+                                       "so its link graph cannot be checked; find the package in the root "
+                                       "CMakeLists.txt or import it GLOBAL")
+                endif()
                 continue()
             endif()
-            list(APPEND seen "${real}")
-            if(item MATCHES "^Qt6?::" OR real MATCHES "^Qt6?::")
+            # `seen` already holds `item`; an alias or other name for a target visited
+            # under its real name is skipped here.
+            if(NOT real STREQUAL item)
+                if(real IN_LIST seen)
+                    continue()
+                endif()
+                list(APPEND seen "${real}")
+            endif()
+            if(real STREQUAL target)
+                continue()
+            endif()
+            if(real MATCHES "^Qt6?::")
                 if(NOT layer MATCHES "^(ui|app)$")
                     _frost_layer_error("layering violation: ${target} (layer ${layer}) reaches Qt (${item}) "
                                        "through its link graph")

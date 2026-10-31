@@ -22,7 +22,9 @@ set(expected
     "frost_bad_qt (layer io) may not link Qt"
     "frost_bad_smuggle: 'frost::ok_io' is a FrostIDE library"
     "frost_bad_wrapper (layer io) reaches Qt (Qt6::Core)"
-    "frost_bad_raw (layer core) links frost_ok_io (layer io)")
+    "frost_bad_raw (layer core) links frost_ok_io (layer io)"
+    "frost_bad_subdir_qt (layer io) reaches Qt (Qt6::Gui)"
+    "frost_bad_subdir_hidden links Pkg::thing, which is not visible from the top-level directory")
 foreach(text IN LISTS expected)
     string(FIND "${flat}" "${text}" position)
     if(position EQUAL -1)

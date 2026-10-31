@@ -14,6 +14,10 @@ frost_add_test(toolchain_probe_tests
     SOURCES allowlist_test.cpp sanitizer_test.cpp
     DEPS frost::compat)
 target_include_directories(toolchain_probe_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+if("address" IN_LIST FROST_SANITIZE)
+    # sanitizer_test.cpp turns this into a compile error if ASan did not reach it.
+    target_compile_definitions(toolchain_probe_tests PRIVATE FROST_EXPECT_ASAN)
+endif()
 
 # Adds a compile-fail probe: builds banned/<name>.cpp and expects `regex` in the output.
 function(frost_add_banned_probe name regex)

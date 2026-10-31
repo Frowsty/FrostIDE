@@ -62,8 +62,10 @@ function Invoke-Native([scriptblock]$Command) {
     return , $lines
 }
 
-# Parses ctest output into "passed/total" plus "(n skipped)". Skipped tests are
-# listed under "The following tests did not run:" and are not counted as passed.
+# Parses ctest output into "passed/total" plus "(n skipped, m disabled)". Both are
+# listed under "The following tests did not run:". ctest's "out of N" includes
+# skipped tests (never counted as passed here) but not disabled ones (gtest's
+# DISABLED_ tests), which are reported on their own.
 function Get-CtestCounts([string[]]$Output) {
     $line = $Output | Where-Object { $_ -match 'tests passed.* out of \d+' } | Select-Object -Last 1
     if (-not $line) { return $null }
@@ -71,9 +73,13 @@ function Get-CtestCounts([string[]]$Output) {
     $failedCount = 0
     $failedMatch = [regex]::Match($line, '(\d+) tests failed')
     if ($failedMatch.Success) { $failedCount = [int]$failedMatch.Groups[1].Value }
-    $skipped = @($Output | Where-Object { $_ -match '^\s*\d+ - .+\((Skipped|Disabled)\)\s*$' }).Count
+    $skipped = @($Output | Where-Object { $_ -match '^\s*\d+ - .+\(Skipped\)\s*$' }).Count
+    $disabled = @($Output | Where-Object { $_ -match '^\s*\d+ - .+\(Disabled\)\s*$' }).Count
     $text = "$($total - $failedCount - $skipped)/$total"
-    if ($skipped -gt 0) { $text += " ($skipped skipped)" }
+    $notes = @()
+    if ($skipped -gt 0) { $notes += "$skipped skipped" }
+    if ($disabled -gt 0) { $notes += "$disabled disabled" }
+    if ($notes.Count -gt 0) { $text += " ($($notes -join ', '))" }
     return $text
 }
 

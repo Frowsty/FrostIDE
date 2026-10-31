@@ -198,6 +198,18 @@ class VcpkgTest(TempDirTestCase):
         self.assertEqual(len(report.violations), 1)
         self.assertIn("no vcpkg installed tree", report.violations[0].message)
 
+    def test_default_roots_cover_every_installed_tree(self) -> None:
+        # The ASan preset has its own tree (build/vcpkg_installed-asan); both are checked,
+        # and neither is mistaken for a build tree.
+        for name in ("vcpkg_installed", "vcpkg_installed-asan", "win-clangcl"):
+            (self.tmp / "build" / name).mkdir(parents=True)
+        self.assertEqual([p.name for p in licensecheck.default_vcpkg_roots(self.tmp)],
+                         ["vcpkg_installed", "vcpkg_installed-asan"])
+        self.assertEqual([p.name for p in licensecheck.default_build_dirs(self.tmp)], ["win-clangcl"])
+
+    def test_default_root_without_any_tree_is_still_checked(self) -> None:
+        self.assertEqual(licensecheck.default_vcpkg_roots(self.tmp), [self.tmp / "build" / "vcpkg_installed"])
+
     def test_port_without_a_licence_needs_an_adr(self) -> None:
         root = self.tmp / "installed"
         _write(root / "x64-t" / "share" / "nolicence" / "vcpkg.spdx.json",

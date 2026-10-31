@@ -8,8 +8,8 @@
 #                                [--build-dir <dir>]... [--qt-root <dir>] [--sbom <file>]
 #
 # Checks:
-#   vcpkg ports  every port in each installed tree (default <repo>/build/vcpkg_installed,
-#                the VCPKG_INSTALLED_DIR of CMakePresets.json) must declare a licence
+#   vcpkg ports  every port in each installed tree (default: every <repo>/build/vcpkg_installed*
+#                directory, the VCPKG_INSTALLED_DIRs of CMakePresets.json) must declare a licence
 #                expression the SPDX allowlist satisfies, or have an ADR-approved
 #                exception (ADR_EXCEPTIONS); anything else "needs an ADR".
 #   Qt modules   the modules and plugins the build uses, derived from find_package(Qt6 ...)
@@ -724,11 +724,20 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     return report
 
 
+def default_vcpkg_roots(repo: Path) -> list[Path]:
+    """Every <repo>/build/vcpkg_installed* tree (the presets give the ASan triplet its
+    own); <repo>/build/vcpkg_installed when there is none, so a missing tree is reported."""
+    build = repo / "build"
+    roots = sorted(d for d in build.glob("vcpkg_installed*") if d.is_dir()) if build.is_dir() else []
+    return roots or [build / "vcpkg_installed"]
+
+
 def default_build_dirs(repo: Path) -> list[Path]:
     build = repo / "build"
     if not build.is_dir():
         return []
-    return [d for d in sorted(build.iterdir()) if d.is_dir() and d.name not in ("vcpkg_installed", "sbom")]
+    return [d for d in sorted(build.iterdir())
+            if d.is_dir() and not d.name.startswith("vcpkg_installed") and d.name != "sbom"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -736,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent,
                         help="repository root (default: the checkout containing this script)")
     parser.add_argument("--vcpkg-installed", type=Path, action="append", default=None,
-                        help="vcpkg installed root (repeatable; default <repo>/build/vcpkg_installed)")
+                        help="vcpkg installed root (repeatable; default every <repo>/build/vcpkg_installed*)")
     parser.add_argument("--build-dir", type=Path, action="append", default=None,
                         help="build tree to scan for Qt libraries (repeatable; default every <repo>/build/*)")
     parser.add_argument("--qt-root", type=Path, default=None,
@@ -747,7 +756,7 @@ def main(argv: list[str] | None = None) -> int:
     if not repo.is_dir():
         print(f"licensecheck: {repo} is not a directory", file=sys.stderr)
         return 2
-    vcpkg_roots = args.vcpkg_installed or [repo / "build" / "vcpkg_installed"]
+    vcpkg_roots = args.vcpkg_installed or default_vcpkg_roots(repo)
     build_dirs = args.build_dir if args.build_dir is not None else default_build_dirs(repo)
     qt_root = args.qt_root
     if qt_root is None and os.environ.get("FROST_QT_ROOT"):

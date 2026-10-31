@@ -71,17 +71,22 @@ summary=()
 status=0
 
 # Turns ctest output (on stdin) into "passed/total" plus " (n skipped)", or nothing.
-# Skipped tests are listed under "The following tests did not run:".
+# Skipped and disabled tests are listed under "The following tests did not run:".
+# ctest's "out of N" includes skipped tests (never counted as passed here) but not
+# disabled ones (gtest's DISABLED_ tests), which are reported on their own.
 ctest_counts() {
-    local out line total failed=0 skipped
+    local out line total failed=0 skipped disabled
     out="$(cat)"
     line="$(grep -E 'tests passed.* out of [0-9]+' <<< "$out" | tail -1 || true)"
     [[ -n "$line" ]] || return 0
     total="$(sed -E 's/.*out of ([0-9]+).*/\1/' <<< "$line")"
     if [[ "$line" =~ ([0-9]+)\ tests\ failed ]]; then failed="${BASH_REMATCH[1]}"; fi
-    skipped="$(grep -cE '^\s*[0-9]+ - .+\((Skipped|Disabled)\)\s*$' <<< "$out" || true)"
-    local text="$((total - failed - skipped))/$total"
-    if ((skipped > 0)); then text+=" ($skipped skipped)"; fi
+    skipped="$(grep -cE '^\s*[0-9]+ - .+\(Skipped\)\s*$' <<< "$out" || true)"
+    disabled="$(grep -cE '^\s*[0-9]+ - .+\(Disabled\)\s*$' <<< "$out" || true)"
+    local text="$((total - failed - skipped))/$total" notes=()
+    if ((skipped > 0)); then notes+=("$skipped skipped"); fi
+    if ((disabled > 0)); then notes+=("$disabled disabled"); fi
+    if ((${#notes[@]} > 0)); then text+=" ($(IFS=,; echo "${notes[*]}" | sed 's/,/, /g'))"; fi
     echo "$text"
 }
 
