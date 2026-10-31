@@ -195,6 +195,25 @@ bool isReservedDeviceName(std::string_view component) noexcept {
 }
 
 /*
+ * Characters no Windows file name may contain (Microsoft, "Naming Files, Paths,
+ * and Namespaces"): < > : " | ? * and the control characters 1-31. ':' would
+ * otherwise select an NTFS alternate data stream ("t.bat::$DATA" opens t.bat),
+ * so the string checked would not name the file opened.
+ */
+Result<void> checkNameCharacters(std::string_view part, std::string_view path) {
+    for (const char c : part) {
+        const auto unit = static_cast<unsigned char>(c);
+        if (unit < 32 || std::string_view("<>:\"|?*").find(c) != std::string_view::npos) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("path component '{}' contains a character Windows does not allow in names "
+                                    "(<>:\"|?* or a control character): '{}'",
+                                    part, path));
+        }
+    }
+    return {};
+}
+
+/*
  * Drive and UNC paths reach Win32 in the \\?\ form, which skips Win32's own
  * name rewriting. Names that the rewriting would change are therefore refused
  * rather than created literally: a trailing dot or space (Win32 strips them, so
@@ -203,6 +222,9 @@ bool isReservedDeviceName(std::string_view component) noexcept {
  */
 Result<void> checkWin32Components(const std::vector<std::string_view>& parts, std::string_view path) {
     for (const std::string_view part : parts) {
+        if (auto ok = checkNameCharacters(part, path); !ok) {
+            return ok;
+        }
         if (part.back() == '.' || part.back() == ' ') {
             return fail(
                 ErrorCode::InvalidArgument,
@@ -230,6 +252,13 @@ Result<void> checkVerbatimComponents(std::string_view rest, std::string_view pat
         if (part.empty() || part == "." || part == "..") {
             return fail(ErrorCode::InvalidArgument,
                         std::format("\\\\?\\ path has an empty, '.' or '..' component: '{}'", path));
+        }
+        if (auto ok = checkNameCharacters(part, path); !ok) {
+            return ok;
+        }
+        // '/' is no separator under \\?\, so it would be part of a name, which NTFS refuses.
+        if (part.find('/') != std::string_view::npos) {
+            return fail(ErrorCode::InvalidArgument, std::format("\\\\?\\ path component contains '/': '{}'", path));
         }
         if (end >= rest.size()) {
             return {};

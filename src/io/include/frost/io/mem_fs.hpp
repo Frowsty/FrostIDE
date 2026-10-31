@@ -9,11 +9,15 @@
  * against MemFs behaves the same on disk:
  *   - Paths must be absolute under the MemFs's PathStyle (native by default)
  *     and are normalised with normalizePath, so "C:/a" and "C:\a" are the same
- *     file and Windows-style names are refused exactly as on disk. POSIX ".."
- *     is resolved the way the kernel does, through existing directories only
- *     ("/a/b/../c" needs /a/b; otherwise NotFound), and a final ".." is not an
- *     entry name for writeFileAtomic, removeFile and removeDirectory
- *     (InvalidArgument), as with the real implementation.
+ *     file and every name normalizePath refuses is refused here too. The
+ *     verbatim forms "\\?\C:\x" and "\\?\UNC\srv\share\x" name the same files as
+ *     "C:\x" and "\\srv\share\x" (with the escape hatch's looser name rules);
+ *     other verbatim roots are separate trees. POSIX ".." is resolved the way the
+ *     kernel does, through existing directories only ("/a/b/../c" needs /a/b;
+ *     otherwise NotFound), except that createDirectories follows the real
+ *     implementation's mkdir -p walk ("/a/new/../c" creates /a/new and /a/c). A
+ *     final ".." is not an entry name for writeFileAtomic, removeFile and
+ *     removeDirectory (InvalidArgument), as with the real implementation.
  *   - Only "/" (POSIX) or "C:\" (Windows) exists initially; other roots (drives,
  *     "\\server\share\") exist once addRoot() is called, so code that assumes a
  *     drive is present fails here as it would on a machine without it. Drive
@@ -32,9 +36,11 @@
  *   - Symlinks are not modelled.
  *
  * Fault injection. injectFault(op, path, code, count) makes the next `count`
- * operations of kind `op` on exactly `path` (after normalisation) fail with
- * `code` before they change anything. Faults are consumed in the order they
- * were injected; an empty path matches every path.
+ * operations of kind `op` on `path` fail with `code` before they change
+ * anything. An operation matches when its own normalised spelling equals the
+ * normalised `path`, or when the entry it reaches does (so a fault on "/a/c"
+ * also fires for "/a/b/../c"). Faults are consumed in the order they were
+ * injected; an empty path matches every path.
  *
  * Thread safety: every member function may be called concurrently; one mutex
  * guards the whole tree (contention is irrelevant for a test double). The
@@ -114,12 +120,26 @@ private:
         std::uint32_t remaining;
     };
 
-    // Normalises `path` under m_style (drive letters upper-cased); InvalidArgument for
-    // relative paths. Pure: the key faults are matched against.
+    // Normalises `path` under m_style (\\?\ drive and UNC forms mapped to their plain
+    // spelling, drive letters upper-cased); InvalidArgument for relative paths. Pure.
     [[nodiscard]] Result<std::string> normalize(std::string_view path) const;
+    // How a lookup ends: every parent found, or the kernel's ENOENT / ENOTDIR.
+    enum class Lookup : unsigned char { Resolved, Missing, NotADirectory };
+    struct Walk {
+        Lookup status = Lookup::Missing;
+        std::string key{}; // With Resolved: the tree key of the final entry (which may not exist).
+    };
+    // What one mkdir(2) of the real createDirectories would do.
+    enum class MkdirOutcome : unsigned char { Done, ParentMissing, Failed };
+
+    // Looks a normalised path up through the tree like the kernel (see mem_fs.cpp).
+    [[nodiscard]] Walk walk(std::string_view normalized) FROST_REQUIRES(m_mutex);
     // The tree key for `path`: normalize() plus POSIX ".." resolution against the tree.
     // `entryTarget`: the operation names an entry to create or remove, so a final ".." is refused.
     [[nodiscard]] Result<std::string> resolve(std::string_view path, std::string_view operation, bool entryTarget)
+        FROST_REQUIRES(m_mutex);
+    // One mkdir(2) of `spelled` (a normalised path); sets `error` when it returns Failed.
+    [[nodiscard]] MkdirOutcome makeDirectory(std::string_view spelled, std::string_view original, Error& error)
         FROST_REQUIRES(m_mutex);
     // Consumes a matching fault and returns its error, if any.
     [[nodiscard]] Result<void> takeFault(FsOp op, const std::string& path, std::string_view original)

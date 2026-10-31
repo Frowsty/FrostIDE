@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The real IProcessLauncher on POSIX (Linux, glibc >= 2.34): posix_spawn with
-// O_CLOEXEC pipes, an optional process group, waitid/pidfd for waiting.
+// O_CLOEXEC pipes, an optional new session, waitid/pidfd for waiting.
 //
 /*
  * Reaping. The child is reaped (waitpid) only when the IProcess is destroyed.
@@ -468,28 +468,25 @@ struct SpawnAttributes {
     SpawnAttributes& operator=(const SpawnAttributes&) = delete ("owns a posix_spawnattr_t");
 };
 
-// Whether this process has descriptor `fd` open.
-bool isOpen(int fd) noexcept { return ::fcntl(fd, F_GETFD) != -1 || errno != EBADF; }
-
 /*
- * What Stdio::Inherit means for standard descriptor `target` (see process.hpp):
- * the null device if this process has no such descriptor, and for a terminal
- * stdin when the child leads its own process group (killOnClose). That group
- * is a background group of the terminal, so the child's first read would stop
- * it with SIGTTIN. Inherited terminal stdout and stderr stay: background
- * writes are allowed unless the terminal has TOSTOP set.
+ * Whether standard descriptor `fd` would reach a child. A slot this process
+ * closed is soon reused by descriptors frost::io opens itself (a pidfd, a pipe
+ * end of a concurrent launch), all of them close-on-exec, so "open" is not
+ * enough: a descriptor with FD_CLOEXEC vanishes at exec and leaves the child's
+ * slot empty, and the child's next open() would become its stdout.
  */
-Stdio effectiveMode(Stdio mode, int target, bool ownGroup) noexcept {
-    if (mode != Stdio::Inherit) {
-        return mode;
-    }
-    if (!isOpen(target)) {
+bool reachesChild(int fd) noexcept {
+    const int flags = ::fcntl(fd, F_GETFD);
+    return flags >= 0 && (flags & FD_CLOEXEC) == 0;
+}
+
+// What Stdio::Inherit means for standard descriptor `target` (see process.hpp): the
+// null device when this process has no inheritable descriptor there.
+Stdio effectiveMode(Stdio mode, int target) noexcept {
+    if (mode == Stdio::Inherit && !reachesChild(target)) {
         return Stdio::Null;
     }
-    if (target == STDIN_FILENO && ownGroup && ::isatty(target) == 1) {
-        return Stdio::Null;
-    }
-    return Stdio::Inherit;
+    return mode;
 }
 
 // Adds the file action for one standard stream. `pipe` is the child end for Stdio::Pipe.
@@ -513,9 +510,9 @@ public:
             return std::unexpected(std::move(valid.error()));
         }
         // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.
-        const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO, spec.killOnClose);
-        const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO, spec.killOnClose);
-        const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO, spec.killOnClose);
+        const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO);
+        const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO);
+        const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO);
         PipeEnds in;
         PipeEnds out;
         PipeEnds err;
@@ -557,14 +554,19 @@ public:
         sigfillset(&all);
         int flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
         if (spec.killOnClose) {
-            flags |= POSIX_SPAWN_SETPGROUP; // Process group 0 = a new group led by the child.
+            /*
+             * A new session (glibc >= 2.26), which also makes the child the leader of
+             * a new process group whose id is its pid, so kill(-pid) reaches the tree.
+             * Unlike a mere new group, the session has no controlling terminal: a
+             * child that opens /dev/tty (ssh and git prompts) gets ENXIO and fails
+             * fast, instead of being stopped by SIGTTIN as a background job of the
+             * IDE's terminal while wait() blocks.
+             */
+            flags |= POSIX_SPAWN_SETSID;
         }
         rc = posix_spawnattr_setsigmask(&attributes.attributes, &none);
         if (rc == 0) {
             rc = posix_spawnattr_setsigdefault(&attributes.attributes, &all);
-        }
-        if (rc == 0) {
-            rc = posix_spawnattr_setpgroup(&attributes.attributes, 0);
         }
         if (rc == 0) {
             rc = posix_spawnattr_setflags(&attributes.attributes, static_cast<short>(flags));

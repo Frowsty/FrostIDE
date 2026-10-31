@@ -46,55 +46,107 @@ MemFs::MemFs(const IClock& clock, PathStyle style) : m_clock(clock), m_style(sty
 
 Result<std::string> MemFs::normalize(std::string_view path) const {
     auto normalized = normalizePath(path, m_style);
+    if (!normalized || m_style != PathStyle::Windows) {
+        return normalized;
+    }
+    std::string& key = *normalized;
+    // "\\?\C:\x" and "\\?\UNC\srv\share\x" name the same files as "C:\x" and "\\srv\share\x";
+    // only the name checks differ, and normalizePath has applied those already.
+    if (key.starts_with("\\\\?\\")) {
+        const std::string_view rest = std::string_view(key).substr(4);
+        if (rest.size() >= 3 && rest[1] == ':' && rest[2] == '\\') {
+            key = std::string(rest);
+        } else if (rest.size() >= 4 && (rest[0] == 'U' || rest[0] == 'u') && (rest[1] == 'N' || rest[1] == 'n') &&
+                   (rest[2] == 'C' || rest[2] == 'c') && rest[3] == '\\') {
+            key = "\\\\" + std::string(rest.substr(4));
+            if (parentPath(key, m_style).empty() && !key.ends_with('\\')) {
+                key += '\\'; // A share root is spelled "\\srv\share\", as normalizePath writes it.
+            }
+        }
+    }
     // Drive letters are case-insensitive on Windows ("c:\" is "C:\").
-    if (normalized && m_style == PathStyle::Windows && normalized->size() >= 2 && (*normalized)[1] == ':' &&
-        (*normalized)[0] >= 'a' && (*normalized)[0] <= 'z') {
-        (*normalized)[0] = static_cast<char>((*normalized)[0] - 'a' + 'A');
+    if (key.size() >= 2 && key[1] == ':' && key[0] >= 'a' && key[0] <= 'z') {
+        key[0] = static_cast<char>(key[0] - 'a' + 'A');
     }
     return normalized;
 }
+
+/*
+ * Looks `normalized` up the way the kernel does: every component before the last
+ * must be an existing directory, and ".." steps to the parent of the directory
+ * reached so far (never above the root). The final entry itself need not exist.
+ * Missing and NotADirectory correspond to ENOENT and ENOTDIR. Windows-style paths
+ * have no ".." left (normalizePath resolved it lexically, as Win32 does), so for
+ * them this only checks that the parents exist.
+ */
+MemFs::Walk MemFs::walk(std::string_view normalized) {
+    std::vector<std::string_view> chain; // The prefixes from the root down: "/", "/a", "/a/..", ...
+    for (std::string_view p = normalized; !p.empty(); p = parentPath(p, m_style)) {
+        chain.push_back(p);
+    }
+    std::ranges::reverse(chain);
+    std::string current(chain.front());
+    if (!m_roots.contains(current)) {
+        return {Lookup::Missing, {}};
+    }
+    const char separator = m_style == PathStyle::Windows ? '\\' : '/';
+    for (std::size_t i = 1; i < chain.size(); ++i) {
+        if (!isDirectory(current)) {
+            return {find(current) != nullptr ? Lookup::NotADirectory : Lookup::Missing, {}};
+        }
+        const std::string_view part = fileName(chain[i], m_style);
+        if (part == "..") {
+            if (const std::string_view parent = parentPath(current, m_style); !parent.empty()) {
+                current = std::string(parent);
+            }
+            continue;
+        }
+        if (current.back() != separator) {
+            current += separator;
+        }
+        current += part;
+    }
+    return {Lookup::Resolved, std::move(current)};
+}
+
+namespace {
+
+// Whether a normalised POSIX path has a ".." component.
+bool hasDotDot(std::string_view normalized) noexcept {
+    return normalized.ends_with("/..") || normalized.find("/../") != std::string_view::npos;
+}
+
+} // namespace
 
 Result<std::string> MemFs::resolve(std::string_view path, std::string_view operation, bool entryTarget) {
     auto normalized = normalize(path);
     if (!normalized) {
         return normalized;
     }
-    if (m_style == PathStyle::Windows) {
-        return normalized; // normalizePath already resolved ".." lexically, as Win32 does.
-    }
-    // POSIX keeps "..": the kernel resolves it against the real tree, so it only works through
-    // existing directories ("/a/b/../c" needs /a/b). Without symlinks that is exactly this walk.
+    // A final ".." names a directory, never an entry to create or remove (POSIX only:
+    // Windows-style paths have no ".." left).
     if (entryTarget && fileName(*normalized, m_style) == "..") {
         return fail(ErrorCode::InvalidArgument, std::format("{} '{}': '..' is not an entry name", operation, path));
     }
-    if (normalized->find("..") == std::string::npos) {
+    if (m_style == PathStyle::Windows || !hasDotDot(*normalized)) {
         return normalized;
     }
-    std::string current = "/";
-    std::string_view rest = std::string_view(*normalized).substr(1);
-    while (!rest.empty()) {
-        const std::size_t end = rest.find('/');
-        const std::string_view part = rest.substr(0, end);
-        rest.remove_prefix(end == std::string_view::npos ? rest.size() : end + 1);
-        if (part == "..") {
-            if (!isDirectory(current)) {
-                return std::unexpected(notFound(operation, path)); // ENOENT, or ENOTDIR (also NotFound).
-            }
-            const std::string_view parent = parentPath(current, m_style);
-            current = parent.empty() ? current : std::string(parent);
-            continue;
-        }
-        if (current.back() != '/') {
-            current += '/';
-        }
-        current += part;
+    // POSIX keeps "..", which the kernel resolves against the real tree: only through existing
+    // directories ("/a/b/../c" needs /a/b). Without symlinks that is exactly walk().
+    Walk walked = walk(*normalized);
+    if (walked.status != Lookup::Resolved) {
+        return std::unexpected(notFound(operation, path)); // ENOENT and ENOTDIR both map to NotFound.
     }
-    return current;
+    return std::move(walked.key);
 }
 
 Result<void> MemFs::takeFault(FsOp op, const std::string& path, std::string_view original) {
+    // A fault matches the entry an operation reaches or the operation's own spelling, so a
+    // fault injected on "/a/b/../c" fires for that spelling and one on "/a/c" for both.
+    const auto spelled = normalize(original);
     for (auto it = m_faults.begin(); it != m_faults.end(); ++it) {
-        if (it->op != op || (!it->path.empty() && it->path != path)) {
+        const bool matches = it->path.empty() || it->path == path || (spelled && it->path == *spelled);
+        if (it->op != op || !matches) {
             continue;
         }
         const ErrorCode code = it->code;
@@ -250,35 +302,66 @@ Result<std::vector<DirEntry>> MemFs::listDirectory(std::string_view path) {
     return entries;
 }
 
+MemFs::MkdirOutcome MemFs::makeDirectory(std::string_view spelled, std::string_view original, Error& error) {
+    const Walk walked = walk(spelled);
+    if (walked.status != Lookup::Resolved) {
+        return MkdirOutcome::ParentMissing; // mkdir(2) fails with ENOENT or ENOTDIR.
+    }
+    // mkdir("a/..") fails with EEXIST: the name is the (existing) parent directory.
+    if (fileName(spelled, m_style) == ".." || isDirectory(walked.key)) {
+        return MkdirOutcome::Done;
+    }
+    if (find(walked.key) != nullptr) {
+        error = Error(ErrorCode::AlreadyExists,
+                      std::format("createDirectories '{}': '{}' exists and is not a directory", original, spelled));
+        return MkdirOutcome::Failed;
+    }
+    m_nodes[walked.key] = Node{FileType::Directory, {}, m_clock.systemNow()};
+    touchParent(walked.key);
+    return MkdirOutcome::Done;
+}
+
 Result<void> MemFs::createDirectories(std::string_view path) {
     LockGuard lock(m_mutex);
-    auto key = resolve(path, "createDirectories", /*entryTarget=*/false);
-    if (!key) {
-        return std::unexpected(std::move(key.error()));
+    auto normalized = normalize(path);
+    if (!normalized) {
+        return std::unexpected(std::move(normalized.error()));
     }
-    if (auto fault = takeFault(FsOp::CreateDirectories, *key, path); !fault) {
+    const Walk target = walk(*normalized);
+    const std::string faultKey = target.status == Lookup::Resolved ? target.key : *normalized;
+    if (auto fault = takeFault(FsOp::CreateDirectories, faultKey, path); !fault) {
         return std::unexpected(std::move(fault.error()));
     }
-    // Ancestors from the top down, the target last.
-    std::vector<std::string_view> chain;
-    for (std::string_view p = *key; !p.empty(); p = parentPath(p, m_style)) {
-        chain.push_back(p);
-    }
-    std::ranges::reverse(chain);
-    for (const std::string_view p : chain) {
-        const std::string component(p);
-        if (isDirectory(component)) {
-            continue;
+    /*
+     * The real implementation's algorithm, step by step, so ".." behaves the same
+     * (mkdir -p): walk up the spelled path until a directory can be made or
+     * exists, then make the missing ones downwards. "/w/new/../out" thus creates
+     * /w/new and then /w/out, and "/w/file/../out" fails with AlreadyExists.
+     */
+    std::vector<std::string_view> missing;
+    std::string_view current = *normalized;
+    for (;;) {
+        Error error(ErrorCode::Unknown);
+        const MkdirOutcome outcome = makeDirectory(current, path, error);
+        if (outcome == MkdirOutcome::Done) {
+            break;
         }
-        if (isRootPath(component)) {
+        if (outcome == MkdirOutcome::Failed) {
+            return std::unexpected(std::move(error));
+        }
+        missing.push_back(current);
+        current = parentPath(current, m_style);
+        if (current.empty()) {
             return fail(ErrorCode::NotFound, std::format("createDirectories '{}': the root does not exist", path));
         }
-        if (find(component) != nullptr) {
-            return fail(ErrorCode::AlreadyExists,
-                        std::format("createDirectories '{}': '{}' exists and is not a directory", path, component));
+    }
+    while (!missing.empty()) {
+        Error error(ErrorCode::NotFound,
+                    std::format("createDirectories '{}': '{}' vanished while being created", path, missing.back()));
+        if (makeDirectory(missing.back(), path, error) != MkdirOutcome::Done) {
+            return std::unexpected(std::move(error));
         }
-        m_nodes[component] = Node{FileType::Directory, {}, m_clock.systemNow()};
-        touchParent(component);
+        missing.pop_back();
     }
     return {};
 }

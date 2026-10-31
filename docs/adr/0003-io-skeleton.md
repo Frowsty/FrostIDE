@@ -39,8 +39,10 @@ Constraints that shaped the design:
   drive and UNC paths rather than created literally under `\\?\`: names ending in a dot or a space (Win32
   strips them) and reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9` and the superscript
   forms, with or without an extension). An explicit `\\?\` path is the escape hatch for such names; it is
-  passed literally but may not contain empty, `.` or `..` components. POSIX normalisation keeps `..`
-  (symlinks make it non-lexical); the kernel resolves it against the real tree.
+  passed literally but may not contain empty, `.` or `..` components, nor `/`. Every Windows form refuses
+  `< > : " | ? *` and control characters in names: they are invalid or wildcards in Win32 names, and `:`
+  would select an alternate data stream (`t.bat::$DATA` is `t.bat`), which no name check could follow.
+  POSIX normalisation keeps `..` (symlinks make it non-lexical); the kernel resolves it against the real tree.
 - On Windows every file-system call uses the extended-length form (`\\?\C:\...`, `\\?\UNC\server\share\...`),
   so MAX_PATH never applies to frost::io, whatever `LongPathsEnabled` says. Only wide (`...W`) APIs are used.
 
@@ -60,13 +62,22 @@ directory where a file is → AlreadyExists).
   exclusively), flushes it (`FlushFileBuffers` / `fsync`), then replaces the target atomically:
   `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` on Windows, `rename` plus a best-effort
   `fsync` of the directory on POSIX. On any failure the temp file is removed and the old content is intact.
-  POSIX keeps the target's permission bits (new files get `0666 & ~umask`); the temp file is created `0600`
-  and receives its final mode only after its content is written, so a partially written file is never
-  readable by others. Windows does not carry over attributes, ACLs, alternate streams or hard links (the
-  SaveManager owns that policy in M1). TODO(M1): sweep stale temp files left by crashes.
+  POSIX metadata: a new file is created with `open(O_CREAT, 0666)` and no `fchmod`, so the kernel applies
+  the umask or, where the directory has one, its default ACL, as for a file any other program creates
+  there. A replaced file's temp file is created `0600` and, once its content is written, receives the
+  target's owner and group (`fchown`, which needs CAP_CHOWN for the owner and membership for the group)
+  and then its permission bits (`fchmod`, after `fchown` because that clears set-id bits). What cannot be
+  carried over fails safe: a different group drops the group bits and S_ISGID, a different owner drops
+  S_ISUID. POSIX ACLs and extended attributes are not carried over. Windows does not carry over
+  attributes, ACLs, alternate streams or hard links (the SaveManager owns that policy in M1). TODO(M1):
+  sweep stale temp files left by crashes.
 - `readFile` reads regular files only: FIFOs, sockets and devices fail with InvalidArgument without
   blocking (POSIX opens with `O_NONBLOCK | O_NOCTTY` and checks `fstat` before reading; Windows checks
-  `GetFileType`).
+  `GetFileType`). Sockets, which refuse `open` with ENXIO, are reported the same way rather than as
+  NotFound. A regular file under another process's write lease (Samba oplocks, NFS delegations) makes the
+  non-blocking open fail with EWOULDBLOCK after starting the lease break; `readFile` retries with backoff
+  (still non-blocking, so a FIFO swapped in cannot hang it) until the holder releases the lease or the
+  kernel revokes it (`lease-break-time`, 45 s by default), and gives up with Busy after 90 s.
 - Links: `listDirectory` reports symlinks and Windows junctions as `Symlink`; `status` follows them.
   `removeFile` removes such an entry itself on both platforms, never its target (Windows uses
   `RemoveDirectoryW` for directory links, which deletes only the reparse point), and `removeDirectory`
@@ -78,8 +89,11 @@ directory where a file is → AlreadyExists).
   so the "old content survives" path is testable). It refuses what the real implementations refuse: the
   Windows name rules above, POSIX `..` through a missing directory or a file (resolved against the tree, as
   the kernel does), a final `..` as an entry to create or remove, and roots that do not exist (only `/` or
-  `C:\` exists until `addRoot`). It is case-sensitive apart from drive letters, even in Windows style
-  (TODO(M2): case-insensitive mode for Windows-style trees).
+  `C:\` exists until `addRoot`). `createDirectories` follows the real walk-up-then-create algorithm, so
+  `/w/new/../out` creates both `new` and `out` as `mkdir -p` does. Windows-style verbatim spellings name the
+  plain entries (`\\?\C:\x` is `C:\x`, `\\?\UNC\s\sh\x` is `\\s\sh\x`). A fault fires for an operation
+  whose own spelling or whose resolved entry matches the fault's path. It is case-sensitive apart from
+  drive letters, even in Windows style (TODO(M2): case-insensitive mode for Windows-style trees).
 
 ### IProcessLauncher
 - `ProcessSpec`: absolute executable, UTF-8 arguments, optional absolute working directory, a clean or
@@ -88,10 +102,11 @@ directory where a file is → AlreadyExists).
   validates specs with the same `validateProcessSpec`, including the Windows-only checks that
   `CreateProcessW` would otherwise fail later (no quote in the executable, a command line under 32,767
   UTF-16 units), so the scripted double refuses exactly what the real launcher refuses.
-- `Inherit` never hands a child an invalid stream: a closed parent descriptor (or a GUI parent without
-  standard handles) becomes the null device. On POSIX with `killOnClose` a terminal stdin also becomes the
-  null device, because the child's new process group is a background job of that terminal and its first
-  read would stop it with SIGTTIN; terminal stdout/stderr are kept.
+- `Inherit` never hands a child an invalid stream: a parent without such a standard handle (a GUI parent,
+  a closed descriptor) gives the child the null device. On POSIX a descriptor marked close-on-exec counts
+  as absent too: once a process closes, say, fd 0, the next descriptor frost::io opens (a pidfd, a pipe
+  end of a concurrent launch) lands there, vanishes at exec, and would leave the child's slot empty for
+  its own next `open` to take.
 - `IProcess` exposes `pid`, blocking `writeStdin`/`closeStdin`/`readStdout`/`readStderr`, `wait(timeout)`,
   `terminate`, and `communicate(stdin, timeout)`, which feeds stdin and drains both outputs concurrently on
   one thread, bounded by the deadline; on timeout it terminates and reaps the process and returns Timeout.
@@ -111,8 +126,12 @@ directory where a file is → AlreadyExists).
   `GetFullPathNameW` of the application name, so trailing separators, dots, spaces or `x\..` cannot hide
   the extension. TODO(M2): a dedicated cmd launcher.
 - Linux: `posix_spawn` (never `posix_spawnp`) with `pipe2(O_CLOEXEC)` pipes, `addclosefrom_np(3)` and
-  `addchdir_np` (glibc ≥ 2.34; Ubuntu 24.04 ships 2.39), default signal mask and dispositions, and a new
-  process group when `killOnClose`. `wait` uses `waitid(WNOWAIT)` (with a pidfd where available) so the
+  `addchdir_np` (glibc ≥ 2.34; Ubuntu 24.04 ships 2.39), default signal mask and dispositions, and, when
+  `killOnClose`, a new session (`POSIX_SPAWN_SETSID`, glibc ≥ 2.26). The session's process group has the
+  child's pid as its id, so `kill(-pid)` ends the tree, and it has no controlling terminal: a tool that
+  opens `/dev/tty` for a prompt gets ENXIO and fails, where in a mere new process group it would be a
+  background job of the IDE's terminal and be stopped by SIGTTIN while `wait` blocks. An inherited
+  terminal stdin is therefore passed through unchanged. `wait` uses `waitid(WNOWAIT)` (with a pidfd where available) so the
   zombie is kept until the `IProcess` is destroyed and a later `kill` can never hit a recycled pid. Writes
   to a child that closed stdin block SIGPIPE for the calling thread and consume it, so a broken pipe is an
   error value, never a signal.

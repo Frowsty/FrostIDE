@@ -32,10 +32,13 @@
  *
  * Process tree. With killOnClose (the default) the child is contained: on
  * Windows it starts inside a new Job Object with
- * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; on POSIX it leads a new process group.
- * terminate() then ends the whole tree, and destroying the IProcess ends
- * whatever is still running in it. Without killOnClose only the child itself
- * is terminated and destroying the IProcess leaves it running.
+ * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; on POSIX it leads a new session, and so a
+ * new process group, without a controlling terminal (opening /dev/tty fails
+ * with ENXIO, so terminal prompts fail fast instead of stopping the child with
+ * SIGTTIN). terminate() then ends the whole tree, and destroying the IProcess
+ * ends whatever is still running in it. Without killOnClose only the child
+ * itself is terminated, destroying the IProcess leaves it running, and on POSIX
+ * it shares this process's session and terminal.
  * TODO(M1): supervision with restart and backoff (PLAN.md section 3.1).
  */
 #pragma once
@@ -56,10 +59,9 @@ namespace frost::io {
 
 // How one of the child's standard streams is connected.
 enum class Stdio : unsigned char {
-    // The parent's handle, or the null device if the parent has none (a GUI process, a closed
-    // descriptor). POSIX with killOnClose: a terminal stdin is replaced by the null device too,
-    // because the child's new process group is a background group of that terminal and its
-    // first read would stop it (SIGTTIN); terminal stdout/stderr are kept.
+    // The parent's handle, or the null device if the parent has none that a child could
+    // inherit (a GUI process; on POSIX a closed descriptor, or one marked close-on-exec,
+    // such as a descriptor frost::io itself opened in a slot the process had closed).
     Inherit,
     Null,            // The null device: reads see EOF, writes are discarded.
     Pipe,            // A pipe to the IProcess.

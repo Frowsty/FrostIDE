@@ -11,10 +11,10 @@
 #include <sys/stat.h>
 
 #include <algorithm>
-#include <array>
 #include <cerrno>
 #include <chrono>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <dirent.h>
@@ -78,42 +78,72 @@ bool existsAsNonDirectory(const std::string& path) noexcept {
     return ::lstat(path.c_str(), &info) == 0 && !S_ISDIR(info.st_mode);
 }
 
+Error notARegularFile(std::string_view path) {
+    return Error(ErrorCode::InvalidArgument, "readFile '" + std::string(path) + "': not a regular file");
+}
+
 /*
- * The process umask, for the mode of newly created files. umask(2) can only be
- * read by setting it, which races with other threads creating files, so the
- * value comes from /proc/self/status (Linux >= 4.7); 022 if that is unavailable.
+ * Opens `checked` for readFile. O_NONBLOCK: opening a FIFO without a writer would
+ * otherwise block forever (readFile clears the flag once fstat shows a regular
+ * file). O_NOCTTY: opening a terminal must not make it our controlling terminal.
+ * Two errors of the non-blocking open need a second look:
+ *   - EWOULDBLOCK on a regular file: another process holds a write lease (Samba
+ *     oplocks, NFS delegations). The failed open has still started the lease
+ *     break (fcntl(2), "Leases"), so retrying succeeds once the holder lets go, or
+ *     once the kernel revokes the lease after /proc/sys/fs/lease-break-time (45 s by
+ *     default). Retrying without blocking, rather than reopening in blocking mode,
+ *     means a FIFO swapped in meanwhile still cannot hang the call.
+ *   - ENXIO: sockets refuse open(); they are reported as "not a regular file".
  */
-mode_t processUmask() noexcept {
-    const UniqueFd fd(::open("/proc/self/status", O_RDONLY | O_CLOEXEC));
-    if (!fd.valid()) {
-        return 022;
-    }
-    std::array<char, 4096> buffer{};
-    std::size_t used = 0;
-    while (used < buffer.size()) {
-        const ssize_t got = ::read(fd.get(), buffer.data() + used, buffer.size() - used);
-        if (got < 0 && errno == EINTR) {
+Result<UniqueFd> openForReading(const std::string& checked, std::string_view path) {
+    using namespace std::chrono_literals;
+    const auto giveUp = std::chrono::steady_clock::now() + 90s;
+    auto pause = 1ms;
+    for (;;) {
+        UniqueFd fd(::open(checked.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY));
+        if (fd.valid()) {
+            return fd;
+        }
+        const int error = errno;
+        struct stat info{};
+        const bool known = ::stat(checked.c_str(), &info) == 0;
+        if (error == ENXIO && known && !S_ISREG(info.st_mode)) {
+            return std::unexpected(notARegularFile(path));
+        }
+        // EWOULDBLOCK is EAGAIN on Linux.
+        if (error == EWOULDBLOCK && known && S_ISREG(info.st_mode) && std::chrono::steady_clock::now() < giveUp) {
+            std::this_thread::sleep_for(pause);
+            pause = std::min(pause * 2, std::chrono::milliseconds(50));
             continue;
         }
-        if (got <= 0) {
-            break;
-        }
-        used += static_cast<std::size_t>(got);
+        return std::unexpected(errnoError(error, "readFile", path));
     }
-    const std::string_view status(buffer.data(), used);
-    const std::size_t at = status.find("\nUmask:");
-    if (at == std::string_view::npos) {
-        return 022;
+}
+
+/*
+ * Gives the temp file `fd` the replaced target's owner, group and permission bits,
+ * as far as this process may: the owner only with CAP_CHOWN, the group only if this
+ * process belongs to it (some file systems, such as vfat or drvfs, ignore both). Bits
+ * that would otherwise grant access to someone else are dropped: the group bits and
+ * S_ISGID when the group differs, S_ISUID when the owner does. fchown runs before
+ * fchmod because it clears the set-id bits. Returns 0 or an errno value.
+ */
+int copyOwnershipAndMode(int fd, const struct stat& existing) noexcept {
+    if (::fchown(fd, existing.st_uid, existing.st_gid) != 0) {
+        static_cast<void>(::fchown(fd, static_cast<uid_t>(-1), existing.st_gid)); // EPERM is fine.
     }
-    mode_t mask = 0;
-    bool any = false;
-    for (std::size_t i = at + 7; i < status.size() && status[i] != '\n'; ++i) {
-        if (status[i] >= '0' && status[i] <= '7') {
-            mask = static_cast<mode_t>(mask * 8 + static_cast<mode_t>(status[i] - '0'));
-            any = true;
-        }
+    struct stat now{};
+    if (::fstat(fd, &now) != 0) {
+        return errno;
     }
-    return any ? (mask & 0777) : 022;
+    mode_t mode = existing.st_mode & 07777;
+    if (now.st_uid != existing.st_uid) {
+        mode &= static_cast<mode_t>(~S_ISUID);
+    }
+    if (now.st_gid != existing.st_gid) {
+        mode &= static_cast<mode_t>(~(S_ISGID | S_IRWXG));
+    }
+    return ::fchmod(fd, mode) == 0 ? 0 : errno;
 }
 
 // Writes all of `data`, retrying on EINTR and short writes. Returns 0 or an errno value.
@@ -142,12 +172,11 @@ public:
         if (!checked) {
             return std::unexpected(std::move(checked.error()));
         }
-        // O_NONBLOCK: opening a FIFO without a writer would otherwise block forever. O_NOCTTY:
-        // opening a terminal must not make it our controlling terminal.
-        UniqueFd fd(::open(checked->c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY));
-        if (!fd.valid()) {
-            return std::unexpected(errnoError(errno, "readFile", path));
+        auto opened = openForReading(*checked, path);
+        if (!opened) {
+            return std::unexpected(std::move(opened.error()));
         }
+        const UniqueFd fd = std::move(*opened);
         struct stat info{};
         if (::fstat(fd.get(), &info) != 0) {
             return std::unexpected(errnoError(errno, "readFile", path));
@@ -157,7 +186,7 @@ public:
         }
         // FIFOs, sockets and devices (/dev/zero never ends) are not files to read whole.
         if (!S_ISREG(info.st_mode)) {
-            return fail(ErrorCode::InvalidArgument, "readFile '" + std::string(path) + "': not a regular file");
+            return std::unexpected(notARegularFile(path));
         }
         const int flags = ::fcntl(fd.get(), F_GETFL);
         if (flags < 0 || ::fcntl(fd.get(), F_SETFL, flags & ~O_NONBLOCK) != 0) {
@@ -197,12 +226,16 @@ public:
         if (directory.empty() || name.empty() || name == "..") {
             return fail(ErrorCode::InvalidArgument, "writeFileAtomic '" + std::string(path) + "': not a file path");
         }
-        // Keep an existing target's permission bits; a new file gets 0666 minus the umask.
-        // The temp file is created 0600 and only gets that final mode once its content is
-        // complete, so no other user can open it while it is being written.
+        /*
+         * Replacing a file: the temp file is created 0600 and gets the target's owner,
+         * group and mode (copyOwnershipAndMode) only once its content is complete, so
+         * no one else can open it meanwhile. Creating one: the temp file is created
+         * 0666 like any open(O_CREAT, 0666), so the umask or the directory's default
+         * ACL decides its mode, exactly as for files other programs create there.
+         */
         struct stat existing{};
         const bool hadTarget = ::stat(target->c_str(), &existing) == 0 && S_ISREG(existing.st_mode);
-        const mode_t finalMode = hadTarget ? (existing.st_mode & 07777) : (0666 & ~processUmask());
+        const mode_t createMode = hadTarget ? 0600 : 0666;
 
         std::string tempPath;
         UniqueFd fd;
@@ -213,7 +246,7 @@ public:
                 return std::unexpected(std::move(candidate.error()));
             }
             tempPath = std::move(*candidate);
-            fd.reset(::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600));
+            fd.reset(::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, createMode));
             if (!fd.valid() && (errno != EEXIST || attempt >= 16)) {
                 return std::unexpected(errnoError(errno, "writeFileAtomic: create temp file for", path));
             }
@@ -228,8 +261,10 @@ public:
         if (const int error = writeAll(fd.get(), data); error != 0) {
             return abandon(errnoError(error, "writeFileAtomic: write temp file for", path));
         }
-        if (::fchmod(fd.get(), finalMode) != 0) {
-            return abandon(errnoError(errno, "writeFileAtomic: set permissions for", path));
+        if (hadTarget) {
+            if (const int error = copyOwnershipAndMode(fd.get(), existing); error != 0) {
+                return abandon(errnoError(error, "writeFileAtomic: copy owner and permissions for", path));
+            }
         }
         if (::fsync(fd.get()) != 0) {
             return abandon(errnoError(errno, "writeFileAtomic: flush temp file for", path));

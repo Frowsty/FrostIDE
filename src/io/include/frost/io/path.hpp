@@ -32,7 +32,10 @@
  * reserved device names (CON, PRN, AUX, NUL, COM0-9, LPT0-9 and the
  * superscript-digit forms, with or without an extension). Verbatim paths are
  * returned unchanged, so they are the escape hatch for such names, but they
- * must not contain empty, "." or ".." components.
+ * must not contain empty, "." or ".." components or a '/'. In every Windows
+ * form, components must not contain the characters no Windows name may
+ * contain: < > : " | ? * and control characters (':' would select an NTFS
+ * alternate data stream, so "t.bat::$DATA" would open t.bat).
  *
  * Extended-length form (Windows). Win32 file APIs limit ordinary paths to
  * MAX_PATH (260) UTF-16 units unless both the application manifest and the

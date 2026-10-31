@@ -33,6 +33,8 @@
 #include "frost/io/utf.hpp"
 
 #include <windows.h>
+// ConvertSidToStringSidW; sddl.h needs windows.h first.
+#include <sddl.h>
 #else
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -117,6 +119,18 @@ std::string reportedValue(std::string_view output, std::string_view prefix) {
     }
     return "<missing>";
 }
+
+#ifdef _WIN32
+// The rest of the first line starting with `prefix` (not hex-encoded), or "<missing>".
+std::string rawValue(std::string_view output, std::string_view prefix) {
+    for (const std::string_view line : lines(output)) {
+        if (line.starts_with(prefix)) {
+            return std::string(line.substr(prefix.size()));
+        }
+    }
+    return "<missing>: " + std::string(output);
+}
+#endif
 
 std::string pattern(std::size_t size) {
     std::string out(size, '\0');
@@ -560,9 +574,10 @@ TEST(RealProcessLauncher, OnlyTheStandardHandlesAreInherited) {
 
 #ifdef _WIN32
 TEST(RealProcessLauncher, BatchFilesAreRefused) {
-    // Real batch files, so a spelling that slipped through would visibly run cmd.exe.
+    // Real batch files, so a spelling that slipped through would visibly run cmd.exe. The
+    // other names hold batch content too, so they exist and are refused for their content.
     const ScratchDir dir("proc-bat");
-    for (const char* name : {"t.bat", "T.CMD"}) {
+    for (const char* name : {"t.bat", "T.CMD", "t.batx", "t.cmdline", "t"}) {
         ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(dir.join(name), "@echo INJECTED\r\n").has_value());
     }
     const std::string d = dir.path();
@@ -580,19 +595,55 @@ TEST(RealProcessLauncher, BatchFilesAreRefused) {
                     result.error().code() == ErrorCode::InvalidArgument)
             << exe << ": " << result.error().describe();
     }
-    // Spellings that do not name the batch file (another name, or stream syntax that
-    // CreateProcessW does not hand to cmd.exe) fail to start or start something else,
-    // but never run the script.
-    for (const std::string& exe :
-         {d + "\\t.batx", d + "\\t.cmdline", d + "\\t.bat::$DATA", d + "\\t.bat:", d + "\\t"}) {
+    // Batch content under other names never starts: CreateProcessW picks cmd.exe by the
+    // .bat/.cmd extension only, and the content is no executable image (ERROR_BAD_EXE_FORMAT).
+    // Stream syntax is refused by the path rules before anything is started.
+    for (const std::string& exe : {d + "\\t.batx", d + "\\t.cmdline", d + "\\t", d + "\\t.bat::$DATA",
+                                   d + "\\t.bat:", "\\\\?\\" + d + "\\t.bat::$DATA"}) {
         ProcessSpec spec;
         spec.executable = exe;
-        spec.stderrMode = Stdio::MergeIntoStdout;
-        const auto result = run(spec, {}, 30s);
-        if (result.has_value()) {
-            EXPECT_EQ(result->stdoutBytes.find("INJECTED"), std::string::npos) << exe;
-        }
+        const auto result = frost::io::realProcessLauncher().launch(spec);
+        EXPECT_FALSE(result.has_value()) << exe << " started";
     }
+}
+
+TEST(RealProcessLauncher, PipesAreUnpredictableAndPrivate) {
+    // The child inspects its own end of the stdout pipe (its write access includes READ_CONTROL).
+    const auto result = run(childSpec({"pipe-info"}));
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    const std::string dacl = rawValue(result->stdoutBytes, "dacl:");
+    const std::string name = rawValue(result->stdoutBytes, "name:");
+
+    // This process's user SID, as SDDL writes it.
+    HANDLE token = nullptr;
+    ASSERT_NE(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token), FALSE);
+    std::vector<DWORD> buffer(256);
+    DWORD size = 0;
+    const BOOL got =
+        GetTokenInformation(token, TokenUser, buffer.data(), static_cast<DWORD>(buffer.size() * sizeof(DWORD)), &size);
+    CloseHandle(token);
+    ASSERT_NE(got, FALSE);
+    wchar_t* sidText = nullptr;
+    ASSERT_NE(ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid, &sidText), FALSE);
+    const std::string sid = frost::io::fromWide(sidText).value();
+    LocalFree(sidText);
+
+    // A protected DACL ("P": nothing inherited) with exactly one ACE, an allow for this user.
+    EXPECT_TRUE(dacl.starts_with("D:P(A;;")) << dacl;
+    EXPECT_EQ(std::ranges::count(dacl, '('), 1) << dacl;
+    EXPECT_TRUE(dacl.ends_with(";;;" + sid + ")")) << dacl << " (user " << sid << ")";
+
+    // "\frost-io-<pid>-<32 random hex digits>".
+    const std::string prefix = std::format("\\frost-io-{}-", GetCurrentProcessId());
+    ASSERT_TRUE(name.starts_with(prefix)) << name;
+    const std::string random = name.substr(prefix.size());
+    EXPECT_EQ(random.size(), 32u) << name;
+    EXPECT_TRUE(std::ranges::all_of(random, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
+        << name;
+    // And different for the next pipe.
+    const auto again = run(childSpec({"pipe-info"}));
+    ASSERT_TRUE(again.has_value()) << again.error().describe();
+    EXPECT_NE(rawValue(again->stdoutBytes, "name:"), name);
 }
 #endif
 
@@ -838,8 +889,36 @@ TEST(RealProcessLauncher, InheritedStdinFallsBackToTheNullDevice) {
     ASSERT_TRUE(closed->has_value()) << closed->error().describe();
     EXPECT_EQ((*closed)->stdoutBytes, "inherited\n");
 
-    // A terminal: in its own process group (killOnClose) the child is a background job of
-    // that terminal and its first read would stop it (SIGTTIN), so it gets the null device...
+    // The same while an earlier child is alive: its pidfd (close-on-exec) took the free
+    // slot 0, which must not count as a stdin a child could inherit.
+    std::optional<frost::Result<ProcessResult>> second;
+    bool slotTaken = false;
+    withStdin(-1, [&] {
+        auto first = frost::io::realProcessLauncher().launch(childSpec({"sleep", "60000"}));
+        ASSERT_TRUE(first.has_value()) << first.error().describe();
+        const int flags = fcntl(0, F_GETFD);
+        slotTaken = flags >= 0 && (flags & FD_CLOEXEC) != 0;
+        second = run(spec);
+        first->reset(); // Before descriptor 0 is restored: the pidfd may be descriptor 0.
+    });
+    ASSERT_TRUE(second.has_value());
+    ASSERT_TRUE(second->has_value()) << second->error().describe();
+    EXPECT_EQ((*second)->stdoutBytes, "inherited\n") << "slot 0 held a close-on-exec descriptor: " << slotTaken;
+    // The same case made deterministic (without pidfd support slot 0 would stay free above).
+    std::optional<frost::Result<ProcessResult>> occupied;
+    withStdin(-1, [&] {
+        const int occupant = open("/dev/zero", O_RDONLY | O_CLOEXEC);
+        ASSERT_EQ(occupant, 0);
+        occupied = run(spec);
+        close(occupant);
+    });
+    ASSERT_TRUE(occupied.has_value());
+    ASSERT_TRUE(occupied->has_value()) << occupied->error().describe();
+    EXPECT_EQ((*occupied)->stdoutBytes, "inherited\n");
+
+    // A terminal is inherited as it is, with or without killOnClose: a contained child leads
+    // its own session, where the terminal is not its controlling one, so reading it cannot
+    // stop the child with SIGTTIN.
     const int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
     ASSERT_GE(master, 0);
     ASSERT_EQ(grantpt(master), 0);
@@ -847,21 +926,35 @@ TEST(RealProcessLauncher, InheritedStdinFallsBackToTheNullDevice) {
     const int terminal = open(ptsname(master), O_RDWR | O_NOCTTY | O_CLOEXEC);
     ASSERT_GE(terminal, 0);
     ASSERT_EQ(isatty(terminal), 1);
-    const std::string terminalIdentity = fileIdentity(terminal);
+    ProcessSpec onTerminal = childSpec({"probe-handle", "stdin", fileIdentity(terminal)});
+    onTerminal.stdinMode = Stdio::Inherit;
     std::optional<frost::Result<ProcessResult>> contained;
-    withStdin(terminal, [&] { contained = run(spec); });
-    // ...while a child in this process's group shares the terminal.
-    ProcessSpec shared = childSpec({"probe-handle", "stdin", terminalIdentity});
-    shared.stdinMode = Stdio::Inherit;
-    shared.killOnClose = false;
-    std::optional<frost::Result<ProcessResult>> sharedResult;
-    withStdin(terminal, [&] { sharedResult = run(shared); });
+    withStdin(terminal, [&] { contained = run(onTerminal); });
+    onTerminal.killOnClose = false;
+    std::optional<frost::Result<ProcessResult>> shared;
+    withStdin(terminal, [&] { shared = run(onTerminal); });
     close(terminal);
     close(master);
     ASSERT_TRUE(contained->has_value()) << contained->error().describe();
     EXPECT_EQ((*contained)->stdoutBytes, "inherited\n");
-    ASSERT_TRUE(sharedResult->has_value()) << sharedResult->error().describe();
-    EXPECT_EQ((*sharedResult)->stdoutBytes, "inherited\n");
+    ASSERT_TRUE(shared->has_value()) << shared->error().describe();
+    EXPECT_EQ((*shared)->stdoutBytes, "inherited\n");
+}
+
+TEST(RealProcessLauncher, ContainedChildrenLeadASessionWithoutATerminal) {
+    // killOnClose: a new session, so /dev/tty cannot be opened (ENXIO) and a prompt for a
+    // passphrase fails fast instead of stopping the child with SIGTTIN, whatever terminal
+    // this test runs under. (Whether this process has a terminal depends on how ctest was
+    // started, so the uncontained case checks only the session.)
+    const auto contained = run(childSpec({"session"}));
+    ASSERT_TRUE(contained.has_value()) << contained.error().describe();
+    EXPECT_EQ(contained->stdoutBytes, "session leader\nno tty\n");
+
+    ProcessSpec shared = childSpec({"session"});
+    shared.killOnClose = false;
+    const auto uncontained = run(shared);
+    ASSERT_TRUE(uncontained.has_value()) << uncontained.error().describe();
+    EXPECT_TRUE(uncontained->stdoutBytes.starts_with("not session leader\n")) << uncontained->stdoutBytes;
 }
 #endif
 

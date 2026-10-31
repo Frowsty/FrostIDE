@@ -78,11 +78,15 @@ TEST(ProcessSpec, BatchFilesAreRefusedOnWindows) {
     }
     const auto device = frost::io::validateProcessSpec(specFor("\\\\.\\C:\\d\\t.bat\\."), true).error().message();
     EXPECT_NE(device.find("device namespace"), std::string::npos) << device;
-    // Not batch files: other extensions, stream syntax (CreateProcessW does not run them through
-    // cmd.exe; the integration test proves it) and extensionless names.
-    for (const char* exe : {"C:\\d\\t.batx", "C:\\d\\t.cmdline", "C:\\d\\t.bat::$DATA", "C:\\d\\t.bat:", "C:\\d\\tbat",
-                            "C:\\x\\batman.exe"}) {
+    // Not batch files: other extensions and extensionless names (CreateProcessW runs only
+    // .bat and .cmd through cmd.exe; the integration test proves it).
+    for (const char* exe : {"C:\\d\\t.batx", "C:\\d\\t.cmdline", "C:\\d\\tbat", "C:\\x\\batman.exe"}) {
         EXPECT_EQ(validate(specFor(exe), true), ErrorCode::Unknown) << exe;
+    }
+    // Stream syntax names t.bat's own data stream; rather than relying on what CreateProcessW
+    // makes of it, ':' is refused in every name, in either spelling.
+    for (const char* exe : {"C:\\d\\t.bat::$DATA", "C:\\d\\t.bat:", "\\\\?\\C:\\d\\t.bat::$DATA", "C:\\d:x\\t.exe"}) {
+        EXPECT_EQ(validate(specFor(exe), true), ErrorCode::InvalidArgument) << exe;
     }
     EXPECT_EQ(validate(specFor("/x/build.bat"), false), ErrorCode::Unknown); // An ordinary file on POSIX.
 }

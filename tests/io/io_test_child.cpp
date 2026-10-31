@@ -24,15 +24,24 @@
 //   grandchild wait|exit  starts a copy of itself as "sleep 60000" that shares these standard
 //                      handles, prints "grandchild <pid>", then sleeps 60 s (wait) or exits 0
 //                      (exit), leaving the grandchild behind holding stdout open
+//   session            POSIX: "session leader" or "not session leader", then "tty" if
+//                      /dev/tty (the controlling terminal) opens, "no tty" for ENXIO
+//   lease PATH         POSIX: takes a write lease on PATH, prints "leased", then waits up
+//                      to 30 s for the lease-break signal, releases the lease and prints
+//                      "released" (or "timed out"); "no lease <errno>" if refused
+//   pipe-info          Windows: "dacl:<SDDL>" and "name:<name>" of its stdout pipe
 //
 // It deliberately uses only the OS and C runtime, not frost::io, so it is an
 // independent oracle for the launcher's quoting, environment and directory handling.
 
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <thread>
 #include <vector>
@@ -40,8 +49,12 @@
 #ifdef _WIN32
 #include <windows.h>
 
+#include <crtdbg.h>
 #include <fcntl.h>
 #include <io.h>
+// GetSecurityInfo; ConvertSecurityDescriptorToStringSecurityDescriptorW. Both need windows.h first.
+#include <aclapi.h>
+#include <sddl.h>
 // CommandLineToArgvW; shellapi.h needs windows.h first.
 #include <shellapi.h>
 #else
@@ -273,6 +286,65 @@ int run(const std::vector<std::string>& args) {
 #endif
         return 0;
     }
+#ifdef _WIN32
+    if (mode == "pipe-info" && args.size() == 2) {
+        const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        wchar_t* sddl = nullptr;
+        if (GetSecurityInfo(out, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr,
+                            &descriptor) != ERROR_SUCCESS ||
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1, DACL_SECURITY_INFORMATION,
+                                                                 &sddl, nullptr) == FALSE) {
+            line("dacl-error:" + std::to_string(GetLastError()));
+        } else {
+            line("dacl:" + toUtf8(sddl));
+        }
+        LocalFree(sddl);
+        LocalFree(descriptor);
+        std::vector<DWORD> buffer(1024); // DWORD-aligned room for FILE_NAME_INFO and a long name.
+        auto* info = reinterpret_cast<FILE_NAME_INFO*>(buffer.data());
+        if (GetFileInformationByHandleEx(out, FileNameInfo, info, static_cast<DWORD>(buffer.size() * sizeof(DWORD))) ==
+            FALSE) {
+            line("name-error:" + std::to_string(GetLastError()));
+        } else {
+            const std::wstring name(info->FileName, info->FileNameLength / sizeof(wchar_t));
+            line("name:" + toUtf8(name.c_str()));
+        }
+        return 0;
+    }
+#else
+    if (mode == "session" && args.size() == 2) {
+        line(getsid(0) == getpid() ? "session leader" : "not session leader");
+        const int tty = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+        if (tty >= 0) {
+            close(tty);
+            line("tty");
+        } else {
+            line(errno == ENXIO ? "no tty" : "tty error " + std::to_string(errno));
+        }
+        return 0;
+    }
+    if (mode == "lease" && args.size() == 3) {
+        // The break is announced with SIGIO; blocked here, it waits for sigtimedwait.
+        sigset_t signals;
+        sigemptyset(&signals);
+        sigaddset(&signals, SIGIO);
+        sigprocmask(SIG_BLOCK, &signals, nullptr);
+        const int fd = open(args[2].c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0 || fcntl(fd, F_SETLEASE, F_WRLCK) != 0) {
+            line("no lease " + std::to_string(errno));
+            return 3;
+        }
+        line("leased");
+        std::fflush(stdout);
+        const timespec limit{30, 0};
+        const int got = sigtimedwait(&signals, nullptr, &limit);
+        fcntl(fd, F_SETLEASE, F_UNLCK);
+        close(fd);
+        line(got == SIGIO ? "released" : "timed out");
+        return 0;
+    }
+#endif
     if (mode == "grandchild" && args.size() == 3 && (args[2] == "wait" || args[2] == "exit")) {
         const unsigned long pid = spawnSleepingCopy();
         if (pid == 0) {
@@ -294,6 +366,15 @@ int run(const std::vector<std::string>& args) {
 
 #ifdef _WIN32
 int wmain(int argc, wchar_t** argv) {
+    // Never a dialog on the desktop: crashes, aborts and Debug CRT assertions go to stderr
+    // and end the process, so a failing test reports instead of waiting for a click.
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    for ([[maybe_unused]] const int type : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) { // Unused in Release.
+        static_cast<void>(_CrtSetReportMode(type, _CRTDBG_MODE_FILE));
+        static_cast<void>(_CrtSetReportFile(type, _CRTDBG_FILE_STDERR));
+    }
     // Binary mode: no CRLF translation, so byte counts and content survive exactly.
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);

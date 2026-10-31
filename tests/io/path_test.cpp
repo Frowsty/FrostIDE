@@ -114,6 +114,23 @@ TEST(Path, VerbatimPathsAreTakenLiterally) {
     }
 }
 
+TEST(Path, WindowsNamesRefuseReservedCharacters) {
+    // ':' would select an alternate data stream ("t.bat::$DATA" runs t.bat), the others are
+    // wildcards or invalid in Win32 names; every form refuses them, the verbatim one included.
+    for (const std::string_view path :
+         {"C:\\a:b", "C:\\t.bat::$DATA", "C:\\t.bat:", "C:\\what?.txt", "C:\\a*", "C:\\a<b", "C:\\a>b", "C:\\a|b",
+          "C:\\a\"b", "C:\\a\x01", "C:\\dir\\a\tb", "\\\\srv\\sh\\a:b", "\\\\?\\C:\\a:b", "\\\\?\\C:\\a*",
+          "\\\\?\\UNC\\srv\\sh\\a?b", "\\\\?\\C:\\a/b", "C:/a:b/c"}) {
+        const auto result = frost::io::normalizePath(path, kWin);
+        ASSERT_FALSE(result.has_value()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << path;
+    }
+    // The prefixes themselves are no names, and POSIX allows all of these characters.
+    EXPECT_EQ(normalized("\\\\?\\C:\\a", kWin), "\\\\?\\C:\\a");
+    EXPECT_EQ(normalized("C:\\a b\\c-d_e.f", kWin), "C:\\a b\\c-d_e.f");
+    EXPECT_EQ(normalized("/a:b/what?*<>|\"", kPosix), "/a:b/what?*<>|\"");
+}
+
 TEST(Path, NormalizesPosixButKeepsDotDot) {
     EXPECT_EQ(normalized("/", kPosix), "/");
     EXPECT_EQ(normalized("//a/./b//", kPosix), "/a/b");

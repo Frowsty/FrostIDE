@@ -239,6 +239,68 @@ TEST_F(MemFsTest, PosixDotDotResolvesThroughExistingDirectoriesOnly) {
     EXPECT_TRUE(iface.exists("/proj/src").value());
 }
 
+TEST_F(MemFsTest, FaultsMatchTheSpellingAndTheEntryReached) {
+    ASSERT_TRUE(iface.writeFileAtomic("/proj/a.txt", "a").has_value());
+    // A fault on the entry fires for a spelling through "..".
+    fs.injectFault(FsOp::Read, "/proj/a.txt", ErrorCode::Busy);
+    EXPECT_EQ(iface.readFile("/proj/src/../a.txt").error().code(), ErrorCode::Busy);
+    // A fault on the spelling fires for that spelling...
+    fs.injectFault(FsOp::Read, "/proj/src/../a.txt", ErrorCode::IoError);
+    EXPECT_EQ(iface.readFile("/proj/src/../a.txt").error().code(), ErrorCode::IoError);
+    // ...and for the other operations too, writes and directory creation included.
+    fs.injectFault(FsOp::Write, "/proj/b.txt", ErrorCode::PermissionDenied);
+    EXPECT_EQ(iface.writeFileAtomic("/proj/src/../b.txt", "b").error().code(), ErrorCode::PermissionDenied);
+    fs.injectFault(FsOp::CreateDirectories, "/proj/out", ErrorCode::PermissionDenied);
+    EXPECT_EQ(iface.createDirectories("/proj/src/../out").error().code(), ErrorCode::PermissionDenied);
+    fs.injectFault(FsOp::RemoveFile, "/proj/a.txt", ErrorCode::Busy);
+    EXPECT_EQ(iface.removeFile("/proj/src/../a.txt").error().code(), ErrorCode::Busy);
+    EXPECT_EQ(fs.pendingFaults(), 0u);
+    EXPECT_FALSE(iface.exists("/proj/b.txt").value());
+    EXPECT_FALSE(iface.exists("/proj/out").value());
+    EXPECT_EQ(iface.readFile("/proj/a.txt").value(), "a");
+}
+
+TEST_F(MemFsTest, CreateDirectoriesWorksLikeMkdirP) {
+    ASSERT_TRUE(iface.writeFileAtomic("/proj/file", "f").has_value());
+    // The directory before ".." is created first, as mkdir -p does.
+    ASSERT_TRUE(iface.createDirectories("/proj/new/../out").has_value());
+    EXPECT_EQ(iface.status("/proj/new").value().type, FileType::Directory);
+    EXPECT_EQ(iface.status("/proj/out").value().type, FileType::Directory);
+    ASSERT_TRUE(iface.createDirectories("/proj/a/b/../../c/d").has_value());
+    EXPECT_TRUE(iface.exists("/proj/a/b").value());
+    EXPECT_TRUE(iface.exists("/proj/c/d").value());
+    EXPECT_TRUE(iface.createDirectories("/proj/new/..").has_value()); // Exists already.
+    // Through a file: the file is the obstacle, as for ENOTDIR then EEXIST.
+    EXPECT_EQ(iface.createDirectories("/proj/file/../x").error().code(), ErrorCode::AlreadyExists);
+    EXPECT_EQ(iface.createDirectories("/proj/file/x").error().code(), ErrorCode::AlreadyExists);
+    EXPECT_FALSE(iface.exists("/proj/x").value());
+}
+
+TEST(MemFs, VerbatimSpellingsNameTheSameEntries) {
+    frost::ManualClock clock;
+    MemFs fs(clock, PathStyle::Windows);
+    fs.addRoot("\\\\server\\share\\");
+    ASSERT_TRUE(fs.createDirectories("\\\\?\\C:\\Users\\dev").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic("\\\\?\\UNC\\server\\share\\x.txt", "unc").has_value());
+    EXPECT_TRUE(fs.exists("C:\\Users\\dev").value());
+    EXPECT_EQ(fs.readFile("\\\\server\\share\\x.txt").value(), "unc");
+    EXPECT_EQ(fs.readFile("\\\\?\\c:\\Users\\..\\Users\\dev").error().code(),
+              ErrorCode::InvalidArgument); // No ".." in the verbatim form, as for Win32.
+    EXPECT_EQ(fs.listDirectory("\\\\?\\C:\\Users").value(), (std::vector<DirEntry>{{"dev", FileType::Directory}}));
+    EXPECT_EQ(fs.allPaths(), (std::vector<std::string>{"C:\\Users", "C:\\Users\\dev", "\\\\server\\share\\x.txt"}));
+}
+
+TEST(MemFs, WindowsNamesWithReservedCharactersAreRefused) {
+    frost::ManualClock clock;
+    MemFs fs(clock, PathStyle::Windows);
+    for (const char* path : {"C:\\a:b", "C:\\what?.txt", "C:\\a<b", "C:\\a>b", "C:\\a|b", "C:\\a\"b", "C:\\a*",
+                             "C:\\a\x01", "C:\\t.bat::$DATA", "\\\\?\\C:\\a:b", "\\\\?\\C:\\a/b"}) {
+        EXPECT_EQ(fs.writeFileAtomic(path, "x").error().code(), ErrorCode::InvalidArgument) << path;
+        EXPECT_EQ(fs.createDirectories(path).error().code(), ErrorCode::InvalidArgument) << path;
+    }
+    EXPECT_TRUE(fs.allPaths().empty());
+}
+
 TEST(MemFs, ConcurrentWritersDoNotInterfere) {
     frost::ManualClock clock;
     MemFs fs(clock, PathStyle::Posix);

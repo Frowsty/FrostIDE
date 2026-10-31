@@ -5,8 +5,11 @@
 // failure), listings, error-code mapping, non-ASCII names, and on Windows
 // paths longer than MAX_PATH, which must work even with LongPathsEnabled = 0.
 
+#include "frost/core/clock.hpp"
 #include "frost/io/file_system.hpp"
+#include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/process.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
@@ -14,19 +17,28 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <format>
+#include <initializer_list>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
-#include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
 
 #include <windows.h>
 #else
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/xattr.h>
 
+#include <cerrno>
+
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -394,7 +406,188 @@ TEST(RealFileSystem, NewFilesGetTheUmaskMode) {
     ASSERT_EQ(stat(file.c_str(), &info), 0);
     EXPECT_EQ(info.st_mode & 07777, 0640u); // 0666 & ~027, as open(O_CREAT) would give.
 }
+
+// A POSIX ACL in the kernel's extended-attribute format (linux/posix_acl_xattr.h):
+// a little-endian version word 2, then (tag, permissions, id) entries.
+std::string aclXattr(std::initializer_list<std::pair<std::uint16_t, std::uint16_t>> entries) {
+    std::string out;
+    const auto put = [&out](std::uint32_t value, int bytes) {
+        for (int i = 0; i < bytes; ++i) {
+            out += static_cast<char>((value >> (8 * i)) & 0xffu);
+        }
+    };
+    put(2, 4);
+    for (const auto& [tag, permissions] : entries) {
+        put(tag, 2);
+        put(permissions, 2);
+        put(0xffffffffu, 4); // ACL_UNDEFINED_ID: the entries used here name no user or group.
+    }
+    return out;
+}
+
+TEST(RealFileSystem, NewFilesFollowTheDirectorysDefaultAcl) {
+    // With a default ACL the kernel ignores the umask; a file written here must get the
+    // same mode as one created with open(O_CREAT, 0666), not 0666 & ~umask.
+    const ScratchDir dir("fs-acl");
+    const std::string shared = dir.join("shared");
+    ASSERT_TRUE(fs().createDirectories(shared).has_value());
+    constexpr std::uint16_t kUserObj = 0x01;
+    constexpr std::uint16_t kGroupObj = 0x04;
+    constexpr std::uint16_t kOther = 0x20;
+    const std::string acl = aclXattr({{kUserObj, 7}, {kGroupObj, 7}, {kOther, 0}});
+    if (setxattr(shared.c_str(), "system.posix_acl_default", acl.data(), acl.size(), 0) != 0) {
+        const int error = errno;
+        if (error == EOPNOTSUPP) { // Also ENOTSUP on Linux.
+            GTEST_SKIP() << "the file system under " << shared << " has no POSIX ACL support";
+        }
+        FAIL() << "setxattr(system.posix_acl_default) failed: errno " << error;
+    }
+    const mode_t saved = umask(022);
+    const std::string control = shared + "/control.txt";
+    const int fd = open(control.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    const auto written = fs().writeFileAtomic(shared + "/saved.txt", "x");
+    umask(saved);
+    ASSERT_GE(fd, 0);
+    close(fd);
+    ASSERT_TRUE(written.has_value()) << written.error().describe();
+    struct stat expected{};
+    struct stat actual{};
+    ASSERT_EQ(stat(control.c_str(), &expected), 0);
+    ASSERT_EQ(stat((shared + "/saved.txt").c_str(), &actual), 0);
+    EXPECT_EQ(actual.st_mode & 07777, expected.st_mode & 07777);
+    EXPECT_EQ(actual.st_mode & 07777, 0660u); // The ACL's rw-rw----, not 0644 from the umask.
+}
+
+TEST(RealFileSystem, ReplacingKeepsOwnerGroupAndSetIdBitsWherePermitted) {
+    const ScratchDir dir("fs-owner");
+    const std::string file = dir.join("deploy.conf");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+    // An owner and group other than this process's where it may set them: root may use
+    // any (1 is "daemon" on Linux); others keep their uid and use a supplementary group.
+    const bool root = geteuid() == 0;
+    const uid_t owner = root ? 1 : geteuid();
+    gid_t group = root ? 1 : getegid();
+    if (!root) {
+        std::vector<gid_t> groups(static_cast<std::size_t>(std::max(getgroups(0, nullptr), 0)));
+        const int count = getgroups(static_cast<int>(groups.size()), groups.data());
+        for (int i = 0; i < count; ++i) {
+            if (groups[static_cast<std::size_t>(i)] != getegid()) {
+                group = groups[static_cast<std::size_t>(i)];
+                break;
+            }
+        }
+    }
+    ASSERT_EQ(chown(file.c_str(), owner, group), 0);
+    ASSERT_EQ(chmod(file.c_str(), 04750), 0);
+    ASSERT_TRUE(fs().writeFileAtomic(file, "new").has_value());
+    struct stat info{};
+    ASSERT_EQ(stat(file.c_str(), &info), 0);
+    EXPECT_EQ(info.st_uid, owner);
+    EXPECT_EQ(info.st_gid, group) << (group == getegid() ? "(no second group to test with)" : "");
+    EXPECT_EQ(info.st_mode & 07777, 04750u);
+    EXPECT_EQ(fs().readFile(file).value(), "new");
+}
+
+TEST(RealFileSystem, ReadFileRefusesSockets) {
+    // Sockets refuse open() with ENXIO, which must not read as "no such file".
+    const ScratchDir dir("fs-sock");
+    const std::string path = dir.join("sock");
+    const int sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    ASSERT_GE(sock, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    ASSERT_LT(path.size(), sizeof(address.sun_path));
+    std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+    ASSERT_EQ(bind(sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)), 0);
+    const auto result = fs().readFile(path);
+    close(sock);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << result.error().describe();
+    EXPECT_NE(result.error().message().find("not a regular file"), std::string::npos);
+    EXPECT_TRUE(fs().exists(path).value());
+}
+
+TEST(RealFileSystem, ReadFileWaitsForALeaseBreak) {
+    // Another process holds a write lease (as Samba oplocks or NFS delegations do). The
+    // non-blocking open fails at once, but readFile must still return the content once
+    // the holder releases the lease, as a blocking open would.
+    const ScratchDir dir("fs-lease");
+    const std::string file = dir.join("leased.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "content").has_value());
+    frost::io::ProcessSpec spec;
+    spec.executable = frost::io::normalizePath(FROST_IO_TEST_CHILD).value();
+    spec.arguments = {"lease", file};
+    auto holder = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_TRUE(holder.has_value()) << holder.error().describe();
+    std::string first;
+    std::array<char, 256> buffer{};
+    while (first.find('\n') == std::string::npos) {
+        const auto got = (*holder)->readStdout(buffer);
+        if (!got || *got == 0) {
+            break;
+        }
+        first.append(buffer.data(), *got);
+    }
+    if (first.starts_with("no lease")) {
+        static_cast<void>((*holder)->communicate({}, 30s));
+        GTEST_SKIP() << "this file system grants no write leases: " << first;
+    }
+    ASSERT_EQ(first, "leased\n");
+    const auto start = std::chrono::steady_clock::now();
+    const auto content = fs().readFile(file);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    ASSERT_TRUE(content.has_value()) << content.error().describe();
+    EXPECT_EQ(*content, "content");
+    EXPECT_LT(elapsed, 20s); // The holder released it; the kernel's revocation would take 45 s.
+    const auto rest = (*holder)->communicate({}, 60s);
+    ASSERT_TRUE(rest.has_value()) << rest.error().describe();
+    EXPECT_EQ(rest->stdoutBytes, "released\n");
+}
 #endif
+
+/*
+ * POSIX ".." semantics that the real file system and MemFs must share (MemFs
+ * promises to behave like the real one). `root` is an existing empty directory.
+ */
+void checkDotDotSemantics(frost::io::IFileSystem& files, const std::string& root) {
+    const std::string w = root + "/w";
+    ASSERT_TRUE(files.createDirectories(w).has_value());
+    ASSERT_TRUE(files.writeFileAtomic(w + "/file", "f").has_value());
+    // createDirectories works like mkdir -p: the directory before ".." is created first.
+    ASSERT_TRUE(files.createDirectories(w + "/new/../out").has_value());
+    EXPECT_EQ(files.status(w + "/new").value().type, FileType::Directory);
+    EXPECT_EQ(files.status(w + "/out").value().type, FileType::Directory);
+    EXPECT_EQ(files.createDirectories(w + "/file/../x").error().code(), ErrorCode::AlreadyExists);
+    // Everything else resolves ".." only through existing directories.
+    EXPECT_EQ(files.readFile(w + "/new/../file").value(), "f");
+    EXPECT_EQ(files.readFile(w + "/missing/../file").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(files.readFile(w + "/file/../file").error().code(), ErrorCode::NotFound);
+    ASSERT_TRUE(files.writeFileAtomic(w + "/new/../g", "g").has_value());
+    EXPECT_EQ(files.readFile(w + "/g").value(), "g");
+    // A final ".." is never an entry to write or remove.
+    for (const std::string& path : {w + "/new/..", w + "/.."}) {
+        EXPECT_EQ(files.writeFileAtomic(path, "x").error().code(), ErrorCode::InvalidArgument) << path;
+        EXPECT_EQ(files.removeFile(path).error().code(), ErrorCode::InvalidArgument) << path;
+        EXPECT_EQ(files.removeDirectory(path).error().code(), ErrorCode::InvalidArgument) << path;
+    }
+    ASSERT_TRUE(files.removeDirectory(w + "/out/../new").has_value());
+    EXPECT_FALSE(files.exists(w + "/new").value());
+    EXPECT_TRUE(files.exists(w + "/out").value());
+}
+
+#ifndef _WIN32
+TEST(RealFileSystem, DotDotSemantics) {
+    const ScratchDir dir("fs-dotdot");
+    checkDotDotSemantics(fs(), dir.path());
+}
+#endif
+
+TEST(MemFsAgainstRealSemantics, DotDotSemantics) {
+    frost::ManualClock clock;
+    frost::io::MemFs memory(clock, frost::io::PathStyle::Posix);
+    ASSERT_TRUE(memory.createDirectories("/scratch").has_value());
+    checkDotDotSemantics(memory, "/scratch");
+}
 
 TEST(RealFileSystem, LinksAreRemovedWithoutFollowingThem) {
     const ScratchDir dir("fs-links");

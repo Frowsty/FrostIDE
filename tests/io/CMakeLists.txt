@@ -25,7 +25,8 @@ endif()
 add_executable(io_test_child io_test_child.cpp)
 frost_apply_compile_options(io_test_child TEST)
 if(WIN32)
-    target_link_libraries(io_test_child PRIVATE shell32)
+    # shell32: CommandLineToArgvW; advapi32: the pipe-info mode's security descriptor calls.
+    target_link_libraries(io_test_child PRIVATE shell32 advapi32)
 endif()
 
 frost_add_test(io_integration_tests
@@ -37,3 +38,7 @@ frost_add_test(io_integration_tests
 target_include_directories(io_integration_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(io_integration_tests PRIVATE FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
 add_dependencies(io_integration_tests io_test_child)
+if(WIN32)
+    # The pipe test's token and SID calls.
+    target_link_libraries(io_integration_tests PRIVATE advapi32)
+endif()
