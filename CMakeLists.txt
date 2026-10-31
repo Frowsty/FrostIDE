@@ -80,6 +80,10 @@ if(FROST_BUILD_UI)
     set(FROST_QT_PLUGIN_DIR "${_frost_qt_prefix}/plugins")
 endif()
 
+# Threads::Threads (frost::sched). Found here so the imported target is visible from
+# the top-level directory, where FrostLayers resolves namespaced dependencies.
+find_package(Threads REQUIRED)
+
 if(FROST_BUILD_TESTS)
     enable_testing()
     find_package(GTest CONFIG REQUIRED)
