@@ -201,8 +201,9 @@ def read_changed(path: Path) -> list[str]:
 # ADR 0027 adds text, whose readers run concurrently).
 TSAN_MODULES = ("io", "rpc", "sched", "text")
 # Budget: B28. Each module and the TSan modules that depend on it (frost:: DEPS of src/*/CMakeLists.txt
-# and tests/<m>/CMakeLists.txt): src/text links frost::io, and text_perf_tests links frost::sched.
-_TSAN_CLOSURE = {"io": ("io", "text"), "rpc": ("rpc",), "sched": ("sched", "text"), "text": ("text",)}
+# and tests/<m>/CMakeLists.txt): src/text links frost::io, text_perf_tests links frost::sched, and src/io
+# links frost::sched (its reactor and watchers, ADR 0020).
+_TSAN_CLOSURE = {"io": ("io", "text"), "rpc": ("rpc",), "sched": ("io", "sched", "text"), "text": ("text",)}
 # Every TSan module depends on these, so a change in them affects all three that exist.
 _FOUNDATION_MODULES = {"core": ("io", "sched", "text"), "compat": ("io", "sched", "text")}
 # Build inputs and shared test code: a change here can alter every module's tests.

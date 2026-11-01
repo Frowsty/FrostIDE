@@ -66,8 +66,7 @@ namespace frost::test {
 class ProcessWatch {
 public:
 #ifdef _WIN32
-    explicit ProcessWatch(io::ProcessId pid)
-        : m_handle(OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid)) {}
+    explicit ProcessWatch(io::ProcessId pid) : m_handle(OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid)) {}
 #else
     explicit ProcessWatch(io::ProcessId pid)
         : m_fd(static_cast<int>(syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0))) {}

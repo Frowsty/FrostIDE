@@ -284,7 +284,7 @@ class TsanSelectionTest(unittest.TestCase):
         cases = {
             "src/io/src/process_posix.cpp": ["io", "text"],
             "tests/io/process_test.cpp": ["io", "text"],
-            "src/sched/include/frost/sched/pool.hpp": ["sched", "text"],
+            "src/sched/include/frost/sched/pool.hpp": ["io", "sched", "text"],
             "src/text/src/piece_tree.cpp": ["text"],
             "tests/text/support/text_ops.cpp": ["text"],
             "src/rpc/src/channel.cpp": ["rpc"],
@@ -313,7 +313,7 @@ class TsanSelectionTest(unittest.TestCase):
             "cmake": [],
             "tests/supportx/a.hpp": [],
             "./src/io/src/x.cpp": ["io", "text"],
-            "src\\sched\\src\\x.cpp": ["sched", "text"],
+            "src\\sched\\src\\x.cpp": ["io", "sched", "text"],
             "src//text//src/x.cpp": ["text"],
         }
         for path, expected in cases.items():
