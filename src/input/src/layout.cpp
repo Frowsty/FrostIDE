@@ -7,6 +7,7 @@
 
 #include "frost/input/layout.hpp"
 
+#include "frost/core/i18n.hpp"
 #include "frost/input/keymap.hpp"
 
 #include <algorithm>
@@ -153,24 +154,40 @@ std::string_view namedKeyText(Key key) noexcept {
     }
 }
 
+// The i18n context of key and modifier names (frost/core/i18n.hpp, ADR 0035).
+constexpr std::string_view kKeyNames = "frost::input::keys";
+
+// Appends the translated modifier or key name `name` and, when `plus`, the "+" separator.
+void appendName(std::string& out, std::string_view name, bool plus) {
+    out += i18n::tr(kKeyNames, name);
+    if (plus) {
+        out.push_back('+');
+    }
+}
+
 void appendStrokeText(std::string& out, Stroke stroke, const LayoutTable& layout, KeymapPlatform platform) {
     if (stroke.mods.has(Modifier::Ctrl)) {
-        out += "Ctrl+";
+        appendName(out, "Ctrl", true);
     }
     if (stroke.mods.has(Modifier::Alt)) {
-        out += platform == KeymapPlatform::MacOS ? "Option+" : "Alt+";
+        appendName(out, platform == KeymapPlatform::MacOS ? "Option" : "Alt", true);
     }
     if (stroke.mods.has(Modifier::Shift)) {
-        out += "Shift+";
+        appendName(out, "Shift", true);
     }
     if (stroke.mods.has(Modifier::Meta)) {
-        out += platform == KeymapPlatform::Windows ? "Win+" : platform == KeymapPlatform::Linux ? "Super+" : "Cmd+";
+        appendName(out,
+                   platform == KeymapPlatform::Windows ? "Win"
+                   : platform == KeymapPlatform::Linux ? "Super"
+                                                       : "Cmd",
+                   true);
     }
     const Key key = stroke.key;
     if (isDigitKey(key)) {
         out.push_back(static_cast<char>('0' + (index(key) - index(Key::Digit0))));
     } else if (isNumpadKey(key) && key <= Key::Numpad9) {
-        out += "Num ";
+        appendName(out, "Num", false);
+        out.push_back(' ');
         out.push_back(static_cast<char>('0' + (index(key) - index(Key::Numpad0))));
     } else if (isFunctionKey(key)) {
         out += keyName(key);
@@ -178,7 +195,7 @@ void appendStrokeText(std::string& out, Stroke stroke, const LayoutTable& layout
         const char32_t label = layout.labelFor(key);
         appendUtf8(out, label != 0 ? simpleUpper(label) : simpleUpper(static_cast<unsigned char>(usCharForKey(key))));
     } else if (const std::string_view named = namedKeyText(key); !named.empty()) {
-        out += named;
+        appendName(out, named, false);
     } else {
         out += keyName(key);
     }
@@ -188,8 +205,8 @@ void appendStrokeText(std::string& out, Stroke stroke, const LayoutTable& layout
 
 std::string toDisplayText(const Sequence& sequence, const LayoutTable& layout, KeymapPlatform platform) {
     switch (sequence.gesture()) {
-    case Gesture::DoubleShift: return "Double Shift";
-    case Gesture::DoubleCtrl: return "Double Ctrl";
+    case Gesture::DoubleShift: return i18n::tr(kKeyNames, "Double Shift");
+    case Gesture::DoubleCtrl: return i18n::tr(kKeyNames, "Double Ctrl");
     case Gesture::None: break;
     }
     std::string out;

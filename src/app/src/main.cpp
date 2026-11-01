@@ -30,16 +30,23 @@
 // abort. Qt's own fatal errors in the GUI still end the process with 0xC0000409 (__fastfail)
 // until M1's crash handler.
 
+#include "frost/app/app_services.hpp"
 #include "frost/app/command_line.hpp"
 #include "frost/app/main_window.hpp"
 #include "frost/app/selftest.hpp"
 #include "frost/app/startup.hpp"
 #include "frost/core/build_info.hpp"
+#include "frost/ui/appearance_manager.hpp"
+#include "frost/ui/shell/notifications.hpp"
+#include "frost/ui/tr.hpp"
 
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 
 #include <cstdio>
 #include <format>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -280,7 +287,41 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
     QApplication app(qtArgc, argv);
     QApplication::setApplicationName(QStringLiteral("FrostIDE"));
     QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
-    frost::app::MainWindow window;
+    // The services outlive the window (declared first, destroyed last).
+    frost::app::AppServices services;
+    // The appearance comes from the resources deployed next to frost (ADR 0015). Without them the
+    // window still opens on Qt's own style and says why (ADR 0035), instead of not starting.
+    const QByteArray resources = (QCoreApplication::applicationDirPath() + QStringLiteral("/resources")).toUtf8();
+    const auto appearance = services.installAppearance(app, resources.toStdString());
+    frost::app::MainWindow window(services.environment());
+    if (!appearance) {
+        window.notifications().notify({frost::ui::qtr("frost::app", "The theme could not be loaded"),
+                                       QString::fromUtf8(appearance.error().message()),
+                                       frost::ui::NotificationKind::Error,
+                                       std::nullopt,
+                                       {}});
+    } else {
+        window.reportStartupWarnings(appearance->warnings);
+    }
+    if (frost::ui::AppearanceManager* manager = services.appearance(); manager != nullptr) {
+        QObject::connect(manager, &frost::ui::AppearanceManager::appearanceApplyFailed, &window,
+                         [&window](const QString& description) {
+                             window.notifications().notify(
+                                 {frost::ui::qtr("frost::app", "The appearance could not be changed"),
+                                  description,
+                                  frost::ui::NotificationKind::Warning,
+                                  std::nullopt,
+                                  {}});
+                         });
+    }
+    // Files named on the command line open in tabs; folders and solutions wait for M2.
+    for (const std::string& path : parsed->paths) {
+        const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
+        if (file.isFile()) {
+            const QByteArray absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8();
+            static_cast<void>(window.openFile(absolute.toStdString()));
+        }
+    }
     window.show();
     return QApplication::exec();
 }

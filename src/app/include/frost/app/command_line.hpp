@@ -16,8 +16,8 @@ namespace frost::app {
 
 // What the process should do after parsing.
 enum class Mode {
-    // Normal start: open the main window. Positional paths are parsed but not opened yet.
-    // TODO(M2): open them (`frost <path>`, PLAN.md 2.2 shell integration, M2 exit).
+    // Normal start: open the main window. Positional paths that name files open in editor tabs.
+    // TODO(M2): open folders and solutions too (`frost <path>`, PLAN.md 2.2 shell integration).
     Gui,
     Version,  // Print version information and exit.
     Help,     // Print usage and exit.

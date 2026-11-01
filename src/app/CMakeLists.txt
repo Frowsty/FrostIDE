@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # frost::app (the application library: command line, start-up hardening and checks,
-# main window, self-test) and the FrostIDE program built from it. The library exists so
+# the composition root's services and the main window over frost::ui_shell (ADR 0035),
+# self-test) and the FrostIDE program built from it. The library exists so
 # tests can exercise the same code the program runs.
 #
 # On Windows the program is two images (ADR 0012):
@@ -21,12 +22,13 @@ set(frost_startup_core_sources include/frost/app/startup_core.hpp src/startup_co
 frost_add_library(app LAYER app
     SOURCES
         include/frost/app/main_window.hpp
+        src/app_services.cpp
         src/command_line.cpp
         src/main_window.cpp
         src/selftest.cpp
         src/startup.cpp
         ${frost_startup_core_sources}
-    DEPS frost::core
+    DEPS frost::ui_shell frost::ui frost::input frost::io frost::core
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
@@ -37,7 +39,7 @@ endif()
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
-        DEPS frost::app frost::core
+        DEPS frost::app frost::ui_shell frost::ui frost::core
         THIRD_PARTY Qt6::Widgets)
     return()
 endif()
@@ -46,7 +48,7 @@ endif()
 # static library in the same directory.
 frost_add_library(app_shared LAYER app SHARED
     SOURCES src/main.cpp
-    DEPS frost::app frost::core
+    DEPS frost::app frost::ui_shell frost::ui frost::core
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app_shared PROPERTIES OUTPUT_NAME frost_app ARCHIVE_OUTPUT_NAME frost_app_shared)
 # /MANIFEST:NO: without it CMake's vs_link_dll step embeds an RT_MANIFEST 2 (trustInfo) into the

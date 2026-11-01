@@ -9,6 +9,7 @@ frost_add_test(core_tests
         assert_quick_tu.cpp
         clock_test.cpp
         error_test.cpp
+        i18n_test.cpp
         mutex_test.cpp
         strong_type_test.cpp
     DEPS frost::core)
