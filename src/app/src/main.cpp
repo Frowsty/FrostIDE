@@ -1,19 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Entry point of frost, the FrostIDE executable.
+// The FrostIDE application's entry point: on Windows frost_main() in frost_app.dll, which the
+// frost.exe launcher calls after hardening the process (src/app/src/launcher.cpp, ADR 0012);
+// on Linux main() of the frost executable, which hardens the process itself. Both run the
+// same body (run() below).
 //
 // Start-up order matters for the budgets in PLAN.md section 4 (B1 first frame):
-// arguments are parsed before Qt exists, so --version and --help never initialise
-// the GUI stack, and --selftest initialises it (offscreen by default) only after its
-// process and plugin checks. Qt gets only the program name, so no argument (not even
-// one after "--") becomes a Qt option such as -platform. The process is hardened
-// (frost/app/startup.hpp) before anything else can load a DLL or start a process.
+// arguments are parsed before Qt's GUI exists, so --version and --help never initialise
+// the GUI stack (they use only Qt6Core, for qVersion()), and --selftest initialises it
+// (offscreen by default) only after its process checks. QApplication is constructed only
+// after the platform plugin is pinned (preparePlatformPlugin()), in every mode, so Qt never
+// fails to load it. Qt gets only the program name, so no argument (not even one after "--")
+// becomes a Qt option such as -platform. Command-line modes (usage errors, --version, --help,
+// --selftest) never show a dialog: suppressCrashDialogs(), guardCommandLineDialogs() and
+// installCommandLineFatalHandler() run before anything else there.
 //
 // Exit status: 0 success, 1 self-test failed, 2 usage error, 4 frost cannot start in this
-// environment (e.g. Qt cannot load its platform plugin from the install directory; the
-// GUI also shows the reason in a message box). 3 is avoided because the Windows CRT's
-// abort() exits with it, so a refusal is never mistaken for an abort; Qt's own fatal
-// errors end the process with 0xC0000409 (__fastfail) instead.
+// environment: Qt's platform plugin is missing or cannot be loaded, or the launcher cannot
+// load frost_app.dll or its DLLs (the GUI also shows the reason in a message box), or Qt
+// reported a fatal error in a command-line mode (the message is on stderr). 3 is avoided
+// because the Windows CRT's abort() exits with it, so a refusal is never mistaken for an
+// abort. Qt's own fatal errors in the GUI still end the process with 0xC0000409 (__fastfail)
+// until M1's crash handler.
 
 #include "frost/app/command_line.hpp"
 #include "frost/app/main_window.hpp"
@@ -27,6 +35,7 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -37,6 +46,25 @@
 #endif
 
 namespace {
+
+#ifdef _WIN32
+
+// UTF-8 of a Win32 string (unpaired surrogates become U+FFFD).
+std::string toUtf8(std::wstring_view text) {
+    if (text.empty()) {
+        return {};
+    }
+    const int bytes =
+        WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(bytes > 0 ? bytes : 0), '\0');
+    if (bytes > 0) {
+        WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), bytes, nullptr,
+                            nullptr);
+    }
+    return out;
+}
+
+#endif
 
 // Returns the process arguments (without the program name) as UTF-8.
 // On Windows they come from the wide command line, so they are correct even if
@@ -50,12 +78,7 @@ std::vector<std::string> utf8Arguments([[maybe_unused]] int argc, [[maybe_unused
         return args;
     }
     for (int i = 1; i < count; ++i) {
-        const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, nullptr, 0, nullptr, nullptr);
-        std::string arg(static_cast<std::size_t>(bytes > 0 ? bytes - 1 : 0), '\0');
-        if (bytes > 1) {
-            WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, arg.data(), bytes, nullptr, nullptr);
-        }
-        args.push_back(std::move(arg));
+        args.push_back(toUtf8(wide[i]));
     }
     LocalFree(wide);
 #else
@@ -66,9 +89,9 @@ std::vector<std::string> utf8Arguments([[maybe_unused]] int argc, [[maybe_unused
     return args;
 }
 
-// Restores the attached console's output code page when main returns. The
+// Restores the attached console's output code page when run() returns. The
 // console belongs to the parent shell, so leaving it on UTF-8 would change the
-// user's terminal after frost exits. Lives in main's frame (no globals).
+// user's terminal after frost exits. Lives in run()'s frame (no globals).
 struct ConsoleCodePageRestorer {
     unsigned previous = 0; // 0: nothing to restore.
     ConsoleCodePageRestorer() = default;
@@ -82,6 +105,20 @@ struct ConsoleCodePageRestorer {
             SetConsoleOutputCP(previous);
         }
 #endif
+    }
+};
+
+// Drops the fatal handler's pointer to a ConsoleCodePageRestorer before that object dies
+// (declared after it in run(), so destroyed first). Qt keeps the handler installed.
+struct FatalHandlerCodePage {
+    bool installed = false;
+    FatalHandlerCodePage() = default;
+    FatalHandlerCodePage(const FatalHandlerCodePage&) = delete ("clears exactly once");
+    FatalHandlerCodePage& operator=(const FatalHandlerCodePage&) = delete ("clears exactly once");
+    ~FatalHandlerCodePage() {
+        if (installed) {
+            frost::app::installCommandLineFatalHandler(nullptr);
+        }
     }
 };
 
@@ -126,17 +163,22 @@ void reportStartupFailure([[maybe_unused]] ConsoleCodePageRestorer& restorer, co
 #endif
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
-    const frost::app::ProcessHardening hardening = frost::app::hardenProcess();
+// The application, after the process is hardened (`hardening` says how far that got).
+// `argv` must outlive the call: QApplication keeps it.
+int run(const frost::app::ProcessHardening& hardening, int argc, char** argv) {
     ConsoleCodePageRestorer consoleCodePage;
+    FatalHandlerCodePage fatalHandler;
     const std::vector<std::string> args = utf8Arguments(argc, argv);
     const std::vector<std::string_view> views(args.begin(), args.end());
     auto parsed = frost::app::parseCommandLine(views);
-    // Command-line modes run unattended (tests, scripts, packaging smoke tests).
+    // Command-line modes run unattended (tests, scripts, packaging smoke tests), so they never
+    // show a dialog, and a Qt fatal error ends them with status 4 (frost/app/startup.hpp).
+    bool dialogGuard = false;
     if (!parsed || parsed->mode != frost::app::Mode::Gui) {
         frost::app::suppressCrashDialogs();
+        dialogGuard = frost::app::guardCommandLineDialogs();
+        frost::app::installCommandLineFatalHandler(&consoleCodePage.previous);
+        fatalHandler.installed = true;
     }
     if (!parsed) {
         attachParentConsoleIfNeeded(consoleCodePage);
@@ -161,19 +203,19 @@ int main(int argc, char** argv) {
             qputenv("QT_QPA_PLATFORM", "offscreen");
         }
         frost::app::SelfTestReport report;
-        report.checks = frost::app::runProcessChecks(hardening);
-        // Without a loadable platform plugin QApplication would abort, so stop with a report
-        // instead. Runs after QT_QPA_PLATFORM is settled, because it checks that plugin.
-        auto plugins = frost::app::checkPluginPaths();
-        if (!plugins) {
-            report.checks.push_back({"plugin-paths", false, true, plugins.error().message()});
+        report.checks = frost::app::runProcessChecks(hardening, dialogGuard);
+        // Pin the platform plugin before QApplication exists, or report why it cannot be loaded
+        // instead of letting Qt fail. Runs after QT_QPA_PLATFORM is settled, because it pins
+        // that platform's plugin.
+        auto plugin = frost::app::preparePlatformPlugin();
+        if (!plugin) {
+            report.checks.push_back({"plugin-paths", false, true, plugin.error().message()});
             print(stdout, report.format());
             return 1;
         }
-        report.checks.push_back({"plugin-paths", true, true, std::move(plugins->detail)});
-        if (!plugins->warning.empty()) {
-            report.checks.push_back({"other-plugin-paths", false, false, std::move(plugins->warning)});
-        }
+        report.checks.push_back({"plugin-paths", true, true, std::move(plugin->detail)});
+        frost::app::PluginPreloadReport others = frost::app::preloadOtherPlugins();
+        report.checks.push_back({"other-plugins", others.ok, false, std::move(others.detail)});
         // frost parsed the arguments; paths after "--" must not become Qt options such as
         // -platform, so Qt gets only the program name. Qt keeps a reference to the count,
         // so it lives as long as `app`.
@@ -182,17 +224,21 @@ int main(int argc, char** argv) {
         for (auto& check : frost::app::runGuiChecks()) {
             report.checks.push_back(std::move(check));
         }
+        for (auto& check : frost::app::runLateLoadChecks()) {
+            report.checks.push_back(std::move(check));
+        }
         print(stdout, report.format());
         return report.passed() ? 0 : 1;
     }
     case frost::app::Mode::Gui: break;
     }
 
-    // TODO(M1): log PluginPathReport::warning once frost::core has logging.
-    if (auto plugins = frost::app::checkPluginPaths(); !plugins) {
-        reportStartupFailure(consoleCodePage, plugins.error().message());
+    if (auto plugin = frost::app::preparePlatformPlugin(); !plugin) {
+        reportStartupFailure(consoleCodePage, plugin.error().message());
         return 4;
     }
+    // TODO(M1): log a failed preload (PluginPreloadReport) once frost::core has logging.
+    static_cast<void>(frost::app::preloadOtherPlugins());
     // As in the self-test: Qt gets only the program name, never the user's arguments.
     int qtArgc = argc > 0 ? 1 : 0;
     QApplication app(qtArgc, argv);
@@ -202,3 +248,33 @@ int main(int argc, char** argv) {
     window.show();
     return QApplication::exec();
 }
+
+} // namespace
+
+#ifdef _WIN32
+
+/*
+ * frost_app.dll's entry point (frost::app::kAppEntryPoint), called once by the frost.exe
+ * launcher on its main thread after hardenProcess() and searchInstallDirectoryExtended();
+ * `hardeningBits` is encodeHardening() of the launcher's state. Returns the exit status, which
+ * the launcher returns from wmain. Qt's one-element argv comes from frost.exe's path without a
+ * \\?\ prefix, the form the old executable's CRT passed.
+ */
+extern "C" __declspec(dllexport) int frost_main(unsigned hardeningBits) {
+    const frost::app::ProcessHardening hardening = frost::app::decodeHardening(hardeningBits);
+    std::string program = toUtf8(frost::app::withoutExtendedPrefix(frost::app::modulePath()));
+    char* argv[] = {program.data(), nullptr};
+    return run(hardening, 1, argv);
+}
+static_assert(std::is_same_v<decltype(&frost_main), frost::app::AppEntryPoint>,
+              "frost_main must match the launcher's frost::app::AppEntryPoint");
+
+#else
+
+int main(int argc, char** argv) {
+    // Before any other code can load a library or start a process.
+    const frost::app::ProcessHardening hardening = frost::app::hardenProcess();
+    return run(hardening, argc, argv);
+}
+
+#endif

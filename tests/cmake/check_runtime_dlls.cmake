@@ -9,22 +9,26 @@
 # reader against a writer, and vcpkg failed with "open_for_read(...): permission
 # denied". The helper must therefore copy once per output directory and configuration,
 # and order every executable in the directory after that copy, also one that was never
-# registered. This script configures tests/cmake/runtime_dlls_fixture with Ninja
+# registered, and every shared library built there (frost_app.dll beside frost.exe), whose
+# z-applocal step reads the DLLs it imports too. This script configures
+# tests/cmake/runtime_dlls_fixture with Ninja
 # Multi-Config and the build's own toolchain (without vcpkg, so the fixture has no
 # z-applocal step; the order check stands for it), then checks, on Windows:
 #   1. structure: in the generated Ninja files of Debug and Release, each of the
 #      fixture's three output directories is the destination of copy_if_different on
 #      exactly one line (one build edge), so no two edges can write the same file;
-#   2. order: in both configurations, every executable's object-order edge (which its
-#      compiles wait for) and its link edge list its directory's copy target among
-#      their order-only inputs, including shared_raw, which is not registered;
+#   2. order: in both configurations, every executable's and shared library's
+#      object-order edge (which its compiles wait for) and its link edge list its
+#      directory's copy target among their order-only inputs, including shared_raw and
+#      shared_lib, which are not registered;
 #   3. dependency: in the fresh tree, building one executable on its own puts its
 #      directory's DLLs next to it, including DLLs that only its siblings link:
-#      shared_c (registered, links no stand-in) in Debug and shared_raw in Release;
+#      shared_c (registered, links no stand-in) in Debug, and shared_raw and shared_lib
+#      in Release (shared_lib's imported DLL among them);
 #   4. result: after parallel builds of both configurations every output directory
-#      holds the union of its executables' DLLs (shared_raw's included) and the ASan
-#      stand-in, nothing else, and they come back after the DLLs and executables are
-#      deleted;
+#      holds the union of its members' DLLs (shared_raw's and shared_lib's included),
+#      the ASan stand-in and the DLLs built there, nothing else, and they come back
+#      after the DLLs and executables are deleted;
 #   5. without the ASan stand-in, a directory with nothing to copy gets no DLLs and
 #      the others get only theirs;
 # on Linux, that nothing is copied at all. On both, a registered and an unregistered
@@ -87,15 +91,20 @@ function(ninja_lines dir out)
     set(${out} "${found}" PARENT_SCOPE)
 endfunction()
 
-# Fails the test unless executable <name>'s object-order edge (the phony that its
-# compiles wait for) and its link edge of <config> list <copy>, the copy target of its
-# directory, among their order-only inputs (after `||`). <edges> holds the candidate
-# Ninja lines.
+# Fails the test unless target <name>'s object-order edge (the phony that its compiles
+# wait for) and its link edge of <config> list <copy>, the copy target of its directory,
+# among their order-only inputs (after `||`). <edges> holds the candidate Ninja lines.
+# An optional fifth argument names the linker rule's kind: EXECUTABLE (the default) or
+# SHARED_LIBRARY.
 function(expect_ordered edges name copy config)
+    set(linker EXECUTABLE)
+    if(ARGC GREATER 4)
+        set(linker "${ARGV4}")
+    endif()
     string(TOUPPER "${config}" upper)
     foreach(kind IN ITEMS object-order link)
         if(kind STREQUAL "link")
-            set(marker ": CXX_EXECUTABLE_LINKER__${name}_${config} ")
+            set(marker ": CXX_${linker}_LINKER__${name}_${config} ")
         else()
             set(marker "build cmake_object_order_depends_target_${name}_${upper}: ")
         endif()
@@ -148,8 +157,9 @@ list(FILTER lines INCLUDE REGEX "copy_if_different")
 
 if(CMAKE_HOST_WIN32)
     set(both fake_qt.dll fake_asan_runtime.dll)
-    # shared/ also gets the stand-in that only the unregistered shared_raw links.
-    set(shared_dlls ${both} fake_extra.dll)
+    # shared/ also gets the stand-ins that only the unregistered shared_raw and shared_lib
+    # link; shared_lib.dll itself is there once shared_lib is built.
+    set(shared_dlls ${both} fake_extra.dll fake_lib.dll)
 
     # 1. One copy edge per output directory and configuration.
     foreach(config IN LISTS configs)
@@ -171,14 +181,17 @@ if(CMAKE_HOST_WIN32)
         endforeach()
     endforeach()
 
-    # 2. Every executable is ordered after its directory's copy target, registered or
-    # not. The copy targets are named after the directory relative to the build tree.
+    # 2. Every executable and shared library is ordered after its directory's copy
+    # target, registered or not. The copy targets are named after the directory relative
+    # to the build tree.
     set(edges "${ninja}")
-    list(FILTER edges INCLUDE REGEX "^build (cmake_object_order_depends_target_|.*: CXX_EXECUTABLE_LINKER__)")
+    list(FILTER edges INCLUDE REGEX
+         "^build (cmake_object_order_depends_target_|.*: CXX_(EXECUTABLE|SHARED_LIBRARY)_LINKER__)")
     foreach(config IN LISTS configs)
         foreach(name IN ITEMS shared_a shared_b shared_c shared_raw)
             expect_ordered("${edges}" ${name} frost_runtime_dlls_shared ${config})
         endforeach()
+        expect_ordered("${edges}" shared_lib frost_runtime_dlls_shared ${config} SHARED_LIBRARY)
         foreach(name IN ITEMS bin_a bin_root)
             expect_ordered("${edges}" ${name} frost_runtime_dlls_bin ${config})
         endforeach()
@@ -191,27 +204,30 @@ if(CMAKE_HOST_WIN32)
     expect_files("${tree}/shared/Debug" shared_c.exe DLLS ${shared_dlls})
     build("${tree}" Release --target shared_raw)
     expect_files("${tree}/shared/Release" shared_raw.exe DLLS ${shared_dlls})
+    build("${tree}" Release --target shared_lib)
+    expect_files("${tree}/shared/Release" shared_raw.exe DLLS ${shared_dlls} shared_lib.dll)
 
     # 4. Everything, in parallel, in both configurations; then again after the DLLs
     # and executables of one directory are deleted.
     foreach(config IN LISTS configs)
         build("${tree}" ${config})
         expect_files("${tree}/shared/${config}" shared_a.exe shared_b.exe shared_c.exe shared_raw.exe
-                     DLLS ${shared_dlls})
+                     DLLS ${shared_dlls} shared_lib.dll)
         expect_files("${tree}/bin/${config}" bin_a.exe bin_root.exe DLLS ${both})
         expect_files("${tree}/${config}" top_plain.exe DLLS fake_asan_runtime.dll)
     endforeach()
     file(GLOB built "${tree}/shared/Debug/*.dll" "${tree}/shared/Debug/*.exe")
     file(REMOVE ${built})
     build("${tree}" Debug)
-    expect_files("${tree}/shared/Debug" shared_a.exe shared_b.exe shared_c.exe shared_raw.exe DLLS ${shared_dlls})
+    expect_files("${tree}/shared/Debug" shared_a.exe shared_b.exe shared_c.exe shared_raw.exe
+                 DLLS ${shared_dlls} shared_lib.dll)
 
     # 5. No ASan stand-in: top_plain's directory has nothing to copy.
     set(plain "${WORK_DIR}/no_asan")
     configure_ok("${plain}" -DFIXTURE_ASAN=OFF)
     build("${plain}" Debug)
     expect_files("${plain}/shared/Debug" shared_a.exe shared_b.exe shared_c.exe shared_raw.exe
-                 DLLS fake_qt.dll fake_extra.dll)
+                 DLLS fake_qt.dll fake_extra.dll fake_lib.dll shared_lib.dll)
     expect_files("${plain}/Debug" top_plain.exe DLLS)
 else()
     # No DLLs to copy: the helper must not generate any copy.
@@ -237,4 +253,4 @@ foreach(kind IN ITEMS registered raw)
     endif()
 endforeach()
 message(STATUS "frost_copy_runtime_dlls: one copy step per output directory and configuration, "
-               "every executable ordered after it")
+               "every executable and shared library ordered after it")

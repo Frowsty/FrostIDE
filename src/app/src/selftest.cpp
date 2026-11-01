@@ -15,14 +15,18 @@
 #include <QWidget>
 #include <QWindow>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <format>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #ifdef _WIN32
+#include <cwchar>
+
 #include <windows.h>
 #endif
 
@@ -76,6 +80,7 @@ namespace {
 #ifdef _WIN32
 
 // Returns the text of this executable's embedded RT_MANIFEST resource 1, or "" if absent.
+// The process manifest is frost.exe's; frost_app.dll carries none (/MANIFEST:NO).
 std::string_view embeddedManifest() {
     HMODULE self = GetModuleHandleW(nullptr);
     HRSRC resource = FindResourceW(self, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(24));
@@ -90,13 +95,26 @@ std::string_view embeddedManifest() {
     return {static_cast<const char*>(LockResource(loaded)), size};
 }
 
-// LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32, set by /DEPENDENTLOADFLAG.
-constexpr DWORD kDependentLoadFlagsWanted = 0xA00;
+// The image that holds this code: frost_app.dll in frost, the test executable in unit tests.
+HMODULE thisImage() {
+    HMODULE module = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&thisImage), &module);
+    return module;
+}
 
-// The DependentLoadFlags of this executable's load configuration directory: the search
-// flags the loader uses for its static imports. 0 if the image has no such field.
-DWORD dependentLoadFlags() {
-    const auto* base = reinterpret_cast<const std::byte*>(GetModuleHandleW(nullptr));
+// frost.exe's /DEPENDENTLOADFLAG: LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
+// Its only import is KERNEL32.dll, so the value is defence in depth.
+constexpr DWORD kExeDependentLoadFlags = 0xA00;
+// frost_app.dll has none, so its imports follow the launcher's kLauncherLoadFlags (0x900). A
+// value there would replace them, and 0xA00 breaks plain starts from 236 units (ADR 0012);
+// 0x900 itself would be harmless and is accepted.
+constexpr DWORD kAppDependentLoadFlagsAllowed[] = {0, 0x900};
+
+// The DependentLoadFlags of `module`'s load configuration directory: the search flags the
+// loader uses for its static imports. 0 if the image has no such field.
+DWORD dependentLoadFlags(HMODULE module) {
+    const auto* base = reinterpret_cast<const std::byte*>(module);
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
     if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) {
@@ -114,11 +132,43 @@ DWORD dependentLoadFlags() {
     return config->DependentLoadFlags;
 }
 
+// UTF-8 of a Win32 string (unpaired surrogates become U+FFFD).
+std::string toUtf8(std::wstring_view text) {
+    if (text.empty()) {
+        return {};
+    }
+    const int bytes =
+        WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(bytes > 0 ? bytes : 0), '\0');
+    if (bytes > 0) {
+        WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), bytes, nullptr,
+                            nullptr);
+    }
+    return out;
+}
+
+// The file name of `path` (after its last backslash).
+std::wstring_view fileName(std::wstring_view path) {
+    const std::size_t slash = path.find_last_of(L'\\');
+    return slash == std::wstring_view::npos ? path : path.substr(slash + 1);
+}
+
+bool isExtended(std::wstring_view path) { return path.starts_with(L"\\\\?\\"); }
+
+// "\\?\ form" or "plain form", as the self-test reports a path.
+std::string_view formOf(std::wstring_view path) { return isExtended(path) ? "\\\\?\\ form" : "plain form"; }
+
+// The Qt6Core DLL this process loaded (release or debug build), or nullptr.
+HMODULE qtCore() {
+    HMODULE module = GetModuleHandleW(L"Qt6Core.dll");
+    return module != nullptr ? module : GetModuleHandleW(L"Qt6Cored.dll");
+}
+
 #endif
 
 } // namespace
 
-std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening) {
+std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, bool dialogGuard) {
     std::vector<SelfTestCheck> checks;
 #ifdef _WIN32
     std::string missing;
@@ -126,21 +176,31 @@ std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening) {
          {std::pair{hardening.defaultDllDirectories, "SetDefaultDllDirectories"},
           std::pair{hardening.dllDirectoryCleared, "SetDllDirectoryW"},
           std::pair{hardening.safeSearchPathMode, "SetSearchPathMode"},
-          std::pair{hardening.exeSearchSkipsCurrentDirectory, "NoDefaultCurrentDirectoryInExePath"}}) {
+          std::pair{hardening.exeSearchSkipsCurrentDirectory, "NoDefaultCurrentDirectoryInExePath"},
+          std::pair{hardening.installDirectoryExtended,
+                    "AddDllDirectory of the \\\\?\\ install directory with USER_DIRS | SYSTEM32 as the default"}}) {
         if (!applied) {
             missing += missing.empty() ? what : std::string(", ") + what;
         }
     }
     // Only what the hardening guarantees: SearchPathW still searches the current directory
     // (see ProcessHardening::safeSearchPathMode).
-    checks.push_back({"process-hardening", hardening.complete(), true,
-                      hardening.complete() ? "DLL searches skip the current directory, and so do CreateProcessW "
-                                             "and cmd.exe for bare executable names"
-                                           : "not applied: " + missing});
-    const bool dependentFlags = dependentLoadFlags() == kDependentLoadFlagsWanted;
-    checks.push_back({"dependent-load-flags", dependentFlags, true,
-                      std::format("load configuration DependentLoadFlags = {:#x}{}", dependentLoadFlags(),
-                                  dependentFlags ? "" : " (expected 0xa00: application directory and System32)")});
+    const bool hardened = hardening.complete() && hardening.installDirectoryExtended;
+    checks.push_back({"process-hardening", hardened, true,
+                      hardened ? "DLL searches skip the current directory, and so do CreateProcessW and cmd.exe for "
+                                 "bare executable names; DLLs load from the \\\\?\\ install directory and System32"
+                               : "not applied: " + missing});
+
+    const DWORD exeFlags = dependentLoadFlags(GetModuleHandleW(nullptr));
+    const DWORD appFlags = dependentLoadFlags(thisImage());
+    const bool appFlagsAllowed =
+        std::ranges::find(kAppDependentLoadFlagsAllowed, appFlags) != std::ranges::end(kAppDependentLoadFlagsAllowed);
+    const bool flagsOk = exeFlags == kExeDependentLoadFlags && appFlagsAllowed;
+    checks.push_back({"dependent-load-flags", flagsOk, true,
+                      std::format("DependentLoadFlags frost.exe {:#x}, frost_app.dll {:#x}{}", exeFlags, appFlags,
+                                  flagsOk ? ""
+                                          : " (expected 0xa00 for frost.exe and 0 or 0x900 for frost_app.dll, whose "
+                                            "imports follow the launcher's DLL_LOAD_DIR | SYSTEM32)")});
 
     const UINT acp = GetACP();
     checks.push_back({"utf8-code-page", acp == CP_UTF8, true, std::format("process ANSI code page is {}", acp)});
@@ -152,15 +212,89 @@ std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening) {
                       declaresLongPaths ? "embedded manifest declares longPathAware"
                                         : "embedded manifest is missing longPathAware=true"});
 
-    // The registry switch needs administrator rights, so this check informs rather than fails.
+    // The registry switch needs administrator rights, and frost does not depend on it.
     const bool effective = longPathsEffective();
     checks.push_back({"long-paths-effective", effective, false,
                       effective ? "paths beyond MAX_PATH work without the \\\\?\\ prefix"
-                                : "disabled system-wide (HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem "
-                                  "LongPathsEnabled=0); FrostIDE uses \\\\?\\ paths internally"});
+                                : "not effective for this process (needs LongPathsEnabled=1 and longPathAware); "
+                                  "FrostIDE starts either way"});
+
+    // The form the parent started frost.exe through, as the loader recorded it.
+    const std::wstring image = modulePath();
+    checks.push_back({"image-path", true, false, std::format("{}, {} UTF-16 units", formOf(image), image.size())});
+
+    // frost_app.dll and its static imports must have come in through \\?\ paths, or a long
+    // plain start would have died in the loader; this shows that the mechanism was used.
+    const std::wstring app = modulePath(thisImage());
+    const HMODULE qt = qtCore();
+    const std::wstring qtPath = qt != nullptr ? modulePath(qt) : std::wstring();
+    const bool loadedExtended = isExtended(app) && isExtended(qtPath);
+    checks.push_back(
+        {"load-form", loadedExtended, true,
+         loadedExtended
+             ? std::format("{} and {} loaded through \\\\?\\ paths", toUtf8(fileName(app)), toUtf8(fileName(qtPath)))
+             : std::format("{} loaded in {} and {} in {}; the launcher loads both through \\\\?\\ paths (ADR 0012)",
+                           toUtf8(fileName(app)), formOf(app), qtPath.empty() ? "Qt6Core" : toUtf8(fileName(qtPath)),
+                           formOf(qtPath))});
+
+    checks.push_back(
+        {"dialog-guard", dialogGuard, true,
+         dialogGuard ? "dialogs are refused on the main thread" : "the dialog hook could not be installed"});
 #else
     static_cast<void>(hardening);
+    static_cast<void>(dialogGuard);
     checks.push_back({"platform", true, false, "no process-level manifest checks on this platform"});
+#endif
+    return checks;
+}
+
+std::vector<SelfTestCheck> runLateLoadChecks() {
+    std::vector<SelfTestCheck> checks;
+#ifdef _WIN32
+    const std::wstring exe = withoutExtendedPrefix(modulePath());
+    const std::wstring dir = exe.substr(0, exe.find_last_of(L'\\'));
+    std::vector<std::wstring> pending;
+    std::size_t total = 0;
+    WIN32_FIND_DATAW data{};
+    HANDLE find = FindFirstFileExW((extendedPath(dir) + L"\\*.dll").c_str(), FindExInfoBasic, &data,
+                                   FindExSearchNameMatch, nullptr, 0);
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            const std::wstring_view name = data.cFileName;
+            // "*.dll" also matches longer extensions through their 8.3 short names.
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || name.size() <= 4 ||
+                _wcsicmp(name.substr(name.size() - 4).data(), L".dll") != 0) {
+                continue;
+            }
+            ++total;
+            if (GetModuleHandleW(data.cFileName) == nullptr) {
+                pending.emplace_back(name);
+            }
+        } while (FindNextFileW(find, &data) != FALSE);
+        FindClose(find);
+    }
+    if (pending.empty()) {
+        checks.push_back(
+            {"late-load", true, false, std::format("all {} DLLs beside frost.exe were loaded at start-up", total)});
+        return checks;
+    }
+    bool ok = true;
+    std::string detail;
+    for (const std::wstring& name : pending) {
+        // By bare name, with the process default search order, as Qt loads a library lazily.
+        HMODULE module = LoadLibraryW(name.c_str());
+        std::string result;
+        if (module != nullptr) {
+            result = std::format("{} ({})", toUtf8(name), formOf(modulePath(module)));
+            FreeLibrary(module);
+        } else {
+            const DWORD error = GetLastError();
+            ok = false;
+            result = std::format("{} failed (win32 error {})", toUtf8(name), error);
+        }
+        detail += (detail.empty() ? "" : ", ") + result;
+    }
+    checks.push_back({"late-load", ok, false, "loaded by name: " + detail});
 #endif
     return checks;
 }

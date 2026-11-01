@@ -207,36 +207,26 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
 ## Consequences
 - Long paths work in frost::io on every Windows machine. A child's *current directory* beyond MAX_PATH is
   still refused by Windows when `LongPathsEnabled = 0`; the launcher reports that as InvalidArgument with an
-  explanation (TODO(M1): fall back to the 8.3 short name). On such machines Qt cannot load a plugin
-  whose path is longer than 250 UTF-16 units. The limit is the Windows loader's: LoadLibraryW fails
-  beyond it for any DLL that embeds an isolation-aware manifest (RT_MANIFEST resource 2), as Qt's DLLs
-  and plugins do (measured with Qt 6.12.0; `kQtPluginPathLimitUnits` in
-  `src/app/include/frost/app/startup.hpp`). Whether `LongPathsEnabled = 1` lifts it has not been
-  measured. So frost.exe itself cannot start from a directory beyond MAX_PATH there, unless it is
-  started through the directory's 8.3 short name, which Qt then uses as well. Its start-up check
-  reports that instead of letting Qt abort. In
-  `tests/app/frost_process_test.cpp`, `RunsFromPathLongerThanMaxPath` skips there, so the M0 exit
-  criterion stays visibly unmet, and `ReportsLongPathLimitCleanly` covers the report.
-- The same limit applies to frost's own start-up DLLs (measured 2026-11-01 at 2c499a2 with
-  `LongPathsEnabled = 0`; raw data in `E:\FrostBuilds\perf\m0\exit-full\`). When frost.exe is started
-  through its plain path, as frost::io's launcher does below MAX_PATH, the loader refuses each DLL that
-  frost.exe loads at start-up (its static imports, which sit next to it) and that embeds RT_MANIFEST
-  resource 2, once that DLL's path is longer than 250 units. It ends the process with 0xC0000106
-  (STATUS_NAME_TOO_LONG) before `main` runs, so the start-up check never runs and no message appears.
-  Release frost dies that way from directories of 236 to 249 units (`Qt6Widgets.dll`), Debug from 235 to
-  249 (`Qt6Widgetsd.dll`). Those ranges come from their end points plus spot checks inside them (Release
-  241 and 245, Debug 240), not from every length. Release frost starts normally up to 225 units and
-  Debug up to 224; from 226 (Release) or 225 (Debug) up to the start of the range, the start-up check
-  refuses cleanly. From 250 units on (frost.exe's path reaches 260) the launcher uses the `\\?\` form,
-  frost starts, and the check refuses cleanly again. ASan trees put clang's ASan runtime next to every
-  executable. Its longer name (`clang_rt.asan_dynamic-x86_64.dll`, 32 units) starts the range at 218
-  units: the runtime loads at 250 units and fails at 251. So `PlatformPluginPathBoundary`, whose
-  directories are 225 and 226 units long, fails there. TODO(M1): make frost refuse cleanly from every
-  directory length (question E4, option (b), in `docs/progress.md`), together with the launch beyond
-  MAX_PATH itself (question E1).
+  explanation (TODO(M1): fall back to the 8.3 short name). The Windows loader refuses a plain path
+  longer than 250 UTF-16 units for any DLL that embeds an isolation-aware manifest (RT_MANIFEST
+  resource 2), as Qt's DLLs and plugins and clang's ASan runtime do, whatever `LongPathsEnabled` says
+  (measured with Qt 6.12.0 with the switch off and on); the `\\?\` form of the same path loads at any
+  length. frost therefore starts through a small launcher, frost.exe, that loads the application
+  (frost_app.dll) and, through it, Qt by `\\?\` paths, and pins Qt's plugins the same way before Qt
+  loads them by their plain paths. It starts from every directory length on every machine, with or
+  without the switch (ADR 0012, which also lists the tests that pin it).
+- History, superseded by ADR 0012: until then frost.exe imported Qt statically, and the same limit
+  killed it before `main` on a plain start (as frost::io's launcher makes below MAX_PATH) with
+  0xC0000106 (STATUS_NAME_TOO_LONG) and no message, from directories of 236 to 249 units in Release
+  (`Qt6Widgets.dll`), 235 to 249 in Debug and 218 to 249 in ASan trees, whose
+  `clang_rt.asan_dynamic-x86_64.dll` has the longest name (measured 2026-11-01 at 2c499a2 with
+  `LongPathsEnabled = 0`; raw data in `E:\FrostBuilds\perf\m0\exit-full\`). Between those ranges and
+  beyond them, a start-up check refused long plugin paths, so the launch beyond MAX_PATH did not work
+  (question E1 in `docs/progress.md`), and `PlatformPluginPathBoundary` failed in ASan trees
+  (question E4).
 - Process-wide hardening that PLAN.md 3.5 lists next to the launcher (`SetDefaultDllDirectories`,
-  `NoDefaultCurrentDirectoryInExePath`) belongs to app startup (`src/app/include/frost/app/startup.hpp`),
-  not to frost::io. As a consequence, DLLs are no longer found through PATH, and
+  `NoDefaultCurrentDirectoryInExePath`) belongs to app startup (`src/app/include/frost/app/startup_core.hpp`,
+  applied by frost.exe's launcher on Windows), not to frost::io. As a consequence, DLLs are no longer found through PATH, and
   `LoadLibraryExW(bare name, LOAD_WITH_ALTERED_SEARCH_PATH)` fails with ERROR_INVALID_PARAMETER;
   third-party code loaded into frost that relies on either (IMEs, shell extensions) breaks, as in
   Chromium and Firefox. `SearchPathW` still searches the current directory, so frost-lint bans it.
@@ -245,7 +235,8 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
 - Tests use `tests/support/scratch_dir.hpp`: one unique directory per test under the system temp directory,
   removed through `realFileSystem()`, so concurrent `ctest -j` runs and worktrees never share files.
 - On Windows a test that starts a child which could show a box (frost.exe in `FrostProcess`, whose Release
-  and ASan builds show Qt's unsuppressible "no Qt platform plugin" box) gives each child a fresh
+  and ASan builds showed Qt's "no Qt platform plugin" box until frost's dialog guard, ADR 0012) gives each
+  child a fresh
   `PrivateDesktop` and `NoHardErrorBoxes`, and does not start it at all if the desktop cannot be created.
   A box then ends at the test's timeout instead of waiting in front of the user. io_test_child turns off
   its own CRT and error boxes and runs on the parent's desktop, apart from the desktop tests; the tests

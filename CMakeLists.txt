@@ -52,38 +52,51 @@ if(WIN32)
         @ONLY)
 endif()
 
-# Sanitizers apply to every target so libraries and tests agree on the runtime.
+# Sanitizers apply to every FrostIDE target so libraries and tests agree on the runtime.
+# frost_apply_compile_options (cmake/FrostCompilerOptions.cmake), which every target's helper
+# calls, adds these options per target; frost.exe's Windows launcher alone opts out
+# (NO_SANITIZE, ADR 0012).
+set(FROST_SANITIZE_COMPILE_OPTIONS "")
+set(FROST_SANITIZE_LINK_OPTIONS "")
 if(FROST_SANITIZE)
     list(JOIN FROST_SANITIZE "," _frost_sanitizers)
     if(MSVC)
         # clang-cl: AddressSanitizer only, with the release CRT (/MD; see the
-        # win-clangcl-asan preset). CMake links with lld-link directly, so the ASan
-        # runtime inputs come from the toolchain (FROST_ASAN_LINK_OPTIONS); lld-link
-        # would ignore -fsanitize.
+        # win-clangcl-asan preset). clang-cl refuses -fsanitize=address with /MDd, so the ASan
+        # tree's Debug configuration does not build; use its RelWithDebInfo (or Release). If
+        # UBSan is ever wanted here, use it together with ASan or in trap mode
+        # (-fsanitize-trap=undefined): its standalone runtime is static-only and fails the
+        # link of /MD code (measured 2026-11-01, ADR 0012). CMake links with lld-link
+        # directly, so the ASan runtime inputs come from the toolchain
+        # (FROST_ASAN_LINK_OPTIONS); lld-link would ignore -fsanitize.
         if(NOT FROST_SANITIZE STREQUAL "address")
             message(FATAL_ERROR "clang-cl builds support FROST_SANITIZE=address only (got '${FROST_SANITIZE}')")
         endif()
         # /Oy- is clang-cl's spelling of -fno-omit-frame-pointer (keeps ASan stacks complete).
-        add_compile_options(-fsanitize=address /Oy-)
-        add_link_options(${FROST_ASAN_LINK_OPTIONS})
-        # The ASan runtime DLL, copied next to every executable by frost_copy_runtime_dlls.
+        set(FROST_SANITIZE_COMPILE_OPTIONS -fsanitize=address /Oy-)
+        set(FROST_SANITIZE_LINK_OPTIONS ${FROST_ASAN_LINK_OPTIONS})
+        # The ASan runtime DLL, copied next to every executable by frost_copy_runtime_dlls,
+        # and loaded first by frost.exe's launcher (src/app/CMakeLists.txt).
         set(FROST_ASAN_RUNTIME_DLL "${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
         if(NOT EXISTS "${FROST_ASAN_RUNTIME_DLL}")
             message(FATAL_ERROR "ASan runtime not found: ${FROST_ASAN_RUNTIME_DLL}")
         endif()
     else()
-        add_compile_options(-fsanitize=${_frost_sanitizers} -fno-omit-frame-pointer -fno-sanitize-recover=all)
-        add_link_options(-fsanitize=${_frost_sanitizers})
+        set(FROST_SANITIZE_COMPILE_OPTIONS
+            -fsanitize=${_frost_sanitizers} -fno-omit-frame-pointer -fno-sanitize-recover=all)
+        set(FROST_SANITIZE_LINK_OPTIONS -fsanitize=${_frost_sanitizers})
     endif()
     message(STATUS "FrostIDE sanitizers: ${_frost_sanitizers}")
 endif()
 
 if(FROST_BUILD_UI)
     find_package(Qt6 ${FROST_QT_VERSION} EXACT REQUIRED COMPONENTS Core Gui Widgets)
-    # Qt's plugin directory, used by tests to load the offscreen platform plugin.
+    # Qt's plugin directory, used by tests to load the offscreen platform plugin, and its
+    # DLL directory, from which frost_process_tests takes DLLs frost does not deploy.
     get_target_property(_frost_qmake Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(_frost_qt_prefix "${_frost_qmake}/../.." ABSOLUTE)
     set(FROST_QT_PLUGIN_DIR "${_frost_qt_prefix}/plugins")
+    set(FROST_QT_BIN_DIR "${_frost_qt_prefix}/bin")
 endif()
 
 # Threads::Threads (frost::sched). Found here so the imported target is visible from

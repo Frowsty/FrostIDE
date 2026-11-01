@@ -18,8 +18,8 @@
 # FATAL_ERROR, so tests/cmake can see every diagnostic of a fixture in one run.
 #
 #   frost_add_library(<name> LAYER <layer> [SOURCES ...] [DEPS frost libs...]
-#                     [THIRD_PARTY imported targets...] [INTERFACE])
-#   frost_add_executable(<name> LAYER <layer> [WIN32] [OUTPUT_NAME <file name>]
+#                     [THIRD_PARTY imported targets...] [INTERFACE | SHARED])
+#   frost_add_executable(<name> LAYER <layer> [WIN32] [NO_SANITIZE] [OUTPUT_NAME <file name>]
 #                        SOURCES ... [DEPS ...] [THIRD_PARTY ...])
 #   frost_add_test(<name> SOURCES ... [DEPS ...] [THIRD_PARTY ...] [LABELS ...] [QT])
 #   frost_copy_runtime_dlls(<executable>)   (frost_add_executable and frost_add_test call it)
@@ -209,20 +209,29 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_check_layer_gra
 
 # Creates FrostIDE library frost_<name> (alias frost::<name>) in <layer>: STATIC
 # from SOURCES with PRODUCTION options, or with INTERFACE a header-only INTERFACE
-# library (no compile options of its own). DEPS (FrostIDE libraries, rank-checked)
+# library (no compile options of its own), or with SHARED a shared library (a DLL on
+# Windows; today only frost_app.dll, ADR 0012), which _frost_add_runtime_dll_copies orders
+# after its output directory's DLL copy. DEPS (FrostIDE libraries, rank-checked)
 # and THIRD_PARTY (imported targets) are linked PUBLIC/INTERFACE; the target is
 # recorded in FROST_LAYERED_TARGETS for the deferred graph check.
 function(frost_add_library name)
-    cmake_parse_arguments(ARG "INTERFACE" "LAYER" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
+    cmake_parse_arguments(ARG "INTERFACE;SHARED" "LAYER" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
     set(target frost_${name})
     _frost_check_layering(${target} "${ARG_LAYER}" "${ARG_DEPS}" "${ARG_THIRD_PARTY}")
+    if(ARG_INTERFACE AND ARG_SHARED)
+        message(FATAL_ERROR "frost_add_library(${name}): INTERFACE and SHARED exclude each other")
+    endif()
     if(ARG_INTERFACE)
         add_library(${target} INTERFACE)
         target_compile_features(${target} INTERFACE cxx_std_26)
         target_include_directories(${target} INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
         target_link_libraries(${target} INTERFACE ${ARG_DEPS} ${ARG_THIRD_PARTY})
     else()
-        add_library(${target} STATIC ${ARG_SOURCES})
+        if(ARG_SHARED)
+            add_library(${target} SHARED ${ARG_SOURCES})
+        else()
+            add_library(${target} STATIC ${ARG_SOURCES})
+        endif()
         target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
         target_link_libraries(${target} PUBLIC ${ARG_DEPS} ${ARG_THIRD_PARTY})
         frost_apply_compile_options(${target} PRODUCTION)
@@ -234,10 +243,12 @@ endfunction()
 
 # Creates executable <name> in <layer> with PRODUCTION options; DEPS and THIRD_PARTY
 # are checked as for frost_add_library and linked PRIVATE. WIN32 selects the GUI
-# subsystem; OUTPUT_NAME renames the produced file. The executable gets its runtime
-# DLLs through frost_copy_runtime_dlls, like every test of frost_add_test.
+# subsystem; NO_SANITIZE leaves out FROST_SANITIZE's flags (frost.exe's Windows launcher
+# only, see frost_apply_compile_options); OUTPUT_NAME renames the produced file. The
+# executable gets its runtime DLLs through frost_copy_runtime_dlls, like every test of
+# frost_add_test.
 function(frost_add_executable name)
-    cmake_parse_arguments(ARG "WIN32" "LAYER;OUTPUT_NAME" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
+    cmake_parse_arguments(ARG "WIN32;NO_SANITIZE" "LAYER;OUTPUT_NAME" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
     _frost_check_layering(${name} "${ARG_LAYER}" "${ARG_DEPS}" "${ARG_THIRD_PARTY}")
     if(ARG_WIN32)
         add_executable(${name} WIN32 ${ARG_SOURCES})
@@ -245,7 +256,11 @@ function(frost_add_executable name)
         add_executable(${name} ${ARG_SOURCES})
     endif()
     target_link_libraries(${name} PRIVATE ${ARG_DEPS} ${ARG_THIRD_PARTY})
-    frost_apply_compile_options(${name} PRODUCTION)
+    if(ARG_NO_SANITIZE)
+        frost_apply_compile_options(${name} PRODUCTION NO_SANITIZE)
+    else()
+        frost_apply_compile_options(${name} PRODUCTION)
+    endif()
     set_target_properties(${name} PROPERTIES FROST_LAYER ${ARG_LAYER})
     set_property(GLOBAL APPEND PROPERTY FROST_LAYERED_TARGETS ${name})
     if(ARG_OUTPUT_NAME)
@@ -277,15 +292,21 @@ endfunction()
 # never a step per executable, and every executable in the directory, registered here
 # or not, is ordered after it: its compiles and its link wait for the copy, so the
 # DLLs are in place before it links and before its z-applocal step runs, also when it
-# is built on its own.
+# is built on its own. Shared and module libraries built here (frost_app.dll, ADR 0012)
+# are members of their DLL's directory in the same way: vcpkg's add_library override gives
+# each one a z-applocal step too, which reads the Qt DLLs it imports from beside it, so each
+# is ordered after its directory's copy, and its imported DLLs join that copy. The copy
+# never writes a DLL built here; that DLL's only writer is its own link step, and no
+# z-applocal step reads it unless an executable beside it imports it (frost.exe loads
+# frost_app.dll at run time and depends on its target, so its own step runs after the link).
 #
 # Preconditions: <target> is an executable built here, not an IMPORTED or ALIAS
-# target. Its runtime output directory, like that of every executable in the build,
-# is the default one or a plain RUNTIME_OUTPUT_DIRECTORY: no generator expression, no
-# RUNTIME_OUTPUT_DIRECTORY_<CONFIG> (checked at the end of configure). The DLLs come
-# from imported targets: FrostIDE builds no shared or module libraries. One built here
-# would not be ordered before the copy, and its own DLL and z-applocal step (vcpkg's
-# add_library override adds one too) would be a writer and a reader in its directory.
+# target. Its runtime output directory, like that of every executable and shared or module
+# library in the build, is the default one or a plain RUNTIME_OUTPUT_DIRECTORY: no
+# generator expression, no RUNTIME_OUTPUT_DIRECTORY_<CONFIG> (checked at the end of
+# configure). The copied DLLs come from imported targets: nothing links a shared library
+# built here (frost.exe loads frost_app.dll at run time), because $<TARGET_RUNTIME_DLLS>
+# would then list it and the copy, which waits for no link, would copy it.
 function(frost_copy_runtime_dlls target)
     if(NOT TARGET ${target})
         message(FATAL_ERROR "frost_copy_runtime_dlls: '${target}' is not a target")
@@ -304,11 +325,12 @@ function(frost_copy_runtime_dlls target)
 endfunction()
 
 # Deferred (end of configure, once the output-directory properties are final). Finds
-# every executable of the build through each directory's BUILDSYSTEM_TARGETS and groups
-# them by runtime output directory. Each directory that holds a target registered by
+# every executable and every shared or module library of the build through each
+# directory's BUILDSYSTEM_TARGETS and groups them by runtime output directory (where a
+# DLL goes on Windows). Each directory that holds a target registered by
 # frost_copy_runtime_dlls gets one custom target, frost_runtime_dlls_<directory>, that
-# copies the union of the group's DLLs into the directory, and every executable of the
-# group, registered or not, depends on it. The search keeps the rule above when a
+# copies the union of the group's imported DLLs into the directory, and every member of
+# the group, registered or not, depends on it. The search keeps the rule above when a
 # registration is missing (s1_probe_validate and s1_first_frame had none and shared
 # tests/perf/s1 with s1_editor), instead of relying on every call site. Multi-config
 # generators run the copy once per configuration, into that configuration's
@@ -322,9 +344,9 @@ endfunction()
 # downgraded. Windows only, after the checks.
 function(_frost_add_runtime_dll_copies)
     get_property(registered GLOBAL PROPERTY FROST_RUNTIME_DLL_TARGETS)
-    # Every executable built here, directory by directory from the top. Imported and
-    # alias targets are not in BUILDSYSTEM_TARGETS, and frost_copy_runtime_dlls rejects
-    # them, so every registered target is in this list.
+    # Every executable and shared or module library built here, directory by directory
+    # from the top. Imported and alias targets are not in BUILDSYSTEM_TARGETS, and
+    # frost_copy_runtime_dlls rejects them, so every registered target is in this list.
     set(executables "")
     set(pending "${CMAKE_SOURCE_DIR}")
     while(pending)
@@ -334,7 +356,7 @@ function(_frost_add_runtime_dll_copies)
         get_property(dir_targets DIRECTORY "${source_dir}" PROPERTY BUILDSYSTEM_TARGETS)
         foreach(target IN LISTS dir_targets)
             get_target_property(type ${target} TYPE)
-            if(type STREQUAL "EXECUTABLE")
+            if(type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
                 list(APPEND executables ${target})
             endif()
         endforeach()
