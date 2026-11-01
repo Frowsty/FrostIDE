@@ -5,8 +5,10 @@
 # where and who waits for the copy (cmake/FrostLayers.cmake, frost_copy_runtime_dlls):
 #   shared/   three registered executables in one output directory (like tests/sched or
 #             tests/app), two of them linking the stand-in Qt library and one not, and
-#             shared_raw, a plain add_executable that is never registered (like
-#             s1_probe_validate beside s1_editor) and links a stand-in nobody else does;
+#             shared_raw, a plain add_executable that is never registered (an executable
+#             whose registration was forgotten, as s1_probe_validate's and s1_first_frame's
+#             was before frost_add_executable registered them) and links a stand-in
+#             nobody else does;
 #   top_plain in this directory's own output directory, linking nothing, so without the
 #             ASan stand-in its directory has no DLLs at all;
 #   bin_a/    and bin_root here: both set RUNTIME_OUTPUT_DIRECTORY to <build>/bin (one
