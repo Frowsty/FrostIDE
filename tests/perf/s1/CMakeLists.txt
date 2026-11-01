@@ -10,6 +10,8 @@
 #                      QRhiWidget glyph atlas) for the 10 s fling and typing runs.
 # The Qt-free tools are in the diag layer with the probes; s1_editor uses Qt and is
 # in the app layer (cmake/FrostLayers.cmake). Its headless tests are s1_editor_tests.
+# frost_add_executable and frost_add_test put each one's runtime DLLs next to it (Qt,
+# and in ASan builds the ASan runtime, which the Qt-free tools import too).
 
 # Embeds the FrostIDE manifest (per-monitor v2 DPI awareness, which Desktop
 # Duplication coordinates rely on; UTF-8 code page; long paths).
@@ -53,7 +55,6 @@ frost_add_executable(s1_editor LAYER app
     THIRD_PARTY Qt6::Widgets Qt6::GuiPrivate)
 target_link_libraries(s1_editor PRIVATE user32)
 frost_s1_embed_manifest(s1_editor)
-frost_copy_runtime_dlls(s1_editor)
 add_custom_command(TARGET s1_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:s1_editor>/platforms
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

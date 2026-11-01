@@ -22,7 +22,7 @@
 #   frost_add_executable(<name> LAYER <layer> [WIN32] [OUTPUT_NAME <file name>]
 #                        SOURCES ... [DEPS ...] [THIRD_PARTY ...])
 #   frost_add_test(<name> SOURCES ... [DEPS ...] [THIRD_PARTY ...] [LABELS ...] [QT])
-#   frost_copy_runtime_dlls(<executable>)   (frost_add_test calls it itself)
+#   frost_copy_runtime_dlls(<executable>)   (frost_add_executable and frost_add_test call it)
 
 include_guard(GLOBAL)
 include(FrostCompilerOptions)
@@ -234,7 +234,8 @@ endfunction()
 
 # Creates executable <name> in <layer> with PRODUCTION options; DEPS and THIRD_PARTY
 # are checked as for frost_add_library and linked PRIVATE. WIN32 selects the GUI
-# subsystem; OUTPUT_NAME renames the produced file.
+# subsystem; OUTPUT_NAME renames the produced file. The executable gets its runtime
+# DLLs through frost_copy_runtime_dlls, like every test of frost_add_test.
 function(frost_add_executable name)
     cmake_parse_arguments(ARG "WIN32" "LAYER;OUTPUT_NAME" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
     _frost_check_layering(${name} "${ARG_LAYER}" "${ARG_DEPS}" "${ARG_THIRD_PARTY}")
@@ -250,30 +251,50 @@ function(frost_add_executable name)
     if(ARG_OUTPUT_NAME)
         set_target_properties(${name} PROPERTIES OUTPUT_NAME ${ARG_OUTPUT_NAME})
     endif()
+    frost_copy_runtime_dlls(${name})
 endfunction()
 
 # Makes executable <target> run from the build tree without PATH edits. On Windows,
 # the DLLs of the imported shared libraries it links (Qt; $<TARGET_RUNTIME_DLLS>) and,
 # in ASan builds, clang's ASan runtime DLL (FROST_ASAN_RUNTIME_DLL, set by the root
 # CMakeLists.txt; not on PATH) are copied into its output directory. Elsewhere nothing
-# is copied, but the preconditions below are still checked.
+# is copied, but the preconditions below are still checked. frost_add_executable and
+# frost_add_test call it for every executable they create; an executable made with a
+# plain add_executable (io_test_child) calls it itself.
 #
-# The copies are made by one custom target per output directory, which every
-# registered target in that directory depends on (_frost_add_runtime_dll_copies, run
-# at the end of configure), never by a POST_BUILD step per target. Executables that
-# share a directory (tests/sched, tests/io, tests/app, tests/perf/s1) would otherwise
-# copy the same DLL at the same time, and in a fresh directory one of the copies fails
-# with a sharing violation ("permission denied"). The DLLs are therefore in place
-# before <target> links, also when it is built on its own.
+# The rule: no build step may read or write a copied DLL in an output directory unless
+# it is ordered after that directory's copy. Every executable in the directory has
+# such a step: vcpkg's toolchain gives each executable a z-applocal POST_BUILD step
+# (its add_executable override; VCPKG_APPLOCAL_DEPS) that opens every DLL the
+# executable imports from beside it, recursively, and would copy missing ones from
+# vcpkg's installed bin directory. That directory stays empty while the triplets link
+# statically, so z-applocal copies nothing today, but it reads the copied Qt and ASan
+# DLLs on every run. That read is what failed in 51e9a05's fresh tests/perf/s1
+# directory: vcpkg printed "open_for_read(...Qt6Widgetsd.dll): permission denied" when
+# one executable's z-applocal opened the DLL while the other executable's POST_BUILD
+# copy was writing it, a reader against a writer. So one custom target per output
+# directory makes the copies (_frost_add_runtime_dll_copies, at the end of configure),
+# never a step per executable, and every executable in the directory, registered here
+# or not, is ordered after it: its compiles and its link wait for the copy, so the
+# DLLs are in place before it links and before its z-applocal step runs, also when it
+# is built on its own.
 #
-# Preconditions: <target> is an executable whose runtime output directory is the
-# default one or a plain RUNTIME_OUTPUT_DIRECTORY: no generator expression, no
+# Preconditions: <target> is an executable built here, not an IMPORTED or ALIAS
+# target. Its runtime output directory, like that of every executable in the build,
+# is the default one or a plain RUNTIME_OUTPUT_DIRECTORY: no generator expression, no
 # RUNTIME_OUTPUT_DIRECTORY_<CONFIG> (checked at the end of configure). The DLLs come
-# from imported targets: FrostIDE's own libraries are static, and a SHARED library
-# built here would not be ordered before the copy.
+# from imported targets: FrostIDE builds no shared or module libraries. One built here
+# would not be ordered before the copy, and its own DLL and z-applocal step (vcpkg's
+# add_library override adds one too) would be a writer and a reader in its directory.
 function(frost_copy_runtime_dlls target)
     if(NOT TARGET ${target})
         message(FATAL_ERROR "frost_copy_runtime_dlls: '${target}' is not a target")
+    endif()
+    get_target_property(aliased ${target} ALIASED_TARGET)
+    get_target_property(imported ${target} IMPORTED)
+    if(aliased OR imported)
+        message(FATAL_ERROR "frost_copy_runtime_dlls: ${target} is an ALIAS or IMPORTED target; "
+                            "name the executable built here")
     endif()
     get_target_property(type ${target} TYPE)
     if(NOT type STREQUAL "EXECUTABLE")
@@ -282,11 +303,15 @@ function(frost_copy_runtime_dlls target)
     set_property(GLOBAL APPEND PROPERTY FROST_RUNTIME_DLL_TARGETS ${target})
 endfunction()
 
-# Deferred (end of configure, once the output-directory properties are final): groups
-# the targets registered by frost_copy_runtime_dlls by runtime output directory and
-# gives each group one custom target, frost_runtime_dlls_<directory>, that copies the
-# union of the group's DLLs into the directory; every target of the group depends on
-# it. Multi-config generators run it once per configuration, into that configuration's
+# Deferred (end of configure, once the output-directory properties are final). Finds
+# every executable of the build through each directory's BUILDSYSTEM_TARGETS and groups
+# them by runtime output directory. Each directory that holds a target registered by
+# frost_copy_runtime_dlls gets one custom target, frost_runtime_dlls_<directory>, that
+# copies the union of the group's DLLs into the directory, and every executable of the
+# group, registered or not, depends on it. The search keeps the rule above when a
+# registration is missing (s1_probe_validate and s1_first_frame had none and shared
+# tests/perf/s1 with s1_editor), instead of relying on every call site. Multi-config
+# generators run the copy once per configuration, into that configuration's
 # subdirectory, so there is exactly one copy step per directory and configuration.
 # The copy target always runs, so DLLs deleted from a directory come back with the next
 # build. copy_if_different compares contents and leaves current DLLs alone; that costs
@@ -296,8 +321,24 @@ endfunction()
 # executable. copy_if_newer would be cheaper but would keep a newer DLL when Qt is
 # downgraded. Windows only, after the checks.
 function(_frost_add_runtime_dll_copies)
-    get_property(targets GLOBAL PROPERTY FROST_RUNTIME_DLL_TARGETS)
-    list(REMOVE_DUPLICATES targets)
+    get_property(registered GLOBAL PROPERTY FROST_RUNTIME_DLL_TARGETS)
+    # Every executable built here, directory by directory from the top. Imported and
+    # alias targets are not in BUILDSYSTEM_TARGETS, and frost_copy_runtime_dlls rejects
+    # them, so every registered target is in this list.
+    set(executables "")
+    set(pending "${CMAKE_SOURCE_DIR}")
+    while(pending)
+        list(POP_FRONT pending source_dir)
+        get_property(subdirs DIRECTORY "${source_dir}" PROPERTY SUBDIRECTORIES)
+        list(APPEND pending ${subdirs})
+        get_property(dir_targets DIRECTORY "${source_dir}" PROPERTY BUILDSYSTEM_TARGETS)
+        foreach(target IN LISTS dir_targets)
+            get_target_property(type ${target} TYPE)
+            if(type STREQUAL "EXECUTABLE")
+                list(APPEND executables ${target})
+            endif()
+        endforeach()
+    endwhile()
     get_property(multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     if(multi_config)
         set(configs ${CMAKE_CONFIGURATION_TYPES})
@@ -305,9 +346,11 @@ function(_frost_add_runtime_dll_copies)
         set(configs ${CMAKE_BUILD_TYPE})
     endif()
     # dirs[i] is a group's base output directory (before any per-configuration
-    # subdirectory); group_<i> lists its targets.
+    # subdirectory); group_<i> lists its executables, and copy_<i> is set when one of
+    # them is registered. Every executable is checked, registered or not: one whose
+    # directory cannot be told could land beside a copy without being ordered after it.
     set(dirs "")
-    foreach(target IN LISTS targets)
+    foreach(target IN LISTS executables)
         foreach(config IN LISTS configs)
             string(TOUPPER "${config}" config)
             get_target_property(per_config ${target} RUNTIME_OUTPUT_DIRECTORY_${config})
@@ -334,6 +377,9 @@ function(_frost_add_runtime_dll_copies)
             list(APPEND dirs "${dir}")
         endif()
         list(APPEND group_${index} ${target})
+        if(target IN_LIST registered)
+            set(copy_${index} TRUE)
+        endif()
     endforeach()
     if(NOT WIN32)
         return()
@@ -342,7 +388,11 @@ function(_frost_add_runtime_dll_copies)
     set(index 0)
     foreach(dir IN LISTS dirs)
         set(members ${group_${index}})
+        set(copy ${copy_${index}})
         math(EXPR index "${index} + 1")
+        if(NOT copy)
+            continue()
+        endif()
         file(RELATIVE_PATH rel "${CMAKE_BINARY_DIR}" "${dir}")
         set(name frost_runtime_dlls)
         if(rel)
@@ -353,8 +403,10 @@ function(_frost_add_runtime_dll_copies)
         if(TARGET ${name})
             set(name "${name}_${index}")
         endif()
-        # The union of the group's DLLs as one generator expression; it holds `;`, so
-        # it stays quoted, and COMMAND_EXPAND_LISTS turns its value into arguments.
+        # The union of the DLLs of every executable in the directory, registered or not,
+        # so that none of them needs a copy of its own, as one generator expression; it
+        # holds `;`, so it stays quoted, and COMMAND_EXPAND_LISTS turns its value into
+        # arguments.
         set(dlls "")
         foreach(target IN LISTS members)
             list(APPEND dlls "$<TARGET_RUNTIME_DLLS:${target}>")
