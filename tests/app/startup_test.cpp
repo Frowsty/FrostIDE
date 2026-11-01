@@ -371,7 +371,8 @@ private:
  * GoogleTest itself clears _WRITE_ABORT_MSG and _CALL_REPORTFAULT, sends CRT errors to
  * stderr and sets the SEM_* flags in every test process and death-test child, so an abort
  * test cannot tell whether suppressCrashDialogs() does anything. This test therefore
- * restores the dialog-showing defaults, calls it, and reads every setting back. Nothing
+ * switches every dialog source on (a superset of the defaults), calls it, and reads every
+ * setting back. Nothing
  * aborts, so a regression fails an assertion instead of opening a dialog; the process's
  * previous settings are restored at the end.
  */

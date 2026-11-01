@@ -310,8 +310,8 @@ TEST(FrostProcess, ReportsLongPathLimitCleanly) {
     // promptly why it cannot start instead of letting Qt abort. This is not the M0 exit
     // criterion, which asks for a launch that works.
     if (systemLongPathsEnabled()) {
-        GTEST_SKIP() << "LongPathsEnabled=1 on this machine: frost starts from long paths, so there is no limit "
-                        "to report (RunsFromPathLongerThanMaxPath covers it)";
+        GTEST_SKIP() << "LongPathsEnabled=1 on this machine: frost does not refuse long paths then, and "
+                        "RunsFromPathLongerThanMaxPath measures whether they launch";
     }
     const ScratchDir scratch("app-process-long-report");
     const std::string exe = copyFrostTo(longDirectoryIn(scratch));
@@ -325,11 +325,13 @@ TEST(FrostProcess, RunsThroughShortNamesOfALongPath) {
     /*
      * Started through the 8.3 short name of a directory beyond MAX_PATH, frost sees its
      * own path in that form, and so does Qt: it loads its platform plugin through the short
-     * path, whatever LongPathsEnabled says (measured 2026-11-01 with Qt 6.12.0). The
-     * start-up check must therefore measure the form GetModuleFileNameW reports; measuring
-     * the long form would refuse a launch that works. If Qt ever moves to the long form,
-     * this fails while LongPathsEnabled=0 with Qt's own abort instead of a clean report, and
-     * the check has to follow; with the switch on, Qt loads either form and this cannot tell.
+     * path with LongPathsEnabled=0 (measured 2026-11-01 with Qt 6.12.0; the switch has never
+     * been on here). The start-up check must therefore measure the form GetModuleFileNameW
+     * reports; measuring the long form would refuse a launch that works. If Qt ever moves to
+     * the long form, this fails while LongPathsEnabled=0 with Qt's own abort instead of a
+     * clean report, and the check has to follow. With the switch on it can tell only if the
+     * switch does not lift the loader's limit, which has not been measured
+     * (kQtPluginPathLimitUnits).
      */
     const ScratchDir scratch("app-process-short");
     const std::string exe = copyFrostTo(longDirectoryIn(scratch));
