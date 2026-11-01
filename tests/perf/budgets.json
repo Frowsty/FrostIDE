@@ -448,7 +448,7 @@
       "variants": [],
       "percentiles": ["p50", "p99"],
       "targets": [
-        { "gate": "M3", "percentile": "p50", "max": null, "relative": "S7 baseline x1.2", "unit": "s" },
+        { "gate": "M3", "percentile": "p50", "max": 25.1, "relative": "S7 baseline x1.2", "unit": "s", "note": "S7 baseline p50 20.93 s on REF-W1 (20 runs, clangd launch to both answers from the persisted index, warm file cache; ADR 0008)" },
         { "gate": "M13", "percentile": "p50", "max": 2, "unit": "s" },
         { "gate": "M13", "percentile": "p99", "max": 3, "unit": "s" }
       ],
