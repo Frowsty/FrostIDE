@@ -3,6 +3,38 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01: M0 spike S1 result (branch `m0/s1`)
+
+### Done
+- **Quiet-window suite (run 3).** The coordinator ran `tests\perf\s1\run-s1.ps1` at bc20789 with the user's go,
+  2026-11-01 01:02-01:11: 47 steps, 8:29, every run valid. All 6 probe validations passed: the GDI window at the
+  start and end, delays through the raster and QRhi paths, and the UI-CPU injection on both backends. The
+  machine was not idle: system CPU was 33-44 % from the user's software, and Wallpaper Engine was running.
+- **ADR 0007 finished** from run 3. Status stays proposed until the user answers its three questions.
+  - Raster fails B6 CPU at 5120x1392 in 5 of 5 rounds, even with fill only (p99 median 9.18 / 7.38 / 6.29 ms
+    for full repaint / scroll-blit / fill).
+  - QRhi passes CPU (p99 0.86 ms) and never drops a tick. It misses 1.5-4.9 % of refreshes, under the 5.0-9.3 %
+    floor of a trivial window, and its maximum interval is within 16.7 ms in 3 of 5 rounds.
+  - B1 warm: frost.exe p50 264.9 ms (n=20). QRhi adds about 215 ms to the first frame (474.6 against 257.7 ms in
+    the same executable), almost all of it inside the first `show()`; shader compilation is 6.5 ms.
+  - Runs 1 and 2 are kept only as supporting evidence under load.
+
+### Next
+- The user's answers to ADR 0007's questions. Then the independent review and merge of `m0/s1`.
+- M1: keep QRhi start-up off B1 (options in ADR 0007, Consequences); profile the first `show()`; check QRhi's
+  swap-chain frame latency.
+- When m0/io lands, port `tests/perf/s1/child_process.cpp` to `IProcessLauncher`.
+
+### Blockers
+- None. DWM ETW needs elevation, so it is deferred (ADR 0007).
+
+### Questions for the user
+1. Approve QRhi as M1's editor renderer (the default on Windows, with raster as the oracle and RDP/WARP fallback)?
+2. How should B6 be gated, given that the desktop itself misses 5-9 % of refreshes with a 20.8 ms maximum
+   interval: a quiet desktop with the absolute budget, a same-session floor, or both?
+3. B1 warm fails before any editor work (frost.exe p50 264.9 ms against 150 ms; max of 20, 360.1 ms, against
+   250 ms). Keep 150/250 ms as M1's target, or re-baseline?
+
 ## 2026-10-31: M0 spike S1 (branch `m0/s1`)
 
 ### Done
