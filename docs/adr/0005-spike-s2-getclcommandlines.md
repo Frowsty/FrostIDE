@@ -2,7 +2,8 @@
 
 - Status: accepted (fixture, R2a and R2b).
 - Date: 2026-10-31; revised 2026-11-01 after the independent verification (R2a control re-measured with
-  `SolutionDir`, units, TerminalAppLib failure, side effects on C:, Windows SDK).
+  `SolutionDir`, units, TerminalAppLib failure, side effects on C:, Windows SDK). The same day the raw data
+  moved out of the session scratchpad into `E:\FrostBuilds\perf\m0\s2-s6\` (Measurements, Raw data).
 - Plan reference: PLAN.md section 2 ("MSBuild / .vcxproj", path (c)), M0 spike S2
 
 ## Context
@@ -122,6 +123,21 @@ Controls, under the same conditions unless noted:
     25 FrostRuntime, 2 FrostServices and 2 Python processes, 7.2 GiB private together), Discord (2.1 GiB) and
     Wallpaper Engine. `lghub_agent.exe` had dropped to 0.17 GiB private.
   - The CPU was 26–47 % busy before the R2a runs, and commit headroom was 27.7–27.8 GiB.
+- **Raw data.** It is kept outside the repository in `E:\FrostBuilds\perf\m0\s2-s6\`. Its `README.txt` maps
+  each folder to the sections it backs:
+  - `run1-prototype\s2\`: the fixture project, its `-getTargetResult` outputs, `frost-extract.targets` and
+    `measure_r2.py`. The first table's runs left no per-run log;
+  - `run2-corpora\`: 2026-10-31, per batch an `s2-*.jsonl` (per-run times, groups, files and load) and an
+    `s2-*.result.json` (the last run's full output), with `analysis.txt`, the TerminalAppLib failure output,
+    `perfsummary-r2b-hostexe-dt.txt`, the restore log, the command-line diff across the restore
+    (`s2-r2b-server-restore-diff.txt`) and a listing of the moved `obj\` and `bin\`;
+  - `run3-s26\raw\`: 2026-11-01, the R2a control with `SolutionDir` (`s26-s2-r2a-npp-dt-sln.*`), the lock and
+    condition records, `versions-s26.txt` (with TerminalAppLib's evaluation-only check), `sizes.txt` (the
+    restore, vcpkg, NuGet cache and moved-tree sizes) and `corpus-state-after.txt`;
+  - `verification\`: the independent verifiers' re-runs and recomputations.
+
+  The scripts still name the session scratchpad paths they ran with. Third-party sources and build output,
+  including the moved `obj\` and `bin\` themselves, are not kept.
 
 ## Consequences
 - Path (c) needs a targets file on disk. It is shipped with FrostIDE and resolved to an absolute path, never taken

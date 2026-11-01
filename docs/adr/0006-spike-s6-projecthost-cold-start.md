@@ -8,8 +8,10 @@
   the trees value.
 - Date: 2026-10-31; revised 2026-11-01 after the independent verification (next project, B23 method,
   preconditions, units, Windows SDK), after its re-verification (the open path under an instant trust grant, the
-  missing cold sample, the trees target, wording), and after the confirmation (the start rule's scope, first-use
-  JIT with no warm-up, D3, the path to L1, figures).
+  missing cold sample, the trees target, wording), after the confirmation (the start rule's scope, first-use
+  JIT with no warm-up, D3, the path to L1, figures), and after the third verification (connection tracing, the
+  wait for L1, the tree fill, the start rule's title, NGEN, the trees proposal, path (c) caveats, wording; raw
+  data moved out of the session scratchpad into `E:\FrostBuilds\perf\m0\s2-s6\`).
 - Plan reference: PLAN.md section 2 ("MSBuild / .vcxproj", paths (b) and (c)), budget B23, D3, M0 spike S6
 
 ## Context
@@ -48,12 +50,14 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
    - At the warm-cache medians, 0.98 s (2026-11-01) to 1.10 s (2026-10-31) of the 3 s remain; after the slowest
      run (2.33 s), 0.67 s. That remainder has to cover all of FrostIDE's part ("Outside it" under Measurements):
      the open request, the native solution read and project selection, the launch, the slowdown that the tree
-     fill causes the host by running beside it, and the ingest after the response. The fill's own duration does
-     not count, because it runs in parallel. If the launch waits for L1, the wait counts too. A cold cache
-     shrinks the remainder further (decision 3). Medians of the parts do not add exactly, so M2 times the whole
-     interval.
-2. **On an open whose first project has no valid cached record: pre-warm ProjectHost while trust is pending;
-   skip the warm-up once trust is granted.**
+     fill causes the host by running beside it, and the ingest after the response. The fill runs in parallel, so
+     its own duration does not count as long as the fill finishes before the host's response. B23 ends when the
+     first project is streamed into the Solution tree, and the Solution view is part of the fill, so a fill that
+     outlasts the response puts its remaining time on the path too. Nothing measured R2b's tree fill. If the
+     launch waits for L1, the wait counts too. A cold cache shrinks the remainder further (decision 3). Medians of
+     the parts do not add exactly, so M2 times the whole interval.
+2. **On an open whose first project has no valid cached record: pre-warm ProjectHost while trust is pending in a
+   root that FrostIDE has no session state for (a first-ever open); skip the warm-up once trust is granted.**
    - **Scope.** This start rule applies only to an open in which the first project (decision 5) has no valid
      ProjectModelCache record, for example a first-ever open of a new root, the case B23 measures.
      - A warm reopen of an unchanged tree follows PLAN.md section 3.4 instead: the fingerprints are validated
@@ -84,7 +88,14 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
        did not measure the host's effect on L1 or on the tree fill.
      - It runs the project's MSBuild logic before L1, and evaluation can reach the network, for example when it
        resolves an MSBuild project SDK through NuGet. PLAN.md rules out network I/O before L1 (section 2.1) and
-       tests it by recording connections (section 2.2). S6 recorded no connections.
+       tests it by recording connections (section 2.2). S6 did not trace connections, so it has no evidence
+       either way for its own runs.
+     - R2b's own MSBuild logic did reach the network during S2. Without the design-time properties, a
+       `GetClCommandLines` run on `TerminalAppLib` built the referenced `types.vcxproj`. Its vcpkg manifest
+       install downloaded tool archives and cloned vcpkg's registry: 552 MB in `%LOCALAPPDATA%\vcpkg`, together
+       with the tools extracted from the archives (ADR 0005 decision 5 and Consequences). That was a build of a
+       reference, not an evaluation. With the properties, the logged `MSBuild.exe` run on Host.EXE, which also
+       references `types.vcxproj`, ran no vcpkg target.
      - PLAN.md section 3.4's cold-start flow lists ProjectHost as the step after the tree fill.
 
      There are three answers, and each needs the user:
@@ -93,7 +104,9 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
      2. Launch before L1, but keep evaluation off the network until L1 and defer a project that needs it.
         Nobody has built or measured that.
      3. Wait for L1. That keeps PLAN.md's rule and order, but it puts the time to L1 on B23's first-project path,
-        where it uses up part of decision 1's remainder. No M0 spike measured that time on R2b.
+        where it uses up some or all of decision 1's remainder (0.98–1.10 s at the warm medians). If the time to
+        L1 on R2b is as long as the remainder, 3 s cannot be met even at those medians. No M0 spike measured that
+        time on R2b.
 
      Whichever answer is chosen, M2 measures the host's effect on L1 and on the tree fill.
    - **First-use JIT with no warm-up.** When trust comes before the host starts, which includes the gating case
@@ -104,27 +117,33 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
      (Consequences). Two options for M2, neither decided here:
      - **(A) Path (c) for the first project of a trusted root while ProjectHost starts.** A fresh `MSBuild.exe`
        with the ADR 0005 wrapper and design-time properties returned Host.EXE's command lines in p50 331 ms
-       (10 runs, max 730 ms, min 293 ms; `spikes-msbuild/s2-r2b-hostexe-dt.jsonl`, 2026-10-31). That is about
-       1.6 s less than the cold host's 1.90 s on the same day. `MSBuild.exe` loads VS's Microsoft.Build, for
-       which this machine's native image cache holds a native image
+       (10 runs, max 730 ms, min 293 ms;
+       `E:\FrostBuilds\perf\m0\s2-s6\run2-corpora\s2-r2b-hostexe-dt.jsonl`, 2026-10-31). That is about 1.6 s
+       less than the cold host's 1.90 s on the same day. `MSBuild.exe` loads VS's Microsoft.Build, for which
+       this machine's native image cache holds a native image
        (`C:\Windows\assembly\NativeImages_v4.0.30319_64\Microsoft.Build`, dated 2026-10-14); whether the runs
        used it was not checked. What this number does not cover:
-       - The runs were loaded: other agents were building during all 10, and the CPU was 31–65 % busy.
+       - The runs were loaded: other agents were building during all 10, and the CPU was 31–65 % busy. Commit
+         headroom was 0.42–1.08 GiB, far less than the 2.1–5.2 GiB during the cold-host runs of 2026-10-31.
        - They ran only the wrapper target, not PLAN.md's three-target list that the spike host runs. One logged
          run of the full list in `MSBuild.exe` (`-clp:PerformanceSummary`,
-         `spikes-msbuild/perfsummary-r2b-hostexe-dt.txt`, 2026-10-31) shows 104 ms for Host.EXE's evaluation
-         and 400 ms for its targets. The spike host's in-host evaluation and build took 729 ms and 822 ms that
-         day (p50; 760 ms and 878 ms in s26). The full list was not timed end to end in a fresh process.
+         `E:\FrostBuilds\perf\m0\s2-s6\run2-corpora\perfsummary-r2b-hostexe-dt.txt`, 2026-10-31) shows 104 ms
+         for Host.EXE's evaluation and 400 ms for its targets. The spike host's in-host evaluation and build
+         took 729 ms and 822 ms that day (p50; 760 ms and 878 ms in s26). The full list was not timed end to end
+         in a fresh process.
        - It would run beside ProjectHost's own start and the tree fill, which was not measured. It does not
          stream, and its output was not compared with the host's for the same project.
+       - Launched before L1 in a trusted root, path (c) also runs the project's MSBuild logic before L1, so it
+         raises the same network question as launching ProjectHost before L1 (the question above).
        - B23's method ends at "the first project streamed from ProjectHost", and its preconditions include
          ProjectHost cold start. So this option changes B23's method and preconditions, which needs an ADR and
          the user's approval.
      - **(B) Native images for the host.** NGEN of ProjectHost's own assemblies at install time covers only our
-       code. Covering Microsoft.Build as well means compiling VS's copies again for the host, and that has to be
-       redone whenever VS updates them. Whether a host that loads Microsoft.Build through MSBuildLocator uses
-       such images at all is open: decision 4's binding to VS's copies made no difference, although
-       Microsoft.Build has a native image here. `ngen install` needs administrator rights, while PLAN.md's
+       code. Covering Microsoft.Build as well may mean compiling VS's copies again for the host, which would then
+       have to be redone whenever VS updates them. It may not: VS's own Microsoft.Build already has a native
+       image here (option (A)), and a host that used that image would need no second NGEN. Whether a host that
+       loads Microsoft.Build through MSBuildLocator uses such images at all is open: decision 4's binding to
+       VS's copies made no difference. `ngen install` needs administrator rights, while PLAN.md's
        Windows installer is a per-user MSI (section 2.2). ReadyToRun is a .NET Core format that .NET Framework
        does not use. It applies only to the net10.0 host for SDK-style projects (PLAN.md section 2, path (b)),
        not to the net472 host for C++.
@@ -168,7 +187,9 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
          unmeasured on a cold cache, as it is on a warm one. A final value proposed from these samples would
          rest on an allowance for that part.
        - D3 waits for the samples: it stays not final until they are in and the user has fixed B23's
-         first-project value. PLAN.md's order is kept.
+         first-project value. PLAN.md's order is kept for that value. It is not kept for the trees value if
+         the user accepts the trees proposal below: S6 would then fix only the first-project value before D3
+         becomes final, and PLAN.md's B23 row changes under this option too.
      - **(ii) Final value from M2.** M2's B23 test, cold under 6 (e) with a warm sample alongside, sets the value.
        - Each cold M2 sample also needs a reboot or an elevated purge (PLAN.md section 4's "Cold"), so this moves
          the user's part to M2 rather than removing it.
@@ -179,9 +200,11 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
    - **The trees target.** S6 gives no evidence for the trees value (R3, p50 1.5 s; see Context), and no M0
      spike measures the native readers. Removing that target's "final value set by S6" note on the strength of
      S6 would finalise 1.5 s with nothing behind it. Proposed: 1.5 s stays provisional until M2's first B23
-     trees measurement on R3, and the note says so. That is also a plan change: PLAN.md's B23 row and
-     `budgets.json` say "final value set by S6" for this target too. 1.5 s stays the ceiling in the same way.
-     The user decides.
+     trees measurement on R3, and the note says so.
+     - This proposal is a change to PLAN.md, under option (i) as well as option (ii). PLAN.md's B23 row carries
+       one "(final value set by S6)" note for both values ("p50 1.5 s / 3 s"), and `budgets.json` puts the
+       same note on this target. This ADR edits neither file.
+     - 1.5 s stays the ceiling in the same way. The user decides.
    - This ADR does not edit `budgets.json`. Any change to a target needs an ADR and user approval.
 4. **MSBuild assemblies load through MSBuildLocator's resolver.** Binding them by `codeBase` to the VS copies (in
    the hope of using VS's native images) made no measurable difference.
@@ -242,8 +265,8 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
     The spike did not need any of them: MSBuildLocator's VS instance resolved the toolset, and the projects'
     own props set the SDK version. M2 revisits them.
 - **What the spike timed, against B23.**
-  - Start: the driver (`s6_drive.py`) reads `perf_counter()` immediately before it creates the `S6Host.exe`
-    process.
+  - Start: the driver (`s6_drive.py`; the copies in `run2-corpora\tools\` and `run3-s26\tools\` under "Raw
+    data" below are identical) reads `perf_counter()` immediately before it creates the `S6Host.exe` process.
   - End: the driver has read the complete JSON-RPC response to the first `DesignTime` request from the host's
     stdout.
   - Inside the interval: process creation, CLR start, MSBuildLocator, StreamJsonRpc, the request (written to the
@@ -255,8 +278,10 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
       decision 2, none of this waits for a warm-up once trust is granted, and as proposed none of it waits for
       L1. If M2's path did wait, the wait would be on the path too;
     - beside the host: the tree fill (native readers, File System and Solution views) runs during the interval
-      and competes for CPU and disk. It adds to the interval only through the slowdown it causes the host, not
-      through its own duration. In the spike, no FrostIDE work ran beside the host;
+      and competes for CPU and disk. As long as it finishes before the host's response, it adds to the interval
+      only through the slowdown it causes the host, not through its own duration. A fill that outlasts the
+      response also adds its remaining time, because B23 ends with the project streamed into the Solution tree.
+      R2b's tree fill was not measured. In the spike, no FrostIDE work ran beside the host;
     - after the response: parsing it, adding the project to the model, streaming it into the Solution tree, and
       the ETW marker that ends B23.
 
@@ -273,6 +298,22 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
   marks are milliseconds since process start.
 - **Units.** Memory figures are read through Win32 in binary units: host memory in MiB, and commit headroom and
   private memory in GiB.
+- **Raw data.** It is kept outside the repository in `E:\FrostBuilds\perf\m0\s2-s6\`. Its `README.txt` maps
+  each folder to the sections it backs:
+  - `run1-prototype\s6\`: the first session's driver and host sources. The first-session Fixture table's runs
+    left no per-run log;
+  - `run2-corpora\`: 2026-10-31, one `jsonl` per batch (plan, per-run times, phase marks, load and host
+    memory) for the R2a, R2b and fixture rows, with `analysis.txt`, the plans, the driver, and the spike host's
+    sources and build log;
+  - `run3-s26\`: 2026-11-01. `raw\` holds the per-run `jsonl` of the runs under the lock "s26", the lock and
+    condition records, the reference counts (`projectrefs.txt`) and the solution order
+    (`slnx-order-debug-x64.txt`); `smoke\` holds the smoke runs;
+  - `analysis\`: the fix rounds' recomputations (`s26-2\headroom.txt`, `fix3-s26\figures.txt`);
+  - `verification\`: the independent verifiers' re-runs and recomputations; `verify2-s26\` holds the
+    independent re-run below.
+
+  The scripts still name the session scratchpad paths they ran with. Compiled hosts, `bin\` and `obj\` folders
+  and third-party sources and build output are not kept.
 - **Machine load, 2026-10-31.** `lghub_agent.exe` (Logitech G HUB) held 43.3 GiB of private memory, which left
   2.1–5.2 GiB of commit headroom during the host runs. Other agents' builds (cmake, ninja, clang-cl, lld-link,
   vcpkg) ran during four of the six batches. The CPU was 23–51 % busy, sampled for 0.5 s before each run.
@@ -292,7 +333,7 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
   (verify-s26, 01:50:12–01:50:34, CPU 10–37 % busy before each run).
   - Cold Host.EXE took 2049, 1564 and 1536 ms, then Host.FeatureTests 190, 126 and 138 ms.
   - Pre-warmed, launch to Host.EXE took 1.60–1.64 s.
-  - Its first run matched s26. The later two were 22.5 % and 23.9 % faster than s26's median (1564 and 1536
+  - Its first run matched s26. The later two took 22.5 % and 23.9 % less time than s26's median (1564 and 1536
     against 2019 ms). Over the three cold runs, the commit headroom before each run grew from 26.4 to 33.1 GiB;
     it was 33.2–34.1 GiB before the pre-warmed runs that followed. The cause was not isolated.
 
@@ -430,8 +471,10 @@ after the NuGet restore described in ADR 0005. Host.EXE returns 2 groups and 3 f
 - **Follow-ups once the user has decided** (not done here):
   - `budgets.json`'s B23 preconditions, and the "final value set by S6" note on each of its two B23 targets.
     S6 has no cold sample for the first-project target and no evidence for the trees target (decision 3);
-  - PLAN.md's B23 row, and the M0 spike list's "fixes B23 before D3 is final" with the D3 row, if the final
-    value moves to M2 (decision 3, option (ii));
+  - PLAN.md's B23 row, under either option of decision 3 if the user accepts the trees proposal, because its
+    one "(final value set by S6)" note covers both values;
+  - the M0 spike list's "fixes B23 before D3 is final" with the D3 row, if the first-project value moves to M2
+    (decision 3, option (ii)). PLAN.md's B23 row changes under that option as well;
   - PLAN.md's no-network-before-L1 rule (sections 2.1 and 2.2), if the user exempts the trusted project's own
     MSBuild logic before L1 (decision 2);
   - B23's method and preconditions, if M2 adopts path (c) for the first project (decision 2, option (A));
