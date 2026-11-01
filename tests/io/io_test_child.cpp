@@ -30,6 +30,12 @@
 //                      to 30 s for the lease-break signal, releases the lease and prints
 //                      "released" (or "timed out"); "no lease <errno>" if refused
 //   pipe-info          Windows: "dacl:<SDDL>" and "name:<name>" of its stdout pipe
+//   image-path         Windows: "image:<hex>", its own image path as GetModuleFileNameW
+//                      reports it (so a \\?\ start shows the prefix)
+//   desktop            Windows: "desktop:<hex>", "<window station>\<desktop>" of its main
+//                      thread, from GetUserObjectInformationW(UOI_NAME)
+//   window             Windows: creates a top-level window that is never shown, prints
+//                      "window:<handle in decimal>", and keeps it until stdin reaches EOF
 //
 // It deliberately uses only the OS and C runtime, not frost::io, so it is an
 // independent oracle for the launcher's quoting, environment and directory handling.
@@ -311,6 +317,53 @@ int run(const std::vector<std::string>& args) {
             const std::wstring name(info->FileName, info->FileNameLength / sizeof(wchar_t));
             line("name:" + toUtf8(name.c_str()));
         }
+        return 0;
+    }
+    if (mode == "image-path" && args.size() == 2) {
+        std::wstring image(32768, L'\0');
+        const DWORD length = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
+        if (length == 0 || length >= image.size()) {
+            line("image-error:" + std::to_string(GetLastError()));
+            return 3;
+        }
+        image.resize(length);
+        line("image:" + hex(toUtf8(image.c_str())));
+        return 0;
+    }
+    if (mode == "desktop" && args.size() == 2) {
+        // The name of a window station or desktop handle, or "" on failure.
+        const auto objectName = [](HANDLE object) {
+            std::vector<wchar_t> name(1024);
+            DWORD needed = 0;
+            if (GetUserObjectInformationW(object, UOI_NAME, name.data(),
+                                          static_cast<DWORD>(name.size() * sizeof(wchar_t)), &needed) == FALSE) {
+                return std::string();
+            }
+            return toUtf8(name.data());
+        };
+        const std::string station = objectName(GetProcessWindowStation());
+        const std::string desk = objectName(GetThreadDesktop(GetCurrentThreadId()));
+        if (station.empty() || desk.empty()) {
+            line("desktop-error:" + std::to_string(GetLastError()));
+            return 3;
+        }
+        line("desktop:" + hex(station + "\\" + desk));
+        return 0;
+    }
+    if (mode == "window" && args.size() == 2) {
+        // Never shown (no WS_VISIBLE), so even on the user's desktop it would stay invisible.
+        HWND window = CreateWindowExW(0, L"STATIC", L"io_test_child", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+                                      GetModuleHandleW(nullptr), nullptr);
+        if (window == nullptr) {
+            line("window-error:" + std::to_string(GetLastError()));
+            return 3;
+        }
+        line("window:" + std::to_string(reinterpret_cast<std::uintptr_t>(window)));
+        std::fflush(stdout);
+        std::vector<char> ignored(4096);
+        while (std::fread(ignored.data(), 1, ignored.size(), stdin) > 0) {
+        }
+        DestroyWindow(window);
         return 0;
     }
 #else

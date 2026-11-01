@@ -56,6 +56,19 @@ TEST(ScriptedProcessLauncher, ServesScriptedOutputAndRecordsTheLaunch) {
     EXPECT_EQ(launcher.pendingScripts(), 0u);
 }
 
+TEST(ScriptedProcessLauncher, RecordsTheImagePathFormAndDesktop) {
+    ScriptedProcessLauncher launcher;
+    launcher.expect(ScriptedProcess{});
+    ProcessSpec spec = gitStatus();
+    spec.imagePathForm = frost::io::ImagePathForm::Extended;
+    spec.desktop = "WinSta0\\frost-test-1";
+    ASSERT_TRUE(launcher.launch(spec).has_value());
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1u);
+    EXPECT_EQ(launches[0].spec.imagePathForm, frost::io::ImagePathForm::Extended);
+    EXPECT_EQ(launches[0].spec.desktop, "WinSta0\\frost-test-1");
+}
+
 TEST(ScriptedProcessLauncher, RecordsStdin) {
     ScriptedProcessLauncher launcher;
     launcher.expect(ScriptedProcess{});

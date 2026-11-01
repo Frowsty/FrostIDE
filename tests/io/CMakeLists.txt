@@ -32,8 +32,9 @@ frost_apply_compile_options(io_test_child TEST)
 # In ASan builds the child needs the ASan runtime DLL next to it like the tests do.
 frost_copy_runtime_dlls(io_test_child)
 if(WIN32)
-    # shell32: CommandLineToArgvW; advapi32: the pipe-info mode's security descriptor calls.
-    target_link_libraries(io_test_child PRIVATE shell32 advapi32)
+    # shell32: CommandLineToArgvW; advapi32: the pipe-info mode's security descriptor calls;
+    # user32: the desktop mode's window-station and desktop names and the window mode's window.
+    target_link_libraries(io_test_child PRIVATE shell32 advapi32 user32)
 endif()
 
 frost_add_test(io_integration_tests
@@ -47,6 +48,7 @@ target_include_directories(io_integration_tests PRIVATE ${FROST_SOURCE_DIR}/test
 target_compile_definitions(io_integration_tests PRIVATE FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
 add_dependencies(io_integration_tests io_test_child)
 if(WIN32)
-    # The pipe test's token and SID calls.
-    target_link_libraries(io_integration_tests PRIVATE advapi32)
+    # advapi32: the pipe test's token and SID calls; user32: tests/support/private_desktop.hpp and
+    # the window test's EnumDesktopWindows.
+    target_link_libraries(io_integration_tests PRIVATE advapi32 user32)
 endif()

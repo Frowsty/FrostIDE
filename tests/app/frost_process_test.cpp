@@ -7,12 +7,14 @@
 // Windows, also through its 8.3 short name; the 250-unit plugin-path limit from both sides
 // (kQtPluginPathLimitUnits); and the start-up check's reports when Qt could not load its
 // platform plugin (frost/app/startup.hpp).
-// Processes are started through frost::io's production IProcessLauncher.
+// Processes are started through frost::io's production IProcessLauncher, on Windows on a
+// private desktop each and with hard-error boxes off (runFrost).
 
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
 
+#include "support/private_desktop.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -49,9 +51,19 @@ struct FrostRun {
     std::string startError;
 };
 
-// Runs `exe` with `args` and collects its combined output (stderr merged into stdout).
-// `environment` overrides apply on top of the test's own environment. Waits at most
-// 120 s; on timeout the child's process tree is killed and exitCode is -1.
+/*
+ * Runs `exe` with `args` and collects its combined output (stderr merged into stdout).
+ * `environment` overrides apply on top of the test's own environment. Waits at most
+ * 120 s; on timeout the child's process tree is killed and exitCode is -1.
+ * On Windows no box from the child reaches the user's screen (tests/support/private_desktop.hpp).
+ * The child runs on a fresh private desktop, which holds the boxes it draws itself: Qt's
+ * "no Qt platform plugin could be initialized" box in Release and ASan builds, which
+ * nothing in frost can suppress and which waits for a click, or a Debug CRT box. Such a
+ * run ends at the timeout instead. It also inherits an error mode without hard-error
+ * boxes, so a loader failure before main (0xC0000106 for a DLL path the loader refuses,
+ * 0xC0000135 for a missing DLL) ends it at once with that status. If no desktop can be
+ * created the child is not started and the test fails.
+ */
 FrostRun runFrost(const std::string& exe, std::vector<std::string> args,
                   std::vector<std::pair<std::string, std::optional<std::string>>> environment = {}) {
     frost::io::ProcessSpec spec;
@@ -59,6 +71,14 @@ FrostRun runFrost(const std::string& exe, std::vector<std::string> args,
     spec.arguments = std::move(args);
     spec.environment = std::move(environment);
     spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+#ifdef _WIN32
+    const frost::test::NoHardErrorBoxes noHardErrorBoxes;
+    const frost::test::PrivateDesktop desktop;
+    if (!desktop.valid()) {
+        return {-1, {}, "no private desktop, so the child was not started (never on the user's desktop)"};
+    }
+    spec.desktop = desktop.name();
+#endif
     auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 120s);
     if (!result) {
         return {-1, {}, result.error().describe()};

@@ -2,6 +2,8 @@
 
 - Status: accepted
 - Date: 2026-10-31
+- Amended: 2026-11-01 (IProcessLauncher: `ProcessSpec::imagePathForm` and `ProcessSpec::desktop`; test
+  children on a private desktop with hard-error boxes off)
 - Plan reference: PLAN.md sections 3.2 (layers), 3.3 (errors), 3.5 (trust model: absolute tool paths),
   6.2 (deterministic doubles), 6.5 (wide Win32 APIs only); milestone M0
 
@@ -107,10 +109,19 @@ directory where a file is → AlreadyExists).
 ### IProcessLauncher
 - `ProcessSpec`: absolute executable, UTF-8 arguments, optional absolute working directory, a clean or
   inherited environment plus ordered overrides (value sets, `nullopt` removes; names case-insensitive on
-  Windows), and per-stream `Inherit`/`Null`/`Pipe` (plus `MergeIntoStdout` for stderr). Every launcher
-  validates specs with the same `validateProcessSpec`, including the Windows-only checks that
-  `CreateProcessW` would otherwise fail later (no quote in the executable, a command line under 32,767
-  UTF-16 units, well-formed UTF-8 in the command line, working directory and environment), so the
+  Windows), and per-stream `Inherit`/`Null`/`Pipe` (plus `MergeIntoStdout` for stderr). Two Windows-only
+  fields, ignored on POSIX, let tests pin how a child starts: `imagePathForm` (`Auto`, today's rule below;
+  `Plain`, never prefixed; `Extended`, always `\\?\`; the child and the loader see that form as its image
+  path) and `desktop` (`STARTUPINFOW::lpDesktop`, empty for the parent's). Tests set `desktop` to a
+  private, never-shown desktop, so a window or message box the child draws itself cannot reach the user's
+  screen. A desktop that does not exist is not a launch error: the child ends with 0xC0000142
+  (STATUS_DLL_INIT_FAILED) before its own code runs, so it never falls back to another desktop. The
+  system's hard-error boxes (the loader's, Windows Error Reporting's) are not the child's windows, so the
+  tests also start children with those boxes off in the error mode they inherit (`PrivateDesktop` and
+  `NoHardErrorBoxes` in `tests/support/private_desktop.hpp`). Every launcher validates specs with the
+  same `validateProcessSpec`, including the Windows-only checks that `CreateProcessW` would otherwise fail
+  later (no quote in the executable, a command line under 32,767 UTF-16 units, well-formed UTF-8 in the
+  command line, working directory and environment, and a NUL-free, well-formed desktop name), so the
   scripted double refuses every spec the real launcher refuses before touching the system.
 - `Inherit` never hands a child an invalid stream: a parent without such a standard handle (a GUI parent,
   a closed descriptor) gives the child the null device. On POSIX a descriptor marked close-on-exec counts
@@ -122,7 +133,8 @@ directory where a file is → AlreadyExists).
   one thread, bounded by the deadline; on timeout it terminates and reaps the process and returns Timeout.
   `runToCompletion` is launch + communicate. `communicate` is a virtual on `IProcess` so the scripted double
   implements it without real time.
-- Windows: `CreateProcessW` with an explicit application name (plain below MAX_PATH, `\\?\` beyond), a
+- Windows: `CreateProcessW` with an explicit application name (plain below MAX_PATH, `\\?\` beyond, unless
+  `ProcessSpec::imagePathForm` forces one; `lpDesktop` from `ProcessSpec::desktop`), a
   command line built by the exact inverse of the MSVC CRT / `CommandLineToArgvW` rules (cited in
   `process.hpp`), `STARTUPINFOEXW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (only the three std handles are
   inherited) and `PROC_THREAD_ATTRIBUTE_JOB_LIST` (the child starts inside a kill-on-close Job Object when
@@ -171,8 +183,9 @@ directory where a file is → AlreadyExists).
 `MemFs` and `ScriptedProcessLauncher` live in `frost_io` itself, next to the interfaces they implement, so
 every module's tests can use them without a separate library. `frost_io` is static and each double is its
 own object file, so they are linked only into binaries that reference them. `ScriptedProcessLauncher` queues
-expected launches (FIFO, optionally pinned to an executable), records every launch with its stdin, models
-launch failures and hung children (`neverExits`), and applies the real launcher's validation.
+expected launches (FIFO, optionally pinned to an executable), records every launch (its whole spec, the
+Windows-only fields included) with its stdin, models launch failures and hung children (`neverExits`), and
+applies the real launcher's validation.
 
 ## Measurements
 Debug build (clang-cl, MSVC STL 14.44), Windows 11 x64 reference machine, per-test gtest timings from
@@ -231,6 +244,12 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
   the blocking per-stream calls can deadlock if misused (documented on `IProcess`).
 - Tests use `tests/support/scratch_dir.hpp`: one unique directory per test under the system temp directory,
   removed through `realFileSystem()`, so concurrent `ctest -j` runs and worktrees never share files.
+- On Windows a test that starts a child which could show a box (frost.exe in `FrostProcess`, whose Release
+  and ASan builds show Qt's unsuppressible "no Qt platform plugin" box) gives each child a fresh
+  `PrivateDesktop` and `NoHardErrorBoxes`, and does not start it at all if the desktop cannot be created.
+  A box then ends at the test's timeout instead of waiting in front of the user. io_test_child turns off
+  its own CRT and error boxes and runs on the parent's desktop, apart from the desktop tests; the tests
+  that make it fail in the loader on purpose (a desktop that does not exist) add `NoHardErrorBoxes`.
 
 ## Alternatives considered
 - `ReplaceFileW` for atomic writes: preserves attributes and ACLs, but without a backup file it can fail

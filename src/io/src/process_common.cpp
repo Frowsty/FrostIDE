@@ -103,6 +103,10 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
             return invalid(std::format("environment variable '{}' is not valid UTF-8", name));
         }
     }
+    // STARTUPINFOW::lpDesktop is a NUL-terminated UTF-16 string; POSIX ignores the field.
+    if (windowsRules && (hasNul(spec.desktop) || !isValidUtf8(spec.desktop))) {
+        return invalid("desktop name contains a NUL character or is not valid UTF-8");
+    }
     if (spec.stdinMode == Stdio::MergeIntoStdout || spec.stdoutMode == Stdio::MergeIntoStdout) {
         return invalid("Stdio::MergeIntoStdout applies to stderr only");
     }

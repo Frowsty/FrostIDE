@@ -76,6 +76,19 @@ enum class Stdio : unsigned char {
     MergeIntoStdout, // stderr only: the same handle as the child's stdout (like 2>&1).
 };
 
+/*
+ * How the Windows launcher passes the executable to CreateProcessW. The child sees the
+ * same form as its own image path (GetModuleFileNameW), and the loader resolves the DLLs
+ * beside it in that form. Ignored on POSIX. The working directory always follows Auto's rule.
+ */
+enum class ImagePathForm : unsigned char {
+    Auto,     // Plain below MAX_PATH (260 UTF-16 units), \\?\ from there on.
+    Plain,    // Never prefixed (a verbatim \\?\ executable is passed as given). CreateProcessW's own
+              // error comes back if it refuses the length; from MAX_PATH on it does, unless the
+              // parent's long paths are effective (LongPathsEnabled=1 and a longPathAware manifest).
+    Extended, // Always \\?\ (\\?\UNC\ for UNC paths).
+};
+
 struct ProcessSpec {
     std::string executable{};             // Absolute path (UTF-8).
     std::vector<std::string> arguments{}; // argv[1..]; argv[0] is always the executable path.
@@ -100,6 +113,22 @@ struct ProcessSpec {
     // Contain the child and its descendants: a Job Object on Windows, a new session and process group
     // on POSIX (see the header comment for what each covers).
     bool killOnClose = true;
+
+    // Windows: see ImagePathForm. Ignored on POSIX.
+    ImagePathForm imagePathForm = ImagePathForm::Auto;
+    /*
+     * Windows: STARTUPINFOW::lpDesktop, "<window station>\<desktop>" (UTF-8, no NUL). Empty
+     * inherits the parent's desktop. Tests use a private desktop that is never shown, so a
+     * window or message box the child draws itself never reaches the user's screen. The
+     * system's hard-error boxes (the loader's, Windows Error Reporting's) are not the child's
+     * windows; the error mode the child inherits governs those (tests/support/private_desktop.hpp).
+     * The desktop must exist and admit the child's user. A missing one is not a launch
+     * error: CreateProcessW succeeds, and a child that imports user32 then ends with
+     * 0xC0000142 (STATUS_DLL_INIT_FAILED) before its own code runs, raising a hard error on
+     * the way (measured 2026-11-01 with io_test_child; pinned by
+     * RealProcessLauncher.MissingDesktopEndsTheChildBeforeItRuns). Ignored on POSIX.
+     */
+    std::string desktop{};
 };
 
 // The exit code reported after terminate(): 128 + SIGKILL, the POSIX shell's
@@ -224,8 +253,9 @@ inline constexpr bool kWindowsProcessRules = false;
  * no .bat/.cmd executable (Unsupported), judged on both the given and the
  * normalised spelling, since "dir\t.bat\." starts dir\t.bat; no quote in the
  * executable; a command line under CreateProcessW's 32,767-unit limit; and
- * well-formed UTF-8 in the command line, the working directory and the
- * environment names and values (the launcher converts them to UTF-16).
+ * well-formed UTF-8 in the command line, the working directory, the
+ * environment names and values and the desktop name, which must also be
+ * NUL-free (the launcher converts them to UTF-16).
  * Errors: InvalidArgument, Unsupported.
  */
 [[nodiscard]] Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules = kWindowsProcessRules);
