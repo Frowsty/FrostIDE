@@ -1,0 +1,1 @@
+// Core string helpers (fixture).

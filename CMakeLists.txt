@@ -143,10 +143,11 @@ find_package(Threads REQUIRED)
 # SQLite and xxHash (frost::storage, ADR 0014), found here for the same reason: FrostLayers' deferred
 # graph check runs in the top-level directory and must resolve unofficial::sqlite3::sqlite3 and
 # xxHash::xxhash. Fuzz trees install no vcpkg ports and build no storage, hence the guard
-# (an undefined FROST_FUZZ is false).
+# (an undefined FROST_FUZZ is false). pugixml (frost::project's XML reader, ADR 0033) likewise.
 if(NOT FROST_FUZZ)
     find_package(unofficial-sqlite3 CONFIG REQUIRED)
     find_package(xxHash CONFIG REQUIRED)
+    find_package(pugixml CONFIG REQUIRED)
 endif()
 # asio::asio (header-only, BSL-1.0; frost::io's reactor, ADR 0020), found here for the same reason.
 # Fuzz trees install no vcpkg ports (VCPKG_MANIFEST_INSTALL=OFF) but share the normal tree's
