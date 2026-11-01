@@ -11,20 +11,54 @@
 // static Qt imports (0xC0000106 on plain starts from directories of 236-249 units in Release,
 // 235-249 in Debug and 218-249 in ASan trees; ADR 0003). wmain then:
 //   1. hardens the process (hardenProcess(), frost/app/startup_core.hpp) while only ntdll,
-//      kernel32 and kernelbase are mapped;
+//      kernel32 and kernelbase are mapped, and takes the restart marker kRestartedFromVariable
+//      out of its environment;
 //   2. sets the error mode for its loads (see wmain), so a broken DLL raises no system box;
-//   3. adds the install directory in its normalised \\?\ form (extendedDirectoryOf()) as a
+//   3. restarts itself through a short link when its image path is too long for the GPU driver
+//      and the start may load one (restartThroughShortLink(), below), and returns that
+//      process's exit status;
+//   4. adds the install directory in its normalised \\?\ form (extendedDirectoryOf()) as a
 //      DLL directory and makes USER_DIRS | SYSTEM32 the default search order
 //      (searchInstallDirectoryExtended());
-//   4. in ASan trees (FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME), loads the ASan runtime by its \\?\
+//   5. in ASan trees (FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME), loads the ASan runtime by its \\?\
 //      path first: it must initialise before the UCRT and Qt, or the instrumented frost_app.dll
 //      aborts with bad-free or bad-malloc_usable_size (measured 2026-11-01);
-//   5. loads frost_app.dll by its \\?\ path with kLauncherLoadFlags, so the DLL and its static
+//   6. loads frost_app.dll by its \\?\ path with kLauncherLoadFlags, so the DLL and its static
 //      imports (Qt, the VC runtime) load in \\?\ form at any length, and calls its frost_main();
 //      its return value is the exit status.
 // The image path itself stays as the parent gave it (plain on a normal start): a start
 // through a \\?\ image path costs about 1.2-3.8 ms more (probe fact 28, spike fact 21 and the
 // review of 4c5533d; ADR 0012, Measurements), so a short install never pays for it.
+//
+/*
+ * The restart (step 3; the user's decision of 2026-11-01, ADR 0012). NVIDIA's user-mode driver
+ * ends any process whose image path is kGpuDriverImagePathLimitUnits (MAX_PATH) or longer as it
+ * loads (0xC0000409 in nvldumdx.dll's DllMain), so the GUI and --selftest=onscreen died from
+ * such paths. When GetModuleFileNameW's path reaches that length and
+ * launcherMayReachGpuDriver() says the start may load a driver, the launcher gets a junction
+ * to its install directory under %LOCALAPPDATA%\FrostIDE\i (prepareShortLink(): created,
+ * verified or repaired without administrator rights, then held open so it cannot change, and
+ * named by its resolved path) and starts <junction>\frost.exe with CreateProcessW: the same
+ * command line, current directory, environment (plus kRestartedFromVariable), standard
+ * handles, desktop and show state, the parent's error mode and priority class, in the same
+ * jobs (measured: about 7 ms per start, ADR 0012). The launcher cannot use frost::io's
+ * IProcessLauncher (it links neither frost::io nor frost::core: /MT, KERNEL32.dll only), so it
+ * calls CreateProcessW itself, with the junction's absolute path as lpApplicationName (no
+ * search). It waits for that process in every mode and exits with its status, so the parent's
+ * process handle still means "frost runs" (B20, exit to process gone, measures it) and the exit
+ * status and output reach the parent unchanged; while it waits it keeps the junction open. The
+ * restarted launcher finds the marker, never restarts again, refuses with a message if its own
+ * path is still too long, and hands the first image path to frost_main(), which shows the real
+ * install directory where frost names its own (the self-test's image-path check, the GUI's
+ * failure message). A start that cannot be restarted (LOCALAPPDATA unset or long, the install
+ * directory on a network share, something else at the junction's path) is refused with a
+ * message, as a missing DLL is, rather than left to the driver's silent crash.
+ * LOCALAPPDATA comes from the environment, not SHGetKnownFolderPath: shell32 would be the
+ * launcher's first DLL beyond KERNEL32 (about 3 ms to load), the parent already controls the
+ * environment as it controls the image path and the current directory, tests can point it at
+ * a scratch folder, and whatever it names is checked before use (prepareShortLink()).
+ */
+//
 // If frost_app.dll, its imports or its entry point cannot be loaded, the launcher reports why
 // (reportFailure) and exits with 4, the status frost uses for "cannot start in this
 // environment". It has no other state and no globals (startup hygiene, PLAN.md 2.1).
@@ -129,16 +163,157 @@ std::wstring loadFailure(const std::wstring& path, DWORD error) {
            L": " + win32Message(error) + L" (win32 error " + std::to_wstring(error) + L")";
 }
 
+// The value of environment variable `name` at any length; "" when it is unset or empty.
+std::wstring environmentVariable(const wchar_t* name) {
+    std::wstring value(64, L'\0');
+    while (true) {
+        const DWORD units = GetEnvironmentVariableW(name, value.data(), static_cast<DWORD>(value.size()));
+        if (units < value.size()) {
+            value.resize(units);
+            return value;
+        }
+        value.resize(units);
+    }
+}
+
+// The file name of `path` (after its last backslash).
+std::wstring fileNameOf(const std::wstring& path) { return path.substr(path.find_last_of(L'\\') + 1); }
+
+// While the launcher waits on the parent's console, Ctrl+C, Ctrl+Break and closing the console
+// must not end it before the restarted frost: that process gets the same events and decides.
+// A handler routine, not SetConsoleCtrlHandler(nullptr, TRUE), whose setting children inherit.
+BOOL WINAPI keepWaitingOnConsoleEvents(DWORD) { return TRUE; }
+
+/*
+ * The STARTUPINFOW for the restarted frost: this launcher's own (GetStartupInfoW), so it gets
+ * the parent's desktop, window title or the shortcut it was started from
+ * (STARTF_TITLEISLINKNAME), show state, position and size, and the standard handles this
+ * process holds now (made inheritable). lpReserved2, the C runtime's table of inherited file
+ * descriptors, is dropped: the standard handles cover descriptors 0-2, the only ones frost uses.
+ * When no standard handle is usable, or STARTF_USEHOTKEY gives hStdInput another meaning, the
+ * three handle fields pass as the parent set them. `hasStandardHandles` says whether any
+ * standard handle is usable.
+ */
+STARTUPINFOW restartStartupInfo(bool& hasStandardHandles) {
+    STARTUPINFOW startup{};
+    GetStartupInfoW(&startup);
+    startup.cb = sizeof startup;
+    startup.lpReserved = nullptr;
+    startup.cbReserved2 = 0;
+    startup.lpReserved2 = nullptr;
+    HANDLE handles[] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
+                        GetStdHandle(STD_ERROR_HANDLE)};
+    hasStandardHandles = false;
+    for (HANDLE& handle : handles) {
+        if (usable(handle)) {
+            hasStandardHandles = true;
+        } else {
+            handle = nullptr;
+        }
+    }
+    if (!hasStandardHandles || (startup.dwFlags & STARTF_USEHOTKEY) != 0) {
+        return startup;
+    }
+    for (HANDLE handle : handles) {
+        if (handle != nullptr) {
+            SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        }
+    }
+    startup.dwFlags |= STARTF_USESTDHANDLES;
+    startup.hStdInput = handles[0];
+    startup.hStdOutput = handles[1];
+    startup.hStdError = handles[2];
+    return startup;
+}
+
+/*
+ * Starts frost again through its short link and waits for it (see the header comment): returns
+ * that process's exit status, or 4 after reportFailure() when there is no usable link or the
+ * start fails. `self` is this launcher's image path (kGpuDriverImagePathLimitUnits or longer),
+ * `extendedDirectory` its \\?\ install directory, `parentErrorMode` the error mode the parent
+ * passed down, which the restarted process inherits in turn, so it sets its own exactly as a
+ * direct start would.
+ * In a command-line mode without usable standard handles (a terminal start without
+ * redirection), the launcher attaches to the parent's console first, so that frost_app.dll's
+ * attachParentConsoleIfNeeded() in the restarted process finds it through this process. The
+ * GUI does not: a waiting process attached to a console would keep that console window open
+ * after its shell exits.
+ */
+int restartThroughShortLink(const std::wstring& self, const std::wstring& extendedDirectory, UINT parentErrorMode,
+                            bool commandLineMode) {
+    const std::wstring why = L"frost.exe's path is " + std::to_wstring(self.size()) +
+                             L" UTF-16 units long, and graphics drivers end a program started from " +
+                             std::to_wstring(frost::app::kGpuDriverImagePathLimitUnits) +
+                             L" units (MAX_PATH) or more, so frost restarts through a short link, but ";
+    const std::wstring advice = L". Install FrostIDE in a directory with a shorter path.";
+    const std::wstring root = environmentVariable(L"LOCALAPPDATA");
+    if (root.empty()) {
+        reportFailure(why + L"LOCALAPPDATA, the folder for that link, is not set" + advice, commandLineMode);
+        return 4;
+    }
+    auto link = frost::app::prepareShortLink(root, extendedDirectory, fileNameOf(self));
+    if (!link) {
+        // An occupied link path says what to remove; installing elsewhere is the other way out.
+        const bool occupied = link.error().kind == frost::app::ShortLinkError::Kind::Occupied;
+        reportFailure(why + link.error().message +
+                          (occupied ? L", or install FrostIDE in a directory with a shorter path." : advice),
+                      commandLineMode);
+        return 4;
+    }
+    if (SetEnvironmentVariableW(frost::app::kRestartedFromVariable, self.c_str()) == FALSE) {
+        reportFailure(why + L"the restart marker cannot be set (win32 error " + std::to_wstring(GetLastError()) + L")" +
+                          advice,
+                      commandLineMode);
+        return 4;
+    }
+    bool hasStandardHandles = false;
+    STARTUPINFOW startup = restartStartupInfo(hasStandardHandles);
+    if (commandLineMode && !hasStandardHandles && AttachConsole(ATTACH_PARENT_PROCESS) != FALSE) {
+        SetConsoleCtrlHandler(keepWaitingOnConsoleEvents, TRUE);
+    }
+    // CreateProcessW may write to the command line, so it gets a copy.
+    std::wstring commandLine = GetCommandLineW();
+    PROCESS_INFORMATION process{};
+    const UINT launcherErrorMode = SetErrorMode(parentErrorMode);
+    // bInheritHandles: the standard handles, and every handle the parent let this process
+    // inherit, as it meant frost to have them; the launcher's own handles are not inheritable.
+    const BOOL started = CreateProcessW(link->imagePath().c_str(), commandLine.data(), nullptr, nullptr, TRUE,
+                                        GetPriorityClass(GetCurrentProcess()), nullptr, nullptr, &startup, &process);
+    const DWORD error = GetLastError();
+    SetErrorMode(launcherErrorMode);
+    if (started == FALSE) {
+        reportFailure(L"cannot restart frost through its short link " + link->imagePath() + L": " +
+                          win32Message(error) + L" (win32 error " + std::to_wstring(error) + L")",
+                      commandLineMode);
+        return 4;
+    }
+    CloseHandle(process.hThread);
+    DWORD status = 4;
+    if (WaitForSingleObject(process.hProcess, INFINITE) != WAIT_OBJECT_0 ||
+        GetExitCodeProcess(process.hProcess, &status) == FALSE) {
+        status = 4;
+    }
+    CloseHandle(process.hProcess);
+    return static_cast<int>(status);
+}
+
 } // namespace
 
 // The static CRT's wide entry point (/ENTRY:wmainCRTStartup with /SUBSYSTEM:WINDOWS, see
-// src/app/CMakeLists.txt). `argv` is used only to tell a GUI launch from a command-line mode;
-// frost_app.dll parses the command line itself.
+// src/app/CMakeLists.txt). `argv` is used only to tell a GUI launch from a command-line mode
+// and whether the start may reach a GPU driver; frost_app.dll parses the command line itself.
 int wmain(int argc, wchar_t** argv) {
     frost::app::ProcessHardening hardening = frost::app::hardenProcess();
+    // The restart marker: read and removed before anything can start a process, so nothing
+    // frost starts inherits it.
+    const std::wstring restartedFrom = environmentVariable(frost::app::kRestartedFromVariable);
+    if (!restartedFrom.empty()) {
+        SetEnvironmentVariableW(frost::app::kRestartedFromVariable, nullptr);
+    }
 
-    const bool commandLineMode = frost::app::launcherCommandLineMode(
-        std::span<const wchar_t* const>(argv + (argc > 0 ? 1 : 0), argc > 1 ? static_cast<std::size_t>(argc - 1) : 0));
+    const std::span<const wchar_t* const> arguments(argv + (argc > 0 ? 1 : 0),
+                                                    argc > 1 ? static_cast<std::size_t>(argc - 1) : 0);
+    const bool commandLineMode = frost::app::launcherCommandLineMode(arguments);
     /*
      * Without SEM_FAILCRITICALERRORS in the process error mode, which a parent such as a
      * terminal passes on as its own, the loader raises a hard error for a mismatched import
@@ -165,6 +340,22 @@ int wmain(int argc, wchar_t** argv) {
         reportFailure(L"cannot determine the path of frost.exe (win32 error " + std::to_wstring(GetLastError()) + L")",
                       commandLineMode);
         return 4;
+    }
+    // Before any DLL of frost's is loaded, so the first launcher costs one process start and
+    // nothing else (ADR 0012, Measurements).
+    if (self.size() >= frost::app::kGpuDriverImagePathLimitUnits &&
+        frost::app::launcherMayReachGpuDriver(arguments, environmentVariable(L"QT_QPA_PLATFORM"))) {
+        if (!restartedFrom.empty()) {
+            // The loop guard: a restarted launcher never restarts again.
+            reportFailure(L"frost was restarted through the short link " + self + L" from " + restartedFrom +
+                              L", but that path is still " + std::to_wstring(self.size()) +
+                              L" UTF-16 units long, and graphics drivers end a program started from " +
+                              std::to_wstring(frost::app::kGpuDriverImagePathLimitUnits) +
+                              L" units (MAX_PATH) or more. Install FrostIDE in a directory with a shorter path.",
+                          commandLineMode);
+            return 4;
+        }
+        return restartThroughShortLink(self, dir, inheritedErrorMode, commandLineMode);
     }
     hardening.installDirectoryExtended = frost::app::searchInstallDirectoryExtended(dir);
 
@@ -194,5 +385,5 @@ int wmain(int argc, wchar_t** argv) {
     if (!commandLineMode) {
         SetErrorMode(inheritedErrorMode);
     }
-    return entry(frost::app::encodeHardening(hardening));
+    return entry(frost::app::encodeHardening(hardening), restartedFrom.empty() ? nullptr : restartedFrom.c_str());
 }

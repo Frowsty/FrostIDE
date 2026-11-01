@@ -168,7 +168,8 @@ HMODULE qtCore() {
 
 } // namespace
 
-std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, bool dialogGuard) {
+std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, bool dialogGuard,
+                                            [[maybe_unused]] std::string_view restartedFrom) {
     std::vector<SelfTestCheck> checks;
 #ifdef _WIN32
     std::string missing;
@@ -217,9 +218,18 @@ std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, b
                                 : "not effective for this process (needs LongPathsEnabled=1 and longPathAware); "
                                   "FrostIDE starts either way"});
 
-    // The form the parent started frost.exe through, as the loader recorded it.
+    // The form the parent started frost.exe through, as the loader recorded it, and the path the
+    // first launcher had when it restarted frost through this short link.
     const std::wstring image = modulePath();
-    checks.push_back({"image-path", true, false, std::format("{}, {} UTF-16 units", formOf(image), image.size())});
+    std::string imageDetail = std::format("{}, {} UTF-16 units", formOf(image), image.size());
+    if (!restartedFrom.empty()) {
+        const int units =
+            MultiByteToWideChar(CP_UTF8, 0, restartedFrom.data(), static_cast<int>(restartedFrom.size()), nullptr, 0);
+        const bool extended = restartedFrom.starts_with("\\\\?\\");
+        imageDetail += std::format("; restarted through this short link from {} ({}, {} UTF-16 units)", restartedFrom,
+                                   extended ? "\\\\?\\ form" : "plain form", units);
+    }
+    checks.push_back({"image-path", true, false, std::move(imageDetail)});
 
     // frost_app.dll and its static imports must have come in through \\?\ paths, or a long
     // plain start would have died in the loader; this shows that the mechanism was used.

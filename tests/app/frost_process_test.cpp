@@ -7,12 +7,16 @@
 // lengths from 200 to 400 UTF-16 units around every boundary measured, plain and \\?\, also
 // with long paths ineffective for frost (a manifest without longPathAware, the state
 // LongPathsEnabled=0 gives), and through 8.3 short names; the self-test with Qt's native
-// platform plugin up to the longest image path below MAX_PATH; a DLL loaded late and
-// non-platform plugins from a long plain path (loaded, skipped or failing); the start-up
-// check's reports when Qt's platform plugin is missing or unloadable, and that Qt's own "no
-// platform plugin" dialog never appears in a command-line mode; the launcher's failure
-// reports and the error mode it loads in; and the structure of the two images: frost.exe
-// imports KERNEL32.dll alone, and frost_app.dll carries no manifest and no DependentLoadFlags.
+// platform plugin (a GPU driver loads) from image paths of 250 to 400 units, through the
+// launcher's restart via a short junction from 260 units on, and the GUI itself from 300
+// units (its window, and its failure box naming the real install directory); that other modes
+// start in place; the restart's exit status and standard streams, its loop guard and its
+// refusals; a DLL loaded late and non-platform plugins from a long plain path (loaded,
+// skipped or failing); the start-up check's reports when Qt's platform plugin is missing or
+// unloadable, and that Qt's own "no platform plugin" dialog never appears in a command-line
+// mode; the launcher's failure reports and the error mode it loads in; and the structure of
+// the two images: frost.exe imports KERNEL32.dll alone, and frost_app.dll carries no manifest
+// and no DependentLoadFlags.
 // Processes are started through frost::io's production IProcessLauncher, on Windows on a
 // private desktop each and with hard-error boxes off (runFrost).
 
@@ -32,15 +36,20 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
+
+#include <tlhelp32.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -728,16 +737,88 @@ TEST(FrostProcess, PreloadFailureOnlyWarns) {
     EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
 }
 
-TEST(FrostProcess, SelfTestOnScreenUpToMaxPath) {
+// The directory for a copy of frost whose image path, <dir>\frost.exe, is exactly `units`
+// UTF-16 units long when started in `form` (the \\?\ prefix counts, for the GPU driver too).
+std::string imagePathCell(const std::string& base, std::size_t units, ImagePathForm form) {
+    const std::size_t prefix = form == ImagePathForm::Extended ? 4 : 0;
+    return cellDirectory(base, units - prefix - std::string_view("\\frost.exe").size());
+}
+
+// The image path a process started from `exe` in `form` reports (GetModuleFileNameW gives
+// the path its parent passed, prefix included).
+std::string startedAs(const std::string& exe, ImagePathForm form) {
+    return form == ImagePathForm::Extended ? "\\\\?\\" + exe : exe;
+}
+
+// The \\?\ form of the absolute path `utf8`, in UTF-16, for Win32 calls at any length.
+std::wstring extendedWide(const std::string& utf8) {
+    return frost::io::toWide(frost::io::extendedLengthPath(utf8).value()).value();
+}
+
+// An entry of the launcher's short-link folder.
+struct ShortLinkEntry {
+    std::string path;      // <LOCALAPPDATA>\FrostIDE\i\<name>.
+    bool junction = false; // Whether it is a mount point (FindFirstFileExW's reparse tag).
+};
+
+// The entries of <localAppData>\FrostIDE\i, where the launcher keeps its short links; empty
+// when that folder does not exist. Links are listed, never followed.
+std::vector<ShortLinkEntry> shortLinksIn(const std::string& localAppData) {
+    const std::string folder = frost::io::joinPath(localAppData, "FrostIDE\\i").value();
+    std::vector<ShortLinkEntry> found;
+    WIN32_FIND_DATAW data{};
+    HANDLE find = FindFirstFileExW((extendedWide(folder) + L"\\*").c_str(), FindExInfoBasic, &data,
+                                   FindExSearchNameMatch, nullptr, 0);
+    if (find == INVALID_HANDLE_VALUE) {
+        return found;
+    }
+    do {
+        const std::wstring name = data.cFileName;
+        if (name != L"." && name != L"..") {
+            found.push_back({frost::io::joinPath(folder, frost::io::fromWide(name).value()).value(),
+                             (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+                                 data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT});
+        }
+    } while (FindNextFileW(find, &data) != FALSE);
+    FindClose(find);
+    return found;
+}
+
+// Whether <localAppData>\FrostIDE exists: a start that needs no restart must not create it.
+bool shortLinkFolderExists(const std::string& localAppData) {
+    return GetFileAttributesW(extendedWide(frost::io::joinPath(localAppData, "FrostIDE").value()).c_str()) !=
+           INVALID_FILE_ATTRIBUTES;
+}
+
+// A fresh directory `name` below `scratch` to stand in for %LOCALAPPDATA%.
+std::string localAppDataIn(const ScratchDir& scratch, std::string_view name) {
+    const std::string dir = scratch.join(std::string(name));
+    EXPECT_TRUE(frost::io::realFileSystem().createDirectories(dir).has_value()) << dir;
+    return dir;
+}
+
+// The form a plain start of a long path needs: plain where this process's long paths are
+// effective, else \\?\ (CreateProcessW would refuse the plain path).
+ImagePathForm longStartForm() { return parentLongPathsEffective() ? ImagePathForm::Plain : ImagePathForm::Extended; }
+
+// "plain form" or "\\?\ form", as the self-test's image-path check names `form`.
+std::string_view reportedForm(ImagePathForm form) {
+    return form == ImagePathForm::Extended ? "\\\\?\\ form" : "plain form";
+}
+
+TEST(FrostProcess, SelfTestOnScreenFromEveryImagePathLength) {
     /*
-     * The self-test with Qt's native platform plugin (windows), as the GUI starts: a real
-     * window, on this test's private desktop, so never on the user's screen. From the build
-     * directory and from the longest image paths below MAX_PATH, 259 UTF-16 units, plain and
-     * \\?\ (the prefix counts). From 260 units on, NVIDIA's user-mode driver ends any process
-     * that creates a Direct3D device in its DllMain (0xC0000409, FAST_FAIL_INVALID_ARG in
-     * nvldumdx.dll, reached from qwindows.dll through d3d9.dll; a python.exe control dies the
-     * same way; measured 2026-11-01 in the review of 4c5533d). That is not frost's code, and how
-     * frost should avoid it waits for the user's decision (ADR 0012), so this test stops below it.
+     * The self-test with Qt's native platform plugin (windows), as the GUI starts: Qt loads
+     * qwindows.dll, which creates a Direct3D device, so the GPU's user-mode driver loads, and a
+     * real window opens on this test's private desktop, never on the user's screen. NVIDIA's
+     * driver ends any process whose image path is 260 UTF-16 units (MAX_PATH) or longer as it
+     * loads (0xC0000409, FAST_FAIL_INVALID_ARG in nvldumdx.dll's DllMain; a python.exe control
+     * dies the same way; ADR 0012). From 260 units on the launcher therefore restarts frost
+     * through its short link under %LOCALAPPDATA% (here a scratch directory per cell), and the
+     * self-test there must pass and name the path it was restarted from; below 260 frost starts
+     * in place and creates no link. Image paths of 250, 259, 260, 261, 300 and 400 units, plain
+     * and \\?\ (the prefix counts), and the build directory. Plain from MAX_PATH on needs this
+     * process's long paths; without them CreateProcessW's refusal is expected there.
      */
     const ScratchDir scratch("app-process-onscreen");
     const std::string base = longFormOf(scratch);
@@ -747,27 +828,103 @@ TEST(FrostProcess, SelfTestOnScreenUpToMaxPath) {
     struct Cell {
         std::string exe;
         ImagePathForm form;
-        std::string what;
+        std::size_t units; // The image path's length as started, or 0 for the build directory.
     };
-    // The longest image path below MAX_PATH, in UTF-16 units, without and with the 4-unit prefix.
-    const std::size_t longestDir = std::size_t{MAX_PATH} - 1 - std::string_view("\\frost.exe").size();
-    const std::vector<Cell> cells{
-        {frostExe(), ImagePathForm::Auto, "build directory"},
-        {linkTree(master, cellDirectory(base, longestDir)), ImagePathForm::Plain, "plain, 259 units"},
-        {linkTree(master, cellDirectory(base, longestDir - 4)), ImagePathForm::Extended, "\\\\?\\, 259 units"}};
-    for (const Cell& cell : cells) {
-        SCOPED_TRACE(cell.what);
-        const auto result = runFrost(cell.exe, {"--selftest=onscreen"}, ownPluginsOnly(), cell.form, 60s);
+    std::vector<Cell> cells{{frostExe(), ImagePathForm::Auto, 0}};
+    for (const std::size_t units :
+         {std::size_t{250}, std::size_t{259}, std::size_t{260}, std::size_t{261}, std::size_t{300}, std::size_t{400}}) {
+        for (const ImagePathForm form : {ImagePathForm::Plain, ImagePathForm::Extended}) {
+            cells.push_back({linkTree(master, imagePathCell(base, units, form)), form, units});
+        }
+    }
+    for (std::size_t index = 0; index < cells.size(); ++index) {
+        const Cell& cell = cells[index];
+        SCOPED_TRACE(cell.units == 0 ? std::string("build directory")
+                                     : std::format("{}, {} units", formName(cell.form), cell.units));
+        const std::string localAppData = localAppDataIn(scratch, std::format("lad {}", index));
+        Environment environment = ownPluginsOnly();
+        environment.emplace_back("LOCALAPPDATA", localAppData);
+        const auto result = runFrost(cell.exe, {"--selftest=onscreen"}, environment, cell.form, 60s);
+        if (cell.form == ImagePathForm::Plain && cell.units >= MAX_PATH && !parentLongPathsEffective()) {
+            EXPECT_EQ(result.exitCode, -1) << result.output;
+            continue;
+        }
         EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
         EXPECT_TRUE(result.output.contains("platform plugin 'windows'")) << result.output;
         EXPECT_TRUE(result.output.contains("ok   main-window: main window exposed and closed")) << result.output;
         EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
-        if (cell.form != ImagePathForm::Auto) {
-            EXPECT_TRUE(result.output.contains(std::format(
-                "image-path: {}, 259 UTF-16 units", cell.form == ImagePathForm::Plain ? "plain form" : "\\\\?\\ form")))
-                << result.output;
+        if (cell.units < MAX_PATH) {
+            EXPECT_FALSE(shortLinkFolderExists(localAppData));
+            EXPECT_FALSE(result.output.contains("restarted through")) << result.output;
+            if (cell.units != 0) {
+                EXPECT_TRUE(result.output.contains(
+                    std::format("image-path: {}, {} UTF-16 units", reportedForm(cell.form), cell.units)))
+                    << result.output;
+            }
+            continue;
         }
+        const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+        ASSERT_EQ(links.size(), 1u) << result.output;
+        EXPECT_TRUE(links.front().junction);
+        // The restarted frost runs from the link, in plain form, and names the first path.
+        const std::string expected = std::format(
+            "image-path: plain form, {} UTF-16 units; restarted through this short link from {} ({}, {} UTF-16 units)",
+            utf16Units(links.front().path) + std::string_view("\\frost.exe").size(), startedAs(cell.exe, cell.form),
+            reportedForm(cell.form), cell.units);
+        EXPECT_TRUE(result.output.contains(expected)) << "expected " << expected << "\n" << result.output;
+        EXPECT_TRUE(result.output.contains(links.front().path + "\\platforms\\")) << result.output;
     }
+}
+
+TEST(FrostProcess, OtherModesStartInPlaceFromALongPath) {
+    /*
+     * Only a start that may load a GPU driver restarts (launcherMayReachGpuDriver();
+     * StartupGpuDriverRule has the whole rule): --version, --help, a usage error and the
+     * offscreen self-test start in place from a 300-unit image path, see that path themselves
+     * and create no short link.
+     */
+    const ScratchDir scratch("app-process-inplace");
+    const ImagePathForm form = longStartForm();
+    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 300, form));
+    const std::string localAppData = localAppDataIn(scratch, "lad");
+    Environment environment = ownPluginsOnly();
+    environment.emplace_back("LOCALAPPDATA", localAppData);
+    struct Case {
+        std::vector<std::string> args;
+        int status;
+        std::string expected;
+    };
+    const std::vector<Case> cases{
+        {{"--version"}, 0, "FrostIDE 0.0.1"},
+        {{"--help"}, 0, "Usage: frost"},
+        {{"--no-such-option"}, 2, "unknown option --no-such-option"},
+        {{"--selftest"}, 0, std::format("image-path: {}, 300 UTF-16 units", reportedForm(form))}};
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.args.front());
+        const auto result = runFrost(exe, c.args, environment, form, 60s);
+        EXPECT_EQ(result.exitCode, c.status) << result.startError << result.output;
+        EXPECT_TRUE(result.output.contains(c.expected)) << result.output;
+        EXPECT_FALSE(result.output.contains("restarted through")) << result.output;
+        EXPECT_FALSE(shortLinkFolderExists(localAppData));
+    }
+}
+
+TEST(FrostProcess, RestartReportsTheRestartedProgramsFailure) {
+    /*
+     * A restarted frost that fails reaches the parent as a direct start would: from a 300-unit
+     * image path without platforms\, the restarted self-test's plugin check fails promptly,
+     * and its status (1) and report come back through the waiting launcher.
+     */
+    const ScratchDir scratch("app-process-restartfail");
+    const ImagePathForm form = longStartForm();
+    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 300, form), Plugins::None);
+    Environment environment = ownPluginsOnly();
+    environment.emplace_back("LOCALAPPDATA", localAppDataIn(scratch, "lad"));
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = runFrost(exe, {"--selftest=onscreen"}, environment, form, 60s);
+    expectPluginCheckFailure(result, started, "Qt's platform plugin \"windows\" is missing");
+    EXPECT_TRUE(result.output.contains("; restarted through this short link from " + startedAs(exe, form)))
+        << result.output;
 }
 
 // Runs a copy of frost from which `missing` (a file beside frost.exe) was removed, in a
@@ -815,6 +972,24 @@ private:
     UINT m_previous;
 };
 
+// Copies the built frost.exe and launcher_probe_app.cpp's DLL, as frost_app.dll, into `dir`
+// (created), and in ASan trees the ASan runtime the launcher loads from its directory first.
+// Returns the copied frost.exe's path.
+std::string copyProbeTo(const std::string& dir) {
+    EXPECT_TRUE(frost::io::realFileSystem().createDirectories(dir).has_value()) << dir;
+    const fs::path built = frost::io::toStdPath(frostExe()).value();
+    copyInto(built, dir, "frost.exe");
+    copyInto(frost::io::toStdPath(frost::io::normalizePath(FROST_LAUNCHER_PROBE_APP).value()).value(), dir,
+             "frost_app.dll");
+    std::error_code error;
+    for (const auto& entry : fs::directory_iterator(built.parent_path(), error)) {
+        if (entry.path().filename().wstring().starts_with(L"clang_rt.asan")) {
+            copyInto(entry.path(), dir, frost::io::fromStdPath(entry.path().filename()).value());
+        }
+    }
+    return frost::io::joinPath(dir, "frost.exe").value();
+}
+
 // The hex number after `label` in `text` ("... at load 0x8003, ..."), or nullopt.
 std::optional<unsigned> hexAfter(std::string_view text, std::string_view label) {
     const std::size_t at = text.find(label);
@@ -839,20 +1014,7 @@ TEST(FrostProcess, LauncherSetsTheErrorModeForItsLoads) {
      * arise even if the launcher regresses; the run then just fails here.
      */
     const ScratchDir scratch("app-process-errormode");
-    const std::string dir = scratch.join("fr\xC3\xB8st probe");
-    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir).has_value());
-    const fs::path built = frost::io::toStdPath(frostExe()).value();
-    copyInto(built, dir, "frost.exe");
-    copyInto(frost::io::toStdPath(frost::io::normalizePath(FROST_LAUNCHER_PROBE_APP).value()).value(), dir,
-             "frost_app.dll");
-    // ASan trees: the launcher loads the ASan runtime from its directory first.
-    std::error_code error;
-    for (const auto& entry : fs::directory_iterator(built.parent_path(), error)) {
-        if (entry.path().filename().wstring().starts_with(L"clang_rt.asan")) {
-            copyInto(entry.path(), dir, frost::io::fromStdPath(entry.path().filename()).value());
-        }
-    }
-    const std::string exe = frost::io::joinPath(dir, "frost.exe").value();
+    const std::string exe = copyProbeTo(scratch.join("fr\xC3\xB8st probe"));
     constexpr unsigned kCritical = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
     constexpr unsigned kNoBoxes = kCritical | SEM_NOGPFAULTERRORBOX;
     struct Case {
@@ -892,6 +1054,410 @@ TEST(FrostProcess, LauncherSetsTheErrorModeForItsLoads) {
         // Every hardening step, the \\?\ install directory included.
         EXPECT_EQ(*bits, 0x1Fu) << output;
     }
+}
+
+// What a run of the launcher with launcher_probe_app.cpp as frost_app.dll gave back.
+struct ProbeRun {
+    int exitCode = -1;       // -1 when it could not be run (`error` says why).
+    std::string header;      // The probe's first stdout line, without its line break.
+    std::string echoed;      // The rest of stdout: what the probe copied from stdin.
+    std::string stderrBytes; // All of stderr.
+    std::string error;
+};
+
+/*
+ * Runs `exe` (a copyProbeTo() result) with `args` on a private desktop, in `form`, with
+ * stdin, stdout and stderr as separate pipes: `stdinData` is written to stdin, and
+ * `environment` applies on top of this process's. The child inherits the error mode
+ * `errorMode` (InheritedErrorMode), so a test can tell the parent's mode from the launcher's.
+ */
+ProbeRun runProbe(const std::string& exe, std::vector<std::string> args, Environment environment, ImagePathForm form,
+                  std::string_view stdinData = {},
+                  UINT errorMode = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX) {
+    frost::io::ProcessSpec spec;
+    spec.executable = exe;
+    spec.arguments = std::move(args);
+    spec.environment = std::move(environment);
+    spec.imagePathForm = form;
+    spec.stdinMode = frost::io::Stdio::Pipe;
+    const frost::test::PrivateDesktop desktop;
+    ProbeRun run;
+    if (!desktop.valid()) {
+        run.error = "no private desktop";
+        return run;
+    }
+    spec.desktop = desktop.name();
+    const auto result = [&] {
+        const InheritedErrorMode inherited(errorMode);
+        return frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, stdinData, 30s);
+    }();
+    if (!result) {
+        run.error = result.error().describe();
+        return run;
+    }
+    const std::size_t line = result->stdoutBytes.find('\n');
+    run.exitCode = result->exitCode;
+    run.stderrBytes = result->stderrBytes;
+    run.header = result->stdoutBytes.substr(0, line);
+    run.echoed = line == std::string::npos ? std::string() : result->stdoutBytes.substr(line + 1);
+    return run;
+}
+
+TEST(FrostProcess, RestartPassesStatusAndStandardStreamsThrough) {
+    /*
+     * The launcher that restarts waits for the restarted one and exits with its status, and the
+     * restarted one gets the parent's standard handles and error mode. launcher_probe_app.cpp,
+     * copied as frost_app.dll beside a frost.exe whose image path is 300 units long, reports
+     * where it runs, copies stdin to stdout, writes to stderr and exits with the status the
+     * test picks, among them 0xC0000409, the status of a fast-fail crash. Cases: the GUI (no
+     * arguments) and --selftest=onscreen, plain and \\?\ where this process's long paths allow
+     * a plain start; each stream is checked byte for byte, as is the restart marker's removal.
+     * The same probe at 259 units starts in place.
+     */
+    const ScratchDir scratch("app-process-restartio");
+    const std::string base = longFormOf(scratch);
+    ASSERT_FALSE(base.empty());
+    constexpr unsigned kCritical = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+    constexpr unsigned kNoBoxes = kCritical | SEM_NOGPFAULTERRORBOX;
+    struct Case {
+        std::size_t units;
+        ImagePathForm form;
+        std::vector<std::string> args;
+        std::string status; // FROST_PROBE_EXIT_CODE.
+        int expected;       // The exit code as frost::io reports it (DWORD bits as int).
+    };
+    std::vector<Case> cases{
+        {300, ImagePathForm::Extended, {}, "42", 42},
+        {300, ImagePathForm::Extended, {"--selftest=onscreen"}, "0xC0000409", static_cast<int>(0xC0000409u)},
+        {259, ImagePathForm::Plain, {}, "7", 7}};
+    if (parentLongPathsEffective()) {
+        cases.push_back({300, ImagePathForm::Plain, {"--selftest=onscreen", "--", "x"}, "0", 0});
+        cases.push_back({400, ImagePathForm::Plain, {"file.txt"}, "0x100", 256});
+    }
+    // Binary data, larger than a pipe's buffer, with a NUL and a non-ASCII character.
+    std::string input = "first line\r\nzweite Zeile \xC3\xBC\n";
+    input += std::string("\0\x01\xFF", 3);
+    input += std::string(70000, 'q');
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        const Case& c = cases[index];
+        SCOPED_TRACE(std::format("{}, {} units, {}", formName(c.form), c.units,
+                                 c.args.empty() ? std::string("GUI") : c.args.front()));
+        const std::string exe = copyProbeTo(imagePathCell(base, c.units, c.form));
+        const std::string localAppData = localAppDataIn(scratch, std::format("lad {}", index));
+        const ProbeRun run = runProbe(exe, c.args,
+                                      {{"LOCALAPPDATA", localAppData},
+                                       {"FROST_PROBE_ECHO", "1"},
+                                       {"FROST_PROBE_EXIT_CODE", c.status},
+                                       {"FROST_RESTARTED_FROM", std::nullopt}},
+                                      c.form, input, SEM_NOGPFAULTERRORBOX);
+        ASSERT_TRUE(run.error.empty()) << run.error;
+        EXPECT_EQ(run.exitCode, c.expected) << run.header << "\n" << run.stderrBytes;
+        EXPECT_EQ(run.stderrBytes, "launcher probe: stderr\n");
+        EXPECT_TRUE(run.echoed == input) << "stdout after the header: " << run.echoed.size() << " bytes, expected "
+                                         << input.size();
+        EXPECT_TRUE(run.header.ends_with(", marker unset")) << run.header;
+        EXPECT_EQ(hexAfter(run.header, "hardening bits 0x"), 0x1Fu) << run.header;
+        const auto atEntry = hexAfter(run.header, "at entry 0x");
+        ASSERT_TRUE(atEntry.has_value()) << run.header;
+        // The parent's mode reaches the GUI through the restart; command-line modes add the rest.
+        EXPECT_EQ(*atEntry & kNoBoxes, c.args.empty() || c.args.front() == "file.txt"
+                                           ? static_cast<unsigned>(SEM_NOGPFAULTERRORBOX)
+                                           : kNoBoxes)
+            << run.header;
+        if (c.units < MAX_PATH) {
+            EXPECT_TRUE(run.header.contains(", restarted from nothing, image " + startedAs(exe, c.form) + ","))
+                << run.header;
+            EXPECT_FALSE(shortLinkFolderExists(localAppData));
+            continue;
+        }
+        const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+        ASSERT_EQ(links.size(), 1u) << run.header;
+        EXPECT_TRUE(links.front().junction);
+        EXPECT_TRUE(run.header.contains(", restarted from " + startedAs(exe, c.form) + ", image " + links.front().path +
+                                        "\\frost.exe,"))
+            << run.header;
+    }
+}
+
+TEST(FrostProcess, RestartedLauncherNeverRestartsAgain) {
+    /*
+     * The restart marker (FROST_RESTARTED_FROM) tells a launcher that another one started it
+     * through the short link. Such a launcher never restarts: if its own image path is still
+     * too long for the GPU driver, it refuses with status 4 and a message instead of starting
+     * a third process. Here the marker comes from the parent's environment and the image path
+     * is 300 units long, as if the link were. Below 260 units the marker is taken out of the
+     * environment and handed to frost_app.dll, which only names it: the parent controls the
+     * environment anyway.
+     */
+    const ScratchDir scratch("app-process-loopguard");
+    const std::string base = longFormOf(scratch);
+    ASSERT_FALSE(base.empty());
+    const std::string localAppData = localAppDataIn(scratch, "lad");
+    const std::string marker = "C:\\first launcher\\frost.exe";
+    const std::string exe = copyProbeTo(imagePathCell(base, 300, ImagePathForm::Extended));
+    const auto started = std::chrono::steady_clock::now();
+    const ProbeRun run =
+        runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", marker}},
+                 ImagePathForm::Extended);
+    ASSERT_TRUE(run.error.empty()) << run.error;
+    EXPECT_EQ(run.exitCode, 4) << run.header << run.stderrBytes;
+    const std::string expected = "frost: frost was restarted through the short link " +
+                                 startedAs(exe, ImagePathForm::Extended) + " from " + marker +
+                                 ", but that path is still 300 UTF-16 units long, and graphics drivers end a "
+                                 "program started from 260 units (MAX_PATH) or more. Install FrostIDE in a directory "
+                                 "with a shorter path.\n";
+    EXPECT_EQ(run.stderrBytes, expected);
+    EXPECT_EQ(run.header, "") << "frost_app.dll was not loaded";
+    EXPECT_FALSE(shortLinkFolderExists(localAppData));
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 30s);
+
+    const std::string shortExe = copyProbeTo(imagePathCell(base, 200, ImagePathForm::Plain));
+    const ProbeRun direct =
+        runProbe(shortExe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", marker}},
+                 ImagePathForm::Plain);
+    ASSERT_TRUE(direct.error.empty()) << direct.error;
+    EXPECT_EQ(direct.exitCode, 0) << direct.header << direct.stderrBytes;
+    EXPECT_TRUE(direct.header.ends_with(", restarted from " + marker + ", image " + shortExe + ", marker unset"))
+        << direct.header;
+}
+
+TEST(FrostProcess, RestartRefusesWithoutAUsableShortLink) {
+    /*
+     * Where no short link can help, the launcher refuses with status 4 and a message that says
+     * why and what to do, and starts nothing: LOCALAPPDATA unset; LOCALAPPDATA so long that the
+     * link's image path would reach 260 units as well; and a file a user left at the link's
+     * path, which stays as it was. In a command-line mode, so the message goes to stderr and no
+     * box is shown.
+     */
+    const ScratchDir scratch("app-process-refuse");
+    const std::string base = longFormOf(scratch);
+    ASSERT_FALSE(base.empty());
+    const ImagePathForm form = longStartForm();
+    const std::string exe = copyProbeTo(imagePathCell(base, 300, form));
+    const std::string why = std::format("frost: frost.exe's path is {} UTF-16 units long, and graphics drivers end a "
+                                        "program started from 260 units (MAX_PATH) or more, so frost restarts "
+                                        "through a short link, but ",
+                                        300);
+    const auto refused = [&](const ProbeRun& run, const std::string& reason) {
+        ASSERT_TRUE(run.error.empty()) << run.error;
+        EXPECT_EQ(run.exitCode, 4) << run.header << run.stderrBytes;
+        EXPECT_EQ(run.stderrBytes, why + reason + "\n");
+        EXPECT_EQ(run.header, "") << "nothing was started";
+    };
+    {
+        SCOPED_TRACE("LOCALAPPDATA unset");
+        refused(runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", std::nullopt}}, form),
+                "LOCALAPPDATA, the folder for that link, is not set. Install FrostIDE in a directory with a "
+                "shorter path.");
+    }
+    {
+        SCOPED_TRACE("LOCALAPPDATA too long");
+        // <root>\FrostIDE\i\<16 hex digits>\frost.exe is the root's length plus 38 units.
+        const std::string root = padToLength(base, 222);
+        ASSERT_TRUE(frost::io::realFileSystem().createDirectories(root).has_value());
+        const ProbeRun run = runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", root}}, form);
+        ASSERT_TRUE(run.error.empty()) << run.error;
+        EXPECT_EQ(run.exitCode, 4) << run.header << run.stderrBytes;
+        EXPECT_TRUE(run.stderrBytes.starts_with(why + "its short link " + root + "\\FrostIDE\\i\\")) << run.stderrBytes;
+        EXPECT_TRUE(run.stderrBytes.ends_with("\\frost.exe would still be 260 UTF-16 units long. Install FrostIDE in "
+                                              "a directory with a shorter path.\n"))
+            << run.stderrBytes;
+        EXPECT_EQ(run.header, "") << "nothing was started";
+        EXPECT_FALSE(shortLinkFolderExists(root));
+    }
+    {
+        SCOPED_TRACE("a file at the link's path");
+        const std::string localAppData = localAppDataIn(scratch, "lad");
+        const ProbeRun first = runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}}, form);
+        ASSERT_EQ(first.exitCode, 0) << first.header << first.stderrBytes;
+        const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+        ASSERT_EQ(links.size(), 1u);
+        const std::wstring link = extendedWide(links.front().path);
+        ASSERT_NE(RemoveDirectoryW(link.c_str()), FALSE) << GetLastError();
+        {
+            std::ofstream out(fs::path(link), std::ios::binary | std::ios::trunc);
+            out << "user data";
+        }
+        refused(runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}}, form),
+                "its short link's path " + links.front().path +
+                    " holds a file; remove it and start frost again, or install FrostIDE in a directory with a "
+                    "shorter path.");
+        std::ifstream in(fs::path(link), std::ios::binary);
+        EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()), "user data");
+    }
+}
+
+// The top-level windows on `desktop` titled exactly `title` and shown, each with the process
+// that owns it.
+std::vector<std::pair<HWND, DWORD>> shownWindowsTitled(HDESK desktop, std::wstring_view title) {
+    struct Search {
+        std::wstring_view title;
+        std::vector<std::pair<HWND, DWORD>> found;
+    } search{title, {}};
+    const WNDENUMPROC collect = [](HWND window, LPARAM context) -> BOOL {
+        auto& into = *reinterpret_cast<Search*>(context);
+        wchar_t text[64] = {};
+        const int units = GetWindowTextW(window, text, 64);
+        if (IsWindowVisible(window) != FALSE &&
+            std::wstring_view(text, static_cast<std::size_t>(units > 0 ? units : 0)) == into.title) {
+            DWORD owner = 0;
+            GetWindowThreadProcessId(window, &owner);
+            into.found.emplace_back(window, owner);
+        }
+        return TRUE;
+    };
+    // FALSE also means "no windows at all", so the result alone is the answer.
+    static_cast<void>(EnumDesktopWindows(desktop, collect, reinterpret_cast<LPARAM>(&search)));
+    return search.found;
+}
+
+// The parent process id of process `pid` (a Toolhelp snapshot), or 0.
+DWORD parentProcessOf(DWORD pid) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    DWORD parent = 0;
+    for (BOOL more = Process32FirstW(snapshot, &entry); more != FALSE; more = Process32NextW(snapshot, &entry)) {
+        if (entry.th32ProcessID == pid) {
+            parent = entry.th32ParentProcessID;
+            break;
+        }
+    }
+    CloseHandle(snapshot);
+    return parent;
+}
+
+/*
+ * Waits up to `limit` for a shown window titled `title` on `desktop` that a process other
+ * than `launcher` owns (the restarted frost's), polling every 20 ms; stops early when
+ * `process` (the launcher) ends. Returns the window and its owner, or {nullptr, 0}.
+ */
+std::pair<HWND, DWORD> waitForRestartedWindow(const frost::test::PrivateDesktop& desktop, std::wstring_view title,
+                                              frost::io::IProcess& process, std::chrono::milliseconds limit) {
+    const auto launcher = static_cast<DWORD>(process.pid());
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (const auto& [window, owner] : shownWindowsTitled(desktop.handle(), title)) {
+            if (owner != launcher) {
+                return {window, owner};
+            }
+        }
+        if (process.wait(0ms).has_value()) {
+            break;
+        }
+        std::this_thread::sleep_for(20ms);
+    }
+    return {nullptr, 0};
+}
+
+/*
+ * Starts `exe` without arguments (the GUI) in `form` on `desktop`, stdout piped with stderr
+ * merged into it, under an error mode without hard-error boxes; null after a failure the
+ * test records.
+ */
+std::unique_ptr<frost::io::IProcess> startGui(const std::string& exe, Environment environment, ImagePathForm form,
+                                              const frost::test::PrivateDesktop& desktop) {
+    frost::io::ProcessSpec spec;
+    spec.executable = exe;
+    spec.environment = std::move(environment);
+    spec.imagePathForm = form;
+    spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+    spec.desktop = desktop.name();
+    const frost::test::NoHardErrorBoxes noHardErrorBoxes;
+    auto process = frost::io::realProcessLauncher().launch(spec);
+    if (!process) {
+        ADD_FAILURE() << process.error().describe();
+        return nullptr;
+    }
+    return std::move(*process);
+}
+
+TEST(FrostProcess, GuiStartFromALongPathShowsItsWindow) {
+    /*
+     * The GUI from a 300-unit image path, as a user starts it (no arguments): the launcher
+     * restarts frost through its short link and waits; the main window ("FrostIDE") appears on
+     * this test's private desktop, owned by the restarted process, whose parent is the
+     * launcher. Closing the window ends both, with status 0.
+     */
+    const ScratchDir scratch("app-process-gui");
+    const ImagePathForm form = longStartForm();
+    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 300, form));
+    const std::string localAppData = localAppDataIn(scratch, "lad");
+    Environment environment = ownPluginsOnly();
+    environment.emplace_back("LOCALAPPDATA", localAppData);
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    const auto process = startGui(exe, environment, form, desktop);
+    ASSERT_NE(process, nullptr);
+    const auto [window, owner] = waitForRestartedWindow(desktop, L"FrostIDE", *process, 60s);
+    if (window == nullptr) {
+        const auto rest = process->communicate({}, 10s);
+        FAIL() << "no FrostIDE window from a restarted frost; launcher output: "
+               << (rest ? rest->stdoutBytes : rest.error().describe());
+    }
+    EXPECT_EQ(parentProcessOf(owner), static_cast<DWORD>(process->pid()));
+    EXPECT_FALSE(process->wait(0ms).has_value()) << "the launcher waits for the restarted frost";
+    const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+    ASSERT_EQ(links.size(), 1u);
+    EXPECT_TRUE(links.front().junction);
+    ASSERT_NE(PostMessageW(window, WM_CLOSE, 0, 0), FALSE) << GetLastError();
+    const auto result = process->communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes;
+}
+
+TEST(FrostProcess, GuiFailureAfterARestartNamesTheInstallDirectory) {
+    /*
+     * After a restart every path frost names itself is the link's, so a GUI failure message
+     * also says where FrostIDE is installed. Here platforms\ is missing: the restarted frost's
+     * box ("FrostIDE cannot start", on the private desktop) and its stderr name the real
+     * install directory and the link. The test closes the box; status 4 comes back through
+     * the launcher.
+     */
+    const ScratchDir scratch("app-process-guifail");
+    const ImagePathForm form = longStartForm();
+    const std::string dir = imagePathCell(longFormOf(scratch), 300, form);
+    const std::string exe = copyFrostTo(dir, Plugins::None);
+    const std::string localAppData = localAppDataIn(scratch, "lad");
+    Environment environment = ownPluginsOnly();
+    environment.emplace_back("LOCALAPPDATA", localAppData);
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    const auto process = startGui(exe, environment, form, desktop);
+    ASSERT_NE(process, nullptr);
+    const auto [box, owner] = waitForRestartedWindow(desktop, L"FrostIDE cannot start", *process, 60s);
+    if (box == nullptr) {
+        const auto rest = process->communicate({}, 10s);
+        FAIL() << "no failure box from a restarted frost; launcher output: "
+               << (rest ? rest->stdoutBytes : rest.error().describe());
+    }
+    EXPECT_EQ(parentProcessOf(owner), static_cast<DWORD>(process->pid()));
+    // MessageBoxW's text is its static control 0xFFFF (WM_GETTEXT works across processes).
+    std::wstring text(4096, L'\0');
+    text.resize(static_cast<std::size_t>(GetDlgItemTextW(box, 0xFFFF, text.data(), static_cast<int>(text.size()))));
+    ASSERT_NE(PostMessageW(box, WM_CLOSE, 0, 0), FALSE) << GetLastError();
+    const auto result = process->communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 4) << result->stdoutBytes;
+    const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+    ASSERT_EQ(links.size(), 1u);
+    const std::string note = "\n\nFrostIDE is installed in " + dir + ". It runs through the short link " +
+                             links.front().path +
+                             ", because graphics drivers end a program started from a path of 260 UTF-16 units or "
+                             "more.";
+    const std::string shown = frost::io::fromWide(text).value_or("?");
+    EXPECT_TRUE(shown.starts_with("Qt's platform plugin \"windows\" is missing")) << shown;
+    EXPECT_TRUE(shown.ends_with(note)) << "expected " << note << "\nin the box: " << shown;
+    // stderr is in text mode: its line breaks are CR LF.
+    std::string output = result->stdoutBytes;
+    for (std::size_t at = output.find("\r\n"); at != std::string::npos; at = output.find("\r\n", at)) {
+        output.erase(at, 1);
+    }
+    EXPECT_TRUE(output.contains("frost: Qt's platform plugin \"windows\" is missing")) << output;
+    EXPECT_TRUE(output.contains(note)) << "expected " << note << "\n" << output;
 }
 
 /*

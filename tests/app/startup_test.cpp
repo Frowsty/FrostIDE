@@ -5,7 +5,10 @@
 // for a missing one, QT_QPA_PLATFORM_PLUGIN_PATH's normalisation and pin, the loader's 250-unit
 // plain-path limit itself, the pin through \\?\ that satisfies Qt's later plain-path load from
 // a long directory (and the failing unpinned load), the launcher's GUI or command-line rule and
-// its normalised \\?\ install directory, the hand-over of the hardening state to frost_app.dll,
+// its normalised \\?\ install directory, its rule for which starts may reach a GPU driver, the
+// short link it restarts through (name, reparse data, creation and reuse, what it does with
+// whatever it finds at the link's path, and where it refuses), the hand-over of the hardening
+// state to frost_app.dll,
 // that the hardened process no longer loads a DLL planted in the current directory (and what it
 // does not cover), that the launcher's \\?\ install directory serves later loads by name, that
 // suppressCrashDialogs() switches every dialog source off, that the command-line dialog guard
@@ -29,10 +32,13 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <initializer_list>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -45,6 +51,7 @@
 
 #include <crtdbg.h>
 #include <stdlib.h>
+#include <winioctl.h>
 #endif
 
 namespace {
@@ -506,6 +513,441 @@ TEST(StartupPlatformPlugin, PinsFromQtQpaPlatformPluginPathFirst) {
     ASSERT_TRUE(result.has_value()) << result.error().message();
     EXPECT_EQ(result->detail, "loaded Qt's platform plugin " + plugin);
     unload(plugin);
+}
+
+// launcherMayReachGpuDriver() of `arguments` (argv without the program name) and a
+// QT_QPA_PLATFORM value.
+bool mayReachGpuDriver(std::initializer_list<const wchar_t*> arguments, std::wstring_view qtQpaPlatform = L"") {
+    return frost::app::launcherMayReachGpuDriver(std::span<const wchar_t* const>(arguments.begin(), arguments.size()),
+                                                 qtQpaPlatform);
+}
+
+TEST(StartupGpuDriverRule, OnlyANativeQApplicationMayReachTheDriver) {
+    /*
+     * The launcher restarts through a short link only for starts that create a QApplication on
+     * a native platform, as main.cpp decides: the GUI and --selftest=onscreen. --version, --help,
+     * usage errors and the offscreen self-test start in place from any path (ADR 0012).
+     */
+    EXPECT_TRUE(mayReachGpuDriver({}));
+    EXPECT_TRUE(mayReachGpuDriver({L"file.txt"}));
+    EXPECT_TRUE(mayReachGpuDriver({nullptr}));
+    EXPECT_TRUE(mayReachGpuDriver({L"--", L"--version"})) << "a path after \"--\": the GUI";
+    EXPECT_TRUE(mayReachGpuDriver({L"--selftest=onscreen"}));
+    EXPECT_TRUE(mayReachGpuDriver({L"--selftest", L"file.txt", L"--selftest=onscreen"}));
+    EXPECT_FALSE(mayReachGpuDriver({L"--version"}));
+    EXPECT_FALSE(mayReachGpuDriver({L"--help"}));
+    EXPECT_FALSE(mayReachGpuDriver({L"--selftest"}));
+    EXPECT_FALSE(mayReachGpuDriver({L"--selftest", L"--", L"-platform", L"windows"}));
+    EXPECT_FALSE(mayReachGpuDriver({L"--bogus"})) << "a usage error";
+    EXPECT_FALSE(mayReachGpuDriver({L"-"})) << "a usage error";
+    EXPECT_FALSE(mayReachGpuDriver({L"--selftest=onscreen", L"--version"})) << "conflicting modes: a usage error";
+    // A set QT_QPA_PLATFORM decides the platform: its first named entry, as Qt and the pin read it.
+    EXPECT_TRUE(mayReachGpuDriver({L"--selftest"}, L"windows"));
+    EXPECT_TRUE(mayReachGpuDriver({L"--selftest"}, L"direct2d;offscreen"));
+    EXPECT_TRUE(mayReachGpuDriver({L"--selftest"}, L";:x;")) << "no named entry: Qt's native default";
+    EXPECT_FALSE(mayReachGpuDriver({}, L"offscreen"));
+    EXPECT_FALSE(mayReachGpuDriver({L"--selftest=onscreen"}, L";offscreen:fontengine=freetype"));
+    EXPECT_FALSE(mayReachGpuDriver({L"--version"}, L"windows"));
+}
+
+TEST(StartupShortLink, NameIsAStableHashOfTheDirectory) {
+    // 64-bit FNV-1a of the UTF-16LE bytes, pinned so a link's name never changes between
+    // builds (the empty input gives the published offset basis; the others come from an
+    // independent implementation checked against FNV's published vector for "a").
+    using frost::app::shortLinkName;
+    EXPECT_EQ(shortLinkName(L""), L"cbf29ce484222325");
+    EXPECT_EQ(shortLinkName(L"a"), L"089be207b544f1e4");
+    EXPECT_EQ(shortLinkName(L"C:\\Program Files\\FrostIDE"), L"f4d82f5db83ec9b1");
+    EXPECT_NE(shortLinkName(L"C:\\Program Files\\FrostIDE"), shortLinkName(L"C:\\Program Files\\FrostIDE2"));
+}
+
+TEST(StartupShortLink, MountPointReparseDataRoundTrips) {
+    using frost::app::mountPointReparseData;
+    using frost::app::mountPointSubstituteName;
+    const std::wstring target = L"C:\\fr\u00f8st dir\\bin";
+    const std::vector<unsigned char> data = mountPointReparseData(target);
+    // 8-byte header, 8 bytes of offsets, then "\??\<target>" and "<target>", each with a NUL.
+    ASSERT_EQ(data.size(), 16 + (4 + target.size() + 1 + target.size() + 1) * sizeof(wchar_t));
+    unsigned tag = 0;
+    std::memcpy(&tag, data.data(), sizeof tag);
+    EXPECT_EQ(tag, static_cast<unsigned>(IO_REPARSE_TAG_MOUNT_POINT));
+    EXPECT_EQ(mountPointSubstituteName(data), L"\\??\\" + target);
+    // Truncated data, another tag and a name outside the buffer give no name.
+    EXPECT_EQ(mountPointSubstituteName(std::span(data).first(data.size() - 2)), L"");
+    std::vector<unsigned char> other = data;
+    other[0] = 0x0C; // IO_REPARSE_TAG_SYMLINK is 0xA000000C.
+    EXPECT_EQ(mountPointSubstituteName(other), L"");
+    std::vector<unsigned char> outside = data;
+    outside[8] = 0xF0; // SubstituteNameOffset far beyond the path buffer.
+    EXPECT_EQ(mountPointSubstituteName(outside), L"");
+    // MAXIMUM_REPARSE_DATA_BUFFER_SIZE (16 KiB) holds a target of up to 4,089 units.
+    EXPECT_EQ(mountPointReparseData(std::wstring(4089, L'a')).size(), 16384u);
+    EXPECT_TRUE(mountPointReparseData(std::wstring(4090, L'a')).empty());
+}
+
+// The UTF-16 form of a test path (UTF-8, absolute).
+std::wstring wide(const std::string& utf8) { return frost::io::toWide(utf8).value(); }
+
+// Opens `path` itself (a link is not followed) for `access`, sharing everything; null on failure.
+HANDLE openItself(const std::wstring& path, DWORD access) {
+    HANDLE handle =
+        CreateFileW((L"\\\\?\\" + path).c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    return handle == INVALID_HANDLE_VALUE ? nullptr : handle;
+}
+
+// The reparse tag of `path` itself, 0 when it is no reparse point, or ~0 when it does not exist.
+DWORD reparseTagOf(const std::wstring& path) {
+    HANDLE handle = openItself(path, FILE_READ_ATTRIBUTES);
+    if (handle == nullptr) {
+        return ~DWORD{0};
+    }
+    FILE_ATTRIBUTE_TAG_INFO info{};
+    const BOOL ok = GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &info, sizeof info);
+    CloseHandle(handle);
+    return ok != FALSE && (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ? info.ReparseTag : 0;
+}
+
+// The substitute name of the mount point at `path`, or "" when it is none.
+std::wstring junctionTarget(const std::wstring& path) {
+    HANDLE handle = openItself(path, GENERIC_READ);
+    if (handle == nullptr) {
+        return {};
+    }
+    std::vector<unsigned char> data(16 * 1024);
+    DWORD returned = 0;
+    const BOOL ok = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nullptr, 0, data.data(),
+                                    static_cast<DWORD>(data.size()), &returned, nullptr);
+    CloseHandle(handle);
+    data.resize(ok != FALSE ? returned : 0);
+    return frost::app::mountPointSubstituteName(data);
+}
+
+// Sets reparse data `body` (after the 8-byte header) with `tag` on the existing `path`.
+bool plantReparsePoint(const std::wstring& path, DWORD tag, std::span<const unsigned char> body) {
+    HANDLE handle = openItself(path, GENERIC_READ | GENERIC_WRITE);
+    if (handle == nullptr) {
+        return false;
+    }
+    std::vector<unsigned char> data(8 + body.size(), 0);
+    std::memcpy(data.data(), &tag, sizeof tag);
+    const auto length = static_cast<WORD>(body.size());
+    std::memcpy(data.data() + 4, &length, sizeof length);
+    std::ranges::copy(body, data.begin() + 8);
+    DWORD returned = 0;
+    const BOOL ok = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, data.data(), static_cast<DWORD>(data.size()),
+                                    nullptr, 0, &returned, nullptr);
+    CloseHandle(handle);
+    return ok != FALSE;
+}
+
+// A junction at the existing empty directory `path` to `target`.
+bool plantJunction(const std::wstring& path, const std::wstring& target) {
+    const std::vector<unsigned char> data = frost::app::mountPointReparseData(target);
+    return data.size() > 8 && plantReparsePoint(path, IO_REPARSE_TAG_MOUNT_POINT, std::span(data).subspan(8));
+}
+
+// A WSL symbolic link (IO_REPARSE_TAG_LX_SYMLINK: a version DWORD, then the target in UTF-8)
+// at the existing `path`. It is a name surrogate like an NT symbolic link, and a standard user
+// may create it, which an NT symbolic link needs a privilege or Developer Mode for.
+bool plantWslSymlink(const std::wstring& path) {
+    constexpr DWORD kLxSymlink = 0xA000001D;
+    const unsigned char body[] = {2, 0, 0, 0, 'e', 'l', 's', 'e', 'w', 'h', 'e', 'r', 'e'};
+    return plantReparsePoint(path, kLxSymlink, body);
+}
+
+// The ChangeTime of `path` itself: any rewrite of its reparse data or attributes moves it.
+LONGLONG changeTimeOf(const std::wstring& path) {
+    HANDLE handle = openItself(path, FILE_READ_ATTRIBUTES);
+    if (handle == nullptr) {
+        return 0;
+    }
+    FILE_BASIC_INFO info{};
+    GetFileInformationByHandleEx(handle, FileBasicInfo, &info, sizeof info);
+    CloseHandle(handle);
+    return info.ChangeTime.QuadPart;
+}
+
+// Whether `a` and `b` name the same file or directory (volume serial number and file index;
+// links followed).
+bool sameFile(const std::wstring& a, const std::wstring& b) {
+    const auto identify = [](const std::wstring& path, BY_HANDLE_FILE_INFORMATION& info) {
+        HANDLE handle = CreateFileW((L"\\\\?\\" + path).c_str(), FILE_READ_ATTRIBUTES,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                    FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        const BOOL ok = GetFileInformationByHandle(handle, &info);
+        CloseHandle(handle);
+        return ok != FALSE;
+    };
+    BY_HANDLE_FILE_INFORMATION first{};
+    BY_HANDLE_FILE_INFORMATION second{};
+    return identify(a, first) && identify(b, second) && first.dwVolumeSerialNumber == second.dwVolumeSerialNumber &&
+           first.nFileIndexHigh == second.nFileIndexHigh && first.nFileIndexLow == second.nFileIndexLow;
+}
+
+// Writes a small file at `path` (UTF-16, absolute).
+void writeFile(const std::wstring& path, std::string_view text) {
+    std::ofstream out(std::filesystem::path(L"\\\\?\\" + path), std::ios::binary | std::ios::trunc);
+    out << text;
+}
+
+// The contents of the file at `path`, or "<missing>".
+std::string readFile(const std::wstring& path) {
+    std::ifstream in(std::filesystem::path(L"\\\\?\\" + path), std::ios::binary);
+    if (!in) {
+        return "<missing>";
+    }
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// An install directory with a frost.exe stand-in (a text file) and a marker, and a link root,
+// below one scratch directory.
+struct LinkFixture {
+    frost::test::ScratchDir scratch{"app-startup-link"};
+    std::wstring install = wide(longForm(scratch.path())) + L"\\inst \u00f8 \u6d4b";
+    std::wstring root = wide(longForm(scratch.path())) + L"\\local app data";
+    std::wstring elsewhere = wide(longForm(scratch.path())) + L"\\elsewhere";
+
+    LinkFixture() {
+        for (const std::wstring& dir : {install, root, elsewhere}) {
+            EXPECT_NE(CreateDirectoryW((L"\\\\?\\" + dir).c_str(), nullptr), FALSE) << GetLastError();
+        }
+        writeFile(install + L"\\frost.exe", "not an image");
+        writeFile(install + L"\\marker.txt", "install");
+        writeFile(elsewhere + L"\\keep.txt", "elsewhere");
+    }
+
+    [[nodiscard]] std::expected<frost::app::ShortLink, frost::app::ShortLinkError> prepare() const {
+        return frost::app::prepareShortLink(root, L"\\\\?\\" + install, L"frost.exe");
+    }
+    // Where prepare() puts the link (shortLinkName() of the install directory, which has no
+    // 8.3 components or links here, so its final path is `install`).
+    [[nodiscard]] std::wstring link() const { return root + L"\\FrostIDE\\i\\" + frost::app::shortLinkName(install); }
+};
+
+// Whether the link of `fixture` is a junction to its install directory.
+void expectLinkToInstall(const LinkFixture& fixture) {
+    EXPECT_EQ(reparseTagOf(fixture.link()), IO_REPARSE_TAG_MOUNT_POINT);
+    EXPECT_EQ(junctionTarget(fixture.link()), L"\\??\\" + fixture.install);
+    EXPECT_TRUE(sameFile(fixture.link() + L"\\marker.txt", fixture.install + L"\\marker.txt"));
+}
+
+TEST(StartupShortLink, CreatesAJunctionToTheInstallDirectoryAndKeepsIt) {
+    /*
+     * The first restart creates %LOCALAPPDATA%\FrostIDE\i\<hash> as a junction to the install
+     * directory without administrator rights; later ones reuse it unchanged. While a ShortLink
+     * holds it, nobody can open it for writing or deleting, nor rename a folder above it, but
+     * another frost can verify and share it.
+     */
+    const LinkFixture fixture;
+    auto first = fixture.prepare();
+    ASSERT_TRUE(first.has_value()) << frost::io::fromWide(first.error().message).value_or("?");
+    EXPECT_EQ(first->directory(), fixture.link());
+    EXPECT_EQ(first->imagePath(), fixture.link() + L"\\frost.exe");
+    EXPECT_EQ(first->target(), fixture.install);
+    expectLinkToInstall(fixture);
+
+    HANDLE writer = CreateFileW((L"\\\\?\\" + fixture.link()).c_str(), GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    EXPECT_EQ(writer, INVALID_HANDLE_VALUE);
+    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_SHARING_VIOLATION));
+    if (writer != INVALID_HANDLE_VALUE) {
+        CloseHandle(writer);
+    }
+    const std::wstring folder = fixture.root + L"\\FrostIDE";
+    EXPECT_EQ(MoveFileExW((L"\\\\?\\" + folder).c_str(), (L"\\\\?\\" + folder + L"-moved").c_str(), 0), FALSE);
+    EXPECT_EQ(RemoveDirectoryW((L"\\\\?\\" + fixture.link()).c_str()), FALSE);
+    auto second = fixture.prepare();
+    ASSERT_TRUE(second.has_value()) << frost::io::fromWide(second.error().message).value_or("?");
+    EXPECT_EQ(second->directory(), first->directory());
+
+    const LONGLONG changed = changeTimeOf(fixture.link());
+    first = std::unexpected(frost::app::ShortLinkError{});
+    second = std::unexpected(frost::app::ShortLinkError{});
+    auto again = fixture.prepare();
+    ASSERT_TRUE(again.has_value()) << frost::io::fromWide(again.error().message).value_or("?");
+    EXPECT_EQ(changeTimeOf(fixture.link()), changed) << "a link that is right is not rewritten";
+    expectLinkToInstall(fixture);
+
+    // Another spelling of the install directory (its 8.3 form, where the volume makes them)
+    // gives the same link.
+    wchar_t shortForm[MAX_PATH * 4] = {};
+    if (GetShortPathNameW((L"\\\\?\\" + fixture.install).c_str(), shortForm, MAX_PATH * 4) > 0 &&
+        std::wstring_view(shortForm).contains(L'~')) {
+        auto spelled = frost::app::prepareShortLink(fixture.root, shortForm, L"frost.exe");
+        ASSERT_TRUE(spelled.has_value()) << frost::io::fromWide(spelled.error().message).value_or("?");
+        EXPECT_EQ(spelled->directory(), fixture.link());
+    } else {
+        std::printf("note: no 8.3 name for %ls\n", fixture.install.c_str());
+    }
+}
+
+TEST(StartupShortLink, HandlesWhatItFindsAtItsPathWithoutFollowingIt) {
+    /*
+     * Whatever is at the link's path is inspected through a handle that does not follow it.
+     * Links and empty directories are frost's to replace; a junction or link to another
+     * directory is replaced without touching that directory; data (a file, a directory with
+     * contents, a reparse point that is no name surrogate) is refused with a message and left
+     * as it was.
+     */
+    const LinkFixture fixture;
+    const std::wstring link = fixture.link();
+    const std::wstring parent = link.substr(0, link.find_last_of(L'\\'));
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(L"\\\\?\\" + parent), error);
+    ASSERT_FALSE(error) << error.message();
+    const auto reset = [&] {
+        // Removes the link object itself (RemoveDirectoryW and DeleteFileW never follow it).
+        if (RemoveDirectoryW((L"\\\\?\\" + link).c_str()) == FALSE) {
+            DeleteFileW((L"\\\\?\\" + link).c_str());
+        }
+        ASSERT_EQ(reparseTagOf(link), ~DWORD{0}) << "the link path is not empty";
+    };
+    const auto created = [&](const char* what) {
+        SCOPED_TRACE(what);
+        auto result = fixture.prepare();
+        ASSERT_TRUE(result.has_value()) << frost::io::fromWide(result.error().message).value_or("?");
+        expectLinkToInstall(fixture);
+        // What a replaced link pointed at is untouched.
+        EXPECT_EQ(readFile(fixture.elsewhere + L"\\keep.txt"), "elsewhere");
+    };
+    const auto refused = [&](const char* what, std::wstring_view message) {
+        SCOPED_TRACE(what);
+        auto result = fixture.prepare();
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().kind, frost::app::ShortLinkError::Kind::Occupied);
+        EXPECT_TRUE(result.error().message.contains(message))
+            << frost::io::fromWide(result.error().message).value_or("?");
+        EXPECT_TRUE(result.error().message.contains(link)) << "names the path";
+    };
+
+    // An empty plain directory becomes the junction.
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
+    created("empty directory");
+    reset();
+
+    // A directory with contents is refused, contents intact.
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
+    writeFile(link + L"\\user.txt", "mine");
+    refused("directory with contents", L"is a directory with contents");
+    EXPECT_EQ(reparseTagOf(link), 0u);
+    EXPECT_EQ(readFile(link + L"\\user.txt"), "mine");
+    DeleteFileW((L"\\\\?\\" + link + L"\\user.txt").c_str());
+    reset();
+
+    // A junction to another directory is rewritten in place.
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
+    ASSERT_TRUE(plantJunction(link, fixture.elsewhere));
+    ASSERT_EQ(junctionTarget(link), L"\\??\\" + fixture.elsewhere);
+    created("junction to another directory");
+    reset();
+
+    // A WSL symbolic link on a directory and on a file: removed themselves, then replaced.
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
+    ASSERT_TRUE(plantWslSymlink(link));
+    created("WSL symbolic link (directory)");
+    reset();
+    writeFile(link, "");
+    ASSERT_TRUE(plantWslSymlink(link));
+    created("WSL symbolic link (file)");
+    reset();
+
+    // An NT symbolic link to another directory, where this account may create one.
+    if (CreateSymbolicLinkW((L"\\\\?\\" + link).c_str(), (L"\\\\?\\" + fixture.elsewhere).c_str(),
+                            SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != FALSE) {
+        ASSERT_EQ(reparseTagOf(link), IO_REPARSE_TAG_SYMLINK);
+        created("NT symbolic link");
+        reset();
+    } else {
+        // ERROR_PRIVILEGE_NOT_HELD without Developer Mode or SeCreateSymbolicLinkPrivilege; the
+        // WSL links above take the same path through prepareShortLink().
+        std::printf("note: no NT symbolic link planted (win32 error %lu)\n", GetLastError());
+    }
+
+    // A file is refused and kept.
+    writeFile(link, "user data");
+    refused("file", L"holds a file");
+    EXPECT_EQ(reparseTagOf(link), 0u);
+    EXPECT_EQ(readFile(link), "user data");
+    reset();
+
+    // A reparse point that is no name surrogate (an AF_UNIX socket's tag) is refused and kept.
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
+    constexpr DWORD kAfUnix = 0x80000023;
+    const unsigned char body[] = {1, 0, 0, 0};
+    ASSERT_TRUE(plantReparsePoint(link, kAfUnix, body));
+    refused("reparse point with data", L"holds a reparse point with data (tag 0x80000023)");
+    EXPECT_EQ(reparseTagOf(link), kAfUnix);
+    reset();
+}
+
+TEST(StartupShortLink, IsNamedByItsResolvedPath) {
+    /*
+     * A root reached through a junction (as when a user moved AppData to another folder): the
+     * link is created in the junction's target, and ShortLink names it by that resolved path,
+     * so retargeting the junction above it cannot redirect the restart. The junction itself is
+     * left as it was.
+     */
+    const LinkFixture fixture;
+    const std::wstring realRoot = fixture.elsewhere + L"\\real root";
+    const std::wstring viaJunction = fixture.root + L"\\moved";
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + realRoot).c_str(), nullptr), FALSE) << GetLastError();
+    ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + viaJunction).c_str(), nullptr), FALSE) << GetLastError();
+    ASSERT_TRUE(plantJunction(viaJunction, realRoot));
+    auto link = frost::app::prepareShortLink(viaJunction, L"\\\\?\\" + fixture.install, L"frost.exe");
+    ASSERT_TRUE(link.has_value()) << frost::io::fromWide(link.error().message).value_or("?");
+    const std::wstring resolved = realRoot + L"\\FrostIDE\\i\\" + frost::app::shortLinkName(fixture.install);
+    EXPECT_EQ(link->directory(), resolved);
+    EXPECT_EQ(link->imagePath(), resolved + L"\\frost.exe");
+    EXPECT_EQ(junctionTarget(resolved), L"\\??\\" + fixture.install);
+    EXPECT_EQ(junctionTarget(viaJunction), L"\\??\\" + realRoot);
+    link = std::unexpected(frost::app::ShortLinkError{});
+    // Removes the junction above, not what it points at (ScratchDir never follows links).
+    EXPECT_NE(RemoveDirectoryW((L"\\\\?\\" + viaJunction).c_str()), FALSE) << GetLastError();
+    EXPECT_EQ(readFile(fixture.elsewhere + L"\\keep.txt"), "elsewhere");
+}
+
+TEST(StartupShortLink, RefusesWhereALinkCannotHelp) {
+    // The link's image path must stay below MAX_PATH, or the driver would end the restarted
+    // process as well; the root must be an absolute drive path.
+    const LinkFixture fixture;
+    const auto refusal = [&](std::wstring_view root) {
+        auto result = frost::app::prepareShortLink(root, L"\\\\?\\" + fixture.install, L"frost.exe");
+        return result.has_value() ? frost::app::ShortLinkError{} : result.error();
+    };
+    for (const std::wstring_view root : {std::wstring_view(L""), std::wstring_view(L"local app data"),
+                                         std::wstring_view(L"\\\\server\\share\\local")}) {
+        const frost::app::ShortLinkError error = refusal(root);
+        EXPECT_EQ(error.kind, frost::app::ShortLinkError::Kind::Unusable);
+        EXPECT_TRUE(error.message.contains(L"is not an absolute path on a drive"))
+            << frost::io::fromWide(error.message).value_or("?");
+    }
+    // "<root>\FrostIDE\i\<16 hex digits>\frost.exe" is the root's length plus 38 units.
+    const std::string base = longForm(fixture.scratch.path());
+    const std::wstring longest = wide(padToLength(base, 221));
+    const std::wstring tooLong = wide(padToLength(base, 222));
+    for (const std::wstring& root : {longest, tooLong}) {
+        std::error_code error;
+        std::filesystem::create_directories(std::filesystem::path(L"\\\\?\\" + root), error);
+        ASSERT_FALSE(error) << error.message();
+    }
+    auto fits = frost::app::prepareShortLink(longest, L"\\\\?\\" + fixture.install, L"frost.exe");
+    ASSERT_TRUE(fits.has_value()) << frost::io::fromWide(fits.error().message).value_or("?");
+    EXPECT_EQ(fits->imagePath().size(), 259u);
+    const frost::app::ShortLinkError error = refusal(tooLong);
+    EXPECT_EQ(error.kind, frost::app::ShortLinkError::Kind::Unusable);
+    EXPECT_TRUE(error.message.contains(L" would still be 260 UTF-16 units long"))
+        << frost::io::fromWide(error.message).value_or("?");
+    // A missing install directory is a failure that names it.
+    auto missing = frost::app::prepareShortLink(fixture.root, L"\\\\?\\" + fixture.install + L"-gone", L"frost.exe");
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_EQ(missing.error().kind, frost::app::ShortLinkError::Kind::Failed);
+    EXPECT_TRUE(missing.error().message.contains(L"cannot open the install directory " + fixture.install + L"-gone"))
+        << frost::io::fromWide(missing.error().message).value_or("?");
 }
 
 /*

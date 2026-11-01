@@ -8,7 +8,9 @@
 #   frost.exe       the launcher (src/launcher.cpp): static CRT in every configuration, no
 #                   sanitizer, KERNEL32.dll as its only import, the process manifest and the
 #                   version resource. It hardens the process and loads frost_app.dll through
-#                   its \\?\ path, so frost starts from a directory of any length;
+#                   its \\?\ path, so frost starts from a directory of any length; from an
+#                   image path of MAX_PATH or more, a start that may load a GPU driver is
+#                   restarted through a short junction under %LOCALAPPDATA%\FrostIDE\i;
 #   frost_app.dll   the application (src/main.cpp's frost_main and frost::app), target
 #                   frost_app_shared.
 # The Qt-free start-up core (src/startup_core.cpp) is compiled into both: one static library

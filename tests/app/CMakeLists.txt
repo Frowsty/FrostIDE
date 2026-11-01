@@ -42,8 +42,10 @@ if(WIN32)
         FROST_QT_BIN_DIR="${FROST_QT_BIN_DIR}" FROST_QT_PLUGIN_DIR="${FROST_QT_PLUGIN_DIR}")
 
     # A stand-in for frost_app.dll (launcher_probe_app.cpp) that reports the launcher's error
-    # mode, for FrostProcess.LauncherSetsTheErrorModeForItsLoads. Built like the launcher:
-    # the static release CRT, no sanitizer and no manifest, so it imports KERNEL32.dll alone.
+    # mode and restart and can echo stdin with a chosen exit status, for
+    # FrostProcess.LauncherSetsTheErrorModeForItsLoads and the restart tests. Built like the
+    # launcher: the static release CRT, no sanitizer and no manifest, so it imports
+    # KERNEL32.dll alone.
     add_library(frost_launcher_probe_app SHARED launcher_probe_app.cpp)
     frost_apply_compile_options(frost_launcher_probe_app TEST NO_SANITIZE)
     set_target_properties(frost_launcher_probe_app PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreaded)

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The FrostIDE application's entry point: on Windows frost_main() in frost_app.dll, which the
-// frost.exe launcher calls after hardening the process (src/app/src/launcher.cpp, ADR 0012);
-// on Linux main() of the frost executable, which hardens the process itself. Both run the
-// same body (run() below).
+// frost.exe launcher calls after hardening the process (src/app/src/launcher.cpp, ADR 0012),
+// possibly in a process it restarted through a short link to the install directory because
+// the GPU driver cannot start from frost.exe's own path; on Linux main() of the frost
+// executable, which hardens the process itself. Both run the same body (run() below).
 //
 // Start-up order matters for the budgets in PLAN.md section 4 (B1 first frame):
 // arguments are parsed before Qt's GUI exists, so --version and --help never initialise
@@ -169,9 +170,38 @@ void reportStartupFailure([[maybe_unused]] ConsoleCodePageRestorer& restorer, co
 #endif
 }
 
+/*
+ * What a GUI failure message adds when the launcher restarted frost through its short link
+ * (`restartedFrom`, the first launcher's image path in UTF-8): the real install directory,
+ * because every path frost names itself (the plugin directory among them) is the link's. ""
+ * otherwise, and always on Linux.
+ */
+std::string restartNote([[maybe_unused]] const std::string& restartedFrom) {
+#ifdef _WIN32
+    if (restartedFrom.empty()) {
+        return {};
+    }
+    const std::wstring self = frost::app::withoutExtendedPrefix(frost::app::modulePath());
+    const std::string link = toUtf8(self.substr(0, self.find_last_of(L'\\')));
+    const std::size_t slash = restartedFrom.find_last_of('\\');
+    std::string installed = restartedFrom.substr(0, slash == std::string::npos ? 0 : slash);
+    if (installed.starts_with("\\\\?\\UNC\\")) {
+        installed = "\\\\" + installed.substr(8);
+    } else if (installed.starts_with("\\\\?\\")) {
+        installed = installed.substr(4);
+    }
+    return std::format("\n\nFrostIDE is installed in {}. It runs through the short link {}, because graphics drivers "
+                       "end a program started from a path of {} UTF-16 units or more.",
+                       installed, link, frost::app::kGpuDriverImagePathLimitUnits);
+#else
+    return {};
+#endif
+}
+
 // The application, after the process is hardened (`hardening` says how far that got).
-// `argv` must outlive the call: QApplication keeps it.
-int run(const frost::app::ProcessHardening& hardening, int argc, char** argv) {
+// `restartedFrom` is the first launcher's image path (UTF-8) when the launcher restarted
+// frost through its short link, else "". `argv` must outlive the call: QApplication keeps it.
+int run(const frost::app::ProcessHardening& hardening, const std::string& restartedFrom, int argc, char** argv) {
     ConsoleCodePageRestorer consoleCodePage;
     FatalHandlerCodePage fatalHandler;
     const std::vector<std::string> args = utf8Arguments(argc, argv);
@@ -209,7 +239,7 @@ int run(const frost::app::ProcessHardening& hardening, int argc, char** argv) {
             qputenv("QT_QPA_PLATFORM", "offscreen");
         }
         frost::app::SelfTestReport report;
-        report.checks = frost::app::runProcessChecks(hardening, dialogGuard);
+        report.checks = frost::app::runProcessChecks(hardening, dialogGuard, restartedFrom);
         // Pin the platform plugin before QApplication exists, or report why it cannot be loaded
         // instead of letting Qt fail. Runs after QT_QPA_PLATFORM is settled, because it pins
         // that platform's plugin.
@@ -240,7 +270,7 @@ int run(const frost::app::ProcessHardening& hardening, int argc, char** argv) {
     }
 
     if (auto plugin = frost::app::preparePlatformPlugin(); !plugin) {
-        reportStartupFailure(consoleCodePage, plugin.error().message());
+        reportStartupFailure(consoleCodePage, plugin.error().message() + restartNote(restartedFrom));
         return 4;
     }
     // TODO(M1): log a failed preload (PluginPreloadReport) once frost::core has logging.
@@ -262,17 +292,22 @@ int run(const frost::app::ProcessHardening& hardening, int argc, char** argv) {
 /*
  * frost_app.dll's entry point (frost::app::kAppEntryPoint), called once by the frost.exe
  * launcher on its main thread after hardenProcess() and searchInstallDirectoryExtended();
- * `hardeningBits` is encodeHardening() of the launcher's state. Returns the exit status, which
- * the launcher returns from wmain. Qt's one-element argv is frost.exe's path as
- * GetModuleFileNameW reports it, without a \\?\ prefix. The old executable's CRT passed the
- * command line's first token instead, as the parent spelled it (possibly relative); Qt takes
- * applicationFilePath() and applicationDirPath() from GetModuleFileNameW in both cases.
+ * `hardeningBits` is encodeHardening() of the launcher's state, `restartedFrom` the image path
+ * of the launcher that restarted this one through its short link, or nullptr (ADR 0012).
+ * Returns the exit status, which the launcher returns from wmain. Qt's one-element argv is
+ * frost.exe's path as GetModuleFileNameW reports it, without a \\?\ prefix (after a restart,
+ * the short link's). The old executable's CRT passed the command line's first token instead, as
+ * the parent spelled it (possibly relative); Qt takes applicationFilePath() and
+ * applicationDirPath() from GetModuleFileNameW in both cases.
+ * TODO(M1): code that starts frost again, writes logs or crash dumps, or registers frost (file
+ * associations, I10) takes the install directory from `restartedFrom` when it is set, and frost
+ * sets an explicit AppUserModelID, so a restarted frost groups with a shortcut to its long path.
  */
-extern "C" __declspec(dllexport) int frost_main(unsigned hardeningBits) {
+extern "C" __declspec(dllexport) int frost_main(unsigned hardeningBits, const wchar_t* restartedFrom) {
     const frost::app::ProcessHardening hardening = frost::app::decodeHardening(hardeningBits);
     std::string program = toUtf8(frost::app::withoutExtendedPrefix(frost::app::modulePath()));
     char* argv[] = {program.data(), nullptr};
-    return run(hardening, 1, argv);
+    return run(hardening, restartedFrom != nullptr ? toUtf8(restartedFrom) : std::string(), 1, argv);
 }
 static_assert(std::is_same_v<decltype(&frost_main), frost::app::AppEntryPoint>,
               "frost_main must match the launcher's frost::app::AppEntryPoint");
@@ -282,7 +317,7 @@ static_assert(std::is_same_v<decltype(&frost_main), frost::app::AppEntryPoint>,
 int main(int argc, char** argv) {
     // Before any other code can load a library or start a process.
     const frost::app::ProcessHardening hardening = frost::app::hardenProcess();
-    return run(hardening, argc, argv);
+    return run(hardening, {}, argc, argv);
 }
 
 #endif

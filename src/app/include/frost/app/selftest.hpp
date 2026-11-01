@@ -6,8 +6,9 @@
 // order, the DependentLoadFlags of both images, and the command-line dialog guard (all
 // required); the embedded manifest and its effects (UTF-8 code page and per-monitor v2 DPI
 // awareness are required; long-path awareness is required in the manifest, and its effect is
-// reported for information, because frost starts either way); the form of the image path
-// (information) and that frost_app.dll and Qt were loaded through \\?\ paths (required); that
+// reported for information, because frost starts either way); the form of the image path and
+// whether the launcher restarted frost through its short link (information) and that
+// frost_app.dll and Qt were loaded through \\?\ paths (required); that
 // Qt's platform plugin was pinned (frost/app/startup.hpp's preparePlatformPlugin(), run by
 // frost_main() before QApplication exists) and the other deployed plugins preloaded when their
 // paths are long (information); that the Qt GUI stack can create, expose and close the main
@@ -18,6 +19,7 @@
 #include "frost/app/startup.hpp"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace frost::app {
@@ -43,9 +45,14 @@ struct SelfTestReport {
  * the launcher's bits), whether guardCommandLineDialogs() succeeded (`dialogGuard`), the
  * DependentLoadFlags of frost.exe and of the image holding this code (frost_app.dll), the
  * code page, the manifest contents, long paths, the image path's form and the form in which
- * frost_app.dll and Qt6Core were loaded. On Linux only a placeholder check.
+ * frost_app.dll and Qt6Core were loaded. `restartedFrom` is the first launcher's image path
+ * (UTF-8) when the launcher restarted frost through its short link (ADR 0012), else ""; the
+ * image-path check then names it, with its form and length: "plain form, 61 UTF-16 units;
+ * restarted through this short link from <path> (\\?\ form, 314 UTF-16 units)". On Linux only
+ * a placeholder check.
  */
-[[nodiscard]] std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, bool dialogGuard);
+[[nodiscard]] std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, bool dialogGuard,
+                                                          std::string_view restartedFrom);
 
 /*
  * Checks that need a live QApplication (precondition) on the calling GUI thread: the
