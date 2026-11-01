@@ -43,7 +43,6 @@ if(WIN32)
     target_link_options(frost PRIVATE /MANIFEST:NO /DEPENDENTLOADFLAG:0xA00)
     # CommandLineToArgvW (shell32) and MessageBoxW (user32) in main.cpp.
     target_link_libraries(frost PRIVATE shell32 user32)
-    frost_copy_runtime_dlls(frost)
     # Platform plugins are loaded from <exe dir>/platforms: the native one and
     # the offscreen one used by --selftest.
     add_custom_command(TARGET frost POST_BUILD

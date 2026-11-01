@@ -29,6 +29,8 @@ endif()
 # working-directory handling.
 add_executable(io_test_child io_test_child.cpp)
 frost_apply_compile_options(io_test_child TEST)
+# In ASan builds the child needs the ASan runtime DLL next to it like the tests do.
+frost_copy_runtime_dlls(io_test_child)
 if(WIN32)
     # shell32: CommandLineToArgvW; advapi32: the pipe-info mode's security descriptor calls.
     target_link_libraries(io_test_child PRIVATE shell32 advapi32)
