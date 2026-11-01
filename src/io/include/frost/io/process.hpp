@@ -82,6 +82,12 @@ struct ProcessSpec {
     bool cleanEnvironment = false;
     // Applied in order on top of the parent's (or the empty) environment: a value sets the
     // variable, nullopt removes it. Names are case-insensitive on Windows, as the OS treats them.
+    // TODO(M2): an environment policy per launch class. frost's start-up sets
+    // NoDefaultCurrentDirectoryInExePath=1 (frost/app/startup.hpp) and every child inherits
+    // it, so cmd.exe in user build scripts (MSBuild Exec tasks, pre/post-build events, CMake
+    // configure) no longer runs a tool from its current directory by bare name. The M2 trust
+    // ADR records whether trusted user-script children get it stripped (Visual Studio's
+    // behaviour) or keep it; restricted children (read-only git, clangd, bundled tools) keep it.
     std::vector<std::pair<std::string, std::optional<std::string>>> environment{};
 
     Stdio stdinMode = Stdio::Null;

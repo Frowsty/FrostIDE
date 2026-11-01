@@ -4,11 +4,19 @@
 //
 // Start-up order matters for the budgets in PLAN.md section 4 (B1 first frame):
 // arguments are parsed before Qt exists, so --version, --help and --selftest
-// never initialise the GUI stack they do not need.
+// never initialise the GUI stack they do not need. The process is hardened
+// (frost/app/startup.hpp) before anything else can load a DLL or start a process.
+//
+// Exit status: 0 success, 1 self-test failed, 2 usage error, 4 frost cannot start in this
+// environment (e.g. Qt cannot load its platform plugin from the install directory; the
+// GUI also shows the reason in a message box). 3 is avoided because the Windows CRT's
+// abort() exits with it, so a refusal is never mistaken for an abort; Qt's own fatal
+// errors end the process with 0xC0000409 (__fastfail) instead.
 
 #include "frost/app/command_line.hpp"
 #include "frost/app/main_window.hpp"
 #include "frost/app/selftest.hpp"
+#include "frost/app/startup.hpp"
 #include "frost/core/build_info.hpp"
 
 #include <QApplication>
@@ -17,6 +25,7 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -100,13 +109,33 @@ void print(FILE* stream, std::string_view text) {
     std::fflush(stream);
 }
 
+// Reports why the GUI cannot start: on stderr when a console or redirection exists,
+// and in a message box, because a GUI launch from Explorer has neither.
+void reportStartupFailure([[maybe_unused]] ConsoleCodePageRestorer& restorer, const std::string& message) {
+    attachParentConsoleIfNeeded(restorer);
+    print(stderr, std::format("frost: {}\n", message));
+#ifdef _WIN32
+    const int units = MultiByteToWideChar(CP_UTF8, 0, message.data(), static_cast<int>(message.size()), nullptr, 0);
+    std::wstring wide(static_cast<std::size_t>(units > 0 ? units : 0), L'\0');
+    if (units > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, message.data(), static_cast<int>(message.size()), wide.data(), units);
+    }
+    MessageBoxW(nullptr, wide.c_str(), L"FrostIDE cannot start", MB_OK | MB_ICONERROR);
+#endif
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    const frost::app::ProcessHardening hardening = frost::app::hardenProcess();
     ConsoleCodePageRestorer consoleCodePage;
     const std::vector<std::string> args = utf8Arguments(argc, argv);
     const std::vector<std::string_view> views(args.begin(), args.end());
     auto parsed = frost::app::parseCommandLine(views);
+    // Command-line modes run unattended (tests, scripts, packaging smoke tests).
+    if (!parsed || parsed->mode != frost::app::Mode::Gui) {
+        frost::app::suppressCrashDialogs();
+    }
     if (!parsed) {
         attachParentConsoleIfNeeded(consoleCodePage);
         print(stderr, std::format("frost: {}\n\n{}", parsed.error().message(), frost::app::usageText()));
@@ -130,7 +159,19 @@ int main(int argc, char** argv) {
             qputenv("QT_QPA_PLATFORM", "offscreen");
         }
         frost::app::SelfTestReport report;
-        report.checks = frost::app::runProcessChecks();
+        report.checks = frost::app::runProcessChecks(hardening);
+        // Without a loadable platform plugin QApplication would abort, so stop with a report
+        // instead. Runs after QT_QPA_PLATFORM is settled, because it checks that plugin.
+        auto plugins = frost::app::checkPluginPaths();
+        if (!plugins) {
+            report.checks.push_back({"plugin-paths", false, true, plugins.error().message()});
+            print(stdout, report.format());
+            return 1;
+        }
+        report.checks.push_back({"plugin-paths", true, true, std::move(plugins->detail)});
+        if (!plugins->warning.empty()) {
+            report.checks.push_back({"other-plugin-paths", false, false, std::move(plugins->warning)});
+        }
         QApplication app(argc, argv);
         for (auto& check : frost::app::runGuiChecks()) {
             report.checks.push_back(std::move(check));
@@ -141,6 +182,11 @@ int main(int argc, char** argv) {
     case frost::app::Mode::Gui: break;
     }
 
+    // TODO(M1): log PluginPathReport::warning once frost::core has logging.
+    if (auto plugins = frost::app::checkPluginPaths(); !plugins) {
+        reportStartupFailure(consoleCodePage, plugins.error().message());
+        return 4;
+    }
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("FrostIDE"));
     QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));

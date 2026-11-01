@@ -17,6 +17,8 @@
 #   todo          to-do markers in comments name an open milestone M0..M14;
 #   budget        every budget reference ("Budget: B5.") exists in tests/perf/budgets.json;
 #   narrow-win32  narrow (...A) Win32 APIs are banned in C/C++ (PLAN.md 2.1);
+#   exe-search    calls that look up an executable in the current directory or PATH are
+#                 banned in C/C++ (PLAN.md 3.5: tools resolve to absolute paths);
 #   cpp26         banned C++26 constructs in C/C++ outside the exempt directories;
 #   no-ci         there is no .github/workflows directory (D24).
 # Byte-exact data (fixtures, goldens, fuzz corpora; DATA_GLOBS) only needs REUSE coverage.
@@ -105,6 +107,27 @@ NARROW_WIN32_APIS = frozenset(
     WaitNamedPipeA WritePrivateProfileStringA
     """.split()
 )
+
+# Functions that look an executable up in the current directory or PATH, or hand a command
+# line to a shell that does. FrostIDE resolves every tool to an absolute path and starts it
+# through IProcessLauncher (CLAUDE.md, PLAN.md 3.5). SearchPathW is among them because it
+# still searches the current directory in safe search mode (see ProcessHardening in
+# src/app/include/frost/app/startup.hpp). Matched as calls (the name followed by "("),
+# unqualified or qualified with std:: or ::, never as members or in comments and strings.
+EXE_SEARCH_APIS = frozenset(
+    """
+    SearchPathW WinExec system _wsystem popen _popen _wpopen
+    _spawnlp _spawnlpe _spawnvp _spawnvpe _wspawnlp _wspawnlpe _wspawnvp _wspawnvpe
+    _execlp _execlpe _execvp _execvpe _wexeclp _wexeclpe _wexecvp _wexecvpe
+    execlp execvp execvpe posix_spawnp
+    """.split()
+)
+
+# Files exempt from the exe-search rule only (every other rule still applies):
+#   tests/app/startup_test.cpp  shows that SearchPathW still finds a tool planted in the
+#                               current directory after frost's hardening, the reason
+#                               SearchPathW is in EXE_SEARCH_APIS.
+EXE_SEARCH_EXEMPT_GLOBS = ("tests/app/startup_test.cpp",)
 
 # ---------------------------------------------------------------------------------------
 # Comment syntax table
@@ -251,6 +274,7 @@ def compile_globs(patterns) -> re.Pattern[str]:
 
 _DATA_RE = compile_globs(DATA_GLOBS)
 _CPP26_EXEMPT_RE = compile_globs(CPP26_EXEMPT_GLOBS)
+_EXE_SEARCH_EXEMPT_RE = compile_globs(EXE_SEARCH_EXEMPT_GLOBS)
 
 
 def is_data_path(rel_path: str) -> bool:
@@ -768,6 +792,20 @@ def check_narrow_win32(rel: str, code: str, lines: _Lines) -> list[Violation]:
     return out
 
 
+# A call of one of EXE_SEARCH_APIS: not preceded by a word character, '.', '>' (member
+# access) or ':' (another class's or namespace's function), except through `std::` or `::`.
+_EXE_SEARCH_CALL = re.compile(r"(?<![\w.>:])(?:std\s*::\s*|::\s*)?\b(" +
+                              "|".join(sorted(EXE_SEARCH_APIS)) + r")\s*\(")
+
+
+def check_exe_search(rel: str, code: str, lines: _Lines) -> list[Violation]:
+    """exe-search: no calls that look an executable up in the current directory or PATH."""
+    return [Violation(rel, lines.line(m.start(1)), "exe-search",
+                      f"{m.group(1)} looks the executable up in the current directory or PATH; resolve the "
+                      f"tool to an absolute path and start it through IProcessLauncher (PLAN.md 3.5)")
+            for m in _EXE_SEARCH_CALL.finditer(code)]
+
+
 _CPP26_HEADERS = ("inplace_vector", "hazard_pointer", "rcu", "linalg", "debugging",
                   "text_encoding", "contracts", "meta", "simd", "hive")
 _CPP26_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -963,6 +1001,8 @@ def lint_file(repo: Path, rel: str, budget_ids: set[str] | None) -> list[Violati
     if syntax.c_family:
         lines = _Lines(scanned.code)
         out += check_narrow_win32(rel, scanned.code, lines)
+        if not _EXE_SEARCH_EXEMPT_RE.match(rel):
+            out += check_exe_search(rel, scanned.code, lines)
         if not _CPP26_EXEMPT_RE.match(rel):
             out += check_cpp26(rel, scanned.code, lines)
     return out

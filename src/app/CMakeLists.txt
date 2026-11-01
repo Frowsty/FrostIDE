@@ -10,6 +10,7 @@ frost_add_library(app LAYER app
         src/command_line.cpp
         src/main_window.cpp
         src/selftest.cpp
+        src/startup.cpp
     DEPS frost::core
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
@@ -35,7 +36,11 @@ frost_add_executable(frost LAYER app WIN32
 
 if(WIN32)
     # frost.rc embeds our manifest; stop the linker from generating a second one.
-    target_link_options(frost PRIVATE /MANIFEST:NO)
+    # /DEPENDENTLOADFLAG:0xA00 (LOAD_LIBRARY_SEARCH_APPLICATION_DIR | _SYSTEM32) makes the
+    # loader resolve frost's static imports only next to frost.exe and in System32, never
+    # in the current directory or PATH; hardenProcess() covers later LoadLibrary calls.
+    # The self-test reads the value back from the image (check "dependent-load-flags").
+    target_link_options(frost PRIVATE /MANIFEST:NO /DEPENDENTLOADFLAG:0xA00)
     frost_copy_runtime_dlls(frost)
     # Platform plugins are loaded from <exe dir>/platforms: the native one and
     # the offscreen one used by --selftest.

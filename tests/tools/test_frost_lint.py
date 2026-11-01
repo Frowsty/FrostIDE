@@ -100,6 +100,39 @@ class Cpp26ExemptionTest(TempDirTestCase):
         self.assertEqual([v.line for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "cpp26"], [6])
 
 
+class ExeSearchTest(TempDirTestCase):
+    HEADER = "// SPDX-License-Identifier: Apache-2.0\n// Calls for the exe-search tests.\n"
+
+    def _exe_search(self, rel: str, body: str) -> list[tuple[int, str]]:
+        _write(self.tmp / rel, self.HEADER + body)
+        return sorted((v.line, v.message.split(" ", 1)[0]) for v in frost_lint.lint(self.tmp, [rel])
+                      if v.rule == "exe-search")
+
+    def test_calls_that_search_for_executables_are_caught(self) -> None:
+        body = ("void a() { SearchPathW(nullptr, L\"git.exe\", nullptr, 0, nullptr, nullptr); }\n"
+                "int b() { return std::system(\"make\"); }\n"
+                "int c() { return ::_wsystem(L\"make\"); }\n"
+                "void d(const char* const* v) { execvp(v[0], v); _wspawnvp(0, L\"x\", nullptr); }\n"
+                "void e() { popen (\"ls\", \"r\"); posix_spawnp(nullptr, \"x\", nullptr, nullptr, nullptr, nullptr); }\n")
+        self.assertEqual(self._exe_search("src/core/spawn.cpp", body),
+                         [(3, "SearchPathW"), (4, "system"), (5, "_wsystem"), (6, "_wspawnvp"), (6, "execvp"),
+                          (7, "popen"), (7, "posix_spawnp")])
+
+    def test_lookalikes_are_not_calls(self) -> None:
+        body = ("wchar_t system[260]; // SearchPathW(nullptr, ...) in a comment\n"
+                "const char* s = \"system(\\\"x\\\")\";\n"
+                "auto& c = std::system_category(); runner.system(1); p->popen(2); Shell::execvp(3);\n"
+                "void f() { mysystem(1); SearchPathWide(2); _wexecvpx(3); }\n")
+        self.assertEqual(self._exe_search("src/core/lookalikes.cpp", body), [])
+
+    def test_startup_test_is_exempt_from_exe_search_only(self) -> None:
+        rel = "tests/app/startup_test.cpp"
+        _write(self.tmp / rel, self.HEADER + "void a() { SearchPathW(nullptr, nullptr, nullptr, 0, nullptr, nullptr); "
+                                             "CreateFileA(nullptr); }\n")
+        self.assertEqual(sorted(v.rule for v in frost_lint.lint(self.tmp, [rel])), ["narrow-win32"])
+        self.assertEqual(len(self._exe_search("tests/app/other_test.cpp", "void a() { SearchPathW(); }\n")), 1)
+
+
 class RepositoryRulesTest(TempDirTestCase):
     def test_github_workflows_directory_is_banned(self) -> None:
         repo = self.copy_fixture("lint/clean")

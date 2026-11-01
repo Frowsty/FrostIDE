@@ -6,6 +6,7 @@
 #include "frost/app/selftest.hpp"
 
 #include "frost/app/main_window.hpp"
+#include "frost/app/startup.hpp"
 
 #include <QApplication>
 #include <QDeadlineTimer>
@@ -15,9 +16,11 @@
 #include <QWindow>
 
 #include <chrono>
+#include <cstddef>
 #include <format>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -87,27 +90,58 @@ std::string_view embeddedManifest() {
     return {static_cast<const char*>(LockResource(loaded)), size};
 }
 
-// RtlAreLongPathsEnabled reports whether this process can use paths beyond
-// MAX_PATH without the \\?\ prefix: it needs both the manifest entry and the
-// system-wide LongPathsEnabled registry value. It is exported by ntdll on every
-// supported Windows 11 build but not declared in the SDK headers.
-bool longPathsEffective() {
-    using Fn = BOOLEAN(NTAPI*)();
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (ntdll == nullptr) {
-        return false;
+// LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32, set by /DEPENDENTLOADFLAG.
+constexpr DWORD kDependentLoadFlagsWanted = 0xA00;
+
+// The DependentLoadFlags of this executable's load configuration directory: the search
+// flags the loader uses for its static imports. 0 if the image has no such field.
+DWORD dependentLoadFlags() {
+    const auto* base = reinterpret_cast<const std::byte*>(GetModuleHandleW(nullptr));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) {
+        return 0;
     }
-    auto* fn = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlAreLongPathsEnabled")));
-    return fn != nullptr && fn() != FALSE;
+    const IMAGE_DATA_DIRECTORY& entry = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
+    if (entry.VirtualAddress == 0) {
+        return 0;
+    }
+    const auto* config = reinterpret_cast<const IMAGE_LOAD_CONFIG_DIRECTORY*>(base + entry.VirtualAddress);
+    // The directory's own Size says which fields the image has; DependentLoadFlags is a WORD.
+    if (config->Size < offsetof(IMAGE_LOAD_CONFIG_DIRECTORY, DependentLoadFlags) + sizeof(WORD)) {
+        return 0;
+    }
+    return config->DependentLoadFlags;
 }
 
 #endif
 
 } // namespace
 
-std::vector<SelfTestCheck> runProcessChecks() {
+std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening) {
     std::vector<SelfTestCheck> checks;
 #ifdef _WIN32
+    std::string missing;
+    for (const auto& [applied, what] :
+         {std::pair{hardening.defaultDllDirectories, "SetDefaultDllDirectories"},
+          std::pair{hardening.dllDirectoryCleared, "SetDllDirectoryW"},
+          std::pair{hardening.safeSearchPathMode, "SetSearchPathMode"},
+          std::pair{hardening.exeSearchSkipsCurrentDirectory, "NoDefaultCurrentDirectoryInExePath"}}) {
+        if (!applied) {
+            missing += missing.empty() ? what : std::string(", ") + what;
+        }
+    }
+    // Only what the hardening guarantees: SearchPathW still searches the current directory
+    // (see ProcessHardening::safeSearchPathMode).
+    checks.push_back({"process-hardening", hardening.complete(), true,
+                      hardening.complete() ? "DLL searches skip the current directory, and so do CreateProcessW "
+                                             "and cmd.exe for bare executable names"
+                                           : "not applied: " + missing});
+    const bool dependentFlags = dependentLoadFlags() == kDependentLoadFlagsWanted;
+    checks.push_back({"dependent-load-flags", dependentFlags, true,
+                      std::format("load configuration DependentLoadFlags = {:#x}{}", dependentLoadFlags(),
+                                  dependentFlags ? "" : " (expected 0xa00: application directory and System32)")});
+
     const UINT acp = GetACP();
     checks.push_back({"utf8-code-page", acp == CP_UTF8, true, std::format("process ANSI code page is {}", acp)});
 
@@ -125,6 +159,7 @@ std::vector<SelfTestCheck> runProcessChecks() {
                                 : "disabled system-wide (HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem "
                                   "LongPathsEnabled=0); FrostIDE uses \\\\?\\ paths internally"});
 #else
+    static_cast<void>(hardening);
     checks.push_back({"platform", true, false, "no process-level manifest checks on this platform"});
 #endif
     return checks;

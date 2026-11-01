@@ -184,11 +184,19 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
 ## Consequences
 - Long paths work in frost::io on every Windows machine. A child's *current directory* beyond MAX_PATH is
   still refused by Windows when `LongPathsEnabled = 0`; the launcher reports that as InvalidArgument with an
-  explanation (TODO(M1): fall back to the 8.3 short name). Qt loads its plugins through plain Win32 paths,
-  so frost.exe itself cannot start from a directory beyond MAX_PATH on such machines (the app test skips
-  there; see `tests/app/frost_process_test.cpp`).
+  explanation (TODO(M1): fall back to the 8.3 short name). Qt cannot load a plugin whose path is longer
+  than 250 characters on such machines (measured with Qt 6.12.0; `kQtPluginPathLimitUnits` in
+  `src/app/include/frost/app/startup.hpp`), so frost.exe itself cannot start from a directory beyond
+  MAX_PATH there, unless it is started through the directory's 8.3 short name, which Qt then uses as
+  well. Its start-up check reports that instead of letting Qt abort. In
+  `tests/app/frost_process_test.cpp`, `RunsFromPathLongerThanMaxPath` skips there, so the M0 exit
+  criterion stays visibly unmet, and `ReportsLongPathLimitCleanly` covers the report.
 - Process-wide hardening that PLAN.md 3.5 lists next to the launcher (`SetDefaultDllDirectories`,
-  `NoDefaultCurrentDirectoryInExePath`) belongs to app startup, not to frost::io.
+  `NoDefaultCurrentDirectoryInExePath`) belongs to app startup (`src/app/include/frost/app/startup.hpp`),
+  not to frost::io. As a consequence, DLLs are no longer found through PATH, and
+  `LoadLibraryExW(bare name, LOAD_WITH_ALTERED_SEARCH_PATH)` fails with ERROR_INVALID_PARAMETER;
+  third-party code loaded into frost that relies on either (IMEs, shell extensions) breaks, as in
+  Chromium and Firefox. `SearchPathW` still searches the current directory, so frost-lint bans it.
 - Callers must use `communicate`/`runToCompletion` unless they deliberately service one pipe at a time;
   the blocking per-stream calls can deadlock if misused (documented on `IProcess`).
 - Tests use `tests/support/scratch_dir.hpp`: one unique directory per test under the system temp directory,
