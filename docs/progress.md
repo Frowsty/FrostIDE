@@ -5,7 +5,7 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first nine slices, the switch to the feature-first phase, the W1 plan and W1's first slice, each
+`main` has M1's first ten slices, the switch to the feature-first phase, the W1 plan and W1's first two slices, each
 merged with `git merge --no-ff` in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76),
 `m1/input-keymap` at c78db87 (merge 3db37c5), `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b) and `m1/theme-icons` at
 73a5143 (merge 94ed47d) merged after the slice's independent reviews. `m1/process-feature-first` at d5f4082 (merge
@@ -14,13 +14,127 @@ after its own `-Quick`, and each batch gets one `-Quick` of the merged tree. The
 (merge b7ce4fb), which puts W1, the work-ready build, before the rest of U1 (ADR 0032), and `m1/io-reactor-watch` at
 e0eaf75 (merge 4cce4c8). The third batch is `m1/encodings` at ab77994 (merge 6455c2b). The fourth batch is
 `m1/keymap-de` at 8f80e22 (merge 9ca6a04), `m1/display-map` at 877893b (merge b36c089) and `w1/project-sln` at 15ba653
-(merge dcfd9ae). The slice records follow this entry's sections as subsections, newest first: `w1/project-sln`'s,
-`m1/display-map`'s, `m1/keymap-de`'s, `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/theme-icons`'s,
-`m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes (none of these branches kept a record
-in this log), then `m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them mark what has changed
-since.
+(merge dcfd9ae). The fifth batch is `w1/build-msbuild` at 111aad0 (merge afa8a35) and `m1/crash-diag` at 4ef7ae3
+(merge 3de145c). The slice records follow this entry's sections as subsections, newest first: `m1/crash-diag`'s,
+`w1/build-msbuild`'s, `w1/project-sln`'s, `m1/display-map`'s, `m1/keymap-de`'s, `m1/encodings`'s,
+`m1/io-reactor-watch`'s, `m1/storage`'s, `m1/theme-icons`'s, `m1/undo-anchors`'s and `m1/input-keymap`'s, written
+from their hand-off notes (none of these branches kept a record in this log), then `m1/piece-tree`'s two, kept as the
+branch wrote them. Merge notes in them mark what has changed since.
 
 ### Done
+
+#### Merge of `w1/build-msbuild` (afa8a35)
+- **The merge** (afa8a35) of `w1/build-msbuild` (111aad0) into `main` at 023f354: frost::build, W1's MSBuild
+  discovery, build driver and diagnostics parser; the slice record below says what they hold. ADR 0034 (no new
+  dependency); the number is unchanged and no other branch uses it. `w1/build-service` (still running, on
+  `w1/project-sln` 15ba653) merges 111aad0 inside its branch, so merging 111aad0 into `main` now keeps that later
+  merge trivial.
+- **One conflict**, resolved so that both sides' intent survives: `tests/CMakeLists.txt` adds `main`'s
+  `tests/project` and the slice's `tests/build`, in that order. `src/CMakeLists.txt` merged without conflict:
+  `build` follows the `NOT FROST_FUZZ` block of storage and project, since it depends only on io, so fuzz trees now
+  build it too (neither fuzz tree was built). The `build` layer rank (7) was already in `cmake/FrostLayers.cmake`.
+  `ErrorCode::Untrusted` is appended after `Internal`, so existing values keep their numbers. `git diff --check`
+  flags only the fixture's `Tiny.sln`, which is CRLF on purpose (`tests/**/fixtures/**` is `-text`).
+- **Orchestrator decisions** (implemented in `w1/build-service`, still running): build output is forced to English
+  (`DOTNET_CLI_UI_LANGUAGE=en-US`, `VSLANG=1033`) so the error list is reliable; after a build only build
+  infrastructure is ended (MSBuild nodes, mspdbsrv, VBCSCompiler), and programs that a post-build step started keep
+  running, as in Visual Studio.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 37.2 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own): exit 0, 384 steps (the new ErrorCode value rebuilt
+  every target), no compiler warning (only Qt's own "No qtpaths executable found" configure notice).
+
+#### Merge of `m1/crash-diag` (3de145c)
+- **The merge** (3de145c) of `m1/crash-diag` (4ef7ae3) into `main` at afa8a35: frost::diag (crash minidumps
+  through crashpad, frost::log, the UI stall watchdog and freeze reports, the self-tests and retention) and its
+  wiring in `src/app`; the slice record below says what they hold. ADR 0022 (crashpad, cpptrace and spdlog through
+  vcpkg, crashpad built by the pinned clang-cl from overlay ports); the number is unchanged and no other branch
+  uses it (`main`'s ADRs after 0010 are now 0011 to 0018, 0020, 0022, 0026 and 0030 to 0034). The slice ran on
+  5f377e7, the piece-tree merge, the oldest base of any slice merged so far; 4ef7ae3 replaces the WIP commit
+  be509f2 saved before the PC restart.
+- **Seven conflicts**, each resolved so that both sides' intent survives:
+  - `src/io/src/process_posix.cpp`: `main` moved the body of `launch()` into `spawnPosixChild`, which `launch()`
+    and `launchAsync()` share (ADR 0020). The slice's `ProcessSpec::posixInheritedFds` staging
+    (`F_DUPFD_CLOEXEC` copies at or above 3 + k, `dup2` to 3 + i, `closefrom` from the first unpassed
+    descriptor) moves into `spawnPosixChild` unchanged, so both paths pass the descriptors. `process.hpp` and the
+    validation in `process_common.cpp` merged without conflict; the Windows launcher and the scripted launcher
+    reject a non-empty list through `validateProcessSpec`.
+  - `src/CMakeLists.txt` and `tests/CMakeLists.txt`: `main`'s input, storage, project and build and the slice's
+    `diag` (under `NOT FROST_FUZZ`; rank 8, so after build) are all kept.
+  - `vcpkg.json`: asio, cpptrace, crashpad, curl (Linux only, no default features), gtest, pugixml, spdlog (no
+    default features), sqlite3 and xxhash, in name order.
+  - `REUSE.toml`: the slice's table for its own `frost-getopt.patch` (Apache-2.0, FrostIDE) follows the
+    `third_party/vcpkg-ports/**` table it overrides; `main`'s asset tables follow, so the `tests/ui/goldens/**`
+    table is still the last one, as its comment says. No other path matches two of these tables.
+  - `tests/features/matrix.json`: row I2 keeps `main`'s `in-progress` (storage); row I3 (crash and freeze
+    reporting) takes the slice's `in-progress` with its five acceptance tests.
+  - `tests/tools/CMakeLists.txt`: `main`'s `asset_fetch` suite and the slice's `symbolize` suite are both
+    registered, and the header comment names both.
+  - Merged without conflict: the root `CMakeLists.txt` (`find_package` of crashpad, cpptrace and spdlog under `NOT
+    FROST_FUZZ`, after storage's and asio's), `CMakePresets.json` (`VCPKG_OVERLAY_PORTS`, which storage had added
+    with the same value), `third_party/vcpkg-ports` (crashpad, cpptrace and vcpkg-tool-gn next to sqlite3),
+    `cmake/FrostCompilerOptions.cmake` (`-Wl,--build-id=sha1` on Linux), `src/core` (frost::log and
+    `Violation::terminating`), `src/app`, `tests/app`, `tests/core`, `tests/io`, and the `-Full`-only symbolize
+    step in `tools/verify.ps1` and `tools/verify.sh`.
+- **One of the slice's known bugs no longer applies:** `REUSE.toml`'s comment on `third_party/vcpkg-ports` names
+  ADR 0014, which was not on the slice's base; it is on `main`, whose identical table the merge keeps.
+- **Orchestrator decisions on the slice's questions** (conservative): crashpad's public-domain getopt is replaced
+  by FrostIDE's own clean-room Apache-2.0 `getopt_long`, written from the POSIX specification and the glibc manual;
+  no WER registry writes for `__fastfail` crashes (a documented gap); on Linux the process is non-dumpable and the
+  minidump is still written; no crash handler when elevated; the 10^9-byte retention cap is fine; adding the handler
+  pipe to PLAN.md 5.2 and to M2's listener enumeration is deferred (below). ADR 0022's text records the slice's
+  choices; these decisions are recorded here.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 37.4 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own; vcpkg built crashpad from the overlay port in about
+  2 min with the pinned clang-cl and restored cpptrace, spdlog, zlib and the GN helper ports from the binary cache).
+  It stopped at step 324 of 404 on the merge's one breakage: `main`'s `frost::io::IFileSystem` gained the pure
+  virtual `listDirectoryWithDiagnostics` (ADR 0020), which was not on the slice's base, so the test double
+  `LinkingFs` in `tests/diag/retention_test.cpp` was abstract (`-Wabstract-final-class`, an error under /WX).
+- **The fix** (4d42a50): `LinkingFs` forwards `listDirectoryWithDiagnostics` to MemFs and adds its link entries
+  as `listDirectory()` does, through one shared helper; no test, budget or warning changes. The rebuild after it:
+  exit 0, 99 steps, no compiler warning.
+
+#### Verification (batch, merged tree 79512d6)
+- Before the batch run: the Windows Debug build after each merge and after the build fix (above).
+- **The first run** of `tools\verify.ps1 -Quick -Jobs 8`, on 4d42a50 (with this record uncommitted) through
+  `run_hidden_nobox.py` (a hidden desktop; no window opened on it), after `night.py build-gate` (no lock, 34.9 GB
+  commit free), 674.7 s, exit 1: `win debug 1665/1671 (5 skipped)` with one failure,
+  `FrostProcess.AppDllImportsOnlyAllowedDlls` (`m1/crash-diag`). The WSL leg (1564/1570, 6 skipped) and the checks
+  passed.
+- **The cause:** the test required `frost_app.dll` to have no delay imports, which held on the slice's base. On
+  `main`, frost_io delay-loads ws2_32.dll into every binary that links it (`src/io/CMakeLists.txt`, ADR 0020:
+  asio's Windows backend references Winsock, and `reactor.cpp`'s guard keeps the DLL from ever loading), and the
+  slice's wiring links frost_io into `frost_app.dll` for the crash handler's IProcessLauncher, so the DLL has one
+  delay import, `WS2_32.dll`.
+- **The fix** (79512d6), so that both intents survive: the test lists every delay descriptor (a new helper,
+  `delayImportedDlls`) and requires each to be ws2_32.dll. The old check looked at the first descriptor only, so
+  any other delay-loaded DLL still fails, and more strictly than before. ws2_32.dll is a System32 KnownDLL (it is in
+  this PC's KnownDLLs list), so where it would load from does not depend on frost's image path, which is the ADR
+  0012 concern the test states; `FileWatcherWindows.WinsockIsNeverLoaded` checks that it never loads. The
+  launcher's own check (`LauncherImportsOnlyKernel32`, no delay imports) is unchanged. After the rebuild,
+  `frost_process_tests` `AppDll*` and `Launcher*` passed 7/7 on a hidden desktop.
+- **The second run**, on 79512d6 (with this record uncommitted), after `night.py build-gate` (no lock, 35.3 GB
+  commit free), 488.0 s, exit 0. Windows ran its Debug leg and the checks; WSL ran `tools/verify.sh` in the ext4
+  mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 1666/1671 (5 skipped), wsl debug 1564/1570 (6 skipped), wsl licensecheck ok, format ok,
+  frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run` (frost-lint 1132 files; licensecheck 27 packages on
+  Windows, 23 on WSL). No test failed. The test steps took 255.1 s (Windows) and 176.0 s (WSL). For its last
+  three minutes another agent's `-Quick` (`w1/build-service`, in its own worktree) ran at the same time.
+- **The six MSBuild integration tests** (label `msbuild`) ran in the Windows leg against VS 2022 Build Tools 17.14,
+  5.0 s together.
+- **The skips:** on Windows the four `WatcherPerf` tests (outside optimised, unsanitised builds) and
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` (creating a directory symlink fails for this account), as in the
+  last batch; `LayoutOs.UsLayoutEqualsTheSimulatedTable` ran and passed again. On WSL the four `WatcherPerf` tests,
+  `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale` (no translated locale) and, new,
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler`, which is Windows-only (the slice's own WSL
+  skip).
+- **No test was lost in the two merges.** Against the fourth batch (win debug 1525, wsl debug 1436) the tree adds
+  146 tests on Windows and 134 on WSL. That is what the two slices added over their bases: `w1/build-msbuild` 52 and
+  43 (1186 and 1091 at 111aad0, against 1134 and 1048 at e9c3214) and `m1/crash-diag` 94 and 91 (579 and 496 at
+  4ef7ae3, against 485 and 405 at 5f377e7).
+- `-Quick` builds no ASan, TSan or fuzz tree, and `-Full`'s new symbolize step did not run. Fuzz trees build `src`
+  without storage, project, diag and the UI, so the merges add frost::build, `ErrorCode::Untrusted` and
+  `ProcessSpec::posixInheritedFds` to them; neither fuzz tree was built. The slices' sanitizer, fuzz, stress and
+  `-Full` runs are in "Deferred to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `m1/keymap-de` (9ca6a04)
 - **The merge** (9ca6a04) of `m1/keymap-de` (8f80e22) into `main` at abc014c: every default shortcut of the
@@ -55,7 +169,8 @@ since.
   `.sln`, `.slnx`, `.vcxproj` and `.vcxproj.filters` readers, SolutionModel and the trust store; the slice record
   below says what they hold. ADR 0033 (pugixml 1.16, MIT, from the vcpkg baseline, PRIVATE to `frost_project`);
   the number is unchanged and no other branch uses it (`main`'s ADRs after 0010 are now 0011 to 0018, 0020, 0026,
-  0030, 0031, 0032 and 0033). ADR 0034 (`w1/build-msbuild`) is not on any branch yet.
+  0030, 0031, 0032 and 0033). ADR 0034 (`w1/build-msbuild`) is not on any branch yet. (Merge note: it came with
+  `w1/build-msbuild`'s merge afa8a35, above.)
 - **No conflicts.** The root `CMakeLists.txt` finds pugixml next to SQLite and xxHash under `NOT FROST_FUZZ`;
   `src/CMakeLists.txt` adds `project` under the same guard as `storage` (fuzz trees install no vcpkg ports);
   `tests/CMakeLists.txt` adds `tests/project` after `tests/storage`; `vcpkg.json` lists asio 1.32.0, gtest 1.18.0,
@@ -154,8 +269,9 @@ since.
   before build, a trust prompt, build output, and an error list with click-to-jump and editor marks. Then clangd
   live diagnostics, navigation and completion, then the rest of U1. Docs only.
 - **Lean slices running:** `w1/project-sln` (ADR 0033) and `w1/build-msbuild` (ADR 0034). Neither number is on
-  `main` or on another branch yet; both slices are still at their base e9c3214. (Merge note: `w1/project-sln`
-  finished at 15ba653 and merged as dcfd9ae, above, with ADR 0033.)
+  `main` or on another branch yet; both slices are still at their base e9c3214. (Merge notes: `w1/project-sln`
+  finished at 15ba653 and merged as dcfd9ae, above, with ADR 0033, and `w1/build-msbuild` finished at 111aad0 and
+  merged as afa8a35, above, with ADR 0034.)
 - **ADR 0032 cites ADR 0029** (the thin path), which is still only on `plan/thin-path`, as ADR 0031 does (below).
   No other ADR uses 0032.
 
@@ -227,8 +343,8 @@ since.
   (4d14df6). `m1/display-map` had nothing to save: its branch has no commit of its own yet (it is at 2fef6ee). Lean
   agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`. (Merge notes:
   `m1/io-reactor-watch` finished at e0eaf75 and merged as 4cce4c8, `m1/encodings` finished at ab77994 and merged as
-  6455c2b, `m1/keymap-de` finished at 8f80e22 and merged as 9ca6a04, and `m1/display-map` finished at 877893b and
-  merged as b36c089, all above.)
+  6455c2b, `m1/keymap-de` finished at 8f80e22 and merged as 9ca6a04, `m1/display-map` finished at 877893b and
+  merged as b36c089, and `m1/crash-diag` finished at 4ef7ae3 and merged as 3de145c, all above.)
 
 #### Merge of `m1/process-feature-first` (5612d23)
 - **The merge** (5612d23) of `m1/process-feature-first` (d5f4082) into `main` at 94ed47d: ADR 0031 and its pointers
@@ -438,15 +554,17 @@ since.
 
 ### Next
 - **W1, the work-ready build** (ADR 0032), before the rest of U1: `w1/project-sln`'s static readers, SolutionModel and
-  trust store are on `main` (ADR 0033). Left: the Solution Explorer view and opening a `.sln`/`.slnx` from the command
-  line, File > Open and the recent list (on SolutionModel; environment-variable expansion joins it if the user's
-  answer under Questions for the user needs it), and `w1/build-msbuild` (ADR 0034: Build, Rebuild and Clean through
-  the installed MSBuild, `checkBuildTrust` before the first build, the build output and the error list), merged in
-  batches as each passes its own `-Quick`. Then clangd live diagnostics (how they get compile commands depends on the
+  trust store (ADR 0033) and `w1/build-msbuild`'s MSBuild discovery, build driver and diagnostics parser (ADR 0034)
+  are on `main`. Left: the Solution Explorer view and opening a `.sln`/`.slnx` from the command line, File > Open and
+  the recent list (on SolutionModel; environment-variable expansion joins it if the user's answer under Questions for
+  the user needs it), and `w1/build-service` (running, on 15ba653 with 111aad0 merged in: `checkBuildTrust` before
+  the first build, the build output and the error list with jumpable paths, English build output, ending only build
+  infrastructure after a build, and the known bugs in `w1/build-msbuild`'s slice record), merged in batches as each
+  passes its own `-Quick`. Then clangd live diagnostics (how they get compile commands depends on the
   open question about the "command-list file", under Questions for the user), then navigation and completion, then the
   rest of U1.
-- **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/crash-diag`, `m1/verify-tooling`
-  and `m1/diff-merge`, merged in batches as each passes its own `-Quick`.
+- **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/verify-tooling` and
+  `m1/diff-merge`, merged in batches as each passes its own `-Quick`.
 - **The frost::text display-map consumers** (ADR 0026): `m1/editor-model` and `m1/editor-view` (mapping, painting
   with DisplayRowCursor, hit testing, vertical caret movement, block decorations for the compare and merge views'
   fillers), and M15's folds and inlays on the final fold and inlay interfaces.
@@ -459,7 +577,8 @@ since.
 - **The frost::io consumers** (ADR 0020, Consequences): `m1/shell-nav` (`scanTree`), the File System view (one
   recursive watch per project root, fanning batches out to settings and the SaveManager), the SaveManager slice
   (row I2: refusing a read-only target on POSIX and sweeping stale `.frost-tmp-*` files, moved there from `src/io`)
-  and the crash and logging slice (row I3: logging the resolved launch, moved from `process.hpp`).
+  and logging the resolved launch through frost::log, which `m1/crash-diag` put on `main` (row I3; the io
+  `TODO(M1)`s, in "Deferred to the hardening phase (ADR 0031)").
 - **The frost::storage consumers** (ADR 0014): SaveManager, autosave and external-change merge (row I2), the Local
   History UI (row 218), and FSEG segments, the cache-key path normaliser and ProjectModelCache (`TODO(M2)` in
   `src/storage/CMakeLists.txt`).
@@ -479,6 +598,37 @@ since.
 
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first.
+- **From `m1/crash-diag`** (ADR 0022), as its hand-off lists them:
+  - `verify -Full` with its Release, ASan and fuzz configurations and the new symbolize step, which has never run
+    in a gate.
+  - Sanitizer builds of frost::diag.
+  - `diag_stress_tests` (the sampler under heap and loader churn, the watchdog's park and wake rounds).
+  - Fuzz targets for the freeze-report writer, the minidump reader and `tools/symbolize.py`'s parsers.
+  - Property tests of `planPrune` at scale.
+  - ADR 0022's measurements: the handler start p50, B1 before and after (with `night.py measure`), the self-tests'
+    wall times in Release, and B19 memory.
+  - An independent review of the security-relevant code: the pipe DACL patch, the pruner's link safety, fatal-path
+    re-entrancy and `ProcessSpec::posixInheritedFds`. With it, a review of the integrator's two fixes at the merge:
+    4d42a50 (`LinkingFs`) and 79512d6 (`frost_app.dll` may delay-load ws2_32.dll and nothing else).
+  - Adopt `m1/storage`'s cache-root resolver in `frost/diag/paths.hpp` (its `TODO(M1)`); `m1/storage` is on
+    `main`.
+  - Resolve the io `TODO(M1)`s that log the child's executable, working directory and arguments, now that
+    frost::log exists.
+  - Add the crash handler's pipe to the M2 listener-enumeration test (row I9) and to PLAN.md 5.2.
+  - WER module registration or `WerAddExcludedApplication` for `__fastfail` crashes (permanent HKCU writes; not
+    done).
+- **From `w1/build-msbuild`** (ADR 0034), as its hand-off lists them:
+  - Sanitizer runs of `build_unit_tests` (BuildSession's threads and cancel races).
+  - Fuzzing `parseDiagnosticLine` and the JSON reader.
+  - Large-output and stress tests: hundreds of MB of output, many builds, start and cancel loops.
+  - Measure the per-build PDB server cost and the ending of stragglers on large solutions (ADR 0034's
+    `TODO(M4)`), and confirm that `_MSPDBSRV_ENDPOINT_` isolates a build from a concurrent Visual Studio build.
+  - GNU-format diagnostics for a future CMake driver; localized category words (I12, M4).
+  - A test that no process (mspdbsrv included) outlives a normal, uncancelled build.
+  - Discovery through the VS Setup COM API with caching; an x86 and arm64 MSBuild fallback.
+  - A real end-to-end build with the ClangCL toolset.
+  - Async pipes on the frost::io reactor instead of two blocking reader threads per build (the `TODO(M1)` in
+    `build_session.hpp`).
 - **From `w1/project-sln`** (ADR 0033), as its hand-off lists them:
   - Fuzz targets for the `.sln`, `.slnx`, `.vcxproj` and `.filters` readers (they need a fuzz tree that installs
     vcpkg ports, as ADR 0014 notes for storage).
@@ -569,10 +719,14 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 ### Blockers
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
   `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons`, `m1/storage`, `plan/w1`, `m1/io-reactor-watch`,
-  `m1/encodings`, `m1/keymap-de`, `m1/display-map` and `w1/project-sln` name none.
+  `m1/encodings`, `m1/keymap-de`, `m1/display-map`, `w1/project-sln`, `w1/build-msbuild` and `m1/crash-diag` name
+  none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
+`w1/build-msbuild` and `m1/crash-diag` ask none; the orchestrator's decisions on their questions are in their merge
+sections above.
+
 From `w1/project-sln` (ADR 0033), asked in chat; the static reader's behaviour stands meanwhile:
 - **Your SDK's generated `.vcxproj` files:** do they name sources through environment variables or imported `.props`
   files? If so, environment-variable expansion goes into the Solution Explorer slice. Today such files are missing
@@ -657,6 +811,95 @@ The user answered the open questions; their words are quoted.
 - **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
 - **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
   reordered into a thin path to a first usable build (ADR 0029, in progress).
+
+### Slice record: `m1/crash-diag` (ADR 0022)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): one commit, 4ef7ae3, on 5f377e7, which replaces the WIP commit be509f2 saved before
+the PC restart. Worktree `.claude\worktrees\m1-crash-diag`. (Merge note: merged into `main` as 3de145c and pushed;
+the M1 entry above.)
+
+#### Done
+- **frost::diag** (`src/diag`, layer diag, Qt-free; ADR 0022): crashpad built by the pinned clang-cl through vcpkg
+  overlay ports, cpptrace without libdwarf, and spdlog.
+- **Crash minidumps** to `<cache>/crashes/crashpad` (`%LOCALAPPDATA%\FrostIDE\caches`; XDG on Linux), never
+  uploaded. The crashpad handler is started by `frost_app.dll` through IProcessLauncher after the first frame (the
+  `frost.exe` launcher still imports only KERNEL32). After a short-link restart only the restarted process starts
+  one, and an elevated process starts none.
+- **Fatal paths** go to the reporter with the reason, the expression, file:line and the stack addresses:
+  FROST_PRE/POST/ASSERT and enforce, `std::terminate`, `abort`, the CRT's invalid-parameter and purecall handlers,
+  and Qt fatal messages. No Linux core dump.
+- **frost::log** in core (an spdlog sink; `<cache>/logs/frost-<UTC>-<pid>-<n>.log`, 8 MiB rotation, 4 files per
+  process, `FROST_LOG_LEVEL`, a 50 ms flush at exit).
+- **The UI stall watchdog:** stalls over 50 ms, stack samples, JSON freeze reports, an early report after 2 s, at
+  most 20 per session and 10 s apart; nested loops, modal and size-move loops, menus and ScopedUiIdle are excluded;
+  B21's stall count.
+- **`--selftest=crash` and `--selftest=freeze`**, with no WER or CRT boxes.
+- **Retention:** 30 days, then oldest first above 10^9 bytes; only its own file patterns; links are never
+  followed.
+- **`tools/symbolize.py`**, unit-tested; its verify step is wired into `-Full` only.
+- **`ProcessSpec::posixInheritedFds`** (frost::io), for the handler's socket on Linux.
+- **Matrix row I3** `in-progress`.
+- **Verification at 4ef7ae3** (its own `-Quick`, on 5f377e7): win debug 579/579, wsl debug 495/496 (1 Windows-only
+  skip), format, frost_lint, licensecheck and featurecheck ok.
+
+#### Known bugs
+- A crash inside the `frost.exe` launcher before `frost_app.dll` loads produces no report.
+- `__fastfail` crashes (/GS, CFG, heap corruption) go to WER instead of crashpad.
+- Possible flakiness under heavy load: the StallHooks timing tests (30 ms gives no stall, 120 ms exactly one) and
+  the GUI handler-start tests.
+- Linux freeze sampling interrupts the UI thread with a real-time signal, so UI-thread code must tolerate EINTR.
+- `REUSE.toml`'s comment on `third_party/vcpkg-ports` names ADR 0014. (Merge note: ADR 0014 is on `main`; no longer
+  a bug.)
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/crash-diag`'s.
+- The orchestrator's decisions on its questions are in the merge section above; it asks the user nothing.
+
+### Slice record: `w1/build-msbuild` (ADR 0034)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031) and W1's second (ADR 0032): one commit, 111aad0, on e9c3214. Worktree
+`.claude\worktrees\w1-build-msbuild`. (Merge note: merged into `main` as afa8a35 and pushed; the M1 entry above.)
+
+#### Done
+- **frost::build** (`src/build`, layer build, Qt-free; ADR 0034, no new dependency).
+- **MSBuild discovery** through vswhere (`-sort -prerelease -products * -requires Microsoft.Component.MSBuild
+  -format json -utf8`): every instance including Build Tools, newest first, an instanceId override, and a clean
+  NotFound without Visual Studio. It finds VS 2022 Build Tools 17.14 on this PC.
+- **startMsBuild and BuildSession:** Build, Rebuild and Clean of a `.sln`/`.slnx`, of one project through the
+  solution's targets (`-t:Lib:Rebuild`, names sanitized as MSBuild does), or of a `.vcxproj` alone with the
+  `Solution*` properties. Configuration and Platform are escaped. `-m -nologo -nodeReuse:false -v:minimal
+  -clp:NoSummary;ForceNoAlign;DisableConsoleColor`; `MSBUILDTERMINALLOGGER=off`, `MSBUILDDISABLENODEREUSE=1` and a
+  private `_MSPDBSRV_ENDPOINT_` per build; UTF-8 output through `DOTNET_CLI_UI_LANGUAGE`.
+- **Output and cancel:** stdout and stderr are streamed line by line on worker threads, with serialized callbacks;
+  cancel ends the whole tree through a Job Object. The result holds success, cancelled, the exit code, the
+  duration, the counts and the unique diagnostics.
+- **The diagnostics parser** (both OSes) for cl, link (including LINK fatal errors), MSBuild, rc and clang-cl: every
+  location form, subcategories, the `[project]` suffix, `N>` prefixes, spaces and non-ASCII.
+- **Trust:** `ErrorCode::Untrusted` is appended to frost::core after `Internal` (existing values keep their
+  numbers); builds refuse unless trusted.
+- **Linux:** discovery and the driver return Unsupported.
+- **Tests:** 46 unit tests on Windows (43 on Linux), and 6 integration tests against the real MSBuild, labelled
+  `msbuild`: `Tiny.sln` builds, links, runs and cleans; warning C4996 and error C2065 with file, line, code and
+  severity; `Lib:Rebuild` only; a `.vcxproj` alone; `Tiny.slnx`; cancel ends MSBuild, cmd and ping within 10 s.
+- **Verification at 111aad0** (its own `-Quick`, on e9c3214): win debug 1186/1186, wsl debug 1091/1091, format,
+  frost_lint, licensecheck and featurecheck ok.
+
+#### Known bugs
+- Until `w1/build-service` lands: everything left in the job is ended when MSBuild exits, so a program that a
+  post-build step starts is closed.
+- Until `w1/build-service` lands: `cancel()` right as MSBuild finishes can report `cancelled=true` for a completed
+  build.
+- `Diagnostic.file` is the origin as printed (LINK, MSBUILD, cl, main.obj, relative paths); `w1/build-service`
+  resolves jumpable paths.
+- Messages from non-English cl and MSBuild installs are untested (I12).
+- The empty work folder `tests/build/msbuild-work` stays in the build tree after the MSBuild tests.
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `w1/build-msbuild`'s.
+- The orchestrator's decisions (English build output, ending only build infrastructure) are in the merge section
+  above and are implemented in `w1/build-service`; it asks the user nothing.
 
 ### Slice record: `w1/project-sln` (ADR 0033)
 
