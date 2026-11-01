@@ -2,6 +2,9 @@
 
 - Status: accepted
 - Date: 2026-10-31
+- Amended: 2026-11-01 by ADR 0029 (milestone IDs M0..M17 in frost-lint, featurecheck and the budgets test; M0 is
+  in `CLOSED_MILESTONES` after its sign-off; featurecheck reads the run order from PLAN.md's milestone ladder and
+  checks each row's "(+Mx)" against it; the budgets test compares gate milestones as whole IDs)
 - Plan reference: PLAN.md section 2 ("Licences", "GUI toolkit"), 2.1, 4 (budgets, corpora), 6.1 ("Feature matrix"), 6.3 ("Checks"), 6.6 ("Enforcement"), M0 deliverables and exit, Appendix A
 
 ## Context
@@ -49,8 +52,8 @@ Windows checkout.
   comments (to-do, budget) or only at code (narrow Win32, C++26), which keeps false positives out of strings and
   prose.
 - *To-do markers*: a TODO word at the start of a comment line, or followed by `:` or `(`, must read
-  `TODO(Mn)` with n in 0..14 and not in `CLOSED_MILESTONES` (empty until the M0 sign-off). Prose that merely
-  mentions the word (the "TODO window" feature) is not a marker.
+  `TODO(Mn)` with n in 0..17 (ADR 0029 added M15–M17) and not in `CLOSED_MILESTONES` (M0 since its sign-off
+  on 2026-11-01). Prose that merely mentions the word (the "TODO window" feature) is not a marker.
 - *Budget references* (`Budget: B5.`) must name IDs present in tests/perf/budgets.json.
 - *Narrow Win32 APIs*: an explicit list of about 100 `...A` functions (files, processes, modules, registry,
   shell, messages, windows), matched as identifiers in C/C++ code.

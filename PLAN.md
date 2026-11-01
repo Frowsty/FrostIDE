@@ -2,7 +2,7 @@
 
 ## Plan at a glance
 
-**Status (2026-10-31).** The user answered the before-M0 and before-M1 decisions (§9) and authorised development; M0 is in progress. No CI/CD of any kind is used (D24): every build and test runs locally on REF-W1 and in WSL on it.
+**Status (2026-10-31).** The user answered the before-M0 and before-M1 decisions (§9) and authorised development; M0 is in progress. No CI/CD of any kind is used (D24): every build and test runs locally on REF-W1 and in WSL on it. **2026-11-01, evening:** M0 is signed off and M1 is under way. The user chose a thin path to a first usable build (D29, ADR 0029): M1–M4 shrink to the cores that real C++ work needs, the first usable build U1 is the M4 exit (around month 10–12), and the deferred halves move to M15–M17, which run before Preview 0.1. The user answered ADR 0029's questions the same evening ("I agree with everything except 4 and 5. I don't care for those savings"), so ADR 0029 is accepted: U1 also has a minimal debugger, moved from M6 to M4, and U1 is not thinned further. The same evening the user put W1, a work-ready build for their MSVC solutions, first inside M1–M4 (ADR 0032), and started a feature-first phase that runs until U1, with a hardening phase after it (ADR 0031; §7, "W1 first" and "Feature-first phase").
 
 **Product.** A cross-platform C/C++ IDE for Windows 11 x64 and Linux x64 (macOS is unsupported until a test leg exists, D24; the code keeps its platform seams so it can be added later), with Rider's layout and behaviour (Islands-style shell, tool-window stripes, Search Everywhere, Alt+Enter) under its own name, icons and themes. Full-fidelity MSVC solutions (.sln, .slnx, .vcxproj) on Windows, CLion-grade CMake, native Claude Code integration. Written in C++23 (C++26 mode, allowlisted) by Claude Code in tested vertical slices, with user sign-off at every milestone.
 
@@ -12,35 +12,39 @@
 3. **LLVM cadence.** Start on 23.1.x; adopt each major within ~6 weeks of its .1 release behind the corpus-differential gate; a local `llvm-next` build leg run on demand (no CI).
 4. **Semantics.** Stock clangd at M3. From M7, frost-clangd: unpatched clangd plus its extension points.
 5. **Analysis.** Five latency tiers, a registry generated from the pinned LLVM's tables (baseline count produced in M0; count and coverage targets gated at M7, M9 and M13), SARIF ingestion; openly below ReSharper C++ parity in v1.
-6. **MSBuild.** Native instant tree and fingerprinted cache; design-time builds in an out-of-process C# ProjectHost that never starts on a warm reopen of an unchanged tree; MSBuild CLI fallback; `cl.exe /c` as independent oracle.
+6. **MSBuild.** Native instant tree and fingerprinted cache; design-time builds in an out-of-process C# ProjectHost that never starts on a warm reopen of an unchanged tree; MSBuild CLI fallback, which is also the evaluator of the first usable build until ProjectHost lands in M16 (ADR 0029); `cl.exe /c` as independent oracle.
 7. **CMake.** Stateful File API, presets v2–v13, a CMakeLists language service and the CMake debugger.
-8. **Debugging.** Our own DAP client: lldb-dap, GDB ≥16 and our own DbgEng adapter (M10). Never vsdbg.
+8. **Debugging.** Our own DAP client: lldb-dap (from U1, M4, built from the pinned LLVM sources on both operating systems), GDB ≥16 (M6) and our own DbgEng adapter (M10). Never vsdbg.
 9. **"Sub-second".** First frame ≤150 ms warm; interactive (L1) ≤700 ms p50 / ≤1 s p99 on a warm reopen. L0–L3 have warm-reopen budgets; a first-ever open promises L0 and the trees (B23); L4 (full index) is tracked, not gated.
 10. **Processes.** One UI process with a Qt-free core; engines out of process under a supervisor and resource governor.
 11. **Product infrastructure from M1.** Settings scopes, safe save and hot exit, local crash reporting with bounded retention, a trust model that also covers project-shared settings, packages from M5, an updater from M6, no telemetry and no network before L1.
 12. **Claude Code.** C1 IDE bridge (M5), C2 MCP server and hooks (M8), C3 native chat (M12, refusing subscription sign-in in code until Anthropic approves; terminal mode unaffected). ACP after 1.0.
 13. **Working agreement.** One PR per slice, merged after green local verification on Windows and WSL (no CI), independent review of core code, a demo pack and explicit user sign-off at each milestone exit.
+14. **Thin path (D29).** A first usable build (U1) at the M4 exit: open, browse, edit and build a CMake project or an MSVC solution, with highlighting, data safety, the IntelliJ keymap, clangd completion, diagnostics and navigation, clickable build errors, Run, a minimal debugger (line breakpoints, stepping, stack, threads, variables, watches; MSVC-built programs through their PDBs) and a terminal (where Claude Code runs until the C1 bridge), fast and safe (§7, "First usable build"). The polish that U1 does not need follows in M15–M17, before Preview 0.1 (ADR 0029).
 
-**Milestone ladder.** 129–156 units plus 10% contingency is about 142–172 weeks, roughly 2.7–3.3 years when run sequentially. Levers that shorten it are in §7. Month 1 is November 2026.
+**Milestone ladder.** 138–168 units (129–156 for the milestones plus the upgrade track's 9–12) plus 10% contingency is about 152–185 weeks, roughly 2.9–3.6 years when run sequentially. Levers that shorten it are in §7. Month 1 is November 2026. The rows are in the order the milestones run. Milestone IDs are identities, not positions: code markers (`TODO(Mn)`), ADRs and the matrix use them, so the deferred halves of M1–M4 got the new IDs M15–M17, which run between M5 and M6 (ADR 0029).
 
 | # | Milestone | Units | Ends around month |
 |---|---|---|---|
-| M0 | Bootstrap (in progress) | 3–4 | 1 |
-| M1 | Editor, shell and product foundations | 11–13 | 4–5 |
-| M2 | Project models, first run, trust | 12–14 | 7–8 |
-| M3 | C++ intelligence | 10–12 | 10–12 |
-| M4 | Build, Run, Terminal, CMake language | 9–11 | 12–15 |
-| M5 | Git, Claude C1, packages (**dogfood v0.1**) | 8–10 | 14–17 |
-| M6 | Debugger, test runner, installers, updater (**Preview 0.1**) | 11–13 | 17–21 |
-| M7 | Analysis tiers | 10–12 | 20–24 |
-| M8 | Claude C2 | 3–4 | 21–25 |
-| M9 | Refactoring, code generation, templates | 11–13 | 24–29 |
-| M10 | Debugger v2 and full test runner | 9–11 | 26–32 |
-| M11 | UX parity, importers, accessibility | 9–11 | 29–35 |
-| M12 | Claude C3 native chat | 5–6 | 30–37 |
-| M13 | Scale hardening | 5–6 | 32–38 |
-| M14 | v1.0 | 4–5 | 33–40 |
-| — | Dependency-upgrade track (5–6 LLVM majors, 5–6 Qt minors, quarterly vcpkg) | 9–11 | throughout |
+| M0 | Bootstrap (signed off 2026-11-01) | 3–4 | 1 |
+| M1 | Editor, shell and data-safety core | 8–9 | 3–4 |
+| M2 | Project models and trust | 9–10 | 5–6 |
+| M3 | C++ intelligence core | 7–8 | 7–8 |
+| M4 | Build, Run, minimal debugger, Terminal (**first usable build U1**) | 9–12 | 10–12 |
+| M5 | Git, Claude C1, packages (**dogfood v0.1**) | 8–10 | 12–14 |
+| M15 | Editor and shell completion | 6–7 | 14–16 |
+| M16 | ProjectHost, solution writes, C#, CMake language | 9–11 | 16–19 |
+| M17 | C++ intelligence completion | 5–6 | 17–21 |
+| M6 | Debugger completion, test runner, installers, updater (**Preview 0.1**) | 9–11 | 20–24 |
+| M7 | Analysis tiers | 10–12 | 23–27 |
+| M8 | Claude C2 | 3–4 | 23–28 |
+| M9 | Refactoring, code generation, templates | 11–13 | 26–32 |
+| M10 | Debugger v2 and full test runner | 9–11 | 29–35 |
+| M11 | UX parity, importers, accessibility | 9–11 | 31–38 |
+| M12 | Claude C3 native chat | 5–6 | 33–40 |
+| M13 | Scale hardening | 5–6 | 34–41 |
+| M14 | v1.0 | 4–5 | 35–43 |
+| — | Dependency-upgrade track (5–7 LLVM majors, 5–7 Qt minors, quarterly vcpkg) | 9–12 | throughout |
 
 ---
 
@@ -52,7 +56,7 @@
 | "Rider clone… GUI of Rider is perfect" | Rider's layout, tool windows, popups and an IntelliJ-compatible keymap; own name, themes ("Glacier") and icons, subject to name clearance (L8); no JetBrains logos, icons, names or theme files (JetBrains Mono under the OFL). | Yes: no JetBrains assets |
 | "feature complete" | Every P0 and P1 row of the 257-row matrix (the 249 researched rows plus 8 new ones), minus the v1 slices in §1.4. Appendix A maps every row to a milestone. | Yes: measurable |
 | ".sln and .slnx" | Full fidelity on Windows through design-time builds against the user's VS. Labelled approximate mode on Linux. | Partly |
-| "CLion's support for CMake" | File API, presets v2–v13, profiles, CTest, a CMakeLists language service (M4), the CMake debugger (M6) and a cache viewer (M4). CLion's WSL and remote toolchains move to 1.x. | Partly (D5) |
+| "CLion's support for CMake" | File API, presets v2–v13, profiles, CTest, a CMakeLists language service (M16), the CMake debugger (M6) and a cache viewer (M16). CLion's WSL and remote toolchains move to 1.x. | Partly (D5) |
 | "cross platform" | Windows 11 x64 (build 22631+ today; the floor is the lowest build a test leg covers, §1.3), Linux x64 (glibc ≥2.39). A platform counts as supported only if a local test leg (REF-W1, its WSL, or a VM on it) covers it; there is no CI (D24). macOS is unsupported until a test leg exists; platform seams stay so it can be added later. arm64 on Windows and Linux in 1.x. | Yes: no Windows 10 (D14), no macOS in v1 (D24) |
 | "sub second launch times" | The budgets in §4. Sub-second means L1 on a warm reopen. A first-ever open promises L0 plus the project trees available in restricted mode (B23, with its preconditions). | Yes |
 | "best in class static code analysis" | Clang-based tiers T0–T4. The registry exposes every configurable Clang warning and primary clang-tidy check of the pinned LLVM, ≥100 CSA checkers and ≥60 frost checks. The total is generated from the pinned LLVM's own tables, never borrowed: LLVM 23.1.4 has 406 primary tidy checks, and the configurable warning-group and CSA counts are measured in M0 (no total is claimed before then). Coverage target: ≥75% of ReSharper C++'s ~296 own inspections. ReSharper C++ lists 2,237 inspections, so v1 is below parity. | Yes: counted, below parity |
@@ -66,7 +70,7 @@
 **Positioning.** Visual Studio is Windows-only; CLion has no MSBuild model; Rider opens C++ .sln only on Windows and C++ .slnx on all three operating systems (marked experimental). FrostIDE gives full .sln/.slnx/.vcxproj fidelity on Windows through the user's own MSBuild, a labelled approximate mode on Linux, CLion-level CMake and Rider-grade UX on both supported operating systems (macOS later, if a test leg is provided).
 
 **C#.**
-- **v1.0, solution citizenship:** C# projects in the Solution view (M2); build, run via launchSettings.json, tree-sitter highlighting, navigation to build errors (M4).
+- **v1.0, solution citizenship:** C# projects in the Solution view; build, run via launchSettings.json and navigation to build errors (all M16, ADR 0029); tree-sitter highlighting (M1).
 - **v1.1, `frost-dotnet` (6–9 months):** roslyn-language-server, netcoredbg, ICSharpCode.Decompiler, MTP. Non-goals: ReSharper-grade C#, Razor, XAML, MAUI, Unity.
 
 **v1.0 contents.** Editor and shell; all project models; C++ intelligence; analysis tiers T0–T4; at least 8 multi-file refactorings; formatter; build and run; debugger; a test runner for GoogleTest, Catch2, doctest, Boost.Test and CTest; Git; terminal; local history; Claude C1–C3; settings import; updater; accessibility gate; signed installers.
@@ -94,12 +98,12 @@ Counts include the moves below and new rows 250–257 (soft wrap, whitespace/ind
 
 **Scope moves.** P1 → P0: the Claude bridge (232) and trusted project (25, now restricted mode). P2 → P1: .sln↔.slnx conversion (3), CMake cache viewer (13), Move (141), CMake debugger (193), quality-gate hooks (234). WSL, Docker and remote toolchain detection (part of 20) and row 223 stay in 1.x (D5). Row 4 means design-time build plus native tree.
 
-**P0 rows finishing after Preview 0.1** (any other P0 slip needs user approval):
-- Row 31, Explorer context actions: Unload/Reload project, Set as Startup Project, Open in Explorer, Copy Path and Properties in M2; Build/Rebuild/Clean and Open in Terminal in M4; Compare With in M5; Run Unit Tests in M6; Show History in M11 (it needs the Local History UI and file history, rows 218 and 209).
-- Row 99, inspection framework: severities and suppression in M3; profiles and scopes in M7.
+**P0 rows finishing after Preview 0.1** (any other P0 slip needs user approval). The thin path (ADR 0029) moved parts of these rows to M15–M17, which run before M6, so no further P0 row slips past Preview 0.1:
+- Row 31, Explorer context actions: Set as Startup Project, Open in Explorer and Copy Path in M2; Build/Rebuild/Clean and Open in Terminal in M4; Compare With in M5; Unload/Reload project and Properties in M16; Run Unit Tests in M6; Show History in M11 (it needs the Local History UI and file history, rows 218 and 209).
+- Row 99, inspection framework: severities and suppression in M17; profiles and scopes in M7.
 - Row 118, C++23/26 language: C++23 in M3; the modules flag and reflection downgrading in M7.
 - Row 227, keymaps: IntelliJ (Windows/Linux; the macOS variant is defined but untested, D24) in M1; Visual Studio, VS 2022, ReSharper and VS Code keymaps in M11.
-- Row 242, status bar widgets: line:col, line separator, encoding, column mode, read-only lock, indent and processes in M1; navigation bar and error indicator in M3; the analysis monitor in M7 with solution-wide analysis (row 111).
+- Row 242, status bar widgets: line:col, line separator, encoding, read-only lock, indent and processes in M1; the error indicator in M3; column mode in M15; the navigation bar in M17; the analysis monitor in M7 with solution-wide analysis (row 111).
 
 **v1 slices of large rows.**
 - **Row 20, toolchain detection:** MSVC (VS 2022/2026), clang-cl, MinGW-w64, Clang, GCC and custom compilers in v1; WSL, Docker and remote-host toolchains in 1.x (D5).
@@ -131,11 +135,11 @@ Counts include the moves below and new rows 250–257 (soft wrap, whitespace/ind
 | Static analysis | **T0:** tree-sitter, under 2 ms. **T1:** clangd diagnostics, include-cleaner, fast tidy and frost checks. **T2:** frost-analyzer, min(4, cores/4) LibTooling processes (governor-scaled) after 2 s idle or on save, for checks clangd disables (misc-const-correctness, use-after-move, unchecked-optional-access, CSA); each with its own PCH cache, ~2 GB cap and timeout. **T3:** Inspect Code: full tidy, CSA CTU (CodeChecker 6.29), IWYU 0.27, optional cppcheck 2.22 and clazy 1.17, MSVC `/analyze`, all as SARIF 2.1.0; headless `frost inspect` for scripted, non-interactive runs. **T4:** index-derived checks (unused, can be final, internal linkage). One registry with stable IDs, Rider-style categories, `frost_cpp_<id>_highlighting` keys and quick-fixes, generated at build time from LLVM's diagnostic tables, the tidy check list and the CSA checker registry. | Cheap checks are instant; expensive ones never block typing. Counts are generated, never borrowed (ReSharper's 974 Clang diagnostics come from its own bundled Clang). | Everything inside clangd. |
 | Refactoring | Single-TU: clangd's 20 tweaks plus frost tweaks. Multi-file: index refs → parallel reparse → `tooling::Replacements` → preview → atomic undo. | Real ASTs. | Textual refactoring. |
 | Formatter | clang-format binary at M3; libFormat in a delay-loaded `frost_format` DLL at M7. `.clang-format` is the source of truth (EditorConfig mapped onto it); all 211 options in the UI. | Users already have the files. | Our own formatter. |
-| MSBuild / .vcxproj | Behind `IMsBuildEvaluator`:<br>**(a) Native.** A `.vcxproj`/`.filters` reader builds the instant tree, including NMake projects (`ConfigurationType=Makefile`: NMakeIncludeSearchPath, NMakePreprocessorDefinitions, NMakeForcedIncludes, AdditionalOptions, build command lines). ProjectModelCache stores one fingerprinted record per (project, config, platform, toolchain). Warm opens of an unchanged tree validate natively and start zero .NET processes.<br>**(b) `FrostIDE.ProjectHost`.** About 3k lines of C# over StreamJsonRpc: net472 via MSBuildLocator, net10.0 for SDK-style projects. 2–4 workers, active configuration first, a shared EvaluationContext. Runs `ComputeReferenceCLInput;GetProjectDirectories;GetClCommandLines` with the msbuild-extractor-sample global properties. Source of truth. `FrostIDE.MSBuildLogger` (C#) streams build events.<br>**(c) `MSBuild.exe -getTargetResult` JSON.** Spike, consistency check, pure-C++ fallback.<br>**(d) Approximate mode.** Labelled; off Windows or without VS. | Only MSBuild evaluates property sheets and conditions exactly. The cache gives native-speed warm opens. net472 needs no extra runtime. (b) and (c) share one engine, so `cl.exe /c` compiles the extracted command lines as the independent check (§6.1). | A native evaluator as source of truth. CLI-only (D3). |
+| MSBuild / .vcxproj | Behind `IMsBuildEvaluator`:<br>**(a) Native.** A `.vcxproj`/`.filters` reader builds the instant tree, including NMake projects (`ConfigurationType=Makefile`: NMakeIncludeSearchPath, NMakePreprocessorDefinitions, NMakeForcedIncludes, AdditionalOptions, build command lines). ProjectModelCache stores one fingerprinted record per (project, config, platform, toolchain). Warm opens of an unchanged tree validate natively and start zero .NET processes.<br>**(b) `FrostIDE.ProjectHost`.** About 3k lines of C# over StreamJsonRpc: net472 via MSBuildLocator, net10.0 for SDK-style projects. 2–4 workers, active configuration first, a shared EvaluationContext. Runs `ComputeReferenceCLInput;GetProjectDirectories;GetClCommandLines` with the msbuild-extractor-sample global properties. Source of truth. `FrostIDE.MSBuildLogger` (C#) streams build events. Both land in M16 (ADR 0029).<br>**(c) `MSBuild.exe -getTargetResult` JSON.** Spike, consistency check, pure-C++ fallback, and the evaluator of the first usable build until ProjectHost lands (M2, with the wrapper target of ADR 0005).<br>**(d) Approximate mode.** Labelled; off Windows or without VS. | Only MSBuild evaluates property sheets and conditions exactly. The cache gives native-speed warm opens. net472 needs no extra runtime. (b) and (c) share one engine, so `cl.exe /c` compiles the extracted command lines as the independent check (§6.1). | A native evaluator as source of truth. CLI-only (D3). |
 | .sln / .slnx | Native readers: a `.sln` tokenizer, `.slnx` via pugixml following Slnx.xsd, and `.slnf`. Writes and conversion go through Microsoft.VisualStudio.SolutionPersistence 1.0.52 (MIT) in ProjectHost. | Reads are on the critical path. Writes must match what VS produces. | A native writer (only if D3 is CLI-only). |
-| CMake | Stateful File API query `client-frostide`: codemodel v2, cache v2, cmakeFiles v1.1, toolchains v1.1, configureLog v1. Native presets parser for v2–v13. `ctest --show-only=json-v1`. `isGenerated` sources show a "Build to generate" hint. **Language service (M4):** tree-sitter-cmake plus the File API model plus docs baked from `cmake --help-*-list`. **Debugger (M6):** `cmake --debugger --debugger-pipe` (CMake ≥3.27) through the DAP client. Requires CMake ≥3.21. | Exact targets and flags per configuration; CLion-grade CMake editing and debugging. | Parsing CMakeLists for the model. |
+| CMake | Stateful File API query `client-frostide`: codemodel v2, cache v2, cmakeFiles v1.1, toolchains v1.1, configureLog v1. Native presets parser for v2–v13. `ctest --show-only=json-v1`. `isGenerated` sources show a "Build to generate" hint. **Language service (M16):** tree-sitter-cmake plus the File API model plus docs baked from `cmake --help-*-list`. **Debugger (M6):** `cmake --debugger --debugger-pipe` (CMake ≥3.27) through the DAP client. Requires CMake ≥3.21. | Exact targets and flags per configuration; CLion-grade CMake editing and debugging. | Parsing CMakeLists for the model. |
 | Toolchain detection | VS Setup COM API, vswhere fallback. Cached vcvarsall environment diffs keyed by instance, arch, SDK and vcvars_ver. Also clang, GCC and MinGW. Tools resolve to absolute paths (§3.5). WSL, Docker and remote in 1.x (D5). | Correct environments, no per-launch cost. | vcvarsall on every build. |
-| Debuggers | **Windows:** lldb-dap at M6. S5 found that the official LLVM 23.1.4 Windows package has no lldb or lldb-dap, so the Windows lldb-dap must come from another source (e.g. the LLVM Windows installer, if it ships one) or be self-built; this is an open item for M6; **frost-dbgeng-dap** at M10 on `Microsoft.Debugging.Platform.DbgEng` 20260319.1511.0 (natvis, minidumps, symbol servers, hardware breakpoints), delivered by the ComponentDownloader until legal review. **Linux:** lldb-dap plus `gdb -i=dap` (GDB ≥16) out of process; Ubuntu 24.04 ships GDB 15, so ≥16 is a documented prerequisite there, tested with a GDB ≥16 installed into WSL (`~/sdk`); ptrace_scope detection with a fix hint. **macOS:** none in v1 (D24); the design (lldb-dap with the system debugserver) stays for later. | DbgEng is redistributable with full PDB fidelity. | vsdbg and cpptools (licence forbids it, enforced since 1.24.5; local verification scans artifacts). |
+| Debuggers | **Windows:** lldb-dap from U1 (M4), debugging MSVC-built programs through their PDBs. S5 found that the official LLVM 23.1.4 Windows package has no lldb or lldb-dap, so M4 builds lldb-dap from the pinned LLVM sources into E:\sdk, pinned in `sdk/sdk.lock.json` (the SDK leg, §6.3; ADR 0029, decision 12); **frost-dbgeng-dap** at M10 on `Microsoft.Debugging.Platform.DbgEng` 20260319.1511.0 (natvis, minidumps, symbol servers, hardware breakpoints), delivered by the ComponentDownloader until legal review. **Linux:** lldb-dap from U1 (M4), built from the same sources in WSL into `~/sdk`, because the official package's lldb-dap links a libpython that Ubuntu 24.04 lacks (S5); `gdb -i=dap` (GDB ≥16) out of process from M6; Ubuntu 24.04 ships GDB 15, so ≥16 is a documented prerequisite there, tested with a GDB ≥16 installed into WSL (`~/sdk`); ptrace_scope detection with a fix hint (M6, with attach). **macOS:** none in v1 (D24); the design (lldb-dap with the system debugserver) stays for later. | DbgEng is redistributable with full PDB fidelity. | vsdbg and cpptools (licence forbids it, enforced since 1.24.5; local verification scans artifacts). |
 | DAP/LSP/MCP clients | Own C++23 clients. `frost-codegen` generates types from DAP 1.71, the LSP 3.18 metaModel and the MCP schema, and emits each schema `description` as a code comment. JSON via yyjson. | Typed, versioned and documented. cppdap was archived on 2026-09-28. | cppdap. |
 | Process model and IPC | One UI process with Qt-free core services. Engines run in a Job Object or process group under a supervisor that restarts them with backoff and replays state. Content-Length JSON-RPC and NDJSON; tests also run every service over a serialising in-memory transport. `FrostLayers.cmake` fails configure on layering violations; only `src/ui` and `src/app` link Qt. | Crash isolation; no IPC on the keystroke path. Re-evaluated at M13. | Shared-memory IPC in v1. |
 | Scheduler | `frost::sched`: N−1 Chase-Lev workers in four lanes (Interactive > UserVisible > Background > Idle) with aging; background capped at cores−4. `Task<T>` coroutines; `std::stop_token` plus generation counters (latest request wins). MainThreadDispatcher delivers one Qt event per frame. asio on IOCP, epoll, kqueue. SimExecutor for virtual-time tests. Helpers run at BELOW_NORMAL + EcoQoS or SCHED_IDLE. | Priorities alone cut Zed's first search result from 16.81 s to 32 ms. | std::execution. TBB. |
@@ -168,28 +172,28 @@ Counts include the moves below and new rows 250–257 (soft wrap, whitespace/ind
 ### 2.2 Product infrastructure
 | Item | Design | Milestone |
 |---|---|---|
-| Settings | Typed registry, scopes, `.frost/`, migrations, dialog, importers (§3.6). | M1; importers M11 |
+| Settings | Typed registry, scopes, `.frost/`, migrations, dialog, importers (§3.6). | M1 (registry, scopes, JSON scope files); dialog M15; importers M11 |
 | Data safety | `SaveManager`: atomic writes (temp file, then ReplaceFileW or rename) preserving BOM, EOL, encoding, permissions, ACLs, hardlinks and symlink targets; retry and UI for locked or read-only files; disk-full handling. Configurable autosave on frame deactivation and idle. A SQLite dirty-buffer journal for hot exit and crash recovery. External changes: silent reload when clean, a 3-way merge prompt when dirty. | M1 |
 | Crash and freeze reporting | Crashpad (Apache-2.0) out-of-process handler in frost and every engine, writing to `<cache>/crashes`. The stall watchdog writes freeze reports (UI-thread stack samples); engine crashes record the TU and command line. Help > Collect Logs and Diagnostics zips logs, dumps and freeze reports with a redaction preview. `tools/package` archives symbols per tagged build (symstore on Windows, debuglink on Linux) under E:\FrostBuilds. Upload is opt-in (D26). Local retention follows the Privacy row. | Handler M1; Collect Logs, symbols M5 |
 | HTTPS | `IHttpClient`: WinHTTP (auto-proxy/PAC), libcurl with OpenSSL 3 on Linux (an NSURLSession shim only if macOS is added); a fake double; fuzzed parser. | M5 Windows; M6 Linux |
-| Packaging | Portable zip or tarball (Qt deployment, app-local VC runtime matching the pinned STL, ProjectHost per D27, archived split symbols), smoke-tested with `--selftest` from a fresh extraction under a clean profile on REF-W1 and in WSL (and in the floor-build VM from M6). Unsigned per-user WiX MSI (no UAC) and AppImage (static type-2 runtime) in M6; signed, every helper included, in M14 (D25). Packages stay local or in the private repository for personal use (D8, D22). Uninstall removes lock files and associations (caches on request); upgrade-in-place tested. Size: B27. | M5, M6, M14 |
+| Packaging | Portable zip or tarball (Qt deployment, app-local VC runtime matching the pinned STL, M4's lldb-dap build, ProjectHost per D27 from M16, archived split symbols), smoke-tested with `--selftest` from a fresh extraction under a clean profile on REF-W1 and in WSL (and in the floor-build VM from M6). Unsigned per-user WiX MSI (no UAC) and AppImage (static type-2 runtime) in M6; signed, every helper included, in M14 (D25). Packages stay local or in the private repository for personal use (D8, D22). Uninstall removes lock files and associations (caches on request); upgrade-in-place tested. Size: B27. | M5, M6, M14 |
 | Updates | Ed25519-signed manifest (libsodium) with SHA-256 payload hashes; nightly, EAP and stable channels; SemVer plus build number; generated changelog. Own updater applying the per-user MSI after exit (Windows), `appimageupdatetool` (AppImageUpdate/zsync2) run as a separate, unlinked process (Linux). Checks only after L1 and with consent; rollback; downgrade protection. One `ComponentDownloader` (signature check, resume, proxy, offline import) for DbgEng and other optional components. | M6 |
 | Privacy and network | No telemetry in v1. No network I/O before L1. Every outbound endpoint (updates, symbol servers, downloads, crash upload) is recorded in an ADR and listed in Settings with first-use consent; symbol servers stay off until enabled per project; an offline switch. Verification test: a scripted session records connections (ETW Kernel-Network, `strace -f -e trace=connect`) and asserts none without consent. **Retention:** crash dumps, freeze reports, ETW/Perfetto/Tracy traces and logs may contain paths and code. They stay local in `<cache>/crashes`, `<cache>/traces` and `<cache>/logs`, kept ≤30 days and ≤1 GB in total (oldest deleted first) and counted in the cache budget. Invalidate Caches / Repair IDE removes them, and uninstall always removes them, even when caches are kept. They leave the machine only through Collect Logs with its redaction preview, or the opt-in upload (D26). A test ages and oversizes fixtures and asserts the pruning. Privacy statement in M14. | Policy, retention and tests M1 |
 | Trust | Restricted mode, absolute-path tool resolution (§3.5). | M2 |
 | Local listeners | Every listener hardened (§5.2). A verification test enumerates sockets and pipes after startup and asserts only the expected ones exist, none before L0. | M2, then per new listener |
 | Windows paths and encodings | Manifest and narrow-API lint (§2.1); fixtures with a non-ASCII profile path with spaces and paths over 260 characters (M0). Build drivers decode child output by its code page (UTF-8 where possible), parse with locale-independent anchors (C\d{4}, MSB\d{4}, LNK\d{4}), have goldens for en, de and ja VS language packs, and offer an opt-in `VSLANG=1033` (M4). | M0, M4 |
-| Shell integration | Single instance over an ACL'd pipe with argument forwarding. A `frost` CLI shim: `frost <path>`, `frost --wait` for GIT_EDITOR/EDITOR, `frost diff` and `frost merge` with git-compatible exit codes. Per-user file associations (HKCU ProgIDs, Linux .desktop/MIME). Jump List recents. | M2 |
-| Resource governance | A `ResourceGovernor` in the supervisor scales clangd background threads, the analyzer pool and ProjectHost workers from free RAM, commit charge and battery. Process-tree budget B26; the cache disk budget with a Settings page; Invalidate Caches / Repair IDE. Power Save Mode pauses T2/T3 and background indexing. | M3; Power Save M7 |
+| Shell integration | Single instance over an ACL'd pipe with argument forwarding. A `frost` CLI shim: `frost <path>`, `frost --wait` for GIT_EDITOR/EDITOR, `frost diff` and `frost merge` with git-compatible exit codes. Per-user file associations (HKCU ProgIDs, Linux .desktop/MIME). Jump List recents. | M2 (single instance, `frost <path>`); M16 (`--wait`, `diff`, `merge`, associations, Jump List) |
+| Resource governance | A `ResourceGovernor` in the supervisor scales clangd background threads, the analyzer pool and ProjectHost workers from free RAM, commit charge and battery. Process-tree budget B26; the cache disk budget (a registry key edited in the scope files until the Settings dialog gives it a page in M15); Invalidate Caches / Repair IDE. Power Save Mode pauses T2/T3 and background indexing. | M3; Power Save M7 |
 | i18n readiness | Every user-visible string goes through `frost::i18n::tr(context, text)`; core errors carry message IDs; no sentence concatenation; plurals via `%n`. frost-lint rejects literals passed to UI text setters. A pseudo-localization screenshot test (+40% length, accents). Translations stay a non-goal. | M1 |
 | Keyboard and IME | Shortcut matcher with AltGr disambiguation and layout-aware mapping (tests simulate de-DE, pl-PL, fr-FR), dead keys, double-Shift suppressed during IME composition. Grapheme-cluster caret movement and deletion. Terminal IME. | M1; terminal M4 |
-| Accessibility | Keyboard navigation of stripes, toolbar (Alt+PageUp), status bar (Alt+PageDown) and gutter, with focus-order tests (M1). Colour-deficiency palette, contrast scrollbars, reduced motion, OS high contrast / forced colours / Increase Contrast, and a terminal text provider for UIA and AT-SPI (M11). | M1, M11 |
+| Accessibility | Keyboard navigation of stripes, toolbar (Alt+PageUp), status bar (Alt+PageDown) and gutter, with focus-order tests, and the UIA TextPattern smoke (M15). Colour-deficiency palette, contrast scrollbars, reduced motion, OS high contrast / forced colours / Increase Contrast, and a terminal text provider for UIA and AT-SPI (M11). | M15, M11 |
 
 ### 2.3 Dependency upgrade policy
 | Dependency | Policy |
 |---|---|
-| LLVM | Each major within ~6 weeks of its .1 release: rebuild, corpus differential (diagnostics, flags, completion and refactoring goldens), regenerated inspection counts, ADR. Point releases as they appear. A local `llvm-next` leg (`tools/verify.sh -LlvmNext`, run on demand, no CI) builds the engines against the newest release branch. LLVM 24 is expected around March 2027 (inferred from the ~6-month cadence), so the 33–40-month roadmap spans 5–6 majors (24 to 28 or 29). ~1 unit per major. |
-| Qt | Each minor within ~6 weeks of its first patch release, behind the screenshot, IME and accessibility suites; patch releases as they appear; no open Qt advisory may affect a shipped module at release. Qt ships about two minors a year, so the roadmap spans 5–6 minors (6.13 onwards). ~0.5 unit per minor. |
-| Others | MSVC STL moves as a pair with LLVM (14.44 → 14.52). vcpkg baseline quarterly (about 11–13 bumps, ~1.5–2 units in total). The whole track is ~9–11 units (D20). OSV-Scanner over the SBOM in `verify -Full`. Weekly golden transcripts (run locally) for the newest Claude CLI minor; failures block the next release, not development. |
+| LLVM | Each major within ~6 weeks of its .1 release: rebuild, corpus differential (diagnostics, flags, completion and refactoring goldens), regenerated inspection counts, ADR. Point releases as they appear. A local `llvm-next` leg (`tools/verify.sh -LlvmNext`, run on demand, no CI) builds the engines against the newest release branch. LLVM 24 is expected around March 2027 (inferred from the ~6-month cadence), so the 35–43-month roadmap spans 5–7 majors (24 to 28, 29 or 30). ~1 unit per major. |
+| Qt | Each minor within ~6 weeks of its first patch release, behind the screenshot, IME and accessibility suites; patch releases as they appear; no open Qt advisory may affect a shipped module at release. Qt ships about two minors a year, so the roadmap spans 5–7 minors (6.13 onwards). ~0.5 unit per minor. |
+| Others | MSVC STL moves as a pair with LLVM (14.44 → 14.52). vcpkg baseline quarterly (about 12–14 bumps, ~1.5–2 units in total). The whole track is ~9–12 units (D20). OSV-Scanner over the SBOM in `verify -Full`. Weekly golden transcripts (run locally) for the newest Claude CLI minor; failures block the next release, not development. |
 
 ---
 
@@ -254,12 +258,12 @@ FrostIDE/
 - Documents and models are immutable snapshots, so readers take no locks. Each service has one owning actor; remaining locks carry `FROST_GUARDED_BY`, checked by `-Wthread-safety`.
 
 ### 3.4 Data flows
-**First run.** The Welcome window appears at L0 (recent solutions, Open, Get from VCS, New Project/Solution). The first-run wizard covers theme, keymap, settings import (from M11), a toolchain report with deep links for anything missing, Claude Code detection with the official installer link (the wizard spawns `claude --version` and `claude auth status --json` through the absolute-path launcher only when its Claude page is shown, after L1, never on the cold-start path), a Defender/Dev Drive check, and consent for crash reports and network use. Nothing touches the network.
+**First run.** The Welcome window appears at L0 (recent solutions and Open from M2, Get from VCS from M5, New Project/Solution from M16). The first-run wizard (M16) covers theme, keymap, settings import (from M11), a toolchain report with deep links for anything missing, Claude Code detection with the official installer link (the wizard spawns `claude --version` and `claude auth status --json` through the absolute-path launcher only when its Claude page is shown, after L1, never on the cold-start path), a Defender/Dev Drive check, and consent for crash reports and network use. Nothing touches the network.
 
 **Cold start**
 1. Minimal static init, then Qt init. Theme blob and icons are mapped, and the first present happens (L0).
 2. At idle, a parallel scan and native solution parsing fill the trees (B23).
-3. In a trusted project, ProjectHost streams evaluations, active configuration first (B23). clangd starts indexing.
+3. In a trusted project, ProjectHost streams evaluations, active configuration first (B23); until M16, path (c) evaluates the projects after L1 (§7 M2). clangd starts indexing.
 4. The bridge listens. The `claude` CLI is never spawned.
 
 **Warm open**
@@ -279,7 +283,7 @@ FrostIDE/
 
 **Completion.** Each request carries a generation counter; a newer keystroke cancels it via `$/cancelRequest`. The fuzzy matcher re-ranks results and the popup opens.
 
-**Build, run, debug.** Before-launch tasks run. MSBuild (with FrostIDE.MSBuildLogger) or `cmake --build` runs inside a Job Object. Output is decoded by code page and parsed into the Build and Problems windows. The DAP adapter launches and binds breakpoints; stacks load lazily and variables on expand.
+**Build, run, debug.** Modified documents are saved, then before-launch tasks run (from M4: Save All and the build before Run; the general task list from M16). MSBuild (with FrostIDE.MSBuildLogger from M16; parsed console output before) or `cmake --build` runs inside a Job Object. Output is decoded by code page and parsed into the Build and Problems windows. The DAP adapter launches and binds breakpoints; stacks load lazily and variables on expand.
 
 **Claude edit → diff review**
 1. The CLI calls `openDiff`; FrostIDE opens a non-blocking diff tab with an editable right side. The first answer (IDE or terminal) wins.
@@ -291,12 +295,14 @@ Opening a project can execute its code: MSBuild design-time builds run targets a
 
 | Mode | Allowed | Blocked |
 |---|---|---|
-| Restricted (default for a new root) | Native .sln/.slnx/.vcxproj/presets readers; reading existing File API replies; tree-sitter; File System and Solution views; text search; clangd with native-reader flags, `--enable-config=false` and no `--query-driver`; T1 only with FrostIDE-bundled tools at absolute paths and no plugin loading (plugin-loading flags are stripped from every command line handed to clangd or tidy, and `ExtraArgs` is ignored); read-only git with `-c core.fsmonitor=false -c core.hooksPath=<empty dir>` | ProjectHost design-time builds, CMake configure, builds, test discovery, debugger init files and project natvis, run-configuration auto-import, tasks and external tools, Claude hooks for that root; project-specified tool binaries (custom clang-tidy, clang-format, compiler, debugger or CMake paths); clang-tidy `--load` modules and compiler plugins; T2/T3 runs (frost-analyzer, CodeChecker, IWYU, cppcheck, clazy) driven by project-supplied configuration; every `executes` key in project-shared settings (§3.6) |
+| Restricted (default for a new root) | Native .sln/.slnx/.vcxproj/presets readers; reading existing File API replies (their targets are shown, never built or run); tree-sitter; File System and Solution views; text search; clangd with native-reader flags, `--enable-config=false` and no `--query-driver`; T1 only with FrostIDE-bundled tools at absolute paths and no plugin loading (plugin-loading flags are stripped from every command line handed to clangd or tidy, and `ExtraArgs` is ignored); read-only git with `-c core.fsmonitor=false -c core.hooksPath=<empty dir>`; the terminal, running the application-scope shell at its absolute path with the root as working directory and NoDefaultCurrentDirectoryInExePath kept (ADR 0011, E2), so a command typed there never resolves to a binary in the root | MSBuild design-time builds (ProjectHost or path (c)), CMake configure, builds (Build, Rebuild, Clean and the build before Run or Debug), running or debugging any run configuration (derived from File API replies or the solution, or project-shared), test discovery, debugger init files and project natvis, run-configuration auto-import, tasks and external tools, Claude hooks for that root; project-specified tool binaries (custom clang-tidy, clang-format, compiler, debugger or CMake paths); clang-tidy `--load` modules and compiler plugins; T2/T3 runs (frost-analyzer, CodeChecker, IWYU, cppcheck, clazy) driven by project-supplied configuration; every `executes` key in project-shared settings (§3.6) |
 | Trusted | Everything | — |
 
 - Trust is granted per root from a banner and stored in application settings; trusting a parent covers its children.
+- A CMake root is the opened source directory. A solution's root is the git work tree that contains it, or the solution's directory outside a work tree, because projects often sit beside the solution's directory (R2a's Scintilla and Lexilla); projects that the solution lists outside the root are named on the banner and trusted with it.
+- A CMake profile's build directory may lie outside the root (R3's `E:\corpus\R3-build` beside `R3\llvm`). Trusting the root covers configure and builds into its profiles' build directories. A build directory outside the root is used only when the user chose it, in an application-scope profile for that root, never when a file in the repository names it, so an untrusted repository cannot aim configure or build output at an arbitrary directory.
 - `IProcessLauncher` resolves every tool (git, cmake, msbuild, claude, compilers) to an absolute path from detection results, never searches the current or project directory (`NoDefaultCurrentDirectoryInExePath`, `SetDefaultDllDirectories`), and logs the path.
-- A malicious fixture repository proves nothing runs before trust and the planted binaries never run. It contains planted git.exe and cmake.exe, an Exec task in Directory.Build.props, an fsmonitor hook, an `.lldbinit`, a `.clang-tidy` whose `ExtraArgs` and a `compile_commands.json` whose `-fplugin=` load a planted plugin, a `.frost/settings.json` naming a planted clang-tidy and compiler path, and a `.frost/runConfigurations` entry with a before-launch command.
+- A malicious fixture repository proves nothing runs before trust and the planted binaries never run. It contains planted git.exe and cmake.exe, an Exec task in Directory.Build.props, an fsmonitor hook, an `.lldbinit`, a `.clang-tidy` whose `ExtraArgs` and a `compile_commands.json` whose `-fplugin=` load a planted plugin, a `.frost/settings.json` naming a planted clang-tidy and compiler path, a `.frost/runConfigurations` entry with a before-launch command, a CMake build directory inside the repository whose File API reply points an executable target at a planted binary, and planted `cmd.exe`, `pwsh.exe` and `bash` in the root. The M2 test covers project opening; M4 extends it to Build, Run, Debug and the terminal; M16 to the run-configuration importers.
 
 ### 3.6 Settings model
 | Scope (low → high) | Location | Shared? |
@@ -310,7 +316,7 @@ Opening a project can execute its code: MSBuild design-time builds run targets a
 - Typed registry entries: key, schema, default, allowed scopes, and a description shown in the dialog and emitted as a comment by frost-codegen.
 - **Executable-bearing keys.** Keys that name an executable, command, plugin or script are marked `executes` in the registry. Examples: clang-tidy, clang-format, compiler, debugger and CMake paths; tidy plugin lists; external tools; before-launch tasks; run-configuration commands. Tool paths and plugin lists are application-scope only. Run configurations and tasks may live in project-shared files, but their `executes` keys are ignored until the root is trusted, and the trust banner lists them (§3.5). A registry test fails if an `executes` key allows project scope without the trust check.
 - Diffable JSON with a `schemaVersion`; migrations are pure functions with golden tests; unknown keys survive round trips; files reload live. SQLite never holds settings.
-- **Dialog (M1):** searchable tree, scope switcher, modified markers, reset, Advanced Settings.
+- **Dialog (M15):** searchable tree, scope switcher, modified markers, reset, Advanced Settings; pages for every key that M1–M5 added (editor, toolchains, CMake profiles, clangd and the cache budget, build and run, debugger, terminal, Git, Claude), generated from the registry's schemas and descriptions, with hand-built pages for the Keymap (ADR 0016), CMake profiles and toolchains. Until then (M1) Find Action opens each scope file in the editor, saves are validated against the registry, and errors appear as notifications (ADR 0029).
 - **Importers (M11):** Rider/CLion `.DotSettings` and `.idea` (keymaps, code style to `.clang-format`, inspection severities, live templates); VS `.vssettings`/`.vstheme`; VS Code `settings.json`/`keybindings.json`; zip export and import.
 
 ---
@@ -357,15 +363,15 @@ Opening a project can execute its code: MSBuild design-time builds run targets a
 | B12 | T2 per file, warm / cancel | p50 10 s / p99 200 ms | R3 | M7 |
 | B13 | Find in Files first hit, unindexed / indexed | p50 300 / 100 ms; p99 600 / 200 ms | R3 | M2 / M13 |
 | B14 | git status with fsmonitor | p50 150 ms; p99 300 ms | R3 | M5 |
-| B15 | F1 first screen (private bytes +≤64 MB; line index ≤2 s) | p50 150 ms; p99 300 ms | F1 | M1 |
-| B16 | F5 → breakpoint (up-to-date check included, compilation excluded) / step | p50 1.0 s / 60 ms; p99 1.5 s / 100 ms | R1 | M6 |
+| B15 | F1 first screen (private bytes +≤64 MB; line index ≤2 s) | p50 150 ms; p99 300 ms | F1 | M15 |
+| B16 | F5 → breakpoint (up-to-date check included, compilation excluded) / step | p50 1.0 s / 60 ms; p99 1.5 s / 100 ms | R1 | M4 |
 | B17 | Terminal echo | p99 10 ms | — | M4 |
 | B18 | getDiagnostics baseline / openDiff visible | p99 50 / 100 ms | R1 | M5 |
 | B19 | UI process, no project / R3 (children excluded) | ≤80 / ≤250 MB | — | M1 / M3 |
 | B20 | Exit to process gone | p50 150 ms; p99 300 ms | R3 | M1 |
 | B21 | Stalls >50 ms in a 10-minute script (the script grows each milestone) | 0 | R3 | M1 |
 | B22 | Engine crash → recovered | p99 2 s, no UI stall | R3 | M3 |
-| B23 | First-ever open of a new root. **Trees** are measured in restricted mode: the File System view plus the native-reader Solution or CMake target tree. For R3, a build directory already configured with the `client-frostide` query is required; without one, only the File System view is promised. **First project streamed** is measured after trust: the trust click is excluded from the timing, and ProjectHost cold start is included. budgets.json records these preconditions. | p50 1.5 s / 3 s (trees: provisional until M2's first trees measurement; first project: final value set by S6) | R3 / R2b | M2 |
+| B23 | First-ever open of a new root. **Trees** are measured in restricted mode: the File System view plus the native-reader Solution or CMake target tree. For R3, a build directory already configured with the `client-frostide` query is required; without one, only the File System view is promised. **First project streamed** is measured after trust: the trust click is excluded from the timing, and the evaluator's cold start is included (path (c)'s `MSBuild.exe` at M2, ProjectHost's at M16). budgets.json records these preconditions. | p50 1.5 s / 3 s (trees: provisional until M2's first trees measurement; first project: final value set by S6, which also binds the M2 gate once set) | R3 / R2b | M2 / M2 (path (c)) and M16 (ProjectHost) |
 | B24 | L2 warm: first workspace/symbol and cross-file definition from the persisted index | M3: S7 baseline ×1.2; M13: p50 2 s, p99 3 s | R3 | M3, M13 |
 | B25 | L3: typical active TU to clangd.fileStatus idle with semantic tokens | p50 3 s | R3 TU set | M3 |
 | B26 | Process-tree memory, peak / idle | ≤8 / ≤4 GB; REF-L1 ≤5 GB peak | R3 | M3; REF-L1 at M13 |
@@ -378,7 +384,7 @@ Opening a project can execute its code: MSBuild design-time builds run targets a
 - The WSL leg (`tools/verify.sh -Perf`) gates on instruction counts (fail above +3%) and on wall-clock smoke (fail at 2x budget).
 - REF-W1 full perf run (`tools/perf.ps1 -Full`, started by the user or by Claude in a session, never by a CI service, §6.3): 20 samples, Mann-Whitney U at p<0.01, a p50 regression above 5% fails. It runs only when the session-state precheck passes (§6.3) and aborts on input. A run that fails the precheck or is aborted is marked invalid, not red, and never enters the history.
 - Results go to a `perf-history` SQLite file outside the repository (E:\FrostBuilds\perf); demo packs plot trends. `perf.ps1 -Smoke` before committing text, render, sched, storage or startup changes.
-- Changing a budget needs an ADR and user approval. Budgeted functions cite their ID; frost-lint checks it exists. Release needs 14 consecutive green local full-verification runs (`verify.ps1 -Full` plus `verify.sh -Full` plus the full perf run, on separate days; invalid perf runs neither extend nor break the streak).
+- Changing a budget needs an ADR and user approval. Budgeted functions cite their ID; frost-lint checks it exists. ADR 0029 (the thin path, D29) changed no target. B15's gate moved from M1 to M15 with large-file mode, and B16's from M6 to M4 with U1's minimal debugger. B23's first-project-streamed variant is gated twice: at M2 on path (c), U1's evaluator, with `MSBuild.exe`'s cold start in place of ProjectHost's, and at M16 on ProjectHost; its trees variant stays gated at M2. Release needs 14 consecutive green local full-verification runs (`verify.ps1 -Full` plus `verify.sh -Full` plus the full perf run, on separate days; invalid perf runs neither extend nor break the streak).
 
 ---
 
@@ -479,7 +485,7 @@ There is no CI/CD of any kind (D24): no GitHub Actions or other hosted pipeline,
 2. clang-format and clang-tidy on changed files; frost-lint, frost-licensecheck, layering check.
 3. `wsl -d Ubuntu-24.04 -- tools/verify.sh`: directly in the WSL distro (it lives on E:\WSL\Ubuntu-24.04; toolchain in `~/sdk` from `tools/bootstrap-wsl.sh`, no container), rsync to `~/frost-src` on ext4, build `linux-clang-debug`, run unit tests offscreen, add TSan when sched, io or rpc changed.
 
-`-Full` adds ASan/UBSan, fuzz smoke, screenshot tests, perf smoke and the real-tool suites (GDB ≥16 in `~/sdk` from M6); the GCC 16 build joins once its optional container exists. `-Full` on both sides is the merge gate (§6.7).
+`-Full` adds ASan/UBSan, fuzz smoke, screenshot tests, perf smoke and the real-tool suites (lldb-dap from M4, GDB ≥16 in `~/sdk` from M6); the GCC 16 build joins once its optional container exists. `-Full` on both sides is the merge gate (§6.7).
 
 No test or budget is weakened without an ADR and user approval. Every commit carries a verification footer (e.g. `Verified: win 412/412, wsl 398/398, perf-smoke ok`). B28 tracks this loop's speed.
 
@@ -534,16 +540,32 @@ Code is documented with ordinary comments in every language in the repository. C
 
 ## 7. Roadmap
 
-**Estimate.** One unit is roughly one focused work-week of Claude Code sessions. 120–145 milestone units plus 9–11 for the upgrade track gives 129–156 units; with 10% contingency, about 142–172 weeks or 2.7–3.3 years sequentially (M14 around months 33–40). The upgrade track covers 5–6 LLVM majors at ~1 unit each, 5–6 Qt minors at ~0.5 each, and 11–13 quarterly vcpkg bumps (~1.5–2 units), because LLVM 24 lands around March 2027 and both projects ship about every six months (§2.3). The drivers are the full P0/P1 matrix (Appendix A), product infrastructure (§2.2) and review and sign-off at each exit.
+**Estimate.** One unit is roughly one focused work-week of Claude Code sessions. 129–156 milestone units plus 9–12 for the upgrade track gives 138–168 units; with 10% contingency, about 152–185 weeks or 2.9–3.6 years sequentially (M14 around months 35–43). The upgrade track covers 5–7 LLVM majors at ~1 unit each, 5–7 Qt minors at ~0.5 each, and 12–14 quarterly vcpkg bumps (~1.5–2 units), because LLVM 24 lands around March 2027 and both projects ship about every six months (§2.3). The drivers are the full P0/P1 matrix (Appendix A), product infrastructure (§2.2) and review and sign-off at each exit. The thin path (D29, ADR 0029) costs about 9–11 units against the previous 120–145: three more milestone exits, interim versions that are later replaced (path (c) before ProjectHost, the large-file guard before large-file mode, the native frame before the frameless window, JSON scope files before the Settings dialog, parsed build output before the MSBuild logger), work done twice or added (M15's settings pages for keys M1–M5 added, a test-only SolutionPersistence oracle in M2, U1's acceptance scenario and its trust tests), M16's share of milestone overhead, and U1's minimal debugger, which moves about 3 units from M6 to M4 and adds up to 2 there (spike S10, its trust tests and the scenario's debug steps). In return the first usable build U1, with that debugger, arrives around month 10–12 instead of the old M4's month 12–15.
+
+**Order.** The milestones run in the order of this section: M0, M1, M2, M3, M4 (first usable build U1), M5 (dogfood v0.1), M15, M16, M17, M6 (Preview 0.1), then M7–M14. IDs are identities, not positions (ADR 0029). M15–M17 are the deferred halves of M1–M4; they run before M6 so that every P0 row still lands by Preview 0.1 (§1.4).
+
+**W1 first, then the rest of U1** (ADR 0032, the user's requirement statement of 2026-11-01: "I want a usable IDE to replace my current Visual Studio even if it has quirks and bugs which we will iron out with time", and for their generated solutions "basically what I need is something that can just open the .sln/.slx files, show my source files, let me edit them, show errors/warnings etc and let me compile"). Inside M1–M4 the work runs in this order:
+1. **W1, the work-ready build,** right after M1's editor and shell: open a `.sln` or `.slnx` from the command line, File > Open and the recent list; a Solution Explorer built from static readers of `.sln`, `.slnx`, `.vcxproj` and `.vcxproj.filters`, without MSBuild evaluation; edit and save; Build, Rebuild and Clean of the solution or one project through the installed MSBuild (found with vswhere), with Configuration|Platform taken from the solution; Save All before a build and a trust prompt before the first build of a folder; the build output, and an error list of errors and warnings with click-to-jump and marks in the editor. These pieces come forward from M2 (the readers, trust) and M4 (the build driver, the error list) in minimal form; their full versions stay in M2 and M4. **Acceptance:** open, browse, edit and build a small generated solution of several linked projects with the real MSBuild on REF-W1, using a synthetic fixture in `tests/` shaped like the user's generated projects (the user's internal SDK is never committed).
+2. **clangd diagnostics** as you type (M3), from compile commands: the generated CMake side's, or derived from the projects.
+3. **Navigation and completion** (M3's core).
+4. **The rest of U1**, as M1–M4 and "First usable build" below define it, the minimal debugger included (ADR 0029).
+
+W1 is a checkpoint inside M1–M4, not a milestone: it has no ID in the ladder, and the milestone units, budgets and U1's content stay as they are. The static readers miss what imported `.props` and `.targets` files add until path (c)'s evaluation (M2) closes that gap, and errors appear after a build until live diagnostics follow (ADR 0032).
 
 **Levers** (part of D5):
-- Two agent streams in separate worktrees after M4 (e.g. M7–M9 alongside M6 and M10): about 25–30% shorter calendar time, roughly twice the review load.
+- Two agent streams in separate worktrees after U1 (e.g. M15 and then M17 alongside M5, with M16 after both, because M16 needs M5 and M15; or M7–M9 alongside M6 and M10): about 25–30% shorter calendar time, roughly twice the review load.
 - Defer M10 (DbgEng adapter, memory views, extra test frameworks) and M12 to 1.1, saving 14–17 units; lldb-dap stays the Windows debugger and the Agent Terminal remains the way to chat.
 - Move named P1 rows from Appendix A to 1.x.
 
 **Every milestone exit also requires:** `verify.ps1 -Full` and `verify.sh -Full` green on REF-W1 and WSL, with the verification footer in the merge commit, including offscreen UI tests with Windows and Linux goldens reviewed (from M1); the no-network (from M1) and listener-enumeration (from M2) tests green; a tagged build, updated ADRs and a green matrix slice; the demo pack, the comment-accuracy review and explicit user sign-off (§6.7).
 
-### M0: Bootstrap (3–4 units), in progress since 2026-10-31
+**Feature-first phase until U1** (ADR 0031, the user's decision of 2026-11-01: "I want to focus on pumping features. Make sure we get everything in, no need for the hour and minute long tests ... Once we have a functional IDE that can be used that's when we start going over the code"). From then until U1, or until the user ends it:
+- One agent builds each slice: its whole scope (no feature is cut), simple functional tests (the happy path and the obvious edge cases, each fast), `verify.ps1 -Quick` on Windows and WSL, one commit. The orchestrator reads the agent's summary as the review and merges slices in batches, with one `-Quick` run of each merged batch (§6.7, "Feature-first phase").
+- Not done in the phase: design critics, independent reviews, sanitizer builds, fuzzing, stress and differential runs, mutation checks, perf and budget gates, screenshot goldens and `-Full`. Each slice lists what it deferred, and `docs/progress.md` keeps the lists. For the phase this overrides §6.7's `-Full` and review rows, CLAUDE.md's independent-review rule, and the `-Full`, goldens and budget parts of the paragraph above.
+- Still required, because they are cheap or legal: Clang only, FrostLayers layering, `std::expected` errors, wide Windows APIs, child processes through `IProcessLauncher`, the clean room, licence checks and a short ADR for each new dependency, SPDX lines, header and doc comments, no CI. No existing test, budget or warning is weakened or deleted, and every exit criterion and budget target of M1–M4 stays as written: budgets stay the targets, not gates, during the phase.
+- **The hardening phase after U1** works through the deferred lists, gives the core, sched, text, storage and security code merged in the phase its independent review, and runs `-Full`, the sanitizers and the budget gates.
+
+### M0: Bootstrap (3–4 units), signed off 2026-11-01
 **Status.** D1 and D2 approved. `tools/bootstrap.ps1` has installed the pinned Windows toolchain under E:\sdk (LLVM 23.1.4, CMake 4.4.5, Ninja 1.13.2, gh 2.103.3, sccache 0.19.0, .NET SDK 10.0.403, a Python venv, Qt 6.12.0 msvc2022_64 via `tools/qt-fetch.py`, vcpkg 2026.10.16); MSVC 14.44.35207 and Windows SDK 10.0.26100.0 come from the existing VS 2022 Build Tools 17.14. Both phases of `tools/bootstrap-wsl.sh` are done: apt packages, then LLVM, CMake, Ninja, Qt 6.12.0 gcc_64 and vcpkg in `~/sdk`. The repository foundation, frost::sched, frost::io, the start-up hardening and the repository checks are merged on `m0/foundation`, with sccache as the Windows compiler cache. Spikes S3, S4, S5 and S9 have results (ADR 0001), as have S2 and S6 (ADRs 0005, 0006), S1 (ADR 0007), S7 (ADR 0008) and the Tracy version (ADR 0009); B28 is met (ADR 0010). **M0's exit is met (2026-11-01).** The M0 decisions are recorded in ADR 0011, on the user's instruction to follow the recommendations. The launch from a path over 260 characters is met with LongPathsEnabled on or off (ADR 0012, on the user's decisions "Use the launcher design" and "Restart via short link (Recommended)"): frost.exe is a small launcher that loads frost_app.dll through `\\?\`, and a start that may load a GPU driver from an image path of 260 UTF-16 units or more restarts through a short junction, because the driver ends such processes; matrix row I7 is green. `FrostProcess.PlatformPluginPathBoundary`'s ASan failure is resolved by the launcher, so `m0/e4-asan-runtime` is not merged (ADR 0011, E4). `verify.ps1 -Full` and `verify.sh -Full` are green on both platforms (`docs/progress.md`, entry "M0 complete"). B1's warm first frame still misses its 150 ms target, which stays M1's target (ADR 0011, A3).
 
 **Deliverables.**
@@ -560,7 +582,7 @@ Code is documented with ordinary comments in every language in the repository. C
 - **S2:** `-getTargetResult:GetClCommandLines` latency on a fixture and R2a.
 - **S3:** aqt offers the current Qt on Windows and Linux. **Result (Windows):** aqtinstall 3.3.0 cannot locate Qt 6.12.0, because the Windows repository moved to one directory per compiler (`qt6_6120/qt6_6120_msvc2022_64/Updates.xml`). `tools/qt-fetch.py` therefore installs Qt straight from download.qt.io, checking Updates.xml and every archive against SHA-256s pinned in `sdk/sdk.lock.json` (the SHA-1 published next to each archive only distinguishes a corrupt download) and extracting with bsdtar, whose output matched py7zr's file for file on both platforms. aqt still lists the Linux layout (`linux_gcc_64`).
 - **S4:** the pinned LLVM, STL 14.44 and Qt msvc2022_64 link together.
-- **S5:** which tools the official LLVM 23.1.4 packages contain, per OS. **Result (Windows):** clang-cl, lld-link, clangd, clang-tidy, clang-format, clang-include-cleaner, diagtool, clang-tblgen, llvm-rc, llvm-mt, the ASan/UBSan/libFuzzer/profile runtimes, and the Clang/LLVM CMake packages with libraries (so frost-clangd may build against it). Missing: lldb and lldb-dap, so the Windows lldb-dap for M6 must come from another source or be self-built (open item for M6). **Result (Linux):** the same tools plus lldb, lldb-dap and lldb-server, and the TSan, MSan and HWASan runtimes; lldb-dap links `libpython3.14.so.1.0`, which Ubuntu 24.04 lacks (it ships 3.12), so M6 builds it without Python scripting or supplies a matching libpython. Neither package has libc++ (ADR 0001).
+- **S5:** which tools the official LLVM 23.1.4 packages contain, per OS. **Result (Windows):** clang-cl, lld-link, clangd, clang-tidy, clang-format, clang-include-cleaner, diagtool, clang-tblgen, llvm-rc, llvm-mt, the ASan/UBSan/libFuzzer/profile runtimes, and the Clang/LLVM CMake packages with libraries (so frost-clangd may build against it). Missing: lldb and lldb-dap, so U1's Windows lldb-dap is built from the pinned LLVM sources in M4 (ADR 0029, decision 12; before that, an open item for M6). **Result (Linux):** the same tools plus lldb, lldb-dap and lldb-server, and the TSan, MSan and HWASan runtimes; lldb-dap links `libpython3.14.so.1.0`, which Ubuntu 24.04 lacks (it ships 3.12), so M4 builds it without Python scripting or supplies a matching libpython. Neither package has libc++ (ADR 0001).
 - **S6:** ProjectHost cold start (net472, MSBuildLocator, StreamJsonRpc) plus one R2a design-time build; fixes B23's first-project value before D3 is final, from 10 cold samples taken one per ordinary reboot (ADR 0011). B23's trees value stays provisional until M2's first trees measurement on R3.
 - **S7:** stock clangd index load and first workspace/symbol on R3; sets B24's M3 value. **Result:** clangd 23.1.4 serves R3's persisted index (12,364 shards, 381 MiB) only once all of it is loaded, on one core: p50 15.3 s to both answers on a quiet machine (20.9 s under the user's own workload). Confirmed on 2026-11-01 (ADR 0011, C1): B24's M3 value of p50 18.4 s from the quiet run, and a quiet machine for the M3 gate (ADR 0008).
 - **S9:** the baseline inspection count of the pinned LLVM 23.1.x. Configurable warning groups come from the diagnostic tables (`diagtool tree` if the package ships it, otherwise `clang-tblgen -gen-clang-diag-groups` over the 23.1.x sources), primary tidy checks from `clang-tidy -checks=* --list-checks` with aliases removed (406 expected), and CSA checkers from `clang -cc1 -analyzer-checker-help`. The counts are written to `matrix.json` as the reference that frost-featurecheck gates against, and replace any borrowed figure.
@@ -576,48 +598,59 @@ Code is documented with ordinary comments in every language in the repository. C
 
 **Depends on** D1–D5, D7, D22 and D23 (all decided 2026-10-31).
 
-### M1: Editor, shell and product foundations (11–13 units)
+### M1: Editor, shell and data-safety core (8–9 units)
+**Thin path (ADR 0029).** M1 keeps what the first usable build U1 needs from the editor and the shell, and all of data safety. Everything else moved to M15 (listed under "Moved out") and is still required there.
+
 **Scope.**
-- **Editor:** piece tree, encodings, raster EditorView over the layered display map; soft wrap, whitespace/indent guides, rulers, Ctrl+wheel zoom; multi-caret and column mode; smart keys, line operations, extend selection; gutter, find/replace, large-file mode; clipboard history; drag and drop; folding with persistence; tree-sitter (7 grammars, Structure view); EditorConfig.
+- **Editor:** piece tree, encodings, the undo tree and anchors; raster EditorView over the layered display map, built in its final order (folds → soft wraps → inlays → block decorations, §2): the soft-wrap and block-decoration layers work, and the fold and inlay layers are identity layers that M15 fills, so nothing below or above them changes then; soft wrap; block decorations for the compare/merge view's alignment fillers (and M5's diff viewer); tree-sitter highlight captures painted through the theme; smart keys, line operations; gutter; find/replace; Go to Line and next/previous member; tree-sitter (7 grammars, highlight and outline queries); grapheme navigation; IME preedit and commit. **A large-file guard until M15's large-file mode,** applied by the Qt-free document load service under every open path (the File System view, Ctrl+E, Go to File and Find in Files results, `frost <path>`, Build-window and Problems navigation, go-to-definition, session restore), on reload after an external change and on hot-exit restore: a file at or above the 128 MB mapping threshold is refused with a notification, and a file whose longest line exceeds the view's cap (set against B5) opens read-only, so neither can stall the UI thread. A reload or merge that would cross the threshold keeps the buffer and its journal entry as they are, marked out of date.
 - **Data safety:** SaveManager, autosave, hot-exit journal, external-change handling with a minimal compare/merge view (histogram diff and merge cores); local-history snapshots on save.
-- **Shell:** frameless window with snap layouts (`HTMAXBUTTON`); tabs, splits, status bar, ToolWindowManager v1, File System view with speed search; Ctrl+E, recent locations, back/forward, Find Action; notifications and background tasks; IntelliJ keymap (Windows/Linux; the macOS variant is defined but untested, D24); Glacier themes, compact mode, IDE zoom; session restore.
-- **Foundations:** settings registry, scopes, Settings dialog; crash handler and freeze reports; i18n and pseudo-localization; shortcut matcher, grapheme navigation, keyboard navigation of stripes, toolbar and status bar; the no-network test; IME preedit and commit; UIA TextPattern smoke; the automation endpoint (dev/test builds); frost-bench v1.
+- **Shell:** main window with the native frame and the toolbar; tabs; status bar (line:col, line separator, encoding, read-only lock, indent, processes); ToolWindowManager v1 (stripes, show and hide, resizing at fixed docking sides); popup framework; File System view with speed search; Ctrl+E, recent locations, back/forward, Find Action; notifications and background tasks; IntelliJ keymap (Windows/Linux; the macOS variant is defined but untested, D24), with every default shortcut reachable on de-DE; Glacier themes, compact mode, IDE zoom; session restore.
+- **Foundations:** settings registry, scopes, `.frost/` and migrations, with the scope files opened in the editor from Find Action and reloaded live (the Settings dialog is M15's); crash handler and freeze reports; i18n and pseudo-localization; shortcut matcher; the no-network test; the automation endpoint (dev/test builds); frost-bench v1.
 
 **Exit.**
-- Piece-tree differential: 10M ops, 0 mismatches; clean 10-minute fuzz. Display-map property test against the brute-force oracle.
-- B1, B5 and B6 (soft wrap on), B15, B19 (no project), B20 and B21 met; rendering-backend ADR recorded; F2 editable.
+- Piece-tree differential: 10M ops, 0 mismatches; clean 10-minute fuzz. Display-map property test against the brute-force oracle on the full four-layer stack, with soft wraps and block decorations in use and the fold and inlay layers as identities (M15 runs it again with folds and inlays).
+- B1, B5 and B6 (soft wrap on), B19 (no project), B20 and B21 met; rendering-backend ADR recorded. The large-file guard's tests, through the load service: a 128 MB file is refused on open, F2 opens read-only, a clean buffer whose file grows past 128 MB is not reloaded, a dirty one's merge against such a file is refused with its journal entry kept, and a hot-exit restore next to a large on-disk file restores the journalled text; none of them stalls the UI thread for more than 50 ms.
 - Data-safety fault injection green (kill -9 mid-save, disk full, locked file, symlink, byte-exact CRLF/BOM, journal restore after a kill). `--selftest=crash` and `--selftest=freeze` artifacts symbolize in `verify -Full`.
-- Settings migration goldens and scope-precedence tests; shortcut tests for de-DE, pl-PL and fr-FR; grapheme tests; focus-order tests.
+- Settings migration goldens and scope-precedence tests; shortcut tests for de-DE, pl-PL and fr-FR; grapheme tests.
 - Screenshot goldens (both themes, 100/125/150/175%, Windows and Linux), contrast and pseudo-localization tests.
-- The matrix rows owned by M1 are green.
+- The matrix rows owned by M1 are green, apart from the parts of rows 35, 55, 57, 94, 218, 227, 239, 240 and 242 that complete in a later milestone ("(+Mx)", Appendix A); their M1 parts are green.
+
+**Moved out** (ADR 0029). To M15: multi-caret and column mode, folding with persistence, the contents of the display map's fold and inlay layers, whitespace and indent guides, Ctrl+wheel zoom, extend selection, EditorConfig, large-file mode with B15 and "F2 editable", the Structure view, rulers, clipboard history, drag and drop, splits, the frameless window with snap layouts, tool-window drag-docking and floating, the Settings dialog, keyboard navigation of stripes, toolbar and status bar with the focus-order tests, and the UIA TextPattern smoke.
 
 **Depends on** M0, D13, D14, D20 and D24.
 
-### M2: Project models, first run and trust (12–14 units)
+### M2: Project models and trust (9–10 units)
+**Thin path (ADR 0029).** U1 opens, browses and evaluates CMake projects and MSVC solutions, and runs no project code before trust. MSBuild evaluation goes through path (c) (`MSBuild.exe -getTargetResult` with the wrapper target of ADR 0005). It runs the same engine and the same design-time targets as ProjectHost, so the fidelity oracles below apply unchanged; ProjectHost itself, solution writes and C# moved to M16. W1 (ADR 0032; §7, "W1 first") brings the static .sln, .slnx, .vcxproj and .filters readers, the Solution view and a trust prompt before a folder's first build forward in minimal form; the scope below is their full version.
+
 **Scope.**
-- **Solutions and MSBuild:** .sln/.slnx/.slnf readers; static .vcxproj reader with NMake projects; Solution view (Show All Files, nesting); ProjectHost (2–4 workers, EnvironmentVariableRead capture) and CLI fallback; `.sln`↔`.slnx` conversion; configuration switcher; C# projects in the tree; the row 31 project actions (Unload/Reload project, Set as Startup Project, Open in Explorer, Copy Path, Properties).
-- **CMake:** File API (generated sources flagged), presets, profiles, background configure and the CMake tool window.
-- **Other sources and search:** compile_commands and open folder; Find/Replace in Files; the TODO window; exclude and mark directories.
-- **Infrastructure:** toolchain detection; ProjectModelCache on FSEG; parallel scan and Go to File; synth-xl; the trust model; Welcome, first-run wizard and New Project/Solution (CMake executable/library; .slnx + .vcxproj written via ProjectHost and SolutionPersistence); single instance, `frost` CLI (`--wait`, `diff`, `merge`), file associations, Jump List; listener hardening and the enumeration test.
+- **Solutions and MSBuild:** .sln/.slnx/.slnf readers; static .vcxproj reader with NMake projects; Solution view; path (c) as the evaluator, started only after trust and after L1, its results stored in ProjectModelCache with fingerprints; configuration switcher; the row 31 project actions Set as Startup Project, Open in Explorer and Copy Path.
+  - **Deterministic MSBuild environment.** Path (c)'s `MSBuild.exe` starts from an empty environment (`ProcessSpec::cleanEnvironment`), never a copy of frost's own: the user's default environment block (`CreateEnvironmentBlock` without inheritance), the cached toolchain environment for the project's instance, architecture, SDK and vcvars_ver (§2, "Toolchain detection"), and the ADR 0011 E2 policy for trusted user-script children. The captured-environment fingerprint covers that whole block until ProjectHost's EnvironmentVariableRead capture narrows it in M16, so how frost was started (WT_SESSION, a changed TEMP, shell variables) cannot invalidate a record.
+  - **Live re-evaluation.** A change to a .sln/.slnx, .vcxproj or .filters file, or to any .props or .targets file in a record's import closure (Directory.Build.* included), invalidates the affected records through the watcher, and path (c) re-evaluates them in the background, active configuration first (the MSBuild counterpart of CMake auto-reload, row 11).
+- **CMake:** File API (generated sources flagged), presets, profiles (defined in settings), background configure and the CMake tool window.
+- **Other sources and search:** compile_commands and open folder; Find/Replace in Files; exclude and mark directories.
+- **Infrastructure:** toolchain detection; ProjectModelCache on FSEG; parallel scan and Go to File; synth-xl; the trust model; the Welcome window (recent projects and Open; Get from VCS works once M5's clone lands); single instance and `frost <path>`; listener hardening and the enumeration test.
 
 **Exit.**
-- **Fidelity:** SolutionPersistence equality on S50: 100%. Every extracted command line for R2a and R2b compiles with `cl.exe /c` (independent) and matches msbuild-extractor-sample after normalization (consistency). File API vs Ninja compdb ≥99.9%. NMake fixture flags match its properties exactly.
-- **Robustness:** all fuzzers clean; a mutation test per fingerprint class.
-- **Performance:** B2, B3 (zero .NET processes), B4, B7, B13 (unindexed) and B23 (under its stated preconditions) met. R2b cold open reported (target ≤30 s, not gated).
-- **Security:** the malicious-repository test (including the planted tidy plugin and the `.frost/settings.json` tool path) runs nothing before trust and never runs the planted binaries; the registry test finds no `executes` key honoured from project scope before trust; listener enumeration green.
-- **First run:** the scripted clean-profile first run passes on Windows and Linux, with screenshot goldens.
-- **Shell:** `frost path\to\R2b.sln` opens in the running instance within B3; `git -c core.editor="frost --wait" commit` round-trips.
+- **Fidelity:** SolutionPersistence equality on S50: 100% (SolutionPersistence runs in a C# test-only oracle that ships in no package; ProjectHost uses it for writes from M16). Every extracted command line for R2a and R2b compiles with `cl.exe /c` (independent) and matches msbuild-extractor-sample after normalization (consistency). File API vs Ninja compdb ≥99.9%. NMake fixture flags match its properties exactly.
+- **Robustness:** all fuzzers clean; a mutation test per fingerprint class. Relaunching frost from a different parent environment (another shell, WT_SESSION set or unset, TEMP and unrelated variables changed) keeps every fingerprint valid and starts zero .NET processes; editing a .props file in a project's import closure re-evaluates exactly the records that import it.
+- **Performance:** B2, B3 (zero .NET processes), B4, B7, B13 (unindexed), B23's trees variant and B23's first project streamed through path (c) on R2b met, each under its stated preconditions (for the first project: trust excluded, `MSBuild.exe`'s cold start included, the target of B23's row at the M2 exit). R2b cold open reported (target ≤30 s, not gated).
+- **Security:** the malicious-repository test (including the planted tidy plugin and the `.frost/settings.json` tool path) runs nothing before trust, starts no path (c) `MSBuild.exe` and never runs the planted binaries; a CMake profile whose build directory outside the root comes from a repository file is ignored; the registry test finds no `executes` key honoured from project scope before trust; listener enumeration green.
+- **Shell:** `frost path\to\R2b.sln` opens in the running instance within B3.
 - **Platforms:** approximate-mode badge on Linux; tested against VS 2022 17.14, and against VS 2026 Build Tools once the user has installed them (otherwise reported as not run); the generated-sources hint appears.
 
-**Depends on** M1, D3, D6, D16 and D19.
+**Moved out** (ADR 0029). To M16: ProjectHost (2–4 workers, EnvironmentVariableRead capture, the launch before L1 of ADR 0011 B4) with B23's first-project gate on ProjectHost and D3's finalisation, `.sln`↔`.slnx` conversion, New Project/Solution, the first-run wizard with its scripted clean-profile first run, C# projects in the tree, the Unload/Reload project and Properties actions, Show All Files and nesting, `frost --wait`, `diff` and `merge` with the `core.editor` round trip, file associations and the Jump List. To M15: the TODO window.
 
-### M3: C++ intelligence on stock clangd (10–12 units)
+**Depends on** M1 and D16.
+
+### M3: C++ intelligence core on stock clangd (7–8 units)
+**Thin path (ADR 0029).** U1's clangd: completion, diagnostics and navigation with MSVC fidelity. The rest of C++ intelligence moved to M17. After W1, diagnostics as you type come first, then navigation and completion (ADR 0032).
+
 **Scope.**
 - LSP client and supervisor; clang-cl command synthesis; ResourceGovernor v1 and cache disk budget; Invalidate Caches / Repair IDE; system and SDK header indexing.
-- Semantic tokens, inactive regions, inlay hints; diagnostics in error stripe, inspection widget and Problems window; inspection framework v1 (severities, suppression comments).
-- Completion (basic, smart, #include, auto-import), Parameter Info, Quick Documentation, Quick Definition, macro expansion.
-- Navigation: declaration, base/implementations, header/source, Find Usages, type and call hierarchy, Navigate To, Select In, Search Everywhere v1, resolve context.
-- Alt+Enter fixes and tweaks with preview; rename; clang-format, `.clang-tidy`, include-cleaner; PCH and forced-include awareness; C++23 (row 118, part 1).
+- Semantic tokens, inactive regions; diagnostics in the error stripe, the inspection widget, the status-bar error indicator and the Problems window.
+- Completion (basic, #include, auto-import), Parameter Info, Quick Documentation.
+- Navigation: declaration, base/implementations, header/source, Find Usages, Go to Class/Symbol, Search Everywhere v1.
+- Alt+Enter fixes and tweaks; rename; clang-format, `.clang-tidy`; PCH and forced-include awareness; the MSVC dialect; C++23 (row 118, part 1).
 
 **Exit.**
 - LSP replay suite passes; B8–B11, B19 (R3), B22, B24 (M3 value), B25 and B26 met on R3.
@@ -625,30 +658,90 @@ Code is documented with ordinary comments in every language in the repository. C
 - Invalidate Caches removes every cache file of the project (directory listing) and the next open rebuilds them.
 - A C++23 conformance fixture (deducing this, `if consteval`, multidimensional subscript, …) shows zero false errors.
 
-**Depends on** M2. **First usable checkpoint.**
-
-### M4: Build, Run, Terminal and CMake language (9–11 units)
-**Scope.**
-- Build drivers for MSBuild, CMake and dotnet, with FrostIDE.MSBuildLogger, the Build window and localized-output decoding.
-- Run configurations: the model, Run widget, run options, Run console, before-launch tasks and gutter run icons for `main()`. Importers for `launch.vs.json`, `.vcxproj.user`, `.idea` and `launchSettings.json`.
-- Terminal: ConPTY or forkpty, patched libvterm, win32-input-mode and terminal IME. **Spike S8:** which VT queries the bundled ConPTY answers itself and which reach the host when claude.exe runs.
-- CMake language service (completion, go-to-definition for functions, macros, targets and include(), Find Usages, Quick Doc, formatting) and the cache viewer.
-- C# solution citizenship: build and run R5, and navigate build errors.
-- LLVM SDK artifacts only where S5 found gaps (win-x64 on REF-W1, linux-x64 in WSL).
-
-**Exit.**
-- R2b, R3 and R5 build from inside the IDE; Job Object cancel test; parser goldens for en, de and ja VS output.
-- Terminal goldens; the Claude TUI probe passes on Windows (through ConPTY) and Linux: DECRQM 2026, XTVERSION, Shift+Enter reaching claude.exe with its modifier, ESC reaching the PTY; composed IME text reaches ConPTY. B17 met.
-- CMake completion and navigation goldens on R3's CMakeLists.
-- Any SDK artifacts built are stored under E:\sdk / `~/sdk` and pinned with hashes in `sdk/sdk.lock.json`.
+**Moved out** (ADR 0029). To M17: inspection framework v1 (severities, suppression comments), inlay hints, Quick Definition, macro expansion, smart completion, Navigate To, type and call hierarchy, Select In and the navigation bar, intention preview, include-cleaner (unused and missing includes, optimize includes) and resolve context. No exit criterion moved.
 
 **Depends on** M2.
+
+### M4: Build, Run, Debug and Terminal. First usable build U1 (9–12 units)
+**Thin path (ADR 0029).** U1's build, run, minimal debugger and terminal, and U1's acceptance scenario. C#, the MSBuild logger, run-configuration importers and the CMake language service moved to M16. The minimal debugger moved here from M6 on the user's answer to ADR 0029's Q4; the rest of the debugger stays in M6 and M10. W1 (ADR 0032; §7, "W1 first") brings an MSBuild build driver (the installed MSBuild found with vswhere, Configuration|Platform from the solution, Save All first) and an error list with click-to-jump and editor marks forward in minimal form; the scope below is their full version.
+
+**Scope.**
+- Build drivers for MSBuild and CMake inside a Job Object; the Build window, whose error and warning locations open the file at that line and column, feeding the Problems window; output decoded by code page and parsed with locale-independent anchors (localized-output decoding).
+- Run configurations: the model (configurations derived from CMake executable targets and from the solution's startup project), the Run widget with Run, Debug and Stop, run options, Run console; Run and Debug build the target first (the general before-launch task list is M16's).
+- Build, Rebuild, Clean, Run and Debug first save every modified document through SaveManager (Save All, as Rider does), so a build never compiles stale disk contents.
+- The row 31 actions Build/Rebuild/Clean and Open in Terminal.
+- **Debugger, the minimal one U1 needs** (ADR 0029, decision 12). The DAP client (`IDebugAdapterClient`, its fake-dap double, the DAP 1.71 types from frost-codegen) and one engine on both operating systems: **lldb-dap built from the pinned LLVM 23.1.4 sources**, the LLVM SDK artifacts where S5 found gaps (win-x64 on REF-W1 into E:\sdk, linux-x64 in WSL into `~/sdk`, §6.3), started under the supervisor at its absolute path and spoken to over stdio. It debugs MSVC-built programs through their PDBs on Windows and DWARF programs on Linux.
+  - Debug from a run configuration (the Run widget's Debug action), with the same Save All and build first as Run.
+  - Line breakpoints toggled in the gutter, shown as verified or unverified with the adapter's reason and kept per root in `.frost/workspace.json` (§3.6); the execution point in the gutter and the editor.
+  - Step over, into and out; continue, pause and stop.
+  - The Debug tool window: the call stack (frames loaded lazily), threads, variables (children loaded on expand), watches, Evaluate Expression and the program's output.
+  - A stop on a crash or an unhandled exception (an access violation, `abort()`, a fatal signal, an unhandled C++ exception), with the faulting frame selected and the reason shown. Breaking when an exception is thrown is an exception breakpoint (row 170, M6).
+  - Values as lldb-dap's default formatters show them; FrostIDE's STL formatters are M6's.
+  - No symbol servers or debuginfod, which stay off until enabled per project (§2.2): lldb-dap starts without `_NT_SYMBOL_PATH`, `_NT_ALT_SYMBOL_PATH` and `DEBUGINFOD_URLS` in its environment.
+  - **Spike S10, first in M4:** lldb-dap 23.1.4 on R2a's cl.exe-built Notepad++ (Debug|x64, with PDBs): breakpoints bind, stepping, the stack through the CRT start-up frames, threads, locals of built-in types, pointers, arrays and structs, a crash fixture, and what the default formatters show for MSVC STL types (recorded, not gated); and on each OS whether those default formatters need lldb's Python scripting, which decides ADR 0001's open choice for the build. If S10 shows that lldb-dap cannot carry the U1 scenario's Windows debug step, M4 stops and the user decides: the alternative, the DbgEng adapter (M10), needs the ComponentDownloader, network consent and a legal review first (D12, L5).
+- **Trust:** in an untrusted root, Build, Rebuild, Clean, Run, Debug and the build before Run or Debug are refused with the trust banner, and the terminal follows §3.5's restricted rule (the application-scope shell, NoDefaultCurrentDirectoryInExePath kept).
+- Terminal: ConPTY or forkpty, patched libvterm, win32-input-mode and terminal IME. **Spike S8:** which VT queries the bundled ConPTY answers itself and which reach the host when claude.exe runs, and which claude state the TUI probe needs (below).
+- The U1 acceptance scenario (below) with its corpus setup, and a tagged U1 build under E:\FrostBuilds.
+
+**Exit.**
+- R2b and R3 build from inside the IDE; Job Object cancel test; parser goldens for en, de and ja VS output.
+- Terminal goldens; the Claude TUI probe passes on Windows (through ConPTY) and Linux: DECRQM 2026, XTVERSION, Shift+Enter reaching claude.exe with its modifier, ESC reaching the PTY; composed IME text reaches ConPTY. B17 met. The probe runs the user's claude.exe with its own `CLAUDE_CONFIG_DIR` set to a pre-seeded probe configuration (onboarding complete, auto-update and non-essential traffic off through `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, no credentials unless S8 shows the input prompt needs them, then the D9 test key); it never submits a prompt, so it spends no tokens (D9).
+- The lldb-dap builds (the SDK artifacts built here) are stored under E:\sdk and `~/sdk` and pinned with hashes in `sdk/sdk.lock.json`.
+- **Debugger:** the DAP conformance scenarios for every request and event M4 uses (initialize, launch, setBreakpoints, configurationDone, threads, stackTrace, scopes, variables, evaluate, next, stepIn, stepOut, continue, pause, disconnect and terminate; stops for a breakpoint, a step, a pause, an exception and a signal; output, exited and terminated) pass against lldb-dap on Windows and Linux and replay against fake-dap; M6 grows the suite to ≥60 scenarios. Crash fixtures built with cl.exe on Windows and clang on Linux (a null dereference, `abort()`, an unhandled C++ exception) stop with the faulting frame selected. Variable goldens per OS for built-in types, pointers, arrays, structs and classes (the STL value goldens are M6's). FrostIDE debugs itself (R1); B16 met.
+- The malicious-repository test (§3.5) extended to M4: before trust, Build, Rebuild, Clean, Run, Debug and the build before Run or Debug are refused, and no lldb-dap starts; the planted File API reply's target binary and the `.frost/runConfigurations` command never run; the terminal starts the application-scope shell, never a planted one, and `git status` typed in cmd.exe there does not run the planted `git.exe`.
+- The no-network test and the listener enumeration cover a debug session on each OS: lldb-dap's process tree opens no connection and no listener.
+- The U1 acceptance scenario, with its debug steps, passes on Windows and Linux.
+
+**Moved in** (ADR 0029, Q4). From M6, for U1's minimal debugger: the DAP client and lldb-dap (the debugger engine, row 167, whose GDB DAP profile stays in M6) with its Windows source, the open item S5 left, now built from the pinned LLVM sources with the LLVM SDK artifacts and their pinning; line breakpoints (row 169; conditions, hit counts and log messages stay in M6); stepping (row 173; Run to Cursor and the other stepping actions stay in M6); the Debug window (row 175); Evaluate and watches (row 178); FrostIDE debugging itself and B16.
+
+**Moved out** (ADR 0029). To M16: the dotnet build driver, FrostIDE.MSBuildLogger, C# solution citizenship (R5 builds from inside the IDE), the run-configuration importers, the before-launch task list, gutter run icons, the CMake language service with its completion and navigation goldens on R3, and the cache viewer.
+
+**Depends on** M2 and M3 (U1 needs both).
+
+### First usable build (U1, the M4 exit)
+**Definition.** The smallest FrostIDE with which the user does real C++ work on a CMake project and on an MSVC .sln/.slnx/.vcxproj solution (D29, ADR 0029). Everything below is built and gated in M1–M4; anything not listed is in M5 or later and still required there. W1, the work-ready build (ADR 0032), is the first checkpoint on the way, and the feature-first phase (ADR 0031) defers U1's sanitizer, fuzz, stress, perf-gate, golden and `-Full` checks to the hardening phase after U1's features are in (§7, "W1 first" and "Feature-first phase").
+- **Open:** the Welcome window and `frost <path>` (single instance); .sln/.slnx/.slnf and .vcxproj through the native readers, evaluated by path (c) after trust; CMake through the File API, presets and profiles with background configure; compile_commands and open folder; restricted mode until the root is trusted.
+- **Browse:** Solution view with .filters folders, the CMake target tree, the File System view with speed search; Go to File, Class and Symbol; Search Everywhere v1; Find/Replace in Files; recent files and locations; back and forward.
+- **Edit:** tree-sitter highlighting, then semantic tokens and inactive regions; undo and redo; smart keys and line operations; find/replace; soft wrap; encodings, BOM and EOL preserved; IME; the IntelliJ keymap on any supported layout (de-DE included); Find Action; tabs; Glacier themes.
+- **Data safety:** atomic saves that preserve encoding, EOL, permissions and links; autosave; the hot-exit journal and crash recovery; external changes reloaded (clean) or merged (dirty); local-history snapshots; the fault-injection suite.
+- **Intelligence:** clangd with clang-cl command synthesis, PCH and forced includes: completion with #include and auto-import, Parameter Info, Quick Documentation, diagnostics in the editor, error stripe and Problems window, Alt+Enter fixes, declaration, implementations, header/source, Find Usages, rename, clang-format.
+- **Build and run:** MSBuild and CMake builds with cancel, after Save All; the Build window's errors open their location; run configurations with build-before-run, the Run widget, the Run console and Stop.
+- **Debug:** a minimal debugger on Windows and Linux, lldb-dap built from the pinned LLVM sources (ADR 0029, decision 12): Debug from a run configuration, after Save All and the build, as Run does; line breakpoints in the gutter; step over, into and out, continue, pause and stop; the Debug window with the call stack, threads, variables, watches, Evaluate and the program's output; a stop at the faulting frame on a crash or an unhandled exception. MSVC-built programs are debugged through their PDBs.
+- **Terminal:** ConPTY or forkpty with libvterm, passing the Claude TUI probe, so the user's own Claude Code CLI runs in it until the C1 bridge (M5).
+- **Fast:** B1, B5, B6, B19 (no project), B20 and B21 (M1); B2, B3, B4, B7, B13 (unindexed), B23 trees and B23's first project through path (c) (M2); B8–B11, B19 (R3), B22, B24 (M3 value), B25 and B26 (M3); B16 and B17 (M4).
+- **Safe:** the trust model with the malicious-repository test (nothing runs before trust, Build, Run, Debug and the terminal included); listener hardening and the enumeration test; the no-network test; the `executes`-key registry test; crash and freeze reports kept locally.
+
+**Acceptance scenario** (`tests/e2e/u1`, driven by frost-bench through the automation endpoint, under a clean profile: APPDATA, LOCALAPPDATA, the XDG directories and CLAUDE_CONFIG_DIR redirected, with no recent projects, trust or session state).
+- **Setup** (`tests/e2e/u1/setup`, outside the scenario and its timings; once per corpus pin, and again when the pin changes):
+  - **R3 on Windows.** Configure `E:\corpus\R3-build` from the source directory `E:\corpus\R3\llvm` with R3's pinned configuration (`tests/corpus/manifest.json`) and a toolchain file outside every worktree: the existing cache names the toolchain file of a worktree that has since been removed, so it cannot reconfigure. Write FrostIDE's `client-frostide` File API query into it before that configure, so its replies exist, and build `not` with its dependencies, which `R3-build` lacks today (`bin\not.exe` is absent), so that no LLVMSupport build happens inside the scenario.
+  - **R3 on Linux.** corpus-fetch R3 at the same pin into `~/corpus/R3` on ext4, and configure `~/corpus/R3-build` with Ninja, Debug, `LLVM_ENABLE_PROJECTS=clang` and the pinned clang with libstdc++ 14, recorded in the manifest as R3's Linux configuration (none is pinned today), with the same query; then build `not`. Debug, not Release, because step 7 debugs `not` and LLVMSupport: a Release build has no line tables, so its breakpoints would not bind, and optimized locals would not be readable.
+  - **Profile seed.** The clean profile gets two things and nothing else: an application-scope CMake profile for the root `R3\llvm` naming that build directory, Ninja and its build type (Release on Windows, Debug on Linux; llvm's CMakePresets.json defines no configure preset with a build directory, so a clean profile would otherwise configure a new one), and R3's persisted clangd index in the profile's cache, built once per pin on the same build directory by an unrecorded run, as for B24.
+- **Recorders.** The no-network recorder (ETW Kernel-Network on Windows, `strace -f -e trace=connect` on Linux) and the listener enumeration run for the whole scenario. They attribute every connection and listener to a process and its ancestors, and they assert on FrostIDE's own process tree: frost, its crash handler, and the engines and tools it supervises (clangd, path (c)'s `MSBuild.exe`, CMake configure, git, lldb-dap and the debug server it starts). That tree opens no network connection and only the expected listeners (§5.2). The trees that Build, Run, Debug and the terminal start (MSBuild nodes and their pipes, `mspdbsrv.exe`, ninja and the compilers, `not`, Notepad++, the shell and whatever runs in it) are the user's code: their connections and listeners are recorded and listed in the report, not asserted, even when lldb-dap is the program's ancestor.
+- **Samples.** The scenario records its own B1, B2, B3, B8, B9, B10, B11, B17 and B20 samples and fails any of them above 2x budget, the wall-clock smoke rule of §4; the gating numbers come from the B-suite. B16's corpus is R1, so the B-suite gates it there, not this scenario.
+- **Clean-up.** Corpus files it edits are restored. The scenario ends by asserting that `git status --porcelain --untracked-files=no` of each corpus is empty and that the only untracked path FrostIDE created there is the root's `.frost/` directory (project-personal state, §3.6).
+
+1. **CMake (R3, Windows; on Linux the same steps run on `~/corpus/R3`).** Start frost and open the source directory `E:\corpus\R3\llvm`. In restricted mode the File System view and, from the existing replies in `R3-build`, the target tree appear (B23 trees), and no project process starts. Trust the root from the banner: the background configure runs (CMake tool window), and the target tree still shows `not`.
+2. Go to File `utils/not/not.cpp`: tree-sitter highlighting, then semantic tokens. Go to Declaration on `ExecuteAndWait` lands in `include/llvm/Support/Program.h`; Back returns. Once the status bar shows L2 (the seeded index loaded, B24), Find Usages lists its call sites, among them `not.cpp`, `lib/Support/GraphWriter.cpp` and `lib/Support/Signals.cpp`, and Switch Header/Source on `include/llvm/Support/WithColor.h` opens `lib/Support/WithColor.cpp`.
+3. At the top of `main`'s body, before `if (argc == 0) return 1;` (where a run without arguments returns), type `llvm::ou` and accept `outs` from completion, completing the line `llvm::outs() << "frost-u1\n";`. Below it add `int frostU1 = undeclaredName;`: the diagnostic appears in the editor and in the Problems window.
+4. Kill frost (TerminateProcess on Windows, SIGKILL on Linux) with the buffer dirty and restart: the hot-exit journal restores the buffer byte-exactly and still dirty, and the root is still trusted.
+5. Build `not`: Save All writes the restored buffer first (M4), the Build window shows the compile error, and opening it puts the caret on that line and column. Delete the line with Ctrl+Y, save, build again: the build succeeds.
+6. Run the `not` configuration with no arguments: the Run console shows `frost-u1` and exit code 1.
+7. **Debug (Linux).** Toggle a line breakpoint in the gutter on the `llvm::outs() << "frost-u1\n";` line and start the `not` configuration with Debug and no arguments: Save All and the build run first and find nothing to rebuild, lldb-dap stops at the breakpoint with the execution point on that line, and the Debug window shows `main` on the call stack, the main thread, and `argc` as 1 in Variables. Step Into enters `llvm::outs()` in `lib/Support/raw_ostream.cpp`; Step Out returns to `main`; Step Over until the execution point is on the line after `--argc;`: a watch on `argc` shows 0, and Evaluate `ExpectCrash || argc != 0` shows `false`. Continue: the program exits with code 1, and the Debug window shows `frost-u1` in the program's output and the exit code. On Windows this step is not run: R3's Windows build directory is Release, and the Windows debug step uses R2a (step 12).
+8. In the terminal (the root is trusted), run `git -C <root> checkout -- utils/not/not.cpp` (an external change, as Claude Code in the terminal makes them): the clean buffer reloads as an undoable edit. Build and run again: no `frost-u1` line. Exit frost (B20), start it again: R3 reopens to L1 within B3 with zero .NET processes, and the active tab is highlighted within B2.
+9. **MSVC (R2a, Windows).** Open `E:\corpus\R2a\PowerEditor\visual.net\notepadPlus.sln` from the Welcome window: the Solution view with its .filters folders appears in restricted mode, and no MSBuild process starts before trust. The banner offers the root `E:\corpus\R2a`, the solution's git work tree, which holds the Scintilla and Lexilla projects beside `PowerEditor` (§3.5). Trust it: path (c) extracts the command lines, and clangd shows no error in `PowerEditor\src\EncodingMapper.cpp` (a TU of R2a's clean-TU set, M3), where completion and Go to Declaration work.
+10. Select Debug|x64 in the configuration switcher. Add an undeclared identifier to `EncodingMapper.cpp` and Build: Save All writes it, the Build window shows MSVC's C2065, decoded from the build's code page, and opening it puts the caret on the line; Problems lists it. Delete the line, save and build: Notepad++, Scintilla and Lexilla build.
+11. Run the Notepad++ startup project with `-multiInst -nosession -noPlugin -settingsDir=<scratch>`, so it writes nothing outside the build tree and the scratch directory: the Run widget shows it running, Stop ends its process tree through the Job Object, and the Run console reports the exit.
+12. **Debug (R2a, Windows).** Toggle a line breakpoint on `parseCommandLine(pCmdLine, params);` in `wWinMain` (`PowerEditor\src\winmain.cpp`) and start the Notepad++ configuration with Debug and step 11's arguments: the Debug|x64 binary that cl.exe built stops there through its PDB, and the Debug window shows `wWinMain` on the call stack above the CRT start-up frames, the main thread, and `pCmdLine` holding the arguments in Variables. Step Into enters `parseCommandLine`; Step Out returns to `wWinMain`; Step Over until the execution point is on the line after `bool doPrintAndQuit = isInList(FLAG_PRINTANDQUIT, params);`: a watch on `isMultiInst` shows `true`, and Evaluate `doPrintAndQuit || doFunctionListExport` shows `false`. Continue: Notepad++'s window appears. Pause: the Debug window lists Notepad++'s threads with the selected thread's stack. Stop ends the session and Notepad++'s process, and the Debug window reports the exit.
+13. In the same session's terminal, run the M4 Claude TUI probe with its pre-seeded probe configuration (M4 exit): the terminal's `CLAUDE_CONFIG_DIR` points at a copy of that configuration, not at the profile's empty one, and the probe submits no prompt.
+14. **Linux, approximate mode.** Open R2a's solution in WSL (read from `/mnt/e`; nothing is built there): the approximate-mode badge, the Solution view and highlighting appear. Build, Run and Debug of MSVC solutions are Windows-only.
+
+**Not in U1** (ADR 0029 lists every item and where it went): Git and the Claude C1 bridge (M5); editor and shell polish (M15); ProjectHost, solution writes, C# and the CMake language service (M16); the rest of C++ intelligence (M17); the rest of the debugger (M6: the GDB DAP profile, function and exception breakpoints, the Breakpoints dialog, conditions and log messages, Run to Cursor, Set Value, inline values, the debugger console, attach, STL formatters beyond lldb-dap's defaults, the CMake debugger; M10: the DbgEng adapter with natvis, minidumps and symbol servers) and the test runner (M6); adding, removing and renaming files in a project (M9; until then the files are edited in the .vcxproj or CMakeLists, which re-evaluate live); and everything planned for M7 and later.
 
 ### M5: Git, Claude C1 and packages. Dogfood v0.1 (8–10 units)
 **Scope.**
 - **Git:** status; Commit window (changelists, partial commits, amend); branches; stash and shelve; diff viewer; compare files, folders, clipboard; VCS colours; clone, fetch, pull (merge/rebase), push (force-with-lease), remotes, Update Project; `frost-askpass`, commit-signing detection and prompts (§2 VCS), LFS detection, hook-output console; conflict list with accept ours/theirs.
 - **Claude:** the C1 bridge with multi-window semantics, the Agent Terminal and the status widget.
-- **Distribution:** portable packages for Windows and Linux (kept local or in the private repository, D8), symbol archival, Collect Logs, `IHttpClient` on Windows, the AppImage build.
+- **Distribution:** portable packages for Windows and Linux, carrying U1's lldb-dap build (kept local or in the private repository, D8), symbol archival, Collect Logs, `IHttpClient` on Windows, the AppImage build.
 
 **Exit.**
 - Diff output matches `git diff --histogram`; B14 and B18 met.
@@ -659,20 +752,78 @@ Code is documented with ordinary comments in every language in the repository. C
 - Package smoke: `--selftest` from each freshly extracted package under a clean profile on REF-W1 and in WSL; B27 met; archived symbols symbolize a `--selftest=crash` dump.
 - Dogfood end-to-end: clone the FrostIDE repository, edit, build, run a test, commit and push.
 
-**Depends on** M3, M4, D8, D9, D26 and D27.
+**Depends on** M3, M4, D8, D9 and D26.
 
-### M6: Debugger v1, test runner, installers, updater. Preview 0.1 (11–13 units)
+### M15: Editor and shell completion (6–7 units)
+The deferred half of M1, and the TODO window from M2 (ADR 0029).
+
 **Scope.**
-- **Debugger:** DAP client; lldb-dap and the GDB DAP profile; line, function and exception breakpoints and the Breakpoints dialog; stepping; Debug window; evaluate, watches, Set Value, inline values, debugger console; attach; LLDB STL formatters; CMake debugger; ptrace_scope detection. **Open item:** a Windows lldb-dap source, because the official LLVM Windows package has none (S5): another official artifact if one ships it, otherwise a self-built lldb.
+- **Editor:** the display map's fold and inlay layers, filling the identity layers that M1 built; folding with persistence; multi-caret and column mode, with the column-mode status widget; whitespace and indent guides; Ctrl+wheel zoom; extend selection; EditorConfig; large-file mode (mapped originals of 128 MB and more, summaries computed in parallel, a first screen before the full line index, the background release of big trees), which replaces M1's large-file guard; the Structure view; rulers, clipboard history, and drag and drop in the editor.
+- **Shell:** editor splits; the frameless window with snap layouts (`HTMAXBUTTON`); ToolWindowManager drag-docking and floating; the Settings dialog (§3.6), with the Keymap page of ADR 0016 and the pages for every key M1–M5 added; keyboard navigation of stripes, toolbar, status bar and gutter (§2.2); the UIA TextPattern smoke; the TODO window.
+
+**Exit.**
+- Display-map property test against the brute-force oracle across all four layers, with folds and inlays in use.
+- B15 met; F2 editable; B5 and B6 still met with folds, inlays and several carets in use.
+- Focus-order tests; the UIA TextPattern smoke; screenshot goldens for the new UI (both themes, 100/125/150/175%, Windows and Linux); a registry test that every key M1–M5 added has a Settings page.
+- TODO-window, ruler, clipboard-history and drag-and-drop tests (rows 115, 252, 254 and 255).
+- The matrix rows owned by M15, and the M15 parts of rows 35, 55, 239, 240 and 242, are green.
+
+**Depends on** M1, M2 (the TODO window searches through M2's Find in Files) and M3 (EditorConfig maps onto M3's `.clang-format` handling); runs after M5, or alongside it (§7, Levers).
+
+### M16: ProjectHost, solution writes, C# and CMake language (9–11 units)
+The deferred halves of M2 and M4 (ADR 0029).
+
+**Scope.**
+- **MSBuild:** `FrostIDE.ProjectHost` (path (b): 2–4 workers, active configuration first, a shared EvaluationContext, EnvironmentVariableRead capture), launched before L1 in a trusted root as ADR 0011 B4 decides, becomes the source of truth; path (c) stays as fallback and consistency check. `FrostIDE.MSBuildLogger` streams build events into the Build window.
+- **Solutions:** `.sln`↔`.slnx` conversion and New Project/Solution (CMake executable/library; .slnx + .vcxproj written via ProjectHost and SolutionPersistence); the Unload/Reload project and Properties actions; Show All Files and nesting.
+- **C# solution citizenship:** C# projects in the tree; the dotnet build driver; build and run R5 (launchSettings.json); navigation to build errors.
+- **First run and shell integration:** the first-run wizard (§3.4); `frost --wait`, `frost diff` and `frost merge`; file associations; the Jump List.
+- **Run configurations:** importers for `launch.vs.json`, `.vcxproj.user`, `.idea` and `launchSettings.json`; before-launch tasks; gutter run icons for `main()`.
+- **CMake:** the language service (completion, go-to-definition for functions, macros, targets and include(), Find Usages, Quick Doc, formatting) and the cache viewer.
+
+**Exit.**
+- Every extracted command line for R2a and R2b, now from ProjectHost, compiles with `cl.exe /c` (independent) and matches path (c) and msbuild-extractor-sample after normalization (consistency).
+- B23's first project streamed met on ProjectHost under its preconditions (ProjectHost cold start included); B3 still met with zero .NET processes; the environment-relaunch test of M2 still passes with EnvironmentVariableRead capture.
+- The scripted clean-profile first run passes on Windows and Linux, with screenshot goldens; `git -c core.editor="frost --wait" commit` round-trips.
+- R5 builds from inside the IDE, and its build errors open their location.
+- CMake completion and navigation goldens on R3's CMakeLists.
+- The malicious-repository test also covers the importers: imported run configurations and before-launch tasks run nothing before trust.
+
+**Depends on** M2, M4, M5 (the wizard's Claude page uses M5's CLI detection), M15 (the wizard and the Properties action open Settings pages), D3, D6, D27 and B23's first-project value from the S6 cold samples (ADR 0011, B1).
+
+### M17: C++ intelligence completion (5–6 units)
+The deferred half of M3 (ADR 0029).
+
+**Scope.**
+- Inspection framework v1: severities and suppression comments (row 99's first part).
+- Inlay hints (on M15's inlay layer), Quick Definition, macro expansion, smart completion, intention preview.
+- Navigate To; type and call hierarchy; Select In and the navigation bar, with its status-bar part (row 242); resolve context.
+- include-cleaner: unused and missing includes, optimize includes.
+
+**Exit.**
+- The LSP replay suite covers every request added here; B8–B11 still met on R3 with inlay hints on.
+- Severity and suppression tests: a suppressed diagnostic stays hidden across edits, saves and reopens.
+- A resolve-context fixture: a header included from two projects with different defines shows each context's inactive regions and diagnostics.
+- The matrix rows owned by M17 are green.
+
+**Depends on** M3 and M15.
+
+### M6: Debugger v1, test runner, installers, updater. Preview 0.1 (9–11 units)
+**Thin path (ADR 0029).** M4 has U1's minimal debugger (the DAP client, lldb-dap on both operating systems, line breakpoints, stepping, the Debug window, Evaluate and watches); M6 completes debugger v1 on it.
+
+**Scope.**
+- **Debugger:** the GDB DAP profile; function and exception breakpoints and the Breakpoints dialog; conditions, hit counts and log messages on line breakpoints (row 169); Run to Cursor and the other stepping actions (row 173); Set Value, inline values, debugger console; attach; LLDB STL formatters beyond lldb-dap's defaults; CMake debugger; ptrace_scope detection.
 - **Test runner:** GoogleTest and CTest run and debug, with a results tree; Run Unit Tests actions; the pre-commit run-tests check.
 - **Distribution:** unsigned per-user MSI and AppImage; the updater and ComponentDownloader; `IHttpClient` on Linux.
 
 **Exit.**
-- DAP conformance suite of ≥60 scenarios; STL value goldens; FrostIDE debugs itself; B16 met; the CMake debugger stops at a breakpoint in R3's CMakeLists.
+- DAP conformance suite of ≥60 scenarios, M4's included; STL value goldens; the CMake debugger stops at a breakpoint in R3's CMakeLists.
 - Updater: a tampered manifest is rejected, a downgrade refused, an interrupted download resumed, a rollback restores the previous version. Uninstall and upgrade-in-place tests; install smoke on the floor-build VM (§1.3, stored on E:\vm) and in WSL; the tested Windows build is recorded.
-- frost-featurecheck shows every P0 row owned by M0–M6 green; the only open P0 rows are 31, 99, 118, 227 and 242, each with its M0–M6 parts green (§1.4).
+- frost-featurecheck shows every P0 row owned by M0–M6 and M15–M17 green (rows 167, 169 and 173, which M4 starts, complete here); the only open P0 rows are 31, 99, 118, 227 and 242, each with its parts in those milestones green (§1.4).
 
-**Depends on** M4, M5 and D25 (certificate lead time).
+**Moved out** (ADR 0029, Q4). To M4, for U1's minimal debugger: the DAP client and lldb-dap, with the Windows lldb-dap source (the open item S5 left; M4 builds it from the pinned LLVM sources, with the LLVM SDK artifacts and their pinning, which return to M4); line breakpoints, stepping, the Debug window, Evaluate and watches; FrostIDE debugging itself and B16.
+
+**Depends on** M4, M5, M15, M16, M17 and D25 (certificate lead time).
 
 ### M7: frost-clangd and analysis tiers (10–12 units)
 **Scope.**
@@ -685,7 +836,7 @@ Code is documented with ordinary comments in every language in the repository. C
 - Each check adds ≤5% overhead; B11 and B12 hold; engine crashes stay isolated; SARIF is schema-valid; `frost inspect` equals the IDE's results on R1.
 - The modules fixture shows no false errors with the flag on; the reflection fixture shows downgraded hints and zero errors.
 
-**Depends on** M3 and M4.
+**Depends on** M3, M4 and M17 (inspection framework v1).
 
 ### M8: Claude C2 (3–4 units)
 **Scope.** `frostide-mcp` and its discovery file; `mcp_tool` hook handlers and the Stop-hook loop guard; the `frostide-tools` plugin; the result-size policy.
@@ -709,7 +860,7 @@ Code is documented with ordinary comments in every language in the repository. C
 - Project-edit goldens: MSBuild (through ProjectHost) and a CMake reconfigure accept every edited project. Template goldens pass.
 - ≥45 frost and ≥4 CFG checks; coverage of ReSharper C++'s own inspections ≥60%; frost-featurecheck fails the exit on any shortfall.
 
-**Depends on** M7.
+**Depends on** M7 and M16 (ProjectHost for the project edits).
 
 ### M10: Debugger v2 and full test runner (9–11 units)
 **Scope.** frost-dbgeng-dap (natvis, minidumps, symbol servers, hardware breakpoints) via the ComponentDownloader; memory, disassembly and register views; Catch2, doctest and Boost.Test; test gutter icons and the Unit Tests window.
@@ -727,7 +878,7 @@ Code is documented with ordinary comments in every language in the repository. C
 - Automated accessibility suites, including colour-deficiency and high-contrast goldens and terminal text via UIA and AT-SPI.
 - Manual NVDA, Narrator, Orca and IME passes added to the user-owned release checklist (VoiceOver only if macOS is added).
 
-**Depends on** M9, D17 and D18.
+**Depends on** M9, M15, D17 and D18.
 
 ### M12: Claude C3 native chat (5–6 units)
 **Scope.** The auth gate, chat panel, permissions UI, checkpoints, sessions and usage widget.
@@ -779,12 +930,12 @@ Code is documented with ordinary comments in every language in the repository. C
 | T3 | GetClCommandLines is an internal target | High | Version-gated adapters, v143 fixtures in local verification (v145 once VS 2026 Build Tools are installed), Rule-XML fallback, CLI path, `cl.exe /c` oracle. |
 | T4 | Stale caches give wrong flags | High | Fingerprint classes, mutation tests, Invalidate Caches. |
 | T5 | Clang false errors on MSVC code; C++26 gaps | High | Curated suppressions, clean-TU oracle, published residuals, `/analyze` SARIF, downgrading, the LLVM cadence, EDG review in 2027. |
-| T6 | Scope and a ~3-year schedule | High | Appendix A, §7 levers, sign-off per milestone, non-goals. |
+| T6 | Scope and a ~3-year schedule | High | Appendix A, §7 levers, sign-off per milestone, non-goals; a first usable build (U1) around month 10–12 (D29, ADR 0029). |
 | T7 | Local listeners; untrusted project code | High | §5.2 rules and enumeration test; §3.5 restricted mode and the malicious-repository test. |
 | T8 | Agent continuity across sessions | High | CLAUDE.md, progress log, ADRs, Issues, the matrix, verification footers. |
 | T9 | Data loss | High | SaveManager, journal, fault injection. |
 | T10 | Raster misses 144 Hz | Med | S1 with validated probes; contained QRhi module; raster fallback. |
-| T11 | Custom shell, IME, accessibility | Med | Built in M1 with automated tests; manual checklists. |
+| T11 | Custom shell, IME, accessibility | Med | Built with automated tests: IME and the shell core in M1, the frameless window, docking, keyboard navigation and the UIA smoke in M15 (ADR 0029); manual checklists. |
 | T12 | Single-machine verification: LLVM builds and full runs compete with the user's own work on REF-W1; WSL shares its cores and memory (no CI, D24) | Med | Official binaries where sufficient (S5); sccache; `-Quick` per change and `-Full` per merge; long runs scheduled with the user; the bootstrap and verify scripts check free disk and commit memory before heavy work. |
 | T13 | LLVM API churn; library gaps; C++26 churn | Med | No patches, a local llvm-next leg, ~1 unit per major; compat layer and allowlist. |
 | T14 | .NET dependency | Med | Out of process, not started on an unchanged warm reopen; S6 measures cold cost. |
@@ -795,6 +946,7 @@ Code is documented with ordinary comments in every language in the repository. C
 | T19 | Disk and memory on REF-W1 | Low | C: had ~214 GB free on 2026-10-31; the WSL distro (already on E:\WSL), caches and the install-smoke VM (E:\vm) live on E:; prechecks stop bootstrap below the floors. Host commit memory can run out because of other programs (seen during bootstrap), which crashes WSL; heavy steps check it first. |
 | T20 | Unverified: aqt for new Qt minors, LLVM package contents, Ctrl+Esc, ConPTY queries | Low | Spikes S3 (aqt fails for Windows Qt 6.12.0; `tools/qt-fetch.py` replaces it), S5 (Windows package lacks lldb-dap), S8 and the M5 test. |
 | T21 | Unreal Engine scale | Low | Post-1.0; NMake path in M2. |
+| T22 | U1's debugger on MSVC-built programs: lldb-dap's PDB and MSVC STL support is below Visual Studio's | Med | Spike S10 first in M4 on R2a's Notepad++; U1 promises only lldb-dap's default formatters; the DbgEng adapter (natvis, full PDB fidelity) in M10; if S10 fails, the user decides before M4 continues (ADR 0029, decision 12). |
 
 ---
 
@@ -816,43 +968,51 @@ Code is documented with ordinary comments in every language in the repository. C
 | # | Decision | User's answer | Consequence |
 |---|---|---|---|
 | D14 | Platform floors | **Windows 11 only.** | Tracks the latest Qt minor; the Windows floor is the lowest build Qt's current minor and the VM leg support (22631 today, §1.3). Linux glibc ≥2.39. No macOS in v1 (D24). |
-| D20 | Upgrade cadence | **Keep updating (track, §2.3).** | ~9–11 units over the roadmap. |
+| D20 | Upgrade cadence | **Keep updating (track, §2.3).** | ~9–12 units over the roadmap (9–11 before ADR 0029 lengthened it). |
 | D24 | CI/CD and Mac access | **No CI/CD pipelines of any kind** (no GitHub Actions, hosted runners, runner services or cloud Mac). Build and verify only on REF-W1 and in WSL on it. | §6.3 is a local verification matrix; milestone exits require `verify.ps1 -Full` and `verify.sh -Full`; macOS is unsupported until a test leg exists; hosted legs (windows-2025, ubuntu-26.04, macos-26) are gone; GCC 16 and libstdc++ 15 legs are optional local containers. |
 
+### Decided during M1 (user, 2026-11-01)
+| # | Decision | User's answer | Consequence |
+|---|---|---|---|
+| D29 | A thin "usable for real C++ work sooner" path (basic editor, CMake, clangd, build and run) ahead of the full M1 polish | **"Yes I want something usable before a fully polished version"** | ADR 0029: the first usable build U1 is the M4 exit (§7, "First usable build"); M1–M4 shrink to their thin cores; their deferred halves move to M15, M16 and M17, before M6; no item or exit criterion is dropped and no target changes; B15's gate moves with large-file mode to M15, B16's with the minimal debugger to M4, and B23's first project is gated at M2 on path (c) and at M16 on ProjectHost; 129–156 milestone units instead of 120–145. The sub-decisions beyond the answer were ADR 0029's questions Q1–Q5, answered the same evening: **"I agree with everything except 4 and 5. I don't care for those savings"**. So path (c) is U1's evaluator (Q1), B23's first project is gated at M2 on path (c) (Q2) and M5 runs before M15–M17 (Q3), as recommended; U1 has a minimal debugger, moved from M6 to M4 (Q4, the recommendation to keep it in M6 reversed); and U1 is not thinned (Q5, the option declined). ADR 0029 is accepted. |
+
 ### Later
-- **D6 C# scope (M2):** solution citizenship in v1, frost-dotnet in 1.1.
+- **D6 C# scope (M16, ADR 0029):** solution citizenship in v1, frost-dotnet in 1.1.
 - **D8 Distribution hosting (M5):** packages stay local (E:\FrostBuilds) or in the private repository while FrostIDE is for personal use (D22); public hosting only after the D28 name search.
 - **D9 Real-CLI E2E (M5):** API key, $0.50 cap per run, run locally in `verify -Nightly`.
 - **D10 Subscription auth in native chat (M12):** gate on; ask Anthropic only if FrostIDE goes public (D22).
 - **D11 Mutating MCP tools (M8):** per-call approval, brave mode off.
 - **D12 DbgEng (M10):** download on first use; bundle after legal review.
-- **D13 Icons (M1):** own set, Lucide as stopgap. **D15 GPL/LGPL analyzers (M7):** optional, user-installed. **D16 Approximate .vcxproj mode off Windows (M2):** on, labelled. **D17 Solution editing:** conversion in M2, editing in M11. **D18 Accessibility bar (M11):** automated gate plus user-owned manual checklists. **D19 Dev Drive (M2):** optional recommendation. **D21 Unreal:** post-1.0.
+- **D13 Icons (M1):** own set, Lucide as stopgap. **D15 GPL/LGPL analyzers (M7):** optional, user-installed. **D16 Approximate .vcxproj mode off Windows (M2):** on, labelled. **D17 Solution editing:** conversion in M16, editing in M11. **D18 Accessibility bar (M11):** automated gate plus user-owned manual checklists. **D19 Dev Drive (M16, with the first-run wizard):** optional recommendation. **D21 Unreal:** post-1.0.
 - **D25 Signing identities and costs (decide before M6 for lead time; used in M14):** Azure Trusted Signing or an OV certificate; a GPG key for Linux; for personal use (D22) self-signed may suffice. No Apple Developer Program while macOS is unsupported.
 - **D26 Crash-report upload (M5):** none (local store plus Collect Logs); alternatives are self-hosted Sentry or a GitHub issue template.
-- **D27 ProjectHost runtime (M5):** net472 in-box; net10 framework-dependent (needs the .NET 10 runtime) or self-contained (larger install).
+- **D27 ProjectHost runtime (M16, with ProjectHost):** net472 in-box; net10 framework-dependent (needs the .NET 10 runtime) or self-contained (larger install).
 - **D28 Legal counsel and name clearance:** the trademark search for "FrostIDE" and "Glacier" comes before the repository goes public or any build is downloadable (D4); with the private repository and personal use (D22) it is not needed yet. Counsel's review of the JetBrains look-alike, LGPL and DbgEng questions comes before any public release.
 
-**Next step (M0 complete; M1 under way).** M0's exit is met (§7 M0): every M0 branch is merged on `m0/foundation` under D23, verified only locally (D24), S1–S7 and S9 are reported as ADRs with numbers (ADRs 0001 and 0005–0008), B28 is met (ADR 0010), the M0 decisions are recorded in ADR 0011, the launch from a path over 260 characters is met (ADR 0012), and `verify -Full` is green on both platforms. The sign-off follows ADR 0011's G1: the final commit is tagged `m0` and `main` is created from it, both pushed to the private repository; the demo pack is in `E:\FrostBuilds\demo\m0\`. Next is M1, already under way on `m1/*` branches, on the user's instruction of 2026-11-01 to go on with M1 and the milestones after it (`docs/progress.md`).
+**Next step (M0 complete; M1 under way).** M0's exit is met (§7 M0): every M0 branch is merged on `m0/foundation` under D23, verified only locally (D24), S1–S7 and S9 are reported as ADRs with numbers (ADRs 0001 and 0005–0008), B28 is met (ADR 0010), the M0 decisions are recorded in ADR 0011, the launch from a path over 260 characters is met (ADR 0012), and `verify -Full` is green on both platforms. The sign-off follows ADR 0011's G1: the final commit is tagged `m0` and `main` is created from it, both pushed to the private repository; the demo pack is in `E:\FrostBuilds\demo\m0\`. Next is M1, already under way on `m1/*` branches, on the user's instruction of 2026-11-01 to go on with M1 and the milestones after it (`docs/progress.md`). Since D29 (2026-11-01, evening) M1 is its thin core (ADR 0029), and the milestones run in §7's order towards the first usable build U1 at the M4 exit: W1 first (ADR 0032), in the feature-first phase (ADR 0031).
 
 ---
 
 ## Appendix A: Feature matrix → milestone
 
-Every P0 and P1 row of `tests/features/matrix.json` is listed under the milestone that delivers it. Row numbers are the 1-based lines of `features.features.tsv`; rows 250–257 (marked *) are new. "(+Mx)" marks the milestone where the last sub-part lands and the row's acceptance test turns fully green. "(P2 in)" marks a P2 row pulled into v1.0.
+Every P0 and P1 row of `tests/features/matrix.json` is listed under the milestone that delivers it. Row numbers are the 1-based lines of `features.features.tsv`; rows 250–257 (marked *) are new. "(+Mx)" marks the milestone where the last sub-part lands and the row's acceptance test turns fully green. "(P2 in)" marks a P2 row pulled into v1.0. Milestones are listed in the order they run (§7): M15–M17 hold the deferred halves of M1–M4 and run between M5 and M6 (ADR 0029).
 
 | Milestone | Tier | Rows |
 |---|---|---|
-| M1 | P0 (28) | 28 File System view; 29 Explorer speed search; 35 text buffer, large files, undo; 38 multi-caret, column mode; 40 folding; 44 smart keys; 45 line operations; 55 editor tabs, splits; 57 gutter (+M6); 60 encodings, BOM, EOL; 78 Find Action; 85 Find/Replace in file; 87 File Structure, Structure window; 91 Recent Files/Locations; 92 Back/Forward; 94 Go to Line, next error/member (+M3); 219 Notifications, background tasks; 226 Settings dialog; 227 keymaps (+M11); 239 main window, toolbar (+M5); 240 tool-window docking; 241 popup framework; 242 status bar widgets (+M7); 243 themes; 244 compact mode, IDE zoom, HiDPI; 250 soft wrap*; 251 whitespace, indent guides*; 253 editor font zoom* |
-| M1 | P1 (8) | 39 extend selection; 59 EditorConfig; 218 Local History (+M11); 246 accessibility (+M11); 252 rulers*; 254 clipboard history*; 255 drag and drop*; 256 fold persistence* |
-| M2 | P0 (15) | 1 .sln reader; 2 .slnx reader; 4 .vcxproj model; 5 .filters folders; 8 CMake File API; 9 CMake profiles; 11 CMake auto-reload; 15 compile_commands; 20 toolchain detection, v1 slice (WSL/Docker/remote: 1.x); 25 trusted project, restricted mode; 26 Welcome, first run, New Project; 27 Solution view; 31 Explorer context actions (+M11); 86 Find/Replace in Files; 154 configuration switcher |
-| M2 | P1 (5) | 3 .sln/.slnx conversion (P2 in); 10 CMake presets; 12 CMake tool window (+M6); 30 Show All Files, nesting; 115 TODO window |
-| M3 | P0 (24) | 22 persistent index, Invalidate Caches; 23 system headers, exclude/mark dirs; 36 semantic highlighting; 37 inactive regions; 50 Parameter Info; 51 Quick Documentation; 58 error stripe, inspection widget; 68 completion; 69 #include completion, auto-import; 76 Search Everywhere (+M5); 77 Go to Class/File/Symbol; 80 Go to Declaration; 81 Go to Base/Implementations; 82 Switch Header/Source; 84 Find Usages; 98 on-the-fly diagnostics; 99 inspection framework (+M7); 100 Alt+Enter actions; 104 clang-tidy integration; 114 Problems window; 118 C++23/26 language, v1 slice (+M7); 119 MSVC dialect; 122 ClangFormat; 131 Rename |
-| M3 | P1 (13) | 21 resolve context; 42 inlay hints; 52 Quick Definition; 53 macro expansion; 70 smart completion; 83 Navigate To; 88 type hierarchy; 89 call hierarchy; 95 Select In, nav bar; 101 intention preview; 106 unused/missing includes (+M7); 120 PCH, forced includes; 125 optimize includes (+M7) |
-| M4 | P0 (9) | 150 Build/Rebuild/Clean; 151 MSBuild orchestration; 152 CMake build; 153 Build window; 159 run/debug configuration model (+M6); 160 Run widget (+M6); 161 run options; 163 Run console; 217 terminal |
-| M4 | P1 (4) | 13 CMake cache viewer (P2 in); 66 CMakeLists language service; 162 before-launch tasks; 164 gutter run icons (+M6) |
+| M1 | P0 (22) | 28 File System view; 29 Explorer speed search; 35 text buffer, large files, undo (+M15); 44 smart keys; 45 line operations; 55 editor tabs, splits (+M15); 57 gutter (+M6); 60 encodings, BOM, EOL; 78 Find Action; 85 Find/Replace in file; 91 Recent Files/Locations; 92 Back/Forward; 94 Go to Line, next error/member (+M3); 219 Notifications, background tasks; 227 keymaps (+M11); 239 main window, toolbar (+M15); 240 tool-window docking (+M15); 241 popup framework; 242 status bar widgets (+M7); 243 themes; 244 compact mode, IDE zoom, HiDPI; 250 soft wrap* |
+| M1 | P1 (1) | 218 Local History (+M11) |
+| M2 | P0 (15) | 1 .sln reader; 2 .slnx reader; 4 .vcxproj model (+M16); 5 .filters folders; 8 CMake File API; 9 CMake profiles; 11 CMake auto-reload; 15 compile_commands; 20 toolchain detection, v1 slice (WSL/Docker/remote: 1.x); 25 trusted project, restricted mode; 26 Welcome, first run, New Project (+M16); 27 Solution view (+M16); 31 Explorer context actions (+M11); 86 Find/Replace in Files; 154 configuration switcher |
+| M2 | P1 (2) | 10 CMake presets; 12 CMake tool window (+M6) |
+| M3 | P0 (23) | 22 persistent index, Invalidate Caches; 23 system headers, exclude/mark dirs; 36 semantic highlighting; 37 inactive regions; 50 Parameter Info; 51 Quick Documentation; 58 error stripe, inspection widget; 68 completion; 69 #include completion, auto-import; 76 Search Everywhere (+M5); 77 Go to Class/File/Symbol; 80 Go to Declaration; 81 Go to Base/Implementations; 82 Switch Header/Source; 84 Find Usages; 98 on-the-fly diagnostics; 100 Alt+Enter actions; 104 clang-tidy integration; 114 Problems window; 118 C++23/26 language, v1 slice (+M7); 119 MSVC dialect; 122 ClangFormat; 131 Rename |
+| M3 | P1 (1) | 120 PCH, forced includes |
+| M4 | P0 (14) | 150 Build/Rebuild/Clean; 151 MSBuild orchestration; 152 CMake build; 153 Build window; 159 run/debug configuration model (+M6); 160 Run widget (+M6); 161 run options; 163 Run console; 167 debugger engine (+M6); 169 line breakpoints (+M6); 173 stepping (+M6); 175 Debug window; 178 Evaluate, watches; 217 terminal |
 | M5 | P0 (5) | 203 git clone/fetch/pull/push; 204 Commit window (+M6); 205 diff viewer; 208 Branches popup; 232 Claude IDE bridge |
 | M5 | P1 (3) | 32 VCS/error colours in tree (+M7); 96 compare files/folders; 210 stash, shelve |
-| M6 | P0 (5) | 167 debugger engine; 169 line breakpoints; 173 stepping; 175 Debug window; 178 Evaluate, watches |
+| M15 | P0 (6) | 38 multi-caret, column mode; 40 folding; 87 File Structure, Structure window; 226 Settings dialog; 251 whitespace, indent guides*; 253 editor font zoom* |
+| M15 | P1 (8) | 39 extend selection; 59 EditorConfig; 115 TODO window; 246 accessibility (+M11); 252 rulers*; 254 clipboard history*; 255 drag and drop*; 256 fold persistence* |
+| M16 | P1 (6) | 3 .sln/.slnx conversion (P2 in); 13 CMake cache viewer (P2 in); 30 Show All Files, nesting; 66 CMakeLists language service; 162 before-launch tasks; 164 gutter run icons (+M6) |
+| M17 | P0 (1) | 99 inspection framework (+M7) |
+| M17 | P1 (12) | 21 resolve context; 42 inlay hints; 52 Quick Definition; 53 macro expansion; 70 smart completion; 83 Navigate To; 88 type hierarchy; 89 call hierarchy; 95 Select In, nav bar; 101 intention preview; 106 unused/missing includes (+M7); 125 optimize includes (+M7) |
 | M6 | P1 (9) | 170 function/exception breakpoints; 172 Breakpoints dialog; 176 data renderers, v1 slice (+M10); 177 inline values; 179 Set Value; 184 debugger console; 186 attach; 193 CMake debugger (P2 in); 196 test runner (+M10) |
 | M7 | P1 (8) | 90 include hierarchy; 102 inspection catalogue, v1 slice (+M13); 103 data-flow checks, v1 slice (+M13); 107 naming conventions; 109 class-design checks; 111 solution-wide analysis; 112 Inspect Code, `frost inspect` CLI; 124 header-guard style |
 | M8 | P1 (2) | 233 frostide MCP server, v1 slice; 234 quality-gate hooks (P2 in) |
@@ -861,14 +1021,14 @@ Every P0 and P1 row of `tests/features/matrix.json` is listed under the mileston
 | M11 | P1 (8) | 41 sticky lines; 56 breadcrumbs; 93 bookmarks; 206 three-way merge tool; 207 Git log; 209 blame, history; 229 colour schemes, theme import; 245 multiple windows |
 | M12 | P1 (1) | 257 native Claude chat panel (C3)* |
 
-**Totals.** P0: 86 (28 + 15 + 24 + 9 + 5 + 5). P1: 85. M0, M13 and M14 own no feature rows; they own infrastructure rows and the budget, analysis-count and release gates.
+**Totals.** P0: 86 (M1 22 + M2 15 + M3 23 + M4 14 + M5 5 + M15 6 + M17 1). P1: 85. M0, M13 and M14 own no feature rows; they own infrastructure rows and the budget, analysis-count and release gates. M4 owns no P1 row, and M16 and M6 no P0 row; M16 completes the P0 rows 4, 26 and 27, and M6 the P0 rows 167, 169 and 173 of U1's minimal debugger (ADR 0029, decision 12).
 
-**P0 rows deferred past Preview 0.1:** 31 (Show History, M11), 99 (profiles and scopes, M7), 118 (modules flag and reflection downgrading, M7), 227 (VS, VS 2022, ReSharper and VS Code keymaps, M11), 242 (analysis monitor, M7). Their M0–M6 parts are green at the M6 exit (§1.4).
+**P0 rows deferred past Preview 0.1:** 31 (Show History, M11), 99 (profiles and scopes, M7), 118 (modules flag and reflection downgrading, M7), 227 (VS, VS 2022, ReSharper and VS Code keymaps, M11), 242 (analysis monitor, M7). Their parts in M0–M6 and M15–M17 are green at the M6 exit (§1.4).
 
 **Infrastructure rows** (tracked in `matrix.json` with an I prefix; P0 unless marked P1):
 - **M0:** I7 Windows long paths, UTF-8 code-page manifest.
 - **M1:** I1 settings registry, scopes, `.frost/`, migration; I2 SaveManager, autosave, hot-exit journal, external-change merge; I3 crash and freeze reporting (out-of-process handler); I4 privacy and network policy, no-network-before-L1 test; I5 i18n-ready strings, pseudo-localization; I6 AltGr and layout-aware shortcuts, grapheme navigation.
-- **M2:** I8 trust model, restricted mode, absolute tool paths; I9 listener hardening and enumeration test (each later listener joins in its milestone); I10 single instance, `frost` CLI, file associations.
+- **M2:** I8 trust model, restricted mode, absolute tool paths; I9 listener hardening and enumeration test (each later listener joins in its milestone); I10 single instance, `frost` CLI, file associations (+M16).
 - **M3:** I11 ResourceGovernor, process-tree memory budget, cache disk budget.
 - **M4:** I12 localized MSBuild/cl output decoding; I13 terminal IME.
 - **M5:** I14 `IHttpClient` (+M6 for Linux); I15 portable packages, symbol archival, Collect Logs.

@@ -53,7 +53,8 @@ class TextBuffer;
  * Lifetime: copy is O(1) (two relaxed atomic increments); move is noexcept and touches no
  * counter. The destructor is O(1) unless it drops the last reference to nodes or storage, which
  * frees them (O(nodes freed)) on the releasing thread: about 40k nodes for a 2 GB document, in the
- * millisecond range. TODO(M1): m1/large-file moves that final release to a background lane.
+ * millisecond range. TODO(M15): large-file mode moves that final release to a background lane
+ * (moved from M1 by ADR 0029; until then M1's guard refuses files of 128 MB or more).
  * String views returned by any query stay valid while any Snapshot (including those held by
  * ChunkRange and LineCursor) or TextBuffer sharing this storage is alive.
  *

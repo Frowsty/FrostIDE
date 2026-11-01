@@ -10,7 +10,7 @@
 # statistics and the save guard. The layered display map (ADR 0026) maps the text to display rows
 # through its ITextShaper seam.
 # Qt-free. Depends on core and on io (validUtf8Prefix, IFileSystem, OS error mapping).
-# TODO(M1): large-file mode with mapped originals (m1/large-file) joins here.
+# TODO(M15): large-file mode with mapped originals joins here (moved from M1 by ADR 0029).
 
 set(frost_text_sources
     src/anchor.cpp

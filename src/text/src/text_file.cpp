@@ -21,7 +21,7 @@
  * decodeTextFile moves the caller's string into the buffer (after erasing a BOM in place). The
  * text is validated twice on that path (here and in TextBuffer::fromUtf8), about 15 ms for a
  * 128 MiB file; decodeTextFile counts line breaks on the built buffer rather than the string, which
- * saves two of eolStats' three passes. TODO(M1): m1/large-file adds a single-validation path for mapped originals if
+ * saves two of eolStats' three passes. TODO(M15): m15/large-file adds a single-validation path for mapped originals if
  * its B15 measurement needs one; EncodingPerf.Utf8LoadOverhead bounds the overhead here (D15).
  */
 

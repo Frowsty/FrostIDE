@@ -2,6 +2,8 @@
 
 - Status: accepted
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (M2 evaluates through path (c); ProjectHost is M16's; nothing else
+  changes)
 - Plan reference: PLAN.md section 2 ".sln / .slnx" (".slnx via pugixml") and "Dependencies" (pugixml from vcpkg);
   ADR 0032 (W1); CLAUDE.md "Licences"
 
@@ -22,10 +24,11 @@ the tree parses XML. PLAN.md already lists pugixml among the vcpkg dependencies 
    fetch anything. XPath is not used. Element and attribute names are compared ASCII-case-insensitively, as MSBuild
    does. A parse error is `Corrupt` with the line of the problem.
 4. **Static reading only.** Imported `.props`/`.targets` are not evaluated; that is path (c)'s MSBuild evaluation
-   (ProjectHost, M2). The header comments of `solution_file.hpp` and `vcxproj.hpp` say what is and is not read.
+   (M2; ProjectHost replaces it in M16, ADR 0029). The header comments of `solution_file.hpp` and `vcxproj.hpp` say what is and is not read.
 
 ## Consequences
-- The readers stay small and Qt-free; ProjectHost (M2) can replace or cross-check them later without touching the UI.
+- The readers stay small and Qt-free; path (c) (M2) and ProjectHost (M16) can replace or cross-check them later
+  without touching the UI.
 - pugixml's notice reaches binary distributions through the SBOM and notices (M5), like xxHash's.
 - Deferred to hardening: a fuzz target for the readers (needs a fuzz tree with ports, as ADR 0014 notes for the
   journal) and a size cap on project files before parsing.

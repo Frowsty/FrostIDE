@@ -3,6 +3,8 @@
 - Status: accepted for `m1/encodings`. No budget, test or warning is weakened; `tests/perf/budgets.json` is
   unchanged. A B15 sub-budget for in-memory loads is recorded here (D15).
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (m1/large-file is m15/large-file, so its to-dos here are `TODO(M15)`;
+  nothing else changes)
 - Plan reference: PLAN.md section 3's "Text buffer" row (UTF-8 storage); section 2.2 "Data safety" (SaveManager
   preserves BOM, EOL and encoding); section 7 M1 scope ("encodings") and exit ("byte-exact CRLF/BOM"); section 6.1
   (fuzz targets, golden and differential tests); budgets B5 and B15; feature matrix row 60.
@@ -162,7 +164,7 @@ below shows they do only after two normalisation rules (D4).
   `detection.source == UserOverride`, in which case they reuse that override.
 - **`m1/large-file`:** `decodeBytes` on a mapped view (`payloadIsText` means map `[payloadOffset, n)`),
   `detectEncoding` on the view, `eolStats(string_view)` and its own single-validation path. `eolStats` on a
-  string costs about 15-25 ms per 64 MiB (three passes, measured below); `TODO(M1)` there fuses them if B15 needs
+  string costs about 15-25 ms per 64 MiB (three passes, measured below); `TODO(M15)` there fuses them if B15 needs
   it.
 - **`m1/settings`:** EditorConfig `charset` (utf-8, utf-8-bom, utf-16le, utf-16be, latin1 = 28591) becomes
   `LoadOptions::encoding` or `convertedTo`; `end_of_line` goes through `findSeparator`; a default-encoding and a
@@ -348,7 +350,7 @@ Target: at least 200 exec/s in the sanitised fuzz build on each OS. The 60 s `fu
 - Unchanged regions of a `NotRoundTrip` file are not preserved on an accepted lossy save. `TODO(M13)`: byte reuse
   for unchanged pieces.
 - A file that grows between `status` and `readFile` can still be read whole (the size is checked again after the
-  read; `TODO(M1)`, `m1/large-file`).
+  read; `TODO(M15)`, `m15/large-file`).
 - Without a BOM, CJK UTF-16 and all UTF-32 files are not detected (override only).
 - frost::text grows by two platform files; text, core and io changes need an independent review before merge
   (CLAUDE.md), which is not part of this slice.

@@ -48,7 +48,7 @@ EolStats eolStats(std::string_view text) noexcept {
      * if both occur, the CR-LF pairs with a loop over adjacent bytes. On 64 MiB of mixed-EOL code
      * this takes about 15 ms (a first version, one memchr per CR, took 18 ms), twice the UTF-8
      * validation; decodeTextFile therefore counts on the buffer it builds (eolStats(Snapshot)).
-     * TODO(M1): m1/large-file fuses the passes if its B15 measurement of mapped loads needs it.
+     * TODO(M15): m15/large-file fuses the passes if its B15 measurement of mapped loads needs it.
      */
     const auto lfBytes = static_cast<std::uint32_t>(std::count(text.begin(), text.end(), '\n'));
     const auto crBytes = static_cast<std::uint32_t>(std::count(text.begin(), text.end(), '\r'));

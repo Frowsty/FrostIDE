@@ -417,9 +417,11 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
  * applicationDirPath() from GetModuleFileNameW in both cases.
  * Crash reports record `restartedFrom` (the frost.restarted_from annotation); logs and dumps
  * live under the cache root, not the install directory.
- * TODO(M1): code that starts frost again or registers frost (file associations, I10) takes the
- * install directory from `restartedFrom` when it is set, and frost sets an explicit
- * AppUserModelID, so a restarted frost groups with a shortcut to its long path.
+ * TODO(M1): code that starts frost again takes the install directory from `restartedFrom` when it
+ * is set.
+ * TODO(M16): so does the code that registers frost (file associations, I10), and frost sets an
+ * explicit AppUserModelID with the Jump List, so a restarted frost groups with a shortcut to its
+ * long path (both moved to M16 by ADR 0029).
  */
 extern "C" __declspec(dllexport) int frost_main(unsigned hardeningBits, const wchar_t* restartedFrom) {
     const frost::app::ProcessHardening hardening = frost::app::decodeHardening(hardeningBits);

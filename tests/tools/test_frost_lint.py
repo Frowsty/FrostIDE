@@ -185,6 +185,12 @@ class RepositoryRulesTest(TempDirTestCase):
         rules = {v.rule for v in frost_lint.lint(repo)}
         self.assertIn("no-ci", rules)
 
+    def test_m0_is_closed_since_its_sign_off(self) -> None:
+        # M0 was signed off on 2026-11-01; its markers must be finished or moved (PLAN.md 6.6).
+        violations = frost_lint.check_todos("x.cpp", [frost_lint.Comment(2, "TODO(M0): leftover")])
+        self.assertEqual([(v.line, v.rule) for v in violations], [(2, "todo")])
+        self.assertIn("closed", violations[0].message)
+
     def test_closed_milestone_markers_fail(self) -> None:
         comments = [frost_lint.Comment(3, "TODO(M3): finish"), frost_lint.Comment(4, "TODO(M4): later")]
         with mock.patch.object(frost_lint, "CLOSED_MILESTONES", frozenset({3})):

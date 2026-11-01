@@ -2,6 +2,8 @@
 
 - Status: accepted
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (the Keymap page moves with the Settings dialog to M15; the Find Action popup
+  and every other decision stay in M1)
 - Plan reference: PLAN.md section 2.2 ("Keyboard and IME", "Accessibility"), section 1.4 row 227 (keymaps),
   row 78 (Find Action), infra row I6, sections 3.3, 3.5 and 3.6, section 7 (M1); D24 (macOS unsupported)
 

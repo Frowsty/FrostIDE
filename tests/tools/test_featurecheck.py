@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for tools/featurecheck.py against the mini plan in tests/tools/fixtures/features:
-# parsing Appendix A rows and markers, generate/check round trips, preservation of the
-# hand-maintained fields, and each failure the check reports.
+# parsing Appendix A rows and markers, the run order from the milestone ladder,
+# generate/check round trips, preservation of the hand-maintained fields, and each
+# failure the check reports.
 
 from __future__ import annotations
 
@@ -122,6 +123,50 @@ class FeatureCheckTest(TempDirTestCase):
         self.assertTrue(any("P1 infra row I18 has no owning milestone" in p for p in problems), problems)
         result = run_tool("featurecheck.py", "--repo", str(self.tmp), "generate")
         self.assertEqual(result.returncode, 1)
+
+    def test_milestones_run_from_m0_to_m17(self) -> None:
+        # ADR 0029 added M15-M17 (the deferred halves of M1-M4); M18 is not a milestone.
+        self._edit_plan("| M2 | P1 (2) |", "| M17 | P1 (2) |")
+        self._edit_plan("57 gutter (+M6)", "57 gutter (+M15)")
+        self._generate()
+        rows = self._rows()
+        self.assertEqual((rows["3"]["milestone"], rows["20"]["milestone"]), ("M17", "M17"))
+        self.assertEqual(rows["57"]["completes"], "M15")
+        self.assertEqual(self._check(), [])
+        self._edit_plan("| M17 | P1 (2) |", "| M18 | P1 (2) |")
+        problems = self._check()
+        self.assertTrue(any("P1 feature row 3 has no owning milestone" in p for p in problems), problems)
+
+    def test_completion_must_name_a_milestone(self) -> None:
+        self._edit_plan("57 gutter (+M6)", "57 gutter (+M18)")
+        problems = self._check()
+        self.assertTrue(any("row 57 completes in M18, which is not a milestone" in p for p in problems), problems)
+        result = run_tool("featurecheck.py", "--repo", str(self.tmp), "generate")
+        self.assertEqual(result.returncode, 1)
+
+    def test_completion_must_run_after_the_owner_in_section_7_order(self) -> None:
+        # The ladder's order, not the number, decides: M17 runs before M7 (ADR 0029).
+        self._edit_plan("| M2 | P1 (2) |", "| M17 | P1 (2) |")
+        self._edit_plan("(WSL/Docker/remote: 1.x)", "(WSL/Docker/remote: 1.x) (+M7)")
+        self._generate()
+        self.assertEqual(self._rows()["20"]["completes"], "M7")
+        self.assertEqual(self._check(), [])
+        # M15 runs before M17, and an infrastructure row cannot complete before its owner either.
+        self._edit_plan("1.x) (+M7)", "1.x) (+M15)")
+        self._edit_plan("(+M6 for Linux)", "(+M1 for Linux)")
+        problems = self._check()
+        self.assertTrue(any("row 20 completes in M15, which does not run after its owner M17" in p
+                            for p in problems), problems)
+        self.assertTrue(any("row I14 completes in M1, which does not run after its owner M5" in p
+                            for p in problems), problems)
+
+    def test_ladder_must_list_every_milestone_once(self) -> None:
+        self._edit_plan("| M16 | ProjectHost | 9–11 | 15–18 |\n", "")
+        self._edit_plan("| M8 | Claude C2 | 3–4 | 23–28 |",
+                        "| M8 | Claude C2 | 3–4 | 23–28 |\n| M3 | again | 1 | 1 |")
+        problems = self._check()
+        self.assertTrue(any("the milestone ladder does not list M16" in p for p in problems), problems)
+        self.assertTrue(any("the milestone ladder lists M3 twice" in p for p in problems), problems)
 
     def test_matrix_rows_without_a_milestone_fail(self) -> None:
         self._generate()

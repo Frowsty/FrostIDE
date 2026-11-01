@@ -224,7 +224,7 @@ struct LoadedText {
  * options.maxFileBytes is refused with OutOfRange before it is read ("the file has N bytes, more
  * than the limit M"), and the size is checked again after the read. fs errors keep their code,
  * with the context "while loading <path>". A file that grows between status and read can still be
- * read whole: TODO(M1): m1/large-file's mapping API bounds that. Thread safety: as `fs` and
+ * read whole: TODO(M15): m15/large-file's mapping API bounds that. Thread safety: as `fs` and
  * `codecs`. O(n).
  */
 [[nodiscard]] Result<LoadedText> loadTextFile(io::IFileSystem& fs, std::string_view path,

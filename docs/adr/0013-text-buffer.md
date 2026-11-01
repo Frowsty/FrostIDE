@@ -3,6 +3,8 @@
 - Status: accepted for M1's first slice (`m1/piece-tree`). No budget, test or warning is weakened;
   `tests/perf/budgets.json` is unchanged. A text-side sub-budget of B5 is recorded here (decision 9).
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (large-file mode, with B15 and the background release of big trees, moved from
+  `m1/large-file` to M15's `m15/large-file`; M1 has a large-file guard until then; nothing else changes)
 - Plan reference: PLAN.md section 3 ("Text buffer"), the module map and the edit data flow, the testing section
   ("piece tree vs std::string", fuzz targets), sections 6.1 and 6.3 (the fuzz smoke in `verify -Full`), section 7
   M1 (exit: "Piece-tree differential: 10M ops, 0 mismatches; clean 10-minute fuzz"); budgets B5 and B15; feature
@@ -17,7 +19,7 @@ edits text through one buffer. It has to give:
   (`didChange`, line/UTF-16 positions) both accept;
 - conversions between byte offsets, (line, byte column), (line, UTF-16 column) and UTF-16 offsets in O(log n);
 - a path to F1 (a 2 GB file) inside B15 (first screen p50 150 ms, private bytes +64 MB, line index within 2 s),
-  which `m1/large-file` gates;
+  which M15's large-file mode (`m15/large-file`, ADR 0029) gates;
 - a keystroke cost far inside B5 (keystroke to paint end p50 3 ms, goal 2 ms; p99 8 ms).
 
 The design follows two published, permissively licensed descriptions, read under the clean-room rule (sources
@@ -58,8 +60,8 @@ B+tree whose nodes cache monoid summaries, searched by a monotone predicate over
    buffers). **B15 risk:** at P = 4 KiB, F1 needs about 512k pieces; the measured projection is 39.9 MB of tree
    nodes for 2 GB, more than half of B15's +64 MB private-bytes budget, and the measured Release load rate
    (0.98 GB/s, single-threaded, validation plus summaries) projects 2.0 s for F1 against B15's 2 s line-index
-   limit. `m1/large-file` may give mapped originals a larger cap with an in-piece line index, and parallelise
-   `summarizePieces` (already a separate, pure step).
+   limit. `m15/large-file` (M15, ADR 0029) may give mapped originals a larger cap with an in-piece line index,
+   and parallelise `summarizePieces` (already a separate, pure step).
 7. **D5, storage.** One append-only, reference-counted `Storage` per buffer lineage: the original text (a
    `std::unique_ptr<std::string>`, whose `data()` is taken only once the string sits in its final heap place,
    since moving a short string would move SSO bytes) plus add chunks of 64 KiB. An insert of 16 KiB or more gets
@@ -156,7 +158,8 @@ B+tree whose nodes cache monoid summaries, searched by a monotone predicate over
   change). `SumTree` keeps detail access to the root pointer and children for that; it is not public API.
 - **The display map** reuses `SumTree` and needs reverse cursors and seek-forward (`m1/editor-model`).
 - **Releasing big trees:** dropping the last reference to a 2 GB document's tree frees about 40k nodes on the
-  releasing thread, in the millisecond range. `TODO(M1)`: `m1/large-file` moves that release to a background lane.
+  releasing thread, in the millisecond range. `TODO(M15)`: `m15/large-file` moves that release to a background
+  lane (ADR 0029).
 
 ### Deviations from the slice spec
 - **CR/LF cuts:** `appendPieces` does not avoid cutting between a CR and an LF. The spec allows this ("where
@@ -259,7 +262,7 @@ harness caps stay at the spec's values (512 ops, documents of 64 KiB, a full che
   undo can keep old versions for the cost of their unshared nodes.
 - Edits report LSP-ready changes; the LSP client never has to re-derive line structure around a CR.
 - Memory is append-only until `TODO(M13)` compaction: a long editing session keeps every inserted byte.
-- F1 is tight at P = 4 KiB (decision 6); `m1/large-file` owns the mitigation and B15's measurement.
+- F1 is tight at P = 4 KiB (decision 6); `m15/large-file` (M15, ADR 0029) owns the mitigation and B15's measurement.
 - The fuzz build has its own CMake path and presets. `verify -Full` grows by about 1.5 minutes per OS: on Windows
   the fuzz leg's configure and rebuild took about 10 s and its test 61 s; in WSL the first configure and build of
   the fuzz tree took about 26 s and its test 59 s (file times in the build trees).
@@ -269,7 +272,7 @@ harness caps stay at the spec's values (512 ops, documents of 64 KiB, a full che
 - **VS Code's red-black piece tree.** Mutable in place, so a snapshot needs a copy or a lock; rejected for a
   persistent B+tree whose snapshot is one reference-count increment.
 - **A rope that copies text into its leaves** (no separate storage). Every edit would copy up to a leaf's text,
-  and a 2 GB load would copy the file; the piece table keeps the original in place (and lets `m1/large-file` map
+  and a 2 GB load would copy the file; the piece table keeps the original in place (and lets `m15/large-file` map
   it).
 - **A gap buffer or a plain line array.** No O(1) snapshots and O(n) worst-case edits.
 - **Fan-out B = 6 (Zed) or 16.** 6 makes the tree taller with shorter scans; 16 doubles the path-copy cost per

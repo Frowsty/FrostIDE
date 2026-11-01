@@ -2,6 +2,8 @@
 
 - Status: proposed
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (m1/large-file is m15/large-file, so the atlas mapping to-do is `TODO(M15)`;
+  nothing else changes)
 - Plan reference: PLAN.md section 2 ("Theming", "Icons and fonts"), 2.1 (`frost/compat`, banned features),
   3.4 (resources), 4 (B1, B5, B19, B28), 6.1 (test oracles), 8 (L1, L7), 9 (D13); milestone M1;
   feature matrix rows 243 ("themes") and 244 ("compact mode, IDE zoom, HiDPI")
@@ -147,7 +149,7 @@ Button.default.hoverBackground from `#3F7AE3` (white text 4.11:1) to `#3166CC` (
   and only the primary screen's scale is read at start-up (0.21 ms cold for 100%): the scale the selection rules
   pick for a Small icon of the theme's Icon.size there, so 125% zoom on a 150% screen preloads 150% (the 20 px
   design is exactly 30 device pixels) rather than 200%. PLAN 3.4 says "mapped"; the
-  mapping API is TODO(M1) with m1/large-file (question 4). A failed lazy load is remembered and the next best
+  mapping API is TODO(M15) with m15/large-file (question 4). A failed lazy load is remembered and the next best
   loaded atlas serves; atlases of different bakes are refused.
 - Tinted pixmaps are cached by (scale, entry, device size, mode, tint ARGB, dark, dpr) in an 8 MiB QCache
   (Budget: B19), so a theme switch re-tints existing QIcons. A hit still chooses the cell first (two O(log n) id
@@ -269,7 +271,7 @@ Atlas sizes (47 icons, 16 and 20 px designs, one page each): 100% 43,048 bytes; 
   - TODO(M1) m1/settings: the IAppearanceSettings adapter in `src/ui`, with live reload on the GUI thread.
   - TODO(M1) m1/editor-view: editor colour keys and `ensureEditorFonts()`.
   - TODO(M1) after m1/piece-tree: libFuzzer adapters for the theme blob and atlas harnesses.
-  - TODO(M1) m1/large-file: a mapping API for atlases (question 4).
+  - TODO(M15) m15/large-file: a mapping API for atlases (question 4).
   - M11: theme import (parentTheme, .icls, lenient mode in-product), reduced motion, accessibility extras.
   - Our own icon set replaces Lucide (D13).
 

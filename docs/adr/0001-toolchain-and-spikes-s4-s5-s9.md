@@ -2,7 +2,9 @@
 
 - Status: accepted
 - Date: 2026-10-31
-- Amended: 2026-11-01 (decision 1: how clang-cl's pinning options are spelled)
+- Amended: 2026-11-01 (decision 1: how clang-cl's pinning options are spelled); 2026-11-01 by ADR 0029 (the
+  lldb-dap that S5 found missing or unusable is built from the pinned LLVM sources in M4, for the first usable
+  build's minimal debugger, instead of being sourced in M6; nothing else changes)
 - Plan reference: PLAN.md section 2 (Compilers and STL, Build and dependencies, Static analysis), section 2.1, M0 spikes S4, S5, S9
 
 ## Context
@@ -85,8 +87,9 @@ the M0 exit.
 - An MSVC toolset update installs a new `VC/Tools/MSVC/<ver>` directory, and the build keeps using 14.44.35207
   until `sdk.lock.json` changes. The 14.52 move needs VS 2026 Build Tools (user-elevated install) and LLVM ≥22,
   which we already have.
-- M6 must source lldb-dap: on Windows by self-building or another official package; on Linux by building without
-  Python scripting, or by providing a matching libpython. Tracked as an M6 open item.
+- M4 must source lldb-dap, for the first usable build's minimal debugger (ADR 0029, decision 12; before ADR 0029
+  this was M6's open item): on both OSes it is built from the pinned LLVM sources into E:\sdk and `~/sdk`; on
+  Linux without Python scripting, or against a matching libpython, as M4's spike S10 decides.
 - frost-lint carries the only enforcement for expansion statements and named modules. If a later clang starts
   rejecting them, the compile-fail probes can take over.
 - Host commit headroom is the main constraint on parallel builds (see `-Jobs`/`FROST_JOBS` in the verify scripts).

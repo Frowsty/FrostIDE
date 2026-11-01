@@ -114,7 +114,10 @@ struct ProcessSpec {
     // ADR 0011 (E2): trusted user-script children (MSBuild Exec tasks and build events, CMake
     // configure, later Build/Run and the terminal) get it stripped from their environment, for
     // Visual Studio-compatible cmd.exe behaviour; restricted children (read-only git, clangd,
-    // bundled tools) keep it. The M2 launcher policy implements that.
+    // bundled tools) keep it. The M2 launcher policy implements that. Path (c)'s MSBuild.exe
+    // (U1's evaluator, ADR 0029) also starts with cleanEnvironment: the user's default block,
+    // the cached toolchain environment and this policy, never frost's own environment, so the
+    // ProjectModelCache environment fingerprint does not depend on how frost was started.
     std::vector<std::pair<std::string, std::optional<std::string>>> environment{};
 
     Stdio stdinMode = Stdio::Null;

@@ -13,7 +13,7 @@
  *
  * TextPerf.LoadThroughput: fromUtf8 on 256 MiB (optimised unsanitised) or 16 MiB. Reports GB/s,
  * bytes per piece and tree memory, and projects them to F1 (a 2 GB file) for B15's +64 MB and 2 s
- * line-index limits (ADR 0013, D4 risk). Report only; m1/large-file gates B15. Budget: B15.
+ * line-index limits (ADR 0013, D4 risk). Report only; M15's large-file mode gates B15. Budget: B15.
  *
  * TextPerf.SeekLatency: random pointAt, offsetAt, utf16PointAt and lineInfo queries on the 16 MiB
  * document. Reports p50/p99, nodes and bytes per piece.
@@ -172,7 +172,7 @@ TEST(TextPerf, LoadThroughput) {
                 static_cast<double>(size) / static_cast<double>(stats.pieces), stats.leaves, stats.internals,
                 loaded->current().pieceTree().height(), static_cast<double>(stats.nodeBytes) / 1e6, nodeBytesPerByte);
     std::printf("[text perf] F1 projection (2 GB): load %.2f s at this rate, %.1f MB of tree nodes (B15 allows +64 MB "
-                "of private bytes and 2 s for the line index; m1/large-file gates it)\n",
+                "of private bytes and 2 s for the line index; M15's large-file mode gates it)\n",
                 kF1Bytes / (gbPerSecond * 1e9), kF1Bytes * nodeBytesPerByte / 1e6);
 }
 

@@ -4,6 +4,8 @@
   `tests/perf/budgets.json` and `TextPerf.EditLatency` are unchanged. ADR 0013's text-side sub-budget of B5 now
   covers the whole text-side keystroke, undo and redo included (decision 12).
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (the large-file to-do in src/text/CMakeLists.txt is `TODO(M15)`; nothing
+  else changes)
 - Plan reference: PLAN.md section 3 ("Text buffer": "O(1) snapshots, anchors, a transactional undo tree excluding
   IME preedit") and the edit data flow; section 3.4 ("Keystroke → paint", "Save and external change"); section 4,
   B5 and B19; sections 6.1, 6.4 and 6.6; section 7 M1. ADR 0013's "Interop notes for later slices". Feature matrix
@@ -411,7 +413,8 @@ Mutation checks of the fixes (Windows Release `text_tests`, each reverted):
   and rollback; edit batches with adjacent ranges may need full sync.
 - **M3 DiagnosticsStore** re-anchors through `ChangeSet.edits`.
 - **M13 compaction** must keep or remap the bytes undo slices reference; anchors are unaffected.
-- `TODO(M1)` in src/text/CMakeLists.txt keeps m1/encodings and m1/large-file only.
+- The to-do line in src/text/CMakeLists.txt keeps large-file mode only, as `TODO(M15)`: m1/encodings has
+  merged, and ADR 0029 moved large-file mode (m1/large-file, now m15/large-file) to M15.
 
 ## Alternatives considered
 - **Storage-position (insertion-id) anchors over a tombstone tree:** changes `Piece` and every query, risks B5, and

@@ -70,7 +70,7 @@ public:
      * first one's sourceHash; a mismatch is Corrupt ("atlas set from different bakes").
      * Atlases are read, not mapped: they are small (about 40-350 KB) and IFileSystem keeps the
      * reads fault-injectable and long-path safe (ADR 0015 decision 7).
-     * TODO(M1): use the IFileSystem mapping API when m1/large-file lands (PLAN.md 3.4 says
+     * TODO(M15): use the IFileSystem mapping API when m15/large-file lands (PLAN.md 3.4 says
      * "mapped").
      * Errors: InvalidArgument (no or unknown preload scale), NotFound, PermissionDenied, Busy,
      * IoError, Corrupt, each with the path as context. Budget: B1.

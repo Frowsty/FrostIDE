@@ -6,9 +6,9 @@
 /*
  * Static reading only. Imported .props and .targets files are not read and nothing is
  * evaluated, so items or properties that imports add are missing: path (c)'s MSBuild evaluation
- * (ProjectHost, M2) closes that gap. Conditions are not evaluated either: every PropertyGroup
- * and ItemGroup is read whatever its Condition, including those inside <Choose>/<When>/
- * <Otherwise>, and each file is kept once (the first item that names it wins).
+ * (M2; ProjectHost from M16, ADR 0029) closes that gap. Conditions are not evaluated either:
+ * every PropertyGroup and ItemGroup is read whatever its Condition, including those inside
+ * <Choose>/<When>/<Otherwise>, and each file is kept once (the first item that names it wins).
  *
  * Properties. ProjectGuid, RootNamespace, ConfigurationType and PlatformToolset keep the first
  * value in document order. A PropertyGroup whose Condition is the standard

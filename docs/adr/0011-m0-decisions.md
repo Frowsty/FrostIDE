@@ -2,6 +2,10 @@
 
 - Status: accepted
 - Date: 2026-11-01
+- Amended: 2026-11-01 by ADR 0029 (the thin path). B1: the S6 cold samples and the user's B23 first-project value
+  are needed before M16, where ProjectHost lands, not before M2; M2 no longer depends on D3. B3: the five
+  preconditions also apply to M2's B23 first-project gate on path (c), with `MSBuild.exe`'s cold start in place of
+  ProjectHost's. B4: ProjectHost before L1 is M16's target; path (c) starts after L1. B5 and E2 are unchanged in M2.
 - Plan reference: PLAN.md section 6.7 (working agreement, sign-off), section 7 (M0 spikes and exit, "Every
   milestone exit also requires"); ADRs 0002, 0003 and 0005–0010; `docs/progress.md` (entry "2026-11-01: M0
   overnight run and exit verification", questions A1–G1); the M0 demo pack `E:\FrostBuilds\demo\m0\index.html`
