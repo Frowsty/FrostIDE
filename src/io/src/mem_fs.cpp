@@ -5,11 +5,13 @@
 #include "frost/io/mem_fs.hpp"
 
 #include "frost/core/assert.hpp"
+#include "frost/io/utf.hpp"
 
 #include "internal.hpp"
 
 #include <algorithm>
 #include <format>
+#include <iterator>
 #include <utility>
 
 namespace frost::io {
@@ -26,6 +28,7 @@ std::string_view opName(FsOp op) noexcept {
     case FsOp::RemoveFile: return "removeFile";
     case FsOp::RemoveEmptyDirectory: return "removeDirectory";
     case FsOp::Exists: return "exists";
+    case FsOp::Rename: return "rename";
     }
     return "?";
 }
@@ -243,13 +246,148 @@ Result<void> MemFs::writeFileAtomic(std::string_view path, std::string_view data
     // Step 2: the rename. A fault here leaves the target untouched and removes the temp file.
     if (auto fault = takeFault(FsOp::AtomicRename, *key, path); !fault) {
         m_nodes.erase(*temp);
+        const MemFsEvent events[] = {{MemFsEventKind::Created, *temp, FileType::Regular, 0},
+                                     {MemFsEventKind::Modified, *temp, FileType::Regular, 0},
+                                     {MemFsEventKind::Removed, *temp, FileType::Regular, 0}};
+        notify(events);
         return std::unexpected(std::move(fault.error()));
     }
     auto node = m_nodes.extract(*temp);
     node.mapped().mtime = m_clock.systemNow();
     m_nodes.insert_or_assign(*key, std::move(node.mapped()));
     touchParent(*key);
+    if (!m_observers.empty()) {
+        const std::uint64_t cookie = nextCookie();
+        const MemFsEvent events[] = {{MemFsEventKind::Created, *temp, FileType::Regular, 0},
+                                     {MemFsEventKind::Modified, *temp, FileType::Regular, 0},
+                                     {MemFsEventKind::MovedFrom, *temp, FileType::Regular, cookie},
+                                     {MemFsEventKind::MovedTo, *key, FileType::Regular, cookie}};
+        notify(events);
+    }
     return {};
+}
+
+Result<void> MemFs::writeInPlace(std::string_view path, std::string_view data) {
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "writeInPlace", /*entryTarget=*/true);
+    if (!key) {
+        return std::unexpected(std::move(key.error()));
+    }
+    if (auto fault = takeFault(FsOp::Write, *key, path); !fault) {
+        return std::unexpected(std::move(fault.error()));
+    }
+    if (fileName(*key, m_style).empty()) {
+        return fail(ErrorCode::InvalidArgument, std::format("writeInPlace '{}': not a file path", path));
+    }
+    if (!isDirectory(std::string(parentPath(*key, m_style)))) {
+        return std::unexpected(notFound("writeInPlace", path));
+    }
+    if (isDirectory(*key)) {
+        return std::unexpected(detail::isADirectoryError("writeInPlace", path));
+    }
+    Node* node = find(*key);
+    const bool created = node == nullptr;
+    if (created) {
+        node = &m_nodes[*key];
+        node->type = FileType::Regular;
+        touchParent(*key);
+    }
+    node->content.assign(data);
+    node->mtime = m_clock.systemNow();
+    if (created) {
+        const MemFsEvent events[] = {{MemFsEventKind::Created, *key, FileType::Regular, 0},
+                                     {MemFsEventKind::Modified, *key, FileType::Regular, 0}};
+        notify(events);
+    } else {
+        const MemFsEvent events[] = {{MemFsEventKind::Modified, *key, FileType::Regular, 0}};
+        notify(events);
+    }
+    return {};
+}
+
+Result<void> MemFs::rename(std::string_view from, std::string_view to) {
+    LockGuard lock(m_mutex);
+    auto source = resolve(from, "rename", /*entryTarget=*/true);
+    if (!source) {
+        return std::unexpected(std::move(source.error()));
+    }
+    auto target = resolve(to, "rename", /*entryTarget=*/true);
+    if (!target) {
+        return std::unexpected(std::move(target.error()));
+    }
+    if (auto fault = takeFault(FsOp::Rename, *source, from); !fault) {
+        return std::unexpected(std::move(fault.error()));
+    }
+    if (isRootPath(*source) || isRootPath(*target)) {
+        return fail(ErrorCode::InvalidArgument, std::format("rename '{}' -> '{}': cannot rename a root", from, to));
+    }
+    const Node* sourceNode = find(*source);
+    if (sourceNode == nullptr) {
+        return std::unexpected(notFound("rename", from));
+    }
+    if (*source == *target) {
+        return {}; // rename(2) of an entry onto itself does nothing.
+    }
+    const char separator = m_style == PathStyle::Windows ? '\\' : '/';
+    const std::string sourcePrefix = *source + separator;
+    if (target->starts_with(sourcePrefix)) {
+        return fail(ErrorCode::InvalidArgument,
+                    std::format("rename '{}' -> '{}': the destination is inside the source", from, to));
+    }
+    if (!isDirectory(std::string(parentPath(*target, m_style)))) {
+        return std::unexpected(notFound("rename", to));
+    }
+    const FileType type = sourceNode->type;
+    if (const Node* targetNode = find(*target); targetNode != nullptr) {
+        if (type == FileType::Directory && targetNode->type != FileType::Directory) {
+            return std::unexpected(detail::notADirectoryError("rename", to));
+        }
+        if (type != FileType::Directory && targetNode->type == FileType::Directory) {
+            return std::unexpected(detail::isADirectoryError("rename", to));
+        }
+        const std::string targetPrefix = *target + separator;
+        if (const auto it = m_nodes.lower_bound(targetPrefix);
+            it != m_nodes.end() && it->first.starts_with(targetPrefix)) {
+            return fail(ErrorCode::IoError, std::format("rename '{}' -> '{}': directory not empty", from, to));
+        }
+        m_nodes.erase(*target);
+    }
+    // Re-key the entry and everything below it.
+    std::vector<decltype(m_nodes)::node_type> moved;
+    moved.push_back(m_nodes.extract(*source));
+    for (auto it = m_nodes.lower_bound(sourcePrefix); it != m_nodes.end() && it->first.starts_with(sourcePrefix);) {
+        auto next = std::next(it);
+        moved.push_back(m_nodes.extract(it));
+        it = next;
+    }
+    for (auto& node : moved) {
+        node.key() = *target + node.key().substr(source->size());
+        m_nodes.insert(std::move(node));
+    }
+    touchParent(*source);
+    touchParent(*target);
+    const std::uint64_t cookie = nextCookie();
+    const MemFsEvent events[] = {{MemFsEventKind::MovedFrom, *source, type, cookie},
+                                 {MemFsEventKind::MovedTo, *target, type, cookie}};
+    notify(events);
+    return {};
+}
+
+void MemFs::addObserver(IMemFsObserver& observer) {
+    LockGuard lock(m_mutex);
+    FROST_PRE(std::ranges::find(m_observers, &observer) == m_observers.end());
+    m_observers.push_back(&observer);
+}
+
+void MemFs::removeObserver(IMemFsObserver& observer) {
+    LockGuard lock(m_mutex);
+    std::erase(m_observers, &observer);
+}
+
+void MemFs::notify(std::span<const MemFsEvent> events) {
+    for (IMemFsObserver* observer : m_observers) {
+        observer->onMemFsEvents(events);
+    }
 }
 
 Result<FileStatus> MemFs::status(std::string_view path) {
@@ -306,6 +444,23 @@ Result<std::vector<DirEntry>> MemFs::listDirectory(std::string_view path) {
     return entries;
 }
 
+Result<DirListing> MemFs::listDirectoryWithDiagnostics(std::string_view path) {
+    auto entries = listDirectory(path);
+    if (!entries) {
+        return std::unexpected(std::move(entries.error()));
+    }
+    DirListing listing;
+    for (const DirEntry& entry : *entries) {
+        if (!isValidUtf8(entry.name)) {
+            listing.issues.push_back(DirListingIssue{
+                entry.name, true,
+                Error(ErrorCode::InvalidArgument, std::format("listDirectory '{}': a name is not valid UTF-8", path))});
+        }
+    }
+    listing.entries = std::move(*entries);
+    return listing;
+}
+
 MemFs::MkdirOutcome MemFs::makeDirectory(std::string_view spelled, std::string_view original, Error& error) {
     const Walk walked = walk(spelled);
     if (walked.status != Lookup::Resolved) {
@@ -322,6 +477,8 @@ MemFs::MkdirOutcome MemFs::makeDirectory(std::string_view spelled, std::string_v
     }
     m_nodes[walked.key] = Node{FileType::Directory, {}, m_clock.systemNow()};
     touchParent(walked.key);
+    const MemFsEvent events[] = {{MemFsEventKind::Created, walked.key, FileType::Directory, 0}};
+    notify(events);
     return MkdirOutcome::Done;
 }
 
@@ -389,6 +546,8 @@ Result<void> MemFs::removeFile(std::string_view path) {
         return std::unexpected(notFound("removeFile", path));
     }
     touchParent(*key);
+    const MemFsEvent events[] = {{MemFsEventKind::Removed, *key, FileType::Regular, 0}};
+    notify(events);
     return {};
 }
 
@@ -421,6 +580,8 @@ Result<void> MemFs::removeDirectory(std::string_view path) {
     }
     m_nodes.erase(*key);
     touchParent(*key);
+    const MemFsEvent events[] = {{MemFsEventKind::Removed, *key, FileType::Directory, 0}};
+    notify(events);
     return {};
 }
 

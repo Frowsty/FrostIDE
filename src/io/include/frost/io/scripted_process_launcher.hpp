@@ -27,6 +27,16 @@
  *     without a timeout fails with Internal instead of blocking forever, and
  *     after terminate() the process reports kTerminatedExitCode (and SIGKILL
  *     on POSIX).
+ *   - launchAsync() returns an IAsyncProcess over the same script, on
+ *     context.scheduler (the reactor is not used, so a SimExecutor works and
+ *     everything runs on its virtual clock). Output arrives in chunks of
+ *     `chunkBytes` (0: all at once), each after `chunkInterval` on the
+ *     scheduler's clock. With `neverExits`, reads past the scripted bytes
+ *     and exited() wait until terminate() (then EOF and kTerminatedExitCode),
+ *     and communicate() waits for its timeout, terminates and fails with
+ *     Timeout. Wakeups are enqueued from the thread that calls terminate()
+ *     or stops a token, so under a SimExecutor those calls belong on its
+ *     owner thread.
  *
  * Thread safety: all members may be called concurrently; records are
  * returned as snapshots. Launched processes share the recorded state with the
@@ -38,7 +48,9 @@
  */
 #pragma once
 
+#include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
+#include "frost/io/async_process.hpp"
 #include "frost/io/process.hpp"
 
 #include <memory>
@@ -56,6 +68,10 @@ struct ScriptedProcess {
     std::string stdoutBytes{};
     std::string stderrBytes{};
     bool neverExits = false;
+    // launchAsync only: the largest piece a read returns (0: no limit) and the scheduler-clock delay before
+    // each piece.
+    std::size_t chunkBytes = 0;
+    IClock::Duration chunkInterval{};
 };
 
 // What the code under test did with one launch.
@@ -85,6 +101,8 @@ public:
     [[nodiscard]] std::vector<LaunchRecord> launches() const;
 
     Result<std::unique_ptr<IProcess>> launch(const ProcessSpec& spec) override;
+    // Accepts any scheduler (see the header comment); records launches like launch().
+    Result<std::unique_ptr<IAsyncProcess>> launchAsync(const ProcessSpec& spec, const AsyncContext& context) override;
 
     struct State; // Shared with the scripted processes; defined in the implementation.
 

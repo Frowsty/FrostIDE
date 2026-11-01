@@ -27,14 +27,18 @@
 #include "frost/io/utf.hpp"
 
 #include "internal.hpp"
+#include "process_internal.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include <windows.h>
@@ -308,14 +312,23 @@ Result<std::wstring> launchPath(const std::string& normalized, ImagePathForm for
     return toWin32Path(normalized);
 }
 
+// While true (tests only), a working directory of kMaxWorkingDirectoryUnits or more is treated as
+// refused by CreateProcessW, as with LongPathsEnabled = 0. Relaxed: set before the launch it targets.
+constinit std::atomic<bool> g_refuseLongWorkingDirectory{false};
+
+// The longest current directory Windows accepts without long paths: MAX_PATH minus room for an 8.3 name
+// (the documented SetCurrentDirectory rule), in UTF-16 units.
+constexpr std::size_t kMaxWorkingDirectoryUnits = MAX_PATH - 12;
+
 /*
  * Explains CreateProcessW's ERROR_DIRECTORY ("the directory name is invalid") for the
  * working directory `normalized`: NotFound if it does not exist, InvalidArgument if it is
  * not a directory or is too long. Windows keeps a process's current directory in a
  * MAX_PATH buffer unless long paths are enabled system-wide, so with LongPathsEnabled = 0
  * (observed 2026-10-31) a directory beyond it cannot be a child's current directory even
- * though frost::io can create and use it.
- * TODO(M1): fall back to the directory's 8.3 short name (GetShortPathNameW) when it has one.
+ * though frost::io can create and use it. Before giving up, launch() retries with the
+ * directory's 8.3 short spelling (detail::shortWorkingDirectory) when the volume has one;
+ * this error means that failed too or there was none.
  */
 Error workingDirectoryError(const ProcessSpec& spec, const std::string& normalized) {
     auto extended = toWin32Path(normalized);
@@ -330,7 +343,7 @@ Error workingDirectoryError(const ProcessSpec& spec, const std::string& normaliz
     }
     const auto wide = toWide(normalized);
     const std::size_t units = wide ? wide->size() : normalized.size();
-    if (units >= MAX_PATH - 12) {
+    if (units >= kMaxWorkingDirectoryUnits) {
         return Error(ErrorCode::InvalidArgument,
                      std::format("launch '{}': working directory '{}' is {} UTF-16 units long; Windows limits a "
                                  "process's current directory to MAX_PATH ({}) unless long paths are enabled",
@@ -687,157 +700,196 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
     return result;
 }
 
+/*
+ * The body of WindowsProcessLauncher::launch() up to the wrapping (process_internal.hpp): validation,
+ * the streams, the job, the inherited-handle list and CreateProcessW with the 8.3 working-directory retry.
+ */
+Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
+    if (auto valid = validateProcessSpec(spec, /*windowsRules=*/true); !valid) {
+        return std::unexpected(std::move(valid.error()));
+    }
+    auto executable = normalizePath(spec.executable, PathStyle::Windows);
+    if (!executable) {
+        return std::unexpected(std::move(executable.error()));
+    }
+    auto applicationName = launchPath(*executable, spec.imagePathForm);
+    if (!applicationName) {
+        return std::unexpected(std::move(applicationName.error()));
+    }
+    if (auto notBatch = checkNotBatch(*applicationName, spec.executable); !notBatch) {
+        return std::unexpected(std::move(notBatch.error()));
+    }
+    // validateProcessSpec has checked that the command line builds and fits the limit.
+    auto utf8CommandLine = buildWindowsCommandLine(*executable, spec.arguments);
+    if (!utf8CommandLine) {
+        return std::unexpected(std::move(utf8CommandLine.error()));
+    }
+    auto commandLine = toWide(*utf8CommandLine);
+    if (!commandLine) {
+        return std::unexpected(std::move(commandLine.error()).withContext("command line"));
+    }
+    std::string normalizedDirectory;
+    std::wstring workingDirectory;
+    if (!spec.workingDirectory.empty()) {
+        auto normalized = normalizePath(spec.workingDirectory, PathStyle::Windows);
+        auto wide = normalized ? launchPath(*normalized, ImagePathForm::Auto)
+                               : Result<std::wstring>(std::unexpected(normalized.error()));
+        if (!wide) {
+            return std::unexpected(std::move(wide.error()));
+        }
+        normalizedDirectory = std::move(*normalized);
+        workingDirectory = std::move(*wide);
+    }
+    // lpDesktop is a non-const LPWSTR, so it points into this buffer; empty means the parent's desktop.
+    std::wstring desktop;
+    if (!spec.desktop.empty()) {
+        auto wide = toWide(spec.desktop);
+        if (!wide) {
+            return std::unexpected(std::move(wide.error()).withContext("desktop name"));
+        }
+        desktop = std::move(*wide);
+    }
+    std::wstring environment;
+    const bool customEnvironment = spec.cleanEnvironment || !spec.environment.empty();
+    if (customEnvironment) {
+        auto block = buildEnvironmentBlock(spec);
+        if (!block) {
+            return std::unexpected(std::move(block.error()));
+        }
+        environment = std::move(*block);
+    }
+
+    auto in = setupStream(spec.stdinMode, STD_INPUT_HANDLE, /*parentReads=*/false);
+    if (!in) {
+        return std::unexpected(std::move(in.error()));
+    }
+    auto out = setupStream(spec.stdoutMode, STD_OUTPUT_HANDLE, /*parentReads=*/true);
+    if (!out) {
+        return std::unexpected(std::move(out.error()));
+    }
+    StreamSetup err;
+    if (spec.stderrMode != Stdio::MergeIntoStdout) {
+        auto setup = setupStream(spec.stderrMode, STD_ERROR_HANDLE, /*parentReads=*/true);
+        if (!setup) {
+            return std::unexpected(std::move(setup.error()));
+        }
+        err = std::move(*setup);
+    }
+    const HANDLE childErr = spec.stderrMode == Stdio::MergeIntoStdout ? out->child.get() : err.child.get();
+
+    UniqueHandle job;
+    if (spec.killOnClose) {
+        job.reset(CreateJobObjectW(nullptr, nullptr));
+        if (!job.valid()) {
+            return std::unexpected(lastWin32Error("CreateJobObjectW"));
+        }
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)) == FALSE) {
+            return std::unexpected(lastWin32Error("SetInformationJobObject"));
+        }
+    }
+
+    // Exactly these handles are inherited (each once; duplicates are an error for the API).
+    std::vector<HANDLE> inherited{in->child.get(), out->child.get()};
+    if (std::ranges::find(inherited, childErr) == inherited.end()) {
+        inherited.push_back(childErr);
+    }
+    const DWORD attributeCount = job.valid() ? 2 : 1;
+    SIZE_T listSize = 0;
+    InitializeProcThreadAttributeList(nullptr, attributeCount, 0, &listSize);
+    std::vector<std::byte> listStorage(listSize);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(listStorage.data());
+    if (InitializeProcThreadAttributeList(attributes, attributeCount, 0, &listSize) == FALSE) {
+        return std::unexpected(lastWin32Error("InitializeProcThreadAttributeList"));
+    }
+    struct ListGuard {
+        LPPROC_THREAD_ATTRIBUTE_LIST list;
+        ~ListGuard() { DeleteProcThreadAttributeList(list); }
+    } listGuard{attributes};
+    if (UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
+                                  inherited.size() * sizeof(HANDLE), nullptr, nullptr) == FALSE) {
+        return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(HANDLE_LIST)"));
+    }
+    // The job is attached at creation, so not even the child's first instruction runs outside it.
+    HANDLE jobHandle = job.get();
+    if (job.valid() && UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &jobHandle,
+                                                 sizeof(HANDLE), nullptr, nullptr) == FALSE) {
+        return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(JOB_LIST)"));
+    }
+
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = in->child.get();
+    startup.StartupInfo.hStdOutput = out->child.get();
+    startup.StartupInfo.hStdError = childErr;
+    startup.StartupInfo.lpDesktop = desktop.empty() ? nullptr : desktop.data();
+    startup.lpAttributeList = attributes;
+    DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+    // A GUI parent has no console; without this flag every console tool would open a window.
+    // A console parent shares its console, so inherited console handles stay valid.
+    if (GetConsoleWindow() == nullptr) {
+        flags |= CREATE_NO_WINDOW;
+    }
+    // TODO(M1): log applicationName, the working directory and the command line (PLAN.md 3.5) once
+    // frost::core has logging (the crash and logging slice, PLAN.md I3; see process.hpp).
+    PROCESS_INFORMATION info{};
+    const auto create = [&](const std::wstring& directory) {
+        return CreateProcessW(applicationName->c_str(), commandLine->data(), nullptr, nullptr, TRUE, flags,
+                              customEnvironment ? environment.data() : nullptr,
+                              directory.empty() ? nullptr : directory.c_str(), &startup.StartupInfo, &info) != FALSE;
+    };
+    const auto directoryUnits = toWide(normalizedDirectory);
+    const bool refuseLong = g_refuseLongWorkingDirectory.load(std::memory_order_relaxed) && directoryUnits &&
+                            directoryUnits->size() >= kMaxWorkingDirectoryUnits;
+    bool created = !refuseLong && create(workingDirectory);
+    DWORD error = created ? ERROR_SUCCESS : (refuseLong ? ERROR_DIRECTORY : GetLastError());
+    // A working directory beyond MAX_PATH is refused unless long paths are enabled system-wide; its
+    // 8.3 short spelling fits when the volume has one (see workingDirectoryError).
+    if (!created && error == ERROR_DIRECTORY && !workingDirectory.empty()) {
+        if (auto shortened = detail::shortWorkingDirectory(normalizedDirectory);
+            shortened && *shortened != workingDirectory) {
+            created = create(*shortened);
+            error = created ? ERROR_SUCCESS : GetLastError();
+        }
+    }
+    if (!created) {
+        if (error == ERROR_DIRECTORY && !spec.workingDirectory.empty()) {
+            return std::unexpected(workingDirectoryError(spec, normalizedDirectory));
+        }
+        return std::unexpected(win32Error(error, "launch", spec.executable));
+    }
+    CloseHandle(info.hThread);
+    // The child ends (in/out/err .child) close when this function returns, so EOF arrives
+    // as soon as the child and its descendants close theirs.
+    return detail::SpawnedChild{
+        UniqueHandle(info.hProcess), std::move(job),         static_cast<ProcessId>(info.dwProcessId),
+        std::move(in->parent),       std::move(out->parent), std::move(err.parent)};
+}
+
 class WindowsProcessLauncher final : public IProcessLauncher {
 public:
     constexpr WindowsProcessLauncher() noexcept = default;
 
     Result<std::unique_ptr<IProcess>> launch(const ProcessSpec& spec) override {
-        if (auto valid = validateProcessSpec(spec, /*windowsRules=*/true); !valid) {
-            return std::unexpected(std::move(valid.error()));
+        auto child = spawnWindowsChild(spec);
+        if (!child) {
+            return std::unexpected(std::move(child.error()));
         }
-        auto executable = normalizePath(spec.executable, PathStyle::Windows);
-        if (!executable) {
-            return std::unexpected(std::move(executable.error()));
-        }
-        auto applicationName = launchPath(*executable, spec.imagePathForm);
-        if (!applicationName) {
-            return std::unexpected(std::move(applicationName.error()));
-        }
-        if (auto notBatch = checkNotBatch(*applicationName, spec.executable); !notBatch) {
-            return std::unexpected(std::move(notBatch.error()));
-        }
-        // validateProcessSpec has checked that the command line builds and fits the limit.
-        auto utf8CommandLine = buildWindowsCommandLine(*executable, spec.arguments);
-        if (!utf8CommandLine) {
-            return std::unexpected(std::move(utf8CommandLine.error()));
-        }
-        auto commandLine = toWide(*utf8CommandLine);
-        if (!commandLine) {
-            return std::unexpected(std::move(commandLine.error()).withContext("command line"));
-        }
-        std::string normalizedDirectory;
-        std::wstring workingDirectory;
-        if (!spec.workingDirectory.empty()) {
-            auto normalized = normalizePath(spec.workingDirectory, PathStyle::Windows);
-            auto wide = normalized ? launchPath(*normalized, ImagePathForm::Auto)
-                                   : Result<std::wstring>(std::unexpected(normalized.error()));
-            if (!wide) {
-                return std::unexpected(std::move(wide.error()));
-            }
-            normalizedDirectory = std::move(*normalized);
-            workingDirectory = std::move(*wide);
-        }
-        // lpDesktop is a non-const LPWSTR, so it points into this buffer; empty means the parent's desktop.
-        std::wstring desktop;
-        if (!spec.desktop.empty()) {
-            auto wide = toWide(spec.desktop);
-            if (!wide) {
-                return std::unexpected(std::move(wide.error()).withContext("desktop name"));
-            }
-            desktop = std::move(*wide);
-        }
-        std::wstring environment;
-        const bool customEnvironment = spec.cleanEnvironment || !spec.environment.empty();
-        if (customEnvironment) {
-            auto block = buildEnvironmentBlock(spec);
-            if (!block) {
-                return std::unexpected(std::move(block.error()));
-            }
-            environment = std::move(*block);
-        }
+        return std::make_unique<WindowsProcess>(std::move(child->process), std::move(child->job), child->pid,
+                                                std::move(child->in), std::move(child->out), std::move(child->err));
+    }
 
-        auto in = setupStream(spec.stdinMode, STD_INPUT_HANDLE, /*parentReads=*/false);
-        if (!in) {
-            return std::unexpected(std::move(in.error()));
+    Result<std::unique_ptr<IAsyncProcess>> launchAsync(const ProcessSpec& spec, const AsyncContext& context) override {
+        if (auto usable = detail::checkAsyncContext(context); !usable) {
+            return std::unexpected(std::move(usable.error()));
         }
-        auto out = setupStream(spec.stdoutMode, STD_OUTPUT_HANDLE, /*parentReads=*/true);
-        if (!out) {
-            return std::unexpected(std::move(out.error()));
+        auto child = spawnWindowsChild(spec);
+        if (!child) {
+            return std::unexpected(std::move(child.error()));
         }
-        StreamSetup err;
-        if (spec.stderrMode != Stdio::MergeIntoStdout) {
-            auto setup = setupStream(spec.stderrMode, STD_ERROR_HANDLE, /*parentReads=*/true);
-            if (!setup) {
-                return std::unexpected(std::move(setup.error()));
-            }
-            err = std::move(*setup);
-        }
-        const HANDLE childErr = spec.stderrMode == Stdio::MergeIntoStdout ? out->child.get() : err.child.get();
-
-        UniqueHandle job;
-        if (spec.killOnClose) {
-            job.reset(CreateJobObjectW(nullptr, nullptr));
-            if (!job.valid()) {
-                return std::unexpected(lastWin32Error("CreateJobObjectW"));
-            }
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            if (SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ==
-                FALSE) {
-                return std::unexpected(lastWin32Error("SetInformationJobObject"));
-            }
-        }
-
-        // Exactly these handles are inherited (each once; duplicates are an error for the API).
-        std::vector<HANDLE> inherited{in->child.get(), out->child.get()};
-        if (std::ranges::find(inherited, childErr) == inherited.end()) {
-            inherited.push_back(childErr);
-        }
-        const DWORD attributeCount = job.valid() ? 2 : 1;
-        SIZE_T listSize = 0;
-        InitializeProcThreadAttributeList(nullptr, attributeCount, 0, &listSize);
-        std::vector<std::byte> listStorage(listSize);
-        auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(listStorage.data());
-        if (InitializeProcThreadAttributeList(attributes, attributeCount, 0, &listSize) == FALSE) {
-            return std::unexpected(lastWin32Error("InitializeProcThreadAttributeList"));
-        }
-        struct ListGuard {
-            LPPROC_THREAD_ATTRIBUTE_LIST list;
-            ~ListGuard() { DeleteProcThreadAttributeList(list); }
-        } listGuard{attributes};
-        if (UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
-                                      inherited.size() * sizeof(HANDLE), nullptr, nullptr) == FALSE) {
-            return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(HANDLE_LIST)"));
-        }
-        // The job is attached at creation, so not even the child's first instruction runs outside it.
-        HANDLE jobHandle = job.get();
-        if (job.valid() && UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &jobHandle,
-                                                     sizeof(HANDLE), nullptr, nullptr) == FALSE) {
-            return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(JOB_LIST)"));
-        }
-
-        STARTUPINFOEXW startup{};
-        startup.StartupInfo.cb = sizeof(startup);
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        startup.StartupInfo.hStdInput = in->child.get();
-        startup.StartupInfo.hStdOutput = out->child.get();
-        startup.StartupInfo.hStdError = childErr;
-        startup.StartupInfo.lpDesktop = desktop.empty() ? nullptr : desktop.data();
-        startup.lpAttributeList = attributes;
-        DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
-        // A GUI parent has no console; without this flag every console tool would open a window.
-        // A console parent shares its console, so inherited console handles stay valid.
-        if (GetConsoleWindow() == nullptr) {
-            flags |= CREATE_NO_WINDOW;
-        }
-        // TODO(M1): log applicationName, the working directory and the command line (PLAN.md 3.5).
-        PROCESS_INFORMATION info{};
-        if (CreateProcessW(applicationName->c_str(), commandLine->data(), nullptr, nullptr, TRUE, flags,
-                           customEnvironment ? environment.data() : nullptr,
-                           workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup.StartupInfo,
-                           &info) == FALSE) {
-            const DWORD error = GetLastError();
-            if (error == ERROR_DIRECTORY && !spec.workingDirectory.empty()) {
-                return std::unexpected(workingDirectoryError(spec, normalizedDirectory));
-            }
-            return std::unexpected(win32Error(error, "launch", spec.executable));
-        }
-        CloseHandle(info.hThread);
-        // The child ends (in/out/err .child) close when this function returns, so EOF arrives
-        // as soon as the child and its descendants close theirs.
-        return std::make_unique<WindowsProcess>(UniqueHandle(info.hProcess), std::move(job),
-                                                static_cast<ProcessId>(info.dwProcessId), std::move(in->parent),
-                                                std::move(out->parent), std::move(err.parent));
+        return detail::makeAsyncProcess(std::move(*child), context);
     }
 };
 
@@ -847,5 +899,36 @@ constinit WindowsProcessLauncher g_realLauncher;
 } // namespace
 
 IProcessLauncher& realProcessLauncher() noexcept { return g_realLauncher; }
+
+std::optional<std::wstring> detail::shortWorkingDirectory(const std::string& normalized) {
+    auto extended = toWin32Path(normalized);
+    if (!extended) {
+        return std::nullopt;
+    }
+    const DWORD needed = GetShortPathNameW(extended->c_str(), nullptr, 0);
+    if (needed == 0) {
+        return std::nullopt;
+    }
+    std::wstring shortPath(needed, L'\0');
+    const DWORD written = GetShortPathNameW(extended->c_str(), shortPath.data(), needed);
+    if (written == 0 || written >= needed) {
+        return std::nullopt;
+    }
+    shortPath.resize(written);
+    // A current directory is a plain path: drop the verbatim prefix GetShortPathNameW kept.
+    if (shortPath.starts_with(L"\\\\?\\UNC\\")) {
+        shortPath = L"\\\\" + shortPath.substr(8);
+    } else if (shortPath.starts_with(L"\\\\?\\")) {
+        shortPath.erase(0, 4);
+    }
+    if (shortPath.size() >= kMaxWorkingDirectoryUnits) {
+        return std::nullopt; // No short names on this volume, or still too long.
+    }
+    return shortPath;
+}
+
+void detail::setRefuseLongWorkingDirectoryForTesting(bool refuse) noexcept {
+    g_refuseLongWorkingDirectory.store(refuse, std::memory_order_relaxed);
+}
 
 } // namespace frost::io

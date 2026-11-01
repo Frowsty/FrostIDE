@@ -12,6 +12,10 @@
 # gets its DLLs from exactly one copy step per configuration, and that every executable and
 # shared library there, registered or not, is ordered after it
 # (tests/cmake/check_runtime_dlls.cmake).
+# io_no_static_init checks that frost_io's only static initialisers are the asio ones ADR 0020
+# lists, in the objects that include asio, and that reactor.cpp carries the Winsock guard
+# (tests/cmake/check_static_init.cmake; PLAN.md section 2.1). Registered only without sanitizers,
+# whose instrumentation adds module constructors.
 if(VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
     set(_frost_fixture_toolchain "${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}")
 else()
@@ -43,3 +47,25 @@ add_test(NAME FrostRuntimeDlls.CopiesOncePerDirectory
         -DTOOLCHAIN=${_frost_fixture_toolchain}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_runtime_dlls.cmake)
 set_tests_properties(FrostRuntimeDlls.CopiesOncePerDirectory PROPERTIES LABELS unit TIMEOUT 180)
+
+if(NOT FROST_SANITIZE)
+    # The LLVM tools beside the compiler (the pinned LLVM; never a PATH search).
+    get_filename_component(_frost_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(FROST_LLVM_OBJDUMP llvm-objdump PATHS "${_frost_llvm_bin}" NO_DEFAULT_PATH REQUIRED)
+    if(WIN32)
+        find_program(FROST_LLVM_DEMANGLER llvm-undname PATHS "${_frost_llvm_bin}" NO_DEFAULT_PATH REQUIRED)
+        set(_frost_object_format COFF)
+    else()
+        find_program(FROST_LLVM_DEMANGLER llvm-cxxfilt PATHS "${_frost_llvm_bin}" NO_DEFAULT_PATH REQUIRED)
+        set(_frost_object_format ELF)
+    endif()
+    add_test(NAME io_no_static_init
+        COMMAND ${CMAKE_COMMAND}
+            -DOBJDUMP=${FROST_LLVM_OBJDUMP}
+            -DDEMANGLER=${FROST_LLVM_DEMANGLER}
+            -DARCHIVE=$<TARGET_FILE:frost_io>
+            -DFORMAT=${_frost_object_format}
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_static_init.cmake)
+    set_tests_properties(io_no_static_init PROPERTIES LABELS unit TIMEOUT 120)
+endif()

@@ -13,6 +13,10 @@
 //   cat                copies stdin to stdout until EOF
 //   tee                copies stdin to stdout and to stderr, chunk by chunk
 //   flood N            writes N pattern bytes to stdout and N to stderr, interleaved in 4 KiB chunks
+//   stream N           writes N pattern bytes (byte i is i % 251) to stdout only, in 64 KiB chunks
+//   read-then-exit N   reads N bytes of stdin (fewer at EOF), prints "read <n>", then exits 0 with
+//                      stdin still open on the parent's side (the parent's writes then fail)
+//   close-stdout-then-sleep MS  closes its stdout, then sleeps MS milliseconds and exits 0
 //   print OUT ERR      writes OUT to stdout and ERR to stderr (raw), then exits 0
 //   sleep MS           sleeps, then exits 0
 //   probe-handle N ID  "inherited" or "not inherited": whether handle/descriptor N (or the
@@ -246,6 +250,49 @@ int run(const std::vector<std::string>& args) {
     if (mode == "flood" && args.size() == 3) {
         flood(static_cast<std::size_t>(std::strtoull(args[2].c_str(), nullptr, 10)));
         return 0;
+    }
+    if (mode == "stream" && args.size() == 3) {
+        const auto count = static_cast<std::size_t>(std::strtoull(args[2].c_str(), nullptr, 10));
+        std::string chunk(64 * 1024, '\0');
+        for (std::size_t written = 0; written < count;) {
+            const std::size_t size = count - written < chunk.size() ? count - written : chunk.size();
+            for (std::size_t i = 0; i < size; ++i) {
+                chunk[i] = static_cast<char>((written + i) % 251);
+            }
+            if (std::fwrite(chunk.data(), 1, size, stdout) != size) {
+                return 1; // The reader went away.
+            }
+            written += size;
+        }
+        return 0;
+    }
+    if (mode == "read-then-exit" && args.size() == 3) {
+        const auto wanted = static_cast<std::size_t>(std::strtoull(args[2].c_str(), nullptr, 10));
+        std::vector<char> buffer(16 * 1024);
+        std::size_t got = 0;
+        while (got < wanted) {
+            const std::size_t chunk = wanted - got < buffer.size() ? wanted - got : buffer.size();
+            const std::size_t read = std::fread(buffer.data(), 1, chunk, stdin);
+            if (read == 0) {
+                break;
+            }
+            got += read;
+        }
+        line("read " + std::to_string(got));
+        std::fflush(stdout);
+        // Exits without draining stdin: the parent's pending and later writes fail (broken pipe).
+        std::_Exit(0);
+    }
+    if (mode == "close-stdout-then-sleep" && args.size() == 3) {
+        std::fflush(stdout);
+#ifdef _WIN32
+        // The CRT's descriptor 1 owns the inherited handle; closing it closes the pipe end.
+        _close(1);
+#else
+        close(STDOUT_FILENO);
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(args[2].c_str())));
+        std::_Exit(0);
     }
     if (mode == "print" && args.size() == 4) {
         writeRaw(stdout, args[2]);
