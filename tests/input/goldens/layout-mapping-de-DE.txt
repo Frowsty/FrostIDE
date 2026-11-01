@@ -1,0 +1,101 @@
+# de-DE:00000407 (FullTable). Consistency golden: levels from the simulated tables, logical keys from the ADR 0016 policy.
+codes
+KeyA          a         A         -         -         -> A
+KeyB          b         B         -         -         -> B
+KeyC          c         C         -         -         -> C
+KeyD          d         D         -         -         -> D
+KeyE          e         E         €         -         -> E
+KeyF          f         F         -         -         -> F
+KeyG          g         G         -         -         -> G
+KeyH          h         H         -         -         -> H
+KeyI          i         I         -         -         -> I
+KeyJ          j         J         -         -         -> J
+KeyK          k         K         -         -         -> K
+KeyL          l         L         -         -         -> L
+KeyM          m         M         µ         -         -> M
+KeyN          n         N         -         -         -> N
+KeyO          o         O         -         -         -> O
+KeyP          p         P         -         -         -> P
+KeyQ          q         Q         @         -         -> Q
+KeyR          r         R         -         -         -> R
+KeyS          s         S         -         -         -> S
+KeyT          t         T         -         -         -> T
+KeyU          u         U         -         -         -> U
+KeyV          v         V         -         -         -> V
+KeyW          w         W         -         -         -> W
+KeyX          x         X         -         -         -> X
+KeyY          z         Z         -         -         -> Z
+KeyZ          y         Y         -         -         -> Y
+Digit0        0         =         }         -         -> Digit0
+Digit1        1         !         -         -         -> Digit1
+Digit2        2         "         ²         -         -> Digit2
+Digit3        3         §         ³         -         -> Digit3
+Digit4        4         $         -         -         -> Digit4
+Digit5        5         %         -         -         -> Digit5
+Digit6        6         &         -         -         -> Digit6
+Digit7        7         /         {         -         -> Digit7
+Digit8        8         (         [         -         -> Digit8
+Digit9        9         )         ]         -         -> Digit9
+Minus         ß         ?         \         ẞ         -> Minus
+Equal         ´(dead)   `(dead)   -         -         -> Equal
+BracketLeft   ü         Ü         -         -         -> BracketLeft
+BracketRight  +         *         ~         -         -> BracketRight
+Backslash     #         '         -         -         -> Backslash
+Semicolon     ö         Ö         -         -         -> Semicolon
+Quote         ä         Ä         -         -         -> Quote
+Backquote     ^(dead)   °         -         -         -> Backquote
+Comma         ,         ;         -         -         -> Comma
+Period        .         :         -         -         -> Period
+Slash         -         _         -         -         -> Minus
+IntlBackslash <         >         |         -         -> None
+IntlRo        -         -         -         -         -> None
+IntlYen       -         -         -         -         -> None
+keys
+A             code=KeyA label=a
+B             code=KeyB label=b
+C             code=KeyC label=c
+D             code=KeyD label=d
+E             code=KeyE label=e
+F             code=KeyF label=f
+G             code=KeyG label=g
+H             code=KeyH label=h
+I             code=KeyI label=i
+J             code=KeyJ label=j
+K             code=KeyK label=k
+L             code=KeyL label=l
+M             code=KeyM label=m
+N             code=KeyN label=n
+O             code=KeyO label=o
+P             code=KeyP label=p
+Q             code=KeyQ label=q
+R             code=KeyR label=r
+S             code=KeyS label=s
+T             code=KeyT label=t
+U             code=KeyU label=u
+V             code=KeyV label=v
+W             code=KeyW label=w
+X             code=KeyX label=x
+Y             code=KeyZ label=y
+Z             code=KeyY label=z
+Digit0        code=Digit0 label=0
+Digit1        code=Digit1 label=1
+Digit2        code=Digit2 label=2
+Digit3        code=Digit3 label=3
+Digit4        code=Digit4 label=4
+Digit5        code=Digit5 label=5
+Digit6        code=Digit6 label=6
+Digit7        code=Digit7 label=7
+Digit8        code=Digit8 label=8
+Digit9        code=Digit9 label=9
+Backquote     code=Backquote label=^
+Minus         code=Slash label=-
+Equal         code=Equal label=´
+BracketLeft   code=BracketLeft label=ü
+BracketRight  code=BracketRight label=+
+Backslash     code=Backslash label=#
+Semicolon     code=Semicolon label=ö
+Quote         code=Quote label=ä
+Comma         code=Comma label=,
+Period        code=Period label=.
+Slash         unreachable
+Space         code=Space label=-

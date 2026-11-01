@@ -1,0 +1,5 @@
+frost-keymap 2
+id future
+name Future format
+[default]
+editor.copy = Ctrl+C

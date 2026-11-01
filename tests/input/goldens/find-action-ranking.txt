@@ -1,0 +1,68 @@
+# FindActionModel ranking over the 40-action fixture in the context {EditorFocus, ProjectOpen}, L2, untrusted. Consistency golden: review rank changes by hand.
+query "copy"
+  1019 name     editor.copy              [Copy]
+   918 name     editor.copyPath          [Copy] Path
+   917 name     refactor.copyClass       [Copy] Class...
+   917 name     editor.copyReference     [Copy] Reference
+query "Copy"
+  1019 name     editor.copy              [Copy]
+   918 name     editor.copyPath          [Copy] Path
+   917 name     refactor.copyClass       [Copy] Class...
+   917 name     editor.copyReference     [Copy] Reference
+query "rc"
+   817 name     code.reformat            [R]eformat [C]ode
+   596 name     search.everywhere        Sea[rc]h Everywhere
+   498 name     search.replace           [R]epla[c]e...
+   491 name     refactor.extractMethod   Ext[r]a[c]t Method...
+   488 name     view.overview            Übe[r]si[c]ht
+   487 name     editor.copyReference     Copy Refe[r]en[c]e
+   484 name     window.project           P[r]oje[c]t
+   438 synonym  file.settings            Prefe[r]en[c]es
+   437 synonym  editor.copy              Clipboa[r]d [c]opy
+query "refco"
+   817 name     code.reformat            [Ref]ormat [Co]de
+query "code"
+   787 name     code.reformat            Reformat [Code]
+   427 synonym  search.findAction        [Co]mman[d] pal[e]tte
+query "ref co"
+   817 name     code.reformat            [Ref]ormat [Co]de
+query "cpy"
+   514 name     editor.copy              [C]o[py]
+   513 name     editor.copyPath          [C]o[py] Path
+   512 name     refactor.copyClass       [C]o[py] Class...
+   512 name     editor.copyReference     [C]o[py] Reference
+query "ctrl+shift+a" (shortcut tier)
+   950 shortcut search.findAction        (by shortcut) Find Action...
+query "Ctrl Shift A" (shortcut tier)
+   950 shortcut search.findAction        (by shortcut) Find Action...
+query "ctrl+k" (shortcut tier)
+   950 shortcut vcs.commit               (by shortcut) Commit...
+   850 shortcut vcs.commitAndPush        (by shortcut) Commit and Push...
+query "f2" (shortcut tier)
+   950 shortcut navigate.nextError       (by shortcut) Next Highlighted Error
+query "alt+1" (shortcut tier)
+   950 shortcut window.project           (by shortcut) Project
+query "a"
+   867 synonym  code.completion          [A]utocomplete
+   787 name     search.findAction        Find [A]ction...
+   786 name     vcs.commitAndPush        Commit [a]nd Push...
+   599 name     editor.paste             P[a]ste
+   598 name     window.terminal          Termin[a]l
+   598 name     editor.copyPath          Copy P[a]th
+   598 name     refactor.rename          Ren[a]me...
+   598 name     search.replace           Repl[a]ce...
+   598 name     code.generate            Gener[a]te...
+   597 name     refactor.copyClass       Copy Cl[a]ss...
+   597 name     code.reformat            Reform[a]t Code
+   597 name     navigate.gotoClass       Go to Cl[a]ss...
+query "up"
+  1020 name     editor.lineUp            [Up]
+   777 name     editor.moveLineUp        Move Line [Up]
+   422 synonym  code.completion          A[u]tocom[p]lete
+query "end"
+   970 synonym  editor.lineEnd           [End]
+   755 name     editor.textEnd           Move Caret to Text [End]
+query ""
+query "300 x x"
+query "ü"
+   597 name     tools.mueller            M[ü]ller Tool

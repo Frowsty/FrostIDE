@@ -1,0 +1,17 @@
+# Every section, comments, blank lines and an explicit unbinding.
+
+frost-keymap 1
+  # indented comment
+id all-sections
+name All sections
+[default]
+editor.copy = Ctrl+C | Ctrl+Insert
+editor.paste = Ctrl+V | Shift+Insert
+agent.terminal =
+[windows]
+editor.paste = Ctrl+V
+[linux]
+vcs.commit = Ctrl+Alt+K
+[macos]
+editor.copy = Meta+C
+tools.macOnly = Alt+Meta+F1

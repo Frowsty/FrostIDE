@@ -1,0 +1,7 @@
+frost-keymap 1
+id two-strokes
+name Two strokes
+[default]
+editor.commentBlock = Ctrl+K, Ctrl+C | Ctrl+K, C
+vcs.commit = Ctrl+K
+file.saveAll = Ctrl+S

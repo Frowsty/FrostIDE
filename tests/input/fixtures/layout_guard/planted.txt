@@ -1,0 +1,23 @@
+Planted names for input.NoLayoutSwitching.DetectsPlanted (tests/input/check_no_layout_switch.cmake).
+Each banned name appears exactly once below; the guard must report every one.
+
+planted 01: LoadKeyboardLayout
+planted 02: ActivateKeyboardLayout
+planted 03: UnloadKeyboardLayout
+planted 04: SPI_SETDEFAULTINPUTLANG
+planted 05: WM_INPUTLANGCHANGEREQUEST
+planted 06: InstallLayoutOrTip
+planted 07: Set-WinUserLanguageList
+planted 08: Set-WinDefaultInputMethodOverride
+planted 09: setxkbmap
+planted 10: xmodmap
+planted 11: xkbcomp
+planted 12: localectl
+planted 13: gsettings set org.gnome.desktop.input-sources
+planted 14: ibus engine
+planted 15: org.kde.keyboard
+planted 16: SendInput
+planted 17: keybd_event
+planted 18: XTestFakeKeyEvent
+planted 19: xdotool
+planted 20: ydotool

@@ -1,0 +1,7 @@
+frost-keymap 1
+id duplicates
+name Duplicates
+[default]
+editor.copy = Ctrl+C | Ctrl+C
+editor.copy = Ctrl+Insert
+[default]

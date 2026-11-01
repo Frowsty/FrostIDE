@@ -1,0 +1,11 @@
+frost-keymap 1
+id bad-sequences
+name Bad sequences
+[default]
+editor.copy = Shift+Ctrl+C
+editor.paste = Ctrl+Ctrl+V
+editor.cut = Ctrl+K, Ctrl+C, Ctrl+D
+editor.undo = Shift+Z
+editor.redo = Ctrl+DoubleShift
+editor.select = Ctrl+K,Ctrl+C
+editor.find = Ctrl+Foo

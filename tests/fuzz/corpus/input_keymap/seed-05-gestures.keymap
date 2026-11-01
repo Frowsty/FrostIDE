@@ -1,0 +1,11 @@
+frost-keymap 1
+id gestures
+name Gestures and named keys
+[default]
+search.everywhere = DoubleShift
+tools.runAnything = DoubleCtrl
+editor.escape = Escape
+navigate.nextError = F2
+editor.lineUp = Up
+editor.textEnd = Ctrl+End | Ctrl+NumpadEnter
+editor.commentLine = Ctrl+Slash | Ctrl+NumpadDivide
