@@ -5,7 +5,8 @@
   decisions state the question for the user. Decision 2 also asks whether the corpus manifest should pin R3's
   configuration.
 - Date: 2026-11-01; revised the same day after the second re-verification (the open points, the p-value
-  method, the driver's re-send delay, the fits, and inferences that were stated as observations).
+  method, the driver's re-send delay, the fits, and inferences that were stated as observations), and after the
+  verification of 51cfceb (the raw data's durable location, the display-awake call, the answer spacing).
 - Plan reference: PLAN.md section 2 ("Semantic engine"), section 3 (warm open step 4, availability level L2),
   section 4 (B24, B26), section 6.3 (perf runs on REF-W1), risk T12, M0 spike S7
 
@@ -26,7 +27,9 @@ workload had ended.
    stays verbatim. budgets.json has no M3 p99 slot; for reference, the control's maximum ×1.2 is 18.9 s. Under the
    user's workload the same protocol gave p50 20.93 s, which would make the value 25.1 s, 6.7 s looser. The
    control passed the input-desktop, lock-state and console-session checks of PLAN.md section 6.3's precheck, and
-   no input arrived. The precheck's DXGI monitor-power item was not made (see Measurements).
+   no input arrived. The precheck's DXGI monitor-power item was not made, and no run called
+   `SetThreadExecutionState(ES_DISPLAY_REQUIRED)`. clangd draws nothing, and the machine did not sleep during any
+   run (see Measurements).
    **Question for the user:** confirm 18.4 s from the quiet control, or choose otherwise, for example 25.1 s from
    the runs under your workload, or a re-measurement that also makes the DXGI check.
 2. **What the baseline measures, and so what an M3 run must reproduce to compare with it.**
@@ -52,13 +55,15 @@ workload had ended.
    - *Index and file cache.* A complete, valid persisted index built by the same clangd with the same flags
      (`--background-index -j=4`), and a warm file cache: one untimed warm-up run comes first.
    - *Machine state; the quiet-machine requirement is proposed, pending the user's confirmation.* PLAN.md already
-     asks two things of a perf run on REF-W1: the session-state precheck of section 6.3 passes (unlocked input
-     desktop, active console session, a powered-on monitor through DXGI), and the run aborts on input (section 4,
-     the REF-W1 full perf run). Proposed in addition: no heavy workload of the user's runs at the same time. PLAN.md
-     has no such rule; T12 says only that long runs are scheduled with the user. In the control, the system CPU
-     averaged 10.7–15.8 % per run, about 5 points of it clangd's own. The sample tracks the machine's load. Under
-     the user's workload, B24 rose by 0.20 s per 1 % of system CPU (Pearson r = 0.95 over 20 runs), and its p50 was
-     37 % above the quiet control's.
+     asks three things of a perf run on REF-W1: it runs in the logged-in interactive session with the display kept
+     awake through `SetThreadExecutionState(ES_DISPLAY_REQUIRED)` (section 6.3), the session-state precheck of
+     section 6.3 passes (unlocked input desktop, active console session, a powered-on monitor through DXGI), and
+     the run aborts on input (section 4, the REF-W1 full perf run). Proposed in addition: no heavy workload of the
+     user's runs at the same time. PLAN.md has no such rule. T12 names the concern, that full runs compete with the
+     user's own work on REF-W1, and its mitigations include scheduling long runs with the user, but it sets no
+     rule on load. In the control, the system CPU averaged 10.7–15.8 % per run, about 5 points of it clangd's own.
+     The sample tracks the machine's load. Under the user's workload, B24 rose by 0.20 s per 1 % of system CPU
+     (Pearson r = 0.95 over 20 runs), and its p50 was 37 % above the quiet control's.
      **Question for the user:** should the M3 gate require a quiet REF-W1, with your heavy workload closed and the
      run scheduled with you? If not, decision 1 needs another value: under the workload of set 1, every run of
      stock clangd itself took longer than 18.4 s (19.77–22.45 s).
@@ -102,7 +107,7 @@ workload had ended.
   files. 5586 commands carry CMake's clang-cl PCH flags (`/Yu /Fp /FI cmake_pch.hxx`). Only LLVMSupport's two
   `.pch` files exist, one per build tree. The opened TU's LLVMCore `.pch` does not, and the TU still parsed without
   errors, with 9 clang-tidy warnings and 1 unused-include warning.
-- **Driver.** `s7_lsp.py` is a standard-library LSP client, kept with the raw logs in the session scratchpad.
+- **Driver.** `s7_lsp.py` is a standard-library LSP client, kept with the raw logs in `spike\` (see Raw data).
   Each run starts a fresh clangd, and time is `perf_counter()` seconds since just before `Popen`. The driver sends
   `initialize`, then `didOpen` for `llvm/lib/IR/Instruction.cpp`. It then keeps repeating two requests until each
   comes from the persisted index. After each answer that does not, the driver's main loop sleeps 50 ms
@@ -115,13 +120,13 @@ workload had ended.
     in `return getParent()->getModule();` (`Instruction::getModule`). Its declaration is BasicBlock.h:220 and its
     definition BasicBlock.cpp:220.
 
-  Answer times are taken when the reader thread receives each response. At the answer, consecutive symbol answers
-  were 0.102–0.104 s apart and definition answers 0.101–0.102 s, so the sample resolves to about 0.1 s. Memory
-  comes from `K32GetProcessMemoryInfo`, with private bytes as "private" and `PeakPagefileUsage` as "peak commit";
-  the driver also samples the system CPU every 0.5 s. After both answers the driver waits for the background-index
-  progress to end, asks once more, and shuts clangd down. `s7_stats.py` makes the summaries, `s7_phases.py` maps
-  verbose clangd log markers onto the driver's clock, and `s7_fix2.py` and `s7_quiet.py` compute the load
-  correlation, the CPU profile and the comparison of the two sets.
+  Answer times are taken when the reader thread receives each response. At the answer, over the 40 timed runs,
+  consecutive symbol answers were 0.101–0.104 s apart and definition answers 0.101–0.102 s, so the sample
+  resolves to about 0.1 s. Memory comes from `K32GetProcessMemoryInfo`, with private bytes as "private" and
+  `PeakPagefileUsage` as "peak commit"; the driver also samples the system CPU every 0.5 s. After both answers the
+  driver waits for the background-index progress to end, asks once more, and shuts clangd down. `s7_stats.py`
+  makes the summaries, `s7_phases.py` maps verbose clangd log markers onto the driver's clock, and `s7_fix2.py`
+  and `s7_quiet.py` compute the load correlation, the CPU profile and the comparison of the two sets.
 - **Procedure.** First an untimed sanity run at `-j=4` with `--log=verbose`, behind `night.py build-gate`. Then,
   for each set, inside a `night.py` measurement lock: one warm-up run, 20 timed runs, and 3 runs with
   `--log=verbose` for the phase breakdown, 3 s apart. Set 1, under the user's workload, ran in the lock `s7`
@@ -137,8 +142,18 @@ workload had ended.
   not made. The power plan never turns the display off on AC power, and WMI listed the monitor with Availability 8
   ("Off Line"), which this check cannot confirm. clangd draws nothing, so the display does not enter these timings,
   but the runs did not pass the full precheck (decision 1).
+- **Conditions, all runs: display and sleep.** PLAN.md section 6.3 asks perf runs to keep the display awake with
+  `SetThreadExecutionState(ES_DISPLAY_REQUIRED)`. No S7 script called `SetThreadExecutionState` (the driver,
+  `run_sanity.ps1`, `run_measure.ps1`, `run_quiet.ps1`, `night.py` and the verifiers' scripts), so nothing of
+  ours kept the display or the system awake. What kept the machine from sleeping was its power plan: High
+  performance, which on AC power never turns the display off (read at 01:59:57, `spike\fix2\display-power.txt`)
+  and never sleeps or hibernates (read at 03:41, after the runs, in the same plan). The System event log has no
+  Kernel-Power or Power-Troubleshooter event from 2026-10-31 21:00 to 2026-11-01 03:00, so the machine neither
+  slept nor resumed during any S7 run, the index builds included (`closeout\power-and-sleep.txt`). The missing
+  call could therefore have mattered only through the display, which these runs do not use: clangd and the driver
+  open no window and draw nothing.
 - **Conditions, set 1 (under the user's workload).** No build of ours ran; other agents waited behind the lock.
-  The user's own processes kept running and were not touched (`conditions.txt` at the lock's start):
+  The user's own processes kept running and were not touched (`spike\final\conditions.txt` at the lock's start):
   - FrostEditor: 4 instances, 2384 MiB private, with 25 FrostRuntime helpers, 3235 MiB;
   - Discord, 2123 MiB;
   - Wallpaper Engine;
@@ -153,9 +168,9 @@ workload had ended.
   ```
   (`top_cpu_processes` is sorted by accumulated CPU time, not current load.)
 - **Conditions, set 2 (quiet control).** FrostEditor, its helpers and the `E:\r11` process had exited by 02:00:58,
-  before the control's first run; nothing of ours stopped them. `conditions.txt` shows it: its process list from
-  02:00:58, made with the same filter as set 1's (FrostEditor, FrostServices, FrostRuntime, anything under
-  `E:\r11`, Discord, Wallpaper Engine, G HUB, the WSL VM), names none of them. Discord (2122 MiB), Wallpaper
+  before the control's first run; nothing of ours stopped them. `spike\quiet\conditions.txt` shows it: its process
+  list from 02:00:58, made with the same filter as set 1's (FrostEditor, FrostServices, FrostRuntime, anything
+  under `E:\r11`, Discord, Wallpaper Engine, G HUB, the WSL VM), names none of them. Discord (2122 MiB), Wallpaper
   Engine, G HUB (185 MiB) and the WSL VM (3899 MiB) kept running; the WSL VM had exited by the end of the set. At
   the lock's start the other agents' builds had just finished: Win32_Processor read 87 % and then 60 %, while no
   remaining Windows process group used more than 0.21 cores. The warm-up run's system CPU was 31–44 % in its first
@@ -165,6 +180,27 @@ workload had ended.
   ```
   {"measurement": "s7-2", "start": "2026-11-01T02:00:53", "free_commit_gb": 30.4, "commit_limit_gb": 64.1, "free_phys_gb": 9.5, "system_cpu_pct": 78.4, "our_builds_running": [], "builds_wait_timed_out": false, "top_cpu_processes": [{"Name": "Discord", "Id": 24484, "ws_mb": 749}, {"Name": "Discord", "Id": 2364, "ws_mb": 88}, {"Name": "wallpaper64", "Id": 24044, "ws_mb": 157}, {"Name": "WindowsTerminal", "Id": 10768, "ws_mb": 145}, {"Name": "claude", "Id": 8908, "ws_mb": 493}, {"Name": "Discord", "Id": 14552, "ws_mb": 93}, {"Name": "FanControl", "Id": 22180, "ws_mb": 48}, {"Name": "RazerAppEngine", "Id": 24352, "ws_mb": 342}]}
   ```
+- **Raw data.** The raw data is kept outside the repository in `E:\FrostBuilds\perf\m0\s7\`; its `README.txt` maps
+  each directory to the section it backs. Raw-data paths in this ADR, such as `spike\final\conditions.txt`, are
+  relative to that directory:
+  - `spike\` is the spike's own tree and the directory the analysis scripts take as their argument. `spike\final\`
+    holds set 1 and `spike\quiet\` set 2: the conditions, the lock records, the run log, the warm-up run, the 20
+    timed runs in `j4\` and the 3 verbose runs in `j4-verbose\`, one JSON report and one clangd log per run;
+    `spike\quiet\session-state.txt` holds the session checks;
+  - `spike\sanity-j4\` holds the sanity run; `spike\query\`, `spike\warmup\` and `spike\verbose\` the earlier
+    `-j=8` runs; `spike\index\` and `spike\index-attempt1-j8-oom\` the two index builds, with
+    `spike\machine_load.csv`. The R3 configure and TableGen build logs, the driver and its summaries (`s7_lsp.py`,
+    `s7_stats.py`, `s7_phases.py`) and the run scripts (`run_sanity.ps1`, `run_measure.ps1`) are at the top of
+    `spike\`;
+  - `spike\fix2\` holds `session_state.py`, `run_quiet.ps1`, `s7_fix2.py`, `s7_quiet.py` and `s7_tables.py` with
+    their outputs, and `night\` holds `night.py`;
+  - `fix3\` holds the recomputations of fix round 3; `verify2\`, `verify3\` and `verify4\` hold the independent
+    verifiers' scripts and re-measurements (`verify2\runs\` is the one in lock `verify-s7`); `closeout\` holds the
+    display and sleep check and the recomputed answer spacing.
+
+  clangd's verbose logs echo the `didOpen` message, whose text is Instruction.cpp, third-party source. In the
+  archived copies that one JSON string is replaced by a placeholder (`closeout\redaction.txt`), and the analysis
+  scripts print the same output on them as on the originals.
 
 **B24 on R3** (fresh clangd per run, `-j=4`, `--log=info`, warm file cache; seconds since clangd launch; at
 n = 20 the maximum stands in for p99).

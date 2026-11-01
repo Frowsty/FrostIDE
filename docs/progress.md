@@ -24,6 +24,14 @@ what is next, blockers and open questions for the user.
   - the WSL VM's start in the `-j=8` attempt is bounded to 127–158 s; leaving out the `.asm`/`.rc` entries is
     marked untested;
   - budgets.json's note says the DXGI monitor-power check was not done and names the 21 generated headers.
+- **Close-out**, after the verification of 51cfceb:
+  - all cited raw data and the scripts we wrote now live in `E:\FrostBuilds\perf\m0\s7\` (32 MB; its `README.txt`
+    maps each directory to the ADR section it backs), and the ADR cites it instead of the session scratchpad. The
+    Instruction.cpp text that the verbose clangd logs echo was replaced by a placeholder in the copies;
+  - the ADR says that no run called `SetThreadExecutionState(ES_DISPLAY_REQUIRED)` (PLAN 6.3), that the power plan
+    kept the machine from sleeping and the System event log shows no sleep or resume, and that the display does not
+    enter the timings; Decision 2's summary of PLAN 6.3 and T12 is complete;
+  - the symbol answers' spacing at the answer is 0.101–0.104 s over all 40 runs (0.102–0.104 s was set 1's alone).
 
 ### Next
 - Before `m0/s7` merges: `tools\verify.ps1 -Quick` and `tools/verify.sh` (CLAUDE.md's definition of done), and
@@ -31,7 +39,7 @@ what is next, blockers and open questions for the user.
   PLAN's S7 sentence, budget data and this log.
 - Once the user has answered: record the answer in ADR 0008's status, budgets.json's note and PLAN's S7 sentence,
   or set the M3 slot to the value the user chooses.
-- M3: the B24 harness, starting from `s7_lsp.py` and `session_state.py`.
+- M3: the B24 harness, starting from `s7_lsp.py` and `session_state.py` (in `E:\FrostBuilds\perf\m0\s7\spike\`).
 
 ### Blockers
 - None for M0. B24's M3 value waits for the user's confirmation.
