@@ -52,13 +52,23 @@ constexpr DWORD kPipeBufferBytes = 64 * 1024;
 // How long communicate() waits for a terminated process to disappear before returning Timeout.
 constexpr DWORD kReapGraceMs = 5000;
 
-// Milliseconds for Wait* APIs: rounded up, clamped below INFINITE.
-DWORD toWaitMs(IClock::Duration duration) noexcept {
-    if (duration <= IClock::Duration::zero()) {
-        return 0;
+// Milliseconds for one Wait* call: rounded up, at most detail::maxWaitSliceMs() (2^30 ms by default, far
+// below INFINITE); callers loop until their deadline.
+DWORD toWaitMs(IClock::Duration duration) noexcept { return static_cast<DWORD>(detail::waitSliceMs(duration)); }
+
+/*
+ * WaitForSingleObject on `handle` until `deadline`, in slices of at most
+ * detail::maxWaitSliceMs(), so a slice that ends is not taken for the deadline.
+ * Returns WAIT_OBJECT_0, WAIT_TIMEOUT once the deadline has passed, or the
+ * failing result (WAIT_FAILED, with GetLastError() still set).
+ */
+DWORD waitUntil(HANDLE handle, std::chrono::steady_clock::time_point deadline) noexcept {
+    for (;;) {
+        const DWORD result = WaitForSingleObject(handle, toWaitMs(deadline - std::chrono::steady_clock::now()));
+        if (result != WAIT_TIMEOUT || std::chrono::steady_clock::now() >= deadline) {
+            return result;
+        }
     }
-    const auto ms = std::chrono::ceil<std::chrono::milliseconds>(duration).count();
-    return static_cast<DWORD>(std::min<long long>(ms, INFINITE - 1));
 }
 
 bool isEndOfPipe(DWORD error) noexcept {
@@ -402,8 +412,9 @@ public:
     }
 
     Result<ExitStatus> wait(std::optional<IClock::Duration> timeout) override {
-        const DWORD ms = timeout ? toWaitMs(*timeout) : INFINITE;
-        switch (WaitForSingleObject(m_process.get(), ms)) {
+        const DWORD result = timeout ? waitUntil(m_process.get(), detail::deadlineAfter(*timeout))
+                                     : WaitForSingleObject(m_process.get(), INFINITE);
+        switch (result) {
         case WAIT_OBJECT_0: return exitStatus();
         case WAIT_TIMEOUT: return fail(ErrorCode::Timeout, std::format("process {} is still running", m_pid));
         default: return std::unexpected(lastWin32Error("WaitForSingleObject(process)"));
@@ -628,7 +639,7 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
         }
         const DWORD signalled = WaitForMultipleObjects(count, events.data(), FALSE, toWaitMs(left));
         if (signalled == WAIT_TIMEOUT) {
-            return timedOut();
+            continue; // One wait slice ended; the check above decides whether the deadline has.
         }
         if (signalled >= WAIT_OBJECT_0 + count) {
             return failWith(lastWin32Error("communicate: WaitForMultipleObjects"));
@@ -660,8 +671,7 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
         }
     }
 
-    const auto left = deadline - std::chrono::steady_clock::now();
-    if (WaitForSingleObject(m_process.get(), toWaitMs(left)) != WAIT_OBJECT_0) {
+    if (waitUntil(m_process.get(), deadline) != WAIT_OBJECT_0) {
         return timedOut();
     }
     auto status = exitStatus();

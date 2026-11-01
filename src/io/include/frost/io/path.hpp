@@ -33,9 +33,12 @@
  * superscript-digit forms, with or without an extension). Verbatim paths are
  * returned unchanged, so they are the escape hatch for such names, but they
  * must not contain empty, "." or ".." components or a '/'. In every Windows
- * form, components must not contain the characters no Windows name may
- * contain: < > : " | ? * and control characters (':' would select an NTFS
- * alternate data stream, so "t.bat::$DATA" would open t.bat).
+ * form, the components after the root must not contain the characters no
+ * Windows name may contain: < > : " | ? * and control characters (':' would
+ * select an NTFS alternate data stream, so "t.bat::$DATA" would open t.bat).
+ * The root is not checked for these characters: UNC server and share names
+ * (also after \\?\UNC\) and the first component after any other \\?\ prefix
+ * ("C:", "Volume{...}") are passed as given.
  *
  * Extended-length form (Windows). Win32 file APIs limit ordinary paths to
  * MAX_PATH (260) UTF-16 units unless both the application manifest and the
@@ -45,9 +48,11 @@
  * "\\server\share\a" becomes "\\?\UNC\server\share\a". Because the prefix
  * turns off the OS's own normalisation, the path is normalised first.
  *
- * Every function here rejects embedded NUL characters (OS APIs would silently
- * truncate the path) with InvalidArgument. All functions are pure, thread-safe
- * and O(n) in the path length.
+ * normalizePath, extendedLengthPath and toWin32Path reject embedded NUL
+ * characters (OS APIs would silently truncate the path) with InvalidArgument;
+ * joinPath rejects one in `name`, and isAbsolutePath returns false. parentPath,
+ * fileName, fromStdPath and toStdPath do not check. All functions are pure,
+ * thread-safe and O(n) in the path length.
  */
 #pragma once
 
@@ -76,10 +81,12 @@ inline constexpr PathStyle kNativePathStyle = PathStyle::Posix;
 // device paths and (Windows) the names described above.
 [[nodiscard]] Result<std::string> normalizePath(std::string_view path, PathStyle style = kNativePathStyle);
 
-// Windows rules: the normalised extended-length spelling of `path` ("\\?\C:\a",
-// "\\?\UNC\server\share\a"); verbatim paths are returned unchanged.
-// Portable (UTF-8 in, UTF-8 out) so the rules are testable everywhere.
-// Errors: as normalizePath.
+/*
+ * Windows rules: the normalised extended-length spelling of `path` ("\\?\C:\a",
+ * "\\?\UNC\server\share\a"); verbatim paths are returned unchanged.
+ * Portable (UTF-8 in, UTF-8 out) so the rules are testable everywhere.
+ * Errors: as normalizePath.
+ */
 [[nodiscard]] Result<std::string> extendedLengthPath(std::string_view path);
 
 // Appends `name` (one or more relative components) to `base` with the style's
@@ -101,7 +108,8 @@ inline constexpr PathStyle kNativePathStyle = PathStyle::Posix;
 // form must be valid (InvalidArgument otherwise); on POSIX the bytes are copied.
 [[nodiscard]] Result<std::string> fromStdPath(const std::filesystem::path& path);
 
-// The inverse of fromStdPath. Errors: InvalidArgument for ill-formed UTF-8 on Windows.
+// The inverse of fromStdPath. Errors: InvalidArgument for ill-formed UTF-8 on Windows. An embedded
+// NUL is not refused (std::filesystem would hand the OS a truncated path), so normalise first.
 [[nodiscard]] Result<std::filesystem::path> toStdPath(std::string_view utf8);
 
 #ifdef _WIN32

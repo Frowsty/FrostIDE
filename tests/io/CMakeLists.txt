@@ -16,15 +16,17 @@ frost_add_test(io_unit_tests
         scripted_process_test.cpp
         utf_test.cpp
     DEPS frost::io)
-# src/io/src: replacement_mode_test.cpp tests pure helpers of the private internal.hpp.
+# src/io/src: replacement_mode_test.cpp tests pure helpers of the private internal.hpp, and
+# mem_fs_test.cpp names detail::kAtomicTempMarker.
 target_include_directories(io_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/io/src)
 if(WIN32)
     # CommandLineToArgvW, the oracle for the Windows quoting tests.
     target_link_libraries(io_unit_tests PRIVATE shell32)
 endif()
 
-# A plain console program built with the test flags; it uses only the OS and C runtime so it
-# is an independent oracle for argv, environment and working-directory handling.
+# A plain console program built with the test flags; it uses only the OS, the C runtime and the
+# C++ standard library (no frost code), so it is an independent oracle for argv, environment and
+# working-directory handling.
 add_executable(io_test_child io_test_child.cpp)
 frost_apply_compile_options(io_test_child TEST)
 if(WIN32)
@@ -38,7 +40,8 @@ frost_add_test(io_integration_tests
         process_test.cpp
     DEPS frost::io
     LABELS integration)
-target_include_directories(io_integration_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+# src/io/src: the tests name detail::kAtomicTempMarker and lower detail::maxWaitSliceMs().
+target_include_directories(io_integration_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(io_integration_tests PRIVATE FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
 add_dependencies(io_integration_tests io_test_child)
 if(WIN32)

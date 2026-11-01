@@ -2,10 +2,12 @@
 //
 // main() for test executables that need Qt (frost_add_test(... QT)).
 //
-// It selects the offscreen platform (unless QT_QPA_PLATFORM is already set) and
-// adds Qt's plugin directory from the build configuration, so the tests run
-// headless from ctest without any environment set-up, then creates the single
-// QApplication the tests share and runs GoogleTest.
+/*
+ * It selects the offscreen platform (unless QT_QPA_PLATFORM is already set) and
+ * adds Qt's plugin directory from the build configuration, so the tests run
+ * headless from ctest without any environment set-up, then creates the single
+ * QApplication the tests share and runs GoogleTest.
+ */
 
 #include <QApplication>
 #include <QCoreApplication>

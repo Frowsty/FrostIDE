@@ -39,7 +39,7 @@ constexpr bool isSeparator(char c, PathStyle style) noexcept {
     return style == PathStyle::Windows ? isWindowsSeparator(c) : c == '/';
 }
 
-// Length of the component starting at `from` (up to the next separator or the end).
+// End index of the component starting at `from` (the position of the next separator, or path.size()).
 std::size_t componentEnd(std::string_view path, std::size_t from, bool backslashOnly) noexcept {
     std::size_t i = from;
     while (i < path.size() && !(backslashOnly ? path[i] == '\\' : isWindowsSeparator(path[i]))) {

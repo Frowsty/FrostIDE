@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Integration tests for the real IFileSystem against the disk: byte-exact
-// round trips, atomic replacement (no temp files left, old content kept on
-// failure, read-only targets, and on POSIX the owner, mode and ACL rules),
-// listings, error-code mapping, non-ASCII names, and on Windows paths longer
-// than MAX_PATH, which must work even with LongPathsEnabled = 0.
+// Integration tests for the real IFileSystem against the disk.
+//
+/*
+ * Byte-exact round trips, atomic replacement (no temp files left, old content
+ * kept on failure, read-only targets, and on POSIX the owner, mode and ACL
+ * rules), listings, error-code mapping, links, non-ASCII names, and on Windows
+ * paths longer than MAX_PATH, which must work even with LongPathsEnabled = 0.
+ */
 
 #include "frost/core/clock.hpp"
 #include "frost/io/file_system.hpp"
@@ -12,7 +15,9 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 
+#include "internal.hpp" // kAtomicTempMarker.
 #include "support/scratch_dir.hpp"
+#include <gtest/gtest-spi.h> // EXPECT_NONFATAL_FAILURE, for ScratchDir's own failure reporting.
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -65,7 +70,7 @@ bool noTempFiles(const std::string& directory) {
         return false;
     }
     for (const DirEntry& entry : *entries) {
-        if (entry.name.find(".frost-tmp-") != std::string::npos) {
+        if (entry.name.find(frost::io::detail::kAtomicTempMarker) != std::string::npos) {
             return false;
         }
     }
@@ -80,7 +85,9 @@ bool runningAsRoot() { return geteuid() == 0; }
 TEST(RealFileSystem, WriteAndReadAreByteExact) {
     const ScratchDir dir("fs-bytes");
     std::string data = "line one\r\nline two\n\0\xff\xfe binary"s; // The s suffix keeps the NUL.
-    data += std::string(200'000, 'x'); // Larger than one I/O chunk on any buffer size we use.
+    // 200 KB: well past small buffers, though each implementation reads and writes it in one call (more
+    // only beyond 1 GiB on Windows, after a short write, or when the file grows during the read).
+    data += std::string(200'000, 'x');
     const std::string file = dir.join("data.bin");
     ASSERT_TRUE(fs().writeFileAtomic(file, data).has_value());
     EXPECT_EQ(fs().readFile(file).value(), data);
@@ -907,6 +914,59 @@ TEST(RealFileSystem, LinksAreRemovedWithoutFollowingThem) {
     }
     EXPECT_EQ(fs().readFile(kept).value(), "kept");
     EXPECT_EQ(fs().listDirectory(dir.path()).value(), (std::vector<DirEntry>{{"target", FileType::Directory}}));
+}
+
+// A link to a directory (a junction on Windows, which needs no privilege; a symlink on POSIX).
+void makeDirectoryLink(const std::string& link, const std::string& target) {
+#ifdef _WIN32
+    ASSERT_NO_FATAL_FAILURE(makeJunction(link, target));
+#else
+    ASSERT_EQ(symlink(target.c_str(), link.c_str()), 0) << link;
+#endif
+}
+
+TEST(RealFileSystem, CreateDirectoriesStopsAtADanglingLink) {
+    // A link whose target is gone is no directory to create children in: the call fails at the
+    // link with AlreadyExists, as mkdir -p does, on every platform.
+    const ScratchDir dir("fs-mkdir-dangling");
+    const std::string gone = dir.join("gone");
+    ASSERT_TRUE(fs().createDirectories(gone).has_value());
+    const std::string link = dir.join("link");
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryLink(link, gone));
+    ASSERT_TRUE(fs().removeDirectory(gone).has_value());
+    for (const std::string& path : {frost::io::joinPath(link, "sub").value(), link}) {
+        const auto result = fs().createDirectories(path);
+        ASSERT_FALSE(result.has_value()) << path;
+        EXPECT_EQ(result.error().code(), ErrorCode::AlreadyExists) << result.error().describe();
+        EXPECT_NE(result.error().message().find("createDirectories '" + path + "': "), std::string::npos)
+            << result.error().message();
+    }
+    EXPECT_FALSE(fs().exists(gone).value()); // Nothing was created through the link.
+    ASSERT_TRUE(fs().removeFile(link).has_value());
+}
+
+TEST(ScratchDirSupport, RemoveTreeRemovesALinkWithoutFollowingIt) {
+    // ScratchDir clears leftovers with removeTree, so a link planted at its name must not lead
+    // it into the directory the link points to.
+    const ScratchDir dir("fs-removetree-link");
+    const std::string target = dir.join("target");
+    ASSERT_TRUE(fs().createDirectories(target).has_value());
+    const std::string kept = frost::io::joinPath(target, "keep.txt").value();
+    ASSERT_TRUE(fs().writeFileAtomic(kept, "kept").has_value());
+    const std::string link = dir.join("link");
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryLink(link, target));
+    EXPECT_TRUE(frost::test::removeTree(fs(), link));
+    EXPECT_EQ(fs().readFile(kept).value(), "kept");
+    EXPECT_EQ(fs().listDirectory(dir.path()).value(), (std::vector<DirEntry>{{"target", FileType::Directory}}));
+    EXPECT_TRUE(frost::test::removeTree(fs(), link)); // Missing paths are fine.
+}
+
+TEST(ScratchDirSupport, JoinRecordsAFailureForARejectedName) {
+    // A quiet "" would let a check on the joined path pass vacuously, so join reports the rejection.
+    const ScratchDir dir("fs-join-rejected");
+    std::string joined = "unset";
+    EXPECT_NONFATAL_FAILURE(joined = dir.join(""), "InvalidArgument: joinPath needs a non-empty relative name");
+    EXPECT_EQ(joined, "");
 }
 
 } // namespace

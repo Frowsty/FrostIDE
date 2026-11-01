@@ -7,6 +7,7 @@
 #include "frost/core/clock.hpp"
 #include "frost/io/mem_fs.hpp"
 
+#include "internal.hpp" // kAtomicTempMarker.
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -36,7 +37,7 @@ protected:
     // True when no writeFileAtomic temp entry is left anywhere in the tree.
     [[nodiscard]] bool noTempFiles() const {
         for (const std::string& path : fs.allPaths()) {
-            if (path.find(".frost-tmp-") != std::string::npos) {
+            if (path.find(frost::io::detail::kAtomicTempMarker) != std::string::npos) {
                 return false;
             }
         }
@@ -63,7 +64,7 @@ TEST_F(MemFsTest, ModificationTimesComeFromTheClock) {
     clock.advance(5s);
     ASSERT_TRUE(iface.writeFileAtomic("/proj/a", "2").has_value());
     EXPECT_EQ(iface.status("/proj/a")->mtime, frost::IClock::SystemTime{1005s});
-    // Creating an entry also touches its parent directory.
+    // Replacing a file (temp file plus rename) also touches its parent directory.
     EXPECT_EQ(iface.status("/proj")->mtime, frost::IClock::SystemTime{1005s});
     EXPECT_EQ(iface.status("/proj/src")->mtime, frost::IClock::SystemTime{1000s});
 }
@@ -288,6 +289,21 @@ TEST(MemFs, VerbatimSpellingsNameTheSameEntries) {
               ErrorCode::InvalidArgument); // No ".." in the verbatim form, as for Win32.
     EXPECT_EQ(fs.listDirectory("\\\\?\\C:\\Users").value(), (std::vector<DirEntry>{{"dev", FileType::Directory}}));
     EXPECT_EQ(fs.allPaths(), (std::vector<std::string>{"C:\\Users", "C:\\Users\\dev", "\\\\server\\share\\x.txt"}));
+}
+
+TEST(MemFs, VerbatimRootsThatAreNotDrivesAreSeparateTrees) {
+    // "\\?\1:\" has no drive letter, so normalizePath reads it as a generic verbatim root: a
+    // tree of its own that exists only once added, never the non-absolute "1:\".
+    frost::ManualClock clock;
+    MemFs fs(clock, PathStyle::Windows);
+    const auto missing = fs.writeFileAtomic("\\\\?\\1:\\x", "x");
+    ASSERT_FALSE(missing.has_value());
+    ASSERT_EQ(missing.error().code(), ErrorCode::NotFound) << missing.error().describe();
+    fs.addRoot("\\\\?\\1:\\");
+    ASSERT_TRUE(fs.writeFileAtomic("\\\\?\\1:\\x", "one").has_value());
+    EXPECT_EQ(fs.readFile("\\\\?\\1:\\x").value(), "one");
+    EXPECT_EQ(fs.allPaths(), (std::vector<std::string>{"\\\\?\\1:\\x"}));
+    EXPECT_EQ(fs.readFile("1:\\x").error().code(), ErrorCode::InvalidArgument); // Not absolute.
 }
 
 TEST(MemFs, WindowsNamesWithReservedCharactersAreRefused) {

@@ -8,7 +8,9 @@
  * Until then wait() learns the exit status with waitid(WNOWAIT), which leaves
  * a zombie that keeps the pid, and with killOnClose the process-group id,
  * reserved. That makes terminate() and the destructor's group kill immune to
- * pid reuse: they can never signal an unrelated process.
+ * pid reuse, provided nothing else in the process reaps this child (no SIGCHLD
+ * SIG_IGN or SA_NOCLDWAIT, no waitpid(-1) or wait(); the M1 child watcher must
+ * reap detached pids only): then they can never signal an unrelated process.
  *
  * SIGPIPE. Writing to a pipe whose reader is gone raises SIGPIPE, which kills
  * the process by default. Rather than changing the process-wide disposition,
@@ -56,14 +58,9 @@ constexpr std::size_t kChunkBytes = 64 * 1024;
 // How long communicate() waits for a terminated process to exit before returning Timeout.
 constexpr auto kReapGrace = std::chrono::seconds(5);
 
-// poll() timeout in milliseconds: rounded up, clamped to int.
-int toPollMs(IClock::Duration duration) noexcept {
-    if (duration <= IClock::Duration::zero()) {
-        return 0;
-    }
-    const auto ms = std::chrono::ceil<std::chrono::milliseconds>(duration).count();
-    return static_cast<int>(std::min<long long>(ms, 1 << 30));
-}
+// poll() timeout in milliseconds: rounded up, at most detail::maxWaitSliceMs() (2^30 ms by default, which
+// fits an int); callers loop until their deadline.
+int toPollMs(IClock::Duration duration) noexcept { return static_cast<int>(detail::waitSliceMs(duration)); }
 
 // write() that cannot raise SIGPIPE (see the file comment). Returns the byte count, or -1
 // with the errno value in `error`.
@@ -129,12 +126,12 @@ public:
         m_out.reset();
         m_err.reset();
         if (m_ownGroup) {
-            // The zombie (or live) leader keeps the group id reserved, so this reaches only our tree.
+            // The zombie (or live) leader keeps the group id reserved, so this reaches only our group.
             ::kill(-m_pid, SIGKILL);
             reap(0);
         } else {
             // Not contained: reap if finished, otherwise let it run.
-            // TODO(M1): the reactor's child watcher reaps detached children when they exit.
+            // TODO(M1): the reactor's child watcher reaps detached children, by pid, when they exit.
             reap(WNOHANG);
         }
     }
@@ -225,7 +222,8 @@ public:
     }
 
     Result<void> terminate() override {
-        // The child is never reaped before destruction, so m_pid cannot have been reused.
+        // The child is never reaped before destruction, so m_pid cannot have been reused (as long as
+        // nothing else reaps it; see the file comment).
         const pid_t target = m_ownGroup ? -m_pid : m_pid;
         if (::kill(target, SIGKILL) != 0 && errno != ESRCH) {
             return std::unexpected(errnoError(errno, "kill"));
@@ -356,7 +354,7 @@ Result<ProcessResult> PosixProcess::communicate(std::string_view stdinData, IClo
             return std::unexpected(errnoError(errno, "communicate: poll"));
         }
         if (ready == 0) {
-            return timedOut();
+            continue; // One wait slice ended; the check above decides whether the deadline has.
         }
         // POLLHUP/POLLERR on a read end still need a read to collect the tail and see EOF.
         if (outIndex >= 0 && entries[static_cast<std::size_t>(outIndex)].revents != 0) {
@@ -565,7 +563,8 @@ public:
         if (spec.killOnClose) {
             /*
              * A new session (glibc >= 2.26), which also makes the child the leader of
-             * a new process group whose id is its pid, so kill(-pid) reaches the tree.
+             * a new process group whose id is its pid, so kill(-pid) reaches every
+             * process that stays in the group (not one that calls setsid or setpgid).
              * Unlike a mere new group, the session has no controlling terminal: a
              * child that opens /dev/tty (ssh and git prompts) gets ENXIO and fails
              * fast, instead of being stopped by SIGTTIN as a background job of the

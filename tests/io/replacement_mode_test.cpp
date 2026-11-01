@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Unit tests for the POSIX permission rules of writeFileAtomic (src/io/src/internal.hpp):
-// the fail-safe mode of a replacement file whose owner, group or access ACL cannot be
-// kept, and the parser for the kernel's ACL attribute format. Pure functions, so they
-// run on every platform; file_system_test.cpp checks the real calls in WSL.
+// Unit tests for the POSIX permission rules of writeFileAtomic (src/io/src/internal.hpp).
+//
+/*
+ * The fail-safe mode of a replacement file whose owner, group or access ACL cannot be
+ * kept, and the parser for the kernel's ACL attribute format. Pure functions, so they
+ * run on every platform; file_system_test.cpp checks the real calls in WSL.
+ */
 
 #include "internal.hpp"
 #include <gtest/gtest.h>
@@ -104,6 +107,10 @@ TEST(AccessAclFloor, TheMaskLimitsTheGroupClass) {
               (AclFloor{5, 5}));
     // No mask (only possible without named entries): nothing is limited.
     EXPECT_EQ(accessAclFloor(aclXattr({{kUserObj, 6}, {kGroupObj, 4}, {kOther, 4}})), (AclFloor{4, 4}));
+    // A mask without named entries (`setfacl -m m::r`, which the kernel stores) limits the owning
+    // group only: the other entry is outside the group class and never masked (acl(5)).
+    EXPECT_EQ(accessAclFloor(aclXattr({{kUserObj, 6}, {kGroupObj, 6}, {kMask, 4}, {kOther, 6}})), (AclFloor{4, 6}));
+    EXPECT_EQ(accessAclFloor(aclXattr({{kUserObj, 7}, {kGroupObj, 7}, {kMask, 0}, {kOther, 5}})), (AclFloor{0, 5}));
 }
 
 TEST(AccessAclFloor, NamedEntriesThatDenyLimitTheClassesTheyOverride) {

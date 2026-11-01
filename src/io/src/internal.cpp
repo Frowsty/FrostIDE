@@ -14,6 +14,10 @@ namespace {
 // constinit and trivially destructible: no code runs before main or after exit.
 constinit std::atomic<std::uint64_t> g_nextId{1};
 
+// maxWaitSliceMs(). Relaxed: only the value matters, and a test sets it before starting the waits it
+// exercises (from the same thread), so no other memory has to be ordered with it.
+constinit std::atomic<std::int64_t> g_maxWaitSliceMs{kDefaultMaxWaitSliceMs};
+
 // Bytes of a UTF-8 string that fit in `limit` without splitting a character.
 std::size_t utf8Prefix(std::string_view text, std::size_t limit) noexcept {
     if (text.size() <= limit) {
@@ -30,6 +34,20 @@ std::size_t utf8Prefix(std::string_view text, std::size_t limit) noexcept {
 } // namespace
 
 std::uint64_t nextUniqueId() noexcept { return g_nextId.fetch_add(1, std::memory_order_relaxed); }
+
+std::int64_t maxWaitSliceMs() noexcept { return g_maxWaitSliceMs.load(std::memory_order_relaxed); }
+
+void setMaxWaitSliceMsForTesting(std::int64_t milliseconds) noexcept {
+    g_maxWaitSliceMs.store(std::clamp<std::int64_t>(milliseconds, 1, kDefaultMaxWaitSliceMs),
+                           std::memory_order_relaxed);
+}
+
+std::int64_t waitSliceMs(IClock::Duration left) noexcept {
+    if (left <= IClock::Duration::zero()) {
+        return 0;
+    }
+    return std::min<std::int64_t>(std::chrono::ceil<std::chrono::milliseconds>(left).count(), maxWaitSliceMs());
+}
 
 std::uint32_t currentProcessId() noexcept {
 #ifdef _WIN32
@@ -88,15 +106,16 @@ std::optional<AclFloor> accessAclFloor(std::string_view xattr) noexcept {
     std::optional<std::uint32_t> groupObj;
     std::optional<std::uint32_t> other;
     std::uint32_t mask = 7; // Without a mask entry (no named entries) nothing is limited.
-    std::uint32_t namedUsers = 7;
-    std::uint32_t namedGroups = 7;
+    // The AND of every named-user (named-group) entry; nullopt while there is none.
+    std::optional<std::uint32_t> namedUsers;
+    std::optional<std::uint32_t> namedGroups;
     for (std::size_t at = kHeaderBytes; at < xattr.size(); at += kEntryBytes) {
         const std::uint32_t permissions = le16(at + 2) & 7u;
         switch (le16(at)) {
         case kUserObj: break; // The owner's entry, which the mask does not limit.
-        case kUser: namedUsers &= permissions; break;
+        case kUser: namedUsers = namedUsers.value_or(7) & permissions; break;
         case kGroupObj: groupObj = permissions; break;
-        case kGroup: namedGroups &= permissions; break;
+        case kGroup: namedGroups = namedGroups.value_or(7) & permissions; break;
         case kMask: mask = permissions; break;
         case kOther: other = permissions; break;
         default: return std::nullopt;
@@ -105,10 +124,14 @@ std::optional<AclFloor> accessAclFloor(std::string_view xattr) noexcept {
     if (!groupObj || !other) {
         return std::nullopt;
     }
-    // The mask limits the whole group class: the owning-group entry and every named entry.
-    namedUsers &= mask;
-    namedGroups &= mask;
-    return AclFloor{*groupObj & mask & namedUsers, *other & namedUsers & namedGroups};
+    /*
+     * The mask limits the whole group class: the owning-group entry and every named
+     * entry. The other entry is not in that class and is never masked (acl(5)), so a
+     * mask without named entries (`setfacl -m m::r`) limits only the owning group.
+     */
+    const std::uint32_t users = namedUsers ? *namedUsers & mask : 7;
+    const std::uint32_t groups = namedGroups ? *namedGroups & mask : 7;
+    return AclFloor{*groupObj & mask & users, *other & users & groups};
 }
 
 std::uint32_t replacementMode(std::uint32_t mode, bool ownerKept, bool groupKept,

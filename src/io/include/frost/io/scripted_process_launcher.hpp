@@ -12,11 +12,12 @@
  *     (validateProcessSpec with the platform's rules), so code that would be
  *     rejected for real is rejected here too. Every launch, valid or not, is
  *     recorded.
- *   - Each valid launch consumes the next ScriptedProcess from the queue
- *     (FIFO). If the script has an `expectExecutable`, a launch of anything
- *     else fails with InvalidArgument ("unexpected launch"); an empty queue
- *     fails with NotFound. A script with `launchError` makes launch() fail
- *     with that error, as a missing tool would.
+ *   - Each valid launch takes the next ScriptedProcess from the queue (FIFO).
+ *     If that script has an `expectExecutable` and the launch names a
+ *     different executable (exact string comparison), launch() fails with
+ *     InvalidArgument ("unexpected launch") and the script stays queued; an
+ *     empty queue fails with NotFound. A script with `launchError` is consumed
+ *     and makes launch() fail with that error, as a missing tool would.
  *   - The returned IProcess serves the scripted stdout/stderr bytes to reads
  *     (only for streams configured as Stdio::Pipe; MergeIntoStdout appends the
  *     scripted stderr to stdout), records stdin writes, and reports the
@@ -60,7 +61,7 @@ struct ScriptedProcess {
 // What the code under test did with one launch.
 struct LaunchRecord {
     ProcessSpec spec{};
-    bool launched = false;    // False if launch() failed (invalid spec, empty queue, launchError).
+    bool launched = false;    // False if launch() failed (bad spec, empty queue, unexpected executable, launchError).
     std::string stdinBytes{}; // Everything written to stdin, through writeStdin or communicate.
     bool stdinClosed = false; // closeStdin() was called (communicate closes it too).
     bool terminated = false;  // terminate() was called.
