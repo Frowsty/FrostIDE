@@ -115,6 +115,33 @@ std::optional<std::string> expandProperties(std::string_view text, const Propert
     return out;
 }
 
+// Expands the $(Name) references `properties` knows and keeps every other reference ($(Unknown),
+// property functions, %(Metadata), @(Items)) as written; for ClCompile metadata (vcxproj.hpp).
+std::string expandKnownProperties(std::string_view text, const PropertyTable& properties) {
+    std::string out;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '$' && i + 1 < text.size() && text[i + 1] == '(') {
+            const std::size_t close = text.find(')', i + 2);
+            if (close == std::string_view::npos) {
+                out.append(text.substr(i));
+                break;
+            }
+            const std::string_view name = trim(text.substr(i + 2, close - i - 2));
+            auto it = properties.find(detail::toLowerAscii(name));
+            if (it != properties.end() && name.find_first_of("[.:(") == std::string_view::npos) {
+                out += it->second;
+            } else {
+                out.append(text.substr(i, close + 1 - i));
+            }
+            i = close + 1;
+        } else {
+            out += text[i++];
+        }
+    }
+    return out;
+}
+
 // "Source Files/Core\\" -> "Source Files\Core".
 std::string normalizeFilterPath(std::string_view filter) {
     std::string slashes(filter);
@@ -181,6 +208,8 @@ public:
                 propertyGroup(child);
             } else if (isElement(child, "ItemGroup")) {
                 itemGroup(child);
+            } else if (isElement(child, "ItemDefinitionGroup")) {
+                itemDefinitionGroup(child);
             } else if (isElement(child, "Choose")) {
                 for (pugi::xml_node branch = child.first_child(); branch; branch = branch.next_sibling()) {
                     if (isElement(branch, "When") || isElement(branch, "Otherwise")) {
@@ -198,6 +227,7 @@ public:
                 if (iequals(name, config.name())) {
                     config.configurationType = values.configurationType;
                     config.platformToolset = values.platformToolset;
+                    config.characterSet = values.characterSet;
                 }
             }
         }
@@ -207,6 +237,7 @@ private:
     struct PerConfiguration {
         std::string configurationType;
         std::string platformToolset;
+        std::string characterSet;
     };
 
     void warn(std::string message) { m_project.warnings.push_back(std::move(message)); }
@@ -252,6 +283,8 @@ private:
                 if (configuration && unconditioned) {
                     setFirst(perConfiguration(*configuration).platformToolset, value);
                 }
+            } else if (iequals(name, "CharacterSet") && configuration && unconditioned) {
+                setFirst(perConfiguration(*configuration).characterSet, value);
             }
             if (!groupCondition.empty() || !unconditioned || detail::istartsWith(name, "MSBuild")) {
                 continue; // Only unconditioned, non-reserved properties join the static table.
@@ -262,6 +295,40 @@ private:
             } else {
                 m_project.properties.erase(key); // Redefined to something we cannot know statically.
             }
+        }
+    }
+
+    // <ItemDefinitionGroup>: the <ClCompile> metadata, conditioned on the group or the element.
+    void itemDefinitionGroup(const pugi::xml_node& group) {
+        const std::string_view groupCondition = trim(attribute(group, "Condition"));
+        for (pugi::xml_node item = group.first_child(); item; item = item.next_sibling()) {
+            if (item.type() != pugi::node_element || !iequals(localName(item), "ClCompile")) {
+                continue;
+            }
+            const std::string_view itemCondition = trim(attribute(item, "Condition"));
+            ClCompileDefinition definition;
+            if (!groupCondition.empty() && !itemCondition.empty()) {
+                // Two conditions at once: not the standard shape, so it cannot be evaluated.
+                definition.otherCondition = true;
+                m_project.clCompileDefinitions.push_back(std::move(definition));
+                continue;
+            }
+            const std::string_view condition = groupCondition.empty() ? itemCondition : groupCondition;
+            if (!condition.empty()) {
+                if (auto pair = configurationCondition(condition)) {
+                    definition.configuration = pair->first + '|' + pair->second;
+                } else {
+                    definition.otherCondition = true;
+                }
+            }
+            for (pugi::xml_node meta = item.first_child(); meta; meta = meta.next_sibling()) {
+                if (meta.type() != pugi::node_element || !trim(attribute(meta, "Condition")).empty()) {
+                    continue; // Metadata with its own condition cannot be evaluated statically.
+                }
+                definition.metadata[detail::toLowerAscii(localName(meta))] =
+                    expandKnownProperties(elementText(meta), m_project.properties);
+            }
+            m_project.clCompileDefinitions.push_back(std::move(definition));
         }
     }
 
@@ -297,7 +364,8 @@ private:
         ProjectConfiguration config{.configuration = std::move(configuration),
                                     .platform = std::move(platform),
                                     .configurationType = {},
-                                    .platformToolset = {}};
+                                    .platformToolset = {},
+                                    .characterSet = {}};
         for (const ProjectConfiguration& existing : m_project.configurations) {
             if (iequals(existing.name(), config.name())) {
                 return;
@@ -420,6 +488,38 @@ Result<VcxProject> parseVcxproj(io::IFileSystem& fs, std::string_view content, s
     parser.walk(doc.document_element());
     parser.finish();
     return project;
+}
+
+std::map<std::string, std::string, std::less<>> clCompileMetadata(const VcxProject& project,
+                                                                  std::string_view configuration) {
+    std::map<std::string, std::string, std::less<>> folded;
+    for (const ClCompileDefinition& definition : project.clCompileDefinitions) {
+        if (definition.otherCondition ||
+            (!definition.configuration.empty() && !iequals(definition.configuration, configuration))) {
+            continue;
+        }
+        for (const auto& [name, value] : definition.metadata) {
+            // Replace every %(Name) of this metadata (any case) with the inherited value.
+            auto previous = folded.find(name);
+            const std::string inherited = previous != folded.end() ? previous->second : std::string();
+            std::string out;
+            std::size_t i = 0;
+            while (i < value.size()) {
+                if (value[i] == '%' && i + 1 < value.size() && value[i + 1] == '(') {
+                    const std::size_t close = value.find(')', i + 2);
+                    if (close != std::string::npos &&
+                        iequals(trim(std::string_view(value).substr(i + 2, close - i - 2)), name)) {
+                        out += inherited;
+                        i = close + 1;
+                        continue;
+                    }
+                }
+                out += value[i++];
+            }
+            folded[name] = std::move(out);
+        }
+    }
+    return folded;
 }
 
 Result<VcxProject> readVcxproj(io::IFileSystem& fs, std::string_view projectPath, const VcxprojOptions& options) {
