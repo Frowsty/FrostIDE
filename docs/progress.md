@@ -5,17 +5,84 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first five slices and the switch to the feature-first phase, each merged with `git merge --no-ff`
-in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
+`main` has M1's first six slices, the switch to the feature-first phase and the W1 plan, each merged with `git
+merge --no-ff` in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
 3db37c5), `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b) and `m1/theme-icons` at 73a5143 (merge 94ed47d) merged after
 the slice's independent reviews. `m1/process-feature-first` at d5f4082 (merge 5612d23) and `m1/storage` at 39837c1
 (merge e9c3214) are the first feature-first batch (ADR 0031): a slice merges after its own `-Quick`, and each batch
-gets one `-Quick` of the merged tree. The slice records follow this entry's sections as subsections, newest first:
-`m1/storage`'s, `m1/theme-icons`'s, `m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes
-(none of these branches kept a record in this log), then `m1/piece-tree`'s two, kept as the branch wrote them.
-Merge notes in them mark what has changed since.
+gets one `-Quick` of the merged tree. The second batch is `plan/w1` at 43ee979 (merge b7ce4fb), which puts W1, the
+work-ready build, before the rest of U1 (ADR 0032), and `m1/io-reactor-watch` at e0eaf75 (merge 4cce4c8). The slice
+records follow this entry's sections as subsections, newest first: `m1/io-reactor-watch`'s, `m1/storage`'s,
+`m1/theme-icons`'s, `m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes (none of these
+branches kept a record in this log), then `m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them
+mark what has changed since.
 
 ### Done
+
+#### W1, the work-ready build (ADR 0032)
+- **Plan:** W1, the work-ready build, comes before the rest of U1 (ADR 0032; the user's requirement statement of
+  2026-11-01). W1: open `.sln`/`.slnx`, a Solution Explorer from static `.sln`/`.slnx`/`.vcxproj`/`.filters`
+  readers, edit and save, Build/Rebuild/Clean through the installed MSBuild with Configuration|Platform, Save All
+  before build, a trust prompt, build output, and an error list with click-to-jump and editor marks. Then clangd
+  live diagnostics, navigation and completion, then the rest of U1. Docs only.
+- **Lean slices running:** `w1/project-sln` (ADR 0033) and `w1/build-msbuild` (ADR 0034). Neither number is on
+  `main` or on another branch yet; both slices are still at their base e9c3214.
+- **ADR 0032 cites ADR 0029** (the thin path), which is still only on `plan/thin-path`, as ADR 0031 does (below).
+  No other ADR uses 0032.
+
+#### Merge of `plan/w1` (b7ce4fb)
+- **The merge** (b7ce4fb) of `plan/w1` (43ee979) into `main` at 5a754de: ADR 0032. Docs only, no conflicts. The
+  number is unchanged and no other branch uses it (`main`'s ADRs after 0010 are now 0011 to 0017, 0031 and 0032).
+- **The slice's verification at 43ee979:** frost_lint ok; docs only, no build.
+
+#### Merge of `m1/io-reactor-watch` (4cce4c8)
+- **The merge** (4cce4c8) of `m1/io-reactor-watch` (e0eaf75) into `main` at b7ce4fb: frost::io's asynchronous half
+  (the slice record below says what it holds). ADR 0020; the number is unchanged and no other branch uses it
+  (`main`'s ADRs after 0010 are now 0011 to 0017, 0020, 0031 and 0032). The slice also amends ADR 0002 (a
+  comment-only edit of `scheduler.hpp`) and ADR 0003.
+- **Two conflicts**, each resolved so that both sides' intent survives:
+  - The root `CMakeLists.txt`: `main`'s `find_package` of unofficial-sqlite3 and xxHash under `NOT FROST_FUZZ` (ADR
+    0014) and the slice's `find_package(asio CONFIG)` with its fatal messages (fuzz trees use the headers the normal
+    preset installed; ADR 0020) are both kept, storage's block first.
+  - `vcpkg.json`: the dependencies are asio 1.32.0, gtest 1.18.0, sqlite3 3.54.1 (no default features,
+    `omit-load-extension`) and xxhash 0.8.4, in name order.
+  - Merged without conflict: `src/io` (the reactor, the watchers, async pipes, the ignore rules and the scan),
+    `tests/io/CMakeLists.txt`, `tests/cmake` (the `io_no_static_init` check), `tests/fuzz/CMakeLists.txt` (the
+    `io_ignore_rules` target and its corpus) and `tests/support/watch_mirror.hpp`. `tests/storage`, which uses
+    `IProcessLauncher` for its crash-consistency child, built unchanged against the slice's `process.hpp`.
+- **Orchestrator decisions on the slice's questions:** Phase B (async child pipes, the gitignore matcher and
+  `scanTree` for `m1/shell-nav`) stays in this slice; asio's static initialisers (pinned by `io_no_static_init`)
+  and the delay-loaded ws2_32 guard are accepted; `WorkingDirectoryBeyondMaxPath` now compares the child's working
+  directory by identity (volume serial plus FileId) instead of by string, because the child may see the 8.3
+  spelling. That checks the same thing at least as strictly, so it is not a weakening.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 39.3 GB commit free), `cmake --preset
+  win-clangcl` (vcpkg installed asio 1.32.0) and `cmake --build --preset win-clangcl-debug -j 8`: exit 0, 226
+  steps, no compiler warning (only Qt's own "No qtpaths executable found" configure notice).
+
+#### Verification (batch, merged tree 4cce4c8)
+- Before the batch run: `git diff --check` clean, and the Windows Debug build after the io merge (above). The
+  `plan/w1` merge is docs only, so it got no build of its own.
+- `tools\verify.ps1 -Quick -Jobs 8` on 4cce4c8 (with this record uncommitted) through `run_hidden_nobox.py` (a
+  hidden desktop; no window opened on it), after `night.py build-gate` (no lock, 36.3 GB commit free), 469.5 s,
+  exit 0. Windows ran its Debug leg and the checks; WSL ran `tools/verify.sh` in the ext4 mirror
+  (`~/frost-src-e235f3842261`): `Verified: win debug 1298/1304 (6 skipped), wsl debug 1211/1216 (5 skipped), wsl
+  licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run` (frost-lint 870 files;
+  licensecheck 18 packages on Windows, 13 on WSL). No test failed. The test steps took 231.5 s (Windows) and 157.9 s
+  (WSL).
+- **The skips are the slice's own five on each OS, plus one from the environment on Windows:**
+  - Both OSes: the four `WatcherPerf` tests skip outside optimised, unsanitised builds (`kAssertBudgets`), as the
+    slice's run did; their reports are in "Deferred to the hardening phase (ADR 0031)".
+  - Windows: `PollingWatcher.DirectorySymlinksAreNotFollowed` (creating a directory symlink fails for this
+    account). WSL: `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale` (no translated locale is installed).
+  - Windows only, new in this run: `LayoutOs.UsLayoutEqualsTheSimulatedTable` (`tests/input`, untouched by this
+    batch) skips when the active keyboard layout is not en-US (00000409), as it was during this run. It ran and
+    passed in every earlier record.
+- **No test was lost in the two merges.** Against the storage merge (win debug 1134/1134, wsl debug 1048/1048), the
+  tree adds 170 tests on Windows and 168 on WSL. That is what `m1/io-reactor-watch` added over its base 0110eff
+  (924 and 835 at e0eaf75, against the input-keymap tree's 754 and 667). `plan/w1` is docs only.
+- `-Quick` builds no ASan, TSan or fuzz tree. The merge adds asio to fuzz trees (through the normal tree's installed
+  headers) and the `io_ignore_rules` fuzz target; neither fuzz tree was built. Sanitizer and fuzz runs of the io
+  slice are in "Deferred to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### The feature-first phase (ADR 0031)
 - **Process:** the feature-first phase until U1 (ADR 0031, the user's decision of 2026-11-01). One agent per slice,
@@ -29,7 +96,8 @@ Merge notes in them mark what has changed since.
   unverified, not pushed): `m1/syntax` (3c86bd1), `m1/keymap-de` (a2b2570), `m1/io-reactor-watch` (e7daf37),
   `m1/crash-diag` (be509f2), `m1/verify-tooling` (bfd769a), `m1/encodings` (0893943) and `m1/diff-merge`
   (4d14df6). `m1/display-map` had nothing to save: its branch has no commit of its own yet (it is at 2fef6ee). Lean
-  agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`.
+  agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`. (Merge note:
+  `m1/io-reactor-watch` finished at e0eaf75 and merged as 4cce4c8, above.)
 
 #### Merge of `m1/process-feature-first` (5612d23)
 - **The merge** (5612d23) of `m1/process-feature-first` (d5f4082) into `main` at 94ed47d: ADR 0031 and its pointers
@@ -67,7 +135,7 @@ Merge notes in them mark what has changed since.
 #### Verification (batch, merged tree e9c3214)
 - Before the batch run: frost_lint ok, `git diff --check` clean, and the Windows Debug build after the storage
   merge (above).
-- `toolserify.ps1 -Quick -Jobs 8` on e9c3214 (with this record uncommitted) through `run_hidden_nobox.py` (a
+- `tools\verify.ps1 -Quick -Jobs 8` on e9c3214 (with this record uncommitted) through `run_hidden_nobox.py` (a
   hidden desktop; no window opened on it), after `night.py build-gate` (no lock, 42.0 GB commit free), 367.4 s,
   exit 0. Windows ran its Debug leg and the checks; WSL ran `tools/verify.sh` in the ext4 mirror
   (`~/frost-src-e235f3842261`): `Verified: win debug 1134/1134, wsl debug 1048/1048, wsl licensecheck ok, format
@@ -238,9 +306,18 @@ Merge notes in them mark what has changed since.
   Every compile command there has `-fsanitize=address` and `-fsanitize=fuzzer-no-link`.
 
 ### Next
+- **W1, the work-ready build** (ADR 0032), before the rest of U1: the lean slices `w1/project-sln` (ADR 0033: open
+  `.sln`/`.slnx`, the static readers, the Solution Explorer) and `w1/build-msbuild` (ADR 0034: Build, Rebuild and
+  Clean through the installed MSBuild, the build output and the error list), merged in batches as each passes its
+  own `-Quick`. Then clangd live diagnostics (how they get compile commands depends on the open question about the
+  "command-list file", under Questions for the user), then navigation and completion, then the rest of U1.
 - **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/display-map`, `m1/keymap-de`,
-  `m1/io-reactor-watch`, `m1/crash-diag`, `m1/verify-tooling`, `m1/encodings` and `m1/diff-merge`, merged in batches
-  as each passes its own `-Quick`.
+  `m1/crash-diag`, `m1/verify-tooling`, `m1/encodings` and `m1/diff-merge`, merged in batches as each passes its own
+  `-Quick`.
+- **The frost::io consumers** (ADR 0020, Consequences): `m1/shell-nav` (`scanTree`), the File System view (one
+  recursive watch per project root, fanning batches out to settings and the SaveManager), the SaveManager slice
+  (row I2: refusing a read-only target on POSIX and sweeping stale `.frost-tmp-*` files, moved there from `src/io`)
+  and the crash and logging slice (row I3: logging the resolved launch, moved from `process.hpp`).
 - **The frost::storage consumers** (ADR 0014): SaveManager, autosave and external-change merge (row I2), the Local
   History UI (row 218), and FSEG segments, the cache-key path normaliser and ProjectModelCache (`TODO(M2)` in
   `src/storage/CMakeLists.txt`).
@@ -258,6 +335,22 @@ Merge notes in them mark what has changed since.
 
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first.
+- **From `m1/io-reactor-watch`** (ADR 0020), as its hand-off lists them:
+  - Sanitizer runs (ASan+UBSan, TSan) of the io unit, integration and stress tests. TSan matters most for the
+    reactor's shutdown, the WatchQueue awaiters, the inotify wd tree and async pipe cancellation.
+  - The `io_stress_tests` label (50k-file watcher stress, rename storms, overflow loops, 64 MiB to 1 GiB pipe
+    streams, 200k coalescer seeds) is written but has not run in WSL.
+  - The `io_perf_tests` reports (change-to-batch latency, shutdown with 10 watches, inotify set-up per 10k
+    directories, polling per 10k files) and the start-up cost of asio's static initialisers; ADR 0020's WSL
+    measurement column.
+  - A fuzz run of `io_ignore_rules` (only its corpus replay ran). No fuzz tree was built for this merge.
+  - An independent review of the reactor, the watch queue and the async pipes, and of the comment-only
+    `scheduler.hpp` edit with its ADR 0002 amendment.
+  - Windows cross-directory moves arrive as Removed plus Created (FileId pairing and the USN journal are M13).
+  - Windows polling calls `status()` per file; switch the snapshot to listings with attributes.
+  - Who owns ThreadPool's timers on the reactor and Windows high-resolution waits (the `TODO(M1)` in
+    `thread_pool.hpp`, ADR 0002; sched needs a timer seam).
+  - Who owns helper-process priorities (BELOW_NORMAL plus EcoQoS, SCHED_IDLE) in the io launcher.
 - **From `m1/storage`** (ADR 0014, low): `openStore` and `Database::open` do not yet re-check the path after
   locking, as `HotExitJournal::create` does, so the residual POSIX removal race stays open (`store.hpp` and ADR 0014
   decision 8 state it, 39837c1).
@@ -283,10 +376,16 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 
 ### Blockers
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
-  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons` and `m1/storage` name none.
+  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons`, `m1/storage`, `plan/w1` and `m1/io-reactor-watch` name
+  none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
+From `plan/w1` (ADR 0032), asked at its merge:
+- **The "command-list file":** what is the command-list file that your new-project script generates (is it
+  `compile_commands.json`?). It decides how live diagnostics get their compile commands after W1: from that file,
+  from the generated CMake side, or derived from the projects.
+
 From `m1/storage` (ADR 0014, Consequences; the conservative choice is implemented), asked at its merge:
 - **ADR 0014 Q1:** where should SaveManager live, given that `src/text` and `src/storage` share FrostLayers rank 4
   (and equal ranks may not depend on each other)?
@@ -356,6 +455,36 @@ The user answered the open questions; their words are quoted.
 - **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
 - **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
   reordered into a thin path to a first usable build (ADR 0029, in progress).
+
+### Slice record: `m1/io-reactor-watch` (ADR 0020)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): saved as the WIP commit e7daf37 before the PC restart, then finished by a lean agent
+as one commit, e0eaf75, on 0110eff. Worktree `.claude\worktrees\m1-io-reactor-watch`. (Merge note: merged into
+`main` as 4cce4c8 and pushed; the M1 entry above.)
+
+#### Done
+- **The asio reactor** (vcpkg asio 1.32.0, BSL-1.0, header-only, PRIVATE to frost_io): IOCP on Windows, epoll on
+  Linux, run by 1 or 2 threads; completions resume coroutines through frost::sched; an ordered shutdown. ws2_32 is
+  delay-loaded and WSAStartup is never called.
+- **IFileWatcher.** Windows: ReadDirectoryChangesExW, then ReadDirectoryChangesW, then polling, with 8.3 expansion
+  and Rescan on overflow. Linux: one shared inotify instance with watch and instance limit detection, and a
+  fallback to polling on network file systems. Both: coalescing, debouncing, rename pairing, an atomic save
+  reported as Modified, the temp-file filter, exclusions and non-recursive watches.
+- **MemFsWatcher** on SimExecutor's clock, the deterministic double.
+- **The io `TODO(M1)`s:** the 8.3 working-directory fallback for launches from long working directories, and
+  English strerror text.
+- **Landed early** (the spec's Phase B, finished in the WIP): async child pipes (`IProcessLauncher::launchAsync`,
+  IAsyncProcess), a clean-room gitignore matcher checked against git, and `scanTree` (the gitignore-aware parallel
+  scan) for `m1/shell-nav`.
+- **Tests:** `io_unit_tests` and `io_integration_tests`; stress, perf and fuzz targets are written but left to the
+  hardening phase.
+- **Verification at e0eaf75:** win debug 919/924 (5 skipped), wsl debug 830/835 (5 skipped), format, frost_lint,
+  licensecheck and featurecheck ok.
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/io-reactor-watch`'s.
+- No questions for the user; the orchestrator's decisions on the slice's questions are in the merge section above.
 
 ### Slice record: `m1/storage` (ADR 0014)
 
