@@ -65,3 +65,7 @@ frost_add_test(s1_editor_tests QT
     SOURCES editor/editor_test.cpp ${s1_editor_sources}
     DEPS frost::perf_probes frost::core
     THIRD_PARTY Qt6::GuiPrivate)
+# Both targets copy the Qt DLLs into this one output directory after linking. In a
+# fresh tree, two concurrent copies of the same file fail with a sharing violation
+# ("permission denied"), so the tests link only after s1_editor's copies are done.
+add_dependencies(s1_editor_tests s1_editor)
