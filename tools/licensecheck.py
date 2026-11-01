@@ -418,6 +418,15 @@ def _module_from_target(name: str) -> tuple[str, bool] | None:
     return name, False
 
 
+def _module_from_component(name: str) -> str:
+    """A find_package component to its module: GuiPrivate -> Gui, as for Qt6::GuiPrivate targets.
+
+    Qt ships a module's private API (rhi/qrhi.h, for example) in a separate CMake
+    package, but in the same library under the same licence as the module.
+    """
+    return name[: -len("Private")] if name.endswith("Private") and len(name) > len("Private") else name
+
+
 def cmake_qt_uses(repo: Path, files: list[str]) -> list[QtUse]:
     """Qt components named in the repository's CMake files (fixtures and goldens excluded)."""
     uses = []
@@ -436,7 +445,7 @@ def cmake_qt_uses(repo: Path, files: list[str]) -> list[QtUse]:
         for m in _FIND_QT.finditer(code):
             line = lines.line(m.start())
             if m.group(1):
-                uses.append(QtUse(m.group(1), False, context, every_platform, rel, line))
+                uses.append(QtUse(_module_from_component(m.group(1)), False, context, every_platform, rel, line))
                 continue
             collecting = False
             for token in m.group(2).split():
@@ -445,7 +454,7 @@ def cmake_qt_uses(repo: Path, files: list[str]) -> list[QtUse]:
                 elif _KEYWORD.match(token) or "${" in token or token[0].isdigit():
                     collecting = collecting and token[0].isdigit()
                 elif collecting:
-                    uses.append(QtUse(token, False, context, every_platform, rel, line))
+                    uses.append(QtUse(_module_from_component(token), False, context, every_platform, rel, line))
         for m in _QT_TARGET.finditer(code):
             mapped = _module_from_target(m.group(1))
             if mapped:
