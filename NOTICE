@@ -5,3 +5,15 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party components and their licences are listed in the software bill of
 materials produced by tools/licensecheck.py.
+
+Bundled assets (resources/, pinned in resources/assets.lock.json, ADR 0015):
+- Inter 4.1, Copyright (c) 2016 The Inter Project Authors, SIL Open Font
+  License 1.1 (resources/fonts/inter/LICENSE.txt);
+- JetBrains Mono 2.304, Copyright 2020 The JetBrains Mono Project Authors,
+  SIL Open Font License 1.1 (resources/fonts/jetbrains-mono/OFL.txt);
+- a subset of Lucide 1.66.0 icons, Copyright (c) 2026 Lucide Icons and
+  Contributors, ISC License, including icons derived from Feather,
+  Copyright (c) 2013-present Cole Bemis, MIT License
+  (resources/icons/lucide/LICENSE).
+The fonts are bundled unmodified. The software bill of materials lists each
+asset with its version, source and SHA-256.

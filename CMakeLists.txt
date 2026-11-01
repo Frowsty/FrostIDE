@@ -97,6 +97,12 @@ if(FROST_BUILD_TESTS)
 endif()
 
 add_subdirectory(src)
+if(FROST_BUILD_UI)
+    # Build-time tools and the resources they compile into frost's output directory (ADR 0015).
+    add_subdirectory(tools/theme_compiler)
+    add_subdirectory(tools/icon_baker)
+    add_subdirectory(resources)
+endif()
 if(FROST_BUILD_TESTS)
     add_subdirectory(tests)
 endif()

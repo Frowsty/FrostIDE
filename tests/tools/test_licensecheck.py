@@ -4,17 +4,20 @@
 # are here: the Qt Charts fixture and the GPL-3.0-only vcpkg port fixture must fail.
 # Also covered: SPDX expression evaluation, Qt SBOM licences, the per-platform and
 # per-context Qt module allowlist, the build-tree scan (Windows DLLs and Linux ELF
-# DT_NEEDED), ADR exceptions, a missing installed tree and the SPDX 2.3 SBOM.
+# DT_NEEDED), ADR exceptions, a missing installed tree, the SPDX 2.3 SBOM, and the bundled-asset
+# gate (ADR 0015) with its OpenType 'name'-table reader over synthetic fixtures.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import struct
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from tools_test_support import TempDirTestCase, clean_env, run_tool
+from tools_test_support import FIXTURES, REPO, TempDirTestCase, clean_env, run_tool
 
 import licensecheck
 
@@ -260,6 +263,172 @@ class SbomTest(TempDirTestCase):
                             r["spdxElementId"] == packages["Qt Test"]["SPDXID"] for r in document["relationships"]))
         defined = {info["licenseId"] for info in document.get("hasExtractedLicensingInfos", [])}
         self.assertIn("LicenseRef-Qt-Commercial", defined)
+
+
+def _font(names: dict[int, str], platform: int = 3, encoding: int = 1) -> bytes:
+    """A minimal sfnt holding only a 'name' table (UTF-16BE, or Mac Roman for platform 1)."""
+    strings, records = b"", b""
+    for name_id, text in sorted(names.items()):
+        data = text.encode("mac_roman" if platform == 1 else "utf-16-be")
+        records += struct.pack(">6H", platform, encoding, 0x409 if platform == 3 else 0, name_id, len(data),
+                               len(strings))
+        strings += data
+    table = struct.pack(">3H", 0, len(names), 6 + len(records)) + records + strings
+    return struct.pack(">IHHHH", 0x00010000, 1, 16, 0, 0) + b"name" + struct.pack(">III", 0, 28, len(table)) + table
+
+
+class AssetGateTest(TempDirTestCase):
+    """The bundled-asset gate (ADR 0015) over the synthetic licence/assets_* fixtures."""
+
+    def _messages(self, fixture: str) -> list[str]:
+        repo = self.copy_fixture(f"licence/{fixture}")
+        report = licensecheck.Report()
+        licensecheck.check_assets(repo, report)
+        return [str(v) for v in report.violations]
+
+    def test_ok_fixture_passes_through_the_cli(self) -> None:
+        repo = self.copy_fixture("licence/assets_ok")
+        out = self.tmp / "sbom.json"
+        result = run_tool("licensecheck.py", "--repo", str(repo), "--qt-root", str(self.tmp / "no-qt"),
+                          "--vcpkg-installed", str(self.tmp / "none"), "--sbom", str(out))
+        self.assertNotIn("asset", result.stdout)
+        packages = {p["name"]: p for p in json.loads(out.read_text(encoding="utf-8"))["packages"]}
+        self.assertEqual(packages["Demo Font"]["licenseDeclared"], "OFL-1.1")
+        self.assertEqual(packages["Demo Icons"]["licenseConcluded"], "ISC AND MIT")
+        self.assertEqual(packages["Demo Font"]["checksums"], [{"algorithm": "SHA256", "checksumValue": "a" * 64}])
+        self.assertEqual(packages["Demo Icons"]["downloadLocation"], "https://example.invalid/demo-icons-2.0.zip")
+
+    def test_no_manifest_means_no_assets(self) -> None:
+        self.assertEqual(self._messages("base"), [])
+
+    def test_negative_fixtures(self) -> None:
+        cases = {
+            "assets_ok": [],
+            "assets_bad_hash": ["resources/icons/demo/circle.svg:1: asset demo-icons: SHA-256 differs"],
+            "assets_unlisted": ["resources/icons/demo/extra.svg:1: asset demo-icons: file is not listed"],
+            "assets_gpl": ["asset demo-icons: licence 'GPL-3.0-only' is not on the allowlist; needs an ADR",
+                           "no known licence text marker for GPL-3.0-only"],
+            "assets_rfn_modified": ["asset demo-font: a modified font may not keep its Reserved Font Names"],
+            "assets_missing_mit_text": ["resources/icons/demo/LICENSE:1: asset demo-icons: the licence file lacks "
+                                        "the MIT text"],
+        }
+        for fixture, expected in cases.items():
+            with self.subTest(fixture=fixture):
+                messages = self._messages(fixture)
+                self.assertEqual(len(messages), len(expected), messages)
+                for fragment, message in zip(expected, messages):
+                    self.assertIn(fragment, message)
+
+    def test_missing_file_adr_and_invalid_manifest(self) -> None:
+        repo = self.copy_fixture("licence/assets_ok")
+        (repo / "resources" / "fonts" / "demo" / "OFL.txt").unlink()
+        (repo / "docs" / "adr" / "0015-demo.txt").unlink()
+        report = licensecheck.Report()
+        licensecheck.check_assets(repo, report)
+        messages = [str(v) for v in report.violations]
+        self.assertTrue(any("OFL.txt:1: asset demo-font: listed file is missing" in m for m in messages), messages)
+        self.assertEqual(sum("ADR docs/adr/0015-demo.txt does not exist" in m for m in messages), 2, messages)
+        (repo / "resources" / "assets.lock.json").write_text('{"schemaVersion": 2}', encoding="utf-8")
+        report = licensecheck.Report()
+        licensecheck.check_assets(repo, report)
+        self.assertEqual(len(report.violations), 1)
+        self.assertIn("invalid asset manifest", report.violations[0].message)
+
+    def _with_font(self, data: bytes, **asset_changes) -> list[str]:
+        self._cases = getattr(self, "_cases", 0) + 1
+        repo = self.tmp / f"case{self._cases}"
+        shutil.copytree(FIXTURES / "licence" / "assets_ok", repo)
+        font = repo / "resources" / "fonts" / "demo" / "Demo-Regular.ttf"
+        font.write_bytes(data)
+        manifest = repo / "resources" / "assets.lock.json"
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        document["assets"][0]["files"][0]["sha256"] = hashlib.sha256(data).hexdigest()
+        document["assets"][0].update(asset_changes)
+        manifest.write_text(json.dumps(document), encoding="utf-8")
+        report = licensecheck.Report()
+        licensecheck.check_assets(repo, report)
+        return [str(v) for v in report.violations]
+
+    def test_font_name_table_checks(self) -> None:
+        holder = "Copyright 2026 The Demo Font Authors"
+        # The licence URL alone (nameID 14) is enough.
+        self.assertEqual(self._with_font(_font({0: holder, 14: "https://scripts.sil.org/OFL"})), [])
+        # Mac Roman records are read too.
+        self.assertEqual(self._with_font(_font({0: holder, 13: "SIL Open Font License, Version 1.1"}, 1, 0)), [])
+        messages = self._with_font(_font({0: holder, 13: "All rights reserved"}))
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("names no SIL Open Font License 1.1", messages[0])
+        messages = self._with_font(_font({0: "Copyright 2026 Somebody Else", 14: "https://openfontlicense.org"}))
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("does not name 'The Demo Font Authors'", messages[0])
+        # A font without the licence fields may be recorded as such (the licence file still applies).
+        self.assertEqual(self._with_font(_font({0: "x"}), nameTableLicence=False), [])
+        messages = self._with_font(b"not a font at all")
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("unreadable font", messages[0])
+        # The holder must appear as whole words: "The Demo Font Authors" is not in "...Authorship".
+        authorship = _font({0: "Copyright 2026 The Demo Font Authorship", 14: "https://openfontlicense.org"})
+        messages = self._with_font(authorship)
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("does not name", messages[0])
+        # A font over the size limit is refused before its bytes are hashed or parsed.
+        with mock.patch.object(licensecheck, "_MAX_FONT_BYTES", 16):
+            messages = self._with_font(_font({0: holder, 14: "https://openfontlicense.org"}))
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("unreadable: larger than", messages[0])
+
+    def test_unpinned_archive_is_a_violation(self) -> None:
+        holder = "Copyright 2026 The Demo Font Authors"
+        messages = self._with_font(_font({0: holder, 14: "https://openfontlicense.org"}), sha256="")
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("the archive SHA-256 is not pinned", messages[0])
+
+    def test_font_names_rejects_malformed_tables(self) -> None:
+        good = _font({0: "Copyright 2026 X", 1: "Demo"})
+        self.assertEqual(licensecheck.font_names(good)[1], ["Demo"])
+        bad = {
+            "truncated": good[:40],
+            "no name table": good[:12] + b"glyf" + good[16:],
+            "table outside": good[:24] + struct.pack(">I", 1 << 20) + good[28:],
+            "record outside": good[:28 + 6 + 8] + struct.pack(">H", 0xFFFF) + good[28 + 6 + 10:],
+            "collection": b"ttcf" + good[4:],
+            "odd utf-16": _font({0: "x"})[:28 + 6 + 8] + struct.pack(">H", 1) + _font({0: "x"})[28 + 6 + 10:],
+        }
+        for label, data in bad.items():
+            with self.subTest(label):
+                with self.assertRaises(licensecheck.FontError):
+                    licensecheck.font_names(data)
+        # Every truncation of a valid font is rejected cleanly, never with another exception.
+        for size in range(len(good)):
+            try:
+                licensecheck.font_names(good[:size])
+            except licensecheck.FontError:
+                pass
+
+    def test_copyright_holder(self) -> None:
+        cases = {
+            "Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)": "The Inter Project Authors",
+            "Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)":
+                "The JetBrains Mono Project Authors",
+            "Copyright (c) 2013-present Cole Bemis": "Cole Bemis",
+            "Copyright © 2026 Lucide Icons and Contributors": "Lucide Icons and Contributors",
+            "Copyright 2016 3M Company": "3M Company",
+            "Copyright (c) 2019, 2020 - 2022 Foo Bar.": "Foo Bar",
+        }
+        for line, holder in cases.items():
+            self.assertEqual(licensecheck.copyright_holder(line), holder)
+
+    def test_names_holder_matches_whole_words(self) -> None:
+        self.assertTrue(licensecheck.names_holder("Copyright 2016 the inter project authors",
+                                                  "The Inter Project Authors"))
+        self.assertFalse(licensecheck.names_holder("Copyright 2016 Themis Ltd", "The"))
+        self.assertFalse(licensecheck.names_holder("anything", ""))
+
+    def test_committed_assets_pass(self) -> None:
+        report = licensecheck.Report()
+        licensecheck.check_assets(REPO, report)
+        self.assertEqual([str(v) for v in report.violations], [])
+        self.assertEqual({p.name for p in report.packages}, {"Lucide", "Inter", "JetBrains Mono"})
 
 
 if __name__ == "__main__":

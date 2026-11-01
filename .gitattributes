@@ -10,6 +10,9 @@
 tests/**/fixtures/** -text
 tests/**/goldens/** -text
 tests/fuzz/corpus/** -text
+# Pinned third-party assets stay byte-identical to their SHA-256 pins (resources/assets.lock.json).
+resources/fonts/** -text
+resources/icons/lucide/** -text
 # Binary assets.
 *.png binary
 *.ico binary

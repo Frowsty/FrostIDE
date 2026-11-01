@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for tools/frost_lint.py (frost-lint v0): the clean and dirty fixtures under
-# tests/tools/fixtures/lint, the C++26 exemptions, the no-CI rule, file enumeration with
+# tests/tools/fixtures/lint (including the qt-svg rule, whose allowed directory is in the clean
+# fixture), the C++26 exemptions, the no-CI rule, file enumeration with
 # and without git, REUSE glob semantics, and the comment/string lexers.
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ class FixtureTest(TempDirTestCase):
                ("tests/toolchain_probe/banned/no_header.cpp", 1, "spdx-header")]
             + [("todo.cpp", line, "todo") for line in (3, 4, 5, 7)]
             + [("win32.cpp", line, "narrow-win32") for line in (4, 5, 6)]
+            + [("qt_svg.cpp", line, "qt-svg") for line in (3, 4, 5, 6)]
         )
         self.assertEqual(sorted(found), expected)
 
@@ -59,6 +61,7 @@ class FixtureTest(TempDirTestCase):
         for line in lines:
             self.assertRegex(line, _LINE)
         self.assertIn("win32.cpp:4: narrow-win32: narrow Win32 API CreateFileA is banned", result.stdout)
+        self.assertIn("qt_svg.cpp:5: qt-svg: #include of QSvgGenerator: Qt Svg is linked only by", result.stdout)
 
     def test_missing_repository_is_a_usage_error(self) -> None:
         result = run_tool("frost_lint.py", "--repo", str(self.tmp / "absent"))
