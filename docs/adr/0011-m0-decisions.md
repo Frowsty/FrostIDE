@@ -9,14 +9,23 @@
 
 ## Context
 The M0 overnight run ended with 28 questions for the user: A1 to G1 in `docs/progress.md`, and E5, G2 and G3,
-which the demo pack raised. Most came with a recommendation, either from an ADR or from the progress log and the
-demo pack.
+which the demo pack raised. The demo pack gives each question the recommendation of an ADR, or says that none
+makes one, and the progress log adds no recommendation of its own:
+- **Nine had an ADR's recommendation:** A1 (ADR 0007 decision 1), A2 (ADR 0007, option (c) of its question 2),
+  B2 (ADR 0006 decision 3, the trees proposal), B3 (ADR 0006 decision 6), B7 (ADR 0005, Consequences), C1
+  (ADR 0008 decisions 1 and 2), C3 (ADR 0008, Consequences: no decision needed now), D2 (ADR 0009 item 3) and F3
+  (ADR 0010 decision 2, for the reading; the question's second part, fixing the probe files and the job counts,
+  had none).
+- **The other 19 had none:** A3 (none explicit in ADR 0007), A4, B1, B4, B5, B6, C2, D1, D3, E1, E2, E3, E4, E5,
+  F1, F2, G1, G2 and G3. For some of them an ADR sets out the options or a wording without choosing: B1 and B4
+  (ADR 0006), D1's exception, to be granted or declined (ADR 0009), and D3's wording (ADR 0009 decision 2).
 
 On 2026-11-01, at about 09:10, the user answered with one instruction: "Follow your own recommendation what to do.
-The path limit should be no problem now, I've enabled long paths". So every question below is decided as
-recommended, on the user's instruction of 2026-11-01 to follow the recommendation. E5, F1, F2, G2 and G3 had no
-recommendation in an ADR. For them the recommendation is the one written for this round, and its reasoning is
-given. None of the wording below is the user's own.
+The path limit should be no problem now, I've enabled long paths". After that instruction, the session wrote its
+own recommendation for each of the other 19, and for F3's second part, into its decision list (`decisions.md`,
+2026-11-01, about 09:10). So every question below is decided as recommended, on the user's instruction of
+2026-11-01 to follow the recommendation: the nine on their ADR's recommendation, the rest on the session's, whose
+reasoning each gives under "Basis". None of the wording below is the user's own.
 
 The user had also turned the long-path switch on: `LongPathsEnabled` under
 `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem` is now 1 (checked with `reg query`). Until then it had been 0,
@@ -60,11 +69,13 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
   - Basis: option (i) keeps PLAN.md's order, "S6 fixes B23 before D3 is final". Collecting one sample per ordinary
     reboot asks for no reboot of its own.
   - Consequence: each ordinary reboot yields one cold S6 sample, through the same logon harness as A4. D3 stays
-    provisional until 10 samples exist and B23's first-project value is fixed from them. 3 s stays the ceiling: a
-    final value above it needs an ADR and the user's approval. M1 does not depend on D3. M2 does (PLAN.md section
-    7, M2 "Depends on"), so the samples are needed before M2 starts; if they are not in by then, that is a
-    question for the user.
-  - Where: M1 (the harness and the samples), then the value before M2.
+    provisional until 10 samples exist and the user has fixed B23's first-project value from them, as ADR 0006
+    option (i) says. 3 s stays the ceiling: a final value above it needs an ADR and the user's approval. M1 does
+    not depend on D3. M2 does (PLAN.md section 7, M2 "Depends on"), so the samples are needed before M2 starts;
+    if they are not in by then, that is a question for the user. PLAN.md's S6 spike-list line now gives this
+    method (10 cold samples, one per ordinary reboot).
+  - Where: now (PLAN.md's S6 spike-list line); M1 (the harness and the samples), then the user's value before
+    M2.
 - **B2. B23's trees target stays provisional.**
   - Basis: ADR 0006 decision 3's trees proposal is accepted. S6 gives no evidence for the trees value, and no M0
     spike measured the native readers.
@@ -98,13 +109,20 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
   - Consequence: `docs/progress.md` records the installer command. Until then R2b measurements use the
     OpenConsole host projects, as the corpus manifest says.
   - Where: M2.
-- **B6. `%LOCALAPPDATA%\vcpkg` is deleted after a check.**
+- **B6. The vcpkg files that S2 left in `%LOCALAPPDATA%\vcpkg` are deleted after a check.**
   - Basis: the directory holds caches that vcpkg downloads again when it needs them (ADR 0005, Consequences). The
     check: every file's timestamp is from 2026-10-31 or later, and no process holds them.
-  - Consequence: `tools/env.ps1` sends vcpkg's downloads and binary cache to E:, so third-party builds must run
-    under it (`docs/progress.md`). The check made on 2026-11-01 did not pass as written, so nothing was deleted
-    yet; the 2026-11-01 (morning) entry of `docs/progress.md` says why and what it found.
-  - Where: now (the check and the progress log); the deletion waits.
+  - Consequence: read by modification time, the check did not pass: 1,035 files and 3 directories under
+    `downloads\tools\` keep the older times that vcpkg's extraction kept from the tool archives (ADR 0005 says
+    the same). By creation time, `downloads\` (1,040 files, created 20:55:09–20:55:17 on 2026-10-31) and
+    `registries\` (3,161 files, created 20:54:53–20:55:08) both match S2's TerminalAppLib reference build
+    (20:54:53–20:55:17, ADR 0005), and no running process referenced the directory. At 09:55 on 2026-11-01 the
+    session deleted those two: 415,726,990 bytes (396.5 MiB) and 136,086,954 bytes (129.8 MiB). `archives\` is
+    kept: 3 binary-cache packages, 6,292,779 bytes (6.0 MiB), created 18:52:29–18:52:47, before S2's run, so
+    they are not S2's, and where they came from is uncertain. `tools/env.ps1` sends vcpkg's downloads, binary
+    cache and, since this branch, its registry clones (`X_VCPKG_REGISTRIES_CACHE`) to E:, so third-party builds
+    must run under it (`docs/progress.md`).
+  - Where: now (done).
 - **B7. R2b's Windows SDK prerequisite is 10.0.26100.0.**
   - Basis: ADR 0005 (Consequences) and ADR 0006 (follow-ups): R2b's pinned commit defaults to 10.0.26100.0, and
     `sdk/sdk.lock.json` pins it. 10.0.22621 is not installed on REF-W1.
@@ -115,8 +133,9 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
   - Basis: ADR 0008 decisions 1 and 2 are accepted: the quiet-machine control's p50 of 15.31 s ×1.2.
   - Consequence: the M3 gate runs on a quiet REF-W1 with the user's heavy workloads closed, scheduled with the user
     (PLAN.md T12). Under set 1's workload every run of stock clangd took longer than 18.4 s (19.77–22.45 s), so a
-    run under load does not compare. `budgets.json`'s note on the M3 slot now says confirmed.
-  - Where: now (`budgets.json`); the gate in M3.
+    run under load does not compare. `budgets.json`'s note on the M3 slot and PLAN.md's S7 spike-list sentence
+    now say confirmed.
+  - Where: now (`budgets.json`, PLAN.md); the gate in M3.
 - **C2. R3's configuration is pinned for all R3 budgets.**
   - Basis: ADR 0008 decision 2: the configuration fixes the index and so the load, and a run configured otherwise
     indexes something else and does not compare with the S7 baseline.
@@ -148,7 +167,8 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
   - Basis: ADR 0009 decision 2 proposed a clearer wording of PLAN.md's "tracy (pinned in M0)", adjusted here for D1
     (a): "tracy (version chosen in M0: 0.14.1 from the vcpkg baseline; use under the dev-builds-only listener
     exception of ADR 0009)".
-  - Where: now (PLAN.md section 2.1, Dependencies).
+  - Consequence: the M0 spike list's "Tracy version" line also records ADR 0009's choice, 0.14.1.
+  - Where: now (PLAN.md section 2.1, Dependencies, and the M0 spike list).
 
 ### E. Start-up and paths
 - **E1. frost must start from every directory length, whether the switch is on or off.**
@@ -240,7 +260,9 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
     - the refusal message's LongPathsEnabled advice: fixed by the E1 fix.
 
     This is closest to the demo pack's option (c), with the E1 fix added to the round.
-  - Where: M0 (the round, after `m0/longpath`); M1 (the strerror text and the capture retry).
+  - Where: M0. The round over the `m0/dll-copy` code is done: comment-accuracy round 5 applied its 9 findings in
+    bc42ada, comments only (`docs/progress.md`). The round over the E1 fix is `m0/longpath`'s review. M1: the
+    strerror text and the capture retry.
 
 ## Measurements
 ### Long-path launch with LongPathsEnabled = 1
@@ -282,19 +304,21 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
 - **On this branch** (`m0/decisions`):
   - the statuses of ADRs 0002, 0006, 0007, 0008, 0009 and 0010, each with a "Decided 2026-11-01 (ADR 0011)" note
     beside the original text;
-  - PLAN.md: B23's row note and the S6 spike-list line (B2), the Tracy wording (D3), and R2b's Windows SDK in
-    section 4 (B7);
+  - PLAN.md: B23's row note (B2) and the S6 spike-list line (B1, B2), the Tracy wording (D3), R2b's Windows SDK in
+    section 4 (B7), and in the M0 spike list the S7 sentence (C1) and the Tracy version line (D3);
+  - `tools/env.ps1`: vcpkg's registry clones go to E: (`X_VCPKG_REGISTRIES_CACHE`, B6), which
+    `tests/tools/test_windows_scripts.py` checks;
   - `tests/perf/budgets.json`: B23's preconditions and its trees note (B2, B3), B24's M3 note (C1) and B28's
     method (F3). No target value changes;
   - `tests/corpus/manifest.json`: R2b's SDK (B7) and R3's configuration (C2);
   - comments only: the TODO(M2) in `process.hpp` (E2), and TODO(M1)s at `writeFileAtomic` (E3) and at the POSIX
-    strerror site (G3).
-- **Left for M0's final integration:** PLAN.md's M0 status paragraph and its next-step line. PLAN.md's S7
-  spike-list sentence still calls B24's M3 value "Proposed, pending the user's confirmation" (C1 confirms it). The
-  M0 spike list's "Tracy version: 0.13.1 or 0.14.1" still reads as a choice (ADR 0009 made it).
-- **Remaining M0 steps, in order:** the E1 fix (`m0/longpath`, which also touches ADR 0003); E4's outcome; I7's
-  acceptance tests (E5); the comment-accuracy round (G3); `verify -Full` on both platforms at `m0/foundation`'s
-  final head; then G1.
+    strerror site (G3);
+  - comments only: comment-accuracy round 5 over the `m0/dll-copy` build code, G3's first part; its 9 findings
+    are applied in bc42ada (`docs/progress.md`).
+- **Left for M0's final integration:** PLAN.md's M0 status paragraph and its next-step line.
+- **Remaining M0 steps, in order:** the E1 fix (`m0/longpath`, which also touches ADR 0003), whose review is G3's
+  comment-accuracy round over it; E4's outcome; I7's acceptance tests (E5); `verify -Full` on both platforms at
+  `m0/foundation`'s final head; then G1.
 - **M1:** QRhi on Windows (A1) and the B6 gating decision (A2); B1's work (A3); the logon harness for cold B1 and
   the passive S6 samples (A4, B1); Tracy under the exception (D1, D2); POSIX read-only refusal (E3); the
   FindOpenGL searches (F2); the strerror text and the capture retry (G3).

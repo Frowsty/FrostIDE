@@ -4,8 +4,9 @@
   B1–B4)**, on the user's instruction of that day to follow the recommendation: decision 3 takes option (i), with
   the cold samples collected passively, one per ordinary reboot (B1), and its trees proposal is accepted (B2);
   decision 6's five preconditions are accepted (B3); decision 2's question takes answer 2 as M2's target, with
-  answer 3 as the fallback and answer 1 rejected (B4). D3 stays not final until the ten cold samples are in.
-  Decision 2's options against first-use JIT stay open M2 options. Until then the status read:
+  answer 3 as the fallback and answer 1 rejected (B4). D3 stays not final until the ten cold samples are in and
+  the user has fixed B23's first-project value from them. Decision 2's options against first-use JIT stay open
+  M2 options. Until then the status read:
   accepted (fixture, R2a and R2b), apart from three parts that are only proposed and wait for the user:
   how B23's final values are set, which also decides when D3 becomes final (decision 3); the B23 preconditions
   (decision 6); and whether a trusted root launches ProjectHost before L1 (decision 2). Decision 1 keeps path (b)
@@ -212,7 +213,7 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
 
      **Decided 2026-11-01 (ADR 0011, B1):** option (i). The cold samples are collected passively: one per
      ordinary reboot, through the logon harness that M1 builds for cold B1. D3 stays not final until 10 samples
-     exist and the first-project value is fixed from them.
+     exist and the user has fixed B23's first-project value from them.
    - **The trees target.** S6 gives no evidence for the trees value (R3, p50 1.5 s; see Context), and no M0
      spike measures the native readers. Removing that target's "final value set by S6" note on the strength of
      S6 would finalise 1.5 s with nothing behind it. Proposed: 1.5 s stays provisional until M2's first B23

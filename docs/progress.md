@@ -7,9 +7,11 @@ what is next, blockers and open questions for the user.
 
 At about 09:10 the user answered the M0 questions (A1–G1 in the entry below, and E5, G2 and G3 from the demo
 pack) with one instruction: "Follow your own recommendation what to do. The path limit should be no problem now,
-I've enabled long paths". Every question is decided as recommended, on that instruction. ADR 0011 records each
-decision with its basis, its consequence and where it is implemented. The work is on branch `m0/decisions`, from
-`m0/foundation` at 593e15f; it is not merged and not pushed.
+I've enabled long paths". Every question is decided as recommended, on that instruction. Nine questions had an
+ADR's recommendation (A1, A2, B2, B3, B7, C1, C3, D2 and F3); for the other 19 the session wrote its own into its
+decision list after the instruction (ADR 0011, Context). ADR 0011 records each decision with its basis, its
+consequence and where it is implemented. The work is on branch `m0/decisions`, from `m0/foundation` at 593e15f;
+it is not merged and not pushed.
 
 ### Done
 #### The decisions in short (ADR 0011)
@@ -19,14 +21,15 @@ decision with its basis, its consequence and where it is implemented. The work i
   (A3). Cold B1 is measured after reboots, through a logon harness that M1 builds (A4).
 - **B, ProjectHost and B23** (ADRs 0005 and 0006).
   - B1: option (i). Each ordinary reboot yields one cold S6 sample through the same harness. D3 stays provisional
-    until 10 samples exist, and 3 s stays the ceiling. M2 depends on D3, so the samples are needed before M2.
+    until 10 samples exist and the user has fixed B23's first-project value from them; 3 s stays the ceiling. M2
+    depends on D3, so the samples are needed before M2.
   - B2: the trees target (1.5 s) stays provisional until M2's first trees measurement on R3.
   - B3: all five B23 preconditions of ADR 0006 decision 6 are in `budgets.json`.
   - B4: ProjectHost before L1 in a trusted root, with evaluation kept off the network until L1, is M2's target
     (answer 2). Waiting for L1 is the fallback; changing PLAN.md's network rule is rejected.
   - B5: the UWP workload waits for M2 (installer command below).
-  - B6: `%LOCALAPPDATA%\vcpkg` is to be deleted after a check. The check did not pass as written, so nothing was
-    deleted (below).
+  - B6: S2's files in `%LOCALAPPDATA%\vcpkg` are deleted after a check: `downloads\` and `registries\` went at
+    09:55; `archives\`, which is not S2's, is kept (below).
   - B7: R2b's Windows SDK prerequisite is 10.0.26100.0.
 - **C, clangd index** (ADR 0008, now accepted). B24's M3 value of p50 18.4 s is confirmed, and the M3 gate runs
   on a quiet machine (C1). The corpus manifest pins R3's configuration (C2). C3 is noted, with no decision.
@@ -49,8 +52,8 @@ decision with its basis, its consequence and where it is implemented. The work i
 - **G, sign-off.** M0 is signed off once `verify -Full` is green on both platforms at `m0/foundation`'s final
   head and every item is recorded. Then that commit is tagged `m0` (annotated, with the `-Full` footer), `main` is
   created from it, and both are pushed. Starting M1 is a separate question (G1). ADR 0002 is accepted (G2). One
-  more comment-accuracy round covers the `m0/dll-copy` build code and the E1 fix, and the POSIX strerror text gets
-  a TODO(M1) (G3).
+  more comment-accuracy round covers the `m0/dll-copy` build code (done: round 5, below) and the E1 fix
+  (`m0/longpath`'s review), and the POSIX strerror text gets a TODO(M1) (G3).
 
 #### Applied on `m0/decisions`
 - `docs/adr/0011-m0-decisions.md` (new).
@@ -58,8 +61,14 @@ decision with its basis, its consequence and where it is implemented. The work i
   (accepted); 0006 (decisions 2, 3 and 6, and the trees proposal); 0007 (decision 1, question 2's option (c),
   questions 3 and 4); 0008 (decisions 1 and 2, the R3 pin); 0009 (the exception, so items 2–9; item 3's rule; the
   wording); 0010 (decision 2).
-- PLAN.md: B23's row note and the S6 spike-list line (B1, B2), the Tracy wording (D3), and R2b's Windows SDK in
-  section 4 (B7). Nothing else.
+- PLAN.md: B23's row note (B2) and the S6 spike-list line (B1, B2), the Tracy wording (D3), R2b's Windows SDK in
+  section 4 (B7), and in the M0 spike list the S7 sentence, now confirmed (C1), and the Tracy version line, now
+  0.14.1 (D3, ADR 0009). Nothing else.
+- `tools\env.ps1`: `X_VCPKG_REGISTRIES_CACHE` sends vcpkg's registry clones to `<SDK root>\vcpkg-registries`,
+  created up front like the other caches (B6). `tests/tools/test_windows_scripts.py`'s cache test checks it, and
+  it now clears the variables before it dot-sources `env.ps1`, so a value inherited from the calling session
+  cannot pass. Against the old `env.ps1` the test fails ("X_VCPKG_REGISTRIES_CACHE= is not under E:\sdk"), also
+  with the variable set in the calling session.
 - `tests/perf/budgets.json`: B23's five preconditions and its trees note, B24's M3 note (now confirmed) and
   B28's method. No target value changed. `plan_target` of B23 follows PLAN.md's new cell, as
   `tests/tools/test_budgets.py` requires.
@@ -68,6 +77,26 @@ decision with its basis, its consequence and where it is implemented. The work i
   asserts both pins; against the old manifest it fails.
 - Comments only: the TODO(M2) on `ProcessSpec::environment` records E2's decision; new TODO(M1)s at
   `writeFileAtomic`'s read-only paragraph (E3) and at `errnoError`'s strerror text (G3).
+
+#### Comment-accuracy round 5: the `m0/dll-copy` build code (G3, first part; bc42ada)
+- Covered `cmake/FrostLayers.cmake`'s runtime-DLL pass, `tests/cmake/check_runtime_dlls.cmake` and its fixture
+  (`tests/cmake/runtime_dlls_fixture/`). 9 findings, all applied in bc42ada, comments only: no CMake command,
+  argument or test step changed.
+  - `FrostLayers.cmake` (6): the header names the runtime-DLL pass (`frost_copy_runtime_dlls` and the deferred
+    `_frost_add_runtime_dll_copies`) and says its output-directory checks run on every platform; the race first
+    failed in the merged tree's verify (87f376a, the merge of `m0/s1`), and 51e9a05 was the stopgap; vcpkg's
+    installed `bin` directory does not exist while the triplets link statically (it is not "empty"); the copy
+    target's name; the cost note cites `Budget: B28.`; CMP0112 covers `$<TARGET_FILE_DIR>`, and
+    `$<TARGET_RUNTIME_DLLS>` adds no dependency either; `frost_add_test`'s doc (TEST options and
+    `frost_copy_runtime_dlls`).
+  - `check_runtime_dlls.cmake` (2): the same race reference; steps 4 and 5 claim only what the script checks.
+  - The fixture's `shared/CMakeLists.txt` (1): four executables in all.
+- Verified (bc42ada's footer): `tools\verify.ps1 -Quick -Jobs 4` **FAILED** in 2 tests: win debug 365/368
+  (1 skipped, 2 failed: `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`,
+  the same two LongPathsEnabled=1 failures as 7fb5a27), `FrostRuntimeDlls.CopiesOncePerDirectory` passed, wsl
+  debug 334/334, wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok; frost_lint ok
+  (280 files), `git diff --check` clean, the diff holds comment lines only.
+- Left for G3: the round over the E1 fix, which is `m0/longpath`'s review.
 
 #### Long paths with LongPathsEnabled = 1 (E1, E4)
 - Measured at 09:00 with the switch on, by the method of the `-Full` finding (`exit-full\scripts`), on the
@@ -91,24 +120,32 @@ decision with its basis, its consequence and where it is implemented. The work i
   follow the switch. So the Windows legs of `verify` run the long-path tests against the new behaviour (see
   Verification).
 
-#### B6: `%LOCALAPPDATA%\vcpkg` was not deleted
+#### B6: S2's vcpkg files deleted from C:; `archives\` kept
 - Listed recursively (creation and modification times) on 2026-11-01: 4,204 files in 110 directories,
   558,106,723 bytes (532 MiB): `archives\` 6,292,779 bytes (3 files), `downloads\` 415,726,990 (1,040) and
   `registries\` 136,086,954 (3,161).
 - No running process has its executable there or names the directory on its command line. Open handles were not
   enumerated: no handle tool is installed.
-- Every entry was created on 2026-10-31, between 18:52:29 and 20:55:17. But 1,038 files have older modification
-  times, back to 2018-01-28. All of them are in `downloads\tools\powershell-core-7.5.3-windows` (931),
-  `downloads\tools\7zip-25.01-windows` (106) and `downloads\tools\ninja` (1), which vcpkg extracted at 20:55 from
-  the archives it had just downloaded; the extraction kept the archives' timestamps (ADR 0005 says the same).
+- Every entry was created on 2026-10-31, between 18:52:29 and 20:55:17. But 1,035 files and 3 directories have
+  older modification times, back to 2018-01-28. All of them are in `downloads\tools\powershell-core-7.5.3-windows`
+  (928 files, and 3 directories under `Modules\`), `downloads\tools\7zip-25.01-windows` (106 files) and
+  `downloads\tools\ninja` (1 file), which vcpkg extracted at 20:55 from the archives it had just downloaded; the
+  extraction kept the archives' timestamps (ADR 0005 says the same). The first count, "1,038 files" (also in
+  7fb5a27's message), counted the 3 directories as files.
 - `archives\` (18:52) holds binary-cache packages of gtest, vcpkg-cmake and vcpkg-cmake-config, FrostIDE's own
   dependencies. ADR 0005 says it predates S2's run and is not from it; most likely a FrostIDE configure without
   `tools\env.ps1` wrote it (not traced).
-- The rule was to delete nothing if anything is older, so nothing was deleted (question below).
+- Read by modification time, the check failed, so at first nothing was deleted. By creation time, `downloads\`
+  (created 20:55:09–20:55:17) and `registries\` (created 20:54:53–20:55:08) both match S2's TerminalAppLib
+  reference build (20:54:53–20:55:17 on 2026-10-31, ADR 0005).
+- **Deleted at 09:55:** `%LOCALAPPDATA%\vcpkg\downloads` (1,040 files, 415,726,990 bytes, 396.5 MiB) and
+  `%LOCALAPPDATA%\vcpkg\registries` (3,161 files, 136,086,954 bytes, 129.8 MiB).
+- **Kept:** `%LOCALAPPDATA%\vcpkg\archives` (3 binary-cache zips, 6,292,779 bytes, 6.0 MiB, created
+  18:52:29–18:52:47), because its origin is uncertain. It is all that `%LOCALAPPDATA%\vcpkg` now holds.
 - **Third-party builds must run under `tools\env.ps1`** (dot-sourced), which sends vcpkg's downloads
-  (`VCPKG_DOWNLOADS`) and binary cache (`VCPKG_DEFAULT_BINARY_CACHE`) to E:. It sets no registries cache
-  (vcpkg's `X_VCPKG_REGISTRIES_CACHE`, which defaults to `%LOCALAPPDATA%\vcpkg\registries`), so a registry clone
-  like the 136 MB here would still land on C:. Whether S2's run had `env.ps1` active is not recorded.
+  (`VCPKG_DOWNLOADS`), binary cache (`VCPKG_DEFAULT_BINARY_CACHE`) and, since this branch, registry clones
+  (`X_VCPKG_REGISTRIES_CACHE`; unset, vcpkg uses `%LOCALAPPDATA%\vcpkg\registries`) to E:. Whether S2's run had
+  `env.ps1` active is not recorded.
 
 #### B5: the installer command for M2 (not run)
 The user runs it from an elevated prompt when M2 evaluates TerminalAppLib:
@@ -146,17 +183,17 @@ The user runs it from an elevated prompt when M2 evaluates TerminalAppLib:
   - The same filter run from `m0/foundation`'s own Debug build (`E:\dev\FrostIDE\build\win-clangcl`, built by
     `-Full` at 2c499a2) fails the same two tests the same way. So `verify -Quick` is red on this machine for
     every branch until the E1 fix (`m0/longpath`) lands. This branch does not touch `src/app` or `tests/app`.
+- The follow-ups to the decisions check (ADR 0011's Context, B1, B6 and G3, round 5's record, `env.ps1` and its
+  test, PLAN.md's S7 and Tracy-version lines): frost-lint ok (280 files), licensecheck ok, featurecheck ok,
+  `git diff --check` clean, and the tools tests 80/80 (`python -B -m unittest discover -s tests/tools`, with
+  `tools\env.ps1` dot-sourced). No C++ changed, so nothing was built.
 
 ### Next
-- `m0/longpath` (another workflow): the E1 fix. Then, in order: E4's outcome; I7's acceptance tests (E5); the
-  comment-accuracy round over the `m0/dll-copy` build code and the E1 fix (G3); `verify -Full` on both platforms
-  at `m0/foundation`'s final head; then G1 (tag `m0`, create `main`, push both).
+- `m0/longpath` (another workflow): the E1 fix, whose review is G3's comment-accuracy round over it. Then, in
+  order: E4's outcome; I7's acceptance tests (E5); `verify -Full` on both platforms at `m0/foundation`'s final
+  head; then G1 (tag `m0`, create `main`, push both).
 - Merge `m0/decisions` after its review. PLAN.md's M0 status paragraph and next-step line are left for the final
-  integration, together with two lines this branch leaves alone: the S7 spike-list sentence still calls B24's M3
-  value "Proposed, pending the user's confirmation" (C1 confirms it), and the spike list's "Tracy version: 0.13.1
-  or 0.14.1" still reads as open (ADR 0009 chose 0.14.1).
-- Proposed, not done: set `X_VCPKG_REGISTRIES_CACHE` in `tools\env.ps1`, so vcpkg's registry clones go to E:
-  too.
+  integration.
 - M1, M2 and M3 work from the decisions: ADR 0011, Consequences.
 
 ### Blockers
@@ -166,9 +203,7 @@ The user runs it from an elevated prompt when M2 evaluates TerminalAppLib:
   (Verification), so no branch meets CLAUDE.md's definition of done until then.
 
 ### Questions for the user
-- **B6.** Delete `%LOCALAPPDATA%\vcpkg` anyway? Every entry was created on 2026-10-31, but 1,038 extracted files
-  keep their archives' older modification times, and `archives\` (6.3 MB) is not from S2's run. All of it is
-  vcpkg cache that vcpkg downloads or rebuilds when it needs it. Recommendation: yes, delete all of it.
+- None from this entry.
 
 ## 2026-11-01: M0 overnight run and exit verification (`m0/foundation`)
 
@@ -483,8 +518,10 @@ commit d41f2a1, which carries its own).
 Groups A to G as consolidated tonight; questions marked **(new)** come from this exit verification and from
 consolidating this log.
 
-**All of them were decided on 2026-11-01**, on the user's instruction to follow the recommendation: see ADR 0011
-and the entry "2026-11-01 (morning): M0 decisions" above. Each question below keeps its text, with a pointer.
+**All of them were answered on 2026-11-01**, on the user's instruction to follow the recommendation: each is
+decided, except C3, which is noted with no decision. G1 decides the sign-off's conditions; M0 is not signed off
+yet. See ADR 0011 and the entry "2026-11-01 (morning): M0 decisions" above. Each question below keeps its text,
+with a pointer.
 
 **A. Renderer and first frame (S1, ADR 0007)**
 - **A1.** Approve QRhi as M1's editor renderer on Windows? Raster stays as the golden oracle and the RDP/WARP
@@ -534,8 +571,8 @@ and the entry "2026-11-01 (morning): M0 decisions" above. Each question below ke
   TerminalAppLib (C++/WinRT).
   - **Decided 2026-11-01** (ADR 0011, B5): deferred to M2; the installer command is in the entry above.
 - **B6.** About 552 MB of third-party downloads that vcpkg left on C: during the spikes: keep or delete?
-  - **Decided 2026-11-01** (ADR 0011, B6): delete after a check. The check did not pass as written, so nothing
-    was deleted yet (entry above).
+  - **Decided 2026-11-01** (ADR 0011, B6): delete after a check. S2's `downloads\` and `registries\` were
+    deleted at 09:55; `archives\`, which is not S2's, is kept (entry above).
 - **B7 (new).** May PLAN.md section 4 and `tests/corpus/manifest.json` give R2b's Windows SDK prerequisite as
   10.0.26100.0 instead of 10.0.22621? The pinned R2b commit defaults to 10.0.26100.0, and `sdk/sdk.lock.json` pins
   it (ADR 0005, Consequences; ADR 0006, follow-ups). Neither file was changed.
