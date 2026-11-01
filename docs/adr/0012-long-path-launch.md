@@ -45,15 +45,20 @@ and "Known limitation". The user's decision, on 2026-11-01 at about 14:15, was *
 (Recommended)"**, described to them as: *"When frost.exe's path is 260+, the launcher makes a junction (no admin
 needed) under `%LOCALAPPDATA%\FrostIDE` pointing at the install folder and restarts frost through it. Costs about 5
 ms, only in that case. The GUI then works from any path; tests prove it."* (again, the code span is only for the
-backslash). Decision 8 below is its design; the restart measured about 7 ms, not 5 (Measurements).
+backslash). Decision 8 below is its design. The quoted cost was too low. The restart measured +6.4 to +7.8 ms
+(paired p50) with a stand-in frost_app.dll that has no Qt, and +8.5 to +10.3 ms (p50 against p50; paired p50 +9.0
+and +9.7 ms) for the real `--selftest=onscreen`, the closest measured stand-in for a GUI start. So the GUI pays about
+10 ms, twice the 5 ms the option named (Measurements). No budget covers the restart; the figure is reported to the
+user with the review fixes of 2f40f9f. The words "from any path" hold with two exceptions that decision 8 adds:
+install directories longer than a junction can name (about 4,089 units) and elevated starts.
 
 ## Decision
 1. **Two images on Windows.** frost.exe is the launcher (`src/app/src/launcher.cpp`); the application is
    frost_app.dll (target `frost_app_shared`, output name `frost_app`, import library `frost_app_shared.lib` so it
    cannot clash with the static `frost_app.lib`), which exports
    `int frost_main(unsigned hardeningBits, const wchar_t* restartedFrom)` (`src/app/src/main.cpp`; `restartedFrom`
-   is null unless the launcher was restarted, decision 8). On Linux frost stays one executable, and the restart is
-   compiled out.
+   is null unless the launcher was restarted and the restart marker names its own image file, decision 8). On Linux
+   frost stays one executable, and the restart is compiled out.
 2. **The launcher** is built with the static release CRT in every configuration (`MSVC_RUNTIME_LIBRARY
    MultiThreaded`), without sanitizers (`frost_add_executable(... NO_SANITIZE)`), with `/ENTRY:wmainCRTStartup`,
    the GUI subsystem, `/MANIFEST:NO` (frost.rc embeds the process manifest as RT_MANIFEST 1) and
@@ -63,7 +68,8 @@ backslash). Decision 8 below is its design; the restart measured about 7 ms, not
    mixing them.
 3. **Launcher sequence** (`wmain`):
    1. `hardenProcess()` while only ntdll, kernel32 and kernelbase are mapped; then the restart marker
-      `FROST_RESTARTED_FROM` is read and removed from the environment (decision 8);
+      `FROST_RESTARTED_FROM` is read and removed from the environment, and once the image path is known it is kept
+      only if it names this image file (decision 8);
    2. the mode rule and the error mode. A start is a command-line mode when an argument before the first `--` starts
       with `-`, as frost_app.dll's parser reads options (`launcherCommandLineMode()`); `frost -- -file.txt` is a GUI
       start. Command-line modes set `SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX` for
@@ -143,9 +149,12 @@ backslash). Decision 8 below is its design; the restart measured about 7 ms, not
      resolved), so each install directory has one link, whatever its spelling. LOCALAPPDATA is read from the
      environment, not with SHGetKnownFolderPath: shell32 would be the launcher's first DLL beyond KERNEL32 (3.3 ms to
      load in a fresh process, junction probe `pj_fs.json`); the parent controls the environment as it controls the
-     image path, the current directory and the DLL search order anyway; tests point it at a scratch folder; and
-     whatever it names is checked. `<root>\FrostIDE\i\<16>\frost.exe` is the root plus 38 units, so a LOCALAPPDATA of
-     222 units or more is refused.
+     image path, the current directory and the DLL search order anyway; and tests point it at a scratch folder.
+     `prepareShortLink()` checks that the value starts with a drive letter, a colon and a separator, then normalises
+     it as Win32 opens a plain path (GetFullPathNameW: `.`, `..`, `/`, repeated separators, trailing dots and spaces),
+     because the `\\?\` form of the file operations would take those literally (`RootIsNormalisedAsWin32OpensIt`),
+     and refuses it on a network drive or when too long. It does not check who may write there (*Security*).
+     `<root>\FrostIDE\i\<16>\frost.exe` is the root plus 38 units, so a LOCALAPPDATA of 222 units or more is refused.
    - *Creating and checking the link* without administrator rights: `CreateDirectoryW`, then
      `FSCTL_SET_REPARSE_POINT` with `IO_REPARSE_TAG_MOUNT_POINT`, substitute name `\??\<target>` and the target as
      print name. Whatever is at the link's path is opened with `FILE_FLAG_OPEN_REPARSE_POINT` (never followed) and
@@ -157,27 +166,57 @@ backslash). Decision 8 below is its design; the restart measured about 7 ms, not
      again, or install FrostIDE in a directory with a shorter path" and left untouched. After every change the link
      is opened and checked again; a sharing violation, access denial or pending delete (another frost setting the
      same link up) is retried every 10 ms for up to about 1 s. The verified link is held open with GENERIC_READ and
-     FILE_SHARE_READ only, until the restarted frost exits.
+     FILE_SHARE_READ only, until the restarted frost exits; what that stops and what it does not is under *Security*.
    - *Refusals* (status 4, the message on stderr or the parent's console, and a box in GUI mode, as for a missing
-     DLL): LOCALAPPDATA unset, relative, on a network drive or too long; an install directory on a network share,
-     mapped drive or volume without a drive letter (a junction can only point at local volumes); something frost
-     does not remove at the link's path. Every message starts "frost.exe's path is N UTF-16 units long, and graphics
-     drivers end a program started from 260 units (MAX_PATH) or more, so frost restarts through a short link, but".
-   - *Security.* The folders inherit %LOCALAPPDATA%'s ACL (the user, SYSTEM and Administrators), so no other standard
-     user can write there. The held handle denies write and delete access to every other opener, so nobody can
-     retarget or remove the junction between its check and CreateProcessW or while frost runs through it, and the
-     folders above it cannot be renamed meanwhile (measured: junction probe `pj_fs.json`;
-     `StartupShortLink.CreatesAJunctionToTheInstallDirectoryAndKeepsIt`). The restart starts the link's *resolved*
-     path (GetFinalPathNameByHandleW of the held handle), so a junction or symbolic link above it, in a redirected
-     LOCALAPPDATA say, cannot be retargeted to redirect the start (`IsNamedByItsResolvedPath`). Same-user tampering
-     is out of scope: a process running as the user can change the link while no frost holds it, as it can replace
-     frost.exe or a DLL beside it. The link adds no target that the user could not already start.
+     DLL): a launcher running elevated (*Security*); LOCALAPPDATA unset, relative, on a network drive or too long; an
+     install directory on a network share, mapped drive or volume without a drive letter (a junction can only point
+     at local volumes) or longer than about 4,089 units (a junction's reparse data holds at most 16 KiB); something
+     frost does not remove at the link's path. Every message starts "frost.exe's path is N UTF-16 units long, and
+     graphics drivers end a program started from 260 units (MAX_PATH) or more, so frost restarts through a short
+     link, but".
+   - *Security.* An earlier version of this section, and of the code comments, said that the held handle stopped
+     anyone from retargeting the junction. That was wrong (both reviews of 2f40f9f), and this is what holds:
+     - *Who can write the link.* The folders inherit the ACL of the folder LOCALAPPDATA names; frost checks neither
+       their owner nor their ACL. Under the real profile folder that ACL admits the user, SYSTEM and Administrators
+       only, so no other standard user can write there. A LOCALAPPDATA that the parent points at a folder other users
+       may write would let them plant or change the link; the parent controls the environment as it controls the
+       image path.
+     - *What holding it stops.* Sharing modes refuse openers for write-data, append-data or delete access
+       (GENERIC_WRITE, DELETE: error 32), so while frost holds the link nobody can remove or rename it, nor rename a
+       folder above it (junction probe `pj_fs.json`; `CreatesAJunctionToTheInstallDirectoryAndKeepsIt`).
+     - *What it does not stop.* Sharing modes never check FILE_WRITE_ATTRIBUTES, WRITE_DAC or WRITE_OWNER, and
+       FILE_WRITE_ATTRIBUTES is all FSCTL_SET_REPARSE_POINT and FSCTL_DELETE_REPARSE_POINT need. A process that may
+       write the link can therefore retarget or strip it at any moment: between the check and CreateProcessW, and
+       while the restarted frost loads frost_app.dll, Qt and the plugins through it. No share mode prevents that.
+       `HoldStopsRemovalButNotAReparseDataWriter` retargets and strips a held link, and shows the next start repairing
+       it.
+     - *Folders above the link.* The restart starts the link's *resolved* path (GetFinalPathNameByHandleW of the held
+       handle), so a junction or symbolic link above it, in a redirected LOCALAPPDATA say, cannot redirect the start
+       (`IsNamedByItsResolvedPath`). Every folder in the resolved path contains the link, so none can be made a
+       junction (error 145), and none can be renamed while the link is held.
+     - *Same-user tampering is out of scope*: a process running as the user can change the link, as it can replace
+       frost.exe or a DLL beside it, so the link gives it no code execution it did not have.
+     - *Elevated starts refuse.* That last argument fails for an elevated frost: a program of the same user that
+       runs without elevation could retarget the link and so choose the code an elevated frost loads (the usual
+       junction-based UAC bypass), which a protected install directory would otherwise prevent. So a launcher whose
+       token is the elevated half of a split token (TokenElevationTypeFull, "Run as administrator") refuses the
+       restart before it touches the link: "... but it runs elevated (as administrator), and programs that run
+       without elevation could change that link and so the code frost loads. Start frost without elevation, or
+       install FrostIDE in a directory with a shorter path." Tokens without a linked token (a standard user, UAC
+       off, the built-in Administrator, a service) and the filtered half restart (`shortLinkAllowedFor()`). The
+       token is read with GetTokenInformation through the API set `api-ms-win-security-base-l1-1-0.dll`, which
+       resolves to the KERNELBASE.dll every process has mapped, so the launcher still imports KERNEL32.dll alone
+       (`StartupElevation.OnlyTheElevatedHalfOfASplitTokenRefusesTheShortLink` checks it against advapi32's answer).
+       The refusal itself is untested: no test can elevate without a prompt.
    - *The restart.* CreateProcessW with the link's image path as lpApplicationName (absolute; no search), a copy of
      GetCommandLineW() (so argv[0] still names the first path, as the parent wrote it), the same current directory
      and environment plus `FROST_RESTARTED_FROM=<first image path>`, the parent's error mode (restored around the
      call), the launcher's priority class, and GetStartupInfoW's data: desktop, title, show state, position, and the
      standard handles, made inheritable and passed with `bInheritHandles` (handles the parent let frost inherit pass
-     on too; the C runtime's `lpReserved2` descriptor table is dropped). The child stays in the parent's jobs. The
+     on too; the C runtime's `lpReserved2` descriptor table is dropped). Under STARTF_USEHOTKEY or STARTF_USEMONITOR
+     (0x400, absent from the SDK's headers: an HMONITOR in hStdOutput, from ShellExecuteEx's SEE_MASK_HMONITOR or a
+     taskbar start) the handle fields pass as the parent set them (`startupFlagsAllowStandardHandles()`). The child
+     stays in the parent's jobs. The
      launcher cannot use frost::io's IProcessLauncher, the project's rule for child processes: it links neither
      frost::io nor frost::core (`/MT`, KERNEL32.dll only), so this is the one CreateProcessW outside frost::io. In a
      command-line mode without standard handles (a terminal start without redirection) the launcher first attaches to
@@ -188,9 +227,17 @@ backslash). Decision 8 below is its design; the restart measured about 7 ms, not
      parent's process handle meaning "frost runs": `frost --selftest=onscreen`'s status and output reach a script
      unchanged, and B20 (exit to process gone) still measures frost's own exit, plus 1.2 ms (Measurements). Exiting
      at once would end every waiting parent early and hand B20 a process that is already gone.
-   - *Loop guard.* A launcher that found the marker never restarts. If its own image path is still 260 units or
-     longer (a link that resolved long, or a marker the parent set), it refuses with status 4 ("frost was restarted
-     through the short link X from Y, but that path is still N UTF-16 units long, ...").
+   - *The marker and the loop guard.* A launcher keeps the marker only if it names its own image file
+     (`sameImageFile()`: both paths normalised as `extendedDirectoryOf()` normalises them and opened, then the volume
+     serial numbers and 128-bit file IDs compared; two opens, only when the marker is set). The first launcher sets it
+     to its own path, and the restarted one runs the same file through the link, so a real restart always passes. A
+     marker that names another file, left in a parent's environment or set by hand, is dropped: it neither stops the
+     restart nor reaches `frost_main()`, so frost never names a directory it does not run from
+     (`RestartedLauncherNeverRestartsAgain`, `StartupRestartMarker.CountsOnlyForTheSameImageFile`). A launcher that
+     kept the marker never restarts. If its own image path is still 260 units or longer, which a real restart cannot
+     produce (the link's path is kept short) but a parent that sets the marker to frost's own long path can, it
+     refuses with status 4 ("frost was restarted through the short link X from Y, but that path is still N UTF-16
+     units long, ..."). The marker is still no stronger than the link it came through (same-user tampering, above).
    - *What frost shows.* After a restart every path frost names itself is the link's (Qt's application directory,
      the plugin paths in messages). The launcher hands the first image path to `frost_main()`, and the places where a
      user reads frost's location name it too: the self-test's `image-path` check, and a GUI start-up failure, whose
@@ -230,9 +277,13 @@ New tests: `FrostProcess.SelfTestReportsUnloadablePlatformPlugin`, `SelfTestNeve
 `StartupDialogGuardDeathTest.RefusesDialogWindowsOnTheMainThread`, `StartupFatalHandlerDeathTest.QtFatalExitsWithStatus4`
 and `OtherMessagesReachThePreviousHandler`, `StartupGpuDriverRule.OnlyANativeQApplicationMayReachTheDriver`,
 `StartupShortLink.NameIsAStableHashOfTheDirectory`, `MountPointReparseDataRoundTrips`,
-`CreatesAJunctionToTheInstallDirectoryAndKeepsIt`, `HandlesWhatItFindsAtItsPathWithoutFollowingIt`,
-`IsNamedByItsResolvedPath` and `RefusesWhereALinkCannotHelp`; `FrostRuntimeDlls.CopiesOncePerDirectory` gained a
-shared library.
+`CreatesAJunctionToTheInstallDirectoryAndKeepsIt`, `HoldStopsRemovalButNotAReparseDataWriter`,
+`RootIsNormalisedAsWin32OpensIt`, `HandlesWhatItFindsAtItsPathWithoutFollowingIt`, `IsNamedByItsResolvedPath` and
+`RefusesWhereALinkCannotHelp`, `StartupRestartMarker.CountsOnlyForTheSameImageFile`,
+`StartupElevation.OnlyTheElevatedHalfOfASplitTokenRefusesTheShortLink`,
+`StartupLauncherMode.RestartPassesStandardHandlesUnlessAFieldMeansSomethingElse`;
+`FrostRuntimeDlls.CopiesOncePerDirectory` gained a shared library. The process tests' LOCALAPPDATA and the unit
+tests' link root have spaces and non-ASCII characters ("ä 测"), as PLAN.md's M0 fixture for profile paths asks.
 `LauncherSetsTheErrorModeForItsLoads` copies frost.exe beside a stand-in frost_app.dll
 (`tests/app/launcher_probe_app.cpp`, KERNEL32.dll only) that reports the error mode during its own load; the parent
 hands down `SEM_NOGPFAULTERRORBOX` alone, so the critical-error flags it sees are the launcher's. The stand-in loads
@@ -329,7 +380,8 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
     stand-in frost_app.dll
     (`launcher_probe_app.cpp`, no Qt) isolates the restart: from a 300-unit image path (restart through the
     existing link) p50 13.2-15.7 ms against 6.6-7.9 ms when started through the link's own path, so +6.4 to +7.8 ms
-    (paired p50 over 60 interleaved rounds, three sessions); 15 starts in a row per block give the same +7.7 ms. Two
+    (paired p50 over 60 interleaved rounds in each of two sessions, `pj_cost` and `pj_cost2`; `pj_outliers` has 100
+    rotated, unpaired rounds of four variants); in `pj_cost2`, 15 starts in a row per block give the same +7.7 ms. Two
     direct starts back to back (13.7 ms) cost what one restart costs (13.6 ms), so the restart is one more launcher
     start and the link check is within noise; creating the link on the first start adds about 0.6 ms (p50 14.2 ms).
     The real `--selftest=onscreen` (Qt, qwindows, Direct3D) from 300 units: p50 198.7 and 207.5 ms against 190.2
@@ -343,6 +395,17 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
     `SelfTestOnScreenFromEveryImagePathLength`) and `app_startup_tests` (32) pass in Debug, Release and the ASan tree's RelWithDebInfo, each binary run on a
     hidden desktop (`frost_process_tests-*.xml`, `app_startup_tests-*.xml` there), and under `verify.ps1 -Quick` and
     `verify.sh` (the commit's footer). The whole on-screen matrix takes 3.2 s in Debug.
+- **Review fixes of 2f40f9f** (two reviews; their probes `junction-review1\pr_hold.json` and
+  `junction\review2_probe\retarget_probe.py` in the session scratch): a FILE_WRITE_ATTRIBUTES opener of a junction
+  held as ShortLink holds it gets a handle, FSCTL_SET_REPARSE_POINT through it retargets the junction and
+  FSCTL_DELETE_REPARSE_POINT strips it, while GENERIC_WRITE and DELETE openers get error 32;
+  `HoldStopsRemovalButNotAReparseDataWriter` now repeats that on every run. The API set
+  `api-ms-win-security-base-l1-1-0.dll` resolves to `C:\WINDOWS\System32\KERNELBASE.dll` with
+  `LOAD_LIBRARY_SEARCH_SYSTEM32`, and this machine's token is TokenElevationTypeLimited (`apiset_probe.py`). After
+  the fixes, `frost_process_tests` (31 tests) and `app_startup_tests` (37) pass in Debug, Release and the ASan
+  tree's RelWithDebInfo under `verify.ps1 -Full` on a hidden desktop (win debug 415/415, release 418/418, asan
+  419/419; wsl debug 335/335, asan 339/339, tsan 338/338): `launcher-impl\junction\review-fixes\` (`verify_full.log`,
+  the Release and ASan ctest logs).
 - **Review fixes**: the review's spelling probe, re-run against the fixed Debug launcher (scratch
   `fixcheck\fc_spelling-debug.jsonl`): `\\.\`, `..`, `.`, trailing-dot, doubled-separator and forward-slash spellings
   of the image path all pass `--selftest` and `--version`, where 4c5533d exited 4 for `\\.\` and failed
@@ -355,16 +418,18 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
 ## Consequences
 - frost's command-line modes and its offscreen self-test start in place from every measured directory length (22
   lengths from 200 to 400 units, plain and `\\?\`, in Release, Debug and ASan), with or without LongPathsEnabled.
-- The GUI and the on-screen self-test start from any image path too: from 260 units on through the short link
+- The GUI and the on-screen self-test start from long image paths too: from 260 units on through the short link
   (decision 8), tested on private desktops from image paths of 250 to 400 units in both forms
   (`SelfTestOnScreenFromEveryImagePathLength`) and with the GUI's own window at 300 units
-  (`GuiStartFromALongPathShowsItsWindow`). The M0 criterion is met for the IDE itself, and matrix row I7 is `green`.
-  The driver's limit was confirmed on the interactive desktop; the restart was run on hidden and private desktops
-  only, because a run on the user's desktop needs their approval at the PC. It works because the driver reads the
-  path the process was started through, which the link makes short; it would not help against a limit on the
-  directory's real path, which no driver showed.
+  (`GuiStartFromALongPathShowsItsWindow`). Two exceptions are refused with a message: install directories over
+  about 4,089 units, and elevated starts (decision 8, *Security*). The M0 criterion is met for the IDE itself, and
+  matrix row I7 is `green`. The driver's limit was confirmed on the interactive desktop; the restart was run on
+  hidden and private desktops only, because a run on the user's desktop needs their approval at the PC. It works
+  because the driver reads the path the process was started through, which the link makes short; it would not help
+  against a limit on the directory's real path, which no driver showed.
 - A start from 260 units or more that may load a GPU driver costs about 7 ms more (one more launcher start;
-  about 10 ms for the on-screen self-test) and creates `%LOCALAPPDATA%\FrostIDE\i\<hash>` on first use. Starts from
+  about 10 ms for the on-screen self-test, against the about 5 ms the user's option named) and creates
+  `%LOCALAPPDATA%\FrostIDE\i\<hash>` on first use. Starts from
   shorter paths, and the command-line modes at any length, pay nothing. While frost runs, Task Manager shows two
   frost.exe processes; the waiting one holds about 0.5 MiB private memory. Ending the waiting one leaves frost
   running (unless the parent's job ends both); ending frost ends the waiting one with frost's status.
@@ -374,9 +439,12 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   frost (file associations, I10) must take the install directory from `restartedFrom`; and the taskbar may group a
   restarted frost apart from a pinned shortcut to the long path until frost sets an explicit AppUserModelID.
 - New refusals, each with a message and status 4 instead of the driver's silent crash: from 260 units, a GUI or
-  on-screen start with LOCALAPPDATA unset, relative, on a network drive or of 222 units or more; an install
-  directory on a network share, a mapped drive or a volume without a drive letter (from 260 units these could not
-  run the GUI before either); and something at the link's path that frost does not remove.
+  on-screen start that runs elevated, or with LOCALAPPDATA unset, relative, on a network drive or of 222 units or
+  more; an install directory on a network share, a mapped drive or a volume without a drive letter, or of more than
+  about 4,089 units (from 260 units none of these could run the GUI before either); and something at the link's
+  path that frost does not remove.
+- The link is only as safe as the folder it lives in: the user's own programs can retarget it even while frost
+  holds it (decision 8, *Security*), which is why elevated starts refuse it.
 - Links of deleted or moved installs stay behind (TODO(M2), decision 8).
 - Two images to deploy: frost_app.dll must sit beside frost.exe; without it, or without one of its DLLs, the
   launcher reports whether frost_app.dll (or the ASan runtime) is missing or loads but lacks a DLL it needs, and
@@ -392,8 +460,12 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
 - The ASan tree's Debug configuration is unusable (above); verification uses RelWithDebInfo.
 - Not tested automatically: the launcher's own GUI-mode message box (its refusals are tested in a command-line
   mode, where they go to stderr), the console attach of a command-line restart without redirection (no test starts
-  frost in a terminal) and anything on the interactive desktop, such as whether a restarted GUI started from
-  Explorer or a shortcut comes to the foreground. The GUI start (`frost` without arguments) is
+  frost in a terminal), the elevated refusal (no test can elevate), STARTF_USEMONITOR from a real taskbar start
+  (only its rule is tested), and anything on the interactive desktop, such as whether a restarted GUI started from
+  Explorer or a shortcut comes to the foreground: its window is created by a process that the waiting launcher
+  started, not by the one Explorer started. If it does not, the remedy is AllowSetForegroundWindow for the
+  restarted process through a lazily loaded user32 in GUI restarts; that needs an on-screen run, which needs the
+  user's approval at the PC. The GUI start (`frost` without arguments) is
   tested on a private desktop from 300 units, its window and its failure box both; the native platform plugin
   through `--selftest=onscreen` up to 400 units. The spike did not cover the native platform at all (its README
   lists it as not measured); spike fact 15 is the offscreen self-test, and only probe fact 27 (qtprobe, not frost)
@@ -421,6 +493,13 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   folder would mean dozens of links per install, fail across volumes (LOCALAPPDATA on C:, the install on E:) and
   go stale on update; a copy of the install costs far more than 7 ms. A junction needs no privilege, is one
   object per install, points across local volumes, and is checked on every use.
+- **A link the hold makes immutable, or a protected link for elevated starts.** No share mode stops an opener that
+  asks for FILE_WRITE_ATTRIBUTES alone. A DACL on the link that denies the user write access (with an OWNER RIGHTS
+  entry, so ownership does not restore it) would stop the user's programs while frost holds the link, but the
+  user's FILE_DELETE_CHILD on the folder lets them replace it whenever no frost holds it, so every start would also
+  have to verify the owner and DACL through security APIs the launcher does not import; an administrator-owned
+  folder for elevated starts would need the same checks and a parent that non-elevated programs cannot rename.
+  Elevated starts from long paths are rare, so they refuse instead (decision 8).
 - **SHGetKnownFolderPath for LOCALAPPDATA**: 3.3 ms of shell32 in a KERNEL32-only launcher, with no security gain
   (the parent controls the environment it would read the profile path from anyway; decision 8).
 - **Exit right after the restart instead of waiting**: the parent would see frost end at once, losing the exit

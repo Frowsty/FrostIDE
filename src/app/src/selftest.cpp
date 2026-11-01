@@ -223,11 +223,12 @@ std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, b
     const std::wstring image = modulePath();
     std::string imageDetail = std::format("{}, {} UTF-16 units", formOf(image), image.size());
     if (!restartedFrom.empty()) {
-        const int units =
-            MultiByteToWideChar(CP_UTF8, 0, restartedFrom.data(), static_cast<int>(restartedFrom.size()), nullptr, 0);
-        const bool extended = restartedFrom.starts_with("\\\\?\\");
+        const int size = static_cast<int>(restartedFrom.size());
+        const int units = MultiByteToWideChar(CP_UTF8, 0, restartedFrom.data(), size, nullptr, 0);
+        std::wstring first(static_cast<std::size_t>(std::max(units, 0)), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, restartedFrom.data(), size, first.data(), static_cast<int>(first.size()));
         imageDetail += std::format("; restarted through this short link from {} ({}, {} UTF-16 units)", restartedFrom,
-                                   extended ? "\\\\?\\ form" : "plain form", units);
+                                   formOf(first), first.size());
     }
     checks.push_back({"image-path", true, false, std::move(imageDetail)});
 

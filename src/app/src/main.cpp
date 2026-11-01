@@ -293,7 +293,8 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
  * frost_app.dll's entry point (frost::app::kAppEntryPoint), called once by the frost.exe
  * launcher on its main thread after hardenProcess() and searchInstallDirectoryExtended();
  * `hardeningBits` is encodeHardening() of the launcher's state, `restartedFrom` the image path
- * of the launcher that restarted this one through its short link, or nullptr (ADR 0012).
+ * of the launcher that restarted this one through its short link, which the launcher checked
+ * to name this process's own image file, or nullptr (frost::app::AppEntryPoint; ADR 0012).
  * Returns the exit status, which the launcher returns from wmain. Qt's one-element argv is
  * frost.exe's path as GetModuleFileNameW reports it, without a \\?\ prefix (after a restart,
  * the short link's). The old executable's CRT passed the command line's first token instead, as

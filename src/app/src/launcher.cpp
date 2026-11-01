@@ -12,7 +12,7 @@
 // 235-249 in Debug and 218-249 in ASan trees; ADR 0003). wmain then:
 //   1. hardens the process (hardenProcess(), frost/app/startup_core.hpp) while only ntdll,
 //      kernel32 and kernelbase are mapped, and takes the restart marker kRestartedFromVariable
-//      out of its environment;
+//      out of its environment (it counts below only if it names this very image file);
 //   2. sets the error mode for its loads (see wmain), so a broken DLL raises no system box;
 //   3. restarts itself through a short link when its image path is too long for the GPU driver
 //      and the start may load one (restartThroughShortLink(), below), and returns that
@@ -37,26 +37,33 @@
  * such paths. When GetModuleFileNameW's path reaches that length and
  * launcherMayReachGpuDriver() says the start may load a driver, the launcher gets a junction
  * to its install directory under %LOCALAPPDATA%\FrostIDE\i (prepareShortLink(): created,
- * verified or repaired without administrator rights, then held open so it cannot change, and
- * named by its resolved path) and starts <junction>\frost.exe with CreateProcessW: the same
+ * verified or repaired without administrator rights, then held open so it cannot be removed or
+ * renamed, and named by its resolved path; its reparse data stays changeable by the user's own
+ * programs, see ShortLink) and starts <junction>\frost.exe with CreateProcessW: the same
  * command line, current directory, environment (plus kRestartedFromVariable), standard
  * handles, desktop and show state, the parent's error mode and priority class, in the same
- * jobs (measured: about 7 ms per start, ADR 0012). The launcher cannot use frost::io's
+ * jobs (measured: about 7 ms per start with a stand-in frost_app.dll, 9-10 ms for the
+ * on-screen self-test; ADR 0012). An elevated launcher refuses instead (shortLinkAllowedFor()):
+ * programs of the same user without elevation could retarget the link and so choose the code
+ * an elevated frost loads. The launcher cannot use frost::io's
  * IProcessLauncher (it links neither frost::io nor frost::core: /MT, KERNEL32.dll only), so it
  * calls CreateProcessW itself, with the junction's absolute path as lpApplicationName (no
  * search). It waits for that process in every mode and exits with its status, so the parent's
  * process handle still means "frost runs" (B20, exit to process gone, measures it) and the exit
  * status and output reach the parent unchanged; while it waits it keeps the junction open. The
- * restarted launcher finds the marker, never restarts again, refuses with a message if its own
- * path is still too long, and hands the first image path to frost_main(), which shows the real
+ * restarted launcher finds the marker, checks that it names its own image file (sameImageFile():
+ * the link leads to the first launcher's directory), never restarts again, refuses with a
+ * message if its own path is still too long, and hands the first image path to frost_main(),
+ * which shows the real
  * install directory where frost names its own (the self-test's image-path check, the GUI's
- * failure message). A start that cannot be restarted (LOCALAPPDATA unset or long, the install
- * directory on a network share, something else at the junction's path) is refused with a
- * message, as a missing DLL is, rather than left to the driver's silent crash.
+ * failure message). A start that cannot be restarted (an elevated launcher, LOCALAPPDATA unset
+ * or long, the install directory on a network share, something else at the junction's path) is
+ * refused with a message, as a missing DLL is, rather than left to the driver's silent crash.
  * LOCALAPPDATA comes from the environment, not SHGetKnownFolderPath: shell32 would be the
  * launcher's first DLL beyond KERNEL32 (about 3 ms to load), the parent already controls the
- * environment as it controls the image path and the current directory, tests can point it at
- * a scratch folder, and whatever it names is checked before use (prepareShortLink()).
+ * environment as it controls the image path and the current directory, and tests can point it
+ * at a scratch folder. prepareShortLink() checks that it is an absolute path on a local drive
+ * and short enough, and normalises it; it does not check who may write there.
  */
 //
 // If frost_app.dll, its imports or its entry point cannot be loaded, the launcher reports why
@@ -190,9 +197,9 @@ BOOL WINAPI keepWaitingOnConsoleEvents(DWORD) { return TRUE; }
  * (STARTF_TITLEISLINKNAME), show state, position and size, and the standard handles this
  * process holds now (made inheritable). lpReserved2, the C runtime's table of inherited file
  * descriptors, is dropped: the standard handles cover descriptors 0-2, the only ones frost uses.
- * When no standard handle is usable, or STARTF_USEHOTKEY gives hStdInput another meaning, the
- * three handle fields pass as the parent set them. `hasStandardHandles` says whether any
- * standard handle is usable.
+ * When no standard handle is usable, or STARTF_USEHOTKEY or STARTF_USEMONITOR gives a handle
+ * field another meaning (startupFlagsAllowStandardHandles()), the three handle fields pass as
+ * the parent set them. `hasStandardHandles` says whether any standard handle is usable.
  */
 STARTUPINFOW restartStartupInfo(bool& hasStandardHandles) {
     STARTUPINFOW startup{};
@@ -211,7 +218,7 @@ STARTUPINFOW restartStartupInfo(bool& hasStandardHandles) {
             handle = nullptr;
         }
     }
-    if (!hasStandardHandles || (startup.dwFlags & STARTF_USEHOTKEY) != 0) {
+    if (!hasStandardHandles || !frost::app::startupFlagsAllowStandardHandles(startup.dwFlags)) {
         return startup;
     }
     for (HANDLE handle : handles) {
@@ -228,8 +235,9 @@ STARTUPINFOW restartStartupInfo(bool& hasStandardHandles) {
 
 /*
  * Starts frost again through its short link and waits for it (see the header comment): returns
- * that process's exit status, or 4 after reportFailure() when there is no usable link or the
- * start fails. `self` is this launcher's image path (kGpuDriverImagePathLimitUnits or longer),
+ * that process's exit status, or 4 after reportFailure() when the launcher runs elevated, there
+ * is no usable link or the start fails. `self` is this launcher's image path
+ * (kGpuDriverImagePathLimitUnits or longer),
  * `extendedDirectory` its \\?\ install directory, `parentErrorMode` the error mode the parent
  * passed down, which the restarted process inherits in turn, so it sets its own exactly as a
  * direct start would.
@@ -246,6 +254,21 @@ int restartThroughShortLink(const std::wstring& self, const std::wstring& extend
                              std::to_wstring(frost::app::kGpuDriverImagePathLimitUnits) +
                              L" units (MAX_PATH) or more, so frost restarts through a short link, but ";
     const std::wstring advice = L". Install FrostIDE in a directory with a shorter path.";
+    // Before the link is created or touched: an elevated frost must not run through it.
+    const auto elevation = frost::app::processUacElevation();
+    if (!elevation) {
+        reportFailure(why + L"it cannot tell whether it runs elevated (win32 error " +
+                          std::to_wstring(elevation.error()) + L")" + advice,
+                      commandLineMode);
+        return 4;
+    }
+    if (!frost::app::shortLinkAllowedFor(*elevation)) {
+        reportFailure(why + L"it runs elevated (as administrator), and programs that run without elevation could "
+                            L"change that link and so the code frost loads. Start frost without elevation, or "
+                            L"install FrostIDE in a directory with a shorter path.",
+                      commandLineMode);
+        return 4;
+    }
     const std::wstring root = environmentVariable(L"LOCALAPPDATA");
     if (root.empty()) {
         reportFailure(why + L"LOCALAPPDATA, the folder for that link, is not set" + advice, commandLineMode);
@@ -305,9 +328,9 @@ int restartThroughShortLink(const std::wstring& self, const std::wstring& extend
 int wmain(int argc, wchar_t** argv) {
     frost::app::ProcessHardening hardening = frost::app::hardenProcess();
     // The restart marker: read and removed before anything can start a process, so nothing
-    // frost starts inherits it.
-    const std::wstring restartedFrom = environmentVariable(frost::app::kRestartedFromVariable);
-    if (!restartedFrom.empty()) {
+    // frost starts inherits it. It is checked once the image path is known.
+    const std::wstring marker = environmentVariable(frost::app::kRestartedFromVariable);
+    if (!marker.empty()) {
         SetEnvironmentVariableW(frost::app::kRestartedFromVariable, nullptr);
     }
 
@@ -341,12 +364,22 @@ int wmain(int argc, wchar_t** argv) {
                       commandLineMode);
         return 4;
     }
+    /*
+     * The first launcher sets the marker to its own image path and starts the same file through
+     * the link, so a true marker names this process's image file. One that names another file (a
+     * parent's stale or hand-set variable) is dropped: it neither stops the restart below nor
+     * reaches frost_main(). Costs two opens only when the marker is set.
+     */
+    const std::wstring restartedFrom =
+        !marker.empty() && frost::app::sameImageFile(marker, self) ? marker : std::wstring();
     // Before any DLL of frost's is loaded, so the first launcher costs one process start and
     // nothing else (ADR 0012, Measurements).
     if (self.size() >= frost::app::kGpuDriverImagePathLimitUnits &&
         frost::app::launcherMayReachGpuDriver(arguments, environmentVariable(L"QT_QPA_PLATFORM"))) {
         if (!restartedFrom.empty()) {
-            // The loop guard: a restarted launcher never restarts again.
+            // The loop guard: a restarted launcher never restarts again. A real restart cannot
+            // get here (prepareShortLink() keeps the link's path short); a parent that sets the
+            // marker to frost's own long path can.
             reportFailure(L"frost was restarted through the short link " + self + L" from " + restartedFrom +
                               L", but that path is still " + std::to_wstring(self.size()) +
                               L" UTF-16 units long, and graphics drivers end a program started from " +

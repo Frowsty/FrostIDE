@@ -6,9 +6,10 @@
 // plain-path limit itself, the pin through \\?\ that satisfies Qt's later plain-path load from
 // a long directory (and the failing unpinned load), the launcher's GUI or command-line rule and
 // its normalised \\?\ install directory, its rule for which starts may reach a GPU driver, the
-// short link it restarts through (name, reparse data, creation and reuse, what it does with
-// whatever it finds at the link's path, and where it refuses), the hand-over of the hardening
-// state to frost_app.dll,
+// short link it restarts through (name, reparse data, creation and reuse, what holding it does
+// and does not stop, the root's normalisation, what it does with whatever it finds at the
+// link's path, and where it refuses), the check of the restart marker, the elevation rule and
+// the standard-handle rule of the restart, the hand-over of the hardening state to frost_app.dll,
 // that the hardened process no longer loads a DLL planted in the current directory (and what it
 // does not cover), that the launcher's \\?\ install directory serves later loads by name, that
 // suppressCrashDialogs() switches every dialog source off, that the command-line dialog guard
@@ -708,7 +709,9 @@ std::string readFile(const std::wstring& path) {
 struct LinkFixture {
     frost::test::ScratchDir scratch{"app-startup-link"};
     std::wstring install = wide(longForm(scratch.path())) + L"\\inst \u00f8 \u6d4b";
-    std::wstring root = wide(longForm(scratch.path())) + L"\\local app data";
+    // A profile path with spaces and non-ASCII characters (PLAN.md's M0 fixture), where the
+    // link lives.
+    std::wstring root = wide(longForm(scratch.path())) + L"\\local app data \u00e4 \u6d4b";
     std::wstring elsewhere = wide(longForm(scratch.path())) + L"\\elsewhere";
 
     LinkFixture() {
@@ -739,8 +742,9 @@ TEST(StartupShortLink, CreatesAJunctionToTheInstallDirectoryAndKeepsIt) {
     /*
      * The first restart creates %LOCALAPPDATA%\FrostIDE\i\<hash> as a junction to the install
      * directory without administrator rights; later ones reuse it unchanged. While a ShortLink
-     * holds it, nobody can open it for writing or deleting, nor rename a folder above it, but
-     * another frost can verify and share it.
+     * holds it, nobody can open it for write-data or delete access, remove it or rename a folder
+     * above it, but another frost can verify and share it. What the hold does not stop is
+     * HoldStopsRemovalButNotAReparseDataWriter's subject.
      */
     const LinkFixture fixture;
     auto first = fixture.prepare();
@@ -750,13 +754,16 @@ TEST(StartupShortLink, CreatesAJunctionToTheInstallDirectoryAndKeepsIt) {
     EXPECT_EQ(first->target(), fixture.install);
     expectLinkToInstall(fixture);
 
-    HANDLE writer = CreateFileW((L"\\\\?\\" + fixture.link()).c_str(), GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    EXPECT_EQ(writer, INVALID_HANDLE_VALUE);
-    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_SHARING_VIOLATION));
-    if (writer != INVALID_HANDLE_VALUE) {
-        CloseHandle(writer);
+    for (const DWORD access : {DWORD{GENERIC_WRITE}, DWORD{DELETE}}) {
+        SCOPED_TRACE(std::format("access {:#x}", access));
+        HANDLE other = CreateFileW((L"\\\\?\\" + fixture.link()).c_str(), access,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        EXPECT_EQ(other, INVALID_HANDLE_VALUE);
+        EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_SHARING_VIOLATION));
+        if (other != INVALID_HANDLE_VALUE) {
+            CloseHandle(other);
+        }
     }
     const std::wstring folder = fixture.root + L"\\FrostIDE";
     EXPECT_EQ(MoveFileExW((L"\\\\?\\" + folder).c_str(), (L"\\\\?\\" + folder + L"-moved").c_str(), 0), FALSE);
@@ -784,6 +791,97 @@ TEST(StartupShortLink, CreatesAJunctionToTheInstallDirectoryAndKeepsIt) {
     } else {
         std::printf("note: no 8.3 name for %ls\n", fixture.install.c_str());
     }
+}
+
+// Sends FSCTL code `control` with `data` to `handle`; the win32 error, or ERROR_SUCCESS.
+DWORD reparseControl(HANDLE handle, DWORD control, std::span<const unsigned char> data) {
+    DWORD returned = 0;
+    return DeviceIoControl(handle, control, const_cast<unsigned char*>(data.data()), static_cast<DWORD>(data.size()),
+                           nullptr, 0, &returned, nullptr) != FALSE
+               ? ERROR_SUCCESS
+               : GetLastError();
+}
+
+TEST(StartupShortLink, HoldStopsRemovalButNotAReparseDataWriter) {
+    /*
+     * What holding a ShortLink does not guarantee (review of 2f40f9f). Sharing modes never check
+     * FILE_WRITE_ATTRIBUTES, and that access is all FSCTL_SET_REPARSE_POINT and
+     * FSCTL_DELETE_REPARSE_POINT need: an opener asking for it alone gets a handle to the held
+     * junction and can retarget it, after which the held link leads to the other directory, or
+     * strip it to a plain directory. Only processes that the folder's ACL lets write the link
+     * can do so (the user's own, SYSTEM, administrators): same-user tampering, out of scope, and
+     * the reason an elevated launcher never restarts through a link (StartupElevation). If
+     * Windows ever refuses these openers, ShortLink's comment and ADR 0012 must say more, not
+     * this test less. Either change is repaired by the next prepareShortLink() once the holder
+     * is gone; a writer while it is held is refused (CreatesAJunctionToTheInstallDirectoryAndKeepsIt).
+     */
+    const LinkFixture fixture;
+    const std::wstring link = L"\\\\?\\" + fixture.link();
+    const auto attributeWriter = [&] {
+        return CreateFileW(link.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    };
+    {
+        SCOPED_TRACE("retargeted while held");
+        auto held = fixture.prepare();
+        ASSERT_TRUE(held.has_value()) << frost::io::fromWide(held.error().message).value_or("?");
+        HANDLE writer = attributeWriter();
+        ASSERT_NE(writer, INVALID_HANDLE_VALUE) << GetLastError();
+        const std::vector<unsigned char> elsewhere = frost::app::mountPointReparseData(fixture.elsewhere);
+        EXPECT_EQ(reparseControl(writer, FSCTL_SET_REPARSE_POINT, elsewhere), static_cast<DWORD>(ERROR_SUCCESS));
+        CloseHandle(writer);
+        EXPECT_EQ(junctionTarget(fixture.link()), L"\\??\\" + fixture.elsewhere);
+        EXPECT_EQ(readFile(held->directory() + L"\\keep.txt"), "elsewhere") << "the held link now leads elsewhere";
+    }
+    auto repaired = fixture.prepare();
+    ASSERT_TRUE(repaired.has_value()) << frost::io::fromWide(repaired.error().message).value_or("?");
+    expectLinkToInstall(fixture);
+    {
+        SCOPED_TRACE("stripped while held");
+        HANDLE writer = attributeWriter();
+        ASSERT_NE(writer, INVALID_HANDLE_VALUE) << GetLastError();
+        // FSCTL_DELETE_REPARSE_POINT takes the 8-byte header alone: the tag, no data.
+        unsigned char header[8] = {};
+        const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+        std::memcpy(header, &tag, sizeof tag);
+        EXPECT_EQ(reparseControl(writer, FSCTL_DELETE_REPARSE_POINT, header), static_cast<DWORD>(ERROR_SUCCESS));
+        CloseHandle(writer);
+        EXPECT_EQ(reparseTagOf(fixture.link()), 0u) << "a plain directory is left";
+    }
+    repaired = std::unexpected(frost::app::ShortLinkError{});
+    repaired = fixture.prepare();
+    ASSERT_TRUE(repaired.has_value()) << frost::io::fromWide(repaired.error().message).value_or("?");
+    expectLinkToInstall(fixture);
+    EXPECT_EQ(readFile(fixture.elsewhere + L"\\keep.txt"), "elsewhere");
+}
+
+TEST(StartupShortLink, RootIsNormalisedAsWin32OpensIt) {
+    /*
+     * LOCALAPPDATA as a parent may spell it: with "." and ".." components, a doubled separator,
+     * forward slashes, a trailing separator, or a trailing dot and space. Each names the
+     * fixture's root as Win32 opens a plain path, so the link must land there, not in a folder
+     * named literally by the \\?\ form (review of 2f40f9f). The spellings name no folder that
+     * exists ("sub" does not), and nothing is created for them.
+     */
+    const LinkFixture fixture;
+    const std::size_t slash = fixture.root.find_last_of(L'\\');
+    std::wstring forward = fixture.root;
+    std::ranges::replace(forward, L'\\', L'/');
+    const std::vector<std::wstring> spellings{fixture.root + L"\\.",
+                                              fixture.root + L"\\sub\\..",
+                                              fixture.root.substr(0, slash) + L"\\\\" + fixture.root.substr(slash + 1),
+                                              forward,
+                                              fixture.root + L"\\",
+                                              fixture.root + L". "};
+    for (const std::wstring& spelling : spellings) {
+        SCOPED_TRACE(frost::io::fromWide(spelling).value_or("?"));
+        auto link = frost::app::prepareShortLink(spelling, L"\\\\?\\" + fixture.install, L"frost.exe");
+        ASSERT_TRUE(link.has_value()) << frost::io::fromWide(link.error().message).value_or("?");
+        EXPECT_EQ(link->directory(), fixture.link());
+        expectLinkToInstall(fixture);
+    }
+    EXPECT_EQ(reparseTagOf(fixture.root + L"\\sub"), ~DWORD{0});
+    EXPECT_EQ(reparseTagOf(fixture.root + L". "), ~DWORD{0}) << "no literally named folder";
 }
 
 TEST(StartupShortLink, HandlesWhatItFindsAtItsPathWithoutFollowingIt) {
@@ -827,41 +925,41 @@ TEST(StartupShortLink, HandlesWhatItFindsAtItsPathWithoutFollowingIt) {
 
     // An empty plain directory becomes the junction.
     ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
-    created("empty directory");
-    reset();
+    ASSERT_NO_FATAL_FAILURE(created("empty directory"));
+    ASSERT_NO_FATAL_FAILURE(reset());
 
     // A directory with contents is refused, contents intact.
     ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
     writeFile(link + L"\\user.txt", "mine");
-    refused("directory with contents", L"is a directory with contents");
+    ASSERT_NO_FATAL_FAILURE(refused("directory with contents", L"is a directory with contents"));
     EXPECT_EQ(reparseTagOf(link), 0u);
     EXPECT_EQ(readFile(link + L"\\user.txt"), "mine");
     DeleteFileW((L"\\\\?\\" + link + L"\\user.txt").c_str());
-    reset();
+    ASSERT_NO_FATAL_FAILURE(reset());
 
     // A junction to another directory is rewritten in place.
     ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
     ASSERT_TRUE(plantJunction(link, fixture.elsewhere));
     ASSERT_EQ(junctionTarget(link), L"\\??\\" + fixture.elsewhere);
-    created("junction to another directory");
-    reset();
+    ASSERT_NO_FATAL_FAILURE(created("junction to another directory"));
+    ASSERT_NO_FATAL_FAILURE(reset());
 
     // A WSL symbolic link on a directory and on a file: removed themselves, then replaced.
     ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
     ASSERT_TRUE(plantWslSymlink(link));
-    created("WSL symbolic link (directory)");
-    reset();
+    ASSERT_NO_FATAL_FAILURE(created("WSL symbolic link (directory)"));
+    ASSERT_NO_FATAL_FAILURE(reset());
     writeFile(link, "");
     ASSERT_TRUE(plantWslSymlink(link));
-    created("WSL symbolic link (file)");
-    reset();
+    ASSERT_NO_FATAL_FAILURE(created("WSL symbolic link (file)"));
+    ASSERT_NO_FATAL_FAILURE(reset());
 
     // An NT symbolic link to another directory, where this account may create one.
     if (CreateSymbolicLinkW((L"\\\\?\\" + link).c_str(), (L"\\\\?\\" + fixture.elsewhere).c_str(),
                             SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != FALSE) {
         ASSERT_EQ(reparseTagOf(link), IO_REPARSE_TAG_SYMLINK);
-        created("NT symbolic link");
-        reset();
+        ASSERT_NO_FATAL_FAILURE(created("NT symbolic link"));
+        ASSERT_NO_FATAL_FAILURE(reset());
     } else {
         // ERROR_PRIVILEGE_NOT_HELD without Developer Mode or SeCreateSymbolicLinkPrivilege; the
         // WSL links above take the same path through prepareShortLink().
@@ -870,19 +968,19 @@ TEST(StartupShortLink, HandlesWhatItFindsAtItsPathWithoutFollowingIt) {
 
     // A file is refused and kept.
     writeFile(link, "user data");
-    refused("file", L"holds a file");
+    ASSERT_NO_FATAL_FAILURE(refused("file", L"holds a file"));
     EXPECT_EQ(reparseTagOf(link), 0u);
     EXPECT_EQ(readFile(link), "user data");
-    reset();
+    ASSERT_NO_FATAL_FAILURE(reset());
 
     // A reparse point that is no name surrogate (an AF_UNIX socket's tag) is refused and kept.
     ASSERT_NE(CreateDirectoryW((L"\\\\?\\" + link).c_str(), nullptr), FALSE);
     constexpr DWORD kAfUnix = 0x80000023;
     const unsigned char body[] = {1, 0, 0, 0};
     ASSERT_TRUE(plantReparsePoint(link, kAfUnix, body));
-    refused("reparse point with data", L"holds a reparse point with data (tag 0x80000023)");
+    ASSERT_NO_FATAL_FAILURE(refused("reparse point with data", L"holds a reparse point with data (tag 0x80000023)"));
     EXPECT_EQ(reparseTagOf(link), kAfUnix);
-    reset();
+    ASSERT_NO_FATAL_FAILURE(reset());
 }
 
 TEST(StartupShortLink, IsNamedByItsResolvedPath) {
@@ -913,14 +1011,16 @@ TEST(StartupShortLink, IsNamedByItsResolvedPath) {
 
 TEST(StartupShortLink, RefusesWhereALinkCannotHelp) {
     // The link's image path must stay below MAX_PATH, or the driver would end the restarted
-    // process as well; the root must be an absolute drive path.
+    // process as well; the root must be an absolute drive path (a drive-relative "C:x" would
+    // resolve against that drive's current directory).
     const LinkFixture fixture;
     const auto refusal = [&](std::wstring_view root) {
         auto result = frost::app::prepareShortLink(root, L"\\\\?\\" + fixture.install, L"frost.exe");
         return result.has_value() ? frost::app::ShortLinkError{} : result.error();
     };
-    for (const std::wstring_view root : {std::wstring_view(L""), std::wstring_view(L"local app data"),
-                                         std::wstring_view(L"\\\\server\\share\\local")}) {
+    for (const std::wstring_view root :
+         {std::wstring_view(L""), std::wstring_view(L"local app data"), std::wstring_view(L"C:local app data"),
+          std::wstring_view(L"\\\\server\\share\\local")}) {
         const frost::app::ShortLinkError error = refusal(root);
         EXPECT_EQ(error.kind, frost::app::ShortLinkError::Kind::Unusable);
         EXPECT_TRUE(error.message.contains(L"is not an absolute path on a drive"))
@@ -948,6 +1048,71 @@ TEST(StartupShortLink, RefusesWhereALinkCannotHelp) {
     EXPECT_EQ(missing.error().kind, frost::app::ShortLinkError::Kind::Failed);
     EXPECT_TRUE(missing.error().message.contains(L"cannot open the install directory " + fixture.install + L"-gone"))
         << frost::io::fromWide(missing.error().message).value_or("?");
+}
+
+TEST(StartupRestartMarker, CountsOnlyForTheSameImageFile) {
+    /*
+     * A launcher believes FROST_RESTARTED_FROM only when it names the launcher's own image file
+     * (sameImageFile(); review of 2f40f9f): after a real restart the marker is the first
+     * launcher's path, and the restarted image is the same file reached through the link. Every
+     * spelling of one file matches (plain, \\?\, "..", through the junction); another file, a
+     * copy, a missing file, a directory and "" do not.
+     */
+    const LinkFixture fixture;
+    auto link = fixture.prepare();
+    ASSERT_TRUE(link.has_value()) << frost::io::fromWide(link.error().message).value_or("?");
+    using frost::app::sameImageFile;
+    const std::wstring image = fixture.install + L"\\frost.exe";
+    const std::wstring installName = fixture.install.substr(fixture.install.find_last_of(L'\\') + 1);
+    EXPECT_TRUE(sameImageFile(image, image));
+    EXPECT_TRUE(sameImageFile(L"\\\\?\\" + image, image));
+    EXPECT_TRUE(sameImageFile(fixture.install + L"\\..\\" + installName + L"\\frost.exe", L"\\\\?\\" + image));
+    EXPECT_TRUE(sameImageFile(link->imagePath(), image)) << "through the junction";
+    ASSERT_NE(CopyFileW((L"\\\\?\\" + image).c_str(), (L"\\\\?\\" + fixture.install + L"\\copy.exe").c_str(), TRUE),
+              FALSE)
+        << GetLastError();
+    EXPECT_FALSE(sameImageFile(fixture.install + L"\\copy.exe", image)) << "a copy is another file";
+    EXPECT_FALSE(sameImageFile(fixture.install + L"\\marker.txt", image));
+    EXPECT_FALSE(sameImageFile(fixture.install + L"\\missing.exe", image));
+    EXPECT_FALSE(sameImageFile(fixture.install, image)) << "a directory";
+    EXPECT_FALSE(sameImageFile(L"", image));
+    EXPECT_FALSE(sameImageFile(image, L""));
+}
+
+TEST(StartupElevation, OnlyTheElevatedHalfOfASplitTokenRefusesTheShortLink) {
+    /*
+     * processUacElevation() reads the token through the API set the launcher can use without
+     * importing advapi32, and must agree with advapi32's GetTokenInformation. Only Full ("Run as
+     * administrator") refuses the short link: the same user's programs without elevation can
+     * retarget it even while it is held (HoldStopsRemovalButNotAReparseDataWriter), so they
+     * could choose the code an elevated frost loads. Tests run without elevation, and none can
+     * elevate without a prompt, so the launcher's refusal itself is not reached here.
+     */
+    TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault;
+    DWORD returned = 0;
+    ASSERT_NE(GetTokenInformation(GetCurrentProcessToken(), TokenElevationType, &type, sizeof type, &returned), FALSE)
+        << GetLastError();
+    const auto elevation = frost::app::processUacElevation();
+    ASSERT_TRUE(elevation.has_value()) << "win32 error " << elevation.error();
+    using frost::app::UacElevation;
+    const UacElevation expected = type == TokenElevationTypeFull      ? UacElevation::Full
+                                  : type == TokenElevationTypeLimited ? UacElevation::Limited
+                                                                      : UacElevation::Default;
+    EXPECT_EQ(*elevation, expected);
+    static_assert(frost::app::shortLinkAllowedFor(UacElevation::Default));
+    static_assert(frost::app::shortLinkAllowedFor(UacElevation::Limited));
+    static_assert(!frost::app::shortLinkAllowedFor(UacElevation::Full));
+}
+
+TEST(StartupLauncherMode, RestartPassesStandardHandlesUnlessAFieldMeansSomethingElse) {
+    // STARTF_USEHOTKEY puts a hotkey in hStdInput and STARTF_USEMONITOR (0x400, missing from
+    // the SDK's headers) an HMONITOR in hStdOutput; neither may meet STARTF_USESTDHANDLES, so
+    // the restart then passes the parent's fields unchanged (review of 2f40f9f).
+    using frost::app::startupFlagsAllowStandardHandles;
+    EXPECT_TRUE(startupFlagsAllowStandardHandles(0));
+    EXPECT_TRUE(startupFlagsAllowStandardHandles(STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES | STARTF_TITLEISLINKNAME));
+    EXPECT_FALSE(startupFlagsAllowStandardHandles(STARTF_USEHOTKEY));
+    EXPECT_FALSE(startupFlagsAllowStandardHandles(0x400 | STARTF_USESHOWWINDOW));
 }
 
 /*

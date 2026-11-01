@@ -10,9 +10,10 @@
 // platform plugin (a GPU driver loads) from image paths of 250 to 400 units, through the
 // launcher's restart via a short junction from 260 units on, and the GUI itself from 300
 // units (its window, and its failure box naming the real install directory); that other modes
-// start in place; the restart's exit status and standard streams, its loop guard and its
-// refusals; a DLL loaded late and non-platform plugins from a long plain path (loaded,
-// skipped or failing); the start-up check's reports when Qt's platform plugin is missing or
+// start in place; the restart's exit status and standard streams, its loop guard, the check
+// of its marker and its refusals, with the link below a non-ASCII LOCALAPPDATA; a DLL loaded
+// late and non-platform plugins from a long plain path (loaded, skipped or failing); the
+// start-up check's reports when Qt's platform plugin is missing or
 // unloadable, and that Qt's own "no platform plugin" dialog never appears in a command-line
 // mode; the launcher's failure reports and the error mode it loads in; and the structure of
 // the two images: frost.exe imports KERNEL32.dll alone, and frost_app.dll carries no manifest
@@ -790,9 +791,11 @@ bool shortLinkFolderExists(const std::string& localAppData) {
            INVALID_FILE_ATTRIBUTES;
 }
 
-// A fresh directory `name` below `scratch` to stand in for %LOCALAPPDATA%.
+// A fresh directory below `scratch` to stand in for %LOCALAPPDATA%: `name` and " ä 测", so the
+// link always lives below a profile path with spaces and non-ASCII characters (PLAN.md's M0
+// fixture).
 std::string localAppDataIn(const ScratchDir& scratch, std::string_view name) {
-    const std::string dir = scratch.join(std::string(name));
+    const std::string dir = scratch.join(std::string(name) + " \xC3\xA4 \xE6\xB5\x8B");
     EXPECT_TRUE(frost::io::realFileSystem().createDirectories(dir).has_value()) << dir;
     return dir;
 }
@@ -1182,43 +1185,71 @@ TEST(FrostProcess, RestartPassesStatusAndStandardStreamsThrough) {
 TEST(FrostProcess, RestartedLauncherNeverRestartsAgain) {
     /*
      * The restart marker (FROST_RESTARTED_FROM) tells a launcher that another one started it
-     * through the short link. Such a launcher never restarts: if its own image path is still
-     * too long for the GPU driver, it refuses with status 4 and a message instead of starting
-     * a third process. Here the marker comes from the parent's environment and the image path
-     * is 300 units long, as if the link were. Below 260 units the marker is taken out of the
-     * environment and handed to frost_app.dll, which only names it: the parent controls the
-     * environment anyway.
+     * through the short link, and it counts only when it names the launcher's own image file,
+     * as it does after a real restart (sameImageFile(); review of 2f40f9f). Such a launcher
+     * never restarts: if its own image path is still too long for the GPU driver, it refuses
+     * with status 4 and a message instead of starting a third process. Here the parent sets the
+     * marker to frost's own 300-unit path in its plain spelling, while frost starts through
+     * \\?\. A marker that names another file is dropped: from 300 units frost restarts as it
+     * would without it, and frost_app.dll gets the real first path; from 200 units it gets
+     * nothing. From 200 units a marker naming frost's own file is handed on. In every case the
+     * launcher takes the marker out of the environment.
      */
     const ScratchDir scratch("app-process-loopguard");
     const std::string base = longFormOf(scratch);
     ASSERT_FALSE(base.empty());
-    const std::string localAppData = localAppDataIn(scratch, "lad");
-    const std::string marker = "C:\\first launcher\\frost.exe";
     const std::string exe = copyProbeTo(imagePathCell(base, 300, ImagePathForm::Extended));
-    const auto started = std::chrono::steady_clock::now();
-    const ProbeRun run =
-        runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", marker}},
-                 ImagePathForm::Extended);
-    ASSERT_TRUE(run.error.empty()) << run.error;
-    EXPECT_EQ(run.exitCode, 4) << run.header << run.stderrBytes;
-    const std::string expected = "frost: frost was restarted through the short link " +
-                                 startedAs(exe, ImagePathForm::Extended) + " from " + marker +
-                                 ", but that path is still 300 UTF-16 units long, and graphics drivers end a "
-                                 "program started from 260 units (MAX_PATH) or more. Install FrostIDE in a directory "
-                                 "with a shorter path.\n";
-    EXPECT_EQ(run.stderrBytes, expected);
-    EXPECT_EQ(run.header, "") << "frost_app.dll was not loaded";
-    EXPECT_FALSE(shortLinkFolderExists(localAppData));
-    EXPECT_LT(std::chrono::steady_clock::now() - started, 30s);
+    const std::string stale = "C:\\first launcher\\frost.exe";
+    {
+        SCOPED_TRACE("a marker naming this file, 300 units");
+        const std::string localAppData = localAppDataIn(scratch, "lad guard");
+        const auto started = std::chrono::steady_clock::now();
+        const ProbeRun run =
+            runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", exe}},
+                     ImagePathForm::Extended);
+        ASSERT_TRUE(run.error.empty()) << run.error;
+        EXPECT_EQ(run.exitCode, 4) << run.header << run.stderrBytes;
+        const std::string expected = "frost: frost was restarted through the short link " +
+                                     startedAs(exe, ImagePathForm::Extended) + " from " + exe +
+                                     ", but that path is still 300 UTF-16 units long, and graphics drivers end a "
+                                     "program started from 260 units (MAX_PATH) or more. Install FrostIDE in a "
+                                     "directory with a shorter path.\n";
+        EXPECT_EQ(run.stderrBytes, expected);
+        EXPECT_EQ(run.header, "") << "frost_app.dll was not loaded";
+        EXPECT_FALSE(shortLinkFolderExists(localAppData));
+        EXPECT_LT(std::chrono::steady_clock::now() - started, 30s);
+    }
+    {
+        SCOPED_TRACE("a marker naming another file, 300 units");
+        const std::string localAppData = localAppDataIn(scratch, "lad stale");
+        const ProbeRun run =
+            runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", stale}},
+                     ImagePathForm::Extended);
+        ASSERT_TRUE(run.error.empty()) << run.error;
+        EXPECT_EQ(run.exitCode, 0) << run.header << run.stderrBytes;
+        const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+        ASSERT_EQ(links.size(), 1u) << run.header;
+        EXPECT_TRUE(run.header.ends_with(", restarted from " + startedAs(exe, ImagePathForm::Extended) + ", image " +
+                                         links.front().path + "\\frost.exe, marker unset"))
+            << run.header;
+    }
 
     const std::string shortExe = copyProbeTo(imagePathCell(base, 200, ImagePathForm::Plain));
-    const ProbeRun direct =
-        runProbe(shortExe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", marker}},
-                 ImagePathForm::Plain);
-    ASSERT_TRUE(direct.error.empty()) << direct.error;
-    EXPECT_EQ(direct.exitCode, 0) << direct.header << direct.stderrBytes;
-    EXPECT_TRUE(direct.header.ends_with(", restarted from " + marker + ", image " + shortExe + ", marker unset"))
-        << direct.header;
+    const std::string localAppData = localAppDataIn(scratch, "lad short");
+    // Each marker and what the probe then reports as the path frost was restarted from.
+    const std::vector<std::pair<std::string, std::string>> markers{{stale, "nothing"},
+                                                                   {"\\\\?\\" + shortExe, "\\\\?\\" + shortExe}};
+    for (const auto& [marker, reported] : markers) {
+        SCOPED_TRACE("200 units, marker " + marker);
+        const ProbeRun run =
+            runProbe(shortExe, {"--selftest=onscreen"},
+                     {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", marker}}, ImagePathForm::Plain);
+        ASSERT_TRUE(run.error.empty()) << run.error;
+        EXPECT_EQ(run.exitCode, 0) << run.header << run.stderrBytes;
+        EXPECT_TRUE(run.header.ends_with(", restarted from " + reported + ", image " + shortExe + ", marker unset"))
+            << run.header;
+        EXPECT_FALSE(shortLinkFolderExists(localAppData));
+    }
 }
 
 TEST(FrostProcess, RestartRefusesWithoutAUsableShortLink) {

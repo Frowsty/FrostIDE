@@ -21,10 +21,11 @@ frost_add_test(app_startup_tests
 target_include_directories(app_startup_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 if(WIN32)
     # The SDK's own platform plugin, copied to a long scratch path by
-    # StartupLoadPlatformPlugin.PinnedPluginSatisfiesQtsPlainPathLoad; and user32 for the
-    # dialog-guard death test (its private desktop, MessageBoxW).
+    # StartupLoadPlatformPlugin.PinnedPluginSatisfiesQtsPlainPathLoad; user32 for the
+    # dialog-guard death test (its private desktop, MessageBoxW); advapi32 for the token query
+    # that StartupElevation compares with frost's own.
     target_compile_definitions(app_startup_tests PRIVATE FROST_QT_PLUGIN_DIR="${FROST_QT_PLUGIN_DIR}")
-    target_link_libraries(app_startup_tests PRIVATE user32)
+    target_link_libraries(app_startup_tests PRIVATE user32 advapi32)
 endif()
 
 frost_add_test(frost_process_tests

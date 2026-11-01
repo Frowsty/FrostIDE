@@ -105,7 +105,11 @@ struct ProcessHardening {
  * receives encodeHardening() of the launcher's state and, when this process is a restart
  * through a short link (prepareShortLink()), the image path of the launcher that restarted it,
  * as that one's GetModuleFileNameW reported it (NUL-terminated, owned by the launcher, valid
- * for the call); nullptr otherwise. Returns the process exit status.
+ * for the call); nullptr otherwise. The launcher passes it only when the restart marker
+ * (kRestartedFromVariable) names this process's own image file (sameImageFile()), so a marker
+ * that a parent left or set to another file never arrives here. It is no stronger than the
+ * link it came through: same-user tampering is out of scope (ShortLink). Returns the process
+ * exit status.
  */
 inline constexpr wchar_t kAppDllName[] = L"frost_app.dll";
 inline constexpr char kAppEntryPoint[] = "frost_main";
@@ -125,11 +129,61 @@ inline constexpr std::size_t kGpuDriverImagePathLimitUnits = 260;
 
 /*
  * The environment variable that marks a restart: the first launcher sets it to its own image
- * path before it starts frost again through the short link. The restarted launcher reads it,
+ * path before it starts frost again through the short link. Every launcher reads it and
  * removes it from its environment before anything else can start a process (so nothing frost
- * starts inherits it), never restarts again, and hands the value to frost_main().
+ * starts inherits it). It counts only when it names the reading launcher's own image file
+ * (sameImageFile()), as it does after a real restart, since the link leads to the first
+ * launcher's directory: that launcher then never restarts again and hands the value to
+ * frost_main(). A marker that names anything else is dropped as if it were unset, so a stale
+ * or hand-set one neither stops a restart nor makes frost name a directory it does not run from.
  */
 inline constexpr wchar_t kRestartedFromVariable[] = L"FROST_RESTARTED_FROM";
+
+/*
+ * Whether the image paths `a` and `b` (as modulePath() reports them: plain, \\?\ or \\.\, maybe
+ * with 8.3 components, "." or "..") name one file: each is normalised as extendedDirectoryOf()
+ * normalises it, opened in that \\?\ form with links followed, and the two volume serial numbers
+ * and file IDs are compared (FileIdInfo, 128 bits, so ReFS counts too; GetFileInformationByHandle
+ * where a file system has no FileIdInfo). False when either cannot be opened. Thread-safe;
+ * two opens and two queries, about 0.1 ms.
+ */
+[[nodiscard]] bool sameImageFile(const std::wstring& a, const std::wstring& b);
+
+/*
+ * How this process's token stands to User Account Control (TOKEN_ELEVATION_TYPE): Default when
+ * it has no linked token (a standard user, UAC off, the built-in Administrator, a service), Full
+ * for the elevated half of a split token ("Run as administrator"), Limited for the filtered half
+ * (an administrator who did not elevate).
+ */
+enum class UacElevation : unsigned char { Default, Full, Limited };
+
+/*
+ * This process's UacElevation: GetTokenInformation(TokenElevationType) of its token. The launcher
+ * imports KERNEL32.dll alone, so the function comes from the API set
+ * api-ms-win-security-base-l1-1-0.dll, which resolves to the KERNELBASE.dll every process has
+ * mapped: no new DLL is loaded. On failure, the win32 error. Thread-safe; about 10 us.
+ */
+[[nodiscard]] std::expected<UacElevation, unsigned long> processUacElevation();
+
+/*
+ * Whether a launcher whose token has `elevation` may restart through a short link: not when it
+ * is Full. The link lives in a folder that the same user's programs without elevation can write,
+ * and holding it does not stop them from retargeting it (ShortLink), so they could pick the code
+ * an elevated frost loads, a privilege that they lack themselves. Pure.
+ */
+[[nodiscard]] constexpr bool shortLinkAllowedFor(UacElevation elevation) noexcept {
+    return elevation != UacElevation::Full;
+}
+
+/*
+ * Whether the restart may hand this launcher's standard handles to the restarted frost
+ * (STARTF_USESTDHANDLES), given the STARTUPINFOW flags `startupFlags` that its parent started it
+ * with: not when STARTF_USEHOTKEY or STARTF_USEMONITOR (0x400, which the SDK's headers lack) is
+ * set, because hStdInput then holds a hotkey or hStdOutput an HMONITOR (ShellExecuteEx with
+ * SEE_MASK_HMONITOR, a start from the taskbar), and neither may be combined with
+ * STARTF_USESTDHANDLES. The handle fields then pass as the parent set them. Pure.
+ */
+[[nodiscard]] bool startupFlagsAllowStandardHandles(unsigned long startupFlags) noexcept;
 
 /*
  * LoadLibraryExW flags for the DLLs the launcher loads by their \\?\ path (frost_app.dll and,
@@ -223,12 +277,20 @@ inline constexpr unsigned long kLauncherLoadFlags = 0x900;
 /*
  * A verified short link: the junction <linkRoot>\FrostIDE\i\<shortLinkName()> to frost's
  * install directory, held open (FILE_FLAG_OPEN_REPARSE_POINT, GENERIC_READ, FILE_SHARE_READ
- * only) for as long as the object lives. The handle denies write and delete access to every
- * other opener, so nobody can retarget or remove the junction between its verification and the
- * restart, or while the restarted frost runs through it (the launcher keeps the object while it
- * waits); with it open, the folders above it cannot be renamed either (measured 2026-11-01).
- * Readers, such as a second frost verifying the same link, share it. Move-only; closes the
- * handle on destruction.
+ * only) for as long as the object lives; the launcher keeps it until the restarted frost exits.
+ * What the hold guarantees: sharing modes refuse every other opener that asks for write-data,
+ * append-data or delete access (GENERIC_WRITE, DELETE: ERROR_SHARING_VIOLATION), so while it is
+ * open nobody can remove or rename the junction, nor rename a folder above it. Readers, such as
+ * a second frost verifying the same link, share it.
+ * What it does not guarantee: sharing modes never check FILE_WRITE_ATTRIBUTES, WRITE_DAC or
+ * WRITE_OWNER, and FILE_WRITE_ATTRIBUTES is all that FSCTL_SET_REPARSE_POINT and
+ * FSCTL_DELETE_REPARSE_POINT need. So whoever the folder's ACL lets write the link (the user's
+ * own programs, SYSTEM, administrators) can still retarget or strip it at any time: between its
+ * verification and the restart, and while the restarted frost loads its DLLs through it. That
+ * is same-user tampering, which prepareShortLink() leaves out of scope; an elevated launcher
+ * never restarts through a link (shortLinkAllowedFor()). Both halves are measured (2026-11-01,
+ * StartupShortLink.HoldStopsRemovalButNotAReparseDataWriter). Move-only; closes the handle on
+ * destruction.
  */
 class ShortLink {
 public:
@@ -260,7 +322,8 @@ private:
 struct ShortLinkError {
     enum class Kind : unsigned char {
         Unusable, // The location or the install directory cannot have such a link (too long,
-                  // not absolute, a network drive or share, a reparse buffer too small).
+                  // not absolute, a network drive or share, an install directory of more
+                  // than about 4,089 units for a junction's 16 KiB of reparse data).
         Occupied, // Something frost does not remove is at the link's path: a file, a
                   // directory with contents, or a reparse point that holds data.
         Failed,   // A Win32 call failed (the message names it), or the path kept changing.
@@ -276,11 +339,17 @@ struct ShortLinkError {
  *   1. The target is the install directory as the file system names it (GetFinalPathNameByHandleW:
  *      8.3 components, letter case and links resolved), so every spelling gets one link; a target
  *      on a network share or mapped drive is Unusable (a junction can point at local volumes
- *      only), and so is a `linkRoot` on a network drive or not absolute. The link's image path
- *      must stay below kGpuDriverImagePathLimitUnits, or Unusable says how long it would be.
- *   2. <linkRoot>\FrostIDE and its i subfolder are created when missing; they inherit
- *      %LOCALAPPDATA%'s ACL (the user, SYSTEM and Administrators), so no other standard user can
- *      write there.
+ *      only), and so is one of more than about 4,089 units (mountPointReparseData()). `linkRoot`
+ *      must start with a drive letter, a colon and a separator, or it is Unusable; it is then
+ *      normalised as Win32 opens a plain path (GetFullPathNameW: "." and "..", '/', repeated
+ *      separators, trailing dots and spaces), because the \\?\ form used below takes every
+ *      character literally, and on a network drive it is Unusable. The link's image path must
+ *      stay below kGpuDriverImagePathLimitUnits, or Unusable says how long it would be.
+ *   2. <linkRoot>\FrostIDE and its i subfolder are created when missing, with the ACL they
+ *      inherit; nothing checks their owner or ACL. Under the real %LOCALAPPDATA% that admits the
+ *      user, SYSTEM and Administrators only, so no other standard user can write there; a
+ *      `linkRoot` that other users may write (a parent can point LOCALAPPDATA anywhere) would let
+ *      them plant or change the link.
  *   3. The link path is opened without following it (FILE_FLAG_OPEN_REPARSE_POINT) and inspected
  *      through that handle: a mount point whose substitute name is "\??\<target>" (ordinal,
  *      case-insensitive) is kept as it is; a mount point to anything else, or an empty plain
@@ -295,11 +364,12 @@ struct ShortLinkError {
  *      or symbolic link above it (in `linkRoot` itself, say) cannot be retargeted between the
  *      check and the restart; that path must be on a local drive and its image path below
  *      kGpuDriverImagePathLimitUnits too, or Unusable.
- * Same-user tampering is out of scope: a process running as the user can change the link while
- * no frost holds it, as it could replace frost.exe itself. Thread-safe; blocking file-system
- * calls only. When the link exists it costs one GetFinalPathNameByHandleW, three
- * CreateDirectoryW that find their directory, and one open, attribute query and reparse read of
- * the link; creating it adds about 0.6 ms (ADR 0012, Measurements).
+ * Same-user tampering is out of scope: a process running as the user can change the link at any
+ * time, even while a frost holds it (ShortLink), as it could replace frost.exe itself.
+ * Thread-safe; blocking file-system calls only. When the link exists it costs two opens and two
+ * GetFinalPathNameByHandleW (the install directory and the link), one GetFullPathNameW, up to
+ * three GetDriveTypeW, three CreateDirectoryW that find their directory, and one attribute query
+ * and reparse read of the link; creating it adds about 0.6 ms (ADR 0012, Measurements).
  * TODO(M2): links whose install directory is gone stay behind (an empty junction each); the
  * installer's uninstall, or a sweep when frost has a settings store, removes them.
  */

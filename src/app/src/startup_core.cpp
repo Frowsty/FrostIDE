@@ -125,27 +125,129 @@ std::wstring extendedPath(const std::wstring& path) {
     return L"\\\\?\\" + path;
 }
 
-std::wstring extendedDirectoryOf(const std::wstring& imagePath) {
-    std::wstring path = imagePath;
-    if (!path.starts_with(L"\\\\?\\")) {
-        // GetFullPathNameW normalises after a \\.\ prefix too, and keeps the prefix.
-        if (const DWORD units = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr); units > 0) {
-            std::wstring full(units, L'\0');
-            const DWORD written = GetFullPathNameW(path.c_str(), units, full.data(), nullptr);
-            if (written > 0 && written < units) {
-                full.resize(written);
-                path = std::move(full);
-            }
-        }
-        if (path.starts_with(L"\\\\.\\")) {
-            path[2] = L'?';
-        } else {
-            path = extendedPath(path);
-        }
+namespace {
+
+// `path` as Win32 opens it (GetFullPathNameW), or "" when that fails; GetLastError() says why.
+std::wstring fullPathOf(const std::wstring& path) {
+    const DWORD units = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+    if (units == 0) {
+        return {};
     }
+    std::wstring full(units, L'\0');
+    const DWORD written = GetFullPathNameW(path.c_str(), units, full.data(), nullptr);
+    if (written == 0 || written >= units) {
+        return {};
+    }
+    full.resize(written);
+    return full;
+}
+
+// The normalised \\?\ form of `path` that extendedDirectoryOf() describes (the whole path).
+std::wstring extendedFormOf(const std::wstring& path) {
+    if (path.starts_with(L"\\\\?\\")) {
+        return path;
+    }
+    // GetFullPathNameW normalises after a \\.\ prefix too, and keeps the prefix.
+    std::wstring full = fullPathOf(path);
+    if (full.empty()) {
+        full = path;
+    }
+    if (full.starts_with(L"\\\\.\\")) {
+        full[2] = L'?';
+        return full;
+    }
+    return extendedPath(full);
+}
+
+} // namespace
+
+std::wstring extendedDirectoryOf(const std::wstring& imagePath) {
+    const std::wstring path = extendedFormOf(imagePath);
     const std::size_t slash = path.find_last_of(L'\\');
     // "\\?\" itself is no directory.
     return slash == std::wstring::npos || slash < 4 ? std::wstring() : path.substr(0, slash);
+}
+
+namespace {
+
+// A file's identity: its volume's serial number and its 128-bit file ID.
+struct FileIdentity {
+    unsigned long long volume = 0;
+    FILE_ID_128 id{};
+};
+
+// The identity of the file at the \\?\ path `path`, links followed; false when it cannot be opened.
+bool identify(const std::wstring& path, FileIdentity& identity) {
+    HANDLE handle =
+        CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, 0, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    FILE_ID_INFO info{};
+    bool ok = GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof info) != FALSE;
+    if (ok) {
+        identity.volume = info.VolumeSerialNumber;
+        identity.id = info.FileId;
+    } else {
+        // FAT and other file systems without FileIdInfo: the 64-bit index in the low bytes.
+        BY_HANDLE_FILE_INFORMATION basic{};
+        ok = GetFileInformationByHandle(handle, &basic) != FALSE;
+        if (ok) {
+            const unsigned long long index =
+                (static_cast<unsigned long long>(basic.nFileIndexHigh) << 32) | basic.nFileIndexLow;
+            identity.volume = basic.dwVolumeSerialNumber;
+            std::memcpy(identity.id.Identifier, &index, sizeof index);
+        }
+    }
+    CloseHandle(handle);
+    return ok;
+}
+
+} // namespace
+
+bool sameImageFile(const std::wstring& a, const std::wstring& b) {
+    FileIdentity first;
+    FileIdentity second;
+    return !a.empty() && !b.empty() && identify(extendedFormOf(a), first) && identify(extendedFormOf(b), second) &&
+           first.volume == second.volume &&
+           std::memcmp(first.id.Identifier, second.id.Identifier, sizeof first.id) == 0;
+}
+
+std::expected<UacElevation, unsigned long> processUacElevation() {
+    // Advapi32's GetTokenInformation forwards to KERNELBASE's; the API set names that one.
+    HMODULE security = LoadLibraryExW(L"api-ms-win-security-base-l1-1-0.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (security == nullptr) {
+        return std::unexpected(GetLastError());
+    }
+    using GetTokenInformationFn = BOOL(WINAPI*)(HANDLE, TOKEN_INFORMATION_CLASS, LPVOID, DWORD, PDWORD);
+    auto* query = reinterpret_cast<GetTokenInformationFn>(
+        reinterpret_cast<void*>(GetProcAddress(security, "GetTokenInformation")));
+    TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault;
+    DWORD returned = 0;
+    const BOOL ok =
+        query != nullptr && query(GetCurrentProcessToken(), TokenElevationType, &type, sizeof type, &returned);
+    const DWORD error = GetLastError();
+    FreeLibrary(security);
+    if (ok == FALSE) {
+        return std::unexpected(error);
+    }
+    switch (type) {
+    case TokenElevationTypeFull: return UacElevation::Full;
+    case TokenElevationTypeLimited: return UacElevation::Limited;
+    case TokenElevationTypeDefault: break;
+    }
+    return UacElevation::Default;
+}
+
+bool startupFlagsAllowStandardHandles(unsigned long startupFlags) noexcept {
+    /*
+     * STARTF_USEMONITOR is not in the SDK's headers. The shell sets it, with an HMONITOR in
+     * hStdOutput, for ShellExecuteEx's SEE_MASK_HMONITOR and for starts from the taskbar or a
+     * jump list (STARTUPINFOW's hStdOutput documentation).
+     */
+    constexpr unsigned long kStartfUseMonitor = 0x400;
+    return (startupFlags & (STARTF_USEHOTKEY | kStartfUseMonitor)) == 0;
 }
 
 bool launcherCommandLineMode(std::span<const wchar_t* const> arguments) noexcept {
@@ -367,10 +469,10 @@ std::unexpected<ShortLinkError> failed(const std::wstring& what, DWORD error) {
                   what + L": " + systemMessage(error) + L" (win32 error " + std::to_wstring(error) + L")");
 }
 
-// Whether `path` starts with a drive letter, a colon and a backslash.
-bool isDriveAbsolute(std::wstring_view path) noexcept {
+// Whether `path` starts with a drive letter, a colon and a backslash (or, with `slash`, a '/').
+bool isDriveAbsolute(std::wstring_view path, bool slash = false) noexcept {
     return path.size() >= 3 && ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) &&
-           path[1] == L':' && path[2] == L'\\';
+           path[1] == L':' && (path[2] == L'\\' || (slash && path[2] == L'/'));
 }
 
 bool isRemoteDrive(std::wstring_view path) {
@@ -378,11 +480,6 @@ bool isRemoteDrive(std::wstring_view path) {
     return GetDriveTypeW(root.c_str()) == DRIVE_REMOTE;
 }
 
-/*
- * The install directory as the file system names it (GetFinalPathNameByHandleW with
- * FILE_NAME_NORMALIZED | VOLUME_NAME_DOS, without its \\?\ prefix): the junction's target and
- * the input of shortLinkName().
- */
 // GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) of `handle`, with its \\?\
 // prefix, at any length; "" on failure, with GetLastError() saying why.
 std::wstring finalPathOf(HANDLE handle) {
@@ -401,6 +498,11 @@ std::wstring finalPathOf(HANDLE handle) {
     }
 }
 
+/*
+ * The install directory as the file system names it (GetFinalPathNameByHandleW with
+ * FILE_NAME_NORMALIZED | VOLUME_NAME_DOS, without its \\?\ prefix): the junction's target and
+ * the input of shortLinkName().
+ */
 std::expected<std::wstring, ShortLinkError> finalDirectoryPath(const std::wstring& directory) {
     HANDLE handle =
         CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -496,9 +598,22 @@ prepareShortLink(std::wstring_view linkRoot, const std::wstring& installDirector
         return std::unexpected(std::move(target.error()));
     }
     std::wstring root(linkRoot);
+    // Checked before it is normalised: GetFullPathNameW would make a relative path absolute
+    // against the current directory, and the \\?\ form below takes every character literally.
+    if (!isDriveAbsolute(root, true)) {
+        return refuse(ShortLinkError::Kind::Unusable,
+                      L"the folder for its short links, \"" + root + L"\", is not an absolute path on a drive");
+    }
+    std::wstring full = fullPathOf(root);
+    if (full.empty()) {
+        const DWORD error = GetLastError();
+        return failed(L"cannot normalise the folder for its short links, " + root, error);
+    }
+    root = std::move(full);
     while (root.size() > 3 && root.back() == L'\\') {
         root.pop_back();
     }
+    // A device name (C:\x\CON on older Windows) normalises to \\.\ and is no folder.
     if (!isDriveAbsolute(root)) {
         return refuse(ShortLinkError::Kind::Unusable,
                       L"the folder for its short links, \"" + root + L"\", is not an absolute path on a drive");
@@ -547,7 +662,8 @@ prepareShortLink(std::wstring_view linkRoot, const std::wstring& installDirector
             return failed(L"cannot create " + link, error);
         }
 
-        // Inspect and keep through a reader that denies write and delete access to others.
+        // Inspect and keep through a reader that refuses openers for write-data, append-data or
+        // delete access; one for FILE_WRITE_ATTRIBUTES alone can still change it (ShortLink).
         HANDLE reader = openLink(linkExtended, GENERIC_READ, FILE_SHARE_READ);
         if (reader == INVALID_HANDLE_VALUE) {
             lastError = GetLastError();
