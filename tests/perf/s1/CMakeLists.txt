@@ -12,7 +12,10 @@
 # in the app layer (cmake/FrostLayers.cmake). Its headless tests are s1_editor_tests.
 
 # Embeds the FrostIDE manifest (per-monitor v2 DPI awareness, which Desktop
-# Duplication coordinates rely on; UTF-8 code page; long paths).
+# Duplication coordinates rely on; UTF-8 code page; long paths) in `target`: adds
+# ${FROST_TEST_MANIFEST_RC} to its sources, sets OBJECT_DEPENDS on that shared .rc
+# (a source-file property, so it is rebuilt when ${FROST_MANIFEST_PATH} changes)
+# and links with /MANIFEST:NO so the linker adds no second manifest.
 function(frost_s1_embed_manifest target)
     target_sources(${target} PRIVATE ${FROST_TEST_MANIFEST_RC})
     set_source_files_properties(${FROST_TEST_MANIFEST_RC} PROPERTIES OBJECT_DEPENDS ${FROST_MANIFEST_PATH})

@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace frost::s1 {
@@ -331,7 +332,12 @@ TEST(S1Gates, PassAndFailFollowTheBudgets) {
 }
 
 TEST(S1Gates, InjectedCpuAndUnpaintedKeysAreNotMeasured) {
-    EXPECT_FALSE(evaluateGates(fullCounts(), passingMetrics(), true).b6Cpu.has_value());
+    // An injected spin also delays the deferred render, so no B6 verdict at all.
+    const Gates injected = evaluateGates(fullCounts(), passingMetrics(), true);
+    EXPECT_FALSE(injected.b6Cpu.has_value());
+    EXPECT_FALSE(injected.b6Missed.has_value());
+    EXPECT_FALSE(injected.b6Interval.has_value());
+    EXPECT_TRUE(injected.decodedEnough); // The run is still valid.
     RunCounts unpainted = fullCounts();
     unpainted.keysPainted = 49;
     EXPECT_FALSE(evaluateGates(unpainted, passingMetrics(), false).b5.has_value());
@@ -339,6 +345,17 @@ TEST(S1Gates, InjectedCpuAndUnpaintedKeysAreNotMeasured) {
     noKeys.keysSent = 0;
     noKeys.keysPainted = 0;
     EXPECT_FALSE(evaluateGates(noKeys, passingMetrics(), false).b5.has_value());
+}
+
+TEST(S1Gates, WatchdogCoversTheFlingAndEveryKey) {
+    // The fling, every key 23 ms apart and the timeout that ends typing, with at
+    // least a second to spare, up to the largest --seconds and --keys.
+    for (const int keys : {0, 50, 200}) {
+        for (const double seconds : {1.0, 10.0, 12.0}) {
+            const auto needed = static_cast<std::int64_t>(seconds * 1000.0) + (keys + 1) * 23;
+            EXPECT_GE(runWatchdogMs(seconds, keys, 23), needed + 1000) << seconds << " s, " << keys << " keys";
+        }
+    }
 }
 
 TEST(S1Gates, TooFewDecodedMarkersMakeTheRunInvalid) {

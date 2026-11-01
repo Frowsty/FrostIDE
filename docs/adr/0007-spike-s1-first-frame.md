@@ -340,8 +340,8 @@ breakdown is not measured here; M1 profiles it.
   later than budgets.json's endpoint, the ETW FirstPresent event, by the time from present to composition. The
   numbers are therefore conservative, and B1 fails with either endpoint: frost.exe's first change is at about
   250 ms.
-- **Window first seen** is polled: EnumWindows between Sleep(1) calls, every 1 to 16 ms depending on the timer
-  resolution. It is context only.
+- **Window first seen** is polled: EnumWindows after each 2 ms message pump, every 2 to 16 ms depending on the
+  timer resolution. It is context only.
 - **Cold proxy.** Before each launch it copies frost.exe and its DLLs with COPY_FILE_NO_BUFFERING into a new
   directory, so the copies have no prefetch trace and the copy does not cache them. Whether they are then read
   from disk at launch is not verified, because Defender may scan the new files when they are closed, which reads

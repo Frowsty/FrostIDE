@@ -4,7 +4,8 @@
 // delays (PLAN.md section 7, M0 spike S1; ADR 0007).
 //
 // A small topmost GDI window (no Qt; it never takes focus) paints a frame
-// marker. Three phases, about 17 s on screen in total:
+// marker. Three phases, about 15 s on screen in total with the default 48 trials
+// at 144 Hz:
 //   A. Latency. For each injected delay D in {0, 8, 25} ms, `--trials` times
 //      (interleaved): wait for a vblank, wait a phase spread evenly over one
 //      refresh period, take the trigger time, wait D, paint the next marker and
@@ -21,11 +22,13 @@
 //      exactly one refresh per frame step, so a frame the desktop dropped costs one
 //      missed refresh (cadence consistency >= 95 %). DWM's refresh period must
 //      match the measured vblank interval.
-//   C. Environment floor. The same animation for another 720 frames without any
-//      stall. The refreshes it missed are reported (as "environmentFloor") to show
-//      how disturbed the desktop was, free of the stalls phase B injects on purpose.
-//      Despite the name it is not a lower bound for other windows: a large
-//      flip-model window missed fewer refreshes on the same desktop (ADR 0007).
+//   C. Trivial-window context. The same animation for another 720 frames without
+//      any stall. The refreshes it missed are reported free of the stalls phase B
+//      injects on purpose, as context only, under the JSON key "environmentFloor"
+//      (a name kept for the run 3 and 4 reports). It is not a floor: on the same
+//      desktop a large flip-model window missed fewer refreshes. It does not track
+//      other windows run by run either, so it does not show how disturbed the
+//      desktop was for them (ADR 0007, Decision 7). It never adjusts a verdict.
 //
 //   s1_probe_validate [--out report.json] [--trials N] [--diagnose]
 // Exit status: 0 validated, 1 validation failed, 2 setup error, 3 invalid run
@@ -70,8 +73,10 @@ constexpr int kFloorFrames = 720; // Phase C, after phase B.
 constexpr int kStallEvery = 36;   // Frames 18, 54, ...: 20 stalls, alternating 8 and 25 ms.
 constexpr std::array<double, 2> kStallMs{8.0, 25.0};
 constexpr double kMinCadenceConsistency = 0.95;
-// A stalled frame is unmeasured only when the desktop drops it; at the measured
-// floor of about 20 % drops, 60 % measured leaves margin.
+// A stalled frame is unmeasured only when the desktop drops it. This GDI window
+// missed 5.0-9.3 % of refreshes in phase C of ADR 0007's runs 3 and 4 (up to 27 %
+// in run 1, under load), and at worst 7 of 10 stalls of one length were measured,
+// so 60 % leaves margin.
 constexpr double kMinStallsMeasured = 0.6;
 
 struct Options {
@@ -222,7 +227,7 @@ void settle(double ms) {
 
 // --diagnose: paints one marker per vblank for one second and lists every desktop
 // present with its dirty-region bounding box, to identify other windows that
-// make DWM compose (ADR 0007 "Environment").
+// make DWM compose (ADR 0007, Measurements: Conditions and Caveats, "Load").
 int diagnose(MarkerWindow& window, DuplicationProbe& probe, VBlankClock& clock, const TickRate& rate) {
     const auto t0 = qpcNow();
     std::vector<double> vblankIntervals;
@@ -411,8 +416,9 @@ int run(const Options& options) {
                                        cadence.consistent, cadence.intervals));
     }
 
-    // Phase C content statistics: the environment floor for a one-frame-per-vblank
-    // window, with no injected stall in the span.
+    // Phase C content statistics: a trivial one-frame-per-vblank window with no
+    // injected stall in the span, reported as context only (ADR 0007, Decision 7;
+    // the JSON key environmentFloor is a legacy name).
     const std::uint32_t floorSeq = firstSeq + static_cast<std::uint32_t>(kSteadyFrames);
     std::vector<ScreenUpdate> steadyUpdates;
     for (const ScreenUpdate& update : updates) {
@@ -517,9 +523,9 @@ int run(const Options& options) {
     }
     std::printf("  cadence: %zu/%zu intervals consistent, %zu frames dropped by the desktop\n", cadence.consistent,
                 cadence.intervals, cadence.dropped);
-    std::printf(
-        "  environment floor (phase C, no stalls): %zu updates, %zu refreshes, missed %.1f %%, max interval %.2f ms\n",
-        steady.updates, steady.refreshes, 100.0 * steady.missedFraction, steady.maxIntervalMs);
+    std::printf("  trivial window (phase C, no stalls, context only): %zu updates, %zu refreshes, missed %.1f %%, max "
+                "interval %.2f ms\n",
+                steady.updates, steady.refreshes, 100.0 * steady.missedFraction, steady.maxIntervalMs);
     for (const std::string& problem : problems) {
         std::printf("  problem: %s\n", problem.c_str());
     }

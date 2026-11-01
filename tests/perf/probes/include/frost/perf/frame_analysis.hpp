@@ -15,9 +15,10 @@
 //                     present intervals do not count refreshes); of several
 //                     presents before one vblank only the last reaches the screen;
 //   content interval  the time between two consecutive screen updates;
-//   missed refresh    a display refresh inside the measured span that showed no
-//                     new content: each interval of k refresh periods (rounded)
-//                     contributes k - 1;
+//   missed refresh    a display refresh between the first and last screen update
+//                     inside the measured span that showed no new content (refreshes
+//                     before the first or after the last update are not counted):
+//                     each interval of k refresh periods (rounded) contributes k - 1;
 //   DWM counters      DwmGetCompositionTimingInfo's refresh, composition and
 //                     missed-composition counters, differenced over the span
 //                     (kept for other Windows builds; on build 26300 they are
@@ -108,8 +109,9 @@ struct FrameMatch {
 // Matches application frames to the first screen update showing their marker
 // whose presentTicks is at or after the frame's readyTicks minus `slackTicks`
 // (clock-domain slack); the match records that update's screenTicks(). Frames
-// must be in submission order and fewer than 65536, so the 16-bit marker is
-// unambiguous. O(frames + updates).
+// must be in submission order and their sequence numbers must span fewer than
+// 65536 values (distinct low 16 bits), so the 16-bit marker is unambiguous; the
+// precondition check covers only frames.size() < 65536. O(frames + updates).
 [[nodiscard]] std::vector<FrameMatch> matchFrames(std::span<const AppFrame> frames,
                                                   std::span<const ScreenUpdate> updates, std::int64_t slackTicks);
 
@@ -121,6 +123,8 @@ struct LatencyStats {
     std::size_t neverShown = 0;
 };
 
+// Summarises the latency of frames[i] against matches[i] (normally matchFrames(frames, ...)).
+// Precondition: frames.size() == matches.size(). O(n log n). Pure.
 [[nodiscard]] LatencyStats summariseLatency(std::span<const AppFrame> frames, std::span<const FrameMatch> matches,
                                             const TickRate& rate);
 
@@ -148,7 +152,8 @@ struct DwmDelta {
     double compositionFraction = 0; // compositions / refreshes (desktop-wide, not per window).
 };
 
-// Precondition: `after` was read no earlier than `before` (counters are monotonic).
+// Precondition: `after` was read no earlier than `before` (refreshCount is monotonic).
+// The other counters may be unsupported or reset; a decrease is reported as 0. O(1).
 [[nodiscard]] DwmDelta dwmDelta(const DwmCounters& before, const DwmCounters& after) noexcept;
 
 } // namespace frost::perf

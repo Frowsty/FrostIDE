@@ -109,7 +109,7 @@ struct DuplicationProbe::Impl {
     Mutex rowMutex;
     std::vector<std::uint8_t> lastRow FROST_GUARDED_BY(rowMutex);
 
-    // (Re)creates the duplication interface and the marker staging texture.
+    // (Re)creates the duplication interface. ensureStaging() makes the marker staging texture.
     Result<void> duplicate() {
         duplication.Reset();
         HRESULT hr = E_NOINTERFACE;
@@ -131,6 +131,9 @@ struct DuplicationProbe::Impl {
         DXGI_OUTDUPL_DESC desc{};
         duplication->GetDesc(&desc);
         if (desc.Rotation != DXGI_MODE_ROTATION_IDENTITY && desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED) {
+            // TODO(M1): call duplication.Reset() before this return. Left set, it ends run()'s retry after an
+            // access loss and the rotated output is read as if unrotated. Not fixed: no seam can make a test fail
+            // without it (it needs a fake IDXGIOutputDuplication), and the access loss already invalidates the run.
             return fail(ErrorCode::Unsupported, "rotated outputs are not supported by the probe");
         }
         return {};
@@ -389,7 +392,8 @@ void DuplicationProbe::run() {
     const int originY = impl.info.desktop.top;
     while (!m_stop.load(std::memory_order_acquire)) {
         if (!impl.duplication) {
-            // After an access loss (desktop switch, mode change) retry until the desktop is back.
+            // After an access loss (desktop switch, mode change) retry until the desktop is back; a
+            // rotated output ends the retry instead (see the TODO(M1) in duplicate()).
             if (!impl.duplicate()) {
                 Sleep(20);
                 continue;

@@ -41,7 +41,7 @@ struct ValidationTolerance {
     double slackMs = 0.5;     // Clock and timestamp slack for causality.
     // Bound on screen - drawn, in refresh periods: up to one period until DWM
     // composes, one to the display vblank, and two compositions the desktop may
-    // skip (ADR 0007 measured one in five skipped on a busy desktop).
+    // skip on a busy desktop (ADR 0007, probe validation: every trial within 4 periods).
     double maxResidualPeriods = 4.0;
 };
 
@@ -71,14 +71,19 @@ struct ValidationReport {
 struct StallProbe {
     std::uint32_t seq = 0;
     double stallMs = 0;
-    std::optional<double> measuredIntervalMs; // screen(seq) - screen(seq - 1), when both were seen.
+    // screen(seq) - screen(prev) - (seq - prev - 1) periods, prev the last shown frame
+    // at most 8 before seq (see measureStalls); nullopt when not measured.
+    std::optional<double> measuredIntervalMs;
 };
 
 // Fills measuredIntervalMs for each stall from matched frames (seq -> screen time):
 // screen(seq) - screen(prev) - (seq - prev - 1) periods, where prev is the last
 // shown frame before seq (normally seq - 1; earlier when the desktop dropped
 // frames, which on a one-frame-per-refresh animation each took one period).
-// Stalls whose frame was never shown stay unmeasured. Frames must be consecutive
+// prev is searched at most 8 frames back, so a longer dropout is not bridged.
+// Stalls at or before matches.front().seq, outside the run, whose frame was never
+// shown or whose predecessors within 8 frames were all dropped stay unmeasured
+// (and count against checkStalls' minMeasuredFraction). Frames must be consecutive
 // sequence numbers starting at matches.front().seq.
 void measureStalls(std::span<StallProbe> stalls, std::span<const FrameMatch> matches, std::int64_t refreshPeriodTicks,
                    const TickRate& rate);
@@ -118,6 +123,8 @@ struct CadenceCheck {
 
 // `excluded` lists sequence numbers whose interval to the previous shown frame
 // is not compared (stalled frames and the frames right after them).
+// Precondition: refreshPeriodTicks > 0 and matches in ascending sequence order (as
+// matchFrames returns them). O(matches x excluded).
 [[nodiscard]] CadenceCheck checkCadence(std::span<const FrameMatch> matches, std::span<const std::uint32_t> excluded,
                                         std::int64_t refreshPeriodTicks);
 

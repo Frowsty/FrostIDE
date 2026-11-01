@@ -115,7 +115,10 @@ void readDisplayPower(SessionFacts& facts) {
     }
     const int state = wait->state.load(std::memory_order_acquire);
     if (answered || registration == nullptr) {
-        // The one callback has run (or none was registered), so nothing can touch `wait` again.
+        /* The current-value callback has run (or none was registered). A second
+           callback racing the unregistration (a display-state change during the
+           precheck) is not excluded by the API, so `wait` is freed on the
+           assumption that none is in flight. */
         CloseHandle(wait->ready);
         delete wait;
     }

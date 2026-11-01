@@ -20,7 +20,9 @@
 //           Direct3D or driver worker threads;
 //   typing  --keys synthetic key presses, 23 ms apart (not vblank-aligned), each
 //           inserting a character and repainting the dirty line (raster) or the
-//           frame (RHI); B5 is input to paint end, with flush end and screen too;
+//           frame (RHI); B5 is input to paint end; the report adds input to
+//           handler return (the flush end on raster; on RHI the render and
+//           present come later) and input to screen;
 //   probes  the Desktop Duplication probe watches the window and decodes the
 //           frame marker at its top-left corner, giving content intervals and
 //           missed refreshes (B6) and frame-to-screen latency.
@@ -37,14 +39,16 @@
 //   --inject-cpu-ms MS  every other fling tick spins MS on the GUI thread once its
 //                       frame is ready. The median tick-to-tick CPU of intervals
 //                       with the spin must exceed the others' by MS within 10 %.
-//                       Such a run reports no B6 CPU verdict.
+//                       Such a run reports no B6 verdict.
 //   --validate-delays   s1_probe_validate's phase A through this backend's present
 //                       path (for RHI, Qt's flip-model swap chain): per trial, wait
 //                       for a vblank and a phase spread over the period, then paint
 //                       a new marker while the paint (paintEvent or
 //                       QRhiWidget::render) spins D in {0, 8, 25} ms after drawing.
 //                       The mean screen latency must shift by D within 1.5 ms, with
-//                       no trial lost or outside its causal bound. About 10 s.
+//                       no trial lost or outside its causal bound. About 4 s of
+//                       trials at 144 Hz (5 to 6 s from launch to exit in ADR
+//                       0007's runs 3 and 4).
 // --first-frame is the target s1_first_frame launches to measure this backend's
 // B1: a normal 1280 x 800 window like frost.exe's main window, placed and shown
 // by the launcher, drawing a 2,000-line buffer once and idling until it is closed
@@ -562,8 +566,13 @@ int run(QApplication& app, const Options& options) {
     std::uint32_t firstFlingSeq = 0;
     std::uint32_t lastFlingSeq = 0;
 
-    // One tick per vblank; while the GUI thread is still busy with the previous
-    // tick, further vblanks are counted as coalesced instead of queued.
+    /* One tick per vblank; while the GUI thread is still busy with the previous
+       tick, further vblanks are counted as coalesced instead of queued. All five
+       atomics use seq_cst: they hand flags and counters between the vblank thread
+       and the GUI thread a few times per refresh, so ordering costs nothing
+       measurable. The posted handler reads latestTick after clearing tickPending,
+       so a vblank in between is handled with the newest tick (at worst one tick
+       is handled twice). */
     std::atomic<bool> stopTicker{false};
     std::atomic<bool> tickPending{false};
     std::atomic<std::int64_t> latestTick{0};
@@ -662,7 +671,7 @@ int run(QApplication& app, const Options& options) {
 
     QElapsedTimer watchdog;
     watchdog.start();
-    const qint64 limitMs = static_cast<qint64>(options.seconds * 1000.0) + 4000;
+    const qint64 limitMs = frost::s1::runWatchdogMs(options.seconds, options.keys, kKeyIntervalMs);
     while (phase != Phase::Done && watchdog.elapsed() < limitMs) {
         // The one-argument overload blocks for events; the (flags, maxTime) overload
         // drops WaitForMoreEvents and would spin, which UI CPU per frame would count.
@@ -672,6 +681,11 @@ int run(QApplication& app, const Options& options) {
     if (phase == Phase::Fling) {
         flingCoalesced = coalesced.load(); // The watchdog ended the fling.
     }
+    // If the watchdog ended typing, no key may be sent during the pumps below: once
+    // the filter is removed a key would not advance seq and would be recorded
+    // against the previous key's paint.
+    keyTimer.stop();
+    phase = Phase::Done;
     pump(app, 150); // Let the last frames reach the screen.
     stopTicker.store(true);
     ticker.join();
@@ -810,7 +824,7 @@ int run(QApplication& app, const Options& options) {
         json.field("truncatedFrames", static_cast<std::uint64_t>(views.rhi->truncatedFrames()));
         json.field("rhiError", views.rhi->error().toStdString());
     }
-    // Verdicts: true, false, or null when the run did not measure enough samples.
+    // Verdicts: true, false, or null when not measured: too few samples, or (for b6) an --inject-cpu-ms run.
     json.key("b6").beginObject();
     writeVerdictField(json, "cpuP99Pass", gates.b6Cpu);
     writeVerdictField(json, "missedPass", gates.b6Missed);

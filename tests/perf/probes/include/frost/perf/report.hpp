@@ -2,7 +2,8 @@
 //
 // JSON report fragments shared by the perf harnesses, so every S1/B1/B5/B6
 // report spells the session verdict, pacing statistics and DWM deltas the same
-// way. Each function writes one JSON value (an object) at the writer's position.
+// way. Each function writes one JSON value (an object, or an array for
+// writeStrings) at the writer's position.
 #pragma once
 
 #include "frost/perf/frame_analysis.hpp"
