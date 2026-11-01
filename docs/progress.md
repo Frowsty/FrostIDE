@@ -5,19 +5,75 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first six slices, the switch to the feature-first phase and the W1 plan, each merged with `git
+`main` has M1's first seven slices, the switch to the feature-first phase and the W1 plan, each merged with `git
 merge --no-ff` in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
 3db37c5), `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b) and `m1/theme-icons` at 73a5143 (merge 94ed47d) merged after
 the slice's independent reviews. `m1/process-feature-first` at d5f4082 (merge 5612d23) and `m1/storage` at 39837c1
 (merge e9c3214) are the first feature-first batch (ADR 0031): a slice merges after its own `-Quick`, and each batch
 gets one `-Quick` of the merged tree. The second batch is `plan/w1` at 43ee979 (merge b7ce4fb), which puts W1, the
-work-ready build, before the rest of U1 (ADR 0032), and `m1/io-reactor-watch` at e0eaf75 (merge 4cce4c8). The slice
-records follow this entry's sections as subsections, newest first: `m1/io-reactor-watch`'s, `m1/storage`'s,
-`m1/theme-icons`'s, `m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes (none of these
-branches kept a record in this log), then `m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them
-mark what has changed since.
+work-ready build, before the rest of U1 (ADR 0032), and `m1/io-reactor-watch` at e0eaf75 (merge 4cce4c8). The third
+batch is `m1/encodings` at ab77994 (merge 6455c2b). The slice records follow this entry's sections as subsections,
+newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/theme-icons`'s, `m1/undo-anchors`'s and
+`m1/input-keymap`'s, written from their hand-off notes (none of these branches kept a record in this log), then
+`m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them mark what has changed since.
 
 ### Done
+
+#### Merge of `m1/encodings` (6455c2b)
+- **The merge** (6455c2b) of `m1/encodings` (ab77994) into `main` at 767312b: frost::text's load and save codec
+  pipeline (22cbc80) and the fixes from the slice's two reviews (ab77994); the slice record below says what they
+  hold. ADR 0018; the number is unchanged and no other branch uses it (`main`'s ADRs after 0010 are now 0011 to
+  0018, 0020, 0031 and 0032). `tests/features/matrix.json` merged on its own: row 60 (encodings, BOM, EOL) is
+  `in-progress` with `EncodingRoundTrip.FixturesByteExact` as its acceptance test, as on the branch.
+- **Four conflicts**, each in a CMake list and each resolved so that both sides' intent survives:
+  - `src/text/CMakeLists.txt`: `main`'s anchor, anchor-set, selection, document and undo-tree sources (ADR 0017)
+    and the slice's codec, detection, line-separator and text-file sources with its per-OS `codec_win.cpp` or
+    `codec_posix.cpp` (ADR 0018) are all built, in one name-ordered list. The header comment describes both ADRs;
+    its `TODO(M1)` keeps only `m1/large-file`, since the undo and anchor work it also named is on `main`.
+  - `tests/text/CMakeLists.txt`: the header comment lists `main`'s undo and anchor additions to `text_tests`,
+    `text_stress_tests` and `text_perf_tests` and the slice's four `text_encoding_*` executables; the test targets
+    themselves merged without conflict.
+  - `tests/text/support/CMakeLists.txt`: `frost_text_test_support` keeps `main`'s UndoOracle and UndoDriver (and
+    their private include of `src/text/src`); the slice's `frost_text_encoding_test_support` sits next to it. The
+    header comment describes both libraries.
+  - `tests/fuzz/CMakeLists.txt`: `main`'s `io_ignore_rules` target (ADR 0020) and the slice's `text_decode` target
+    and its corpus are both registered; the header comment lists all three fuzz targets.
+- **The FrostProcess failures that the slice's verification lists as known no longer apply.** It ran on its base
+  6fb6826, which predates `m0/longpath`, so `FrostProcess.RunsFromPathLongerThanMaxPath` and
+  `FrostProcess.PlatformPluginPathBoundary` fail there. `main` has the E1 launcher (ADR 0012); the merged tree's
+  results are below.
+- **Orchestrator decisions on the slice's questions** (conservative, matching Visual Studio):
+  - Invalid UTF-8 keeps the lossless legacy fallback (the system ANSI page on Windows, 1252 on Linux; the status
+    bar offers "Reload in UTF-8"), not VS Code-style U+FFFD (ADR 0018 D7's open question).
+  - Files with no line break get CRLF on Windows and LF on Linux (D9, until `m1/settings`), and 1252 as the Linux
+    legacy candidate is fine (D14's questions for `m1/settings`).
+  - No upstream TSan report about the gconv false positive for now (deferred, below).
+  - ADR 0018's text still calls these open; the decisions are recorded here.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 35.4 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own): exit 0, 59 steps, no compiler warning (only Qt's own
+  "No qtpaths executable found" configure notice).
+
+#### Verification (batch, merged tree 6455c2b)
+- Before the batch run: the Windows Debug build after the merge (above).
+- `tools\verify.ps1 -Quick -Jobs 8` on 6455c2b (with this record uncommitted) through `run_hidden_nobox.py` (a
+  hidden desktop; no window opened on it), after `night.py build-gate` (no lock, 37.8 GB commit free), 583.6 s,
+  exit 0. Three other agents' `-Quick` runs (`w1/project-sln`, `w1/build-msbuild`, `m1/display-map`, in their own
+  worktrees and WSL mirrors) ran at the same time, so the timings are not comparable with earlier batches. Windows
+  ran its Debug leg and the checks; WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 1448/1454 (6 skipped), wsl debug 1360/1365 (5 skipped), wsl licensecheck ok, format ok,
+  frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run` (frost-lint 961 files; licensecheck 18 packages on
+  Windows, 13 on WSL). No test failed. The test steps took 346.8 s (Windows) and 172.4 s (WSL).
+- **The skips are the previous batch's:** on both OSes the four `WatcherPerf` tests (outside optimised, unsanitised
+  builds); on Windows `PollingWatcher.DirectorySymlinksAreNotFollowed` and `LayoutOs.UsLayoutEqualsTheSimulatedTable`
+  (the active keyboard layout was again not en-US); on WSL `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale`.
+  None of them is in `m1/encodings`' tests, which all ran.
+- **No test was lost in the merge.** Against the io merge (win debug 1304, wsl debug 1216) the tree adds 150 tests on
+  Windows and 149 on WSL, exactly the slice's `-Quick` tests: `text_encoding_tests` 142 on Windows and 141 on WSL
+  (one case is Windows-only), `text_encoding_integration_tests` 3, `text_encoding_perf_tests` 4 and
+  `fuzz_replay.text_decode` 1. `text_encoding_stress_tests` (2 tests, label stress) is not in `-Quick`.
+- `-Quick` builds no ASan, TSan or fuzz tree. The merge adds the `text_decode` fuzz target, whose corpus replay
+  ran; no fuzz tree was built. The slice's sanitizer, fuzz, stress and Release perf runs are in "Deferred to the
+  hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### W1, the work-ready build (ADR 0032)
 - **Plan:** W1, the work-ready build, comes before the rest of U1 (ADR 0032; the user's requirement statement of
@@ -96,8 +152,9 @@ mark what has changed since.
   unverified, not pushed): `m1/syntax` (3c86bd1), `m1/keymap-de` (a2b2570), `m1/io-reactor-watch` (e7daf37),
   `m1/crash-diag` (be509f2), `m1/verify-tooling` (bfd769a), `m1/encodings` (0893943) and `m1/diff-merge`
   (4d14df6). `m1/display-map` had nothing to save: its branch has no commit of its own yet (it is at 2fef6ee). Lean
-  agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`. (Merge note:
-  `m1/io-reactor-watch` finished at e0eaf75 and merged as 4cce4c8, above.)
+  agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`. (Merge notes:
+  `m1/io-reactor-watch` finished at e0eaf75 and merged as 4cce4c8, and `m1/encodings` finished at ab77994 and merged
+  as 6455c2b, both above.)
 
 #### Merge of `m1/process-feature-first` (5612d23)
 - **The merge** (5612d23) of `m1/process-feature-first` (d5f4082) into `main` at 94ed47d: ADR 0031 and its pointers
@@ -312,8 +369,13 @@ mark what has changed since.
   own `-Quick`. Then clangd live diagnostics (how they get compile commands depends on the open question about the
   "command-list file", under Questions for the user), then navigation and completion, then the rest of U1.
 - **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/display-map`, `m1/keymap-de`,
-  `m1/crash-diag`, `m1/verify-tooling`, `m1/encodings` and `m1/diff-merge`, merged in batches as each passes its own
-  `-Quick`.
+  `m1/crash-diag`, `m1/verify-tooling` and `m1/diff-merge`, merged in batches as each passes its own `-Quick`.
+- **The frost::text encodings consumers** (ADR 0018): the SaveManager slice (row I2: `encodeForSave` and the lossy
+  save guard keep BOM, EOL and encoding), the status bar's encoding and line-separator items (`formatStatus`,
+  "Reload in", "Convert to"), `m1/settings` (the default legacy page and the separator for files without breaks,
+  D9 and D14) and `m1/large-file` (the mapped path for files of 128 MB and more; a single-validation path and fused
+  passes for mapped originals if its B15 measurement needs them; bounding a file that grows between `status` and
+  the read: the `TODO(M1)`s in `src/text`).
 - **The frost::io consumers** (ADR 0020, Consequences): `m1/shell-nav` (`scanTree`), the File System view (one
   recursive watch per project root, fanning batches out to settings and the SaveManager), the SaveManager slice
   (row I2: refusing a read-only target on POSIX and sweeping stale `.frost-tmp-*` files, moved there from `src/io`)
@@ -335,6 +397,21 @@ mark what has changed since.
 
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first.
+- **From `m1/encodings`** (ADR 0018), as its hand-off lists them:
+  - Mutation checks of `decodeBlocks` (review issue 1, test strength).
+  - Measure the transient load peak (review issue 2: the payload-sized reservation that the shrink hides, which no
+    unit test observes) and add a B15/B26 gate for it.
+  - Sanitizer runs: Windows ASan, WSL ASan+UBSan and WSL TSan (`EncodingConcurrency`, and the gconv mutex
+    workaround in `codec_posix.cpp`).
+  - Fuzz runs: 60 s `text_decode` smokes on both OSes with check (d), and a corpus merge. Only its corpus replay
+    (`fuzz_replay.text_decode`) ran; no fuzz tree was built for this merge.
+  - The stress label (`text_encoding_stress_tests`: the full-BMP differential, `LosslessProperty` at 2000 and 20000
+    seeds).
+  - The Release perf gates (`text_encoding_perf_tests`: D15's 1.5x UTF-8 load ratio, the detection bounds,
+    throughput) and `verify -Full`.
+  - Re-measure the committed memory of loaded 32 MiB UTF-16LE and windows-1252 documents against ADR 0018's figures.
+  - A re-review of ADR 0018's "Review follow-up" section and its comment wording.
+  - Decide whether to file an upstream TSan report about gconv module loads (LLVM 23.1.4, glibc 2.39).
 - **From `m1/io-reactor-watch`** (ADR 0020), as its hand-off lists them:
   - Sanitizer runs (ASan+UBSan, TSan) of the io unit, integration and stress tests. TSan matters most for the
     reactor's shutdown, the WatchQueue awaiters, the inotify wd tree and async pipe cancellation.
@@ -376,8 +453,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 
 ### Blockers
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
-  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons`, `m1/storage`, `plan/w1` and `m1/io-reactor-watch` name
-  none.
+  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons`, `m1/storage`, `plan/w1`, `m1/io-reactor-watch` and
+  `m1/encodings` name none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
@@ -455,6 +532,34 @@ The user answered the open questions; their words are quoted.
 - **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
 - **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
   reordered into a thin path to a first usable build (ADR 0029, in progress).
+
+### Slice record: `m1/encodings` (ADR 0018)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. Built as 22cbc80 on 6fb6826
+(the piece-tree head) and reviewed twice; the review fixes were saved as the WIP commit 0893943 before the PC
+restart, then finished in the feature-first phase (ADR 0031) as ab77994, which replaces the WIP on the branch and
+adds `EncodingFiles.VisualStudioSourcesWithProductionDefaults`.
+Worktree `.claude\worktrees\m1-encodings`. (Merge note: merged into `main` as 6455c2b and pushed; the M1 entry above.)
+
+#### Done
+- **The load/save codec pipeline** (frost::text, ADR 0018): UTF-8 with or without BOM, UTF-16 and UTF-32 in both
+  byte orders with or without BOM, and 16 Windows code pages behind `ITextCodec` (MultiByteToWideChar on Windows,
+  glibc iconv on Linux; no new dependency).
+- **Detection** with a confidence, candidates and an override ("Reload in"), and "Convert to".
+- **Line separators:** EOL statistics and the dominant separator; existing breaks are never rewritten on save.
+- **Fidelity:** an exact fidelity record per load; lossy loads are guarded on save; `formatStatus` for the status
+  bar.
+- **Visual Studio sources:** VS-style C++ sources (UTF-8 with and without BOM, windows-1252, CRLF) open losslessly
+  and save byte-exact, also after an edit (`EncodingFiles.VisualStudioSourcesWithProductionDefaults`).
+- **Review fixes (ab77994):** decoded documents keep at most 1/16 + 64 KiB spare capacity; codec OS failures report
+  `Internal`; only a really missing converter skips a code page; each page opens once; IANA aliases for 437 and 850.
+- **Verification at ab77994** (its own `-Quick`): win 585/588 (1 skipped; 2 failures,
+  `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`, which exist at its
+  base 6fb6826 and are fixed on `main` by the E1 launcher, ADR 0012), wsl 553/553.
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/encodings`'.
+- No questions for the user; the orchestrator's decisions on the slice's questions are in the merge section above.
 
 ### Slice record: `m1/io-reactor-watch` (ADR 0020)
 
