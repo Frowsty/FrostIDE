@@ -1,0 +1,25 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Libraries/">
+    <Project Path="Libraries/Core/Core.vcxproj" Id="c0c0c0c0-0002-4000-8000-000000000002" />
+    <Project Path="Libraries/Engine/Engine.vcxproj">
+      <Build Solution="Release|x86" Project="false" />
+    </Project>
+  </Folder>
+  <Folder Name="/Tools/">
+    <File Path="README.md" />
+    <Project Path="Tools/Gone/Gone.vcxproj" />
+    <Project Path="Tools/Packager/Packager.csproj">
+      <Build Solution="Debug|*" Project="false" />
+    </Project>
+  </Folder>
+  <Project Path="App/App.vcxproj">
+    <BuildDependency Project="Tools/Packager/Packager.csproj" />
+    <Deploy Solution="Debug|x64" Project="true" />
+  </Project>
+</Solution>

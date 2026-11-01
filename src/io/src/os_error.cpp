@@ -13,6 +13,9 @@
 #include "frost/io/utf.hpp"
 
 #include <windows.h>
+#else
+#include <locale.h>
+#include <string.h>
 #endif
 
 namespace frost::io {
@@ -63,14 +66,36 @@ ErrorCode errorCodeFromErrno(int errnoValue) noexcept {
     }
 }
 
-Error errnoError(int errnoValue, std::string_view operation, std::string_view path, std::source_location where) {
+#ifndef _WIN32
+namespace {
+
+// The "C" locale for strerror_l: created on first use (thread-safe static initialisation) and never freed;
+// a locale_t is a plain handle, so there is no exit-time destructor. Null if newlocale failed.
+[[nodiscard]] locale_t cLocale() noexcept {
+    static const locale_t locale = ::newlocale(LC_ALL_MASK, "C", static_cast<locale_t>(nullptr));
+    return locale;
+}
+
+} // namespace
+#endif
+
+std::string errnoText(int errnoValue) {
+#ifndef _WIN32
     /*
-     * generic_category().message is thread-safe (unlike strerror). On glibc it follows LC_MESSAGES, which Qt
-     * sets from the environment, so English is guaranteed only in a "C"-locale process (see os_error.hpp).
-     * TODO(M1): make the text English in every locale (for example strerror_l with a "C" locale from newlocale),
-     * with a test under a translated locale, which this WSL lacks (comment-accuracy round 2; ADR 0011, G3).
+     * English in every locale: strerror_l with the "C" locale ignores LC_MESSAGES, which Qt sets from the
+     * environment (ADR 0011, G3). glibc's strerror_l is thread-safe; the text is copied at once because an
+     * unknown value's text lives in a per-thread buffer.
      */
-    const std::string detail = std::format("{} (errno {})", std::generic_category().message(errnoValue), errnoValue);
+    if (const locale_t locale = cLocale(); locale != static_cast<locale_t>(nullptr)) {
+        return std::string(::strerror_l(errnoValue, locale));
+    }
+#endif
+    // MSVC's generic_category has its own English table; on POSIX this is the fallback when newlocale failed.
+    return std::generic_category().message(errnoValue);
+}
+
+Error errnoError(int errnoValue, std::string_view operation, std::string_view path, std::source_location where) {
+    const std::string detail = std::format("{} (errno {})", errnoText(errnoValue), errnoValue);
     return Error(errorCodeFromErrno(errnoValue), formatMessage(operation, path, detail), where);
 }
 

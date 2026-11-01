@@ -61,9 +61,12 @@ struct KeyTranslationContext {
  *     xkb keycode minus 8, an evdev code). Synthesized events without one (QTest, the
  *     automation endpoint, some remote tools) fall back to the Qt::Key: a table for named
  *     and modifier keys (KeypadModifier selects numpad codes), layout.codeFor() for
- *     letters, digits and the 11 punctuation keys, and for other printable characters the
- *     writing key that produces them at base or Shift level (Key_Question is US Slash);
- *     codeFromFallback is then set.
+ *     letters and digits; for the 11 US punctuation keys the first writing key (in Code
+ *     order) that types the character at base, as the hardware key would report (de
+ *     Key_Minus is the '-' key, Code::Slash; fr Key_Apostrophe is Digit4; ADR 0030), else
+ *     layout.codeFor() (de Key_Slash is Code::Slash); and for other printable characters
+ *     the writing key that produces them at base or Shift level (Key_Question is US
+ *     Slash); codeFromFallback is then set. O(writing keys), no allocation.
  *   - modifiers: Qt's, without KeypadModifier; a modifier key's own bit is set on its press
  *     and cleared on its release (the AltGr refinement below then applies, so a Windows
  *     AltGr press reports altGr without Alt).

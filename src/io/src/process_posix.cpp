@@ -25,8 +25,8 @@
 #include "frost/io/process.hpp"
 
 #include "internal.hpp"
+#include "process_internal.hpp"
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 
 #include <algorithm>
@@ -105,20 +105,10 @@ ExitStatus statusFromSiginfo(const siginfo_t& info) noexcept {
     return ExitStatus{128 + info.si_status, info.si_status}; // CLD_KILLED or CLD_DUMPED.
 }
 
-// A pidfd for `pid` (Linux >= 5.3), or an invalid descriptor where unsupported.
-UniqueFd openPidfd(pid_t pid) noexcept {
-#ifdef SYS_pidfd_open
-    return UniqueFd(static_cast<int>(::syscall(SYS_pidfd_open, pid, 0)));
-#else
-    static_cast<void>(pid);
-    return UniqueFd();
-#endif
-}
-
 class PosixProcess final : public IProcess {
 public:
     PosixProcess(pid_t pid, bool ownGroup, UniqueFd in, UniqueFd out, UniqueFd err)
-        : m_pid(pid), m_ownGroup(ownGroup), m_pidfd(openPidfd(pid)), m_in(std::move(in)), m_out(std::move(out)),
+        : m_pid(pid), m_ownGroup(ownGroup), m_pidfd(detail::openPidfd(pid)), m_in(std::move(in)), m_out(std::move(out)),
           m_err(std::move(err)) {}
 
     ~PosixProcess() override {
@@ -130,8 +120,13 @@ public:
             ::kill(-m_pid, SIGKILL);
             reap(0);
         } else {
-            // Not contained: reap if finished, otherwise let it run.
-            // TODO(M1): the reactor's child watcher reaps detached children, by pid, when they exit.
+            /*
+             * Not contained: reap if finished, otherwise let it run. Async children (launchAsync) are
+             * reaped by their pidfd watch when they exit (ADR 0020), but this blocking IProcess has no
+             * reactor: the stateless constinit launcher cannot own one. A detached child that outlives its
+             * IProcess therefore stays a zombie until frost exits (one per such child).
+             * TODO(M3): the supervisor reaps detached children of the blocking launcher.
+             */
             reap(WNOHANG);
         }
     }
@@ -508,139 +503,163 @@ int addStreamAction(posix_spawn_file_actions_t& actions, Stdio mode, int target,
     return EINVAL;
 }
 
+/*
+ * The body of PosixProcessLauncher::launch() up to the wrapping (process_internal.hpp): validation, the
+ * pipes, the file actions and attributes, and posix_spawn.
+ */
+Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
+    if (auto valid = validateProcessSpec(spec, /*windowsRules=*/false); !valid) {
+        return std::unexpected(std::move(valid.error()));
+    }
+    // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.
+    const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO, spec.killOnClose);
+    const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO, spec.killOnClose);
+    const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO, spec.killOnClose);
+    PipeEnds in;
+    PipeEnds out;
+    PipeEnds err;
+    for (auto [mode, ends, parentReads] :
+         {std::tuple{stdinMode, &in, false}, std::tuple{stdoutMode, &out, true}, std::tuple{stderrMode, &err, true}}) {
+        if (mode == Stdio::Pipe) {
+            auto pipe = createPipe(parentReads);
+            if (!pipe) {
+                return std::unexpected(std::move(pipe.error()));
+            }
+            *ends = std::move(*pipe);
+        }
+    }
+
+    SpawnActions actions;
+    int rc = addStreamAction(actions.actions, stdinMode, STDIN_FILENO, in.child);
+    if (rc == 0) {
+        rc = addStreamAction(actions.actions, stdoutMode, STDOUT_FILENO, out.child);
+    }
+    if (rc == 0) {
+        rc = addStreamAction(actions.actions, stderrMode, STDERR_FILENO, err.child);
+    }
+    // Belt and braces: descriptors other code opened without O_CLOEXEC are not inherited either.
+    if (rc == 0) {
+        rc = posix_spawn_file_actions_addclosefrom_np(&actions.actions, 3);
+    }
+    if (rc == 0 && !spec.workingDirectory.empty()) {
+        rc = posix_spawn_file_actions_addchdir_np(&actions.actions, spec.workingDirectory.c_str());
+    }
+    if (rc != 0) {
+        return std::unexpected(errnoError(rc, "posix_spawn_file_actions"));
+    }
+
+    // The child starts with no blocked signals and default handlers, whatever this process uses.
+    SpawnAttributes attributes;
+    sigset_t none;
+    sigemptyset(&none);
+    sigset_t all;
+    sigfillset(&all);
+    int flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+    if (spec.killOnClose) {
+        /*
+         * A new session (glibc >= 2.26), which also makes the child the leader of
+         * a new process group whose id is its pid, so kill(-pid) reaches every
+         * process that stays in the group (not one that calls setsid or setpgid).
+         * Unlike a mere new group, the session has no controlling terminal: a
+         * child that opens /dev/tty (ssh and git prompts) gets ENXIO and fails
+         * fast, instead of being stopped by SIGTTIN as a background job of the
+         * IDE's terminal while wait() blocks.
+         */
+        flags |= POSIX_SPAWN_SETSID;
+    }
+    rc = posix_spawnattr_setsigmask(&attributes.attributes, &none);
+    if (rc == 0) {
+        rc = posix_spawnattr_setsigdefault(&attributes.attributes, &all);
+    }
+    if (rc == 0) {
+        rc = posix_spawnattr_setflags(&attributes.attributes, static_cast<short>(flags));
+    }
+    if (rc != 0) {
+        return std::unexpected(errnoError(rc, "posix_spawnattr"));
+    }
+
+    // argv and envp point into these strings, which outlive the posix_spawn call.
+    std::vector<std::string> argvStorage;
+    argvStorage.reserve(spec.arguments.size() + 1);
+    argvStorage.push_back(spec.executable);
+    argvStorage.insert(argvStorage.end(), spec.arguments.begin(), spec.arguments.end());
+    std::vector<char*> argv;
+    for (std::string& argument : argvStorage) {
+        argv.push_back(argument.data());
+    }
+    argv.push_back(nullptr);
+
+    std::vector<std::string> envStorage;
+    if (!spec.cleanEnvironment) {
+        // Reading environ is safe as long as nothing calls setenv concurrently; FrostIDE never does.
+        for (char** entry = environ; entry != nullptr && *entry != nullptr; ++entry) {
+            envStorage.emplace_back(*entry);
+        }
+    }
+    for (const auto& [name, value] : spec.environment) {
+        const std::string prefix = name + "=";
+        std::erase_if(envStorage, [&](const std::string& entry) { return entry.starts_with(prefix); });
+        if (value) {
+            envStorage.push_back(prefix + *value);
+        }
+    }
+    std::vector<char*> envp;
+    for (std::string& entry : envStorage) {
+        envp.push_back(entry.data());
+    }
+    envp.push_back(nullptr);
+
+    // TODO(M1): log the executable, the working directory and the arguments (PLAN.md 3.5) once
+    // frost::core has logging (the crash and logging slice, PLAN.md I3; see process.hpp).
+    pid_t pid = 0;
+    // posix_spawn, never posix_spawnp: the path is absolute and PATH is not searched.
+    rc = posix_spawn(&pid, spec.executable.c_str(), &actions.actions, &attributes.attributes, argv.data(), envp.data());
+    if (rc != 0) {
+        // The chdir file action fails with ENOENT or ENOTDIR, indistinguishable from the
+        // executable's own errors, so the directory is checked to say which one failed
+        // (with the same codes as the Windows launcher).
+        struct stat info{};
+        if ((rc == ENOENT || rc == ENOTDIR) && !spec.workingDirectory.empty()) {
+            if (::stat(spec.workingDirectory.c_str(), &info) != 0) {
+                return fail(ErrorCode::NotFound, std::format("launch '{}': working directory '{}' does not exist",
+                                                             spec.executable, spec.workingDirectory));
+            }
+            if (!S_ISDIR(info.st_mode)) {
+                return fail(ErrorCode::InvalidArgument,
+                            std::format("launch '{}': working directory '{}' is not a directory", spec.executable,
+                                        spec.workingDirectory));
+            }
+        }
+        return std::unexpected(errnoError(rc, "launch", spec.executable));
+    }
+    // The child ends close when this function returns, so EOF arrives as soon as the child
+    // and its descendants close theirs.
+    return detail::SpawnedChild{pid, spec.killOnClose, std::move(in.parent), std::move(out.parent),
+                                std::move(err.parent)};
+}
+
 class PosixProcessLauncher final : public IProcessLauncher {
 public:
     constexpr PosixProcessLauncher() noexcept = default;
 
     Result<std::unique_ptr<IProcess>> launch(const ProcessSpec& spec) override {
-        if (auto valid = validateProcessSpec(spec, /*windowsRules=*/false); !valid) {
-            return std::unexpected(std::move(valid.error()));
+        auto child = spawnPosixChild(spec);
+        if (!child) {
+            return std::unexpected(std::move(child.error()));
         }
-        // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.
-        const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO, spec.killOnClose);
-        const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO, spec.killOnClose);
-        const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO, spec.killOnClose);
-        PipeEnds in;
-        PipeEnds out;
-        PipeEnds err;
-        for (auto [mode, ends, parentReads] : {std::tuple{stdinMode, &in, false}, std::tuple{stdoutMode, &out, true},
-                                               std::tuple{stderrMode, &err, true}}) {
-            if (mode == Stdio::Pipe) {
-                auto pipe = createPipe(parentReads);
-                if (!pipe) {
-                    return std::unexpected(std::move(pipe.error()));
-                }
-                *ends = std::move(*pipe);
-            }
-        }
+        return std::make_unique<PosixProcess>(child->pid, child->ownGroup, std::move(child->in), std::move(child->out),
+                                              std::move(child->err));
+    }
 
-        SpawnActions actions;
-        int rc = addStreamAction(actions.actions, stdinMode, STDIN_FILENO, in.child);
-        if (rc == 0) {
-            rc = addStreamAction(actions.actions, stdoutMode, STDOUT_FILENO, out.child);
+    Result<std::unique_ptr<IAsyncProcess>> launchAsync(const ProcessSpec& spec, const AsyncContext& context) override {
+        if (auto usable = detail::checkAsyncContext(context); !usable) {
+            return std::unexpected(std::move(usable.error()));
         }
-        if (rc == 0) {
-            rc = addStreamAction(actions.actions, stderrMode, STDERR_FILENO, err.child);
+        auto child = spawnPosixChild(spec);
+        if (!child) {
+            return std::unexpected(std::move(child.error()));
         }
-        // Belt and braces: descriptors other code opened without O_CLOEXEC are not inherited either.
-        if (rc == 0) {
-            rc = posix_spawn_file_actions_addclosefrom_np(&actions.actions, 3);
-        }
-        if (rc == 0 && !spec.workingDirectory.empty()) {
-            rc = posix_spawn_file_actions_addchdir_np(&actions.actions, spec.workingDirectory.c_str());
-        }
-        if (rc != 0) {
-            return std::unexpected(errnoError(rc, "posix_spawn_file_actions"));
-        }
-
-        // The child starts with no blocked signals and default handlers, whatever this process uses.
-        SpawnAttributes attributes;
-        sigset_t none;
-        sigemptyset(&none);
-        sigset_t all;
-        sigfillset(&all);
-        int flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
-        if (spec.killOnClose) {
-            /*
-             * A new session (glibc >= 2.26), which also makes the child the leader of
-             * a new process group whose id is its pid, so kill(-pid) reaches every
-             * process that stays in the group (not one that calls setsid or setpgid).
-             * Unlike a mere new group, the session has no controlling terminal: a
-             * child that opens /dev/tty (ssh and git prompts) gets ENXIO and fails
-             * fast, instead of being stopped by SIGTTIN as a background job of the
-             * IDE's terminal while wait() blocks.
-             */
-            flags |= POSIX_SPAWN_SETSID;
-        }
-        rc = posix_spawnattr_setsigmask(&attributes.attributes, &none);
-        if (rc == 0) {
-            rc = posix_spawnattr_setsigdefault(&attributes.attributes, &all);
-        }
-        if (rc == 0) {
-            rc = posix_spawnattr_setflags(&attributes.attributes, static_cast<short>(flags));
-        }
-        if (rc != 0) {
-            return std::unexpected(errnoError(rc, "posix_spawnattr"));
-        }
-
-        // argv and envp point into these strings, which outlive the posix_spawn call.
-        std::vector<std::string> argvStorage;
-        argvStorage.reserve(spec.arguments.size() + 1);
-        argvStorage.push_back(spec.executable);
-        argvStorage.insert(argvStorage.end(), spec.arguments.begin(), spec.arguments.end());
-        std::vector<char*> argv;
-        for (std::string& argument : argvStorage) {
-            argv.push_back(argument.data());
-        }
-        argv.push_back(nullptr);
-
-        std::vector<std::string> envStorage;
-        if (!spec.cleanEnvironment) {
-            // Reading environ is safe as long as nothing calls setenv concurrently; FrostIDE never does.
-            for (char** entry = environ; entry != nullptr && *entry != nullptr; ++entry) {
-                envStorage.emplace_back(*entry);
-            }
-        }
-        for (const auto& [name, value] : spec.environment) {
-            const std::string prefix = name + "=";
-            std::erase_if(envStorage, [&](const std::string& entry) { return entry.starts_with(prefix); });
-            if (value) {
-                envStorage.push_back(prefix + *value);
-            }
-        }
-        std::vector<char*> envp;
-        for (std::string& entry : envStorage) {
-            envp.push_back(entry.data());
-        }
-        envp.push_back(nullptr);
-
-        // TODO(M1): log the executable, the working directory and the arguments (PLAN.md 3.5).
-        pid_t pid = 0;
-        // posix_spawn, never posix_spawnp: the path is absolute and PATH is not searched.
-        rc = posix_spawn(&pid, spec.executable.c_str(), &actions.actions, &attributes.attributes, argv.data(),
-                         envp.data());
-        if (rc != 0) {
-            // The chdir file action fails with ENOENT or ENOTDIR, indistinguishable from the
-            // executable's own errors, so the directory is checked to say which one failed
-            // (with the same codes as the Windows launcher).
-            struct stat info{};
-            if ((rc == ENOENT || rc == ENOTDIR) && !spec.workingDirectory.empty()) {
-                if (::stat(spec.workingDirectory.c_str(), &info) != 0) {
-                    return fail(ErrorCode::NotFound, std::format("launch '{}': working directory '{}' does not exist",
-                                                                 spec.executable, spec.workingDirectory));
-                }
-                if (!S_ISDIR(info.st_mode)) {
-                    return fail(ErrorCode::InvalidArgument,
-                                std::format("launch '{}': working directory '{}' is not a directory", spec.executable,
-                                            spec.workingDirectory));
-                }
-            }
-            return std::unexpected(errnoError(rc, "launch", spec.executable));
-        }
-        // The child ends close when this function returns, so EOF arrives as soon as the child
-        // and its descendants close theirs.
-        return std::make_unique<PosixProcess>(pid, spec.killOnClose, std::move(in.parent), std::move(out.parent),
-                                              std::move(err.parent));
+        return detail::makeAsyncProcess(std::move(*child), context);
     }
 };
 

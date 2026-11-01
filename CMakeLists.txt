@@ -140,6 +140,26 @@ endif()
 # Threads::Threads (frost::sched). Found here so the imported target is visible from
 # the top-level directory, where FrostLayers resolves namespaced dependencies.
 find_package(Threads REQUIRED)
+# SQLite and xxHash (frost::storage, ADR 0014), found here for the same reason: FrostLayers' deferred
+# graph check runs in the top-level directory and must resolve unofficial::sqlite3::sqlite3 and
+# xxHash::xxhash. Fuzz trees install no vcpkg ports and build no storage, hence the guard
+# (an undefined FROST_FUZZ is false). pugixml (frost::project's XML reader, ADR 0033) likewise.
+if(NOT FROST_FUZZ)
+    find_package(unofficial-sqlite3 CONFIG REQUIRED)
+    find_package(xxHash CONFIG REQUIRED)
+    find_package(pugixml CONFIG REQUIRED)
+endif()
+# asio::asio (header-only, BSL-1.0; frost::io's reactor, ADR 0020), found here for the same reason.
+# Fuzz trees install no vcpkg ports (VCPKG_MANIFEST_INSTALL=OFF) but share the normal tree's
+# installed directory and triplet, so they find the headers the normal configure installed.
+find_package(asio CONFIG)
+if(NOT asio_FOUND)
+    if(FROST_FUZZ)
+        message(FATAL_ERROR "asio not found: fuzz trees use the headers the normal preset installs "
+                            "(configure win-clangcl or linux-clang first; ADR 0020)")
+    endif()
+    message(FATAL_ERROR "asio not found: add it to vcpkg.json and configure through a preset (ADR 0020)")
+endif()
 
 if(FROST_BUILD_TESTS OR FROST_FUZZ)
     enable_testing()
@@ -151,6 +171,12 @@ endif()
 include(FrostFuzz)
 
 add_subdirectory(src)
+if(FROST_BUILD_UI)
+    # Build-time tools and the resources they compile into frost's output directory (ADR 0015).
+    add_subdirectory(tools/theme_compiler)
+    add_subdirectory(tools/icon_baker)
+    add_subdirectory(resources)
+endif()
 if(FROST_BUILD_TESTS)
     add_subdirectory(tests)
 elseif(FROST_FUZZ)

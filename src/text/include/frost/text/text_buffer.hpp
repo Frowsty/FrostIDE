@@ -9,6 +9,7 @@
 #include "frost/core/strong_type.hpp"
 #include "frost/text/detail/piece.hpp"
 #include "frost/text/detail/ref.hpp"
+#include "frost/text/detail/slice_edit.hpp"
 #include "frost/text/positions.hpp"
 #include "frost/text/snapshot.hpp"
 
@@ -19,6 +20,8 @@
 #include <vector>
 
 namespace frost::text {
+
+class Document;
 
 // One edit of a batch (TextBuffer::applyEdits): replace `range` of the text before the batch with
 // `text`. The view must stay valid for the call.
@@ -150,8 +153,9 @@ public:
     /*
      * Makes `earlier` (a snapshot of this buffer) the current text again. O(1); bumps the version.
      * The change covers the whole text: start 0, oldEnd the old size, newEnd the new size, with
-     * points taken from the summaries (m1/undo-anchors makes it precise). Errors: InvalidArgument
-     * if !earlier.sharesStorageWith(current()) (a default Snapshot is foreign). `earlier` may alias
+     * points taken from the summaries. Document::undo/redo report precise changes (ADR 0017);
+     * restore keeps the whole-text change. Errors: InvalidArgument if
+     * !earlier.sharesStorageWith(current()) (a default Snapshot is foreign). `earlier` may alias
      * current().
      */
     [[nodiscard]] Result<TextChange> restore(const Snapshot& earlier) noexcept;
@@ -165,7 +169,19 @@ public:
     [[nodiscard]] Result<void> checkInvariants() const noexcept;
 
 private:
+    friend class Document;
+
     TextBuffer(detail::Ref<detail::Storage> storage, detail::PieceTree tree, Options options) noexcept;
+
+    /*
+     * Applies the slice replacements last to first, for Document's undo and redo (ADR 0017): the
+     * ranges are sorted, non-overlapping char boundaries of the current text; the slices are
+     * pieces of this storage; the result fits maxBufferBytes (it is an earlier state of this
+     * buffer; FROST_ASSERT). Publishes once and bumps the version once if anything changed;
+     * returns the D8 changes in application order. No validation and no append.
+     * O(Σ (B log n + P)). Budget: B5.
+     */
+    [[nodiscard]] std::vector<TextChange> replaySlices(std::span<const detail::SliceEdit> edits) noexcept;
 
     // Validates one edit (checks 1-4) against the current text; `label` prefixes the message.
     [[nodiscard]] Result<void> validate(ByteRange range, std::string_view text, std::string_view label) const noexcept;

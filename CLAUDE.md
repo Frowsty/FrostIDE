@@ -46,9 +46,14 @@ relevant section before starting a slice. `docs/progress.md` is the hand-off log
 4. The commit message ends with a verification footer, e.g. `Verified: win 412/412, wsl 398/398, lint ok`,
    followed by the co-author line.
 
+**Feature-first phase (ADR 0031, user decision 2026-11-01), until U1:** items 1-4 apply with simple functional
+tests only. Design critics, independent reviews, sanitizers, fuzzing, stress runs, perf gates, goldens and `-Full`
+are deferred to the hardening phase; each slice lists what it deferred. Kill every process tree you start.
+
 ## Working agreement (PLAN.md section 6.7)
 - Standing permission (D23): commit, push and merge feature branches after verification and independent review.
 - One branch per vertical slice (`m0/sched`, `m1/piece-tree`, ...). Merge to `main` only with green verification.
-- Code touching core, sched, text, storage or security gets an independent review before merge.
+- Code touching core, sched, text, storage or security gets an independent review before merge (in the
+  feature-first phase, ADR 0031, that review moves to the hardening phase after U1).
 - Update `docs/progress.md` (done, next, blockers, questions) at the end of every session.
 - Stop and ask the user about legal questions, costs, scope changes or weakening any test or budget.

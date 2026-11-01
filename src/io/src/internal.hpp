@@ -141,6 +141,18 @@ void setMaxWaitSliceMsForTesting(std::int64_t milliseconds) noexcept;
 
 #ifdef _WIN32
 
+/*
+ * The 8.3 short spelling of the existing directory `normalized` (a normalised Windows path), without the
+ * \\?\ prefix, when it fits a process's current directory (fewer than MAX_PATH - 12 UTF-16 units); nullopt
+ * when the volume has no short names or the result is still too long. process_win.cpp retries
+ * CreateProcessW with it when a long working directory is refused. Thread-safe.
+ */
+[[nodiscard]] std::optional<std::wstring> shortWorkingDirectory(const std::string& normalized);
+
+// Tests only: while true, the Windows launcher treats a working directory of MAX_PATH - 12 units or more as
+// refused by CreateProcessW (as with LongPathsEnabled = 0), so the short-name fallback runs on every machine.
+void setRefuseLongWorkingDirectoryForTesting(bool refuse) noexcept;
+
 // Owns a Win32 HANDLE (either INVALID_HANDLE_VALUE or nullptr means "none").
 class UniqueHandle {
 public:

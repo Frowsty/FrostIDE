@@ -16,7 +16,8 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 
-#include "internal.hpp" // detail::maxWaitSliceMs and its test setter.
+#include "internal.hpp"    // detail::maxWaitSliceMs and its test setter.
+#include "process_env.hpp" // childSpec, pattern, ProcessWatch.
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -24,6 +25,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <memory>
@@ -63,17 +65,11 @@ using frost::ErrorCode;
 using frost::io::ProcessResult;
 using frost::io::ProcessSpec;
 using frost::io::Stdio;
+using frost::test::childPath;
+using frost::test::childSpec;
+using frost::test::pattern;
+using frost::test::ProcessWatch;
 using frost::test::ScratchDir;
-
-// The helper's absolute path, normalised (CMake hands it over with forward slashes).
-std::string childPath() { return frost::io::normalizePath(FROST_IO_TEST_CHILD).value(); }
-
-ProcessSpec childSpec(std::vector<std::string> arguments) {
-    ProcessSpec spec;
-    spec.executable = childPath();
-    spec.arguments = std::move(arguments);
-    return spec;
-}
 
 frost::Result<ProcessResult> run(const ProcessSpec& spec, std::string_view stdinData = {},
                                  frost::IClock::Duration timeout = 120s) {
@@ -138,14 +134,6 @@ std::string rawValue(std::string_view output, std::string_view prefix) {
     return "<missing>: " + std::string(output);
 }
 #endif
-
-std::string pattern(std::size_t size) {
-    std::string out(size, '\0');
-    for (std::size_t i = 0; i < size; ++i) {
-        out[i] = static_cast<char>(i % 251);
-    }
-    return out;
-}
 
 void setParentVariable(const char* name, const char* value) {
 #ifdef _WIN32
@@ -245,6 +233,32 @@ TEST(RealProcessLauncher, ExecutableInADirectoryWithSpacesAndNonAscii) {
     ASSERT_EQ(result->exitCode, 0) << "the copied child did not run: " << result->stderrBytes;
     EXPECT_EQ(reportedArguments(result->stdoutBytes, "crt"), (std::vector<std::string>{"x y"}));
 }
+
+#ifdef _WIN32
+// Whether two spellings name the same directory: volume serial number and 128-bit file id.
+bool sameDirectory(const std::string& a, const std::string& b) {
+    const auto identity = [](const std::string& path) -> std::optional<FILE_ID_INFO> {
+        auto wide = frost::io::toWin32Path(path);
+        if (!wide) {
+            return std::nullopt;
+        }
+        const HANDLE handle =
+            CreateFileW(wide->c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return std::nullopt;
+        }
+        FILE_ID_INFO info{};
+        const BOOL ok = GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof(info));
+        CloseHandle(handle);
+        return ok ? std::optional<FILE_ID_INFO>(info) : std::nullopt;
+    };
+    const auto first = identity(a);
+    const auto second = identity(b);
+    return first && second && first->VolumeSerialNumber == second->VolumeSerialNumber &&
+           std::memcmp(first->FileId.Identifier, second->FileId.Identifier, sizeof(first->FileId.Identifier)) == 0;
+}
+#endif
 
 // A directory under `root` whose path is longer than Windows' MAX_PATH (260 UTF-16 units).
 std::string deepDirectory(const std::string& root) {
@@ -489,8 +503,51 @@ TEST(RealProcessLauncher, WorkingDirectoryBeyondMaxPath) {
     }
 #endif
     ASSERT_TRUE(result.has_value()) << result.error().describe();
+#ifdef _WIN32
+    // The child may run in the directory's 8.3 short spelling (the fallback in process_win.cpp), so compare
+    // identities rather than strings.
+    EXPECT_TRUE(sameDirectory(reportedValue(result->stdoutBytes, "cwd"), deep)) << result->stdoutBytes;
+#else
     EXPECT_EQ(frost::io::normalizePath(reportedValue(result->stdoutBytes, "cwd")).value(), deep) << result->stdoutBytes;
+#endif
 }
+
+#ifdef _WIN32
+// The fallback runs whatever LongPathsEnabled says: the test hook makes the launcher treat the long
+// directory as refused, so the 8.3 retry is what makes the launch succeed.
+TEST(RealProcessLauncher, LongWorkingDirectoryFallsBackToTheShortName) {
+    const ScratchDir dir("proc-short-cwd");
+    const std::string deep = deepDirectory(dir.path());
+    struct Reset {
+        ~Reset() { frost::io::detail::setRefuseLongWorkingDirectoryForTesting(false); }
+    } reset;
+    frost::io::detail::setRefuseLongWorkingDirectoryForTesting(true);
+    ProcessSpec spec = childSpec({"cwd"});
+    spec.workingDirectory = deep;
+    const auto result = run(spec);
+    const auto shortened = frost::io::detail::shortWorkingDirectory(frost::io::normalizePath(deep).value());
+    if (!shortened) {
+        // The volume makes no 8.3 names (fsutil 8dot3name): the refusal must still be explained.
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << result.error().describe();
+        EXPECT_NE(result.error().message().find("MAX_PATH"), std::string::npos) << result.error().describe();
+        GTEST_SKIP() << "the scratch volume has no 8.3 names";
+    }
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    const std::string reported = reportedValue(result->stdoutBytes, "cwd");
+    EXPECT_LT(reported.size(), std::size_t{MAX_PATH}) << reported;
+    EXPECT_TRUE(sameDirectory(reported, deep)) << reported;
+}
+
+TEST(RealProcessLauncher, ShortWorkingDirectoryOfAShortPathIsItsOwnSpelling) {
+    const ScratchDir dir("proc-short-name");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.path()).has_value());
+    const auto shortened = frost::io::detail::shortWorkingDirectory(dir.path());
+    ASSERT_TRUE(shortened.has_value());
+    EXPECT_FALSE(shortened->starts_with(L"\\\\?\\"));
+    EXPECT_TRUE(sameDirectory(frost::io::fromWide(*shortened).value(), dir.path()));
+}
+#endif
 
 TEST(RealProcessLauncher, WorkingDirectoryThatIsAFile) {
     const ScratchDir dir("proc-cwd-file");
@@ -844,66 +901,6 @@ TEST(RealProcessLauncher, PipesAreUnpredictableAndPrivate) {
     EXPECT_NE(rawValue(again->stdoutBytes, "name:"), name);
 }
 #endif
-
-// Observes a process's exit without being its parent (a SYNCHRONIZE handle or a pidfd).
-// Opened while the process is known to be alive, so the id cannot have been reused.
-class ProcessWatch {
-public:
-    explicit ProcessWatch(frost::io::ProcessId pid) {
-#ifdef _WIN32
-        m_handle = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid);
-#else
-        m_fd = static_cast<int>(syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0));
-#endif
-    }
-    ~ProcessWatch() {
-#ifdef _WIN32
-        if (m_handle != nullptr) {
-            CloseHandle(m_handle);
-        }
-#else
-        if (m_fd >= 0) {
-            close(m_fd);
-        }
-#endif
-    }
-    ProcessWatch(const ProcessWatch&) = delete ("owns a handle");
-    ProcessWatch& operator=(const ProcessWatch&) = delete ("owns a handle");
-
-    [[nodiscard]] bool valid() const noexcept {
-#ifdef _WIN32
-        return m_handle != nullptr;
-#else
-        return m_fd >= 0;
-#endif
-    }
-
-    // Whether the process has ended, or ends within `timeout`.
-    [[nodiscard]] bool exitsWithin(std::chrono::milliseconds timeout) const {
-#ifdef _WIN32
-        return WaitForSingleObject(m_handle, static_cast<DWORD>(timeout.count())) == WAIT_OBJECT_0;
-#else
-        pollfd entry{m_fd, POLLIN, 0};
-        return poll(&entry, 1, static_cast<int>(timeout.count())) == 1;
-#endif
-    }
-
-    // Cleanup for failed expectations and for processes the test owns.
-    void kill() const {
-#ifdef _WIN32
-        TerminateProcess(m_handle, 1);
-#else
-        syscall(SYS_pidfd_send_signal, m_fd, SIGKILL, nullptr, 0);
-#endif
-    }
-
-private:
-#ifdef _WIN32
-    HANDLE m_handle = nullptr;
-#else
-    int m_fd = -1;
-#endif
-};
 
 // Reads the child's "grandchild <pid>" line from its stdout pipe; 0 if it never comes.
 frost::io::ProcessId readGrandchildPid(frost::io::IProcess& process) {

@@ -38,7 +38,8 @@
 // Not in this slice:
 // TODO(M1): MainThreadDispatcher (Qt event per frame) lives in src/ui; it will implement IScheduler's
 //           enqueue for a "main thread" target.
-// TODO(M1): the asio reactor (src/io) completes I/O awaiters by calling enqueue() from its threads.
+// The asio reactor (src/io, ADR 0020) completes I/O awaiters by calling enqueue() from its threads
+// (file-watch wakeups, async child pipes); ThreadPool accepts that until its shutdown begins.
 #pragma once
 
 #include "frost/core/assert.hpp"

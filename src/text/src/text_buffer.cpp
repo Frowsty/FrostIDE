@@ -2,7 +2,7 @@
 //
 // TextBuffer (frost/text/text_buffer.hpp): loading, validation in the shared check order, edits as
 // split + split + concat + concat over the piece tree, typing coalescing, D8 change normalisation,
-// batches and restore.
+// batches, restore, and the slice replay behind Document's undo and redo (ADR 0017).
 
 #include "frost/text/text_buffer.hpp"
 
@@ -38,18 +38,20 @@ int byteOrAbsent(const detail::PieceTree& tree, std::uint64_t i) noexcept {
  *   start rule: if s > 0, O[s-1] == CR and (O[s] == LF or N[s] == LF), then s -= 1;
  *   end rule:   if O[eo] == LF and (O[eo-1] == CR or N[en-1] == CR), then eo += 1 and en += 1,
  *               tested with the requested bounds (before the start rule).
- * N's bytes at the bounds come from `text` or, when it is empty, from O beside the range, so the
- * rules take at most four byte reads of O; the points take three point queries.
+ * N's bytes at the bounds come from the new text or, when it is empty, from O beside the range, so
+ * the rules take at most four byte reads of O; the points take three point queries. The new text
+ * is given by its size and its first and last bytes (0..255, ignored when newBytes is 0), which
+ * both a string (edits) and a slice of pieces (Document's undo and redo, replaySlices) provide.
  */
 TextChange normalisedChange(const detail::PieceTree& before, const detail::PieceTree& after, std::uint64_t a,
-                            std::uint64_t b, std::string_view text) noexcept {
+                            std::uint64_t b, std::uint64_t newBytes, int firstNewByte, int lastNewByte) noexcept {
     std::uint64_t s = a;
     std::uint64_t eo = b;
-    std::uint64_t en = a + text.size();
+    std::uint64_t en = a + newBytes;
     const int oldBeforeStart = a > 0 ? byteOrAbsent(before, a - 1) : -1;
     const int oldAtEnd = byteOrAbsent(before, b);
-    const int newAtStart = !text.empty() ? static_cast<unsigned char>(text.front()) : oldAtEnd;
-    const int newBeforeEnd = !text.empty() ? static_cast<unsigned char>(text.back()) : oldBeforeStart;
+    const int newAtStart = newBytes != 0 ? firstNewByte : oldAtEnd;
+    const int newBeforeEnd = newBytes != 0 ? lastNewByte : oldBeforeStart;
     if (s > 0 && oldBeforeStart == '\r' && (byteOrAbsent(before, a) == '\n' || newAtStart == '\n')) {
         --s;
     }
@@ -64,6 +66,14 @@ TextChange normalisedChange(const detail::PieceTree& before, const detail::Piece
                       detail::pointAt(before, s),
                       detail::pointAt(before, eo),
                       detail::pointAt(after, en)};
+}
+
+// The change of replacing [a, b) of `before` by `text`, giving `after`.
+TextChange normalisedChange(const detail::PieceTree& before, const detail::PieceTree& after, std::uint64_t a,
+                            std::uint64_t b, std::string_view text) noexcept {
+    return text.empty() ? normalisedChange(before, after, a, b, 0, -1, -1)
+                        : normalisedChange(before, after, a, b, text.size(), static_cast<unsigned char>(text.front()),
+                                           static_cast<unsigned char>(text.back()));
 }
 
 // The empty change of a no-op edit at `offset`.
@@ -224,6 +234,39 @@ Result<std::vector<TextChange>> TextBuffer::applyEdits(std::span<const Edit> edi
         changes.push_back(normalisedChange(tree, after, edit.range.begin.value(), edit.range.end.value(), edit.text));
         tree = std::move(after);
     }
+    if (!changes.empty()) {
+        m_current = Snapshot(std::move(tree), m_storage, ++m_version);
+    }
+    return changes;
+}
+
+std::vector<TextChange> TextBuffer::replaySlices(std::span<const detail::SliceEdit> edits) noexcept {
+    std::vector<TextChange> changes;
+    changes.reserve(edits.size());
+    detail::PieceTree tree = m_current.pieceTree();
+    // Last to first, as applyEdits: the ranges still to apply keep their coordinates.
+    for (std::size_t i = edits.size(); i-- > 0;) {
+        const detail::SliceEdit& edit = edits[i];
+        const std::uint64_t newBytes = edit.slice.summary().bytes;
+        if (edit.range.empty() && newBytes == 0) {
+            continue;
+        }
+        auto [left, rest] = detail::splitAtByte(tree, edit.range.begin.value());
+        const detail::PieceTree right = detail::splitAtByte(rest, edit.range.size()).second;
+        detail::PieceTree after = detail::PieceTree::concat(detail::PieceTree::concat(left, edit.slice), right);
+        int first = -1;
+        int last = -1;
+        if (newBytes != 0) {
+            const detail::Piece& front = *edit.slice.front();
+            const detail::Piece& back = *edit.slice.back();
+            first = static_cast<unsigned char>(front.data[0]);
+            last = static_cast<unsigned char>(back.data[back.size() - 1]);
+        }
+        changes.push_back(
+            normalisedChange(tree, after, edit.range.begin.value(), edit.range.end.value(), newBytes, first, last));
+        tree = std::move(after);
+    }
+    FROST_ASSERT(tree.summary().bytes <= m_options.maxBufferBytes);
     if (!changes.empty()) {
         m_current = Snapshot(std::move(tree), m_storage, ++m_version);
     }

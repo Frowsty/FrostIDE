@@ -4,6 +4,8 @@
 - Date: 2026-10-31
 - Amended: 2026-11-01 (IProcessLauncher: `ProcessSpec::imagePathForm` and `ProcessSpec::desktop`; test
   children on a private desktop with hard-error boxes off)
+- Amended: 2026-11-01 (ADR 0020: the reactor, file watchers, async pipes, the listing diagnostics, the 8.3
+  working-directory fallback; async `IFileSystem` variants are not planned)
 - Plan reference: PLAN.md sections 3.2 (layers), 3.3 (errors), 3.5 (trust model: absolute tool paths),
   6.2 (deterministic doubles), 6.5 (wide Win32 APIs only); milestone M0
 
@@ -28,7 +30,8 @@ Constraints that shaped the design:
 - The API speaks UTF-8 `std::string`. Conversion to and from UTF-16 is strict: ill-formed UTF-8 (per Unicode
   table 3-7: overlongs, surrogates, > U+10FFFF, truncation) and unpaired surrogates fail with
   `InvalidArgument` naming the offset; nothing is replaced with U+FFFD. Directory entries whose UTF-16 name
-  is not valid Unicode are skipped by `listDirectory` (TODO(M1): report them).
+  is not valid Unicode are skipped by `listDirectory`; `listDirectoryWithDiagnostics` (ADR 0020) reports
+  them, and POSIX names that are not valid UTF-8, which both calls list as raw bytes.
 - Every path given to `IFileSystem` or `IProcessLauncher` must be absolute in the platform's syntax; relative
   paths fail with `InvalidArgument` and are never resolved against the current directory. Windows accepts
   drive (`C:\`), UNC (`\\server\share\`) and verbatim (`\\?\`) roots; drive-relative (`C:x`), rooted (`\x`)
@@ -57,7 +60,8 @@ the same way on both platforms ("is a directory" / "is not a directory" → Inva
 directory where a file is → AlreadyExists).
 
 ### IFileSystem
-- Synchronous and blocking (callers run it on scheduler threads; TODO(M1): async variants on the reactor).
+- Synchronous and blocking (callers run it on scheduler threads). Async variants on the reactor are not
+  planned (ADR 0020): epoll cannot make regular-file I/O asynchronous, so callers hop to `Lane::Background`.
   Operations: `readFile`, `writeFileAtomic`, `status` (type, size, mtime), `listDirectory` (sorted by name),
   `createDirectories`, `removeFile`, `removeDirectory` (empty only), `exists`.
 - `writeFileAtomic` writes a temp file `.<name>.frost-tmp-<pid>-<n>` in the target's directory (created
@@ -80,8 +84,8 @@ directory where a file is → AlreadyExists).
   non-owner entry granted, because named entries may deny. Other extended attributes are not carried
   over. A read-only target is replaced on POSIX (rename needs write access to the directory only) and
   keeps its mode; Windows refuses it with PermissionDenied. Windows does not carry over attributes, ACLs,
-  alternate streams or hard links (the SaveManager owns that policy in M1). TODO(M1): sweep stale temp
-  files left by crashes.
+  alternate streams or hard links (the SaveManager owns that policy in M1). TODO(M1): the SaveManager
+  slice sweeps stale temp files left by crashes (ADR 0020: scanTree and the watchers hide them meanwhile).
 - `readFile` reads regular files only: FIFOs, sockets and devices fail with InvalidArgument without
   blocking (POSIX opens with `O_NONBLOCK | O_NOCTTY` and checks `fstat` before reading; Windows checks
   `GetFileType`). Sockets, which refuse `open` with ENXIO, are reported the same way rather than as
@@ -176,8 +180,9 @@ directory where a file is → AlreadyExists).
   (`wait()` with no timeout, and the blocking `readStdout`, `readStderr` and `writeStdin`) still block in
   one call: `WaitForSingleObject(INFINITE)` or `GetOverlappedResult(..., TRUE)` on Windows, a blocking
   `waitid` or `poll(-1)` on POSIX.
-- Not yet: logging of the resolved launch (PLAN.md 3.5; TODO(M1) once core has logging), async pipes on the
-  reactor (TODO(M1)), supervision with restart (TODO(M3), the M3 supervisor).
+- Async pipes on the reactor: done (`launchAsync`, `IAsyncProcess`; ADR 0020).
+- Not yet: logging of the resolved launch (PLAN.md 3.5; TODO(M1) once core has logging, in the crash and
+  logging slice, PLAN.md I3), supervision with restart (TODO(M3), the M3 supervisor).
 
 ### Doubles
 `MemFs` and `ScriptedProcessLauncher` live in `frost_io` itself, next to the interfaces they implement, so
@@ -206,9 +211,9 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
 
 ## Consequences
 - Long paths work in frost::io on every Windows machine. A child's *current directory* beyond MAX_PATH is
-  still refused by Windows when `LongPathsEnabled = 0`; the launcher reports that as InvalidArgument with an
-  explanation (TODO(M1): fall back to the 8.3 short name). The Windows loader refuses a plain path
-  longer than 250 UTF-16 units for any DLL that embeds an isolation-aware manifest (RT_MANIFEST
+  still refused by Windows when `LongPathsEnabled = 0`; the launcher first retries with the directory's 8.3
+  short name when the volume has one (ADR 0020), and otherwise reports InvalidArgument with an
+  explanation. The Windows loader refuses a plain path longer than 250 UTF-16 units for any DLL that embeds an isolation-aware manifest (RT_MANIFEST
   resource 2), as Qt's DLLs and plugins and clang's ASan runtime do, whatever `LongPathsEnabled` says
   (measured with Qt 6.12.0 with the switch off and on); the `\\?\` form of the same path loads at any
   length. frost therefore starts through a small launcher, frost.exe, that loads the application

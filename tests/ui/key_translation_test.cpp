@@ -20,9 +20,11 @@
 #include <QString>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace frost::ui {
 namespace {
@@ -385,6 +387,12 @@ TEST(KeyTranslation, FallbackCodesWithoutAScanCode) {
                          Case{SimulatedLayoutId::EnUs, Qt::Key_F24, Qt::NoModifier, Code::F24},
                          Case{SimulatedLayoutId::EnUs, Qt::Key_Slash, Qt::KeypadModifier, Code::NumpadDivide},
                          Case{SimulatedLayoutId::EnUs, Qt::Key_Slash, Qt::NoModifier, Code::Slash},
+                         // The 11 US punctuation keys: the key that types the character at base (ADR 0030).
+                         Case{SimulatedLayoutId::DeDe, Qt::Key_Minus, Qt::ControlModifier, Code::Slash},
+                         Case{SimulatedLayoutId::DeDe, Qt::Key_Comma, Qt::ControlModifier, Code::Comma},
+                         Case{SimulatedLayoutId::FrFr, Qt::Key_Apostrophe, Qt::ControlModifier, Code::Digit4},
+                         Case{SimulatedLayoutId::FrFr, Qt::Key_Minus, Qt::ControlModifier, Code::Digit6},
+                         Case{SimulatedLayoutId::FrFr, Qt::Key_Comma, Qt::ControlModifier, Code::KeyM},
                          Case{SimulatedLayoutId::EnUs, Qt::Key_3, Qt::KeypadModifier, Code::Numpad3},
                          Case{SimulatedLayoutId::EnUs, Qt::Key_Enter, Qt::KeypadModifier, Code::NumpadEnter},
                          Case{SimulatedLayoutId::EnUs, Qt::Key_Shift, Qt::ShiftModifier, Code::ShiftLeft},
@@ -438,14 +446,57 @@ TEST(KeyTranslation, FallbackCodesForShiftedCharacters) {
     // The base level wins over Shift, and dead levels never match: de '^' is a dead base.
     const Rig de(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
     EXPECT_EQ(de.press(Qt::Key_AsciiCircum, Qt::NoModifier, 0).code, Code::Unknown);
-    EXPECT_EQ(de.press(Qt::Key_Slash, Qt::ControlModifier, 0).code, Code::Unknown)
-        << "the 11 US punctuation keys go through codeFor(); de has no Slash key";
+    EXPECT_EQ(de.press(Qt::Key_Slash, Qt::ControlModifier, 0).code, Code::Slash)
+        << "no de key types '/' at base, so codeFor(Slash): the '-' key after rule 3.6 (ADR 0030)";
     // Logical keys follow: Ctrl+Shift+Key_Question is Ctrl+Shift+Slash on en-US.
     const Rig us;
     const KeyEvent question = us.press(Qt::Key_Question, Qt::ControlModifier | Qt::ShiftModifier, 0);
     const auto stroke = input::strokeFromEvent(question, *us.layout);
     ASSERT_TRUE(stroke.has_value());
     EXPECT_EQ(*stroke, (input::Stroke{Modifier::Ctrl | Modifier::Shift, input::Key::Slash}));
+}
+
+// A synthesized press of one of the 11 US punctuation characters (QTest, the automation
+// endpoint: no scan code) resolves to the key that types the character at base, so it
+// matches as the hardware key does: the stroke equals SimulatedKeyboard's Windows Ctrl press
+// of that key, on every simulated layout (de Ctrl+'-' is Comment Line either way).
+TEST(KeyTranslation, SynthesizedPunctuationMatchesHardware) {
+    std::size_t checked = 0;
+    for (const SimulatedLayoutId id :
+         {SimulatedLayoutId::EnUs, SimulatedLayoutId::DeDe, SimulatedLayoutId::PlPl, SimulatedLayoutId::FrFr}) {
+        const Rig rig(KeyPlatform::Windows, id);
+        for (const char ch : std::string_view("`-=[]\\;',./")) {
+            const auto c = static_cast<char32_t>(static_cast<unsigned char>(ch));
+            bool typedAtBase = false;
+            for (std::size_t i = input::index(Code::KeyA); i <= input::index(Code::IntlYen); ++i) {
+                const input::KeyLevels l = rig.layout->levels(static_cast<Code>(i));
+                typedAtBase = typedAtBase || (l.base == c && !l.dead(input::Level::Base));
+            }
+            if (!typedAtBase) {
+                continue;
+            }
+            const KeyEvent e = rig.press(static_cast<int>(c), Qt::ControlModifier, 0);
+            ASSERT_TRUE(e.codeFromFallback) << ch;
+            EXPECT_EQ(rig.layout->levels(e.code).base, c) << ch << " on " << rig.layout->id();
+
+            input::SimulatedKeyboard keyboard(*rig.layout, KeyPlatform::Windows, rig.clock);
+            const std::vector<KeyEvent> events = keyboard.chord({Code::ControlLeft}, e.code);
+            const auto hardware =
+                std::ranges::find_if(events, [&](const KeyEvent& h) { return h.code == e.code && h.isPress(); });
+            ASSERT_NE(hardware, events.end());
+            const auto stroke = input::strokeFromEvent(e, *rig.layout);
+            ASSERT_TRUE(stroke.has_value()) << ch << " on " << rig.layout->id();
+            EXPECT_EQ(stroke, input::strokeFromEvent(*hardware, *rig.layout)) << ch << " on " << rig.layout->id();
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 30U) << "en-US and pl-PL type all 11 at base, de-DE 3, fr-FR 5";
+    // The rule 3.6 case itself: de Ctrl+'-' is Ctrl+Slash, both synthesized and from the key.
+    const Rig de(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
+    EXPECT_EQ(input::strokeFromEvent(de.press(Qt::Key_Minus, Qt::ControlModifier, 0), *de.layout),
+              (input::Stroke{Modifier::Ctrl, input::Key::Slash}));
+    EXPECT_EQ(input::strokeFromEvent(de.press(Qt::Key_Minus, Qt::ControlModifier, de.scanOf(Code::Slash)), *de.layout),
+              (input::Stroke{Modifier::Ctrl, input::Key::Slash}));
 }
 
 // The AltGr key's own press on a Windows AltGr layout is AltGr, not Alt (as SimulatedKeyboard

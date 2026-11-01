@@ -189,8 +189,8 @@ public:
 
     // The base character of the preferred code mapped to `key` (a code mapped by letter or
     // character dispatch beats a positional one; within a class, Code order decides), or
-    // 0 when the key is unreachable or is not a writing key. Example: German Key::Minus has
-    // the label '-' (code Slash), not 'ß'. O(1).
+    // 0 when the key is unreachable or is not a writing key. Example: French Key::Comma has
+    // the label ',' (code KeyM, dispatched), not ';' (code Comma, which is Key::Semicolon). O(1).
     [[nodiscard]] constexpr char32_t labelFor(Key key) const noexcept {
         return index(key) < kKeyCount ? m_labelFor[index(key)] : 0;
     }
@@ -318,6 +318,21 @@ protected:
  *          None; on IntlBackslash, IntlRo and IntlYen, None.
  *      3.5 a table with no Latin letter at base on any letter-area key (a non-Latin
  *          layout) maps every writing key positionally (Intl* keys are None).
+ *      3.6 positional preference at the 11 US punctuation positions (ADR 0030): after
+ *          3.1-3.5, character dispatch on a punctuation position stays only where it is the
+ *          only way to reach its key. Repeated until nothing changes, over the positions
+ *          Minus..Slash in Code order: a position p whose key K' came from character
+ *          dispatch (3.3), with K' not its own positional key K and not a letter (French
+ *          'm' on Semicolon is never re-pointed), maps to K instead when another writing
+ *          code also maps to K'. German '-' on Slash is then Key::Slash (Ctrl+- is Comment
+ *          Line, as on JetBrains' Linux mapping) because 'ß' on Minus keeps Key::Minus;
+ *          French ';' on Comma stays Semicolon because 'm' is on Semicolon. Properties: no
+ *          key loses reachability (K' keeps the other code, K gains p); at the fixpoint
+ *          every remaining punctuation dispatch is the only code of its key; each change
+ *          clears one dispatch flag, so there are at most 11 changes and 12 passes; ties go
+ *          by Code order (when two positions dispatch to the same otherwise unreached key,
+ *          the first one is re-pointed). It is a no-op in LettersByLabel mode and on
+ *          non-Latin tables, where nothing is dispatched.
  *   4. LettersByLabel mode: writing keys are positional; logicalKey() lets a hint letter win,
  *      and dispatches a letter-area key with a punctuation hint by character (or to None).
  * Two physical keys may map to the same logical key (harmless); a logical key no code maps
@@ -469,6 +484,32 @@ constexpr detail::LayoutError detail::computeLayout(LayoutTable& table, std::str
             // Rule 3.4, Intl* keys: None.
         }
         table.m_logical[i] = key;
+    }
+
+    // Rule 3.6: re-point a punctuation position's character dispatch when another code
+    // already reaches that key. Every change clears a dispatch flag, so the loop ends.
+    constexpr std::array kPunctuationPositions = {
+        Code::Minus, Code::Equal,     Code::BracketLeft, Code::BracketRight, Code::Backslash, Code::Semicolon,
+        Code::Quote, Code::Backquote, Code::Comma,       Code::Period,       Code::Slash};
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const Code p : kPunctuationPositions) {
+            const std::size_t pi = index(p);
+            const Key dispatchedKey = table.m_logical[pi];
+            const Key own = positional(p);
+            if (!dispatched[pi] || dispatchedKey == own || isLetterKey(dispatchedKey)) {
+                continue;
+            }
+            bool reachedElsewhere = false;
+            for (std::size_t q = index(Code::KeyA); q <= index(Code::IntlYen) && !reachedElsewhere; ++q) {
+                reachedElsewhere = q != pi && table.m_logical[q] == dispatchedKey;
+            }
+            if (reachedElsewhere) {
+                table.m_logical[pi] = own;
+                dispatched[pi] = false;
+                changed = true;
+            }
+        }
     }
 
     // Reverse arrays: the preferred code per key (dispatched beats positional; then Code order).

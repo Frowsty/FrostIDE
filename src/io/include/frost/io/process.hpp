@@ -21,14 +21,16 @@
  *     explicit PROC_THREAD_ATTRIBUTE_HANDLE_LIST; POSIX opens every descriptor
  *     with O_CLOEXEC and the child closes everything above 2 before exec.
  *   - TODO(M1): log the resolved executable, working directory and arguments
- *     (PLAN.md 3.5 requires it) once frost::core has logging.
+ *     (PLAN.md 3.5 requires it) once frost::core has logging; that arrives with
+ *     the crash and logging slice (PLAN.md I3), where ADR 0020 moved this item.
  *
  * Pipes. Streams configured as Stdio::Pipe are connected to the IProcess:
- * writeStdin/readStdout/readStderr block until done (the asio reactor that
- * makes them asynchronous arrives in M1). A caller that reads only one pipe
- * while the child fills the other deadlocks; communicate() and
+ * writeStdin/readStdout/readStderr block until done. A caller that reads only
+ * one pipe while the child fills the other deadlocks; communicate() and
  * runToCompletion() drain all pipes together and are the safe default.
- * TODO(M1): async pipe I/O on the reactor (IOCP / epoll).
+ * launchAsync() starts the same child with its pipes on the asio reactor
+ * (IOCP / epoll) instead: IAsyncProcess (async_process.hpp, ADR 0020) reads,
+ * writes and waits in coroutines that never block a thread.
  *
  * Process tree. With killOnClose (the default) the child is contained: on
  * Windows it starts inside a new Job Object with
@@ -61,6 +63,9 @@
 
 namespace frost::io {
 
+class IAsyncProcess; // async_process.hpp
+struct AsyncContext; // async_process.hpp
+
 // How one of the child's standard streams is connected.
 enum class Stdio : unsigned char {
     // The parent's handle, or the null device if the parent has none that a child could
@@ -92,7 +97,10 @@ enum class ImagePathForm : unsigned char {
 struct ProcessSpec {
     std::string executable{};             // Absolute path (UTF-8).
     std::vector<std::string> arguments{}; // argv[1..]; argv[0] is always the executable path.
-    std::string workingDirectory{};       // Absolute path, or empty to use the parent's current directory.
+    // Absolute path, or empty to use the parent's current directory. Windows: a directory of MAX_PATH - 12
+    // UTF-16 units or more that CreateProcessW refuses (LongPathsEnabled = 0) is retried with its 8.3 short
+    // spelling when the volume has one, and the child then sees that spelling as its current directory.
+    std::string workingDirectory{};
 
     // Start from an empty environment instead of a copy of the parent's.
     bool cleanEnvironment = false;
@@ -224,6 +232,15 @@ public:
      * processes), IoError. Thread-safe.
      */
     [[nodiscard]] virtual Result<std::unique_ptr<IProcess>> launch(const ProcessSpec& spec) = 0;
+
+    /*
+     * Starts a process as launch() does, with its pipes bound to context.reactor and its coroutines
+     * resuming on context.scheduler (async_process.hpp). Errors: those of launch(); InvalidArgument also
+     * for a caller-driven scheduler (the real launchers; a SimExecutor cannot take wakeups from reactor
+     * threads); Cancelled (the reactor is shut down). Thread-safe.
+     */
+    [[nodiscard]] virtual Result<std::unique_ptr<IAsyncProcess>> launchAsync(const ProcessSpec& spec,
+                                                                             const AsyncContext& context) = 0;
 
 protected:
     constexpr IProcessLauncher() noexcept = default;

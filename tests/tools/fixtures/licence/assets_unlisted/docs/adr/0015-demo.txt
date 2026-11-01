@@ -1,0 +1,1 @@
+Synthetic ADR placeholder for the licensecheck asset gate fixtures.

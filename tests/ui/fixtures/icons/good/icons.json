@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "icons": [
+    {"id": "test.full", "source": "full.svg", "sizes": [16], "tint": "Icon.Default"},
+    {"id": "test.line", "source": "line.svg", "sizes": [14, 16, 20], "tint": "Icon.Accent", "strokePx": {"14": 1.0, "16": 1.0, "20": 2.0}},
+    {"id": "test.ring", "source": "ring.svg", "sizes": [16, 20], "tint": "Icon.Error", "strokePx": {"16": 1.0, "20": 1.25}},
+    {"id": "test.swatch", "source": "swatch.svg", "sizes": [16], "tint": null, "dark": "swatch_dark.svg"}
+  ]
+}

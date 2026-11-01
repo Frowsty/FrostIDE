@@ -1,0 +1,17 @@
+generated-on windows 2026-11-01
+cp437 bmp scalars=63488 encodable=256 fnv1a64=17ca606c8b360a09
+cp850 bmp scalars=63488 encodable=256 fnv1a64=680834d48881b723
+cp866 bmp scalars=63488 encodable=256 fnv1a64=2d90d6b61ab5e28f
+cp874 bmp scalars=63488 encodable=248 fnv1a64=ff063ad1e8d4293d
+cp932 bmp scalars=63488 encodable=9398 fnv1a64=f275947bc0b05db7
+cp1250 bmp scalars=63488 encodable=256 fnv1a64=ff5c89c4ef344555
+cp1251 bmp scalars=63488 encodable=256 fnv1a64=09eebab835fc54e7
+cp1252 bmp scalars=63488 encodable=256 fnv1a64=f3a752f369c2b6d7
+cp1253 bmp scalars=63488 encodable=253 fnv1a64=af4f2ac5e7497b15
+cp1254 bmp scalars=63488 encodable=256 fnv1a64=706194a34b777bf1
+cp1256 bmp scalars=63488 encodable=256 fnv1a64=064a0a860c08d1d3
+cp1257 bmp scalars=63488 encodable=254 fnv1a64=7bd6b665b84b1061
+cp20866 bmp scalars=63488 encodable=256 fnv1a64=03c6411492fde819
+cp28591 bmp scalars=63488 encodable=256 fnv1a64=5c46791712292b2d
+cp28592 bmp scalars=63488 encodable=256 fnv1a64=c3ce94ed95577eff
+cp28605 bmp scalars=63488 encodable=256 fnv1a64=aeddfd869809d395

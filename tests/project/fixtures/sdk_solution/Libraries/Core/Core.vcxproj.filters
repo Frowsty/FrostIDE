@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{0A000000-0000-4000-8000-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Detail">
+      <UniqueIdentifier>{0A000000-0000-4000-8000-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{0A000000-0000-4000-8000-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Shared">
+      <UniqueIdentifier>{0A000000-0000-4000-8000-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Empty Filter">
+      <UniqueIdentifier>{0A000000-0000-4000-8000-000000000005}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\detail\strings.cpp">
+      <Filter>Source Files\Detail</Filter>
+    </ClCompile>
+    <ClInclude Include="include\core\core.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\common.h">
+      <Filter>Header Files\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="generated\config.h">
+      <Filter>Generated\Config</Filter>
+    </ClInclude>
+    <Natvis Include="core.natvis" />
+  </ItemGroup>
+</Project>

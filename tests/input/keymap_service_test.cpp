@@ -8,6 +8,7 @@
 #include "frost/input/keymap_service.hpp"
 #include "frost/input/simulated_keyboard.hpp"
 
+#include "input/support/synthetic_layouts.hpp"
 #include "input/support/test_actions.hpp"
 #include <gtest/gtest.h>
 
@@ -70,6 +71,11 @@ ActionId add(ActionRegistry& registry, std::string id, int priority = 0) {
 
 const LayoutTable& enUs() { return simulatedLayout(SimulatedLayoutId::EnUs); }
 const LayoutTable& deDe() { return simulatedLayout(SimulatedLayoutId::DeDe); }
+// No key types '/': the unreachable-binding subject since de-DE reaches Slash (ADR 0030).
+const LayoutTable& noSlash() {
+    static const LayoutTable table = test::synthetic::noSlash();
+    return table;
+}
 
 TEST(BindingIndex, OverridesReplaceAndRemove) {
     ActionRegistry registry;
@@ -163,7 +169,8 @@ TEST(BindingIndex, PrimaryShortcutSkipsUnreachableSequences) {
     const BindingIndex index = BindingIndex::build(test::intellij(), KeymapPlatform::Windows, {}, registry);
     const ActionId comment = *registry.find("editor.commentLine");
     EXPECT_EQ(index.primaryShortcut(comment, enUs()), seq("Ctrl+Slash"));
-    EXPECT_EQ(index.primaryShortcut(comment, deDe()), seq("Ctrl+NumpadDivide"));
+    EXPECT_EQ(index.primaryShortcut(comment, deDe()), seq("Ctrl+Slash")) << "the '-' key (rule 3.6)";
+    EXPECT_EQ(index.primaryShortcut(comment, noSlash()), seq("Ctrl+NumpadDivide"));
     const ActionId everywhere = *registry.find("search.everywhere");
     EXPECT_EQ(index.primaryShortcut(everywhere, deDe()), Sequence::of(Gesture::DoubleShift));
     const ActionId terminal = *registry.find("agent.terminal");
@@ -210,9 +217,11 @@ TEST(BindingIndex, ConflictsAndUnreachable) {
         EXPECT_EQ(conflicts[i].prefixConflict, expected[i].prefixConflict) << i;
     }
     EXPECT_TRUE(index.unreachable(enUs()).empty());
-    EXPECT_EQ(formatted(index.unreachable(deDe())), std::vector<std::string>{"Ctrl+Slash"});
+    EXPECT_TRUE(index.unreachable(deDe()).empty());
+    EXPECT_EQ(formatted(index.unreachable(noSlash())), std::vector<std::string>{"Ctrl+Slash"});
+    EXPECT_EQ(index.primaryShortcut(c, noSlash()), seq("Ctrl+K, Ctrl+C"));
     EXPECT_EQ(index.primaryShortcut(c, deDe()), seq("Ctrl+K, Ctrl+C"));
-    EXPECT_EQ(index.primaryShortcut(d, deDe()), seq("Ctrl+Alt+Z"));
+    EXPECT_EQ(index.primaryShortcut(d, noSlash()), seq("Ctrl+Alt+Z"));
 }
 
 // A double tap of Shift with `gap` between the four events, as raw events.
@@ -403,6 +412,10 @@ TEST(KeymapService, SetLayoutResetsAPendingStroke) {
     EXPECT_FALSE(service.pendingPrefix().has_value());
     EXPECT_EQ(service.bindingsGeneration(), before + 1);
     EXPECT_EQ(service.layout().id(), "de-DE:00000407");
+    EXPECT_TRUE(service.unreachableBindings().empty()) << "de-DE reaches every default (ADR 0030)";
+    EXPECT_EQ(service.primaryShortcut(*rig.registry.find("editor.commentLine")), seq("Ctrl+Slash"));
+    service.setLayout(noSlash());
+    EXPECT_EQ(service.bindingsGeneration(), before + 2);
     // Sorted by Sequence order: modifier bits first (Ctrl before Ctrl+Shift), then the key.
     EXPECT_EQ(formatted(service.unreachableBindings()), (std::vector<std::string>{"Ctrl+Slash", "Ctrl+Shift+Slash"}));
     EXPECT_EQ(service.primaryShortcut(*rig.registry.find("editor.commentLine")), seq("Ctrl+NumpadDivide"));

@@ -1,0 +1,49 @@
+generated-on windows 2026-11-01
+cp437 decode units=256 valid=256 nort=0 fnv1a64=c45d902557f3fc63
+cp437 encode-sample scalars=2369 encodable=271 fnv1a64=280280dac52d7bc4
+cp437 streams=4 fnv1a64=3454e577832ad25c
+cp850 decode units=256 valid=256 nort=0 fnv1a64=d33f7ee29c0ed653
+cp850 encode-sample scalars=2369 encodable=269 fnv1a64=0e41862b239b31df
+cp850 streams=4 fnv1a64=596d68fd8918937c
+cp866 decode units=256 valid=256 nort=0 fnv1a64=069eea4c2cec3488
+cp866 encode-sample scalars=2369 encodable=264 fnv1a64=9aed69ab3dd6881e
+cp866 streams=4 fnv1a64=af12f27af7de34f7
+cp874 decode units=256 valid=248 nort=0 fnv1a64=0600328ca1db30d4
+cp874 encode-sample scalars=2361 encodable=276 fnv1a64=080005d94dd962b5
+cp874 streams=4 fnv1a64=8169a491bcb56e58
+cp932 decode units=11776 valid=9796 nort=398 fnv1a64=6f0914cc956e7bb0
+cp932 encode-sample scalars=11511 encodable=9698 fnv1a64=5b4131745b00072c
+cp932 streams=4 fnv1a64=a1ec98c0092a18f0
+cp1250 decode units=256 valid=256 nort=0 fnv1a64=0f1de7c7c9058021
+cp1250 encode-sample scalars=2369 encodable=271 fnv1a64=f3ec0cd008f811ab
+cp1250 streams=4 fnv1a64=e1bf94fc781fec88
+cp1251 decode units=256 valid=256 nort=0 fnv1a64=4865a120848fd09b
+cp1251 encode-sample scalars=2369 encodable=265 fnv1a64=03f4f6074a270cd3
+cp1251 streams=4 fnv1a64=59cd8c24fe8bf77f
+cp1252 decode units=256 valid=256 nort=0 fnv1a64=8d70504484206a2f
+cp1252 encode-sample scalars=2369 encodable=275 fnv1a64=302ebc2feab1c0eb
+cp1252 streams=4 fnv1a64=a758342c2eae0fa8
+cp1253 decode units=256 valid=253 nort=0 fnv1a64=ccc516c87a72c6b0
+cp1253 encode-sample scalars=2366 encodable=280 fnv1a64=e7ec299027068e45
+cp1253 streams=4 fnv1a64=f5b6f767b2b1b98c
+cp1254 decode units=256 valid=256 nort=0 fnv1a64=484be484ec3b8824
+cp1254 encode-sample scalars=2369 encodable=276 fnv1a64=1131d9fc42a101f6
+cp1254 streams=4 fnv1a64=43237fc6726a5989
+cp1256 decode units=256 valid=256 nort=0 fnv1a64=0c050a3b178a884b
+cp1256 encode-sample scalars=2369 encodable=272 fnv1a64=8c5a19c843aa8040
+cp1256 streams=4 fnv1a64=697d99d4fe9eecc6
+cp1257 decode units=256 valid=254 nort=0 fnv1a64=2d0d3bcf279eb3c7
+cp1257 encode-sample scalars=2367 encodable=275 fnv1a64=9d6d3efb29495f75
+cp1257 streams=4 fnv1a64=5196ddd074fbca52
+cp20866 decode units=256 valid=256 nort=0 fnv1a64=693c55483842a105
+cp20866 encode-sample scalars=2369 encodable=264 fnv1a64=ed43651d954e5ddb
+cp20866 streams=4 fnv1a64=779c9b45dfc7b749
+cp28591 decode units=256 valid=256 nort=0 fnv1a64=b37ec1603650f2bd
+cp28591 encode-sample scalars=2369 encodable=297 fnv1a64=b0591344dc356f25
+cp28591 streams=4 fnv1a64=a93631bfbb45d475
+cp28592 decode units=256 valid=256 nort=0 fnv1a64=47448a852d982562
+cp28592 encode-sample scalars=2369 encodable=294 fnv1a64=e02fd661237df721
+cp28592 streams=4 fnv1a64=778b5d829f7085cf
+cp28605 decode units=256 valid=256 nort=0 fnv1a64=4cfeddd9cf053f4d
+cp28605 encode-sample scalars=2369 encodable=298 fnv1a64=671931571de10c92
+cp28605 streams=4 fnv1a64=4d743ce6319a4f4e

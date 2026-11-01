@@ -18,6 +18,16 @@
 #                available under LGPL-3.0-only (GPL-only modules such as Charts and Canvas
 #                Painter fail) and must be on the per-platform module allowlist for their
 #                context (runtime, icon baker, tests).
+#   assets       resources/assets.lock.json (ADR 0015; absent means no bundled assets): the
+#                manifest schema (shared with tools/asset_fetch.py); each asset's licence
+#                expression on the allowlist; the archive's SHA-256 pinned; every listed file
+#                present with its pinned SHA-256;
+#                no unlisted file under an asset's dest directory; the licence file containing
+#                the text of every licence in the expression; reservedFontNames only with
+#                modified false; for OFL fonts, an OpenType 'name' table naming the OFL 1.1
+#                (nameID 13 or 14) and the manifest's copyright holder (nameID 0), unless the
+#                asset records "nameTableLicence": false; and the asset's ADR present. Each
+#                asset becomes an SBOM package with its archive's SHA-256.
 # Module licences come from Qt's own SBOMs (<qt-root>/sbom/*.spdx.json, qt-root defaulting
 # to $FROST_QT_ROOT) and fall back to QT_MODULE_LICENCES for modules not installed.
 #
@@ -36,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -46,6 +57,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import asset_fetch  # noqa: E402  (the asset manifest schema and SHA-256 helper)
 import frost_lint  # noqa: E402  (shared repository file listing and CMake lexer)
 
 # ---------------------------------------------------------------------------------------
@@ -263,6 +275,7 @@ class Package:
     purl: str | None = None
     comment: str = ""
     relationship: str = "DEPENDS_ON"
+    sha256: str | None = None  # the downloaded archive's SHA-256 (bundled assets)
 
 
 @dataclass
@@ -648,6 +661,225 @@ def check_qt(repo: Path, uses: list[QtUse], qt_root: Path | None, report: Report
 
 
 # ---------------------------------------------------------------------------------------
+# Bundled assets (fonts and icons; ADR 0015)
+# ---------------------------------------------------------------------------------------
+
+ASSET_MANIFEST = "resources/assets.lock.json"
+# Text every licence file must contain for each licence in the asset's expression.
+LICENCE_MARKERS = {
+    "OFL-1.1": "SIL OPEN FONT LICENSE Version 1.1",
+    "ISC": "ISC License",
+    "MIT": "Permission is hereby granted, free of charge",
+}
+# Font files whose 'name' table is checked (OFL assets).
+_FONT_SUFFIXES = (".ttf", ".otf")
+# A font's OFL reference in its 'name' table: nameID 13 (licence description) naming the
+# SIL Open Font License 1.1, or nameID 14 (licence URL) pointing at the OFL.
+_OFL_DESCRIPTION = re.compile(r"SIL\s+Open\s+Font\s+License,?\s+Version\s+1\.1", re.IGNORECASE)
+_OFL_URL = re.compile(r"(openfontlicense\.org|scripts\.sil\.org/OFL)", re.IGNORECASE)
+# Larger font files are refused before they are read.
+_MAX_FONT_BYTES = 32 * 1024 * 1024
+
+
+class FontError(ValueError):
+    """A font file whose table directory or 'name' table is malformed."""
+
+
+def font_names(data: bytes) -> dict[int, list[str]]:
+    """
+    Reads the 'name' table of an OpenType/TrueType font (not a collection) and returns the
+    decoded strings per nameID. Written from the OpenType specification, "name - Naming
+    Table" and "The OpenType Font File" (https://learn.microsoft.com/typography/opentype/spec/):
+    the table directory is sfntVersion u32, numTables u16 and three u16 search fields, then
+    16-byte records (tag, checksum, offset, length); the 'name' table starts with version,
+    count and storageOffset (u16 each), then 12-byte name records (platformID, encodingID,
+    languageID, nameID, length, stringOffset). Platform 0 and platform 3 strings are
+    UTF-16BE; platform 1 encoding 0 is Mac Roman; other encodings are skipped. Every offset
+    and length is bounds-checked. Raises FontError. Pure; O(size of the name table).
+    """
+    def u16(at: int) -> int:
+        if at < 0 or at + 2 > len(data):
+            raise FontError(f"read past the end of the font at offset {at}")
+        return struct.unpack_from(">H", data, at)[0]
+
+    def u32(at: int) -> int:
+        if at < 0 or at + 4 > len(data):
+            raise FontError(f"read past the end of the font at offset {at}")
+        return struct.unpack_from(">I", data, at)[0]
+
+    version = u32(0)
+    if version not in (0x00010000, 0x4F54544F, 0x74727565):  # 1.0, 'OTTO', 'true'
+        raise FontError(f"not an OpenType/TrueType font (sfntVersion {version:#010x})")
+    num_tables = u16(4)
+    name_offset = name_length = None
+    for index in range(num_tables):
+        record = 12 + 16 * index
+        if record + 16 > len(data):
+            raise FontError("the table directory runs past the end of the font")
+        if data[record:record + 4] == b"name":
+            name_offset, name_length = u32(record + 8), u32(record + 12)
+    if name_offset is None or name_length is None:
+        raise FontError("no 'name' table")
+    if name_offset + name_length > len(data) or name_length < 6:
+        raise FontError("the 'name' table lies outside the font")
+    count = u16(name_offset + 2)
+    storage = name_offset + u16(name_offset + 4)
+    if 6 + 12 * count > name_length:
+        raise FontError("the name records run past the 'name' table")
+    names: dict[int, list[str]] = {}
+    for index in range(count):
+        record = name_offset + 6 + 12 * index
+        platform, encoding, _language, name_id, length, offset = struct.unpack_from(">6H", data, record)
+        start = storage + offset
+        if start + length > name_offset + name_length:
+            raise FontError(f"name record {index} (nameID {name_id}) lies outside the 'name' table")
+        raw = data[start:start + length]
+        if platform in (0, 3):
+            if length % 2:
+                raise FontError(f"name record {index} has an odd UTF-16 length")
+            text = raw.decode("utf-16-be", errors="replace")
+        elif platform == 1 and encoding == 0:
+            text = raw.decode("mac_roman")
+        else:
+            continue
+        names.setdefault(name_id, []).append(text)
+    return names
+
+
+# The years at the start of a copyright statement: "2016", "2013-present", "2019, 2020". Each is
+# exactly four digits followed by a word boundary, so a holder such as "3M" keeps its digits.
+_COPYRIGHT_YEARS = re.compile(r"^(?:\d{4}(?:\s*[-–]\s*(?:\d{4}|present))?\b[\s,]*)+", re.IGNORECASE)
+
+
+def copyright_holder(line: str) -> str:
+    """The holder in a copyright line: "Copyright (c) 2016 The X Authors (https://...)" -> "The X Authors"."""
+    holder = re.sub(r"^\s*Copyright\s*(\(c\)|©)?\s*", "", line, flags=re.IGNORECASE)
+    holder = _COPYRIGHT_YEARS.sub("", holder)
+    holder = re.sub(r"\s*\([^)]*\)\s*$", "", holder)
+    return holder.strip().rstrip(".")
+
+
+def names_holder(copyrights: str, holder: str) -> bool:
+    """True when `copyrights` contains `holder` as whole words (case-insensitive)."""
+    return bool(holder) and re.search(r"(?<!\w)" + re.escape(holder) + r"(?!\w)", copyrights,
+                                      re.IGNORECASE) is not None
+
+
+def expression_ids(node) -> set[str]:
+    """The licence IDs in a parse_expression tree, without WITH exceptions."""
+    if node[0] in ("id", "with"):
+        return {node[1]}
+    return set().union(*(expression_ids(child) for child in node[1]))
+
+
+def _read_bounded(path: Path, limit: int) -> bytes:
+    """Reads `path` in one bounded read; raises FontError when it holds more than `limit` bytes."""
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise FontError(f"larger than {limit // (1024 * 1024)} MiB")
+    return data
+
+
+def check_assets(repo: Path, report: Report, files: list[str] | None = None) -> None:
+    """The bundled-asset gate (see the header comment). `files` is the repository listing."""
+    manifest = repo / ASSET_MANIFEST
+    if not manifest.is_file():
+        return
+    try:
+        _, assets = asset_fetch.load_manifest(manifest)
+    except asset_fetch.ManifestError as error:
+        report.violations.append(Violation(ASSET_MANIFEST, 1, f"invalid asset manifest: {error}"))
+        return
+    listing = files if files is not None else frost_lint.list_repo_files(repo)
+    for asset in assets:
+        label = f"asset {asset['id']}"
+        dest = asset["dest"]
+        licence = asset["licence"]
+        try:
+            ids = expression_ids(parse_expression(licence))
+            allowed = expression_allowed(licence, ALLOWLIST)
+        except ExpressionError as error:
+            report.violations.append(Violation(ASSET_MANIFEST, 1, f"{label}: licence {licence!r}: {error}"))
+            ids, allowed = set(), False
+        else:
+            if not allowed:
+                report.violations.append(Violation(
+                    ASSET_MANIFEST, 1, f"{label}: licence '{licence}' is not on the allowlist; needs an ADR"))
+        if not asset["sha256"]:
+            report.violations.append(Violation(
+                ASSET_MANIFEST, 1, f"{label}: the archive SHA-256 is not pinned (run asset_fetch.py --pin)"))
+        if asset["reservedFontNames"] and asset["modified"]:
+            report.violations.append(Violation(
+                ASSET_MANIFEST, 1, f"{label}: a modified font may not keep its Reserved Font Names "
+                                   f"{asset['reservedFontNames']} (OFL-1.1 condition 3)"))
+        if not (repo / asset["adr"]).is_file():
+            report.violations.append(Violation(ASSET_MANIFEST, 1, f"{label}: ADR {asset['adr']} does not exist"))
+        listed = dict(asset_fetch.asset_paths(asset))
+        # OFL fonts are read once, bounded: the same bytes are hashed and their 'name' table read.
+        check_names = "OFL-1.1" in ids and asset.get("nameTableLicence", True) is not False
+        fonts: dict[str, bytes] = {}
+        for name, expected in sorted(listed.items()):
+            shown = f"{dest}/{name}"
+            path = repo / dest / name
+            if not path.is_file():
+                report.violations.append(Violation(shown, 1, f"{label}: listed file is missing"))
+                continue
+            try:
+                if check_names and name.lower().endswith(_FONT_SUFFIXES):
+                    fonts[name] = _read_bounded(path, _MAX_FONT_BYTES)
+                    actual = hashlib.sha256(fonts[name]).hexdigest()
+                else:
+                    actual = asset_fetch.sha256_file(path)
+            except (OSError, FontError) as error:
+                report.violations.append(Violation(shown, 1, f"{label}: unreadable: {error}"))
+                continue
+            if not expected or actual != expected:
+                report.violations.append(Violation(shown, 1, f"{label}: SHA-256 differs from the pin in "
+                                                             f"{ASSET_MANIFEST}"))
+        for rel in listing:
+            if rel.startswith(dest + "/") and rel[len(dest) + 1:] not in listed:
+                report.violations.append(Violation(
+                    rel, 1, f"{label}: file is not listed in {ASSET_MANIFEST} (no unlisted third-party files)"))
+        licence_path = repo / dest / asset["licenceFile"]
+        if licence_path.is_file():
+            text = licence_path.read_text(encoding="utf-8", errors="replace")
+            for ref in sorted(ids):
+                marker = LICENCE_MARKERS.get(ref)
+                if marker is None:
+                    report.violations.append(Violation(
+                        f"{dest}/{asset['licenceFile']}", 1, f"{label}: no known licence text marker for {ref}"))
+                elif marker not in text:
+                    report.violations.append(Violation(
+                        f"{dest}/{asset['licenceFile']}", 1,
+                        f"{label}: the licence file lacks the {ref} text (\"{marker}\")"))
+        if check_names:
+            holders = [copyright_holder(line) for line in asset["copyright"]]
+            for name, data in sorted(fonts.items()):
+                shown = f"{dest}/{name}"
+                try:
+                    names = font_names(data)
+                except FontError as error:
+                    report.violations.append(Violation(shown, 1, f"{label}: unreadable font: {error}"))
+                    continue
+                described = any(_OFL_DESCRIPTION.search(t) for t in names.get(13, []))
+                linked = any(_OFL_URL.search(t) for t in names.get(14, []))
+                if not (described or linked):
+                    report.violations.append(Violation(
+                        shown, 1, f"{label}: the 'name' table names no SIL Open Font License 1.1 (nameID 13 or "
+                                  f"14); risk L7"))
+                copyrights = " ".join(names.get(0, []))
+                if not any(names_holder(copyrights, h) for h in holders):
+                    report.violations.append(Violation(
+                        shown, 1, f"{label}: the 'name' table copyright (nameID 0) does not name "
+                                  f"{' or '.join(repr(h) for h in holders)}"))
+        report.packages.append(Package(
+            _spdx_id(f"Asset-{asset['id']}"), asset["name"], asset["version"], licence,
+            licence if allowed else "NOASSERTION", asset["url"], asset["homepage"], None,
+            f"Bundled asset ({dest}), pinned in {ASSET_MANIFEST}", "DEPENDS_ON", asset["sha256"] or None))
+
+
+# ---------------------------------------------------------------------------------------
 # SBOM
 # ---------------------------------------------------------------------------------------
 
@@ -685,6 +917,8 @@ def write_sbom(repo: Path, report: Report, path: Path) -> None:
         }
         if package.homepage:
             entry["homepage"] = package.homepage
+        if package.sha256:
+            entry["checksums"] = [{"algorithm": "SHA256", "checksumValue": package.sha256}]
         if package.purl:
             entry["externalRefs"] = [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
                                       "referenceLocator": package.purl}]
@@ -730,6 +964,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     files = frost_lint.list_repo_files(repo)
     uses = cmake_qt_uses(repo, files) + binary_qt_uses(repo, build_dirs)
     check_qt(repo, uses, qt_root, report)
+    check_assets(repo, report, files)
     report.violations = sorted(set(report.violations))
     return report
 

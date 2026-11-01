@@ -12,11 +12,10 @@
  *
  * The OS message aims at the convention that Error messages are English log
  * text (frost/core/error.hpp). On Windows FormatMessageW is asked for en-US
- * first, then the user's language. On POSIX the text is the C library's
- * strerror text, which glibc translates for LC_MESSAGES; Qt sets that from the
- * environment, so English is guaranteed only in a "C"-locale process (the
- * non-Qt unit tests, for example; the Qt test binaries create a QApplication,
- * which calls setlocale, so they follow the environment like the IDE).
+ * first, then the user's language. On POSIX the text is strerror_l's under a
+ * "C" locale from newlocale, so it stays English whatever LC_MESSAGES says (Qt
+ * sets that from the environment); only if newlocale fails does it fall back to
+ * generic_category's text, which follows LC_MESSAGES.
  *
  * Mapping, by intent rather than by the letter of each OS code (Win32 codes
  * first, then errno values):
@@ -58,12 +57,16 @@
 
 #include <cstdint>
 #include <source_location>
+#include <string>
 #include <string_view>
 
 namespace frost::io {
 
 // Maps a POSIX errno value (as defined by <cerrno> on this platform). Never fails.
 [[nodiscard]] ErrorCode errorCodeFromErrno(int errnoValue) noexcept;
+
+// The English text for a POSIX errno value (see above), without the number. Thread-safe.
+[[nodiscard]] std::string errnoText(int errnoValue);
 
 // An Error for a failed POSIX call: code from errorCodeFromErrno, message as above.
 // `path` may be empty when the operation has none.

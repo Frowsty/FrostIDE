@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <cerrno>
+#include <clocale>
 #include <format>
 #include <string>
 #include <utility>
@@ -58,6 +59,43 @@ TEST(OsError, ErrnoErrorKeepsOperationPathAndNumber) {
     // Without a path the quotes are omitted.
     EXPECT_EQ(frost::io::errnoError(EIO, "poll").message().find('\''), std::string::npos);
 }
+
+// ASCII lower case, for comparing the C library's text with MSVC's (which is lower case).
+std::string lowered(std::string text) {
+    for (char& c : text) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
+TEST(OsError, ErrnoTextIsEnglish) {
+    EXPECT_EQ(lowered(frost::io::errnoText(ENOENT)), "no such file or directory");
+    EXPECT_NE(frost::io::errnoError(ENOENT, "open").message().find(frost::io::errnoText(ENOENT)), std::string::npos);
+}
+
+#ifndef _WIN32
+// strerror_l under a "C" locale ignores LC_MESSAGES (ADR 0011, G3). Needs a translated locale; WSL's
+// default image has none (locale-gen de_DE.UTF-8 adds one), so the test skips without it.
+TEST(OsError, ErrnoTextStaysEnglishUnderATranslatedLocale) {
+    const char* current = std::setlocale(LC_ALL, nullptr);
+    const std::string saved = current != nullptr ? current : "C";
+    const char* translated = nullptr;
+    for (const char* candidate : {"de_DE.UTF-8", "fr_FR.UTF-8", "es_ES.UTF-8", "de_DE.utf8", "fr_FR.utf8"}) {
+        if (std::setlocale(LC_ALL, candidate) != nullptr) {
+            translated = candidate;
+            break;
+        }
+    }
+    if (translated == nullptr) {
+        GTEST_SKIP() << "no translated locale is installed";
+    }
+    const std::string text = frost::io::errnoText(ENOENT);
+    static_cast<void>(std::setlocale(LC_ALL, saved.c_str()));
+    EXPECT_EQ(text, "No such file or directory") << "under " << translated;
+}
+#endif
 
 #ifdef _WIN32
 

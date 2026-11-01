@@ -21,7 +21,49 @@ SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["resources/**/*.png", "resources/**/*.ico", "resources/**/*.svg"]
+path = ["resources/**/*.png", "resources/**/*.ico", "resources/icons/frost/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
+
+# vcpkg overlay ports copied from microsoft/vcpkg (MIT; LICENSE-vcpkg.txt in each port), ADR 0014.
+# "override" so the Apache-2.0 *.json entry above does not claim the ports' vcpkg.json files.
+[[annotations]]
+path = ["third_party/vcpkg-ports/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Microsoft Corporation and vcpkg contributors"
+SPDX-License-Identifier = "MIT"
+
+# Pinned third-party assets (resources/assets.lock.json, ADR 0015). When several tables match a
+# file, REUSE uses the last one, so these tables (after the generic Apache-2.0 rules above, such
+# as **/*.json) are the ones that apply; "override" also makes REUSE ignore any notice inside
+# the files themselves, which are upstream bytes we never edit.
+[[annotations]]
+path = ["resources/icons/lucide/**"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Lucide Icons and Contributors", "2013-present Cole Bemis"]
+SPDX-License-Identifier = "ISC AND MIT"
+
+[[annotations]]
+path = ["resources/fonts/inter/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2016 The Inter Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+[[annotations]]
+path = ["resources/fonts/jetbrains-mono/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2020 The JetBrains Mono Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+# The screenshot goldens are FrostIDE renderings that show Lucide icons, so they carry both our
+# terms and Lucide's (renderings of the OFL fonts are program output, which the OFL does not
+# restrict). Being the last match, this table replaces the tests/**/goldens/** rule above for
+# these files rather than adding to it, so it lists every holder and licence itself (ADR 0015,
+# question 2).
+[[annotations]]
+path = ["tests/ui/goldens/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 The FrostIDE authors", "2026 Lucide Icons and Contributors",
+                          "2013-present Cole Bemis"]
+SPDX-License-Identifier = "Apache-2.0 AND ISC AND MIT"

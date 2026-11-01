@@ -12,6 +12,7 @@
 #include "frost/input/simulated_keyboard.hpp"
 
 #include "input/support/matcher_rig.hpp"
+#include "input/support/synthetic_layouts.hpp"
 #include "input/support/test_actions.hpp"
 #include <gtest/gtest.h>
 
@@ -315,19 +316,19 @@ TEST_P(ShortcutLayouts, AltGrWithoutCharacterActsAsCtrlAlt) {
               (Stroke{Modifier::Ctrl | Modifier::Alt | Modifier::Meta, Key::F7}));
 }
 
-// (e) Every single-stroke binding fires from the physical key the product maps to its
-// logical key, or is listed as unreachable; the list is a golden per layout and platform.
-TEST_P(ShortcutLayouts, EveryBindingReachableOrListed) {
-    MatcherRig rig(truth(), platform());
+// Every single-stroke binding of `rig`'s keymap fires from the physical key the product maps
+// to its logical key; returns the bindings that have no such key (sorted, unique).
+std::vector<std::string> unreachableSingleStrokes(MatcherRig& rig) {
     std::vector<std::string> unreachable;
     std::size_t checked = 0;
-    for (const Binding& binding : rig.keymap.bindings(test::keymapPlatformFor(platform()))) {
+    for (const Binding& binding : rig.keymap.bindings(test::keymapPlatformFor(rig.platform))) {
         for (const Sequence& s : binding.sequences) {
             if (s.length() != 1) {
                 continue;
             }
             const Stroke stroke = s.first();
-            const auto code = test::physicalCodeFor(stroke.key, truth(), platform(), stroke.mods.has(Modifier::Shift));
+            const auto code =
+                test::physicalCodeFor(stroke.key, *rig.truth, rig.platform, stroke.mods.has(Modifier::Shift));
             if (!code) {
                 unreachable.push_back(formatSequence(s));
                 continue;
@@ -348,22 +349,30 @@ TEST_P(ShortcutLayouts, EveryBindingReachableOrListed) {
     std::ranges::sort(unreachable);
     const auto [first, last] = std::ranges::unique(unreachable);
     unreachable.erase(first, last);
+    return unreachable;
+}
 
-    std::vector<std::string> expected;
-    if (windows() && layoutId() == SimulatedLayoutId::DeDe) {
-        expected = {"Ctrl+Shift+Slash", "Ctrl+Slash"};
-    }
-    EXPECT_EQ(unreachable, expected);
-    if (windows()) {
-        // On Windows the table is the whole truth: KeymapService reports the same list.
-        std::vector<std::string> reported;
-        for (const Sequence& s : rig.index.unreachable(*rig.table)) {
-            if (s.length() == 1) {
-                reported.push_back(formatSequence(s));
-            }
+// The single-stroke bindings KeymapService reports as unreachable on the rig's table (sorted).
+std::vector<std::string> reportedUnreachable(const MatcherRig& rig) {
+    std::vector<std::string> reported;
+    for (const Sequence& s : rig.index.unreachable(*rig.table)) {
+        if (s.length() == 1) {
+            reported.push_back(formatSequence(s));
         }
-        std::ranges::sort(reported);
-        EXPECT_EQ(reported, expected);
+    }
+    std::ranges::sort(reported);
+    return reported;
+}
+
+// (e) Every single-stroke binding fires from the physical key the product maps to its
+// logical key: since rule 3.6 (ADR 0030) none is unreachable on any simulated layout and
+// platform (de-DE Ctrl+Slash is the '-' key). ShortcutLayoutsSynthetic keeps the listed case.
+TEST_P(ShortcutLayouts, EveryBindingReachableOrListed) {
+    MatcherRig rig(truth(), platform());
+    EXPECT_EQ(unreachableSingleStrokes(rig), std::vector<std::string>{});
+    if (windows()) {
+        // On Windows the table is the whole truth: KeymapService reports the same (empty) list.
+        EXPECT_EQ(reportedUnreachable(rig), std::vector<std::string>{});
     }
 }
 
@@ -378,13 +387,29 @@ TEST_P(ShortcutLayouts, NamedExamples) {
         EXPECT_EQ(fire(rig, ctrl, Code::KeyZ), "editor.deleteLine");
         EXPECT_EQ(fire(rig, ctrl, Code::BracketLeft), "editor.codeBlockStart");
         EXPECT_EQ(fire(rig, ctrl, Code::NumpadDivide), "editor.commentLine");
+        // The key labelled '-' (US '/' position) is Slash, as JetBrains documents for its
+        // IDEs' Linux mapping ("to execute Alt + / on a German keyboard, press Alt + -",
+        // Rider Help, Keymap, "Use national layout for shortcuts"); 'ß' (US '-') is Minus.
+        // Rule 3.6, ADR 0030; the same on Windows and Linux.
+        EXPECT_EQ(fire(rig, ctrl, Code::Slash), "editor.commentLine");
+        EXPECT_EQ(fire(rig, ctrlShift, Code::Slash), "editor.commentBlock");
+        EXPECT_EQ(fire(rig, ctrl, Code::Minus), "editor.foldCollapse");
+        EXPECT_EQ(fire(rig, ctrlShift, Code::Minus), "editor.foldCollapseAll");
+        EXPECT_EQ(fire(rig, ctrl, Code::NumpadSubtract), "editor.foldCollapse");
+        if (windows()) {
+            const auto shown = [&](std::string_view text) {
+                return toDisplayText(*parseSequence(text, SyntaxMode::Strict), *rig.table, KeymapPlatform::Windows);
+            };
+            EXPECT_EQ(shown("Ctrl+Slash"), "Ctrl+-");
+            EXPECT_EQ(shown("Ctrl+Shift+Slash"), "Ctrl+Shift+-");
+            EXPECT_EQ(shown("Ctrl+Minus"), "Ctrl+ß");
+        }
         rig.resetKeyboard();
         const Step caret = rig.stroke(ctrl, Code::Backquote);
         EXPECT_EQ(caret.fired, "view.quickSwitchScheme");
         EXPECT_EQ(caret.keyEvent.deadKey, U'^') << "reported, not composed";
         EXPECT_EQ(rig.keyboard.pendingDeadKey(), 0U);
         EXPECT_EQ(std::u32string(rig.tap(Code::KeyE).keyEvent.textView()), U"e");
-        EXPECT_EQ(fire(rig, ctrl, Code::Slash), windows() ? "editor.foldCollapse" : "editor.commentLine");
         break;
     }
     case SimulatedLayoutId::FrFr: {
@@ -506,6 +531,21 @@ INSTANTIATE_TEST_SUITE_P(EnUs, ShortcutLayouts,
                          ::testing::Combine(::testing::Values(SimulatedLayoutId::EnUs),
                                             ::testing::Values(KeyPlatform::Windows, KeyPlatform::X11)),
                          paramName);
+
+// (e, listed) On a layout with no '/' (the old de-DE gap, synthetic since rule 3.6) both
+// comment shortcuts are unreachable on Windows, KeymapService lists the same two, and the
+// numpad alternatives still fire.
+TEST(ShortcutLayoutsSynthetic, UnreachableListedOnNoSlash) {
+    const LayoutTable noSlash = test::synthetic::noSlash();
+    MatcherRig rig(noSlash, KeyPlatform::Windows);
+    const std::vector<std::string> expected = {"Ctrl+Shift+Slash", "Ctrl+Slash"};
+    EXPECT_EQ(unreachableSingleStrokes(rig), expected);
+    EXPECT_EQ(reportedUnreachable(rig), expected);
+    rig.resetKeyboard();
+    EXPECT_EQ(rig.stroke(Modifier::Ctrl, Code::NumpadDivide).fired, "editor.commentLine");
+    rig.resetKeyboard();
+    EXPECT_EQ(rig.stroke(Modifier::Ctrl, Code::Slash).fired, "editor.foldCollapse") << "'-' is Minus here";
+}
 
 // (b, fr) French AltGr characters against a synthetic keymap that binds their Ctrl+Alt reading.
 TEST(ShortcutLayoutsSynthetic, FrenchAltGrTypesTextOverCtrlAltBindings) {

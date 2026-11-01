@@ -46,7 +46,7 @@ Quote         ä         Ä         -         -         -> Quote
 Backquote     ^(dead)   °         -         -         -> Backquote
 Comma         ,         ;         -         -         -> Comma
 Period        .         :         -         -         -> Period
-Slash         -         _         -         -         -> Minus
+Slash         -         _         -         -         -> Slash
 IntlBackslash <         >         |         -         -> None
 IntlRo        -         -         -         -         -> None
 IntlYen       -         -         -         -         -> None
@@ -88,7 +88,7 @@ Digit7        code=Digit7 label=7
 Digit8        code=Digit8 label=8
 Digit9        code=Digit9 label=9
 Backquote     code=Backquote label=^
-Minus         code=Slash label=-
+Minus         code=Minus label=ß
 Equal         code=Equal label=´
 BracketLeft   code=BracketLeft label=ü
 BracketRight  code=BracketRight label=+
@@ -97,5 +97,5 @@ Semicolon     code=Semicolon label=ö
 Quote         code=Quote label=ä
 Comma         code=Comma label=,
 Period        code=Period label=.
-Slash         unreachable
+Slash         code=Slash label=-
 Space         code=Space label=-
