@@ -5,13 +5,47 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first two slices, each merged with `git merge --no-ff` in the main worktree under D23 after the
-slice's two independent reviews: `m1/piece-tree` at 6fb6826 (merge 455bb76) and `m1/input-keymap` at c78db87 (merge
-3db37c5). The slice records follow this entry's sections as subsections, newest first: `m1/input-keymap`'s, written
-from its hand-off note (the branch kept no record in this log), then `m1/piece-tree`'s two, kept as the branch wrote
-them. Merge notes in them mark what has changed since.
+`main` has M1's first three slices, each merged with `git merge --no-ff` in the main worktree under D23 after the
+slice's independent reviews: `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
+3db37c5) and `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b). The slice records follow this entry's sections as
+subsections, newest first: `m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes (neither
+branch kept a record in this log), then `m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them
+mark what has changed since.
 
 ### Done
+
+#### Merge of `m1/undo-anchors` (3163d0b)
+- **The merge** (3163d0b) of `m1/undo-anchors` (7ae2ab5) into `main` at 0110eff: frost::text's Document (81afd3a)
+  and the fixes from the slice's two reviews (7ae2ab5), which an independent re-review of the fix commit approved;
+  the slice record below says what they hold. ADR 0017; the number is unchanged and no other ADR on `main` uses it
+  (`main`'s ADRs after 0010 are now 0011 to 0013, 0016 and 0017).
+- **No conflicts.** The slice branched from 6fb6826, the piece-tree head, and `main`'s `m1/input-keymap` merge
+  touches none of its files. `tests/features/matrix.json` merged on its own: row 38 (multi-caret, column mode) is
+  `in-progress`, as on the branch.
+- **The FrostProcess failures that the slice's verification lists as known no longer apply.** Its base 6fb6826
+  predates `m0/longpath`, so `FrostProcess.RunsFromPathLongerThanMaxPath` and
+  `FrostProcess.PlatformPluginPathBoundary` fail there and one test is skipped, as in the piece-tree records below.
+  `main` has `m0/longpath` (ADR 0012); the merged tree's results are below.
+
+#### Verification (merged tree 3163d0b)
+- Before the merge commit: frost_lint ok (478 files), licensecheck ok, featurecheck ok, `git diff --check` clean.
+- After the merge commit, `night.py build-gate` (it waited about a minute for another session's measurement,
+  `m1-encodings-r2-wsl-asan`, then 27.7 GB commit free), then `cmake --build --preset win-clangcl-debug -j 12`:
+  exit 0 in 21 s, no compiler warning (only Qt's own "No qtpaths executable found" configure notice).
+- `tools\verify.ps1 -Quick -Jobs 12` on 3163d0b through `run_hidden_nobox.py` (a hidden desktop; no window opened
+  on it), after `night.py build-gate` (no wait, 28.5 GB commit free), 259.2 s, exit 0. Windows ran its Debug leg
+  and the checks; WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 832/832, wsl debug 745/745, wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok,
+  featurecheck ok, tidy not-run`. No test failed or was skipped. Against the input-keymap merge (win debug 754/754,
+  wsl debug 667/667) the slice adds 78 tests on each OS. That is what it added over its base 6fb6826: 516 and 482
+  at 7ae2ab5, against 438 and 404 at the piece-tree head, so no test was lost in the merge. The test steps took
+  136.0 s (Windows) and 81.6 s (WSL). The run rebuilt the text library and its tests in the WSL mirror, so it is
+  not a B28 sample; re-measuring B28 is in Next.
+- `-Quick` builds no ASan, TSan or fuzz tree. The merge had no conflicts and changes no build flag, so the slice's
+  own sanitizer results at 7ae2ab5 (151/151 on each of Windows ASan, WSL ASan+UBSan and WSL TSan) and its `-Full`
+  fuzz legs at 81afd3a (win fuzz 2/2, wsl fuzz 2/2) stand. Fuzz trees now build `frost_text_test_support` with the
+  undo oracle and driver, and `frost_input` from the previous merge; neither tree was rebuilt for this merge, and
+  `verify -Full`'s fuzz legs cover them.
 
 #### Merge of `m1/input-keymap` (3db37c5)
 - **The merge** (3db37c5) of `m1/input-keymap` (c78db87) into `main` at 5f377e7: frost::input and frost::ui_input
@@ -115,16 +149,32 @@ them. Merge notes in them mark what has changed since.
   (IKeymapSettings, the dispatch filter, menus), `m1/editor-view` and `m1/editor-model` (the editor actions and
   contexts), `m1/shell-nav` (the Find Action popup and the Keymap page) and `m1/automation-bench` (the real native
   key path on the real desktop, which needs your approval while you are at the PC).
-- The other M1 slices. `m1/undo-anchors`, `m1/encodings` and `m1/diff-merge` have worktrees on 6fb6826, the
-  piece-tree head; `m1/storage` and `m1/theme-icons` are as the entry "M0 complete" describes.
+- The other M1 slices. `m1/encodings` and `m1/diff-merge` have worktrees on 6fb6826, the piece-tree head;
+  `m1/storage` and `m1/theme-icons` are as the entry "M0 complete" describes.
   Then `m1/large-file` (mapped originals, B15 at the buffer level, the background release of big trees:
   `TODO(M1)` in `snapshot.hpp`) and the editor model (the slice record "M1 first slice", "Next").
 - Re-measure B28 with ADR 0010's harness (the slice record "M1 first slice", "B28 effect").
 - The M1 work from ADR 0011's Consequences and ADR 0012's `TODO(M1)`s (entry "M0 complete").
 
 ### Blockers
-- None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; `m1/input-keymap` lists none.
+- None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
+  `m1/input-keymap` and `m1/undo-anchors` name none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
+
+### Questions for the user
+From `m1/undo-anchors` (ADR 0017), asked at its merge:
+- **Undo defaults** (non-blocking; they become settings later): consecutive typing, backspace and delete merge into
+  one undo step within 1000 ms while the caret stays put; history is capped at 1000 steps per document. Keep, or
+  other values?
+- **Edits from elsewhere** (another split on the same file, formatting, reload): carets move after text inserted
+  exactly at them, and selections grow to include text inserted at their edges. Keep, or should carets stay before
+  inserted text? One function sets this.
+- **IME:** preedit text sits in the buffer tagged as composition (never in undo, never saved: `committedText()` is
+  what saves use), so highlighting sees it while composing. The alternative is a view-only inlay; `m1/editor-view`
+  decides. Any preference?
+- **Only if B28** (`-Quick` p50 5 min) is still over budget at M1 exit: may `AnchorSet.MatchesNaiveModel` and the
+  `UndoProperty` cases move to the stress label? That would weaken `-Quick`, so it needs your approval; nothing is
+  moved now.
 
 ### User decisions (2026-11-01, evening)
 The user answered the open questions; their words are quoted.
@@ -149,6 +199,31 @@ The user answered the open questions; their words are quoted.
 - **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
 - **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
   reordered into a thin path to a first usable build (ADR 0029, in progress).
+
+### Slice record: `m1/undo-anchors` (ADR 0017)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A core-tier slice: design,
+critic, build, two independent reviews, fixes, then an independent re-review of the fix commit (approve; weakening:
+no). Worktree `.claude\worktrees\m1-undo-anchors`, branch from `m1/piece-tree` (6fb6826). (Merge note: merged into
+`main` as 3163d0b and pushed; the M1 entry above.)
+
+#### Done
+- **frost::text Document** (`src/text`, 81afd3a): biased anchors that resolve against later snapshots;
+  SelectionSet (multi-caret, normalised and merged, with an origins map); and a transactional undo tree: groups,
+  typing coalescing by time and kind, redo branches, IME preedit kept out of history, ChangeSets with a base
+  version, `UndoState.stateId` for the dirty flag, and `committedText()`.
+- **Review fixes** (7ae2ab5): coalesced delete runs keep whole pieces, so the history memory per deleting keystroke
+  is no longer about 90 times that of typing; AnchorSet's path thresholds use measured factors; pruned redo branches
+  are freed later rather than in the keystroke that prunes them; and the restore scan's finds no longer allocate.
+- **Verification at 7ae2ab5:** `verify -Quick` win debug 513/516 (the two FrostProcess long-path failures then known
+  on its pre-M0 base, and 1 skip), wsl debug 482/482; Windows Release text 139/139, stress 6/6, perf 3/3 twice with
+  B5 asserted (typing p99 48.2 and 42.8 us, undo/redo p99 100.1 and 54.4 us); Windows ASan, WSL ASan+UBSan and WSL
+  TSan 151/151 each on the text tests. (Merge note: those failures and the skip no longer apply on `main`; the M1
+  entry above.)
+
+#### Left
+- Six low items, recorded in ADR 0017.
+- The four questions in the M1 entry's "Questions for the user", marked as `m1/undo-anchors`'s.
 
 ### Slice record: `m1/input-keymap` (ADR 0016)
 
