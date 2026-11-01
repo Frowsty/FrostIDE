@@ -158,9 +158,12 @@ directory where a file is → AlreadyExists).
 - `terminate()` reports exit code `kTerminatedExitCode` (137 = 128 + SIGKILL) on both platforms; POSIX also
   reports the signal.
 - Deadlines saturate: `timeout` values up to `Duration::max()` mean "effectively no deadline" instead of
-  overflowing `steady_clock::now() + timeout`. A single `poll` or `Wait*` call blocks for at most 2^30 ms
-  (about 12.4 days), and every wait re-checks its deadline when such a slice ends, so a far deadline is
-  never cut short; tests lower the slice to cover that loop.
+  overflowing `steady_clock::now() + timeout`. A single `poll` or `Wait*` call that has a deadline blocks
+  for at most 2^30 ms (about 12.4 days), and every such wait re-checks its deadline when a slice ends, so
+  a far deadline is never cut short; tests lower the slice to cover that loop. Waits without a deadline
+  (`wait()` with no timeout, and the blocking `readStdout`, `readStderr` and `writeStdin`) still block in
+  one call: `WaitForSingleObject(INFINITE)` or `GetOverlappedResult(..., TRUE)` on Windows, a blocking
+  `waitid` or `poll(-1)` on POSIX.
 - Not yet: logging of the resolved launch (PLAN.md 3.5; TODO(M1) once core has logging), async pipes on the
   reactor (TODO(M1)), supervision with restart (TODO(M3), the M3 supervisor).
 

@@ -31,12 +31,12 @@
  *     trees, matching NTFS.
  *   - Errors use the same codes and refinements as file_system.hpp.
  *   - writeFileAtomic runs the same protocol as the real one: it creates a
- *     ".<name>.frost-tmp-<pid>-<n>" entry (<name> cut to its first 64 bytes),
- *     fills it, then renames it over the target, all under one lock (no caller
- *     can observe the temp entry), so faults can be injected at either step
- *     (FsOp::Write fails before the temp file exists, FsOp::AtomicRename after
- *     it has been written). Either way the target keeps its old content and
- *     the temp entry is removed.
+ *     ".<name>.frost-tmp-<pid>-<n>" entry (<name> cut to at most 64 bytes at a
+ *     UTF-8 character boundary), fills it, then renames it over the target,
+ *     all under one lock (no caller can observe the temp entry), so faults can
+ *     be injected at either step (FsOp::Write fails before the temp file
+ *     exists, FsOp::AtomicRename after it has been written). Either way the
+ *     target keeps its old content and the temp entry is removed.
  *   - Every successful mutation stamps the touched entry with clock.systemNow(),
  *     and the parent directory too for every writeFileAtomic (the temp-file
  *     rename changes the directory, as on disk), creation and removal.

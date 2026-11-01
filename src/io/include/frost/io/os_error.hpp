@@ -14,8 +14,9 @@
  * text (frost/core/error.hpp). On Windows FormatMessageW is asked for en-US
  * first, then the user's language. On POSIX the text is the C library's
  * strerror text, which glibc translates for LC_MESSAGES; Qt sets that from the
- * environment, so it is English only in a process whose locale is "C" (the
- * unit tests, for example).
+ * environment, so English is guaranteed only in a "C"-locale process (the
+ * non-Qt unit tests, for example; the Qt test binaries create a QApplication,
+ * which calls setlocale, so they follow the environment like the IDE).
  *
  * Mapping, by intent rather than by the letter of each OS code (Win32 codes
  * first, then errno values):

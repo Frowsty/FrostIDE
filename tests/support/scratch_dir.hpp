@@ -69,7 +69,8 @@ inline bool removeTree(io::IFileSystem& fs, const std::string& path) {
 class ScratchDir {
 public:
     // Creates "<temp>/frost-<tag>-<pid>-<n>"; `tag` may contain any characters valid in a file name.
-    // On failure records a test failure (ADD_FAILURE) and path() is empty.
+    // On failure records a test failure (ADD_FAILURE); path() is empty if no name could be formed
+    // (no usable temp directory, or joinPath rejected `tag`), otherwise it names the uncreated directory.
     explicit ScratchDir(std::string_view tag) {
         // Per-process sequence for directory names; only uniqueness matters, so no ordering is
         // needed (a relaxed fetch_add would do).

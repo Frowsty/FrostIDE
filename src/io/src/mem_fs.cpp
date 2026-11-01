@@ -360,8 +360,11 @@ Result<void> MemFs::createDirectories(std::string_view path) {
         }
     }
     while (!missing.empty()) {
-        Error error(ErrorCode::NotFound,
-                    std::format("createDirectories '{}': '{}' vanished while being created", path, missing.back()));
+        // Unreachable here: under the lock, the parent just made (or found) cannot disappear. The text
+        // matches the real implementations, where a concurrent removal of that parent ends here.
+        const std::string_view child = missing.back();
+        Error error(ErrorCode::NotFound, std::format("createDirectories '{}': '{}' vanished before '{}' was created",
+                                                     path, parentPath(child, m_style), child));
         if (makeDirectory(missing.back(), path, error) != MkdirOutcome::Done) {
             return std::unexpected(std::move(error));
         }

@@ -333,9 +333,11 @@ public:
             }
         }
         while (!missing.empty()) {
-            // ParentMissing here means the parent just made (or found) is gone again.
+            // ParentMissing here means the parent just made (or found) is gone again; the error names it.
+            const std::string_view child = missing.back();
             Error error(ErrorCode::NotFound, "createDirectories '" + std::string(path) + "': '" +
-                                                 std::string(missing.back()) + "' vanished while being created");
+                                                 std::string(parentPath(child, PathStyle::Windows)) +
+                                                 "' vanished before '" + std::string(child) + "' was created");
             if (makeDirectory(missing.back(), path, error) != MkdirOutcome::Done) {
                 return std::unexpected(std::move(error));
             }

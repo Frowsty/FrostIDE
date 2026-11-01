@@ -121,11 +121,13 @@ struct AclFloor {
 inline constexpr std::int64_t kDefaultMaxWaitSliceMs = std::int64_t{1} << 30;
 
 /*
- * The longest single blocking wait (one poll() or Wait* call) in milliseconds,
- * kDefaultMaxWaitSliceMs unless a test lowered it. A wait whose deadline is
- * further away blocks in slices and re-checks the deadline after each, so a
- * slice that ends is never mistaken for the deadline and even a timeout of
- * IClock::Duration::max() does not end early. Thread-safe (relaxed atomic).
+ * The longest single blocking wait that has a deadline (one poll() or Wait*
+ * call) in milliseconds, kDefaultMaxWaitSliceMs unless a test lowered it. A
+ * wait whose deadline is further away blocks in slices and re-checks the
+ * deadline after each, so a slice that ends is never mistaken for the deadline
+ * and even a timeout of IClock::Duration::max() does not end early. Waits with
+ * no deadline (wait() without a timeout, the blocking pipe reads and writes)
+ * are not sliced and block in one call. Thread-safe (relaxed atomic).
  */
 [[nodiscard]] std::int64_t maxWaitSliceMs() noexcept;
 

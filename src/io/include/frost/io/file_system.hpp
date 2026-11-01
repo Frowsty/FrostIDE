@@ -83,13 +83,13 @@ public:
      * complete new content, never a mixture or a truncated file.
      *
      * Protocol: write a temporary file in the same directory
-     * (".<name>.frost-tmp-<pid>-<n>", with <name> cut to its first 64 bytes, created
-     * exclusively), flush it to stable storage, then rename it over the
-     * target in one step (MoveFileExW with MOVEFILE_REPLACE_EXISTING |
-     * MOVEFILE_WRITE_THROUGH on Windows; rename() then an fsync of the directory
-     * on POSIX). On any failure the temporary file is removed and the target is
-     * left as it was. A process killed mid-write can leave a temporary file
-     * behind but never a damaged target.
+     * (".<name>.frost-tmp-<pid>-<n>", with <name> cut to at most 64 bytes at a
+     * UTF-8 character boundary, created exclusively), flush it to stable storage,
+     * then rename it over the target in one step (MoveFileExW with
+     * MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH on Windows; rename() then
+     * an fsync of the directory on POSIX). On any failure the temporary file is
+     * removed and the target is left as it was. A process killed mid-write can
+     * leave a temporary file behind but never a damaged target.
      *
      * POSIX metadata. A new file is created like any open(O_CREAT, 0666), so the
      * umask or the directory's default ACL decides its mode. When a file is
@@ -113,14 +113,15 @@ public:
      * POSIX access ACL; Windows attributes, ACLs and alternate streams; hard-link
      * identity and symlinks: on POSIX a symlink at `path` is replaced by a regular
      * file, which takes the owner, mode and access ACL of the file the link pointed
-     * to; on Windows a directory symlink or junction at `path` makes the call fail
-     * with InvalidArgument ("is a directory") and is left in place.
+     * to; on Windows a file symlink at `path` is replaced too, even one that points
+     * at a directory, while a directory symlink or junction, even a dangling one,
+     * makes the call fail with InvalidArgument ("is a directory") and is left in place.
      * SaveManager (M1) adds metadata and symlink preservation on top of this
      * primitive. TODO(M1): sweep stale .frost-tmp-* files left by killed processes.
      *
      * Errors: NotFound (parent directory missing), PermissionDenied, Busy,
-     * InvalidArgument (the target is a directory, or on Windows a link to one),
-     * IoError (disk full, ...).
+     * InvalidArgument (the target is a directory, or on Windows a directory
+     * symlink or junction, even a dangling one), IoError (disk full, ...).
      */
     [[nodiscard]] virtual Result<void> writeFileAtomic(std::string_view path, std::string_view data) = 0;
 
