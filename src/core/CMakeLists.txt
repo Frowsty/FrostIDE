@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# frost::core: error model, contract checks, strong index types, the clock seam and build
-# information. Qt-free; everything else builds on it.
+# frost::core: error model, contract checks, strong index types, the clock seam,
+# thread-safety annotations and annotated locks, and build information. Qt-free;
+# everything else builds on it.
 configure_file(include/frost/core/build_info.hpp.in
                ${CMAKE_CURRENT_BINARY_DIR}/generated/frost/core/build_info.hpp @ONLY)
 

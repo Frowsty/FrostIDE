@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Test suites, one directory per module (PLAN.md section 6.1). Unit tests are
-# labelled "unit", process-level tests "integration"; verify scripts select by label.
+# Test suites, one directory per module plus tests of the build (cmake), the
+# repository tools (tools) and the toolchain (toolchain_probe). frost_add_test
+# labels tests "unit" by default; process-level tests are "integration", long runs
+# "stress", timing tests "perf". The verify scripts' debug leg excludes "stress"
+# (-LE stress); the -Full legs run every label.
 add_subdirectory(compat)
 add_subdirectory(core)
 add_subdirectory(sched)

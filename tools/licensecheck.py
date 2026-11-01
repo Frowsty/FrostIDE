@@ -574,6 +574,7 @@ def load_qt_sbom(qt_root: Path | None) -> dict[tuple[str, str], str]:
 
 
 def qt_version(qt_root: Path | None) -> str:
+    """The Qt version from <qt_root>/sbom/qtbase-<version>.spdx.json, else NOASSERTION."""
     if qt_root is not None:
         for path in sorted((qt_root / "sbom").glob("qtbase-*.spdx.json")) if (qt_root / "sbom").is_dir() else []:
             m = re.match(r"qtbase-(.+)\.spdx\.json$", path.name)
@@ -733,6 +734,7 @@ def default_vcpkg_roots(repo: Path) -> list[Path]:
 
 
 def default_build_dirs(repo: Path) -> list[Path]:
+    """Every directory under <repo>/build except vcpkg_installed* and sbom (the --build-dir default)."""
     build = repo / "build"
     if not build.is_dir():
         return []

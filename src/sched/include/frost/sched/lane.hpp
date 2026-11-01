@@ -39,7 +39,7 @@ using LaneMask = std::uint8_t;
 
 inline constexpr LaneMask kLowLanes = static_cast<LaneMask>(laneBit(Lane::Background) | laneBit(Lane::Idle));
 
-// "Interactive", "UserVisible", "Background" or "Idle" ("Lane(<n>)" is never returned: Lane is closed).
+// "Interactive", "UserVisible", "Background" or "Idle"; "Lane(?)" only for a value outside the enum (e.g. a bad cast).
 [[nodiscard]] std::string_view toString(Lane lane) noexcept;
 
 } // namespace frost::sched

@@ -61,6 +61,8 @@ public:
     // One-line description for logs: "NotFound: no such file [while loading x] (error.cpp:12)".
     [[nodiscard]] std::string describe() const;
 
+    // Equal when code() and message() match; where() and context() are ignored, so
+    // the same failure raised at different call sites compares equal.
     friend bool operator==(const Error& a, const Error& b) noexcept {
         return a.m_code == b.m_code && a.m_message == b.m_message;
     }

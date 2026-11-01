@@ -39,8 +39,9 @@ public:
     void unlock() FROST_RELEASE() { m_mutex.unlock(); }
     [[nodiscard]] bool try_lock() FROST_TRY_ACQUIRE(true) { return m_mutex.try_lock(); }
 
-    // The underlying mutex, for std::condition_variable. Callers must hold the lock
-    // already (e.g. through UniqueLock); the analysis does not see waits.
+    // The underlying std::mutex, so UniqueLock can wrap it in a std::unique_lock for
+    // std::condition_variable. Locking or unlocking it directly bypasses -Wthread-safety;
+    // use LockGuard or UniqueLock instead.
     [[nodiscard]] std::mutex& native() noexcept { return m_mutex; }
 
 private:

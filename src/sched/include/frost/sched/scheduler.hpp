@@ -7,9 +7,10 @@
 //
 //   co_await scheduler.schedule(Lane::Background);        // hop onto a lane
 //   bool expired = co_await scheduler.sleepFor(50ms, token);  // timer via the scheduler's IClock
-//   JoinHandle<int> h = scheduler.spawn(Lane::UserVisible, compute(token), token);
-//   int value = co_await std::move(h);                     // or h.join() from a plain thread
-//   int other = syncWait(compute(token));                  // blocking, for tests and non-coroutine callers
+//   // compute() returns Task<Result<int>>: the token overload takes Result and void tasks only.
+//   JoinHandle<Result<int>> h = scheduler.spawn(Lane::UserVisible, compute(token), token);
+//   Result<int> value = co_await std::move(h);             // or h.join() from a plain thread
+//   Result<int> other = syncWait(compute(token));          // blocking, for tests and non-coroutine callers
 //
 // Lanes of continuations. A coroutine stays on the lane it was last dispatched
 // on: awaiting a Task runs it inline in the same lane, and only schedule(),
@@ -24,9 +25,15 @@
 // LatestWins (latest_wins.hpp) builds "latest request wins" on top.
 //
 // Shutdown (both implementations, see ThreadPool::shutdown): the scheduler's
-// stop token is requested, pending and future sleeps complete immediately with
-// `false`, and all remaining work runs to completion before shutdown returns
-// ("drain"). Nothing is destroyed half-run, so every JoinHandle completes.
+// stop token is requested; pending sleeps complete immediately with `false`
+// (even one whose deadline has passed but has not fired yet), and so do later
+// sleeps that would have to wait; a later sleep whose deadline has already
+// passed still yields true unless its token is stopped; and everything the
+// scheduler knows about (queued, running or sleeping) runs to completion
+// before shutdown returns ("drain"). Nothing is destroyed half-run, so every
+// JoinHandle whose task only waits on this scheduler completes. A coroutine
+// suspended on another scheduler or an external event is not part of the
+// drain: it may still be pending when shutdown returns.
 //
 // Not in this slice:
 // TODO(M1): MainThreadDispatcher (Qt event per frame) lives in src/ui; it will implement IScheduler's
@@ -349,8 +356,9 @@ JoinFrame<T> runJoined(Task<T> task, std::stop_token token) {
 // The single consumer of a spawned task's result. Move-only. Destroying it (or
 // detach()) gives up the result; the task keeps running. Thread safety: one
 // thread uses a JoinHandle at a time; it may race freely with the task finishing.
-// Lifetime: a ready handle may outlive its scheduler (every handle is ready once
-// its scheduler has shut down); a pending one must not (see join()).
+// Lifetime: a ready handle may outlive its scheduler (once its scheduler has shut
+// down, every handle whose task only waited on that scheduler is ready); a pending
+// one must not (see join()).
 template<class T>
 class [[nodiscard]] JoinHandle {
 public:
@@ -398,8 +406,9 @@ public:
     // finish (an idle scheduler with the task pending is a contract violation,
     // i.e. a deadlock).
     // Lifetime: a ready handle may outlive its scheduler (shutdown drains, so
-    // every handle is ready once the scheduler is gone) and join() then only
-    // takes the result. A pending handle must not outlive its scheduler.
+    // every handle whose task only waited on that scheduler is ready once it is
+    // gone) and join() then only takes the result. A pending handle must not
+    // outlive its scheduler.
     T join() {
         FROST_PRE(valid());
         detail::JoinPromise<T>& promise = m_frame.promise();

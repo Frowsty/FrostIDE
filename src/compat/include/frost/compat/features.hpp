@@ -4,8 +4,11 @@
 //
 // The supported standard libraries differ: MSVC STL 14.44 on Windows and
 // libstdc++ 14 (the floor) on Linux. Each FROST_HAS_* macro is 1 when the
-// standard library provides the feature itself and 0 when frost/compat must
-// supply it. Polyfill headers key on these macros, and each polyfill states its
+// standard library provides the feature and 0 otherwise. So far only
+// function_ref.hpp and saturate.hpp polyfill on them; the other macros (flat_map,
+// inplace_vector, ...) are probes for planned polyfills (PLAN.md section 2.1), and
+// code must not assume frost/compat supplies those yet. FROST_HAS_STD_EXPECTED is
+// a hard requirement (see the static_assert below). Each polyfill states its
 // removal condition, so retiring one is a matter of raising a library floor.
 #pragma once
 

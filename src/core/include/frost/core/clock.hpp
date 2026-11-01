@@ -25,7 +25,12 @@ public:
     // Wall-clock time for display and file timestamps; may jump.
     using SystemTime = std::chrono::time_point<std::chrono::system_clock, Duration>;
 
+    // Current steady time; never earlier than a previous call on the same clock.
+    // Implementations must be safe to call from any thread that uses the clock
+    // (ThreadPool reads it on its timer thread and workers). O(1), never blocks.
     [[nodiscard]] virtual SteadyTime steadyNow() const noexcept = 0;
+    // Current wall-clock time; may jump in either direction between calls. Same
+    // thread-safety and cost requirements as steadyNow().
     [[nodiscard]] virtual SystemTime systemNow() const noexcept = 0;
 
 protected:
@@ -79,6 +84,9 @@ public:
     }
 
 private:
+    // Nanosecond ticks since each clock's epoch. Advances are release and reads are
+    // acquire, so a worker that observes a new time also observes everything the
+    // advancing thread wrote before advance() or setSystemTime().
     std::atomic<Duration::rep> m_steady;
     std::atomic<Duration::rep> m_system;
 };

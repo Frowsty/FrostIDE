@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# FrostLayers.cmake: target helpers that enforce the module layering from
-# PLAN.md section 3.1/3.2 at configure time.
+# FrostLayers.cmake: target helpers that enforce the module layering at configure
+# time. The layer ranks below are the source of truth for the dependency order of
+# the modules listed in PLAN.md section 3.2; the Qt rule is PLAN.md section 2
+# ("Process model and IPC") and section 6.5.
 #
 # Every FrostIDE library belongs to a layer with a rank. A library may depend
 # only on libraries of a strictly lower rank, or on libraries of its own layer.
@@ -17,7 +19,8 @@
 #
 #   frost_add_library(<name> LAYER <layer> [SOURCES ...] [DEPS frost libs...]
 #                     [THIRD_PARTY imported targets...] [INTERFACE])
-#   frost_add_executable(<name> LAYER <layer> SOURCES ... [DEPS ...] [THIRD_PARTY ...])
+#   frost_add_executable(<name> LAYER <layer> [WIN32] [OUTPUT_NAME <file name>]
+#                        SOURCES ... [DEPS ...] [THIRD_PARTY ...])
 #   frost_add_test(<name> SOURCES ... [DEPS ...] [THIRD_PARTY ...] [LABELS ...] [QT])
 
 include_guard(GLOBAL)
@@ -203,6 +206,11 @@ function(_frost_check_layer_graph)
 endfunction()
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_check_layer_graph)
 
+# Creates FrostIDE library frost_<name> (alias frost::<name>) in <layer>: STATIC
+# from SOURCES with PRODUCTION options, or with INTERFACE a header-only INTERFACE
+# library (no compile options of its own). DEPS (FrostIDE libraries, rank-checked)
+# and THIRD_PARTY (imported targets) are linked PUBLIC/INTERFACE; the target is
+# recorded in FROST_LAYERED_TARGETS for the deferred graph check.
 function(frost_add_library name)
     cmake_parse_arguments(ARG "INTERFACE" "LAYER" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
     set(target frost_${name})
@@ -223,6 +231,9 @@ function(frost_add_library name)
     add_library(frost::${name} ALIAS ${target})
 endfunction()
 
+# Creates executable <name> in <layer> with PRODUCTION options; DEPS and THIRD_PARTY
+# are checked as for frost_add_library and linked PRIVATE. WIN32 selects the GUI
+# subsystem; OUTPUT_NAME renames the produced file.
 function(frost_add_executable name)
     cmake_parse_arguments(ARG "WIN32" "LAYER;OUTPUT_NAME" "SOURCES;DEPS;THIRD_PARTY" ${ARGN})
     _frost_check_layering(${name} "${ARG_LAYER}" "${ARG_DEPS}" "${ARG_THIRD_PARTY}")
@@ -268,6 +279,8 @@ endfunction()
 # QT marks tests that need Qt at runtime. They link tests/support/qt_test_main.cpp
 # instead of gtest_main: it selects the offscreen platform and Qt's plugin
 # directory before creating the QApplication, so ctest needs no environment setup.
+# LABELS defaults to unit. On Windows the test embeds the FrostIDE manifest
+# (test_manifest.rc) and the linker's own manifest is disabled.
 function(frost_add_test name)
     cmake_parse_arguments(ARG "QT" "" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
     if(ARG_QT)

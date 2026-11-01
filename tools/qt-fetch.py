@@ -116,7 +116,8 @@ def find_package(updates_xml: bytes, name: str) -> ET.Element:
 def extract_targets(package: ET.Element) -> dict:
     """
     Maps each archive file name to the directory its Extract operation names,
-    relative to the installer's @TargetDir@ (e.g. "6.12.0/msvc2022_64/bin").
+    relative to the installer's @TargetDir@ (e.g. "6.12.0/msvc2022_64"; the archives
+    carry their own bin/, lib/ and include/ prefixes).
     """
     targets = {}
     for op in package.iter("Operation"):

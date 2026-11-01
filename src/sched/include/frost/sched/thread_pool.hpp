@@ -15,9 +15,10 @@
  * be overtaken forever by newer work.
  *
  * Low-lane cap. At most lowLaneCap() Background+Idle segments run at once
- * (default: N-4, at least 1, and at most workers-1), so at least one worker is
- * always free of low-lane work and Interactive work never waits behind
- * indexing. A "segment" is one resume of a coroutine until it next suspends.
+ * (default: N-4, at least 1, and at most workers-1 when there are two or more
+ * workers), so with two or more workers at least one is always free of low-lane
+ * work and Interactive work never waits behind indexing. A one-worker pool has a
+ * cap of 1. A "segment" is one resume of a coroutine until it next suspends.
  *
  * Parking. Idle workers spin briefly, then park on an event count (m_epoch,
  * std::atomic::wait). Producers bump it after publishing work when a worker
@@ -77,7 +78,8 @@ class ThreadPool final : public IScheduler {
 public:
     // Every kFifoPeriod-th dispatch of a worker takes the oldest available element (in dispatches).
     static constexpr std::uint32_t kFifoPeriod = 32;
-    // Rounds of re-searching (each followed by a CPU pause burst) before a worker parks.
+    // Rounds of (a burst of CPU pauses, kPausesPerSpinRound in thread_pool.cpp, then a
+    // full re-search) before a worker parks.
     static constexpr unsigned kSpinRounds = 16;
     // Steal attempts per victim and lane after losing a race (StealStatus::Abort).
     static constexpr unsigned kStealRetries = 2;
@@ -87,22 +89,31 @@ public:
     // hardware_concurrency() - 4, at least 1 (before clamping to the worker count).
     [[nodiscard]] static unsigned defaultLowLaneCap() noexcept;
 
-    // Starts the workers and the timer thread. Allocation or thread-creation failure terminates.
-    explicit ThreadPool(ThreadPoolOptions options = {});
+    // Starts the workers and the timer thread. Allocation or thread-creation failure
+    // terminates (noexcept, so no exception leaves the constructor).
+    explicit ThreadPool(ThreadPoolOptions options = {}) noexcept;
 
     // Calls shutdown(). Precondition: not called from one of this pool's workers.
     ~ThreadPool();
 
     // Drains and stops the pool (idempotent):
     //  1. requests stopToken();
-    //  2. completes every pending sleep immediately with `false`; later sleeps do the same;
+    //  2. completes every pending sleep immediately with `false` (even one whose
+    //     deadline has passed but has not fired yet); later sleeps that would have
+    //     to wait do the same, and a later sleep whose deadline has already passed
+    //     still yields true unless its token is stopped;
     //  3. keeps dispatching until nothing is queued, running or sleeping, so every
-    //     queued task runs (observing the stop if it checks) and every JoinHandle completes;
+    //     queued task runs (observing the stop if it checks) and every JoinHandle
+    //     whose task only waits on this pool completes (a coroutine suspended on
+    //     another scheduler or an external event is not part of the drain);
     //  4. joins the workers and the timer thread.
     // Tasks may spawn and schedule more work while draining; work that never
     // finishes (an infinite loop ignoring stopToken()) makes shutdown hang.
-    // Preconditions: not called from a worker; after shutdown has returned, no
-    // thread may enqueue work. Thread-safe against concurrent enqueue from tasks.
+    // Preconditions: called from one thread at a time (the owner; the destructor
+    // counts), never from one of this pool's workers. Once shutdown() has begun,
+    // only this pool's own tasks (and the stop callbacks of their sleeps) may
+    // enqueue work; an enqueue from another thread after the drain has gone
+    // quiescent violates enqueue()'s precondition.
     void shutdown();
 
     // Blocks until nothing is queued, running or sleeping (a moment of quiescence;
@@ -174,9 +185,14 @@ private:
     // Units of outstanding work: +1 per enqueue and per registered timer, -1 when a
     // segment ends or a timer's unit is handed to the queue. Zero means quiescent.
     alignas(64) std::atomic<std::int64_t> m_outstanding{0};
+    // Low-lane slots in use: +1 by tryReserveLowSlot() before taking Background/Idle
+    // work, -1 when that segment ends, or at once when the reserved lane yielded no
+    // element (findWork()). Seq_cst on the handshake paths (see park()).
     alignas(64) std::atomic<std::int64_t> m_lowRunning{0};
     // Event count for parking: bumped by every wake; parked workers wait on its value.
     alignas(64) std::atomic<std::uint32_t> m_epoch{0};
+    // Workers inside park() (announced before the re-check). Producers read it to
+    // decide whether to wake (Dekker with park()).
     std::atomic<std::int64_t> m_sleepers{0};
     std::atomic<bool> m_draining{false}; // shutdown() has flushed timers and waits for quiescence.
     std::atomic<bool> m_exit{false};     // Quiescent while draining: workers leave.

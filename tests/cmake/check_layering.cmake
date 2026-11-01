@@ -24,16 +24,19 @@ set(expected
     "frost_bad_wrapper (layer io) reaches Qt (Qt6::Core)"
     "frost_bad_raw (layer core) links frost_ok_io (layer io)"
     "frost_bad_subdir_qt (layer io) reaches Qt (Qt6::Gui)"
-    "frost_bad_subdir_hidden links Pkg::thing, which is not visible from the top-level directory")
+    "frost_bad_subdir_hidden links Pkg::thing, which is not visible from the top-level directory"
+    "frost_bad_deps: 'plain_helper' is not a FrostIDE library; list it under THIRD_PARTY"
+    "frost_bad_alias_qt (layer io) reaches Qt (fixture::qt_alias)")
 foreach(text IN LISTS expected)
     string(FIND "${flat}" "${text}" position)
     if(position EQUAL -1)
         message(FATAL_ERROR "missing diagnostic: '${text}'\nconfigure output:\n${output}")
     endif()
 endforeach()
-# Diagnostics name their owner after "violation: " or as "<owner>: '"; a valid
-# target may still appear as the *dependency* of a bad one.
-string(REGEX MATCH "violation: frost_ok_[a-z]+|frost_ok_[a-z]+: '" valid_hit "${flat}")
+# Diagnostics name their owner after "violation: ", as "<owner>: '" or as
+# "<owner> links "; a valid target may still appear as the *dependency* of a bad
+# one ("links frost_ok_io (layer ...").
+string(REGEX MATCH "violation: frost_ok_[a-z]+|frost_ok_[a-z]+: '|frost_ok_[a-z]+ links " valid_hit "${flat}")
 if(valid_hit)
     message(FATAL_ERROR "a valid target was reported (${valid_hit}):\n${output}")
 endif()

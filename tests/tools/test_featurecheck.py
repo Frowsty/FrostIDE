@@ -77,6 +77,20 @@ class FeatureCheckTest(TempDirTestCase):
         self.assertEqual(json.loads(self.matrix.read_text(encoding="utf-8"))
                          ["inspection_counts"]["s9_baseline"]["clang_tidy_checks"], 406)
 
+    def test_generate_refuses_to_overwrite_an_unparsable_matrix(self) -> None:
+        self._generate()
+        document = json.loads(self.matrix.read_text(encoding="utf-8"))
+        for row in document["rows"]:
+            if row["id"] == "28":
+                row["status"], row["acceptance_test"] = "green", "ui.file_system_view"
+        # A merge conflict leaves the hand-maintained fields in a file that no longer parses.
+        broken = "<<<<<<< HEAD\n" + featurecheck.render(document)
+        self.matrix.write_text(broken, encoding="utf-8", newline="\n")
+        result = run_tool("featurecheck.py", "--repo", str(self.tmp), "generate")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("tests/features/matrix.json:1: not valid JSON", result.stdout)
+        self.assertEqual(self.matrix.read_text(encoding="utf-8"), broken)
+
     def test_out_of_date_matrix_fails(self) -> None:
         self._generate()
         self._edit_plan("57 gutter (+M6)", "57 gutter (+M7)")

@@ -10,8 +10,9 @@
 # --exclude-standard`, so build trees and the ignored .claude/worktrees are skipped;
 # when the tree is not a git checkout, as in the WSL ext4 mirror, a .gitignore-aware
 # walk stands in). Rules, each reported under its name:
-#   spdx-header   source files (SOURCE_SYNTAX below) start with a header comment that
-#                 holds an SPDX-License-Identifier line and says what the file is for;
+#   spdx-header   source files (SOURCE_SYNTAX_BY_SUFFIX and SOURCE_SYNTAX_BY_NAME below)
+#                 start with a header comment that holds an SPDX-License-Identifier
+#                 line and says what the file is for;
 #   reuse         every other file is covered by a REUSE.toml annotation or a
 #                 `<file>.license` sidecar (a `reuse lint` equivalent);
 #   todo          to-do markers in comments name an open milestone M0..M14;
@@ -43,7 +44,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 if sys.version_info < (3, 11):
-    sys.exit("frost_lint.py needs Python 3.11 or newer (tomllib)")
+    # An environment error, so exit status 2 (sys.exit with a message would exit 1).
+    print("frost_lint.py needs Python 3.11 or newer (tomllib)", file=sys.stderr)
+    sys.exit(2)
 
 import tomllib  # noqa: E402  (after the version check on purpose)
 
@@ -138,6 +141,9 @@ PYTHON = Syntax("Python", "hash", quotes=("'", '"'), triple_quotes=True)
 YAML = Syntax("YAML", "hash", quotes=("'", '"'), hash_word_start=True, raw_single_quotes=True)
 TOML = Syntax("TOML", "hash", quotes=("'", '"'), triple_quotes=True, raw_single_quotes=True)
 INI = Syntax("INI", "hash", ini=True)
+# .gitignore and .gitattributes: '#' starts a comment only at the start of a line. The
+# INI scanner also reads a leading ';' as one; harmless, since only comments are checked.
+GIT_PATTERNS = Syntax("git pattern file", "hash", ini=True)
 XML = Syntax("XML", "xml")
 BATCH = Syntax("batch", "bat")
 
@@ -169,6 +175,8 @@ SOURCE_SYNTAX_BY_NAME: dict[str, Syntax] = {
     ".clang-tidy": YAML,
     ".clangd": YAML,
     ".editorconfig": INI,
+    ".gitignore": GIT_PATTERNS,
+    ".gitattributes": GIT_PATTERNS,
 }
 
 
@@ -989,7 +997,8 @@ def lint(repo: Path, files: list[str] | None = None) -> list[Violation]:
                 violations.append(Violation(
                     rel, 1, "reuse",
                     "not covered by REUSE.toml or a .license sidecar (if this file type has comment "
-                    "syntax, add it to SOURCE_SYNTAX in tools/frost_lint.py and give it a header)"))
+                    "syntax, add its extension to SOURCE_SYNTAX_BY_SUFFIX (or its name to "
+                    "SOURCE_SYNTAX_BY_NAME) in tools/frost_lint.py and give it a header)"))
             continue
         violations.extend(lint_file(repo, rel, budget_ids))
     return sorted(set(violations))
@@ -1004,8 +1013,17 @@ def main(argv: list[str] | None = None) -> int:
     if not repo.is_dir():
         print(f"frost-lint: {repo} is not a directory", file=sys.stderr)
         return 2
-    files = list_repo_files(repo)
-    violations = lint(repo, files)
+    # A failing git or an unreadable tree is an environment error, not a violation.
+    try:
+        files = list_repo_files(repo)
+        violations = lint(repo, files)
+    except subprocess.CalledProcessError as error:
+        stderr = error.stderr.decode("utf-8", "replace") if isinstance(error.stderr, bytes) else error.stderr
+        print(f"frost-lint: {(stderr or '').strip() or error}", file=sys.stderr)
+        return 2
+    except OSError as error:
+        print(f"frost-lint: {error}", file=sys.stderr)
+        return 2
     for violation in violations:
         print(violation)
     print(f"frost-lint: {len(files)} files, {len(violations)} violation(s)", file=sys.stderr)

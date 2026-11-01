@@ -80,7 +80,8 @@ function Assert-Hash([string]$Path, $Pin) {
 }
 
 # Installs one archive component from the lock file into $SdkRoot\<name>-<version>.
-# Extraction uses the in-box bsdtar (tar.exe), which reads zip, tar.gz and tar.zst.
+# Extraction uses the in-box bsdtar (tar.exe), which reads the pinned .zip and .tar.xz archives
+# (it refuses LLVM's .tar.zst, whose 2 GiB zstd window exceeds its memory limit; see the lock file).
 # If the archive has a single top-level directory, its contents become the root.
 function Install-Archive([string]$Name) {
     $pin = $Lock.windows.$Name
@@ -123,14 +124,16 @@ function Invoke-NativeQuiet([scriptblock]$Command) {
 }
 
 # Creates the tooling venv ($SdkRoot\py) that runs qt-fetch.py and the repository
-# checks. Every tool uses the standard library only, so nothing is pip-installed.
+# checks. Every tool uses the standard library only, so nothing is pip-installed. The
+# checks need Python 3.11 or newer (tomllib).
+# TODO(M0): fail here when the venv's interpreter is older than 3.11; it is not checked yet.
 function Install-PythonTools {
     $venv = Join-Path $SdkRoot 'py'
     $python = Join-Path $venv 'Scripts\python.exe'
     if (-not (Test-Path $python)) {
         Write-Host '[python] creating venv'
         & python -m venv $venv
-        if ($LASTEXITCODE -ne 0) { throw 'python -m venv failed (is Python 3.10+ on PATH?)' }
+        if ($LASTEXITCODE -ne 0) { throw 'python -m venv failed (is Python 3.11+ on PATH?)' }
     }
     Write-Host "[python] venv ready: $(& $python --version)"
 }

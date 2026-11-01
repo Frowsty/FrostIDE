@@ -94,6 +94,8 @@ class Git:
         self.exe = str(Path(found).resolve())
 
     def run(self, *args: str, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+        """Runs git with `args` (in `cwd` via -C); raises RuntimeError with git's stderr when
+        check is true and git fails."""
         command = [self.exe]
         if cwd is not None:
             command += ["-C", str(cwd)]
@@ -113,6 +115,7 @@ def head_of(git: Git, directory: Path) -> str | None:
 
 
 def tree_size_mb(directory: Path) -> float:
+    """Size in MiB of the files under `directory`, .git excluded; unreadable entries are skipped."""
     total = 0
     for root, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if d != ".git"]
@@ -157,6 +160,9 @@ def fetch(git: Git, entry: dict, dest_root: Path) -> str:
 
 
 def list_corpora(git: Git | None, corpora: list[dict], dest_root: Path) -> None:
+    """Prints each corpus's pin, licence, size and checkout state (present, other commit,
+    missing) to stdout, two lines per corpus. Runs git rev-parse in each <dest>/<id>
+    checkout when `git` is given; without it every corpus reads as missing."""
     for entry in corpora:
         directory = dest_root / entry["id"]
         head = head_of(git, directory) if git else None

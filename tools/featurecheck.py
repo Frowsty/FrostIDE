@@ -11,7 +11,8 @@
 # list) into tests/features/matrix.json, one row per feature or infrastructure row with
 # its priority, owning milestone and completion milestone. The hand-maintained fields
 # (acceptance_test, status, and inspection_counts.s9_baseline, which spike S9 records)
-# are carried over from the existing file, so regenerating never loses them.
+# are carried over from the existing file, so regenerating never loses them; if the
+# existing file is not valid JSON (a merge conflict, say), `generate` refuses to write.
 #
 # `check` fails when Appendix A is inconsistent (a tier's declared row count or the
 # totals line disagree with the listed rows, duplicate IDs), when a P0, P1 or
@@ -334,7 +335,8 @@ def check(repo: Path) -> list[Problem]:
 
 
 def generate(repo: Path) -> int:
-    """Writes matrix.json; fails without writing if Appendix A does not parse cleanly."""
+    """Writes matrix.json; fails without writing if Appendix A does not parse cleanly or
+    an existing matrix.json is not valid JSON (its hand-maintained fields would be lost)."""
     parsed = parse_plan((repo / PLAN_FILE).read_text(encoding="utf-8"))
     if parsed.problems:
         for problem in parsed.problems:
@@ -343,10 +345,13 @@ def generate(repo: Path) -> int:
     matrix_path = repo / MATRIX_FILE
     existing = None
     if matrix_path.is_file():
+        # An unparsable matrix (e.g. a merge conflict) still holds the hand-maintained
+        # fields; regenerating would reset them to defaults, so refuse instead.
         try:
             existing = json.loads(matrix_path.read_text(encoding="utf-8"))
-        except ValueError:
-            existing = None
+        except ValueError as error:
+            print(Problem(MATRIX_FILE, 1, f"not valid JSON ({error}); fix it before regenerating"))
+            return 1
     matrix_path.parent.mkdir(parents=True, exist_ok=True)
     matrix_path.write_text(render(build_matrix(parsed, existing)), encoding="utf-8", newline="\n")
     totals = build_matrix(parsed, existing)["totals"]

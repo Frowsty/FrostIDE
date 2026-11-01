@@ -93,10 +93,14 @@ unsigned ThreadPool::defaultLowLaneCap() noexcept {
     return hardware > 4 ? hardware - 4 : 1;
 }
 
-ThreadPool::ThreadPool(ThreadPoolOptions options) : m_clock(options.clock != nullptr ? options.clock : &systemClock()) {
+// noexcept: a std::bad_alloc or std::system_error from reserve(), make_unique or a
+// std::thread constructor terminates instead of leaving the constructor.
+ThreadPool::ThreadPool(ThreadPoolOptions options) noexcept
+    : m_clock(options.clock != nullptr ? options.clock : &systemClock()) {
     const unsigned workers = options.workerCount != 0 ? options.workerCount : defaultWorkerCount();
     const unsigned requestedCap = options.lowLaneCap != 0 ? options.lowLaneCap : defaultLowLaneCap();
-    // At most workers - 1, so one worker is always free of low-lane work.
+    // At most workers - 1, so with two or more workers one is always free of
+    // low-lane work; a one-worker pool gets a cap of 1.
     m_lowCap = workers > 1 ? std::clamp(requestedCap, 1U, workers - 1) : 1U;
 
     detail::SplitMix64 seeder(options.seed);
@@ -354,9 +358,10 @@ void* ThreadPool::stealFromOthers(Worker& worker, Lane lane) {
 
 void ThreadPool::runSegment(Found found) {
     // Ramp up: if eligible work remains and a worker is parked, wake one more.
-    // Seq_cst: this load follows this worker's own seq_cst updates (the low-slot
-    // release after its previous segment, the m_queued decrement), completing the
-    // handshake with a worker that parked because the cap looked full.
+    // Seq_cst: this load follows this worker's own seq_cst low-slot release after its
+    // previous segment, completing the handshake with a worker that parked because
+    // the cap looked full (park() announces itself, then reads m_lowRunning). The
+    // m_queued decrement (acq_rel) plays no part in it.
     if (m_sleepers.load(std::memory_order_seq_cst) > 0 && hasEligibleWork()) {
         wakeOne();
     }

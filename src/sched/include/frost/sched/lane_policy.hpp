@@ -38,7 +38,9 @@ namespace frost::sched {
 class LaneSelector {
 public:
     // Passes, in dispatches, after which a lane with waiting work is served ahead
-    // of higher lanes. Interactive is never passed over, so its entry is unused (0).
+    // of higher lanes. Interactive has no lane above it, so it never accumulates
+    // passes and its entry is unused (0); it can still wait up to
+    // maxWait(Interactive) = 3 dispatches while aged lower lanes are served.
     // UserVisible: 4 dispatches; Background: 16; Idle: 64. Lower lanes wait longer.
     // With every lane saturated a dispatcher's turns split about 74% / 19% / 6% / 1.5%;
     // with only Interactive and UserVisible, 80% / 20%.

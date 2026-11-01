@@ -3,10 +3,13 @@
 # env.ps1: puts the pinned toolchain from tools/bootstrap.ps1 on PATH for the
 # current PowerShell session only. Dot-source it:  . tools\env.ps1
 #
-# It also points every cache that would otherwise land on the system drive
-# (NuGet, vcpkg downloads and binary cache, sccache, .NET) at the SDK root or,
-# for the vcpkg binary cache, at <SDK drive>\vcpkg-cache, and turns off tool
-# telemetry. Nothing is persisted machine-wide.
+# It also points the NuGet package folder, the vcpkg downloads and sccache at the
+# SDK root and the vcpkg binary cache at <SDK drive>\vcpkg-cache, sets DOTNET_ROOT to
+# the pinned .NET SDK, and turns off tool telemetry. The .NET CLI home and NuGet's
+# HTTP and plugin caches are not redirected yet and still use the user profile on C:.
+# Nothing is persisted machine-wide.
+# TODO(M0): redirect DOTNET_CLI_HOME, NUGET_HTTP_CACHE_PATH and NUGET_PLUGINS_CACHE_PATH
+# to the SDK root as well (D1: caches on E:).
 
 param(
     # Must match the -SdkRoot given to bootstrap.ps1.

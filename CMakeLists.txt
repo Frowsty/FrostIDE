@@ -20,7 +20,10 @@ set(FROST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 # Named modules are banned in v1 (PLAN.md section 2.1), so skip CMake's C++20
 # module dependency scan; it would run clang-scan-deps over every file.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
-# Debug information embedded in objects (/Z7) keeps sccache effective on Windows.
+# Debug information embedded in objects (/Z7) instead of a shared PDB, so objects
+# stay cacheable by a compiler cache.
+# TODO(M0): run the Windows build through sccache (PLAN.md section 6.4); tools/env.ps1
+# puts it on PATH, but it is not yet set as the compiler launcher.
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
