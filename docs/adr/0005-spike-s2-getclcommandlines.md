@@ -71,7 +71,7 @@ Each run is a fresh MSBuild process (`-nodeReuse:false`) with a warm file cache,
 launch to exit.
 
 R2b's projects use that SDK: at the pinned commit, `src/common.build.pre.props` defaults
-`WindowsTargetPlatformVersion` to 10.0.26100.0. PLAN.md section 5 and `tests/corpus/manifest.json` still give
+`WindowsTargetPlatformVersion` to 10.0.26100.0. PLAN.md section 4 and `tests/corpus/manifest.json` still give
 "Windows SDK 10.0.22621" as R2b's prerequisite, which no longer matches the pin (see Consequences).
 
 The first table is from the first session: three other agents were building at the same time, and no
@@ -144,7 +144,7 @@ Controls, under the same conditions unless noted:
   its solution. Its C++/WinRT projects (all under `src/cascadia`, including `TerminalAppLib`) need the UWP workload.
   Until the user installs it, R2b measurements use the OpenConsole host projects, as the corpus manifest already
   says.
-- R2b's Windows SDK prerequisite in PLAN.md section 5 and `tests/corpus/manifest.json` (10.0.22621) should read
+- R2b's Windows SDK prerequisite in PLAN.md section 4 and `tests/corpus/manifest.json` (10.0.22621) should read
   10.0.26100.0, the version the pinned commit defaults to and the one `sdk/sdk.lock.json` pins. This ADR leaves
   both files unchanged, because PLAN.md changes need the user. That correction is listed for the user with the
   other open B23 questions (ADR 0006).

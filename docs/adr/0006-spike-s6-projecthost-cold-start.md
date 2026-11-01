@@ -1,9 +1,11 @@
 # ADR 0006: Spike S6, ProjectHost cold start
 
 - Status: accepted (fixture, R2a and R2b). Two parts are only proposed and wait for the user: decision 6 (the
-  B23 preconditions) and the final B23 value (decision 3).
+  B23 preconditions) and how B23's final values are set (decision 3). S6 has no cold sample, so it cannot set
+  the first-project value on its own, and it does not cover the trees value.
 - Date: 2026-10-31; revised 2026-11-01 after the independent verification (next project, B23 method,
-  preconditions, units, Windows SDK).
+  preconditions, units, Windows SDK), and again after its re-verification (the open path under an instant trust
+  grant, the missing cold sample, the trees target, wording).
 - Plan reference: PLAN.md section 2 ("MSBuild / .vcxproj", path (b)), budget B23, D3, M0 spike S6
 
 ## Context
@@ -12,10 +14,15 @@ targets and tasks need .NET Framework MSBuild), finds VS with MSBuildLocator and
 D3 allows C#.
 
 ProjectHost's cold start is part of B23's "first project streamed" variant: p50 3 s on R2b. `budgets.json`
-still notes that target as "final value set by S6", and defines B23 like this:
+defines B23 like this:
 - method: "Open request to the trees painted, and to the first project streamed from ProjectHost (ETW
   markers)";
 - preconditions: measured after trust, the trust click excluded from the timing, ProjectHost cold start included.
+
+`budgets.json` puts the note "final value set by S6" on both B23 targets: the trees on R3 (p50 1.5 s) and the
+first project streamed on R2b (p50 3 s). PLAN.md's row reads "p50 1.5 s / 3 s (final value set by S6)". S6
+covers only the second. The trees use the native readers and no ProjectHost, so S6 has no evidence for 1.5 s
+(decision 3).
 
 The interval starts and ends in FrostIDE's own open path: the open request, the native solution reader, the
 supervisor and the ETW markers. That path first exists in M2, so S6 can time only ProjectHost's part of it.
@@ -23,30 +30,67 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
 ## Decision
 1. **Keep path (b) as planned:** net472 + Microsoft.Build.Locator + StreamJsonRpc.
    - On R2b, ProjectHost's part of B23's first-project interval takes p50 1.90 s (2026-10-31) and 2.02 s
-     (2026-11-01), 20 runs each. "What the spike timed" under Measurements defines that part.
-   - It is a ProjectHost-side lower bound on B23 for the same machine and cache state, not a B23 measurement.
-     The M2 measurement with ETW markers decides B23.
-   - At these medians about 1 s of the 3 s would remain for FrostIDE's own part of the path. Medians of the
+     (2026-11-01), 20 runs each, max 2.33 s over the 40 runs, all with a warm file cache. "What the spike timed"
+     under Measurements defines that part.
+   - It is an expected ProjectHost-side lower bound on B23 for the same machine and cache state. It is neither a
+     B23 measurement nor a guaranteed bound; "What the spike timed" gives the conditions it rests on. The M2
+     measurement with ETW markers decides B23.
+   - This cold-host figure, not the pre-warmed one, is the one that applies under the proposed gating condition.
+     Under decision 6 (d) trust is granted at the open request, so decision 2 launches ProjectHost without a
+     warm-up and without waiting for L1.
+   - At the warm-cache medians, 0.98 s (2026-11-01) to 1.10 s (2026-10-31) of the 3 s remain; after the slowest
+     run (2.33 s), 0.67 s. That remainder has to cover all of FrostIDE's part ("Outside it" under Measurements):
+     the open request, the native solution read and project selection, the launch, the tree fill running beside
+     the host, and the ingest after the response. A cold cache shrinks it further (decision 3). Medians of the
      parts do not add exactly, so M2 times the whole interval.
-2. **Pre-warm ProjectHost after L1, before trust.** As soon as a root with a solution or vcxproj opens, FrostIDE
-   starts ProjectHost and has it evaluate and design-time-build a *bundled* dummy C++ project. That JITs the
-   evaluator and the VC targets without running any project-supplied code, so the trust model (PLAN.md section 3.5)
-   is unaffected. The trust click then pays only for the real project: on R2b, Host.EXE takes 0.45 s
-   (2026-10-31) and 0.51 s (2026-11-01) after the warm-up, instead of 1.90–2.02 s.
-   - Later projects cost less, but how much less depends on their project references. In a cold host, after
-     Host.EXE, R2b's second project under decision 5, `Host.FeatureTests` (2 references), takes 185 ms, and `hostlib`
-     (1 reference) then takes 131 ms (p50, 20 runs). Host.EXE requested a second time in a pre-warmed host still
-     takes 398 ms. The first estimate here, about 0.1 s per later project, holds only for projects with few
-     references.
-   - If trust is given before the warm-up finishes, the real request waits behind it. Launch to the first R2b
+2. **Pre-warm ProjectHost while trust is pending; skip the warm-up once trust is granted.**
+   - **Trust pending.** In a restricted root with a solution or vcxproj, FrostIDE starts ProjectHost once L1 is
+     reached, which keeps the host's work off the path to L1. It has the host evaluate and design-time-build a
+     *bundled* dummy C++ project. That JITs the evaluator and the VC targets without running any
+     project-supplied code, so the trust model (PLAN.md section 3.5) is unaffected. A trust click after the
+     warm-up then pays only for the real project: on R2b, Host.EXE takes 0.45 s (2026-10-31) and 0.50 s
+     (2026-11-01) after the warm-up, instead of 1.90–2.02 s.
+   - **Trust before the host has started.** Trust can come first through a trusted parent (PLAN.md section 3.5),
+     a trust click before L1, or decision 6 (d)'s instant grant. FrostIDE then runs no warm-up and does not wait
+     for L1. The supervisor launches ProjectHost as soon as trust is granted and decision 5's rule has picked the
+     first project, and that project is the host's first request. ProjectHost's part of B23 is then the
+     cold-host figure of decision 1.
+   - **Trust given during the warm-up.** The real request waits behind the warm-up. Launch to the first R2b
      project then takes 1.96 s against 1.90 s for a cold host (2026-10-31), or 2.13 s against 2.02 s
-     (2026-11-01), p50. In that case pre-warming costs about 60–110 ms.
-3. **Propose keeping B23 at p50 3 s for "first project streamed" on R2b. Whether that value is final is the
-   user's decision.**
-   - ProjectHost's part is p50 1.90–2.02 s, max 2.33 s over 40 runs, with a warm file cache.
-   - The rest of the interval stays unmeasured until M2, and M2 also measures it with a cold cache (decision 6).
-   - `budgets.json` still says "final value set by S6". Confirming 3 s and removing that note is up to the user,
-     and this ADR does not edit `budgets.json`. Any change to the target needs an ADR and user approval.
+     (2026-11-01), p50; the maxima are 2.12 s and 2.36 s. That is about 60–110 ms more than a cold host, and the
+     launch itself waited for L1. This case does not arise under decision 6 (d).
+   - Later projects cost less, but not as little as the first estimate here, about 0.1 s per later project.
+     After Host.EXE in a cold host (2026-11-01, p50 over 20 runs), R2b's second project under decision 5,
+     `Host.FeatureTests` (2 references), takes 185 ms, and `hostlib` (1 reference) then takes 131 ms. After the
+     pre-warm they take 170 ms and 124 ms (10 runs). Only hostlib comes near 0.1 s. Host.EXE requested a second
+     time in a pre-warmed host still takes 398 ms. These points do not give a per-reference cost ("References
+     and build time" under Measurements).
+   - Whether a restricted root should start the warm-up before L1 instead, so that an early trust click waits
+     less, is an M2 measurement. The spike did not measure the host's effect on the tree fill.
+3. **S6 does not set B23's final values. It proposes keeping p50 3 s for "first project streamed" on R2b as a
+   provisional target. How the final values are set is the user's decision.**
+   - PLAN.md's M0 spike list (section 7) says S6 "fixes B23". Proposed precondition 6 (e) makes the gating
+     sample cold in PLAN.md section 4's sense, after a reboot or a standby-list purge. Every S6 sample has a
+     warm file cache. The spike did not measure, bound or estimate what a cold cache adds.
+   - With a cold cache, ProjectHost has to read from disk what the warm runs found in memory, unless another
+     process holds it: the .NET Framework and Microsoft.Build assemblies, the VC props and targets, and
+     Host.EXE's project with its 14 references and their imports. That could use up the 0.98–1.10 s left at the
+     warm medians (decision 1).
+   - Machine state alone moves the warm figure: 1.90 s against 2.02 s between the sessions, and about a quarter
+     less in the later runs of the independent re-run (Measurements).
+   - Confirming 3 s as final together with 6 (e) would therefore fix a final value for a condition nobody has
+     measured. There are two ways forward, and both are the user's to choose:
+     - **Cold samples for S6.** Each sample needs a reboot, or an elevated standby-list purge (`RAMMap -Et`;
+       RAMMap is not installed here) right before it, so the user has to take part. S6 would take 10 such
+       samples with the cold-host plan, record Defender and Dev Drive state per sample (PLAN.md section 4), and
+       propose the final value from them.
+     - **Final value from M2.** M2's B23 test, cold under 6 (e) with a warm sample alongside, sets the value.
+       PLAN.md's "S6 fixes B23" then changes, so this is a plan change.
+   - **The trees target.** S6 gives no evidence for the trees value (R3, p50 1.5 s; see Context), and no M0
+     spike measures the native readers. Removing that target's "final value set by S6" note on the strength of
+     S6 would finalise 1.5 s with nothing behind it. Proposed: 1.5 s stays provisional until M2's first B23
+     trees measurement on R3, and the note says so. The user decides.
+   - This ADR does not edit `budgets.json`. Any change to a target needs an ADR and user approval.
 4. **MSBuild assemblies load through MSBuildLocator's resolver.** Binding them by `codeBase` to the VS copies (in
    the hope of using VS's native images) made no measurable difference.
 5. **Projects stream in solution-file order, limited to C++ projects that build in the active solution
@@ -75,15 +119,16 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
      Restore). Without the restore, command lines silently lose the WIL include directory (ADR 0005 decision 6).
    - **(b)** The active solution configuration is Debug\|x64.
    - **(c)** The first project streamed is chosen by decision 5's rule. On R2b that is Host.EXE.
-   - **(d)** Trust is granted as soon as the open request is made. ProjectHost's cold start, and a pre-warm that
-     is still running (decision 2), then stay inside the timed interval. Once ProjectHost is pre-warmed, that is
-     what "ProjectHost cold start is included" requires. With an instant grant, the excluded trust click takes
-     no time.
+   - **(d)** Trust is granted as soon as the open request is made, so the excluded trust click takes no time.
+     Under decision 2, FrostIDE then runs no warm-up and does not wait for L1, and ProjectHost's cold start lies
+     inside the timed interval, as the current precondition requires. M2's open path must follow that order. A
+     path that waited for L1, or put the warm-up first, would time a longer interval than decision 1 assumes.
    - **(e)** The gating sample is cold in PLAN.md section 4's sense (after a reboot or a standby-list purge), and
-     a warm-cache sample is reported alongside. All of S6's numbers are warm-cache numbers.
+     a warm-cache sample is reported alongside. All of S6's numbers are warm-cache numbers, so S6 cannot say
+     whether 3 s holds under (e) (decision 3).
 
    If the user approves, `budgets.json`'s B23 preconditions and PLAN.md's B23 row take these over, together
-   with the final value (decision 3).
+   with the user's choice of how the final values are set (decision 3).
 
 ## Measurements
 - **Machine and toolchain.**
@@ -113,16 +158,25 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
     pipe.
   - Outside it, all in FrostIDE and first built in M2:
     - before the request: the open request, the native solution read with decision 5's project selection,
-      trust, the supervisor launching ProjectHost through `IProcessLauncher`, and building the request;
+      trust, the supervisor launching ProjectHost through `IProcessLauncher`, and building the request. Under
+      decision 2, none of this waits for L1 or for a warm-up once trust is granted. If M2's path did wait, the
+      wait would be on the path too;
+    - beside the host: the tree fill (native readers, File System and Solution views) runs during the interval
+      and competes for CPU and disk. In the spike, no FrostIDE work ran beside the host;
     - after the response: parsing it, adding the project to the model, streaming it into the Solution tree, and
       the ETW marker that ends B23.
 
     The spike's request came from a precomputed plan file.
-  - The figure is therefore only ProjectHost's side of B23. Under the same machine and cache state, B23 cannot
-    be shorter.
-- **Method.** Each run is a fresh process with a warm file cache. It is not a post-reboot cold start; M2 measures
-  that (decision 6 (e)). The driver measures from process launch to each response. The host's marks are
-  milliseconds since process start.
+  - The figure is therefore only ProjectHost's side of B23. Under the same machine and cache state it is an
+    expected lower bound on B23, not a guaranteed one.
+    - It holds only if M2's ProjectHost does at least the spike host's work for the first request: the same
+      target list, a first evaluation in a fresh process, and a request already waiting when the host attaches.
+    - The spike host is a throwaway prototype that creates a new `ProjectCollection` for each request. M2's
+      planned shared `EvaluationContext` and 2–4 workers (PLAN.md section 2, path (b)) could make the first
+      request cheaper.
+- **Method.** Each run is a fresh process with a warm file cache. It is not a post-reboot cold start, and the
+  spike has no cold sample (decision 3). The driver measures from process launch to each response. The host's
+  marks are milliseconds since process start.
 - **Units.** Memory figures are read through Win32 in binary units: host memory in MiB, and commit headroom and
   private memory in GiB.
 - **Machine load, 2026-10-31.** `lghub_agent.exe` (Logitech G HUB) held 43.3 GiB of private memory, which left
@@ -137,8 +191,18 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
   - Host.EXE and the warm-up took 6–13 % longer than on 2026-10-31 (cold Host.EXE 2.02 against 1.90 s), despite
     the far larger commit headroom. In-host evaluation took 4 % longer and the build 7 %. The cause was not
     isolated. hostlib, now requested third, took about the same time as before: 124–131 against 129–131 ms.
+  - Before the lock, one smoke run of each host plan ran at 01:29:12–01:29:21, after `build-gate` but outside
+    any measurement lock. They should have run inside the s26 lock: from 01:29:14 they overlapped another
+    agent's lock (verify-s1), whose first samples may carry their load. The smoke runs are in no table here.
+- **Independent re-run, 2026-11-01.** The verification re-ran both host plans, 3 runs each, under its own lock
+  (verify-s26, 01:50:12–01:50:34, CPU 10–37 % busy before each run).
+  - Cold Host.EXE took 2049, 1564 and 1536 ms, then Host.FeatureTests 190, 126 and 138 ms.
+  - Pre-warmed, launch to Host.EXE took 1.60–1.64 s.
+  - Its first run matched s26. The later ones were about a quarter faster (1536 against s26's 2019 ms), while
+    commit headroom grew from 26.4 to 34.1 GiB. The cause was not isolated.
 
-  In both sessions all numbers are upper bounds.
+  In both sessions the machine was loaded, so the numbers are best read as upper bounds for a warm file cache.
+  They are not upper bounds for a cold cache (decision 3).
 
 **Fixture (first session).** The 4-TU v143 project from ADR 0005. The request evaluates it and runs the wrapper
 target `FrostGetClCommandLines`. Three agents were building in parallel.
@@ -246,8 +310,9 @@ after the NuGet restore described in ADR 0005. Host.EXE returns 2 groups and 3 f
   - fixture: 75 MiB and 54 MiB.
 
 ## Consequences
-- ProjectHost needs a `warmUp` request and a bundled dummy project (M2), and the supervisor starts the host on
-  root open. On a machine without VS the host is not started.
+- ProjectHost needs a `warmUp` request and a bundled dummy project (M2). The supervisor follows decision 2's
+  start rule: at L1 with the warm-up while trust is pending, or at once and without it when the root is already
+  trusted. On a machine without VS the host is not started.
   - If the dummy references a second dummy project, the warm-up also JIT-compiles the reference protocol.
   - That saves at most the first-use part of Host.EXE's build after the warm-up, about 0.1 s (397 against
     301 ms). The other 0.3 s recurs on every request. M2 measures this.
@@ -260,11 +325,13 @@ after the NuGet restore described in ADR 0005. Host.EXE returns 2 groups and 3 f
   That result decides B23, under the preconditions the user approves (decision 6). The S6 figures do not.
 - The spike creates a new `ProjectCollection` for each request. The planned shared `EvaluationContext` should let
   the references evaluated for the first project be reused when those projects stream next; hostlib is one of
-  them. The next-project figures (Host.FeatureTests 170–185 ms, hostlib 124–131 ms) are therefore upper bounds.
+  them. The next-project figures (Host.FeatureTests 170–185 ms, hostlib 124–131 ms) are therefore expected to be
+  upper bounds for a warm cache.
 - **Follow-ups once the user has decided** (not done here):
-  - `budgets.json`'s B23 preconditions and its "final value set by S6" note;
-  - PLAN.md's B23 row;
-  - R2b's Windows SDK prerequisite in PLAN.md section 5 and `tests/corpus/manifest.json`, which should read
+  - `budgets.json`'s B23 preconditions, and the "final value set by S6" note on each of its two B23 targets.
+    S6 has no cold sample for the first-project target and no evidence for the trees target (decision 3);
+  - PLAN.md's B23 row, and the M0 spike list's "fixes B23" if the final value moves to M2;
+  - R2b's Windows SDK prerequisite in PLAN.md section 4 and `tests/corpus/manifest.json`, which should read
     10.0.26100.0, not 10.0.22621 (ADR 0005).
 - R2b measurements assume restored NuGet packages, the state a developer of that repository has (ADR 0005
   decision 6). Its C++/WinRT projects need the UWP workload, which is not installed here. Host.EXE,
@@ -279,4 +346,8 @@ after the NuGet restore described in ADR 0005. Host.EXE returns 2 groups and 3 f
 - NGEN of the host at install time: helps only our own assemblies, not Microsoft.Build loaded from VS. Revisit
   in M13 if pre-warming proves insufficient.
 - Pre-warming with the solution's own first project instead of a bundled dummy: it would hide the remaining
-  0.45–0.51 s, but it runs the repository's MSBuild logic before trust (PLAN.md section 3.5).
+  0.45–0.50 s, but it runs the repository's MSBuild logic before trust (PLAN.md section 3.5).
+- Running the warm-up even when the root is already trusted: the real request would wait behind it, about
+  60–110 ms more than a cold host (decision 2), for no gain.
+- Waiting for L1 before launching ProjectHost in a trusted root: it would put the time to L1 on B23's
+  first-project path.
