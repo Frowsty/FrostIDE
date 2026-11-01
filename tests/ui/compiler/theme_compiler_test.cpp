@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -230,11 +231,108 @@ TEST(ThemeCompiler, LiteralDuplicateMembers) {
     EXPECT_TRUE(has(lenient, Diagnostic::Warning, "dark", "duplicate member")) << dump(lenient);
     // Escapes are decoded before names are compared.
     std::string escaped = toJson(minimalTheme());
-    escaped.insert(1, R"("dark":false,)");
-    EXPECT_TRUE(has(compileText(escaped), Diagnostic::Error, "dark", "duplicate member"));
+    // "dark" with its d escaped (a backslash, then "u0064ark"), built from two literals so the
+    // escape stays in the JSON text.
+    escaped.insert(1, std::string("\"\\") + "u0064ark\":false,");
+    ASSERT_EQ(escaped.substr(1, 11), std::string(1, '"') + std::string(1, '\\') + "u0064ark\"");
+    EXPECT_TRUE(has(compileText(escaped), Diagnostic::Error, "dark", "duplicate member")) << dump(compileText(escaped));
     // Nested duplicates carry their path.
     const std::string nested = R"({"name":"x","dark":true,"ui":{"Island":{"arc":1,"arc":2}}})";
     EXPECT_TRUE(has(compileText(nested), Diagnostic::Error, "ui.Island.arc", "duplicate member"));
+}
+
+TEST(ThemeCompiler, DiagnosticsStayBoundedOnHostileInput) {
+    /*
+     * Every duplicate or unknown member below a long name used to copy that name into its own
+     * diagnostic: output about the square of the input (gigabytes at the 1 MiB limit). Now
+     * kMaxReportedDuplicates duplicates are listed, with elided paths, plus a count, and a ui
+     * key longer than any registry key is reported once without descending.
+     */
+    const auto repeat = [](std::string_view unit, std::size_t count) {
+        std::string out;
+        out.reserve(unit.size() * count);
+        for (std::size_t i = 0; i < count; ++i) {
+            out += unit;
+        }
+        return out;
+    };
+    // `count` members all named "a".
+    const auto duplicates = [&repeat](std::size_t count) { return "\"a\":1" + repeat(",\"a\":1", count - 1); };
+    const auto expectBounded = [](const CompileResult& result) {
+        EXPECT_FALSE(result.ok());
+        EXPECT_LE(result.diagnostics.size(), kMaxReportedDuplicates + 4) << dump(result);
+        std::size_t bytes = 0;
+        for (const Diagnostic& d : result.diagnostics) {
+            EXPECT_LE(d.jsonPath.size(), kMaxDiagnosticPathBytes + 3);
+            EXPECT_LE(d.message.size(), kMaxDiagnosticMessageBytes + 3);
+            bytes += d.jsonPath.size() + d.message.size();
+        }
+        EXPECT_LE(bytes, 64U * 1024U);
+    };
+    // The per-member duplicate diagnostics (equal ones are merged when the result is sorted).
+    const auto listedDuplicates = [](const CompileResult& result) {
+        return std::ranges::count_if(
+            result.diagnostics, [](const Diagnostic& d) { return d.message == "duplicate member name in one object"; });
+    };
+    // A valid theme with `author` (any value is ignored) inserted first.
+    const std::string good = toJson(minimalTheme());
+    ASSERT_TRUE(compileText(good).ok());
+    const auto withAuthor = [&good](const std::string& author) {
+        std::string json = good;
+        json.insert(1, "\"author\":" + author + ",");
+        return json;
+    };
+
+    // 4,096 duplicates under a 16 KiB name: 32 listed (all at one path, so merged into one), 4,063 counted.
+    const std::string longName = repeat("k", 16 * 1024);
+    const CompileResult object = compileText(withAuthor("{\"" + longName + "\":{" + duplicates(4096) + "}}"));
+    expectBounded(object);
+    EXPECT_EQ(listedDuplicates(object), 1) << dump(object);
+    EXPECT_TRUE(has(object, Diagnostic::Error, "$", "4063 more duplicate member names are not listed")) << dump(object);
+    const auto elided = std::ranges::find_if(
+        object.diagnostics, [](const Diagnostic& d) { return d.message == "duplicate member name in one object"; });
+    ASSERT_NE(elided, object.diagnostics.end());
+    EXPECT_TRUE(elided->jsonPath.starts_with("author.kkkk")) << elided->jsonPath;
+    EXPECT_TRUE(elided->jsonPath.ends_with("kkk.a")) << elided->jsonPath;
+    EXPECT_NE(elided->jsonPath.find("..."), std::string::npos);
+
+    // The same through array elements: 2,000 objects of one duplicate each, whose distinct
+    // paths ("author.kkk...kkk[i].a") keep the 32 listed apart.
+    const CompileResult array =
+        compileText(withAuthor("{\"" + longName + "\":[" + repeat(R"({"a":1,"a":2},)", 1999) + R"({"a":1,"a":2}]})"));
+    expectBounded(array);
+    EXPECT_EQ(listedDuplicates(array), static_cast<std::ptrdiff_t>(kMaxReportedDuplicates)) << dump(array);
+    // The 32nd: the path's first and last 128 bytes around "...".
+    EXPECT_TRUE(has(array, Diagnostic::Error,
+                    "author." + longName.substr(0, 121) + "..." + longName.substr(0, 122) + "[31].a",
+                    "duplicate member"))
+        << dump(array);
+    EXPECT_TRUE(has(array, Diagnostic::Error, "$", "1968 more duplicate member names are not listed")) << dump(array);
+
+    // 2,048 distinct members under an unknown 8 KiB ui key: one diagnostic, not one each.
+    QJsonObject inner;
+    for (int i = 0; i < 2048; ++i) {
+        inner.insert(QString::number(i), 1);
+    }
+    const CompileResult ui = compileObject(
+        withUi(minimalTheme(), [&](QJsonObject& object) { object.insert(QString(8 * 1024, QChar('u')), inner); }));
+    expectBounded(ui);
+    const auto unknownKeys = std::ranges::count_if(
+        ui.diagnostics, [](const Diagnostic& d) { return d.message.find("unknown key") != std::string::npos; });
+    EXPECT_EQ(unknownKeys, 1) << dump(ui);
+    EXPECT_TRUE(std::ranges::any_of(ui.diagnostics, [](const Diagnostic& d) {
+        return d.message.find("(and every key under it)") != std::string::npos;
+    })) << dump(ui);
+
+    // At the 1 MiB limit: a 512 KiB name over as many duplicates as still fit.
+    const std::string prefix = "{\"" + repeat("k", 512 * 1024) + "\":{\"a\":1";
+    const std::size_t count = (kMaxThemeJsonBytes - withAuthor(prefix + "}}").size()) / 6;
+    const std::string limit = withAuthor(prefix + repeat(",\"a\":1", count) + "}}");
+    ASSERT_LE(limit.size(), kMaxThemeJsonBytes);
+    const CompileResult huge = compileText(limit);
+    expectBounded(huge);
+    EXPECT_TRUE(has(huge, Diagnostic::Error, "$", std::format("{} more duplicate", count - kMaxReportedDuplicates)))
+        << dump(huge);
 }
 
 TEST(ThemeCompiler, UnresolvedKeyNamesItsPath) {

@@ -113,6 +113,32 @@ TEST(AppearancePerf, AtlasOpenOneScale) {
     }
 }
 
+TEST(AppearancePerf, IconPixmapCacheHit) {
+    // The B5 hot path: a pixmap request that hits the cache (IconAtlasSet::pixmap's choice of
+    // cell plus one QCache lookup), 1,000 hits per sample.
+    const std::string dir = *io::joinPath(test::resourceDir(), "icons");
+    const std::array<std::uint16_t, 1> preload{150};
+    auto set = IconAtlasSet::open(io::realFileSystem(), dir, preload);
+    ASSERT_TRUE(set) << set.error().describe();
+    auto theme = loadThemeFile(io::realFileSystem(), resource("themes", "glacier-dark.ftheme"), "glacier-dark");
+    ASSERT_TRUE(theme);
+    const QPixmap first =
+        (*set)->pixmap("actions.search", IconSlot::Small, 16, 1.5, QIcon::Normal, &*theme, Density::Normal);
+    ASSERT_FALSE(first.isNull());
+    constexpr int kHits = 1000;
+    const auto timing = measure("icon_pixmap_hit_x1000", [&] {
+        for (int i = 0; i < kHits; ++i) {
+            const QPixmap hit =
+                (*set)->pixmap("actions.search", IconSlot::Small, 16, 1.5, QIcon::Normal, &*theme, Density::Normal);
+            ASSERT_EQ(hit.cacheKey(), first.cacheKey()) << "a hit returns the cached pixmap";
+        }
+    });
+    if (kAssertBudgets) {
+        // 5 microseconds a hit: a small slice of B5's 3 ms keystroke-to-paint p50.
+        EXPECT_LE(timing.p50Ms, 5.0);
+    }
+}
+
 TEST(AppearancePerf, FontRegistrationAndInstallReported) {
     const std::string fonts = *io::joinPath(*io::joinPath(test::resourceDir(), "fonts"), "inter");
     measure("ui_font_registration", [&] {

@@ -145,6 +145,14 @@ TEST(Contrast, KnownAnswers) {
     EXPECT_NEAR(ratio("#777777", "#FFFFFF"), 4.48, 0.005);
     EXPECT_NEAR(ratio("#595959", "#FFFFFF"), 7.00, 0.005);
     EXPECT_DOUBLE_EQ(ratio("#3870D8", "#3870D8"), 1.0);
+    // Primaries, which greys cannot tell apart: each channel's weight (0.2126, 0.7152, 0.0722)
+    // and the channel order of the ARGB value (WebAIM's checker gives 4.00, 8.59 and 15.30).
+    EXPECT_NEAR(ratio("#FF0000", "#FFFFFF"), 4.00, 0.005);
+    EXPECT_NEAR(ratio("#0000FF", "#FFFFFF"), 8.59, 0.005);
+    EXPECT_NEAR(ratio("#00FF00", "#000000"), 15.30, 0.005);
+    EXPECT_NEAR(relativeLuminance(*parseHexColor("#FF0000")), 0.2126, 1e-12);
+    EXPECT_NEAR(relativeLuminance(*parseHexColor("#00FF00")), 0.7152, 1e-12);
+    EXPECT_NEAR(relativeLuminance(*parseHexColor("#0000FF")), 0.0722, 1e-12);
     EXPECT_NEAR(relativeLuminance(*parseHexColor("#FFFFFF")), 1.0, 1e-12);
     EXPECT_NEAR(relativeLuminance(*parseHexColor("#000000")), 0.0, 1e-12);
     // The linear segment of the sRGB curve: channel 10/255 = 0.0392 <= 0.04045.

@@ -27,13 +27,16 @@ struct Comparison {
     [[nodiscard]] std::string describe() const;
 };
 
-// Channel differences up to this pass; up to kMaxOutlierPixels pixels may exceed it.
+// Channel differences up to this pass; up to kMaxOutlierPixels pixels may exceed it, but none
+// by more than kMaxOutlierChannelDiff (antialiasing noise, never a missing or recoloured shape).
 inline constexpr int kChannelTolerance = 2;
 inline constexpr int kMaxOutlierPixels = 16;
+inline constexpr int kMaxOutlierChannelDiff = 32;
 
 /*
  * Compares two images as ARGB32 (not premultiplied): the sizes must match; every channel within
- * kChannelTolerance passes; otherwise at most kMaxOutlierPixels pixels may differ by more.
+ * kChannelTolerance passes; otherwise at most kMaxOutlierPixels pixels may differ by more, and
+ * none of them by more than kMaxOutlierChannelDiff in any channel.
  */
 [[nodiscard]] Comparison compareImages(const QImage& actual, const QImage& expected);
 

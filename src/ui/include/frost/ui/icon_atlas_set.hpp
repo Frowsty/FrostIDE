@@ -36,9 +36,16 @@ enum class IconSlot : std::uint8_t {
     return slot == IconSlot::Toolbar ? MetricKey::ToolbarIconSize : MetricKey::IconSize;
 }
 
-// The baked scale to preload for a screen of `devicePixelRatio` at `zoomPercent`: the smallest
-// kAtlasScales value at or above the effective scale, or the largest. Pure.
-[[nodiscard]] std::uint16_t preloadScaleFor(double devicePixelRatio, std::uint16_t zoomPercent) noexcept;
+/*
+ * The baked scale to preload for a screen of `devicePixelRatio` at `zoomPercent`: the scale of
+ * the cell pixmap() would choose (selectIconSource over every kAtlasScales x kIconDesignSizes
+ * candidate) for a Small icon of `iconDesignSize` (the theme's Icon.size) drawn at
+ * px(iconDesignSize) logical pixels. The design-size switch counts, so 125% zoom on a 150%
+ * screen preloads 150 (the 20 px design is exactly 30 device pixels there), not 200. Toolbar
+ * icons may still pick another scale, which then loads on first use. Pure, O(1).
+ */
+[[nodiscard]] std::uint16_t preloadScaleFor(double devicePixelRatio, std::uint16_t zoomPercent,
+                                            std::uint8_t iconDesignSize = 16) noexcept;
 
 /*
  * The atlases of one bake, shared through std::shared_ptr<const IconAtlasSet>: every icon engine
@@ -95,8 +102,11 @@ public:
      *     Disabled uses IconRole::Disabled, Selected uses IconRole::Selected; without a theme the
      *     tint is opaque black. Untinted icons use their dark cell when the theme is dark;
      *   - the result has devicePixelRatio `dpr` and is cached under (scale, entry, devicePx,
-     *     mode, tint, dark) with its byte size as cost (kPixmapCacheBytes cap). Budget: B5 for
-     *     a cache hit (one hash lookup); Budget: B19 for the cache.
+     *     mode, tint, dark, dpr) with its byte size as cost (kPixmapCacheBytes cap).
+     * Budget: B5 for a cache hit, which still makes the choice above before the cache is
+     * consulted: two O(log n) id searches, at most 21 candidates and a few small vector
+     * allocations, then one hash lookup (about a microsecond; AppearancePerf.IconPixmapCacheHit
+     * measures it). Budget: B19 for the cache.
      * An unknown id returns a null QPixmap and increments missingLookups(). GUI thread only.
      */
     [[nodiscard]] QPixmap pixmap(std::string_view id, IconSlot slot, int logicalPx, qreal dpr, QIcon::Mode mode,

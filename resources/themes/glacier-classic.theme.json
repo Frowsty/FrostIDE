@@ -48,7 +48,7 @@
       "default": {
         "background": "#3870D8",
         "foreground": "white",
-        "hoverBackground": "#3F7AE3"
+        "hoverBackground": "#3166CC"
       }
     },
     "TextField": {

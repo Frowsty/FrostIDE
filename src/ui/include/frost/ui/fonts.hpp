@@ -29,10 +29,11 @@ struct RegisteredFonts {
  * Reads every file of `set` from `fontsDir` (absolute UTF-8: <resources>/fonts/inter or
  * <resources>/fonts/jetbrains-mono) with readFile and registers it with
  * QFontDatabase::addApplicationFontFromData. Not idempotent: AppearanceManager tracks what is
- * registered (no static cache). Needs a QGuiApplication; GUI thread only.
- * Errors: NotFound, PermissionDenied, Busy or IoError naming the file (nothing is registered
- * after the first failure, but earlier files of the set stay registered); Corrupt when Qt
- * rejects a file. Budget: B1 for FontSet::Ui; the editor set is registered lazily (Budget: B19).
+ * registered (no static cache). All or nothing: on any error the files of the set that were
+ * already registered are removed again (QFontDatabase::removeApplicationFont), so a failed or
+ * retried call never leaves fonts behind. Needs a QGuiApplication; GUI thread only.
+ * Errors: NotFound, PermissionDenied, Busy or IoError naming the file; Corrupt when Qt rejects
+ * a file. Budget: B1 for FontSet::Ui; the editor set is registered lazily (Budget: B19).
  */
 [[nodiscard]] Result<RegisteredFonts> registerBundledFonts(io::IFileSystem& fs, std::string_view fontsDir, FontSet set);
 

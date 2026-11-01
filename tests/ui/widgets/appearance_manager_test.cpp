@@ -238,6 +238,28 @@ TEST(AppearanceManager, ThemeSnapshotOutlivesSwitch) {
     EXPECT_EQ(snapshot->color(ColorKey::IslandBackground), island);
 }
 
+TEST(AppearanceManager, StartupFallbackStaysUntilTheResolvedThemeChanges) {
+    auto mem = test::mirrorResources({"themes/glacier-light.ftheme"});
+    ASSERT_TRUE(mem);
+    const auto installed = test::install(withTheme("glacier-light"), &mem->fs, mem->root);
+    ASSERT_TRUE(installed);
+    ASSERT_EQ(installed->report.themeId, "glacier-dark");
+    SignalCounter counter(*installed->manager);
+    // The settings still resolve to glacier-light: zoom applies on the fallback, no retry.
+    ASSERT_TRUE(installed->manager->zoomIn());
+    EXPECT_EQ(installed->manager->theme().id(), "glacier-dark");
+    EXPECT_EQ(installed->manager->scale().zoomPercent, 110);
+    EXPECT_EQ(counter.changed, 1);
+    EXPECT_EQ(counter.failed, 0);
+    // Another theme loads; going back to the missing one is then an error that keeps it.
+    ASSERT_TRUE(installed->manager->apply(withTheme("glacier-classic")));
+    EXPECT_EQ(installed->manager->theme().id(), "glacier-classic");
+    const auto back = installed->manager->apply(withTheme("glacier-light"));
+    ASSERT_FALSE(back);
+    EXPECT_EQ(back.error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(installed->manager->theme().id(), "glacier-classic");
+}
+
 // The observable global state a failed install must leave alone.
 struct GlobalState {
     const QStyle* style = QApplication::style();

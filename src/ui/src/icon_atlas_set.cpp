@@ -43,14 +43,22 @@ std::string atlasFileName(std::uint16_t percent) { return std::format("icons-{}.
 
 } // namespace
 
-std::uint16_t preloadScaleFor(double devicePixelRatio, std::uint16_t zoomPercent) noexcept {
-    const double effective = devicePixelRatio * zoomPercent;
+std::uint16_t preloadScaleFor(double devicePixelRatio, std::uint16_t zoomPercent,
+                              std::uint8_t iconDesignSize) noexcept {
+    // pixmap()'s request for a Small icon on that screen, and its choice among every baked scale
+    // and design grid (the bake's own design sizes are not known before an atlas is read).
+    const double dpr = devicePixelRatio > 0.0 ? devicePixelRatio : 1.0;
+    const int logicalPx = UiScale{Density::Normal, zoomPercent}.px(iconDesignSize);
+    const auto wantedPx = static_cast<std::uint16_t>(std::clamp(std::lround(logicalPx * dpr), 1L, 4096L));
+    std::array<IconCandidate, kAtlasScales.size() * kIconDesignSizes.size()> candidates{};
+    std::size_t n = 0;
     for (const std::uint16_t scale : kAtlasScales) {
-        if (scale + 0.5 >= effective) {
-            return scale;
+        for (const std::uint8_t size : kIconDesignSizes) {
+            candidates[n++] = {size, scale, iconDevicePx(size, scale)};
         }
     }
-    return kAtlasScales.back();
+    const auto pick = selectIconSource(candidates, iconDesignSize, wantedPx);
+    return pick ? candidates[*pick].scalePercent : kAtlasScales.back();
 }
 
 IconAtlasSet::IconAtlasSet(io::IFileSystem& fs, std::string iconsDir) : m_fs(fs), m_iconsDir(std::move(iconsDir)) {}
@@ -231,7 +239,7 @@ QPixmap IconAtlasSet::pixmap(std::string_view id, IconSlot slot, int logicalPx, 
                        entry.tinted ? tint.argb : 0U,
                        dark,
                        std::bit_cast<std::uint64_t>(static_cast<double>(dpr))};
-    // Budget: B5. A hit is this one lookup.
+    // Budget: B5. A hit costs the choice above plus this lookup (icon_atlas_set.hpp).
     if (const QPixmap* hit = m_cache.object(key)) {
         return *hit;
     }

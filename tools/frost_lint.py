@@ -858,11 +858,13 @@ _TRAILING_RETURN = re.compile(r"\)\s*->\s*[\w:<>,\s*&]*$")
 # An #include directive in lexed code; group 1 is the opening delimiter. Quoted names are
 # blanked in the lexed code, so the name is read from the original text at the same offset.
 _INCLUDE_OPEN = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])', re.M)
-_QT_SVG_HEADER = re.compile(r"Qt?Svg")
+# A Qt Svg or Qt Svg Widgets header: a path component starting QSvg, QtSvg or QGraphicsSvg in
+# any case (<QSvgRenderer>, <qsvgrenderer.h>, <QtSvgWidgets/...>, <qgraphicssvgitem.h>).
+_QT_SVG_HEADER = re.compile(r"(?:^|/)(?:qt?svg|qgraphicssvg)", re.I)
 
 
 def check_qt_svg(rel: str, text: str, code: str, lines: _Lines) -> list[Violation]:
-    """qt-svg: Qt Svg headers (<QSvg...>, <QtSvg/...>, <QtSvgWidgets/...>) only in the icon baker."""
+    """qt-svg: Qt Svg headers (class, lower-case and module spellings) only in the icon baker."""
     out = []
     for m in _INCLUDE_OPEN.finditer(code):
         close = ">" if m.group(1) == "<" else '"'
@@ -871,7 +873,7 @@ def check_qt_svg(rel: str, text: str, code: str, lines: _Lines) -> list[Violatio
         if end < 0 or 0 <= newline < end:
             continue
         name = text[m.end() : end].strip()
-        if _QT_SVG_HEADER.match(name):
+        if _QT_SVG_HEADER.search(name):
             out.append(Violation(rel, lines.line(m.start()), "qt-svg",
                                  f"#include of {name}: Qt Svg is linked only by tools/icon_baker; the runtime "
                                  f"draws baked icon atlases (ADR 0015)"))

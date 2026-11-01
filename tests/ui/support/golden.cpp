@@ -34,15 +34,17 @@ QImage renderAt(QWidget& widget, qreal dpr) {
 }
 
 bool Comparison::passes() const {
-    return sizesMatch && (maxChannelDiff <= kChannelTolerance || pixelsOverTolerance <= kMaxOutlierPixels);
+    return sizesMatch && (maxChannelDiff <= kChannelTolerance ||
+                          (pixelsOverTolerance <= kMaxOutlierPixels && maxChannelDiff <= kMaxOutlierChannelDiff));
 }
 
 std::string Comparison::describe() const {
     if (!sizesMatch) {
         return "the sizes differ";
     }
-    return std::format("max channel difference {}, {} pixel(s) over {}", maxChannelDiff, pixelsOverTolerance,
-                       kChannelTolerance);
+    return std::format("max channel difference {} (outliers may reach {}), {} pixel(s) over {} (at most {})",
+                       maxChannelDiff, kMaxOutlierChannelDiff, pixelsOverTolerance, kChannelTolerance,
+                       kMaxOutlierPixels);
 }
 
 Comparison compareImages(const QImage& actual, const QImage& expected) {

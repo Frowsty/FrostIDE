@@ -27,19 +27,28 @@ namespace frost::ui {
  * QApplication::setStyle, which owns it and deletes it on the next setStyle(); the base Fusion
  * style is owned by the proxy. Everything runs on the GUI thread.
  *
- * Mapping (ADR 0015 section 4.4):
+ * Mapping (ADR 0015 decision 1):
  *   standardPalette()  every role of the Active, Inactive and Disabled groups from the theme;
  *   pixelMetric()      icon sizes, scroll bar width, focus margins, button margin, layout
  *                      spacing and margins, all through UiScale, and Fusion's check and radio
  *                      indicator sizes times the zoom;
- *   sizeFromContents() heights clamped to Button.height, TextField.height, List/Tree.rowHeight,
- *                      Menu.itemHeight and TabbedPane.tabHeight;
- *   drawPrimitive()    buttons, line edits, focus rings, check boxes, radio buttons, item-view
- *                      rows, menus and the tab-widget frame;
+ *   sizeFromContents() heights at least Button.height, TextField.height, List/Tree.rowHeight,
+ *                      Menu.itemHeight and TabbedPane.tabHeight (larger content keeps its size);
+ *   drawPrimitive()    buttons (a focused default button adds a Button.default.foreground line
+ *                      inside its focus ring), line edits, focus rings, check boxes, radio
+ *                      buttons, item-view rows, the menu panel (Menu.background) and the
+ *                      tab-widget frame;
  *   drawControl()      the tab shape (an accent underline), the default button's label colour
- *                      (Button.default.foreground) and icon-only tool buttons' icons (QIcon::paint
+ *                      (Button.default.foreground), menu items (Menu.foreground and
+ *                      Menu.selection*), the combo label (ComboBox.foreground), selected tree text
+ *                      (Tree.selectionForeground) and icon-only tool buttons' icons (QIcon::paint
  *                      at the painter's scale); everything else is Fusion's;
- *   drawComplexControl() the combo box frame (a text field's) and its arrow.
+ *   drawComplexControl() the combo box frame (a text field's, in ComboBox.background and
+ *                      ComboBox.borderColor) and its arrow (ComboBox.foreground).
+ * Keys no drawing path reads yet are listed as reserved in theme_registry.hpp.
+ * Focus rings show whenever a widget has focus, whether it came from the keyboard or a click
+ * (as in IntelliJ, and WCAG 2.4.7 Focus Visible): State_KeyboardFocusChange is not consulted. A
+ * push button's ring is drawn once, by its panel (FrostStyle.FocusedPushButtonDrawsOneRing).
  * Animations are off (SH_Widget_Animation_Duration 0, decision 13). Every drawing path reads the
  * device pixel ratio from the painter's device transform (also correct under QWidget::render,
  * which redirects to the widget) and snaps shape edges to device pixels.
@@ -95,7 +104,10 @@ public:
 private:
     [[nodiscard]] QPalette buildPalette() const;
     void drawButtonPanel(const QStyleOption* option, QPainter* painter) const;
-    void drawLineEditFrame(const QStyleOption* option, QPainter* painter, bool fill) const;
+    // A text field's frame (and, with `fill`, its fill); combo boxes pass their own keys.
+    void drawLineEditFrame(const QStyleOption* option, QPainter* painter, bool fill,
+                           ColorKey background = ColorKey::TextFieldBackground,
+                           ColorKey borderKey = ColorKey::TextFieldBorderColor) const;
     void drawFocusRing(const QRectF& rect, qreal radius, QPainter* painter) const;
     void drawCheckIndicator(const QStyleOption* option, QPainter* painter, bool radio) const;
     void drawItemPanel(const QStyleOption* option, QPainter* painter, const QWidget* widget, bool row) const;

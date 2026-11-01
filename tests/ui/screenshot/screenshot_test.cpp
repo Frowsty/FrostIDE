@@ -124,7 +124,7 @@ QRect logicalGeometry(const test::SamplePanel& panel, const QWidget* widget) {
     return {widget->mapTo(panel.root.get(), QPoint(0, 0)), widget->size()};
 }
 
-// The structural samples of the spec (section 8.D). Interior points only: every sample is at
+// The structural samples (ADR 0015 decision 11). Interior points only: every sample is at
 // least one device pixel away from an antialiased edge at every scale.
 void expectStructure(const Rendered& r) {
     const test::SamplePanel& panel = r.panel;
@@ -279,6 +279,28 @@ TEST(ThemeScreenshot, FontIsBundled) {
     ASSERT_TRUE(mono);
     EXPECT_EQ(QFontInfo(r->panel.monoLabel->font()).family(), mono->primaryFamily);
     EXPECT_TRUE(QFontInfo(r->panel.monoLabel->font()).fixedPitch());
+}
+
+TEST(GoldenComparator, BoundsOutliersInCountAndSize) {
+    QImage golden(40, 30, QImage::Format_ARGB32);
+    golden.fill(QColor(30, 40, 50));
+    const auto withDiffs = [&](int pixels, int delta) {
+        QImage image = golden.copy();
+        for (int i = 0; i < pixels; ++i) {
+            image.setPixelColor(i % 40, i / 40, QColor(30 + delta, 40, 50));
+        }
+        return test::compareImages(image, golden);
+    };
+    EXPECT_TRUE(withDiffs(0, 0).passes());
+    EXPECT_TRUE(withDiffs(1200, test::kChannelTolerance).passes()) << "every pixel within the tolerance";
+    EXPECT_TRUE(withDiffs(test::kMaxOutlierPixels, test::kMaxOutlierChannelDiff).passes()) << "antialiasing noise";
+    EXPECT_FALSE(withDiffs(test::kMaxOutlierPixels + 1, test::kChannelTolerance + 1).passes()) << "too many";
+    const test::Comparison recoloured = withDiffs(1, test::kMaxOutlierChannelDiff + 1);
+    EXPECT_FALSE(recoloured.passes()) << "one pixel far off is a regression, not noise";
+    EXPECT_EQ(recoloured.maxChannelDiff, test::kMaxOutlierChannelDiff + 1);
+    EXPECT_EQ(recoloured.pixelsOverTolerance, 1);
+    EXPECT_FALSE(withDiffs(test::kMaxOutlierPixels, 200).passes()) << "a small shape drawn in the wrong colour";
+    EXPECT_FALSE(test::compareImages(golden.copy(0, 0, 39, 30), golden).passes()) << "sizes differ";
 }
 
 constexpr const char* kThemes[] = {"glacier-dark", "glacier-light", "glacier-classic", "glacier-high-contrast"};

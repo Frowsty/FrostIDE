@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -279,6 +280,10 @@ class HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
 
 # Replaces urllib's default redirect handler (build_opener drops a default when given a subclass).
 _OPENER = urllib.request.build_opener(HttpsOnlyRedirects)
+# What a request or a response read can raise: urllib's errors, http.client's for a broken
+# reply (IncompleteRead, RemoteDisconnected, a bad status line), and socket/file errors.
+_NETWORK_ERRORS: tuple[type[BaseException], ...] = (urllib.error.URLError, http.client.HTTPException, OSError,
+                                                    ValueError)
 
 
 def download(url: str, target: Path, limit: int = MAX_DOWNLOAD_BYTES) -> str:
@@ -298,7 +303,7 @@ def download(url: str, target: Path, limit: int = MAX_DOWNLOAD_BYTES) -> str:
                     raise FetchError(f"download of {url} exceeds the {limit}-byte limit")
                 digest.update(chunk)
                 out.write(chunk)
-    except (urllib.error.URLError, OSError, ValueError) as error:
+    except _NETWORK_ERRORS as error:
         raise FetchError(f"download of {url} failed: {error}") from error
     return digest.hexdigest()
 
@@ -307,7 +312,8 @@ def github_digest(url: str) -> str | None:
     """
     The SHA-256 GitHub publishes for a release asset (the REST API's `digest` field), or None
     when `url` is not a GitHub release download or the asset has no digest. Raises FetchError
-    when the API cannot be read.
+    when the API cannot be read or its reply is not a release object with a list of asset
+    objects.
     """
     m = _GITHUB_RELEASE.match(url)
     if not m:
@@ -322,9 +328,12 @@ def github_digest(url: str) -> str | None:
         if len(reply) > MAX_API_REPLY_BYTES:
             raise FetchError(f"the GitHub release {owner}/{repo}@{tag} reply exceeds {MAX_API_REPLY_BYTES} bytes")
         release = json.loads(reply.decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError) as error:
+    except _NETWORK_ERRORS as error:
         raise FetchError(f"cannot read the GitHub release {owner}/{repo}@{tag}: {error}") from error
-    for item in release.get("assets", []):
+    assets = release.get("assets") if isinstance(release, dict) else None
+    if not isinstance(assets, list) or not all(isinstance(item, dict) for item in assets):
+        raise FetchError(f"the GitHub release {owner}/{repo}@{tag} reply is not a release with a list of assets")
+    for item in assets:
         if item.get("name") == urllib.parse.unquote(name):
             digest = item.get("digest")
             if isinstance(digest, str) and digest.startswith("sha256:"):

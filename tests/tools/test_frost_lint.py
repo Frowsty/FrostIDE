@@ -48,7 +48,7 @@ class FixtureTest(TempDirTestCase):
                ("tests/toolchain_probe/banned/no_header.cpp", 1, "spdx-header")]
             + [("todo.cpp", line, "todo") for line in (3, 4, 5, 7)]
             + [("win32.cpp", line, "narrow-win32") for line in (4, 5, 6)]
-            + [("qt_svg.cpp", line, "qt-svg") for line in (3, 4, 5, 6)]
+            + [("qt_svg.cpp", line, "qt-svg") for line in range(3, 13)]
         )
         self.assertEqual(sorted(found), expected)
 

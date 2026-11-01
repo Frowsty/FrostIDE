@@ -12,13 +12,16 @@ namespace frost::ui::detail {
 
 namespace {
 
+constexpr bool isContinuationByte(char c) noexcept { return (static_cast<unsigned char>(c) & 0xc0U) == 0x80U; }
+
 class Scanner {
 public:
-    Scanner(std::string_view text, int maxDepth) : m_text(text), m_maxDepth(maxDepth) {}
+    Scanner(std::string_view text, int maxDepth, std::size_t maxReported)
+        : m_text(text), m_maxDepth(maxDepth), m_maxReported(maxReported) {}
 
     PrescanResult run() {
         skipSpace();
-        if (!value("", 1)) {
+        if (!value(1)) {
             if (!m_result.depthExceeded) {
                 m_result.syntaxError = true;
             }
@@ -202,10 +205,10 @@ private:
         return true;
     }
 
-    bool value(const std::string& path, int depth) {
+    bool value(int depth) {
         switch (peek()) {
-        case '{': return object(path, depth);
-        case '[': return array(path, depth);
+        case '{': return object(depth);
+        case '[': return array(depth);
         case '"': {
             std::string ignored;
             return string(ignored);
@@ -217,7 +220,27 @@ private:
         }
     }
 
-    bool object(const std::string& path, int depth) {
+    /*
+     * The path of the innermost member or element, joined from the segment stack. Called only
+     * for reported duplicates, so a long name shared by many members is copied at most
+     * maxReported times rather than once per member.
+     */
+    [[nodiscard]] std::string currentPath() const {
+        std::string out;
+        for (const Segment& segment : m_segments) {
+            if (segment.name != nullptr) {
+                if (!out.empty()) {
+                    out.push_back('.');
+                }
+                out += *segment.name;
+            } else {
+                out += "[" + std::to_string(segment.index) + "]";
+            }
+        }
+        return out;
+    }
+
+    bool object(int depth) {
         if (!enter(depth)) {
             return false;
         }
@@ -227,15 +250,20 @@ private:
             ++m_pos;
             return true;
         }
+        // Set nodes never move, so the segment stack can point at the names they hold.
         std::set<std::string> names;
         while (true) {
             std::string name;
             if (!string(name)) {
                 return false;
             }
-            std::string memberPath = path.empty() ? name : path + "." + name;
-            if (!names.insert(name).second) {
-                m_result.duplicates.push_back({memberPath});
+            const auto [it, inserted] = names.insert(std::move(name));
+            m_segments.push_back({&*it, 0});
+            if (!inserted) {
+                if (m_result.duplicates.size() < m_maxReported) {
+                    m_result.duplicates.push_back({elideForDiagnostic(currentPath())});
+                }
+                ++m_result.duplicateCount;
             }
             skipSpace();
             if (peek() != ':') {
@@ -243,9 +271,10 @@ private:
             }
             ++m_pos;
             skipSpace();
-            if (!value(memberPath, depth + 1)) {
+            if (!value(depth + 1)) {
                 return false;
             }
+            m_segments.pop_back();
             skipSpace();
             if (peek() == ',') {
                 ++m_pos;
@@ -260,7 +289,7 @@ private:
         }
     }
 
-    bool array(const std::string& path, int depth) {
+    bool array(int depth) {
         if (!enter(depth)) {
             return false;
         }
@@ -271,9 +300,11 @@ private:
             return true;
         }
         for (std::size_t index = 0;; ++index) {
-            if (!value(path + "[" + std::to_string(index) + "]", depth + 1)) {
+            m_segments.push_back({nullptr, index});
+            if (!value(depth + 1)) {
                 return false;
             }
+            m_segments.pop_back();
             skipSpace();
             if (peek() == ',') {
                 ++m_pos;
@@ -288,14 +319,45 @@ private:
         }
     }
 
+    // One step of the current path: a member name (owned by its object's name set) or, when
+    // `name` is null, array element `index`.
+    struct Segment {
+        const std::string* name;
+        std::size_t index;
+    };
+
     std::string_view m_text;
     int m_maxDepth;
+    std::size_t m_maxReported;
     std::size_t m_pos = 0;
+    std::vector<Segment> m_segments; // at most maxDepth + 1 deep
     PrescanResult m_result;
 };
 
 } // namespace
 
-PrescanResult prescanJson(std::string_view text, int maxDepth) { return Scanner(text, maxDepth).run(); }
+PrescanResult prescanJson(std::string_view text, int maxDepth, std::size_t maxReported) {
+    return Scanner(text, maxDepth, maxReported).run();
+}
+
+std::string elideForDiagnostic(std::string_view text, std::size_t maxBytes) {
+    if (text.size() <= maxBytes) {
+        return std::string(text);
+    }
+    // Cut the head before a continuation byte and start the tail after one, so both halves
+    // stay valid UTF-8 when `text` is.
+    std::size_t head = maxBytes / 2;
+    while (head > 0 && isContinuationByte(text[head])) {
+        --head;
+    }
+    std::size_t tail = text.size() - maxBytes / 2;
+    while (tail < text.size() && isContinuationByte(text[tail])) {
+        ++tail;
+    }
+    std::string out(text.substr(0, head));
+    out += "...";
+    out += text.substr(tail);
+    return out;
+}
 
 } // namespace frost::ui::detail

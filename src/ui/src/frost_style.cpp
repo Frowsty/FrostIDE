@@ -69,6 +69,13 @@ void fillRounded(QPainter* painter, const QRectF& rect, qreal radius, const QCol
 
 constexpr std::array<QPalette::ColorGroup, 3> kGroups{QPalette::Active, QPalette::Inactive, QPalette::Disabled};
 
+// Sets `role` to `color` in the Active and Inactive groups; the Disabled group keeps the
+// palette's disabled colours.
+void setEnabledGroups(QPalette& palette, QPalette::ColorRole role, const QColor& color) {
+    palette.setColor(QPalette::Active, role, color);
+    palette.setColor(QPalette::Inactive, role, color);
+}
+
 } // namespace
 
 FrostStyle::FrostStyle(std::shared_ptr<const Theme> theme, UiScale scale, std::shared_ptr<const IconAtlasSet> icons,
@@ -257,11 +264,25 @@ void FrostStyle::drawButtonPanel(const QStyleOption* option, QPainter* painter) 
     strokeRounded(painter, rect, radius, color(border), deviceWidth(painter, 1.0));
     if (enabled && (option->state & State_HasFocus) != 0) {
         drawFocusRing(rect, radius, painter);
+        if (isDefault) {
+            /*
+             * A default button's fill is often the focus colour itself (Glacier Light's accent),
+             * so the ring alone would leave the focused button looking unfocused. A
+             * Button.default.foreground line just inside the ring makes a two-colour indicator
+             * (WCAG 2.2 technique C40); its contrast with the fill, resting or hovered, is the
+             * label's Text pair (theme_registry.hpp). Both edges stay on device pixels.
+             */
+            const qreal ring = deviceWidth(painter, metricPx(MetricKey::ComponentFocusWidth));
+            const QRectF outer = detail::snapToDevicePixels(*painter, rect);
+            strokeRounded(painter, outer.adjusted(ring, ring, -ring, -ring), std::max<qreal>(0.0, radius - ring),
+                          color(ColorKey::ButtonDefaultForeground), deviceWidth(painter, 1.0));
+        }
     }
     painter->restore();
 }
 
-void FrostStyle::drawLineEditFrame(const QStyleOption* option, QPainter* painter, bool fill) const {
+void FrostStyle::drawLineEditFrame(const QStyleOption* option, QPainter* painter, bool fill, ColorKey background,
+                                   ColorKey borderKey) const {
     const bool enabled = (option->state & State_Enabled) != 0;
     const bool focus = enabled && (option->state & State_HasFocus) != 0;
     const QRectF rect(option->rect);
@@ -269,15 +290,14 @@ void FrostStyle::drawLineEditFrame(const QStyleOption* option, QPainter* painter
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     if (fill) {
-        fillRounded(painter, rect, radius, color(ColorKey::TextFieldBackground));
+        fillRounded(painter, rect, radius, color(background));
     }
     const auto* frame = qstyleoption_cast<const QStyleOptionFrame*>(option);
     if (!fill || frame == nullptr || frame->lineWidth > 0) {
         if (focus) {
             drawFocusRing(rect, radius, painter);
         } else {
-            strokeRounded(painter, rect, radius,
-                          color(enabled ? ColorKey::TextFieldBorderColor : ColorKey::ComponentDisabledBorderColor),
+            strokeRounded(painter, rect, radius, color(enabled ? borderKey : ColorKey::ComponentDisabledBorderColor),
                           deviceWidth(painter, 1.0));
         }
     }
@@ -375,17 +395,19 @@ void FrostStyle::drawComplexControl(ComplexControl control, const QStyleOptionCo
         QProxyStyle::drawComplexControl(control, option, painter, widget);
         return;
     }
-    // The frame and fill of a text field (focus ring included), then the arrow.
+    // A text field's frame and fill in the ComboBox colours (focus ring included), then the arrow.
     if ((combo->subControls & SC_ComboBoxFrame) != 0 && combo->frame) {
         QStyleOptionFrame frame;
         frame.QStyleOption::operator=(*combo);
         frame.lineWidth = 1;
-        drawLineEditFrame(&frame, painter, true);
+        drawLineEditFrame(&frame, painter, true, ColorKey::ComboBoxBackground, ColorKey::ComboBoxBorderColor);
     }
     if ((combo->subControls & SC_ComboBoxArrow) != 0) {
         const QRect arrow = subControlRect(CC_ComboBox, combo, SC_ComboBoxArrow, widget);
         const bool enabled = (combo->state & State_Enabled) != 0;
-        drawDownArrow(arrow, combo->palette.color(enabled ? QPalette::Active : QPalette::Disabled, QPalette::Text),
+        drawDownArrow(arrow,
+                      enabled ? color(ColorKey::ComboBoxForeground)
+                              : combo->palette.color(QPalette::Disabled, QPalette::Text),
                       painter);
     }
 }
@@ -406,7 +428,7 @@ void FrostStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* opt
     case PE_IndicatorRadioButton: drawCheckIndicator(option, painter, true); return;
     case PE_PanelItemViewItem: drawItemPanel(option, painter, widget, false); return;
     case PE_PanelItemViewRow: drawItemPanel(option, painter, widget, true); return;
-    case PE_PanelMenu: painter->fillRect(option->rect, color(ColorKey::PopupBackground)); return;
+    case PE_PanelMenu: painter->fillRect(option->rect, color(ColorKey::MenuBackground)); return;
     case PE_FrameMenu:
     case PE_FrameTabWidget:
         painter->save();
@@ -430,6 +452,47 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
             (button->state & State_Enabled) != 0) {
             QStyleOptionButton copy(*button);
             copy.palette.setColor(QPalette::ButtonText, color(ColorKey::ButtonDefaultForeground));
+            QProxyStyle::drawControl(element, &copy, painter, widget);
+            return;
+        }
+    }
+    if (element == CE_MenuItem) {
+        // Menus take Menu.* rather than the palette's Text and Highlight roles (which are the
+        // TextField and List keys); Fusion draws the item with them.
+        if (const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option)) {
+            QStyleOptionMenuItem copy(*item);
+            for (const QPalette::ColorRole role : {QPalette::Text, QPalette::WindowText, QPalette::ButtonText}) {
+                setEnabledGroups(copy.palette, role, color(ColorKey::MenuForeground));
+            }
+            setEnabledGroups(copy.palette, QPalette::Highlight, color(ColorKey::MenuSelectionBackground));
+            setEnabledGroups(copy.palette, QPalette::HighlightedText, color(ColorKey::MenuSelectionForeground));
+            QProxyStyle::drawControl(element, &copy, painter, widget);
+            return;
+        }
+    }
+    if (element == CE_ComboBoxLabel) {
+        if (const auto* combo = qstyleoption_cast<const QStyleOptionComboBox*>(option)) {
+            QStyleOptionComboBox copy(*combo);
+            setEnabledGroups(copy.palette, QPalette::Text, color(ColorKey::ComboBoxForeground));
+            setEnabledGroups(copy.palette, QPalette::ButtonText, color(ColorKey::ComboBoxForeground));
+            QProxyStyle::drawControl(element, &copy, painter, widget);
+            return;
+        }
+    }
+    if (element == CE_ItemViewItem && qobject_cast<const QTreeView*>(widget) != nullptr) {
+        /*
+         * A selected tree row's text is Tree.selectionForeground (its fill is
+         * Tree.selectionBackground, drawItemPanel). Only the style's own HighlightedText is
+         * replaced, so a colour that the model or the widget set explicitly is kept.
+         */
+        if (const auto* item = qstyleoption_cast<const QStyleOptionViewItem*>(option)) {
+            QStyleOptionViewItem copy(*item);
+            for (const QPalette::ColorGroup group : kGroups) {
+                if (copy.palette.color(group, QPalette::HighlightedText) ==
+                    m_palette.color(group, QPalette::HighlightedText)) {
+                    copy.palette.setColor(group, QPalette::HighlightedText, color(ColorKey::TreeSelectionForeground));
+                }
+            }
             QProxyStyle::drawControl(element, &copy, painter, widget);
             return;
         }

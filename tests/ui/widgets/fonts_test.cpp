@@ -105,6 +105,32 @@ TEST(Fonts, MissingFontIsNonFatalWarning) {
     EXPECT_EQ(corrupt.error().code(), ErrorCode::Corrupt);
 }
 
+TEST(Fonts, FailedRegistrationLeavesNothingRegistered) {
+    // From no application fonts: any family that appears below was registered by this test.
+    QFontDatabase::removeAllApplicationFonts();
+    const QStringList before = QFontDatabase::families();
+    ASSERT_FALSE(before.contains(QStringLiteral("JetBrains Mono"))) << "JetBrains Mono must not be a system font here";
+    auto mem = test::mirrorResources();
+    ASSERT_TRUE(mem);
+    // The last editor file fails to read three times, after the first three were registered.
+    mem->fs.injectFault(io::FsOp::Read, mem->path("fonts/jetbrains-mono/JetBrainsMono-BoldItalic.ttf"),
+                        ErrorCode::IoError, 3);
+    const auto installed = test::install(withTheme("glacier-dark"), &mem->fs, mem->root);
+    ASSERT_TRUE(installed);
+    const QStringList afterInstall = QFontDatabase::families();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        SCOPED_TRACE(attempt);
+        const auto failed = installed->manager->ensureEditorFonts();
+        ASSERT_FALSE(failed);
+        EXPECT_EQ(failed.error().code(), ErrorCode::IoError);
+        EXPECT_EQ(QFontDatabase::families(), afterInstall) << "a failed call leaves no font registered";
+    }
+    // The next call reads every file and registers the set.
+    const auto editor = installed->manager->ensureEditorFonts();
+    ASSERT_TRUE(editor) << editor.error().describe();
+    EXPECT_TRUE(QFontDatabase::families().contains(editor->primaryFamily));
+}
+
 TEST(QtOsAppearanceSource, Smoke) {
     QtOsAppearanceSource source;
     const OsAppearance first = source.current();

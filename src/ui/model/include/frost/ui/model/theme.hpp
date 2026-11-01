@@ -51,7 +51,7 @@ struct ThemeInfo {
 [[nodiscard]] bool isValidThemeId(std::string_view id) noexcept;
 
 /*
- * An immutable theme value: about 600 bytes of arrays plus the id and name strings. Concurrent
+ * An immutable theme value: 456 bytes of arrays plus the id and name strings. Concurrent
  * const access from any number of threads is safe. Copyable; FrostStyle and AppearanceManager
  * share one through std::shared_ptr<const Theme>.
  */

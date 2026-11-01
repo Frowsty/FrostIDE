@@ -82,6 +82,10 @@ public:
      * there is no fallback at run time) one new FrostStyle is installed (generation + 1), the
      * palette and font are set, and appearanceChanged() is emitted exactly once. The atlas set
      * is kept, so existing QIcons stay valid. On error the old state is kept.
+     * After install() fell back to kDefaultThemeId, the current resolved id is still the one
+     * the settings asked for (InstallReport::requestedThemeId): settings that keep resolving to
+     * it, with any density or zoom, keep the fallback theme without retrying the failed load or
+     * reporting an error (zoom keeps working), and only a different resolved id loads a theme.
      * Errors: InvalidArgument (validate, or install() not called), those of loadThemeFile.
      */
     [[nodiscard]] Result<void> apply(const AppearanceSettings& settings);
@@ -97,8 +101,9 @@ public:
     [[nodiscard]] Result<void> resetZoom();
 
     // Registers JetBrains Mono on first use (m1/editor-view calls it when the first editor
-    // opens) and returns its families; later calls return the same. Budget: B19 (never on the
-    // start-up path).
+    // opens) and returns its families; later calls return the same. A failure registers
+    // nothing (registerBundledFonts rolls back) and the next call tries again, so repeated
+    // editor opens never pile up partial registrations. Budget: B19 (never on the start-up path).
     [[nodiscard]] Result<RegisteredFonts> ensureEditorFonts();
 
     // The current theme; valid until the next appearanceChanged().

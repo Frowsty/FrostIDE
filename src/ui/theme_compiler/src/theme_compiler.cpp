@@ -32,6 +32,18 @@ namespace {
 
 constexpr std::string_view kRoot = "$";
 
+// The longest colour or metric key name: a "ui" key longer than this matches nothing.
+constexpr std::size_t kLongestKeyName = [] {
+    std::size_t longest = 0;
+    for (const ColorKeyInfo& entry : kColorKeys) {
+        longest = std::max(longest, entry.name.size());
+    }
+    for (const MetricKeyInfo& entry : kMetricKeys) {
+        longest = std::max(longest, entry.name.size());
+    }
+    return longest;
+}();
+
 // The last dot-separated segment of a registry key name ("Button.default.background" ->
 // "background"), which a "*" wildcard property matches.
 std::string_view lastSegment(std::string_view name) noexcept {
@@ -91,19 +103,16 @@ public:
     }
 
 private:
-    void error(std::string path, std::string message) {
-        m_diagnostics.push_back({Diagnostic::Error, std::move(path), std::move(message)});
+    // Every diagnostic is bounded (kMaxDiagnosticPathBytes, kMaxDiagnosticMessageBytes).
+    void add(Diagnostic::Severity severity, std::string_view path, std::string_view message) {
+        m_diagnostics.push_back({severity, detail::elideForDiagnostic(path, kMaxDiagnosticPathBytes),
+                                 detail::elideForDiagnostic(message, kMaxDiagnosticMessageBytes)});
     }
-    void warning(std::string path, std::string message) {
-        m_diagnostics.push_back({Diagnostic::Warning, std::move(path), std::move(message)});
-    }
+    void error(std::string_view path, std::string_view message) { add(Diagnostic::Error, path, message); }
+    void warning(std::string_view path, std::string_view message) { add(Diagnostic::Warning, path, message); }
     // Unknown fields and keys: errors in strict mode, warnings in lenient mode.
-    void unknown(std::string path, std::string message) {
-        if (m_options.strict) {
-            error(std::move(path), std::move(message));
-        } else {
-            warning(std::move(path), std::move(message));
-        }
+    void unknown(std::string_view path, std::string_view message) {
+        add(m_options.strict ? Diagnostic::Error : Diagnostic::Warning, path, message);
     }
 
     void compile(std::span<const std::byte> json) {
@@ -126,13 +135,17 @@ private:
             error(std::string(kRoot), "the file is not valid UTF-8");
             return;
         }
-        const detail::PrescanResult scan = detail::prescanJson(text, kMaxThemeJsonDepth);
+        const detail::PrescanResult scan = detail::prescanJson(text, kMaxThemeJsonDepth, kMaxReportedDuplicates);
         if (scan.depthExceeded) {
             error(std::string(kRoot), std::format("nesting is deeper than {} levels", kMaxThemeJsonDepth));
             return;
         }
         for (const detail::DuplicateMember& duplicate : scan.duplicates) {
             unknown(duplicate.jsonPath, "duplicate member name in one object");
+        }
+        if (scan.duplicateCount > scan.duplicates.size()) {
+            unknown(kRoot, std::format("{} more duplicate member names are not listed",
+                                       scan.duplicateCount - scan.duplicates.size()));
         }
         QJsonParseError parseError{};
         const QJsonDocument document = QJsonDocument::fromJson(
@@ -265,6 +278,17 @@ private:
                 continue;
             }
             const std::string key = keyPrefix.empty() ? name : keyPrefix + "." + name;
+            if (key.size() > kLongestKeyName) {
+                /*
+                 * Neither this key nor any below it can be a registry key. Reporting the member
+                 * once, without descending, keeps the work per member at O(kLongestKeyName +
+                 * name): keyPrefix is never longer than kLongestKeyName, so a long name shared
+                 * by many members is never copied into each of their keys and paths.
+                 */
+                unknown(path,
+                        std::format("unknown key {}{}", key, value.isObject() ? " (and every key under it)" : ""));
+                continue;
+            }
             if (value.isObject()) {
                 flattenUi(value.toObject(), key, path);
                 continue;

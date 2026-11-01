@@ -21,7 +21,8 @@ namespace frost::ui {
  * which is the target's ratio also under QWidget::render), never from a screen; the icon's
  * origin is snapped to a device pixel. The theme and density come from
  * FrostStyle::current(); without one the icon is tinted opaque black at design size 16.
- * GUI thread only. Budget: B5 (a cache hit is one lookup plus drawPixmap).
+ * GUI thread only. Budget: B5 (a cache hit is IconAtlasSet::pixmap's choice and cache lookup,
+ * a few microseconds, plus drawPixmap; isNull() is one O(log n) id search).
  */
 class FrostIconEngine final : public QIconEngine {
 public:

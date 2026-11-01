@@ -13,7 +13,9 @@
 #include <QFont>
 #include <QScreen>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
 
 namespace frost::ui {
@@ -86,10 +88,12 @@ Result<InstallReport> AppearanceManager::install(QApplication& app) {
     }
     report.themeId = std::string(theme->id());
 
-    // 4. The icon atlases, preloading the scale the primary screen will use first.
+    // 4. The icon atlases, preloading the scale the primary screen's Small icons will use first.
     const QScreen* screen = QGuiApplication::primaryScreen();
+    const auto iconDesign =
+        static_cast<std::uint8_t>(std::clamp(std::lround(theme->metric(MetricKey::IconSize, scale.density)), 1L, 255L));
     const std::array<std::uint16_t, 1> preload{
-        preloadScaleFor(screen != nullptr ? screen->devicePixelRatio() : 1.0, scale.zoomPercent)};
+        preloadScaleFor(screen != nullptr ? screen->devicePixelRatio() : 1.0, scale.zoomPercent, iconDesign)};
     auto icons = IconAtlasSet::open(m_env.fileSystem, joined(m_env.resourceDir, "icons"), preload);
     if (!icons) {
         return std::unexpected(std::move(icons).error());

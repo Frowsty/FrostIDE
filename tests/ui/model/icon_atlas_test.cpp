@@ -450,6 +450,21 @@ TEST(PackShelves, DeterministicAndNoOverlap) {
     EXPECT_TRUE(packShelves(std::span(&tooBig, 1), 102));
 }
 
+TEST(PackShelves, PageCountFitsTheSixteenBitFields) {
+    // At the smallest page limit a 14 px cell (16 with its gaps) fills a page on its own, so n
+    // cells need n pages. 65,535 still fit the 16-bit page count and indices; one more is
+    // OutOfRange rather than a silently truncated count (which the parser would then refuse).
+    const std::vector<CellRequest> requests(kMaxAtlasPageCount + 1, CellRequest{14, 14, 0, "a.b", 14, 0});
+    const auto fits = packShelves(std::span(requests).first(kMaxAtlasPageCount), kMinAtlasPageLimit);
+    ASSERT_TRUE(fits) << fits.error().describe();
+    EXPECT_EQ(fits->pages.size(), kMaxAtlasPageCount);
+    EXPECT_EQ(fits->cells.back().page, kMaxAtlasPageCount - 1);
+    const auto tooMany = packShelves(requests, kMinAtlasPageLimit);
+    ASSERT_FALSE(tooMany);
+    EXPECT_EQ(tooMany.error().code(), ErrorCode::OutOfRange);
+    EXPECT_NE(tooMany.error().message().find("65535-page"), std::string::npos) << tooMany.error().message();
+}
+
 TEST(IconSelection, Table) {
     // 16 and 20 designs at 100/125/150%: device sizes 16, 20, 20, 25, 24, 30.
     const IconCandidate c[] = {{16, 100, 16}, {20, 100, 20}, {16, 125, 20},

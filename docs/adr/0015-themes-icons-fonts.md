@@ -23,8 +23,8 @@ detection, the icon atlas format), `frost::ui_theme_compiler` and `frost-themec`
 
 ## Decision
 **Decision 1. FrostStyle, a QProxyStyle over Fusion.**
-- The palette comes from the theme for every role of the Active, Inactive and Disabled groups (section 4.4 of the
-  slice spec): Window = Panel.background, Base = TextField.background, Highlight = List.selectionBackground
+- The palette comes from the theme for every role of the Active, Inactive and Disabled groups:
+  Window = Panel.background, Base = TextField.background, Highlight = List.selectionBackground
   (Inactive: List.selectionInactiveBackground), HighlightedText = List.selectionForeground, Accent =
   Component.focusColor, and so on. Light, Midlight, Mid, Dark and Shadow derive from Component.borderColor with
   fixed factors: lighter(150), lighter(125), the border itself, darker(150) and darker(200).
@@ -32,12 +32,26 @@ detection, the icon atlas format), `frost::ui_theme_compiler` and `frost-themec`
   platform palette otherwise wins: the windows plugin applies its own palette and per-class fonts
   (`ui_native_tests` proves the theme wins, with `QT_QPA_PLATFORM=windows`).
 - Metrics go through UiScale: icon sizes, scroll bar width, focus margins, button margin, layout spacing and
-  margins, and Fusion's check and radio indicator sizes times the zoom. `sizeFromContents` clamps heights to
-  Button.height, TextField.height, List/Tree.rowHeight, Menu.itemHeight and TabbedPane.tabHeight.
-- FrostStyle draws buttons, text fields, focus rings, check boxes, radio buttons, item-view rows, menus, the
-  tab-widget frame, the tab shape (a 2 px accent underline), combo boxes (a text field's frame and a triangle
-  arrow), the default button's label colour (Button.default.foreground) and icon-only tool buttons' icons.
-  Everything else is Fusion with our palette.
+  margins, and Fusion's check and radio indicator sizes times the zoom. `sizeFromContents` makes heights at least
+  Button.height, TextField.height, List/Tree.rowHeight, Menu.itemHeight and TabbedPane.tabHeight (Fusion's
+  height when that is larger).
+- FrostStyle draws buttons, text fields, focus rings, check boxes, radio buttons, item-view rows, menus (the panel
+  in Menu.background, items in Menu.foreground and Menu.selection*), the tab-widget frame, the tab shape (a 2 px
+  accent underline), combo boxes (a frame, fill, label and triangle arrow in the ComboBox.* keys), a tree's
+  selected text (Tree.selectionForeground, unless the model or widget set a colour), the default button's label
+  colour (Button.default.foreground) and icon-only tool buttons' icons. Everything else is Fusion with our
+  palette. Registry keys nothing draws yet (List and Tree background and foreground, TextField.selection*,
+  ScrollBar.*, the separators, StatusBar.foreground) are listed as reserved in `theme_registry.hpp`, with the
+  slice that wires each.
+- A focused button's ring is Component.focusColor on its outer edge. A default button adds a
+  Button.default.foreground line just inside the ring (a two-colour indicator, WCAG 2.2 technique C40), because
+  its fill is the focus colour itself in Glacier Light and close to it in the dark themes (1.69:1); no single
+  colour reaches 3:1 against both Light's white island and its blue fill.
+  `FrostStyle.FocusIndicatorVisibleOnEveryButton` checks every theme, both button kinds, resting and hovered, at
+  100, 150 and 200%: the pixels that change on focus change by 3:1 or more along at least a one-device-pixel line
+  around the straight edges.
+- IslandFrame draws Island.borderColor with its alpha multiplied by Window.inactiveAlpha while its window is
+  inactive and repaints on activation changes (`IslandFrame.InactiveWindowFadesTheBorder`).
 - Every drawing path takes the device pixel ratio from the painter's device transform, not from
   `painter->device()`: `QWidget::render` into a QImage redirects the painter to the widget, whose ratio is its
   screen's (1.0 in a dpr-1 process), while the device transform carries the target's 1.5. Shape edges and icon
@@ -55,14 +69,20 @@ FrostIDE extensions: `highContrast`, `compact` (values for keys the registry mar
 resolves to an explicit value, then the wildcard entry for its last segment, then its registry fallback, else the
 error "unresolved key". Compilation is strict at build time: unknown keys and literal duplicate members are errors
 (lenient mode, for M11's importer, makes them warnings). A Qt-free pre-scan finds duplicate member names before
-QJsonDocument collapses them. Inputs are limited to 1 MiB and depth 8.
+QJsonDocument collapses them. Inputs are limited to 1 MiB and depth 8. Diagnostics stay small whatever the
+input's shape: at most 32 duplicate member names are listed (one more diagnostic counts the rest), paths and
+messages are elided beyond 256 and 1,024 bytes, and a `ui` key longer than any registry key is reported once
+without descending. Without these bounds a long name over many duplicate or unknown members produced output about
+the square of the input (gigabytes at 1 MiB); `ThemeCompiler.DiagnosticsStayBoundedOnHostileInput` covers objects,
+arrays, `ui` and the 1 MiB limit.
 
 **Decision 3. The compiler is C++ on QJsonDocument** (`frost::ui_theme_compiler`, `frost-themec`): no new
 dependency, and the same code imports user themes in-product in M11. yyjson arrives with m1/settings under its own
 ADR; moving the compiler to it later makes the `.theme.json` fuzz target Qt-free (TODO(M1)).
 
-**Decision 4. Theme blob v1** (`.ftheme`, about 700 bytes). A 48-byte header (magic, version, flags, the registry
-hash, the registry's counts, lengths, total size, an FNV-1a 64 checksum over everything but the checksum), then
+**Decision 4. Theme blob v1** (`.ftheme`, about 530 bytes: the shipped blobs are 528 to 546). A 48-byte header
+(magic, version, flags, the registry hash, the registry's counts, lengths, total size, an FNV-1a 64 checksum over
+everything but the checksum), then
 64 ARGB colours, 21 metrics times two (normal and compact) as f32, 8 icon role colours, the id and the name.
 `kRegistryHash` covers every key name, opacity flag, metric unit, range and compact flag, and the role names, so a
 blob from another registry is refused (Unsupported) rather than misread. Lookup is O(1) by key index; start-up
@@ -80,7 +100,10 @@ light theme, and Unknown to the sync dark theme. Detection:
   Without a session bus the result is Unknown, which is specified, not skipped.
 - FrostIDE never calls `QStyleHints::setColorScheme`. At start-up a missing, truncated or unreadable chosen
   theme falls back to Glacier Dark with a warning in the InstallReport; a broken default theme or a missing
-  primary atlas fails `install()` without touching the application's style, palette, font or fonts.
+  primary atlas fails `install()` without touching the application's style, palette, font or fonts. The
+  fallback stays while the settings keep resolving to the failed theme (density and zoom changes apply to it,
+  and the failed load is not retried); choosing another theme loads it, and returning to the broken one is then
+  an apply error that keeps the current theme.
 
 **Decision 6. The contrast policy** (`frost/ui/model/contrast.hpp`), checked on every shipped theme by the
 compiler tests and again on the installed blobs and the rendered pixels by the screenshot tests:
@@ -93,6 +116,10 @@ compiler tests and again on the installed blobs and the rendered pixels by the s
 Translucent backgrounds are composited over a declared underlay first. The selection text pair is checked on both
 the active and the inactive selection background (HighlightedText is List.selectionForeground in every palette
 group); this pair moved High Contrast's inactive selection from `#4D4D4D` to `#A0A0A0` (black text, 8.0:1).
+Every drawn text colour has a Text pair on every fill it is drawn on: button labels on the hover and pressed
+fills, the default label on Button.default.hoverBackground, ComboBox.foreground on ComboBox.background, and
+Tree.selectionForeground on both tree selections. The default hover pair moved Glacier Dark's and Classic's
+Button.default.hoverBackground from `#3F7AE3` (white text 4.11:1) to `#3166CC` (5.38:1).
 
 **Decision 7. The icon pipeline.**
 - Qt Svg is linked only by `frost-icon-baker` (a build tool); the runtime never renders SVG. licensecheck reads
@@ -107,7 +134,9 @@ group); this pair moved High Contrast's inactive selection from `#4D4D4D` to `#A
   (FNV-1a 64 over the format version and the length-prefixed manifest and SVGs, equal in every atlas of one
   bake), sorted 32-byte entries, an id table and 64-byte-aligned pages. Alpha8 pages hold tint masks; Argb32
   premultiplied pages hold untinted icons, with optional `_dark` variants for dark themes (exercised by the baker
-  fixtures; every shipped Lucide icon is tinted). Only the canonical encoding parses.
+  fixtures; every shipped Lucide icon is tinted). Only the canonical encoding parses. Page numbers and the page
+  count are 16-bit fields, so packing refuses a bake that needs more than 65,535 pages (OutOfRange) instead of
+  wrapping the page index.
 - Scales 100, 125, 150, 175, 200, 250 and 300%; design sizes 14, 16 and 20 px (the Lucide subset bakes 16 and 20).
   A design size's device size is `lround(designSize x scale)`, so 14 px is 18 px at 125% and 25 px at 175%.
 - Selection: an exact device size with the wanted design size, then an exact size with any design size, then
@@ -115,11 +144,15 @@ group); this pair moved High Contrast's inactive selection from `#4D4D4D` to `#A
   downsample the next larger cell with SmoothTransformation and tint after resampling. Compact mode switches the
   toolbar slot from the 20 px to the 16 px design without recreating the QIcon.
 - Atlases are read through IFileSystem (fault-injectable, long-path safe), not mapped: they are 43 to 353 KB,
-  and only the primary screen's scale is read at start-up (0.21 ms cold for 100%). PLAN 3.4 says "mapped"; the
+  and only the primary screen's scale is read at start-up (0.21 ms cold for 100%): the scale the selection rules
+  pick for a Small icon of the theme's Icon.size there, so 125% zoom on a 150% screen preloads 150% (the 20 px
+  design is exactly 30 device pixels) rather than 200%. PLAN 3.4 says "mapped"; the
   mapping API is TODO(M1) with m1/large-file (question 4). A failed lazy load is remembered and the next best
   loaded atlas serves; atlases of different bakes are refused.
 - Tinted pixmaps are cached by (scale, entry, device size, mode, tint ARGB, dark, dpr) in an 8 MiB QCache
-  (Budget: B19), so a theme switch re-tints existing QIcons and a hit is one lookup plus drawPixmap (Budget: B5).
+  (Budget: B19), so a theme switch re-tints existing QIcons. A hit still chooses the cell first (two O(log n) id
+  searches, at most 21 candidates and a few small allocations), then makes one cache lookup and the drawPixmap
+  (Budget: B5); `AppearancePerf.IconPixmapCacheHit` measures 1,000 hits per sample.
 
 **Decision 8. Lucide 1.66.0 is the D13 stopgap.** 47 icons (`resources/icons/icons.json`; `toolwindow.history`
 uses `rotate-ccw-clock` because Lucide has no `history` icon), unmodified, licence "ISC AND MIT": ISC for Lucide
@@ -138,7 +171,8 @@ JetBrains icons (L1). Our own set replaces Lucide in a later slice.
 - Both are bundled unmodified and not subset, with their licence files next to them in the build output.
   licensecheck re-checks the name tables on every run.
 The UI set registers at start-up from `<resources>/fonts/inter` (B1); the editor set registers on the first
-`ensureEditorFonts()` (B19). A missing UI font is a warning, not a failure.
+`ensureEditorFonts()` (B19). A missing UI font is a warning, not a failure. Registration is all or nothing: a
+failure removes the set's fonts registered so far, so retried editor opens never pile up partial registrations.
 
 **Decision 10. The asset manifest and gate.** `resources/assets.lock.json` pins each asset (https URL, archive
 SHA-256, a recorded cross-check, SPDX licence, copyright lines, Reserved Font Names, files with SHA-256, extra
@@ -149,7 +183,11 @@ destinations below `resources/`; size limits while streaming; atomic writes), ve
 files, no unlisted files under an asset directory, licence-file markers, the OFL name tables (read once, bounded),
 the ADR, and SBOM packages with SHA-256 checksums. Both changes had an independent /code-review (PLAN 6.7); its
 ten findings are fixed and tested. REUSE.toml annotates the asset directories with override rules and
-the goldens with an aggregate "ISC AND MIT" (they show rendered Lucide icons; question 2). `.gitattributes` marks
+`tests/ui/goldens/**` with "Apache-2.0 AND ISC AND MIT" and all three copyright lines (they are our renderings
+showing Lucide icons; question 2). REUSE applies only the last table that matches a file, so that table lists
+every holder itself rather than adding to the generic goldens rule. Network failures inside a reply
+(`http.client` errors such as IncompleteRead) and a GitHub API reply that is not a release with a list of asset
+objects are fetch errors (exit status 1), never tracebacks. `.gitattributes` marks
 `resources/fonts/**` and `resources/icons/lucide/**` `-text`, so committed bytes equal the pins.
 
 **Decision 11. Screenshot goldens.**
@@ -158,7 +196,9 @@ the goldens with an aggregate "ISC AND MIT" (they show rendered Lucide icons; qu
   and activated (no desktop window exists). No widget holds focus, so the tree's selection is drawn inactive.
 - 13 goldens per OS under `tests/ui/goldens/{windows,linux}`: Glacier Dark and Light at 100, 125, 150 and 175%,
   Classic and High Contrast at 100%, Dark compact at 100%, and Dark at zoom 125% at 100 and 150%.
-- The comparator: equal sizes, then every channel within 2, else at most 16 pixels over 2. Text uses
+- The comparator: equal sizes, then every channel within 2, else at most 16 pixels over 2 and none of them over
+  32 in any channel, so antialiasing noise passes but a small shape drawn missing or in the wrong colour does not
+  (`GoldenComparator.BoundsOutliersInCountAndSize`). Text uses
   PreferNoHinting and grayscale antialiasing (test-only settings), so goldens test style, layout and colour
   rather than ClearType; the Windows font-smoothing settings are logged.
 - Structural samples check theme colours at interior points independent of text (window band, island gap and
@@ -166,14 +206,23 @@ the goldens with an aggregate "ISC AND MIT" (they show rendered Lucide icons; qu
 - `ui_hidpi_tests` validates the explicit-dpr path against Qt's backing store under `QT_SCALE_FACTOR=1.5`
   (`QScreen::grabWindow`). The offscreen plugin returns only the top-left window-size device pixels there
   (480 x 320 of 720 x 480), so that region is compared; it covers the buttons, fields, check boxes, tab bar and a
-  toolbar icon. Device-pixel snapping (decision 1) is what makes the two paths agree.
+  toolbar icon. Device-pixel snapping (decision 1) is what makes the two paths agree. When `grabWindow` returns
+  nothing the tests fail rather than compare `QWidget::grab()`, which is the goldens' own render path and so no
+  independent oracle.
 - Update mode (`FROST_UPDATE_GOLDENS=1`) writes only failing goldens and always fails. Goldens are generated
   from Debug and pass unchanged in Release and ASan.
-- In TSan builds the Qt widget tests start with `ignore_noninstrumented_modules=1`
-  (`tests/ui/support/tsan_options.cpp`). Qt's raster engine and QImage scaling use Qt's thread pool, synchronised
-  by futex-based locks inside the uninstrumented libQt6Core, so TSan reported Qt's own malloc/free pairs as races
-  (exit status 66) although every assertion passed. The option drops only interceptor accesses made from
-  uninstrumented modules; FrostIDE's instrumented code stays fully checked.
+- In TSan builds the Qt widget tests carry three built-in suppressions, `called_from_lib` for libQt6Core,
+  libQt6Gui and libQt6Widgets (`tests/ui/support/tsan_options.cpp`, through `__tsan_default_suppressions`). Qt's
+  raster engine and QImage scaling use Qt's thread pool, synchronised by futex-based locks inside the
+  uninstrumented libQt6Core, so TSan reported Qt's own malloc/free pairs as races (exit status 66; 7 to 34 reports
+  per executable) although every assertion passed. A suppression drops only interceptor accesses made from the
+  named library: libc, libstdc++, glib, fontconfig, freetype, ICU, D-Bus, the platform plugins and all of
+  FrostIDE's instrumented code stay checked. (The first version used `ignore_noninstrumented_modules=1`, which
+  ignores every uninstrumented module; the three named libraries are enough, so the blind spot is now named.) It
+  still hides a real race whose other side is an interceptor call inside those libraries, such as a QByteArray
+  or QImage copy of FrostIDE-owned memory, so these executables are no race oracle for code that shares data
+  with Qt's threads: a later test of FrostIDE threads talking to Qt objects goes in its own executable without
+  the suppressions, and the suppressions await the user's approval (question 5).
 - The Windows and Linux goldens came out pixel-identical (both use the offscreen platform, the bundled fonts and
   Qt's own rasteriser). They stay separate files so a platform difference can appear later without weakening
   the comparator.
@@ -243,8 +292,14 @@ Atlas sizes (47 icons, 16 and 20 px designs, one page each): 100% 43,048 bytes; 
 ## Questions for the user
 1. Glacier Classic is held to the 1.20:1 island rule (the stricter reading) and passes at 1.25:1. Should a flat
    theme be exempt?
-2. Goldens that show rendered Lucide icons carry an aggregate "ISC AND MIT" REUSE annotation besides Apache-2.0.
-   Acceptable, or should goldens use only FrostIDE-authored icons (which needs a minimal own set first)?
+2. Goldens that show rendered Lucide icons are annotated "Apache-2.0 AND ISC AND MIT" with the FrostIDE, Lucide
+   and Feather copyright lines. Acceptable, or should goldens use only FrostIDE-authored icons (which needs a
+   minimal own set first)?
 3. Unchecked check box borders are held to WCAG 1.4.11's 3:1 in every theme (NonText), stricter than "borders only
    in High Contrast"; other borders keep the original policy. Confirm.
 4. Atlases are read, not mapped (decision 7). Confirm, or ask for QFile::map now.
+5. The TSan runs of the Qt widget tests suppress interceptor reports from libQt6Core, libQt6Gui and
+   libQt6Widgets (`called_from_lib`, decision 11), so they see less than the default. Approve, or should TSan
+   skip these executables until an instrumented Qt build exists?
+6. The golden comparator lets up to 16 pixels differ by up to 32 per channel (decision 11). Confirm, or tighten
+   (for example to 8 pixels) once more platforms have run the goldens?

@@ -21,7 +21,8 @@
  *     u32 ARGB x colorCount, f32 x metricCount x 2 (normal, compact), u32 ARGB x roleCount,
  *     then the id bytes and the name bytes (UTF-8, no terminator).
  *
- * A blob is about 700 bytes. Any single changed byte changes the FNV-1a checksum (see
+ * A blob is about 530 bytes (48 header, 456 body arrays, the id and the name; the shipped ones
+ * are 528 to 546). Any single changed byte changes the FNV-1a checksum (see
  * fnv1a.hpp), so every one-byte corruption is detected.
  */
 #pragma once
@@ -40,7 +41,7 @@ namespace frost::ui {
 
 inline constexpr std::uint16_t kThemeBlobVersion = 1;
 inline constexpr std::size_t kThemeBlobHeaderSize = 48;
-// Files above this size are refused before they are read (a blob is about 700 bytes).
+// Files above this size are refused before they are read (a blob is about 530 bytes).
 inline constexpr std::uint64_t kMaxThemeFileBytes = 64 * 1024;
 // The file name suffix of compiled themes: <themes dir>/<id>.ftheme.
 inline constexpr std::string_view kThemeFileSuffix = ".ftheme";

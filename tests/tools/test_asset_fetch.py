@@ -6,12 +6,14 @@
 # duplicate, missing and oversized members, extra files, cross-checks, fresh download
 # directories, all-or-nothing writes and usage errors, plus the hardening: unpinned hashes
 # refused by --fetch, https-only redirects, the download size limit, corrupt member data,
-# reserved file names and temporary files. No network access.
+# reserved file names and temporary files, and broken or malformed network replies (through a
+# stand-in for asset_fetch._OPENER). No network access.
 
 from __future__ import annotations
 
 import copy
 import hashlib
+import http.client
 import json
 import unittest
 import urllib.error
@@ -377,6 +379,64 @@ class HelperTest(TempDirTestCase):
             asset_fetch.download(source.as_uri(), self.tmp / "copy.bin", limit=63)
         self.assertIn("exceeds the 63-byte limit", str(caught.exception))
         self.assertEqual(asset_fetch.download(source.as_uri(), self.tmp / "copy2.bin", limit=64), _sha(b"x" * 64))
+
+    def _with_reply(self, read) -> None:
+        """Makes asset_fetch._OPENER answer every request with a response whose read() is `read`."""
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self, *_):
+                return read()
+
+        class Opener:
+            def open(self, *_args, **_kwargs):
+                return Response()
+
+        saved = asset_fetch._OPENER
+        asset_fetch._OPENER = Opener()
+        self.addCleanup(setattr, asset_fetch, "_OPENER", saved)
+
+    def test_broken_replies_are_fetch_errors(self) -> None:
+        # http.client's errors are not OSError: a truncated or dropped reply must still be a
+        # FetchError (exit status 1), never a traceback.
+        url = "https://github.com/o/r/releases/download/v1/a.zip"
+        for error in (http.client.IncompleteRead(b"partial", 10), http.client.RemoteDisconnected("closed"),
+                      http.client.BadStatusLine("HTTP/9")):
+            with self.subTest(error=type(error).__name__):
+
+                def fail(error=error):
+                    raise error
+
+                self._with_reply(fail)
+                with self.assertRaises(asset_fetch.FetchError):
+                    asset_fetch.download(url, self.tmp / f"{type(error).__name__}.bin")
+                with self.assertRaises(asset_fetch.FetchError):
+                    asset_fetch.github_digest(url)
+
+    def test_github_reply_shapes(self) -> None:
+        url = "https://github.com/o/r/releases/download/v1/a.zip"
+        for reply in (b"[]", b"3", b"null", b'"release"', b"{}", b'{"assets": 3}', b'{"assets": {"a.zip": 1}}',
+                      b'{"assets": [3]}', b'{"assets": [{"name": "b.zip"}, "a.zip"]}'):
+            with self.subTest(reply=reply):
+                self._with_reply(lambda reply=reply: reply)
+                with self.assertRaises(asset_fetch.FetchError) as caught:
+                    asset_fetch.github_digest(url)
+                self.assertIn("o/r@v1", str(caught.exception))
+        digest = "ab" * 32
+        good = json.dumps({"assets": [{"name": "b.zip"}, {"name": "a.zip", "digest": f"sha256:{digest.upper()}"}]})
+        self._with_reply(lambda: good.encode())
+        self.assertEqual(asset_fetch.github_digest(url), digest)
+        self._with_reply(lambda: b'{"assets": [{"name": "a.zip"}]}')
+        self.assertIsNone(asset_fetch.github_digest(url), "an asset without a digest")
+        self._with_reply(lambda: b'{"assets": []}')
+        with self.assertRaises(asset_fetch.FetchError) as caught:
+            asset_fetch.github_digest(url)
+        self.assertIn("has no asset a.zip", str(caught.exception))
 
 
 if __name__ == "__main__":

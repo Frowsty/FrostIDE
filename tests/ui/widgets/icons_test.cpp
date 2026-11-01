@@ -298,8 +298,32 @@ TEST(Icons, PreloadScale) {
     EXPECT_EQ(preloadScaleFor(1.0, 100), 100);
     EXPECT_EQ(preloadScaleFor(1.25, 100), 125);
     EXPECT_EQ(preloadScaleFor(1.0, 110), 125);
-    EXPECT_EQ(preloadScaleFor(1.5, 125), 200);
+    // 125% zoom on a 150% screen: 16 px is 20 logical, 30 device pixels, exactly the 20 px
+    // design at 150% (selection rule 2), so 150 is preloaded, not the 200 above 187.5%.
+    EXPECT_EQ(preloadScaleFor(1.5, 125), 150);
     EXPECT_EQ(preloadScaleFor(2.0, 200), 300);
+    EXPECT_EQ(preloadScaleFor(1.0, 100, 20), 100) << "the 20 px Icon.size is baked at 100%";
+    EXPECT_EQ(preloadScaleFor(0.0, 100), 100) << "an unknown ratio counts as 1";
+}
+
+TEST(Icons, PreloadedScaleServesTheFirstSmallIcon) {
+    // Consistency with pixmap(): on every screen and zoom of interest, the preloaded atlas is
+    // the one pixmap() reads for a Small icon, so start-up never loads a second atlas for it.
+    const std::string dir = *io::joinPath(test::resourceDir(), "icons");
+    for (const double dpr : {1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0}) {
+        for (const std::uint16_t zoom : kZoomSteps) {
+            SCOPED_TRACE(testing::Message() << dpr << " x " << zoom << "%");
+            const std::array<std::uint16_t, 1> preload{preloadScaleFor(dpr, zoom)};
+            auto set = IconAtlasSet::open(io::realFileSystem(), dir, preload);
+            ASSERT_TRUE(set) << set.error().describe();
+            const int logical = UiScale{Density::Normal, zoom}.px(16.0);
+            static_cast<void>((*set)->pixmap(icons::kActionsSearch, IconSlot::Small, logical, dpr, QIcon::Normal,
+                                             nullptr, Density::Normal));
+            for (const std::uint16_t scale : kAtlasScales) {
+                EXPECT_EQ((*set)->isLoaded(scale), scale == preload[0]) << scale << "%";
+            }
+        }
+    }
 }
 
 TEST(Icons, IdsMatchManifest) {

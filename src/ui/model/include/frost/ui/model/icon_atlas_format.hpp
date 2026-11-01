@@ -69,6 +69,9 @@ inline constexpr std::size_t kAtlasPageAlignment = 64;
 // The largest page edge in pixels, and the smallest page limit a file may declare.
 inline constexpr std::uint16_t kMaxAtlasPage = 2048;
 inline constexpr std::uint16_t kMinAtlasPageLimit = 16;
+// The most pages one atlas can hold: the page count (header [28,30)) and the entries' page
+// indices are 16-bit.
+inline constexpr std::size_t kMaxAtlasPageCount = 0xffff;
 // Atlas files above this size are refused before they are read.
 inline constexpr std::uint64_t kMaxAtlasFileBytes = 16 * 1024 * 1024;
 // The baked scales, in percent of the design size (PLAN.md section 2, "Icons and fonts").
@@ -202,7 +205,8 @@ struct PackedLayout {
  * with a 1 px transparent gap around every cell (and at the page edges); a cell that does not
  * fit the shelf starts a new shelf, one that does not fit the page starts a new page of the same
  * class. Page sizes are the extent actually used. Errors: OutOfRange when a cell plus its
- * padding exceeds maxPage in either direction. O(n log n).
+ * padding exceeds maxPage in either direction, or when the cells need more than
+ * kMaxAtlasPageCount pages. O(n log n).
  */
 [[nodiscard]] Result<PackedLayout> packShelves(std::span<const CellRequest> requests,
                                                std::uint16_t maxPage = kMaxAtlasPage);
@@ -227,8 +231,8 @@ public:
                                    std::optional<AtlasCell> dark = std::nullopt);
 
     // Errors: InvalidArgument (a scale outside kAtlasScales or a page limit outside
-    // [kMinAtlasPageLimit, kMaxAtlasPage]), OutOfRange (a cell larger than a page, or a file over
-    // 4 GiB). O(pixels + n log n).
+    // [kMinAtlasPageLimit, kMaxAtlasPage]), OutOfRange (a cell larger than a page, more than
+    // kMaxAtlasPageCount pages, or a file over 4 GiB). O(pixels + n log n).
     [[nodiscard]] Result<std::vector<std::byte>> finish() const;
 
 private:

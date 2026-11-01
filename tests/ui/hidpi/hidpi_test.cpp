@@ -82,7 +82,8 @@ const char* describe(CaptureKind kind) {
  * The backing store of `widget`'s window through QScreen::grabWindow. Under QT_SCALE_FACTOR the
  * offscreen plugin clamps the grab to the window's logical size counted in device pixels, so at
  * 150% the capture is the top-left two thirds of the window at full device resolution; `kind`
- * says so. When grabWindow returns nothing it falls back to QWidget::grab().
+ * says so. When grabWindow returns nothing it falls back to QWidget::grab() and reports
+ * Consistency, which the tests refuse: that image is not an independent oracle.
  */
 QImage capture(QWidget& widget, CaptureKind& kind) {
     QScreen* screen = widget.windowHandle() != nullptr ? widget.windowHandle()->screen() : nullptr;
@@ -117,6 +118,9 @@ TEST(RealDprCrossCheck, BackingStoreMatchesGolden) {
         RecordProperty(std::string(variant) + "_oracle", describe(kind));
         std::printf("[ui hidpi] %s@%d: %s, %dx%d\n", variant, scale, describe(kind), captured.width(),
                     captured.height());
+        // The fallback renders through the goldens' own path, so comparing it would prove nothing.
+        ASSERT_NE(kind, CaptureKind::Consistency)
+            << "QScreen::grabWindow returned no image: the backing-store oracle is unavailable";
         const QString file = QStringLiteral("%1@%2.png").arg(QString::fromLatin1(variant)).arg(scale);
         QImage golden = test::loadGolden(file);
         ASSERT_FALSE(golden.isNull()) << "missing golden " << file.toStdString();
@@ -161,6 +165,8 @@ TEST(HiDpi, IconsCrispAt150) {
     const QImage captured = capture(host, kind);
     RecordProperty("oracle", describe(kind));
     std::printf("[ui hidpi] icon at %d%%: %s\n", scale, describe(kind));
+    ASSERT_NE(kind, CaptureKind::Consistency)
+        << "QScreen::grabWindow returned no image: the backing-store oracle is unavailable";
 
     // The expected cell: the 16 px design at this scale, tinted Icon.Default over the island.
     const std::string path =

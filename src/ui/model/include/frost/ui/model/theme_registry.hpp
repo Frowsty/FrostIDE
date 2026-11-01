@@ -17,6 +17,14 @@
  * fallback or a value in every shipped theme, and changes kRegistryHash, which makes every
  * compiled theme blob stale (they are rebuilt by the build).
  *
+ * Reserved keys: List.background, List.foreground, Tree.background, Tree.foreground,
+ * TextField.selectionBackground, TextField.selectionForeground, every ScrollBar.* colour,
+ * Separator.color, Menu.separatorColor and StatusBar.foreground are compiled, stored in every
+ * blob and validated, but no FrostStyle drawing path reads them yet (item views fill with the
+ * palette's Base, line edits select with its Highlight, scroll bars and separators are
+ * Fusion's, and the status bar arrives with m1/shell-frame). Overriding one changes nothing
+ * on screen until the slice that draws it maps it, adding its contrast pairs then.
+ *
  * The consteval checks at the end of this header prove at compile time that the tables are
  * consistent: entry i has key i, names are unique and well formed, fallback chains are
  * acyclic, every contrast pair names existing keys, and every pair whose background key may
@@ -313,14 +321,33 @@ inline constexpr std::array kContrastPairs{
     ContrastPair{ColorKey::LabelForeground, ColorKey::TextFieldBackground, ContrastKind::Text},
     ContrastPair{ColorKey::TextFieldForeground, ColorKey::TextFieldBackground, ContrastKind::Text},
     ContrastPair{ColorKey::ButtonForeground, ColorKey::ButtonBackground, ContrastKind::Text},
+    // Buttons keep their label colour when hovered or pressed (frost_style.cpp drawButtonPanel).
+    ContrastPair{ColorKey::ButtonForeground, ColorKey::ButtonHoverBackground, ContrastKind::Text,
+                 ColorKey::IslandBackground},
+    ContrastPair{ColorKey::ButtonForeground, ColorKey::ButtonPressedBackground, ContrastKind::Text,
+                 ColorKey::IslandBackground},
+    /*
+     * The default button: resting, and hovered or pressed (both fill with
+     * Button.default.hoverBackground). Button.default.foreground also draws the inner line of
+     * a focused default button's two-colour focus indicator, so these pairs hold that line to
+     * the Text minimum against either fill.
+     */
     ContrastPair{ColorKey::ButtonDefaultForeground, ColorKey::ButtonDefaultBackground, ContrastKind::Text},
+    ContrastPair{ColorKey::ButtonDefaultForeground, ColorKey::ButtonDefaultHoverBackground, ContrastKind::Text,
+                 ColorKey::IslandBackground},
     ContrastPair{ColorKey::TextFieldPlaceholderForeground, ColorKey::TextFieldBackground, ContrastKind::Text},
+    ContrastPair{ColorKey::ComboBoxForeground, ColorKey::ComboBoxBackground, ContrastKind::Text},
     ContrastPair{ColorKey::ListSelectionForeground, ColorKey::ListSelectionBackground, ContrastKind::Text,
                  ColorKey::ListBackground},
     // The palette's HighlightedText is List.selectionForeground in every group, also on the
     // Inactive group's List.selectionInactiveBackground.
     ContrastPair{ColorKey::ListSelectionForeground, ColorKey::ListSelectionInactiveBackground, ContrastKind::Text,
                  ColorKey::ListBackground},
+    // Trees draw their selection with the Tree.* keys, active and inactive.
+    ContrastPair{ColorKey::TreeSelectionForeground, ColorKey::TreeSelectionBackground, ContrastKind::Text,
+                 ColorKey::TreeBackground},
+    ContrastPair{ColorKey::TreeSelectionForeground, ColorKey::TreeSelectionInactiveBackground, ContrastKind::Text,
+                 ColorKey::TreeBackground},
     ContrastPair{ColorKey::MenuForeground, ColorKey::MenuBackground, ContrastKind::Text},
     ContrastPair{ColorKey::MenuSelectionForeground, ColorKey::MenuSelectionBackground, ContrastKind::Text,
                  ColorKey::MenuBackground},

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Native-platform tests (Windows only, QT_QPA_PLATFORM=windows; ADR 0015 decision 2). The
+// Native-platform tests (Windows only, QT_QPA_PLATFORM=windows; ADR 0015 decision 1). The
 // windows platform plugin applies its own palette and per-class fonts; these tests prove the
 // theme's palette and the bundled UI font win over them. No widget is ever shown.
 

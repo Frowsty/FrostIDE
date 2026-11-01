@@ -50,6 +50,16 @@ namespace frost::ui {
 inline constexpr std::size_t kMaxThemeJsonBytes = 1024 * 1024;
 inline constexpr int kMaxThemeJsonDepth = 8; // The top-level object is depth 1.
 
+/*
+ * Diagnostics stay small whatever the input's shape: at most kMaxReportedDuplicates duplicate
+ * member names are listed (one more "$" diagnostic counts the rest), a jsonPath longer than
+ * kMaxDiagnosticPathBytes keeps its first and last 128 bytes around "...", and a message is
+ * elided the same way beyond kMaxDiagnosticMessageBytes.
+ */
+inline constexpr std::size_t kMaxReportedDuplicates = 32;
+inline constexpr std::size_t kMaxDiagnosticPathBytes = 256;
+inline constexpr std::size_t kMaxDiagnosticMessageBytes = 1024;
+
 struct Diagnostic {
     enum Severity : std::uint8_t { Warning, Error };
     Severity severity = Error;
@@ -74,15 +84,20 @@ struct CompileResult {
 
 /*
  * Compiles `json` (the bytes of a .theme.json file) for theme `themeId` (the file name stem,
- * which must pass isValidThemeId). Error diagnostics, which stop at the first failing stage:
- * input over kMaxThemeJsonBytes, nesting deeper than kMaxThemeJsonDepth, a UTF-8 BOM, invalid
- * UTF-8, malformed JSON, a top level that is not an object. Then, collected together: missing
- * or mistyped top-level fields, unknown fields and keys (strict), wildcards on non-leaves,
- * unknown named colours and names that reference names, translucent values for opaque keys,
- * metrics outside their range, compact values for keys without hasCompact or above the normal
- * value (Px keys), missing icon roles, duplicate spellings with different values, unresolved
- * keys, and contrast pairs whose background resolves translucent without an underlay.
- * Pure; thread-safe for distinct inputs (Qt's JSON classes are reentrant). O(input + keys).
+ * which must pass isValidThemeId). Error diagnostics, which stop at the first failing stage, in
+ * this order: an invalid theme id, input over kMaxThemeJsonBytes, a UTF-8 BOM, invalid UTF-8,
+ * nesting deeper than kMaxThemeJsonDepth, malformed JSON, a top level that is not an object.
+ * Duplicate member names found by the pre-scan (errors when strict) are kept even when the
+ * malformed-JSON stage then fails. Then,
+ * collected together: missing or mistyped top-level fields, unknown fields and keys (strict),
+ * wildcards on non-leaves, unknown named colours and names that reference names, translucent
+ * values for opaque keys, metrics outside their range, compact values for keys without
+ * hasCompact or above the normal value (Px keys), missing icon roles, duplicate spellings with
+ * different values, unresolved keys, and contrast pairs whose background resolves translucent
+ * without an underlay. A "ui" member whose dotted key is already longer than every registry
+ * key is reported once as unknown, without visiting what is under it.
+ * Pure; thread-safe for distinct inputs (Qt's JSON classes are reentrant). O(n log n) time and
+ * O(n) memory in the input size n, for any input shape (no per-member copy of a parent path).
  */
 [[nodiscard]] CompileResult compileTheme(std::string_view themeId, std::span<const std::byte> json,
                                          const CompileOptions& options = {});

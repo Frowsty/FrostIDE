@@ -469,6 +469,11 @@ Result<PackedLayout> packShelves(std::span<const CellRequest> requests, std::uin
             shelf = 0;
         }
         if (newClass || y + r.height + 1 > maxPage) {
+            if (layout.pages.size() == kMaxAtlasPageCount) {
+                // The header's page count and every entry's page index are 16-bit fields.
+                return fail(ErrorCode::OutOfRange, std::format("cell {} needs page {}, beyond the {}-page atlas limit",
+                                                               r.id, layout.pages.size() + 1, kMaxAtlasPageCount));
+            }
             layout.pages.push_back({0, 0, r.pageClass});
             x = 1;
             y = 1;
