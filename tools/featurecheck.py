@@ -16,8 +16,11 @@
 #
 # `check` fails when Appendix A is inconsistent (a tier's declared row count or the
 # totals line disagree with the listed rows, duplicate IDs), when a P0, P1 or
-# infrastructure row lacks an owning milestone, when a hand-maintained field is invalid,
-# or when matrix.json is out of date against PLAN.md.
+# infrastructure row lacks an owning milestone, when a row's completion marker "(+Mx)"
+# names no milestone or one that does not run after the row's owner, when the milestone
+# ladder (PLAN.md "Plan at a glance", rows in run order) does not list every milestone
+# exactly once, when a hand-maintained field is invalid, or when matrix.json is out of
+# date against PLAN.md.
 #
 # Output: one "path:line: message" line per violation on stdout; exit status 1 on any
 # violation, 0 otherwise, 2 on usage errors. Python 3.11+, standard library only.
@@ -55,6 +58,8 @@ _INFRA_ITEM = re.compile(r"^(I\d+)\s+(.+)$")
 _COMPLETES = re.compile(r"\s*\(\+(M\d+)(?:\s+([^)]*))?\)$")
 _P2_IN = re.compile(r"\s*\(P2 in\)$")
 _OWNER = re.compile(r"\s*\((M\d+)\)$")
+# A row of the milestone ladder: | Mn | name | units | ends around month |.
+_LADDER_ROW = re.compile(r"^\|\s*(M\d+)\s*\|[^|]*\|[^|]*\|[^|]*\|\s*$")
 _TOTALS = re.compile(r"\*\*Totals\.\*\*\s*P0:\s*(\d+).*?P1:\s*(\d+)")
 _TARGET = re.compile(r"(M\d+)\s+≥?(\d+)(?:\s*frost)?,\s*≥?(\d+)(?:\s*CFG)?,\s*≥?(\d+)%")
 
@@ -125,11 +130,58 @@ def _row(row_id: str, kind: str, feature: str, priority: str, milestone: str | N
     }
 
 
+def parse_run_order(lines: list[str], problems: list[Problem]) -> list[str]:
+    """The milestone IDs in the order they run, from the ladder table that follows the
+    '**Milestone ladder.**' paragraph (its rows are in run order, PLAN.md section 7). IDs
+    are identities, not positions: M15-M17 run between M5 and M6 (ADR 0029). Appends a
+    problem when the table is missing or does not list each of M0..M17 exactly once."""
+    start = next((i for i, l in enumerate(lines) if l.startswith("**Milestone ladder.**")), None)
+    if start is None:
+        problems.append(Problem(PLAN_FILE, 1, "no '**Milestone ladder.**' table (the run order)"))
+        return []
+    order: list[str] = []
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("#") or line.strip() == "---":
+            break
+        m = _LADDER_ROW.match(line)
+        if not m:
+            continue
+        if not _is_milestone(m.group(1)):
+            problems.append(Problem(PLAN_FILE, index + 1, f"the milestone ladder lists {m.group(1)}, "
+                                    f"which is not a milestone (M{FIRST_MILESTONE}..M{LAST_MILESTONE})"))
+        elif m.group(1) in order:
+            problems.append(Problem(PLAN_FILE, index + 1, f"the milestone ladder lists {m.group(1)} twice"))
+        else:
+            order.append(m.group(1))
+    missing = [f"M{n}" for n in range(FIRST_MILESTONE, LAST_MILESTONE + 1) if f"M{n}" not in order]
+    if missing:
+        problems.append(Problem(PLAN_FILE, start + 1, f"the milestone ladder does not list {', '.join(missing)}"))
+    return order
+
+
+def _check_completions(rows: list[dict], order: list[str], problems: list[Problem]) -> None:
+    """A row's "(+Mx)" must name a milestone that runs after the row's owner."""
+    for row in rows:
+        completes, owner = row["completes"], row["milestone"]
+        if completes is None:
+            continue
+        if not _is_milestone(completes):
+            problems.append(Problem(PLAN_FILE, row["_line"], f"row {row['id']} completes in {completes}, which is "
+                                    f"not a milestone (M{FIRST_MILESTONE}..M{LAST_MILESTONE})"))
+        elif owner in order and completes in order and order.index(completes) <= order.index(owner):
+            problems.append(Problem(PLAN_FILE, row["_line"],
+                                    f"row {row['id']} completes in {completes}, which does not run after its "
+                                    f"owner {owner} (PLAN.md section 7 order)"))
+
+
 def parse_plan(text: str) -> Parsed:
-    """Parses Appendix A (rows, totals) and the section 6.1 inspection-count targets."""
+    """Parses Appendix A (rows, totals), the run order from the milestone ladder and the
+    section 6.1 inspection-count targets."""
     lines = text.splitlines()
     problems: list[Problem] = []
     rows: list[dict] = []
+    order = parse_run_order(lines, problems)
     start = next((i for i, l in enumerate(lines) if l.startswith("## Appendix A")), None)
     if start is None:
         return Parsed([], {}, [Problem(PLAN_FILE, 1, "no '## Appendix A' section")])
@@ -197,6 +249,7 @@ def parse_plan(text: str) -> Parsed:
         if row["milestone"] is None:
             problems.append(Problem(PLAN_FILE, row["_line"],
                                     f"{row['priority']} {row['kind']} row {row['id']} has no owning milestone"))
+    _check_completions(rows, order, problems)
     rows.sort(key=lambda r: (r["kind"] != "feature", int(r["id"].lstrip("I"))))
     return Parsed(rows, _parse_targets(lines, problems), problems)
 

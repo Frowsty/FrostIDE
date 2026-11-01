@@ -19,6 +19,10 @@
   JIT with no warm-up, D3, the path to L1, figures), and after the third verification (connection tracing, the
   wait for L1, the tree fill, the start rule's title, NGEN, the trees proposal, path (c) caveats, wording; raw
   data moved out of the session scratchpad into `E:\FrostBuilds\perf\m0\s2-s6\`).
+- Amended: 2026-11-01 by ADR 0029 (the thin path). Decision 1 (path (b) as planned) is M16's plan, not M2's; the
+  first usable build evaluates through path (c), option (A) of decision 2 used for every project rather than the
+  first. B23's first project is gated at M2 on path (c) under decision 6's preconditions, with `MSBuild.exe`'s
+  cold start in place of the host's, and at M16 on ProjectHost. Decisions 3–6 are otherwise unchanged.
 - Plan reference: PLAN.md section 2 ("MSBuild / .vcxproj", paths (b) and (c)), budget B23, D3, M0 spike S6
 
 ## Context

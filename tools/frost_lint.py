@@ -61,9 +61,9 @@ import tomllib  # noqa: E402  (after the version check on purpose)
 FIRST_MILESTONE = 0
 LAST_MILESTONE = 17
 # Milestones whose exit has been signed off. A to-do marker naming one of them is a
-# violation, because the work it describes should have landed (PLAN.md 6.6). None are
-# closed yet; add the number here at each milestone sign-off.
-CLOSED_MILESTONES: frozenset[int] = frozenset()
+# violation, because the work it describes should have landed (PLAN.md 6.6). M0 was
+# signed off on 2026-11-01 (PLAN.md section 7); add the number here at each sign-off.
+CLOSED_MILESTONES: frozenset[int] = frozenset({0})
 
 # Paths (REUSE glob syntax, relative to the repository root) that hold byte-exact data:
 # fixtures, goldens and fuzz corpora (PLAN.md 6.6 "Every other file"). They must stay

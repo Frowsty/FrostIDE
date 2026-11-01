@@ -7,7 +7,7 @@
 // Never call CreateFileA; frost-lint must not flag this comment.
 // Budget: B5.
 // TODO(M3): a valid to-do marker.
-/* TODO(M17): also valid in a block comment; M17 is the last milestone. */
+/* TODO(M17): also valid in a block comment; M17 is the highest milestone ID. */
 // The TODO window lists markers; this is prose, not a marker.
 int f(int x);
 void post(int task);

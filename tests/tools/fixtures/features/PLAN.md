@@ -1,5 +1,31 @@
 # Mini plan for the featurecheck tests
 
+**Milestone ladder.** The rows are in the order the milestones run.
+
+| # | Milestone | Units | Ends around month |
+|---|---|---|---|
+| M0 | Bootstrap | 3–4 | 1 |
+| M1 | Editor | 8–9 | 3–4 |
+| M2 | Projects | 9–10 | 5–6 |
+| M3 | Intelligence | 7–8 | 7–8 |
+| M4 | Build | 6–7 | 9–10 |
+| M5 | Git | 8–10 | 11–13 |
+| M15 | Editor completion | 6–7 | 13–15 |
+| M16 | ProjectHost | 9–11 | 15–18 |
+| M17 | Intelligence completion | 5–6 | 17–20 |
+| M6 | Debugger | 12–14 | 20–24 |
+| M7 | Analysis | 10–12 | 23–27 |
+| M8 | Claude C2 | 3–4 | 23–28 |
+| M9 | Refactoring | 11–13 | 26–31 |
+| M10 | Debugger v2 | 9–11 | 29–35 |
+| M11 | UX parity | 9–11 | 31–38 |
+| M12 | Claude C3 | 5–6 | 33–39 |
+| M13 | Scale | 5–6 | 34–41 |
+| M14 | v1.0 | 4–5 | 35–42 |
+| — | Upgrade track | 9–12 | throughout |
+
+---
+
 ### 6.1 Test pyramid
 - **Feature matrix.** `frost-featurecheck` gates the matrix (M7 ≥30 frost, ≥2 CFG, ≥45%; M9 ≥45, ≥4, ≥60%; M13 ≥60, 5, ≥75%).
 

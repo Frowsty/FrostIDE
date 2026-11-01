@@ -2,7 +2,9 @@
 #
 # Tests that tests/perf/budgets.json captures every row of the PLAN.md section 4 budgets
 # table verbatim (plan_* fields) and that its structured targets are well formed, so a
-# budget cannot change in one place without the other (changing one needs an ADR).
+# budget cannot change in one place without the other (changing one needs an ADR). The
+# structured gates must name exactly the milestones of PLAN's "Gate from" cell, and every
+# variant a gate or target names must be one the budget declares.
 
 from __future__ import annotations
 
@@ -15,6 +17,8 @@ from tools_test_support import REPO
 _ROW = re.compile(r"^\| (B\d+) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|$")
 _UNITS = {"ms", "s", "min", "MB", "GB", "percent", "count"}
 _PERCENTILES = {"p50", "p95", "p99", "max", None}
+# A milestone ID as a whole word in a "Gate from" cell (M1 never matches inside M15).
+_MILESTONE = re.compile(r"\bM\d+\b")
 
 
 def plan_rows() -> dict[str, tuple[str, str, str, str]]:
@@ -56,7 +60,19 @@ class BudgetsTest(unittest.TestCase):
             for milestone in gates:
                 # M0..M17 (PLAN.md section 7; ADR 0029 added M15-M17).
                 self.assertRegex(milestone, r"^M(\d|1[0-7])$", budget_id)
-                self.assertIn(milestone, budget["plan_gate"], budget_id)
+            # The structured gates and PLAN's "Gate from" cell name the same milestones. Whole IDs
+            # are compared, so a gate M1 does not pass against a cell that names only M15.
+            self.assertEqual(set(gates), set(_MILESTONE.findall(budget["plan_gate"])), budget_id)
+            # A gate or target that names a variant names one the budget declares.
+            for entry in budget["gate"] + budget["targets"]:
+                if entry.get("variant") is not None:
+                    self.assertIn(entry["variant"], budget["variants"], budget_id)
+
+    def test_milestone_ids_are_compared_whole(self) -> None:
+        # The check above must tell M1 from M15, M16 and M17 (ADR 0029).
+        self.assertEqual(_MILESTONE.findall("M15 / M2 (path (c)) and M16"), ["M15", "M2", "M16"])
+        self.assertNotIn("M1", _MILESTONE.findall("M15"))
+        self.assertEqual(_MILESTONE.findall("M3; REF-L1 at M13"), ["M3", "M13"])
 
 
 if __name__ == "__main__":
