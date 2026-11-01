@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The piece-tree item (ADR 0012, D3-D5): a Piece names a run of bytes in the text storage and
+// The piece-tree item (ADR 0013, D3-D5): a Piece names a run of bytes in the text storage and
 // carries its TextSummary; PieceTraits makes SumTree<PieceTraits, 8> the piece tree. Not public
 // API: snapshot.hpp needs the complete types for its members.
 #pragma once
@@ -26,7 +26,7 @@ struct Piece {
     [[nodiscard]] std::size_t size() const noexcept { return static_cast<std::size_t>(summary.bytes); }
     [[nodiscard]] std::string_view view() const noexcept { return {data, size()}; }
 };
-static_assert(sizeof(Piece) == 72, "Piece is 72 bytes (ADR 0012: leaf size)");
+static_assert(sizeof(Piece) == 72, "Piece is 72 bytes (ADR 0013: leaf size)");
 
 // SumTree traits of the piece tree: a piece's summary is its cached TextSummary, combined with
 // text::combine.
@@ -40,7 +40,7 @@ struct PieceTraits {
     }
 };
 
-// The piece tree: 8..16 pieces per leaf, 8..16 children per internal node (ADR 0012, fan-out).
+// The piece tree: 8..16 pieces per leaf, 8..16 children per internal node (ADR 0013, fan-out).
 inline constexpr int kPieceTreeFanout = 8;
 using PieceTree = SumTree<PieceTraits, kPieceTreeFanout>;
 

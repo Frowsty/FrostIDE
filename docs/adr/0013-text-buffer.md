@@ -1,4 +1,4 @@
-# ADR 0012: The text buffer (frost::text piece tree)
+# ADR 0013: The text buffer (frost::text piece tree)
 
 - Status: accepted for M1's first slice (`m1/piece-tree`). No budget, test or warning is weakened;
   `tests/perf/budgets.json` is unchanged. A text-side sub-budget of B5 is recorded here (decision 9).

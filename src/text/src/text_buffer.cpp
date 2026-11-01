@@ -33,7 +33,7 @@ int byteOrAbsent(const detail::PieceTree& tree, std::uint64_t i) noexcept {
 }
 
 /*
- * The change of one edit step, normalised (ADR 0012, D8). The old text O had [a, b) replaced by
+ * The change of one edit step, normalised (ADR 0013, D8). The old text O had [a, b) replaced by
  * `text`, giving N. With s = a, eo = b, en = a + |text| (bytes outside a text are absent):
  *   start rule: if s > 0, O[s-1] == CR and (O[s] == LF or N[s] == LF), then s -= 1;
  *   end rule:   if O[eo] == LF and (O[eo-1] == CR or N[en-1] == CR), then eo += 1 and en += 1,
@@ -98,7 +98,7 @@ Result<TextBuffer> TextBuffer::fromUtf8(std::string text, Options options) noexc
         return fail(ErrorCode::InvalidArgument, std::format("ill-formed UTF-8 at byte {}", valid));
     }
     auto storage = detail::Ref<detail::Storage>::make(options, std::move(text));
-    // summarizePieces, then buildTree (ADR 0012): the first is pure over the stored bytes and can
+    // summarizePieces, then buildTree (ADR 0013): the first is pure over the stored bytes and can
     // later run in parallel per range. Budget: B15.
     const std::vector<detail::Piece> pieces = detail::summarizePieces(storage->original(), options.maxPieceBytes);
     detail::PieceTree tree = detail::buildTree(pieces);

@@ -3,7 +3,7 @@
 // The concurrent-reader scenario shared by TextConcurrency.ReadersDuringEdits (unit scale) and
 // TextStress.ConcurrentReaders (stress scale): one writer edits a TextBuffer and publishes each
 // version's Snapshot while readers query, copy, swap and release snapshots on their own threads
-// (ADR 0012, D7). TSan in the WSL -Full tree checks the reference counting and publication.
+// (ADR 0013, D7). TSan in the WSL -Full tree checks the reference counting and publication.
 /*
  * The writer keeps a std::string mirror. Before publishing version v it stores the mirror's size
  * for every v and, for every 64th v, the oracle's summary and an FNV-1a hash of the mirror, all in

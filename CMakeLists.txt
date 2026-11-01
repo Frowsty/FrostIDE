@@ -33,7 +33,7 @@ include(FrostCompilerCache)
 option(FROST_BUILD_TESTS "Build the test suites" ON)
 option(FROST_BUILD_UI "Build Qt-based targets (src/ui, src/app)" ON)
 set(FROST_SANITIZE "" CACHE STRING "Sanitizers to enable: address;undefined, thread or memory")
-# Fuzz trees (presets win-clangcl-fuzz, linux-clang-fuzz; cmake/FrostFuzz.cmake, ADR 0012). -Full
+# Fuzz trees (presets win-clangcl-fuzz, linux-clang-fuzz; cmake/FrostFuzz.cmake, ADR 0013). -Full
 # runs each target for FROST_FUZZ_SECONDS = 60; longer runs (600 s for the M1 exit, 1800 s for a
 # future -Nightly) use separate build trees, so the -Full tree's cache keeps 60.
 option(FROST_FUZZ "Build libFuzzer targets instead of corpus replays (needs ASan, no tests, no UI)" OFF)
@@ -53,7 +53,7 @@ if(FROST_FUZZ)
     if(MSVC AND NOT CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL "MultiThreaded")
         # The pinned clang_rt.fuzzer-x86_64.lib records RuntimeLibrary=MT_StaticRelease and
         # _ITERATOR_DEBUG_LEVEL=0 (RelWithDebInfo matches); lld-link's /failifmismatch rejects
-        # any other CRT. Its STL imports are defined by the pinned 14.44 libcpmt (ADR 0012).
+        # any other CRT. Its STL imports are defined by the pinned 14.44 libcpmt (ADR 0013).
         message(FATAL_ERROR "FROST_FUZZ under clang-cl needs CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded "
                             "(got '${CMAKE_MSVC_RUNTIME_LIBRARY}')")
     endif()
@@ -61,7 +61,7 @@ if(FROST_FUZZ)
     if(MSVC)
         # The same library records annotate_string=0 and annotate_vector=0 while ASan TUs record 1,
         # which fails /failifmismatch; fuzz trees lose std::string/vector container-overflow checks
-        # (the Windows ASan tree keeps them; ADR 0012).
+        # (the Windows ASan tree keeps them; ADR 0013).
         add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
     endif()
     message(STATUS "FrostIDE fuzz targets: ${FROST_FUZZ_SECONDS} s per CTest run")

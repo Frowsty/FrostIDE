@@ -99,7 +99,7 @@ TextSummary summarize(std::string_view utf8) noexcept {
     out.endsWithCr = data[n - 1] == '\r';
 
     // Line counters are 64-bit while scanning; stored values fit in 32 bits for inputs within the
-    // buffer limit of 0xFFFF'FFFE bytes (ADR 0012, D6).
+    // buffer limit of 0xFFFF'FFFE bytes (ADR 0013, D6).
     LineCounters line;
     std::uint64_t chars = 0;
     std::uint64_t utf16 = 0;

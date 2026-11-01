@@ -8,12 +8,12 @@
  * ops (local inserts and backspaces, with occasional jumps), each followed by what the editor does
  * per keystroke: snapshot(), pointAt(cursor) and a LineCursor over the 60 visible lines. Reports
  * p50/p99/max; asserts p99 <= 0.25 ms in optimised unsanitised builds. Budget: B5. That is the
- * text-side sub-budget of B5 recorded in ADR 0012: 1/32 of B5's p99 limit (8 ms) and 1/8 of its
+ * text-side sub-budget of B5 recorded in ADR 0013: 1/32 of B5's p99 limit (8 ms) and 1/8 of its
  * p50 goal (2 ms), leaving the rest of the keystroke for layout and paint.
  *
  * TextPerf.LoadThroughput: fromUtf8 on 256 MiB (optimised unsanitised) or 16 MiB. Reports GB/s,
  * bytes per piece and tree memory, and projects them to F1 (a 2 GB file) for B15's +64 MB and 2 s
- * line-index limits (ADR 0012, D4 risk). Report only; m1/large-file gates B15. Budget: B15.
+ * line-index limits (ADR 0013, D4 risk). Report only; m1/large-file gates B15. Budget: B15.
  *
  * TextPerf.SeekLatency: random pointAt, offsetAt, utf16PointAt and lineInfo queries on the 16 MiB
  * document. Reports p50/p99, nodes and bytes per piece.
@@ -149,7 +149,7 @@ TEST(TextPerf, EditLatency) {
                 static_cast<unsigned long long>(checksum));
     ASSERT_TRUE(buffer.checkInvariants().has_value());
     if (kAssertBudgets) {
-        // Budget: B5 (text-side sub-budget, ADR 0012).
+        // Budget: B5 (text-side sub-budget, ADR 0013).
         EXPECT_LE(p.p99us, 250.0) << "keystroke p99 above the 0.25 ms text sub-budget of B5";
     }
 }

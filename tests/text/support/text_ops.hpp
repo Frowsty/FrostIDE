@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // OpDriver: drives random operations against a TextBuffer and the TextOracle and compares them
-// (ADR 0012, section 9.1). The differential test, the stress tests and the libFuzzer target all
+// (ADR 0013, section 9.1). The differential test, the stress tests and the libFuzzer target all
 // run this one driver; only their ByteSource differs. No gtest dependency.
 /*
  * Op mix: insert 40 %, erase 25 %, replace 15 %, applyEdits batch 5 %, restore one of the last 16

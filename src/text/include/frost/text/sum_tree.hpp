@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // SumTree<Traits, B>: a persistent, reference-counted B+tree of items whose nodes cache the
-// summaries of their subtrees (ADR 0012, D3). frost::text builds the piece tree on it; the display
+// summaries of their subtrees (ADR 0013, D3). frost::text builds the piece tree on it; the display
 // map (a later slice) reuses it. Header-only template.
 /*
  * Design. Items live in leaves; every node caches the monoid summary of its subtree, and
@@ -19,7 +19,7 @@
  * upward (push_tree), and small fan-outs in tests (Zed uses TREE_BASE 2 in tests, 6 otherwise)
  * follow Zed's crates/sum_tree (https://github.com/zed-industries/zed, commit d544470, 2026-10-05,
  * whose crates/sum_tree/Cargo.toml declares license = "Apache-2.0"). The code here is written from
- * that description, not translated; ADR 0012 records the sources.
+ * that description, not translated; ADR 0013 records the sources.
  *
  * Fan-out: B = 8 (8..16 entries) by default; tests also instantiate B = 2 and 3.
  *

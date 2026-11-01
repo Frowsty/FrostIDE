@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // frost::text::Snapshot: an immutable, O(1)-copyable version of a text buffer that any number of
-// threads can query without locks (ADR 0012, D5 and D7), plus its ChunkRange and LineCursor
+// threads can query without locks (ADR 0013, D5 and D7), plus its ChunkRange and LineCursor
 // views. TextBuffer (text_buffer.hpp) is the single writer that produces snapshots.
 /*
  * PieceTree stores a document as a persistent B+tree of pieces. Leaves reference ranges in the

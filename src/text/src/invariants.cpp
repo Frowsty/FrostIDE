@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Invariant checks of frost::text (ADR 0012, section 7): Snapshot::checkInvariants (S1-S4 through
+// Invariant checks of frost::text (ADR 0013, section 7): Snapshot::checkInvariants (S1-S4 through
 // SumTree, plus the piece rules P1-P4) and TextBuffer::checkInvariants (plus P5 and P6). Each
 // failure is ErrorCode::Internal with the invariant's ID first in the message. For tests and
 // fuzzing; O(bytes + n).

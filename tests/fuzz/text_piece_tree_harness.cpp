@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fuzz harness for frost::text's piece tree (ADR 0012): the input drives the same OpDriver as the
+// Fuzz harness for frost::text's piece tree (ADR 0013): the input drives the same OpDriver as the
 // differential and stress tests (tests/text/support/text_ops.hpp), with choices read from the
 // input bytes instead of a seed.
 /*

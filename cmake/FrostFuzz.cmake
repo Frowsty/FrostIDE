@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# FrostFuzz.cmake: fuzz targets (PLAN.md sections 6.1 and 6.3; ADR 0012). Every target exists in
+# FrostFuzz.cmake: fuzz targets (PLAN.md sections 6.1 and 6.3; ADR 0013). Every target exists in
 # two forms, chosen by FROST_FUZZ (root CMakeLists.txt):
 #   - in a fuzz tree (FROST_FUZZ ON, tests off; presets win-clangcl-fuzz and linux-clang-fuzz) a
 #     libFuzzer executable, run by CTest fuzz.<name> (label fuzz) for FROST_FUZZ_SECONDS;

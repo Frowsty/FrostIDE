@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Tests for frost::text::SumTree (ADR 0012, D3) at fan-outs B = 2, 3 and 8, with uint32 items and
+// Tests for frost::text::SumTree (ADR 0013, D3) at fan-outs B = 2, 3 and 8, with uint32 items and
 // a non-commutative summary, so any reordering, duplication or loss of items changes the hash.
 /*
  * The summary keeps {count, sum, max, first, last, hash, pow}: hash = sum of item_i * M^(count-1-i)

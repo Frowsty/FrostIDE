@@ -4,7 +4,7 @@
 # libFuzzer executable with CTest fuzz.<name> (label fuzz); in a normal test tree it is a corpus
 # replay with CTest fuzz_replay.<name> (label unit). corpus/<name>/ holds the committed seeds.
 #
-#   text_piece_tree  frost::text's piece tree against the brute-force oracle (ADR 0012)
+#   text_piece_tree  frost::text's piece tree against the brute-force oracle (ADR 0013)
 
 # The text test support library: already a target in normal trees (tests/text), added here in
 # fuzz trees. Its source is not a subdirectory of this one, so the binary directory is explicit.

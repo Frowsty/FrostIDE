@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // TextConcurrency.ReadersDuringEdits: one writer and up to four reader threads share snapshots of
-// one TextBuffer while it is edited 20k times (concurrent_readers.hpp; ADR 0012, D7). The WSL
+// one TextBuffer while it is edited 20k times (concurrent_readers.hpp; ADR 0013, D7). The WSL
 // -Full TSan tree runs it under ThreadSanitizer.
 
 #include "text/concurrent_readers.hpp"

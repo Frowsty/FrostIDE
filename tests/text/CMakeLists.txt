@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Tests for frost::text (ADR 0012), split by label because labels apply per executable:
+# Tests for frost::text (ADR 0013), split by label because labels apply per executable:
 #   text_tests         unit:   TextSummary, SumTree, TextBuffer edge cases, the 200-seed differential
 #                              against the brute-force oracle, and concurrent readers (TSan in WSL -Full)
 #   text_stress_tests  stress: the 1M-op differential (FROST_STRESS_FULL=1: the 10M-op M1 exit run),

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# frost::text (PLAN.md section 3.2; ADR 0012): the text buffer. A persistent, reference-counted
+# frost::text (PLAN.md section 3.2; ADR 0013): the text buffer. A persistent, reference-counted
 # piece tree (SumTree<PieceTraits, 8>) over append-only UTF-8 storage, O(1) snapshots readable from
 # any thread, TextBuffer edits with normalised TextChanges, and line/UTF-16 position conversions.
 # Qt-free. Depends on core and on io (validUtf8Prefix; SaveManager will need io later anyway).

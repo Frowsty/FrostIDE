@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// frost::text::TextBuffer: the single writer of a text document (ADR 0012). It loads UTF-8,
+// frost::text::TextBuffer: the single writer of a text document (ADR 0013). It loads UTF-8,
 // applies edits as new immutable Snapshots (snapshot.hpp) and reports each edit as a TextChange
 // normalised to line-break boundaries, ready for tree-sitter's input edits and LSP didChange.
 #pragma once
@@ -31,7 +31,7 @@ struct Edit {
  * What one edit step changed: the old text's bytes [start, oldEnd) became the new text's bytes
  * [start, newEnd). startPoint and oldEndPoint are points in the old text, newEndPoint in the new.
  *
- * Normalisation (ADR 0012, D8): the change is widened, by at most one byte on each side of the
+ * Normalisation (ADR 0013, D8): the change is widened, by at most one byte on each side of the
  * requested range, so that no bound lies strictly inside a CRLF in the old or the new text and the
  * line structure outside the change is identical in both. Its points therefore follow the LSP line
  * model and are representable in LSP, and replaying it as an LSP edit on the old text yields the
@@ -87,7 +87,7 @@ struct TextBufferOptions {
  * any edit and, if valid, succeeds with an empty change at the offset and keeps the version.
  *
  * Cost of an edit: O(B log n + P + |text|) time; it allocates O(log n + |text| / P) nodes and
- * appends |text| bytes to the storage (deleted text is not reclaimed; ADR 0012, D5).
+ * appends |text| bytes to the storage (deleted text is not reclaimed; ADR 0013, D5).
  */
 class TextBuffer {
 public:

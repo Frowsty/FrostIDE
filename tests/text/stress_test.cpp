@@ -3,7 +3,7 @@
 // Stress tests for frost::text (label `stress`; skipped in the plain Debug configuration, run in
 // the configurations -Full adds: Release and ASan on Windows, ASan+UBSan and TSan in WSL).
 /*
- * M1 exit criterion (ADR 0012, PLAN.md section 7): 10M random ops of the piece-tree differential
+ * M1 exit criterion (ADR 0013, PLAN.md section 7): 10M random ops of the piece-tree differential
  * in Release on both OSes, selected with FROST_STRESS_FULL=1 (Release only; sanitizer builds keep
  * their scaled counts). The default scale keeps every case under 120 s in each -Full
  * configuration:
@@ -68,7 +68,7 @@ double secondsSince(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 
-// Scales (measured; ADR 0012 and the progress log record the timings).
+// Scales (measured; ADR 0013 and the progress log record the timings).
 constexpr std::uint64_t kExitOps = 10'000'000;
 constexpr std::uint64_t kDifferentialOps = !kSanitized        ? (kOptimized ? 1'000'000 : 200'000)
                                            : kThreadSanitizer ? 300'000

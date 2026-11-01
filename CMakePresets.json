@@ -43,7 +43,7 @@
       "name": "win-clangcl-fuzz",
       "displayName": "Windows, clang-cl, libFuzzer + AddressSanitizer (/MT, RelWithDebInfo)",
       "inherits": "win-clangcl",
-      "$comment": "Fuzz targets only (FROST_FUZZ, cmake/FrostFuzz.cmake; ADR 0012): the pinned libFuzzer library needs the static CRT, so the tree builds without Qt and gtest and installs no vcpkg ports.",
+      "$comment": "Fuzz targets only (FROST_FUZZ, cmake/FrostFuzz.cmake; ADR 0013): the pinned libFuzzer library needs the static CRT, so the tree builds without Qt and gtest and installs no vcpkg ports.",
       "cacheVariables": {
         "FROST_SANITIZE": "address",
         "FROST_FUZZ": "ON",
@@ -81,7 +81,7 @@
       "name": "linux-clang-fuzz",
       "displayName": "Linux, clang, libFuzzer + ASan + UBSan (RelWithDebInfo)",
       "inherits": "linux-clang",
-      "$comment": "Fuzz targets only (FROST_FUZZ, cmake/FrostFuzz.cmake; ADR 0012), built like the Windows fuzz tree: no Qt, no gtest, no vcpkg ports.",
+      "$comment": "Fuzz targets only (FROST_FUZZ, cmake/FrostFuzz.cmake; ADR 0013), built like the Windows fuzz tree: no Qt, no gtest, no vcpkg ports.",
       "cacheVariables": {
         "FROST_SANITIZE": "address;undefined",
         "FROST_FUZZ": "ON",

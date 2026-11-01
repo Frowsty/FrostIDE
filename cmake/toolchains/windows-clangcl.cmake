@@ -130,7 +130,7 @@ set(FROST_ASAN_LINK_OPTIONS
     "/INCLUDE:__asan_seh_interceptor"
     "/WHOLEARCHIVE:${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
 # The static-CRT (/MT) variant and libFuzzer, as `clang-cl -fsanitize=address,fuzzer -MT -###`
-# shows them with LLVM 23.1.4 (ADR 0012 records the probe): the same runtime import library and
+# shows them with LLVM 23.1.4 (ADR 0013 records the probe): the same runtime import library and
 # the static thunk, whole-archive. No /INCLUDE:__asan_seh_interceptor: the driver passes it only
 # for /MD, and the static thunk defines the symbol. The driver links libFuzzer whole-archive too.
 # The root CMakeLists.txt uses these for CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded (fuzz trees).

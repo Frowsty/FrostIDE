@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Edge-case tests for frost::text::TextBuffer and Snapshot (ADR 0012): the LSP line model with
+// Edge-case tests for frost::text::TextBuffer and Snapshot (ADR 0013): the LSP line model with
 // lone CRs and split CRLFs, TextChange normalisation (D8) and its LSP replay, the round-trip rules,
 // the edit check order, batches, restore, UTF-16 conversions, large texts, piece caps, snapshot
 // immutability and lifetimes. The random differential lives in differential_test.cpp.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // TextDifferential.Quick: 200 seeds x 1000 random ops of TextBuffer against the brute-force
-// TextOracle (text_ops.hpp), the -Quick share of the piece-tree differential (ADR 0012), plus
+// TextOracle (text_ops.hpp), the -Quick share of the piece-tree differential (ADR 0013), plus
 // the tests of its settings and of the reproduction command that failures print.
 /*
  * Each seed picks its piece cap from {4, 5, 7, 16, 64, 4096} and an initial text (empty for a

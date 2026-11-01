@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Piece-tree algorithms shared by Snapshot and TextBuffer (ADR 0012, sections 4 and 5; private
+// Piece-tree algorithms shared by Snapshot and TextBuffer (ADR 0013, sections 4 and 5; private
 // header): building pieces over stored bytes, byte splits, seeks by bytes, line breaks and UTF-16
 // units, in-piece scanners and the line scanner behind lineInfo and LineCursor. All functions are
 // pure over immutable trees, safe from any thread, and take no references.
@@ -31,7 +31,7 @@ namespace frost::text::detail {
 // 3 bytes. O(size). Splitting the original into bounded runs follows VS Code's chunked buffers
 // ("Text Buffer Reimplementation", 2018; see storage.hpp).
 void appendPieces(std::vector<Piece>& out, const char* data, std::size_t size, std::uint32_t maxPieceBytes) noexcept;
-// The pieces of `stored` (summarizePieces in ADR 0012): pure, parallelisable later. Budget: B15.
+// The pieces of `stored` (summarizePieces in ADR 0013): pure, parallelisable later. Budget: B15.
 [[nodiscard]] std::vector<Piece> summarizePieces(std::string_view stored, std::uint32_t maxPieceBytes) noexcept;
 // A balanced tree of `pieces` (buildTree). O(n).
 [[nodiscard]] PieceTree buildTree(std::span<const Piece> pieces) noexcept;

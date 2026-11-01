@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // TextOracle: a brute-force model of frost::text over std::string, the independent oracle of the
-// piece-tree differential, stress and fuzz tests (ADR 0012, section 9.1). No gtest dependency.
+// piece-tree differential, stress and fuzz tests (ADR 0013, section 9.1). No gtest dependency.
 /*
  * Independence. The oracle shares no code with frost::text or frost::io beyond the plain value
  * types (Point, TextSummary, TextChange, ErrorCode):

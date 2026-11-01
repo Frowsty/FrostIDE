@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Intrusive reference counting for frost::text's immutable shared objects (sum-tree nodes and
-// the text storage; ADR 0012, D5 and D7). Not public API: detail headers are included by the
+// the text storage; ADR 0013, D5 and D7). Not public API: detail headers are included by the
 // public ones and may change with any slice.
 /*
  * RefCounted carries the count; Ref<T> is the owning handle and the only place that allocates

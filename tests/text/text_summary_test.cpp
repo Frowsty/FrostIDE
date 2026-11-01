@@ -2,7 +2,7 @@
 //
 // Tests for frost::text::TextSummary: summarize() against the oracle's independent summary, the
 // monoid laws of combine(), split invariance (exhaustive over short strings) and the CRLF, longest
-// line and lone-CR rules (ADR 0012, D1 and D2).
+// line and lone-CR rules (ADR 0013, D1 and D2).
 
 #include "frost/sched/detail/split_mix64.hpp"
 #include "frost/text/text_summary.hpp"

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Position types of frost::text (ADR 0012): byte ranges, line/column points in bytes and in
+// Position types of frost::text (ADR 0013): byte ranges, line/column points in bytes and in
 // UTF-16 code units, line-break kinds and per-line information. Plain values; every type here
 // is trivially copyable and safe to share between threads.
 /*

@@ -29,12 +29,12 @@ window opened on your desktop.
 - **Low, the fuzz smoke was not hermetic.** The new setup fixture `fuzz.<name>.reset`
   (`cmake/FrostFuzzResetWork.cmake`) empties `fuzz-work/<name>` before each run, so every run starts from the
   committed corpus. Fuzz trees now count two tests (`win fuzz 2/2`, `wsl fuzz 2/2`).
-- **Low, docs:** `snapshot.hpp` and ADR 0012 D7 now say that `chunks()` and `linesFrom()` copy the snapshot (four
+- **Low, docs:** `snapshot.hpp` and ADR 0013 D7 now say that `chunks()` and `linesFrom()` copy the snapshot (four
   counter operations per call). The ADR's tree height for 256 MiB is now 4, not 3: 16^3 = 4096 leaves is the most
   height 3 holds, and `TextPerf.LoadThroughput` now prints the height. D8 now says where the LSP-replay property is
   checked: at each full check, not after every op. Two comment fixes: `mergeSiblings` holds "at least B", and the
   harness takes bytes `[2, 2+L)`.
-- **Low, clean-room record:** `text_summary.hpp` and ADR 0012's Sources now record where TextSummary's
+- **Low, clean-room record:** `text_summary.hpp` and ADR 0013's Sources now record where TextSummary's
   line-metric design came from, and the review's note that the line fields resemble those of Zed's GPL rope
   crate. That crate was not opened. See the question below.
 - **Mutation checks** (Debug, each reverted afterwards; `git diff src/text/src` is empty). Each mutant made the new
@@ -57,7 +57,7 @@ window opened on your desktop.
   - Every text stress case stays under its 120 s ceiling. The longest are WSL ASan Differential at 55.6 s, WSL
     TSan Differential at 48.9 s and Windows ASan Differential at 31.2 s. `TextDifferential.Quick` takes 6.0 s in
     Windows Debug and 5.7 s in WSL Debug.
-- **M1 exit runs, repeated on the final code** (run beside each other; ADR 0012 has the details):
+- **M1 exit runs, repeated on the final code** (run beside each other; ADR 0013 has the details):
   - The 10M-op differential in Windows Release: **0 mismatches**, 1,126,249 full checks, 21,367 rejections by the
     buffer limit, 161.4 s.
   - A **clean 10-minute fuzz on each OS**, each starting from an empty work corpus. Windows: 381289 runs,
@@ -78,7 +78,7 @@ window opened on your desktop.
   rule match, field for field, the `TextSummary` of Zed's rope crate. That crate is GPL, and PLAN.md section 3
   lists it as off-limits. The review found no evidence of copying, and found the CR, CRLF and lone-CR rules,
   `lineFeeds`, per-byte counting and tie-breaking original. The slice's source record says the crate was not
-  opened. The record now states this in ADR 0012 and in a provenance comment in `text_summary.hpp`. Is that record
+  opened. The record now states this in ADR 0013 and in a provenance comment in `text_summary.hpp`. Is that record
   enough, or do you want something else? For example, a redesign of the line fields, or a citation of a public
   description such as Zed's "Rope & SumTree" blog post, which this session has not read.
 
@@ -86,7 +86,7 @@ window opened on your desktop.
 
 M1 started while M0 waits for sign-off (your instruction on 2026-11-01). Branch `m1/piece-tree` from
 `m0/foundation` (593e15f), worktree `.claude\worktrees\m1-piece-tree`; committed, not merged or pushed. Design,
-sources and measurements: ADR 0012. Every Windows test ran through `run_hidden_nobox.py` (a private desktop with
+sources and measurements: ADR 0013. Every Windows test ran through `run_hidden_nobox.py` (a private desktop with
 error boxes off); no window opened on your desktop.
 
 ### Done
@@ -116,7 +116,7 @@ error boxes off); no window opened on your desktop.
   - The only failures are the known `FrostProcess.RunsFromPathLongerThanMaxPath` and
     `FrostProcess.PlatformPluginPathBoundary` (they fail until `m0/longpath` lands); the skip is
     `FrostProcess.ReportsLongPathLimitCleanly`.
-- **Text test times and scales** (ADR 0012 has the table): `TextDifferential.Quick` 8.2 s in Windows Debug (ceiling
+- **Text test times and scales** (ADR 0013 has the table): `TextDifferential.Quick` 8.2 s in Windows Debug (ceiling
   15 s; 4 threads), 6.1 s in WSL Debug; every other unit case at most 0.9 s in Windows Debug. All text unit cases
   together: 11.7 s Windows Debug, 8.3 s WSL Debug. Stress cases in `-Full`, longest first: WSL ASan Differential
   66.7 s (200k ops), Windows ASan Differential 55.8 s (500k), WSL TSan Differential 52.6 s (300k), Windows ASan
@@ -127,8 +127,8 @@ error boxes off); no window opened on your desktop.
   the text library and its four test executables on both OSes, so they are not B28 samples. Both stay far inside
   B28's p50 5 min. Re-measuring B28 with ADR 0010's harness is part of its M1 follow-up.
 - **Perf** (Windows Release, REF-W1, you at the PC): `TextPerf.EditLatency` p50 9.7 us, p99 22.2 us against the
-  0.25 ms text-side sub-budget of B5 (ADR 0012, decision 9; asserted in optimised builds); load 0.98 GB/s, F1
-  projection 2.03 s and 39.9 MB of tree nodes (the B15 risk in ADR 0012, decision 6); seek p99 3-16 us.
+  0.25 ms text-side sub-budget of B5 (ADR 0013, decision 9; asserted in optimised builds); load 0.98 GB/s, F1
+  projection 2.03 s and 39.9 MB of tree nodes (the B15 risk in ADR 0013, decision 6); seek p99 3-16 us.
 - **Fuzz throughput** (60 s smoke, ASan): Windows 1484 exec/s on the first run, 940 exec/s in `-Full` (a larger
   work corpus); Linux (ASan + UBSan) 1079 exec/s; target 200. Caps unchanged.
 - **M1 exit runs** (after `night.py build-gate`): the 10M-op differential in Release, **0 mismatches on both OSes**
@@ -148,7 +148,7 @@ error boxes off); no window opened on your desktop.
   known FrostProcess failures.
 
 ### Questions for the user
-- None new. ADR 0012 records the slice's decisions; none weakens a test, budget or warning.
+- None new. ADR 0013 records the slice's decisions; none weakens a test, budget or warning.
 
 ## 2026-11-01: M0 overnight run and exit verification (`m0/foundation`)
 

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// TextSummary: the monoid that frost::text caches in every piece-tree node (ADR 0012, D1 and D2).
+// TextSummary: the monoid that frost::text caches in every piece-tree node (ADR 0013, D1 and D2).
 // It counts bytes, UTF-16 code units, characters (Unicode scalar values), line breaks and line
 // feeds, and keeps the line metrics needed to answer line/column queries and the longest line
 // of any concatenation in O(1) from its parts.
 /*
- * Provenance (clean room; ADR 0012, Sources): the line metrics serve PLAN.md section 3's "longest
+ * Provenance (clean room; ADR 0013, Sources): the line metrics serve PLAN.md section 3's "longest
  * line" summary. Combining two texts' longest lines in O(1) needs each side's first and last
  * partial rows (the rows that join at the seam) and its longest row with that row's index; the
  * combine rules below follow from that. Zed's rope crate (GPL), whose TextSummary has similar
- * line fields, was not consulted; ADR 0012 records that resemblance, which a review found.
+ * line fields, was not consulted; ADR 0013 records that resemblance, which a review found.
  */
 #pragma once
 
@@ -55,7 +55,7 @@ struct TextSummary {
 
     friend constexpr bool operator==(const TextSummary&, const TextSummary&) noexcept = default;
 };
-static_assert(sizeof(TextSummary) == 64, "TextSummary is 64 bytes (ADR 0012: piece and node sizes)");
+static_assert(sizeof(TextSummary) == 64, "TextSummary is 64 bytes (ADR 0013: piece and node sizes)");
 
 /*
  * combine(a, b) is the summary of the concatenation of a's text and b's text. It is a monoid

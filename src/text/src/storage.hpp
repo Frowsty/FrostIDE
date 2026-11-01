@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// frost::text's append-only byte storage (ADR 0012, D5; private header). One original text plus
+// frost::text's append-only byte storage (ADR 0013, D5; private header). One original text plus
 // add chunks; pieces point into it with raw pointers, so its memory never moves or frees while any
 // owner (the TextBuffer and every Snapshot, through Ref<Storage>) lives.
 /*
