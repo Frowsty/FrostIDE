@@ -141,6 +141,7 @@ if [[ $CHECKS -eq 1 ]]; then
     # clang-format on the tracked C/C++ files (the list comes from the source tree's
     # git; the mirror has the same contents). Fixtures are excluded: they are
     # byte-exact inputs, and clang-format cannot parse the banned-construct probes.
+    # Vendored tree-sitter sources stay as pinned (ADR 0023).
     echo "=== check: format"
     # A git worktree's .git file names its git directory as Git for Windows wrote it
     # ("gitdir: E:/dev/FrostIDE/.git/worktrees/<name>"), which git here cannot open; point it
@@ -155,7 +156,7 @@ if [[ $CHECKS -eq 1 ]]; then
     fi
     # An empty list (git failing, e.g. on safe.directory) must fail, not pass vacuously.
     sources="$("${source_git[@]}" ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' |
-        grep -Ev '^tests/toolchain_probe/banned/|^tests/[^/]+/fixtures/' || true)"
+        grep -Ev '^tests/toolchain_probe/banned/|^tests/[^/]+/fixtures/|^third_party/(tree-sitter|grammars)/' || true)"
     unformatted=0
     while IFS= read -r file; do
         if ! clang-format --dry-run --Werror "$MIRROR/$file" > /dev/null 2>&1; then

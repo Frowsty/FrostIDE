@@ -4,8 +4,9 @@
 # are here: the Qt Charts fixture and the GPL-3.0-only vcpkg port fixture must fail.
 # Also covered: SPDX expression evaluation, Qt SBOM licences, the per-platform and
 # per-context Qt module allowlist, the build-tree scan (Windows DLLs and Linux ELF
-# DT_NEEDED), ADR exceptions, a missing installed tree, the SPDX 2.3 SBOM, and the bundled-asset
-# gate (ADR 0015) with its OpenType 'name'-table reader over synthetic fixtures.
+# DT_NEEDED), ADR exceptions, a missing installed tree, the SPDX 2.3 SBOM, the bundled-asset
+# gate (ADR 0015) with its OpenType 'name'-table reader over synthetic fixtures, and the same gate
+# over vendored sources (ADR 0023: the committed vendor lock and a synthetic one).
 
 from __future__ import annotations
 
@@ -429,6 +430,53 @@ class AssetGateTest(TempDirTestCase):
         licensecheck.check_assets(REPO, report)
         self.assertEqual([str(v) for v in report.violations], [])
         self.assertEqual({p.name for p in report.packages}, {"Lucide", "Inter", "JetBrains Mono"})
+
+    def test_committed_vendored_sources_pass(self) -> None:
+        report = licensecheck.Report()
+        licensecheck.check_assets(REPO, report, manifest_rel=licensecheck.VENDOR_MANIFEST)
+        self.assertEqual([str(v) for v in report.violations], [])
+        self.assertEqual(len(report.packages), 8)
+        self.assertIn("tree-sitter", {p.name for p in report.packages})
+        for package in report.packages:
+            self.assertEqual(package.declared, "MIT")
+            self.assertTrue(package.purl and package.purl.startswith("pkg:github/"), package.name)
+            self.assertTrue(package.spdx_id.startswith("SPDXRef-Vendored-"), package.spdx_id)
+
+    def test_vendored_gate_reports_unlisted_files_and_licences(self) -> None:
+        # A synthetic vendor lock: one component with a nested file, its MIT licence and its ADR.
+        mit = b"MIT License\n\nPermission is hereby granted, free of charge, to any person (synthetic)\n"
+        source = b"int demo(void) { return 0; }\n"
+        dest = self.tmp / "third_party" / "demo"
+        (dest / "src").mkdir(parents=True)
+        (dest / "LICENSE").write_bytes(mit)
+        (dest / "src" / "demo.c").write_bytes(source)
+        (self.tmp / "docs").mkdir()
+        (self.tmp / "docs" / "adr.md").write_text("synthetic\n", encoding="utf-8")
+        component = {
+            "id": "demo", "name": "demo", "version": "1.0", "commit": "1" * 40, "purl": "pkg:github/demo/demo@v1.0",
+            "url": "https://example.invalid/demo.tar.gz", "archive": "demo.tar.gz", "sha256": "a" * 64,
+            "crossCheck": "synthetic", "licence": "MIT", "copyright": ["Copyright (c) 2026 Demo"],
+            "reservedFontNames": [], "modified": False, "homepage": "https://example.invalid",
+            "dest": "third_party/demo", "licenceFile": "LICENSE", "adr": "docs/adr.md",
+            "files": [{"member": "demo/LICENSE", "path": "LICENSE", "sha256": hashlib.sha256(mit).hexdigest()},
+                      {"member": "demo/src/demo.c", "path": "src/demo.c",
+                       "sha256": hashlib.sha256(source).hexdigest()}],
+        }
+        lock = self.tmp / "third_party" / "vendor.lock.json"
+
+        def messages(files: list[str]) -> list[str]:
+            lock.write_text(json.dumps({"schemaVersion": 1, "components": [component]}), encoding="utf-8")
+            report = licensecheck.Report()
+            licensecheck.check_assets(self.tmp, report, files, licensecheck.VENDOR_MANIFEST)
+            return [str(v) for v in report.violations]
+
+        listed = ["third_party/demo/LICENSE", "third_party/demo/src/demo.c"]
+        self.assertEqual(messages(listed), [])
+        unlisted = messages(listed + ["third_party/demo/src/extra.c"])
+        self.assertEqual(len(unlisted), 1)
+        self.assertIn("vendored demo: file is not listed in third_party/vendor.lock.json", unlisted[0])
+        component["licence"] = "GPL-3.0-only"
+        self.assertTrue(any("not on the allowlist" in m for m in messages(listed)))
 
 
 if __name__ == "__main__":

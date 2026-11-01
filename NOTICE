@@ -17,3 +17,19 @@ Bundled assets (resources/, pinned in resources/assets.lock.json, ADR 0015):
   (resources/icons/lucide/LICENSE).
 The fonts are bundled unmodified. The software bill of materials lists each
 asset with its version, source and SHA-256.
+
+Vendored sources (third_party/, pinned in third_party/vendor.lock.json,
+ADR 0023), each under the MIT License in the LICENSE file of its directory
+and compiled unmodified into FrostIDE:
+- tree-sitter 0.27.1, Copyright (c) 2018 Max Brunsfeld
+  (third_party/tree-sitter);
+- tree-sitter-c 0.24.2, tree-sitter-cpp 0.23.4 and tree-sitter-json 0.24.8,
+  Copyright (c) 2014 Max Brunsfeld (third_party/grammars/c, cpp, json);
+- tree-sitter-c-sharp 0.23.5, Copyright (c) 2014-2023 Max Brunsfeld, Damien
+  Guard, Amaan Qureshi, and contributors (third_party/grammars/c-sharp);
+- tree-sitter-cmake 0.7.6, Copyright (c) 2025 Uy Ha
+  (third_party/grammars/cmake);
+- tree-sitter-xml 0.7.0, Copyright (c) 2023 ObserverOfTime
+  (third_party/grammars/xml);
+- tree-sitter-markdown 0.5.4, Copyright (c) 2021 Matthias Deiml
+  (third_party/grammars/markdown).
