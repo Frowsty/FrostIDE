@@ -21,6 +21,8 @@
 #   exe-search    calls that look up an executable in the current directory or PATH are
 #                 banned in C/C++ (PLAN.md 3.5: tools resolve to absolute paths);
 #   cpp26         banned C++26 constructs in C/C++ outside the exempt directories;
+#   qt-svg        Qt Svg headers are included only under **/icon_baker/** (ADR 0015 decision 7:
+#                 the runtime draws baked atlases and never renders SVG);
 #   no-ci         there is no .github/workflows directory (D24).
 # Byte-exact data (fixtures, goldens, fuzz corpora; DATA_GLOBS) only needs REUSE coverage.
 #
@@ -131,6 +133,9 @@ EXE_SEARCH_APIS = frozenset(
 #                               current directory after frost's hardening, the reason
 #                               SearchPathW is in EXE_SEARCH_APIS.
 EXE_SEARCH_EXEMPT_GLOBS = ("tests/app/startup_test.cpp",)
+
+# The only directories that may include Qt Svg headers (the build-time icon baker).
+QT_SVG_ALLOWED_GLOBS = ("**/icon_baker/**",)
 
 # ---------------------------------------------------------------------------------------
 # Comment syntax table
@@ -283,6 +288,7 @@ def compile_globs(patterns) -> re.Pattern[str]:
 _DATA_RE = compile_globs(DATA_GLOBS)
 _CPP26_EXEMPT_RE = compile_globs(CPP26_EXEMPT_GLOBS)
 _EXE_SEARCH_EXEMPT_RE = compile_globs(EXE_SEARCH_EXEMPT_GLOBS)
+_QT_SVG_ALLOWED_RE = compile_globs(QT_SVG_ALLOWED_GLOBS)
 
 
 def is_data_path(rel_path: str) -> bool:
@@ -849,6 +855,31 @@ _NOT_DECLARATORS = {
 _TRAILING_RETURN = re.compile(r"\)\s*->\s*[\w:<>,\s*&]*$")
 
 
+# An #include directive in lexed code; group 1 is the opening delimiter. Quoted names are
+# blanked in the lexed code, so the name is read from the original text at the same offset.
+_INCLUDE_OPEN = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])', re.M)
+# A Qt Svg or Qt Svg Widgets header: a path component starting QSvg, QtSvg or QGraphicsSvg in
+# any case (<QSvgRenderer>, <qsvgrenderer.h>, <QtSvgWidgets/...>, <qgraphicssvgitem.h>).
+_QT_SVG_HEADER = re.compile(r"(?:^|/)(?:qt?svg|qgraphicssvg)", re.I)
+
+
+def check_qt_svg(rel: str, text: str, code: str, lines: _Lines) -> list[Violation]:
+    """qt-svg: Qt Svg headers (class, lower-case and module spellings) only in the icon baker."""
+    out = []
+    for m in _INCLUDE_OPEN.finditer(code):
+        close = ">" if m.group(1) == "<" else '"'
+        end = text.find(close, m.end())
+        newline = text.find("\n", m.end())
+        if end < 0 or 0 <= newline < end:
+            continue
+        name = text[m.end() : end].strip()
+        if _QT_SVG_HEADER.search(name):
+            out.append(Violation(rel, lines.line(m.start()), "qt-svg",
+                                 f"#include of {name}: Qt Svg is linked only by tools/icon_baker; the runtime "
+                                 f"draws baked icon atlases (ADR 0015)"))
+    return out
+
+
 def _skip_space_back(code: str, k: int) -> int:
     while k >= 0 and code[k] in " \t\r\n":
         k -= 1
@@ -1013,6 +1044,8 @@ def lint_file(repo: Path, rel: str, budget_ids: set[str] | None) -> list[Violati
             out += check_exe_search(rel, scanned.code, lines)
         if not _CPP26_EXEMPT_RE.match(rel):
             out += check_cpp26(rel, scanned.code, lines)
+        if not _QT_SVG_ALLOWED_RE.match(rel):
+            out += check_qt_svg(rel, text, scanned.code, lines)
     return out
 
 

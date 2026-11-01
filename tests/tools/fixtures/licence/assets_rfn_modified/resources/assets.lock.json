@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "description": "Synthetic asset manifest for the licensecheck asset gate tests.",
+  "assets": [
+    {
+      "id": "demo-font",
+      "name": "Demo Font",
+      "version": "1.0",
+      "url": "https://example.invalid/demo-font-1.0.zip",
+      "archive": "demo-font-1.0.zip",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "crossCheck": "Synthetic.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright 2026 The Demo Font Authors (https://example.invalid/demo)"
+      ],
+      "reservedFontNames": [
+        "Demo"
+      ],
+      "modified": true,
+      "homepage": "https://example.invalid/demo",
+      "dest": "resources/fonts/demo",
+      "licenceFile": "OFL.txt",
+      "files": [
+        {
+          "member": "fonts/Demo-Regular.ttf",
+          "path": "Demo-Regular.ttf",
+          "sha256": "51193162f6b1e2eabe5715a3273948e25c455a4331f19f3ad7e310386b4ea53a"
+        },
+        {
+          "member": "OFL.txt",
+          "path": "OFL.txt",
+          "sha256": "2fa52852e994ec7bd5ac824fab061357c772cd87af53e26b186c74ee7c0969af"
+        }
+      ],
+      "adr": "docs/adr/0015-demo.txt"
+    },
+    {
+      "id": "demo-icons",
+      "name": "Demo Icons",
+      "version": "2.0",
+      "url": "https://example.invalid/demo-icons-2.0.zip",
+      "archive": "demo-icons-2.0.zip",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "crossCheck": "Synthetic.",
+      "licence": "ISC AND MIT",
+      "copyright": [
+        "Copyright (c) 2026 Demo Icons Contributors"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://example.invalid/icons",
+      "dest": "resources/icons/demo",
+      "licenceFile": "LICENSE",
+      "files": [
+        {
+          "member": "icons/circle.svg",
+          "path": "circle.svg",
+          "sha256": "7d6f25d3d63fc9f382db992622fcebdda20de5deaff7e070020651c9af6de70c"
+        },
+        {
+          "member": "LICENSE",
+          "path": "LICENSE",
+          "sha256": "5112021d66043041a87d74c023ef6b9477acff72e68eb534b5cd5fed6c2c0673"
+        }
+      ],
+      "adr": "docs/adr/0015-demo.txt"
+    }
+  ]
+}

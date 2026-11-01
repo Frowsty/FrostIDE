@@ -1,0 +1,119 @@
+{
+  "name": "Glacier Dark",
+  "dark": true,
+  "author": "FrostIDE",
+  "colors": {
+    "window": "#111215",
+    "island": "#23252A",
+    "popup": "#2A2D33",
+    "field": "#1B1D21",
+    "text": "#DFE1E5",
+    "textSecondary": "#9DA3AD",
+    "textDisabled": "#6B7079",
+    "border": "#43474E",
+    "accent": "#5A9BFF",
+    "selection": "#2E4370",
+    "white": "#FFFFFF"
+  },
+  "ui": {
+    "MainWindow.background": "window",
+    "Island": {
+      "background": "island",
+      "borderColor": "#2C2F35",
+      "arc": 10,
+      "gap": 4
+    },
+    "Popup": {
+      "background": "popup",
+      "borderColor": "#3A3D44"
+    },
+    "Separator.color": "#34373D",
+    "Label": {
+      "foreground": "text",
+      "secondaryForeground": "textSecondary",
+      "disabledForeground": "textDisabled"
+    },
+    "Link.foreground": "#6CA2FF",
+    "Component": {
+      "borderColor": "border",
+      "focusColor": "accent",
+      "disabledBorderColor": "#34373D",
+      "arc": 4,
+      "focusWidth": 2,
+      "paddingH": 8
+    },
+    "Button": {
+      "background": "#2B2E34",
+      "hoverBackground": "#33363D",
+      "pressedBackground": "#3A3E46",
+      "arc": 6,
+      "height": 28,
+      "default": {
+        "background": "#3870D8",
+        "foreground": "white",
+        "hoverBackground": "#3166CC"
+      }
+    },
+    "TextField": {
+      "background": "field",
+      "placeholderForeground": "#8A909A",
+      "height": 28
+    },
+    "CheckBox.borderColor": "#737882",
+    "List": {
+      "hoverBackground": "popup",
+      "selectionBackground": "selection",
+      "selectionForeground": "white",
+      "selectionInactiveBackground": "#2C2F35",
+      "rowHeight": 24
+    },
+    "ScrollBar": {
+      "thumbColor": "#4A4E56",
+      "thumbHoverColor": "#5A5F68",
+      "trackColor": "#00000000",
+      "width": 10
+    },
+    "ToolTip.background": "popup",
+    "Menu.itemHeight": 26,
+    "TabbedPane.tabHeight": 36,
+    "StatusBar.height": 28,
+    "Layout": {
+      "margin": 8,
+      "spacing": 6
+    },
+    "Icon.size": 16,
+    "Toolbar.iconSize": 20,
+    "Font": {
+      "uiSize": 13,
+      "smallSize": 11
+    },
+    "Window.inactiveAlpha": 0.44
+  },
+  "compact": {
+    "Island.arc": 8,
+    "Island.gap": 3,
+    "Button.height": 24,
+    "TextField.height": 24,
+    "List.rowHeight": 20,
+    "Menu.itemHeight": 22,
+    "TabbedPane.tabHeight": 30,
+    "StatusBar.height": 24,
+    "ScrollBar.width": 8,
+    "Component.paddingH": 6,
+    "Layout.margin": 6,
+    "Layout.spacing": 4,
+    "Toolbar.iconSize": 16
+  },
+  "icons": {
+    "ColorPalette": {
+      "Icon.Default": "#B4B8BF",
+      "Icon.Secondary": "#8A909A",
+      "Icon.Accent": "accent",
+      "Icon.Error": "#F2716F",
+      "Icon.Warning": "#E8B04B",
+      "Icon.Success": "#5FB878",
+      "Icon.Disabled": "#5C6168",
+      "Icon.Selected": "white"
+    }
+  }
+}
