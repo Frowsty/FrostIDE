@@ -20,12 +20,15 @@ set(FROST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 # Named modules are banned in v1 (PLAN.md section 2.1), so skip CMake's C++20
 # module dependency scan; it would run clang-scan-deps over every file.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
-# Debug information embedded in objects (/Z7) instead of a shared PDB, so objects
-# stay cacheable by a compiler cache.
-# TODO(M0): run the Windows build through sccache (PLAN.md section 6.4); tools/env.ps1
-# puts it on PATH, but it is not yet set as the compiler launcher.
+# Debug information embedded in objects (/Z7) in every configuration, so each object
+# is self-contained and cacheable by sccache (FrostCompilerCache.cmake). clang-cl
+# embeds it for /Zi too and never writes a compile-time PDB, but /Z7 says so
+# explicitly; with cl.exe, /Zi's shared PDB would make compiles uncacheable.
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# sccache as the compiler launcher (FROST_SCCACHE); must come before the first target.
+include(FrostCompilerCache)
 
 option(FROST_BUILD_TESTS "Build the test suites" ON)
 option(FROST_BUILD_UI "Build Qt-based targets (src/ui, src/app)" ON)

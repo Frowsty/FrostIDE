@@ -37,6 +37,8 @@ $Downloads = Join-Path $SdkRoot '_downloads'
 # Free-space floors from PLAN.md section 7 (M0): stop before the system drive gets tight.
 $MinFreeSystemGB = 15
 $MinFreeSdkGB = 150
+# The oldest Python the repository checks run on (tomllib; tools/frost_lint.py checks it too).
+$MinPython = [version]'3.11'
 
 # Returns $true when the named component should be installed in this run.
 function Test-Wanted([string]$Name) {
@@ -123,19 +125,37 @@ function Invoke-NativeQuiet([scriptblock]$Command) {
     return (& $Command 2>$null)
 }
 
+# Throws unless $VersionText, the "major.minor.micro" that $Interpreter printed for
+# sys.version_info, is $MinPython or newer. Text that is not a version (an
+# interpreter that failed to start, say) also throws. $Venv is named in the message
+# because an existing venv keeps the interpreter it was created with.
+function Assert-PythonVersion([string]$VersionText, [string]$Interpreter, [string]$Venv) {
+    $text = "$VersionText".Trim()
+    if ($text -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+        throw "could not read the Python version of $Interpreter (got '$text')"
+    }
+    $version = [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+    if ($version -lt $MinPython) {
+        throw ("$Interpreter is Python $version, but the repository checks need Python $MinPython or newer " +
+               "(tomllib). Put a newer Python on PATH, delete $Venv and run the bootstrap again.")
+    }
+}
+
 # Creates the tooling venv ($SdkRoot\py) that runs qt-fetch.py and the repository
-# checks. Every tool uses the standard library only, so nothing is pip-installed. The
-# checks need Python 3.11 or newer (tomllib).
-# TODO(M0): fail here when the venv's interpreter is older than 3.11; it is not checked yet.
+# checks, and stops unless its interpreter is $MinPython or newer (checked on every
+# run, so an existing venv from an older Python is caught too). Every tool uses the
+# standard library only, so nothing is pip-installed.
 function Install-PythonTools {
     $venv = Join-Path $SdkRoot 'py'
     $python = Join-Path $venv 'Scripts\python.exe'
     if (-not (Test-Path $python)) {
         Write-Host '[python] creating venv'
         & python -m venv $venv
-        if ($LASTEXITCODE -ne 0) { throw 'python -m venv failed (is Python 3.11+ on PATH?)' }
+        if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (is Python $MinPython+ on PATH?)" }
     }
-    Write-Host "[python] venv ready: $(& $python --version)"
+    $versionText = Invoke-NativeQuiet { & $python -I -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" }
+    Assert-PythonVersion $versionText $python $venv
+    Write-Host "[python] venv ready: Python $("$versionText".Trim())"
 }
 
 # Installs the pinned Qt subset with tools/qt-fetch.py into $SdkRoot\qt; the

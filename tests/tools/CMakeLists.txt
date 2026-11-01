@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for the repository tools in tools/ (frost-lint, frost-licensecheck,
-# frost-featurecheck, corpus_fetch) and for tests/perf/budgets.json. They are Python
-# unittest suites over the fixtures in tests/tools/fixtures, registered with CTest
-# (label "unit") so they run in both verify legs. Standard library only; Python 3.11+
-# (tomllib). Each suite is one CTest test; git must be on PATH.
+# frost-featurecheck, corpus_fetch, and on Windows the PowerShell scripts bootstrap.ps1
+# and env.ps1) and for tests/perf/budgets.json. They are Python unittest suites over the
+# fixtures in tests/tools/fixtures, registered with CTest (label "unit") so they run in
+# both verify legs. Standard library only; Python 3.11+ (tomllib). Each suite is one
+# CTest test; git must be on PATH.
 
 # Prefer the SDK's Python on Windows (tools/bootstrap.ps1 creates it), so ctest uses the
 # same interpreter as tools/verify.ps1.
@@ -13,7 +14,12 @@ if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{
 endif()
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
-foreach(suite frost_lint licensecheck featurecheck corpus_fetch budgets)
+set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch budgets)
+if(WIN32)
+    # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.
+    list(APPEND _frost_tool_suites windows_scripts)
+endif()
+foreach(suite IN LISTS _frost_tool_suites)
     add_test(NAME tools.${suite}
         COMMAND ${Python3_EXECUTABLE} -B -m unittest -v test_${suite}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
