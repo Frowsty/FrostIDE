@@ -3,25 +3,42 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
-## 2026-11-01: m0/tracy, ADR 0009 after verification
+## 2026-11-01: m0/tracy, ADR 0009 after two verifications
 
 ### Done
-- ADR 0009 chooses Tracy 0.14.1 (the 2026.10.16 baseline's port, 0.14.1#1). The independent verification's
-  findings are handled: the threat model (a connected local process can read and corrupt the client's memory),
-  the shutdown order for manual lifetime, the warning counts (7 in Tracy's own TU on clang-cl, 0 in ours through
-  system includes), the pinning plan (an override in M1), and the per-zone cost of the prescribed task zones.
-- PLAN.md's dependency list now says tracy's version was chosen in M0 and its use is pending the listener
-  exception.
+- ADR 0009 chooses Tracy 0.14.1 (the 2026.10.16 baseline's port, 0.14.1#1). The first verification's findings
+  are handled: the threat model (a connected local process can read and corrupt the client's memory), the
+  shutdown order for manual lifetime, the warning counts, the pinning plan (an override in M1), and the
+  per-zone cost of the prescribed task zones.
+- The second verification's findings are handled:
+  - Tracy's symbol worker: with the port defaults it calls DbgHelp unlocked beside FrostIDE's own DbgHelp
+    users, rewrites `_NT_SYMBOL_PATH` and preloads symbols for every module. Item 5 now adds
+    `TRACY_NO_CALLSTACK` and `TRACY_NO_SYSTEM_TRACING`. Measured on both OSes under the `tracy-2` measurement
+    lock: no symbol worker, no DbgHelp, no environment change, a `ShutdownProfiler` that no longer depends on the
+    loaded modules (Windows p50 37.5–62.5 ms, against 151.1 ms with Qt loaded before), unchanged zone costs,
+    and 0 warnings in Tracy's own TU on clang-cl.
+  - The shutdown figures now give load, loaded modules and time since start, and B20's bullet says they are
+    load-dependent.
+  - The dev-only manifest feature is required, with its own install tree; the release SBOM names only the
+    release preset's tree.
+  - The override's precondition (the port tree must be in the vcpkg clone) is stated.
+  - The process counts in the conditions are corrected.
+- PLAN.md is unchanged on this branch. The previous round's edit of the Dependencies line was reverted: the
+  wording is a question for the user, not a change made without approval.
 
 ### Next
 - M1 work list in ADR 0009, only once the user grants the listener exception.
 
 ### Blockers
-- None.
+- Any use of Tracy (the whole M1 work list in ADR 0009) is blocked on the listener exception (question 1).
+  Nothing in M0 is blocked: the branch adds only the ADR and this entry.
 
 ### Questions for the user
-- ADR 0009: grant or decline the listener exception for Tracy (an unauthenticated 127.0.0.1 TCP listener in dev
-  builds, started only by an explicit per-run opt-in); confirm that budget and perf runs never start Tracy.
+1. ADR 0009: grant or decline the listener exception for Tracy (an unauthenticated 127.0.0.1 TCP listener in
+   dev builds, started only by an explicit per-run opt-in).
+2. Confirm the new rule that budget and perf runs (`frost-bench`, `verify -Perf`) never start Tracy.
+3. Optional: PLAN.md 2.1 lists "tracy (pinned in M0)". Should it read "tracy (version chosen in M0: 0.14.1 from
+   the vcpkg baseline; use pending the listener exception in ADR 0009)"? Not applied.
 
 ## 2026-10-31: M0 bootstrap, session 1
 
