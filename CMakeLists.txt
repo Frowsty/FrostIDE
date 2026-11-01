@@ -148,6 +148,13 @@ if(FROST_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
     include(GoogleTest)
 endif()
+# RE2 and utf8proc (frost::text_editor, ADR 0025), found here so that FrostLayers' deferred graph
+# check in the top-level directory resolves re2::re2 and utf8proc::utf8proc. Fuzz trees install no
+# vcpkg ports and build no editor model, hence the guard (an undefined FROST_FUZZ is false).
+if(NOT FROST_FUZZ)
+    find_package(re2 CONFIG REQUIRED)
+    find_package(utf8proc CONFIG REQUIRED)
+endif()
 include(FrostFuzz)
 
 add_subdirectory(src)

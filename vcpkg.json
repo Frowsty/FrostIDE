@@ -6,6 +6,8 @@
   "license": "Apache-2.0",
   "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
-    { "name": "gtest", "version>=": "1.18.0" }
+    { "name": "gtest", "version>=": "1.18.0" },
+    { "name": "re2", "version>=": "2025-11-05" },
+    { "name": "utf8proc", "version>=": "2.12.0" }
   ]
 }
