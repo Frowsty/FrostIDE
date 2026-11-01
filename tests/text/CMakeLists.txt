@@ -129,3 +129,7 @@ frost_add_test(text_encoding_perf_tests
     LABELS perf)
 target_include_directories(text_encoding_perf_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(text_encoding_perf_tests PRIVATE ${frost_encoding_test_dirs})
+
+# The editor model's tests (frost::text_editor, ADR 0025) live in editor/, so they carry this
+# directory's mod.text label (frost_add_test_directory).
+add_subdirectory(editor)

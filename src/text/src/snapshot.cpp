@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Snapshot, ChunkRange and LineCursor (frost/text/snapshot.hpp). The special members live here so
-// that the Storage type stays private; the queries delegate to piece_tree.cpp.
+// Snapshot, ChunkRange, ReverseChunkRange and LineCursor (frost/text/snapshot.hpp). The special
+// members live here so that the Storage type stays private; the queries delegate to piece_tree.cpp.
 
 #include "frost/text/snapshot.hpp"
 
@@ -131,6 +131,12 @@ ChunkRange Snapshot::chunks(ByteRange range) const noexcept {
     return ChunkRange(*this, range);
 }
 
+ReverseChunkRange Snapshot::reversedChunks(ByteRange range) const noexcept {
+    FROST_PRE(range.begin <= range.end && range.end <= size());
+    FROST_PRE(isCharBoundary(range.begin) && isCharBoundary(range.end));
+    return ReverseChunkRange(*this, range);
+}
+
 std::string_view Snapshot::chunkAt(ByteOffset offset) const noexcept {
     FROST_PRE(offset <= size());
     if (offset == size()) {
@@ -176,6 +182,40 @@ ChunkRange::Iterator& ChunkRange::Iterator::operator++() noexcept {
     const std::string_view piece = m_cursor.item()->view();
     const std::uint64_t pieceStart = m_cursor.prefix().bytes;
     m_chunk = piece.substr(0, static_cast<std::size_t>(std::min<std::uint64_t>(m_end - pieceStart, piece.size())));
+    return *this;
+}
+
+ReverseChunkRange::ReverseChunkRange(Snapshot snapshot, ByteRange range) noexcept
+    : m_snapshot(std::move(snapshot)), m_range(range) {}
+
+ReverseChunkRange::Iterator ReverseChunkRange::begin() const noexcept {
+    Iterator it;
+    if (m_range.empty()) {
+        return it;
+    }
+    it.m_tree = &m_snapshot.pieceTree();
+    it.m_begin = m_range.begin.value();
+    it.load(m_range.end.value());
+    return it;
+}
+
+void ReverseChunkRange::Iterator::load(std::uint64_t end) noexcept {
+    // The piece holding the byte before `end`; pieces end on char boundaries, so the chunk is
+    // valid UTF-8 whenever m_begin is a char boundary.
+    const detail::PieceTree::Cursor cursor = detail::seekByte(*m_tree, end - 1);
+    const std::string_view piece = cursor.item()->view();
+    const std::uint64_t pieceStart = cursor.prefix().bytes;
+    m_chunkStart = std::max(pieceStart, m_begin);
+    m_chunk =
+        piece.substr(static_cast<std::size_t>(m_chunkStart - pieceStart), static_cast<std::size_t>(end - m_chunkStart));
+}
+
+ReverseChunkRange::Iterator& ReverseChunkRange::Iterator::operator++() noexcept {
+    if (m_chunkStart <= m_begin) {
+        m_chunk = {};
+        return *this;
+    }
+    load(m_chunkStart);
     return *this;
 }
 
