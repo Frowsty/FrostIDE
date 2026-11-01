@@ -52,8 +52,10 @@ namespace frost::text {
  * Both calls accept any input size: implementations chunk internally, and the Windows codec keeps
  * every API call at or below 64 KiB, inside int. Both start from the initial state (M1's pages are
  * stateless) and append to their output. On error the appended part is unspecified and the caller
- * discards it. Errors are platform failures only, never invalid input: Internal or Unsupported,
- * built with io::lastWin32Error or io::errnoError.
+ * discards it. Errors are platform failures only, never invalid input: Internal, whose message
+ * keeps the OS error's (io::win32Error or io::errnoError text), or Unsupported. decodeLegacy and
+ * encodeLegacy report any other code a codec returns as Internal, so a caller never mistakes a
+ * platform failure for InvalidArgument ("no reversible mapping", text_file.hpp).
  *
  * Lifetime: info() refers to static storage for platform codecs and to the provider's storage for
  * test doubles, so a codec must not outlive its provider. Thread safety: an ITextCodec is
@@ -83,9 +85,13 @@ protected:
  * Opens codecs. Interfaces are passed by reference and never deleted through the base (the
  * IFileSystem pattern: a protected non-virtual destructor). open() is thread-safe for the platform
  * provider; test doubles document their own rules.
- * Errors: Unsupported when `codePage` is not in supportedCodePages(), or when the platform lacks it
- * ("iconv has no converter for CP932; install the glibc gconv modules", for example
- * glibc-gconv-extra on Fedora).
+ * Errors:
+ *   - Unsupported when `codePage` is not in supportedCodePages(), or when the platform lacks it
+ *     (IsValidCodePage fails; iconv_open fails with EINVAL: "iconv has no converter for CP932;
+ *     install the glibc gconv modules", for example glibc-gconv-extra on Fedora);
+ *   - Internal, with the OS error's text, when the platform fails to open a converter it has
+ *     (iconv_open's EMFILE, ENFILE or ENOMEM). Detection and the loader skip only Unsupported
+ *     pages and report this error.
  */
 class ITextCodecProvider {
 public:
@@ -119,7 +125,8 @@ protected:
  *      byte.
  * Stats as in DecodeStats (unicode_codec.hpp). The split invariance of appendUtf8Lossy holds.
  * Errors:
- *   - the codec's own errors, with the context "while decoding <name>";
+ *   - the codec's own errors, with the context "while decoding <name>": Unsupported stays, any
+ *     other code becomes Internal (its message keeps the codec's);
  *   - Internal if the codec reports more bytes consumed than it was given, or appends ill-formed
  *     UTF-8.
  * Thread safety: as the codec (single-threaded). O(n + calls); calls is linear in n (ADR 0018,
@@ -136,8 +143,11 @@ protected:
  *   - nullopt when everything was encoded (appended to `bytes`);
  *   - otherwise the offset in `utf8` of the first unencodable character, with `bytes` holding the
  *     encoding of everything before it.
- * Errors: the codec's errors, and Internal for contract breaches. Precondition: `utf8` is
- * well-formed (FROST_PRE is not evaluated; a codec may report Internal).
+ * Errors: the codec's errors as in decodeLegacy (Unsupported, or Internal), and Internal for
+ * contract breaches. Precondition: `utf8` is well-formed. It is not validated up front (that would
+ * add a pass), so ill-formed input is never reported as an error: a truncated sequence fails a
+ * FROST_ASSERT where a scalar is decoded (at a stop, or in the Windows codec's conversion to
+ * UTF-16), and other ill-formed bytes give unspecified output or an unspecified stop.
  * O(n + stops): per chunk of at most 4 KiB, one encodePrefix and one decodePrefix check, plus O(1)
  * calls per stop.
  */

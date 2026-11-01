@@ -52,36 +52,23 @@ std::size_t finish(std::string& out, DecodeStats& stats, std::size_t outStart, s
  */
 std::size_t maximalSubpart(std::string_view b, std::size_t i, bool& atEnd) noexcept {
     atEnd = false;
-    const std::uint8_t b0 = octetAt(b, i);
     // Table 3-7: the length and the second-byte range follow from the lead byte.
-    std::size_t length = 0;
-    std::uint8_t lo = 0x80;
-    std::uint8_t hi = 0xBF;
-    if (b0 >= 0xC2 && b0 <= 0xDF) {
-        length = 2;
-    } else if (b0 >= 0xE0 && b0 <= 0xEF) {
-        length = 3;
-        lo = b0 == 0xE0 ? 0xA0 : 0x80;
-        hi = b0 == 0xED ? 0x9F : 0xBF;
-    } else if (b0 >= 0xF0 && b0 <= 0xF4) {
-        length = 4;
-        lo = b0 == 0xF0 ? 0x90 : 0x80;
-        hi = b0 == 0xF4 ? 0x8F : 0xBF;
-    } else {
+    const detail::SequenceShape shape = detail::multiByteShape(octetAt(b, i));
+    if (shape.length == 0) {
         return 1; // 80..C1 and F5..FF never start a sequence.
     }
     std::size_t k = 1;
     if (i + 1 < b.size()) {
         const std::uint8_t b1 = octetAt(b, i + 1);
-        if (b1 >= lo && b1 <= hi) {
+        if (b1 >= shape.secondLow && b1 <= shape.secondHigh) {
             k = 2;
-            while (k < length && i + k < b.size() && detail::isContinuation(octetAt(b, i + k))) {
+            while (k < shape.length && i + k < b.size() && detail::isContinuation(octetAt(b, i + k))) {
                 ++k;
             }
         }
     }
     // validUtf8Prefix stopped at i, so the sequence is not complete there.
-    FROST_ASSERT(k < length);
+    FROST_ASSERT(k < shape.length);
     atEnd = i + k == b.size();
     return k;
 }

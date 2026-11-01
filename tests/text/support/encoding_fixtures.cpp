@@ -297,6 +297,23 @@ std::vector<EncodingFixture> buildFixtures() {
         f.consentBytes = fromHex("fe ff 00 41 ff fd");
         all.push_back(std::move(f));
     }
+    { // 20. A Replaced legacy load: windows-1253 leaves AA undefined on both OSes (probe F1), so
+        // the override gives U+FFFD, and even AcceptLoss fails (U+FFFD has no mapping, D6).
+        EncodingFixture f = make("cp1253-undefined", "cp1253-undefined.txt", fromHex("61 aa 62 0a"));
+        f.override = Encoding::legacy(1253);
+        f.encoding = Encoding::legacy(1253);
+        f.source = DetectionSource::UserOverride;
+        f.minConfidence = 100;
+        f.eol = {1, 0, 0};
+        f.separator = LineSeparator::Lf;
+        f.loss = LossKind::Replaced;
+        f.replacements = 1;
+        f.firstLossFileOffset = 1;
+        f.firstLossTextOffset = 1;
+        f.text = fromU8(u8"a\ufffdb\n");
+        f.consentUnencodable = true;
+        all.push_back(std::move(f));
+    }
     return all;
 }
 
@@ -327,10 +344,12 @@ LoadOptions fixtureOptions(const EncodingFixture& f) {
 }
 
 std::string fuzzSeedHeader(const EncodingFixture& f) {
-    // Byte 0: bits 0-2 the override (0 none, 1 UTF-8, 2 UTF-16LE, 3 UTF-16BE, 4 UTF-32LE,
-    // 5 UTF-32BE, 6 cp1252, 7 cp932); bit 3 clear: platform codecs; bits 4-5 the legacy code page
-    // (0 1252, 1 932, 2 1251, 3 437); bits 6-7 clear: no buffer limit. Byte 1: the fake seed.
-    // Byte 2: 255, the default sample size.
+    /*
+     * Byte 0: bits 0-2 the override (0 none, 1 UTF-8, 2 UTF-16LE, 3 UTF-16BE, 4 UTF-32LE,
+     * 5 UTF-32BE, 6 cp1252, 7 cp932); bit 3 clear: platform codecs; bits 4-5 the legacy code page
+     * (0 1252, 1 932, 2 1251, 3 437); bits 6-7 clear: no buffer limit. Byte 1: the fake seed.
+     * Byte 2: 255, the default sample size.
+     */
     unsigned overrideBits = 0;
     if (f.override) {
         switch (f.override->form) {

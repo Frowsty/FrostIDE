@@ -49,9 +49,49 @@ constexpr std::size_t kNulLoDenominator = 20; // 0.05 = 1/20
 
 constexpr std::uint16_t kWindows1252 = 1252;
 
-bool canOpen(ITextCodecProvider& codecs, std::uint16_t codePage) noexcept {
-    return findCodePage(codePage) != nullptr && codecs.open(codePage).has_value();
-}
+/*
+ * The codecs one detection opens: at most one open per distinct code page, and at most three pages
+ * (the default encoding, the legacy page and 1252), so the availability probe and the sample
+ * decode share an open. A page is available unless it is outside the table or the provider reports
+ * Unsupported: any other open failure keeps the page, so the loader opens it again and reports the
+ * error if it gets there (text_file.hpp) instead of detection hiding it.
+ */
+class DetectionCodecs {
+public:
+    explicit DetectionCodecs(ITextCodecProvider& codecs) : m_codecs(codecs) { m_entries.reserve(3); }
+
+    [[nodiscard]] bool available(std::uint16_t codePage) noexcept {
+        if (findCodePage(codePage) == nullptr) {
+            return false;
+        }
+        const Result<std::unique_ptr<ITextCodec>>& opened = open(codePage);
+        return opened.has_value() || opened.error().code() != ErrorCode::Unsupported;
+    }
+
+    // The page's codec, or nullptr when its open failed. Only for pages in the table.
+    [[nodiscard]] ITextCodec* codec(std::uint16_t codePage) noexcept {
+        const Result<std::unique_ptr<ITextCodec>>& opened = open(codePage);
+        return opened.has_value() ? opened->get() : nullptr;
+    }
+
+private:
+    struct Entry {
+        std::uint16_t codePage = 0;
+        Result<std::unique_ptr<ITextCodec>> opened;
+    };
+
+    const Result<std::unique_ptr<ITextCodec>>& open(std::uint16_t codePage) noexcept {
+        for (const Entry& entry : m_entries) {
+            if (entry.codePage == codePage) {
+                return entry.opened;
+            }
+        }
+        return m_entries.emplace_back(Entry{codePage, m_codecs.open(codePage)}).opened;
+    }
+
+    ITextCodecProvider& m_codecs;
+    std::vector<Entry> m_entries; // At most 3.
+};
 
 bool isUtf16Or32(Encoding encoding) noexcept {
     return encoding.form == EncodingForm::Utf16Le || encoding.form == EncodingForm::Utf16Be ||
@@ -161,8 +201,9 @@ EncodingDetection detectEncoding(std::string_view bytes, const DetectOptions& op
 
     // 0. Effective defaults: values from settings are never preconditions (D7). Codecs are opened
     // only after the BOM check, so a BOM costs no codec open.
+    DetectionCodecs pages(codecs);
     Encoding def = options.defaultEncoding;
-    if (!isAsciiCompatible(def) || (def.form == EncodingForm::CodePage && !canOpen(codecs, def.codePage))) {
+    if (!isAsciiCompatible(def) || (def.form == EncodingForm::CodePage && !pages.available(def.codePage))) {
         def = Encoding::utf8();
     }
 
@@ -185,8 +226,8 @@ EncodingDetection detectEncoding(std::string_view bytes, const DetectOptions& op
     }
 
     const std::optional<std::uint16_t> legacy =
-        canOpen(codecs, options.legacyCodePage) ? std::optional<std::uint16_t>(options.legacyCodePage) : std::nullopt;
-    const bool have1252 = canOpen(codecs, kWindows1252);
+        pages.available(options.legacyCodePage) ? std::optional<std::uint16_t>(options.legacyCodePage) : std::nullopt;
+    const bool have1252 = pages.available(kWindows1252);
 
     // 4. Valid UTF-8 (a sequence the cut splits counts as valid).
     const std::size_t valid = io::validUtf8Prefix(sample);
@@ -222,26 +263,28 @@ EncodingDetection detectEncoding(std::string_view bytes, const DetectOptions& op
     // 5. Not UTF-8: rank the legacy candidates by whether they decode the sample cleanly.
     std::vector<EncodingGuess> clean;
     std::vector<EncodingGuess> dirty;
-    std::uint16_t pages[2] = {0, 0};
+    std::uint16_t ranked[2] = {0, 0};
     std::size_t pageCount = 0;
     if (legacy) {
-        pages[pageCount++] = *legacy;
+        ranked[pageCount++] = *legacy;
     }
     if (have1252 && (!legacy || *legacy != kWindows1252)) {
-        pages[pageCount++] = kWindows1252;
+        ranked[pageCount++] = kWindows1252;
     }
     std::string scratch;
     for (std::size_t p = 0; p < pageCount; ++p) {
-        auto codec = codecs.open(pages[p]);
-        if (!codec) {
-            continue; // canOpen succeeded a moment ago; a provider that fails now is skipped too.
+        const Encoding encoding = Encoding::legacy(ranked[p]);
+        ITextCodec* const codec = pages.codec(ranked[p]);
+        if (codec == nullptr) {
+            // Available but its open failed (not Unsupported): lossy, so the loader reports the error.
+            dirty.push_back({encoding, false, kLossyConfidence, DetectionSource::Lossy});
+            continue;
         }
         scratch.clear();
         DecodeStats stats;
-        const Result<std::size_t> consumed = decodeLegacy(**codec, sample, scratch, stats, tail);
-        const Encoding encoding = Encoding::legacy(pages[p]);
+        const Result<std::size_t> consumed = decodeLegacy(*codec, sample, scratch, stats, tail);
         if (consumed && stats.replacements == 0) {
-            const CodePageInfo& info = (*codec)->info();
+            const CodePageInfo& info = codec->info();
             const std::uint8_t confidence =
                 info.isDoubleByte()
                     ? static_cast<std::uint8_t>(

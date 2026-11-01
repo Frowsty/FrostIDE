@@ -144,6 +144,17 @@ TEST(EncodingRoundTrip, FixturesByteExact) {
             ASSERT_FALSE(saved.has_value());
             EXPECT_EQ(saved.error().code(), ErrorCode::Corrupt);
             auto consent = frost::text::encodeForSave(text, e, SaveConsent::AcceptLoss);
+            if (f.consentUnencodable) {
+                // A Replaced legacy load: U+FFFD has no mapping in any M1 page (D6, D10).
+                ASSERT_FALSE(consent.has_value());
+                EXPECT_EQ(consent.error().code(), ErrorCode::InvalidArgument);
+                ASSERT_TRUE(f.firstLossTextOffset.has_value());
+                EXPECT_NE(consent.error().message().find(std::format("U+FFFD at byte {}", *f.firstLossTextOffset)),
+                          std::string::npos)
+                    << consent.error().message();
+                EXPECT_TRUE(f.consentBytes.empty());
+                continue;
+            }
             ASSERT_TRUE(consent.has_value()) << consent.error().describe();
             EXPECT_EQ(toHex(*consent), toHex(f.consentBytes));
             EXPECT_NE(*consent, *bytes);

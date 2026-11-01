@@ -67,10 +67,12 @@ private:
     std::unique_ptr<Data> m_data;
 };
 
-// A random single-byte page: ASCII 00..7F as itself, then 80..FF with some undefined bytes,
-// some windowsOnlyC1 bytes in 80..9F (undefined, as glibc has them, or defined as U+00bb, as
-// Windows has them) and scalars from several scripts (2-, 3- and 4-byte UTF-8, never C1 or
-// surrogates).
+/*
+ * A random single-byte page: ASCII 00..7F as itself, then 80..FF with some undefined bytes,
+ * some windowsOnlyC1 bytes in 80..9F (undefined, as glibc has them, or defined as U+00bb, as
+ * Windows has them) and scalars from several scripts (2-, 3- and 4-byte UTF-8, never C1 or
+ * surrogates).
+ */
 [[nodiscard]] FakeCodePage randomSbcs(sched::detail::SplitMix64& rng);
 // A random double-byte page: randomSbcs's single bytes outside 1-3 lead ranges in 81..FE, pairs
 // for trails 40..FE with some undefined pairs, valid and invalid ASCII trails, and a few duplicate
@@ -88,10 +90,12 @@ public:
     // table) and the codec's info() is the page's info with codePage set to the id.
     void serve(std::shared_ptr<const FakeCodePage> page, std::uint16_t codePage);
 
-    // Fault knobs. failOpen makes open(codePage) fail with `code`. failDecodeAfter(calls) lets
-    // `calls` decodePrefix calls (counted from now, over all codecs) succeed and fails every later
-    // one with `code`; failEncodeAfter does the same for encodePrefix. overconsume makes
-    // decodePrefix report one byte more than it was given; illFormedOutput makes it append C0 80.
+    /*
+     * Fault knobs. failOpen makes open(codePage) fail with `code`. failDecodeAfter(calls) lets
+     * `calls` decodePrefix calls (counted from now, over all codecs) succeed and fails every later
+     * one with `code`; failEncodeAfter does the same for encodePrefix. overconsume makes
+     * decodePrefix report one byte more than it was given; illFormedOutput makes it append C0 80.
+     */
     void failOpen(std::uint16_t codePage, ErrorCode code);
     void failDecodeAfter(std::uint64_t calls, ErrorCode code);
     void failEncodeAfter(std::uint64_t calls, ErrorCode code);

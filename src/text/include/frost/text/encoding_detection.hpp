@@ -63,11 +63,11 @@ struct EncodingGuess {
 // Detection options. Defaults suit production; tests set legacyCodePage explicitly.
 struct DetectOptions {
     // For empty and ASCII-only samples. It usually comes from settings, so it is not a
-    // precondition: a value that is not ASCII-compatible (UTF-16/32), or whose codec `codecs`
-    // cannot open, is replaced by UTF-8.
+    // precondition: a value that is not ASCII-compatible (UTF-16/32), or a code page outside the
+    // table or reported Unsupported by `codecs`, is replaced by UTF-8.
     Encoding defaultEncoding = Encoding::utf8();
-    // The first legacy candidate. A value outside the table, or one `codecs` cannot open, is
-    // skipped, and 1252 remains.
+    // The first legacy candidate. A value outside the table, or one `codecs` reports Unsupported
+    // for, is skipped, and 1252 remains.
     std::uint16_t legacyCodePage = defaultLegacyCodePage();
     // Bytes inspected without a BOM. FROST_PRE: >= 16 (a test and fuzz knob).
     std::size_t sampleBytes = kDetectSampleBytes;
@@ -75,8 +75,9 @@ struct DetectOptions {
 
 // The ranked candidates of one detection.
 struct EncodingDetection {
-    // Ranked, best first, never empty (UTF-8 always appears unless a BOM decided), no duplicate
-    // encodings, at most 4.
+    // Ranked, best first, never empty, no duplicate encodings, at most 4. UTF-8 appears in every
+    // list except three: a BOM's (its form, plus UTF-16LE after FF FE 00 00), an empty file's
+    // (only the default encoding, which may be a code page) and a NUL pattern's (only UTF-16).
     std::vector<EncodingGuess> candidates;
     // The sample holds a 0x00 byte and the top candidate is not UTF-16 or UTF-32.
     bool binaryLikely = false;
@@ -86,10 +87,13 @@ struct EncodingDetection {
  * Ranks the encodings `bytes` may be in (the algorithm above; ADR 0018, D7). It reads at most the
  * BOM and the first sampleBytes; it also uses bytes.size() (the BOM rule, and whether the sample
  * was cut), so pass a view of the whole file. That suits mapped views (m1/large-file). Code pages
- * that `codecs` cannot open are left out. Deterministic. Precondition: options.sampleBytes >= 16.
+ * outside the table, or that `codecs` reports Unsupported, are left out; a page whose open fails
+ * otherwise stays a candidate (ranked lossy when the sample needed it), so the loader reports the
+ * failure if it reaches the page. Deterministic. Precondition: options.sampleBytes >= 16.
  * Thread safety: as safe as `codecs` (platformCodecs() is thread-safe).
  * Cost: O(min(n, sampleBytes)) plus one strict decode of the sample per legacy candidate (at most
- * 2) and up to 3 codec opens. Budget: B15.
+ * 2) and at most 3 codec opens, one per distinct page among the default encoding, the legacy page
+ * and 1252 (none when a BOM decides). Budget: B15.
  */
 [[nodiscard]] EncodingDetection detectEncoding(std::string_view bytes, const DetectOptions& options,
                                                ITextCodecProvider& codecs) noexcept;

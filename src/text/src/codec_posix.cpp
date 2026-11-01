@@ -45,15 +45,32 @@ constexpr std::size_t kMaxWindow = 64 * 1024;
 bool isInvalid(iconv_t cd) noexcept { return cd == reinterpret_cast<iconv_t>(-1); }
 
 /*
- * Serialises iconv_open and iconv_close. They load and unload gconv modules through glibc's dynamic
- * loader, which has its own lock, but ThreadSanitizer cannot see that lock (glibc is not
- * instrumented) and reports the loader's allocations on two threads as a data race
- * (EncodingConcurrency.PlatformCodecsInParallel under TSan). With this mutex, which it can see,
- * every load and unload is ordered. Each codec opens and closes once, so it is rarely contended;
- * conversions (iconv) run outside it. Constant-initialised and trivially destructible (libstdc++
- * defines __GTHREAD_MUTEX_INIT on Linux): no global constructor, no exit-time destructor.
+ * Workaround (ThreadSanitizer, not correctness): serialises iconv_open and iconv_close.
+ *   - Why: they load and unload gconv modules through glibc's dynamic loader, which has its own
+ *     lock, but ThreadSanitizer cannot see that lock (glibc is not instrumented, and gconv's
+ *     internal loads do not go through TSan's dlopen/dlclose interceptors). It reports the
+ *     loader's allocations on two threads (_dl_new_object in one thread's iconv_open,
+ *     _dl_close_worker in another's iconv_close) as a data race:
+ *     EncodingConcurrency.PlatformCodecsInParallel and EncodingStress.LosslessProperty.
+ *   - Tool versions: LLVM 23.1.4 TSan with glibc 2.39-0ubuntu8.9 (Ubuntu 24.04, WSL).
+ *   - Issue link: none; no upstream report was found on 2026-11-01 (ADR 0018 lists filing one as
+ *     a question for the user). No suppression file is used instead.
+ *   - Removal condition: drop the mutex once both tests pass under TSan without it on the pinned
+ *     toolchain (a TSan that sees glibc's loader lock, or a glibc that loads gconv modules through
+ *     the public dlopen), or if a profile shows it contended.
+ * It guards nothing of ours. With it, every module load and unload is ordered in a way TSan sees.
+ * Each codec opens and closes once, so it is rarely contended; conversions (iconv) run outside it.
+ * Constant-initialised and trivially destructible (libstdc++ defines __GTHREAD_MUTEX_INIT on
+ * Linux): no global constructor, no exit-time destructor.
  */
 constinit std::mutex gGconvMutex;
+
+// A conversion failure other than EILSEQ, EINVAL or E2BIG (ITextCodec: platform failures are
+// Internal): io's mapping of errno would read as invalid input, so only its message is kept.
+std::unexpected<Error> platformFailure(int error, std::string_view operation) {
+    return fail(ErrorCode::Internal,
+                std::format("the iconv converter failed: {}", io::errnoError(error, operation).message()));
+}
 
 class IconvCodec final : public ITextCodec {
 public:
@@ -126,7 +143,7 @@ private:
                     break;
                 }
                 out.resize(start);
-                return std::unexpected(io::errnoError(error, "iconv"));
+                return platformFailure(error, "iconv");
             }
             const std::size_t consumed = static_cast<std::size_t>(inPtr - in.data()) - pos;
             pos += consumed;
@@ -155,7 +172,7 @@ private:
                 continue;
             }
             out.resize(start);
-            return std::unexpected(io::errnoError(error, "iconv"));
+            return platformFailure(error, "iconv");
         }
         out.resize(used);
         return pos;
@@ -193,14 +210,21 @@ public:
             }
         }
         if (isInvalid(toUtf8) || isInvalid(fromUtf8)) {
-            return unsupported(*info, error);
+            return openFailure(*info, error);
         }
         return std::unique_ptr<ITextCodec>(std::make_unique<IconvCodec>(*info, toUtf8, fromUtf8));
     }
 
 private:
-    static std::unexpected<Error> unsupported(const CodePageInfo& info, int error) {
-        Error base = io::errnoError(error, "iconv_open", info.iconvName);
+    // iconv_open's EINVAL means the conversion is not available here: Unsupported with the gconv
+    // hint. Any other errno (EMFILE, ENFILE, ENOMEM) is a platform failure: Internal, so callers
+    // report it instead of skipping the page.
+    static std::unexpected<Error> openFailure(const CodePageInfo& info, int error) {
+        const Error base = io::errnoError(error, "iconv_open", info.iconvName);
+        if (error != EINVAL) {
+            return fail(ErrorCode::Internal, std::format("iconv could not open its {} converter ({}): {}",
+                                                         info.iconvName, info.name, base.message()));
+        }
         return fail(ErrorCode::Unsupported,
                     std::format("iconv has no converter for {} ({}); install the glibc gconv modules "
                                 "(glibc-gconv-extra on Fedora): {}",

@@ -3,7 +3,8 @@
 // Private Unicode helpers of frost::text's codecs (ADR 0018), shared by unicode_codec.cpp,
 // legacy_codec.cpp, text_file.cpp, encoding_detection.cpp and codec_win.cpp: scalar-to-UTF-8
 // encoding, decoding one scalar of well-formed UTF-8, UTF-16 units to UTF-8, char-boundary
-// helpers and the proper-prefix test of the streaming decoders. Not public API. Header-only, pure
+// helpers, table 3-7's lead-byte shapes and the proper-prefix test of the streaming decoders.
+// Not public API. Header-only, pure
 // and thread-safe; the bit layouts are the Unicode Standard's (chapter 3, table 3-6 and 3-7).
 #pragma once
 
@@ -78,6 +79,32 @@ inline void appendScalarUtf8(char32_t scalar, std::string& out) noexcept {
     return i;
 }
 
+// The shape table 3-7 gives a multi-byte sequence by its lead byte: the sequence length (2-4) and
+// the range of its second byte; later bytes are always 80..BF. Length 0: the byte cannot start a
+// multi-byte sequence (00..C1, F5..FF).
+struct SequenceShape {
+    std::size_t length = 0;
+    std::uint8_t secondLow = 0x80;
+    std::uint8_t secondHigh = 0xBF;
+};
+
+// The one copy of table 3-7's lead-byte rows, shared by the lossy UTF-8 decoder's maximal subparts
+// and isProperUtf8Prefix (detection's cut samples). O(1).
+[[nodiscard]] constexpr SequenceShape multiByteShape(std::uint8_t lead) noexcept {
+    if (lead >= 0xC2 && lead <= 0xDF) {
+        return {2, 0x80, 0xBF};
+    }
+    if (lead >= 0xE0 && lead <= 0xEF) {
+        return {3, lead == 0xE0 ? std::uint8_t{0xA0} : std::uint8_t{0x80},
+                lead == 0xED ? std::uint8_t{0x9F} : std::uint8_t{0xBF}};
+    }
+    if (lead >= 0xF0 && lead <= 0xF4) {
+        return {4, lead == 0xF0 ? std::uint8_t{0x90} : std::uint8_t{0x80},
+                lead == 0xF4 ? std::uint8_t{0x8F} : std::uint8_t{0xBF}};
+    }
+    return {};
+}
+
 /*
  * True when `tail` (1..3 bytes) is a proper prefix of a well-formed UTF-8 sequence (table 3-7): a
  * valid lead byte whose second byte, if present, is in the lead's second-byte range and whose
@@ -88,30 +115,14 @@ inline void appendScalarUtf8(char32_t scalar, std::string& out) noexcept {
     if (tail.empty() || tail.size() > 3) {
         return false;
     }
-    const std::uint8_t b0 = octetAt(tail, 0);
-    std::uint8_t lo = 0x80;
-    std::uint8_t hi = 0xBF;
-    std::size_t length = 0;
-    if (b0 >= 0xC2 && b0 <= 0xDF) {
-        length = 2;
-    } else if (b0 >= 0xE0 && b0 <= 0xEF) {
-        length = 3;
-        lo = b0 == 0xE0 ? 0xA0 : 0x80;
-        hi = b0 == 0xED ? 0x9F : 0xBF;
-    } else if (b0 >= 0xF0 && b0 <= 0xF4) {
-        length = 4;
-        lo = b0 == 0xF0 ? 0x90 : 0x80;
-        hi = b0 == 0xF4 ? 0x8F : 0xBF;
-    } else {
-        return false;
-    }
-    if (tail.size() >= length) {
+    const SequenceShape shape = multiByteShape(octetAt(tail, 0));
+    if (shape.length == 0 || tail.size() >= shape.length) {
         return false;
     }
     for (std::size_t k = 1; k < tail.size(); ++k) {
         const std::uint8_t b = octetAt(tail, k);
-        const std::uint8_t low = k == 1 ? lo : std::uint8_t{0x80};
-        const std::uint8_t high = k == 1 ? hi : std::uint8_t{0xBF};
+        const std::uint8_t low = k == 1 ? shape.secondLow : std::uint8_t{0x80};
+        const std::uint8_t high = k == 1 ? shape.secondHigh : std::uint8_t{0xBF};
         if (b < low || b > high) {
             return false;
         }

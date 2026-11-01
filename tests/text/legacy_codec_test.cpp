@@ -268,6 +268,9 @@ TEST(LegacyDriver, CallCountsLinear) {
     }
 }
 
+// ITextCodec's errors are Internal or Unsupported: the driver keeps Unsupported and reports any
+// other code as Internal with the codec's code and message, so InvalidArgument can only ever mean
+// an unencodable character to encodeForSave's callers (review of 22cbc80).
 TEST(LegacyDriver, CodecDecodeErrorPropagates) {
     auto o = open(smallSbcs(false));
     o->provider.failDecodeAfter(0, ErrorCode::Busy);
@@ -275,26 +278,38 @@ TEST(LegacyDriver, CodecDecodeErrorPropagates) {
     DecodeStats stats;
     auto r = decodeLegacy(*o->codec, "abc", text, stats);
     ASSERT_FALSE(r.has_value());
-    EXPECT_EQ(r.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(r.error().code(), ErrorCode::Internal);
+    EXPECT_NE(r.error().message().find("the fake-sbcs codec failed (Busy)"), std::string::npos) << r.error().message();
     ASSERT_FALSE(r.error().context().empty());
     EXPECT_EQ(r.error().context().back(), "while decoding fake-sbcs");
+    auto unsupported = open(smallSbcs(false));
+    unsupported->provider.failDecodeAfter(0, ErrorCode::Unsupported);
+    std::string text2;
+    DecodeStats stats2;
+    auto kept = decodeLegacy(*unsupported->codec, "abc", text2, stats2);
+    ASSERT_FALSE(kept.has_value());
+    EXPECT_EQ(kept.error().code(), ErrorCode::Unsupported) << "Unsupported is part of the contract";
 }
 
 TEST(LegacyDriver, CodecEncodeErrorPropagates) {
-    auto o = open(smallSbcs(false));
-    o->provider.failEncodeAfter(0, ErrorCode::PermissionDenied);
-    std::string bytes;
-    auto r = encodeLegacy(*o->codec, "abc", bytes);
-    ASSERT_FALSE(r.has_value());
-    EXPECT_EQ(r.error().code(), ErrorCode::PermissionDenied);
-    EXPECT_EQ(r.error().context().back(), "while encoding fake-sbcs");
+    for (const ErrorCode code : {ErrorCode::PermissionDenied, ErrorCode::InvalidArgument}) {
+        auto o = open(smallSbcs(false));
+        o->provider.failEncodeAfter(0, code);
+        std::string bytes;
+        auto r = encodeLegacy(*o->codec, "abc", bytes);
+        ASSERT_FALSE(r.has_value());
+        EXPECT_EQ(r.error().code(), ErrorCode::Internal) << frost::toString(code);
+        EXPECT_NE(r.error().message().find(frost::toString(code)), std::string::npos) << r.error().message();
+        EXPECT_EQ(r.error().context().back(), "while encoding fake-sbcs");
+    }
     // A decode failure inside the reversible check propagates too.
     auto o2 = open(smallSbcs(false));
     o2->provider.failDecodeAfter(0, ErrorCode::Timeout);
     std::string bytes2;
     auto r2 = encodeLegacy(*o2->codec, "abc", bytes2);
     ASSERT_FALSE(r2.has_value());
-    EXPECT_EQ(r2.error().code(), ErrorCode::Timeout);
+    EXPECT_EQ(r2.error().code(), ErrorCode::Internal);
+    EXPECT_EQ(r2.error().context().back(), "while decoding fake-sbcs");
 }
 
 TEST(LegacyDriver, OverconsumptionIsInternal) {

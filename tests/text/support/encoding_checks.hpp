@@ -2,8 +2,9 @@
 //
 // Checks and generators shared by the encoding unit, stress and fuzz tests (ADR 0018, "Tests"):
 // the load/save property of TextFile.LosslessIffRoundTrip (which the fuzz target's check (c)
-// extends), its random inputs, and the golden comparison with FROST_UPDATE_GOLDENS and the dump
-// directory that EncodingDifferential and EncodingDifferentialStress share.
+// extends) and its random inputs, decodeBytes' block-size invariance (the fuzz target's check (d)
+// and TextFileBlocks), and the golden comparison with FROST_UPDATE_GOLDENS and the dump directory
+// that EncodingDifferential and EncodingDifferentialStress share.
 /*
  * checkLoadAndSave(bytes, options, codecs, limitMode) runs, on one input:
  *   - decodeTextFile succeeds (OutOfRange is accepted only in limit mode);
@@ -50,6 +51,12 @@ namespace frost::text::test {
 // The checks above. `limitMode`: options.buffer.maxBufferBytes is small and OutOfRange is allowed.
 [[nodiscard]] Result<void> checkLoadAndSave(std::string_view bytes, const LoadOptions& options,
                                             ITextCodecProvider& codecs, bool limitMode);
+
+// decodeBytes with options.blockBytes = `blockBytes` (>= 16) gives the same result as with
+// `options` (D16): the same error code, or the same text, payload fields, encoding, eol, attempts
+// and binaryLikely. Failures are Internal errors with a description.
+[[nodiscard]] Result<void> checkBlockInvariance(std::string_view bytes, const LoadOptions& options,
+                                                ITextCodecProvider& codecs, std::size_t blockBytes);
 
 // One canonical table behind a fingerprint line, dumped on a mismatch.
 struct CanonicalTable {

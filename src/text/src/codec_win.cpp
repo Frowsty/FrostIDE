@@ -48,6 +48,13 @@ constexpr std::size_t kMaxCallInput = 64 * 1024;
 // Chunks up to this size convert into a stack buffer (no allocation per call).
 constexpr std::size_t kStackUnits = 512;
 
+// A failure of a conversion API other than an invalid character (ITextCodec: platform failures
+// are Internal): io's mapping of the code would read as invalid input (ERROR_INVALID_PARAMETER is
+// InvalidArgument), so only its message is kept.
+std::unexpected<Error> platformFailure(const Error& os) {
+    return fail(ErrorCode::Internal, std::format("the Windows code page converter failed: {}", os.message()));
+}
+
 class WinCodec final : public ITextCodec {
 public:
     explicit WinCodec(const CodePageInfo& info) noexcept : m_info(&info) {}
@@ -194,7 +201,7 @@ private:
                     ErrorCode::Internal,
                     std::format("MultiByteToWideChar({}) needed more than one UTF-16 unit per byte", m_info->codePage));
             }
-            return std::unexpected(io::win32Error(error, "MultiByteToWideChar"));
+            return platformFailure(io::win32Error(error, "MultiByteToWideChar"));
         }
         detail::appendUtf16UnitsAsUtf8(std::wstring_view(buffer, static_cast<std::size_t>(written)), utf8);
         return true;
@@ -214,8 +221,9 @@ private:
             WideCharToMultiByte(m_info->codePage, WC_NO_BEST_FIT_CHARS, units.data(), static_cast<int>(units.size()),
                                 bytes.data() + start, static_cast<int>(capacity), nullptr, &usedDefault);
         if (written <= 0) {
+            const Error error = io::lastWin32Error("WideCharToMultiByte");
             bytes.resize(start);
-            return std::unexpected(io::lastWin32Error("WideCharToMultiByte"));
+            return platformFailure(error);
         }
         if (usedDefault != FALSE) {
             bytes.resize(start);

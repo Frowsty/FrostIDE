@@ -64,10 +64,12 @@ void oracleAppendUtf8(char32_t scalar, std::string& out);
 // after it is a 2-byte unit; anything else one byte).
 [[nodiscard]] OracleDecode legacyOracle(const FakeCodePage& page, std::string_view bytes);
 
-// The reversible-encode rule (D4) over a table: each character's bytes must decode back to it as
-// one unit; U+0080..U+009F map to their byte when it is a windowsOnlyC1 non-lead byte the table
-// does not encode reversibly. Returns the bytes before the first unencodable character and that
-// character's UTF-8 offset (nullopt when everything encoded).
+/*
+ * The reversible-encode rule (D4) over a table: each character's bytes must decode back to it as
+ * one unit; U+0080..U+009F map to their byte when it is a windowsOnlyC1 non-lead byte the table
+ * does not encode reversibly. Returns the bytes before the first unencodable character and that
+ * character's UTF-8 offset (nullopt when everything encoded).
+ */
 struct OracleEncode {
     std::string bytes;
     std::optional<std::uint64_t> stop;

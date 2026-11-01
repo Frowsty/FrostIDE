@@ -32,8 +32,9 @@ below shows they do only after two normalisation rules (D4).
    follow the WHATWG Encoding Standard where it has the encoding, with one divergence: "ISO-8859-1" is the real
    ISO-8859-1 (28591), not WHATWG's label for windows-1252. Aliases are WHATWG labels minus those that would name
    a different page ("latin1", which EditorConfig reads as ISO-8859-1 and WHATWG as windows-1252, and "ascii"),
-   plus the common iconv spellings (`sjis`, `ms932`, `iso8859-n`, `koi8r`); `findEncoding` also accepts `cp<N>`
-   for table entries. Excluded, with the probe's evidence (F4): 1255 and 1258 (glibc's converters compose base characters with combining marks), 936, 949 and 950
+   plus the common iconv spellings (`sjis`, `ms932`, `iso8859-n`, `koi8r`); WHATWG has neither 437 nor 850, so
+   their aliases are the IANA character-set registry's (`cspc8codepage437`, `cspc850multilingual`, `437`, `850`).
+   `findEncoding` also accepts `cp<N>` for table entries. Excluded, with the probe's evidence (F4): 1255 and 1258 (glibc's converters compose base characters with combining marks), 936, 949 and 950
    (2149, 189 and 5817 Windows-only EUDC/PUA mappings), KOI8-U (2 mapping differences) and every stateful encoding
    (ISO-2022, UTF-7, EBCDIC).
 3. **D3, strict platform codecs and a narrow seam.** `ITextCodec` decodes and encodes strictly: Windows with
@@ -42,7 +43,11 @@ below shows they do only after two normalisation rules (D4).
    U+FFFD per invalid unit; a lead byte followed by a byte >= 0x80 consumes 2; a lead byte followed by an ASCII
    byte consumes 1 and the ASCII byte is read again (WHATWG's Shift_JIS rule); units come from the driver's
    lead-byte table, not the codec. The driver validates codec output (well-formed UTF-8, no overconsumption) and
-   reports a misbehaving codec as `Internal`.
+   reports a misbehaving codec as `Internal`. Codec errors are `Internal` (with the OS message) or `Unsupported`;
+   the driver reports any other code a codec returns as `Internal` too, so an OS `InvalidArgument` can never pass
+   for D10's unencodable character. Opening a page is `Unsupported` when it is not in the table, `IsValidCodePage`
+   fails or `iconv_open` reports `EINVAL` (with the gconv hint); any other `iconv_open` failure (`EMFILE`,
+   `ENFILE`, `ENOMEM`) is `Internal`.
 4. **D4, normalisation to Windows' tables.** The `windowsOnlyC1` bytes (F1: bytes Windows maps to the identical C1
    control and glibc rejects) are decoded and encoded by the driver on every platform, and encoding accepts only
    reversible mappings (`enc(c) = b` and `dec(b) = c`, F2). With both rules, per-unit decoding, BMP encoding and
@@ -68,17 +73,21 @@ below shows they do only after two normalisation rules (D4).
      fallback chain (a UTF-16 file never becomes UTF-8 with NULs).
    - Valid UTF-8: ASCII only gives the default encoding at 100 (`AsciiOnly`; 90 when the sample was cut, since
      later bytes may be non-ASCII); otherwise UTF-8 at `80 + 5 * min(m, 3)` for m lead bytes >= 0xC2. Both are
-     followed by the fallback chain [UTF-8, legacy, 1252] at 30, minus duplicates and unopenable pages, which lets
-     the loader recover when bytes after the sample are not UTF-8.
+     followed by the fallback chain [UTF-8, legacy, 1252] at 30, minus duplicates and pages reported
+     `Unsupported`, which lets the loader recover when bytes after the sample are not UTF-8.
    - Invalid UTF-8: each of [legacy, 1252] decodes the sample; clean single-byte pages score 40, clean DBCS pages
      `50 + min(20, d)` for d double-byte characters, and dirty ones 10 (`Lossy`). Order: the clean pages, then
      UTF-8 at 10, then the dirty pages. At most 4 candidates; `tried` records each attempt and its outcome.
+   - Detection opens each distinct page once (at most 3 opens, none for a BOM). Only `Unsupported` (a missing
+     converter) removes a page; a page whose open failed otherwise stays a candidate (dirty, 10, when the sample
+     needed decoding), and the loader reports that error ("while decoding as X") when it reaches the page
+     instead of skipping to a lossy fallback.
    - **Invalid UTF-8 falls back losslessly to the legacy page** (the system ANSI code page, else 1252) instead of
      showing U+FFFD. The reason is data safety: a legacy load round-trips, the status bar shows the guess and its
      confidence (30 or 40), `tried` records where UTF-8 failed, and "Reload in UTF-8" stays one click away. This
      is an open question for the user (progress notes): VS Code-style UTF-8 with U+FFFD is the alternative.
-   - Unusable defaults (a UTF-16/32 default, an unopenable page) fall back to UTF-8; an unusable legacy page is
-     skipped and 1252 remains. These values come from settings, so they are never preconditions (D18).
+   - Unusable defaults (a UTF-16/32 default, a page reported `Unsupported`) fall back to UTF-8; an unusable
+     legacy page is skipped and 1252 remains. These values come from settings, so they are never preconditions (D18).
    - No UTF-32 detection without a BOM, and mostly-CJK UTF-16 without a BOM (few zero bytes) is not detected:
      both are override-only, which keeps M1 small and avoids false positives on binary files.
    - 932 is never a candidate unless it is the legacy page: Western 1252 text such as E9 61 is valid Shift_JIS.
@@ -107,7 +116,8 @@ below shows they do only after two normalisation rules (D4).
     DBCS page under four ids), the legacy page, a 256-byte buffer limit and the sample size. Checks: the three
     Unicode decoders against independent oracles with split invariance and encode identity, and the whole
     load/save pipeline through `checkLoadAndSave` (the lossless implications, `decodeBytes` agreement, the sink,
-    `AcceptLoss` against `firstUnencodable`).
+    `AcceptLoss` against `firstUnencodable`), then `checkBlockInvariance`: `decodeBytes` in blocks of 16-79 bytes
+    (from the seed byte) equals one block, so fuzzed inputs cross many block boundaries.
 14. **D14, the default legacy code page.** Windows: `GetLocaleInfoEx(LOCALE_NAME_SYSTEM_DEFAULT,
     LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER)`, read once; 0 (Unicode-only locales) or a page outside
     the table gives 1252. Linux: always 1252, because the locale's charset is UTF-8 on every supported setup and
@@ -120,15 +130,25 @@ below shows they do only after two normalisation rules (D4).
     than the string. Measured below.
 16. **D16, streaming.** Decoders take `InputEnd::More` or `Final` and return the bytes consumed; an incomplete
     sequence at a `More` end is left for the next call. `DecodeStats` offsets are absolute over the stream, and
-    every split gives the same text and stats as one call (tested and fuzzed). Loads decode in 1 MiB blocks;
-    detection's cut sample and M4's child output use the same rule.
+    every split gives the same text and stats as one call (tested and fuzzed). Loads decode in blocks of
+    `LoadOptions::blockBytes`, 1 MiB by default (`kDecodeBlockBytes`); like `DetectOptions::sampleBytes` it is a
+    test and fuzz knob (at least 16 bytes, so every block holds a whole character), and the result never depends
+    on it (`TextFileBlocks.SmallBlocksMatchOneBlock` and the fuzz target's check (d)). Detection's cut sample and
+    M4's child output use the same rule.
 17. **D17, load limits and memory.** `maxFileBytes` is checked before reading (allocation failure terminates, ADR
-    0013); the output cap is `maxBufferBytes`, checked after each 1 MiB block, so a candidate that would exceed
+    0013); the output cap is `maxBufferBytes`, checked after each decode block, so a candidate that would exceed
     it is abandoned early (`TooLarge`). No lossy copy is retained. The round-trip check is incremental (64 KiB
-    chunks re-encoded and compared), so peak memory is the input, one decoded text and O(64 KiB), never a full
-    re-encoding. Windows API calls take at most 64 KiB; decoding starts each call with a one-character chunk and
-    doubles it after every success, bisecting a failing chunk at character boundaries, so dense errors cost one
-    failing call per byte and stay linear. `encodeLegacy` resumes after a stop.
+    chunks re-encoded and compared), never a full re-encoding. One decoded text exists at a time: each candidate
+    starts from an empty string; a block is decoded straight into the text while its spare capacity covers the
+    block's worst case, else into a staging string (one block's output) after which the text is regrown by hand
+    to the size projected from the ratio so far, plus 1/32 and 64 KiB (at least 9/8 of the old capacity, at most
+    the cap). So the peak is the input, the text plus about 1/32 and one staged block when the first block is
+    representative; a later regrowth briefly holds the old and the new buffer. An accepted text with more than
+    1/16 + 64 KiB unused is shrunk, so a document never retains the payload-sized reservation of the first build
+    (2x its text for UTF-16 ASCII, 4x for UTF-32). Windows API calls take at most 64 KiB; decoding starts each
+    call with a one-character chunk and doubles it after every success, bisecting a failing chunk at character
+    boundaries, so dense errors cost one failing call per byte and stay linear. `encodeLegacy` resumes after a
+    stop.
 18. **D18, persisted state.** Every persisted enum has stable, append-only values and a name function with an exact
     inverse (`encodingName`/`findEncoding`, `lossKindName`, `detectionSourceName`, `separatorName`, ...). The
     persisted `DocumentEncoding` fields are the format (encoding, bom, separator), the fidelity record and the
@@ -168,7 +188,8 @@ below shows they do only after two normalisation rules (D4).
   both OSes, F1), because windows-1252 decodes every byte after D4; the 1252 half of the case converts a lossy
   UTF-8 document with `convertedTo`.
 - **Aliases:** the spec named only 932's aliases and the ISO ones; the table adds the WHATWG labels of each page
-  (`csibm437`, `dos-874`, `x-cp125x`, `cskoi8r`, ...) and common iconv spellings, minus the conflicting labels (D2).
+  (`csibm866`, `dos-874`, `x-cp125x`, `cskoi8r`, ...), the IANA aliases of 437 and 850 (which WHATWG lacks) and
+  common iconv spellings, minus the conflicting labels (D2).
 - **`payloadOffset`** is the accepted candidate's BOM length (0, 2, 3 or 4) for every accepted candidate, as the
   header documents, not only when `payloadIsText`.
 - **gconv loads under a mutex** (not in the spec): the first `verify -Full` failed two cases under WSL TSan
@@ -177,12 +198,58 @@ below shows they do only after two normalisation rules (D4).
   a data race, because glibc's own loader lock is invisible to it. `codec_posix.cpp` now also runs `iconv_open`
   and `iconv_close` under a constant-initialised `std::mutex` (TSan sees it; conversions run outside it), and
   both cases are clean under TSan (five runs of the concurrency cases, the stress binary once). No suppression
-  was added.
+  was added. It is a workaround for a tool limitation (LLVM 23.1.4's TSan with glibc 2.39-0ubuntu8.9) and guards
+  nothing of ours; no upstream issue was found on 2026-11-01 (filing one is a question for the user), and it is
+  removed when both cases pass under TSan without it. The comment in `codec_posix.cpp` says the same.
 - **The line-break pass of `decodeTextFile`:** it runs `decodeBytes`' steps without the string `eolStats` and
   counts on the built buffer instead (D15). The result equals `decodeBytes`' (the fuzz harness and
   `TextFile.LosslessIffRoundTrip` compare them). The first build ran the spec's order and failed D15 with ratios
   of 1.54-1.59 on Windows Release; `eolStats(string_view)` was also rewritten (two `std::count` passes and a
   branch-free pair loop instead of one `memchr` per CR).
+
+### Review follow-up (two independent reviews of 22cbc80)
+Neither review found a correctness or data-safety bug. The changes, folded into D3, D7 and D17 above:
+- **Retained capacity (medium).** The first build reserved the payload's size for every decoded text, so a
+  UTF-16 document kept 2x its text in commit for its lifetime, UTF-32 4x, and legacy or lossy texts kept
+  std::string's growth (1.5x or 2x). It also held two payload-sized buffers when nothing decoded cleanly. D17 now
+  has one text at a time with a projected reservation, and a shrink when more than 1/16 + 64 KiB is unused. The
+  reviewer's probe (Release, a 32 MiB text, commit held by the loaded document): UTF-16LE 65 -> 34 MiB,
+  windows-1252 with 1% e-acute 49 -> 35 MiB, zero-copy UTF-8 32 MiB before and after.
+- **Codec error contract (low).** Codecs passed io's OS mappings through (`ERROR_INVALID_PARAMETER` and `EINVAL`
+  became `InvalidArgument`, which `encodeForSave` uses for an unencodable character). Now they are `Internal`
+  with the OS message. `iconv_open` reports `Unsupported` only for `EINVAL`, and detection and the loader skip a
+  page only when its open is `Unsupported` (D3, D7).
+- **Detection opens (low):** each distinct page once, at most 3, and none after a BOM (`DetectionCodecs`).
+- **Shared table 3-7 rows:** `isProperUtf8Prefix` and the lossy decoder's maximal subparts read one
+  `multiByteShape`.
+- **Comments:** the candidates and opens of `detectEncoding`, `encodeLegacy`'s precondition, the BOM erase's
+  O(n) cost, D15's ratio label, the 437/850 aliases (WHATWG lacks both; their aliases are now IANA's) and the
+  gconv mutex's workaround fields (tool versions, issue, removal condition).
+- **The block size became a knob (`LoadOptions::blockBytes`, D16).** The first version of the block tests used
+  only 1 MiB inputs and took 2.9 s of WSL's ASan + UBSan Debug run. That pushed `text_encoding_tests` past its
+  15 s ASan budget (13.0 s before). The real 1 MiB block is still crossed by the cases where that is cheap; the
+  others use 64 B-128 KiB blocks. Block-size invariance is now a property test and fuzz check (d), so fuzzed
+  inputs cross block boundaries too.
+- **Tests:**
+  - `TextFileBlocks` (12 cases, 0.25 s in Windows Debug):
+    - sequences across a block end: UTF-16 (both orders, with and without a BOM), Shift_JIS, lossy UTF-8 and a
+      UTF-8 BOM file;
+    - the buffer limit after the crossing block and on the last block;
+    - the capacity bound, including the decoded-again path;
+    - `SmallBlocksMatchOneBlock`;
+    - `NotRoundTrip` offsets past the first 64 KiB round-trip chunk;
+    - the error contract at the loader.
+  - Detection: `SampleCutTailUsesTable37`, `FailedOpenKeepsPage` and `OpensEachPageOnce`.
+  - The `cp1253-undefined` fixture, which gives `consentUnencodable` its first reader.
+  - Before the knob, seven of the new checks failed on 22cbc80's sources (the knob's tests cannot build there).
+  - Mutants of `text_file.cpp`, each run against `TextFileBlocks` and the corpus replay:
+    - always passing `Final`, or `pos = blockEnd`: three or four block cases and the property fail, and so do 3
+      of the 30 replayed seeds;
+    - checking the limit only after the last block: `TooLargeStopsAfterTheCrossingBlock` fails;
+    - 22cbc80's capacity code (a payload-sized reservation, no shrink), or dropping either shrink: the capacity
+      test fails.
+    - The payload-sized reservation alone survives, because the shrink then hides it. That is the transient
+      peak, which no unit test observes; the probe above measures it.
 
 ## Measurements
 Machine: REF-W1 (AMD Ryzen 9 5900X, 12 cores / 24 threads, 32 GB, Windows 11 10.0.26300; WSL Ubuntu 24.04 with
@@ -246,7 +313,7 @@ Windows, the raw iconv and fixed-1252 checks on Linux). The slowest unit cases i
 ### Perf (`text_encoding_perf_tests`, Release, min of 5 runs, three runs each)
 | | Windows | WSL |
 | --- | --- | --- |
-| D15 ratio, 64 MiB (fromUtf8 / decodeTextFile) | **1.21-1.26** (60 / 73-82 ms) | **1.22-1.31** (51-63 / 62-77 ms) |
+| D15 ratio, 64 MiB (decodeTextFile / fromUtf8) | **1.21-1.26** (73-82 / 60 ms) | **1.22-1.31** (62-77 / 51-63 ms) |
 | ... the parts: one validation / string `eolStats` | 7-8 ms / 15-19 ms | 6-8 ms / 21-27 ms |
 | Detection, 256 MiB file: UTF-8 / 1252 / dense junk with 932 | 0.11 / 0.37 / 2.2 ms | 0.06 / 0.14-0.26 / 1.4-1.6 ms |
 | Decode, 32 MiB: UTF-8 lossy / UTF-16LE / 1252 / Shift_JIS | 3.0-4.2 GB/s / 1.06 GB/s / 230 MB/s / 118 MB/s | 5.7-7.0 GB/s / 0.8-1.0 GB/s / 340-390 MB/s / 175-189 MB/s |
@@ -310,6 +377,7 @@ Target: at least 200 exec/s in the sanitised fuzz build on each OS. The 60 s `fu
 - Unicode 16.0 core specification, chapter 3, section 3.9 (U+FFFD substitution of maximal subparts) and table
   3-7 (well-formed byte sequences).
 - WHATWG Encoding Standard (names and labels, the Shift_JIS decoder's ASCII-trail rule; CC BY 4.0).
+- IANA Character Sets registry (the aliases of IBM437 and IBM850, which WHATWG does not list).
 - Microsoft Learn: `MultiByteToWideChar`, `WideCharToMultiByte`, `IsValidCodePage`, `GetCPInfoExW`,
   `GetLocaleInfoEx`.
 - The glibc `iconv(3)` manual page.

@@ -13,6 +13,7 @@
 #include "text/support/fake_codec.hpp"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -31,6 +32,7 @@ using frost::text::EncodingForm;
 using frost::text::EncodingGuess;
 using frost::text::test::fromHex;
 using frost::text::test::fromU8;
+using frost::text::test::toHex;
 
 DetectOptions options(std::uint16_t legacy, Encoding def = Encoding::utf8(),
                       std::size_t sample = frost::text::kDetectSampleBytes) {
@@ -246,6 +248,40 @@ TEST(EncodingDetection, SampleCutsUtf8Sequence) {
     EXPECT_EQ(whole.candidates[0].source, DetectionSource::LegacyFallback);
 }
 
+/*
+ * A cut sample's tail counts as valid only when it is a proper prefix of a well-formed sequence by
+ * table 3-7, including the special second-byte ranges of E0, ED, F0 and F4 (review of 22cbc80:
+ * isProperUtf8Prefix had no direct test). Each sample is 14 ASCII bytes plus a cut tail; the file
+ * continues with the bytes that would complete the sequence, then ASCII.
+ */
+TEST(EncodingDetection, SampleCutTailUsesTable37) {
+    struct Case {
+        std::string tail;
+        std::string rest;
+        bool utf8;
+    };
+    const Case cases[] = {
+        {fromHex("e0 a0"), fromHex("80"), true},     {fromHex("e0 80"), fromHex("80"), false},
+        {fromHex("ed 9f"), fromHex("bf"), true},     {fromHex("ed a0"), fromHex("80"), false},
+        {fromHex("f0 90"), fromHex("80 80"), true},  {fromHex("f0 80"), fromHex("80 80"), false},
+        {fromHex("f4 8f"), fromHex("bf bf"), true},  {fromHex("f4 90"), fromHex("80 80"), false},
+        {fromHex("c2"), fromHex("a9"), true},        {fromHex("c1"), fromHex("bf"), false},
+        {fromHex("e1 80"), fromHex("80"), true},     {fromHex("e1 c0"), fromHex("80"), false},
+        {fromHex("f1 80 80"), fromHex("80"), true},  {fromHex("f1 80 c0"), fromHex("80"), false},
+        {fromHex("f5 80"), fromHex("80 80"), false},
+    };
+    for (const Case& c : cases) {
+        const std::string sample = std::string(16 - c.tail.size(), 'a') + c.tail;
+        const auto d = detect(sample + c.rest + "zz", options(1252, kUtf8, 16));
+        ASSERT_FALSE(d.candidates.empty());
+        if (c.utf8) {
+            EXPECT_EQ(d.candidates[0].source, DetectionSource::Utf8Valid) << toHex(c.tail);
+        } else {
+            EXPECT_EQ(d.candidates[0], guess(kCp1252, false, 40, DetectionSource::LegacyFallback)) << toHex(c.tail);
+        }
+    }
+}
+
 TEST(EncodingDetection, SampleCutsDbcsPair) {
     // 82 A0 (U+3042) pairs, invalid UTF-8; the 16-byte sample ends with a lead byte.
     std::string bytes = "abc";
@@ -299,12 +335,62 @@ TEST(EncodingDetection, UnavailableCodecSkipped) {
     auto page = std::make_shared<frost::text::test::FakeCodePage>(frost::text::test::randomSbcs(rng));
     fake.serve(page, 932);
     fake.serve(page, 1252);
-    fake.failOpen(932, frost::ErrorCode::Busy);
+    fake.failOpen(932, frost::ErrorCode::Unsupported);
     const auto d = detectEncoding(fromU8(u8"caf\u00e9"), options(932), fake);
     for (const EncodingGuess& g : d.candidates) {
         EXPECT_NE(g.encoding, kCp932);
     }
     EXPECT_EQ(d.candidates.back().encoding, kCp1252);
+}
+
+// Only Unsupported means "not here": any other open failure keeps the page, so the loader reports
+// the failure instead of detection hiding it (review of 22cbc80; TextFile.CodecOpenFailureReported).
+TEST(EncodingDetection, FailedOpenKeepsPage) {
+    frost::text::test::FakeCodecProvider fake;
+    SplitMix64 rng(3);
+    auto page = std::make_shared<frost::text::test::FakeCodePage>(frost::text::test::randomSbcs(rng));
+    fake.serve(page, 932);
+    fake.serve(page, 1252);
+    fake.failOpen(932, frost::ErrorCode::Busy);
+    const auto valid = detectEncoding(fromU8(u8"caf\u00e9"), options(932), fake);
+    ASSERT_EQ(valid.candidates.size(), 3u);
+    EXPECT_EQ(valid.candidates[1], guess(kCp932, false, 30, DetectionSource::LegacyFallback));
+    const auto invalid = detectEncoding("caf\xE9", options(932), fake);
+    const auto it = std::find_if(invalid.candidates.begin(), invalid.candidates.end(),
+                                 [](const EncodingGuess& g) { return g.encoding == kCp932; });
+    ASSERT_NE(it, invalid.candidates.end());
+    EXPECT_EQ(*it, guess(kCp932, false, 10, DetectionSource::Lossy)) << "it never decoded the sample";
+    // A failed default encoding is kept too.
+    EXPECT_EQ(detectEncoding("", options(1252, kCp932), fake).candidates[0].encoding, kCp932);
+}
+
+// One open per distinct page, at most 3 (the default, the legacy page and 1252), and none for a
+// BOM (review of 22cbc80: the availability probe and the sample decode used to open twice).
+TEST(EncodingDetection, OpensEachPageOnce) {
+    frost::text::test::FakeCodecProvider fake;
+    SplitMix64 rng(4);
+    auto page = std::make_shared<frost::text::test::FakeCodePage>(frost::text::test::randomSbcs(rng));
+    for (const std::uint16_t id : {std::uint16_t{932}, std::uint16_t{1252}, std::uint16_t{1251}}) {
+        fake.serve(page, id);
+    }
+    struct Case {
+        std::string bytes;
+        DetectOptions options;
+        std::uint64_t opens;
+    };
+    const Case cases[] = {
+        {"caf\xE9 x", options(932, kCp1252), 2},
+        {"caf\xE9 x", options(932, Encoding::legacy(1251)), 3},
+        {fromU8(u8"caf\u00e9"), options(932, Encoding::legacy(1251)), 3},
+        {"caf\xE9 x", options(1252, kCp1252), 1},
+        {"caf\xE9 x", options(1252), 1},
+        {fromHex("ff fe 41 00"), options(932, kCp1252), 0},
+    };
+    for (const Case& c : cases) {
+        fake.resetCounts();
+        (void)detectEncoding(c.bytes, c.options, fake);
+        EXPECT_EQ(fake.opens(), c.opens) << toHex(c.bytes) << " legacy " << c.options.legacyCodePage;
+    }
 }
 
 TEST(EncodingDetection, Deterministic) {

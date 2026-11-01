@@ -37,6 +37,9 @@
 
 namespace frost::text {
 
+// The input bytes decodeBytes decodes per block by default (LoadOptions::blockBytes; D16, D17).
+inline constexpr std::size_t kDecodeBlockBytes = std::size_t{1} << 20;
+
 // How a document is written back. A plain value.
 struct TextFileFormat {
     Encoding encoding;
@@ -122,13 +125,16 @@ struct LoadOptions {
     TextBufferOptions buffer;
     // loadTextFile refuses larger files with OutOfRange before reading them (D17).
     std::uint64_t maxFileBytes = 0xFFFF'FFFE;
+    // Input bytes per decode block (D16, D17); the result does not depend on it. FROST_PRE: >= 16,
+    // so a block always holds a whole character. A test and fuzz knob, like detect.sampleBytes.
+    std::size_t blockBytes = kDecodeBlockBytes;
 };
 
 // What happened to one candidate the load tried (in order). Exactly one attempt is Accepted.
 enum class AttemptOutcome : std::uint8_t {
     Accepted,         // Its text was taken (valid, or the lossy fallback when nothing was valid).
     Lossy,            // It decoded with replacements and a later candidate was tried.
-    CodecUnavailable, // `codecs` could not open its code page (detected candidates only).
+    CodecUnavailable, // `codecs` reported Unsupported for its code page (detected candidates only).
     TooLarge,         // Its text grew beyond options.buffer.maxBufferBytes.
 };
 
@@ -165,16 +171,28 @@ struct DecodedText {
  *     without replacements. If that one does not round-trip (NotRoundTrip), it is still accepted
  *     and the document is marked. If no candidate is valid, it takes the first lossy candidate,
  *     re-decoded, and the document is marked Replaced.
- * Decoding runs in 1 MiB blocks; a candidate whose text exceeds options.buffer.maxBufferBytes is
- * abandoned (TooLarge). Reads `bytes` only during the call.
+ * Decoding runs in blocks of options.blockBytes (1 MiB by default), and the result is the same for
+ * every block size; a candidate whose text exceeds options.buffer.maxBufferBytes is abandoned
+ * (TooLarge) after the block that crossed the limit. A detected candidate whose code page the
+ * provider reports Unsupported is skipped (CodecUnavailable). Reads `bytes` only during the call.
+ * Precondition (FROST_PRE): options.blockBytes >= 16 and options.detect.sampleBytes >= 16.
  * Errors:
  *   - Unsupported: the override names an unsupported or unavailable code page;
  *   - OutOfRange: every candidate's text exceeds options.buffer.maxBufferBytes;
- *   - Internal: a codec produced ill-formed UTF-8 or broke its contract;
- *   - the codec's own errors.
- * Ill-formed input is never an error. Peak memory: the input plus one candidate's text plus
- * O(64 KiB). Cost: O(n) per candidate tried (at most 4), typically one validation or decode.
- * Thread-safe given a thread-safe provider. Budget: B15 (the UTF-8 path).
+ *   - Internal: a codec produced ill-formed UTF-8 or broke its contract, or a platform failure
+ *     (codecs report those as Internal; the drivers turn any other code from a codec into
+ *     Internal);
+ *   - any other error from opening a candidate's codec, with the context "while decoding as
+ *     <name>": only Unsupported is skipped.
+ * Ill-formed input is never an error.
+ * Memory: one decoded text exists at a time. Its capacity is projected from the first block's
+ * ratio of text to input, so the peak is the input, the text plus about 1/32 and one block's
+ * staged text when the first block is representative of the file; otherwise a later block regrows
+ * the text (old and new buffer together, at least 9/8 apart) or the projection overshoots (at most
+ * by the ratio range of the form, transiently). The returned `text` keeps at most 1/16 of its size
+ * plus 64 KiB of spare capacity.
+ * Cost: O(n) per candidate tried (at most 4), typically one validation or decode. Thread-safe
+ * given a thread-safe provider. Budget: B15 (the UTF-8 path).
  */
 [[nodiscard]] Result<DecodedText> decodeBytes(std::string_view bytes, const LoadOptions& options = {},
                                               ITextCodecProvider& codecs = platformCodecs()) noexcept;
@@ -190,8 +208,10 @@ struct LoadedText {
 
 /*
  * decodeBytes, then TextBuffer::fromUtf8. Takes ownership of `bytes`. Valid UTF-8 without a BOM
- * moves into the buffer without a copy; with a BOM, it costs an erase of up to 4 bytes. The result
- * equals decodeBytes' (eol included), but line breaks are counted on the built buffer.
+ * moves into the buffer without a copy; with a BOM, the bytes after it move down in place (one
+ * O(n) memmove, no second buffer). Other texts move into the buffer with decodeBytes' capacity
+ * bound. The result equals decodeBytes' (eol included), but line breaks are counted on the built
+ * buffer.
  * Errors: decodeBytes' errors; OutOfRange from fromUtf8; InvalidArgument from fromUtf8 becomes
  * Internal ("a decoder produced ill-formed UTF-8 for <name>"). Thread-safe given a thread-safe
  * provider. O(n). Budget: B15 (the UTF-8 path).

@@ -50,9 +50,11 @@ struct EncodingFixture {
     std::optional<std::uint64_t> firstLossFileOffset;
     std::optional<std::uint64_t> firstLossTextOffset;
     bool binaryLikely = false;
-    std::string text;                // The decoded UTF-8.
-    std::string consentBytes;        // Lossy fixtures: encodeForSave(AcceptLoss), or "" for InvalidArgument.
-    bool consentUnencodable = false; // Lossy legacy fixtures: AcceptLoss is InvalidArgument.
+    std::string text;         // The decoded UTF-8.
+    std::string consentBytes; // Lossy fixtures: encodeForSave(AcceptLoss); "" when consentUnencodable.
+    // Replaced legacy fixtures (cp1253-undefined): AcceptLoss is InvalidArgument at the first U+FFFD
+    // (EncodingRoundTrip.FixturesByteExact and EncodingFiles check it).
+    bool consentUnencodable = false;
 };
 
 // Every fixture, in a fixed order. Several entries may share one file (different options).

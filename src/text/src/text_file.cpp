@@ -7,11 +7,15 @@
  * first one that decodes without replacements ("valid-first", D6/D7). A valid legacy decode is
  * then checked incrementally: the text is re-encoded in 64 KiB chunks and compared with the file
  * bytes, so a NotRoundTrip load (932's NEC/IBM duplicates) is accepted but marked, without ever
- * holding a full re-encoding. Decoding runs in 1 MiB blocks with InputEnd::More (D16), and a
- * candidate whose text exceeds the buffer limit is abandoned after the block that crossed it
- * (D17). The text of a lossy candidate is discarded unless it is the last candidate; when nothing
- * decodes cleanly, the first lossy candidate is decoded again. Peak memory is therefore the input,
- * one candidate's text and O(64 KiB).
+ * holding a full re-encoding. Decoding runs in blocks of options.blockBytes (1 MiB by default)
+ * with InputEnd::More (D16), and a candidate whose text exceeds the buffer limit is abandoned
+ * after the block that crossed it (D17). The text of a lossy candidate is discarded unless it is
+ * the last candidate; when nothing decodes cleanly, the first lossy candidate is decoded again.
+ * One decoded text exists at a time, reserved from the first block's ratio (decodeBlocks), so the
+ * peak is the input, that text plus about 1/32, and one block's staged text when the first block
+ * is representative; the accepted text keeps at most 1/16 + 64 KiB of spare capacity
+ * (releaseSlack). The block size never changes the result (TextFileBlocks, and the fuzz target's
+ * check (d)).
  *
  * The UTF-8 path is zero-copy: a well-formed payload is reported as payloadIsText, and
  * decodeTextFile moves the caller's string into the buffer (after erasing a BOM in place). The
@@ -38,11 +42,11 @@
 namespace frost::text {
 namespace {
 
-constexpr std::size_t kBlockBytes = 1u << 20;             // Decode block (D17).
 constexpr std::size_t kRoundTripChunkBytes = 64u * 1024u; // Incremental round-trip check (D17).
 constexpr std::size_t kSinkPieceBytes = 64u * 1024u;      // The largest piece a SaveSink receives.
 constexpr std::size_t kEncodeSliceBytes = 16u * 1024u;    // UTF-8 per encode step on save.
 constexpr std::size_t kFlushBytes = 32u * 1024u;          // Flush threshold of the save scratch.
+constexpr std::size_t kTextSlackBytes = 64u * 1024u;      // Fixed slack of a decoded text's capacity.
 constexpr std::uint64_t kMaxBufferBytes = 0xFFFF'FFFEULL; // TextBufferOptions' limit (ADR 0013, D6).
 constexpr std::uint8_t kOverrideConfidence = 100;
 
@@ -74,39 +78,119 @@ std::size_t sliceEnd(std::string_view utf8, std::size_t pos, std::size_t limit) 
     return end;
 }
 
+/*
+ * The most UTF-8 the decoders append for `bytes` input bytes of `form` (bytes): UTF-8, 3 per byte
+ * (U+FFFD for each invalid byte); UTF-16, 3 per unit (a surrogate pair gives 4 for 4) plus an odd
+ * byte's U+FFFD; UTF-32, 4 per unit plus a partial unit's U+FFFD; code pages, 4 per byte (a unit
+ * maps to one scalar or U+FFFD). A memory heuristic, not a contract: a codec that exceeds it only
+ * costs a std::string growth.
+ */
+std::size_t worstCaseText(EncodingForm form, std::size_t bytes) noexcept {
+    switch (form) {
+    case EncodingForm::Utf16Le:
+    case EncodingForm::Utf16Be: return 3 * (bytes / 2) + 3;
+    case EncodingForm::Utf32Le:
+    case EncodingForm::Utf32Be: return bytes + 3;
+    case EncodingForm::CodePage: return 4 * bytes;
+    case EncodingForm::Utf8: break;
+    }
+    return 3 * bytes;
+}
+
+/*
+ * The capacity to give the text when `needed` bytes of it came from the first `consumed` of
+ * `payloadSize` input bytes and the current capacity `capacity` is too small: exactly `needed`
+ * once the input is consumed; otherwise the text so far scaled to the whole payload by the ratio so
+ * far, plus 1/32 and kTextSlackBytes, at least 9/8 of the current capacity (so a file whose ratio
+ * keeps rising regrows O(log n) times), and at most `cap` (beyond it the candidate is abandoned).
+ */
+std::size_t projectedCapacity(std::size_t needed, std::size_t consumed, std::size_t payloadSize, std::size_t capacity,
+                              std::uint64_t cap) noexcept {
+    if (consumed >= payloadSize) {
+        return needed;
+    }
+    const double ratio = static_cast<double>(needed) / static_cast<double>(std::max<std::size_t>(consumed, 1));
+    const double rest = ratio * static_cast<double>(payloadSize - consumed);
+    const double projected = static_cast<double>(needed) + rest + rest / 32.0 + static_cast<double>(kTextSlackBytes);
+    std::uint64_t target = projected >= static_cast<double>(cap) ? cap : static_cast<std::uint64_t>(projected);
+    target = std::max<std::uint64_t>(target, capacity + capacity / 8);
+    target = std::min<std::uint64_t>(target, cap);
+    return static_cast<std::size_t>(std::max<std::uint64_t>(target, needed));
+}
+
+// Gives an accepted text back its spare capacity when that exceeds 1/16 of the text plus
+// kTextSlackBytes (a first block that was not representative), so the buffer that takes the
+// string keeps at most that much unused for the document's lifetime. O(n) when it shrinks.
+void releaseSlack(std::string& text) noexcept {
+    if (text.capacity() - text.size() > text.size() / 16 + kTextSlackBytes) {
+        text.shrink_to_fit();
+    }
+}
+
 enum class BlockOutcome : std::uint8_t { Done, TooLarge };
 
-// Decodes `payload` as `form` (through `codec` for code pages) into `text` in 1 MiB blocks, one
-// DecodeStats for the stream; stops with TooLarge once the text exceeds `cap`.
-Result<BlockOutcome> decodeBlocks(EncodingForm form, ITextCodec* codec, std::string_view payload, std::uint64_t cap,
-                                  std::string& text, DecodeStats& stats) noexcept {
-    text.clear();
+// Decodes one block of `form` (through `codec` for code pages), appending to `out`; returns the
+// bytes consumed.
+Result<std::size_t> decodeBlock(EncodingForm form, ITextCodec* codec, std::string_view block, std::string& out,
+                                DecodeStats& stats, InputEnd end) noexcept {
+    switch (form) {
+    case EncodingForm::Utf8: return appendUtf8Lossy(block, out, stats, end);
+    case EncodingForm::Utf16Le: return appendUtf16Lossy(block, Endian::Little, out, stats, end);
+    case EncodingForm::Utf16Be: return appendUtf16Lossy(block, Endian::Big, out, stats, end);
+    case EncodingForm::Utf32Le: return appendUtf32Lossy(block, Endian::Little, out, stats, end);
+    case EncodingForm::Utf32Be: return appendUtf32Lossy(block, Endian::Big, out, stats, end);
+    case EncodingForm::CodePage: break;
+    }
+    FROST_ASSERT(codec != nullptr);
+    return decodeLegacy(*codec, block, out, stats, end);
+}
+
+/*
+ * Decodes `payload` as `form` (through `codec` for code pages) into `text` in blocks of
+ * `blockBytes` (>= 16, so each block makes progress: a decoder holds back at most 3 bytes at More),
+ * one DecodeStats for the stream; stops with TooLarge once the text exceeds `cap` (D17). The buffer
+ * `text` held (an earlier candidate's) is released first, so one decoded text exists at a time.
+ * Capacity (Budget: B15). std::string's own growth (1.5x in the MSVC STL, 2x in libstdc++) would
+ * leave up to half of the capacity unused for the document's lifetime, and a reserve of the
+ * payload's size would hold 2x a UTF-16 text and 4x a UTF-32 one. So a block whose worst case
+ * (worstCaseText) fits in the spare capacity decodes straight into `text`; any other block decodes
+ * into `staged` (O(block)) and is appended after `text` moved, when needed, to a string reserved
+ * by hand to projectedCapacity. A file whose first block is representative is therefore reserved
+ * once, after its first block, at its text plus about 1/32; only the first block and the last few
+ * blocks (while the spare capacity is below a block's worst case) pass through `staged`.
+ */
+Result<BlockOutcome> decodeBlocks(EncodingForm form, ITextCodec* codec, std::string_view payload,
+                                  std::size_t blockBytes, std::uint64_t cap, std::string& text,
+                                  DecodeStats& stats) noexcept {
+    std::string().swap(text);
     stats = {};
-    text.reserve(static_cast<std::size_t>(std::min<std::uint64_t>(payload.size(), cap)) + 16);
+    std::string staged;
     std::size_t pos = 0;
     while (true) {
-        const std::size_t blockEnd = std::min(payload.size(), pos + kBlockBytes);
+        const std::size_t blockEnd = pos + std::min(payload.size() - pos, blockBytes);
         const bool last = blockEnd == payload.size();
-        const InputEnd end = last ? InputEnd::Final : InputEnd::More;
         const std::string_view block = payload.substr(pos, blockEnd - pos);
-        std::size_t consumed = 0;
-        switch (form) {
-        case EncodingForm::Utf8: consumed = appendUtf8Lossy(block, text, stats, end); break;
-        case EncodingForm::Utf16Le: consumed = appendUtf16Lossy(block, Endian::Little, text, stats, end); break;
-        case EncodingForm::Utf16Be: consumed = appendUtf16Lossy(block, Endian::Big, text, stats, end); break;
-        case EncodingForm::Utf32Le: consumed = appendUtf32Lossy(block, Endian::Little, text, stats, end); break;
-        case EncodingForm::Utf32Be: consumed = appendUtf32Lossy(block, Endian::Big, text, stats, end); break;
-        case EncodingForm::CodePage: {
-            FROST_ASSERT(codec != nullptr);
-            auto decoded = decodeLegacy(*codec, block, text, stats, end);
-            if (!decoded) {
-                return std::unexpected(std::move(decoded).error());
+        const bool direct = text.capacity() - text.size() >= worstCaseText(form, block.size());
+        staged.clear();
+        auto consumed =
+            decodeBlock(form, codec, block, direct ? text : staged, stats, last ? InputEnd::Final : InputEnd::More);
+        if (!consumed) {
+            return std::unexpected(std::move(consumed).error());
+        }
+        pos += *consumed;
+        if (!direct) {
+            const std::size_t needed = text.size() + staged.size();
+            if (needed > cap) {
+                return BlockOutcome::TooLarge;
             }
-            consumed = *decoded;
-            break;
+            if (text.capacity() < needed) {
+                std::string grown;
+                grown.reserve(projectedCapacity(needed, pos, payload.size(), text.capacity(), cap));
+                grown.append(text);
+                text.swap(grown);
+            }
+            text.append(staged);
         }
-        }
-        pos += consumed;
         if (text.size() > cap) {
             return BlockOutcome::TooLarge;
         }
@@ -284,6 +368,7 @@ namespace {
 Result<DecodedText> decodeImpl(std::string_view bytes, const LoadOptions& options, ITextCodecProvider& codecs,
                                bool countEol) noexcept {
     FROST_PRE(options.buffer.maxBufferBytes <= kMaxBufferBytes);
+    FROST_PRE(options.blockBytes >= 16); // A block holds a whole character, so every block progresses.
     const std::uint64_t cap = options.buffer.maxBufferBytes;
     DecodedText result;
     std::vector<EncodingGuess> candidates;
@@ -343,13 +428,18 @@ Result<DecodedText> decodeImpl(std::string_view bytes, const LoadOptions& option
         if (guess.encoding.form == EncodingForm::CodePage && codec == nullptr) {
             auto open = codecs.open(guess.encoding.codePage);
             if (!open) {
+                // Only a missing converter is skipped; any other failure is reported, never hidden.
+                if (open.error().code() != ErrorCode::Unsupported) {
+                    return std::unexpected(std::move(open).error().withContext(
+                        std::format("while decoding as {}", displayName(guess.encoding))));
+                }
                 attempt.outcome = AttemptOutcome::CodecUnavailable;
                 continue;
             }
             opened = std::move(*open);
             codec = opened.get();
         }
-        auto decoded = decodeBlocks(guess.encoding.form, codec, payload, cap, text, stats);
+        auto decoded = decodeBlocks(guess.encoding.form, codec, payload, options.blockBytes, cap, text, stats);
         if (!decoded) {
             return std::unexpected(std::move(decoded).error());
         }
@@ -365,6 +455,7 @@ Result<DecodedText> decodeImpl(std::string_view bytes, const LoadOptions& option
             if (!firstLossy) {
                 firstLossy = i;
                 if (i + 1 == candidates.size()) {
+                    releaseSlack(text);
                     result.text = std::move(text); // The last candidate: no decode again (D17).
                     lossyTextKept = true;
                 }
@@ -381,11 +472,13 @@ Result<DecodedText> decodeImpl(std::string_view bytes, const LoadOptions& option
                                                 ByteOffset{(*mismatch)->text}};
             }
         }
+        releaseSlack(text);
         result.text = std::move(text);
         accepted = i;
     }
 
-    // 3. Nothing valid: the first lossy candidate, decoded again unless its text was kept.
+    // 3. Nothing valid: the first lossy candidate, decoded again unless its text was kept. It
+    // decodes into `text`, so the last candidate's buffer is released first (D17).
     if (!accepted) {
         if (!firstLossy) {
             return fail(ErrorCode::OutOfRange,
@@ -409,13 +502,15 @@ Result<DecodedText> decodeImpl(std::string_view bytes, const LoadOptions& option
                 opened = std::move(*open);
                 codec = opened.get();
             }
-            auto decoded = decodeBlocks(guess.encoding.form, codec, payload, cap, result.text, stats);
+            auto decoded = decodeBlocks(guess.encoding.form, codec, payload, options.blockBytes, cap, text, stats);
             if (!decoded) {
                 return std::unexpected(std::move(decoded).error());
             }
             if (*decoded == BlockOutcome::TooLarge) {
                 return fail(ErrorCode::Internal, "a lossy candidate grew beyond the buffer limit when decoded again");
             }
+            releaseSlack(text);
+            result.text = std::move(text);
         }
         result.tried[j].outcome = AttemptOutcome::Accepted;
         accepted = j;

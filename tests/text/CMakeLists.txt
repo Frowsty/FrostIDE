@@ -10,11 +10,13 @@
 # and for the encodings (ADR 0018):
 #   text_encoding_tests              unit:        names and BOMs, the Unicode and legacy decoders against
 #                                                 independent oracles, the cross-OS fingerprint differential,
-#                                                 line separators, detection, load/save, the byte-exact
+#                                                 line separators, detection, load/save (with the decode
+#                                                 blocks and their size invariance), the byte-exact
 #                                                 fixtures (row 60's acceptance test) and parallel codecs
 #   text_encoding_integration_tests  integration: fixtures through the real file system
-#   text_encoding_stress_tests       stress:      every BMP scalar through every code page, and the 20k-seed
-#                                                 lossless property
+#   text_encoding_stress_tests       stress:      every BMP scalar through every code page, and the
+#                                                 lossless property (2000 seeds; 20000 with
+#                                                 FROST_STRESS_FULL=1)
 #   text_encoding_perf_tests         perf:        the UTF-8 load overhead (D15), bounded detection (B15),
 #                                                 decode throughput and dense-invalid decoding (D17)
 # support/ holds the oracles, op driver, fake codec and fixtures they share with the fuzz targets
@@ -65,6 +67,7 @@ frost_add_test(text_encoding_tests
         line_separator_test.cpp
         encoding_detection_test.cpp
         text_file_test.cpp
+        text_file_blocks_test.cpp
         encoding_round_trip_test.cpp
         encoding_concurrency_test.cpp
     DEPS frost::text frost_text_encoding_test_support

@@ -10,7 +10,7 @@
  *            serving one random DBCS page, seeded from byte 1, under each of 1252, 932, 1251 and
  *            437; clear: platformCodecs()); bits 4-5 the legacy code page (1252, 932, 1251, 437);
  *            bits 6-7 == 3: a buffer limit of 256 bytes, where OutOfRange is allowed;
- *   byte 1   the fake page's seed;
+ *   byte 1   the fake page's seed, and check (d)'s block size: 16 + byte % 64 bytes;
  *   byte 2   the detection sample: 16 + 4 * byte bytes for 0..254, kDetectSampleBytes for 255
  *            (with -max_len=16384 the sample is otherwise never cut);
  *   the rest the file; defaultSeparator is LF.
@@ -21,7 +21,10 @@
  *       same split invariance, and encoding a decode without replacements gives the bytes back;
  *   (c) checkLoadAndSave (decodeTextFile succeeds, or fails with OutOfRange only in limit mode;
  *       the invariants, eol, decodeBytes agreement, the attempts and detection, the lossless
- *       implications, the sink, and AcceptLoss against firstUnencodable).
+ *       implications, the sink, and AcceptLoss against firstUnencodable);
+ *   (d) checkBlockInvariance: decodeBytes in blocks of 16..79 bytes gives the same result as in
+ *       one block (D16), so the block loop's carries, More at each block end and limit checks are
+ *       fuzzed even though inputs stay far below the default 1 MiB block.
  * Shorter inputs than 3 bytes run with zero header bytes.
  */
 
@@ -131,7 +134,12 @@ Result<void> checkUnicode(Form form, Endian order, std::string_view bytes) {
     return {};
 }
 
-// One fake DBCS page per seed byte, built on first use.
+/*
+ * One fake DBCS page per seed byte, built on first use. This cache is the one state the harness
+ * keeps between inputs, an exception to fuzz_harness.hpp's rule: a page is a pure function of its
+ * seed byte (and immutable once built), so every input still reproduces on its own; the cache only
+ * saves rebuilding the page's tables for each input.
+ */
 std::shared_ptr<const text::test::FakeCodePage> fakePage(std::uint8_t seed) {
     static std::array<std::shared_ptr<const text::test::FakeCodePage>, 256> pages;
     if (!pages[seed]) {
@@ -180,15 +188,23 @@ Result<void> runInput(std::span<const std::uint8_t> data) {
     if (limitMode) {
         options.buffer.maxBufferBytes = 256;
     }
+    // (c), then (d).
+    const std::size_t blockBytes = 16u + seed % 64u;
+    const auto check = [&](text::ITextCodecProvider& codecs) -> Result<void> {
+        if (auto ok = text::test::checkLoadAndSave(file, options, codecs, limitMode); !ok) {
+            return ok;
+        }
+        return text::test::checkBlockInvariance(file, options, codecs, blockBytes);
+    };
     if ((mode & 0x8u) != 0) {
         text::test::FakeCodecProvider fake;
         const auto page = fakePage(seed);
         for (const std::uint16_t id : kLegacy) {
             fake.serve(page, id);
         }
-        return text::test::checkLoadAndSave(file, options, fake, limitMode);
+        return check(fake);
     }
-    return text::test::checkLoadAndSave(file, options, text::platformCodecs(), limitMode);
+    return check(text::platformCodecs());
 }
 
 } // namespace frost::fuzz

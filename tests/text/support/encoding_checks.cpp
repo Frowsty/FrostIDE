@@ -322,6 +322,33 @@ Result<void> checkLoadAndSave(std::string_view bytes, const LoadOptions& options
     return {};
 }
 
+Result<void> checkBlockInvariance(std::string_view bytes, const LoadOptions& options, ITextCodecProvider& codecs,
+                                  std::size_t blockBytes) {
+    LoadOptions blocked = options;
+    blocked.blockBytes = blockBytes;
+    auto one = decodeBytes(bytes, options, codecs);
+    auto split = decodeBytes(bytes, blocked, codecs);
+    if (one.has_value() != split.has_value()) {
+        return broken(std::format("in blocks of {} bytes decodeBytes {}: {}", blockBytes,
+                                  split ? "succeeded where one block failed" : "failed where one block succeeded",
+                                  split ? one.error().describe() : split.error().describe()));
+    }
+    if (!one) {
+        if (one.error().code() != split.error().code()) {
+            return broken(std::format("in blocks of {} bytes decodeBytes failed with {}, not {}", blockBytes,
+                                      split.error().describe(), one.error().describe()));
+        }
+        return {};
+    }
+    if (one->payloadIsText != split->payloadIsText || one->payloadOffset != split->payloadOffset ||
+        one->text != split->text || !(one->encoding == split->encoding) || one->eol != split->eol ||
+        one->binaryLikely != split->binaryLikely || !sameAttempts(one->tried, split->tried)) {
+        return broken(std::format("blocks of {} bytes change decodeBytes' result: {} instead of {}", blockBytes,
+                                  attemptsText(split->tried), attemptsText(one->tried)));
+    }
+    return {};
+}
+
 SeedRange encodingSeeds(std::uint64_t count) {
     const std::string value = frost::test::environment("FROST_ENCODING_SEED");
     if (!value.empty()) {

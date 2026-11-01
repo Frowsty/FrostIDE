@@ -16,9 +16,10 @@ namespace frost::text {
 namespace {
 
 // Aliases (lower case; findEncoding compares ASCII case-insensitively). WHATWG labels where WHATWG
-// has the encoding, minus the labels that would name a different page ("latin1", "ascii").
-constexpr std::string_view kAliases437[] = {"csibm437"};
-constexpr std::string_view kAliases850[] = {"csibm850"};
+// has the encoding, minus the labels that would name a different page ("latin1", "ascii"); for 437
+// and 850, which WHATWG lacks, the IANA character-set registry's aliases.
+constexpr std::string_view kAliases437[] = {"cspc8codepage437", "437"};
+constexpr std::string_view kAliases850[] = {"cspc850multilingual", "850"};
 constexpr std::string_view kAliases866[] = {"csibm866", "866"};
 constexpr std::string_view kAliases874[] = {"dos-874"};
 constexpr std::string_view kAliases932[] = {"shift-jis", "sjis", "cp932", "ms932", "windows-31j"};

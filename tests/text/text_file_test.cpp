@@ -559,6 +559,8 @@ TEST(FormatStatus, PerFixture) {
          {"windows-1252", false, LossKind::None, DetectionSource::LegacyFallback, 40, "LF", false}},
         {"utf16le-lone-surrogate", {"UTF-16LE", true, LossKind::Replaced, DetectionSource::Bom, 100, "LF", false}},
         {"utf16be-odd", {"UTF-16BE", true, LossKind::Replaced, DetectionSource::Bom, 100, "LF", false}},
+        {"cp1253-undefined",
+         {"windows-1253", false, LossKind::Replaced, DetectionSource::UserOverride, 100, "LF", false}},
     };
     ASSERT_EQ(expected.size(), frost::text::test::encodingFixtures().size());
     for (const auto& f : frost::text::test::encodingFixtures()) {

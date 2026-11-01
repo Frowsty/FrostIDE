@@ -21,6 +21,9 @@
  * character whose bytes do not decode back to it. The M1 code pages are prefix-free (a lead byte
  * never decodes alone), so the first character where the re-decoded text differs is the
  * unencodable one.
+ *
+ * Errors. Codec errors keep Unsupported and become Internal otherwise (withName), so the error
+ * codes the drivers return mean the same thing whatever codec ran.
  */
 
 #include "frost/core/assert.hpp"
@@ -33,6 +36,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace frost::text {
@@ -45,7 +50,21 @@ bool isWindowsOnlyC1(const CodePageInfo& info, std::uint8_t byte) noexcept {
     return std::binary_search(info.windowsOnlyC1.begin(), info.windowsOnlyC1.end(), byte);
 }
 
+/*
+ * A codec's error with the context "while <verb> <name>". ITextCodec's errors are Internal or
+ * Unsupported; any other code (a codec that passes an OS mapping such as InvalidArgument through)
+ * becomes Internal with the codec's message, so callers can rely on the contract: InvalidArgument
+ * from encodeForSave only ever means an unencodable character (text_file.hpp).
+ */
 Error withName(Error error, const CodePageInfo& info, std::string_view verb) {
+    if (error.code() != ErrorCode::Internal && error.code() != ErrorCode::Unsupported) {
+        Error internal(ErrorCode::Internal,
+                       std::format("the {} codec failed ({}): {}", info.name, toString(error.code()), error.message()));
+        for (const std::string& note : error.context()) {
+            internal.withContext(note);
+        }
+        error = std::move(internal);
+    }
     return std::move(error).withContext(std::format("while {} {}", verb, info.name));
 }
 
