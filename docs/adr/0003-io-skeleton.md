@@ -213,17 +213,22 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
   (measured with Qt 6.12.0 with the switch off and on); the `\\?\` form of the same path loads at any
   length. frost therefore starts through a small launcher, frost.exe, that loads the application
   (frost_app.dll) and, through it, Qt by `\\?\` paths, and pins Qt's plugins the same way before Qt
-  loads them by their plain paths. It starts from every directory length on every machine, with or
-  without the switch (ADR 0012, which also lists the tests that pin it).
+  loads them by their plain paths. Its command-line modes and offscreen self-test start from every
+  directory length measured (200 to 400 units), with or without the switch; the GUI with Qt's native
+  platform plugin dies from an image path of 260 units on this machine, in NVIDIA's driver, which
+  waits for the user's decision (ADR 0012, which also lists the tests that pin all of it).
 - History, superseded by ADR 0012: until then frost.exe imported Qt statically, and the same limit
   killed it before `main` on a plain start (as frost::io's launcher makes below MAX_PATH) with
   0xC0000106 (STATUS_NAME_TOO_LONG) and no message, from directories of 236 to 249 units in Release
   (`Qt6Widgets.dll`), 235 to 249 in Debug and 218 to 249 in ASan trees, whose
   `clang_rt.asan_dynamic-x86_64.dll` has the longest name (measured 2026-11-01 at 2c499a2 with
-  `LongPathsEnabled = 0`; raw data in `E:\FrostBuilds\perf\m0\exit-full\`). Between those ranges and
-  beyond them, a start-up check refused long plugin paths, so the launch beyond MAX_PATH did not work
-  (question E1 in `docs/progress.md`), and `PlatformPluginPathBoundary` failed in ASan trees
-  (question E4).
+  `LongPathsEnabled = 0`; raw data in `E:\FrostBuilds\perf\m0\exit-full\`). Below those ranges, from
+  directories of 226 units in Release and 225 in Debug (where the platform plugin's path passes 250
+  units), and again from 250 units on (where the launcher used the `\\?\` form), frost reached `main`,
+  but Qt loads plugins by their plain paths. While long paths were ineffective a start-up check then
+  refused the long plugin path cleanly; with `LongPathsEnabled = 1` it stood down and Qt failed itself.
+  So the launch beyond MAX_PATH did not work (question E1 in `docs/progress.md`), and
+  `PlatformPluginPathBoundary` failed in ASan trees (question E4).
 - Process-wide hardening that PLAN.md 3.5 lists next to the launcher (`SetDefaultDllDirectories`,
   `NoDefaultCurrentDirectoryInExePath`) belongs to app startup (`src/app/include/frost/app/startup_core.hpp`,
   applied by frost.exe's launcher on Windows), not to frost::io. As a consequence, DLLs are no longer found through PATH, and

@@ -3,14 +3,16 @@
 // Integration tests that run the real frost program (PLAN.md section 7, M0 exit): --version,
 // --help, error exit codes, the built-in self-test (also that arguments after "--" never reach
 // Qt), and launching from a directory whose path has non-ASCII characters and spaces. On
-// Windows also the M0 exit criterion's long paths (ADR 0012): a start from every directory
-// length from 200 to 400 UTF-16 units, plain and \\?\, also with long paths ineffective for
-// frost (a manifest without longPathAware, the state LongPathsEnabled=0 gives), and through 8.3
-// short names; a DLL loaded late and a non-platform plugin from a long plain path; the start-up
+// Windows also the M0 exit criterion's long paths (ADR 0012): a start from 22 directory
+// lengths from 200 to 400 UTF-16 units around every boundary measured, plain and \\?\, also
+// with long paths ineffective for frost (a manifest without longPathAware, the state
+// LongPathsEnabled=0 gives), and through 8.3 short names; the self-test with Qt's native
+// platform plugin up to the longest image path below MAX_PATH; a DLL loaded late and
+// non-platform plugins from a long plain path (loaded, skipped or failing); the start-up
 // check's reports when Qt's platform plugin is missing or unloadable, and that Qt's own "no
 // platform plugin" dialog never appears in a command-line mode; the launcher's failure
-// reports; and the structure of the two images: frost.exe imports KERNEL32.dll alone, and
-// frost_app.dll carries no manifest and no DependentLoadFlags.
+// reports and the error mode it loads in; and the structure of the two images: frost.exe
+// imports KERNEL32.dll alone, and frost_app.dll carries no manifest and no DependentLoadFlags.
 // Processes are started through frost::io's production IProcessLauncher, on Windows on a
 // private desktop each and with hard-error boxes off (runFrost).
 
@@ -23,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -669,7 +672,9 @@ TEST(FrostProcess, PreloadsOtherPluginsFromALongPath) {
      * A non-platform plugin with a dependency (imageformats\qsvg, which imports Qt6Svg) in a
      * directory whose plugin paths pass the loader's 250-unit limit: frost loads it through
      * \\?\ before Qt would load it by its plain path, and the dependency comes from the \\?\
-     * install directory.
+     * install directory. Beside it, the same plugin of Qt's other build (debug or release,
+     * whose Qt6Svg is not deployed) and a DLL that is no Qt plugin (System32's version.dll):
+     * frost loads neither, because neither imports this build's Qt6Core.
      */
     const ScratchDir scratch("app-process-plugins");
     const std::string dir = cellDirectory(longFormOf(scratch), 300);
@@ -677,17 +682,99 @@ TEST(FrostProcess, PreloadsOtherPluginsFromALongPath) {
     ASSERT_TRUE(fs::create_directories(anyLengthPath(dir) / "imageformats"));
     copyInto(sdkFile(FROST_QT_PLUGIN_DIR, "imageformats\\" + qtDll("qsvg")), dir, "imageformats\\" + qtDll("qsvg"));
     copyInto(sdkFile(FROST_QT_BIN_DIR, qtDll("Qt6Svg")), dir, qtDll("Qt6Svg"));
+    const std::string otherBuild = kQtSuffix.empty() ? "qsvgd.dll" : "qsvg.dll";
+    copyInto(sdkFile(FROST_QT_PLUGIN_DIR, "imageformats\\" + otherBuild), dir, "imageformats\\" + otherBuild);
+    wchar_t system[MAX_PATH];
+    ASSERT_NE(GetSystemDirectoryW(system, MAX_PATH), 0u);
+    copyInto(fs::path(system) / L"version.dll", dir, "imageformats\\frost_not_a_plugin.dll");
     const auto form = parentLongPathsEffective() ? ImagePathForm::Plain : ImagePathForm::Extended;
     const auto result = runFrost(exe, {"--selftest"}, ownPluginsOnly(), form, 30s);
     EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
     EXPECT_TRUE(result.output.contains("ok   other-plugins: loaded 1 of 1 plugin(s) through \\\\?\\")) << result.output;
+    // Qt's other build of the same plugin (it would bring in the other Qt6Core) and a DLL that
+    // is no Qt plugin are named and left alone.
+    EXPECT_TRUE(result.output.contains(std::format("; skipped, as they do not import {}: ", qtDll("Qt6Core"))))
+        << result.output;
+    EXPECT_TRUE(result.output.contains("imageformats\\" + otherBuild)) << result.output;
+    EXPECT_TRUE(result.output.contains("imageformats\\frost_not_a_plugin.dll")) << result.output;
+    EXPECT_FALSE(result.output.contains("Qt will skip")) << result.output;
     EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
+}
+
+TEST(FrostProcess, PreloadFailureOnlyWarns) {
+    /*
+     * A non-platform plugin that cannot be loaded (named like one, but not a PE image) in a
+     * directory whose plugin paths pass the loader's limit: the self-test names it in its
+     * other-plugins warning and still passes, because Qt would skip that plugin too and frost
+     * must start without it.
+     */
+    const ScratchDir scratch("app-process-badpreload");
+    const std::string dir = cellDirectory(longFormOf(scratch), 300);
+    const std::string exe = copyFrostTo(dir);
+    ASSERT_TRUE(fs::create_directories(anyLengthPath(dir) / "imageformats"));
+    const std::string broken = "imageformats\\" + qtDll("qbroken");
+    {
+        std::ofstream out(anyLengthPath(dir) / frost::io::toStdPath(broken).value(),
+                          std::ios::binary | std::ios::trunc);
+        out << std::string(4096, 'x');
+    }
+    const auto form = parentLongPathsEffective() ? ImagePathForm::Plain : ImagePathForm::Extended;
+    const auto result = runFrost(exe, {"--selftest"}, ownPluginsOnly(), form, 30s);
+    EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
+    EXPECT_TRUE(result.output.contains("selftest: warn other-plugins: loaded 0 of 1 plugin(s) through \\\\?\\"))
+        << result.output;
+    EXPECT_TRUE(result.output.contains("; Qt will skip " + broken + " (")) << result.output;
+    EXPECT_TRUE(result.output.contains("win32 error 193)")) << result.output;
+    EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
+}
+
+TEST(FrostProcess, SelfTestOnScreenUpToMaxPath) {
+    /*
+     * The self-test with Qt's native platform plugin (windows), as the GUI starts: a real
+     * window, on this test's private desktop, so never on the user's screen. From the build
+     * directory and from the longest image paths below MAX_PATH, 259 UTF-16 units, plain and
+     * \\?\ (the prefix counts). From 260 units on, NVIDIA's user-mode driver ends any process
+     * that creates a Direct3D device in its DllMain (0xC0000409, FAST_FAIL_INVALID_ARG in
+     * nvldumdx.dll, reached from qwindows.dll through d3d9.dll; a python.exe control dies the
+     * same way; measured 2026-11-01 in the review of 4c5533d). That is not frost's code, and how
+     * frost should avoid it waits for the user's decision (ADR 0012), so this test stops below it.
+     */
+    const ScratchDir scratch("app-process-onscreen");
+    const std::string base = longFormOf(scratch);
+    ASSERT_FALSE(base.empty());
+    const std::string master = frost::io::joinPath(scratch.path(), "m").value();
+    ASSERT_FALSE(copyFrostTo(master).empty());
+    struct Cell {
+        std::string exe;
+        ImagePathForm form;
+        std::string what;
+    };
+    // The longest image path below MAX_PATH, in UTF-16 units, without and with the 4-unit prefix.
+    const std::size_t longestDir = std::size_t{MAX_PATH} - 1 - std::string_view("\\frost.exe").size();
+    const std::vector<Cell> cells{
+        {frostExe(), ImagePathForm::Auto, "build directory"},
+        {linkTree(master, cellDirectory(base, longestDir)), ImagePathForm::Plain, "plain, 259 units"},
+        {linkTree(master, cellDirectory(base, longestDir - 4)), ImagePathForm::Extended, "\\\\?\\, 259 units"}};
+    for (const Cell& cell : cells) {
+        SCOPED_TRACE(cell.what);
+        const auto result = runFrost(cell.exe, {"--selftest=onscreen"}, ownPluginsOnly(), cell.form, 60s);
+        EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
+        EXPECT_TRUE(result.output.contains("platform plugin 'windows'")) << result.output;
+        EXPECT_TRUE(result.output.contains("ok   main-window: main window exposed and closed")) << result.output;
+        EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
+        if (cell.form != ImagePathForm::Auto) {
+            EXPECT_TRUE(result.output.contains(std::format(
+                "image-path: {}, 259 UTF-16 units", cell.form == ImagePathForm::Plain ? "plain form" : "\\\\?\\ form")))
+                << result.output;
+        }
+    }
 }
 
 // Runs a copy of frost from which `missing` (a file beside frost.exe) was removed, in a
 // command-line mode, and checks the launcher's report: status 4 at once, the reason on
 // stderr, and no box (the run would otherwise wait on the private desktop until the timeout).
-void expectLauncherFailure(const std::string& missing) {
+// `expectedPath` is how the report names what failed.
+void expectLauncherFailure(const std::string& missing, std::string_view expectedPath) {
     const ScratchDir scratch("app-process-launcher");
     const std::string dir = scratch.join("fr\xC3\xB8st launcher");
     const std::string exe = copyFrostTo(dir);
@@ -696,18 +783,115 @@ void expectLauncherFailure(const std::string& missing) {
     const auto started = std::chrono::steady_clock::now();
     const auto result = runFrost(exe, {"--version"}, {}, ImagePathForm::Auto, 30s);
     EXPECT_EQ(result.exitCode, 4) << result.startError << result.output;
-    const std::string expected = "frost: cannot load " + frost::io::joinPath(dir, "frost_app.dll").value() + ": ";
+    const std::string expected =
+        "frost: cannot load " + frost::io::joinPath(dir, "frost_app.dll").value() + std::string(expectedPath) + ": ";
     EXPECT_TRUE(result.output.contains(expected)) << "expected " << expected << "\n" << result.output;
     EXPECT_TRUE(result.output.contains("(win32 error 126)")) << result.output;
     EXPECT_LT(std::chrono::steady_clock::now() - started, 30s);
 }
 
-TEST(FrostProcess, LauncherReportsMissingAppDll) { expectLauncherFailure("frost_app.dll"); }
+TEST(FrostProcess, LauncherReportsMissingAppDll) { expectLauncherFailure("frost_app.dll", ""); }
 
 TEST(FrostProcess, LauncherReportsMissingQtDll) {
     // frost_app.dll's import is missing: the launcher reports its own load failure, where the
-    // single-image frost died in the loader with 0xC0000135 before any code ran.
-    expectLauncherFailure(qtDll("Qt6Widgets"));
+    // single-image frost died in the loader with 0xC0000135 before any code ran. The loader
+    // does not say which import failed, so the report says that frost_app.dll is there.
+    expectLauncherFailure(qtDll("Qt6Widgets"), " or a DLL it needs");
+}
+
+/*
+ * While an instance lives, this process's error mode is exactly `mode`, so a child started
+ * meanwhile inherits that mode and nothing else; the destructor restores the previous mode.
+ * Same threading rule as frost::test::NoHardErrorBoxes.
+ */
+class InheritedErrorMode {
+public:
+    explicit InheritedErrorMode(UINT mode) noexcept : m_previous(SetErrorMode(mode)) {}
+    ~InheritedErrorMode() { SetErrorMode(m_previous); }
+    InheritedErrorMode(const InheritedErrorMode&) = delete ("restores the error mode once");
+    InheritedErrorMode& operator=(const InheritedErrorMode&) = delete ("restores the error mode once");
+
+private:
+    UINT m_previous;
+};
+
+// The hex number after `label` in `text` ("... at load 0x8003, ..."), or nullopt.
+std::optional<unsigned> hexAfter(std::string_view text, std::string_view label) {
+    const std::size_t at = text.find(label);
+    if (at == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const char* begin = text.data() + at + label.size();
+    unsigned value = 0;
+    const auto [end, error] = std::from_chars(begin, text.data() + text.size(), value, 16);
+    return error == std::errc() && end != begin ? std::optional<unsigned>(value) : std::nullopt;
+}
+
+TEST(FrostProcess, LauncherSetsTheErrorModeForItsLoads) {
+    /*
+     * Without SEM_FAILCRITICALERRORS, the loader answers a mismatched import (127) or a broken
+     * image (193) with csrss's modal "Entry Point Not Found" or "Bad Image" box, which would hold
+     * `frost --version` in a terminal until someone clicks (review of 4c5533d). Here the parent
+     * hands down SEM_NOGPFAULTERRORBOX alone, and launcher_probe_app.cpp, copied as
+     * frost_app.dll, records the mode during its own load: the critical-error flags must be on
+     * then, in every mode. Command-line modes keep them; a GUI start (no option before "--")
+     * gives frost_app.dll the parent's mode back. The probe loads cleanly, so no hard error can
+     * arise even if the launcher regresses; the run then just fails here.
+     */
+    const ScratchDir scratch("app-process-errormode");
+    const std::string dir = scratch.join("fr\xC3\xB8st probe");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir).has_value());
+    const fs::path built = frost::io::toStdPath(frostExe()).value();
+    copyInto(built, dir, "frost.exe");
+    copyInto(frost::io::toStdPath(frost::io::normalizePath(FROST_LAUNCHER_PROBE_APP).value()).value(), dir,
+             "frost_app.dll");
+    // ASan trees: the launcher loads the ASan runtime from its directory first.
+    std::error_code error;
+    for (const auto& entry : fs::directory_iterator(built.parent_path(), error)) {
+        if (entry.path().filename().wstring().starts_with(L"clang_rt.asan")) {
+            copyInto(entry.path(), dir, frost::io::fromStdPath(entry.path().filename()).value());
+        }
+    }
+    const std::string exe = frost::io::joinPath(dir, "frost.exe").value();
+    constexpr unsigned kCritical = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+    constexpr unsigned kNoBoxes = kCritical | SEM_NOGPFAULTERRORBOX;
+    struct Case {
+        std::vector<std::string> args;
+        bool commandLine;
+    };
+    const std::vector<Case> cases{{{"--version"}, true},
+                                  {{}, false},
+                                  {{"--", "-file.txt", "--version"}, false},
+                                  {{"file.txt", "--selftest"}, true}};
+    for (const Case& c : cases) {
+        SCOPED_TRACE(std::format("arguments: {}", c.args.empty() ? std::string("none") : c.args.front() + " ..."));
+        frost::io::ProcessSpec spec;
+        spec.executable = exe;
+        spec.arguments = c.args;
+        spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+        const frost::test::PrivateDesktop desktop;
+        ASSERT_TRUE(desktop.valid());
+        spec.desktop = desktop.name();
+        const auto result = [&] {
+            const InheritedErrorMode inherited(SEM_NOGPFAULTERRORBOX);
+            return frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 30s);
+        }();
+        ASSERT_TRUE(result.has_value()) << result.error().describe();
+        const std::string& output = result->stdoutBytes;
+        EXPECT_EQ(result->exitCode, 0) << output;
+        const auto atLoad = hexAfter(output, "error mode at load 0x");
+        const auto atEntry = hexAfter(output, "at entry 0x");
+        const auto bits = hexAfter(output, "hardening bits 0x");
+        ASSERT_TRUE(atLoad && atEntry && bits) << output;
+        EXPECT_EQ(*atLoad & kCritical, kCritical) << output;
+        if (c.commandLine) {
+            EXPECT_EQ(*atEntry & kNoBoxes, kNoBoxes) << output;
+        } else {
+            EXPECT_EQ(*atEntry & kNoBoxes, static_cast<unsigned>(SEM_NOGPFAULTERRORBOX)) << output;
+        }
+        // Every hardening step, the \\?\ install directory included.
+        EXPECT_EQ(*bits, 0x1Fu) << output;
+    }
 }
 
 /*
@@ -825,8 +1009,7 @@ TEST(FrostProcess, AppDllHasNoDependentLoadFlags) {
     // for its imports; 0xA00 there broke plain starts from 236 units in the spike.
     const MappedImage app(appDll());
     ASSERT_TRUE(app.valid());
-    const DWORD flags = dependentLoadFlags(app);
-    EXPECT_TRUE(flags == 0 || flags == 0x900) << std::format("{:#x}", flags);
+    EXPECT_EQ(dependentLoadFlags(app), 0u);
 }
 
 TEST(FrostProcess, AppDllEmbedsNoManifest) {

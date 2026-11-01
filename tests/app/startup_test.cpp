@@ -2,12 +2,15 @@
 //
 // Tests for frost's start-up hardening, guards and plugin pinning (frost/app/startup.hpp and
 // startup_core.hpp): which platform plugin files Qt will load and in which order, the report
-// for a missing one, the pin through \\?\ that satisfies Qt's later plain-path load from a long
-// directory, the hand-over of the hardening state to frost_app.dll, that the hardened process
-// no longer loads a DLL planted in the current directory (and what it does not cover), that
-// the launcher's \\?\ install directory serves later loads by name, that suppressCrashDialogs()
-// switches every dialog source off, that the command-line dialog guard refuses dialog windows,
-// and that a Qt fatal error in a command-line mode ends the process with status 4.
+// for a missing one, QT_QPA_PLATFORM_PLUGIN_PATH's normalisation and pin, the loader's 250-unit
+// plain-path limit itself, the pin through \\?\ that satisfies Qt's later plain-path load from
+// a long directory (and the failing unpinned load), the launcher's GUI or command-line rule and
+// its normalised \\?\ install directory, the hand-over of the hardening state to frost_app.dll,
+// that the hardened process no longer loads a DLL planted in the current directory (and what it
+// does not cover), that the launcher's \\?\ install directory serves later loads by name, that
+// suppressCrashDialogs() switches every dialog source off, that the command-line dialog guard
+// refuses dialog windows, and that a Qt fatal error in a command-line mode ends the process
+// with status 4.
 // hardenProcess(), the guard and the fatal handler run only in death-test children, because
 // they cannot be undone; the binary is separate from app_tests so those children start without
 // a QApplication.
@@ -29,6 +32,8 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <initializer_list>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -148,6 +153,81 @@ TEST(StartupHardeningBits, RoundTripEveryField) {
 
 #ifdef _WIN32
 
+// launcherCommandLineMode() of `arguments` (argv without the program name).
+bool launcherMode(std::initializer_list<const wchar_t*> arguments) {
+    return frost::app::launcherCommandLineMode(std::span<const wchar_t* const>(arguments.begin(), arguments.size()));
+}
+
+TEST(StartupLauncherMode, OptionsBeforeDoubleDashSelectACommandLineMode) {
+    // The launcher shows its box only in GUI mode, so it must read options as frost_app.dll's
+    // parser does (command_line.cpp): '-' starts an option, also an unknown one (a usage error,
+    // a command-line mode), and everything after "--" is a path.
+    EXPECT_FALSE(launcherMode({}));
+    EXPECT_FALSE(launcherMode({L"file.txt", L"C:\\fr\u00f8st dir"}));
+    EXPECT_FALSE(launcherMode({L""}));
+    EXPECT_FALSE(launcherMode({nullptr}));
+    EXPECT_TRUE(launcherMode({L"--version"}));
+    EXPECT_TRUE(launcherMode({L"file.txt", L"--selftest"}));
+    EXPECT_TRUE(launcherMode({L"-"}));
+    EXPECT_TRUE(launcherMode({L"---"}));
+    EXPECT_TRUE(launcherMode({L"--bogus"}));
+    EXPECT_TRUE(launcherMode({L"--selftest", L"--", L"-platform"}));
+    // `frost -- <path>`, the way to open a path that starts with '-' (and a file-association
+    // template), is a GUI start, so a failure there must still show the box.
+    EXPECT_FALSE(launcherMode({L"--", L"-file.txt", L"--version"}));
+    EXPECT_FALSE(launcherMode({L"file.txt", L"--", L"--help"}));
+}
+
+TEST(StartupInstallDirectory, ExtendedDirectoryNormalisesThePlainSpelling) {
+    /*
+     * GetModuleFileNameW reports frost.exe's path as the parent spelled it, and \\?\ takes
+     * every character literally: AddDllDirectory of "\\?\C:\x\sub\..\bin" fails, and "\\.\C:\..."
+     * with a \\?\UNC\ prefix becomes a lookup of the server "." (win32 error 53), as the review
+     * of 4c5533d measured. Plain and \\.\ spellings are therefore normalised as Win32 opens them;
+     * \\?\ ones are already literal and stay. 8.3 short components are not expanded.
+     */
+    using frost::app::extendedDirectoryOf;
+    EXPECT_EQ(extendedDirectoryOf(L"C:\\fr\u00f8st dir\\bin\\frost.exe"), L"\\\\?\\C:\\fr\u00f8st dir\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"C:\\x\\sub\\..\\bin\\.\\frost.exe"), L"\\\\?\\C:\\x\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"C:\\x\\bin.\\frost.exe"), L"\\\\?\\C:\\x\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"C:/x//bin/frost.exe"), L"\\\\?\\C:\\x\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"\\\\.\\C:\\x\\..\\bin\\frost.exe"), L"\\\\?\\C:\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"\\\\.\\UNC\\server\\share\\x\\..\\bin\\frost.exe"),
+              L"\\\\?\\UNC\\server\\share\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"\\\\server\\share\\bin\\frost.exe"), L"\\\\?\\UNC\\server\\share\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"\\\\?\\C:\\x\\..\\bin\\frost.exe"), L"\\\\?\\C:\\x\\..\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"\\\\?\\UNC\\server\\share\\bin\\frost.exe"), L"\\\\?\\UNC\\server\\share\\bin");
+    EXPECT_EQ(extendedDirectoryOf(L"C:\\PROGRA~1\\Frost\\frost.exe"), L"\\\\?\\C:\\PROGRA~1\\Frost");
+    EXPECT_EQ(extendedDirectoryOf(L"frost.exe").substr(0, 4), L"\\\\?\\");
+    EXPECT_EQ(extendedDirectoryOf(L"\\\\?\\frost.exe"), L"");
+    // Beyond MAX_PATH: unchanged apart from the prefix.
+    const std::wstring longDir =
+        L"C:\\" + std::wstring(100, L'a') + L"\\" + std::wstring(100, L'b') + L"\\" + std::wstring(100, L'c');
+    EXPECT_EQ(extendedDirectoryOf(longDir + L"\\frost.exe"), L"\\\\?\\" + longDir);
+}
+
+TEST(StartupPlatformPlugin, OverrideDirectoryIsNormalisedAsQtResolvesIt) {
+    // QT_QPA_PLATFORM_PLUGIN_PATH as users and scripts write it; the pin goes through \\?\,
+    // which would take every one of these spellings literally.
+    using frost::app::platformPluginOverrideDirectory;
+    EXPECT_EQ(platformPluginOverrideDirectory(u""), u"");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"plugins\\platforms"), u"") << "relative: Qt's to resolve";
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:"), u"");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:platforms"), u"");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:/fr\u00f8st/plugins/platforms/"),
+              u"C:\\fr\u00f8st\\plugins\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"//?/C:/qt/platforms"), u"C:\\qt\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"\\\\?\\C:\\qt\\platforms\\\\"), u"C:\\qt\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:\\qt\\.\\x\\..\\platforms"), u"C:\\qt\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:\\qt\\platforms."), u"C:\\qt\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:\\qt//platforms"), u"C:\\qt\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"\\\\server\\share\\platforms\\"), u"\\\\server\\share\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"\\\\?\\UNC\\server\\share\\platforms"),
+              u"\\\\server\\share\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"\\\\.\\C:\\qt\\x\\..\\platforms"), u"C:\\qt\\platforms");
+    EXPECT_EQ(platformPluginOverrideDirectory(u"C:\\"), u"C:\\");
+}
+
 // Sets environment variable `name` for one test and restores its previous state.
 class ScopedEnvironment {
 public:
@@ -233,6 +313,24 @@ void unload(const std::string& utf8) {
             break;
         }
     }
+}
+
+// The long form (GetLongPathNameW) of the existing path `utf8`, so that lengths built on it are
+// the ones the loader sees (the temp directory may be named through an 8.3 component); `utf8`
+// itself if that fails.
+std::string longForm(const std::string& utf8) {
+    const std::wstring wide = frost::io::toWide(utf8).value();
+    const DWORD units = GetLongPathNameW(wide.c_str(), nullptr, 0);
+    if (units == 0) {
+        return utf8;
+    }
+    std::wstring out(units, L'\0');
+    const DWORD written = GetLongPathNameW(wide.c_str(), out.data(), units);
+    if (written == 0 || written >= units) {
+        return utf8;
+    }
+    out.resize(written);
+    return frost::io::fromWide(out).value_or(utf8);
 }
 
 // `base` extended by ASCII components to exactly `units` UTF-16 code units (at least 2 more).
@@ -323,12 +421,18 @@ TEST(StartupLoadPlatformPlugin, PinnedPluginSatisfiesQtsPlainPathLoad) {
     const std::string name = frost::io::fromStdPath(sdkOffscreenPlugin().filename()).value();
     const std::string plugin = copyInto(sdkOffscreenPlugin(), dir, name);
     ASSERT_GT(frost::io::utf8ToUtf16(plugin).value().size(), 260u);
+    std::wstring plain = frost::io::toWide(plugin).value();
+
+    // The control: unpinned, the plain-path load fails, so what follows is the pin's doing.
+    SetLastError(ERROR_SUCCESS);
+    EXPECT_EQ(LoadLibraryExW(plain.c_str(), nullptr, 0), nullptr);
+    EXPECT_EQ(GetLastError(), static_cast<DWORD>(ERROR_FILENAME_EXCED_RANGE));
+
     const auto pinned = frost::app::loadPlatformPlugin(std::vector{frost::io::utf8ToUtf16(plugin).value()},
                                                        std::vector<std::string>{"offscreen"});
     ASSERT_TRUE(pinned.has_value()) << pinned.error().message();
 
     // Qt's later call: the plain path, no \\?\ prefix, backslashes and forward slashes.
-    std::wstring plain = frost::io::toWide(plugin).value();
     HMODULE byPin = GetModuleHandleW(frost::io::toWin32Path(plugin).value().c_str());
     ASSERT_NE(byPin, nullptr);
     HMODULE byPlainPath = LoadLibraryExW(plain.c_str(), nullptr, 0);
@@ -341,6 +445,66 @@ TEST(StartupLoadPlatformPlugin, PinnedPluginSatisfiesQtsPlainPathLoad) {
             FreeLibrary(module);
         }
     }
+    unload(plugin);
+}
+
+TEST(StartupLoaderLimit, PlainPathOfAManifestDllLoadsUpTo250Units) {
+    /*
+     * The Windows loader's limit that kLoaderPlainPathLimitUnits states and that gates
+     * preloadOtherPlugins(), measured on every run with the SDK's unmodified offscreen plugin
+     * (it embeds RT_MANIFEST 2, as all of Qt's DLLs do): a plain path of exactly 250 UTF-16
+     * units loads, 251 fails with ERROR_FILENAME_EXCED_RANGE. A Windows or Qt upgrade that
+     * lowers the limit fails here, where Qt would otherwise skip plugins silently. No pin.
+     */
+    keepQtGuiLoaded();
+    const frost::test::ScratchDir scratch("app-startup-limit");
+    const std::string name = frost::io::fromStdPath(sdkOffscreenPlugin().filename()).value();
+    const std::size_t limit = frost::app::kLoaderPlainPathLimitUnits;
+    for (const std::size_t units : {limit, limit + 1}) {
+        SCOPED_TRACE(std::format("plugin path of {} UTF-16 units", units));
+        const std::string dir =
+            padToLength(frost::io::joinPath(longForm(scratch.path()), std::format("\xC3\xA4 {}", units)).value(),
+                        units - 1 - name.size());
+        const std::string plugin = copyInto(sdkOffscreenPlugin(), dir, name);
+        const std::wstring plain = frost::io::toWide(plugin).value();
+        ASSERT_EQ(plain.size(), units);
+        SetLastError(ERROR_SUCCESS);
+        HMODULE module = LoadLibraryExW(plain.c_str(), nullptr, 0);
+        const DWORD error = GetLastError();
+        if (units <= limit) {
+            EXPECT_NE(module, nullptr) << "win32 error " << error;
+        } else {
+            EXPECT_EQ(module, nullptr);
+            EXPECT_EQ(error, static_cast<DWORD>(ERROR_FILENAME_EXCED_RANGE));
+        }
+        if (module != nullptr) {
+            FreeLibrary(module);
+        }
+        unload(plugin);
+    }
+}
+
+TEST(StartupPlatformPlugin, PinsFromQtQpaPlatformPluginPathFirst) {
+    /*
+     * preparePlatformPlugin() with QT_QPA_PLATFORM_PLUGIN_PATH set, as a script would write it
+     * (forward slashes, "." and "..", a trailing separator): the plugin in that directory is
+     * pinned, through the normalised path (platformPluginOverrideDirectory()); the \\?\ form
+     * of the raw value would name no file. The test binary's own directory has no platforms\.
+     */
+    keepQtGuiLoaded();
+    const frost::test::ScratchDir scratch("app-startup-override");
+    const std::string name = frost::io::fromStdPath(sdkOffscreenPlugin().filename()).value();
+    const std::string custom = scratch.join("custom pl\xC3\xBCgins");
+    const std::string plugin = copyInto(sdkOffscreenPlugin(), custom, name);
+    std::string spelled = custom + "\\.\\sub\\..\\";
+    std::ranges::replace(spelled, '\\', '/');
+    const std::wstring value = frost::io::toWide(spelled).value();
+    const ScopedEnvironment pluginPath(L"QT_PLUGIN_PATH", nullptr);
+    const ScopedEnvironment platformPath(L"QT_QPA_PLATFORM_PLUGIN_PATH", value.c_str());
+    const ScopedEnvironment platform(L"QT_QPA_PLATFORM", L"offscreen");
+    const auto result = frost::app::preparePlatformPlugin();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(result->detail, "loaded Qt's platform plugin " + plugin);
     unload(plugin);
 }
 

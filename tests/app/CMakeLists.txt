@@ -40,6 +40,17 @@ if(WIN32)
     target_link_libraries(frost_process_tests PRIVATE user32)
     target_compile_definitions(frost_process_tests PRIVATE
         FROST_QT_BIN_DIR="${FROST_QT_BIN_DIR}" FROST_QT_PLUGIN_DIR="${FROST_QT_PLUGIN_DIR}")
+
+    # A stand-in for frost_app.dll (launcher_probe_app.cpp) that reports the launcher's error
+    # mode, for FrostProcess.LauncherSetsTheErrorModeForItsLoads. Built like the launcher:
+    # the static release CRT, no sanitizer and no manifest, so it imports KERNEL32.dll alone.
+    add_library(frost_launcher_probe_app SHARED launcher_probe_app.cpp)
+    frost_apply_compile_options(frost_launcher_probe_app TEST NO_SANITIZE)
+    set_target_properties(frost_launcher_probe_app PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreaded)
+    target_link_options(frost_launcher_probe_app PRIVATE /MANIFEST:NO)
+    target_compile_definitions(frost_process_tests PRIVATE
+        FROST_LAUNCHER_PROBE_APP="$<TARGET_FILE:frost_launcher_probe_app>")
+    add_dependencies(frost_process_tests frost_launcher_probe_app)
 endif()
 # The tests run the real program from its build directory (on Windows frost.exe, with
 # frost_app.dll beside it).

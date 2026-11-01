@@ -7,7 +7,9 @@
 #include "frost/app/startup_core.hpp"
 
 #include <algorithm>
+#include <span>
 #include <string>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -111,6 +113,44 @@ std::wstring extendedPath(const std::wstring& path) {
         return L"\\\\?\\UNC\\" + path.substr(2);
     }
     return L"\\\\?\\" + path;
+}
+
+std::wstring extendedDirectoryOf(const std::wstring& imagePath) {
+    std::wstring path = imagePath;
+    if (!path.starts_with(L"\\\\?\\")) {
+        // GetFullPathNameW normalises after a \\.\ prefix too, and keeps the prefix.
+        if (const DWORD units = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr); units > 0) {
+            std::wstring full(units, L'\0');
+            const DWORD written = GetFullPathNameW(path.c_str(), units, full.data(), nullptr);
+            if (written > 0 && written < units) {
+                full.resize(written);
+                path = std::move(full);
+            }
+        }
+        if (path.starts_with(L"\\\\.\\")) {
+            path[2] = L'?';
+        } else {
+            path = extendedPath(path);
+        }
+    }
+    const std::size_t slash = path.find_last_of(L'\\');
+    // "\\?\" itself is no directory.
+    return slash == std::wstring::npos || slash < 4 ? std::wstring() : path.substr(0, slash);
+}
+
+bool launcherCommandLineMode(std::span<const wchar_t* const> arguments) noexcept {
+    for (const wchar_t* argument : arguments) {
+        if (argument == nullptr) {
+            continue;
+        }
+        if (argument[0] == L'-' && argument[1] == L'-' && argument[2] == L'\0') {
+            return false;
+        }
+        if (argument[0] == L'-') {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool searchInstallDirectoryExtended(const std::wstring& extendedDirectory) {

@@ -7,13 +7,19 @@
 //
 // Start-up order matters for the budgets in PLAN.md section 4 (B1 first frame):
 // arguments are parsed before Qt's GUI exists, so --version and --help never initialise
-// the GUI stack (they use only Qt6Core, for qVersion()), and --selftest initialises it
-// (offscreen by default) only after its process checks. QApplication is constructed only
-// after the platform plugin is pinned (preparePlatformPlugin()), in every mode, so Qt never
-// fails to load it. Qt gets only the program name, so no argument (not even one after "--")
-// becomes a Qt option such as -platform. Command-line modes (usage errors, --version, --help,
-// --selftest) never show a dialog: suppressCrashDialogs(), guardCommandLineDialogs() and
-// installCommandLineFatalHandler() run before anything else there.
+// the GUI stack: no QApplication, no platform plugin. They still need every static import of
+// frost_app.dll (Qt6Core, Qt6Gui and Qt6Widgets), and they call qVersion(), install the fatal
+// message handler (qInstallMessageHandler) and the dialog hook (SetWindowsHookExW).
+// --selftest initialises the GUI stack (offscreen by default) only after its process checks.
+// QApplication is constructed only after preparePlatformPlugin() has pinned the platform
+// plugin or reported why it cannot, in every mode; only where QT_PLUGIN_PATH,
+// QT_QPA_PLATFORM_PLUGIN_PATH or qt.conf may supply a plugin frost did not find is the load
+// left to Qt, which may then fail (frost/app/startup.hpp). Qt gets only the program name, so
+// no argument (not even one after "--") becomes a Qt option such as -platform. Command-line
+// modes (usage errors, --version, --help, --selftest) never show a dialog:
+// suppressCrashDialogs(), guardCommandLineDialogs() and installCommandLineFatalHandler() run
+// before anything else there, and the launcher has already set an error mode without the
+// loader's boxes.
 //
 // Exit status: 0 success, 1 self-test failed, 2 usage error, 4 frost cannot start in this
 // environment: Qt's platform plugin is missing or cannot be loaded, or the launcher cannot
@@ -257,8 +263,10 @@ int run(const frost::app::ProcessHardening& hardening, int argc, char** argv) {
  * frost_app.dll's entry point (frost::app::kAppEntryPoint), called once by the frost.exe
  * launcher on its main thread after hardenProcess() and searchInstallDirectoryExtended();
  * `hardeningBits` is encodeHardening() of the launcher's state. Returns the exit status, which
- * the launcher returns from wmain. Qt's one-element argv comes from frost.exe's path without a
- * \\?\ prefix, the form the old executable's CRT passed.
+ * the launcher returns from wmain. Qt's one-element argv is frost.exe's path as
+ * GetModuleFileNameW reports it, without a \\?\ prefix. The old executable's CRT passed the
+ * command line's first token instead, as the parent spelled it (possibly relative); Qt takes
+ * applicationFilePath() and applicationDirPath() from GetModuleFileNameW in both cases.
  */
 extern "C" __declspec(dllexport) int frost_main(unsigned hardeningBits) {
     const frost::app::ProcessHardening hardening = frost::app::decodeHardening(hardeningBits);

@@ -11,9 +11,11 @@
 //     platform plugin" box among them), and Qt's fatal errors, which end the process with
 //     status 4 instead;
 //   - preparePlatformPlugin() loads (pins) the Qt platform plugin through its \\?\ path before
-//     QApplication exists, or reports why it cannot, so Qt never fails to load it;
-//     preloadOtherPlugins() does the same for the other deployed plugins when their paths
-//     are long.
+//     QApplication exists, or reports why it cannot, so Qt's own load of a plugin frost pinned
+//     cannot fail. When QT_PLUGIN_PATH, QT_QPA_PLATFORM_PLUGIN_PATH or qt.conf may point Qt
+//     elsewhere and no candidate exists, nothing is pinned and Qt may still fail (the
+//     command-line guards then end the process with status 4, FrostProcess.SelfTestNeverShowsQtsDialog);
+//     preloadOtherPlugins() pins the other deployed plugins when their paths are long.
 //
 // Why the pin (measured on Windows 11 26300 with Qt 6.12.0, LongPathsEnabled=0 and =1; ADR
 // 0012): the Windows loader refuses a plain path longer than kLoaderPlainPathLimitUnits for
@@ -89,8 +91,10 @@ void installCommandLineFatalHandler(const unsigned* consoleCodePageToRestore);
  * in legacy and hardened search modes (measured 2026-11-01 on Windows 11 26300; ADR 0012).
  * DLLs without that resource load at any plain length. frost loads every DLL of its own
  * through \\?\ and pins the platform plugin, so the limit no longer decides whether frost
- * starts; it only decides whether preloadOtherPlugins() has work to do. Measure again when
- * Windows or Qt is upgraded (FrostProcess.StartsFromEveryDirectoryLength covers the range).
+ * starts; it only decides whether preloadOtherPlugins() has work to do. A lower real limit
+ * would make Qt skip plugins between it and this value silently, so
+ * StartupLoaderLimit.PlainPathOfAManifestDllLoadsUpTo250Units measures it on every test run
+ * with the SDK's unmodified offscreen plugin (250 loads, 251 fails with 206).
  */
 inline constexpr std::size_t kLoaderPlainPathLimitUnits = 250;
 
@@ -137,6 +141,20 @@ platformPluginCandidates(std::span<const std::u16string> dirs, std::span<const s
 [[nodiscard]] Result<std::u16string> loadPlatformPlugin(std::span<const std::u16string> candidates,
                                                         std::span<const std::string> platforms);
 
+#ifdef _WIN32
+/*
+ * The plugin directory that a QT_QPA_PLATFORM_PLUGIN_PATH value names, in the form
+ * preparePlatformPlugin() makes its first candidates from, or "" when `value` is empty or not
+ * absolute (a relative value is Qt's to resolve, and frost pins nothing from it). A \\?\ or
+ * //?/ prefix is stripped and '/' becomes '\'; an absolute value is a drive path ("X:\...") or
+ * a UNC or \\.\ path. It is then normalised as Win32 and Qt resolve it ("." and "..",
+ * repeated separators, trailing dots and spaces; GetFullPathNameW), because the pin goes
+ * through \\?\, which takes all of them literally; a \\.\ prefix is dropped, and trailing
+ * separators are removed except after a drive root ("C:\"). O(length); no file system access.
+ */
+[[nodiscard]] std::u16string platformPluginOverrideDirectory(std::u16string_view value);
+#endif
+
 // What preparePlatformPlugin() reports when Qt can start.
 struct PlatformPluginReport {
     std::string detail; // For the self-test's plugin-paths check. Always set.
@@ -144,12 +162,12 @@ struct PlatformPluginReport {
 
 /*
  * Pins the platform plugin Qt is about to use (platformPluginNames() of QT_QPA_PLATFORM, so
- * call it after the platform is chosen) before QApplication exists. The candidates come from
- * QT_QPA_PLATFORM_PLUGIN_PATH, when it is set to an absolute path (a \\?\ or //?/ prefix is
- * stripped, '/' becomes '\' and "." and ".." components are resolved, as Qt resolves them),
- * and from <install dir>\platforms, where the install directory
- * is frost.exe's, in the form GetModuleFileNameW reports (8.3 short components kept: Qt
- * derives its plugin path from the same form, FrostProcess.RunsThroughShortNamesOfALongPath).
+ * call it after the platform is chosen) before QApplication exists. The candidates come first
+ * from QT_QPA_PLATFORM_PLUGIN_PATH (platformPluginOverrideDirectory(), when it names an
+ * absolute path), then from <install dir>\platforms, where the install directory is
+ * frost.exe's, as the launcher loads from it (extendedDirectoryOf(): normalised, 8.3 short
+ * components kept, since Qt derives its plugin path from the same form,
+ * FrostProcess.RunsThroughShortNamesOfALongPath).
  * The plugin's build ("d" suffix or not) follows the Qt6Core that is loaded.
  * Details: "loaded Qt's platform plugin <path>"; when no candidate exists but QT_PLUGIN_PATH,
  * QT_QPA_PLATFORM_PLUGIN_PATH or <install dir>\qt.conf may point Qt elsewhere, "platform
@@ -171,17 +189,22 @@ struct PluginPreloadReport {
 };
 
 /*
- * The other deployed plugins (every DLL in a subdirectory of the install directory except
- * platforms\: styles, imageformats, ...) are best-effort: Qt skips one it cannot load. When
- * one of their plain paths lies beyond kLoaderPlainPathLimitUnits
- * (pluginPathExceedsLoaderLimit()), each is loaded through its \\?\ path with
- * loadPlatformPlugin()'s flags, so Qt's later plain-path load finds it mapped, and its
- * dependencies beside frost.exe resolve in \\?\ form (qsvg needs Qt6Svg, for one); a failure
- * is reported (ok false), never fatal: Qt would skip that plugin silently.
+ * The other deployed plugins (DLLs in a first-level subdirectory of the install directory
+ * other than platforms\: styles, imageformats, ...) are best-effort: Qt skips one it cannot
+ * load. When one of their plain paths lies beyond kLoaderPlainPathLimitUnits
+ * (pluginPathExceedsLoaderLimit(), over every listed DLL), each DLL whose import directory
+ * names the Qt6Core this process loaded (Qt6Core.dll or Qt6Cored.dll) is loaded through its
+ * \\?\ path with loadPlatformPlugin()'s flags, so Qt's later plain-path load finds it mapped,
+ * and its dependencies beside frost.exe resolve in \\?\ form (qsvg needs Qt6Svg, for one).
+ * The others (a plugin of Qt's other build, a DLL that is no Qt plugin) are skipped and
+ * named in the detail, because Qt would refuse them and loading them would bring in a second
+ * Qt or run foreign code. A file that cannot be read or loaded is reported (ok false), never
+ * fatal: Qt would skip that plugin silently (FrostProcess.PreloadFailureOnlyWarns).
  * Otherwise nothing is loaded and Qt loads them as usual. Budget: B1. The cost on a normal
  * install is one listing of the install directory and one per plugin directory; today only
- * platforms\ is deployed, so this lists one directory and loads nothing. Same threading rule
- * as preparePlatformPlugin(). Does nothing on non-Windows platforms.
+ * platforms\ is deployed, so this lists one directory and loads nothing. Beyond the limit
+ * each DLL is also mapped once as a data file for its imports. Same threading rule as
+ * preparePlatformPlugin(). Does nothing on non-Windows platforms.
  */
 [[nodiscard]] PluginPreloadReport preloadOtherPlugins();
 

@@ -106,10 +106,10 @@ HMODULE thisImage() {
 // frost.exe's /DEPENDENTLOADFLAG: LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
 // Its only import is KERNEL32.dll, so the value is defence in depth.
 constexpr DWORD kExeDependentLoadFlags = 0xA00;
-// frost_app.dll has none, so its imports follow the launcher's kLauncherLoadFlags (0x900). A
-// value there would replace them, and 0xA00 breaks plain starts from 236 units (ADR 0012);
-// 0x900 itself would be harmless and is accepted.
-constexpr DWORD kAppDependentLoadFlagsAllowed[] = {0, 0x900};
+// frost_app.dll has none (no /DEPENDENTLOADFLAG, src/app/CMakeLists.txt), so its imports
+// follow the launcher's kLauncherLoadFlags (0x900). A value there would replace them, and
+// 0xA00 breaks plain starts from 236 units (ADR 0012).
+constexpr DWORD kAppDependentLoadFlags = 0;
 
 // The DependentLoadFlags of `module`'s load configuration directory: the search flags the
 // loader uses for its static imports. 0 if the image has no such field.
@@ -193,14 +193,12 @@ std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening, b
 
     const DWORD exeFlags = dependentLoadFlags(GetModuleHandleW(nullptr));
     const DWORD appFlags = dependentLoadFlags(thisImage());
-    const bool appFlagsAllowed =
-        std::ranges::find(kAppDependentLoadFlagsAllowed, appFlags) != std::ranges::end(kAppDependentLoadFlagsAllowed);
-    const bool flagsOk = exeFlags == kExeDependentLoadFlags && appFlagsAllowed;
+    const bool flagsOk = exeFlags == kExeDependentLoadFlags && appFlags == kAppDependentLoadFlags;
     checks.push_back({"dependent-load-flags", flagsOk, true,
                       std::format("DependentLoadFlags frost.exe {:#x}, frost_app.dll {:#x}{}", exeFlags, appFlags,
                                   flagsOk ? ""
-                                          : " (expected 0xa00 for frost.exe and 0 or 0x900 for frost_app.dll, whose "
-                                            "imports follow the launcher's DLL_LOAD_DIR | SYSTEM32)")});
+                                          : " (expected 0xa00 for frost.exe and 0 for frost_app.dll, whose imports "
+                                            "follow the launcher's DLL_LOAD_DIR | SYSTEM32)")});
 
     const UINT acp = GetACP();
     checks.push_back({"utf8-code-page", acp == CP_UTF8, true, std::format("process ANSI code page is {}", acp)});

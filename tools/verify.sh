@@ -139,8 +139,19 @@ if [[ $CHECKS -eq 1 ]]; then
     # git; the mirror has the same contents). Fixtures are excluded: they are
     # byte-exact inputs, and clang-format cannot parse the banned-construct probes.
     echo "=== check: format"
+    # A git worktree's .git file names its git directory as Git for Windows wrote it
+    # ("gitdir: E:/dev/FrostIDE/.git/worktrees/<name>"), which git here cannot open; point it
+    # at the /mnt/<drive> form of that directory instead.
+    source_git=(git -C "$SOURCE")
+    if [[ -f "$SOURCE/.git" ]]; then
+        gitdir="$(sed -n 's/^gitdir: //p' "$SOURCE/.git" | tr -d '\r')"
+        if [[ "$gitdir" =~ ^([A-Za-z]):[/\\](.*)$ ]]; then
+            drive="${BASH_REMATCH[1],,}"
+            source_git=(git --git-dir="/mnt/$drive/${BASH_REMATCH[2]//\\//}" --work-tree="$SOURCE")
+        fi
+    fi
     # An empty list (git failing, e.g. on safe.directory) must fail, not pass vacuously.
-    sources="$(git -C "$SOURCE" ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' |
+    sources="$("${source_git[@]}" ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' |
         grep -Ev '^tests/toolchain_probe/banned/|^tests/[^/]+/fixtures/' || true)"
     unformatted=0
     while IFS= read -r file; do

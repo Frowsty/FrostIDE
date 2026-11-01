@@ -12,22 +12,26 @@
 // 235-249 in Debug and 218-249 in ASan trees; ADR 0003). wmain then:
 //   1. hardens the process (hardenProcess(), frost/app/startup_core.hpp) while only ntdll,
 //      kernel32 and kernelbase are mapped;
-//   2. adds the install directory in its \\?\ form as a DLL directory and makes USER_DIRS |
-//      SYSTEM32 the default search order (searchInstallDirectoryExtended());
-//   3. in ASan trees (FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME), loads the ASan runtime by its \\?\
+//   2. sets the error mode for its loads (see wmain), so a broken DLL raises no system box;
+//   3. adds the install directory in its normalised \\?\ form (extendedDirectoryOf()) as a
+//      DLL directory and makes USER_DIRS | SYSTEM32 the default search order
+//      (searchInstallDirectoryExtended());
+//   4. in ASan trees (FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME), loads the ASan runtime by its \\?\
 //      path first: it must initialise before the UCRT and Qt, or the instrumented frost_app.dll
 //      aborts with bad-free or bad-malloc_usable_size (measured 2026-11-01);
-//   4. loads frost_app.dll by its \\?\ path with kLauncherLoadFlags, so the DLL and its static
+//   5. loads frost_app.dll by its \\?\ path with kLauncherLoadFlags, so the DLL and its static
 //      imports (Qt, the VC runtime) load in \\?\ form at any length, and calls its frost_main();
 //      its return value is the exit status.
-// The image path itself stays as the parent gave it (plain on a normal start), so a short
-// install pays nothing for the \\?\ form of the image (about +1.4 ms per start, ADR 0012).
+// The image path itself stays as the parent gave it (plain on a normal start): a start
+// through a \\?\ image path costs about 1.2-3.8 ms more (probe fact 28, spike fact 21 and the
+// review of 4c5533d; ADR 0012, Measurements), so a short install never pays for it.
 // If frost_app.dll, its imports or its entry point cannot be loaded, the launcher reports why
 // (reportFailure) and exits with 4, the status frost uses for "cannot start in this
 // environment". It has no other state and no globals (startup hygiene, PLAN.md 2.1).
 
 #include "frost/app/startup_core.hpp"
 
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -75,10 +79,11 @@ bool usable(HANDLE handle) {
  *   - "frost: <message>" on stderr if the process has one (UTF-8 to a pipe or file, UTF-16
  *     through WriteConsoleW to a console), else on the parent's console (AttachConsole and
  *     CONOUT$), if there is one;
- *   - in GUI mode (`commandLineMode` false: no argument starts with '-'), also a message box,
- *     because a launch from Explorer has neither. user32 is loaded only here, from System32,
- *     so the launcher's static imports stay KERNEL32.dll alone. Command-line modes never show
- *     a box: tests and scripts run them unattended.
+ *   - in GUI mode (`commandLineMode` false, see launcherCommandLineMode()), also a message
+ *     box, because a launch from Explorer has neither. user32 is loaded only here, from
+ *     System32, so the launcher's static imports stay KERNEL32.dll alone. Command-line modes
+ *     never show a box: tests and scripts run them unattended, and wmain has set an error mode
+ *     in which the loader raises no system box either.
  */
 void reportFailure(const std::wstring& message, bool commandLineMode) {
     const std::wstring line = L"frost: " + message + L"\n";
@@ -111,10 +116,17 @@ void reportFailure(const std::wstring& message, bool commandLineMode) {
     }
 }
 
-// "cannot load <path>: <reason> (win32 error N)", with the path in its plain form.
+/*
+ * "cannot load <path>: <reason> (win32 error N)", with the path in its plain form. When the
+ * file itself exists, "cannot load <path> or a DLL it needs: ...": the loader reports a
+ * missing (126), mismatched (127) or broken (193) static import of the DLL with the same
+ * error as the DLL itself, and does not say which one it was.
+ */
 std::wstring loadFailure(const std::wstring& path, DWORD error) {
-    return L"cannot load " + frost::app::withoutExtendedPrefix(path) + L": " + win32Message(error) + L" (win32 error " +
-           std::to_wstring(error) + L")";
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    const bool fileExists = attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    return L"cannot load " + frost::app::withoutExtendedPrefix(path) + (fileExists ? L" or a DLL it needs" : L"") +
+           L": " + win32Message(error) + L" (win32 error " + std::to_wstring(error) + L")";
 }
 
 } // namespace
@@ -125,21 +137,35 @@ std::wstring loadFailure(const std::wstring& path, DWORD error) {
 int wmain(int argc, wchar_t** argv) {
     frost::app::ProcessHardening hardening = frost::app::hardenProcess();
 
-    bool commandLineMode = false;
-    for (int i = 1; i < argc; ++i) {
-        commandLineMode = commandLineMode || argv[i][0] == L'-';
-    }
+    const bool commandLineMode = frost::app::launcherCommandLineMode(
+        std::span<const wchar_t* const>(argv + (argc > 0 ? 1 : 0), argc > 1 ? static_cast<std::size_t>(argc - 1) : 0));
+    /*
+     * Without SEM_FAILCRITICALERRORS in the process error mode, which a parent such as a
+     * terminal passes on as its own, the loader raises a hard error for a mismatched import
+     * (STATUS_ENTRYPOINT_NOT_FOUND, win32 error 127) or a broken image (STATUS_INVALID_IMAGE_FORMAT,
+     * 193), and csrss shows a modal "Entry Point Not Found" or "Bad Image" box that holds the
+     * process until someone clicks (measured 2026-11-01, review of 4c5533d). Command-line
+     * modes keep the no-box mode for good, as frost_app.dll's suppressCrashDialogs() sets it
+     * again later. The GUI has it only while the launcher loads, so the launcher's own box is
+     * the only one, and frost_app.dll starts with the mode the parent gave (Windows Error
+     * Reporting stays on until M1's crash handler). The mode is process-wide, not
+     * SetThreadErrorMode, because the loader maps a DLL's imports on its worker threads too;
+     * the launcher starts no thread of its own. FrostProcess.LauncherSetsTheErrorModeForItsLoads
+     * reads the mode back inside a stand-in frost_app.dll.
+     */
+    constexpr UINT kCommandLineMode = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
+    constexpr UINT kGuiLoadMode = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+    const UINT inheritedErrorMode = SetErrorMode(GetErrorMode() | (commandLineMode ? kCommandLineMode : kGuiLoadMode));
 
     const std::wstring self = frost::app::modulePath();
-    const std::size_t slash = self.find_last_of(L'\\');
-    if (self.empty() || slash == std::wstring::npos) {
+    // Always the \\?\ form, whatever the length: a length rule would hang on a hand-kept list of
+    // the longest deployed file name and measured no faster (ADR 0012).
+    const std::wstring dir = self.empty() ? std::wstring() : frost::app::extendedDirectoryOf(self);
+    if (dir.empty()) {
         reportFailure(L"cannot determine the path of frost.exe (win32 error " + std::to_wstring(GetLastError()) + L")",
                       commandLineMode);
         return 4;
     }
-    // Always the \\?\ form, whatever the length: a length rule would hang on a hand-kept list of
-    // the longest deployed file name and measured no faster (ADR 0012).
-    const std::wstring dir = frost::app::extendedPath(frost::app::withoutExtendedPrefix(self.substr(0, slash)));
     hardening.installDirectoryExtended = frost::app::searchInstallDirectoryExtended(dir);
 
 #ifdef FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME
@@ -164,6 +190,9 @@ int wmain(int argc, wchar_t** argv) {
                           std::to_wstring(GetLastError()) + L")",
                       commandLineMode);
         return 4;
+    }
+    if (!commandLineMode) {
+        SetErrorMode(inheritedErrorMode);
     }
     return entry(frost::app::encodeHardening(hardening));
 }

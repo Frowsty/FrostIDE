@@ -12,8 +12,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <string>
 #include <string_view>
@@ -182,12 +185,12 @@ bool hasDllExtension(std::wstring_view name) noexcept {
     return name.size() > 4 && equalsAsciiNoCase(toU16(name.substr(name.size() - 4)), ".dll");
 }
 
-// The install directory (frost.exe's) in the form GetModuleFileNameW reports, without a
-// \\?\ prefix, or "" if it cannot be determined.
+// The install directory (frost.exe's) as the launcher loads from it (extendedDirectoryOf():
+// normalised, 8.3 short components kept), without a \\?\ prefix, or "" if it cannot be
+// determined.
 std::wstring installDirectory() {
-    const std::wstring exe = withoutExtendedPrefix(modulePath());
-    const std::size_t slash = exe.find_last_of(L'\\');
-    return exe.empty() || slash == std::wstring::npos ? std::wstring() : exe.substr(0, slash);
+    const std::wstring exe = modulePath();
+    return exe.empty() ? std::wstring() : withoutExtendedPrefix(extendedDirectoryOf(exe));
 }
 
 // `path` (absolute) with "." and ".." components resolved, as Win32 resolves them in a plain
@@ -204,6 +207,64 @@ std::wstring resolvedPath(const std::wstring& path) {
     }
     out.resize(written);
     return out;
+}
+
+// What a DLL's import directory says about it (importsOf()).
+struct ImportScan {
+    DWORD error = ERROR_SUCCESS; // Why the file could not be mapped; ERROR_SUCCESS if it was.
+    bool importsDll = false;     // Whether it imports the DLL asked for.
+};
+
+// The ASCII string at `rva` of an image mapped `size` bytes long, or "" if it does not end
+// inside the image.
+std::string_view imageString(const std::byte* base, std::size_t size, DWORD rva) {
+    if (rva >= size) {
+        return {};
+    }
+    const auto* begin = reinterpret_cast<const char*>(base + rva);
+    const void* end = std::memchr(begin, '\0', size - rva);
+    return end == nullptr ? std::string_view()
+                          : std::string_view(begin, static_cast<std::size_t>(static_cast<const char*>(end) - begin));
+}
+
+/*
+ * Whether the DLL at `extended` (a \\?\ path) imports `dll` (ASCII, compared without case),
+ * read from its import directory. The file is mapped as an image resource, so no code runs
+ * and no import resolves; every RVA is checked against the image size, because the file is
+ * not trusted to be well formed. The error is GetLastError() of a file that cannot be mapped
+ * (193 for one that is not a PE image).
+ */
+ImportScan importsOf(const std::wstring& extended, std::string_view dll) {
+    HMODULE mapped =
+        LoadLibraryExW(extended.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (mapped == nullptr) {
+        return {GetLastError(), false};
+    }
+    // The handle's low bits mark a data-file mapping; the image starts at the aligned address.
+    const auto* base =
+        reinterpret_cast<const std::byte*>(reinterpret_cast<std::uintptr_t>(mapped) & ~std::uintptr_t{3});
+    ImportScan scan;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    const std::size_t size = nt->OptionalHeader.SizeOfImage;
+    if (nt->OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_IMPORT) {
+        const IMAGE_DATA_DIRECTORY entry = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        for (std::size_t offset = entry.VirtualAddress;
+             entry.VirtualAddress != 0 && offset + sizeof(IMAGE_IMPORT_DESCRIPTOR) <= size;
+             offset += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+            const auto* descriptor = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + offset);
+            if (descriptor->Name == 0) {
+                break;
+            }
+            const std::string_view name = imageString(base, size, descriptor->Name);
+            if (equalsAsciiNoCase(std::u16string(name.begin(), name.end()), dll)) {
+                scan.importsDll = true;
+                break;
+            }
+        }
+    }
+    FreeLibrary(mapped);
+    return scan;
 }
 
 // The platform of `platforms` whose plugin `candidate` is (q<p>.dll or q<p>d.dll), or "".
@@ -350,6 +411,35 @@ Result<std::u16string> loadPlatformPlugin(std::span<const std::u16string> candid
 #endif
 }
 
+#ifdef _WIN32
+
+std::u16string platformPluginOverrideDirectory(std::u16string_view value) {
+    std::wstring custom(value.begin(), value.end());
+    std::replace(custom.begin(), custom.end(), L'/', L'\\');
+    if (custom.starts_with(L"\\\\?\\")) {
+        custom = withoutExtendedPrefix(custom);
+    }
+    const bool absolute = (custom.size() >= 3 && custom[1] == L':' && custom[2] == L'\\') ||
+                          (custom.size() > 2 && custom.starts_with(L"\\\\"));
+    if (!absolute) {
+        return {};
+    }
+    // The pin goes through \\?\, which takes "." and ".." components, trailing dots and repeated
+    // separators literally where Qt and Win32 resolve them; a \\.\ device path is resolved the
+    // same way and loses its prefix.
+    custom = resolvedPath(custom);
+    if (custom.starts_with(L"\\\\.\\")) {
+        custom[2] = L'?';
+        custom = withoutExtendedPrefix(custom);
+    }
+    while (custom.size() > 3 && custom.back() == L'\\') {
+        custom.pop_back();
+    }
+    return toU16(custom);
+}
+
+#endif
+
 Result<PlatformPluginReport> preparePlatformPlugin() {
 #ifdef _WIN32
     const std::wstring dir = installDirectory();
@@ -362,19 +452,10 @@ Result<PlatformPluginReport> preparePlatformPlugin() {
     const bool debugQt = GetModuleHandleW(L"Qt6Cored.dll") != nullptr;
     // Qt's order: QT_QPA_PLATFORM_PLUGIN_PATH first, then <library path>\platforms.
     std::vector<std::u16string> dirs;
-    std::wstring custom = environmentVariable(L"QT_QPA_PLATFORM_PLUGIN_PATH");
-    std::replace(custom.begin(), custom.end(), L'/', L'\\');
-    if (custom.starts_with(L"\\\\?\\")) {
-        custom = withoutExtendedPrefix(custom);
-    }
-    while (custom.size() > 3 && custom.back() == L'\\') {
-        custom.pop_back();
-    }
-    const bool absolute = (custom.size() >= 3 && custom[1] == L':' && custom[2] == L'\\') ||
-                          (custom.size() > 2 && custom.starts_with(L"\\\\"));
-    if (absolute) {
-        // The pin goes through \\?\, which takes "." and ".." literally where Qt resolves them.
-        dirs.push_back(toU16(custom.find(L"\\.") != std::wstring::npos ? resolvedPath(custom) : custom));
+    if (std::u16string custom =
+            platformPluginOverrideDirectory(toU16(environmentVariable(L"QT_QPA_PLATFORM_PLUGIN_PATH")));
+        !custom.empty()) {
+        dirs.push_back(std::move(custom));
     }
     dirs.push_back(toU16(dir + L"\\platforms"));
     const std::vector<std::u16string> candidates = platformPluginCandidates(dirs, platforms, debugQt);
@@ -432,21 +513,42 @@ PluginPreloadReport preloadOtherPlugins() {
                                   "loader's {}-unit limit",
                                   plugins.size(), longestPath, kLoaderPlainPathLimitUnits)};
     }
+    /*
+     * Only DLLs that import the Qt6Core this process loaded are loaded: every Qt plugin imports
+     * it, and Qt itself refuses a plugin of its other build (debug or release) or a DLL that is
+     * no plugin. Loading those would bring in a second Qt (qsvgd.dll pulls in Qt6Cored.dll) or
+     * run foreign DllMain code. The gate above counts every listed DLL, so it may preload when
+     * only a skipped DLL is long; that costs the import scans and nothing else.
+     */
+    const std::string_view qtCore = GetModuleHandleW(L"Qt6Cored.dll") != nullptr ? "Qt6Cored.dll" : "Qt6Core.dll";
+    std::size_t candidates = 0;
     std::size_t loaded = 0;
+    std::string skipped;
     std::string failures;
     for (const std::wstring& plugin : plugins) {
-        if (LoadLibraryExW((extended + L"\\" + plugin).c_str(), nullptr, kPluginLoadFlags) != nullptr) {
-            ++loaded;
-        } else {
-            const DWORD error = GetLastError();
-            failures += std::format("{}{} ({}, win32 error {})", failures.empty() ? "" : ", ", toUtf8(toU16(plugin)),
-                                    win32Message(error), error);
+        const std::wstring path = extended + L"\\" + plugin;
+        const ImportScan scan = importsOf(path, qtCore);
+        DWORD error = scan.error;
+        if (error == ERROR_SUCCESS && !scan.importsDll) {
+            skipped += std::format("{}{}", skipped.empty() ? "" : ", ", toUtf8(toU16(plugin)));
+            continue;
         }
+        ++candidates;
+        if (error == ERROR_SUCCESS) {
+            if (LoadLibraryExW(path.c_str(), nullptr, kPluginLoadFlags) != nullptr) {
+                ++loaded;
+                continue;
+            }
+            error = GetLastError();
+        }
+        failures += std::format("{}{} ({}, win32 error {})", failures.empty() ? "" : ", ", toUtf8(toU16(plugin)),
+                                win32Message(error), error);
     }
-    return {loaded == plugins.size(),
+    return {loaded == candidates,
             std::format("loaded {} of {} plugin(s) through \\\\?\\ (the longest path is {} UTF-16 units, beyond the "
-                        "loader's {}-unit limit){}{}",
-                        loaded, plugins.size(), longestPath, kLoaderPlainPathLimitUnits,
+                        "loader's {}-unit limit){}{}{}{}",
+                        loaded, candidates, longestPath, kLoaderPlainPathLimitUnits,
+                        skipped.empty() ? "" : std::format("; skipped, as they do not import {}: ", qtCore), skipped,
                         failures.empty() ? "" : "; Qt will skip ", failures)};
 #else
     return {true, "not needed on this platform"};

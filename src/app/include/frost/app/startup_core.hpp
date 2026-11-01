@@ -3,7 +3,8 @@
 // The part of frost's start-up that both halves of the Windows executable run (ADR 0012):
 // frost.exe, the launcher (src/app/src/launcher.cpp), and frost_app.dll, the application it
 // loads. It holds the process hardening, the hand-over of its result across the DLL boundary,
-// the launcher's DLL search order for the install directory, and the path helpers they need.
+// the launcher's DLL search order for the install directory, its rule for telling a GUI start
+// from a command-line mode, and the path helpers they need.
 // The source (src/startup_core.cpp) is compiled twice: into frost.exe with the static CRT
 // (/MT, every configuration) and into frost::app with the shared one (/MD), because one static
 // library cannot serve both (lld-link's /failifmismatch on RuntimeLibrary). So it uses only the
@@ -12,6 +13,7 @@
 // Windows-only declarations below do not exist.
 #pragma once
 
+#include <span>
 #include <string>
 
 namespace frost::app {
@@ -119,6 +121,28 @@ inline constexpr unsigned long kLauncherLoadFlags = 0x900;
 // The \\?\ (or \\?\UNC\ for \\server\share) form of the absolute, normalised path `path`,
 // which Win32 accepts at any length. Pure.
 [[nodiscard]] std::wstring extendedPath(const std::wstring& path);
+
+/*
+ * The directory of the executable or DLL at `imagePath` (as modulePath() reports it) as an
+ * absolute \\?\ path, the form the launcher loads from. GetModuleFileNameW reports the path as
+ * the parent spelled it, and \\?\ takes every character literally, so a plain path is first
+ * normalised as Win32 would open it (GetFullPathNameW: "." and ".." components, '/', repeated
+ * separators, trailing dots and spaces), a \\.\ device path becomes \\?\ after the same
+ * normalisation, and a \\?\ path is kept as it is. 8.3 short components are kept (no file
+ * system access). If GetFullPathNameW fails, the spelling is used as given. "" when
+ * `imagePath` has no directory part. Thread-safe (GetFullPathNameW reads the current
+ * directory only for relative paths, which GetModuleFileNameW does not report); O(length).
+ */
+[[nodiscard]] std::wstring extendedDirectoryOf(const std::wstring& imagePath);
+
+/*
+ * Whether the launcher's arguments (`arguments`: argv without the program name) select a
+ * command-line mode, in which no box may appear (tests and scripts run them unattended):
+ * true when an argument before the first "--" starts with '-', as frost_app.dll's parser
+ * (frost/app/command_line.hpp) reads options; arguments after "--" are paths, so
+ * `frost -- -file.txt` is a GUI start. A null element is ignored. Pure; O(arguments).
+ */
+[[nodiscard]] bool launcherCommandLineMode(std::span<const wchar_t* const> arguments) noexcept;
 
 /*
  * The launcher's step after hardenProcess(): AddDllDirectory(`extendedDirectory`), the
