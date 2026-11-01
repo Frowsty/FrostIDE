@@ -50,6 +50,7 @@
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -131,7 +132,22 @@ struct ProcessSpec {
      * RealProcessLauncher.MissingDesktopEndsTheChildBeforeItRuns). Ignored on POSIX.
      */
     std::string desktop{};
+
+    /*
+     * POSIX: open descriptors of this process that the child receives as fds 3, 4, ... in
+     * order (entry i becomes fd 3 + i); every other descriptor above 2 is closed in the child
+     * as before. The parent's descriptors are untouched and stay open (close them after
+     * launch() if the child should own them alone); they need not be close-on-exec, and none
+     * reaches any other child, because the launcher duplicates them only in the child being
+     * started. At most kMaxInheritedFds entries, each non-negative and distinct. Windows
+     * rejects a non-empty list with ErrorCode::Unsupported (handles are inherited
+     * differently there and frost::io passes none). For frost::diag's crash handler socket.
+     */
+    std::vector<int> posixInheritedFds{};
 };
+
+// The most descriptors ProcessSpec::posixInheritedFds may pass.
+inline constexpr std::size_t kMaxInheritedFds = 16;
 
 // The exit code reported after terminate(): 128 + SIGKILL, the POSIX shell's
 // convention, so Windows and POSIX agree.

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for the repository tools in tools/ (frost-lint, frost-licensecheck,
-# frost-featurecheck, corpus_fetch, and on Windows the PowerShell scripts bootstrap.ps1
-# and env.ps1) and for tests/perf/budgets.json. They are Python unittest suites over the
+# frost-featurecheck, corpus_fetch, symbolize.py, and on Windows the PowerShell scripts
+# bootstrap.ps1 and env.ps1) and for tests/perf/budgets.json. They are Python unittest suites over the
 # fixtures in tests/tools/fixtures, registered with CTest (label "unit") so they run in
 # both verify legs. Standard library only; Python 3.11+ (tomllib). Each suite is one
 # CTest test; git must be on PATH.
@@ -14,7 +14,7 @@ if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{
 endif()
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
-set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch budgets)
+set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch budgets symbolize)
 if(WIN32)
     # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.
     list(APPEND _frost_tool_suites windows_scripts)

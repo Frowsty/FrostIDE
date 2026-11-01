@@ -1,0 +1,35 @@
+{
+  "name": "crashpad",
+  "version-date": "2026-07-02",
+  "description": [
+    "Crashpad is a crash-reporting system.",
+    "FrostIDE overlay of vcpkg's crashpad port at baseline 9eec002 (ADR 0022): the same crashpad and mini_chromium revisions, built with the pinned clang-cl on Windows, with the copyright files of every component linked in an Apache-2.0 getopt_long in place of the public-domain getopt the handler bundles, and a handler pipe that admits only the current user and SYSTEM at medium integrity or above."
+  ],
+  "homepage": "https://chromium.googlesource.com/crashpad/crashpad/+/master/README.md",
+  "license": "Apache-2.0 AND BSD-3-Clause",
+  "supports": "linux | (windows & !uwp & !arm)",
+  "dependencies": [
+    {
+      "name": "curl",
+      "default-features": false,
+      "platform": "linux"
+    },
+    {
+      "name": "vcpkg-cmake-get-vars",
+      "host": true
+    },
+    {
+      "name": "vcpkg-get-python-packages",
+      "host": true
+    },
+    {
+      "name": "vcpkg-gn",
+      "host": true
+    },
+    {
+      "name": "vcpkg-tool-gn",
+      "host": true
+    },
+    "zlib"
+  ]
+}

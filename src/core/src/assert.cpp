@@ -21,9 +21,12 @@ const char* kindName(Kind kind) noexcept {
     return "contract";
 }
 
-// Writes the violation to stderr and flushes it. stdio is not async-signal-safe,
-// so a violation detected inside a signal handler could block on the stdio lock.
-// TODO(M1): the crash reporter writes with WriteFile/write(2) instead.
+/*
+ * Writes the violation to stderr and flushes it. stdio is not async-signal-safe, so a
+ * violation detected inside a signal handler could block on the stdio lock; frost's program
+ * replaces this handler with frost::diag's, which writes with WriteFile/write(2) and hands
+ * terminating violations to the crash reporter. This one serves tests and tools.
+ */
 void defaultHandler(const Violation& violation) noexcept {
     std::fprintf(stderr, "FrostIDE %s violated: %s\n  at %s:%u in %s\n", kindName(violation.kind), violation.expression,
                  violation.where.file_name(), static_cast<unsigned>(violation.where.line()),
@@ -52,7 +55,9 @@ void reportViolation(const Violation& violation) noexcept {
 }
 
 void reportViolationAndAbort(const Violation& violation) noexcept {
-    reportViolation(violation);
+    Violation terminating = violation;
+    terminating.terminating = true;
+    reportViolation(terminating);
     std::abort();
 }
 

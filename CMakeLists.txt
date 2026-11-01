@@ -141,6 +141,14 @@ endif()
 # the top-level directory, where FrostLayers resolves namespaced dependencies.
 find_package(Threads REQUIRED)
 
+if(NOT FROST_FUZZ)
+    # frost::diag's third-party libraries (ADR 0022). Fuzz trees skip frost::diag and install no
+    # vcpkg manifest.
+    find_package(crashpad CONFIG REQUIRED)
+    find_package(cpptrace CONFIG REQUIRED)
+    find_package(spdlog CONFIG REQUIRED)
+endif()
+
 if(FROST_BUILD_TESTS OR FROST_FUZZ)
     enable_testing()
 endif()

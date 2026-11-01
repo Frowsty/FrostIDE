@@ -1,0 +1,32 @@
+diff --git a/util/win/registration_protocol_win.cc b/util/win/registration_protocol_win.cc
+index 95111f9c..b2f41d17 100644
+--- a/util/win/registration_protocol_win.cc
++++ b/util/win/registration_protocol_win.cc
+@@ -252,16 +252,20 @@ const void* GetFallbackSecurityDescriptorForNamedPipeInstance(size_t* size) {
+ const void* GetSecurityDescriptorForNamedPipeInstance(size_t* size) {
+   CHECK(!IsThreadInLoaderLock());
+ 
+-  // Get a security descriptor which grants the current user and SYSTEM full
+-  // access to the named pipe. Also grant AppContainer RW access through the ALL
+-  // APPLICATION PACKAGES SID (S-1-15-2-1). Finally add an Untrusted Mandatory
+-  // Label for non-AppContainer sandboxed users.
++  // FrostIDE (vcpkg overlay, ADR 0022): a DACL that grants the current user and
++  // SYSTEM full access to the named pipe and no one else, and a Medium
++  // Mandatory Label with no-write-up, so no lower-integrity process can
++  // connect. No AppContainer (S-1-15-2-1) access and no Untrusted label, since
++  // FrostIDE runs no sandboxed clients, and no fallback to the descriptor
++  // without a DACL: a handler that cannot build this one stops instead. The
++  // label must be present: without a SACL entry BuildSecurityDescriptor leaves
++  // a null SACL, which CreateNamedPipe refuses without SeSecurityPrivilege
++  // (ERROR_PRIVILEGE_NOT_HELD, measured 2026-11-01).
+   static size_t sd_size;
+   static void* sec_desc = GetSecurityDescriptorWithUser(
+-      L"D:(A;;GA;;;SY)(A;;GWGR;;;S-1-15-2-1)S:(ML;;;;;S-1-16-0)", &sd_size);
++      L"D:(A;;GA;;;SY)S:(ML;;NW;;;ME)", &sd_size);
+ 
+-  if (!sec_desc)
+-    return GetFallbackSecurityDescriptorForNamedPipeInstance(size);
++  CHECK(sec_desc) << "no security descriptor for the handler pipe";
+ 
+   if (size)
+     *size = sd_size;

@@ -294,6 +294,10 @@ bool launcherMayReachGpuDriver(std::span<const wchar_t* const> arguments, std::w
         } else if (option == L"--selftest=onscreen") {
             selfTest = true;
             onScreen = true;
+        } else if (option == L"--selftest=crash" || option == L"--selftest=freeze") {
+            // Never a native platform: the crash self-test creates no QApplication, and the
+            // freeze self-test always an offscreen one (main.cpp overrides QT_QPA_PLATFORM).
+            return false;
         } else {
             // --version, --help, or a usage error (an unknown option, or one that conflicts
             // with --selftest): frost_app.dll prints and exits without a QApplication.

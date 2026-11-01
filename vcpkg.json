@@ -6,6 +6,10 @@
   "license": "Apache-2.0",
   "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
-    { "name": "gtest", "version>=": "1.18.0" }
+    { "name": "gtest", "version>=": "1.18.0" },
+    { "name": "crashpad" },
+    { "name": "cpptrace", "version>=": "1.0.4" },
+    { "name": "spdlog", "version>=": "1.17.0#1", "default-features": false },
+    { "name": "curl", "default-features": false, "platform": "linux" }
   ]
 }

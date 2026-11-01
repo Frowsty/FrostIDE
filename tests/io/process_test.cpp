@@ -43,6 +43,7 @@
 // ConvertSidToStringSidW; sddl.h needs windows.h first.
 #include <sddl.h>
 #else
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -769,6 +770,88 @@ TEST(RealProcessLauncher, OnlyTheStandardHandlesAreInherited) {
     EXPECT_EQ(control->stdoutBytes, "inherited\n");
 #endif
 }
+
+#ifndef _WIN32
+// ProcessSpec::posixInheritedFds entry 0 arrives as fd 3: a socket the child writes into.
+TEST(RealProcessLauncher, PassesInheritedSocketAsFd3) {
+    int pair[2] = {-1, -1};
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair), 0);
+    ProcessSpec spec = childSpec({"fd-write", "3", "hello from fd 3"});
+    spec.posixInheritedFds = {pair[1]};
+    const auto result = run(spec);
+    close(pair[1]);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->stdoutBytes, "wrote\n");
+    std::array<char, 64> buffer{};
+    const ssize_t got = recv(pair[0], buffer.data(), buffer.size(), MSG_DONTWAIT);
+    close(pair[0]);
+    ASSERT_GT(got, 0);
+    EXPECT_EQ(std::string_view(buffer.data(), static_cast<std::size_t>(got)), "hello from fd 3");
+}
+
+// A descriptor passed to one child reaches neither a child started without it (even while the
+// first runs) nor, through the launcher's staged copy, any other descriptor number.
+TEST(RealProcessLauncher, InheritedFdIsNotLeakedToOtherChildren) {
+    const ScratchDir dir("proc-inherit");
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(dir.join("probe"), "").has_value());
+    // Without O_CLOEXEC, so only the launcher's closefrom keeps it from other children.
+    const int fd = open(dir.join("probe").c_str(), O_RDONLY);
+    ASSERT_GE(fd, 0);
+    const std::string identity = fileIdentity(fd);
+
+    ProcessSpec holder = childSpec({"find-identity", identity});
+    holder.posixInheritedFds = {fd};
+    const auto passed = run(holder);
+    ASSERT_TRUE(passed.has_value()) << passed.error().describe();
+    EXPECT_EQ(passed->stdoutBytes, "found 3\ndone\n"); // Only at fd 3, never at the staged number.
+
+    // A long-running child that holds the descriptor, then another child without it.
+    ProcessSpec sleeper = childSpec({"sleep", "2000"});
+    sleeper.posixInheritedFds = {fd};
+    auto running = frost::io::realProcessLauncher().launch(sleeper);
+    ASSERT_TRUE(running.has_value()) << running.error().describe();
+    const auto other = run(childSpec({"find-identity", identity}));
+    (void)(*running)->terminate();
+    close(fd);
+    ASSERT_TRUE(other.has_value()) << other.error().describe();
+    EXPECT_EQ(other->stdoutBytes, "done\n");
+}
+
+/*
+ * A source that already has its target number keeps FD_CLOEXEC under dup2(fd, fd), so the
+ * launcher must stage it: here the source is fd k (k >= 3), listed at index k - 3 so its target
+ * is k, and it is close-on-exec in this process.
+ */
+TEST(RealProcessLauncher, InheritedFdThatEqualsItsTargetStillReachesTheChild) {
+    const ScratchDir dir("proc-inherit-same");
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(dir.join("probe"), "").has_value());
+    const int fd = open(dir.join("probe").c_str(), O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(fd, 3);
+    if (fd - 3 >= static_cast<int>(frost::io::kMaxInheritedFds)) {
+        close(fd);
+        GTEST_SKIP() << "fd " << fd << " is beyond the inherited-descriptor limit";
+    }
+    // Fillers for the indices before k - 3: /dev/null descriptors, all distinct.
+    std::vector<int> fillers;
+    for (int i = 0; i < fd - 3; ++i) {
+        const int filler = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        ASSERT_GE(filler, 0);
+        fillers.push_back(filler);
+    }
+    std::vector<int> inherited = fillers;
+    inherited.push_back(fd);
+    ProcessSpec spec = childSpec({"find-identity", fileIdentity(fd)});
+    spec.posixInheritedFds = inherited;
+    const auto result = run(spec);
+    for (const int filler : fillers) {
+        close(filler);
+    }
+    const std::string expected = std::format("found {}\ndone\n", fd);
+    close(fd);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->stdoutBytes, expected);
+}
+#endif
 
 #ifdef _WIN32
 TEST(RealProcessLauncher, BatchFilesAreRefused) {

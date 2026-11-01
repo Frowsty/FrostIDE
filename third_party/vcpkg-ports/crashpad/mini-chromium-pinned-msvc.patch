@@ -1,0 +1,69 @@
+diff --git a/build/win_helper.py b/build/win_helper.py
+index 8f7b891..7eeb8b0 100644
+--- a/build/win_helper.py
++++ b/build/win_helper.py
+@@ -78,8 +78,18 @@ def _GenerateEnvironmentFiles(install_dir, out_dir, script_path):
+     instead preferring something like "cl.exe" in the rule which will then run
+     whichever the environment setup has put in the path."""
+     archs = ('x86', 'amd64', 'arm64')
++    # FrostIDE (vcpkg overlay, ADR 0022): with MINI_CHROMIUM_VCVARS_ARGS set,
++    # vcvarsall.bat runs once, for amd64, with those arguments (the pinned
++    # Windows SDK and -vcvars_ver), and its environment serves every
++    # toolchain name; only x64 is ever built.
++    pinned_args = os.environ.get('MINI_CHROMIUM_VCVARS_ARGS', '').split()
+     result = []
+     for arch in archs:
++        if pinned_args:
++            basename = 'environment.' + arch
++            if arch != 'amd64':
++                result.append(basename)
++                continue
+         # Extract environment variables for subprocesses.
+         args = [os.path.join(install_dir, script_path)]
+         script_arch_name = arch
+@@ -87,7 +97,9 @@ def _GenerateEnvironmentFiles(install_dir, out_dir, script_path):
+             script_arch_name = '/x64'
+         if arch == 'arm64':
+             script_arch_name = 'x86_arm64'
+-        args.extend((script_arch_name, '&&', 'set'))
++        args.append(script_arch_name)
++        args.extend(pinned_args)
++        args.extend(('&&', 'set'))
+         popen = subprocess.Popen(args,
+                                  shell=True,
+                                  stdout=subprocess.PIPE,
+@@ -97,12 +109,18 @@ def _GenerateEnvironmentFiles(install_dir, out_dir, script_path):
+             raise Exception('"%s" failed with error %d' %
+                             (args, popen.returncode))
+         env = _ExtractImportantEnvironment(variables)
++        # vcvarsall.bat exits 0 even when it cannot set up the requested
++        # toolset; a pinned run must have put the MSVC headers on INCLUDE.
++        if pinned_args and (os.path.join('vc', 'tools', 'msvc')
++                            not in env.get('INCLUDE', '').lower()):
++            raise Exception('"%s" did not set up the MSVC toolset' % (args,))
+ 
+         env_block = _FormatAsEnvironmentBlock(env)
+-        basename = 'environment.' + arch
+-        with open(os.path.join(out_dir, basename), 'wb') as f:
+-            f.write(env_block.encode())
+-        result.append(basename)
++        targets = archs if pinned_args else (arch,)
++        for target in targets:
++            with open(os.path.join(out_dir, 'environment.' + target), 'wb') as f:
++                f.write(env_block.encode())
++        result.append('environment.' + arch)
+     return result
+ 
+ 
+@@ -195,6 +213,11 @@ class WinTool(object):
+                 if from_env and os.path.exists(
+                         os.path.join(from_env, setenv_path)):
+                     return from_env, setenv_path
++            # FrostIDE (ADR 0022): a Visual Studio install named by
++            # VSINSTALLDIR is used through its vcvarsall.bat, never vswhere.
++            vcvarsall = os.path.join('VC', 'Auxiliary', 'Build', 'vcvarsall.bat')
++            if from_env and os.path.exists(os.path.join(from_env, vcvarsall)):
++                return from_env, vcvarsall
+ 
+         def autodetect():
+             # Try vswhere, which will find VS2017.2+. Note that earlier VS2017s

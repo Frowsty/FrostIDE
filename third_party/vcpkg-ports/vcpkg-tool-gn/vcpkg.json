@@ -1,0 +1,9 @@
+{
+  "name": "vcpkg-tool-gn",
+  "version-date": "2025-08-05",
+  "port-version": 1,
+  "description": "GN build system. FrostIDE overlay of vcpkg's port at baseline 9eec002 (ADR 0022) that declares GN's licence, BSD-3-Clause (gn.googlesource.com/gn LICENSE, checked 2026-11-01); a host build tool for crashpad, never linked.",
+  "homepage": "https://gn.googlesource.com/gn/",
+  "license": "BSD-3-Clause",
+  "supports": "native"
+}

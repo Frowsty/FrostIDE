@@ -72,9 +72,41 @@ TEST(CommandLine, RejectsConflictingModes) {
     EXPECT_TRUE(parse({"--version", "--version"}).has_value());
 }
 
+TEST(CommandLine, SelfTestCrashAndFreezeOptions) {
+    using frost::app::SelfTestKind;
+    const auto crash = parse({"--selftest=crash"});
+    ASSERT_TRUE(crash.has_value());
+    EXPECT_EQ(crash->mode, Mode::SelfTest);
+    EXPECT_EQ(crash->selfTestKind, SelfTestKind::Crash);
+    EXPECT_FALSE(crash->selfTestOnScreen);
+    const auto freeze = parse({"--selftest=freeze"});
+    ASSERT_TRUE(freeze.has_value());
+    EXPECT_EQ(freeze->selfTestKind, SelfTestKind::Freeze);
+    EXPECT_EQ(parse({"--selftest"})->selfTestKind, SelfTestKind::Checks);
+    EXPECT_EQ(parse({"--selftest=onscreen"})->selfTestKind, SelfTestKind::Checks);
+    // A deliberate fault is never combined with anything else, not even itself or a path.
+    for (const std::vector<std::string_view>& args :
+         {std::vector<std::string_view>{"--selftest=crash", "--selftest=crash"},
+          std::vector<std::string_view>{"--selftest=freeze", "file.txt"},
+          std::vector<std::string_view>{"--selftest", "--selftest=crash"},
+          std::vector<std::string_view>{"--", "x", "--selftest=freeze"}}) {
+        const auto parsed = parse(args);
+        if (args.front() == "--") {
+            // After "--" it is a path, not an option.
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->mode, Mode::Gui);
+            continue;
+        }
+        ASSERT_FALSE(parsed.has_value()) << args.front() << " " << args.back();
+        EXPECT_EQ(parsed.error().code(), frost::ErrorCode::InvalidArgument);
+    }
+    EXPECT_FALSE(parse({"--selftest=crashy"}).has_value());
+}
+
 TEST(CommandLine, UsageMentionsEveryOption) {
     const std::string_view usage = frost::app::usageText();
-    for (const std::string_view option : {"--version", "--help", "--selftest", "--selftest=onscreen"}) {
+    for (const std::string_view option :
+         {"--version", "--help", "--selftest", "--selftest=onscreen", "--selftest=crash", "--selftest=freeze"}) {
         EXPECT_NE(usage.find(option), std::string_view::npos) << option;
     }
 }

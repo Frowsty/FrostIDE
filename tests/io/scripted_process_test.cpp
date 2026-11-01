@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <string>
+#include <vector>
 
 #ifndef _WIN32
 #include <csignal>
@@ -67,6 +68,24 @@ TEST(ScriptedProcessLauncher, RecordsTheImagePathFormAndDesktop) {
     ASSERT_EQ(launches.size(), 1u);
     EXPECT_EQ(launches[0].spec.imagePathForm, frost::io::ImagePathForm::Extended);
     EXPECT_EQ(launches[0].spec.desktop, "WinSta0\\frost-test-1");
+}
+
+TEST(ScriptedProcessLauncher, RecordsInheritedFds) {
+    ScriptedProcessLauncher launcher;
+    ProcessSpec spec = gitStatus();
+    spec.posixInheritedFds = {9, 4};
+#ifdef _WIN32
+    // The platform's rules apply: Windows passes no descriptors.
+    const auto refused = launcher.launch(spec);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::Unsupported);
+#else
+    launcher.expect(ScriptedProcess{});
+    ASSERT_TRUE(launcher.launch(spec).has_value());
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1u);
+    EXPECT_EQ(launches[0].spec.posixInheritedFds, (std::vector<int>{9, 4}));
+#endif
 }
 
 TEST(ScriptedProcessLauncher, RecordsStdin) {

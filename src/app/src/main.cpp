@@ -27,17 +27,30 @@
 // load frost_app.dll or its DLLs (the GUI also shows the reason in a message box), or Qt
 // reported a fatal error in a command-line mode (the message is on stderr). 3 is avoided
 // because the Windows CRT's abort() exits with it, so a refusal is never mistaken for an
-// abort. Qt's own fatal errors in the GUI still end the process with 0xC0000409 (__fastfail)
-// until M1's crash handler.
+// abort. --selftest=crash ends with its deliberate crash (Windows 0xC0000005, Linux SIGSEGV)
+// once the crash handler is ready, and with 1 if the handler cannot start. Qt's fatal errors
+// in the GUI end the process through the crash reporter (frost::diag, ADR 0022): a crash report,
+// then exit code 0xE0464154 on Windows or SIGABRT on Linux.
+//
+// Diagnostics (frost/app/diagnostics_qt.hpp): the GUI installs the fatal handlers and starts the
+// log at once, and the stall watchdog and the crash handler only after the first frame, on the
+// GUI thread and the "frost-diag" thread, so neither delays B1.
 
 #include "frost/app/command_line.hpp"
+#include "frost/app/diagnostics_qt.hpp"
 #include "frost/app/main_window.hpp"
 #include "frost/app/selftest.hpp"
 #include "frost/app/startup.hpp"
 #include "frost/core/build_info.hpp"
+#include "frost/core/log.hpp"
+#include "frost/diag/selftest_faults.hpp"
 
+#include <QAbstractEventDispatcher>
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QTimer>
 
+#include <chrono>
 #include <cstdio>
 #include <format>
 #include <string>
@@ -198,6 +211,76 @@ std::string restartNote([[maybe_unused]] const std::string& restartedFrom) {
 #endif
 }
 
+// --selftest=crash (ADR 0022): starts the crash handler synchronously (at most 10 s), reports
+// it, then crashes in frost::diag::selfTestCrash(). Returns only when the handler cannot start.
+int runCrashSelfTest(const std::string& restartedFrom) {
+    frost::app::installProgramFatalHandlers();
+    frost::app::startProgramLogging();
+    auto status = frost::app::startProgramCrashReporter(restartedFrom, std::chrono::seconds(10));
+    if (!status) {
+        print(stdout, std::format("selftest: FAIL crash-reporter: {}\n", status.error().describe()));
+        return 1;
+    }
+    print(stdout, std::format("selftest: crash-reporter ok pid={} handler={} database={}\n", status->handlerPid,
+                              status->handlerPath, status->databasePath));
+    frost::app::programReporter().annotate(frost::diag::AnnotationKey::SelfTest, "crash");
+    print(stdout, "selftest: crashing now (write to 0xf00d)\n");
+    frost::log::info("app", "selftest: crashing on purpose");
+    frost::app::flushProgramLog();
+    frost::diag::selfTestCrash();
+}
+
+/*
+ * --selftest=freeze (ADR 0022): an offscreen QApplication (whatever QT_QPA_PLATFORM says, so
+ * the GPU driver is never reached) with the stall watchdog and its hooks, no crash reporter.
+ * At the first aboutToBlock() (the watchdog is armed then) a 0 ms timer blocks the GUI thread
+ * in frost::diag::selfTestFreeze() for 300 ms; the self-test waits at most 10 s for the final
+ * freeze report and prints its path.
+ */
+int runFreezeSelfTest(int argc, char** argv) {
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    frost::app::startProgramLogging();
+    if (auto plugin = frost::app::preparePlatformPlugin(); !plugin) {
+        print(stdout, std::format("selftest: FAIL plugin-paths: {}\n", plugin.error().message()));
+        return 1;
+    }
+    int qtArgc = argc > 0 ? 1 : 0;
+    QApplication app(qtArgc, argv);
+    auto watchdog = frost::app::startProgramWatchdog(app);
+    if (!watchdog) {
+        print(stdout, std::format("selftest: FAIL watchdog: {}\n", watchdog.error().describe()));
+        return 1;
+    }
+    bool queued = false;
+    QObject::connect(QAbstractEventDispatcher::instance(), &QAbstractEventDispatcher::aboutToBlock, &app, [&queued] {
+        if (!queued) {
+            queued = true;
+            QTimer::singleShot(0, [] { frost::diag::selfTestFreeze(std::chrono::milliseconds(300)); });
+        }
+    });
+    QElapsedTimer elapsed;
+    elapsed.start();
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &app, [&] {
+        const auto report = (*watchdog)->lastReport();
+        if ((report.has_value() && !report->ongoing) || elapsed.elapsed() > 10'000) {
+            QCoreApplication::quit();
+        }
+    });
+    poll.start(10);
+    QApplication::exec();
+    const auto report = (*watchdog)->lastReport();
+    frost::app::stopProgramWatchdog();
+    frost::app::flushProgramLog();
+    if (!report.has_value() || report->ongoing) {
+        print(stdout, "selftest: FAIL freeze-report: no final freeze report within 10 s\n");
+        return 1;
+    }
+    print(stdout, std::format("selftest: freeze-report {} samples={} duration-ms={}\n", report->path, report->samples,
+                              report->durationMs));
+    return 0;
+}
+
 // The application, after the process is hardened (`hardening` says how far that got).
 // `restartedFrom` is the first launcher's image path (UTF-8) when the launcher restarted
 // frost through its short link, else "". `argv` must outlive the call: QApplication keeps it.
@@ -234,6 +317,12 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         return 0;
     case frost::app::Mode::SelfTest: {
         attachParentConsoleIfNeeded(consoleCodePage);
+        if (parsed->selfTestKind == frost::app::SelfTestKind::Crash) {
+            return runCrashSelfTest(restartedFrom);
+        }
+        if (parsed->selfTestKind == frost::app::SelfTestKind::Freeze) {
+            return runFreezeSelfTest(argc, argv);
+        }
         // Offscreen by default so the self-test runs headless (packaging smoke tests, WSL).
         if (!parsed->selfTestOnScreen && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
             qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -269,20 +358,46 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
     case frost::app::Mode::Gui: break;
     }
 
+    // Fatal handlers and the log at once; everything slower waits for the first frame.
+    frost::app::installProgramFatalHandlers();
+    frost::app::startProgramLogging();
+    frost::app::installGuiQtMessageHandler();
+    frost::log::info("app", "FrostIDE {} starting", frost::build_info::kVersion);
     if (auto plugin = frost::app::preparePlatformPlugin(); !plugin) {
+        frost::log::error("app", "cannot start: {}", plugin.error().message());
+        frost::app::flushProgramLog();
         reportStartupFailure(consoleCodePage, plugin.error().message() + restartNote(restartedFrom));
         return 4;
     }
-    // TODO(M1): log a failed preload (PluginPreloadReport) once frost::core has logging.
-    static_cast<void>(frost::app::preloadOtherPlugins());
-    // As in the self-test: Qt gets only the program name, never the user's arguments.
-    int qtArgc = argc > 0 ? 1 : 0;
-    QApplication app(qtArgc, argv);
-    QApplication::setApplicationName(QStringLiteral("FrostIDE"));
-    QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
-    frost::app::MainWindow window;
-    window.show();
-    return QApplication::exec();
+    if (frost::app::PluginPreloadReport others = frost::app::preloadOtherPlugins(); !others.ok) {
+        // Qt skips a plugin it cannot load, so this is a warning, not a start-up failure.
+        frost::log::warn("app", "plugin preload: {}", others.detail);
+    }
+    int status = 0;
+    {
+        // As in the self-test: Qt gets only the program name, never the user's arguments.
+        int qtArgc = argc > 0 ? 1 : 0;
+        QApplication app(qtArgc, argv);
+        QApplication::setApplicationName(QStringLiteral("FrostIDE"));
+        QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
+        frost::app::MainWindow window;
+        window.show();
+        frost::app::afterFirstFrame(window, [&app, restartedFrom] {
+            // FrostProcess.GuiStartsTheCrashHandlerAfterTheFirstFrame orders this line before the
+            // handler's "crash handler registered" line.
+            frost::log::info("app", "first frame shown");
+            if (auto watchdog = frost::app::startProgramWatchdog(app); !watchdog) {
+                frost::log::warn("diag", "no stall watchdog: {}", watchdog.error().describe());
+            }
+            frost::app::startProgramDiagnosticsThread(restartedFrom);
+        });
+        status = QApplication::exec();
+        // The watchdog and its hooks go before the window and QApplication (declared after it).
+        frost::app::stopProgramWatchdog();
+    }
+    frost::log::info("app", "FrostIDE exits with {}", status);
+    frost::app::flushProgramLog(); // Budget: B20.
+    return status;
 }
 
 } // namespace
@@ -300,9 +415,11 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
  * the short link's). The old executable's CRT passed the command line's first token instead, as
  * the parent spelled it (possibly relative); Qt takes applicationFilePath() and
  * applicationDirPath() from GetModuleFileNameW in both cases.
- * TODO(M1): code that starts frost again, writes logs or crash dumps, or registers frost (file
- * associations, I10) takes the install directory from `restartedFrom` when it is set, and frost
- * sets an explicit AppUserModelID, so a restarted frost groups with a shortcut to its long path.
+ * Crash reports record `restartedFrom` (the frost.restarted_from annotation); logs and dumps
+ * live under the cache root, not the install directory.
+ * TODO(M1): code that starts frost again or registers frost (file associations, I10) takes the
+ * install directory from `restartedFrom` when it is set, and frost sets an explicit
+ * AppUserModelID, so a restarted frost groups with a shortcut to its long path.
  */
 extern "C" __declspec(dllexport) int frost_main(unsigned hardeningBits, const wchar_t* restartedFrom) {
     const frost::app::ProcessHardening hardening = frost::app::decodeHardening(hardeningBits);

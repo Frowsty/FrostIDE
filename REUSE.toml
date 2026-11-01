@@ -25,3 +25,19 @@ path = ["resources/**/*.png", "resources/**/*.ico", "resources/**/*.svg"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
+
+# vcpkg overlay ports copied from microsoft/vcpkg (MIT; LICENSE-vcpkg.txt in each port), ADR 0014.
+# "override" so the Apache-2.0 *.json entry above does not claim the ports' vcpkg.json files.
+[[annotations]]
+path = ["third_party/vcpkg-ports/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Microsoft Corporation and vcpkg contributors"
+SPDX-License-Identifier = "MIT"
+
+# The getopt that replaces crashpad's public-domain one is FrostIDE's own code (ADR 0022). Being the
+# last match, this table replaces the vcpkg-ports rule above for that one patch.
+[[annotations]]
+path = ["third_party/vcpkg-ports/crashpad/frost-getopt.patch"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"
