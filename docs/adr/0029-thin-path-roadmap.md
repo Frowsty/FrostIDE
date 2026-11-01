@@ -28,7 +28,15 @@ needs build, run and a terminal, became possible only at the M4 exit, around mon
 State when this was decided: M0 is signed off; M1's `m1/piece-tree` and `m1/input-keymap` are merged into `main`;
 `m1/storage`, `m1/theme-icons`, `m1/undo-anchors`, `m1/encodings`, `m1/diff-merge`, `m1/io-reactor-watch`,
 `m1/crash-diag`, `m1/verify-tooling` and `m1/keymap-de` are running and will land. Since then `m1/undo-anchors`
-(merge 3163d0b) and `m1/theme-icons` (merge 94ed47d) have been merged into `main`.
+(merge 3163d0b) and `m1/theme-icons` (merge 94ed47d) have been merged into `main`, and later `m1/storage`,
+`m1/io-reactor-watch`, `m1/encodings`, `m1/display-map`, `m1/keymap-de` and `w1/project-sln`; this branch merged
+`main` at dcfd9ae (Consequences, "Merging with `main`").
+
+Two decisions of the user came after this ADR and build on it: ADR 0031 (a feature-first phase until U1, with a
+hardening phase after it) and ADR 0032 (W1, a work-ready build for the user's MSVC solutions, first inside M1–M4,
+then clangd diagnostics, navigation and completion, then the rest of U1). They change the order of the work inside
+M1–M4 and the process until U1, not U1's content, the milestone units or the budgets (PLAN.md section 7, "W1 first"
+and "Feature-first phase").
 
 Constraints set with the decision:
 - Scope items and exit criteria move between milestones; none is dropped. No test, budget or warning is weakened: a
@@ -160,8 +168,9 @@ Constraints set with the decision:
     gates), ADR 0011 (B1's samples are needed before M16, not M2, and M2 no longer depends on D3; B3's preconditions
     also apply to the path (c) gate; B4 is M16's target; B5 and E2 unchanged), ADR 0013 (`m1/large-file` is
     `m15/large-file`, its `TODO(M1)` a `TODO(M15)`) and ADR 0016 (the Keymap page goes with the Settings dialog to
-    M15; the Find Action popup stays in M1). ADR 0017 is on `main` only: the merge updates its line about the
-    `TODO(M1)` in `src/text/CMakeLists.txt` (Consequences).
+    M15; the Find Action popup stays in M1). ADRs 0015, 0017, 0018 and 0033 came from `main`: the merge retags
+    their large-file to-dos to M15 (0015, 0017 and 0018) and names ProjectHost as M16's (0033), each with an
+    "Amended" line (Consequences).
 12. **A minimal debugger is part of U1** (Q4, the recommendation reversed by the user). M4 gets, from M6:
     - the DAP client (`IDebugAdapterClient`, its fake-dap double, the DAP 1.71 types from frost-codegen) and one
       engine on Windows and Linux, lldb-dap, started under the supervisor at its absolute path. The official LLVM
@@ -390,16 +399,18 @@ is not measured yet; that is spike S10's job (decision 12).
   `tests/text/perf_test.cpp` (B15 is gated by M15's large-file mode) and the `TODO(M2)` in
   `src/io/include/frost/io/process.hpp` (path (c)'s clean environment). Every other `TODO(M1)`–`TODO(M4)` in `src`,
   `tests`, `tools` and `cmake` names work that stays in its milestone.
-- **Merging with `main`:** `m1/undo-anchors` and `m1/theme-icons` are merged there now, so the conflicts are concrete.
-  `git merge-tree` of this branch against `main` (94ed47d) reports two: `src/text/CMakeLists.txt` (the to-do line:
-  keep main's text without the anchors and undo item, with the large-file part as `TODO(M15)`) and
-  `tests/features/matrix.json` (row 38, now owned by M15, has main's `in-progress` status; rows 243 and 244 have
-  main's acceptance tests; take main's status and acceptance fields, then run `featurecheck.py generate`).
-  `tools/frost_lint.py` merges cleanly. ADR 0017's line "`TODO(M1)` in src/text/CMakeLists.txt keeps m1/encodings
-  and m1/large-file only" becomes "keeps m1/encodings only; large-file mode is `TODO(M15)` (ADR 0029)". The running
-  slices meet the same kind of conflict when they merge after this branch (`m1/encodings` in
-  `src/text/CMakeLists.txt`); a slice that adds a `TODO(M1)` for work this ADR moved retags it to M15, M16 or M17
-  before it merges.
+- **Merging with `main`:** the merge commit after this ADR's answers brings in `main` at dcfd9ae (ADRs 0014,
+  0015, 0017, 0018, 0020, 0026, 0030, 0031, 0032 and 0033 with their slices). `git merge` reported two conflicts,
+  resolved so that both sides survive: `src/text/CMakeLists.txt` (main's header comment and sources; `m1/encodings`
+  is merged, so the to-do line is only the large-file one, as `TODO(M15)`) and `tests/features/matrix.json` (main's
+  `status` and `acceptance_test` for every row, rows 38, 60, 227, 243 and 244 among them, the owners from this
+  ADR, then `featurecheck.py generate`). PLAN.md (main's section 6.7 "Feature-first phase" row), `tools/frost_lint.py`
+  and the rest merged cleanly. Retagged in the merge, comments and ADR prose only: the `TODO(M1)` markers for
+  `m1/large-file` (now `TODO(M15)`, `m15/large-file`) in `text_file.hpp`, `text_file.cpp`, `line_separator.cpp` and
+  `icon_atlas_set.hpp`, and the matching lines of ADRs 0015, 0017 and 0018; ProjectHost as M2's evaluator in
+  `src/project/CMakeLists.txt`, `vcxproj.hpp` and ADR 0033 (path (c) is M2's, ProjectHost M16's). A slice that
+  merges after this branch and adds a `TODO(M1)` for work this ADR moved retags it to M15, M16 or M17 before it
+  merges; one that adds debugger work tags it M4 (decision 12).
 - **Hand-off:** this branch does not edit `docs/progress.md`; the session that merges it records it there.
 
 ## Answers
@@ -433,9 +444,9 @@ Asked before this ADR was accepted. Each had a recommendation, which the branch 
   stepping, the Debug window) would cost roughly 3–5 units before U1, more on Windows, where the official LLVM package
   has no lldb-dap (S5) and one has to be built first.
 - **Q5. A thinner U1.** Optional. These U1 items could move to M15 or M16, still before Preview 0.1, to bring U1
-  about 1–2 units sooner: approximate mode for solutions on Linux (D16, scenario step 12), the .slnf reader,
-  compile_commands and open folder, Search Everywhere v1 (Go to File, Class and Symbol and Find Action stay), terminal
-  IME and the ja VS-output goldens. Not done unless the user asks.
+  about 1–2 units sooner: approximate mode for solutions on Linux (D16, scenario step 12, now step 14), the .slnf
+  reader, compile_commands and open folder, Search Everywhere v1 (Go to File, Class and Symbol and Find Action
+  stay), terminal IME and the ja VS-output goldens. Not done unless the user asks.
 
 ## Alternatives considered
 - **Keep the plan.** Real C++ work at the M4 exit, around month 12–15. Rejected by the user's answer.
