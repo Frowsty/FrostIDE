@@ -10,8 +10,8 @@ worktree under D23, after the slice's two independent reviews. The slice's own t
 sections as subsections, kept as the branch wrote them. Merge notes in them mark what has changed since.
 
 ### Done
-- **The merge** of `m1/piece-tree` (6fb6826) into `main` at 2da44fb, the `m0` sign-off: frost::text's piece tree
-  (c8757f3), the review fixes and repeated exit runs (e25c036), and the ADR renumbering (6fb6826).
+- **The merge** (455bb76) of `m1/piece-tree` (6fb6826) into `main` at 2da44fb, the `m0` sign-off: frost::text's
+  piece tree (c8757f3), the review fixes and repeated exit runs (e25c036), and the ADR renumbering (6fb6826).
 - **ADR 0013, not 0012.** The branch first wrote its record as ADR 0012. `m0/longpath` took that number for the
   long-path launch, so 6fb6826 renamed the record to `docs/adr/0013-text-buffer.md` and updated every reference
   in the branch (comments and file names only). The merged tree cites the text buffer as ADR 0013 throughout; no
@@ -33,20 +33,33 @@ sections as subsections, kept as the branch wrote them. Merge notes in them mark
   `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary` as failures and
   `FrostProcess.ReportsLongPathLimitCleanly` as the skip, all waiting for `m0/longpath`. `main` has `m0/longpath`
   (ADR 0012): `RunsFromPathLongerThanMaxPath` passes, and 4c5533d replaced the other two with tests that assert at
-  least as much (entry "M0 complete"). `main`'s sign-off `-Full` at c87c56a had no failure and no skip.
+  least as much (entry "M0 complete"). `main`'s sign-off `-Full` at c87c56a had no failure and no skip, and
+  neither has the merged tree's `-Quick` (Verification, below).
 - **What the slice verified** (its records below): `verify -Full` twice at e25c036, green apart from those
   failures; the 10M-op differential in Windows Release with 0 mismatches (at c8757f3 on both OSes); a clean
   10-minute fuzz on each OS. 6fb6826 changed comments and file names only.
 
 #### Verification (merged tree)
-- Follows in the next commit, "M1: record `m1/piece-tree` merge verification".
+- Before the merge commit (455bb76): frost_lint ok (356 files), licensecheck ok, featurecheck ok, `git diff
+  --check` clean.
+- `tools\verify.ps1 -Quick -Jobs 8` on 455bb76 through `run_hidden_nobox.py` (a hidden desktop; no window opened
+  on it), after `night.py build-gate` (no lock, 38.8 GB commit free), 148.9 s, exit 0. Windows ran its Debug leg
+  and the checks; WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 485/485, wsl debug 405/405, wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok,
+  featurecheck ok, tidy not-run`. Against `main`'s sign-off (win debug 415/415, wsl debug 335/335) the slice adds
+  70 tests on each OS. No test failed or was skipped, the FrostProcess long-path tests included.
+- The conflict resolution changes only the /MT fuzz tree, which `-Quick` does not build. So the Windows fuzz tree
+  was checked on its own (`win-clangcl-fuzz` in `build\win-clangcl-fuzz`, hidden desktop, after `build-gate`):
+  configure, build and `ctest -L fuzz`, fuzz 2/2 (`fuzz.text_piece_tree` 61.1 s, no artifact). The fuzz target
+  links the static thunk and libFuzzer whole-archive, without `/INCLUDE:__asan_seh_interceptor`, as on the branch.
+  Every compile command there has `-fsanitize=address` and `-fsanitize=fuzzer-no-link`.
 
 ### Next
 - The other M1 slices. `m1/undo-anchors`, `m1/encodings` and `m1/diff-merge` have worktrees on 6fb6826, the head
   merged here; `m1/storage`, `m1/input-keymap` and `m1/theme-icons` are as the entry "M0 complete" describes.
   Then `m1/large-file` (mapped originals, B15 at the buffer level, the background release of big trees:
-  `TODO(M1)` in `snapshot.hpp`) and the editor model (the slice's first record, "Next").
-- Re-measure B28 with ADR 0010's harness (the slice's first record, "B28 effect").
+  `TODO(M1)` in `snapshot.hpp`) and the editor model (the slice record "M1 first slice", "Next").
+- Re-measure B28 with ADR 0010's harness (the slice record "M1 first slice", "B28 effect").
 - The M1 work from ADR 0011's Consequences and ADR 0012's `TODO(M1)`s (entry "M0 complete").
 
 ### Blockers
