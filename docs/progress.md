@@ -3,6 +3,41 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01: B28 measured on `m0/foundation` (ADR 0010)
+
+### Done
+- **B28 is met at M0.** It was measured on 5978075 under the overnight lock `b28` (04:22–04:42) on a quiet
+  machine: system CPU 0.6 %, 36.6 GB of commit free, no other agent building. sccache was active on Windows
+  (configure printed "FrostIDE compiler cache: sccache 0.19.0 ...").
+  - **One-.cpp rebuild** (target p50 20 s), 10 counted runs per row. A new probe constant per run made every
+    timed compile an sccache miss.
+    - `src/core/src/error.cpp`: p50 1.58 s with `--target frost`, 3.09 s for the full build (max 3.53 s).
+    - `src/app/src/main.cpp`: p50 3.33 s either way.
+    - `src/sched/src/lane.cpp`: p50 1.16 s for the full build. `frost` does not link sched.
+  - **`verify.ps1 -Quick -Jobs 4`** (target p50 5 min), 6 runs after probe changes: p50 82.3 s, max 85.5 s,
+    all green. Split at p50: Windows 35.8 s (31 s of it serial ctest), checks 3.0 s, WSL leg 43.1 s (23 s of it
+    the Linux configure).
+- **Proposed, pending the user:** the full default build as B28's reading of "rebuilt and linked" from M1 on
+  (ADR 0010, decision 2 and question 1). Both readings meet the target at M0.
+- **Found while splitting the WSL leg.** About 15 s of each Linux configure goes to two FindOpenGL `find_path`
+  searches for headers that are not installed (`GL/glu.h`, `GL/xmesa.h`). Their NOTFOUND results make CMake
+  search again on every configure. Whether the 38 `/mnt` PATH entries make them slow was not tested.
+- Raw data, the harness (`scripts\b28_bench.py`) and a `README.txt` mapping them to the ADR are in
+  `E:\FrostBuilds\perf\m0\b28\`. The probed files were restored, and the tree is clean.
+
+### Next
+- M1 follow-ups from ADR 0010: the Linux configure's OpenGL searches, parallel ctest on Windows, and moving the
+  B28 harness into `tools/perf.ps1` with a re-measurement as R1 grows.
+
+### Blockers
+- None.
+
+### Questions for the user
+1. B28's "rebuilt and linked": should it be (a) the full default build after the change (proposed; core p50
+   3.09 s, main 3.33 s), (b) `--target frost` (core 1.58 s, main 3.33 s), or (c) the executable(s) that cover
+   the change? Should `budgets.json`'s B28 method also fix the probe files and job counts? Nothing waits on the
+   answer at M0.
+
 ## 2026-11-01: M0 spike S7 (branch `m0/s7`), ADR 0008 after three verification rounds
 
 ### Done
