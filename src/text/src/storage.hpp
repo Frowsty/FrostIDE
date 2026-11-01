@@ -19,8 +19,8 @@
  * construction and readable from any thread.
  *
  * Deleted text is not reclaimed during a buffer's life, as with VS Code's add buffer.
- * TODO(M13): compaction. It would also invalidate storage-position anchors, if m1/undo-anchors
- * chooses them.
+ * TODO(M13): compaction must keep or remap the bytes that undo slices (frost::text::Document)
+ * reference; anchors are unaffected (ADR 0017).
  */
 #pragma once
 

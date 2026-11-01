@@ -85,8 +85,8 @@ struct SumTreeInternal;
 
 // The header every node starts with: reference count, height (0 for a leaf), entry count and the
 // subtree's summary. The node kind follows from the height; nodes have no virtual functions, so
-// destroy() deletes the concrete kind. Exposed for the undo slice's structural diff (node
-// identity) and for frost::text's own descents; not public API.
+// destroy() deletes the concrete kind. Exposed for frost::text's own descents and white-box tests
+// (the undo design, ADR 0017, needs no node identity); not public API.
 template<class Traits, int B>
 struct SumTreeNode : RefCounted {
     using Summary = typename Traits::Summary;
@@ -428,8 +428,8 @@ public:
         return checkNode(m_root.get(), m_root->height, 0, true);
     }
 
-    // Node access for frost::text's own descents and the undo slice's structural diff (node
-    // identity). Not public API: nullptr for the empty tree.
+    // Node access for frost::text's own descents and white-box tests (the undo design, ADR 0017,
+    // needs no node identity). Not public API: nullptr for the empty tree.
     [[nodiscard]] const Node* rootNode() const noexcept { return m_root.get(); }
 
     // Two trees are identical when they share the same root node (or are both empty). O(1).
