@@ -39,7 +39,8 @@ what is next, blockers and open questions for the user.
   PLAN's S7 sentence, budget data and this log.
 - Once the user has answered: record the answer in ADR 0008's status, budgets.json's note and PLAN's S7 sentence,
   or set the M3 slot to the value the user chooses.
-- M3: the B24 harness, starting from `s7_lsp.py` and `session_state.py` (in `E:\FrostBuilds\perf\m0\s7\spike\`).
+- M3: the B24 harness, starting from `s7_lsp.py` (in `E:\FrostBuilds\perf\m0\s7\spike\`) and `session_state.py`
+  (in its `fix2\` sub-directory).
 
 ### Blockers
 - None for M0. B24's M3 value waits for the user's confirmation.
