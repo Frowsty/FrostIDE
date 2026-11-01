@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for the pure helpers inside the verify scripts (ADR 0027), run without running a verification.
-# On Windows the functions Split-WslSummary, ConvertTo-WslPath and Get-CtestCounts are taken from
-# tools/verify.ps1's syntax tree and called in a child Windows PowerShell 5.1, and both PowerShell
-# scripts must parse. On Linux tools/verify.sh must pass `bash -n`, and its ctest_counts, join_items and
-# run_tsan_quick functions are cut out of the script and run in a child bash. The two sides share the
+# On Windows the functions Split-WslSummary, ConvertTo-WslPath, Get-CtestCounts and Get-WslArgs are taken
+# from tools/verify.ps1's syntax tree and called in a child Windows PowerShell 5.1, both PowerShell
+# scripts must parse, and every ctest call keeps error boxes off (checked against a real ctest). On
+# Linux tools/verify.sh must pass `bash -n`, and its parse_args, ctest_counts, join_items,
+# run_tsan_quick and run_tidy functions are cut out of the script and run in a child bash
+# (tidy and the TSan quick leg are off unless switched on, ADR 0027 decision 9). The two sides share the
 # tables in tests/tools/fixtures/verify (ctest outputs, summary items, WSL paths), so the PowerShell and
 # bash halves of the gate are checked against the same expectations.
 
@@ -44,7 +46,7 @@ $ErrorActionPreference = 'Stop'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw "verify.ps1 does not parse: $($errors[0])" }
-$names = @('Split-WslSummary', 'ConvertTo-WslPath', 'Get-CtestCounts')
+$names = @('Split-WslSummary', 'ConvertTo-WslPath', 'Get-CtestCounts', 'Get-WslArgs')
 $text = ''
 foreach ($name in $names) {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -58,6 +60,12 @@ $out = New-Object System.Collections.Generic.List[string]
 foreach ($case in $cases) {
     if ($case.fn -eq 'Get-CtestCounts') { $value = Get-CtestCounts ([string[]]@($case.arg)) }
     elseif ($case.fn -eq 'Split-WslSummary') { $value = Split-WslSummary $case.arg }
+    elseif ($case.fn -eq 'Get-WslArgs') {
+        # The case's arg is an object of named parameters; JSON null stays $null.
+        $named = @{}
+        foreach ($p in $case.arg.PSObject.Properties) { $named[$p.Name] = $p.Value }
+        $value = Get-WslArgs @named
+    }
     else { $value = & $case.fn $case.arg }
     # ConvertTo-Json flattens a one-element array; wrap so every result keeps its shape.
     $out.Add((ConvertTo-Json -Compress -InputObject @{ v = $value }))
@@ -106,6 +114,29 @@ class VerifyPs1Test(TempDirTestCase):
             with self.subTest(fixture=name):
                 self.assertEqual(value, table[name])
 
+    def test_get_wsl_args_passes_the_switches_and_the_list(self):
+        # -Tidy and -TsanQuick are off by default (ADR 0027 decision 9): without them verify.sh gets no
+        # switch and FROST_CHANGED_FILES stays unset, so it neither tidies nor makes a list.
+        script = "/mnt/e/r/tools/verify.sh"
+        base = {"Script": script, "Jobs": 8, "Base": "main", "ChangedList": None, "Mirror": "", "Full": False,
+                "Tidy": False, "TsanQuick": False}
+        head = ["-d", "Ubuntu-24.04", "--exec", "env", "FROST_JOBS=8", "FROST_VERIFY_BASE=main"]
+        cases = [
+            ({}, head + ["bash", script, "--no-checks"]),
+            ({"ChangedList": "/mnt/e/r/build/verify-changed-1.txt", "Tidy": True, "TsanQuick": True, "Mirror": "~/m"},
+             head + ["FROST_CHANGED_FILES=/mnt/e/r/build/verify-changed-1.txt", "FROST_MIRROR=~/m", "bash", script,
+                     "--no-checks", "--tidy", "--tsan-quick"]),
+            # The list was asked for but could not be made: an empty value, so verify.sh does not retry.
+            ({"ChangedList": "", "TsanQuick": True}, head + ["FROST_CHANGED_FILES=", "bash", script, "--no-checks",
+                                                             "--tsan-quick"]),
+            ({"Full": True, "Tidy": True, "Jobs": 4}, head[:4] + ["FROST_JOBS=4", "FROST_VERIFY_BASE=main", "bash",
+                                                                  script, "--no-checks", "--full", "--tidy"]),
+        ]
+        got = self._call([{"fn": "Get-WslArgs", "arg": {**base, **delta}} for delta, _ in cases])
+        for (delta, expected), value in zip(cases, got):
+            with self.subTest(case=delta):
+                self.assertEqual(value, expected)
+
     def test_scripts_parse_and_declare_their_parameters(self):
         script = r"""
 param([string]$Path)
@@ -128,7 +159,7 @@ if ($ast.ParamBlock) { foreach ($p in $ast.ParamBlock.Parameters) { "param: $($p
                     params = set(re.findall(r"^param: (\w+)$", result.stdout, re.M))
                     # frost_perf.py passes -Base HEAD when the script declares it (verify_declares_base).
                     self.assertLessEqual({"Quick", "Full", "WindowsOnly", "BuildDir", "WslMirror", "Jobs", "TestJobs",
-                                          "Base"}, params)
+                                          "Tidy", "TsanQuick", "Base"}, params)
 
     def test_ctest_label_filters_are_anchored(self):
         text = (TOOLS / "verify.ps1").read_text(encoding="utf-8")
@@ -136,6 +167,33 @@ if ($ast.ParamBlock) { foreach ($p in $ast.ParamBlock.Parameters) { "param: $($p
         self.assertIn("'-L', '^fuzz$'", text)
         self.assertIn("'-LE', '^stress$'", text)
         self.assertNotRegex(text, r"'-LE?', '(?!\^)")
+
+    def test_ctest_starts_tests_with_error_boxes_off(self):
+        # ctest's default interactive mode starts every test with the default error mode, so a test
+        # that fails to start or crashes raises a box on the user's desktop; verify.ps1 therefore
+        # passes --interactive-debug-mode 0 to every ctest call (ADR 0027 decision 3).
+        text = (TOOLS / "verify.ps1").read_text(encoding="utf-8")
+        calls = [line for line in text.splitlines() if re.search(r"[{&]\s*ctest\b", line)]
+        self.assertTrue(calls, "verify.ps1 runs ctest")
+        for line in calls:
+            self.assertIn("--interactive-debug-mode 0", line)
+        # And ctest's mode 0 really does hand SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX (0x3) on.
+        ctest = os.environ.get("FROST_CTEST") or shutil.which("ctest")
+        if not ctest:
+            self.skipTest("ctest is not on PATH")
+        probe = self.tmp / "mode.py"
+        probe.write_text("import ctypes\nprint(f'errormode={ctypes.windll.kernel32.GetErrorMode():#x}')\n",
+                         encoding="utf-8")
+        python = getattr(sys, "_base_executable", None) or sys.executable
+        (self.tmp / "CTestTestfile.cmake").write_text(
+            f'add_test(mode "{Path(python).as_posix()}" "-I" "{probe.as_posix()}")\n', encoding="utf-8")
+        result = subprocess.run([ctest, "--test-dir", str(self.tmp), "-V", "--interactive-debug-mode", "0"],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                                check=False, env=clean_env())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        match = re.search(r"errormode=(0x[0-9a-f]+)", result.stdout)
+        self.assertIsNotNone(match, result.stdout)
+        self.assertEqual(int(match.group(1), 16) & 0x3, 0x3, result.stdout)
 
 
 def _bash() -> str | None:
@@ -187,7 +245,7 @@ class VerifyShTest(TempDirTestCase):
         # tools/verify_support.py, found relative to the working directory as in the mirror.
         stub = 'run_config() { printf "run_config"; printf " [%s]" "$@"; echo; }\n'
         script = (stub + _bash_function("run_tsan_quick") +
-                  'summary=(); status=0; changed_list="$1"; changed_reason="$2"\n'
+                  'summary=(); status=0; TSAN_QUICK=1; changed_list="$1"; changed_reason="$2"\n'
                   'run_tsan_quick\n'
                   'printf "summary [%s]\\n" "${summary[@]+"${summary[@]}"}"\n'
                   'echo "status $status"\n')
@@ -218,6 +276,43 @@ class VerifyShTest(TempDirTestCase):
         result = self._bash(script, str(bad), "", cwd=REPO)
         self.assertIn("summary [tsan-quick FAILED (selection)]", result.stdout)
         self.assertIn("status 1", result.stdout)
+        # Without --tsan-quick (the default, ADR 0027 decision 9) nothing is selected or built.
+        listing = self.tmp / "changed.txt"
+        listing.write_text("src/io/src/process_posix.cpp\n", encoding="utf-8")
+        result = self._bash(script.replace("TSAN_QUICK=1", "TSAN_QUICK=0"), str(listing), "", cwd=REPO)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("run_config", result.stdout)
+        self.assertIn("summary [tsan-quick not-run (off by default)]", result.stdout)
+        self.assertIn("status 0", result.stdout)
+
+    def test_parse_args_leaves_tidy_and_tsan_quick_off_by_default(self):
+        script = _bash_function("parse_args") + 'parse_args "$@"\necho "$FULL $CHECKS $TIDY $TSAN_QUICK"\n'
+        cases = [
+            ([], "0 1 0 0"),
+            (["--tidy", "--tsan-quick"], "0 1 1 1"),
+            (["-Full", "-Tidy", "-TsanQuick", "--no-checks"], "1 0 1 1"),
+            (["--full", "--quick"], "0 1 0 0"),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                result = self._bash(script, *args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        result = self._bash(script, "--tsan")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage: verify.sh", result.stderr)
+
+    def test_run_tidy_reports_off_without_the_switch(self):
+        script = (_bash_function("run_tidy") +
+                  'summary=(); status=0; TIDY=0; debug_built=1\n'
+                  'run_tidy\n'
+                  'printf "summary [%s]\\n" "${summary[@]}"\n'
+                  'echo "status $status"\n')
+        result = self._bash(script, cwd=REPO)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("=== tidy", result.stdout)
+        self.assertIn("summary [tidy not-run (off by default)]", result.stdout)
+        self.assertIn("status 0", result.stdout)
 
     def test_ctest_label_filters_are_anchored(self):
         text = (TOOLS / "verify.sh").read_text(encoding="utf-8")

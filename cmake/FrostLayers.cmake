@@ -486,23 +486,29 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_add_runtime_dll
 # manifest is disabled. Tests are built with TEST options and, like the executables of
 # frost_add_executable, get their runtime DLLs through frost_copy_runtime_dlls.
 #
-# Scheduling keywords for parallel ctest (verify.ps1 runs ctest -j; ADR 0027 decision 3). They
-# apply to every test the executable's discovery adds, so a lock covers the whole executable:
-#   RUN_SERIAL            the tests run with nothing else in parallel;
-#   RESOURCE_LOCK <name>  tests holding the same lock never overlap (one lock name per executable);
-#   PROCESSORS <n>        each test counts as n of ctest's -j slots.
-# Policy for new tests (ADR 0027):
-#   - a test that starts frost.exe, creates a desktop or a window, starts console helpers on a
-#     private desktop, or touches per-user state shared with other tests takes
-#     RESOURCE_LOCK frost_desktop;
-#   - a test that asserts wall-clock latency takes RUN_SERIAL;
-#   - a test that starts many threads declares PROCESSORS.
+# Scheduling for parallel ctest (verify.ps1 runs ctest -j; ADR 0027 decision 3). The kind label
+# sets the default, so a suite added later is kept apart without further wiring:
+#   integration  RESOURCE_LOCK frost_desktop: process-level tests start frost.exe or console helpers,
+#                create private desktops and windows, or touch per-user state, and the executables
+#                holding the lock never overlap;
+#   perf         RUN_SERIAL: they measure wall-clock latency (asserted in optimised builds);
+#   unit, stress no default.
+# Keywords, applied to every test the executable's discovery adds (so they cover the executable):
+#   RUN_SERIAL            nothing else runs beside these tests;
+#   RESOURCE_LOCK <name>  tests holding the same name never overlap (replaces the kind's default);
+#   PROCESSORS <n>        each test counts as n of ctest's -j slots (many threads, a nested build).
+# A unit suite that needs the same isolation (a private desktop, MessageBoxW, a native window)
+# says RESOURCE_LOCK frost_desktop; a test added with add_test or gtest_discover_tests directly
+# sets these properties itself.
 function(frost_add_test name)
     cmake_parse_arguments(ARG "QT;RUN_SERIAL" "RESOURCE_LOCK;PROCESSORS" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
     list(LENGTH ARG_LABELS label_count)
     if(label_count GREATER 1)
         message(FATAL_ERROR "frost_add_test(${name}): LABELS takes one kind label (got '${ARG_LABELS}'); "
                             "the module label comes from frost_add_test_directory (tests/CMakeLists.txt)")
+    endif()
+    if(ARG_LABELS AND NOT ARG_LABELS MATCHES "^(unit|integration|stress|perf)$")
+        message(FATAL_ERROR "frost_add_test(${name}): LABELS is unit, integration, stress or perf (got '${ARG_LABELS}')")
     endif()
     if(DEFINED ARG_PROCESSORS AND NOT ARG_PROCESSORS MATCHES "^[1-9][0-9]*$")
         message(FATAL_ERROR "frost_add_test(${name}): PROCESSORS needs a positive integer (got '${ARG_PROCESSORS}')")
@@ -525,6 +531,12 @@ function(frost_add_test name)
     endif()
     if(NOT ARG_LABELS)
         set(ARG_LABELS unit)
+    endif()
+    # The kind's scheduling default (see above).
+    if(ARG_LABELS STREQUAL "integration" AND NOT ARG_RESOURCE_LOCK)
+        set(ARG_RESOURCE_LOCK frost_desktop)
+    elseif(ARG_LABELS STREQUAL "perf")
+        set(ARG_RUN_SERIAL TRUE)
     endif()
     set(properties LABELS ${ARG_LABELS})
     if(ARG_RUN_SERIAL)

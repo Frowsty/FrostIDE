@@ -7,7 +7,8 @@
 #   sched_perf_tests    perf:   interactive dispatch p99 (asserted only in optimised, unsanitised builds)
 # Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): sched_tests starts thread pools
 # (PROCESSORS 2), the stress runs saturate every lane (PROCESSORS 4; they run in -Full only), and
-# the perf test asserts dispatch latency in Release, so it runs with nothing beside it (RUN_SERIAL).
+# the perf test asserts dispatch latency in Release, so it runs with nothing beside it (RUN_SERIAL,
+# the perf label's default).
 frost_add_test(sched_tests
     SOURCES
         deque_test.cpp
@@ -33,6 +34,5 @@ frost_add_test(sched_perf_tests
     SOURCES
         dispatch_perf_test.cpp
     DEPS frost::sched
-    LABELS perf
-    RUN_SERIAL)
+    LABELS perf)
 target_include_directories(sched_perf_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

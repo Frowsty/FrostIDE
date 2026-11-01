@@ -5,26 +5,32 @@
 # PLAN.md section 6.4). Run inside WSL:
 #
 #   wsl -d Ubuntu-24.04 --exec bash /mnt/e/dev/FrostIDE/tools/verify.sh [--quick | --full] [--no-checks]
+#       [--tidy] [--tsan-quick]
 #
 # It mirrors the working tree onto ext4 (building on the /mnt/e 9P mount is
 # several times slower), then configures, builds and tests:
-#   --quick  (default) linux-clang Debug (clang + libstdc++ 14, the Linux floor), plus the TSan
-#            quick leg: the linux-clang-tsan tree's tests of the modules the changed files affect
-#            (io, rpc, sched, text and their dependents; tools/verify_support.py tsan, ADR 0027
-#            decision 5), or "tsan-quick not-needed" when none is affected
-#   --full   additionally ASan+UBSan (Debug), TSan (RelWithDebInfo, every module) and the fuzz
-#            smoke: the linux-clang-fuzz tree (libFuzzer + ASan + UBSan, RelWithDebInfo) runs each
-#            fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L '^fuzz$'
-# The PowerShell spellings -Quick and -Full are accepted too.
+#   --quick       (default) linux-clang Debug (clang + libstdc++ 14, the Linux floor)
+#   --tsan-quick  with --quick, the TSan quick leg: the linux-clang-tsan tree's tests of the
+#                 modules the changed files affect (io, rpc, sched, text and their dependents;
+#                 tools/verify_support.py tsan, ADR 0027 decision 5), or "tsan-quick not-needed"
+#                 when none is affected
+#   --full        additionally ASan+UBSan (Debug), TSan (RelWithDebInfo, every module) and the fuzz
+#                 smoke: the linux-clang-fuzz tree (libFuzzer + ASan + UBSan, RelWithDebInfo) runs
+#                 each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L '^fuzz$'
+# The PowerShell spellings -Quick, -Full, -Tidy and -TsanQuick are accepted too.
 #
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
-# configuration and run in the --full configurations. Afterwards clang-tidy checks the
-# changed files' translation units over the Debug compile database (every TU under --full,
+# configuration and run in the --full configurations. Afterwards, with --tidy, clang-tidy checks
+# the changed files' translation units over the Debug compile database (every TU under --full,
 # with the fuzz tree's own TUs, or when there is no changed-file list), and the licence
 # check inspects the Linux build trees and Qt. Both run even with --no-checks, because they
 # depend on the Linux build trees. The tree checks (clang-format, frost-lint, the
 # feature-matrix check) run unless --no-checks is given, which verify.ps1 passes because it
 # has already checked the same tree.
+#
+# --tidy and --tsan-quick are off by default during the feature-first phase (ADR 0031; ADR 0027
+# decision 9); without them the summary says "tidy not-run (off by default)" and, in --quick,
+# "tsan-quick not-run (off by default)", and no changed-file list is made.
 #
 # Before anything runs, the PATH loses the Windows directories (/mnt/<drive>/...) that WSL
 # appends: every CMake find_* search also probes them over 9P (ADR 0027 decision 4).
@@ -35,7 +41,8 @@
 #                        its own mirror; a lock file serialises runs on one mirror.
 #   FROST_JOBS           build and tidy parallelism (default: nproc), to stay inside the WSL memory cap.
 #   FROST_SDK            SDK root whose env.sh is sourced (default: ~/sdk).
-#   FROST_CHANGED_FILES  the changed-file list (repository-relative paths, one per line):
+#   FROST_CHANGED_FILES  the changed-file list (repository-relative paths, one per line), used
+#                        only with --tidy or --tsan-quick in --quick:
 #                        unset, verify.sh computes it from the source tree's git; set and empty,
 #                        there is no list (verify.ps1 could not make one) and none is computed,
 #                        so tidy checks every TU and the TSan quick leg covers every module;
@@ -44,7 +51,8 @@
 #                        verify.sh computes the list (default: main).
 #
 # The last line of output is the summary for the commit verification footer,
-# e.g. "wsl: debug 62/63 (1 skipped), tsan-quick 40/40, tidy ok (2 TUs), licensecheck ok".
+# e.g. "wsl: debug 62/63 (1 skipped), tsan-quick 40/40, tidy ok (2 TUs), licensecheck ok" (with
+# --tsan-quick and --tidy).
 # Items are joined with ", " and never contain ", " outside parentheses. Skipped tests are
 # never counted as passed. Exit status is non-zero if any configuration fails to build, has
 # a failing test, tidy finds something, or a check fails; 2 for a usage error or a missing tool.
@@ -54,16 +62,26 @@
 
 set -euo pipefail
 
-FULL=0
-CHECKS=1
-for arg in "$@"; do
-    case "$arg" in
-        --full | -Full | -full) FULL=1 ;;
-        --quick | -Quick | -quick) FULL=0 ;;
-        --no-checks) CHECKS=0 ;;
-        *) echo "usage: verify.sh [--quick | --full] [--no-checks]" >&2; exit 2 ;;
-    esac
-done
+# Sets FULL, CHECKS, TIDY and TSAN_QUICK (0 or 1) from the command line; exits 2 with the usage
+# line for anything else. No other side effects; tests/tools/test_verify_scripts.py runs it alone.
+parse_args() {
+    FULL=0
+    CHECKS=1
+    TIDY=0
+    TSAN_QUICK=0
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --full | -Full | -full) FULL=1 ;;
+            --quick | -Quick | -quick) FULL=0 ;;
+            --no-checks) CHECKS=0 ;;
+            --tidy | -Tidy) TIDY=1 ;;
+            --tsan-quick | -TsanQuick) TSAN_QUICK=1 ;;
+            *) echo "usage: verify.sh [--quick | --full] [--no-checks] [--tidy] [--tsan-quick]" >&2; exit 2 ;;
+        esac
+    done
+}
+parse_args "$@"
 
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -n "${FROST_MIRROR:-}" ]]; then
@@ -93,7 +111,9 @@ fi
 PATH="$new_path"
 echo "verify.sh: $(cat "$path_note") Windows PATH entries (ADR 0027)"
 rm -f "$path_note"
-for tool in cmake ninja clang-format clang-tidy rsync python3 git flock; do
+needed_tools=(cmake ninja clang-format rsync python3 git flock)
+if [[ $TIDY -eq 1 ]]; then needed_tools+=(clang-tidy); fi
+for tool in "${needed_tools[@]}"; do
     if ! command -v "$tool" > /dev/null; then
         echo "verify.sh: $tool is not on PATH (source ~/sdk/env.sh; tools/bootstrap-wsl.sh installs it)" >&2
         exit 2
@@ -127,11 +147,16 @@ if ! flock -n 9; then
     flock 9
 fi
 
-# The changed-file list (FROST_CHANGED_FILES above). The path next to the mirror belongs to this
-# run because the mirror's lock is held.
+# The changed-file list (FROST_CHANGED_FILES above), made only when --tidy or --tsan-quick use it
+# (--full checks everything). The path next to the mirror belongs to this run because the mirror's
+# lock is held.
 changed_list=""
 changed_reason=""
-if [[ -n "${FROST_CHANGED_FILES+set}" ]]; then
+need_list=0
+if [[ $FULL -eq 0 && ($TIDY -eq 1 || $TSAN_QUICK -eq 1) ]]; then need_list=1; fi
+if [[ $need_list -eq 0 ]]; then
+    :
+elif [[ -n "${FROST_CHANGED_FILES+set}" ]]; then
     if [[ -z "$FROST_CHANGED_FILES" ]]; then
         changed_reason="verify.ps1 had none"
     elif [[ -r "$FROST_CHANGED_FILES" ]]; then
@@ -147,7 +172,7 @@ else
 fi
 if [[ -n "$changed_list" ]]; then
     echo "verify.sh: changed-file list $changed_list ($(grep -c . "$changed_list" || true) files)"
-else
+elif [[ $need_list -eq 1 ]]; then
     echo "verify.sh: no changed-file list: $changed_reason"
 fi
 
@@ -219,11 +244,13 @@ run_config() {
     summary+=("$label $counts")
 }
 
-# The TSan quick leg (PLAN.md 6.4 step 3; ADR 0027 decision 5): the TSan tree's tests of the
-# modules the changed files affect, by their mod.* labels. Without a list every module runs.
-# The tree builds incrementally, so the first run in a fresh mirror builds all of it. A selection
-# that matches no test fails as "no-results" (the presets set noTestsAction to error).
+# The TSan quick leg (PLAN.md 6.4 step 3; ADR 0027 decision 5), with --tsan-quick only (decision
+# 9): the TSan tree's tests of the modules the changed files affect, by their mod.* labels. Without
+# a list every module runs. The tree builds incrementally, so the first run in a fresh mirror builds
+# all of it. A selection that matches no test fails as "no-results" (the presets set noTestsAction
+# to error).
 run_tsan_quick() {
+    if [[ $TSAN_QUICK -ne 1 ]]; then summary+=("tsan-quick not-run (off by default)"); return; fi
     local args=(--all) out modules regex
     if [[ -n "$changed_list" ]]; then
         args=(--changed "$changed_list")
@@ -262,10 +289,12 @@ run_check() {
     if python3 -I "tools/$name.py" --repo "$MIRROR" 2>&1; then summary+=("$name ok"); else summary+=("$name FAILED"); status=1; fi
 }
 
-# clang-tidy over the Debug compile database (ADR 0027 decision 1): the changed files' TUs with a
-# list (Budget: B28), every TU without one or under --full (plus the fuzz tree's own TUs). Appends
-# the summary line tools/verify_support.py prints last ("tidy ok (2 TUs)", "tidy FAILED (...)").
+# clang-tidy over the Debug compile database (ADR 0027 decision 1), with --tidy only (decision 9):
+# the changed files' TUs with a list (Budget: B28), every TU without one or under --full (plus the
+# fuzz tree's own TUs). Appends the summary line tools/verify_support.py prints last
+# ("tidy ok (2 TUs)", "tidy FAILED (...)"), or "tidy not-run (off by default)".
 run_tidy() {
+    if [[ $TIDY -ne 1 ]]; then summary+=("tidy not-run (off by default)"); return; fi
     echo "=== tidy"
     if [[ $debug_built -ne 1 ]]; then summary+=("tidy not-run (debug build failed)"); return; fi
     local args=(--repo "$MIRROR" --build-dir "$MIRROR/build/linux-clang" --config Debug

@@ -1039,31 +1039,60 @@ class RealClangTidyTest(TempDirTestCase):
 
 class BuildTreeLabelsTest(unittest.TestCase):
     """
-    The TSan quick leg selects tests by their mod.* label, so every test of the build tree that runs
-    this suite must carry exactly one, and it must name the test's directory under tests/. ctest
-    passes the tree, its configuration and ctest's path (tests/tools/CMakeLists.txt); run directly,
-    the test is skipped.
+    The build tree's ctest properties, read with `ctest --show-only=json-v1`. The TSan quick leg selects
+    tests by their mod.* label, so every test must carry exactly one, naming its directory under tests/;
+    and parallel ctest relies on the kind labels' scheduling defaults (frost_add_test). ctest passes the
+    tree, its configuration and ctest's path (tests/tools/CMakeLists.txt); run directly, both are skipped.
     """
 
-    def test_every_test_has_exactly_one_module_label(self):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tests = None
         tree, config, ctest = (os.environ.get(name) for name in ("FROST_TEST_TREE", "FROST_TEST_CONFIG",
                                                                  "FROST_CTEST"))
-        if not (tree and config and ctest):
+        if tree and config and ctest:
+            result = subprocess.run([ctest, "--test-dir", tree, "-C", config, "-N", "--show-only=json-v1"],
+                                    capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
+            cls.error = result.stderr if result.returncode != 0 else ""
+            cls.tests = json.loads(result.stdout)["tests"] if result.returncode == 0 else []
+
+    def setUp(self) -> None:
+        if self.tests is None:
             self.skipTest("FROST_TEST_TREE, FROST_TEST_CONFIG and FROST_CTEST are set only under ctest")
-        result = subprocess.run([ctest, "--test-dir", tree, "-C", config, "-N", "--show-only=json-v1"],
-                                capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        tests = json.loads(result.stdout)["tests"]
+        self.assertEqual(self.error, "")
+        self.assertGreater(len(self.tests), 100)
+
+    @staticmethod
+    def _properties(test: dict) -> dict:
+        return {p["name"]: p["value"] for p in test.get("properties", [])}
+
+    def test_every_test_has_exactly_one_module_label(self):
         directories = {p.name for p in (REPO / "tests").iterdir() if (p / "CMakeLists.txt").is_file()}
-        self.assertGreater(len(tests), 100)
-        self.assertIn("tools.verify_support", {test["name"] for test in tests})
+        self.assertIn("tools.verify_support", {test["name"] for test in self.tests})
         wrong = []
-        for test in tests:
-            labels = next((p["value"] for p in test.get("properties", []) if p["name"] == "LABELS"), [])
+        for test in self.tests:
+            labels = self._properties(test).get("LABELS", [])
             modules = [label for label in labels if label.startswith("mod.")]
             if len(modules) != 1 or modules[0][len("mod."):] not in directories:
                 wrong.append(f"{test['name']}: {labels}")
-        self.assertEqual(wrong, [], f"{len(wrong)} of {len(tests)} tests")
+        self.assertEqual(wrong, [], f"{len(wrong)} of {len(self.tests)} tests")
+
+    def test_integration_and_perf_tests_are_kept_apart(self):
+        # ADR 0027 decision 3: an integration test holds a resource lock (frost_desktop by default), a
+        # perf test runs serially; FrostProcess.* hold frost_desktop through the integration default.
+        wrong, desktop = [], []
+        for test in self.tests:
+            properties = self._properties(test)
+            labels = properties.get("LABELS", [])
+            if "integration" in labels and not (properties.get("RESOURCE_LOCK") or properties.get("RUN_SERIAL")):
+                wrong.append(f"{test['name']}: integration without a lock")
+            if "perf" in labels and not properties.get("RUN_SERIAL"):
+                wrong.append(f"{test['name']}: perf without RUN_SERIAL")
+            if "frost_desktop" in properties.get("RESOURCE_LOCK", []):
+                desktop.append(test["name"])
+        self.assertEqual(wrong, [])
+        if any(test["name"].startswith("FrostProcess.") for test in self.tests):  # Trees with the UI.
+            self.assertTrue(any(name.startswith("FrostProcess.") for name in desktop), desktop[:5])
 
 
 if __name__ == "__main__":

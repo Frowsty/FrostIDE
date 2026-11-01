@@ -7,8 +7,9 @@
 #                         frost.exe launcher and frost_app.dll) through frost::io's
 #                         IProcessLauncher.
 #
-# Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): app_startup_tests and
-# frost_process_tests hold RESOURCE_LOCK frost_desktop with io_integration_tests. Their tests
+# Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): frost_process_tests (label
+# integration, so by default) and app_startup_tests (explicitly) hold RESOURCE_LOCK frost_desktop
+# with the other integration suites. Their tests
 # create private desktops (desktops come from the session's desktop heap), raise MessageBoxW on
 # them, start frost.exe with Qt and on the --selftest=onscreen and GUI cases a GPU driver, and
 # use the launcher's short links under the per-user LOCALAPPDATA; within one verify run they have
@@ -41,7 +42,6 @@ frost_add_test(frost_process_tests
     SOURCES frost_process_test.cpp
     DEPS frost::io
     LABELS integration
-    RESOURCE_LOCK frost_desktop
     PROCESSORS 2)
 # tests/support/scratch_dir.hpp and private_desktop.hpp.
 target_include_directories(frost_process_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
