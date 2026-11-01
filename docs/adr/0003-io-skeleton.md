@@ -206,11 +206,14 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
   criterion stays visibly unmet, and `ReportsLongPathLimitCleanly` covers the report.
 - The same limit applies to frost's own start-up DLLs (measured 2026-11-01 at 2c499a2 with
   `LongPathsEnabled = 0`; raw data in `E:\FrostBuilds\perf\m0\exit-full\`). When frost.exe is started
-  through its plain path, as frost::io's launcher does below MAX_PATH, the loader refuses every DLL next
-  to frost.exe that embeds RT_MANIFEST resource 2 once that DLL's path is longer than 250 units. It ends
-  the process with 0xC0000106 (STATUS_NAME_TOO_LONG) before `main` runs, so the start-up check never runs
-  and no message appears. Release frost dies that way from directories of 236 to 249 units
-  (`Qt6Widgets.dll`), Debug from 235 to 249 (`Qt6Widgetsd.dll`). Below that range the start-up check
+  through its plain path, as frost::io's launcher does below MAX_PATH, the loader refuses each DLL that
+  frost.exe loads at start-up (its static imports, which sit next to it) and that embeds RT_MANIFEST
+  resource 2, once that DLL's path is longer than 250 units. It ends the process with 0xC0000106
+  (STATUS_NAME_TOO_LONG) before `main` runs, so the start-up check never runs and no message appears.
+  Release frost dies that way from directories of 236 to 249 units (`Qt6Widgets.dll`), Debug from 235 to
+  249 (`Qt6Widgetsd.dll`). Those ranges come from their end points plus spot checks inside them (Release
+  241 and 245, Debug 240), not from every length. Release frost starts normally up to 225 units and
+  Debug up to 224; from 226 (Release) or 225 (Debug) up to the start of the range, the start-up check
   refuses cleanly. From 250 units on (frost.exe's path reaches 260) the launcher uses the `\\?\` form,
   frost starts, and the check refuses cleanly again. ASan trees put clang's ASan runtime next to every
   executable. Its longer name (`clang_rt.asan_dynamic-x86_64.dll`, 32 units) starts the range at 218

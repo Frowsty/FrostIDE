@@ -27,9 +27,9 @@ commits' messages.
   came with d41f2a1, after the last `-Full`, and `m0/dll-copy` ran ASan for tests/sched and tests/io only.
 - **Root cause, measured** on a hidden desktop with critical-error boxes off. frost::io's `launchPath` passes the
   plain path below MAX_PATH and the `\\?\` form from 260 units on. With LongPathsEnabled=0 and a plain launch, the
-  loader refuses every DLL beside frost.exe that embeds an isolation-aware manifest (RT_MANIFEST 2) once its path
-  is longer than 250 UTF-16 units. That is the limit ADR 0003 records for Qt's plugins, here hitting frost's
-  static imports. The ASan runtime `clang_rt.asan_dynamic-x86_64.dll` (32 units, RT_MANIFEST 2) loads at 250 units
+  loader refuses each DLL that frost.exe loads at start-up (its static imports beside it) and that embeds an
+  isolation-aware manifest (RT_MANIFEST 2), once its path is longer than 250 UTF-16 units. That is the limit ADR
+  0003 records for Qt's plugins, here hitting frost's static imports. The ASan runtime `clang_rt.asan_dynamic-x86_64.dll` (32 units, RT_MANIFEST 2) loads at 250 units
   and fails at 251, from a directory of 218 units. The test's two directories are 225 and 226 units (the plugin at
   250 and 251), so the test cannot pass in that tree as written.
 - **The same gap in the product.** Release frost dies with 0xC0000106, and no message, from directories of 236 to
