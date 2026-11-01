@@ -448,7 +448,7 @@
       "variants": [],
       "percentiles": ["p50", "p99"],
       "targets": [
-        { "gate": "M3", "percentile": "p50", "max": null, "relative": "S7 baseline x1.2", "unit": "s" },
+        { "gate": "M3", "percentile": "p50", "max": 18.4, "relative": "S7 baseline x1.2", "unit": "s", "note": "Proposed, pending the user's confirmation (ADR 0008): S7 baseline p50 15.31 s x1.2 = 18.37 s, from the quiet-machine control on REF-W1, 20 runs: clangd launch to both answers from the persisted index; R3 at 7a941dfb2 configured with Ninja, LLVM_ENABLE_PROJECTS=clang, CMAKE_BUILD_TYPE=Release and the clang-cl toolchain file, TableGen targets and 21 generated headers built; CMake's compile_commands.json (5945 entries); a complete index built with --background-index -j=4 (12,364 shards); warm file cache; unlocked input desktop, active console session and no user input. The PLAN 6.3 precheck's DXGI monitor-power item was not done (WMI listed the monitor as Availability 8, Off Line). No heavy user workload ran; requiring that of the M3 gate is also proposed, pending the user's confirmation. Under the user's workload the same runs gave p50 20.93 s (x1.2 = 25.1 s)." },
         { "gate": "M13", "percentile": "p50", "max": 2, "unit": "s" },
         { "gate": "M13", "percentile": "p99", "max": 3, "unit": "s" }
       ],
