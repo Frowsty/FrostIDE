@@ -3,6 +3,85 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01: `m1/piece-tree`, acting on two independent reviews
+
+Two independent reviews of c8757f3: one approves, one asks for changes. Neither found a correctness,
+memory-safety or concurrency defect in `src/text`. Together they report one medium and seven low findings, all in
+test tooling, docs and the clean-room record. Every finding is fixed or recorded; one question for you is below.
+Committed on `m1/piece-tree`, not merged or pushed. Every Windows test ran through `run_hidden_nobox.py`; no
+window opened on your desktop.
+
+### Done
+- **Medium, the stress test's reproduction command.** `TextStress.Differential` runs 64 queries per full check,
+  but the command it printed re-ran the seed through `TextDifferential.Quick` with its fixed 16. The verify RNG
+  draws differently with 16 queries, so a failure found by the later draws could pass under the printed command.
+  `text_ops` now has `quickSettings`, which parses `FROST_TEXT_SEED`, `_OPS`, `_CHECK_EVERY`, the new
+  `FROST_TEXT_QUERIES` and `_THREADS` and rejects bad values (InvalidArgument; zero threads too, which used to run
+  no seed), and `reproduceCommand(SeedRun)`, which sets every SeedRun field. Both tests print it. New tests:
+  `TextDifferential.ReproduceCommandRoundTrips` and `TextDifferential.SettingsDefaultsAndBadValues`.
+- **Low, the buffer limit was never fuzzed.** One differential seed in seven (`seedBufferLimit`, `seed % 7 == 3`)
+  and 30 of the 256 values of a fuzz input's first byte now run with a small `maxBufferBytes` (`limitBuffer`).
+  Edits, batches, loads and the invalid op's near-limit branch then meet check 5. `DriverStats::overLimit` counts
+  these rejections, `TextDifferential.Quick` expects some, and the stress test prints the count. No committed
+  corpus file changes meaning: none has a first byte in the new range. The first mapping, `(seed / 24) % 8 == 7`,
+  chose no seed in the default-scale stress runs (seeds 1,000,000-1,000,049; the first `-Full` printed
+  "0 rejections by the buffer limit"). Any 7 consecutive seeds include one of the new mapping's seeds.
+- **Low, the fuzz smoke was not hermetic.** The new setup fixture `fuzz.<name>.reset`
+  (`cmake/FrostFuzzResetWork.cmake`) empties `fuzz-work/<name>` before each run, so every run starts from the
+  committed corpus. Fuzz trees now count two tests (`win fuzz 2/2`, `wsl fuzz 2/2`).
+- **Low, docs:** `snapshot.hpp` and ADR 0012 D7 now say that `chunks()` and `linesFrom()` copy the snapshot (four
+  counter operations per call). The ADR's tree height for 256 MiB is now 4, not 3: 16^3 = 4096 leaves is the most
+  height 3 holds, and `TextPerf.LoadThroughput` now prints the height. D8 now says where the LSP-replay property is
+  checked: at each full check, not after every op. Two comment fixes: `mergeSiblings` holds "at least B", and the
+  harness takes bytes `[2, 2+L)`.
+- **Low, clean-room record:** `text_summary.hpp` and ADR 0012's Sources now record where TextSummary's
+  line-metric design came from, and the review's note that the line fields resemble those of Zed's GPL rope
+  crate. That crate was not opened. See the question below.
+- **Mutation checks** (Debug, each reverted afterwards; `git diff src/text/src` is empty). Each mutant made the new
+  tests fail:
+  - (A) the command without `FROST_TEXT_QUERIES`, and (B) Quick ignoring that variable: the round-trip test fails.
+  - Removing the size check from (C) `applyEdits`, (D) `replace` or (E) `fromUtf8`: Quick fails 3, 29 and 12
+    seeds, the first being seed 3, 3 and 10. All three were also killed under the first mapping, where the
+    printed command reproduced C's first failing seed (171) on its own.
+  - (F) no limited seeds: Quick fails its `overLimit > 0` expectation.
+  The reviewer's surviving mutant was C. These runs used the final mapping: Quick had 486 limit rejections, and
+  the 1M-op stress run in Release had 2218.
+- **Verification** (`run_hidden_nobox.py`, `-Jobs 4`, `night.py build-gate` before every build and long run):
+  - `verify.ps1 -Full`, twice: first on the first mapping (21 min 49 s), then on the final code (20 min 26 s).
+    Both gave win debug 435/438 (1 skipped), release 441/444 (1 skipped), asan 442/445 (1 skipped), fuzz 2/2; wsl
+    debug 404/404, asan 411/411, tsan 410/410, fuzz 2/2. format, frost_lint (348 files), licensecheck and
+    featurecheck were ok. The only failures are the known `FrostProcess.RunsFromPathLongerThanMaxPath` and
+    `FrostProcess.PlatformPluginPathBoundary`; the skip is `FrostProcess.ReportsLongPathLimitCleanly`.
+  - The final `verify.ps1 -Quick`, after the long runs and the docs: win debug 435/438 (1 skipped; the same two
+    known failures), wsl debug 404/404, all checks ok, 105 s wall. Only this log entry changed after it.
+  - Every text stress case stays under its 120 s ceiling. The longest are WSL ASan Differential at 55.6 s, WSL
+    TSan Differential at 48.9 s and Windows ASan Differential at 31.2 s. `TextDifferential.Quick` takes 6.0 s in
+    Windows Debug and 5.7 s in WSL Debug.
+- **M1 exit runs, repeated on the final code** (run beside each other; ADR 0012 has the details):
+  - The 10M-op differential in Windows Release: **0 mismatches**, 1,126,249 full checks, 21,367 rejections by the
+    buffer limit, 161.4 s.
+  - A **clean 10-minute fuzz on each OS**, each starting from an empty work corpus. Windows: 381289 runs,
+    634 exec/s. Linux: 386400 runs, 642 exec/s. No artifacts on either.
+- `TextPerf.LoadThroughput` at 256 MiB now prints height 4 (the ADR's corrected value).
+
+### Next
+- Merge `m1/piece-tree` once M0 is signed off and you have answered the provenance question (CLAUDE.md: text,
+  core and io had their independent review; these fixes touch only comments in `src/text`).
+- Then `m1/undo-anchors`, `m1/encodings`, `m1/large-file` and the editor model, as in the entry below.
+
+### Blockers
+- None new. The two known FrostProcess failures still wait for `m0/longpath`.
+
+### Questions for the user
+- **TextSummary provenance (clean room).** The second review noted that TextSummary's line metrics
+  (`firstLineChars`, `lastLineChars`, `lastLineUtf16`, `longestLineChars`, `longestLine`) and the non-CRLF combine
+  rule match, field for field, the `TextSummary` of Zed's rope crate. That crate is GPL, and PLAN.md section 3
+  lists it as off-limits. The review found no evidence of copying, and found the CR, CRLF and lone-CR rules,
+  `lineFeeds`, per-byte counting and tie-breaking original. The slice's source record says the crate was not
+  opened. The record now states this in ADR 0012 and in a provenance comment in `text_summary.hpp`. Is that record
+  enough, or do you want something else? For example, a redesign of the line fields, or a citation of a public
+  description such as Zed's "Rope & SumTree" blog post, which this session has not read.
+
 ## 2026-11-01: M1 first slice, the frost::text piece tree (`m1/piece-tree`)
 
 M1 started while M0 waits for sign-off (your instruction on 2026-11-01). Branch `m1/piece-tree` from

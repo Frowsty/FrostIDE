@@ -49,8 +49,10 @@ B+tree whose nodes cache monoid summaries, searched by a monotone predicate over
 5. **Fan-out B = 8** (8..16 entries), against Zed's 6..12 (`TREE_BASE` 6). Wider nodes give a lower tree and
    longer sequential summary scans, and a path copy still costs about 1.2 KiB per level: a leaf is 16 pieces of
    72 B plus a 72 B header, an internal node 16 summaries of 64 B plus 16 references. Measured: a 256 MiB text in
-   4 KiB pieces has 4097 leaves and 277 internal nodes, height 3, 5.4 MB of nodes (0.020 bytes per text byte).
-   The generic tests instantiate B = 2, 3 and 8.
+   4 KiB pieces has 4097 leaves and 277 internal nodes, height 4, 5.4 MB of nodes (0.020 bytes per text byte).
+   Height 3 holds at most 16^3 = 4096 leaves, so the 4097th leaf adds a level. An earlier draft of this ADR said
+   height 3, which had not been measured; `TextPerf.LoadThroughput` now prints the height, and printed 4. The
+   generic tests instantiate B = 2, 3 and 8.
 6. **D4, the piece cap.** Pieces hold 1..`maxPieceBytes` bytes (default 4096, at least 4), which bounds every
    in-piece scan. Loads cut the original at char boundaries into runs of at most P bytes (VS Code's chunked
    buffers). **B15 risk:** at P = 4 KiB, F1 needs about 512k pieces; the measured projection is 39.9 MB of tree
@@ -78,10 +80,13 @@ B+tree whose nodes cache monoid summaries, searched by a monotone predicate over
 10. **D7, concurrency.** One writer (the TextBuffer, owned by one thread at a time) and any number of readers
     (Snapshots). Reference counts are the only shared mutable state, and storage bytes are written only past every
     published byte. Increments are relaxed; decrements are `fetch_sub(acq_rel)` (the Boost intrusive_ptr scheme),
-    with no standalone fences because ThreadSanitizer does not model `atomic_thread_fence`. Queries take no
-    references: only copying a Snapshot touches counters, so readers that query one snapshot never contend on its
-    root's counter. Allocation failure terminates; edits, loads and text members are `noexcept`, so `bad_alloc`
-    never leaves frost::text (as in frost::sched).
+    with no standalone fences because ThreadSanitizer does not model `atomic_thread_fence`. The queries take no
+    references, so readers that only query one snapshot never contend on its root's counter. Copying a Snapshot
+    touches the counters, and so do `chunks()` and `linesFrom()`: the `ChunkRange` and `LineCursor` they return
+    hold a Snapshot copy, so each call costs two relaxed increments and, when the result dies, two acq_rel
+    decrements on the shared root-node and storage counters (once per call, not per chunk or line; renderer and
+    syntax threads iterating one snapshot do contend there). Allocation failure terminates; edits, loads and text
+    members are `noexcept`, so `bad_alloc` never leaves frost::text (as in frost::sched).
 11. **D8, TextChange normalisation.** Every change an edit step reports is widened so that no bound lies strictly
     inside a CRLF in the old or the new text, and the line structure outside the change is identical in both.
     With O the old text, N the new, s the start and eo/en the old/new ends: if s > 0, O[s-1] is CR and O[s] or
@@ -90,9 +95,13 @@ B+tree whose nodes cache monoid summaries, searched by a monotone predicate over
     than the edit asked for. **Rationale:** LSP cannot express a position between a CR and its LF, and an edit
     that turns a lone CR into a CRLF (or splits one) changes the line structure one byte outside the edited range;
     widening makes the points LSP-representable and makes "apply the change to the old text as an LSP edit"
-    reproduce the new text, which the tests check after every op. `applyEdits` reports one change per step, in
-    application order (last edit first), each in its own step's coordinates, ready for sequential `didChange`
-    entries.
+    reproduce the new text. The tests check that LSP-replay property, and the change's points, for the last
+    text-changing op before each full check (every step of it for a batch): every 64 ops in
+    `TextDifferential.Quick`, 16 in the stress run, 32 in the fuzz target, and on the driver's explicit check ops
+    (5 % of ops). After every op they check the change's byte fields against the oracle's D8 result, the coverage
+    bounds and that no bound is CRLF-interior in the old or the new text (`tests/text/support/text_ops.hpp`).
+    `applyEdits` reports one change per step, in application order (last edit first), each in its own step's
+    coordinates, ready for sequential `didChange` entries.
 12. **Edits.** `insert`, `erase`, `replace`, `applyEdits` (atomic batch) and `restore(earlier snapshot)` are
     all-or-nothing: on error the text, version and storage are unchanged. Checks run in a fixed order shared with
     the test oracle: begin > end (InvalidArgument), end > size (OutOfRange), a bound inside a UTF-8 sequence
@@ -105,8 +114,12 @@ B+tree whose nodes cache monoid summaries, searched by a monotone predicate over
     stress tests, with choices read from the input instead of a seed. Fuzz trees are Qt-free and gtest-free
     (`FROST_FUZZ`, presets `win-clangcl-fuzz` and `linux-clang-fuzz`, RelWithDebInfo); normal trees build a
     replay executable that runs the committed corpus as the unit test `fuzz_replay.text_piece_tree` on both OSes.
-    `verify -Full` runs each fuzz target for 60 s (`FROST_FUZZ_SECONDS`) on both OSes. Windows specifics, probed
-    on 2026-11-01 with LLVM 23.1.4 and MSVC 14.44.35207:
+    `verify -Full` runs each fuzz target for 60 s (`FROST_FUZZ_SECONDS`) on both OSes. Each run is hermetic: the
+    setup fixture `fuzz.<name>.reset` (`cmake/FrostFuzzResetWork.cmake`) empties the work corpus first, so a run
+    starts from the committed corpus alone and its exec/s and coverage do not depend on the tree's earlier runs.
+    The differential seeds and the fuzz inputs both include runs with a small `maxBufferBytes` (one seed in seven;
+    30 of the 256 values of the input's first byte), so the size-limit check of decision 12 is exercised at random
+    as well as by the unit tests. Windows specifics, probed on 2026-11-01 with LLVM 23.1.4 and MSVC 14.44.35207:
     - **/MT is required.** The pinned `clang_rt.fuzzer-x86_64.lib` records, in each of its 15 members,
       `/FAILIFMISMATCH` values `RuntimeLibrary=MT_StaticRelease`, `_ITERATOR_DEBUG_LEVEL=0`, `annotate_string=0`,
       `annotate_vector=0`, `_MSC_VER=1900` and `_CRT_STDIO_ISO_WIDE_SPECIFIERS=0`. Configure fails unless
@@ -183,7 +196,8 @@ desktop use) during every run. All Windows runs went through `run_hidden_nobox.p
 | WSL ASan + UBSan (Debug) | 21.1 s | 29.2 s | 66.7 s (200k) / 1.7 s (8 MB) / 35.9 s (200k) |
 | WSL TSan (RelWithDebInfo) | 11.6 s | 16.4 s | 52.6 s (300k) / 2.7 s (8 MB) / 13.4 s (100k) |
 
-"All text unit cases" is the sum over `text_tests` (62 cases), the text perf cases and `fuzz_replay.text_piece_tree`.
+"All text unit cases" is the sum over `text_tests` (62 cases when measured; 64 since the review fixes added the
+reproduction and settings tests), the text perf cases and `fuzz_replay.text_piece_tree`.
 Every unit case other than the differential takes at most 0.9 s in Windows Debug (`TextConcurrency` 0.84 s), and
 every stress case stays under its 120 s ceiling in each `-Full` configuration. `TextConcurrency.ReadersDuringEdits`
 is clean under TSan.
@@ -191,19 +205,24 @@ is clean under TSan.
 Scales (`tests/text/stress_test.cpp`, chosen to keep each case under 120 s): `TextStress.Differential` runs 1M ops
 in optimised unsanitised builds, 500k in optimised ASan, 300k under TSan, 200k in sanitised Debug and in
 unsanitised Debug, and 10M with `FROST_STRESS_FULL=1` in optimised unsanitised builds (the M1 exit scale). Seeds of
-20k ops, a full check every 16 ops with 64 queries. `TextStress.F2SingleLine` uses a 50 MB line, 8 MB in Debug or
+20k ops, a full check every 16 ops with 64 queries; a failing seed prints a command that re-runs it alone through
+`TextDifferential.Quick` with all four settings (`FROST_TEXT_QUERIES` included, so the reproduction draws the same
+queries). `TextStress.F2SingleLine` uses a 50 MB line, 8 MB in Debug or
 sanitised builds. `TextStress.ConcurrentReaders` runs 1M edits optimised, 100k under TSan, 200k otherwise.
 
 M1 exit scale (`FROST_STRESS_FULL=1`, Release, 500 seeds of 20k ops on 4 threads, a full check every 16 ops): **10M
 ops, 0 mismatches on both OSes**. Windows 217.5 s (1,125,973 full checks; ctest through `run_hidden_nobox.py`),
 WSL 166.1 s (1,126,685 full checks; the binary run directly in `verify.sh`'s ext4 mirror). The other two stress
 cases ran at their default scale beside it: F2SingleLine 2.5 s and 2.2 s, ConcurrentReaders 11.8 s and 11.4 s.
+Re-run once on Windows after the review fixes, when one seed in seven has a small buffer limit: 10M ops, 0
+mismatches, 1,126,249 full checks, 21,367 rejections by the limit, 161.4 s. It ran beside the two 10-minute fuzz
+runs below.
 
 ### Perf (REF-W1, Windows Release)
 - `TextPerf.EditLatency` (16 MiB, 100k typing ops): p50 9.7 us, p99 22.2 us, max 111 us. Debug, 1 MiB, 2k ops,
   report only: p50 35.9 us, p99 76.9 us.
 - `TextPerf.LoadThroughput`: 256 MiB in 0.273 s = 0.98 GB/s; 65537 pieces (4096 bytes each), 4097 leaves, 277
-  internal nodes, 5.4 MB of nodes. F1 projection: load 2.03 s, 39.9 MB of tree nodes.
+  internal nodes, height 4, 5.4 MB of nodes. F1 projection: load 2.03 s, 39.9 MB of tree nodes.
 - `TextPerf.SeekLatency` (16 MiB, 419144 lines, height 3): p99 `pointAt` 4.3 us, `offsetAt(Point)` 3.7 us,
   `offsetAt(Utf16Point)` + `utf16PointAt` 15.8 us, `lineInfo` 3.0 us.
 
@@ -212,7 +231,8 @@ Target: at least 200 exec/s in the ASan fuzz build on each OS. Both builds excee
 harness caps stay at the spec's values (512 ops, documents of 64 KiB, a full check every 32 ops with 16 queries).
 - Windows (`win-clangcl-fuzz`, /MT, ASan), the 60 s `fuzz.text_piece_tree` smoke: 1484 exec/s on the first run
   (90533 runs from the 6 hand seeds; peak RSS 397 MB), 940 exec/s in `verify -Full` (57371 runs, starting from the
-  first run's 1465-file work corpus; peak RSS 413 MB).
+  first run's 1465-file work corpus; peak RSS 413 MB). That dependence on earlier runs is why the smoke now resets
+  its work corpus (decision 13).
 - Linux (`linux-clang-fuzz`, ASan + UBSan), the same smoke in `verify -Full`: 1079 exec/s (68038 runs; peak RSS
   365 MB).
 - Corpus: 6 hand seeds plus 24 inputs picked from a 60 s run's 1470. `-set_cover_merge=1` with `-use_counters=0
@@ -226,6 +246,13 @@ harness caps stay at the spec's values (512 ops, documents of 64 KiB, a full che
   541 exec/s, 2313 edges, peak RSS 624 MB (ctest through `run_hidden_nobox.py`); Linux 346013 runs in 601 s = 575
   exec/s, peak RSS 414 MB. The rate halves over the long runs as libFuzzer's inputs grow (the length limit reached
   252 bytes on Windows).
+- After the review fixes (the buffer-limit inputs, the reset fixture), both exit runs were repeated in the same
+  trees. Each started from an empty work corpus plus the 29 non-empty committed files, where the earlier runs had
+  left 2417 and 1939 files. **Again no crash, leak or timeout on either OS, and no artifact.** Windows 381289 runs
+  in 601 s = 634 exec/s, 2325 edges, peak RSS 630 MB; Linux 386400 runs in 601 s = 642 exec/s, peak RSS 432 MB.
+  Both ran beside each other and beside the Windows 10M-op run.
+- The 60 s smokes in `verify -Full` after the fixes, each from an empty work corpus: Windows 1192 exec/s, Linux
+  958 exec/s.
 
 ## Consequences
 - Every later M1 slice builds on immutable snapshots: the syntax host, indexer and renderer read without locks, and
@@ -271,4 +298,12 @@ harness caps stay at the spec's values (512 ops, documents of 64 KiB, a full che
   memory ordering (`src/text/include/frost/text/detail/ref.hpp`).
 - LSP 3.17 (line ends and positions) and tree-sitter's public API documentation (`TSInputEdit`, `TSPoint`, the read
   callback).
+- `TextSummary`'s line metrics (`firstLineChars`, `lastLineChars`, `lastLineBytes`, `lastLineUtf16`,
+  `longestLineChars`, `longestLine`) and their combine rules cite no source: they serve PLAN.md section 3's
+  "longest line" summary, and combining two texts' longest lines in O(1) needs each side's first and last partial
+  rows and its longest row with that row's index. The independent review of this slice noted that these fields
+  and the non-CRLF combine rule match, field for field, the `TextSummary` of Zed's rope crate (GPL; PLAN.md
+  section 3 lists it as off-limits, and it was not opened, as above). The review found no evidence of copying, and
+  found the CR, CRLF and lone-CR rules, `lineFeeds`, per-byte counting and the tie-breaking original. Recorded
+  here and in `text_summary.hpp`; how to treat the resemblance is a question for the user (progress log).
 - No function is a close port of any upstream code, so no NOTICE entry or upstream copyright line is needed.

@@ -167,10 +167,10 @@ TEST(TextPerf, LoadThroughput) {
     const double nodeBytesPerByte = static_cast<double>(stats.nodeBytes) / static_cast<double>(size);
     constexpr double kF1Bytes = 2e9;
     std::printf("[text perf] LoadThroughput (%s): %zu bytes in %.3f s = %.2f GB/s; %zu pieces (%.0f bytes per piece), "
-                "%zu leaves, %zu internal nodes, %.1f MB of nodes (%.4f bytes per text byte)\n",
+                "%zu leaves, %zu internal nodes, height %u, %.1f MB of nodes (%.4f bytes per text byte)\n",
                 kFullScale ? "full scale" : "small scale", size, seconds, gbPerSecond, stats.pieces,
                 static_cast<double>(size) / static_cast<double>(stats.pieces), stats.leaves, stats.internals,
-                static_cast<double>(stats.nodeBytes) / 1e6, nodeBytesPerByte);
+                loaded->current().pieceTree().height(), static_cast<double>(stats.nodeBytes) / 1e6, nodeBytesPerByte);
     std::printf("[text perf] F1 projection (2 GB): load %.2f s at this rate, %.1f MB of tree nodes (B15 allows +64 MB "
                 "of private bytes and 2 s for the line index; m1/large-file gates it)\n",
                 kF1Bytes / (gbPerSecond * 1e9), kF1Bytes * nodeBytesPerByte / 1e6);

@@ -5,15 +5,18 @@
 // input bytes instead of a seed.
 /*
  * Input format:
- *   byte 0          maxPieceBytes = {4, 5, 7, 16, 64, 4096}[byte % 6];
+ *   byte 0          maxPieceBytes = {4, 5, 7, 16, 64, 4096}[byte % 6]; when (byte / 6) % 8 == 7
+ *                   (30 of the 256 values) also a small buffer limit of 128 + 256 * (byte / 48)
+ *                   bytes (limitBuffer), so edits and loads meet the limit check;
  *   byte 1          the initial text's length L (0..255);
- *   bytes 2..2+L    the initial text, loaded with TextBuffer::fromUtf8. Ill-formed text must be
+ *   bytes [2, 2+L)  the initial text, loaded with TextBuffer::fromUtf8. Ill-formed text must be
  *                   rejected exactly when the oracle's validator rejects it, with the matching
  *                   error and offset; the run then starts empty;
  *   the rest        the OpDriver's choices (FuzzSource), until the input runs out (the driver
  *                   stops at the next op boundary) or after 512 ops.
- * Documents stay within 64 KiB; a full check runs every 32 ops (16 random queries) and a sweep of
- * every line ends each input. An empty input runs an empty buffer through the final check.
+ * Documents stay within 64 KiB (the limit plus 32 bytes with a buffer limit); a full check runs
+ * every 32 ops (16 random queries) and a sweep of every line ends each input. An empty input runs
+ * an empty buffer through the final check.
  */
 
 #include "fuzz/fuzz_harness.hpp"
@@ -35,12 +38,16 @@ Result<void> runInput(std::span<const std::uint8_t> data) {
     using frost::text::test::FuzzSource;
     using frost::text::test::OpDriver;
     constexpr std::uint32_t kCaps[] = {4, 5, 7, 16, 64, 4096};
+    const std::uint8_t mode = data.empty() ? 0 : data[0];
     DriverOptions options;
-    options.buffer.maxPieceBytes = kCaps[(data.empty() ? 0 : data[0]) % std::size(kCaps)];
+    options.buffer.maxPieceBytes = kCaps[mode % std::size(kCaps)];
     options.checkEvery = 32;
     options.queriesPerCheck = 16;
     options.maxOps = 512;
     options.maxDocBytes = 64 * 1024;
+    if ((mode / 6) % 8 == 7) {
+        frost::text::test::limitBuffer(options, 128 + 256 * std::uint64_t{mode / 48u});
+    }
     const std::size_t length = data.size() > 1 ? data[1] : 0;
     const std::span<const std::uint8_t> rest = data.size() > 2 ? data.subspan(2) : std::span<const std::uint8_t>();
     const std::span<const std::uint8_t> initial = rest.first(std::min(length, rest.size()));

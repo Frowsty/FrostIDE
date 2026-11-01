@@ -491,7 +491,7 @@ private:
     /*
      * Two adjacent nodes a, b of one height as one or two valid siblings: unchanged when both
      * already hold at least B entries, merged into one node when the entries fit in 2B, otherwise
-     * redistributed evenly into two nodes (each then holds more than B, since there are > 2B).
+     * redistributed evenly into two nodes (each then holds at least B, since there are > 2B).
      */
     static NodePair mergeSiblings(const NodeRef& a, const NodeRef& b) noexcept {
         if (a->count >= kMinEntries && b->count >= kMinEntries) {

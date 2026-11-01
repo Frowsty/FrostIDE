@@ -8,8 +8,10 @@
 #include "frost/text/text_summary.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <format>
 #include <optional>
+#include <system_error>
 #include <utility>
 
 namespace frost::text::test {
@@ -163,6 +165,11 @@ std::string tokenText(ByteSource& source, std::uint64_t bytes) {
     return out;
 }
 
+void limitBuffer(DriverOptions& options, std::uint64_t limit) noexcept {
+    options.buffer.maxBufferBytes = limit;
+    options.maxDocBytes = limit + 32;
+}
+
 std::uint32_t seedPieceCap(std::uint64_t seed) noexcept {
     constexpr std::uint32_t kCaps[] = {4, 5, 7, 16, 64, 4096};
     return kCaps[seed % std::size(kCaps)];
@@ -176,9 +183,19 @@ std::string seedInitialText(std::uint64_t seed) {
     return tokenText(source, source.next(8 * 1024 + 1));
 }
 
+std::optional<std::uint64_t> seedBufferLimit(std::uint64_t seed) noexcept {
+    if (seed % 7 != 3) {
+        return std::nullopt;
+    }
+    return 256 + 1024 * ((seed / 7) % 9);
+}
+
 Result<DriverStats> runSeed(const SeedRun& run) {
     DriverOptions options;
     options.buffer.maxPieceBytes = seedPieceCap(run.seed);
+    if (const std::optional<std::uint64_t> limit = seedBufferLimit(run.seed)) {
+        limitBuffer(options, *limit);
+    }
     options.checkEvery = run.checkEvery;
     options.queriesPerCheck = run.queriesPerCheck;
     options.maxOps = run.ops;
@@ -196,6 +213,68 @@ Result<DriverStats> runSeed(const SeedRun& run) {
         return std::unexpected(std::move(verified).error());
     }
     return driver.stats();
+}
+
+namespace {
+
+// The variables quickSettings reads and reproduceCommand sets, named once so they cannot drift.
+constexpr std::string_view kSeedVariable = "FROST_TEXT_SEED";
+constexpr std::string_view kOpsVariable = "FROST_TEXT_OPS";
+constexpr std::string_view kCheckEveryVariable = "FROST_TEXT_CHECK_EVERY";
+constexpr std::string_view kQueriesVariable = "FROST_TEXT_QUERIES";
+constexpr std::string_view kThreadsVariable = "FROST_TEXT_THREADS";
+
+// A tripwire: a new SeedRun field must also go into quickSettings, reproduceCommand and the
+// round-trip test.
+static_assert(sizeof(SeedRun) == 24, "SeedRun changed: update quickSettings and reproduceCommand");
+
+// Variable `name` as a decimal number in [min, max], or none when unset.
+Result<std::optional<std::uint64_t>> readNumber(const EnvironmentLookup& lookup, std::string_view name,
+                                                std::uint64_t min, std::uint64_t max) {
+    const std::string value = lookup(name);
+    if (value.empty()) {
+        return std::optional<std::uint64_t>();
+    }
+    std::uint64_t number = 0;
+    const char* const end = value.data() + value.size();
+    const auto [stop, error] = std::from_chars(value.data(), end, number);
+    if (error != std::errc() || stop != end || number < min || number > max) {
+        return std::unexpected(Error(ErrorCode::InvalidArgument,
+                                     std::format("{}={} is not a decimal number in [{}, {}]", name, value, min, max)));
+    }
+    return std::optional<std::uint64_t>(number);
+}
+
+} // namespace
+
+Result<QuickSettings> quickSettings(const EnvironmentLookup& lookup) {
+    constexpr std::uint64_t k32 = 0xFFFF'FFFFu;
+    const auto seed = readNumber(lookup, kSeedVariable, 0, ~std::uint64_t{0});
+    const auto ops = readNumber(lookup, kOpsVariable, 0, k32);
+    const auto checkEvery = readNumber(lookup, kCheckEveryVariable, 0, k32);
+    const auto queries = readNumber(lookup, kQueriesVariable, 0, k32);
+    const auto threads = readNumber(lookup, kThreadsVariable, 1, 1024);
+    for (const auto* read : {&seed, &ops, &checkEvery, &queries, &threads}) {
+        if (!*read) {
+            return std::unexpected(read->error());
+        }
+    }
+    QuickSettings settings;
+    settings.onlySeed = *seed;
+    settings.run.seed = seed->value_or(0);
+    settings.run.ops = static_cast<std::uint32_t>(ops->value_or(settings.run.ops));
+    settings.run.checkEvery = static_cast<std::uint32_t>(checkEvery->value_or(settings.run.checkEvery));
+    settings.run.queriesPerCheck = static_cast<std::uint32_t>(queries->value_or(settings.run.queriesPerCheck));
+    if (*threads) {
+        settings.threads = static_cast<unsigned>(**threads);
+    }
+    return settings;
+}
+
+std::string reproduceCommand(const SeedRun& run) {
+    return std::format("{}={} {}={} {}={} {}={} text_tests --gtest_filter=TextDifferential.Quick", kSeedVariable,
+                       run.seed, kOpsVariable, run.ops, kCheckEveryVariable, run.checkEvery, kQueriesVariable,
+                       run.queriesPerCheck);
 }
 
 std::string OpDriver::randomText(ByteSource& source, std::uint64_t maxBytes) const {
@@ -233,6 +312,7 @@ Result<void> OpDriver::load(std::string initial) {
         m_buffer = TextBuffer(m_options.buffer);
         m_oracle.setText({});
         ++m_stats.rejected;
+        m_stats.overLimit += tooLong ? 1 : 0;
     } else {
         if (!loaded) {
             return std::unexpected(mismatch("fromUtf8 failed: " + loaded.error().describe()));
@@ -332,7 +412,8 @@ Result<void> OpDriver::edit(ByteSource& source, int api, std::uint64_t a, std::u
     const std::uint64_t versionBefore = m_buffer.version();
     const TextSummary summaryBefore = m_buffer.current().summary();
     std::optional<ErrorCode> expected = m_oracle.checkEdit(a, b, text);
-    if (!expected && m_oracle.size() - (b - a) + text.size() > m_options.buffer.maxBufferBytes) {
+    const bool overLimit = !expected && m_oracle.size() - (b - a) + text.size() > m_options.buffer.maxBufferBytes;
+    if (overLimit) {
         expected = ErrorCode::OutOfRange;
     }
     const ByteRange range{ByteOffset{a}, ByteOffset{b}};
@@ -340,6 +421,7 @@ Result<void> OpDriver::edit(ByteSource& source, int api, std::uint64_t a, std::u
                                       : api == 1 ? m_buffer.erase(range)
                                                  : m_buffer.replace(range, text);
     if (expected) {
+        m_stats.overLimit += overLimit ? 1 : 0;
         return checkRejected(result, *expected, versionBefore, summaryBefore);
     }
     if (!result) {
@@ -423,7 +505,8 @@ Result<void> OpDriver::batch(ByteSource& source) {
             total = total - (b - a) + edits[i].text.size();
         }
     }
-    if (!expected && total > m_options.buffer.maxBufferBytes) {
+    const bool overLimit = !expected && total > m_options.buffer.maxBufferBytes;
+    if (overLimit) {
         expected = ErrorCode::OutOfRange;
     }
     const std::uint64_t versionBefore = m_buffer.version();
@@ -431,6 +514,7 @@ Result<void> OpDriver::batch(ByteSource& source) {
     const Result<std::vector<TextChange>> result = m_buffer.applyEdits(edits);
     if (expected) {
         ++m_stats.rejected;
+        m_stats.overLimit += overLimit ? 1 : 0;
         if (result) {
             return std::unexpected(mismatch(std::format("expected {}, but the batch succeeded", toString(*expected))));
         }

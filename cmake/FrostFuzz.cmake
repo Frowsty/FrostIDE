@@ -27,10 +27,13 @@ include(FrostLayers)
 # Side effects with FROST_FUZZ ON: creates executable <name>_fuzzer (TEST compile options, the
 # ASan runtime DLL copied beside it, the test manifest on Windows, libFuzzer linked with
 # -fsanitize=fuzzer on Linux or FROST_FUZZER_LINK_OPTIONS on Windows); makes the directories
-# ${CMAKE_BINARY_DIR}/fuzz-artifacts/<name> (crash artifacts) and fuzz-work/<name> (new inputs:
-# libFuzzer writes into its first corpus directory, so new inputs never touch the committed one)
-# at configure time; registers CTest fuzz.<name> with TIMEOUT FROST_FUZZ_SECONDS + 120, which
-# overrides the test presets' 300 s default.
+# ${CMAKE_BINARY_DIR}/fuzz-artifacts/<name> (crash artifacts, kept across runs) and
+# fuzz-work/<name> (new inputs: libFuzzer writes into its first corpus directory, so new inputs
+# never touch the committed one) at configure time; registers CTest fuzz.<name> with TIMEOUT
+# FROST_FUZZ_SECONDS + 120, which overrides the test presets' 300 s default, and its setup
+# fixture fuzz.<name>.reset (cmake/FrostFuzzResetWork.cmake), which empties fuzz-work/<name>
+# first, so each run starts from the committed corpus alone (both label fuzz; CTest adds the
+# fixture whenever fuzz.<name> is selected).
 #
 # Side effects otherwise, when FROST_BUILD_TESTS is ON: creates executable <name>_replay from the
 # harness sources and tests/fuzz/replay_main.cpp (TEST options, test manifest on Windows) and
@@ -77,7 +80,12 @@ function(frost_add_fuzz_target name)
                 -print_final_stats=1 -artifact_prefix=${artifacts}/
                 ${work} ${ARG_CORPUS})
         math(EXPR timeout "${FROST_FUZZ_SECONDS} + 120")
-        set_tests_properties(fuzz.${name} PROPERTIES LABELS fuzz TIMEOUT ${timeout})
+        set_tests_properties(fuzz.${name} PROPERTIES LABELS fuzz TIMEOUT ${timeout}
+            FIXTURES_REQUIRED fuzz.${name}.work)
+        # A hermetic smoke: without this, each run would start from every earlier run's inputs.
+        add_test(NAME fuzz.${name}.reset
+            COMMAND ${CMAKE_COMMAND} -DFROST_FUZZ_WORK=${work} -P ${FROST_SOURCE_DIR}/cmake/FrostFuzzResetWork.cmake)
+        set_tests_properties(fuzz.${name}.reset PROPERTIES LABELS fuzz FIXTURES_SETUP fuzz.${name}.work)
     elseif(FROST_BUILD_TESTS)
         set(target ${name}_replay)
         add_executable(${target} ${harness_sources} ${FROST_SOURCE_DIR}/tests/fuzz/replay_main.cpp)

@@ -21,7 +21,12 @@
  * current snapshot (P1-P6, S1-S4); queriesPerCheck
  * random queries of every conversion and the round-trip rules; summaryOf, chunks and chunkAt on
  * random ranges; a LineCursor window (every line with sweepAllLines); one ring snapshot's text;
- * and the last op's TextChange points with the LSP-replay property.
+ * and the TextChange points with the LSP-replay property, for the last text-changing op before
+ * the full check only (every step of it when it was a batch).
+ *
+ * Buffer limit: with a small options.buffer.maxBufferBytes (limitBuffer), generated edits and
+ * loads cross the limit and must fail with OutOfRange (check 5 of TextBuffer's order); the
+ * invalid op's near-limit branch inserts one byte more than the room left.
  *
  * A mismatch returns ErrorCode::Internal naming the driver's label (the seed), the op index, what
  * differed and the last 32 ops. Deterministic for a given ByteSource; no time or thread input.
@@ -39,8 +44,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace frost::text::test {
@@ -99,7 +107,8 @@ struct DriverStats {
     std::uint64_t batches = 0;
     std::uint64_t restores = 0;
     std::uint64_t reloads = 0;
-    std::uint64_t rejected = 0; // Ops that returned an error, as the oracle expected.
+    std::uint64_t rejected = 0;  // Ops that returned an error, as the oracle expected.
+    std::uint64_t overLimit = 0; // Of those, edits, batches and loads rejected by the buffer limit.
     std::uint64_t noOps = 0;
     std::uint64_t fullChecks = 0;
     std::uint64_t checkedBytes = 0; // Document bytes over all full checks (mean = / fullChecks).
@@ -188,19 +197,56 @@ private:
 // line break kind, NUL and characters at the 1- to 4-byte boundaries. O(bytes).
 [[nodiscard]] std::string tokenText(ByteSource& source, std::uint64_t bytes);
 
-// One seeded differential run (TextDifferential, TextStress): the seed picks maxPieceBytes from
-// {4, 5, 7, 16, 64, 4096}[seed % 6] and an initial text of 0-8 KiB, empty when (seed / 6) % 4 == 0,
-// so every cap also starts empty. Then `ops` driver steps from SplitMixSource(seed) and a final
-// verifyFull(true).
+// Gives `options` a small buffer limit: maxBufferBytes = limit and maxDocBytes = limit + 32, so
+// generated inserts, replaces and batches sometimes overshoot the limit and longer initial texts
+// fail to load (both OutOfRange). Precondition: limit <= 0xFFFF'FFFE (TextBufferOptions).
+void limitBuffer(DriverOptions& options, std::uint64_t limit) noexcept;
+
+/*
+ * One seeded differential run (TextDifferential, TextStress): the seed picks maxPieceBytes from
+ * {4, 5, 7, 16, 64, 4096}[seed % 6] and an initial text of 0-8 KiB, empty when (seed / 6) % 4 == 0,
+ * so every cap also starts empty; one seed in seven runs with a small buffer limit
+ * (seedBufferLimit). Then `ops` driver steps from SplitMixSource(seed) and a final verifyFull(true).
+ * Every field changes the run's choices or checks, so reproduceCommand names each of them.
+ */
 struct SeedRun {
     std::uint64_t seed = 0;
     std::uint32_t ops = 1000;
     std::uint32_t checkEvery = 64;
     std::uint32_t queriesPerCheck = 16;
+
+    friend constexpr bool operator==(const SeedRun&, const SeedRun&) noexcept = default;
 };
 [[nodiscard]] std::uint32_t seedPieceCap(std::uint64_t seed) noexcept;
 [[nodiscard]] std::string seedInitialText(std::uint64_t seed);
+// The small buffer limit of seed `seed` (passed to limitBuffer), or none (the default limit). One
+// seed in seven, seed % 7 == 3: any 7 consecutive seeds include one, so every stress scale has
+// some, and 7 is coprime to the 6 caps, so every cap and initial-text choice occurs with a limit.
+// The limit is 256 + 1024 * ((seed / 7) % 9) bytes, from below to above the largest initial text.
+[[nodiscard]] std::optional<std::uint64_t> seedBufferLimit(std::uint64_t seed) noexcept;
 // The driver's stats, or its first mismatch (ErrorCode::Internal, labelled "seed <s>").
 [[nodiscard]] Result<DriverStats> runSeed(const SeedRun& run);
+
+/*
+ * TextDifferential.Quick's settings: the seeds 0..199, or only FROST_TEXT_SEED, each run as
+ * SeedRun{seed, FROST_TEXT_OPS (default 1000), FROST_TEXT_CHECK_EVERY (64), FROST_TEXT_QUERIES
+ * (16)} on FROST_TEXT_THREADS worker threads (default min(4, hardware threads / 2); 1 with
+ * FROST_TEXT_SEED). `lookup(name)` returns a variable's value, empty when unset.
+ * Errors: InvalidArgument naming the variable when a value is not a decimal number in range
+ * (ops, checks and queries 32-bit, threads 1..1024).
+ */
+struct QuickSettings {
+    std::optional<std::uint64_t> onlySeed;
+    SeedRun run; // run.seed is *onlySeed when that is set, else 0 (unused).
+    std::optional<unsigned> threads;
+};
+using EnvironmentLookup = std::function<std::string(std::string_view name)>;
+[[nodiscard]] Result<QuickSettings> quickSettings(const EnvironmentLookup& lookup);
+
+// The command that re-runs exactly `run` through TextDifferential.Quick: it sets every variable
+// quickSettings reads for a SeedRun field, so quickSettings on its assignments yields `run` again
+// (TextDifferential.ReproduceCommandRoundTrips). The differential and stress tests print it for
+// their first failing seed.
+[[nodiscard]] std::string reproduceCommand(const SeedRun& run);
 
 } // namespace frost::text::test

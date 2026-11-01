@@ -12,7 +12,8 @@
  *   - TextStress.F2SingleLine: a 50 MB single line (F2) loaded and edited 1000 times, 8 MB under
  *     sanitizers or in Debug;
  *   - TextStress.ConcurrentReaders: 1M edits with concurrent readers, fewer under sanitizers.
- * Each test prints its scale and wall time.
+ * Each test prints its scale and wall time. A failing differential seed prints the command that
+ * re-runs it alone with these settings (text_ops.hpp, reproduceCommand).
  */
 
 #include "frost/sched/detail/split_mix64.hpp"
@@ -30,7 +31,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <format>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -50,6 +50,7 @@ using frost::text::ByteRange;
 using frost::text::Point;
 using frost::text::TextBuffer;
 using frost::text::TextChange;
+using frost::text::test::SeedRun;
 
 #if defined(__SANITIZE_THREAD__)
 constexpr bool kThreadSanitizer = true;
@@ -82,6 +83,7 @@ TEST(TextStress, Differential) {
     const unsigned threads = std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
     std::atomic<std::uint64_t> next{0};
     std::atomic<std::uint64_t> fullChecks{0};
+    std::atomic<std::uint64_t> overLimit{0};
     std::atomic<std::uint64_t> maxBytes{0};
     std::mutex mutex;
     std::string firstFailure;
@@ -91,22 +93,20 @@ TEST(TextStress, Differential) {
         workers.emplace_back([&] {
             for (std::uint64_t i = next.fetch_add(1); i < seeds; i = next.fetch_add(1)) {
                 // Seeds from 1'000'000 on, disjoint from TextDifferential.Quick's 0..199.
-                const std::uint64_t seed = 1'000'000 + i;
-                const auto result = frost::text::test::runSeed(
-                    {.seed = seed, .ops = kOpsPerSeed, .checkEvery = 16, .queriesPerCheck = 64});
+                const SeedRun run{.seed = 1'000'000 + i, .ops = kOpsPerSeed, .checkEvery = 16, .queriesPerCheck = 64};
+                const auto result = frost::text::test::runSeed(run);
                 if (!result) {
                     const std::lock_guard lock(mutex);
                     if (firstFailure.empty()) {
-                        firstFailure = result.error().message() +
-                                       std::format("\nReproduce with: FROST_TEXT_SEED={} FROST_TEXT_OPS={} "
-                                                   "FROST_TEXT_CHECK_EVERY=16 text_tests "
-                                                   "--gtest_filter=TextDifferential.Quick",
-                                                   seed, kOpsPerSeed);
+                        // Names every SeedRun field, so the reproduction makes the same checks.
+                        firstFailure =
+                            result.error().message() + "\nReproduce with: " + frost::text::test::reproduceCommand(run);
                     }
                     next.store(seeds); // Stop the other workers early.
                     return;
                 }
                 fullChecks.fetch_add(result->fullChecks, std::memory_order_relaxed);
+                overLimit.fetch_add(result->overLimit, std::memory_order_relaxed);
                 std::uint64_t seen = maxBytes.load(std::memory_order_relaxed);
                 while (result->maxBytes > seen && !maxBytes.compare_exchange_weak(seen, result->maxBytes)) {
                 }
@@ -117,10 +117,11 @@ TEST(TextStress, Differential) {
         worker.join();
     }
     std::printf("TextStress.Differential: %llu ops (%llu seeds x %u, %s scale) on %u threads, %llu full checks, "
-                "largest text %llu bytes, %.1f s\n",
+                "%llu rejections by the buffer limit, largest text %llu bytes, %.1f s\n",
                 static_cast<unsigned long long>(ops), static_cast<unsigned long long>(seeds), kOpsPerSeed,
                 exitScale ? "exit" : "default", threads, static_cast<unsigned long long>(fullChecks.load()),
-                static_cast<unsigned long long>(maxBytes.load()), secondsSince(start));
+                static_cast<unsigned long long>(overLimit.load()), static_cast<unsigned long long>(maxBytes.load()),
+                secondsSince(start));
     EXPECT_EQ(firstFailure, "");
 }
 
