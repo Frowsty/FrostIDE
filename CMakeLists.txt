@@ -140,6 +140,17 @@ endif()
 # Threads::Threads (frost::sched). Found here so the imported target is visible from
 # the top-level directory, where FrostLayers resolves namespaced dependencies.
 find_package(Threads REQUIRED)
+# asio::asio (header-only, BSL-1.0; frost::io's reactor, ADR 0020), found here for the same reason.
+# Fuzz trees install no vcpkg ports (VCPKG_MANIFEST_INSTALL=OFF) but share the normal tree's
+# installed directory and triplet, so they find the headers the normal configure installed.
+find_package(asio CONFIG)
+if(NOT asio_FOUND)
+    if(FROST_FUZZ)
+        message(FATAL_ERROR "asio not found: fuzz trees use the headers the normal preset installs "
+                            "(configure win-clangcl or linux-clang first; ADR 0020)")
+    endif()
+    message(FATAL_ERROR "asio not found: add it to vcpkg.json and configure through a preset (ADR 0020)")
+endif()
 
 if(FROST_BUILD_TESTS OR FROST_FUZZ)
     enable_testing()

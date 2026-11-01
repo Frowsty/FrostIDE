@@ -217,8 +217,9 @@ The TSan and ASan unit runs (56 tests at the time) took 0.6 s and 1.7 s.
 - Timers have Windows' default 15.6 ms timer resolution until they move to the reactor.
 - Follow-up work:
   - TODO(M1): MainThreadDispatcher (src/ui) implementing `IScheduler::enqueue` for the UI thread.
-  - TODO(M1): the asio reactor completes I/O awaiters through `enqueue()`; the pool's timers move to the
-    reactor's timer queue, with high-resolution waits on Windows.
+  - Done (ADR 0020, `m1/io-reactor-watch`): the asio reactor completes I/O awaiters through `enqueue()`.
+    TODO(M1): the pool's timers move to the reactor's timer queue, with high-resolution waits on Windows
+    (sched cannot depend on io, so this needs a timer seam in sched; its owner is an open question, ADR 0020).
   - TODO(M1): helper-process priorities (BELOW_NORMAL + EcoQoS, SCHED_IDLE) in the io process launcher;
     worker threads keep normal OS priority.
   - TODO(M1): a Relacy-style model check of the deque (PLAN.md section 6.1).

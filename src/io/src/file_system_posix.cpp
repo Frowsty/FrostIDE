@@ -6,6 +6,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/os_error.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/utf.hpp"
 
 #include "internal.hpp"
 #include <sys/stat.h>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <format>
 #include <optional>
 #include <string_view>
 #include <thread>
@@ -420,6 +422,25 @@ public:
         }
         std::ranges::sort(entries, {}, &DirEntry::name);
         return entries;
+    }
+
+    Result<DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        auto entries = listDirectory(path);
+        if (!entries) {
+            return std::unexpected(std::move(entries.error()));
+        }
+        DirListing listing;
+        for (const DirEntry& entry : *entries) {
+            if (!isValidUtf8(entry.name)) {
+                listing.issues.push_back(DirListingIssue{
+                    entry.name, true,
+                    Error(ErrorCode::InvalidArgument,
+                          std::format("listDirectory '{}': a name of {} bytes is not valid UTF-8 after byte {}", path,
+                                      entry.name.size(), validUtf8Prefix(entry.name)))});
+            }
+        }
+        listing.entries = std::move(*entries);
+        return listing;
     }
 
     Result<void> createDirectories(std::string_view path) override {

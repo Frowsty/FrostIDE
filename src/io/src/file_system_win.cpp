@@ -13,7 +13,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <format>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -41,6 +44,22 @@ IClock::SystemTime toSystemTime(FILETIME time) noexcept {
 
 // GetFileAttributesW, or INVALID_FILE_ATTRIBUTES.
 DWORD attributesOf(const std::wstring& widePath) noexcept { return GetFileAttributesW(widePath.c_str()); }
+
+// `name` as UTF-8 with every unpaired surrogate replaced by U+FFFD (for messages only).
+std::string lossyUtf8(std::wstring_view name) {
+    std::wstring repaired(name);
+    for (std::size_t i = 0; i < repaired.size(); ++i) {
+        const wchar_t unit = repaired[i];
+        const bool high = unit >= 0xD800 && unit <= 0xDBFF;
+        const bool low = unit >= 0xDC00 && unit <= 0xDFFF;
+        if (high && i + 1 < repaired.size() && repaired[i + 1] >= 0xDC00 && repaired[i + 1] <= 0xDFFF) {
+            ++i; // A valid pair.
+        } else if (high || low) {
+            repaired[i] = 0xFFFD;
+        }
+    }
+    return fromWide(repaired).value_or(std::string("?"));
+}
 
 // Whether the entry at `widePath` itself (a directory link included) has the directory attribute.
 bool isDirectory(const std::wstring& widePath) noexcept {
@@ -248,7 +267,21 @@ public:
         return result;
     }
 
-    Result<std::vector<DirEntry>> listDirectory(std::string_view path) override {
+    Result<std::vector<DirEntry>> listDirectory(std::string_view path) override { return list(path, nullptr); }
+
+    Result<DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        DirListing listing;
+        auto entries = list(path, &listing.issues);
+        if (!entries) {
+            return std::unexpected(std::move(entries.error()));
+        }
+        listing.entries = std::move(*entries);
+        std::ranges::sort(listing.issues, {}, &DirListingIssue::name);
+        return listing;
+    }
+
+    // The body of both listings; names that are not valid UTF-16 go to `issues` when given.
+    Result<std::vector<DirEntry>> list(std::string_view path, std::vector<DirListingIssue>* issues) {
         auto wide = toWin32Path(path);
         if (!wide) {
             return std::unexpected(std::move(wide.error()));
@@ -285,7 +318,15 @@ public:
             }
             auto utf8 = fromWide(name);
             if (!utf8) {
-                continue; // Not representable as UTF-8 (lone surrogate); see file_system.hpp.
+                // Not representable as UTF-8 (lone surrogate); see file_system.hpp.
+                if (issues != nullptr) {
+                    std::string lossy = lossyUtf8(name);
+                    std::string message = std::format(
+                        "listDirectory '{}': the name '{}' is not valid UTF-16 and was skipped", path, lossy);
+                    issues->push_back(DirListingIssue{std::move(lossy), false,
+                                                      Error(ErrorCode::InvalidArgument, std::move(message))});
+                }
+                continue;
             }
             FileType type = FileType::Regular;
             const DWORD attributes = data.dwFileAttributes;

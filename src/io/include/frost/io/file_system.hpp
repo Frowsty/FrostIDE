@@ -66,6 +66,19 @@ struct DirEntry {
     friend bool operator==(const DirEntry&, const DirEntry&) = default;
 };
 
+// A name listDirectoryWithDiagnostics() reports: one frost cannot use as a UTF-8 path component.
+struct DirListingIssue {
+    std::string name;    // Windows: UTF-8 with each unpaired surrogate as U+FFFD; POSIX: the raw bytes.
+    bool listed = false; // Whether DirListing::entries has it (POSIX: yes, as raw bytes; Windows: no).
+    Error error{ErrorCode::InvalidArgument}; // InvalidArgument, naming the directory and the problem.
+};
+
+// listDirectoryWithDiagnostics(): the entries listDirectory() returns, and what it passed over silently.
+struct DirListing {
+    std::vector<DirEntry> entries;
+    std::vector<DirListingIssue> issues;
+};
+
 class IFileSystem {
 public:
     /*
@@ -107,9 +120,10 @@ public:
      *
      * Read-only targets: Windows refuses to replace them (PermissionDenied). POSIX
      * replaces them, because rename needs write access to the directory only, and
-     * the new file keeps the read-only mode. TODO(M1): refuse a non-writable target
-     * with PermissionDenied on POSIX too, matching Windows, with a test; M1's
-     * SaveManager then offers an explicit "overwrite read-only file" action (ADR 0011, E3).
+     * the new file keeps the read-only mode. TODO(M1): the SaveManager slice (PLAN.md
+     * I2) refuses a non-writable target with PermissionDenied on POSIX too, matching
+     * Windows, with a test, and offers an explicit "overwrite read-only file" action
+     * (ADR 0011, E3); ADR 0020 moved this there, as it changes save semantics.
      *
      * Not preserved from an existing target: extended attributes other than the
      * POSIX access ACL; Windows attributes, ACLs and alternate streams; hard-link
@@ -119,7 +133,9 @@ public:
      * at a directory, while a directory symlink or junction, even a dangling one,
      * makes the call fail with InvalidArgument ("is a directory") and is left in place.
      * SaveManager (M1) adds metadata and symlink preservation on top of this
-     * primitive. TODO(M1): sweep stale .frost-tmp-* files left by killed processes.
+     * primitive. TODO(M1): the SaveManager slice sweeps stale .frost-tmp-* files left
+     * by killed processes (moved there by ADR 0020; scanTree and the watchers already
+     * hide them by default).
      *
      * Errors: NotFound (parent directory missing), PermissionDenied, Busy,
      * InvalidArgument (the target is a directory, or on Windows a directory
@@ -136,9 +152,16 @@ public:
      * Errors: NotFound, InvalidArgument (not a directory), PermissionDenied, IoError.
      * Windows names that are not valid UTF-16 (lone surrogates) cannot be represented
      * and are skipped; POSIX names are returned as the kernel's bytes, valid UTF-8 or
-     * not (see DirEntry). TODO(M1): surface both to the scanner as diagnostics.
+     * not (see DirEntry). listDirectoryWithDiagnostics() reports both.
      */
     [[nodiscard]] virtual Result<std::vector<DirEntry>> listDirectory(std::string_view path) = 0;
+
+    /*
+     * As listDirectory(), plus an issue for every name it skipped (Windows: not valid UTF-16) or returned
+     * as bytes that are not valid UTF-8 (POSIX), in name order. The scanner (tree_scan.hpp) turns them
+     * into ScanIssues. Errors as listDirectory's. O(entries).
+     */
+    [[nodiscard]] virtual Result<DirListing> listDirectoryWithDiagnostics(std::string_view path) = 0;
 
     // Creates `path` and any missing parents; succeeds if it already is a directory (links are followed).
     // Errors: NotFound (the root, drive or share does not exist), AlreadyExists (it or a parent exists as a
