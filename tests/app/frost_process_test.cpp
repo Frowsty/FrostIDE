@@ -1573,6 +1573,23 @@ std::vector<std::string> importedDlls(const MappedImage& image) {
     return names;
 }
 
+// The DLL names of the image's delay-import directory (every descriptor), lower-cased.
+std::vector<std::string> delayImportedDlls(const MappedImage& image) {
+    std::vector<std::string> names;
+    const IMAGE_DATA_DIRECTORY entry = image.directory(IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT);
+    if (entry.VirtualAddress == 0) {
+        return names;
+    }
+    for (const auto* descriptor = image.at<IMAGE_DELAYLOAD_DESCRIPTOR>(entry.VirtualAddress);
+         descriptor->DllNameRVA != 0; ++descriptor) {
+        std::string name = image.at<char>(descriptor->DllNameRVA);
+        std::ranges::transform(name, name.begin(),
+                               [](char c) { return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c; });
+        names.push_back(std::move(name));
+    }
+    return names;
+}
+
 // The DependentLoadFlags of the image's load configuration, 0 if it has none.
 DWORD dependentLoadFlags(const MappedImage& image) {
     const IMAGE_DATA_DIRECTORY entry = image.directory(IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG);
@@ -1659,6 +1676,13 @@ TEST(FrostProcess, AppDllImportsOnlyAllowedDlls) {
      * to frost_app.dll's static imports: no dbghelp.dll (the cpptrace overlay resolves nothing
      * in process), no networking DLL (nothing is uploaded, D26), and nothing delay-loaded that
      * could change how the launcher's restart rules apply (ADR 0012).
+     *
+     * The one delay import allowed is ws2_32.dll, which every binary that links frost_io
+     * delay-loads (src/io/CMakeLists.txt, ADR 0020): frost_app.dll links frost_io for the crash
+     * handler's IProcessLauncher, and asio's Windows backend references Winsock. It is a
+     * System32 KnownDLL, so where it would load from does not depend on frost's image path,
+     * and reactor.cpp's guard keeps it from ever loading (FileWatcherWindows.WinsockIsNeverLoaded).
+     * Every delay descriptor is checked, so any other delay-loaded DLL still fails.
      */
     const MappedImage app(appDll());
     ASSERT_TRUE(app.valid());
@@ -1668,8 +1692,9 @@ TEST(FrostProcess, AppDllImportsOnlyAllowedDlls) {
         EXPECT_TRUE(allowedAppImport(name)) << name;
     }
     EXPECT_NE(std::ranges::find(imports, "bcrypt.dll"), imports.end());
-    const IMAGE_DATA_DIRECTORY delay = app.directory(IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT);
-    EXPECT_TRUE(delay.VirtualAddress == 0 || app.at<IMAGE_DELAYLOAD_DESCRIPTOR>(delay.VirtualAddress)->DllNameRVA == 0);
+    for (const std::string& name : delayImportedDlls(app)) {
+        EXPECT_EQ(name, "ws2_32.dll") << "frost_app.dll delay-loads " << name;
+    }
 }
 
 // The crashpad_handler.exe processes whose parent is `parent` (a Toolhelp snapshot).
