@@ -14,7 +14,7 @@ commits' messages.
 
 ### Done
 
-#### Exit verification: one test fails, nothing pushed
+#### Exit verification: one test fails; pushed under D23
 - `tools\verify.ps1 -Full -Jobs 4` on 2c499a2, a clean tree, after `night.py build-gate` (04:50–04:59, 8 min
   21 s). **One test failed**; every other result is green.
   - Windows: debug 367/368 (1 skipped), release 370/371 (1 skipped), asan 370/372 (1 skipped, **1 failed**). The
@@ -36,8 +36,15 @@ commits' messages.
   249 units (`Qt6Widgets.dll` beyond 250 units); Debug does from 235 (`Qt6Widgetsd.dll`). Below that, the start-up
   check refuses cleanly (exit 1, from 226 units in Release). From 250 on, the `\\?\` launch starts frost and the
   check refuses cleanly again. No test covers 235–249, so only ASan showed it: its runtime has the longest name.
-- Nothing was changed. A pass in ASan needs either a skip, which weakens the gate, or a change to how frost starts,
-  so it is question E4 (new). **Nothing was pushed** ("Branches" below).
+- No code or test changed on `m0/foundation`: e4f5756 records the finding in ADR 0003 (Consequences) and as a
+  `TODO(M1)` at `kQtPluginPathLimitUnits`, docs and comments only. A pass in ASan was first thought to need either a
+  skip, which weakens the gate, or a change to how frost starts. Option (d, revised) on the unmerged branch
+  `m0/e4-asan-runtime` is a third way: a test-fixture change in the ASan tree only, with `-Full` green there and an
+  approving review that lists open issues. All of it is question E4 (new).
+- **Pushed at 05:24 under D23**, although `-Full` had failed. A push needs CLAUDE.md's definition of done
+  (`verify -Quick` on Windows and `verify.sh` in WSL, both green) and an independent review of every branch, which
+  were met; `-Full` gates the M0 sign-off (PLAN.md section 7, "Every milestone exit also requires"). 2741b57's footer
+  shows the failure ("Branches" below).
 - The `-Full` log, the measurement script, its results and the re-run are in `E:\FrostBuilds\perf\m0\exit-full\`
   (`README.txt` maps them).
 
@@ -238,24 +245,30 @@ commit d41f2a1, which carries its own).
 - Raw data, the harness (`scripts\b28_bench.py`) and a `README.txt` are in `E:\FrostBuilds\perf\m0\b28\`.
 
 #### Branches
-- **Not pushed tonight**, because the `-Full` gate failed one test (E4). Once E4 is settled, the push under D23 is
-  `m0/foundation` (origin has 0e703dc) and the new branches `m0/io`, `m0/startup`, `m0/s1`, `m0/spikes-msbuild`,
-  `m0/tracy`, `m0/s7`, `m0/comments-1`, `m0/comments-2`, `m0/comments-3`, `m0/comments-4`, `m0/dll-copy` and
-  `m0/docs`. All are merged into `m0/foundation`, and none needs a force. `m0/sched` and `m0/tools` are already on
-  origin. No `main` and no tag before your sign-off (G1).
+- **Pushed at 05:24** under D23 (time from the remote-tracking reflog), with `-Full` still failing one test (E4) and
+  2741b57's footer saying so. origin moved `m0/foundation` from 0e703dc to 2741b57 and gained `m0/io` (66dbabc),
+  `m0/startup` (d41f2a1), `m0/s1` (009eb20), `m0/spikes-msbuild` (d3976ae), `m0/tracy` (de4a093), `m0/s7`
+  (b540543), `m0/comments-1` to `m0/comments-4` (8e1e46e, 6a12cca, b22884a, 301430f), `m0/dll-copy` (1252a18) and
+  `m0/docs` (8027101). All are merged into `m0/foundation`, and none needed a force. `m0/sched` (a51c23b) and
+  `m0/tools` (33600e3) were already on origin. No `main` and no tag before your sign-off (G1).
+- Pushed after this entry's commit: `m0/foundation` with e4f5756 and this commit, and `m0/e4-asan-runtime` (11a5a23,
+  on e4f5756). That branch has `-Full` green and an approving review, but it is not merged: it waits for your answer
+  to E4 and has open review issues (E4 (d)).
 - `m0/startup-wip` (343785a) stays local: d41f2a1 rebuilt the start-up work as one commit on 008a2de and
   superseded it.
 
 ### Next
-- Your answers to the questions below, E4 first: it decides whether tonight's branches are pushed as they are.
-- Then the push above (D23), the M0 demo pack (PLAN.md section 6.7: screenshots or a recording, the perf report, the
-  feature-matrix diff, the ADR list, the comment-accuracy result) and the request for M0 sign-off (G1).
+- Your answers to the questions below, E4 first: it decides how the failing `-Full` test is resolved, among them
+  whether `m0/e4-asan-runtime` is merged (option (d), after its review issues are fixed), and so whether `-Full` can
+  be green on `m0/foundation` before sign-off.
+- The M0 demo pack (PLAN.md section 6.7: screenshots or a recording, the perf report, the feature-matrix diff, the ADR
+  list, the comment-accuracy result) is `E:\FrostBuilds\demo\m0\index.html`; then the request for M0 sign-off (G1).
 - Record each answer where it belongs: ADR 0007's status (A1–A4); ADR 0006's follow-ups, budgets.json's B23 notes
   and preconditions, PLAN.md's B23 row, its S6 line and its D3 row (B1–B4); R2b's SDK prerequisite in PLAN.md and
   the corpus manifest (B7); ADR 0008's status, budgets.json's B24 note and PLAN.md's S7 sentence, or the M3 slot set
   to the value you choose (C1, C2); ADR 0009 and PLAN.md's Dependencies line (D1–D3); budgets.json's B28 method
-  (F3). Once E4 is decided, ADR 0003 and `kQtPluginPathLimitUnits`'s comment should also state the measured limit
-  for frost's own DLLs.
+  (F3). ADR 0003 and `kQtPluginPathLimitUnits`'s comment state the measured limit for frost's own DLLs since
+  e4f5756; the review's wording points on that commit are listed under E4 (d).
 - M1 follow-ups:
   - S1 (ADR 0007): keep QRhi start-up off B1 without moving it onto B2 or B15 (options in its Consequences); profile
     the first `show()`; check QRhi's swap-chain frame latency; a quiet-desktop control and PresentMon's present mode
@@ -270,7 +283,8 @@ commit d41f2a1, which carries its own).
   `E:\FrostBuilds\perf\m0\s7\spike\`) and `session_state.py` (in its `fix2\` sub-directory).
 
 ### Blockers
-- **Push and sign-off:** E4 (the failing ASan test) and G1 are yours.
+- **Sign-off:** E4 (the failing ASan test, so `-Full` is not green on `m0/foundation`) and G1 are yours. The push
+  is done (05:24, D23).
 - **M0 exit criterion not met on REF-W1:** the launch from a path over 260 characters (E1). E4's finding also means
   that E1 (b)'s "otherwise exits promptly with a clear message" does not hold yet for directories of 235–249 units
   (Debug; 236–249 in Release).
@@ -384,13 +398,70 @@ consolidating this log.
   process with 0xC0000106 before frost's code runs, so there is no message. That happens from a directory of 236
   units in Release (Qt6Widgets.dll), 235 in Debug and 218 in ASan (clang_rt.asan_dynamic-x86_64.dll), up to 249;
   from 250 the launch uses `\\?\` and frost refuses cleanly. The test's directories (225 and 226 units) are in that
-  range in the ASan tree only. Nothing was changed and nothing was pushed. How should it be handled?
+  range in the ASan tree only. ADR 0003 records the finding since e4f5756 (docs and comments only). The work was
+  pushed at 05:24 under D23 with the failure in 2741b57's footer, so the push that (c) describes has happened; (c)'s
+  other half, keeping the failure as known until E1 is decided, is still yours. How should it be handled?
   - (a) Approve skipping the boundary test where a DLL beside frost.exe has a longer name than
     `platforms\<plugin>` (today only the ASan runtime), with the reason in the skip message and a guard test that
     fails if any other DLL does. This weakens the ASan gate, so it needs an ADR.
   - (b) First make frost refuse cleanly at every length, for example through a small launcher without such imports,
     or by delay-loading Qt; neither is designed or measured. This goes with E1.
   - (c) Record the failure as known until E1 is decided, and push tonight's branches with a footer that shows it.
+  - (d, revised; not E1's (d)) Keep the ASan runtime beside frost.exe, but in ASan trees copy it into the test's
+    directories without its RT_MANIFEST 2. Branch `m0/e4-asan-runtime`, 11a5a23 on e4f5756: pushed, **not merged
+    and not ready to merge**, because the review's issues below are open and it needs your explicit yes.
+    - Why revised: the proposed (d), which leaves the runtime out of the copy and puts the build directory on the
+      child's PATH, cannot work. frost.exe's `/DEPENDENTLOADFLAG:0xA00` makes the loader look for its static imports
+      only beside frost.exe and in System32. Measured: such a copy exits with 0xC0000135 with or without the build
+      directory on PATH, while compat_tests.exe (ASan, no such flag) finds the runtime through PATH. Moving the
+      runtime out would need the ASan build of frost.exe to drop the flag, which changes the product build and the
+      self-test's 0xa00 check.
+    - What it does: the removed resource is a 364-byte trustInfo block (requestedExecutionLevel asInvoker), which
+      has no effect in a DLL and is the only thing that triggers the limit. Measured with the stripped runtime: it
+      loads at 251 units, the plugin at 250 passes the self-test, 251 is refused cleanly (exit 1), and Qt6Widgets.dll
+      at 251 still ends frost with 0xC0000106, so the product gap is unchanged. The stripped copy is made once per
+      run at a short scratch path. frost.exe and Qt's DLLs stay as built, the Release and Debug copies are unchanged,
+      and no assertion changes. A new guard ASSERT before the first launch fails if any DLL beside the copied
+      frost.exe still embeds RT_MANIFEST 2 and is not named shorter than `platforms\<plugin>`. A reverted scratch
+      check showed it failing on a 24-unit DLL and on an unstripped runtime, and passing at 23 units. ADR 0003's new
+      bullet says what the test does in ASan trees and why.
+    - `-Full` in the branch's worktree, on the content committed as 11a5a23 (05:41–05:50, after
+      `night.py build-gate`, 36.4 GB of commit free), is **green**: win debug 367/368 (1 skipped), win release
+      370/371 (1 skipped), win asan 371/372 (1 skipped), wsl debug 334/334, wsl asan 338/338, wsl tsan 337/337, wsl
+      licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run.
+    - Independent adversarial review: verdict **approve**, weakening **No**. "In no build flavour does the test now
+      check less of the product than before. No assertion, budget, warning or skip was relaxed; the only change to
+      what is asserted is one new ASSERT." Release and Debug get byte-identical copies, and the guard is a no-op
+      there today (longest DLL names 14 and 15 units against thresholds of 24 and 25). With the stripped runtime,
+      ASan frost still dies at 236 and 242 units (measured), because Qt6Widgets.dll still passes 250.
+    - The cost, in the review's words: "this turns green the only red signal of the product gap." The silent death
+      from 236–249 units (Release) and 235–249 (Debug) then lives only in the `TODO(M1)`s in ADR 0003 and
+      startup.hpp and in (b). No test went red on it at those lengths before or after; (c) keeps it visible, and (a)
+      at least shows a skip. "It is a fixture change in one flavour, disclosed in the code, the ADR and the commit,
+      and it still needs the user's explicit yes as E4 (d)."
+    - The review's issues; only the progress-log follow-up is handled, by this entry:
+      - Minor, on the branch: `removeIsolationManifest`'s comment says the file must be shorter than MAX_PATH, but
+        EndUpdateResourceW fails with error 122 from 256 units already (255 works; measured). No practical effect:
+        the strip runs at a short scratch root under %TEMP%, and a failure there fails the test.
+      - Minor, on e4f5756 (ADR 0003): "Below that range the start-up check refuses cleanly" has no lower bound.
+        frost refuses cleanly only from 226 units (Release) or 225 (Debug); below that it starts normally (225 in
+        Release and 224 in Debug: selftest PASSED).
+      - Minor, on e4f5756: the ranges were sampled at their ends only (Release 234/235/236/249/250, Debug
+        233/234/235/249/250, ASan 216/217/218/225/226/249/250), and the ADR calls them measured without saying the
+        interiors are inferred. The review measured Release 241 and 245 and Debug 240 (all 0xC0000106), so the
+        claim holds.
+      - Minor, on e4f5756: "the loader refuses every DLL next to frost.exe that embeds RT_MANIFEST resource 2"
+        should say every such DLL the process loads at start-up (frost.exe's static imports). The root-cause bullet
+        in "Exit verification" above makes the same broad claim ("every DLL beside frost.exe").
+      - Follow-up: E4 listed only (a)–(c), and "Exit verification" said a pass in ASan needs a skip or a change to
+        how frost starts. This entry now records (d).
+      - Nit: `removeIsolationManifest` fails with error 87 if a future runtime lacks RT_MANIFEST 2 in language 0x409
+        (fail-closed, but a spurious failure after an LLVM change). That the resource holds only a trustInfo block
+        is true today but not checked in code; if a future runtime's manifest gained dependency entries, stripping
+        it would change how the runtime binds.
+      - Nit: `isAsanRuntime` matches the `clang_rt.asan_dynamic` prefix without checking the `.dll` extension
+        (harmless today: the directory holds only the .dll).
+    - Evidence: `E:\FrostBuilds\perf\m0\exit-full\e4-option-d\` (`README.txt` maps it).
 
 **F. Machine and tooling**
 - **F1.** Logitech G HUB (lghub_agent.exe) holds about 43 GB of commit. Restarting it would give the builds
