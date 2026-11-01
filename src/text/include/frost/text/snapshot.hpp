@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // frost::text::Snapshot: an immutable, O(1)-copyable version of a text buffer that any number of
-// threads can query without locks (ADR 0013, D5 and D7), plus its ChunkRange and LineCursor
-// views. TextBuffer (text_buffer.hpp) is the single writer that produces snapshots.
+// threads can query without locks (ADR 0013, D5 and D7), plus its ChunkRange, ReverseChunkRange
+// and LineCursor views. TextBuffer (text_buffer.hpp) is the single writer that produces snapshots.
 /*
  * PieceTree stores a document as a persistent B+tree of pieces. Leaves reference ranges in the
  * original text or in append-only add chunks; inner nodes cache TextSummary values (bytes, line
@@ -42,6 +42,7 @@ namespace frost::text {
 
 class ChunkRange;
 class LineCursor;
+class ReverseChunkRange;
 class TextBuffer;
 
 /*
@@ -151,6 +152,11 @@ public:
     // both char boundaries. The ChunkRange holds a Snapshot copy, so it may outlive this object and
     // the TextBuffer. O(B log n) to begin, amortised O(1) per chunk. Budget: B5.
     [[nodiscard]] ChunkRange chunks(ByteRange range) const noexcept;
+    // The bytes of `range` as non-empty string_views from the last to the first: the same chunks
+    // as chunks(range) in reverse order, each valid UTF-8, for backward search and backward
+    // character scans. Precondition: as chunks(). The ReverseChunkRange holds a Snapshot copy.
+    // O(B log n) per chunk (each step seeks the piece before the previous chunk).
+    [[nodiscard]] ReverseChunkRange reversedChunks(ByteRange range) const noexcept;
     // The rest of the piece containing `offset`, or an empty view at size(). Precondition:
     // offset <= size(). It starts with a whole character when `offset` is a char boundary: the
     // shape of tree-sitter's read callback. O(B log n).
@@ -231,6 +237,68 @@ private:
     friend class Snapshot;
 
     ChunkRange(Snapshot snapshot, ByteRange range) noexcept;
+
+    Snapshot m_snapshot;
+    ByteRange m_range;
+};
+
+/*
+ * The bytes of a byte range of a snapshot from its end to its start, as non-empty string_views
+ * (Snapshot::reversedChunks): every chunk is a whole piece or the part of one inside the range, so
+ * the chunks are those of ChunkRange in reverse order. It holds a Snapshot copy; its iterators
+ * borrow from it and are valid while the ReverseChunkRange is alive. Thread safety: like
+ * ChunkRange.
+ */
+class ReverseChunkRange {
+public:
+    class Iterator {
+    public:
+        using value_type = std::string_view;
+        using difference_type = std::ptrdiff_t;
+        using iterator_concept = std::forward_iterator_tag;
+
+        // The end iterator.
+        Iterator() noexcept = default;
+
+        // The current chunk (non-empty unless this is the end iterator).
+        [[nodiscard]] std::string_view operator*() const noexcept { return m_chunk; }
+        // The offset of the current chunk's first byte.
+        [[nodiscard]] ByteOffset offset() const noexcept { return ByteOffset{m_chunkStart}; }
+        // Moves to the chunk before the current one. O(B log n).
+        Iterator& operator++() noexcept;
+        Iterator operator++(int) noexcept {
+            Iterator before = *this;
+            ++*this;
+            return before;
+        }
+
+        friend bool operator==(const Iterator& a, const Iterator& b) noexcept {
+            return a.m_chunk.data() == b.m_chunk.data() && a.m_chunk.size() == b.m_chunk.size();
+        }
+        friend bool operator==(const Iterator& it, std::default_sentinel_t) noexcept { return it.m_chunk.empty(); }
+
+    private:
+        friend class ReverseChunkRange;
+
+        // Loads the chunk that ends at `end` (> m_begin).
+        void load(std::uint64_t end) noexcept;
+
+        const detail::PieceTree* m_tree = nullptr;
+        std::uint64_t m_begin = 0;      // Absolute start of the range.
+        std::uint64_t m_chunkStart = 0; // Absolute start of the current chunk.
+        std::string_view m_chunk;       // Empty (and null) at the end.
+    };
+
+    // The last chunk. O(B log n).
+    [[nodiscard]] Iterator begin() const noexcept;
+    [[nodiscard]] std::default_sentinel_t end() const noexcept { return {}; }
+    // The byte range this range covers.
+    [[nodiscard]] ByteRange range() const noexcept { return m_range; }
+
+private:
+    friend class Snapshot;
+
+    ReverseChunkRange(Snapshot snapshot, ByteRange range) noexcept;
 
     Snapshot m_snapshot;
     ByteRange m_range;
