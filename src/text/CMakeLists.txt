@@ -4,6 +4,7 @@
 # piece tree (SumTree<PieceTraits, 8>) over append-only UTF-8 storage, O(1) snapshots readable from
 # any thread, TextBuffer edits with normalised TextChanges, and line/UTF-16 position conversions.
 # Anchors, selections and Document's transactional undo tree (ADR 0017) sit on top of TextBuffer.
+# The layered display map (ADR 0026) maps the text to display rows through its ITextShaper seam.
 # Qt-free. Depends on core and on io (validUtf8Prefix; SaveManager will need io later anyway).
 # TODO(M1): encodings (m1/encodings) and large-file mode with mapped originals (m1/large-file)
 # join here.
@@ -21,4 +22,9 @@ frost_add_library(text LAYER text
         src/selection.cpp
         src/document.cpp
         src/undo_tree.cpp
+        src/text_shaper.cpp
+        src/display_fold.cpp
+        src/display_wrap.cpp
+        src/display_block.cpp
+        src/display_map.cpp
     DEPS frost::core frost::io)

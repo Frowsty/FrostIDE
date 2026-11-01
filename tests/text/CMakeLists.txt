@@ -16,6 +16,9 @@
 #                      100k ops, and concurrent anchor readers at 500k ops
 #   text_perf_tests    Document typing and undo/redo latency (B5 text sub-budget) and the anchor and
 #                      caret report
+# The display map (ADR 0026) adds to text_tests: the shaper double, wrap rules, mapping round trips
+# with soft wraps and block decorations, wraps and blocks after edits (against a fresh rebuild),
+# tabs, CRLF, wide and zero-width characters, hit testing and vertical caret movement.
 # The white-box tests read the library's private undo_tree.hpp and anchor_paths.hpp (src/text/src).
 add_subdirectory(support)
 
@@ -34,6 +37,8 @@ frost_add_test(text_tests
         undo_differential_test.cpp
         undo_property_test.cpp
         anchor_concurrency_test.cpp
+        text_shaper_test.cpp
+        display_map_test.cpp
     DEPS frost::text frost_text_test_support
     LABELS unit)
 target_include_directories(text_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
