@@ -16,6 +16,8 @@ std::string_view usageText() noexcept {
            "  --help               Print this help and exit.\n"
            "  --selftest           Run the built-in self-test offscreen and exit with its status.\n"
            "  --selftest=onscreen  Run the self-test with a visible window.\n"
+           "  --selftest=crash     Start the crash handler, then crash on purpose (writes a crash report).\n"
+           "  --selftest=freeze    Block the user interface for 300 ms (writes a freeze report).\n"
            "  --                   Treat every following argument as a path (also one starting with '-').\n";
 }
 
@@ -50,6 +52,13 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
         } else if (arg == "--selftest=onscreen") {
             status = setMode(Mode::SelfTest, arg);
             result.selfTestOnScreen = true;
+        } else if (arg == "--selftest=crash" || arg == "--selftest=freeze") {
+            // Deliberate faults: never combined with anything that could change what they test.
+            if (args.size() != 1) {
+                return fail(ErrorCode::InvalidArgument, std::format("option {} must be the only argument", arg));
+            }
+            status = setMode(Mode::SelfTest, arg);
+            result.selfTestKind = arg == "--selftest=crash" ? SelfTestKind::Crash : SelfTestKind::Freeze;
         } else {
             return fail(ErrorCode::InvalidArgument, std::format("unknown option {}", arg));
         }

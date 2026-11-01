@@ -24,12 +24,21 @@ enum class Mode {
     SelfTest, // Run the built-in self-test and exit with its status.
 };
 
+// Which self-test Mode::SelfTest runs.
+enum class SelfTestKind {
+    Checks, // --selftest, --selftest=onscreen: the process, plugin and GUI checks.
+    Crash,  // --selftest=crash: start the crash handler, then crash on purpose (ADR 0022).
+    Freeze, // --selftest=freeze: block the GUI thread for 300 ms and write a freeze report.
+};
+
 struct CommandLine {
     Mode mode = Mode::Gui;
     // Paths given as positional arguments, in order, as UTF-8.
     std::vector<std::string> paths;
     // Self-test only: show the window on the real platform instead of offscreen.
     bool selfTestOnScreen = false;
+    // Self-test only: which one.
+    SelfTestKind selfTestKind = SelfTestKind::Checks;
 };
 
 // Parses UTF-8 arguments (argv[1..], without the program name). Every argument
@@ -37,8 +46,9 @@ struct CommandLine {
 // single-dash typos such as -version) are an InvalidArgument error, so they are
 // reported instead of being opened as paths. Two different mode options (e.g.
 // --version --selftest) are also an InvalidArgument error; repeating one, or combining
-// --selftest with --selftest=onscreen, is allowed. Pure and thread-safe; O(total length
-// of the arguments).
+// --selftest with --selftest=onscreen, is allowed. --selftest=crash and --selftest=freeze must
+// be the only argument (anything else with them is an InvalidArgument error). Pure and
+// thread-safe; O(total length of the arguments).
 [[nodiscard]] Result<CommandLine> parseCommandLine(std::span<const std::string_view> args);
 
 // Usage text printed by --help and after a parse error.

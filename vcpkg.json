@@ -7,8 +7,12 @@
   "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
     { "name": "asio", "version>=": "1.32.0" },
+    { "name": "cpptrace", "version>=": "1.0.4" },
+    { "name": "crashpad" },
+    { "name": "curl", "default-features": false, "platform": "linux" },
     { "name": "gtest", "version>=": "1.18.0" },
     { "name": "pugixml", "version>=": "1.16" },
+    { "name": "spdlog", "version>=": "1.17.0#1", "default-features": false },
     { "name": "sqlite3", "version>=": "3.54.1", "default-features": false, "features": ["omit-load-extension"] },
     { "name": "xxhash", "version>=": "0.8.4" }
   ]

@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <thread>
 
@@ -95,6 +96,38 @@ TEST(ContractsDeathTest, QuickEnforceTrapsWithoutHandler) {
             std::exit(0);
         },
         trapped, testing::Not(testing::HasSubstr("violated")));
+}
+
+// Records whether the last violation was terminating; the death-test child prints it.
+std::atomic<int> g_lastTerminating{-1};
+
+void terminatingRecorder(const frost::contracts::Violation& violation) noexcept {
+    g_lastTerminating.store(violation.terminating ? 1 : 0);
+    std::fprintf(stderr, "terminating=%d\n", violation.terminating ? 1 : 0);
+    std::fflush(stderr);
+}
+
+TEST(Contracts, ViolationMarksTerminatingForEnforce) {
+    // observe: the handler sees terminating == false and the program continues.
+    const auto previous = frost::contracts::setViolationHandler(&terminatingRecorder);
+    frost::test::checkObserved(false);
+    EXPECT_EQ(g_lastTerminating.load(), 0);
+    frost::contracts::setViolationHandler(previous);
+
+    // enforce: the handler sees terminating == true, then the process aborts.
+#if defined(_WIN32)
+    const auto aborted = testing::ExitedWithCode(3);
+#else
+    const auto aborted = testing::KilledBySignal(SIGABRT);
+#endif
+    EXPECT_EXIT(
+        {
+            frost::test::disableCrashDialogs();
+            frost::contracts::setViolationHandler(&terminatingRecorder);
+            (void)enforcedIdentity(-1);
+            std::exit(0);
+        },
+        aborted, "terminating=1");
 }
 
 TEST(Contracts, SetHandlerReturnsPrevious) {

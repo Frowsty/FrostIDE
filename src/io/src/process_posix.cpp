@@ -529,6 +529,26 @@ Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
         }
     }
 
+    /*
+     * ProcessSpec::posixInheritedFds: entry i becomes the child's fd 3 + i. Each source is
+     * first duplicated in this process to a close-on-exec descriptor at or above 3 + k, so
+     * no source can be overwritten by another entry's dup2 in the child (a source may itself
+     * be one of the targets 3 .. 3 + k - 1), a source that already equals its target still
+     * loses FD_CLOEXEC (dup2 onto the same descriptor would keep the flag), and a concurrent
+     * launch on another thread never inherits a staged copy. closefrom(3 + k) then closes
+     * the staged copies and everything else in the child.
+     */
+    const int firstUnpassed = 3 + static_cast<int>(spec.posixInheritedFds.size());
+    std::vector<UniqueFd> staged;
+    staged.reserve(spec.posixInheritedFds.size());
+    for (const int source : spec.posixInheritedFds) {
+        const int copy = ::fcntl(source, F_DUPFD_CLOEXEC, firstUnpassed);
+        if (copy < 0) {
+            return std::unexpected(errnoError(errno, "fcntl(F_DUPFD_CLOEXEC) of an inherited descriptor"));
+        }
+        staged.emplace_back(copy);
+    }
+
     SpawnActions actions;
     int rc = addStreamAction(actions.actions, stdinMode, STDIN_FILENO, in.child);
     if (rc == 0) {
@@ -537,9 +557,12 @@ Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
     if (rc == 0) {
         rc = addStreamAction(actions.actions, stderrMode, STDERR_FILENO, err.child);
     }
+    for (std::size_t i = 0; rc == 0 && i < staged.size(); ++i) {
+        rc = posix_spawn_file_actions_adddup2(&actions.actions, staged[i].get(), 3 + static_cast<int>(i));
+    }
     // Belt and braces: descriptors other code opened without O_CLOEXEC are not inherited either.
     if (rc == 0) {
-        rc = posix_spawn_file_actions_addclosefrom_np(&actions.actions, 3);
+        rc = posix_spawn_file_actions_addclosefrom_np(&actions.actions, firstUnpassed);
     }
     if (rc == 0 && !spec.workingDirectory.empty()) {
         rc = posix_spawn_file_actions_addchdir_np(&actions.actions, spec.workingDirectory.c_str());

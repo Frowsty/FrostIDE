@@ -17,7 +17,12 @@
 // unloadable, and that Qt's own "no platform plugin" dialog never appears in a command-line
 // mode; the launcher's failure reports and the error mode it loads in; and the structure of
 // the two images: frost.exe imports KERNEL32.dll alone, and frost_app.dll carries no manifest
-// and no DependentLoadFlags.
+// and no DependentLoadFlags and imports only allowed DLLs. Crash and freeze reports (ADR 0022):
+// --selftest=crash and --selftest=freeze write a minidump and a freeze report (left in
+// selftest-artifacts/ for verify -Full's symbolize step, with crash_child's contract-violation
+// dump), the crash self-test works from every directory length, and the GUI starts its crash
+// handler only after the first frame, through the short link after a restart, and never
+// leaves it running after frost ends.
 // Processes are started through frost::io's production IProcessLauncher, on Windows on a
 // private desktop each and with hard-error boxes off (runFrost).
 
@@ -25,6 +30,8 @@
 #include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
 
+#include "diag/diag_test_support.hpp"
+#include "support/minidump_reader.hpp"
 #include "support/private_desktop.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
@@ -37,6 +44,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -51,6 +59,10 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
+#else
+#include <csignal>
+
+#include <signal.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -70,6 +82,8 @@ struct FrostRun {
     std::string output; // stdout and stderr, interleaved as the child wrote them.
     // What went wrong (launch error, Timeout or IoError) when exitCode == -1.
     std::string startError;
+    // POSIX: the signal that ended the child, or 0.
+    int signal = 0;
 };
 
 using Environment = std::vector<std::pair<std::string, std::optional<std::string>>>;
@@ -107,7 +121,7 @@ FrostRun runFrost(const std::string& exe, std::vector<std::string> args, Environ
     if (!result) {
         return {-1, {}, result.error().describe()};
     }
-    return {result->exitCode, std::move(result->stdoutBytes), {}};
+    return {result->exitCode, std::move(result->stdoutBytes), {}, result->signal};
 }
 
 // A std::filesystem path for `utf8` that Win32 accepts at any length (the \\?\ form).
@@ -159,6 +173,10 @@ std::string copyFrostTo(const std::string& dir, [[maybe_unused]] Plugins plugins
         }
     }
 #endif
+    // The crash handler frost starts lives beside the program (ADR 0022).
+    const fs::path handler = exe.parent_path() / (std::string("crashpad_handler") + exe.extension().string());
+    fs::copy_file(handler, target / handler.filename(), fs::copy_options::overwrite_existing, error);
+    EXPECT_FALSE(error) << "copy " << handler.string() << ": " << error.message();
     return frost::io::joinPath(dir, frost::io::fromStdPath(exe.filename()).value()).value();
 }
 
@@ -1618,6 +1636,470 @@ TEST(FrostProcess, AppDllEmbedsNoManifest) {
     EXPECT_EQ(manifestIds(app), std::vector<unsigned>{});
 }
 
+// Whether `name` (lower case) is a DLL frost_app.dll may import (see the test below).
+bool allowedAppImport(std::string_view name) {
+    static constexpr std::string_view kSystem[] = {"kernel32.dll", "user32.dll", "advapi32.dll", "shell32.dll",
+                                                   "bcrypt.dll"};
+    if (std::ranges::find(kSystem, name) != std::end(kSystem)) {
+        return true;
+    }
+    // The C and C++ runtimes (release or debug), the ASan runtime in the ASan tree, and Qt.
+    for (const std::string_view prefix : {"api-ms-win-crt-", "ucrtbase", "vcruntime140", "msvcp140",
+                                          "clang_rt.asan_dynamic-x86_64", "qt6core", "qt6gui", "qt6widgets"}) {
+        if (name.starts_with(prefix) && name.ends_with(".dll")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+TEST(FrostProcess, AppDllImportsOnlyAllowedDlls) {
+    /*
+     * frost::diag (crashpad, cpptrace, spdlog; ADR 0022) adds only bcrypt.dll, a System32 DLL,
+     * to frost_app.dll's static imports: no dbghelp.dll (the cpptrace overlay resolves nothing
+     * in process), no networking DLL (nothing is uploaded, D26), and nothing delay-loaded that
+     * could change how the launcher's restart rules apply (ADR 0012).
+     */
+    const MappedImage app(appDll());
+    ASSERT_TRUE(app.valid());
+    const std::vector<std::string> imports = importedDlls(app);
+    EXPECT_FALSE(imports.empty());
+    for (const std::string& name : imports) {
+        EXPECT_TRUE(allowedAppImport(name)) << name;
+    }
+    EXPECT_NE(std::ranges::find(imports, "bcrypt.dll"), imports.end());
+    const IMAGE_DATA_DIRECTORY delay = app.directory(IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT);
+    EXPECT_TRUE(delay.VirtualAddress == 0 || app.at<IMAGE_DELAYLOAD_DESCRIPTOR>(delay.VirtualAddress)->DllNameRVA == 0);
+}
+
+// The crashpad_handler.exe processes whose parent is `parent` (a Toolhelp snapshot).
+std::vector<DWORD> crashHandlersOf(DWORD parent) {
+    std::vector<DWORD> found;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return found;
+    }
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    for (BOOL more = Process32FirstW(snapshot, &entry); more != FALSE; more = Process32NextW(snapshot, &entry)) {
+        if (entry.th32ParentProcessID == parent && std::wstring_view(entry.szExeFile) == L"crashpad_handler.exe") {
+            found.push_back(entry.th32ProcessID);
+        }
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+// The image path of process `pid` (UTF-8, the form the kernel reports), or "".
+std::string imagePathOf(DWORD pid) {
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (process == nullptr) {
+        return {};
+    }
+    std::wstring path(32768, L'\0');
+    DWORD size = static_cast<DWORD>(path.size());
+    const BOOL ok = QueryFullProcessImageNameW(process, 0, path.data(), &size);
+    CloseHandle(process);
+    if (ok == FALSE) {
+        return {};
+    }
+    path.resize(size);
+    return frost::io::fromWide(path).value_or(std::string());
+}
+
+#endif
+
+// --- Crash and freeze reports (ADR 0022) ---
+
+/*
+ * frost's cache for one test: LOCALAPPDATA (Windows) or XDG_CACHE_HOME (Linux) redirected into
+ * the scratch directory `base`, so no report reaches the user's own cache, and the directories
+ * frost writes below it (frost/diag/paths.hpp).
+ */
+struct TestCache {
+    Environment environment;
+    std::string crashpad;
+    std::string freezes;
+    std::string logs;
+};
+
+TestCache testCacheIn(const std::string& base) {
+    EXPECT_TRUE(frost::io::realFileSystem().createDirectories(base).has_value()) << base;
+    const auto join = [](std::string path, std::initializer_list<std::string_view> parts) {
+        for (const std::string_view part : parts) {
+            path = frost::io::joinPath(path, part).value();
+        }
+        return path;
+    };
+    TestCache cache;
+#ifdef _WIN32
+    cache.environment = {{"LOCALAPPDATA", base}};
+    const std::string root = join(base, {"FrostIDE", "caches"});
+#else
+    cache.environment = {{"XDG_CACHE_HOME", base}};
+    const std::string root = join(base, {"FrostIDE"});
+#endif
+    cache.crashpad = join(root, {"crashes", "crashpad"});
+    cache.freezes = join(root, {"crashes", "freezes"});
+    cache.logs = join(root, {"logs"});
+    return cache;
+}
+
+// <build>/selftest-artifacts/<config>/<kind>, emptied: where verify -Full's symbolize step
+// (tools/symbolize.py check-selftest) finds this run's artifacts.
+std::string freshArtifactDirectory(std::string_view kind) {
+    const std::string dir =
+        frost::io::joinPath(frost::io::normalizePath(FROST_SELFTEST_ARTIFACTS).value(), kind).value();
+    EXPECT_TRUE(frost::test::removeTree(frost::io::realFileSystem(), dir)) << dir;
+    EXPECT_TRUE(frost::io::realFileSystem().createDirectories(dir).has_value()) << dir;
+    return dir;
+}
+
+/*
+ * Copies `file` into `dir` and writes dir/artifact.json, which tells tools/symbolize.py what the
+ * artifact must symbolize to: `function` at the source line of `source` that holds `marker`.
+ */
+void saveArtifact(const std::string& dir, const fs::path& file, std::string_view kind, std::string_view function,
+                  std::string_view marker, std::string_view source, int status, int signal) {
+    std::error_code error;
+    fs::copy_file(file, anyLengthPath(dir) / file.filename(), fs::copy_options::overwrite_existing, error);
+    EXPECT_FALSE(error) << "copy " << file.string() << ": " << error.message();
+    const std::string json = std::format("{{\n  \"schema\": \"frost-selftest-artifact/1\",\n  \"kind\": \"{}\",\n"
+                                         "  \"file\": \"{}\",\n  \"function\": \"{}\",\n  \"marker\": \"{}\",\n"
+                                         "  \"source\": \"{}\",\n  \"status\": {},\n  \"signal\": {}\n}}\n",
+                                         kind, frost::io::fromStdPath(file.filename()).value(), function, marker,
+                                         source, static_cast<std::uint32_t>(status), signal);
+    const auto written =
+        frost::io::realFileSystem().writeFileAtomic(frost::io::joinPath(dir, "artifact.json").value(), json);
+    EXPECT_TRUE(written.has_value()) << written.error().describe();
+}
+
+// The one finished crash report in `database`, parsed; nullopt after a recorded failure.
+std::optional<frost::test::MinidumpReader> onlyReport(const std::string& database, const std::string& context,
+                                                      fs::path* file = nullptr) {
+    const frost::test::DatabaseReports reports = frost::test::waitForReports(anyLengthPath(database), 1);
+    EXPECT_TRUE(reports.unfinished.empty()) << context;
+    if (reports.finished.size() != 1) {
+        ADD_FAILURE() << reports.finished.size() << " finished reports, expected 1\n" << context;
+        return std::nullopt;
+    }
+    frost::test::MinidumpReader dump(frost::test::readBytes(reports.finished.front()));
+    if (!dump.error().empty() || !dump.exception().has_value()) {
+        ADD_FAILURE() << "unreadable minidump: " << dump.error();
+        return std::nullopt;
+    }
+    if (file != nullptr) {
+        *file = reports.finished.front();
+    }
+    return dump;
+}
+
+std::string annotationOf(const frost::test::MinidumpReader& dump, const std::string& key) {
+    return dump.annotations().contains(key) ? dump.annotations().at(key) : std::string();
+}
+
+// The checks of a --selftest=crash run whose cache is `cache`: the status, one report, the
+// fault at 0xF00D in frost_app.dll (Linux: frost) and the selftest annotation.
+void expectSelfTestCrash(const FrostRun& run, const TestCache& cache, fs::path* file = nullptr) {
+    const std::string context =
+        std::format("exit {} signal {} {}\n{}", run.exitCode, run.signal, run.startError, run.output);
+    EXPECT_TRUE(run.output.contains("selftest: crash-reporter ok pid=")) << context;
+    EXPECT_TRUE(run.output.contains("selftest: crashing now")) << context;
+#ifdef _WIN32
+    EXPECT_EQ(static_cast<std::uint32_t>(run.exitCode), 0xC0000005u) << context;
+#else
+    EXPECT_EQ(run.signal, SIGSEGV) << context;
+#endif
+    const auto dump = onlyReport(cache.crashpad, context, file);
+    if (!dump) {
+        return;
+    }
+    const frost::test::MinidumpException& exception = *dump->exception();
+#ifdef _WIN32
+    EXPECT_EQ(exception.code, 0xC0000005u);
+    ASSERT_GE(exception.information.size(), 2u);
+    EXPECT_EQ(exception.information[0], 1u) << "a write";
+    EXPECT_EQ(exception.information[1], 0xF00Du);
+    const std::string_view module = "frost_app.dll";
+#else
+    EXPECT_EQ(exception.code, static_cast<std::uint32_t>(SIGSEGV));
+    EXPECT_EQ(exception.address, 0xF00Du);
+    const std::string_view module = "frost";
+#endif
+    const frost::test::MinidumpModule* faulting = dump->moduleAt(exception.contextRip);
+    ASSERT_NE(faulting, nullptr) << std::format("rip 0x{:x} in no module", exception.contextRip);
+    EXPECT_EQ(frost::io::fileName(faulting->name), module) << faulting->name;
+    EXPECT_EQ(annotationOf(*dump, "frost.selftest"), "crash");
+    EXPECT_FALSE(annotationOf(*dump, "frost.image_path").empty());
+}
+
+TEST(FrostProcess, SelfTestCrashWritesASymbolizableDump) {
+    /*
+     * --selftest=crash from the build directory: the crash handler starts, frost writes to
+     * 0xF00D and crashpad's handler writes exactly one minidump into <cache>/crashes/crashpad;
+     * the fault is in frost_app.dll (Linux: frost). The dump goes to selftest-artifacts/crash
+     * for verify -Full, which symbolizes it to selfTestCrash's marker line.
+     */
+    const std::string artifacts = freshArtifactDirectory("crash");
+    const ScratchDir scratch("app-process-crash");
+    const TestCache cache = testCacheIn(scratch.join("cache"));
+    const FrostRun run = runFrost(frostExe(), {"--selftest=crash"}, frost::test::crashEnvironment(cache.environment));
+    fs::path dump;
+    expectSelfTestCrash(run, cache, &dump);
+    ASSERT_FALSE(dump.empty());
+    saveArtifact(artifacts, dump, "crash", "frost::diag::selfTestCrash", "FROST-SELFTEST-CRASH-SITE",
+                 "src/diag/src/selftest_faults.cpp", run.exitCode, run.signal);
+}
+
+TEST(FrostProcess, SelfTestFreezeWritesAReport) {
+    /*
+     * --selftest=freeze: frost blocks its GUI thread for 300 ms and the watchdog writes one
+     * final freeze report into <cache>/crashes/freezes with at least 5 samples over at least
+     * 250 ms. The report goes to selftest-artifacts/freeze for verify -Full.
+     */
+    const std::string artifacts = freshArtifactDirectory("freeze");
+    const ScratchDir scratch("app-process-freeze");
+    const TestCache cache = testCacheIn(scratch.join("cache"));
+    const FrostRun run = runFrost(frostExe(), {"--selftest=freeze"}, cache.environment);
+    ASSERT_EQ(run.exitCode, 0) << run.startError << run.output;
+    // "selftest: freeze-report <path> samples=<n> duration-ms=<ms>"
+    const std::string_view label = "selftest: freeze-report ";
+    const std::size_t at = run.output.find(label);
+    ASSERT_NE(at, std::string::npos) << run.output;
+    const std::size_t end = run.output.find(" samples=", at);
+    ASSERT_NE(end, std::string::npos) << run.output;
+    const std::string path = run.output.substr(at + label.size(), end - at - label.size());
+    EXPECT_EQ(frost::io::parentPath(path), cache.freezes) << path;
+    const std::string json = frost::test::readBytes(anyLengthPath(path));
+    EXPECT_TRUE(json.contains("\"schema\": \"frost-freeze-report/1\"")) << json.substr(0, 300);
+    EXPECT_TRUE(json.contains("\"ongoing\": false")) << json.substr(0, 300);
+    std::size_t samples = 0;
+    for (std::size_t found = json.find("\"t_ms\":"); found != std::string::npos;
+         found = json.find("\"t_ms\":", found + 1)) {
+        ++samples;
+    }
+    EXPECT_GE(samples, 5u);
+    const std::size_t duration = json.find("\"duration_ms\": ");
+    ASSERT_NE(duration, std::string::npos);
+    EXPECT_GE(std::stoll(json.substr(duration + 15)), 250);
+    saveArtifact(artifacts, anyLengthPath(path), "freeze", "frost::diag::selfTestFreeze", "FROST-SELFTEST-FREEZE-SITE",
+                 "src/diag/src/selftest_faults.cpp", run.exitCode, 0);
+}
+
+TEST(FrostProcess, ContractViolationDumpIsCollected) {
+    /*
+     * An enforced FROST_PRE in crash_child (frost::diag's fatal paths set up as frost's program
+     * sets them up) ends in a crash report whose annotations name the reason, the violated
+     * expression and the frames; verify -Full symbolizes the frames to the violating function
+     * at its marker line (selftest-artifacts/contract).
+     */
+    const std::string artifacts = freshArtifactDirectory("contract");
+    const ScratchDir scratch("app-process-contract");
+    const std::string database = scratch.join("crashpad");
+    const frost::test::ChildRun run =
+        frost::test::runChild(frost::io::normalizePath(FROST_CRASH_CHILD).value(), {"contract-enforce", database},
+                              frost::test::crashEnvironment());
+    const std::string context =
+        std::format("exit {} signal {} {}\n{}", run.exitCode, run.signal, run.error, run.output);
+#ifdef _WIN32
+    EXPECT_EQ(static_cast<std::uint32_t>(run.exitCode), 0xE0464154u) << context; // kFatalExceptionCode
+#else
+    EXPECT_EQ(run.signal, SIGABRT) << context;
+#endif
+    fs::path file;
+    const auto dump = onlyReport(database, context, &file);
+    ASSERT_TRUE(dump.has_value());
+    EXPECT_EQ(annotationOf(*dump, "frost.fatal_reason"), "contract-violation");
+    EXPECT_TRUE(annotationOf(*dump, "frost.message").contains("precondition violated: value >= 0"));
+    EXPECT_TRUE(annotationOf(*dump, "frost.frames").starts_with("0x"));
+    saveArtifact(artifacts, file, "contract", "contractEnforceSite", "FROST-SELFTEST-CONTRACT-SITE",
+                 "tests/diag/crash_child.cpp", run.exitCode, run.signal);
+}
+
+TEST(FrostProcess, SelfTestCrashFromEveryDirectoryLength) {
+    /*
+     * The crash handler starts beside frost wherever frost is installed: Windows directories of
+     * 249, 259 and 300 UTF-16 units, plain and \\?\ (the crash self-test never restarts through
+     * the short link, so it runs in place); Linux a non-ASCII directory with spaces.
+     */
+    const ScratchDir scratch("app-process-crash-dirs");
+#ifdef _WIN32
+    const std::string base = longFormOf(scratch);
+    for (const ImagePathForm form : {ImagePathForm::Plain, ImagePathForm::Extended}) {
+        if (form == ImagePathForm::Plain && !parentLongPathsEffective()) {
+            continue; // CreateProcessW refuses long plain paths then (StartsWithLongPathsIneffective).
+        }
+        for (const std::size_t units : {249u, 259u, 300u}) {
+            SCOPED_TRACE(std::format("{} units, {}", units, reportedForm(form)));
+            const std::string exe = copyFrostTo(imagePathCell(base, units, form), Plugins::None);
+            const TestCache cache =
+                testCacheIn(scratch.join(std::format("cache {} {}", units, static_cast<int>(form))));
+            const FrostRun run =
+                runFrost(exe, {"--selftest=crash"}, frost::test::crashEnvironment(cache.environment), form, 60s);
+            expectSelfTestCrash(run, cache);
+        }
+    }
+#else
+    const std::string exe = copyFrostTo(scratch.join("fr\xC3\xB8st \xE6\xB5\x8B dir"));
+    const TestCache cache = testCacheIn(scratch.join("cache"));
+    expectSelfTestCrash(runFrost(exe, {"--selftest=crash"}, frost::test::crashEnvironment(cache.environment)), cache);
+#endif
+}
+
+// The log lines of the frost log files in `logs`, in file order.
+std::string readLogs(const std::string& logs) {
+    std::string text;
+    std::error_code error;
+    for (const auto& entry : fs::directory_iterator(anyLengthPath(logs), error)) {
+        if (entry.path().extension() == ".log") {
+            text += frost::test::readBytes(entry.path());
+        }
+    }
+    return text;
+}
+
+// The value after " <key>=" in `text`: up to the closing quote when quoted, else up to the next
+// space or line end.
+std::string fieldAfter(std::string_view text, std::string_view key) {
+    const std::string needle = " " + std::string(key) + "=";
+    const std::size_t at = text.find(needle);
+    if (at == std::string_view::npos) {
+        return {};
+    }
+    std::size_t begin = at + needle.size();
+    std::size_t end = std::string_view::npos;
+    if (begin < text.size() && text[begin] == '"') {
+        ++begin;
+        end = text.find('"', begin);
+    } else {
+        end = text.find_first_of(" \r\n", begin);
+    }
+    return std::string(text.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin));
+}
+
+/*
+ * Waits up to `limit` for the log in `logs` to name the registered crash handler; returns the
+ * whole log text then, or what it holds at the deadline.
+ */
+std::string waitForHandlerLine(const std::string& logs, std::chrono::milliseconds limit) {
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    std::string text;
+    while (std::chrono::steady_clock::now() < deadline) {
+        text = readLogs(logs);
+        if (text.contains("crash handler registered pid=")) {
+            break;
+        }
+        std::this_thread::sleep_for(20ms);
+    }
+    return text;
+}
+
+TEST(FrostProcess, GuiStartsTheCrashHandlerAfterTheFirstFrame) {
+    /*
+     * The GUI registers the crash handler only after its first frame (B1): the log names
+     * "crash handler registered pid=N path=..." after "first frame shown", the handler lives
+     * beside frost_app.dll (Linux: frost), and it ends with frost: within 2 s of a close
+     * (Windows WM_CLOSE) or SIGTERM (Linux).
+     */
+    const ScratchDir scratch("app-process-gui-handler");
+    const TestCache cache = testCacheIn(scratch.join("cache"));
+#ifdef _WIN32
+    Environment environment = ownPluginsOnly();
+    environment.insert(environment.end(), cache.environment.begin(), cache.environment.end());
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    const auto process = startGui(frostExe(), environment, ImagePathForm::Auto, desktop);
+    ASSERT_NE(process, nullptr);
+    // From the build directory frost starts in place: frost.exe itself owns the window.
+    HWND window = nullptr;
+    for (const auto deadline = std::chrono::steady_clock::now() + 60s;
+         window == nullptr && std::chrono::steady_clock::now() < deadline && !process->wait(0ms).has_value();
+         std::this_thread::sleep_for(20ms)) {
+        const auto shown = shownWindowsTitled(desktop.handle(), L"FrostIDE");
+        window = shown.empty() ? nullptr : shown.front().first;
+    }
+    ASSERT_NE(window, nullptr) << "no FrostIDE window";
+#else
+    frost::io::ProcessSpec spec;
+    spec.executable = frostExe();
+    spec.environment = cache.environment;
+    spec.environment.emplace_back("QT_QPA_PLATFORM", "offscreen");
+    spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+    auto launched = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_TRUE(launched.has_value()) << launched.error().describe();
+    const std::unique_ptr<frost::io::IProcess> process = std::move(*launched);
+#endif
+    const std::string log = waitForHandlerLine(cache.logs, 60s);
+    const std::size_t firstFrame = log.find("first frame shown");
+    const std::size_t registered = log.find("crash handler registered pid=");
+    ASSERT_NE(registered, std::string::npos) << log;
+    ASSERT_NE(firstFrame, std::string::npos) << log;
+    EXPECT_LT(firstFrame, registered) << log;
+    const std::string line = log.substr(registered, log.find('\n', registered) - registered);
+    const std::uint64_t handler = std::stoull(fieldAfter(line, "pid"));
+    EXPECT_TRUE(frost::test::processAlive(handler)) << line;
+#ifdef _WIN32
+    EXPECT_EQ(frost::io::parentPath(fieldAfter(line, "path")), frost::io::parentPath(appDll())) << line;
+    EXPECT_EQ(fieldAfter(line, "restarted-from"), "") << "a start in place: " << line;
+    EXPECT_EQ(crashHandlersOf(static_cast<DWORD>(process->pid())), std::vector<DWORD>{static_cast<DWORD>(handler)});
+    ASSERT_NE(PostMessageW(window, WM_CLOSE, 0, 0), FALSE) << GetLastError();
+#else
+    EXPECT_EQ(frost::io::parentPath(fieldAfter(line, "path")), frost::io::parentPath(frostExe())) << line;
+    ASSERT_EQ(::kill(static_cast<pid_t>(process->pid()), SIGTERM), 0);
+#endif
+    const auto result = process->communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_TRUE(frost::test::waitForProcessGone(handler, 2s)) << "the crash handler outlived frost";
+}
+
+#ifdef _WIN32
+TEST(FrostProcess, GuiStartsTheCrashHandlerThroughTheShortLink) {
+    /*
+     * A GUI start from a 310-unit image path restarts through the short link (ADR 0012); the
+     * restarted frost starts exactly one crash handler, from the link (its path is under
+     * <LOCALAPPDATA>\FrostIDE\i\), annotated with the first launcher as frost.restarted_from;
+     * the first launcher starts none, and the handler ends with frost after a close.
+     */
+    const ScratchDir scratch("app-process-gui-link");
+    const ImagePathForm form = longStartForm();
+    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 310, form));
+    const std::string localAppData = localAppDataIn(scratch, "lad");
+    const TestCache cache = testCacheIn(localAppData);
+    Environment environment = ownPluginsOnly();
+    environment.insert(environment.end(), cache.environment.begin(), cache.environment.end());
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    const auto process = startGui(exe, environment, form, desktop);
+    ASSERT_NE(process, nullptr);
+    const auto [window, owner] = waitForRestartedWindow(desktop, L"FrostIDE", *process, 60s);
+    if (window == nullptr) {
+        const auto rest = process->communicate({}, 10s);
+        FAIL() << "no FrostIDE window from a restarted frost; launcher output: "
+               << (rest ? rest->stdoutBytes : rest.error().describe());
+    }
+    const std::string log = waitForHandlerLine(cache.logs, 60s);
+    const std::size_t registered = log.find("crash handler registered pid=");
+    ASSERT_NE(registered, std::string::npos) << log;
+    const std::string line = log.substr(registered, log.find('\n', registered) - registered);
+    const auto handler = static_cast<DWORD>(std::stoul(fieldAfter(line, "pid")));
+    EXPECT_EQ(crashHandlersOf(owner), std::vector<DWORD>{handler}) << line;
+    EXPECT_TRUE(crashHandlersOf(static_cast<DWORD>(process->pid())).empty()) << "the first launcher starts none";
+    // frost started the handler by its path through the link; the kernel names the image by the
+    // resolved path, which is the handler beside the long-path copy.
+    const std::string linkFolder = frost::io::joinPath(localAppData, "FrostIDE\\i").value();
+    EXPECT_TRUE(fieldAfter(line, "path").starts_with(linkFolder + "\\")) << line << " not under " << linkFolder;
+    const std::string handlerImage = imagePathOf(handler);
+    const std::string handlerPlain = handlerImage.starts_with("\\\\?\\") ? handlerImage.substr(4) : handlerImage;
+    EXPECT_EQ(handlerPlain, frost::io::joinPath(frost::io::parentPath(exe), "crashpad_handler.exe").value());
+    // frost.restarted_from is annotated with this value just before the line is logged.
+    const std::string restartedFrom = fieldAfter(line, "restarted-from");
+    EXPECT_TRUE(restartedFrom == startedAs(exe, form) || restartedFrom == exe) << line;
+    ASSERT_NE(PostMessageW(window, WM_CLOSE, 0, 0), FALSE) << GetLastError();
+    const auto result = process->communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes;
+    EXPECT_TRUE(frost::test::waitForProcessGone(handler, 2s)) << "the crash handler outlived frost";
+}
 #endif
 
 } // namespace

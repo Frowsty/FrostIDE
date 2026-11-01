@@ -116,6 +116,34 @@ if ($Full) {
     Test-WindowsConfig 'fuzz' 'win-clangcl-fuzz' 'RelWithDebInfo' $fuzzDir @('-L', 'fuzz')
 }
 
+# Symbolization of the self-test artifacts (-Full only; ADR 0022). The Debug and Release ctest
+# runs above leave a crash dump, a contract-violation dump and a freeze report in
+# <build>\selftest-artifacts\<Config> (frost_process_tests), and tools\symbolize.py
+# check-selftest must resolve each to its marked source line with the pinned llvm-symbolizer.
+# Artifacts older than this verify run (a configuration whose tests did not run) count as
+# none, and "no-artifacts" fails the gate.
+if ($Full) {
+    $symbolizeRoot = $BuildDir
+    if (-not $symbolizeRoot) { $symbolizeRoot = Join-Path $repo 'build\win-clangcl' }
+    $symbolizeSince = (Get-Process -Id $PID).StartTime
+    $symbolizer = Join-Path $env:FROST_LLVM_ROOT 'bin\llvm-symbolizer.exe'
+    $symbolizePython = Join-Path $env:FROST_SDK 'py\Scripts\python.exe'
+    foreach ($symbolizeConfig in @('Debug', 'Release')) {
+        $symbolizeLabel = $symbolizeConfig.ToLowerInvariant()
+        $artifacts = Join-Path $symbolizeRoot "selftest-artifacts\$symbolizeConfig"
+        $fresh = @(Get-ChildItem -Path (Join-Path $artifacts '*\artifact.json') -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $symbolizeSince })
+        Write-Host "=== $symbolizeLabel symbolize ($artifacts)"
+        if ($fresh.Count -eq 0) {
+            $summary.Add("win symbolize $symbolizeLabel no-artifacts"); $failed = $true; continue
+        }
+        $null = Invoke-Native { & $symbolizePython -I (Join-Path $PSScriptRoot 'symbolize.py') check-selftest `
+                --artifacts $artifacts --llvm-symbolizer $symbolizer --source-root $repo }
+        if ($LASTEXITCODE -eq 0) { $summary.Add("win symbolize $symbolizeLabel ok") }
+        else { $summary.Add("win symbolize $symbolizeLabel FAILED"); $failed = $true }
+    }
+}
+
 # Repository checks.
 $checks = New-Object System.Collections.Generic.List[string]
 

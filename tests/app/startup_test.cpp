@@ -551,6 +551,17 @@ TEST(StartupGpuDriverRule, OnlyANativeQApplicationMayReachTheDriver) {
     EXPECT_FALSE(mayReachGpuDriver({L"--version"}, L"windows"));
 }
 
+TEST(StartupCore, CrashAndFreezeSelfTestsNeverReachTheGpuDriver) {
+    // --selftest=crash creates no QApplication, --selftest=freeze always an offscreen one (main.cpp
+    // overrides QT_QPA_PLATFORM), so neither restarts through the short link (ADR 0022, D-E).
+    for (const wchar_t* option : {L"--selftest=crash", L"--selftest=freeze"}) {
+        EXPECT_FALSE(mayReachGpuDriver({option}));
+        EXPECT_FALSE(mayReachGpuDriver({option}, L"windows")) << "QT_QPA_PLATFORM=windows";
+        EXPECT_FALSE(mayReachGpuDriver({option}, L"direct2d;offscreen"));
+        EXPECT_FALSE(mayReachGpuDriver({option, L"file.txt"})) << "a usage error";
+    }
+}
+
 TEST(StartupShortLink, NameIsAStableHashOfTheDirectory) {
     // 64-bit FNV-1a of the UTF-16LE bytes, pinned so a link's name never changes between
     // builds (the empty input gives the published offset basis; the others come from an

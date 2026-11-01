@@ -72,6 +72,9 @@ function(frost_apply_compile_options target kind)
     else()
         target_compile_options(${target} PRIVATE ${FROST_CLANG_WARNINGS} -g)
         target_compile_definitions(${target} PRIVATE $<${hardened}:_GLIBCXX_ASSERTIONS>)
+        # A GNU build-id note in every linked binary: freeze reports and tools/symbolize.py
+        # identify ELF objects by it (ADR 0022). Static libraries ignore link options.
+        target_link_options(${target} PRIVATE -Wl,--build-id=sha1)
     endif()
 
     if(kind STREQUAL "PRODUCTION")

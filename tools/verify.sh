@@ -121,6 +121,27 @@ run_config() {
 }
 
 run_config debug linux-clang linux-clang-debug -LE stress
+
+# Symbolization of the self-test artifacts (--full only; ADR 0022). The Debug ctest run above
+# leaves a crash dump, a contract-violation dump and a freeze report in
+# build/linux-clang/selftest-artifacts/Debug (frost_process_tests), and tools/symbolize.py
+# check-selftest must resolve each to its marked source line with the pinned llvm-symbolizer.
+# Artifacts older than this run's lock file (a run whose tests did not run) count as none, and
+# "no-artifacts" fails. The ASan and TSan trees write artifacts of their own; they are not
+# symbolized.
+if [[ $FULL -eq 1 ]]; then
+    symbolize_dir="build/linux-clang/selftest-artifacts/Debug"
+    echo "=== symbolize ($symbolize_dir)"
+    if [[ -z "$(find "$symbolize_dir" -mindepth 2 -maxdepth 2 -name artifact.json -newer "$MIRROR.lock" 2>/dev/null)" ]]; then
+        summary+=("symbolize no-artifacts"); status=1
+    elif python3 -I tools/symbolize.py check-selftest --artifacts "$symbolize_dir" \
+            --llvm-symbolizer "$FROST_LLVM_ROOT/bin/llvm-symbolizer" --source-root "$MIRROR" 2>&1; then
+        summary+=("symbolize ok")
+    else
+        summary+=("symbolize FAILED"); status=1
+    fi
+fi
+
 if [[ $FULL -eq 1 ]]; then
     run_config asan linux-clang-asan linux-clang-asan
     run_config tsan linux-clang-tsan linux-clang-tsan

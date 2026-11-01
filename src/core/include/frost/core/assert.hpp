@@ -37,11 +37,17 @@ struct Violation {
     Kind kind;
     const char* expression; // The condition's source text.
     std::source_location where;
+    // True when the process ends after the handler returns (enforce): reportViolationAndAbort
+    // sets it, so a handler can write a crash report instead of logging and continuing.
+    bool terminating = false;
 };
 
-// A violation handler must not throw. The default handler writes the kind,
-// expression and location to stderr.
-// TODO(M1): route violations to the crash reporter and log with a stack trace.
+/*
+ * A violation handler must not throw. The default handler writes the kind, expression and
+ * location to stderr. frost's program installs frost::diag's handler at start-up
+ * (frost/diag/fatal_handlers.hpp), which logs the violation and, when `terminating` is set,
+ * writes a crash report with the stack through the crash reporter and does not return.
+ */
 using ViolationHandler = void (*)(const Violation&) noexcept;
 
 // Installs `handler` (nullptr restores the default) and returns the previous one.

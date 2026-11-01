@@ -247,8 +247,10 @@ inline constexpr unsigned long kLauncherLoadFlags = 0x900;
  * before "--") and the self-test on a native platform. The self-test is offscreen unless it
  * says "--selftest=onscreen" or QT_QPA_PLATFORM is set; a QT_QPA_PLATFORM whose first named
  * entry (platformPluginNames()' rule: ';'-separated, ':' options dropped, empty entries
- * skipped) is "offscreen" keeps any mode offscreen. --version, --help and usage errors (any
- * other option) create no QApplication. A null element is ignored. Pure; O(arguments + value).
+ * skipped) is "offscreen" keeps any mode offscreen. --selftest=crash creates no QApplication
+ * and --selftest=freeze always an offscreen one, whatever QT_QPA_PLATFORM says, so both are
+ * false. --version, --help and usage errors (any other option) create no QApplication. A null
+ * element is ignored. Pure; O(arguments + value).
  */
 [[nodiscard]] bool launcherMayReachGpuDriver(std::span<const wchar_t* const> arguments,
                                              std::wstring_view qtQpaPlatform) noexcept;

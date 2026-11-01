@@ -34,6 +34,14 @@ precedence = "override"
 SPDX-FileCopyrightText = "Microsoft Corporation and vcpkg contributors"
 SPDX-License-Identifier = "MIT"
 
+# The getopt that replaces crashpad's public-domain one is FrostIDE's own code (ADR 0022). Being the
+# last match, this table replaces the vcpkg-ports rule above for that one patch.
+[[annotations]]
+path = ["third_party/vcpkg-ports/crashpad/frost-getopt.patch"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"
+
 # Pinned third-party assets (resources/assets.lock.json, ADR 0015). When several tables match a
 # file, REUSE uses the last one, so these tables (after the generic Apache-2.0 rules above, such
 # as **/*.json) are the ones that apply; "override" also makes REUSE ignore any notice inside

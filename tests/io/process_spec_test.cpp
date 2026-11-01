@@ -163,6 +163,30 @@ TEST(ProcessSpec, OtherFieldsAreChecked) {
     EXPECT_EQ(validate(spec, false), ErrorCode::Unknown);
 }
 
+TEST(ProcessSpec, ValidatesPosixInheritedFds) {
+    ProcessSpec spec = specFor("/bin/tool");
+    spec.posixInheritedFds = {7, 3, 0};
+    EXPECT_EQ(validate(spec, false), ErrorCode::Unknown);
+    spec.posixInheritedFds = {5, -1};
+    EXPECT_EQ(validate(spec, false), ErrorCode::InvalidArgument);
+    spec.posixInheritedFds = {5, 6, 5};
+    EXPECT_EQ(validate(spec, false), ErrorCode::InvalidArgument);
+    spec.posixInheritedFds.clear();
+    for (int fd = 0; fd < static_cast<int>(frost::io::kMaxInheritedFds); ++fd) {
+        spec.posixInheritedFds.push_back(100 + fd);
+    }
+    EXPECT_EQ(validate(spec, false), ErrorCode::Unknown);
+    spec.posixInheritedFds.push_back(99);
+    EXPECT_EQ(validate(spec, false), ErrorCode::InvalidArgument);
+}
+
+TEST(ProcessSpec, WindowsRejectsPosixInheritedFds) {
+    ProcessSpec spec = specFor("C:\\tools\\tool.exe");
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unknown);
+    spec.posixInheritedFds = {3};
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unsupported);
+}
+
 TEST(ProcessSpec, DesktopNameIsCheckedOnWindowsOnly) {
     // STARTUPINFOW::lpDesktop: a NUL would cut the name short, and it must convert to UTF-16.
     // POSIX ignores the field, so it refuses nothing there.

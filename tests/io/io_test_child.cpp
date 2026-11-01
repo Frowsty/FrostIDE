@@ -30,6 +30,10 @@
 //                      (exit), leaving the grandchild behind holding stdout open
 //   session            POSIX: "session leader" or "not session leader", then "tty" if
 //                      /dev/tty (the controlling terminal) opens, "no tty" for ENXIO
+//   fd-write N TEXT    POSIX: writes TEXT to descriptor N, then prints "wrote" ("write error
+//                      <errno>" if that fails); for ProcessSpec::posixInheritedFds
+//   find-identity ID   POSIX: "found <fd>" for every descriptor 3..1023 whose "<st_dev>:<st_ino>"
+//                      is ID, then "done"; shows where (and whether) a probe object arrived
 //   lease PATH         POSIX: takes a write lease on PATH, prints "leased", then waits up
 //                      to 30 s for the lease-break signal, releases the lease and prints
 //                      "released" (or "timed out"); "no lease <errno>" if refused
@@ -423,6 +427,22 @@ int run(const std::vector<std::string>& args) {
         } else {
             line(errno == ENXIO ? "no tty" : "tty error " + std::to_string(errno));
         }
+        return 0;
+    }
+    if (mode == "fd-write" && args.size() == 4) {
+        const int fd = std::atoi(args[2].c_str());
+        const ssize_t wrote = write(fd, args[3].data(), args[3].size());
+        line(wrote == static_cast<ssize_t>(args[3].size()) ? "wrote" : "write error " + std::to_string(errno));
+        return 0;
+    }
+    if (mode == "find-identity" && args.size() == 3) {
+        for (int fd = 3; fd < 1024; ++fd) {
+            struct stat info{};
+            if (fstat(fd, &info) == 0 && std::to_string(info.st_dev) + ":" + std::to_string(info.st_ino) == args[2]) {
+                line("found " + std::to_string(fd));
+            }
+        }
+        line("done");
         return 0;
     }
     if (mode == "lease" && args.size() == 3) {

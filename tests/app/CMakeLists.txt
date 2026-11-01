@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for frost::app and the frost program:
-#   app_tests             unit tests (command line) and offscreen window tests;
+#   app_tests             unit tests (command line) and offscreen window and stall-hook tests;
 #   app_startup_tests     start-up hardening, guards and plugin pinning (frost/app/startup.hpp);
 #   frost_process_tests   integration tests that run the built frost program (on Windows the
 #                         frost.exe launcher and frost_app.dll) through frost::io's
 #                         IProcessLauncher.
 
 frost_add_test(app_tests QT
-    SOURCES command_line_test.cpp main_window_test.cpp
-    DEPS frost::app)
+    SOURCES command_line_test.cpp main_window_test.cpp stall_hooks_test.cpp
+    DEPS frost::app frost::diag frost::io)
 
 # Most of start-up hardening cannot be undone (startup.hpp), so StartupHardeningDeathTest
 # applies it only in a death-test child of this binary, which needs no QApplication (no Qt
@@ -59,3 +59,9 @@ endif()
 # frost_app.dll beside it).
 target_compile_definitions(frost_process_tests PRIVATE FROST_EXE_PATH="$<TARGET_FILE:frost>")
 add_dependencies(frost_process_tests frost)
+# The crash tests (ADR 0022): crash_child (tests/diag) for the contract-violation dump, and the
+# directory where the self-test artifacts are left for verify -Full's symbolize step.
+target_compile_definitions(frost_process_tests PRIVATE
+    FROST_CRASH_CHILD="$<TARGET_FILE:crash_child>"
+    FROST_SELFTEST_ARTIFACTS="${CMAKE_BINARY_DIR}/selftest-artifacts/$<CONFIG>")
+add_dependencies(frost_process_tests crash_child)

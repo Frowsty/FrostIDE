@@ -1,0 +1,766 @@
+diff --git a/third_party/getopt/LICENSE b/third_party/getopt/LICENSE
+deleted file mode 100644
+index 4444b120..00000000
+--- a/third_party/getopt/LICENSE
++++ /dev/null
+@@ -1,5 +0,0 @@
+-Copyright (C) 1997 Gregory Pietsch
+-
+-[These files] are hereby placed in the public domain without restrictions. Just
+-give the author credit, don't claim you wrote it or prevent anyone else from
+-using it.
+diff --git a/third_party/getopt/README.crashpad b/third_party/getopt/README.crashpad
+index ac3201a6..571d6e2d 100644
+--- a/third_party/getopt/README.crashpad
++++ b/third_party/getopt/README.crashpad
+@@ -1,21 +1,12 @@
+-Name: Gregory Pietsch getopt
++Name: getopt (FrostIDE replacement)
+ Short Name: getopt
+-URL: https://sourceware.org/ml/newlib/2005/msg00758.html
+-License: Public domain
+-License File: LICENSE
++License: Apache-2.0
+ Security Critical: no
+ Shipped: yes
+ 
+ Description:
+-A public domain implementation of getopt.
+-
+-Local Modifications:
+- - Minor compilation fixes applied for Windows.
+- - NO_ARG, REQUIRED_ARG, and OPTIONAL_ARG were renamed to the more traditional
+-   no_argument, required_argument, and optional_argument for source
+-   compatibility with BSD and glibc getopt_long().
+- - Add copy of copyright (Public domain) to the top of both files for Chromium's
+-   checklicenses step.
+- - Compiled as .cc, and wrapped in namespace crashpad.
+- - memcmp() -> strncmp() in getopt.cc to make ASan happier about some string
+-   manipulation.
++getopt, getopt_long and getopt_long_only written by the FrostIDE authors for
++FrostIDE's vcpkg overlay of crashpad (ADR 0022). They replace the public-domain
++implementation by Gregory Pietsch that crashpad bundles here, whose dedication is
++not an SPDX licence on FrostIDE's allowlist. Same declarations in namespace
++crashpad; arguments are never permuted.
+diff --git a/third_party/getopt/getopt.cc b/third_party/getopt/getopt.cc
+index 7dfd888c..6d6953ef 100644
+--- a/third_party/getopt/getopt.cc
++++ b/third_party/getopt/getopt.cc
+@@ -1,423 +1,236 @@
+-/*
+-Copyright (C) 1997 Gregory Pietsch
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 The FrostIDE authors
++//
++// The option scanner declared in getopt.h, written for FrostIDE's vcpkg overlay
++// (ADR 0022) from the POSIX getopt() specification and the GNU C Library manual's
++// description of getopt_long(): short options may be clustered ("-ab") and take
++// their argument attached or from the next argument; long options take theirs
++// after '=' or, when required, from the next argument, and may be abbreviated to
++// a unique prefix. An optstring starting with ':' reports a missing argument as
++// ':' instead of '?' and suppresses the messages, as POSIX describes.
+ 
+-[These files] are hereby placed in the public domain without restrictions. Just
+-give the author credit, don't claim you wrote it or prevent anyone else from
+-using it.
+-*/
+-
+-/****************************************************************************
+-
+-getopt.c - Read command line options
+-
+-AUTHOR: Gregory Pietsch
+-CREATED Fri Jan 10 21:13:05 1997
+-
+-DESCRIPTION:
+-
+-The getopt() function parses the command line arguments.  Its arguments argc
+-and argv are the argument count and array as passed to the main() function
+-on program invocation.  The argument optstring is a list of available option
+-characters.  If such a character is followed by a colon (`:'), the option
+-takes an argument, which is placed in optarg.  If such a character is
+-followed by two colons, the option takes an optional argument, which is
+-placed in optarg.  If the option does not take an argument, optarg is NULL.
+-
+-The external variable optind is the index of the next array element of argv
+-to be processed; it communicates from one call to the next which element to
+-process.
+-
+-The getopt_long() function works like getopt() except that it also accepts
+-long options started by two dashes `--'.  If these take values, it is either
+-in the form
+-
+---arg=value
+-
+- or
+-
+---arg value
+-
+-It takes the additional arguments longopts which is a pointer to the first
+-element of an array of type GETOPT_LONG_OPTION_T.  The last element of the
+-array has to be filled with NULL for the name field.
+-
+-The longind pointer points to the index of the current long option relative
+-to longopts if it is non-NULL.
+-
+-The getopt() function returns the option character if the option was found
+-successfully, `:' if there was a missing parameter for one of the options,
+-`?' for an unknown option character, and EOF for the end of the option list.
+-
+-The getopt_long() function's return value is described in the header file.
+-
+-The function getopt_long_only() is identical to getopt_long(), except that a
+-plus sign `+' can introduce long options as well as `--'.
+-
+-The following describes how to deal with options that follow non-option
+-argv-elements.
+-
+-If the caller did not specify anything, the default is REQUIRE_ORDER if the
+-environment variable POSIXLY_CORRECT is defined, PERMUTE otherwise.
+-
+-REQUIRE_ORDER means don't recognize them as options; stop option processing
+-when the first non-option is seen.  This is what Unix does.  This mode of
+-operation is selected by either setting the environment variable
+-POSIXLY_CORRECT, or using `+' as the first character of the optstring
+-parameter.
+-
+-PERMUTE is the default.  We permute the contents of ARGV as we scan, so that
+-eventually all the non-options are at the end.  This allows options to be
+-given in any order, even with programs that were not written to expect this.
+-
+-RETURN_IN_ORDER is an option available to programs that were written to
+-expect options and other argv-elements in any order and that care about the
+-ordering of the two.  We describe each non-option argv-element as if it were
+-the argument of an option with character code 1.  Using `-' as the first
+-character of the optstring parameter selects this mode of operation.
+-
+-The special argument `--' forces an end of option-scanning regardless of the
+-value of ordering.  In the case of RETURN_IN_ORDER, only `--' can cause
+-getopt() and friends to return EOF with optind != argc.
+-
+-COPYRIGHT NOTICE AND DISCLAIMER:
+-
+-Copyright (C) 1997 Gregory Pietsch
+-
+-This file and the accompanying getopt.h header file are hereby placed in the
+-public domain without restrictions.  Just give the author credit, don't
+-claim you wrote it or prevent anyone else from using it.
+-
+-Gregory Pietsch's current e-mail address:
+-gpietsch@comcast.net
+-****************************************************************************/
++#include "getopt.h"
+ 
+-/* include files */
+ #include <stdio.h>
+-#include <stdlib.h>
+ #include <string.h>
+-#ifndef GETOPT_H
+-#include "getopt.h"
+-#endif
+ 
+ namespace crashpad {
+ 
+-/* macros */
+-
+-/* types */
+-typedef enum GETOPT_ORDERING_T
+-{
+-  PERMUTE,
+-  RETURN_IN_ORDER,
+-  REQUIRE_ORDER
+-} GETOPT_ORDERING_T;
+-
+-/* globally-defined variables */
+-char *optarg = NULL;
+-int optind = 0;
++char* optarg = nullptr;
++int optind = 1;
+ int opterr = 1;
+-int optopt = '?';
+-
+-/* functions */
++int optopt = 0;
+ 
+-/* reverse_argv_elements:  reverses num elements starting at argv */
+-static void
+-reverse_argv_elements (char **argv, int num)
+-{
+-  int i;
+-  char *tmp;
++namespace {
+ 
+-  for (i = 0; i < (num >> 1); i++)
+-    {
+-      tmp = argv[i];
+-      argv[i] = argv[num - i - 1];
+-      argv[num - i - 1] = tmp;
+-    }
+-}
++// The rest of a cluster of short options ("-abc" after "-a"), or null.
++char* g_next_char = nullptr;
+ 
+-/* permute: swap two blocks of argv-elements given their lengths */
+-static void
+-permute (char **argv, int len1, int len2)
+-{
+-  reverse_argv_elements (argv, len1);
+-  reverse_argv_elements (argv, len1 + len2);
+-  reverse_argv_elements (argv, len2);
++// Skips the GNU ordering flags '+' and '-' (arguments are never permuted here).
++const char* SkipOrderingFlags(const char* shortopts) {
++  while (shortopts != nullptr && (*shortopts == '+' || *shortopts == '-')) {
++    ++shortopts;
++  }
++  return shortopts;
+ }
+ 
+-/* is_option: is this argv-element an option or the end of the option list? */
+-static int
+-is_option (char *argv_element, int only)
+-{
+-  return ((argv_element == NULL)
+-          || (argv_element[0] == '-') || (only && argv_element[0] == '+'));
++void Complain(const char* program, const char* what, const char* text) {
++  if (opterr) {
++    fprintf(stderr, "%s: %s '%s'\n", program != nullptr ? program : "", what,
++            text);
++  }
+ }
+ 
+-/* getopt_internal:  the function that does all the dirty work */
+-static int
+-getopt_internal (int argc, char **argv, char *shortopts,
+-                 GETOPT_LONG_OPTION_T * longopts, int *longind, int only)
+-{
+-  GETOPT_ORDERING_T ordering = PERMUTE;
+-  static size_t optwhere = 0;
+-  size_t permute_from = 0;
+-  int num_nonopts = 0;
+-  int optindex = 0;
+-  size_t match_chars = 0;
+-  char *possible_arg = NULL;
+-  int longopt_match = -1;
+-  int has_arg = -1;
+-  char *cp = NULL;
+-  int arg_next = 0;
+-
+-  /* first, deal with silly parameters and easy stuff */
+-  if (argc == 0 || argv == NULL || (shortopts == NULL && longopts == NULL))
+-    return (optopt = '?');
+-  if (optind >= argc || argv[optind] == NULL)
+-    return EOF;
+-  if (strcmp (argv[optind], "--") == 0)
+-    {
+-      optind++;
+-      return EOF;
++// Parses the long option in argv[optind], whose name starts at `name` (after
++// "--", or after "-" for getopt_long_only). Returns the value to hand back, or -2
++// when `name` matches no long option and the caller may try short options.
++int ParseLong(int argc,
++              char** argv,
++              char* name,
++              const option* longopts,
++              int* longind,
++              bool colon_mode,
++              bool may_fall_back) {
++  char* equals = strchr(name, '=');
++  const size_t length =
++      equals != nullptr ? static_cast<size_t>(equals - name) : strlen(name);
++  int match = -1;
++  bool ambiguous = false;
++  for (int i = 0; longopts[i].name != nullptr; ++i) {
++    if (strncmp(longopts[i].name, name, length) != 0) {
++      continue;
++    }
++    if (strlen(longopts[i].name) == length) {
++      match = i;
++      ambiguous = false;
++      break;
++    }
++    if (match == -1) {
++      match = i;
++    } else if (longopts[match].has_arg != longopts[i].has_arg ||
++               longopts[match].flag != longopts[i].flag ||
++               longopts[match].val != longopts[i].val) {
++      ambiguous = true;
+     }
+-  /* if this is our first time through */
+-  if (optind == 0) {
+-    optind = 1;
+-    optwhere = 1;
+   }
+-
+-  /* define ordering */
+-  if (shortopts != NULL && (*shortopts == '-' || *shortopts == '+'))
+-    {
+-      ordering = (*shortopts == '-') ? RETURN_IN_ORDER : REQUIRE_ORDER;
+-      shortopts++;
++  if (match == -1 && may_fall_back) {
++    return -2;
++  }
++  char* const whole = argv[optind];
++  ++optind;
++  optopt = 0;
++  if (match == -1) {
++    if (!colon_mode) {
++      Complain(argv[0], "unrecognized option", whole);
+     }
+-  else
+-    ordering = (getenv ("POSIXLY_CORRECT") != NULL) ? REQUIRE_ORDER : PERMUTE;
+-
+-  /*
+-   * based on ordering, find our next option, if we're at the beginning of
+-   * one
+-   */
+-  if (optwhere == 1)
+-    {
+-      switch (ordering)
+-        {
+-        case PERMUTE:
+-          permute_from = optind;
+-          num_nonopts = 0;
+-          while (!is_option (argv[optind], only))
+-            {
+-              optind++;
+-              num_nonopts++;
+-            }
+-          if (argv[optind] == NULL)
+-            {
+-              /* no more options */
+-              optind = (int)permute_from;
+-              return EOF;
+-            }
+-          else if (strcmp (argv[optind], "--") == 0)
+-            {
+-              /* no more options, but have to get `--' out of the way */
+-              permute (argv + permute_from, num_nonopts, 1);
+-              optind = (int)(permute_from + 1);
+-              return EOF;
+-            }
+-          break;
+-        case RETURN_IN_ORDER:
+-          if (!is_option (argv[optind], only))
+-            {
+-              optarg = argv[optind++];
+-              return (optopt = 1);
+-            }
+-          break;
+-        case REQUIRE_ORDER:
+-          if (!is_option (argv[optind], only))
+-            return EOF;
+-          break;
+-        }
++    return '?';
++  }
++  if (ambiguous) {
++    if (!colon_mode) {
++      Complain(argv[0], "ambiguous option", whole);
++    }
++    return '?';
++  }
++  const option& found = longopts[match];
++  if (equals != nullptr) {
++    if (found.has_arg == no_argument) {
++      optopt = found.flag == nullptr ? found.val : 0;
++      if (!colon_mode) {
++        Complain(argv[0], "option does not take an argument", whole);
++      }
++      return '?';
+     }
+-  /* we've got an option, so parse it */
++    optarg = equals + 1;
++  } else if (found.has_arg == required_argument) {
++    if (optind >= argc || argv[optind] == nullptr) {
++      optopt = found.flag == nullptr ? found.val : 0;
++      if (!colon_mode) {
++        Complain(argv[0], "option requires an argument", whole);
++      }
++      return colon_mode ? ':' : '?';
++    }
++    optarg = argv[optind++];
++  }
++  if (longind != nullptr) {
++    *longind = match;
++  }
++  if (found.flag != nullptr) {
++    *found.flag = found.val;
++    return 0;
++  }
++  return found.val;
++}
+ 
+-  /* first, is it a long option? */
+-  if (longopts != NULL
+-      && (strncmp (argv[optind], "--", 2) == 0
+-          || (only && argv[optind][0] == '+')) && optwhere == 1)
+-    {
+-      /* handle long options */
+-      if (strncmp (argv[optind], "--", 2) == 0)
+-        optwhere = 2;
+-      longopt_match = -1;
+-      possible_arg = strchr (argv[optind] + optwhere, '=');
+-      if (possible_arg == NULL)
+-        {
+-          /* no =, so next argv might be arg */
+-          match_chars = strlen (argv[optind]);
+-          possible_arg = argv[optind] + match_chars;
+-          match_chars = match_chars - optwhere;
+-        }
+-      else
+-        match_chars = (possible_arg - argv[optind]) - optwhere;
+-      for (optindex = 0; longopts[optindex].name != NULL; optindex++)
+-        {
+-          if (strncmp (argv[optind] + optwhere,
+-                       longopts[optindex].name, match_chars) == 0)
+-            {
+-              /* do we have an exact match? */
+-              if (match_chars == strlen (longopts[optindex].name))
+-                {
+-                  longopt_match = optindex;
+-                  break;
+-                }
+-              /* do any characters match? */
+-              else
+-                {
+-                  if (longopt_match < 0)
+-                    longopt_match = optindex;
+-                  else
+-                    {
+-                      /* we have ambiguous options */
+-                      if (opterr)
+-                        fprintf (stderr, "%s: option `%s' is ambiguous "
+-                                 "(could be `--%s' or `--%s')\n",
+-                                 argv[0],
+-                                 argv[optind],
+-                                 longopts[longopt_match].name,
+-                                 longopts[optindex].name);
+-                      return (optopt = '?');
+-                    }
+-                }
+-            }
+-        }
+-      if (longopt_match >= 0)
+-        has_arg = longopts[longopt_match].has_arg;
++int Scan(int argc,
++         char** argv,
++         const char* shortopts,
++         const option* longopts,
++         int* longind,
++         bool long_only) {
++  optarg = nullptr;
++  shortopts = SkipOrderingFlags(shortopts);
++  const bool colon_mode = shortopts != nullptr && *shortopts == ':';
++  if (colon_mode) {
++    ++shortopts;
++  }
++  if (g_next_char == nullptr || *g_next_char == '\0') {
++    g_next_char = nullptr;
++    if (optind >= argc || argv[optind] == nullptr) {
++      return -1;
+     }
+-  /* if we didn't find a long option, is it a short option? */
+-  if (longopt_match < 0 && shortopts != NULL)
+-    {
+-      cp = strchr (shortopts, argv[optind][optwhere]);
+-      if (cp == NULL)
+-        {
+-          /* couldn't find option in shortopts */
+-          if (opterr)
+-            fprintf (stderr,
+-                     "%s: invalid option -- `-%c'\n",
+-                     argv[0], argv[optind][optwhere]);
+-          optwhere++;
+-          if (argv[optind][optwhere] == '\0')
+-            {
+-              optind++;
+-              optwhere = 1;
+-            }
+-          return (optopt = '?');
+-        }
+-        has_arg = ((cp[1] == ':') ? ((cp[2] == ':') ? optional_argument
+-                                                    : required_argument)
+-                                  : no_argument);
+-        possible_arg = argv[optind] + optwhere + 1;
+-        optopt = *cp;
++    char* const arg = argv[optind];
++    if (arg[0] != '-' || arg[1] == '\0') {
++      return -1;  // The first operand ends the options; "-" is an operand.
+     }
+-  /* get argument and reset optwhere */
+-  arg_next = 0;
+-  switch (has_arg)
+-    {
+-    case optional_argument:
+-      if (*possible_arg == '=')
+-        possible_arg++;
+-      if (*possible_arg != '\0')
+-        {
+-          optarg = possible_arg;
+-          optwhere = 1;
+-        }
+-      else
+-        optarg = NULL;
+-      break;
+-    case required_argument:
+-      if (*possible_arg == '=')
+-        possible_arg++;
+-      if (*possible_arg != '\0')
+-        {
+-          optarg = possible_arg;
+-          optwhere = 1;
+-        }
+-      else if (optind + 1 >= argc)
+-        {
+-          if (opterr)
+-            {
+-              fprintf (stderr, "%s: argument required for option `", argv[0]);
+-              if (longopt_match >= 0)
+-                fprintf (stderr, "--%s'\n", longopts[longopt_match].name);
+-              else
+-                fprintf (stderr, "-%c'\n", *cp);
+-            }
+-          optind++;
+-          return (optopt = ':');
+-        }
+-      else
+-        {
+-          optarg = argv[optind + 1];
+-          arg_next = 1;
+-          optwhere = 1;
+-        }
+-      break;
+-    case no_argument:
+-      if (longopt_match < 0)
+-        {
+-          optwhere++;
+-          if (argv[optind][optwhere] == '\0')
+-            optwhere = 1;
+-        }
+-      else
+-        optwhere = 1;
+-      optarg = NULL;
+-      break;
++    if (arg[1] == '-' && arg[2] == '\0') {
++      ++optind;  // "--" ends the options and is consumed.
++      return -1;
+     }
+-
+-  /* do we have to permute or otherwise modify optind? */
+-  if (ordering == PERMUTE && optwhere == 1 && num_nonopts != 0)
+-    {
+-      permute (argv + permute_from, num_nonopts, 1 + arg_next);
+-      optind = (int)(permute_from + 1 + arg_next);
++    if (longopts != nullptr && arg[1] == '-') {
++      return ParseLong(
++          argc, argv, arg + 2, longopts, longind, colon_mode, false);
+     }
+-  else if (optwhere == 1)
+-    optind = optind + 1 + arg_next;
++    if (longopts != nullptr && long_only) {
++      // "-name" is a long option unless it is no long option's prefix and its
++      // first character is a short option.
++      const bool short_known = shortopts != nullptr &&
++                               strchr(shortopts, arg[1]) != nullptr &&
++                               arg[1] != ':';
++      const int result = ParseLong(
++          argc, argv, arg + 1, longopts, longind, colon_mode, short_known);
++      if (result != -2) {
++        return result;
++      }
++    }
++    g_next_char = arg + 1;
++  }
+ 
+-  /* finally return */
+-  if (longopt_match >= 0)
+-    {
+-      if (longind != NULL)
+-        *longind = longopt_match;
+-      if (longopts[longopt_match].flag != NULL)
+-        {
+-          *(longopts[longopt_match].flag) = longopts[longopt_match].val;
+-          return 0;
+-        }
+-      else
+-        return longopts[longopt_match].val;
++  const char c = *g_next_char++;
++  const char* spec = (shortopts != nullptr && c != ':' && c != '\0')
++                         ? strchr(shortopts, c)
++                         : nullptr;
++  const bool cluster_done = *g_next_char == '\0';
++  if (spec == nullptr) {
++    optopt = static_cast<unsigned char>(c);
++    if (cluster_done) {
++      ++optind;
++      g_next_char = nullptr;
+     }
+-  else
+-    return optopt;
++    if (!colon_mode && opterr) {
++      fprintf(stderr, "%s: invalid option -- '%c'\n",
++              argv[0] != nullptr ? argv[0] : "", c);
++    }
++    return '?';
++  }
++  if (spec[1] != ':') {
++    if (cluster_done) {
++      ++optind;
++      g_next_char = nullptr;
++    }
++    return static_cast<unsigned char>(c);
++  }
++  if (!cluster_done) {
++    optarg = g_next_char;  // "-ovalue" (required or optional argument).
++    ++optind;
++  } else if (spec[2] == ':') {
++    ++optind;  // An optional argument must be attached.
++  } else if (optind + 1 < argc && argv[optind + 1] != nullptr) {
++    optarg = argv[optind + 1];
++    optind += 2;
++  } else {
++    optopt = static_cast<unsigned char>(c);
++    ++optind;
++    g_next_char = nullptr;
++    if (!colon_mode && opterr) {
++      fprintf(stderr, "%s: option requires an argument -- '%c'\n",
++              argv[0] != nullptr ? argv[0] : "", c);
++    }
++    return colon_mode ? ':' : '?';
++  }
++  g_next_char = nullptr;
++  return static_cast<unsigned char>(c);
+ }
+ 
+-int
+-getopt (int argc, char **argv, char *optstring)
+-{
+-  return getopt_internal (argc, argv, optstring, NULL, NULL, 0);
++}  // namespace
++
++int getopt(int argc, char** argv, const char* optstring) {
++  return Scan(argc, argv, optstring, nullptr, nullptr, false);
+ }
+ 
+-int
+-getopt_long (int argc, char **argv, const char *shortopts,
+-             const GETOPT_LONG_OPTION_T * longopts, int *longind)
+-{
+-  return getopt_internal (argc, argv, (char*)shortopts, (GETOPT_LONG_OPTION_T*)longopts, longind, 0);
++int getopt_long(int argc,
++                char** argv,
++                const char* shortopts,
++                const option* longopts,
++                int* longind) {
++  return Scan(argc, argv, shortopts, longopts, longind, false);
+ }
+ 
+-int
+-getopt_long_only (int argc, char **argv, const char *shortopts,
+-                  const GETOPT_LONG_OPTION_T * longopts, int *longind)
+-{
+-  return getopt_internal (argc, argv, (char*)shortopts, (GETOPT_LONG_OPTION_T*)longopts, longind, 1);
++int getopt_long_only(int argc,
++                     char** argv,
++                     const char* shortopts,
++                     const option* longopts,
++                     int* longind) {
++  return Scan(argc, argv, shortopts, longopts, longind, true);
+ }
+ 
+ }  // namespace crashpad
+-
+-/* end of file GETOPT.C */
+diff --git a/third_party/getopt/getopt.h b/third_party/getopt/getopt.h
+index 27ab0dd4..a3705bfc 100644
+--- a/third_party/getopt/getopt.h
++++ b/third_party/getopt/getopt.h
+@@ -1,63 +1,45 @@
+-/*
+-Copyright (C) 1997 Gregory Pietsch
+-
+-[These files] are hereby placed in the public domain without restrictions. Just
+-give the author credit, don't claim you wrote it or prevent anyone else from
+-using it.
+-*/
+-
+-#ifndef GETOPT_H
+-#define GETOPT_H
+-
+-/* include files needed by this include file */
+-
+-/* macros defined by this include file */
+-#define no_argument       0
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 The FrostIDE authors
++//
++// getopt, getopt_long and getopt_long_only for crashpad's Windows build, written
++// for FrostIDE's vcpkg overlay (ADR 0022) in place of the public-domain getopt that
++// crashpad bundles, from the behaviour POSIX specifies for getopt() and the GNU C
++// Library manual documents for getopt_long(). Arguments are not permuted: the first
++// argument that is not an option ends the scan, as POSIXLY_CORRECT does in glibc.
++
++#ifndef CRASHPAD_THIRD_PARTY_GETOPT_GETOPT_H_
++#define CRASHPAD_THIRD_PARTY_GETOPT_GETOPT_H_
++
++#define no_argument 0
+ #define required_argument 1
+ #define optional_argument 2
+ 
+-/* types defined by this include file */
+-
+ namespace crashpad {
+ 
+-/* GETOPT_LONG_OPTION_T: The type of long option */
+-typedef struct GETOPT_LONG_OPTION_T
+-{
+-  const char *name;             /* the name of the long option */
+-  int has_arg;                  /* one of the above macros */
+-  int *flag;                    /* determines if getopt_long() returns a
+-                                 * value for a long option; if it is
+-                                 * non-NULL, 0 is returned as a function
+-                                 * value and the value of val is stored in
+-                                 * the area pointed to by flag.  Otherwise,
+-                                 * val is returned. */
+-  int val;                      /* determines the value to return if flag is
+-                                 * NULL. */
+-} GETOPT_LONG_OPTION_T;
+-
+-typedef GETOPT_LONG_OPTION_T option;
+-
+-/* externally-defined variables */
+-extern char *optarg;
++struct option {
++  const char* name;  // The long option's name, without the leading "--".
++  int has_arg;       // no_argument, required_argument or optional_argument.
++  int* flag;         // If non-null, *flag = val and 0 is returned.
++  int val;           // Returned (or stored through flag) when the option is seen.
++};
++
++extern char* optarg;
+ extern int optind;
+ extern int opterr;
+ extern int optopt;
+ 
+-/* function prototypes */
+-int getopt(int argc, char** argv, char* optstring);
++int getopt(int argc, char** argv, const char* optstring);
+ int getopt_long(int argc,
+                 char** argv,
+                 const char* shortopts,
+-                const GETOPT_LONG_OPTION_T* longopts,
++                const option* longopts,
+                 int* longind);
+ int getopt_long_only(int argc,
+                      char** argv,
+                      const char* shortopts,
+-                     const GETOPT_LONG_OPTION_T* longopts,
++                     const option* longopts,
+                      int* longind);
+ 
+ }  // namespace crashpad
+ 
+-#endif /* GETOPT_H */
+-
+-/* END OF FILE getopt.h */
++#endif  // CRASHPAD_THIRD_PARTY_GETOPT_GETOPT_H_

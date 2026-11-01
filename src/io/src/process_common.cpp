@@ -110,6 +110,26 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
     if (spec.stdinMode == Stdio::MergeIntoStdout || spec.stdoutMode == Stdio::MergeIntoStdout) {
         return invalid("Stdio::MergeIntoStdout applies to stderr only");
     }
+    if (!spec.posixInheritedFds.empty()) {
+        if (windowsRules) {
+            return fail(ErrorCode::Unsupported, "posixInheritedFds is POSIX-only; Windows children inherit no handles");
+        }
+        if (spec.posixInheritedFds.size() > kMaxInheritedFds) {
+            return invalid(std::format("posixInheritedFds has {} entries; at most {} are allowed",
+                                       spec.posixInheritedFds.size(), kMaxInheritedFds));
+        }
+        for (std::size_t i = 0; i < spec.posixInheritedFds.size(); ++i) {
+            const int fd = spec.posixInheritedFds[i];
+            if (fd < 0) {
+                return invalid(std::format("posixInheritedFds[{}] is negative ({})", i, fd));
+            }
+            for (std::size_t j = 0; j < i; ++j) {
+                if (spec.posixInheritedFds[j] == fd) {
+                    return invalid(std::format("posixInheritedFds lists fd {} twice", fd));
+                }
+            }
+        }
+    }
     return {};
 }
 
