@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // toolchain_probe: in AddressSanitizer builds, proves the instrumentation is
-// live by requiring a deliberate heap overflow to be reported. Compiled into the
-// probe only when ASan is enabled, so other configurations run no placeholder.
+// live by requiring a deliberate heap overflow to be reported. Always compiled; the
+// test is defined only when this translation unit is ASan-instrumented, so other
+// configurations register no placeholder test.
 // CMake defines FROST_EXPECT_ASAN when FROST_SANITIZE contains "address", so a
 // build whose sanitizer flags were lost fails to compile instead of silently
 // dropping the probe.

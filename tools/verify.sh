@@ -23,6 +23,7 @@
 #                 ~/frost-src-<hash of the source path>, so every worktree gets
 #                 its own mirror; a lock file serialises runs on one mirror.
 #   FROST_JOBS    build parallelism (default: nproc), to stay inside the WSL memory cap.
+#   FROST_SDK     SDK root whose env.sh is sourced (default: ~/sdk).
 #
 # The last line of output is the summary for the commit verification footer,
 # e.g. "wsl: debug 62/63 (1 skipped), asan 63/63, tsan 63/63". Skipped tests are
@@ -70,7 +71,8 @@ echo "verify.sh: source $SOURCE, mirror $MIRROR, jobs $JOBS"
 summary=()
 status=0
 
-# Turns ctest output (on stdin) into "passed/total" plus " (n skipped)", or nothing.
+# Turns ctest output (on stdin) into "passed/total" plus " (n skipped, m disabled)" (each part only when
+# non-zero), or nothing when ctest printed no summary line.
 # Skipped and disabled tests are listed under "The following tests did not run:".
 # ctest's "out of N" includes skipped tests (never counted as passed here) but not
 # disabled ones (gtest's DISABLED_ tests), which are reported on their own.

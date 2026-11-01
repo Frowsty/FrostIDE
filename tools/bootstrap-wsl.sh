@@ -16,6 +16,10 @@
 # Archives are taken from the Windows download cache (/mnt/e/sdk/_downloads)
 # when present, otherwise downloaded. Every archive, Qt's included, is checked
 # against the SHA-256 pinned in the lock file.
+#
+# Environment:
+#   FROST_SDK            install root (default ~/sdk)
+#   FROST_WIN_DOWNLOADS  Windows download cache to copy archives from (default /mnt/e/sdk/_downloads)
 
 set -euo pipefail
 

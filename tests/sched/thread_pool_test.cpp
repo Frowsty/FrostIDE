@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Tests for ThreadPool: sizing, spawning and joining, lane hops, lane
-// priority and aging on a single worker, the Background+Idle cap (with
-// Interactive work still running), work stealing, cancellation before start and
-// during a run, timers on the system clock and on a ManualClock, shutdown with
-// pending work (and with a sleep whose deadline just passed), a ready handle
-// outliving the pool, and lost-wakeup hunting.
+// Tests for ThreadPool: a constructor that never throws, sizing, spawning and
+// joining, lane hops, lane priority and aging on a single worker, the
+// Background+Idle cap (with Interactive work still running), work stealing,
+// cancellation before start and during a run, timers on the system clock and on a
+// ManualClock, shutdown with pending work (and with a sleep whose deadline just
+// passed), a ready handle outliving the pool, and lost-wakeup hunting.
 
 #include "frost/core/clock.hpp"
 #include "frost/sched/lane_policy.hpp"
@@ -25,6 +25,7 @@
 #include <set>
 #include <stop_token>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -70,6 +71,11 @@ private:
     std::mutex m_mutex;
     std::vector<std::pair<Lane, int>> m_order;
 };
+
+// Construction failures terminate rather than throw out of the constructor (no
+// exceptions across modules).
+static_assert(std::is_nothrow_constructible_v<ThreadPool, ThreadPoolOptions>);
+static_assert(std::is_nothrow_default_constructible_v<ThreadPool>);
 
 TEST(ThreadPool, SizingFollowsHardwareAndClampsTheCap) {
     const unsigned hardware = std::max(1U, std::thread::hardware_concurrency());

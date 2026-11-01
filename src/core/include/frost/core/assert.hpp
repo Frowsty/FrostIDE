@@ -13,6 +13,13 @@
 // Debug and Release both default to enforce; hot paths that measured a cost may
 // select quick_enforce locally. Conditions must be free of side effects, since
 // "ignore" skips them.
+//
+// The semantic is fixed when assert.hpp is first included, so define it before
+// any include. It then applies to every check expanded in the TU, including
+// checks in inline functions and templates from headers, and those must see the
+// same semantic in every TU of a program (ODR). A non-default semantic is
+// therefore safe only in a .cpp that includes no header containing checks, or
+// when the whole program is built with it.
 #pragma once
 
 #include <source_location>

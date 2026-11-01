@@ -38,7 +38,9 @@ class function_ref;
 template<class R, class... Args>
 class function_ref<R(Args...)> {
 public:
-    // Binds a function pointer. The pointer itself is stored, so it may be a temporary.
+    // Binds a function pointer. Precondition: `function` is not null (as for
+    // std::function_ref); a null pointer is undefined behaviour at call time. The
+    // pointer itself is stored, so it may be a temporary.
     template<class F>
         requires std::is_function_v<F> && std::is_invocable_r_v<R, F*, Args...>
     function_ref(F* function) noexcept // NOLINT(google-explicit-constructor): implicit like std::function_ref

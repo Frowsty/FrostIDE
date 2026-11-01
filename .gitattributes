@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Git attributes for FrostIDE: line-ending normalisation and binary markers.
+
 # Normalise text to LF in the repository; Windows-only scripts keep CRLF.
 * text=auto eol=lf
 *.bat text eol=crlf

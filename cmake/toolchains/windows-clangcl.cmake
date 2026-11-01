@@ -10,9 +10,10 @@
 #      In that mode VCPKG_CRT_LINKAGE is defined and vcpkg's standard Windows
 #      flags are pulled in so ports build exactly as they would with cl.exe.
 #
-# The MSVC toolset and SDK are pinned with clang-cl's and lld-link's /vctoolsdir,
-# /winsdkdir and /winsdkversion, so a newer Visual Studio update cannot silently
-# change the STL under us (STL >= 14.52 rejects Clang < 22; PLAN.md section 2).
+# The MSVC toolset and SDK are pinned with clang-cl's and lld-link's vctoolsdir,
+# winsdkdir and winsdkversion options (spelled as explained at the pin below), so a
+# newer Visual Studio update cannot silently change the STL under us (STL >= 14.52
+# rejects Clang < 22; PLAN.md section 2).
 # (/vctoolsversion is not used: it only applies together with /winsysroot and on
 # its own disables clang-cl's toolchain detection.)
 
@@ -74,11 +75,35 @@ if(NOT EXISTS "${FROST_WINSDK_DIR}/Include/${FROST_WINSDK_VERSION}/ucrt")
     message(FATAL_ERROR "Windows SDK ${FROST_WINSDK_VERSION} not found under '${FROST_WINSDK_DIR}'")
 endif()
 
-# Pin the STL and SDK for both the compiler and the linker.
-set(_frost_cl_pin "/vctoolsdir \"${FROST_VCTOOLS_DIR}\" /winsdkdir \"${FROST_WINSDK_DIR}\" /winsdkversion:${FROST_WINSDK_VERSION}")
+# Pin the STL and SDK for both the compiler and the linker. clang-cl takes these
+# options joined to their value with a "-" prefix ("-vctoolsdir<dir>"), for two
+# reasons, both checked with clang-cl 23.1.4 and sccache 0.19.0:
+#  - sccache treats an unknown "/" option, or an unknown option's separate value,
+#    as a second input file and refuses to cache the compile (FrostCompilerCache.cmake);
+#  - clang-cl ignores "/winsdkversion:<version>": with a version that does not exist it
+#    still picks the newest installed SDK, so that spelling pinned nothing.
+# lld-link uses its own "/name:value" syntax.
+set(_frost_cl_pin "\"-vctoolsdir${FROST_VCTOOLS_DIR}\" \"-winsdkdir${FROST_WINSDK_DIR}\" -winsdkversion${FROST_WINSDK_VERSION}")
 set(_frost_link_pin "/vctoolsdir:\"${FROST_VCTOOLS_DIR}\" /winsdkdir:\"${FROST_WINSDK_DIR}\" /winsdkversion:${FROST_WINSDK_VERSION}")
 string(APPEND CMAKE_C_FLAGS_INIT " ${_frost_cl_pin}")
 string(APPEND CMAKE_CXX_FLAGS_INIT " ${_frost_cl_pin}")
+# The _INIT values seed the cached CMAKE_<LANG>_FLAGS only on a tree's first configure,
+# so a tree configured with the old spelling would keep it, and sccache would quietly
+# cache nothing there. Rewrite exactly that old pin in the cache, once.
+# TODO(M1): remove this migration once every build tree has been reconfigured.
+set(_frost_cl_pin_old "/vctoolsdir \"${FROST_VCTOOLS_DIR}\" /winsdkdir \"${FROST_WINSDK_DIR}\" /winsdkversion:${FROST_WINSDK_VERSION}")
+foreach(_frost_lang IN ITEMS C CXX)
+    if(DEFINED CACHE{CMAKE_${_frost_lang}_FLAGS})
+        set(_frost_cached "$CACHE{CMAKE_${_frost_lang}_FLAGS}")
+        string(FIND "${_frost_cached}" "${_frost_cl_pin_old}" _frost_old_at)
+        if(NOT _frost_old_at EQUAL -1)
+            string(REPLACE "${_frost_cl_pin_old}" "${_frost_cl_pin}" _frost_cached "${_frost_cached}")
+            get_property(_frost_help CACHE CMAKE_${_frost_lang}_FLAGS PROPERTY HELPSTRING)
+            set(CMAKE_${_frost_lang}_FLAGS "${_frost_cached}" CACHE STRING "${_frost_help}" FORCE)
+            message(STATUS "windows-clangcl: rewrote the MSVC/SDK pin in the cached CMAKE_${_frost_lang}_FLAGS")
+        endif()
+    endif()
+endforeach()
 string(APPEND CMAKE_EXE_LINKER_FLAGS_INIT " ${_frost_link_pin}")
 string(APPEND CMAKE_SHARED_LINKER_FLAGS_INIT " ${_frost_link_pin}")
 string(APPEND CMAKE_MODULE_LINKER_FLAGS_INIT " ${_frost_link_pin}")

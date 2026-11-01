@@ -33,6 +33,15 @@ function(frost_apply_compile_options target kind)
     target_compile_features(${target} PUBLIC cxx_std_26)
     set_target_properties(${target} PROPERTIES CXX_EXTENSIONS OFF)
 
+    # Standard-library hardening in Debug and in sanitizer (verification) builds,
+    # PLAN.md section 2 ("C++23/26 policy"); tests/toolchain_probe/hardening_test.cpp
+    # checks it. A condition for $<...:...>: always true with FROST_SANITIZE set.
+    if(FROST_SANITIZE)
+        set(hardened 1)
+    else()
+        set(hardened "$<CONFIG:Debug>")
+    endif()
+
     if(MSVC)
         # clang-cl in MSVC-compatible mode.
         # Debug information format (/Z7) comes from CMAKE_MSVC_DEBUG_INFORMATION_FORMAT in the root file.
@@ -43,11 +52,11 @@ function(frost_apply_compile_options target kind)
             NOMINMAX WIN32_LEAN_AND_MEAN STRICT UNICODE _UNICODE
             # Windows 10/11 API surface; FrostIDE supports Windows 11 only (PLAN.md section 1.3).
             _WIN32_WINNT=0x0A00 WINVER=0x0A00
-            $<$<CONFIG:Debug>:_MSVC_STL_HARDENING=1>)
+            $<${hardened}:_MSVC_STL_HARDENING=1>)
         target_link_options(${target} PRIVATE /DEBUG)
     else()
         target_compile_options(${target} PRIVATE ${FROST_CLANG_WARNINGS} -g)
-        target_compile_definitions(${target} PRIVATE $<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
+        target_compile_definitions(${target} PRIVATE $<${hardened}:_GLIBCXX_ASSERTIONS>)
     endif()
 
     if(kind STREQUAL "PRODUCTION")

@@ -31,9 +31,13 @@ void defaultHandler(const Violation& violation) noexcept {
     std::fflush(stderr);
 }
 
-// The installed handler; nullptr means defaultHandler. constinit keeps it free of
-// dynamic initialisation (startup hygiene); atomic so tests can swap it while
-// other threads check contracts.
+/*
+ * The installed handler; nullptr means defaultHandler. constinit keeps it free of
+ * dynamic initialisation (startup hygiene); atomic so tests can swap it while
+ * other threads check contracts. Installation is a release and lookup an acquire,
+ * so a thread that loads a new handler also sees whatever state the installer
+ * prepared for it.
+ */
 constinit std::atomic<ViolationHandler> g_handler{nullptr};
 
 } // namespace

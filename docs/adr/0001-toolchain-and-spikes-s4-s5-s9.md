@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-31
+- Amended: 2026-11-01 (decision 1: how clang-cl's pinning options are spelled)
 - Plan reference: PLAN.md section 2 (Compilers and STL, Build and dependencies, Static analysis), section 2.1, M0 spikes S4, S5, S9
 
 ## Context
@@ -12,11 +13,22 @@ Three spikes check that the pinned set works together and record what it contain
 - S9: the baseline inspection counts that frost-featurecheck gates against later.
 
 ## Decision
-1. **STL/SDK pinning on Windows uses `/vctoolsdir`, `/winsdkdir` and `/winsdkversion`** for both clang-cl and
-   lld-link (`cmake/toolchains/windows-clangcl.cmake`). The toolset directory is located with vswhere, the SDK root
+1. **STL/SDK pinning on Windows uses the vctoolsdir, winsdkdir and winsdkversion options** for both clang-cl and
+   lld-link (`cmake/toolchains/windows-clangcl.cmake`). clang-cl takes them joined to their value with a `-`
+   prefix (`-vctoolsdir<dir>`, `-winsdkdir<dir>`, `-winsdkversion<version>`); lld-link takes `/vctoolsdir:<dir>`,
+   `/winsdkdir:<dir>` and `/winsdkversion:<version>`. The toolset directory is located with vswhere, the SDK root
    from the `KitsRoot10` registry value. `/vctoolsversion` is not used: it only takes effect together with
    `/winsysroot`, and on its own it disables clang-cl's MSVC detection (headers then resolve to a nonexistent
    `Microsoft Visual Studio 10.0` directory and `<version>` is not found).
+
+   Amendment (2026-11-01): until then clang-cl got `/vctoolsdir <dir> /winsdkdir <dir> /winsdkversion:<version>`.
+   clang-cl 23.1.4 ignores `/winsdkversion:<version>`: under `clang-cl -###`, `/winsdkversion:10.0.99999.0`
+   still includes `Include\10.0.26100.0\ucrt`, while `-winsdkversion10.0.99999.0` includes
+   `Include\10.0.99999.0\ucrt`. The compile-side SDK version was therefore never pinned; clang-cl picked the
+   newest SDK under the pinned root. REF-W1 has only 10.0.26100.0 installed, so no build used another SDK. The
+   separate-value form also made sccache 0.19 read `<dir>` as a second input file and refuse to cache every
+   compile (`cmake/FrostCompilerCache.cmake`). The toolchain rewrites the old spelling in existing build trees'
+   cached `CMAKE_<LANG>_FLAGS` once (TODO(M1) there to remove that migration).
 2. **The official LLVM release packages are used on both OSes** for compiling, linking, sanitizers, fuzzing,
    clangd, clang-tidy and clang-format. Debugging is the exception (see S5): the Windows package has no lldb, and the
    Linux package's lldb-dap links `libpython3.14`, which Ubuntu 24.04 lacks.
@@ -81,6 +93,6 @@ the M0 exit.
 
 ## Alternatives considered
 - `/winsysroot` with a copied MSVC+SDK tree: fully hermetic, but it duplicates about 3 GB and adds a sync step;
-  `/vctoolsdir` gives the same pinning for the single installed VS.
+  vctoolsdir and winsdkdir give the same pinning for the single installed VS.
 - Relying on clang-cl auto-detection with no flags: works today, but a VS update could silently switch the STL.
 - Building LLVM ourselves now: unnecessary for M0, since the official packages cover everything except debugging.

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Stress tests for frost::sched (label `stress`; skipped in Debug quick runs,
-// run in every -Full configuration, notably TSan). M0 exit criteria (PLAN.md
+// Stress tests for frost::sched (label `stress`; skipped in the plain Debug
+// configuration, run in the configurations -Full adds: Release and ASan on
+// Windows, ASan+UBSan and TSan in WSL). M0 exit criteria (PLAN.md
 // section 7, "M0 Exit"):
 //   - SimExecutor seeds: 10k seeds of the randomised scenario, invariants and
 //     the lane-policy oracle checked for each, determinism re-checked on a sample.

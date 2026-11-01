@@ -6,11 +6,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
-from tools_test_support import TempDirTestCase, git, run_tool
+from tools_test_support import REPO, TOOLS, TempDirTestCase, clean_env, git, run_tool
 
 import frost_lint
 
@@ -60,6 +64,32 @@ class FixtureTest(TempDirTestCase):
         result = run_tool("frost_lint.py", "--repo", str(self.tmp / "absent"))
         self.assertEqual(result.returncode, 2)
 
+    def test_git_failure_is_an_environment_error(self) -> None:
+        error = subprocess.CalledProcessError(128, ["git", "ls-files"], stderr=b"fatal: bad index file")
+        stderr = io.StringIO()
+        with mock.patch.object(frost_lint, "list_repo_files", side_effect=error), contextlib.redirect_stderr(stderr):
+            status = frost_lint.main(["--repo", str(self.tmp)])
+        self.assertEqual(status, 2)
+        self.assertIn("fatal: bad index file", stderr.getvalue())
+
+    def test_unreadable_tree_is_an_environment_error(self) -> None:
+        # An OSError while listing the tree (an unreadable .gitignore, say) also exits 2.
+        error = PermissionError(13, "Permission denied", str(self.tmp / "locked"))
+        stderr = io.StringIO()
+        with mock.patch.object(frost_lint, "list_repo_files", side_effect=error), contextlib.redirect_stderr(stderr):
+            status = frost_lint.main(["--repo", str(self.tmp)])
+        self.assertEqual(status, 2)
+        self.assertIn("Permission denied", stderr.getvalue())
+
+    def test_old_python_is_an_environment_error(self) -> None:
+        # Pretends to be Python 3.10 before the version check runs.
+        code = ("import runpy, sys; sys.version_info = (3, 10, 0, 'final', 0); "
+                f"runpy.run_path({str(TOOLS / 'frost_lint.py')!r}, run_name='__main__')")
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, text=True,
+                                encoding="utf-8", env=clean_env(), check=False)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("needs Python 3.11 or newer", result.stderr)
+
 
 class Cpp26ExemptionTest(TempDirTestCase):
     BODY = ("// SPDX-License-Identifier: Apache-2.0\n"
@@ -89,6 +119,17 @@ class Cpp26ExemptionTest(TempDirTestCase):
 
     def test_compat_is_exempt(self) -> None:
         self.assertEqual(self._cpp26("src/compat/include/frost/compat/probe.hpp"), [])
+
+    def test_banned_constructs_clang_accepts_are_caught(self) -> None:
+        # tests/toolchain_probe/banned shows the constructs clang 23 compiles without
+        # complaint; outside the exempt directory, the cpp26 rule must reject each.
+        expected = {"expansion_statement.cpp": ["expansion statements (template for) are banned (PLAN.md 2.1)"],
+                    "named_module.cpp": ["named modules (export module) are banned (PLAN.md 2.1)"]}
+        for name, messages in expected.items():
+            rel = f"src/core/{name}"
+            _write(self.tmp / rel, (REPO / "tests" / "toolchain_probe" / "banned" / name).read_text(encoding="utf-8"))
+            found = [v.message for v in frost_lint.lint(self.tmp, [rel])]
+            self.assertEqual(found, messages, name)
 
     def test_conservative_contract_detection(self) -> None:
         rel = "src/core/calls.cpp"
@@ -187,9 +228,7 @@ class FileListingTest(TempDirTestCase):
     def test_git_mode_lints_untracked_files_but_not_ignored_ones(self) -> None:
         repo = self.copy_fixture("lint/clean")
         git("init", "-q", cwd=repo)
-        _write(repo / ".gitignore", "# Ignore rules for the lint test.\nignored/\n")
-        _write(repo / "REUSE.toml", (repo / "REUSE.toml").read_text(encoding="utf-8").replace(
-            '"data/**"', '"data/**", ".gitignore"'))
+        _write(repo / ".gitignore", "# SPDX-License-Identifier: Apache-2.0\n# Ignore rules for the lint test.\nignored/\n")
         _write(repo / "ignored" / "bad.cpp", "int ignored;\n")
         _write(repo / "untracked" / "bad.cpp", "int untracked;\n")
         paths = {v.path for v in frost_lint.lint(repo)}
@@ -231,6 +270,8 @@ class GlobTest(unittest.TestCase):
         self.assertIs(frost_lint.source_syntax("src/app/resources/windows/frost.rc.in"), frost_lint.RC)
         self.assertIs(frost_lint.source_syntax("a/CMakeLists.txt"), frost_lint.CMAKE)
         self.assertIs(frost_lint.source_syntax(".clang-format"), frost_lint.YAML)
+        self.assertIs(frost_lint.source_syntax(".gitignore"), frost_lint.GIT_PATTERNS)
+        self.assertIs(frost_lint.source_syntax("src/.gitattributes"), frost_lint.GIT_PATTERNS)
         self.assertIsNone(frost_lint.source_syntax("README.md"))
         self.assertIsNone(frost_lint.source_syntax("LICENSE"))
         self.assertIsNone(frost_lint.source_syntax("notes.txt"))

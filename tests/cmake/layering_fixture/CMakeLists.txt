@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Fixture for tests/cmake/check_layering.cmake: a project whose targets break the
-# layering rules in every way FrostLayers.cmake must catch, plus a valid part
-# (targets named ok_*) that must produce no diagnostic. Configured with
-# FROST_LAYERS_REPORT_ALL so every violation is reported in one run.
+# layering rules in each way FrostLayers.cmake reports through _frost_layer_error
+# (cases 1-9 below), plus a valid part (targets named ok_*) that must produce no
+# diagnostic. Configured with FROST_LAYERS_REPORT_ALL so every violation is
+# reported in one run. The two checks that always stop configure (an unknown
+# layer, a DEPS entry that is not a target) are not planted, since they would
+# end the run before the others are reported.
 cmake_minimum_required(VERSION 4.0)
 project(frost_layering_fixture LANGUAGES CXX)
 set(FROST_LAYERS_REPORT_ALL ON)
@@ -12,12 +15,15 @@ include(FrostLayers)
 
 # A stand-in for Qt: only its name matters to the checks.
 add_library(Qt6::Core INTERFACE IMPORTED)
+# A third-party package found in the root directory, so the graph check can see it.
+add_library(Pkg::visible INTERFACE IMPORTED)
 
-# Valid: io may use core and compat; ui may use Qt.
+# Valid: io may use core and compat; ui may use Qt; any layer may link a visible package.
 frost_add_library(ok_compat LAYER compat INTERFACE)
 frost_add_library(ok_core LAYER core INTERFACE DEPS frost::ok_compat)
 frost_add_library(ok_io LAYER io INTERFACE DEPS frost::ok_core)
 frost_add_library(ok_ui LAYER ui INTERFACE DEPS frost::ok_io THIRD_PARTY Qt6::Core)
+frost_add_library(ok_pkg LAYER io INTERFACE DEPS frost::ok_core THIRD_PARTY Pkg::visible)
 
 # 1. A declared upward dependency.
 frost_add_library(bad_upward LAYER core INTERFACE DEPS frost::ok_io)
@@ -34,3 +40,9 @@ frost_add_library(bad_raw LAYER core INTERFACE)
 target_link_libraries(frost_bad_raw INTERFACE frost::ok_io)
 # 6 and 7: directory-scoped imported targets (see sub/CMakeLists.txt).
 add_subdirectory(sub)
+# 8. A non-FrostIDE target listed under DEPS.
+add_library(plain_helper INTERFACE)
+frost_add_library(bad_deps LAYER core INTERFACE DEPS plain_helper)
+# 9. Qt reached through an alias whose own name does not look like Qt.
+add_library(fixture::qt_alias ALIAS Qt6::Core)
+frost_add_library(bad_alias_qt LAYER io INTERFACE THIRD_PARTY fixture::qt_alias)

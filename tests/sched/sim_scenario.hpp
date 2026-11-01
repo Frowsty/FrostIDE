@@ -11,8 +11,9 @@
 //   - a sleep that expired resumes exactly at its deadline in virtual time, and
 //     a cut-short one no later;
 //   - schedule(lane) resumes on that lane;
-//   - results are the same for every interleaving (checksums), and exceptions
-//     in Result tasks arrive as ErrorCode::Internal;
+//   - each root's checksum is at least its interleaving-independent part
+//     (compute chains and children that can be neither cancelled nor throw),
+//     and exceptions in Result tasks arrive as ErrorCode::Internal;
 //   - latest-wins: commits arrive in increasing generation order and the last
 //     request is the one that sticks;
 //   - the dispatch trace obeys the lane policy, checked by an independent
