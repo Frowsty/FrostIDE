@@ -47,6 +47,20 @@ commits' messages.
   shows the failure ("Branches" below).
 - The `-Full` log, the measurement script, its results and the re-run are in `E:\FrostBuilds\perf\m0\exit-full\`
   (`README.txt` maps them).
+- **sched's exit-scale TSan stress, re-run on 3563873: clean** (06:35–06:38, after `night.py build-gate`). The two
+  sched exit criteria (TSan clean over 10k SimExecutor seeds; the real pool, 1M tasks × 100 iterations with
+  cancellation) had been shown at the exit scale only by a run that ended on 2026-10-31 at 19:38. That was before
+  a51c23b (`join()` on a ready handle, the shutdown flush, results taken once) and round 1 (23127ab) changed sched,
+  and `-Full` runs the stress at its default 20 iterations. The re-run is
+  `FROST_STRESS_FULL=1 TSAN_OPTIONS=halt_on_error=1 sched_stress_tests` in the WSL TSan tree (RelWithDebInfo) of
+  verify.sh's mirror, synced as verify.sh does (0 paths differ). Ninja had nothing to rebuild in the sched targets,
+  so the binary is `-Full`'s from 04:58. Exit 0, `[ PASSED ] 3 tests`, **no TSan report**:
+  - SimExecutor: 10,000 seeds, 1,362,189 dispatches (as on 2026-10-31), 8 threads, 0.6 s.
+  - ThreadPool: 100 × 1,000,000 tasks on 23 workers (low-lane cap 20), 8,461,798 skipped, 372,943 cut short,
+    134.7 s; every invariant held in every iteration.
+  - Deque: 20M items, 6 thieves, 37.9 s. Wall 178.5 s, peak RSS 427 MB.
+  - Logs: `E:\FrostBuilds\perf\m0\sched-exit-scale-2026-11-01\` (`README.txt` maps them). ADR 0002's exit-scale
+    table still shows the 2026-10-31 run.
 
 #### Merged into `m0/foundation` tonight
 Every M0 branch is merged, each with a verification footer on its merge commit (`m0/startup` came in as the single
