@@ -828,7 +828,7 @@ Code is documented with ordinary comments in every language in the repository. C
 - **D27 ProjectHost runtime (M5):** net472 in-box; net10 framework-dependent (needs the .NET 10 runtime) or self-contained (larger install).
 - **D28 Legal counsel and name clearance:** the trademark search for "FrostIDE" and "Glacier" comes before the repository goes public or any build is downloadable (D4); with the private repository and personal use (D22) it is not needed yet. Counsel's review of the JetBrains look-alike, LGPL and DbgEng questions comes before any public release.
 
-**Next step (M0 in progress).** `tools/bootstrap.ps1` and `tools/bootstrap-wsl.sh` are done, every M0 branch is merged on `m0/foundation` under D23, verified only locally (D24), and S1–S7 and S9 are reported as ADRs with numbers (ADRs 0001 and 0005–0008, §7 M0); the user's answers to the open questions in `docs/progress.md` come next, then the push, the M0 demo pack and the request for M1 sign-off.
+**Next step (M0 in progress).** `tools/bootstrap.ps1` and `tools/bootstrap-wsl.sh` are done, every M0 branch is merged on `m0/foundation` under D23, verified only locally (D24), and S1–S7 and S9 are reported as ADRs with numbers (ADRs 0001 and 0005–0008, §7 M0), with B28 met (ADR 0010). The work is pushed to the private repository, and the M0 demo pack is in `E:\FrostBuilds\demo\m0\`. `verify -Full` is green except one Windows ASan test (question E4 in `docs/progress.md`). The user's answers to the open questions there come next, then the request for M1 sign-off.
 
 ---
 
