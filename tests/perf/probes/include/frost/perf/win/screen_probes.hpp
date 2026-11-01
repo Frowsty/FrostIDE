@@ -143,9 +143,9 @@ public:
     [[nodiscard]] std::optional<std::string> failure() const;
 
     // Diagnostics: the DXGI_FORMAT of the last desktop image a marker strip was read
-    // from (0 before the first marker read and while the desktop format is unsupported,
-    // since unsupported formats are not read) and the raw bytes of the centre row of
-    // the last marker strip read, in that format.
+    // from, and the raw bytes of the centre row of the last marker strip read, in that
+    // format. Unsupported formats are not read, so the format is 0 until a strip is first
+    // read and keeps the last supported format read after the desktop turns unsupported.
     [[nodiscard]] int desktopFormat() const noexcept;
     [[nodiscard]] std::vector<std::uint8_t> lastMarkerRow() const;
 

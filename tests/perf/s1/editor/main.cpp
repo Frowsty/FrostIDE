@@ -824,7 +824,7 @@ int run(QApplication& app, const Options& options) {
         json.field("truncatedFrames", static_cast<std::uint64_t>(views.rhi->truncatedFrames()));
         json.field("rhiError", views.rhi->error().toStdString());
     }
-    // Verdicts: true, false, or null when the run did not measure enough samples.
+    // Verdicts: true, false, or null when not measured: too few samples, or (for b6) an --inject-cpu-ms run.
     json.key("b6").beginObject();
     writeVerdictField(json, "cpuP99Pass", gates.b6Cpu);
     writeVerdictField(json, "missedPass", gates.b6Missed);

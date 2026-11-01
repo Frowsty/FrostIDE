@@ -11,14 +11,15 @@
 // is passed verbatim, already quoted) with its first window placed by
 // STARTF_USEPOSITION in the middle of the primary work area and shown without
 // activation, over a solid topmost backdrop window of our own (so a video or
-// animated wallpaper behind it cannot fake a change). A window
-// shown without activation by a background process opens below the foreground
-// window, where it is not on screen; so a WinEvent hook (EVENT_OBJECT_CREATE
-// through EVENT_OBJECT_SHOW, out of context) makes each new top-level window of
-// the child topmost when it is created, or at the latest when it is shown (the
-// report's raisedBeforeShow says which). The Desktop
-// Duplication probe reads five sample pixels inside the expected client area from
-// every desktop present:
+// animated wallpaper behind it cannot fake a change). A window shown without
+// activation by a background process opens below the foreground window, where it
+// is not on screen; so a WinEvent hook (EVENT_OBJECT_CREATE through
+// EVENT_OBJECT_SHOW, out of context) makes each new top-level window of the child
+// topmost soon after it is created, normally before Qt shows it, and otherwise at
+// the latest on its show event, just after it appeared (the report's
+// raisedBeforeShow says whether the first raise came while the window was still
+// hidden). The Desktop Duplication probe reads five sample pixels inside the
+// expected client area from every desktop present:
 //   first frame   the first present after process start in which at least three
 //                 samples moved more than 24 levels away from the backdrop colour.
 //                 During DWM's fade-in that is not the window's first composed

@@ -73,10 +73,10 @@ constexpr int kFloorFrames = 720; // Phase C, after phase B.
 constexpr int kStallEvery = 36;   // Frames 18, 54, ...: 20 stalls, alternating 8 and 25 ms.
 constexpr std::array<double, 2> kStallMs{8.0, 25.0};
 constexpr double kMinCadenceConsistency = 0.95;
-// A stalled frame is unmeasured only when the desktop drops it. Trivial windows
-// missed 5.0-9.3 % of refreshes in ADR 0007's runs 3 and 4 (up to 27 % in run 1,
-// under load), and at worst 7 of 10 stalls of one length were measured, so 60 %
-// leaves margin.
+// A stalled frame is unmeasured only when the desktop drops it. This GDI window
+// missed 5.0-9.3 % of refreshes in phase C of ADR 0007's runs 3 and 4 (up to 27 %
+// in run 1, under load), and at worst 7 of 10 stalls of one length were measured,
+// so 60 % leaves margin.
 constexpr double kMinStallsMeasured = 0.6;
 
 struct Options {

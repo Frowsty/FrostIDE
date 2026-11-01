@@ -47,8 +47,9 @@
 # at once.
 #
 # The -Config configuration (Release by default) of s1_probe_validate, s1_editor,
-# s1_first_frame and frost must be built first. Reports are JSON files in -OutDir; summary.json and
-# the printed table give each configuration's min / median / max over the rounds.
+# s1_first_frame and frost must be built first. Reports are JSON files in -OutDir;
+# summary.json and the printed table give each configuration's min / median / max
+# over the rounds.
 # -SummaryOnly rebuilds the summary from the reports already in -OutDir.
 
 param(
@@ -134,9 +135,9 @@ $summaryConfigs = @($editorConfigs) + @($fullConfigs)
 
 # The first-frame blocks: 10 warm launches each (plus one priming launch) and one
 # cold-proxy block of 5. Add-FirstFrame appends one s1_first_frame step to $plan
-# (name, group and backend as in Add-Step): `target` launched `runs` times in `mode` (warm or cold), `childArguments` joined
-# into --args, and an estimate from the per-launch figures below (warm counts the
-# priming launch).
+# (name, group and backend as in Add-Step): `target` launched `runs` times in
+# `mode` (warm or cold), `childArguments` joined into --args, and an estimate
+# from the per-launch figures below (warm counts the priming launch).
 $inProcess = Join-Path $out 'ff-inprocess.jsonl'
 $childOut = @()
 if ($out -notmatch '\s') {
@@ -492,10 +493,11 @@ if (Test-Path $inProcess) {
 
 # Runs one plan step: `$step.Exe` with its arguments and `--out <OutDir>\<Name>.json`,
 # its output shown on the console. Returns the exit code: 0 valid, 1 a validation
-# failed, or 3 an invalid run that did not stop the suite. Side effects: records the step's duration in $script:timings and
-# counts invalid runs. Stops the suite (after writing the summary) on a setup
-# error (2) or any unknown code, and on an invalid run (3) when the report says
-# the session itself ended invalid or after $maxInvalidRuns invalid runs.
+# failed, or 3 an invalid run that did not stop the suite. Side effects: records
+# the step's duration in $script:timings and counts invalid runs. Stops the suite
+# (after writing the summary) on a setup error (2) or any unknown code, and on an
+# invalid run (3) when the report says the session itself ended invalid or after
+# $maxInvalidRuns invalid runs.
 function Invoke-Step($step) {
     $report = Join-Path $out "$($step.Name).json"
     Write-Host ("== {0}: {1}" -f $step.Name, ($step.Arguments -join ' '))

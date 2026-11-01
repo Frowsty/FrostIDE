@@ -42,9 +42,9 @@ struct Gates {
     // desktop measured dropped about half) and undecoded captures at most a tenth
     // of the decoded ones (or 10). A run without it is invalid.
     bool decodedEnough = false;
-    std::optional<bool> b6Cpu;      // UI CPU per frame p99 <= 5 ms; needs kMinCpuIntervals.
-    std::optional<bool> b6Missed;   // Missed refreshes <= 1 %; needs kMinDecodedUpdates.
-    std::optional<bool> b6Interval; // Max content interval <= 16.7 ms; needs kMinDecodedUpdates.
+    std::optional<bool> b6Cpu;      // UI CPU per frame p99 <= 5 ms; needs kMinCpuIntervals, not injected.
+    std::optional<bool> b6Missed;   // Missed refreshes <= 1 %; needs kMinDecodedUpdates, not injected.
+    std::optional<bool> b6Interval; // Max content interval <= 16.7 ms; needs kMinDecodedUpdates, not injected.
     std::optional<bool> b5;         // Input to paint end p50 <= 3 ms and p99 <= 8 ms; every key painted.
 };
 
