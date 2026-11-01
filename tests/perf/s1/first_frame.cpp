@@ -13,9 +13,10 @@
 // activation, over a solid topmost backdrop window of our own (so a video or
 // animated wallpaper behind it cannot fake a change). A window
 // shown without activation by a background process opens below the foreground
-// window, where it is not on screen; so a WinEvent hook (EVENT_OBJECT_CREATE, out
-// of context) makes each new top-level window of the child topmost as soon as it
-// exists, normally before Qt shows it (the report says when it was too late). The Desktop
+// window, where it is not on screen; so a WinEvent hook (EVENT_OBJECT_CREATE
+// through EVENT_OBJECT_SHOW, out of context) makes each new top-level window of
+// the child topmost when it is created, or at the latest when it is shown (the
+// report's raisedBeforeShow says which). The Desktop
 // Duplication probe reads five sample pixels inside the expected client area from
 // every desktop present:
 //   first frame   the first present after process start in which at least three
@@ -27,7 +28,7 @@
 //   settled       the first present in which at least four samples are within 6
 //                 levels of the colour the window shows once idle;
 //   window seen   when EnumWindows first returned a visible, uncloaked window of
-//                 the process (polled between Sleep(1) calls, so every 1 to 16 ms
+//                 the process (polled after each pumpFor(2.0), so every 2 to 16 ms
 //                 depending on the system timer resolution; context only).
 // The window is closed with WM_CLOSE 700 ms after it appeared. Times are from the
 // QPC reading just before CreateProcessW to the present's display vblank.
@@ -152,7 +153,9 @@ Options parseOptions() {
         } else if (arg == L"--mode" && i + 1 < count) {
             options.cold = std::wstring(argv[++i]) == L"cold";
         } else if (arg == L"--runs" && i + 1 < count) {
-            options.runs = std::clamp(_wtoi(argv[++i]), 1, 12); // Keeps one invocation under 20 s on screen.
+            // 12 runs keep the backdrop on screen for about 22 s (13 warm launches);
+            // run-s1.ps1 passes 10 warm and 5 cold to stay under 20 s.
+            options.runs = std::clamp(_wtoi(argv[++i]), 1, 12);
         } else if (arg == L"--out" && i + 1 < count) {
             options.out = argv[++i];
         }

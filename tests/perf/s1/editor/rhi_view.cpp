@@ -45,7 +45,9 @@ float4 main(PSIn i) : SV_TARGET {
 }
 )";
 
-constexpr std::size_t kInstanceCapacity = 65536; // 640 columns x 74 rows fit with room to spare.
+// Worst case at Consolas 15 px (8 px advance, 18 px lines): 642 columns x 81 rows
+// (5120x1440) = about 52,000 quads; real frames draw about 3,000.
+constexpr std::size_t kInstanceCapacity = 65536;
 
 QShader hlslShader(QShader::Stage stage, const char* source, const QShader::NativeResourceBindingMap& bindings) {
     const QShaderKey key(QShader::HlslShader, QShaderVersion(50));

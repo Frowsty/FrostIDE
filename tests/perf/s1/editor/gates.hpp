@@ -3,13 +3,15 @@
 // Verdicts of one s1_editor run (ADR 0007): which budget gates (B5, B6) were
 // measured at all, whether they pass, and whether the run's screen data is good
 // enough to count. A gate without enough samples is "not measured" (nullopt),
-// never a pass. Also the UI-CPU probe check (--inject-cpu-ms). Pure functions,
-// no Qt and no Windows, so the rules have headless tests.
+// never a pass. Also the UI-CPU probe check (--inject-cpu-ms) and the run
+// watchdog's allowance. Pure functions, no Qt and no Windows, so the rules have
+// headless tests.
 #pragma once
 
 #include "frost/perf/stats.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 
@@ -50,7 +52,10 @@ inline constexpr std::size_t kMinCpuIntervals = 100; // So p99 is not the maximu
 inline constexpr std::size_t kMinDecodedUpdates = 2; // An interval needs two updates.
 
 // Budget: B5, B6 (tests/perf/budgets.json). `cpuInjected`: the run spun on
-// purpose (--inject-cpu-ms), so its UI CPU says nothing about B6. O(1).
+// purpose (--inject-cpu-ms), so its UI CPU says nothing about B6 and, because the
+// spin also delays QRhiWidget's deferred render, neither do its missed refreshes
+// and intervals: an injected run reports no B6 verdict (decodedEnough still
+// decides its validity). O(1).
 [[nodiscard]] Gates evaluateGates(const RunCounts& counts, const RunMetrics& metrics, bool cpuInjected);
 
 // The UI-CPU probe check: tick-to-tick intervals that contained an injected spin
@@ -69,5 +74,15 @@ inline constexpr std::size_t kMinInjectionSamples = 50;
 // Precondition: injectedMs > 0, toleranceFraction > 0. O(n log n).
 [[nodiscard]] CpuInjectionCheck checkCpuInjection(std::span<const double> spunMs, std::span<const double> plainMs,
                                                   double injectedMs, double toleranceFraction);
+
+// Slack of the run watchdog beyond the planned fling and typing time: the first
+// vblank tick, timer jitter and slow paints.
+inline constexpr std::int64_t kWatchdogSlackMs = 4000;
+
+// The watchdog allowance of s1_editor's fling and typing loop, in milliseconds:
+// `seconds` of fling, then for keys > 0 the `keys` timeouts `keyIntervalMs` apart
+// that each send a key plus the one that ends typing, and kWatchdogSlackMs. A run
+// the watchdog ends early stops typing at once. O(1).
+[[nodiscard]] std::int64_t runWatchdogMs(double seconds, int keys, int keyIntervalMs);
 
 } // namespace frost::s1

@@ -16,7 +16,8 @@
 // work for raster Qt (GDI BitBlt into the DWM redirection surface, which
 // present-based tools such as PresentMon cannot see) and for QRhi alike.
 // Coordinates are desktop coordinates in physical pixels; callers must be
-// per-monitor DPI aware (the FrostIDE manifest makes every executable so).
+// per-monitor DPI aware: embed the FrostIDE manifest (frost.exe and frost_add_test
+// targets do; harness executables must add it, as tests/perf/s1 does).
 #pragma once
 
 #include "frost/core/error.hpp"
@@ -88,7 +89,7 @@ struct CaptureFrame {
 struct DuplicationOptions {
     ScreenRect watch;                 // Region whose changes are recorded (may be empty until setWatch).
     std::optional<ScreenRect> marker; // Top-left pixel of the frame-marker strip (only left/top are used).
-    int markerCellPx = 4;             // Marker cell size in physical pixels.
+    int markerCellPx = 4;             // Marker cell size in physical pixels; at least 1.
     bool keepDirtyRects = false;      // Store every frame's dirty rectangles (B1 needs them after the fact).
     bool keepAllFrames = false;       // Record frames that do not touch the watched region too.
     // Pixels read from every recorded frame (B1 detects a window's first frame by
@@ -109,9 +110,10 @@ struct DuplicationOptions {
 class DuplicationProbe {
 public:
     // Opens a D3D11 device on the adapter that drives the output and duplicates the
-    // output. Errors: NotFound (no attached output contains the point), Unsupported
-    // (duplication refused: secure desktop, rotated output, too many duplicators),
-    // IoError (other DXGI failures).
+    // output. Errors: NotFound (no attached output contains the point), InvalidArgument
+    // (the marker strip is not inside that output), Unsupported (duplication refused:
+    // secure desktop, rotated output, too many duplicators), IoError (other DXGI
+    // failures). Precondition: options.markerCellPx >= 1.
     [[nodiscard]] static Result<std::unique_ptr<DuplicationProbe>> open(const DuplicationOptions& options);
 
     ~DuplicationProbe();
@@ -140,8 +142,10 @@ public:
     // The capture thread's last fatal error, if it stopped on one.
     [[nodiscard]] std::optional<std::string> failure() const;
 
-    // Diagnostics: the desktop image's DXGI_FORMAT (0 before the first marker read)
-    // and the raw bytes of the centre row of the last marker strip read, in that format.
+    // Diagnostics: the DXGI_FORMAT of the last desktop image a marker strip was read
+    // from (0 before the first marker read and while the desktop format is unsupported,
+    // since unsupported formats are not read) and the raw bytes of the centre row of
+    // the last marker strip read, in that format.
     [[nodiscard]] int desktopFormat() const noexcept;
     [[nodiscard]] std::vector<std::uint8_t> lastMarkerRow() const;
 
@@ -166,7 +170,8 @@ private:
 // Movable, not copyable; use from one thread at a time.
 class VBlankClock {
 public:
-    // Errors: NotFound when no attached output contains the point.
+    // Errors: NotFound when no attached output contains the point; IoError when DXGI
+    // cannot be initialised.
     [[nodiscard]] static Result<VBlankClock> forPoint(int x, int y);
 
     VBlankClock(VBlankClock&& other) noexcept;
@@ -176,6 +181,7 @@ public:
     VBlankClock& operator=(const VBlankClock&) = delete ("owns a DXGI output reference");
 
     // Blocks until the next vertical blank; returns qpcNow() on wake-up.
+    // Errors: IoError when WaitForVBlank fails. Precondition: not moved from.
     [[nodiscard]] Result<std::int64_t> wait();
 
 private:

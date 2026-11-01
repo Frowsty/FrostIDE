@@ -2,8 +2,9 @@
 #
 # Runs the whole spike S1 measurement suite (ADR 0007) on REF-W1 in one quiet
 # session, then writes a summary. The suite is, in this order:
-#   1. s1_probe_validate (GDI window: injected delays, stalls, cadence, and the
-#      environment floor of a trivial window in a stall-free phase);
+#   1. s1_probe_validate (GDI window: injected delays, stalls, cadence, and a
+#      trivial window's missed refreshes in a stall-free phase, recorded as
+#      context, not as a floor; ADR 0007, Decision 7);
 #   2. probe validation through each editor backend: s1_editor --validate-delays
 #      (delays spun inside the paint, so QRhi's flip-model swap chain is covered)
 #      and --inject-cpu-ms 2 (the UI-CPU probe must see the spin within 10 %);
@@ -33,8 +34,8 @@
 # printed before anything starts; -DryRun prints the plan and the estimate only.
 #
 #   powershell -ExecutionPolicy Bypass -File tests\perf\s1\run-s1.ps1 -BuildDir build\s1 -OutDir <dir>
-#              [-Suite main|floors] [-Repeats 5] [-ContinueUnvalidated] [-SkipFirstFrame] [-DryRun]
-#              [-SummaryOnly]
+#              [-Config Release] [-Suite main|floors] [-Repeats 5] [-ContinueUnvalidated]
+#              [-SkipFirstFrame] [-DryRun] [-SummaryOnly]
 #
 # Validation policy: if the first s1_probe_validate does not pass (exit code 1, or
 # an invalid run the suite survives) the suite stops, because the probe itself is
@@ -45,8 +46,8 @@
 # monitor off) or after three invalid runs; a setup error (exit code 2) stops it
 # at once.
 #
-# The Release configuration of s1_probe_validate, s1_editor, s1_first_frame and
-# frost must be built first. Reports are JSON files in -OutDir; summary.json and
+# The -Config configuration (Release by default) of s1_probe_validate, s1_editor,
+# s1_first_frame and frost must be built first. Reports are JSON files in -OutDir; summary.json and
 # the printed table give each configuration's min / median / max over the rounds.
 # -SummaryOnly rebuilds the summary from the reports already in -OutDir.
 
@@ -131,7 +132,11 @@ if ($Suite -eq 'floors') {
 }
 $summaryConfigs = @($editorConfigs) + @($fullConfigs)
 
-# The first-frame blocks: 10 launches each (plus one priming launch when warm).
+# The first-frame blocks: 10 warm launches each (plus one priming launch) and one
+# cold-proxy block of 5. Add-FirstFrame appends one s1_first_frame step to $plan
+# (name, group and backend as in Add-Step): `target` launched `runs` times in `mode` (warm or cold), `childArguments` joined
+# into --args, and an estimate from the per-launch figures below (warm counts the
+# priming launch).
 $inProcess = Join-Path $out 'ff-inprocess.jsonl'
 $childOut = @()
 if ($out -notmatch '\s') {
@@ -486,8 +491,8 @@ if (Test-Path $inProcess) {
 }
 
 # Runs one plan step: `$step.Exe` with its arguments and `--out <OutDir>\<Name>.json`,
-# its output shown on the console. Returns the exit code (0 valid, 1 a validation
-# failed). Side effects: records the step's duration in $script:timings and
+# its output shown on the console. Returns the exit code: 0 valid, 1 a validation
+# failed, or 3 an invalid run that did not stop the suite. Side effects: records the step's duration in $script:timings and
 # counts invalid runs. Stops the suite (after writing the summary) on a setup
 # error (2) or any unknown code, and on an invalid run (3) when the report says
 # the session itself ended invalid or after $maxInvalidRuns invalid runs.

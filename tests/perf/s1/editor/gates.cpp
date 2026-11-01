@@ -18,7 +18,7 @@ Gates evaluateGates(const RunCounts& counts, const RunMetrics& metrics, bool cpu
     if (!cpuInjected && counts.cpuIntervals >= kMinCpuIntervals) {
         gates.b6Cpu = metrics.cpuP99Ms <= 5.0;
     }
-    if (counts.decodedUpdates >= kMinDecodedUpdates) {
+    if (!cpuInjected && counts.decodedUpdates >= kMinDecodedUpdates) {
         gates.b6Missed = metrics.missedFraction <= 0.01;
         gates.b6Interval = metrics.maxIntervalMs <= 16.7;
     }
@@ -39,6 +39,12 @@ CpuInjectionCheck checkCpuInjection(std::span<const double> spunMs, std::span<co
         check.pass = std::abs(check.measuredDeltaMs - injectedMs) <= toleranceFraction * injectedMs;
     }
     return check;
+}
+
+std::int64_t runWatchdogMs(double seconds, int keys, int keyIntervalMs) {
+    // The fling, then `keys` timeouts that send a key and one that ends typing.
+    const std::int64_t typingMs = keys > 0 ? static_cast<std::int64_t>(keys + 1) * keyIntervalMs : 0;
+    return static_cast<std::int64_t>(seconds * 1000.0) + typingMs + kWatchdogSlackMs;
 }
 
 } // namespace frost::s1
