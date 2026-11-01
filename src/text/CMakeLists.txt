@@ -4,8 +4,8 @@
 # piece tree (SumTree<PieceTraits, 8>) over append-only UTF-8 storage, O(1) snapshots readable from
 # any thread, TextBuffer edits with normalised TextChanges, and line/UTF-16 position conversions.
 # Qt-free. Depends on core and on io (validUtf8Prefix; SaveManager will need io later anyway).
-# TODO(M1): anchors and the undo tree (m1/undo-anchors), encodings (m1/encodings) and large-file
-# mode with mapped originals (m1/large-file) join here.
+# TODO(M1): anchors and the undo tree (m1/undo-anchors) and encodings (m1/encodings) join here.
+# TODO(M15): large-file mode with mapped originals joins here (moved from M1 by ADR 0029).
 
 frost_add_library(text LAYER text
     SOURCES

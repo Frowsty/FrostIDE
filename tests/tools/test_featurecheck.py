@@ -123,6 +123,19 @@ class FeatureCheckTest(TempDirTestCase):
         result = run_tool("featurecheck.py", "--repo", str(self.tmp), "generate")
         self.assertEqual(result.returncode, 1)
 
+    def test_milestones_run_from_m0_to_m17(self) -> None:
+        # ADR 0029 added M15-M17 (the deferred halves of M1-M4); M18 is not a milestone.
+        self._edit_plan("| M2 | P1 (2) |", "| M17 | P1 (2) |")
+        self._edit_plan("57 gutter (+M6)", "57 gutter (+M15)")
+        self._generate()
+        rows = self._rows()
+        self.assertEqual((rows["3"]["milestone"], rows["20"]["milestone"]), ("M17", "M17"))
+        self.assertEqual(rows["57"]["completes"], "M15")
+        self.assertEqual(self._check(), [])
+        self._edit_plan("| M17 | P1 (2) |", "| M18 | P1 (2) |")
+        problems = self._check()
+        self.assertTrue(any("P1 feature row 3 has no owning milestone" in p for p in problems), problems)
+
     def test_matrix_rows_without_a_milestone_fail(self) -> None:
         self._generate()
         text = self.matrix.read_text(encoding="utf-8").replace(

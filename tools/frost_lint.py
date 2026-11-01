@@ -15,7 +15,7 @@
 #                 line and says what the file is for;
 #   reuse         every other file is covered by a REUSE.toml annotation or a
 #                 `<file>.license` sidecar (a `reuse lint` equivalent);
-#   todo          to-do markers in comments name an open milestone M0..M14;
+#   todo          to-do markers in comments name an open milestone M0..M17;
 #   budget        every budget reference ("Budget: B5.") exists in tests/perf/budgets.json;
 #   narrow-win32  narrow (...A) Win32 APIs are banned in C/C++ (PLAN.md 2.1);
 #   exe-search    calls that look up an executable in the current directory or PATH are
@@ -56,9 +56,10 @@ import tomllib  # noqa: E402  (after the version check on purpose)
 # Policy constants
 # ---------------------------------------------------------------------------------------
 
-# Milestones are M0..M14 (PLAN.md section 7).
+# Milestones are M0..M17 (PLAN.md section 7). IDs are identities, not positions: ADR 0029
+# added M15-M17 for the deferred halves of M1-M4. Keep in step with featurecheck.py's range.
 FIRST_MILESTONE = 0
-LAST_MILESTONE = 14
+LAST_MILESTONE = 17
 # Milestones whose exit has been signed off. A to-do marker naming one of them is a
 # violation, because the work it describes should have landed (PLAN.md 6.6). None are
 # closed yet; add the number here at each milestone sign-off.
@@ -739,7 +740,7 @@ _TODO_VALID = re.compile(_TODO_WORD + r"\(M(\d{1,2})\)")
 
 
 def check_todos(rel: str, comments: list[Comment]) -> list[Violation]:
-    """todo: markers must read TODO(Mn) with n in 0..14 and name an open milestone."""
+    """todo: markers must read TODO(Mn) with n in 0..17 and name an open milestone."""
     out = []
     for comment in comments:
         for m in _TODO_MARKER.finditer(comment.text):

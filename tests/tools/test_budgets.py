@@ -54,7 +54,8 @@ class BudgetsTest(unittest.TestCase):
             gates = [g["milestone"] for g in budget["gate"]]
             self.assertTrue(gates, budget_id)
             for milestone in gates:
-                self.assertRegex(milestone, r"^M(\d|1[0-4])$", budget_id)
+                # M0..M17 (PLAN.md section 7; ADR 0029 added M15-M17).
+                self.assertRegex(milestone, r"^M(\d|1[0-7])$", budget_id)
                 self.assertIn(milestone, budget["plan_gate"], budget_id)
 
 

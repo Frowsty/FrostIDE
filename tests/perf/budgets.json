@@ -283,7 +283,7 @@
       "plan_metric": "F1 first screen (private bytes +≤64 MB; line index ≤2 s)",
       "plan_target": "p50 150 ms; p99 300 ms",
       "plan_corpus": "F1",
-      "plan_gate": "M1",
+      "plan_gate": "M15",
       "variants": [],
       "percentiles": ["p50", "p99"],
       "targets": [
@@ -293,9 +293,9 @@
         { "quantity": "line index complete", "percentile": null, "max": 2, "unit": "s" }
       ],
       "corpus": ["F1"],
-      "preconditions": "Opening F1, the 2 GB file.",
+      "preconditions": "Opening F1, the 2 GB file. Large-file mode lands in M15 with this gate (ADR 0029, moved from M1 with the feature; target unchanged); until then M1's large-file guard refuses files of 128 MB or more.",
       "method": "Open request to the first screen of text painted (ETW markers); private bytes before and after; line index completion marker.",
-      "gate": [{ "milestone": "M1" }]
+      "gate": [{ "milestone": "M15" }]
     },
     {
       "id": "B16",
@@ -425,7 +425,7 @@
       "plan_metric": "First-ever open of a new root. **Trees** are measured in restricted mode: the File System view plus the native-reader Solution or CMake target tree. For R3, a build directory already configured with the `client-frostide` query is required; without one, only the File System view is promised. **First project streamed** is measured after trust: the trust click is excluded from the timing, and ProjectHost cold start is included. budgets.json records these preconditions.",
       "plan_target": "p50 1.5 s / 3 s (trees: provisional until M2's first trees measurement; first project: final value set by S6)",
       "plan_corpus": "R3 / R2b",
-      "plan_gate": "M2",
+      "plan_gate": "M2 / M16",
       "variants": ["trees", "first project streamed"],
       "percentiles": ["p50"],
       "targets": [
@@ -434,9 +434,9 @@
       ],
       "corpus": ["R3", "R2b"],
       "level": "L1",
-      "preconditions": "Trees: measured in restricted mode; the File System view plus the native-reader Solution or CMake target tree. For R3 a build directory already configured with the client-frostide File API query is required; without one only the File System view is promised. First project streamed: measured after trust; the trust click is excluded from the timing and ProjectHost cold start is included. Also for first project streamed (ADR 0006 decision 6, accepted in ADR 0011, B3): (a) R2b's NuGet packages are restored with the repository's own dep\\nuget\\nuget.exe; (b) the active solution configuration is Debug|x64; (c) the first project streamed is chosen by ADR 0006 decision 5's rule (solution-file order, C++ projects that build in the active configuration; Host.EXE on R2b); (d) trust is granted as soon as the open request is made, so the excluded trust click takes no time and no ProjectHost warm-up runs; if ProjectHost's launch waits for L1 (ADR 0011, B4's fallback), the timed interval holds that wait; (e) the gating sample is cold (defaults.cold), and a warm-cache sample is reported alongside.",
+      "preconditions": "Trees: measured in restricted mode; the File System view plus the native-reader Solution or CMake target tree. For R3 a build directory already configured with the client-frostide File API query is required; without one only the File System view is promised. First project streamed: measured after trust; the trust click is excluded from the timing and ProjectHost cold start is included. Also for first project streamed (ADR 0006 decision 6, accepted in ADR 0011, B3): (a) R2b's NuGet packages are restored with the repository's own dep\\nuget\\nuget.exe; (b) the active solution configuration is Debug|x64; (c) the first project streamed is chosen by ADR 0006 decision 5's rule (solution-file order, C++ projects that build in the active configuration; Host.EXE on R2b); (d) trust is granted as soon as the open request is made, so the excluded trust click takes no time and no ProjectHost warm-up runs; if ProjectHost's launch waits for L1 (ADR 0011, B4's fallback), the timed interval holds that wait; (e) the gating sample is cold (defaults.cold), and a warm-cache sample is reported alongside. Gates (ADR 0029): the trees variant at M2; the first-project-streamed variant at M16, where ProjectHost lands (moved from M2 with ProjectHost; target unchanged). At M2 the first project comes from path (c) (MSBuild.exe -getTargetResult, ADR 0005); its time is measured under the same preconditions, with path (c)'s MSBuild process start in place of ProjectHost's cold start, and reported against the same 3 s, not gated.",
       "method": "Open request to the trees painted, and to the first project streamed from ProjectHost (ETW markers).",
-      "gate": [{ "milestone": "M2" }]
+      "gate": [{ "milestone": "M2", "variant": "trees" }, { "milestone": "M16", "variant": "first project streamed" }]
     },
     {
       "id": "B24",

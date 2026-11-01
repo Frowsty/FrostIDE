@@ -24,7 +24,8 @@
 #
 # TODO(M1): fail a milestone exit when a row it owns has no green acceptance test
 # (needs the test runner's results; PLAN.md 6.1).
-# TODO(M1): diff the matrix against the checklist of IntelliJ editor settings pages (PLAN.md 6.1).
+# TODO(M15): diff the matrix against the checklist of IntelliJ editor settings pages (PLAN.md 6.1),
+# with the editor settings that M15 completes (ADR 0029).
 # TODO(M7): gate milestone exits on the generated inspection counts against
 # inspection_counts.targets (registry vs LLVM's tables, frost and CFG check counts,
 # ReSharper C++ coverage), once the S9 baseline and the generated registry exist.
@@ -40,7 +41,10 @@ from pathlib import Path
 
 PLAN_FILE = "PLAN.md"
 MATRIX_FILE = "tests/features/matrix.json"
-FIRST_MILESTONE, LAST_MILESTONE = 0, 14
+# Milestone IDs M0..M17 (PLAN.md section 7). IDs are identities, not positions: ADR 0029
+# added M15-M17 for the deferred halves of M1-M4, which run between M5 and M6. Keep in
+# step with frost_lint.py's range.
+FIRST_MILESTONE, LAST_MILESTONE = 0, 17
 # Allowed values of the hand-maintained `status` field.
 STATUSES = ("planned", "in-progress", "green", "deferred")
 
