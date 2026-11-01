@@ -194,11 +194,14 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
 ## Consequences
 - Long paths work in frost::io on every Windows machine. A child's *current directory* beyond MAX_PATH is
   still refused by Windows when `LongPathsEnabled = 0`; the launcher reports that as InvalidArgument with an
-  explanation (TODO(M1): fall back to the 8.3 short name). Qt cannot load a plugin whose path is longer
-  than 250 characters on such machines (measured with Qt 6.12.0; `kQtPluginPathLimitUnits` in
-  `src/app/include/frost/app/startup.hpp`), so frost.exe itself cannot start from a directory beyond
-  MAX_PATH there, unless it is started through the directory's 8.3 short name, which Qt then uses as
-  well. Its start-up check reports that instead of letting Qt abort. In
+  explanation (TODO(M1): fall back to the 8.3 short name). On such machines Qt cannot load a plugin
+  whose path is longer than 250 UTF-16 units. The limit is the Windows loader's: LoadLibraryW fails
+  beyond it for any DLL that embeds an isolation-aware manifest (RT_MANIFEST resource 2), as Qt's DLLs
+  and plugins do (measured with Qt 6.12.0; `kQtPluginPathLimitUnits` in
+  `src/app/include/frost/app/startup.hpp`). Whether `LongPathsEnabled = 1` lifts it has not been
+  measured. So frost.exe itself cannot start from a directory beyond MAX_PATH there, unless it is
+  started through the directory's 8.3 short name, which Qt then uses as well. Its start-up check
+  reports that instead of letting Qt abort. In
   `tests/app/frost_process_test.cpp`, `RunsFromPathLongerThanMaxPath` skips there, so the M0 exit
   criterion stays visibly unmet, and `ReportsLongPathLimitCleanly` covers the report.
 - Process-wide hardening that PLAN.md 3.5 lists next to the launcher (`SetDefaultDllDirectories`,
