@@ -74,6 +74,8 @@ using Utf16Offset = StrongIndex<struct Utf16OffsetTag, std::uint64_t>;
 using LineIndex = StrongIndex<struct LineIndexTag, std::uint32_t>;
 // Zero-based column in UTF-8 bytes within a line.
 using ByteColumn = StrongIndex<struct ByteColumnTag, std::uint32_t>;
+// Zero-based column in UTF-16 code units within a line (LSP character offsets).
+using Utf16Column = StrongIndex<struct Utf16ColumnTag, std::uint32_t>;
 
 } // namespace frost
 

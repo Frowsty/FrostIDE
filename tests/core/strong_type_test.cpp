@@ -43,6 +43,19 @@ TEST(StrongIndex, DistinctTypesDoNotMix) {
     static_assert(sizeof(frost::LineIndex) == sizeof(std::uint32_t));
 }
 
+TEST(StrongIndex, Utf16ColumnIsItsOwnType) {
+    // A UTF-16 column (LSP character offset) never mixes with a byte column or a UTF-16 offset.
+    static_assert(!std::convertible_to<frost::Utf16Column, frost::ByteColumn>);
+    static_assert(!std::equality_comparable_with<frost::Utf16Column, frost::ByteColumn>);
+    static_assert(!std::equality_comparable_with<frost::Utf16Column, frost::Utf16Offset>);
+    static_assert(sizeof(frost::Utf16Column) == sizeof(std::uint32_t));
+    frost::Utf16Column column{3};
+    column += 2;
+    EXPECT_EQ(column.value(), 5u);
+    EXPECT_EQ(column - frost::Utf16Column{1}, 4u);
+    EXPECT_EQ(std::format("{}", column), "5");
+}
+
 TEST(StrongIndex, IsFormattableInsideContainers) {
     static_assert(std::formattable<frost::ByteOffset, char>);
 #if defined(__cpp_lib_format_ranges)

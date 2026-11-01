@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tests for the strict UTF-8 <-> UTF-16 codec: round trips over every scalar
-// value, boundary code points, and rejection of every class of ill-formed
-// input (Unicode Standard table 3-7; unpaired surrogates).
+// value, boundary code points, rejection of every class of ill-formed input
+// (Unicode Standard table 3-7; unpaired surrogates), and validUtf8Prefix against
+// an encoder-built oracle.
 
 #include "frost/io/utf.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <bitset>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -17,6 +24,7 @@ using frost::ErrorCode;
 using frost::io::isValidUtf8;
 using frost::io::utf16ToUtf8;
 using frost::io::utf8ToUtf16;
+using frost::io::validUtf8Prefix;
 
 // Builds a std::string from raw bytes (string literals cannot hold every byte portably).
 std::string bytes(std::initializer_list<unsigned char> list) {
@@ -144,6 +152,151 @@ TEST(Utf, RejectsUnpairedSurrogates) {
     const auto located = utf16ToUtf8(std::u16string{u'a', u'b', char16_t{0xDC00}});
     ASSERT_FALSE(located.has_value());
     EXPECT_NE(located.error().message().find("offset 2"), std::string::npos) << located.error().message();
+}
+
+/*
+ * The set of every well-formed sequence, built by running the test-local encoder above over every
+ * scalar value; it never consults io's decoder. Sequences of 1-3 bytes are looked up in bitsets
+ * indexed by their bytes, 4-byte sequences in a sorted vector (U+10000..U+10FFFF). Because UTF-8
+ * is prefix-free, the longest well-formed prefix of a string is found greedily: at each position
+ * at most one of the lengths 1-4 names a member.
+ */
+class EncodedSet {
+public:
+    EncodedSet()
+        : m_two(std::make_unique<std::bitset<1u << 16>>()), m_three(std::make_unique<std::bitset<1u << 24>>()) {
+        for (char32_t cp = 0; cp <= 0x10FFFF; ++cp) {
+            if (cp >= 0xD800 && cp <= 0xDFFF) {
+                continue;
+            }
+            const std::string s = encode(cp);
+            const std::uint32_t key = pack(s);
+            switch (s.size()) {
+            case 1: m_one.set(key); break;
+            case 2: m_two->set(key); break;
+            case 3: m_three->set(key); break;
+            default: m_four.push_back(key); break;
+            }
+        }
+        std::sort(m_four.begin(), m_four.end());
+    }
+
+    // True when `s` (1-4 bytes) is the encoding of one scalar value.
+    [[nodiscard]] bool contains(std::string_view s) const {
+        const std::uint32_t key = pack(s);
+        switch (s.size()) {
+        case 1: return m_one.test(key);
+        case 2: return m_two->test(key);
+        case 3: return m_three->test(key);
+        case 4: return std::binary_search(m_four.begin(), m_four.end(), key);
+        default: return false;
+        }
+    }
+
+    // The length of the longest prefix of `s` that is a concatenation of members.
+    [[nodiscard]] std::size_t validPrefix(std::string_view s) const {
+        std::size_t i = 0;
+        while (i < s.size()) {
+            std::size_t step = 0;
+            for (std::size_t length = 1; length <= 4 && i + length <= s.size(); ++length) {
+                if (contains(s.substr(i, length))) {
+                    step = length;
+                    break;
+                }
+            }
+            if (step == 0) {
+                return i;
+            }
+            i += step;
+        }
+        return s.size();
+    }
+
+private:
+    static std::uint32_t pack(std::string_view s) {
+        std::uint32_t key = 0;
+        for (const char c : s) {
+            key = (key << 8) | static_cast<unsigned char>(c);
+        }
+        return key;
+    }
+
+    std::bitset<256> m_one;
+    std::unique_ptr<std::bitset<1u << 16>> m_two;
+    std::unique_ptr<std::bitset<1u << 24>> m_three;
+    std::vector<std::uint32_t> m_four;
+};
+
+TEST(Utf, ValidUtf8PrefixMatchesEncoder) {
+    const EncodedSet set;
+    std::size_t checked = 0;
+    const auto check = [&](const std::string& s) {
+        ++checked;
+        const std::size_t expected = set.validPrefix(s);
+        ASSERT_EQ(validUtf8Prefix(s), expected)
+            << "input of " << s.size() << " bytes, first byte " << static_cast<int>(static_cast<unsigned char>(s[0]));
+        ASSERT_EQ(isValidUtf8(s), expected == s.size());
+    };
+    // Every 1- and 2-byte sequence.
+    for (unsigned b0 = 0; b0 < 256; ++b0) {
+        check(bytes({static_cast<unsigned char>(b0)}));
+        for (unsigned b1 = 0; b1 < 256; ++b1) {
+            check(bytes({static_cast<unsigned char>(b0), static_cast<unsigned char>(b1)}));
+        }
+    }
+    // Every 3-byte sequence with lead E0..EF.
+    for (unsigned b0 = 0xE0; b0 <= 0xEF; ++b0) {
+        for (unsigned b1 = 0; b1 < 256; ++b1) {
+            for (unsigned b2 = 0; b2 < 256; ++b2) {
+                check(bytes(
+                    {static_cast<unsigned char>(b0), static_cast<unsigned char>(b1), static_cast<unsigned char>(b2)}));
+            }
+        }
+    }
+    // Every 4-byte sequence with lead F0..F7 and any second byte; the last two bytes come from
+    // values on both sides of the continuation range 80..BF and its sub-range edges.
+    const unsigned char tails[] = {0x7F, 0x80, 0x8F, 0x90, 0xBF, 0xC0};
+    for (unsigned b0 = 0xF0; b0 <= 0xF7; ++b0) {
+        for (unsigned b1 = 0; b1 < 256; ++b1) {
+            for (const unsigned char b2 : tails) {
+                for (const unsigned char b3 : tails) {
+                    check(bytes({static_cast<unsigned char>(b0), static_cast<unsigned char>(b1), b2, b3}));
+                }
+            }
+        }
+    }
+    EXPECT_EQ(checked, 256u + 65536u + 16u * 65536u + 8u * 256u * 36u);
+
+    // A valid text (ASCII runs of every length around the 8-byte fast path, then multi-byte
+    // characters) followed by each kind of ill-formed tail: the prefix is the valid text.
+    const std::string badTails[] = {
+        bytes({0x80}),
+        bytes({0xC0, 0x80}),
+        bytes({0xC1, 0xBF}),
+        bytes({0xE0, 0x9F, 0xBF}),
+        bytes({0xED, 0xA0, 0x80}),
+        bytes({0xF0, 0x8F, 0xBF, 0xBF}),
+        bytes({0xF4, 0x90, 0x80, 0x80}),
+        bytes({0xF5}),
+        bytes({0xFF}),
+        bytes({0xE2, 0x82}),
+        bytes({0xF0, 0x9F, 0x98}),
+        bytes({0xC3, 0x41}),
+        bytes({0xE2, 0x28, 0xA1}),
+        bytes({0xC3}),
+    };
+    for (std::size_t ascii = 0; ascii <= 17; ++ascii) {
+        for (const std::string& multi : {std::string(), encode(0xE9), encode(0x20AC), encode(0x1F600)}) {
+            const std::string valid = std::string(ascii, 'a') + multi;
+            ASSERT_EQ(validUtf8Prefix(valid), valid.size());
+            for (const std::string& tail : badTails) {
+                const std::string input = valid + tail + "xyz";
+                EXPECT_EQ(validUtf8Prefix(input), valid.size()) << ascii << " ASCII bytes";
+                EXPECT_EQ(set.validPrefix(input), valid.size());
+            }
+        }
+    }
+    EXPECT_EQ(validUtf8Prefix(""), 0u);
 }
 
 #ifdef _WIN32

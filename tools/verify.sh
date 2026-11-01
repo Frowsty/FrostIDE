@@ -9,7 +9,9 @@
 # It mirrors the working tree onto ext4 (building on the /mnt/e 9P mount is
 # several times slower), then configures, builds and tests:
 #   --quick  (default) linux-clang Debug (clang + libstdc++ 14, the Linux floor)
-#   --full   additionally ASan+UBSan (Debug) and TSan (RelWithDebInfo)
+#   --full   additionally ASan+UBSan (Debug), TSan (RelWithDebInfo) and the fuzz smoke:
+#            the linux-clang-fuzz tree (libFuzzer + ASan + UBSan, RelWithDebInfo) runs each
+#            fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L fuzz
 # The PowerShell spellings -Quick and -Full are accepted too.
 #
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
@@ -26,7 +28,7 @@
 #   FROST_SDK     SDK root whose env.sh is sourced (default: ~/sdk).
 #
 # The last line of output is the summary for the commit verification footer,
-# e.g. "wsl: debug 62/63 (1 skipped), asan 63/63, tsan 63/63". Skipped tests are
+# e.g. "wsl: debug 62/63 (1 skipped), asan 63/63, tsan 63/63, fuzz 1/1". Skipped tests are
 # never counted as passed. Exit status is non-zero if any configuration fails to
 # build, has a failing test, or a check fails.
 
@@ -122,6 +124,7 @@ run_config debug linux-clang linux-clang-debug -LE stress
 if [[ $FULL -eq 1 ]]; then
     run_config asan linux-clang-asan linux-clang-asan
     run_config tsan linux-clang-tsan linux-clang-tsan
+    run_config fuzz linux-clang-fuzz linux-clang-fuzz -L fuzz
 fi
 
 # Runs tools/<name>.py on the mirror (which has no .git: frost-lint then walks it,

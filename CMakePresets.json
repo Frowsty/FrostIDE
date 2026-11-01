@@ -40,6 +40,21 @@
       }
     },
     {
+      "name": "win-clangcl-fuzz",
+      "displayName": "Windows, clang-cl, libFuzzer + AddressSanitizer (/MT, RelWithDebInfo)",
+      "inherits": "win-clangcl",
+      "$comment": "Fuzz targets only (FROST_FUZZ, cmake/FrostFuzz.cmake; ADR 0012): the pinned libFuzzer library needs the static CRT, so the tree builds without Qt and gtest and installs no vcpkg ports.",
+      "cacheVariables": {
+        "FROST_SANITIZE": "address",
+        "FROST_FUZZ": "ON",
+        "FROST_BUILD_UI": "OFF",
+        "FROST_BUILD_TESTS": "OFF",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "VCPKG_MANIFEST_INSTALL": "OFF"
+      }
+    },
+    {
       "name": "linux-clang",
       "displayName": "Linux, clang + libstdc++ 14",
       "inherits": "base",
@@ -61,16 +76,32 @@
       "displayName": "Linux, clang, ThreadSanitizer",
       "inherits": "linux-clang",
       "cacheVariables": { "FROST_SANITIZE": "thread" }
+    },
+    {
+      "name": "linux-clang-fuzz",
+      "displayName": "Linux, clang, libFuzzer + ASan + UBSan (RelWithDebInfo)",
+      "inherits": "linux-clang",
+      "$comment": "Fuzz targets only (FROST_FUZZ, cmake/FrostFuzz.cmake; ADR 0012), built like the Windows fuzz tree: no Qt, no gtest, no vcpkg ports.",
+      "cacheVariables": {
+        "FROST_SANITIZE": "address;undefined",
+        "FROST_FUZZ": "ON",
+        "FROST_BUILD_UI": "OFF",
+        "FROST_BUILD_TESTS": "OFF",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "VCPKG_MANIFEST_INSTALL": "OFF"
+      }
     }
   ],
   "buildPresets": [
     { "name": "win-clangcl-debug", "configurePreset": "win-clangcl", "configuration": "Debug" },
     { "name": "win-clangcl-release", "configurePreset": "win-clangcl", "configuration": "Release" },
     { "name": "win-clangcl-asan", "configurePreset": "win-clangcl-asan", "configuration": "RelWithDebInfo" },
+    { "name": "win-clangcl-fuzz", "configurePreset": "win-clangcl-fuzz", "configuration": "RelWithDebInfo" },
     { "name": "linux-clang-debug", "configurePreset": "linux-clang", "configuration": "Debug" },
     { "name": "linux-clang-release", "configurePreset": "linux-clang", "configuration": "Release" },
     { "name": "linux-clang-asan", "configurePreset": "linux-clang-asan", "configuration": "Debug" },
-    { "name": "linux-clang-tsan", "configurePreset": "linux-clang-tsan", "configuration": "RelWithDebInfo" }
+    { "name": "linux-clang-tsan", "configurePreset": "linux-clang-tsan", "configuration": "RelWithDebInfo" },
+    { "name": "linux-clang-fuzz", "configurePreset": "linux-clang-fuzz", "configuration": "RelWithDebInfo" }
   ],
   "testPresets": [
     {
@@ -82,9 +113,11 @@
     { "name": "win-clangcl-debug", "inherits": "test-base", "configurePreset": "win-clangcl", "configuration": "Debug" },
     { "name": "win-clangcl-release", "inherits": "test-base", "configurePreset": "win-clangcl", "configuration": "Release" },
     { "name": "win-clangcl-asan", "inherits": "test-base", "configurePreset": "win-clangcl-asan", "configuration": "RelWithDebInfo" },
+    { "name": "win-clangcl-fuzz", "inherits": "test-base", "configurePreset": "win-clangcl-fuzz", "configuration": "RelWithDebInfo", "filter": { "include": { "label": "fuzz" } } },
     { "name": "linux-clang-debug", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "Debug" },
     { "name": "linux-clang-release", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "Release" },
     { "name": "linux-clang-asan", "inherits": "test-base", "configurePreset": "linux-clang-asan", "configuration": "Debug" },
-    { "name": "linux-clang-tsan", "inherits": "test-base", "configurePreset": "linux-clang-tsan", "configuration": "RelWithDebInfo" }
+    { "name": "linux-clang-tsan", "inherits": "test-base", "configurePreset": "linux-clang-tsan", "configuration": "RelWithDebInfo" },
+    { "name": "linux-clang-fuzz", "inherits": "test-base", "configurePreset": "linux-clang-fuzz", "configuration": "RelWithDebInfo", "filter": { "include": { "label": "fuzz" } } }
   ]
 }

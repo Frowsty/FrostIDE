@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <format>
 
 namespace frost::io {
@@ -152,17 +153,34 @@ Result<std::string> fromUtf16(std::basic_string_view<Unit> in) {
 
 } // namespace
 
-bool isValidUtf8(std::string_view utf8) noexcept {
-    for (std::size_t i = 0; i < utf8.size();) {
+std::size_t validUtf8Prefix(std::string_view utf8) noexcept {
+    const std::size_t size = utf8.size();
+    std::size_t i = 0;
+    while (i < size) {
+        // ASCII fast path: skip 8 bytes at a time while none has its high bit set. memcpy
+        // keeps the load free of alignment and aliasing assumptions.
+        while (size - i >= 8) {
+            std::uint64_t word = 0;
+            std::memcpy(&word, utf8.data() + i, sizeof word);
+            if ((word & 0x8080'8080'8080'8080ULL) != 0) {
+                break;
+            }
+            i += 8;
+        }
+        if (i >= size) {
+            break;
+        }
         char32_t cp = 0;
         const std::size_t n = decodeUtf8(utf8, i, cp);
         if (n == 0) {
-            return false;
+            return i;
         }
         i += n;
     }
-    return true;
+    return size;
 }
+
+bool isValidUtf8(std::string_view utf8) noexcept { return validUtf8Prefix(utf8) == utf8.size(); }
 
 Result<std::u16string> utf8ToUtf16(std::string_view utf8) { return toUtf16<std::u16string>(utf8); }
 

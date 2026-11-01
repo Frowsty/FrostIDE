@@ -3,6 +3,74 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01: M1 first slice, the frost::text piece tree (`m1/piece-tree`)
+
+M1 started while M0 waits for sign-off (your instruction on 2026-11-01). Branch `m1/piece-tree` from
+`m0/foundation` (593e15f), worktree `.claude\worktrees\m1-piece-tree`; committed, not merged or pushed. Design,
+sources and measurements: ADR 0012. Every Windows test ran through `run_hidden_nobox.py` (a private desktop with
+error boxes off); no window opened on your desktop.
+
+### Done
+- **frost::text** (`src/text`, layer rank 4): the generic persistent `SumTree<Traits, B>` (ref-counted B+tree,
+  B = 8), the piece tree over append-only UTF-8 storage, `TextSummary` (64 B), O(1) lock-free `Snapshot`s,
+  `TextBuffer` with insert/erase/replace, atomic `applyEdits` and `restore`, each returning `TextChange`s normalised
+  to line-break boundaries (D8), conversions between byte offsets, `Point`, `Utf16Point` and UTF-16 offsets with
+  documented round-trip rules, chunk and line iteration, `summaryOf`, `checkInvariants`, and stateless typing
+  coalescing. Nothing from the spec's cut list was cut.
+- **Core and io:** `Utf16Column` in `strong_type.hpp`; `io::validUtf8Prefix`, now behind `isValidUtf8`, tested
+  against an independent encoder over every scalar value (`ValidUtf8PrefixMatchesEncoder`).
+- **Tests** (`tests/text`): a brute-force oracle with its own bit-pattern UTF-8 decoder and an `OpDriver` shared by
+  the differential, stress and fuzz tests; 62 `text_tests` (summary monoid, `SumTree` at B = 2, 3 and 8, 30 edge
+  cases, the 200-seed differential, the concurrent-reader test), `text_stress_tests` and `text_perf_tests`. The
+  shared test environment (`stressFull`, `kSanitized`, ...) moved to `tests/support/test_env.hpp`.
+- **Fuzzing:** `FROST_FUZZ`, `cmake/FrostFuzz.cmake`, presets `win-clangcl-fuzz` (/MT) and `linux-clang-fuzz`, the
+  first target `text_piece_tree` with a 30-file corpus, the corpus replay `fuzz_replay.text_piece_tree` (label unit)
+  in every normal tree, and the fuzz legs in `verify -Full` on both OSes (60 s per target).
+- **Verification** (`run_hidden_nobox.py`, `-Jobs 4`, after `night.py build-gate`):
+  - `verify.ps1 -Quick`: win debug 433/436 (1 skipped), wsl debug 402/402, format, frost_lint, licensecheck and
+    featurecheck ok. Run twice: 136 s wall (rebuilding the reformatted text sources) and, on the final tree, 132 s
+    (rebuilding everything that includes `snapshot.hpp` after a comment change).
+  - `verify.ps1 -Full`: win debug 433/436 (1 skipped), release 439/442 (1 skipped), asan 440/443 (1 skipped), fuzz
+    1/1; wsl debug 402/402, asan 409/409, tsan 408/408, fuzz 1/1; all checks ok. 27 min 9 s wall, most of it the
+    first build of this worktree's ASan trees on both OSes. It ran before the last change, which only adds a comment
+    to `snapshot.hpp` (the `TODO(M1)` on releasing big trees) and fills in the docs; the second `-Quick` covers it.
+  - The only failures are the known `FrostProcess.RunsFromPathLongerThanMaxPath` and
+    `FrostProcess.PlatformPluginPathBoundary` (they fail until `m0/longpath` lands); the skip is
+    `FrostProcess.ReportsLongPathLimitCleanly`.
+- **Text test times and scales** (ADR 0012 has the table): `TextDifferential.Quick` 8.2 s in Windows Debug (ceiling
+  15 s; 4 threads), 6.1 s in WSL Debug; every other unit case at most 0.9 s in Windows Debug. All text unit cases
+  together: 11.7 s Windows Debug, 8.3 s WSL Debug. Stress cases in `-Full`, longest first: WSL ASan Differential
+  66.7 s (200k ops), Windows ASan Differential 55.8 s (500k), WSL TSan Differential 52.6 s (300k), Windows ASan
+  ConcurrentReaders 45.1 s; every case is under its 120 s ceiling.
+- **B28 effect:** the text tests add about 12 s (Windows) and 8 s (WSL) to `verify -Quick`'s test steps, inside the
+  30 s per OS the slice allows; the test steps now take 58.6 s and 25.2 s. ADR 0010 measured `verify -Quick` at
+  p50 82.3 s after a one-.cpp change; this slice's two runs took 136 s and 132 s, each after a change that rebuilt
+  the text library and its four test executables on both OSes, so they are not B28 samples. Both stay far inside
+  B28's p50 5 min. Re-measuring B28 with ADR 0010's harness is part of its M1 follow-up.
+- **Perf** (Windows Release, REF-W1, you at the PC): `TextPerf.EditLatency` p50 9.7 us, p99 22.2 us against the
+  0.25 ms text-side sub-budget of B5 (ADR 0012, decision 9; asserted in optimised builds); load 0.98 GB/s, F1
+  projection 2.03 s and 39.9 MB of tree nodes (the B15 risk in ADR 0012, decision 6); seek p99 3-16 us.
+- **Fuzz throughput** (60 s smoke, ASan): Windows 1484 exec/s on the first run, 940 exec/s in `-Full` (a larger
+  work corpus); Linux (ASan + UBSan) 1079 exec/s; target 200. Caps unchanged.
+- **M1 exit runs** (after `night.py build-gate`): the 10M-op differential in Release, **0 mismatches on both OSes**
+  (Windows 217.5 s through `run_hidden_nobox.py`; WSL 166.1 s in the ext4 mirror), and a **clean 10-minute fuzz on
+  each OS** in separate `FROST_FUZZ_SECONDS=600` trees (Windows 541 exec/s, Linux 575 exec/s; no artifacts). Both
+  M1 exit criteria for the piece tree are met; the other M1 exit items wait for later slices.
+- `tests/features/matrix.json` row 35 (text buffer, large files, undo) is `in-progress`.
+
+### Next
+- An independent review of `m1/piece-tree` (it touches core, io and text) before any merge (CLAUDE.md).
+- `m1/undo-anchors` (anchors, selections, the undo tree, precise restore changes by node identity), then
+  `m1/encodings` and `m1/large-file` (mapped originals, B15 at the buffer level, the background release of big
+  trees: `TODO(M1)`), and the editor model (reverse cursors, seek-forward, graphemes).
+
+### Blockers
+- None for this slice. M0 sign-off (G1) and the M0 questions below are still open; `m0/longpath` decides the two
+  known FrostProcess failures.
+
+### Questions for the user
+- None new. ADR 0012 records the slice's decisions; none weakens a test, budget or warning.
+
 ## 2026-11-01: M0 overnight run and exit verification (`m0/foundation`)
 
 This entry consolidates the five entries that tonight's branches appended (S1 on 2026-10-31 and on 2026-11-01,

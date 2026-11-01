@@ -9,7 +9,9 @@
 # Steps:
 #   1. Windows: configure win-clangcl, build Debug, run ctest (tests labelled
 #      `stress` are skipped in Debug).
-#   2. -Full adds Release and the ASan configuration (RelWithDebInfo), with every label.
+#   2. -Full adds Release and the ASan configuration (RelWithDebInfo), with every label,
+#      and the /MT fuzz smoke: the win-clangcl-fuzz tree (libFuzzer + ASan, RelWithDebInfo)
+#      runs each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L fuzz.
 #   3. Repository checks: clang-format on tracked C/C++ files, frost-lint, the
 #      licence check (Windows build trees) and the feature-matrix check. A check
 #      whose tool does not exist yet is reported as "not-run", never silently dropped.
@@ -109,6 +111,9 @@ if ($Full) {
     $asanDir = ''
     if ($BuildDir) { $asanDir = "$BuildDir-asan" }
     Test-WindowsConfig 'asan' 'win-clangcl-asan' 'RelWithDebInfo' $asanDir
+    $fuzzDir = ''
+    if ($BuildDir) { $fuzzDir = "$BuildDir-fuzz" }
+    Test-WindowsConfig 'fuzz' 'win-clangcl-fuzz' 'RelWithDebInfo' $fuzzDir @('-L', 'fuzz')
 }
 
 # Repository checks.
