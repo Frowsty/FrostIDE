@@ -263,10 +263,14 @@ else:
 '''
 
 _FAKE_VERIFY = r'''
-import json, sys
+import json, shutil, subprocess, sys
 from pathlib import Path
 here = Path(__file__).resolve().parent
 (here / "verify.args").write_text(json.dumps(sys.argv[1:]))
+# What verify's changed-file list would hold with -Base HEAD (the run's cwd is the repository).
+diff = subprocess.run([shutil.which("git"), "diff", "--name-only", "HEAD"], capture_output=True, text=True).stdout
+with (here / "verify.changed").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(diff.split()) + "\n")
 for marker in ("=== changed files", "=== debug configure", "=== debug build", "=== debug test", "=== tidy",
                "=== wsl /mnt/x/tools/verify.sh"):
     print(marker, flush=True)
@@ -530,6 +534,20 @@ class EndToEndTest(TempDirTestCase):
         self.assertEqual(path.read_bytes(), self.originals["core"])
         self.assertFalse((self.tmp / "gitdir" / frost_perf.POINTER_NAME).exists())
 
+    def test_restoring_a_probe_mid_run_checks_the_bytes(self) -> None:
+        path = self.repo / frost_perf.B28_PROBE_FILES["core"]
+        journal = frost_perf.ProbeJournal(self.tmp / "run", self.repo, self.tmp / "gitdir", {"core": path})
+        journal.begin()
+        self.assertFalse(journal.restore_original("core"))  # already original: nothing written
+        journal.write_probe("core", 1)
+        self.assertTrue(journal.restore_original("core"))
+        self.assertEqual(path.read_bytes(), self.originals["core"])
+        journal.write_probe("core", 2)  # the journal still accepts the file after the restore
+        path.write_bytes(b"namespace frost { int edited(); }\n")
+        with self.assertRaises(frost_perf.RunInvalid):
+            journal.restore_original("core")
+        self.assertEqual(path.read_bytes(), b"namespace frost { int edited(); }\n")
+
     def test_dirty_or_probed_files_exit_2_before_any_write(self) -> None:
         core = self.repo / frost_perf.B28_PROBE_FILES["core"]
         core.write_bytes(self.originals["core"] + b"// edit\n")
@@ -584,6 +602,11 @@ class EndToEndTest(TempDirTestCase):
             self.assertIn("wsl", r["phases"])
         args = json.loads((self.fakes / "verify.args").read_text(encoding="utf-8"))
         self.assertEqual(args, ["-Quick", "-Jobs", "4", "-Base", "HEAD"])
+        # Each timed run sees only its own probe file changed: the previous run's probe went back first.
+        seen = [json.loads(line) for line in (self.fakes / "verify.changed").read_text(encoding="utf-8").splitlines()]
+        files = frost_perf.B28_PROBE_FILES
+        self.assertEqual(seen, [[files["core"]], [files["main"]], [files["core"]]])
+        self.assertEqual([r["b28"]["restored"] for r in runs], [[], ["core"], ["main"]])
         variant = summary["variants"]["verify"]
         self.assertEqual((variant["verdict"], variant["verdict_reason"], variant["n"]), ("info", "n < 6", 2))
         self.assertIn("tidy", variant["phases_p50"])

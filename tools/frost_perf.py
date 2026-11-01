@@ -329,6 +329,28 @@ class ProbeJournal:
         self._save()
         write_atomic(path, data)
 
+    def restore_original(self, key: str) -> bool:
+        """
+        Puts file `key` back to its original bytes mid-run, through the journal like a probe write;
+        returns whether it wrote (False when the file is already original). Raises RunInvalid,
+        without writing, for an external edit (bytes matching no journal state).
+        """
+        entry = self.entries[key]
+        path = Path(entry["path"])
+        digest = sha256(path.read_bytes())
+        if digest == entry["original_sha256"]:
+            return False
+        if digest not in (entry["last_written_sha256"], entry["previous_written_sha256"]):
+            raise RunInvalid(f"{path} changed outside the harness; not overwritten (original: {entry['original']})")
+        original = Path(entry["original"]).read_bytes()
+        if sha256(original) != entry["original_sha256"]:
+            raise RunInvalid(f"{entry['original']} does not match the journal; {path} not restored")
+        entry["previous_written_sha256"] = digest
+        entry["last_written_sha256"] = entry["original_sha256"]
+        self._save()
+        write_atomic(path, original)
+        return True
+
 
 def restore_journal(journal_path: Path) -> list[str]:
     """
@@ -778,6 +800,15 @@ class RunContext:
             self.hooks.after_probe_write(key, self.journal.files[key], n)
         return n
 
+    def restore_other_probes(self, key: str) -> list[str]:
+        """
+        Puts every probed file except `key` back to its original bytes (ProbeJournal.restore_original),
+        so the working tree differs from HEAD in at most `key`'s file; returns the keys it rewrote.
+        """
+        if self.journal is None:
+            raise RunInvalid("no probe journal")
+        return [other for other in sorted(self.journal.files) if other != key and self.journal.restore_original(other)]
+
 
 def record(ctx: RunContext, variant: Variant, **fields: Any) -> dict[str, Any]:
     """A runs.jsonl record: the generic core fields, then the harness's own (for B28 a "b28" object)."""
@@ -812,8 +843,9 @@ class B28Harness:
                "frost" (--target frost) is reported.
       noop     5 runs of each command with no change (informational).
       verify   1 warm-up + 6 runs of tools\\verify.ps1 -Quick -Jobs 4 alternating core and main, each
-               after a settle and a probe; gated: p50 at most 5 min. With -Base HEAD when verify.ps1
-               declares it, so tidy and TSan see only the probe change, as on main (ADR 0027 decision 7).
+               after restoring the other probe file, a settle and a probe; gated: p50 at most 5 min. With
+               -Base HEAD when verify.ps1 declares it, so tidy and TSan see only the probe change, as on
+               main (ADR 0027 decision 7).
       wsl-leg  3 runs of verify.sh --no-checks after the distro has stopped by itself (informational).
     Builds and tests only, nothing on screen, so no session precheck (ADR 0010, Conditions).
     """
@@ -985,6 +1017,10 @@ class B28Harness:
         for run in range(warmup + runs):
             key = files[run % len(files)]
             tag = f"v{run:02d}-{key}"
+            # The previous run's probe goes before the settle, so the timed run's changed files (and
+            # with them verify's tidy and TSan work) are the one probe file, as for a one-file edit on
+            # main (decision 7 of ADR 0027).
+            restored = ctx.restore_other_probes(key)
             settle = self._settle(ctx, tag)
             before = self._sccache(ctx)
             n = ctx.write_probe(key)
@@ -1000,7 +1036,8 @@ class B28Harness:
                          wall_s=round(streamed.wall, 3), exit=streamed.exit, valid=ok,
                          phases=phase_split(markers, streamed.wall), summary_line=verified[-1] if verified else None,
                          b28={"probe": n, "markers": [[round(t, 3), name] for t, name in markers],
-                              "sccache": self._delta(before, after), "settle": settle, "command": cmd})
+                              "sccache": self._delta(before, after), "settle": settle, "restored": restored,
+                              "command": cmd})
             if not ok:
                 why = "timed out" if streamed.timed_out else f"exit {streamed.exit}"
                 raise RunInvalid(f"verify run {tag} failed ({why})")
