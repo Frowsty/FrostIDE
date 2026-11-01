@@ -3,6 +3,26 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01: m0/tracy, ADR 0009 after verification
+
+### Done
+- ADR 0009 chooses Tracy 0.14.1 (the 2026.10.16 baseline's port, 0.14.1#1). The independent verification's
+  findings are handled: the threat model (a connected local process can read and corrupt the client's memory),
+  the shutdown order for manual lifetime, the warning counts (7 in Tracy's own TU on clang-cl, 0 in ours through
+  system includes), the pinning plan (an override in M1), and the per-zone cost of the prescribed task zones.
+- PLAN.md's dependency list now says tracy's version was chosen in M0 and its use is pending the listener
+  exception.
+
+### Next
+- M1 work list in ADR 0009, only once the user grants the listener exception.
+
+### Blockers
+- None.
+
+### Questions for the user
+- ADR 0009: grant or decline the listener exception for Tracy (an unauthenticated 127.0.0.1 TCP listener in dev
+  builds, started only by an explicit per-run opt-in); confirm that budget and perf runs never start Tracy.
+
 ## 2026-10-31: M0 bootstrap, session 1
 
 ### Done

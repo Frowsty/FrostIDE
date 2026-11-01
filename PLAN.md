@@ -156,7 +156,7 @@ Counts include the moves below and new rows 250–257 (soft wrap, whitespace/ind
 
 **`frost/compat` polyfills**, keyed on `__cpp_lib_*`, each with its removal condition: flat_map/flat_set (STL 14.44, libstdc++ 14); mdspan via Kokkos (libstdc++ <16.1); the libc++/Apple gaps (zip, generator, move_only_function, chunk/slide, stacktrace via cpptrace, inplace_vector via beman, enumerate) matter only if macOS is added, though each polyfill still switches on `__cpp_lib_*` so any library lacking a feature gets it. Also `function_ref`, saturation arithmetic, `FROST_ASSUME`, and `FROST_PRE`/`FROST_POST`/`FROST_ASSERT` with ignore, observe, enforce and quick_enforce semantics.
 
-**Dependencies.** From vcpkg: gtest 1.18, benchmark 1.10, yyjson, xxhash 0.8.4, sqlite3 3.54.1, re2, pcre2, asio, llhttp, pugixml, spdlog, cpptrace, mimalloc, utf8proc, crashpad, libsodium, libcurl (Linux), tracy (pinned in M0). Vendored: tree-sitter, libvterm.
+**Dependencies.** From vcpkg: gtest 1.18, benchmark 1.10, yyjson, xxhash 0.8.4, sqlite3 3.54.1, re2, pcre2, asio, llhttp, pugixml, spdlog, cpptrace, mimalloc, utf8proc, crashpad, libsodium, libcurl (Linux), tracy (version chosen in M0: 0.14.1 from the vcpkg baseline; use pending the listener exception in ADR 0009). Vendored: tree-sitter, libvterm.
 
 **Startup hygiene.**
 - `-Wglobal-constructors` and `-Wexit-time-destructors` are errors on Clang legs.
