@@ -53,6 +53,65 @@ what is next, blockers and open questions for the user.
 3. Should `tests/corpus/manifest.json` pin R3's configuration (Ninja, `LLVM_ENABLE_PROJECTS=clang`, Release, the
    clang-cl toolchain) for all R3 budgets?
 
+## 2026-11-01: m0/tracy, ADR 0009 after three verifications
+
+### Done
+- ADR 0009 chooses Tracy 0.14.1 (the 2026.10.16 baseline's port, 0.14.1#1). The first verification's findings
+  are handled: the threat model (a connected local process can read and corrupt the client's memory), the
+  shutdown order for manual lifetime, the warning counts, the pinning plan (an override in M1), and the
+  per-zone cost of the prescribed task zones.
+- The second verification's findings are handled:
+  - Tracy's symbol worker: with the port defaults it calls DbgHelp unlocked beside FrostIDE's own DbgHelp
+    users, rewrites `_NT_SYMBOL_PATH` and preloads symbols for every module. Item 5 now adds
+    `TRACY_NO_CALLSTACK` and `TRACY_NO_SYSTEM_TRACING`. Measured on both OSes under the `tracy-2` measurement
+    lock: Tracy runs no symbol worker, neither loads DbgHelp nor changes `_NT_SYMBOL_PATH` (FrostIDE's own
+    DbgHelp users and a developer's `_NT_SYMBOL_PATH` are unaffected), and its `ShutdownProfiler` no longer
+    depends on the loaded modules (Windows p50 37.5–62.5 ms, against 151.1 ms with Qt loaded before). Zone
+    costs are unchanged, and Tracy's own TU has 0 warnings on clang-cl.
+  - The shutdown figures now give load, loaded modules and time since start, and B20's bullet says they are
+    load-dependent.
+  - The dev-only manifest feature is required, with its own install tree; the release SBOM names only the
+    release preset's tree.
+  - The override's precondition (the port tree must be in the vcpkg clone) is stated.
+  - The process counts in the conditions are corrected.
+- The third verification confirmed the ADR. Its four low findings are fixed:
+  - one cell rounded twice (connected, 4 threads, **nc**: 55.8 ns, raw median 55.846);
+  - the DbgHelp claim now says what the probe could show, which is that Tracy itself no longer loads
+    `dbghelp.dll` or changes `_NT_SYMBOL_PATH`;
+  - the first WSL hold of the lock (lock 1) is compared cell by cell with lock 2, including its outliers;
+  - the cost of giving up call stacks and system tracing is stated, in the ADR and in question 1 below.
+- The raw data the ADR relies on now lives in `E:\FrostBuilds\perf\m0\tracy\` (254 MiB): the logs, scripts,
+  probe sources and captures of the three measurement passes, the third fix round's recompute script, and the
+  three verifiers' re-runs and recompute scripts. Its `README.txt` maps each directory to the ADR section it
+  backs, and the ADR's Method names it. Tracy's sources, the vcpkg and consumer build trees and the binaries
+  were not kept.
+- PLAN.md is unchanged on this branch. The previous round's edit of the Dependencies line was reverted: the
+  wording is a question for the user, not a change made without approval.
+
+### Next
+- M1 work list in ADR 0009, only once the user grants the listener exception.
+
+### Blockers
+- Any use of Tracy (the whole M1 work list in ADR 0009) is blocked on the listener exception (question 1).
+  Nothing in M0 is blocked: the branch adds only the ADR and this entry.
+
+### Questions for the user
+1. ADR 0009: grant or decline the listener exception for Tracy (an unauthenticated 127.0.0.1 TCP listener in
+   dev builds, started only by an explicit per-run opt-in).
+   - While Tracy runs, any local process (and, for a WSL instance, any Windows-side process) can connect. It
+     can then read FrostIDE's memory: open buffers, the IDE-bridge token, askpass passphrases, the
+     environment. It can also corrupt that memory through a heap overflow, so treat it as possible code
+     execution inside FrostIDE (ADR 0009, threat model).
+   - Granting the exception also means accepting item 5's options as they stand, including
+     `TRACY_NO_CALLSTACK` and `TRACY_NO_SYSTEM_TRACING`: Tracy then captures no call stacks, no sampled call
+     stacks and no context switches. FrostIDE's zones never use call stacks, and on Windows sampling and
+     context switches need elevation, which FrostIDE never has, so the real loss is sampling and context
+     switches on Linux. Keeping them was not evaluated further (ADR 0009, Alternatives, "Keeping call
+     stacks").
+2. Confirm the new rule that budget and perf runs (`frost-bench`, `verify -Perf`) never start Tracy.
+3. Optional: PLAN.md 2.1 lists "tracy (pinned in M0)". Should it read "tracy (version chosen in M0: 0.14.1 from
+   the vcpkg baseline; use pending the listener exception in ADR 0009)"? Not applied.
+
 ## 2026-11-01: M0 spike S1 result (branch `m0/s1`)
 
 ### Done
