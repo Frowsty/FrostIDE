@@ -5,11 +5,62 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first slice. `m1/piece-tree` at 6fb6826 is merged into `main` with `git merge --no-ff`, in the main
-worktree under D23, after the slice's two independent reviews. The slice's own two records follow this entry's
-sections as subsections, kept as the branch wrote them. Merge notes in them mark what has changed since.
+`main` has M1's first two slices, each merged with `git merge --no-ff` in the main worktree under D23 after the
+slice's two independent reviews: `m1/piece-tree` at 6fb6826 (merge 455bb76) and `m1/input-keymap` at c78db87 (merge
+3db37c5). The slice records follow this entry's sections as subsections, newest first: `m1/input-keymap`'s, written
+from its hand-off note (the branch kept no record in this log), then `m1/piece-tree`'s two, kept as the branch wrote
+them. Merge notes in them mark what has changed since.
 
 ### Done
+
+#### Merge of `m1/input-keymap` (3db37c5)
+- **The merge** (3db37c5) of `m1/input-keymap` (c78db87) into `main` at 5f377e7: frost::input and frost::ui_input
+  (4cee32c) and the fixes from the slice's two reviews (c78db87); the slice record below says what they hold. ADR
+  0016; the number is unchanged and no other branch uses it (`main` has 0011 to 0013, `m1/storage` holds 0014,
+  `m1/theme-icons` 0015, `m1/undo-anchors` 0017, `m1/encodings` 0018 and `m1/diff-merge` 0019).
+- **Three conflicts**, each resolved so that both sides' intent survives:
+  - `src/CMakeLists.txt` and `tests/CMakeLists.txt`: `main`'s `text` (and `tests/fuzz`) and the slice's `input` are
+    all kept, in the order text, input, fuzz. The slice's `add_subdirectory(ui)` under `FROST_BUILD_UI` merged
+    cleanly in both.
+  - `tests/features/matrix.json`: row I6 takes the slice's state (`in-progress`, acceptance `ctest -R
+    ShortcutLayouts`); row I7 keeps `main`'s (`green`, with the M0 long-path acceptance tests).
+  - Merged without conflict: the `input` rank (4) in `cmake/FrostLayers.cmake`, which cites ADR 0016 decision 1,
+    and `FROST_QT_TEST_PLATFORM` in `tests/support/qt_test_main.cpp`.
+- **The keymap fuzz target is not registered yet.** ADR 0016 (Consequences) and the slice's `TODO(M1)`s in
+  `tests/input/CMakeLists.txt` and `keymap_fuzz_replay_test.cpp` leave it to the integrator, once
+  `cmake/FrostFuzz.cmake` is on the base, to register `input_keymap` with `frost_add_fuzz_target` and delete the
+  `KeymapFuzzReplay` test. FrostFuzz.cmake is on `main` now, but a new fuzz target needs a fuzz-tree build and smoke
+  on both OSes, which `-Quick` does not cover, so it is a follow-up (Next). Until then `KeymapFuzzReplay` replays
+  `tests/fuzz/corpus/input_keymap` in every normal tree, as on the branch.
+- **The FrostProcess failures that the slice's verification lists as known no longer apply.** It ran on its pre-M0
+  base 593e15f, where `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`
+  fail until `m0/longpath`. `main` has `m0/longpath` (ADR 0012); the merged tree's results are below.
+
+#### Verification (merged tree 3db37c5)
+- Before the merge commit: frost_lint ok (448 files), licensecheck ok, featurecheck ok. `git diff --check` flags only
+  two byte-exact fuzz seeds, `seed-06-bom-crlf.keymap` (CRLF on purpose) and `seed-17-long-line.keymap` (trailing
+  padding on purpose); `tests/fuzz/corpus/**` is `-text` in `.gitattributes`.
+- After the merge commit, `night.py build-gate` (no lock, 37.6 GB commit free), then `cmake --build --preset
+  win-clangcl-debug -j 12`: exit 0 in 17 s, no compiler warning (only Qt's own "No qtpaths executable found"
+  configure notice).
+- `tools\verify.ps1 -Quick -Jobs 12` on 3db37c5 through `run_hidden_nobox.py` (a hidden desktop; no window opened
+  on it), after `night.py build-gate` (no lock, 34.5 GB commit free), 176.1 s, exit 0. Windows ran its Debug leg
+  and the checks; WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 754/754, wsl debug 667/667, wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok,
+  featurecheck ok, tidy not-run`. No test failed or was skipped. Against the piece-tree merge (win debug 485/485,
+  wsl debug 405/405) the slice adds 269 tests on Windows and 262 on WSL. That is what it added over its base
+  593e15f: 637 and 596 at c78db87, against 368 and 334 on the base (the piece-tree slice's 438 and 404 at e25c036
+  less the 70 it added), so no test was lost in the merge. The run includes `KeymapFuzzReplay`, the
+  `ShortcutLayouts` suites, `input.NoLayoutSwitching` and its planted-name check, and on Windows `NativeKeyDelivery`
+  (Qt's "windows" plugin with a window that is created but never shown).
+- `-Quick` builds no ASan, TSan or fuzz tree. Fuzz trees build all of `src`, so the merge adds `frost_input` to
+  them. The Windows fuzz tree (`win-clangcl-fuzz`, /MT, ASan) was therefore built on its own after `build-gate`:
+  exit 0, `frost_input.lib` compiled and linked with no warning; `fuzz.text_piece_tree` was not re-run (its sources
+  are unchanged). The Linux fuzz tree was not built (the WSL mirror has none); `verify -Full`'s fuzz legs cover it.
+  The slice's own ASan, ASan+UBSan and TSan results at c78db87 stand: the conflict resolution changes only
+  `add_subdirectory` lines and two matrix rows.
+
+#### Merge of `m1/piece-tree` (455bb76)
 - **The merge** (455bb76) of `m1/piece-tree` (6fb6826) into `main` at 2da44fb, the `m0` sign-off: frost::text's
   piece tree (c8757f3), the review fixes and repeated exit runs (e25c036), and the ADR renumbering (6fb6826).
 - **ADR 0013, not 0012.** The branch first wrote its record as ADR 0012. `m0/longpath` took that number for the
@@ -39,7 +90,7 @@ sections as subsections, kept as the branch wrote them. Merge notes in them mark
   failures; the 10M-op differential in Windows Release with 0 mismatches (at c8757f3 on both OSes); a clean
   10-minute fuzz on each OS. 6fb6826 changed comments and file names only.
 
-#### Verification (merged tree)
+#### Verification (merged tree 455bb76)
 - Before the merge commit (455bb76): frost_lint ok (356 files), licensecheck ok, featurecheck ok, `git diff
   --check` clean.
 - `tools\verify.ps1 -Quick -Jobs 8` on 455bb76 through `run_hidden_nobox.py` (a hidden desktop; no window opened
@@ -55,26 +106,81 @@ sections as subsections, kept as the branch wrote them. Merge notes in them mark
   Every compile command there has `-fsanitize=address` and `-fsanitize=fuzzer-no-link`.
 
 ### Next
-- The other M1 slices. `m1/undo-anchors`, `m1/encodings` and `m1/diff-merge` have worktrees on 6fb6826, the head
-  merged here; `m1/storage`, `m1/input-keymap` and `m1/theme-icons` are as the entry "M0 complete" describes.
+- **The `input_keymap` fuzz target** (ADR 0016, Consequences; the `TODO(M1)`s named above): register it with
+  `frost_add_fuzz_target` over `runKeymapFuzzInput` and `tests/fuzz/corpus/input_keymap`, build and smoke it in
+  `win-clangcl-fuzz` and `linux-clang-fuzz`, and only then delete `KeymapFuzzReplay`. That test also runs seeded
+  mutations of the corpus, so its removal must not lose them (keep them as a unit test, or show the fuzz legs
+  cover them); nothing is weakened.
+- **The frost::input consumers** that ADR 0016's Consequences names: `m1/shell-frame` with `m1/settings`
+  (IKeymapSettings, the dispatch filter, menus), `m1/editor-view` and `m1/editor-model` (the editor actions and
+  contexts), `m1/shell-nav` (the Find Action popup and the Keymap page) and `m1/automation-bench` (the real native
+  key path on the real desktop, which needs your approval while you are at the PC).
+- The other M1 slices. `m1/undo-anchors`, `m1/encodings` and `m1/diff-merge` have worktrees on 6fb6826, the
+  piece-tree head; `m1/storage` and `m1/theme-icons` are as the entry "M0 complete" describes.
   Then `m1/large-file` (mapped originals, B15 at the buffer level, the background release of big trees:
   `TODO(M1)` in `snapshot.hpp`) and the editor model (the slice record "M1 first slice", "Next").
 - Re-measure B28 with ADR 0010's harness (the slice record "M1 first slice", "B28 effect").
 - The M1 work from ADR 0011's Consequences and ADR 0012's `TODO(M1)`s (entry "M0 complete").
 
 ### Blockers
-- None. The slice's only listed blocker, `m0/longpath`, is on `main`.
+- None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; `m1/input-keymap` lists none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
 - **TextSummary provenance (clean room).** TextSummary's line metrics (`firstLineChars`, `lastLineChars`,
   `lastLineUtf16`, `longestLineChars`, `longestLine`) and their combine rule match, field for field, the
   `TextSummary` of Zed's GPL rope crate, which was never opened. A longest-line monoid needs exactly this data. The
-  review's details are in the slice's question below. Which do you want?
+  review's details are in the piece-tree slice's question below. Which do you want?
   - (a) Accept the provenance record in `text_summary.hpp` and ADR 0013. Recommended; the slice is merged on that
     basis.
   - (b) Redesign the fields.
   - (c) Cite a public description. Not recommended: the known post quotes GPL code.
+- **IntelliJ keymap provenance (legal; `m1/input-keymap`, ADR 0016 decision 8).** The built-in IntelliJ-compatible
+  keymap takes only shortcut facts (which key does what) from JetBrains' public IntelliJ IDEA Help pages
+  ("Predefined Windows keymap", "Predefined macOS keymap") and the published reference cards. No intellij-community
+  code or keymap XML was opened, and the ids, names and file format are our own. Is that acceptable? Recommended:
+  yes, shortcut assignments are functional facts. The slice is merged on that basis.
+- **Keyboard-layout test oracle licence (`m1/input-keymap`).** libxkbcommon and xkeyboard-config (in WSL) could
+  independently check the simulated de-DE, pl-PL and fr-FR tables (test-only, never shipped) and later read real
+  Linux layouts. xkeyboard-config's HPND-style notice is not on the SPDX allowlist. Adopt it under an ADR? Until
+  then the tables are checked by hand-reviewed goldens plus Windows' own en-US layout. (ADR 0016 decision 13
+  describes the xkb-data files as MIT; the licence check for the ADR would settle which notices apply.)
+- **de-DE comment shortcuts (`m1/input-keymap`).** On a German layout, Ctrl+/ and Ctrl+Shift+/ (comment line and
+  comment block) cannot be typed under the chosen mapping policy; Ctrl+Num / works, and the keymap reports the gap.
+  Keep that, or add a German-specific default (for example the '#' key)?
+- **Linux punctuation shortcuts in M1 (`m1/input-keymap`).** Linux in M1 has no xkb reader: letters map by label,
+  punctuation by US position, so punctuation shortcuts can differ from Windows on non-US Linux layouts. Acceptable
+  for M1? (The M1 exit's layout tests are simulated.)
+- **A fourth simulated layout (`m1/input-keymap`).** Add Windows 11's newer "French (Standard, AZERTY)" (NF
+  Z71-300) now, or later? The simulated fr-FR is KBDFR, the legacy AZERTY.
+- **PLAN.md section 3.2 (`m1/input-keymap`).** The repository layout does not list `src/input` (frost::input) or
+  `src/ui/input` (frost::ui_input). Add them? ADR 0016 decision 1 records them meanwhile.
+
+### Slice record: `m1/input-keymap` (ADR 0016)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A standard-tier slice under
+the old full process: design, critic, build, two independent reviews, fixes. Worktree
+`.claude\worktrees\m1-input-keymap`, branch from `m0/foundation` (593e15f). (Merge note: merged into `main` as
+3db37c5 and pushed; the M1 entry above.)
+
+#### Done
+- **frost::input** (`src/input`, layer rank 4, Qt-free): the shortcut matcher (chords, two-stroke sequences, AltGr
+  disambiguation from Qt's per-side `nativeModifiers` bits on Windows, dead keys, double Shift suppressed during
+  IME composition, autorepeat after a swallowed sequence); simulated de-DE, pl-PL and fr-FR (KBDFR, the legacy
+  AZERTY) layouts for the M1 exit's shortcut tests, so no layout is ever switched on the machine; the
+  IntelliJ-compatible keymap as our own data (shortcut facts from JetBrains' public help pages and reference cards
+  only; no JetBrains files or code); the action registry and the Find Action model.
+- **frost::ui_input** (`src/ui/input`): the thin QKeyEvent adapter, with a scan-code fallback for synthesized
+  events.
+- **Verification at c78db87:** win debug 634/637 (the two FrostProcess long-path failures then known on its pre-M0
+  base, and 1 skip), wsl debug 596/596, win asan (slice tests) 270/270, wsl asan+ubsan and tsan (slice tests)
+  263/263 each. (Merge note: those failures and the skip no longer apply on `main`; the M1 entry above.)
+- **Release numbers** (REF-W1): Find Action 0.42 ms (bound 2 ms); the B5 matcher feed 17 ns per event (bound 2 us).
+
+#### Left
+- Six low items (the slice's count), recorded in ADR 0016: its Consequences and known approximations, and the
+  `TODO(M1)`, `TODO(M2)` and `TODO(M11)` markers in `src/input` and `tests/input`.
+- The six questions above, marked `m1/input-keymap`.
 
 ### Slice record: `m1/piece-tree`, acting on two independent reviews
 
