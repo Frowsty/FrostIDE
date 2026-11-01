@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 2,
+  "editor.tabSize": 3,
+  "editor.softWrap": true,
+  "layout": {"panels": ["project", "build"]}
+}
