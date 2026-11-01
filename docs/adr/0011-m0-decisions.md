@@ -192,12 +192,18 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
       junction under `%LOCALAPPDATA%\FrostIDE\i` (ADR 0012, decision 8).
 
     The command-line modes and the offscreen self-test start in place at every measured length: 22 lengths from
-    200 to 400 units, plain and `\\?\`, in Release, Debug and ASan, with long paths effective or not. The GUI and
-    the on-screen self-test start through the link, tested from image paths of 250 to 400 units. Two cases are
-    refused with a message: install directories over about 4,089 units, and elevated starts from 260 units on.
-    The restart costs about 10 ms for an on-screen start, against the 5 ms that the user's option named. The
-    Windows shell (ShellExecuteW, so Explorer and shortcuts) cannot start an executable at a 310-unit path at
-    all; a terminal or script start works (ADR 0012, Measurements).
+    200 to 400 units, plain and `\\?\`, in Release, Debug and ASan (`StartsFromEveryDirectoryLength`). With long
+    paths ineffective, simulated by removing longPathAware from a copy of the manifest, 8 of those lengths are
+    tested, plain only up to 249 units, and the self-test fails only its long-path-manifest check, as expected
+    (`StartsWithLongPathsIneffective`). The GUI and the on-screen self-test start through the link from 260 units
+    on. The on-screen self-test is tested from image paths of 250 to 400 units
+    (`SelfTestOnScreenFromEveryImagePathLength`). The GUI's own window is tested at 300 units on a private desktop
+    (`GuiStartFromALongPathShowsItsWindow`) and was run on the user's desktop at 310. Some starts are refused with a
+    message, among others install directories over about 4,089 units and elevated GUI or on-screen starts from
+    260 units on (ADR 0012, Consequences, "New refusals"). The restart costs about 10 ms for an on-screen start,
+    against the 5 ms that the user's option named. One direct ShellExecuteW of a 310-unit frost.exe returned 5 and
+    started nothing; that the length causes it, and that Explorer and shortcuts, which go through the shell, fail
+    the same way, is inferred, not measured. A terminal or script start works (ADR 0012, Measurements).
 - **E2. Trusted user-script children get Visual Studio-compatible cmd.exe behaviour.**
   - Basis: frost's start-up sets NoDefaultCurrentDirectoryInExePath=1, and every child inherits it. cmd.exe in a
     user build script then no longer runs a tool from its current directory by bare name, as it does under Visual
@@ -281,8 +287,11 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
   - Note (2026-11-01, afternoon): E1, E4, E5 and G3 are done (their outcomes above and below). `m0/decisions` and
     `m0/longpath` are merged into `m0/foundation` (52809c6, 2d824ce), and the exit record follows them. The
     sign-off runs `verify -Full` on both platforms at that final head and tags and pushes only if it is green
-    (`docs/progress.md`, entry "M0 complete"). The separate question about starting M1 was answered by the user
-    at about 14:35: "go ahead finishe M1, start M2 when M1 is finished and so on".
+    (`docs/progress.md`, entry "M0 complete"). Recording the result takes one more commit, docs only, which fills
+    the `-Full` footer into `docs/progress.md`: that commit, "M0: sign-off record", is the one tagged `m0` and the
+    one `main` starts from, and the tag's message says that `-Full` ran on its parent. The separate question about
+    starting M1 was answered by the user at about 14:35: "go ahead finishe M1, start M2 when M1 is finished and so
+    on".
 - **G2. ADR 0002 is accepted.**
   - Basis: `m0/sched` is merged and was independently reviewed, and its M0 exit numbers are met, including the
     exit-scale TSan re-run on 3563873 (`docs/progress.md`).

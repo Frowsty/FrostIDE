@@ -49,8 +49,9 @@ backslash). Decision 8 below is its design. The quoted cost was too low. The res
 (paired p50) with a stand-in frost_app.dll that has no Qt, and +8.5 to +10.3 ms (p50 against p50; paired p50 +9.0
 and +9.7 ms) for the real `--selftest=onscreen`, the closest measured stand-in for a GUI start. So the GUI pays about
 10 ms, twice the 5 ms the option named (Measurements). No budget covers the restart; the figure is reported to the
-user with the review fixes of 2f40f9f. The words "from any path" hold with two exceptions that decision 8 adds:
-install directories longer than a junction can name (about 4,089 units) and elevated starts.
+user with the review fixes of 2f40f9f. The words "from any path" hold with the exceptions that decision 8 adds,
+among them install directories longer than a junction can name (about 4,089 units) and elevated GUI and on-screen
+starts from 260 units; Consequences ("New refusals") lists them all.
 
 ## Decision
 1. **Two images on Windows.** frost.exe is the launcher (`src/app/src/launcher.cpp`); the application is
@@ -361,23 +362,26 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   p50 197.5 ms, the launcher (33a329a) p50 195.6 ms, n 24 valid each; -1.9 ms, within noise. B1's warm p50 budget
   (150 ms) is missed before and after, as recorded (ADR 0007, question A3). Both runs start from short paths, so
   no restart is involved.
-- **The restart on the interactive desktop** (2026-11-01 at about 16:00, the Release build of b9dd60f, under the
+- **The restart on the interactive desktop** (2026-11-01 at about 16:30, the Release build of b9dd60f, under the
   user's standing permission of about 14:35 for window tests while they are away;
-  `E:\FrostBuilds\perf\m0\longpaths-on\launcher-impl\onscreen\README.txt`, with `restart_fg.py`,
-  `restart_fg.json` and `restart_fg2.json` beside it). The Release launcher tree was copied into a directory with
-  non-ASCII characters and spaces, so that frost.exe's image path was 310 units, and LOCALAPPDATA pointed at a
-  scratch folder.
+  `E:\FrostBuilds\perf\m0\longpaths-on\launcher-impl\onscreen\README.txt`, with `restart_fg.py` and
+  `restart_fg.json` (the ShellExecuteW runs) and `restart_fg2.json` (the CreateProcessW runs) beside it; the script
+  of the CreateProcessW runs was not saved, so their method rests on the README). The Release launcher tree was
+  copied into a directory with non-ASCII characters and spaces, so that frost.exe's image path was 310 units, and
+  LOCALAPPDATA pointed at a scratch folder.
   - *Started with CreateProcessW*, as a terminal or a script starts it, alternating 210 and 310 units, twice each.
-    Every run showed a visible Qt window 0.2 s after the start, and it was the foreground window. From 310 units
-    the window belonged to the restarted process (a pid other than the launcher's). One junction was created under
-    the scratch LOCALAPPDATA, and the second long start reused it. The launcher exited 0 after WM_CLOSE. So on
-    this path the restarted GUI comes to the foreground without AllowSetForegroundWindow.
-  - *Started with ShellExecuteW*, as Explorer and shortcuts start a program: for the 310-unit frost.exe it returned
-    5 (SE_ERR_ACCESSDENIED), and no window and no junction appeared. The Windows shell refuses the executable at
-    that length before frost runs at all, so the restart cannot help. The run through a `.lnk` shortcut also
-    returned 5, but it shows less: WScript.Shell refused the 310-unit target when the script created the shortcut
-    (ArgumentException, `restart_fg.json`), so that shortcut did not name frost.exe. Only 310 units was tried.
-    That the shell's limit starts at 260 units (MAX_PATH) is inferred; lengths from 260 to 309 were not tried.
+    Every run showed a visible Qt window within about 0.2 s of the start (`after_s` is 0.202 in all four, which
+    looks like the polling interval), and it was the foreground window. From 310 units the window belonged to the
+    restarted process (a pid other than the launcher's). One junction was created under the scratch LOCALAPPDATA,
+    and the second long start reused it. The launcher exited 0 after WM_CLOSE. So on this path the restarted GUI
+    comes to the foreground without AllowSetForegroundWindow.
+  - *Started with ShellExecuteW*, the shell's API: one direct ShellExecuteW of the 310-unit frost.exe returned 5
+    (SE_ERR_ACCESSDENIED), and no window and no junction appeared, so frost did not run at all. The run through a
+    `.lnk` shortcut also returned 5, but it shows less: WScript.Shell refused the 310-unit target when the script
+    created the shortcut (ArgumentException, `restart_fg.json`), so that shortcut did not name frost.exe. Inferred,
+    not measured: that the path's length causes the 5 (no ShellExecuteW of a shorter path was run as a control),
+    that Explorer and real shortcuts, which start programs through the shell, fail the same way (neither was
+    tried), and that the limit starts at 260 units (MAX_PATH; only 310 was tried).
 - **The short link** (Release, Debug and ASan builds of this change; probes and raw results in
   `E:\FrostBuilds\perf\m0\longpaths-on\launcher-impl\junction\`, every run on a hidden or private desktop):
   - Premise (`pj_premise.json`): the python.exe control in a 300-unit directory dies with 0xC0000409 through its
@@ -434,24 +438,31 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
 
 ## Consequences
 - frost's command-line modes and its offscreen self-test start in place from every measured directory length (22
-  lengths from 200 to 400 units, plain and `\\?\`, in Release, Debug and ASan), with or without LongPathsEnabled.
+  lengths from 200 to 400 units, plain and `\\?\`, in Release, Debug and ASan; `StartsFromEveryDirectoryLength`).
+  With long paths ineffective, which `StartsWithLongPathsIneffective` simulates by removing longPathAware from a
+  copy of frost.exe's manifest, 8 of those lengths are tested (200, 218, 225, 236, 249, 260, 300 and 400, plain
+  starts only up to 249): frost starts and passes every check except long-path-manifest, which reports the edited
+  manifest, so the self-test exits 1 there as expected.
 - The GUI and the on-screen self-test start from long image paths too: from 260 units on through the short link
   (decision 8), tested on private desktops from image paths of 250 to 400 units in both forms
   (`SelfTestOnScreenFromEveryImagePathLength`) and with the GUI's own window at 300 units
-  (`GuiStartFromALongPathShowsItsWindow`). Two exceptions are refused with a message: install directories over
-  about 4,089 units, and elevated starts (decision 8, *Security*). The M0 criterion is met for the IDE itself, and
+  (`GuiStartFromALongPathShowsItsWindow`). Some starts are refused with a message instead, among them install
+  directories over about 4,089 units and elevated GUI or on-screen starts from 260 units (decision 8, *Security*;
+  the full list is "New refusals", below). The M0 criterion is met for the IDE itself, and
   matrix row I7 is `green`. The driver's limit was confirmed on the interactive desktop; the restart was run on
   hidden and private desktops only, because a run on the user's desktop needs their approval at the PC. It works
   because the driver reads the path the process was started through, which the link makes short; it would not help
-  against a limit on the directory's real path, which no driver showed. Update (2026-11-01, about 16:00): the
+  against a limit on the directory's real path, which no driver showed. Update (2026-11-01, about 16:30): the
   restart has since run on the interactive desktop too. From a 310-unit image path started with CreateProcessW,
   the restarted GUI showed its window in the foreground (Measurements, "The restart on the interactive desktop").
-- Residual limit, the shell's (the same on-screen check): the Windows shell cannot start an executable at 260 units
-  or more. Measured at 310 units, ShellExecuteW returns 5 and frost does not start (no window, no junction); the
-  260-unit threshold is inferred, not measured. A frost installed that deep therefore cannot be started from Explorer, a shortcut or
-  anything else that goes through ShellExecuteW; that happens before frost runs, so no fix in frost reaches it. A
-  terminal or script start (CreateProcessW) works, through the restart. Registrations that go through the shell
-  (file associations and shortcuts, I10 in M2) inherit the limit.
+- Residual limit, the shell's (the same on-screen check), partly inferred. Measured: one direct ShellExecuteW of the
+  310-unit frost.exe returned 5, and frost did not start (no window, no junction). Inferred, not measured: that the
+  path's length causes the 5 (no shorter-path ShellExecuteW was run as a control), that the limit starts at 260
+  units, and that Explorer and shortcuts, which start programs through the shell, fail the same way (neither was
+  tried; Measurements). If that holds, a frost installed that deep cannot be started from Explorer, a shortcut or
+  anything else that goes through ShellExecuteW, and since that happens before frost runs, no fix in frost reaches
+  it. A terminal or script start (CreateProcessW) works, through the restart. Registrations that go through the
+  shell (file associations and shortcuts, I10 in M2) would inherit the limit.
 - A start from 260 units or more that may load a GPU driver costs about 7 ms more (one more launcher start;
   about 10 ms for the on-screen self-test, against the about 5 ms the user's option named) and creates
   `%LOCALAPPDATA%\FrostIDE\i\<hash>` on first use. Starts from
@@ -490,10 +501,11 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   Explorer or a shortcut comes to the foreground: its window is created by a process that the waiting launcher
   started, not by the one Explorer started. If it does not, the remedy is AllowSetForegroundWindow for the
   restarted process through a lazily loaded user32 in GUI restarts; that needs an on-screen run, which needs the
-  user's approval at the PC. (Update, 2026-11-01 about 16:00: the on-screen run is done. A CreateProcessW start
+  user's approval at the PC. (Update, 2026-11-01 about 16:30: the on-screen run is done. A CreateProcessW start
   from 310 units, as a terminal or a script makes it, brought the restarted window to the foreground, so
-  AllowSetForegroundWindow is not needed there. Explorer and shortcut starts from that length never reach frost,
-  because the shell refuses them (Measurements). Neither is an automated test.) The GUI start (`frost` without
+  AllowSetForegroundWindow is not needed there. A direct ShellExecuteW of the 310-unit frost.exe returned 5 and
+  never reached frost; that Explorer and shortcut starts from that length fail the same way is inferred, not
+  measured (Measurements). Neither run is an automated test.) The GUI start (`frost` without
   arguments) is
   tested on a private desktop from 300 units, its window and its failure box both; the native platform plugin
   through `--selftest=onscreen` up to 400 units. The spike did not cover the native platform at all (its README

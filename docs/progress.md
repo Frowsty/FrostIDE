@@ -26,9 +26,24 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
   Three header comments conflicted: `cmake/FrostLayers.cmake`, `tests/cmake/check_runtime_dlls.cmake` and the
   fixture's `shared/CMakeLists.txt`. Each keeps round 5's corrections and adds `m0/longpath`'s shared libraries.
   The merged tree's non-comment lines in those files equal `m0/longpath`'s.
-- **The exit record** (this commit): PLAN.md's M0 status paragraph and next-step line; notes in ADR 0011 (E1,
+- **The exit record** (09f428f): PLAN.md's M0 status paragraph and next-step line; notes in ADR 0011 (E1,
   E4, E5, G1, G3, Consequences) and ADR 0012 (the on-screen restart, the shell's limit); this entry; and the
-  decided and done pointers in the entries below.
+  decided and done pointers in the entries below. Its commit message gives the on-screen restart's time as about
+  16:00; it was about 16:30 (the fixes below).
+- **The exit record's check** (a read-only check of 09f428f) found 12 docs issues, all fixed in the next commit,
+  docs only, together with the on-screen README and the demo pack:
+  - the restart's time (about 16:30, not 16:00);
+  - the M0 status line's "S1 (ADR 0007, proposed)", now accepted;
+  - the shell's limit, now marked as partly inferred (one ShellExecuteW at 310 units was measured);
+  - the full list of refusals (ADR 0012, Consequences, "New refusals") instead of "two";
+  - what is tested with long paths ineffective (8 lengths, `StartsWithLongPathsIneffective`);
+  - which GUI starts were tested at which lengths;
+  - "no measurable B1 cost on screen" instead of "no B1 cost";
+  - the on-screen README's evidence gaps: the CreateProcessW runs' script was not saved, the `.lnk` caveat, and
+    "within about 0.2 s" (every `after_s` is 0.202, the polling interval by the look of it);
+  - in the demo pack, row 16 back to pending until the push, its section 1 intro, and the new questions renamed
+    LP1 and LP2, away from PLAN's load stages L0-L4;
+  - which commit gets the tag (ADR 0011, G1 note).
 - **Not merged:** `m0/e4-asan-runtime` (19157a8). It stays pushed for the record (E4, below).
 
 #### E1 in short: frost starts from any path length (ADR 0012)
@@ -81,20 +96,22 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
     251 units and died at 260, 271 and 311.
   - B1 on screen (`launcher-impl\b1-onscreen\README.txt`), with `s1_first_frame --mode warm --runs 15` and the
     rounds interleaved. The single-image frost.exe had p50 197.5 ms and the launcher p50 195.6 ms, 24 valid runs
-    each. The launcher has no B1 cost. **B1 warm still fails**: its target is p50 150 ms. It stays M1's target
-    (ADR 0011, A3).
-- **About 16:00, while the user was away**, under the 14:35 permission (the Release build of b9dd60f;
+    each. The launcher has no measurable B1 cost on screen (-1.9 ms, within noise). **B1 warm still fails**: its
+    target is p50 150 ms. It stays M1's target (ADR 0011, A3).
+- **About 16:30, while the user was away**, under the 14:35 permission (the Release build of b9dd60f;
   `launcher-impl\onscreen\README.txt`, `restart_fg.json`, `restart_fg2.json`):
   - The restart is confirmed in the foreground. The runs used CreateProcessW, as a terminal or a script starts a
-    program, and alternated 210 and 310 units, twice each. In every run a Qt window was visible 0.2 s after the
-    start, and it was the foreground window. From 310 units the window belonged to the restarted process. One
-    junction was created and then reused, and the launcher exited 0 after WM_CLOSE. So AllowSetForegroundWindow
-    is not needed on this path.
-  - The shell's limit. ShellExecuteW, which Explorer and shortcuts use, returned 5 for the 310-unit frost.exe:
-    no window and no junction appeared. The Windows shell cannot launch an executable at that length, so neither
-    can Explorer or a shortcut. A terminal or script launch works. This is a residual limit of Windows, not of
-    frost, and ADR 0012's Consequences record it. Only 310 units was tried. The `.lnk` run shows less: the
-    shortcut could not be given the 310-unit target in the first place.
+    program, and alternated 210 and 310 units, twice each. In every run a Qt window was visible within about 0.2
+    s of the start, and it was the foreground window. From 310 units the window belonged to the restarted
+    process. One junction was created and then reused, and the launcher exited 0 after WM_CLOSE. So
+    AllowSetForegroundWindow is not needed on this path. The script of these runs was not saved; the README
+    records their method.
+  - The shell's limit, partly inferred. One direct ShellExecuteW of the 310-unit frost.exe returned 5: no window
+    and no junction appeared. Inferred, not measured: that the path's length causes the 5 (no shorter-path
+    control was run), and that Explorer and shortcuts, which start programs through the shell, fail the same way
+    (neither was tried). A terminal or script launch works. If the inference holds, this is a residual limit of
+    Windows, not of frost; ADR 0012's Consequences record it. Only 310 units was tried. The `.lnk` run shows
+    less: the shortcut could not be given the 310-unit target in the first place.
 
 #### E4 closed, E5 and G3 done
 - **E4: closed without merging `m0/e4-asan-runtime`.** Its ASan case now passes for a real reason. The runtime
@@ -118,10 +135,14 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
 - `verify -Full` at `m0/foundation`'s final head (the sign-off): <!--FULL-->
 
 ### Next
-- The sign-off (ADR 0011, G1). If `-Full` at the final head is green, tag that commit `m0` (annotated, with the
-  `-Full` footer), create `main` from it and push both.
+- The sign-off (ADR 0011, G1). If `-Full` at the final head is green, record its footer in one more docs-only
+  commit ("M0: sign-off record"), tag that commit `m0` (annotated, with the `-Full` footer and a note that
+  `-Full` ran on its parent), create `main` from it, and push `m0/foundation`, `main`, `m0/decisions`,
+  `m0/longpath` and the tag.
 - **Next: M1.** It is already under way. `m1/piece-tree` has frost::text's piece tree (ADR 0013, three commits,
-  not merged). `m1/storage`, `m1/input-keymap` and `m1/theme-icons` have worktrees but no commits yet.
+  not merged). `m1/storage`, `m1/input-keymap` and `m1/theme-icons` have worktrees but no commits yet, and
+  `m1/diff-merge`, `m1/encodings` and `m1/undo-anchors` have worktrees on `m1/piece-tree`'s head (6fb6826),
+  created at about 16:45 (the state then).
 - M1 work from the decisions is listed in ADR 0011's Consequences (A1-A4, B1, D1, D2, E3, F2, G3). ADR 0012
   adds its TODO(M1)s in `main.cpp`: code that starts frost again, writes logs or dumps, or registers frost must
   take the install directory from `restartedFrom`; an explicit AppUserModelID; and logging a failed
