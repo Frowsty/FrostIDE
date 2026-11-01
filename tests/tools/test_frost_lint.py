@@ -199,6 +199,21 @@ class RepositoryRulesTest(TempDirTestCase):
         self.assertEqual(len(messages), 1)
         self.assertIn("missing", messages[0])
 
+    def test_vendored_sources_need_only_reuse_coverage(self) -> None:
+        # No header and a narrow API: fine under third_party/tree-sitter once REUSE.toml covers it.
+        rel = "third_party/tree-sitter/lib/src/a.c"
+        _write(self.tmp / rel, "int f(void) { return CreateFileA(0); }\n")
+        found = [(v.path, v.rule) for v in frost_lint.lint(self.tmp, [rel])]
+        self.assertEqual(found, [(rel, "reuse")])
+        _write(self.tmp / "REUSE.toml", "# SPDX-License-Identifier: Apache-2.0\n#\n# REUSE annotations for the test.\n"
+               'version = 1\n\n[[annotations]]\npath = "third_party/tree-sitter/**"\n'
+               'SPDX-FileCopyrightText = "Copyright (c) 2018 Max Brunsfeld"\nSPDX-License-Identifier = "MIT"\n')
+        self.assertEqual(frost_lint.lint(self.tmp, [rel, "REUSE.toml"]), [])
+        # The same file outside the vendored directories gets every rule.
+        _write(self.tmp / "src/a.c", "int f(void) { return CreateFileA(0); }\n")
+        rules = {v.rule for v in frost_lint.lint(self.tmp, ["src/a.c"])}
+        self.assertEqual(rules, {"spdx-header", "narrow-win32"})
+
     def test_sidecar_without_spdx_is_reported(self) -> None:
         _write(self.tmp / "logo.svg", "<svg/>\n")
         _write(self.tmp / "logo.svg.license", "no licence here\n")
@@ -312,6 +327,11 @@ class LexerTest(unittest.TestCase):
     def test_powershell(self) -> None:
         text = "<# one\ntwo #>\n$a = @\"\n# no\n\"@\n$b = '#no' # yes\n"
         self.assertEqual(self._comments(text, frost_lint.POWERSHELL), [(1, "one"), (2, "two"), (6, "yes")])
+
+    def test_tree_sitter_query(self) -> None:
+        text = '; one\n((identifier) @x (#eq? @x "; no")) ; two\n"#no" @y\n'
+        self.assertEqual(self._comments(text, frost_lint.TREE_SITTER_QUERY), [(1, "one"), (2, "two")])
+        self.assertIs(frost_lint.source_syntax("src/syntax/queries/c/highlights.scm"), frost_lint.TREE_SITTER_QUERY)
 
     def test_xml(self) -> None:
         text = '<?xml version="1.0"?>\n<!-- one\n  two -->\n<a/>\n'

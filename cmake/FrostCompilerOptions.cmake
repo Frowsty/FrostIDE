@@ -81,3 +81,34 @@ function(frost_apply_compile_options target kind)
         target_compile_options(${target} PRIVATE ${FROST_STARTUP_HYGIENE_WARNINGS})
     endif()
 endfunction()
+
+# frost_apply_c_options(<target> <OWN|VENDORED>): C11 options for the C targets of frost::syntax
+# (ADR 0023). OWN is our C code (the tree-sitter runtime wrapper) with the full warning set as
+# errors; VENDORED is upstream C we never edit (the grammars), compiled with warnings off because
+# their diagnostics are not ours to fix. Both get FROST_SANITIZE's flags, debug information and
+# upstream's feature macros. No /EHsc, /GR or C++ hardening macros: they are C++ only.
+function(frost_apply_c_options target kind)
+    if(NOT kind MATCHES "^(OWN|VENDORED)$")
+        message(FATAL_ERROR "frost_apply_c_options: kind must be OWN or VENDORED, got '${kind}'")
+    endif()
+    set_target_properties(${target} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(${target} PRIVATE ${FROST_SANITIZE_COMPILE_OPTIONS})
+    target_link_options(${target} PRIVATE ${FROST_SANITIZE_LINK_OPTIONS})
+    if(MSVC)
+        if(kind STREQUAL "OWN")
+            target_compile_options(${target} PRIVATE /W4 /WX -Wconversion -Wshadow /utf-8)
+        else()
+            target_compile_options(${target} PRIVATE /w /utf-8)
+        endif()
+        target_compile_definitions(${target} PRIVATE
+            WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00 _CRT_SECURE_NO_WARNINGS)
+    else()
+        if(kind STREQUAL "OWN")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror -g)
+        else()
+            target_compile_options(${target} PRIVATE -w -g)
+        endif()
+        # The feature macros of upstream tree-sitter's own CMakeLists.txt (fdopen, strdup).
+        target_compile_definitions(${target} PRIVATE _POSIX_C_SOURCE=200112L _DEFAULT_SOURCE)
+    endif()
+endfunction()

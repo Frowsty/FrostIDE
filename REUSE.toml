@@ -75,3 +75,41 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 The FrostIDE authors", "2026 Lucide Icons and Contributors",
                           "2013-present Cole Bemis"]
 SPDX-License-Identifier = "Apache-2.0 AND ISC AND MIT"
+
+# Vendored tree-sitter sources (third_party/vendor.lock.json, ADR 0023): upstream bytes under
+# each project's MIT licence, with the copyright line of its LICENSE file.
+[[annotations]]
+path = ["third_party/tree-sitter/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2018 Max Brunsfeld"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/grammars/c/**", "third_party/grammars/cpp/**", "third_party/grammars/json/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2014 Max Brunsfeld"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/grammars/c-sharp/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2014-2023 Max Brunsfeld, Damien Guard, Amaan Qureshi, and contributors"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/grammars/cmake/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2025 Uy Ha"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/grammars/xml/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2023 ObserverOfTime"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/grammars/markdown/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2021 Matthias Deiml"
+SPDX-License-Identifier = "MIT"

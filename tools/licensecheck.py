@@ -28,6 +28,9 @@
 #                (nameID 13 or 14) and the manifest's copyright holder (nameID 0), unless the
 #                asset records "nameTableLicence": false; and the asset's ADR present. Each
 #                asset becomes an SBOM package with its archive's SHA-256.
+#   vendored     third_party/vendor.lock.json (ADR 0023; absent means nothing vendored): the
+#                same checks for each vendored source component (no font checks apply), which
+#                becomes an SBOM package with its purl.
 # Module licences come from Qt's own SBOMs (<qt-root>/sbom/*.spdx.json, qt-root defaulting
 # to $FROST_QT_ROOT) and fall back to QT_MODULE_LICENCES for modules not installed.
 #
@@ -665,6 +668,8 @@ def check_qt(repo: Path, uses: list[QtUse], qt_root: Path | None, report: Report
 # ---------------------------------------------------------------------------------------
 
 ASSET_MANIFEST = "resources/assets.lock.json"
+# Vendored third-party sources (ADR 0023), checked with the same gate.
+VENDOR_MANIFEST = "third_party/vendor.lock.json"
 # Text every licence file must contain for each licence in the asset's expression.
 LICENCE_MARKERS = {
     "OFL-1.1": "SIL OPEN FONT LICENSE Version 1.1",
@@ -781,40 +786,45 @@ def _read_bounded(path: Path, limit: int) -> bytes:
     return data
 
 
-def check_assets(repo: Path, report: Report, files: list[str] | None = None) -> None:
-    """The bundled-asset gate (see the header comment). `files` is the repository listing."""
-    manifest = repo / ASSET_MANIFEST
+def check_assets(repo: Path, report: Report, files: list[str] | None = None,
+                 manifest_rel: str = ASSET_MANIFEST) -> None:
+    """
+    The bundled-asset gate (see the header comment) over `manifest_rel`: the asset manifest, or
+    the vendor lock (VENDOR_MANIFEST). `files` is the repository listing.
+    """
+    manifest = repo / manifest_rel
     if not manifest.is_file():
         return
     try:
-        _, assets = asset_fetch.load_manifest(manifest)
+        document, assets = asset_fetch.load_manifest(manifest)
     except asset_fetch.ManifestError as error:
-        report.violations.append(Violation(ASSET_MANIFEST, 1, f"invalid asset manifest: {error}"))
+        report.violations.append(Violation(manifest_rel, 1, f"invalid asset manifest: {error}"))
         return
+    vendored = asset_fetch.is_vendor_lock(document)
     listing = files if files is not None else frost_lint.list_repo_files(repo)
     for asset in assets:
-        label = f"asset {asset['id']}"
+        label = f"{'vendored' if vendored else 'asset'} {asset['id']}"
         dest = asset["dest"]
         licence = asset["licence"]
         try:
             ids = expression_ids(parse_expression(licence))
             allowed = expression_allowed(licence, ALLOWLIST)
         except ExpressionError as error:
-            report.violations.append(Violation(ASSET_MANIFEST, 1, f"{label}: licence {licence!r}: {error}"))
+            report.violations.append(Violation(manifest_rel, 1, f"{label}: licence {licence!r}: {error}"))
             ids, allowed = set(), False
         else:
             if not allowed:
                 report.violations.append(Violation(
-                    ASSET_MANIFEST, 1, f"{label}: licence '{licence}' is not on the allowlist; needs an ADR"))
+                    manifest_rel, 1, f"{label}: licence '{licence}' is not on the allowlist; needs an ADR"))
         if not asset["sha256"]:
             report.violations.append(Violation(
-                ASSET_MANIFEST, 1, f"{label}: the archive SHA-256 is not pinned (run asset_fetch.py --pin)"))
+                manifest_rel, 1, f"{label}: the archive SHA-256 is not pinned (run asset_fetch.py --pin)"))
         if asset["reservedFontNames"] and asset["modified"]:
             report.violations.append(Violation(
-                ASSET_MANIFEST, 1, f"{label}: a modified font may not keep its Reserved Font Names "
+                manifest_rel, 1, f"{label}: a modified font may not keep its Reserved Font Names "
                                    f"{asset['reservedFontNames']} (OFL-1.1 condition 3)"))
         if not (repo / asset["adr"]).is_file():
-            report.violations.append(Violation(ASSET_MANIFEST, 1, f"{label}: ADR {asset['adr']} does not exist"))
+            report.violations.append(Violation(manifest_rel, 1, f"{label}: ADR {asset['adr']} does not exist"))
         listed = dict(asset_fetch.asset_paths(asset))
         # OFL fonts are read once, bounded: the same bytes are hashed and their 'name' table read.
         check_names = "OFL-1.1" in ids and asset.get("nameTableLicence", True) is not False
@@ -836,11 +846,11 @@ def check_assets(repo: Path, report: Report, files: list[str] | None = None) -> 
                 continue
             if not expected or actual != expected:
                 report.violations.append(Violation(shown, 1, f"{label}: SHA-256 differs from the pin in "
-                                                             f"{ASSET_MANIFEST}"))
+                                                             f"{manifest_rel}"))
         for rel in listing:
             if rel.startswith(dest + "/") and rel[len(dest) + 1:] not in listed:
                 report.violations.append(Violation(
-                    rel, 1, f"{label}: file is not listed in {ASSET_MANIFEST} (no unlisted third-party files)"))
+                    rel, 1, f"{label}: file is not listed in {manifest_rel} (no unlisted third-party files)"))
         licence_path = repo / dest / asset["licenceFile"]
         if licence_path.is_file():
             text = licence_path.read_text(encoding="utf-8", errors="replace")
@@ -873,10 +883,11 @@ def check_assets(repo: Path, report: Report, files: list[str] | None = None) -> 
                     report.violations.append(Violation(
                         shown, 1, f"{label}: the 'name' table copyright (nameID 0) does not name "
                                   f"{' or '.join(repr(h) for h in holders)}"))
+        kind = "Vendored source" if vendored else "Bundled asset"
         report.packages.append(Package(
-            _spdx_id(f"Asset-{asset['id']}"), asset["name"], asset["version"], licence,
-            licence if allowed else "NOASSERTION", asset["url"], asset["homepage"], None,
-            f"Bundled asset ({dest}), pinned in {ASSET_MANIFEST}", "DEPENDS_ON", asset["sha256"] or None))
+            _spdx_id(f"{'Vendored' if vendored else 'Asset'}-{asset['id']}"), asset["name"], asset["version"],
+            licence, licence if allowed else "NOASSERTION", asset["url"], asset["homepage"], asset.get("purl"),
+            f"{kind} ({dest}), pinned in {manifest_rel}", "DEPENDS_ON", asset["sha256"] or None))
 
 
 # ---------------------------------------------------------------------------------------
@@ -965,6 +976,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     uses = cmake_qt_uses(repo, files) + binary_qt_uses(repo, build_dirs)
     check_qt(repo, uses, qt_root, report)
     check_assets(repo, report, files)
+    check_assets(repo, report, files, VENDOR_MANIFEST)
     report.violations = sorted(set(report.violations))
     return report
 
