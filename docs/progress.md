@@ -3,6 +3,149 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01 (afternoon): M0 complete
+
+M0's exit is met. `m0/decisions` and `m0/longpath` are merged into `m0/foundation`, and this exit record follows
+them: PLAN.md's M0 status and next-step lines, notes in ADRs 0011 and 0012, and pointers in the entries below. The
+launch from a path over 260 characters, the last unmet criterion, is met by ADR 0012, on two decisions by the user.
+The sign-off follows ADR 0011's G1: `verify -Full` on both platforms at `m0/foundation`'s final head, then, if it
+is green, the annotated tag `m0` with its footer on that commit, `main` created from it, and both pushed. The work
+was done in the main worktree, starting from `m0/foundation` at 593e15f, which was clean.
+
+### Done
+#### Landed on `m0/foundation`
+- **52809c6**, `git merge --no-ff m0/decisions` (c0c3f3c). It brings ADR 0011 and the decisions it applies
+  (7fb5a27), comment-accuracy round 5 (bc42ada), and the decisions check follow-ups with
+  `X_VCPKG_REGISTRIES_CACHE` (c0c3f3c). No conflicts.
+- **2d824ce**, `git merge --no-ff m0/longpath` (b9dd60f):
+  - 67838d1: test children start on a private desktop;
+  - 4c5533d: the launcher, with its review fixes in 33a329a;
+  - 2f40f9f: the short-junction restart, with its review fixes in b9dd60f;
+  - ADR 0012.
+
+  Three header comments conflicted: `cmake/FrostLayers.cmake`, `tests/cmake/check_runtime_dlls.cmake` and the
+  fixture's `shared/CMakeLists.txt`. Each keeps round 5's corrections and adds `m0/longpath`'s shared libraries.
+  The merged tree's non-comment lines in those files equal `m0/longpath`'s.
+- **The exit record** (this commit): PLAN.md's M0 status paragraph and next-step line; notes in ADR 0011 (E1,
+  E4, E5, G1, G3, Consequences) and ADR 0012 (the on-screen restart, the shell's limit); this entry; and the
+  decided and done pointers in the entries below.
+- **Not merged:** `m0/e4-asan-runtime` (19157a8). It stays pushed for the record (E4, below).
+
+#### E1 in short: frost starts from any path length (ADR 0012)
+- **The switch does not lift the loader's limit.** LongPathsEnabled=1 has been on since this morning. The
+  loader still refuses a plain path over 250 UTF-16 units for any DLL that embeds RT_MANIFEST 2, which every Qt
+  DLL and plugin and clang's ASan runtime do. The `\\?\` form of the same path loads at any length (ADR 0011,
+  Measurements; ADR 0012, Context).
+- **The launcher** (4c5533d, review fixes 33a329a). frost.exe is now a small launcher. It uses the static CRT and
+  imports KERNEL32.dll only. It loads frost_app.dll, and in ASan trees the ASan runtime, through `\\?\` paths.
+  frost_app.dll then pins Qt's platform plugin through `\\?\` before QApplication exists. Qt's DLLs are not
+  modified. The spike held the M0 criterion in 132 of 132 cells. The launcher's B1 cost is +0.1 to +1.0 ms
+  offscreen, and on screen it measured -1.9 ms, which is within noise (below).
+- **The GPU driver's MAX_PATH crash** (found by the review of 4c5533d). With Qt's native platform plugin, the GUI
+  and `--selftest=onscreen` died from an image path of 260 units (MAX_PATH) on. The cause is a fail-fast
+  (0xC0000409) in the DllMain of nvldumdx.dll, NVIDIA's user-mode driver loader. A python.exe that creates a
+  Direct3D 11 device dies the same way, so the limit is the driver's and applies to any process.
+- **The junction restart** (2f40f9f, review fixes b9dd60f). From an image path of 260 units or more, a start
+  that may load a GPU driver restarts through `%LOCALAPPDATA%\FrostIDE\i\<hash>`. That is a junction to the
+  install directory, which needs no administrator rights, and the launcher waits for the restarted frost and
+  returns its status. The review fixes:
+  - state honestly what holding the link guarantees;
+  - refuse the restart for an elevated frost;
+  - keep the restart marker only when it names the launcher's own image file.
+- **Matrix row I7 is green**, with six acceptance tests (E5, below).
+- **Evidence**, under `E:\FrostBuilds\perf\m0\longpaths-on\`:
+  - `run.log` and `scripts\`: the 09:00 measurement with the switch on;
+  - `probe\README.txt` (facts 1-32) and `launcher-spike\README.txt` (facts 1-22);
+  - `launcher-impl\`: test results, `timing_ab.json` and `review-fixes\`;
+  - `launcher-impl\junction\`: the premise, file-system facts and cost probes, and `review-fixes\verify_full.log`,
+    the -Full at b9dd60f;
+  - `launcher-impl\onscreen\README.txt` and `launcher-impl\b1-onscreen\README.txt`: the on-screen checks.
+
+#### The user's decisions
+- About 11:00, of "Approve stripping", "Use the launcher design" and "Neither for now": **"Use the launcher
+  design"** (ADR 0012, Context).
+- About 14:15, of "Restart via short link (Recommended)", "Use 8.3 short names" and "Known limitation":
+  **"Restart via short link (Recommended)"** (ADR 0012, Context).
+- They rest on this morning's instruction, "Follow your own recommendation what to do. The path limit should be
+  no problem now, I've enabled long paths" (ADR 0011).
+- At about 14:35 the user also said: "You may run continuously until I stop you. You don't have to ask for
+  permission to do any window testing etc. I will not be on my PC for a while possibly until tomorrow so please go
+  ahead finishe M1, start M2 when M1 is finished and so on". That answers G1's separate question about starting
+  M1.
+
+#### On-screen checks on the user's desktop
+- **14:20-14:26, approved by the user at the PC** (the Release launcher of 33a329a):
+  - The driver's limit (`launcher-impl\onscreen\README.txt`). From a 210-unit image path the GUI showed its
+    window and `--selftest=onscreen` passed on 'windows'. From 310 units both ended with 0xC0000409 after 0.1-0.3
+    s, without a window. The python.exe Direct3D 11 control, started through `\\?\`, created a device at 246 and
+    251 units and died at 260, 271 and 311.
+  - B1 on screen (`launcher-impl\b1-onscreen\README.txt`), with `s1_first_frame --mode warm --runs 15` and the
+    rounds interleaved. The single-image frost.exe had p50 197.5 ms and the launcher p50 195.6 ms, 24 valid runs
+    each. The launcher has no B1 cost. **B1 warm still fails**: its target is p50 150 ms. It stays M1's target
+    (ADR 0011, A3).
+- **About 16:00, while the user was away**, under the 14:35 permission (the Release build of b9dd60f;
+  `launcher-impl\onscreen\README.txt`, `restart_fg.json`, `restart_fg2.json`):
+  - The restart is confirmed in the foreground. The runs used CreateProcessW, as a terminal or a script starts a
+    program, and alternated 210 and 310 units, twice each. In every run a Qt window was visible 0.2 s after the
+    start, and it was the foreground window. From 310 units the window belonged to the restarted process. One
+    junction was created and then reused, and the launcher exited 0 after WM_CLOSE. So AllowSetForegroundWindow
+    is not needed on this path.
+  - The shell's limit. ShellExecuteW, which Explorer and shortcuts use, returned 5 for the 310-unit frost.exe:
+    no window and no junction appeared. The Windows shell cannot launch an executable at that length, so neither
+    can Explorer or a shortcut. A terminal or script launch works. This is a residual limit of Windows, not of
+    frost, and ADR 0012's Consequences record it. Only 310 units was tried. The `.lnk` run shows less: the
+    shortcut could not be given the 310-unit target in the first place.
+
+#### E4 closed, E5 and G3 done
+- **E4: closed without merging `m0/e4-asan-runtime`.** Its ASan case now passes for a real reason. The runtime
+  is no longer a static import of frost.exe, and the launcher loads it through `\\?\`. 4c5533d replaced
+  `PlatformPluginPathBoundary` with tests that assert at least as much, and they pass in the ASan tree (419/419
+  at b9dd60f). Stripping the runtime's manifest also belonged to "Approve stripping", the option the user passed
+  over. The branch stays pushed at 19157a8 (ADR 0011, E4's outcome).
+- **E5: done.** I7 is `green`, with `FrostProcess.SelfTestPasses`, `StartsFromEveryDirectoryLength`,
+  `StartsWithLongPathsIneffective`, `RunsFromPathLongerThanMaxPath`, `SelfTestOnScreenFromEveryImagePathLength`
+  and `GuiStartFromALongPathShowsItsWindow` as its acceptance tests.
+- **G3: done.** The comment-accuracy round over the E1 fix is `m0/longpath`'s reviews, whose findings are fixed
+  in 33a329a and b9dd60f. The refusal message with the LongPathsEnabled advice is gone.
+
+#### Verification
+- `m0/longpath` at b9dd60f, `tools\verify.ps1 -Full -Jobs 4` on a hidden desktop: win debug 415/415, win release
+  418/418, win asan 419/419, wsl debug 335/335, wsl asan 339/339, wsl tsan 338/338, wsl licensecheck ok, format
+  ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run.
+- After each merge, on the merged tree: frost_lint ok (280 files, then 287), licensecheck ok, featurecheck ok, the
+  tools tests 80/80 and `git diff --check` clean.
+- This exit record (docs only): frost_lint ok, featurecheck ok, licensecheck ok, `git diff --check` clean.
+- `verify -Full` at `m0/foundation`'s final head (the sign-off): <!--FULL-->
+
+### Next
+- The sign-off (ADR 0011, G1). If `-Full` at the final head is green, tag that commit `m0` (annotated, with the
+  `-Full` footer), create `main` from it and push both.
+- **Next: M1.** It is already under way. `m1/piece-tree` has frost::text's piece tree (ADR 0013, three commits,
+  not merged). `m1/storage`, `m1/input-keymap` and `m1/theme-icons` have worktrees but no commits yet.
+- M1 work from the decisions is listed in ADR 0011's Consequences (A1-A4, B1, D1, D2, E3, F2, G3). ADR 0012
+  adds its TODO(M1)s in `main.cpp`: code that starts frost again, writes logs or dumps, or registers frost must
+  take the install directory from `restartedFrom`; an explicit AppUserModelID; and logging a failed
+  non-platform preload in the GUI.
+- ADR 0012's TODO(M2): sweep stale short links.
+
+### Blockers
+- None for M0 apart from the `-Full` run at the final head.
+- B1 warm fails: about 195 ms on screen against p50 150 ms. That is M1 work (ADR 0011, A3), not an M0 exit
+  criterion.
+
+### Questions for the user
+- **The restart's cost: about 10 ms, against the "about 5 ms" in the option you chose.** The real
+  `--selftest=onscreen` from 300 units pays +8.5 to +10.3 ms (paired p50 +9.0 and +9.7 ms). The stand-in without
+  Qt pays +6.4 to +7.8 ms, about one more launcher start. Only GUI and on-screen starts from an image path of 260
+  units or more pay it. No budget covers it. Is that acceptable, or should it be reduced? (ADR 0012,
+  Measurements, "The short link")
+- **An elevated frost from 260 units or more refuses to restart.** A frost started with "Run as administrator"
+  from such a path exits with status 4 and a message. Programs of the same user that run without elevation could
+  retarget the junction and so choose the code an elevated frost loads, which is the usual junction-based UAC
+  bypass. So an elevated GUI start from a path that deep does not work. Is that acceptable? The alternatives (a
+  DACL-protected link, an administrator-owned folder) and their costs are in ADR 0012's Alternatives. The refusal
+  is not tested automatically, because no test can elevate without a prompt.
+
 ## 2026-11-01 (morning): M0 decisions
 
 At about 09:10 the user answered the M0 questions (A1–G1 in the entry below, and E5, G2 and G3 from the demo
@@ -39,13 +182,20 @@ it is not merged and not pushed.
 - **E, start-up and paths.**
   - E1: the switch does not lift the limit (below). frost is to start from every directory length with the switch
     on or off; that is the `m0/longpath` work.
+    - **Done** (afternoon; ADR 0012, merged in 2d824ce): met, through the launcher and the short-junction restart,
+      on the user's decisions "Use the launcher design" and "Restart via short link (Recommended)". See the entry
+      "2026-11-01 (afternoon): M0 complete".
   - E2: in M2, trusted user-script children get NoDefaultCurrentDirectoryInExePath stripped; restricted children
     keep it.
   - E3: in M1, frost::io refuses non-writable POSIX targets, and the SaveManager offers an explicit overwrite.
   - E4: if the E1 fix makes `PlatformPluginPathBoundary`'s ASan case pass, or makes it moot, `m0/e4-asan-runtime`
     is not merged and stays pushed for the record. Otherwise it is merged (option (d)).
+    - **Closed** (afternoon; ADR 0011, E4's outcome): the launcher does both, so `m0/e4-asan-runtime` is not merged
+      and stays pushed at 19157a8. See the entry "M0 complete".
   - E5: once the E1 fix lands, matrix row I7 gets `FrostProcess.SelfTestPasses` and the long-path launch tests
     as its acceptance tests.
+    - **Done** (afternoon; ADR 0011, E5's outcome): I7 is `green` with six acceptance tests. See the entry "M0
+      complete".
 - **F, machine and tooling.** No action on G HUB (F1). No Linux sccache; M1 caches or avoids the FindOpenGL
   searches instead (F2, TODO below). B28 reads the full default build, and its method fixes the probe files and
   the job counts (F3; ADR 0010 decision 2 accepted).
@@ -54,6 +204,9 @@ it is not merged and not pushed.
   created from it, and both are pushed. Starting M1 is a separate question (G1). ADR 0002 is accepted (G2). One
   more comment-accuracy round covers the `m0/dll-copy` build code (done: round 5, below) and the E1 fix
   (`m0/longpath`'s review), and the POSIX strerror text gets a TODO(M1) (G3).
+  - **Afternoon:** G3's round over the E1 fix is done (`m0/longpath`'s reviews, fixed in 33a329a and b9dd60f).
+    G1's conditions are met apart from `verify -Full` at the final head, which the sign-off runs before it tags
+    `m0` and creates `main`. The user answered the M1 question at about 14:35. See the entry "M0 complete".
 
 #### Applied on `m0/decisions`
 - `docs/adr/0011-m0-decisions.md` (new).
@@ -195,8 +348,12 @@ The user runs it from an elevated prompt when M2 evaluates TerminalAppLib:
 - Merge `m0/decisions` after its review. PLAN.md's M0 status paragraph and next-step line are left for the final
   integration.
 - M1, M2 and M3 work from the decisions: ADR 0011, Consequences.
+- **Afternoon:** `m0/longpath` (E1, E4, E5) and `m0/decisions` are merged (2d824ce, 52809c6), and PLAN.md's two M0
+  lines are updated. What remains is `-Full` at the final head, then G1 (entry "M0 complete").
 
 ### Blockers
+- **Afternoon:** the E1 fix has landed (entry "M0 complete"). That resolves the second blocker below and the E1
+  part of the first; the sign-off still waits on `-Full` at the final head.
 - Sign-off waits on the E1 fix (`m0/longpath`) and on a green `verify -Full` (G1).
 - With the switch on, frost started from a directory of 226–235 or 250+ units shows Qt's dialog or aborts, until
   the E1 fix lands. For the same reason `verify -Quick` on Windows fails two long-path tests on every branch here
@@ -631,6 +788,9 @@ with a pointer.
   - **Decided 2026-11-01** (ADR 0011, E1): the user enabled the switch, and it does not lift the limit (measured,
     entry above). frost is fixed to start from every directory length, whether the switch is on or off
     (`m0/longpath`); the criterion stays.
+  - **Done 2026-11-01 (afternoon)** (ADR 0012; merged in 2d824ce): the criterion is met through the launcher
+    ("Use the launcher design") and the short-junction restart ("Restart via short link (Recommended)"). See
+    the entry "2026-11-01 (afternoon): M0 complete".
 - **E2.** By M2: should trusted user-script children (MSBuild Exec and build events, CMake configure, later
   Build/Run and the terminal) get Visual Studio-compatible cmd.exe behaviour, with
   NoDefaultCurrentDirectoryInExePath stripped? Or keep the hardened behaviour, where a tool in the current directory
@@ -715,6 +875,9 @@ with a pointer.
     - Evidence: `E:\FrostBuilds\perf\m0\exit-full\e4-option-d\` (`README.txt` maps it).
   - **Decided 2026-11-01** (ADR 0011, E4): if the E1 fix makes the ASan case pass, or makes it moot, on its own,
     `m0/e4-asan-runtime` is not merged and stays pushed for the record; otherwise it is merged (option (d)).
+  - **Closed 2026-11-01 (afternoon)** (ADR 0011, E4's outcome; ADR 0012, Measurements): the launcher makes the ASan
+    case pass for a real reason, and 4c5533d replaced the test with stronger ones. `m0/e4-asan-runtime` is not
+    merged and stays pushed at 19157a8. See the entry "M0 complete".
 
 **F. Machine and tooling**
 - **F1.** Logitech G HUB (lghub_agent.exe) holds about 43 GB of commit. Restarting it would give the builds
@@ -735,6 +898,9 @@ with a pointer.
   - **Decided 2026-11-01** (ADR 0011, G1): signed off once `verify -Full` is green on both platforms at
     `m0/foundation`'s final head and every item is recorded; then tag `m0`, create `main` and push both. Starting
     M1 is a separate question. Not signed off yet.
+  - **2026-11-01 (afternoon):** every item is recorded, and E1, E4, E5 and G3 are done. The sign-off runs `-Full`
+    at the final head, then tags `m0` and creates `main`. The user answered the M1 question at about 14:35 ("go
+    ahead finishe M1, start M2 when M1 is finished and so on"). See the entry "M0 complete".
 
 ## 2026-10-31: M0 bootstrap, session 1
 

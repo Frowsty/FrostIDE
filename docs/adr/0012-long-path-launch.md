@@ -361,6 +361,23 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   p50 197.5 ms, the launcher (33a329a) p50 195.6 ms, n 24 valid each; -1.9 ms, within noise. B1's warm p50 budget
   (150 ms) is missed before and after, as recorded (ADR 0007, question A3). Both runs start from short paths, so
   no restart is involved.
+- **The restart on the interactive desktop** (2026-11-01 at about 16:00, the Release build of b9dd60f, under the
+  user's standing permission of about 14:35 for window tests while they are away;
+  `E:\FrostBuilds\perf\m0\longpaths-on\launcher-impl\onscreen\README.txt`, with `restart_fg.py`,
+  `restart_fg.json` and `restart_fg2.json` beside it). The Release launcher tree was copied into a directory with
+  non-ASCII characters and spaces, so that frost.exe's image path was 310 units, and LOCALAPPDATA pointed at a
+  scratch folder.
+  - *Started with CreateProcessW*, as a terminal or a script starts it, alternating 210 and 310 units, twice each.
+    Every run showed a visible Qt window 0.2 s after the start, and it was the foreground window. From 310 units
+    the window belonged to the restarted process (a pid other than the launcher's). One junction was created under
+    the scratch LOCALAPPDATA, and the second long start reused it. The launcher exited 0 after WM_CLOSE. So on
+    this path the restarted GUI comes to the foreground without AllowSetForegroundWindow.
+  - *Started with ShellExecuteW*, as Explorer and shortcuts start a program: for the 310-unit frost.exe it returned
+    5 (SE_ERR_ACCESSDENIED), and no window and no junction appeared. The Windows shell refuses the executable at
+    that length before frost runs at all, so the restart cannot help. The run through a `.lnk` shortcut also
+    returned 5, but it shows less: WScript.Shell refused the 310-unit target when the script created the shortcut
+    (ArgumentException, `restart_fg.json`), so that shortcut did not name frost.exe. Only 310 units was tried.
+    That the shell's limit starts at 260 units (MAX_PATH) is inferred; lengths from 260 to 309 were not tried.
 - **The short link** (Release, Debug and ASan builds of this change; probes and raw results in
   `E:\FrostBuilds\perf\m0\longpaths-on\launcher-impl\junction\`, every run on a hidden or private desktop):
   - Premise (`pj_premise.json`): the python.exe control in a 300-unit directory dies with 0xC0000409 through its
@@ -426,7 +443,15 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   matrix row I7 is `green`. The driver's limit was confirmed on the interactive desktop; the restart was run on
   hidden and private desktops only, because a run on the user's desktop needs their approval at the PC. It works
   because the driver reads the path the process was started through, which the link makes short; it would not help
-  against a limit on the directory's real path, which no driver showed.
+  against a limit on the directory's real path, which no driver showed. Update (2026-11-01, about 16:00): the
+  restart has since run on the interactive desktop too. From a 310-unit image path started with CreateProcessW,
+  the restarted GUI showed its window in the foreground (Measurements, "The restart on the interactive desktop").
+- Residual limit, the shell's (the same on-screen check): the Windows shell cannot start an executable at 260 units
+  or more. Measured at 310 units, ShellExecuteW returns 5 and frost does not start (no window, no junction); the
+  260-unit threshold is inferred, not measured. A frost installed that deep therefore cannot be started from Explorer, a shortcut or
+  anything else that goes through ShellExecuteW; that happens before frost runs, so no fix in frost reaches it. A
+  terminal or script start (CreateProcessW) works, through the restart. Registrations that go through the shell
+  (file associations and shortcuts, I10 in M2) inherit the limit.
 - A start from 260 units or more that may load a GPU driver costs about 7 ms more (one more launcher start;
   about 10 ms for the on-screen self-test, against the about 5 ms the user's option named) and creates
   `%LOCALAPPDATA%\FrostIDE\i\<hash>` on first use. Starts from
@@ -465,7 +490,11 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   Explorer or a shortcut comes to the foreground: its window is created by a process that the waiting launcher
   started, not by the one Explorer started. If it does not, the remedy is AllowSetForegroundWindow for the
   restarted process through a lazily loaded user32 in GUI restarts; that needs an on-screen run, which needs the
-  user's approval at the PC. The GUI start (`frost` without arguments) is
+  user's approval at the PC. (Update, 2026-11-01 about 16:00: the on-screen run is done. A CreateProcessW start
+  from 310 units, as a terminal or a script makes it, brought the restarted window to the foreground, so
+  AllowSetForegroundWindow is not needed there. Explorer and shortcut starts from that length never reach frost,
+  because the shell refuses them (Measurements). Neither is an automated test.) The GUI start (`frost` without
+  arguments) is
   tested on a private desktop from 300 units, its window and its failure box both; the native platform plugin
   through `--selftest=onscreen` up to 400 units. The spike did not cover the native platform at all (its README
   lists it as not measured); spike fact 15 is the offscreen self-test, and only probe fact 27 (qtprobe, not frost)
@@ -475,6 +504,7 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
 - TODO(M1): log a failed non-platform preload in the GUI once frost::core has logging (`src/app/src/main.cpp`).
 - PLAN.md's M0 status paragraph (section 7) and its "Next step" note still say that the launch over 260 characters is
   not met while LongPathsEnabled=0 and that one ASan test fails; both are left to the branch that edits PLAN.md.
+  (Done 2026-11-01 in M0's exit record on `m0/foundation`: both now say that the criterion is met.)
 
 ## Alternatives considered
 - **Strip RT_MANIFEST 2 from the deployed DLLs** (design B; probe 10; for the ASan runtime alone, branch

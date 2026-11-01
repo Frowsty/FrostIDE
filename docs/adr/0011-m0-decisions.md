@@ -181,6 +181,23 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
     trusts the switch and no longer refuses. A Release frost from a directory of 226–235 units waits on Qt's
     message box, a Debug one from 225–234 units aborts, and both do the same from 250 units on.
   - Where: M0, on `m0/longpath`.
+  - Outcome (2026-11-01, ADR 0012; `m0/longpath` merged into `m0/foundation` in 2d824ce): **met.** The user made
+    two decisions, quoted in ADR 0012's Context:
+    - "Use the launcher design" (about 11:00). frost.exe is now a small launcher that imports KERNEL32.dll only
+      and loads frost_app.dll, and in ASan trees clang's ASan runtime, through `\\?\` paths. No DLL that embeds
+      RT_MANIFEST 2 is a static import of frost.exe any more, and Qt's DLLs stay unmodified.
+    - "Restart via short link (Recommended)" (about 14:15). The launcher's review found a second limit, not the
+      loader's: NVIDIA's user-mode driver ends any process whose image path is 260 UTF-16 units or longer
+      (0xC0000409 in nvldumdx.dll). So from 260 units, a start that may load a GPU driver restarts through a
+      junction under `%LOCALAPPDATA%\FrostIDE\i` (ADR 0012, decision 8).
+
+    The command-line modes and the offscreen self-test start in place at every measured length: 22 lengths from
+    200 to 400 units, plain and `\\?\`, in Release, Debug and ASan, with long paths effective or not. The GUI and
+    the on-screen self-test start through the link, tested from image paths of 250 to 400 units. Two cases are
+    refused with a message: install directories over about 4,089 units, and elevated starts from 260 units on.
+    The restart costs about 10 ms for an on-screen start, against the 5 ms that the user's option named. The
+    Windows shell (ShellExecuteW, so Explorer and shortcuts) cannot start an executable at a 310-unit path at
+    all; a terminal or script start works (ADR 0012, Measurements).
 - **E2. Trusted user-script children get Visual Studio-compatible cmd.exe behaviour.**
   - Basis: frost's start-up sets NoDefaultCurrentDirectoryInExePath=1, and every child inherits it. cmd.exe in a
     user build script then no longer runs a tool from its current directory by bare name, as it does under Visual
@@ -206,6 +223,17 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
     on its own, `m0/e4-asan-runtime` is not merged, and the pushed branch stays for the record. Otherwise it is
     merged (option (d)).
   - Where: M0, after `m0/longpath`.
+  - Outcome (2026-11-01, ADR 0012, Measurements, "E4"): **closed by the E1 fix; `m0/e4-asan-runtime` is not
+    merged** and stays pushed at 19157a8 for the record. Both conditions above hold:
+    - The ASan case passes for a real reason. Its 225- and 226-unit starts died because the ASan runtime was a
+      static import of frost.exe. The launcher has no such import and loads the runtime by its `\\?\` path, so
+      the ASan frost starts at 225, 226 and every other measured length without a changed fixture.
+    - The test itself is moot. 4c5533d replaced `PlatformPluginPathBoundary` with tests that assert at least as
+      much (ADR 0012, "Removed and relaxed tests"). They pass in the ASan tree: win asan 419/419 at b9dd60f.
+
+    Option (d) would also go against the user's first decision. Its stripped runtime belonged to "Approve
+    stripping", the option the user passed over for "Use the launcher design" (ADR 0012, Context and
+    Alternatives), and ADR 0012's decision 7 modifies no DLL.
 - **E5. Feature-matrix row I7 gets its acceptance tests after the E1 fix.**
   - Basis: I7 ("Windows long paths, UTF-8 code-page manifest") is the matrix's only M0 row, and every milestone
     exit needs a green matrix slice (PLAN.md section 7). `FrostProcess.SelfTestPasses` proves the manifest and
@@ -215,6 +243,11 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
     acceptance test). That is the demo pack's option (a). `tests/features/matrix.json` changes after
     `m0/longpath` merges, not on this branch.
   - Where: M0, after `m0/longpath`.
+  - Outcome (2026-11-01, ADR 0012): **done**, on `m0/longpath` itself (4c5533d, 33a329a and 2f40f9f) rather than
+    after its merge. I7 is `green` in `tests/features/matrix.json`, with six acceptance tests:
+    `FrostProcess.SelfTestPasses`, `StartsFromEveryDirectoryLength`, `StartsWithLongPathsIneffective`,
+    `RunsFromPathLongerThanMaxPath`, `SelfTestOnScreenFromEveryImagePathLength` and
+    `GuiStartFromALongPathShowsItsWindow`. featurecheck passes. This is option (a) with more tests than it named.
 
 ### F. Machine and tooling
 - **F1. Logitech G HUB: no action.**
@@ -245,6 +278,11 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
     `main` is created from it, and both are pushed. Starting M1 is a separate question for the user, because M1
     work loads the PC.
   - Where: M0, after E1, E4, E5 and G3.
+  - Note (2026-11-01, afternoon): E1, E4, E5 and G3 are done (their outcomes above and below). `m0/decisions` and
+    `m0/longpath` are merged into `m0/foundation` (52809c6, 2d824ce), and the exit record follows them. The
+    sign-off runs `verify -Full` on both platforms at that final head and tags and pushes only if it is green
+    (`docs/progress.md`, entry "M0 complete"). The separate question about starting M1 was answered by the user
+    at about 14:35: "go ahead finishe M1, start M2 when M1 is finished and so on".
 - **G2. ADR 0002 is accepted.**
   - Basis: `m0/sched` is merged and was independently reviewed, and its M0 exit numbers are met, including the
     exit-scale TSan re-run on 3563873 (`docs/progress.md`).
@@ -263,6 +301,9 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
   - Where: M0. The round over the `m0/dll-copy` code is done: comment-accuracy round 5 applied its 9 findings in
     bc42ada, comments only (`docs/progress.md`). The round over the E1 fix is `m0/longpath`'s review. M1: the
     strerror text and the capture retry.
+  - Note (2026-11-01, afternoon): the round over the E1 fix is done. `m0/longpath`'s reviews of 4c5533d and
+    2f40f9f were fixed in 33a329a and b9dd60f (ADR 0012). The refusal message with its LongPathsEnabled advice no
+    longer exists: frost no longer refuses long plugin paths.
 
 ## Measurements
 ### Long-path launch with LongPathsEnabled = 1
@@ -319,6 +360,9 @@ implemented: now (on this branch), at a later M0 step, or in a later milestone.
 - **Remaining M0 steps, in order:** the E1 fix (`m0/longpath`, which also touches ADR 0003), whose review is G3's
   comment-accuracy round over it; E4's outcome; I7's acceptance tests (E5); `verify -Full` on both platforms at
   `m0/foundation`'s final head; then G1.
+- **Update 2026-11-01 (afternoon), M0's exit record:** PLAN.md's M0 status paragraph and its next-step line now
+  say that M0's exit is met. The E1 fix, its review, E4's outcome and I7's acceptance tests are done (the outcomes
+  under E1, E4, E5 and G3). What remains is `verify -Full` at `m0/foundation`'s final head, then G1.
 - **M1:** QRhi on Windows (A1) and the B6 gating decision (A2); B1's work (A3); the logon harness for cold B1 and
   the passive S6 samples (A4, B1); Tracy under the exception (D1, D2); POSIX read-only refusal (E3); the
   FindOpenGL searches (F2); the strerror text and the capture retry (G3).
