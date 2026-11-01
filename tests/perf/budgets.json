@@ -448,7 +448,7 @@
       "variants": [],
       "percentiles": ["p50", "p99"],
       "targets": [
-        { "gate": "M3", "percentile": "p50", "max": 25.1, "relative": "S7 baseline x1.2", "unit": "s", "note": "S7 baseline p50 20.93 s on REF-W1 (20 runs, clangd launch to both answers from the persisted index, warm file cache; ADR 0008)" },
+        { "gate": "M3", "percentile": "p50", "max": 18.4, "relative": "S7 baseline x1.2", "unit": "s", "note": "S7 baseline p50 15.31 s on REF-W1, quiet-machine control, 20 runs (ADR 0008): clangd launch to both answers from the persisted index; R3 at 7a941dfb2 configured with Ninja, LLVM_ENABLE_PROJECTS=clang, CMAKE_BUILD_TYPE=Release and the clang-cl toolchain file, TableGen targets built; CMake's compile_commands.json (5945 entries); a complete index built with --background-index -j=4 (12,364 shards); warm file cache; unlocked console session and no user input (PLAN 6.3 checks), no heavy user workload. Under the user's workload the same runs gave p50 20.93 s." },
         { "gate": "M13", "percentile": "p50", "max": 2, "unit": "s" },
         { "gate": "M13", "percentile": "p99", "max": 3, "unit": "s" }
       ],
