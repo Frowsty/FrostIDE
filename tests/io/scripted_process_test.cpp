@@ -2,15 +2,19 @@
 //
 // Tests for ScriptedProcessLauncher, the IProcessLauncher double: scripted
 // output and exit codes, recorded launches and stdin, the same validation as
-// the real launcher, and deterministic hung-process behaviour.
+// the real launcher, deterministic hung-process behaviour, and the scripted
+// container (leftovers, terminateContained, release, held and abandoned output).
 
+#include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -228,6 +232,87 @@ TEST(ScriptedProcessLauncher, ProcessesMayOutliveTheLauncher) {
     const auto result = process->communicate("", 1s);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->stdoutBytes, "late");
+}
+
+} // namespace
+
+namespace {
+
+ProcessSpec uncontained() {
+    ProcessSpec spec = gitStatus();
+    spec.killOnClose = false;
+    return spec;
+}
+
+TEST(ScriptedProcessLauncher, ContainersListEndReleaseAndAbandon) {
+    ScriptedProcessLauncher launcher;
+    launcher.expect(ScriptedProcess{.neverExits = true, .leftovers = {{9001, "mspdbsrv.exe"}, {9002, "notepad.exe"}}});
+    auto process = launcher.launch(gitStatus());
+    ASSERT_TRUE(process.has_value());
+    const auto pid = (*process)->pid();
+    auto listed = (*process)->containedProcesses();
+    ASSERT_TRUE(listed.has_value());
+    EXPECT_EQ(*listed,
+              (std::vector<frost::io::ContainedProcess>{
+                  {pid, std::string(frost::io::fileName(kTool))}, {9001, "mspdbsrv.exe"}, {9002, "notepad.exe"}}));
+
+    ASSERT_TRUE((*process)->terminateContained(9001).has_value());
+    EXPECT_EQ((*process)->terminateContained(4242).error().code(), ErrorCode::InvalidArgument);
+    ASSERT_TRUE((*process)->releaseContainer().has_value());
+    (*process)->abandonOutput();
+    std::array<char, 16> buffer{};
+    EXPECT_EQ((*process)->readStdout(buffer).value(), 0U);
+    EXPECT_EQ((*process)->containedProcesses()->size(), 2U); // The child and notepad.exe.
+
+    const auto record = launcher.launches().at(0);
+    EXPECT_EQ(record.terminatedContained, std::vector<frost::io::ProcessId>{9001});
+    EXPECT_TRUE(record.containerReleased);
+    EXPECT_TRUE(record.outputAbandoned);
+    EXPECT_FALSE(record.terminated);
+
+    // terminate() ends the whole container.
+    ASSERT_TRUE((*process)->terminate().has_value());
+    EXPECT_TRUE((*process)->containedProcesses()->empty());
+}
+
+TEST(ScriptedProcessLauncher, UncontainedProcessesHaveNoContainer) {
+    ScriptedProcessLauncher launcher;
+    launcher.expect(ScriptedProcess{});
+    auto process = launcher.launch(uncontained());
+    ASSERT_TRUE(process.has_value());
+    EXPECT_EQ((*process)->containedProcesses().error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ((*process)->terminateContained(1).error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ((*process)->releaseContainer().error().code(), ErrorCode::Unsupported);
+}
+
+TEST(ScriptedProcessLauncher, HeldOutputBlocksUntilAbandoned) {
+    ScriptedProcessLauncher launcher;
+    launcher.expect(ScriptedProcess{.stdoutBytes = "built\n", .outputHeld = true});
+    auto process = launcher.launch(gitStatus());
+    ASSERT_TRUE(process.has_value());
+    std::array<char, 64> buffer{};
+    EXPECT_EQ((*process)->readStdout(buffer).value(), 6U);
+    std::atomic<bool> done{false};
+    std::thread reader([&] {
+        std::array<char, 64> rest{};
+        EXPECT_EQ((*process)->readStdout(rest).value(), 0U);
+        done = true;
+    });
+    std::this_thread::sleep_for(50ms);
+    EXPECT_FALSE(done.load()); // Still held.
+    (*process)->abandonOutput();
+    reader.join();
+    EXPECT_TRUE(done.load());
+}
+
+TEST(ScriptedProcessLauncher, ATerminateThatRacesTheExitKeepsTheExitCode) {
+    ScriptedProcessLauncher launcher;
+    launcher.expect(ScriptedProcess{.exitCode = 0, .neverExits = true, .racesTerminate = true});
+    auto process = launcher.launch(gitStatus());
+    ASSERT_TRUE(process.has_value());
+    EXPECT_EQ((*process)->wait(1s).error().code(), ErrorCode::Timeout);
+    ASSERT_TRUE((*process)->terminate().has_value());
+    EXPECT_EQ((*process)->wait().value(), (frost::io::ExitStatus{0, 0}));
 }
 
 } // namespace

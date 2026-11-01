@@ -6,10 +6,12 @@
 #include "frost/io/scripted_process_launcher.hpp"
 
 #include "frost/core/mutex.hpp"
+#include "frost/io/path.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/task.hpp"
 
 #include <algorithm>
+#include <condition_variable>
 #include <coroutine>
 #include <csignal>
 #include <cstdint>
@@ -45,8 +47,10 @@ public:
     ScriptedChild(std::shared_ptr<ScriptedProcessLauncher::State> state, std::size_t index, ProcessId pid,
                   const ScriptedProcess& script, const ProcessSpec& spec)
         : m_state(std::move(state)), m_index(index), m_pid(pid), m_status{script.exitCode, script.signal},
-          m_neverExits(script.neverExits), m_stdinPipe(spec.stdinMode == Stdio::Pipe),
-          m_stdoutPipe(spec.stdoutMode == Stdio::Pipe), m_stderrPipe(spec.stderrMode == Stdio::Pipe) {
+          m_neverExits(script.neverExits), m_racesTerminate(script.racesTerminate), m_outputHeld(script.outputHeld),
+          m_contained(spec.killOnClose), m_image(fileName(spec.executable)), m_stdinPipe(spec.stdinMode == Stdio::Pipe),
+          m_stdoutPipe(spec.stdoutMode == Stdio::Pipe), m_stderrPipe(spec.stderrMode == Stdio::Pipe),
+          m_leftovers(script.leftovers) {
         if (m_stdoutPipe) {
             m_stdout = script.stdoutBytes;
             if (spec.stderrMode == Stdio::MergeIntoStdout) {
@@ -86,13 +90,13 @@ public:
     }
 
     Result<std::size_t> readStdout(std::span<char> buffer) override {
-        LockGuard lock(m_mutex);
-        return read(m_stdoutPipe, m_stdout, m_stdoutPos, buffer, "readStdout");
+        UniqueLock lock(m_mutex);
+        return read(lock, m_stdoutPipe, m_stdout, m_stdoutPos, buffer, "readStdout");
     }
 
     Result<std::size_t> readStderr(std::span<char> buffer) override {
-        LockGuard lock(m_mutex);
-        return read(m_stderrPipe, m_stderr, m_stderrPos, buffer, "readStderr");
+        UniqueLock lock(m_mutex);
+        return read(lock, m_stderrPipe, m_stderr, m_stderrPos, buffer, "readStderr");
     }
 
     Result<ExitStatus> wait(std::optional<IClock::Duration> timeout) override {
@@ -104,17 +108,74 @@ public:
             }
             return fail(ErrorCode::Timeout, std::format("process {} is still running", m_pid));
         }
-        return m_terminated && m_neverExits ? kTerminatedStatus : m_status;
+        return status();
     }
 
     Result<void> terminate() override {
         {
             LockGuard lock(m_mutex);
             m_terminated = true;
+            m_leftovers.clear();
         }
+        m_changed.notify_all();
         LockGuard lock(m_state->mutex);
         m_state->records[m_index].terminated = true;
         return {};
+    }
+
+    Result<std::vector<ContainedProcess>> containedProcesses() override {
+        if (!m_contained) {
+            return fail(ErrorCode::Unsupported, std::format("scripted process {} is not contained", m_pid));
+        }
+        LockGuard lock(m_mutex);
+        std::vector<ContainedProcess> processes;
+        if (m_neverExits && !m_terminated && !m_childTerminated) {
+            processes.push_back({m_pid, m_image});
+        }
+        processes.insert(processes.end(), m_leftovers.begin(), m_leftovers.end());
+        return processes;
+    }
+
+    Result<void> terminateContained(ProcessId pid) override {
+        if (!m_contained) {
+            return fail(ErrorCode::Unsupported, std::format("scripted process {} is not contained", m_pid));
+        }
+        {
+            LockGuard lock(m_mutex);
+            if (pid == m_pid) {
+                m_childTerminated = true;
+            } else {
+                const auto it =
+                    std::ranges::find_if(m_leftovers, [pid](const ContainedProcess& p) { return p.pid == pid; });
+                if (it == m_leftovers.end()) {
+                    return fail(ErrorCode::InvalidArgument,
+                                std::format("process {} is not in the container of scripted process {}", pid, m_pid));
+                }
+                m_leftovers.erase(it);
+            }
+        }
+        LockGuard lock(m_state->mutex);
+        m_state->records[m_index].terminatedContained.push_back(pid);
+        return {};
+    }
+
+    Result<void> releaseContainer() override {
+        if (!m_contained) {
+            return fail(ErrorCode::Unsupported, std::format("scripted process {} is not contained", m_pid));
+        }
+        LockGuard lock(m_state->mutex);
+        m_state->records[m_index].containerReleased = true;
+        return {};
+    }
+
+    void abandonOutput() noexcept override {
+        {
+            LockGuard lock(m_mutex);
+            m_abandoned = true;
+        }
+        m_changed.notify_all();
+        LockGuard lock(m_state->mutex);
+        m_state->records[m_index].outputAbandoned = true;
     }
 
     Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) override {
@@ -144,19 +205,34 @@ public:
             }
         }
         LockGuard lock(m_mutex);
-        const ExitStatus status = m_terminated && m_neverExits ? kTerminatedStatus : m_status;
-        ProcessResult result{status.exitCode, status.signal, m_stdout.substr(m_stdoutPos),
-                             m_stderr.substr(m_stderrPos)};
+        const ExitStatus exit = status();
+        ProcessResult result{exit.exitCode, exit.signal, m_stdout.substr(m_stdoutPos), m_stderr.substr(m_stderrPos)};
         m_stdoutPos = m_stdout.size();
         m_stderrPos = m_stderr.size();
         return result;
     }
 
 private:
-    static Result<std::size_t> read(bool isPipe, const std::string& data, std::size_t& position, std::span<char> buffer,
-                                    std::string_view operation) {
+    // The status wait() reports once the child has exited (see the header comment).
+    ExitStatus status() const FROST_REQUIRES(m_mutex) {
+        const bool ended = m_terminated || m_childTerminated;
+        return ended && m_neverExits && !m_racesTerminate ? kTerminatedStatus : m_status;
+    }
+
+    Result<std::size_t> read(UniqueLock& lock, bool isPipe, const std::string& data, std::size_t& position,
+                             std::span<char> buffer, std::string_view operation) FROST_REQUIRES(m_mutex) {
         if (!isPipe) {
             return fail(ErrorCode::InvalidArgument, std::format("{}: the stream is not a pipe", operation));
+        }
+        if (m_abandoned) {
+            return std::size_t{0};
+        }
+        if (m_outputHeld && position == data.size()) {
+            // A descendant holds the pipe open: no EOF until it is ended or the output abandoned.
+            while (!m_abandoned && !m_terminated) {
+                m_changed.wait(lock.native());
+            }
+            return std::size_t{0};
         }
         const std::size_t count = std::min(buffer.size(), data.size() - position);
         std::copy_n(data.data() + position, count, buffer.data());
@@ -169,6 +245,10 @@ private:
     const ProcessId m_pid;
     const ExitStatus m_status;
     const bool m_neverExits;
+    const bool m_racesTerminate;
+    const bool m_outputHeld;
+    const bool m_contained;
+    const std::string m_image; // The executable's file name, for containedProcesses().
     const bool m_stdinPipe;
     const bool m_stdoutPipe;
     const bool m_stderrPipe;
@@ -176,10 +256,14 @@ private:
     std::string m_stderr; // Immutable after construction.
 
     Mutex m_mutex;
+    std::condition_variable m_changed; // terminate() or abandonOutput(), for held reads.
     std::size_t m_stdoutPos FROST_GUARDED_BY(m_mutex) = 0;
     std::size_t m_stderrPos FROST_GUARDED_BY(m_mutex) = 0;
     bool m_stdinOpen FROST_GUARDED_BY(m_mutex) = false;
     bool m_terminated FROST_GUARDED_BY(m_mutex) = false;
+    bool m_childTerminated FROST_GUARDED_BY(m_mutex) = false; // terminateContained(pid()).
+    bool m_abandoned FROST_GUARDED_BY(m_mutex) = false;
+    std::vector<ContainedProcess> m_leftovers FROST_GUARDED_BY(m_mutex);
 };
 
 /*

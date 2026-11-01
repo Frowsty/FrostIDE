@@ -44,7 +44,18 @@
  *
  * terminate() changes the reported status only for neverExits scripts; any
  * other scripted process counts as already exited, as with a real child that
- * finished before terminate() was called.
+ * finished before terminate() was called. A neverExits script with
+ * `racesTerminate` models a child that exited on its own just as terminate()
+ * arrived: it keeps running until terminate(), then reports its scripted
+ * status rather than kTerminatedExitCode.
+ *
+ * Containers. For a spec with killOnClose, containedProcesses() lists the child
+ * (while it runs) and the script's `leftovers` (until terminate() or
+ * terminateContained() ends them); terminateContained(), releaseContainer() and
+ * abandonOutput() are recorded. Without killOnClose the first three fail with
+ * Unsupported, as for real. A script with `outputHeld` models a descendant that
+ * keeps the pipes open: once its bytes are read, reads block until
+ * abandonOutput() or terminate() is called.
  */
 #pragma once
 
@@ -68,6 +79,9 @@ struct ScriptedProcess {
     std::string stdoutBytes{};
     std::string stderrBytes{};
     bool neverExits = false;
+    bool racesTerminate = false; // With neverExits: terminate() finds the child exited by itself.
+    bool outputHeld = false;     // Reads block after the scripted bytes until abandonOutput() or terminate().
+    std::vector<ContainedProcess> leftovers{}; // Other processes in the container (killOnClose only).
     // launchAsync only: the largest piece a read returns (0: no limit) and the scheduler-clock delay before
     // each piece.
     std::size_t chunkBytes = 0;
@@ -81,6 +95,9 @@ struct LaunchRecord {
     std::string stdinBytes{}; // Everything written to stdin, through writeStdin or communicate.
     bool stdinClosed = false; // closeStdin() was called (communicate closes it too).
     bool terminated = false;  // terminate() was called.
+    std::vector<ProcessId> terminatedContained{}; // terminateContained() calls that ended a process, in order.
+    bool containerReleased = false;               // releaseContainer() succeeded.
+    bool outputAbandoned = false;                 // abandonOutput() was called.
 };
 
 class ScriptedProcessLauncher final : public IProcessLauncher {

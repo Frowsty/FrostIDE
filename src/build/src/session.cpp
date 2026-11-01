@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// BuildSession (see frost/build/build_session.hpp): the reader threads, the waiter thread and
-// the hand-over of the result.
+// BuildSession (see frost/build/build_session.hpp): the reader threads, the waiter thread, the
+// clean-up of the build's container and the hand-over of the result.
 
 #include "frost/build/build_session.hpp"
 #include "frost/build/line_splitter.hpp"
@@ -23,11 +23,26 @@ constexpr auto kWaitSlice = std::chrono::milliseconds(100);
 constexpr auto kIdlePause = std::chrono::milliseconds(20);
 constexpr std::size_t kReadChunk = 64 * 1024;
 
+// ASCII case-insensitive equality, for image file names.
+bool sameImageName(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+        if (lower(a[i]) != lower(b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 struct BuildSession::State {
     IClock* clock = nullptr;
     BuildCallbacks callbacks;
+    BuildSessionOptions options;
     std::unique_ptr<io::IProcess> process;
     io::ProcessId pid = 0;
     IClock::SteadyTime started{};
@@ -47,6 +62,7 @@ struct BuildSession::State {
     bool cancelRequested FROST_GUARDED_BY(stateMutex) = false;
     bool exited FROST_GUARDED_BY(stateMutex) = false;
     bool done FROST_GUARDED_BY(stateMutex) = false;
+    int readersDone FROST_GUARDED_BY(stateMutex) = 0; // Readers that saw the end of their stream.
     // Written once by the waiter before it sets `done` under stateMutex, and read only after a
     // reader saw `done` under it, so the mutex orders every access; it never changes afterwards.
     BuildResult result;
@@ -75,6 +91,62 @@ struct BuildSession::State {
             splitter.feed(std::string_view(buffer.data(), *read), sink);
         }
         splitter.finish(sink);
+        {
+            LockGuard lock(stateMutex);
+            ++readersDone;
+        }
+        stateChanged.notify_all();
+    }
+
+    bool isInfrastructure(std::string_view image) const {
+        for (const std::string& name : options.infrastructureImages) {
+            if (sameImageName(image, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /*
+     * After the tool exited on its own, with infrastructureImages set: ends the listed images,
+     * releases the container when anything else survives, and gives the readers outputGrace to
+     * reach the end of their streams before their output is abandoned.
+     */
+    void endInfrastructure() {
+        auto contained = process->containedProcesses();
+        if (!contained) {
+            static_cast<void>(process->terminate()); // Cannot tell them apart: end them all.
+        } else {
+            bool survivors = false;
+            for (const io::ContainedProcess& entry : *contained) {
+                if (entry.pid == pid) {
+                    continue; // The tool itself, still being torn down.
+                }
+                if (isInfrastructure(entry.imageName)) {
+                    static_cast<void>(process->terminateContained(entry.pid));
+                } else {
+                    survivors = true;
+                }
+            }
+            if (survivors) {
+                // On failure they end with the session, as by default.
+                static_cast<void>(process->releaseContainer());
+            }
+        }
+        bool abandon = false;
+        {
+            const auto deadline = std::chrono::steady_clock::now() + options.outputGrace;
+            UniqueLock lock(stateMutex);
+            while (readersDone < 2) {
+                if (stateChanged.wait_until(lock.native(), deadline) == std::cv_status::timeout) {
+                    break;
+                }
+            }
+            abandon = readersDone < 2;
+        }
+        if (abandon) {
+            process->abandonOutput();
+        }
     }
 
     // Sleeps for `pause`, or less if cancel() is called meanwhile.
@@ -113,9 +185,18 @@ struct BuildSession::State {
             cancelled = cancelRequested;
             exited = true;
         }
-        // Stragglers that inherited the pipes (a PDB server, a tool's child) keep them open; end
-        // them so the readers see EOF once the buffered output is read.
-        static_cast<void>(process->terminate());
+        // A cancel that reached a process which had already finished on its own did not end it
+        // (terminate() leaves an exited process's code alone): report the build as it finished.
+        if (cancelled && !waitFailed && status.exitCode != io::kTerminatedExitCode) {
+            cancelled = false;
+        }
+        if (cancelled || waitFailed || options.infrastructureImages.empty()) {
+            // Stragglers that inherited the pipes (a PDB server, a tool's child) keep them open;
+            // end them so the readers see EOF once the buffered output is read.
+            static_cast<void>(process->terminate());
+        } else {
+            endInfrastructure();
+        }
         stdoutReader.join();
         stderrReader.join();
 
@@ -143,7 +224,8 @@ struct BuildSession::State {
 };
 
 Result<std::unique_ptr<BuildSession>> BuildSession::start(io::IProcessLauncher& launcher, const io::ProcessSpec& spec,
-                                                          bool trusted, BuildCallbacks callbacks, IClock& clock) {
+                                                          bool trusted, BuildCallbacks callbacks, IClock& clock,
+                                                          BuildSessionOptions options) {
     if (!trusted) {
         return fail(ErrorCode::Untrusted,
                     std::format("'{}' was not started: the folder it builds is not trusted", spec.executable));
@@ -157,6 +239,7 @@ Result<std::unique_ptr<BuildSession>> BuildSession::start(io::IProcessLauncher& 
     auto state = std::make_shared<State>();
     state->clock = &clock;
     state->callbacks = std::move(callbacks);
+    state->options = std::move(options);
     state->started = clock.steadyNow();
     auto process = launcher.launch(spec);
     if (!process) {

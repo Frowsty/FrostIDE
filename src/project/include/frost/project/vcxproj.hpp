@@ -17,7 +17,11 @@
  * group or the property) form the static property table used for $(Name) expansion, together
  * with MSBuild's reserved ones (MSBuildProjectDirectory, MSBuildThisFileDirectory,
  * MSBuildProjectName, MSBuildProjectFile, MSBuildProjectFullPath, ProjectDir, ProjectName,
- * ProjectFileName, ProjectPath) and SolutionDir when the caller knows the solution.
+ * ProjectFileName, ProjectPath) and SolutionDir when the caller knows the solution. A name the
+ * table does not define is looked up in the environment next, as MSBuild does (its properties
+ * start as the environment's variables, which project properties override), so an SDK-style
+ * "$(MY_SDK_DIR)\include\sdk.h" resolves; the environment is the process's unless
+ * VcxprojOptions::environment replaces it.
  *
  * Items. ClCompile, ClInclude, None, ResourceCompile, Text, CustomBuild, Image and Natvis, plus
  * MASM, Midl, FxCompile, Manifest, CopyFileToFolders and Xml as ItemType::Other. Include may list
@@ -40,7 +44,9 @@
 
 #include "frost/core/error.hpp"
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -109,9 +115,19 @@ struct VcxProject {
     std::vector<std::string> warnings;           // Non-fatal problems, for the log.
 };
 
+// Looks up one environment variable by name; nullopt when it is not set.
+using EnvironmentLookup = std::function<std::optional<std::string>(std::string_view name)>;
+
+// The process environment (GetEnvironmentVariableW on Windows, getenv on POSIX); thread-safe as
+// long as nothing changes the environment meanwhile. Names are case-insensitive on Windows only.
+[[nodiscard]] std::optional<std::string> processEnvironmentVariable(std::string_view name);
+
 struct VcxprojOptions {
     // The solution's directory, for $(SolutionDir) (absolute, normalised); "" leaves it undefined.
     std::string solutionDirectory;
+    // Where $(Name) references the property table does not define are looked up (see above);
+    // empty uses processEnvironmentVariable. Values are used literally, never expanded again.
+    EnvironmentLookup environment{};
 };
 
 // One <Filter Include="Source Files\Core"> of a .filters file.
@@ -143,12 +159,14 @@ struct FiltersFile {
                                              const VcxprojOptions& options = {});
 
 // Parses the .vcxproj.filters XML that belongs to `project`; Include paths resolve against the
-// project's directory with its property table. Errors: Corrupt (malformed XML, root not <Project>).
+// project's directory with its property table, then options.environment. Errors: Corrupt
+// (malformed XML, root not <Project>).
 [[nodiscard]] Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view content,
-                                                      const VcxProject& project);
+                                                      const VcxProject& project, const VcxprojOptions& options = {});
 
 // Reads "<project.path>.filters" and parses it. A missing file is an empty FiltersFile, not an
 // error. Errors: those of IFileSystem::readFile other than NotFound, and parseVcxprojFilters.
-[[nodiscard]] Result<FiltersFile> readVcxprojFilters(io::IFileSystem& fs, const VcxProject& project);
+[[nodiscard]] Result<FiltersFile> readVcxprojFilters(io::IFileSystem& fs, const VcxProject& project,
+                                                     const VcxprojOptions& options = {});
 
 } // namespace frost::project

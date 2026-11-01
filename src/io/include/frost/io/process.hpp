@@ -181,15 +181,28 @@ struct ProcessResult {
 
 using ProcessId = std::uint32_t;
 
+// One process still running in a contained child's container (IProcess::containedProcesses).
+struct ContainedProcess {
+    ProcessId pid = 0;
+    // The executable's file name ("mspdbsrv.exe" on Windows, "cc1plus" on Linux), or "" when it
+    // cannot be read (a process that is just exiting).
+    std::string imageName{};
+
+    friend bool operator==(const ContainedProcess&, const ContainedProcess&) = default;
+};
+
 /*
  * A running (or finished) child process. Owned through std::unique_ptr, so,
  * unlike the reference-passed seams, it has a public virtual destructor.
  * Destruction closes the pipes and, with killOnClose, ends every process still
- * in the child's container (see the header comment).
+ * in the child's container (see the header comment) unless releaseContainer()
+ * was called.
  *
  * Thread safety: operations on different streams (stdin, stdout, stderr) and
  * wait()/terminate() may run concurrently from different threads; operations
  * on the same stream must not. communicate() must not overlap any other call.
+ * containedProcesses(), terminateContained(), releaseContainer() and
+ * abandonOutput() may run concurrently with everything but communicate().
  */
 class IProcess {
 public:
@@ -229,6 +242,39 @@ public:
      * Errors: InvalidArgument (stdinData given but stdin is not a pipe), Timeout, IoError.
      */
     [[nodiscard]] virtual Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) = 0;
+
+    /*
+     * The processes still running in the child's container (killOnClose), the child itself
+     * included while it runs, in no particular order. Windows: the Job Object's process list.
+     * Linux: the members of the child's process group that are not zombies, read from /proc. A
+     * snapshot: processes may start or end right after it. The default implementation (for
+     * doubles outside frost::io) fails with Unsupported.
+     * Errors: Unsupported (not contained, or not Windows or Linux), IoError.
+     */
+    [[nodiscard]] virtual Result<std::vector<ContainedProcess>> containedProcesses();
+
+    // Ends one process of the container (kTerminatedExitCode or SIGKILL) without waiting for it.
+    // Succeeds if it has already exited. Errors: InvalidArgument (the process is not in the
+    // container), Unsupported (not contained; the default implementation), IoError.
+    [[nodiscard]] virtual Result<void> terminateContained(ProcessId pid);
+
+    /*
+     * Lets the processes still in the container outlive this IProcess: destroying it no longer
+     * ends them (terminate() still does while the IProcess lives). Windows clears the Job
+     * Object's kill-on-close limit; POSIX skips the destructor's kill of the process group.
+     * Idempotent. Errors: Unsupported (not contained; the default implementation), IoError (the
+     * job could not be changed, so destruction still ends the tree).
+     */
+    [[nodiscard]] virtual Result<void> releaseContainer();
+
+    /*
+     * Gives up on the output pipes: pending and later readStdout/readStderr calls return 0
+     * (EOF) at once. For a child that exited while a descendant still holds the pipes open, so
+     * its readers would otherwise block until that descendant exits. May be called while other
+     * threads are blocked in a read; idempotent. Bytes not yet read are dropped. The default
+     * implementation does nothing.
+     */
+    virtual void abandonOutput() noexcept;
 
 protected:
     IProcess() = default;

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Tests for the MSBuild driver's command line and environment (msbuildProcessSpec, portable) and
-// for startMsBuild's preconditions (trust everywhere, Unsupported off Windows, the PDB endpoint on
-// Windows against the scripted launcher).
+// Tests for the MSBuild driver's command line and environment (msbuildProcessSpec, portable; English
+// output by default), the infrastructure image list, and startMsBuild's preconditions (trust
+// everywhere, Unsupported off Windows, the PDB endpoint on Windows against the scripted launcher).
 
 #include "frost/build/msbuild_driver.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
@@ -154,6 +154,29 @@ TEST(MsBuildCommandLine, DefaultUiLanguageIsSet) {
     const std::optional<std::string> language = environmentValue(*spec, "DOTNET_CLI_UI_LANGUAGE");
     ASSERT_TRUE(language.has_value());
     EXPECT_FALSE(language->empty());
+}
+
+TEST(MsBuildCommandLine, OutputIsEnglishByDefault) {
+    // An empty language is en-US for the .NET CLI and 1033 for the Visual Studio tools (cl, link),
+    // so the diagnostic parser sees "error"/"warning" whatever the user's UI language is.
+    MsBuildRequest request = solutionRequest();
+    request.uiLanguage.clear();
+    auto spec = frost::build::msbuildProcessSpec(request);
+    ASSERT_TRUE(spec.has_value()) << spec.error().describe();
+    EXPECT_EQ(environmentValue(*spec, "DOTNET_CLI_UI_LANGUAGE"), "en-US");
+    EXPECT_EQ(environmentValue(*spec, "VSLANG"), "1033");
+
+    // Another language is passed on for the .NET CLI, and VSLANG is left to the user's setting.
+    request.uiLanguage = "de-DE";
+    auto german = frost::build::msbuildProcessSpec(request);
+    ASSERT_TRUE(german.has_value()) << german.error().describe();
+    EXPECT_EQ(environmentValue(*german, "DOTNET_CLI_UI_LANGUAGE"), "de-DE");
+    EXPECT_FALSE(environmentValue(*german, "VSLANG").has_value());
+}
+
+TEST(MsBuildCommandLine, InfrastructureImages) {
+    EXPECT_EQ(frost::build::msbuildInfrastructureImages(),
+              (std::vector<std::string>{"MSBuild.exe", "MSBuildTaskHost.exe", "mspdbsrv.exe", "VBCSCompiler.exe"}));
 }
 
 TEST(StartMsBuild, RefusesAnUntrustedFolderBeforeAnythingElse) {
