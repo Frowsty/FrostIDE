@@ -214,7 +214,8 @@ REF-W1, clang-cl Release (win-clangcl), `input_perf_tests`, medians of three run
   name in their own ADR (MIT plus HPND-style notices; HPND is not added to the general allowlist): test-only now,
   in `m1/keymap-de`, and the Linux active-layout reader later.
 - **de-DE:** "Support german keyboard layout". `m1/keymap-de` makes every default shortcut, comment line and
-  block included, reachable on a German layout; this supersedes the Ctrl+Num / gap described above.
+  block included, reachable on a German layout; this supersedes the Ctrl+Num / gap described above (ADR 0030:
+  rule 3.6; the approval of libxkbcommon and xkeyboard-config is recorded there, the oracle is deferred).
 - **Linux punctuation in M1 (decision 12):** "It's okay for M1".
 - **French (Standard, AZERTY):** "Can be done later". A later item (M11, Rider UX parity), not M1.
 - **Repository layout (decision 1):** "Yes add them". PLAN.md section 3.2 lists `src/input` and `src/ui/input`.

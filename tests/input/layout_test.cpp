@@ -10,12 +10,14 @@
 #include "frost/input/simulated_keyboard.hpp"
 
 #include "input/support/golden.hpp"
+#include "input/support/synthetic_layouts.hpp"
 #include "input/support/test_actions.hpp"
 #include <gtest/gtest.h>
 
 #include <array>
 #include <format>
-#include <map>
+#include <random>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -270,7 +272,8 @@ TEST(LayoutMapping, GermanFacts) {
     EXPECT_EQ(de.logicalKey(Code::KeyZ), Key::Y);
     EXPECT_EQ(de.logicalKey(Code::Comma), Key::Comma);
     EXPECT_EQ(de.logicalKey(Code::Period), Key::Period);
-    EXPECT_EQ(de.logicalKey(Code::Slash), Key::Minus);
+    // Rule 3.6 (ADR 0030): '-' on Slash is Key::Slash, because 'ß' on Minus already reaches Key::Minus.
+    EXPECT_EQ(de.logicalKey(Code::Slash), Key::Slash);
     EXPECT_EQ(de.logicalKey(Code::Minus), Key::Minus);
     EXPECT_EQ(de.logicalKey(Code::Equal), Key::Equal);
     EXPECT_EQ(de.logicalKey(Code::Backquote), Key::Backquote);
@@ -283,14 +286,16 @@ TEST(LayoutMapping, GermanFacts) {
     for (std::size_t i = 0; i < 10; ++i) {
         EXPECT_EQ(de.logicalKey(static_cast<Code>(index(Code::Digit0) + i)), static_cast<Key>(index(Key::Digit0) + i));
     }
-    EXPECT_FALSE(de.reachable(Key::Slash));
-    EXPECT_EQ(de.labelFor(Key::Minus), U'-');
-    EXPECT_EQ(de.codeFor(Key::Minus), Code::Slash);
+    for (std::size_t k = index(Key::A); k <= index(Key::Space); ++k) {
+        EXPECT_TRUE(de.reachable(static_cast<Key>(k))) << keyName(static_cast<Key>(k));
+    }
+    EXPECT_EQ(de.labelFor(Key::Slash), U'-');
+    EXPECT_EQ(de.codeFor(Key::Slash), Code::Slash);
+    EXPECT_EQ(de.labelFor(Key::Minus), U'ß');
+    EXPECT_EQ(de.codeFor(Key::Minus), Code::Minus);
     EXPECT_EQ(de.codeFor(Key::Z), Code::KeyY);
     EXPECT_EQ(de.labelFor(Key::BracketLeft), U'ü');
     EXPECT_EQ(de.labelFor(Key::Digit7), U'7');
-    EXPECT_EQ(de.labelFor(Key::Slash), 0U);
-    EXPECT_EQ(de.codeFor(Key::Slash), Code::Unknown);
     EXPECT_FALSE(de.reachable(Key::None));
 }
 
@@ -322,21 +327,7 @@ TEST(LayoutMapping, FrenchFacts) {
     EXPECT_EQ(fr.labelFor(Key::Digit1), U'&');
 }
 
-// A US table with some cells replaced: the synthetic layouts of the policy tests.
-LayoutTable usWith(std::vector<std::pair<Code, KeyLevels>> changes, std::string_view id = "test") {
-    std::map<Code, KeyLevels> cells;
-    const LayoutTable& us = simulatedLayout(SimulatedLayoutId::EnUs);
-    for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlBackslash); ++i) {
-        cells[static_cast<Code>(i)] = us.levels(static_cast<Code>(i));
-    }
-    for (const auto& [code, levels] : changes) {
-        cells[code] = levels;
-    }
-    std::vector<std::pair<Code, KeyLevels>> keys(cells.begin(), cells.end());
-    auto table = LayoutTable::make(id, MappingMode::FullTable, keys, {});
-    EXPECT_TRUE(table.has_value());
-    return table ? *table : us;
-}
+using test::usWith;
 
 TEST(LayoutMapping, KeyProducingNothingIsNone) {
     const LayoutTable table = usWith({{Code::KeyQ, KeyLevels{}}});
@@ -376,6 +367,187 @@ TEST(LayoutMapping, NonLatinLayoutIsPositional) {
         EXPECT_EQ(table.logicalKey(code), keyForUsChar(static_cast<unsigned char>(usBaseChar(code)))) << codeName(code);
     }
     EXPECT_EQ(table.logicalKey(Code::IntlBackslash), Key::None);
+}
+
+// The US key of a writing code's position (Intl* keys: None).
+Key positionalKey(Code code) { return keyForUsChar(static_cast<unsigned char>(usBaseChar(code))); }
+
+constexpr std::array kPunctuationPositions = {Code::Minus,     Code::Equal,     Code::BracketLeft, Code::BracketRight,
+                                              Code::Backslash, Code::Semicolon, Code::Quote,       Code::Backquote,
+                                              Code::Comma,     Code::Period,    Code::Slash};
+
+// Rule 3.6 (ADR 0030) on the synthetic shapes: dispatch at a punctuation position stays only
+// where it is the only way to reach its key.
+TEST(LayoutMapping, PositionalPreference) {
+    const auto allPositional = [](const LayoutTable& table) {
+        for (const Code p : kPunctuationPositions) {
+            EXPECT_EQ(table.logicalKey(p), positionalKey(p)) << table.id() << " " << codeName(p);
+        }
+        for (std::size_t k = index(Key::A); k <= index(Key::Space); ++k) {
+            EXPECT_TRUE(table.reachable(static_cast<Key>(k))) << table.id() << " " << keyName(static_cast<Key>(k));
+        }
+    };
+    // The chains: Swiss-like in one pass, the backward chain on the second.
+    allPositional(test::synthetic::swissLike());
+    allPositional(test::synthetic::backwardChain());
+    EXPECT_EQ(test::synthetic::swissLike().labelFor(Key::Minus), U'\'');
+    EXPECT_EQ(test::synthetic::swissLike().labelFor(Key::Slash), U'-');
+
+    // Needed dispatch stays: ';' on Comma is the only Semicolon key, because 'm' is on Semicolon.
+    const LayoutTable fr = test::synthetic::frLike();
+    EXPECT_EQ(fr.logicalKey(Code::Comma), Key::Semicolon);
+    EXPECT_EQ(fr.logicalKey(Code::Semicolon), Key::M);
+    EXPECT_EQ(fr.logicalKey(Code::KeyM), Key::Comma) << "letter-area dispatch is outside rule 3.6";
+    EXPECT_EQ(fr.codeFor(Key::Comma), Code::KeyM);
+
+    // A swap: each dispatch is the only code of its key.
+    const LayoutTable swapped = test::synthetic::swap();
+    EXPECT_EQ(swapped.logicalKey(Code::Slash), Key::Minus);
+    EXPECT_EQ(swapped.logicalKey(Code::Minus), Key::Slash);
+
+    // Two producers of '-' and no Minus key: the first in Code order (Comma) is re-pointed.
+    const LayoutTable two = test::synthetic::twoProducers();
+    EXPECT_EQ(two.logicalKey(Code::Comma), Key::Comma);
+    EXPECT_EQ(two.logicalKey(Code::Slash), Key::Minus);
+    EXPECT_EQ(two.logicalKey(Code::Minus), Key::None);
+    EXPECT_FALSE(two.reachable(Key::Slash));
+
+    // No '/' anywhere: Slash stays unreachable, and '-' keeps Key::Minus.
+    const LayoutTable none = test::synthetic::noSlash();
+    EXPECT_EQ(none.logicalKey(Code::Slash), Key::Minus);
+    EXPECT_FALSE(none.reachable(Key::Slash));
+    EXPECT_EQ(none.codeFor(Key::Minus), Code::Slash);
+
+    // A no-op in LettersByLabel mode and on non-Latin tables: writing keys stay positional.
+    std::vector<std::pair<Code, KeyLevels>> cells;
+    const LayoutTable& de = simulatedLayout(SimulatedLayoutId::DeDe);
+    for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlBackslash); ++i) {
+        cells.emplace_back(static_cast<Code>(i), de.levels(static_cast<Code>(i)));
+    }
+    auto byLabel = LayoutTable::make("de:LettersByLabel", MappingMode::LettersByLabel, cells, {});
+    ASSERT_TRUE(byLabel.has_value());
+    for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlBackslash); ++i) {
+        EXPECT_EQ(byLabel->logicalKey(static_cast<Code>(i)), positionalKey(static_cast<Code>(i)))
+            << codeName(static_cast<Code>(i));
+    }
+    std::vector<std::pair<Code, KeyLevels>> cyrillic;
+    for (std::size_t i = index(Code::KeyA); i <= index(Code::KeyZ); ++i) {
+        const auto c = static_cast<char32_t>(0x0430 + (i - index(Code::KeyA)));
+        cyrillic.emplace_back(static_cast<Code>(i), KeyLevels{c, static_cast<char32_t>(c - 0x20), 0, 0, 0, 0});
+    }
+    cyrillic.emplace_back(Code::Slash, KeyLevels{U'-', U'_', 0, 0, 0, 0});
+    const LayoutTable nonLatin = usWith(cyrillic);
+    EXPECT_EQ(nonLatin.logicalKey(Code::Slash), Key::Slash);
+    EXPECT_EQ(nonLatin.logicalKey(Code::Minus), Key::Minus);
+}
+
+// Rules 3.1-3.5 for one writing code of a table whose letter area is US: the reference rule
+// 3.6 is compared with (test-local, so a shared bug in computeLayout cannot hide).
+Key referenceKey(Code code, const KeyLevels& levels) {
+    if (isLetterAreaKey(code) || isDigitRowKey(code)) {
+        return positionalKey(code); // US letters at base; digit rows are positional.
+    }
+    const char32_t c = levels.base;
+    if (c == 0) {
+        return Key::None;
+    }
+    if (!levels.dead(Level::Base) && detail::usPunctuationKey(c) != Key::None) {
+        return detail::usPunctuationKey(c);
+    }
+    return isUsPunctuationKey(code) ? positionalKey(code) : Key::None;
+}
+
+// Rule 3.6 over 10,000 seeded random Latin tables whose punctuation positions and
+// IntlBackslash draw their base character from the 11 US punctuation characters, ß ä # + <,
+// dead ^ and ´, and nothing.
+TEST(LayoutMapping, PositionalPreferenceProperty) {
+    struct Pick {
+        char32_t c;
+        bool dead;
+    };
+    constexpr std::array kPool = {Pick{U'`', false}, Pick{U'-', false},  Pick{U'=', false}, Pick{U'[', false},
+                                  Pick{U']', false}, Pick{U'\\', false}, Pick{U';', false}, Pick{U'\'', false},
+                                  Pick{U',', false}, Pick{U'.', false},  Pick{U'/', false}, Pick{U'ß', false},
+                                  Pick{U'ä', false}, Pick{U'#', false},  Pick{U'+', false}, Pick{U'<', false},
+                                  Pick{U'^', true},  Pick{U'´', true},   Pick{0, false}};
+    std::mt19937_64 rng(0x3600'0030);
+    std::size_t changedTables = 0;
+    std::size_t repointed = 0;
+    std::size_t keptDispatch = 0;
+    for (std::size_t n = 0; n < 10'000; ++n) {
+        std::vector<std::pair<Code, KeyLevels>> changes;
+        for (const Code p :
+             {Code::Minus, Code::Equal, Code::BracketLeft, Code::BracketRight, Code::Backslash, Code::Semicolon,
+              Code::Quote, Code::Backquote, Code::Comma, Code::Period, Code::Slash, Code::IntlBackslash}) {
+            const Pick pick = kPool[rng() % kPool.size()];
+            changes.emplace_back(p,
+                                 KeyLevels{pick.c, 0, 0, 0, static_cast<std::uint8_t>(pick.dead ? kDeadBase : 0), 0});
+        }
+        const LayoutTable table = usWith(changes, "property");
+        SCOPED_TRACE(n);
+
+        std::array<Key, kCodeCount> reference{};
+        std::set<Key> referenceKeys;
+        std::set<Key> tableKeys;
+        bool changed = false;
+        for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlYen); ++i) {
+            const auto code = static_cast<Code>(i);
+            reference[i] = referenceKey(code, table.levels(code));
+            referenceKeys.insert(reference[i]);
+            tableKeys.insert(table.logicalKey(code));
+            // (a) Only punctuation positions differ, and each one that differs is now positional.
+            if (table.logicalKey(code) != reference[i]) {
+                changed = true;
+                ++repointed;
+                ASSERT_TRUE(isUsPunctuationKey(code)) << codeName(code);
+                ASSERT_EQ(table.logicalKey(code), positionalKey(code)) << codeName(code);
+            }
+        }
+        changedTables += changed ? 1 : 0;
+        // (b) The set of reachable keys only grows.
+        for (const Key k : referenceKeys) {
+            ASSERT_TRUE(tableKeys.contains(k)) << keyName(k);
+        }
+        for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlYen); ++i) {
+            const auto code = static_cast<Code>(i);
+            const KeyLevels l = table.levels(code);
+            const Key target = l.dead(Level::Base) ? Key::None : detail::usPunctuationKey(l.base);
+            if (target == Key::None) {
+                continue;
+            }
+            // (c) Every character-dispatch target is reachable.
+            ASSERT_TRUE(table.reachable(target)) << codeName(code);
+            // (d) A punctuation dispatch that remains is the only code of its key.
+            if (isUsPunctuationKey(code) && table.logicalKey(code) == target && target != positionalKey(code)) {
+                ++keptDispatch;
+                for (std::size_t q = index(Code::KeyA); q <= index(Code::IntlYen); ++q) {
+                    ASSERT_TRUE(q == i || table.logicalKey(static_cast<Code>(q)) != target)
+                        << codeName(code) << " shares " << keyName(target) << " with "
+                        << codeName(static_cast<Code>(q));
+                }
+            }
+        }
+    }
+    // Not vacuous: rule 3.6 fired often, and needed dispatch was kept often.
+    EXPECT_GT(changedTables, 1000U);
+    EXPECT_GT(repointed, 1000U);
+    EXPECT_GT(keptDispatch, 1000U);
+
+    // (e) make() and the consteval build() agree on de-DE.
+    std::vector<std::pair<Code, KeyLevels>> cells;
+    const LayoutTable& de = simulatedLayout(SimulatedLayoutId::DeDe);
+    for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlYen); ++i) {
+        cells.emplace_back(static_cast<Code>(i), de.levels(static_cast<Code>(i)));
+    }
+    auto made = LayoutTable::make(de.id(), MappingMode::FullTable, cells, de.compositions());
+    ASSERT_TRUE(made.has_value());
+    for (std::size_t i = 0; i < kCodeCount; ++i) {
+        EXPECT_EQ(made->logicalKey(static_cast<Code>(i)), de.logicalKey(static_cast<Code>(i))) << i;
+    }
+    for (std::size_t k = 0; k < kKeyCount; ++k) {
+        EXPECT_EQ(made->codeFor(static_cast<Key>(k)), de.codeFor(static_cast<Key>(k))) << k;
+        EXPECT_EQ(made->labelFor(static_cast<Key>(k)), de.labelFor(static_cast<Key>(k))) << k;
+    }
 }
 
 TEST(LayoutMapping, LettersByLabel) {

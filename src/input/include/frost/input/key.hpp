@@ -142,8 +142,9 @@ inline constexpr std::size_t kWritingKeyCount =
  * Sources for the scan-code and evdev columns: Microsoft's scan-code table in "About
  * Keyboard Input" (learn.microsoft.com, Keyboard Input > Scan codes), the W3C UI Events
  * code-values specification, and the Linux evdev key codes as listed in xkeyboard-config's
- * keycodes/evdev (MIT). They were cross-checked against Chromium's
- * ui/events/keycodes/dom/dom_code_data.inc (BSD-3-Clause); no table text is copied.
+ * keycodes/evdev (permissive notices, recorded in ADR 0030). They were cross-checked
+ * against Chromium's ui/events/keycodes/dom/dom_code_data.inc (BSD-3-Clause); no table
+ * text is copied.
  */
 [[nodiscard]] Code codeFromWindowsScanCode(std::uint16_t scanCode) noexcept;
 // Maps a Linux evdev key code (KEY_*; the X11/Wayland adapter subtracts 8 from the xkb

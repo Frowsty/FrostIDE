@@ -153,11 +153,33 @@ Code codeProducing(char32_t c, const input::LayoutTable& layout) noexcept {
     return Code::Unknown;
 }
 
+// The first writing code in Code order whose non-dead base level produces `c`, or Unknown.
+// O(writing keys), no allocation.
+Code baseProducer(char32_t c, const input::LayoutTable& layout) noexcept {
+    for (std::size_t i = input::index(Code::KeyA); i <= input::index(Code::IntlYen); ++i) {
+        const auto code = static_cast<Code>(i);
+        const input::KeyLevels levels = layout.levels(code);
+        if (levels.base == c && !levels.dead(Level::Base)) {
+            return code;
+        }
+    }
+    return Code::Unknown;
+}
+
 Code fallbackCode(int key, bool keypad, const input::LayoutTable& layout) noexcept {
     if (const Code named = namedKeyCode(key, keypad); named != Code::Unknown) {
         return named;
     }
     if (const Key writing = writingKeyOf(key); writing != Key::None) {
+        // One of the 11 US punctuation characters: the key that types it at base, as the
+        // hardware key that produced the character would report (ADR 0030: de Key_Minus is
+        // the '-' key, Code::Slash, whose logical key is Slash after rule 3.6, not codeFor(Minus)).
+        if (!input::isLetterKey(writing) && !input::isDigitKey(writing)) {
+            const char32_t c = static_cast<unsigned char>(input::usCharForKey(writing));
+            if (const Code producer = baseProducer(c, layout); producer != Code::Unknown) {
+                return producer;
+            }
+        }
         return layout.codeFor(writing);
     }
     // Other printable characters (Qt::Key_Question, Key_Underscore, Key_Adiaeresis, ...):
