@@ -40,7 +40,7 @@ commits' messages.
   `TODO(M1)` at `kQtPluginPathLimitUnits`, docs and comments only. A pass in ASan was first thought to need either a
   skip, which weakens the gate, or a change to how frost starts. Option (d, revised) on the unmerged branch
   `m0/e4-asan-runtime` is a third way: a test-fixture change in the ASan tree only, with `-Full` green there and an
-  approving review that lists open issues. All of it is question E4 (new).
+  approving review whose issues are handled, apart from one nit. All of it is question E4 (new).
 - **Pushed at 05:24 under D23**, although `-Full` had failed. A push needs CLAUDE.md's definition of done
   (`verify -Quick` on Windows and `verify.sh` in WSL, both green) and an independent review of every branch, which
   were met; `-Full` gates the M0 sign-off (PLAN.md section 7, "Every milestone exit also requires"). 2741b57's footer
@@ -251,15 +251,16 @@ commit d41f2a1, which carries its own).
   (b540543), `m0/comments-1` to `m0/comments-4` (8e1e46e, 6a12cca, b22884a, 301430f), `m0/dll-copy` (1252a18) and
   `m0/docs` (8027101). All are merged into `m0/foundation`, and none needed a force. `m0/sched` (a51c23b) and
   `m0/tools` (33600e3) were already on origin. No `main` and no tag before your sign-off (G1).
-- Pushed after this entry's commit: `m0/foundation` with e4f5756 and this commit, and `m0/e4-asan-runtime` (11a5a23,
-  on e4f5756). That branch has `-Full` green and an approving review, but it is not merged: it waits for your answer
-  to E4 and has open review issues (E4 (d)).
+- Pushed later: `m0/foundation` up to 5ee286f (e4f5756, 319fd93 and 5ee286f, all docs), and `m0/e4-asan-runtime`
+  at 19157a8: 11a5a23, the comment fix 9c7a10d and a merge of `m0/foundation`, so it merges without conflicts.
+  That branch has `-Full` green at 11a5a23 (the later commits are comments and docs) and an approving review, but it
+  is not merged: it waits for your answer to E4 (E4 (d)).
 - `m0/startup-wip` (343785a) stays local: d41f2a1 rebuilt the start-up work as one commit on 008a2de and
   superseded it.
 
 ### Next
 - Your answers to the questions below, E4 first: it decides how the failing `-Full` test is resolved, among them
-  whether `m0/e4-asan-runtime` is merged (option (d), after its review issues are fixed), and so whether `-Full` can
+  whether `m0/e4-asan-runtime` is merged (option (d)), and so whether `-Full` can
   be green on `m0/foundation` before sign-off.
 - The M0 demo pack (PLAN.md section 6.7: screenshots or a recording, the perf report, the feature-matrix diff, the ADR
   list, the comment-accuracy result) is `E:\FrostBuilds\demo\m0\index.html`; then the request for M0 sign-off (G1).
@@ -408,8 +409,9 @@ consolidating this log.
     or by delay-loading Qt; neither is designed or measured. This goes with E1.
   - (c) Record the failure as known until E1 is decided, and push tonight's branches with a footer that shows it.
   - (d, revised; not E1's (d)) Keep the ASan runtime beside frost.exe, but in ASan trees copy it into the test's
-    directories without its RT_MANIFEST 2. Branch `m0/e4-asan-runtime`, 11a5a23 on e4f5756: pushed, **not merged
-    and not ready to merge**, because the review's issues below are open and it needs your explicit yes.
+    directories without its RT_MANIFEST 2. Branch `m0/e4-asan-runtime` at 19157a8 (11a5a23, a comment fix and a
+    merge of `m0/foundation`): pushed and **not merged**; it needs your explicit yes. The review's issues are
+    handled apart from one nit (below).
     - Why revised: the proposed (d), which leaves the runtime out of the copy and puts the build directory on the
       child's PATH, cannot work. frost.exe's `/DEPENDENTLOADFLAG:0xA00` makes the loader look for its static imports
       only beside frost.exe and in System32. Measured: such a copy exits with 0xC0000135 with or without the build
@@ -439,28 +441,30 @@ consolidating this log.
       startup.hpp and in (b). No test went red on it at those lengths before or after; (c) keeps it visible, and (a)
       at least shows a skip. "It is a fixture change in one flavour, disclosed in the code, the ADR and the commit,
       and it still needs the user's explicit yes as E4 (d)."
-    - The review's issues; only the progress-log follow-up is handled, by this entry:
+    - The review's issues, and how each was handled:
       - Minor, on the branch: `removeIsolationManifest`'s comment says the file must be shorter than MAX_PATH, but
         EndUpdateResourceW fails with error 122 from 256 units already (255 works; measured). No practical effect:
-        the strip runs at a short scratch root under %TEMP%, and a failure there fails the test.
+        the strip runs at a short scratch root under %TEMP%, and a failure there fails the test. Fixed in 9c7a10d.
       - Minor, on e4f5756 (ADR 0003): "Below that range the start-up check refuses cleanly" has no lower bound.
         frost refuses cleanly only from 226 units (Release) or 225 (Debug); below that it starts normally (225 in
-        Release and 224 in Debug: selftest PASSED).
+        Release and 224 in Debug: selftest PASSED). Fixed in 5ee286f.
       - Minor, on e4f5756: the ranges were sampled at their ends only (Release 234/235/236/249/250, Debug
         233/234/235/249/250, ASan 216/217/218/225/226/249/250), and the ADR calls them measured without saying the
         interiors are inferred. The review measured Release 241 and 245 and Debug 240 (all 0xC0000106), so the
-        claim holds.
+        claim holds. 5ee286f says how the ranges were found.
       - Minor, on e4f5756: "the loader refuses every DLL next to frost.exe that embeds RT_MANIFEST resource 2"
         should say every such DLL the process loads at start-up (frost.exe's static imports). The root-cause bullet
-        in "Exit verification" above makes the same broad claim ("every DLL beside frost.exe").
+        in "Exit verification" above makes the same broad claim ("every DLL beside frost.exe"). Both fixed in
+        5ee286f.
       - Follow-up: E4 listed only (a)–(c), and "Exit verification" said a pass in ASan needs a skip or a change to
         how frost starts. This entry now records (d).
       - Nit: `removeIsolationManifest` fails with error 87 if a future runtime lacks RT_MANIFEST 2 in language 0x409
         (fail-closed, but a spurious failure after an LLVM change). That the resource holds only a trustInfo block
         is true today but not checked in code; if a future runtime's manifest gained dependency entries, stripping
-        it would change how the runtime binds.
+        it would change how the runtime binds. 9c7a10d documents both at `removeIsolationManifest`.
       - Nit: `isAsanRuntime` matches the `clang_rt.asan_dynamic` prefix without checking the `.dll` extension
-        (harmless today: the directory holds only the .dll).
+        (harmless today: the directory holds only the .dll). Open: a code change, left for the branch's next
+        code commit rather than another `-Full` tonight.
     - Evidence: `E:\FrostBuilds\perf\m0\exit-full\e4-option-d\` (`README.txt` maps it).
 
 **F. Machine and tooling**
