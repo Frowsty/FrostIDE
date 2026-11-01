@@ -1,0 +1,29 @@
+application_id=1181895752
+user_version=1
+auto_vacuum=2
+journal_mode=wal
+
+index lh_blob_fingerprint on lh_blob
+CREATE INDEX lh_blob_fingerprint ON lh_blob (fingerprint, size)
+
+index lh_revision_blob on lh_revision
+CREATE INDEX lh_revision_blob ON lh_revision (blob_id)
+
+index lh_revision_path on lh_revision
+CREATE INDEX lh_revision_path ON lh_revision (path_key, created_ns, id)
+
+index lh_revision_path_id on lh_revision
+CREATE INDEX lh_revision_path_id ON lh_revision (path_key, id)
+
+table lh_blob on lh_blob
+CREATE TABLE lh_blob (id INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 16),
+  size INTEGER NOT NULL CHECK (size >= 0), chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0)) STRICT
+
+table lh_chunk on lh_chunk
+CREATE TABLE lh_chunk (blob_id INTEGER NOT NULL REFERENCES lh_blob(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL CHECK (seq >= 0), data BLOB NOT NULL, PRIMARY KEY (blob_id, seq)) STRICT
+
+table lh_revision on lh_revision
+CREATE TABLE lh_revision (id INTEGER PRIMARY KEY AUTOINCREMENT, path_key TEXT NOT NULL CHECK (length(path_key) > 0),
+  path TEXT NOT NULL, created_ns INTEGER NOT NULL, kind INTEGER NOT NULL CHECK (kind >= 1),
+  label TEXT NOT NULL DEFAULT '', blob_id INTEGER NOT NULL REFERENCES lh_blob(id)) STRICT

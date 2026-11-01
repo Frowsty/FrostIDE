@@ -140,6 +140,14 @@ endif()
 # Threads::Threads (frost::sched). Found here so the imported target is visible from
 # the top-level directory, where FrostLayers resolves namespaced dependencies.
 find_package(Threads REQUIRED)
+# SQLite and xxHash (frost::storage, ADR 0014), found here for the same reason: FrostLayers' deferred
+# graph check runs in the top-level directory and must resolve unofficial::sqlite3::sqlite3 and
+# xxHash::xxhash. Fuzz trees install no vcpkg ports and build no storage, hence the guard
+# (an undefined FROST_FUZZ is false).
+if(NOT FROST_FUZZ)
+    find_package(unofficial-sqlite3 CONFIG REQUIRED)
+    find_package(xxHash CONFIG REQUIRED)
+endif()
 
 if(FROST_BUILD_TESTS OR FROST_FUZZ)
     enable_testing()

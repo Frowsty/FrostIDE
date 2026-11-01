@@ -1,0 +1,28 @@
+application_id=1181894730
+user_version=1
+auto_vacuum=0
+journal_mode=wal
+
+table journal_chunk on journal_chunk
+CREATE TABLE journal_chunk (entry_id INTEGER NOT NULL REFERENCES journal_entry(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL CHECK (seq >= 0), data BLOB NOT NULL, PRIMARY KEY (entry_id, seq)) STRICT
+
+table journal_clean on journal_clean
+CREATE TABLE journal_clean (document_key TEXT PRIMARY KEY CHECK (length(document_key) > 0),
+  generation INTEGER NOT NULL CHECK (generation >= 0)) STRICT, WITHOUT ROWID
+
+table journal_entry on journal_entry
+CREATE TABLE journal_entry (id INTEGER PRIMARY KEY,
+  document_key TEXT NOT NULL UNIQUE CHECK (length(document_key) > 0), path TEXT NOT NULL,
+  generation INTEGER NOT NULL CHECK (generation >= 0), updated_ns INTEGER NOT NULL,
+  encoding TEXT NOT NULL, has_bom INTEGER NOT NULL CHECK (has_bom IN (0, 1)), line_ending TEXT NOT NULL,
+  base_size INTEGER, base_mtime_ns INTEGER,
+  base_fingerprint BLOB CHECK (base_fingerprint IS NULL OR length(base_fingerprint) = 16),
+  content_size INTEGER NOT NULL CHECK (content_size >= 0),
+  content_fingerprint BLOB NOT NULL CHECK (length(content_fingerprint) = 16),
+  chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
+  CHECK ((base_size IS NULL) = (base_fingerprint IS NULL) AND (base_size IS NULL) = (base_mtime_ns IS NULL))) STRICT
+
+table journal_state on journal_state
+CREATE TABLE journal_state (id INTEGER PRIMARY KEY CHECK (id = 1), created_ns INTEGER NOT NULL,
+  clean_shutdown INTEGER NOT NULL CHECK (clean_shutdown IN (0, 1)), updated_ns INTEGER NOT NULL) STRICT

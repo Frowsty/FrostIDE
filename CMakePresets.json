@@ -12,6 +12,7 @@
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/third_party/vcpkg-ports",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
         "CMAKE_PREFIX_PATH": "$env{FROST_QT_ROOT}",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
