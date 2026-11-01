@@ -9,6 +9,7 @@
     { "name": "asio", "version>=": "1.32.0" },
     { "name": "gtest", "version>=": "1.18.0" },
     { "name": "sqlite3", "version>=": "3.54.1", "default-features": false, "features": ["omit-load-extension"] },
-    { "name": "xxhash", "version>=": "0.8.4" }
+    { "name": "xxhash", "version>=": "0.8.4" },
+    { "name": "yyjson", "version>=": "0.13.0" }
   ]
 }

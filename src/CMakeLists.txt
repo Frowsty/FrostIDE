@@ -8,9 +8,11 @@ add_subdirectory(sched)
 add_subdirectory(io)
 add_subdirectory(text)
 add_subdirectory(input)
-# Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash) is left out of them.
+# Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash) and settings (yyjson) are left out
+# of them.
 if(NOT FROST_FUZZ)
     add_subdirectory(storage)
+    add_subdirectory(settings)
 endif()
 if(FROST_BUILD_UI)
     add_subdirectory(ui)

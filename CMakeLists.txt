@@ -147,6 +147,8 @@ find_package(Threads REQUIRED)
 if(NOT FROST_FUZZ)
     find_package(unofficial-sqlite3 CONFIG REQUIRED)
     find_package(xxHash CONFIG REQUIRED)
+    # yyjson (MIT; frost::settings' JSON scope files, ADR 0021), found here for the same reason.
+    find_package(yyjson CONFIG REQUIRED)
 endif()
 # asio::asio (header-only, BSL-1.0; frost::io's reactor, ADR 0020), found here for the same reason.
 # Fuzz trees install no vcpkg ports (VCPKG_MANIFEST_INSTALL=OFF) but share the normal tree's
