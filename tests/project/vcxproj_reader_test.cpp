@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tests for the static .vcxproj and .vcxproj.filters readers (frost/project/vcxproj.hpp):
-// properties, configurations, items (wildcards, Exclude, ../ paths, $(Name) expansion,
-// duplicates), references, filters, BOM and CRLF, and the error cases.
+// properties, configurations, items (wildcards, Exclude, ../ paths, $(Name) expansion from the
+// properties and then the environment, duplicates), references, filters, BOM and CRLF, and the
+// error cases.
 #include "frost/io/file_system.hpp"
 #include "frost/project/vcxproj.hpp"
 
@@ -10,8 +11,16 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include "frost/io/utf.hpp"
+
+#include <windows.h>
+#endif
 
 namespace frost::project {
 namespace {
@@ -179,6 +188,80 @@ TEST(VcxprojReader, ReadsChooseBranchesAndSplitsIncludeLists) {
     EXPECT_EQ(project->items[5].type, ItemType::Other);
     EXPECT_EQ(project->items[5].itemName, "MASM");
     EXPECT_EQ(project->unresolvedIncludes, std::vector<std::string>{"%(Identity).h"});
+}
+
+TEST(VcxprojReader, ExpandsEnvironmentVariablesAfterProjectProperties) {
+    MemTree tree;
+    const std::string sdkDir = MemTree::path("sdk");
+    const EnvironmentLookup environment = [&sdkDir](std::string_view name) -> std::optional<std::string> {
+        if (name == "MY_SDK_DIR") {
+            return sdkDir;
+        }
+        if (name == "Shadowed") {
+            return std::string("from-the-environment");
+        }
+        return std::nullopt;
+    };
+    const std::string text = R"(<Project>
+  <PropertyGroup>
+    <Shadowed>own</Shadowed>
+    <SdkInclude>$(MY_SDK_DIR)\include</SdkInclude>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MY_SDK_DIR)\include\sdk.h" />
+    <ClInclude Include="$(SdkInclude)/more.h" />
+    <None Include="$(Shadowed).txt" />
+    <None Include="$(NOT_SET_ANYWHERE)\x.txt" />
+  </ItemGroup>
+</Project>
+)";
+    const VcxprojOptions options{.solutionDirectory = {}, .environment = environment};
+    auto project = parseVcxproj(tree.fs, text, MemTree::path("p/P.vcxproj"), options);
+    ASSERT_TRUE(project.has_value()) << project.error().describe();
+    // Project properties win over the environment; an unknown name stays unresolved.
+    EXPECT_EQ(itemPaths(*project),
+              (std::vector<std::string>{MemTree::path("sdk/include/sdk.h"), MemTree::path("sdk/include/more.h"),
+                                        MemTree::path("p/own.txt")}));
+    EXPECT_EQ(project->unresolvedIncludes, std::vector<std::string>{R"($(NOT_SET_ANYWHERE)\x.txt)"});
+
+    // The .filters file resolves through the same environment.
+    const std::string filtersText = R"(<Project>
+  <ItemGroup>
+    <ClInclude Include="$(MY_SDK_DIR)\include\sdk.h"><Filter>SDK</Filter></ClInclude>
+  </ItemGroup>
+</Project>
+)";
+    auto filters = parseVcxprojFilters(tree.fs, filtersText, *project, options);
+    ASSERT_TRUE(filters.has_value()) << filters.error().describe();
+    ASSERT_EQ(filters->assignments.size(), 1U);
+    EXPECT_EQ(filters->assignments[0].itemPath, MemTree::path("sdk/include/sdk.h"));
+    EXPECT_EQ(filters->assignments[0].filter, "SDK");
+}
+
+TEST(VcxprojReader, UsesTheProcessEnvironmentByDefault) {
+    MemTree tree;
+    constexpr std::string_view kName = "FROST_TEST_VCXPROJ_SDK_DIR";
+    const std::string value = MemTree::path("envsdk");
+#ifdef _WIN32
+    ASSERT_NE(SetEnvironmentVariableW(L"FROST_TEST_VCXPROJ_SDK_DIR", io::toWide(value).value().c_str()), FALSE);
+#else
+    ASSERT_EQ(setenv(std::string(kName).c_str(), value.c_str(), 1), 0);
+#endif
+    EXPECT_EQ(processEnvironmentVariable(kName), value);
+    auto project = parseVcxproj(
+        tree.fs,
+        R"(<Project><ItemGroup><ClInclude Include="$(FROST_TEST_VCXPROJ_SDK_DIR)/api.h" /></ItemGroup></Project>)",
+        MemTree::path("p/P.vcxproj"));
+#ifdef _WIN32
+    SetEnvironmentVariableW(L"FROST_TEST_VCXPROJ_SDK_DIR", nullptr);
+#else
+    unsetenv(std::string(kName).c_str());
+#endif
+    ASSERT_TRUE(project.has_value()) << project.error().describe();
+    EXPECT_EQ(itemPaths(*project), std::vector<std::string>{MemTree::path("envsdk/api.h")});
+    EXPECT_FALSE(processEnvironmentVariable(kName).has_value());
+    EXPECT_FALSE(processEnvironmentVariable("A=B").has_value());
+    EXPECT_FALSE(processEnvironmentVariable("").has_value());
 }
 
 TEST(VcxprojReader, RefusesRecursiveWildcardsAtTheRoot) {

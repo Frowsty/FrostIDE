@@ -2,7 +2,8 @@
 //
 // Tests for BuildSession (frost/build/build_session.hpp) against the scripted launcher, on every
 // platform: streamed lines and diagnostics, duplicates, the result, trust, cancellation of a build
-// that never ends, and the destructor's cancel.
+// that never ends, a cancel that races the exit, the destructor's cancel, and what happens to the
+// processes left in the container (all ended, or only the infrastructure, with held output abandoned).
 
 #include "frost/build/build_session.hpp"
 #include "frost/core/mutex.hpp"
@@ -209,6 +210,91 @@ TEST(BuildSession, CancelAfterTheEndChangesNothing) {
     EXPECT_TRUE((*session)->wait().success);
     (*session)->cancel();
     EXPECT_FALSE((*session)->wait().cancelled);
+}
+
+TEST(BuildSession, ACancelThatRacesTheExitReportsTheFinishedBuild) {
+    // The tool exits with 0 just as cancel() arrives: terminate() then finds it gone.
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.exitCode = 0, .stdoutBytes = "done\n", .neverExits = true, .racesTerminate = true});
+    auto session = BuildSession::start(launcher, toolSpec(), true, {});
+    ASSERT_TRUE(session.has_value());
+    EXPECT_FALSE((*session)->waitFor(std::chrono::milliseconds(20)).has_value());
+    (*session)->cancel();
+    const BuildResult& result = (*session)->wait();
+    EXPECT_FALSE(result.cancelled);
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(result.exitCode, 0);
+
+    // The same race with a failed build: failed, not cancelled.
+    launcher.expect({.exitCode = 3, .neverExits = true, .racesTerminate = true});
+    auto failed = BuildSession::start(launcher, toolSpec(), true, {});
+    ASSERT_TRUE(failed.has_value());
+    (*failed)->cancel();
+    EXPECT_FALSE((*failed)->wait().cancelled);
+    EXPECT_FALSE((*failed)->wait().success);
+    EXPECT_EQ((*failed)->wait().exitCode, 3);
+}
+
+TEST(BuildSession, ByDefaultTheWholeContainerEndsWithTheTool) {
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.leftovers = {{9001, "mspdbsrv.exe"}, {9002, "game.exe"}}});
+    auto session = BuildSession::start(launcher, toolSpec(), true, {});
+    ASSERT_TRUE(session.has_value());
+    EXPECT_TRUE((*session)->wait().success);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    EXPECT_TRUE(launches[0].terminated);
+    EXPECT_FALSE(launches[0].containerReleased);
+}
+
+TEST(BuildSession, OnlyInfrastructureEndsAndTheRestKeepsRunning) {
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.leftovers = {{9001, "mspdbsrv.exe"}, {9002, "game.exe"}, {9003, "MSBUILD.EXE"}}});
+    const frost::build::BuildSessionOptions options{.infrastructureImages = {"MSBuild.exe", "mspdbsrv.exe"},
+                                                    .outputGrace = std::chrono::milliseconds(1000)};
+    auto session = BuildSession::start(launcher, toolSpec(), true, {}, frost::systemClock(), options);
+    ASSERT_TRUE(session.has_value());
+    EXPECT_TRUE((*session)->wait().success);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    EXPECT_EQ(launches[0].terminatedContained, (std::vector<frost::io::ProcessId>{9001, 9003}));
+    EXPECT_TRUE(launches[0].containerReleased); // game.exe outlives the session.
+    EXPECT_FALSE(launches[0].terminated);
+    EXPECT_FALSE(launches[0].outputAbandoned); // The output ended on its own.
+
+    // Only infrastructure left: it is ended and nothing needs releasing.
+    launcher.expect({.leftovers = {{9101, "VBCSCompiler.exe"}}});
+    auto quiet = BuildSession::start(launcher, toolSpec(), true, {}, frost::systemClock(),
+                                     {.infrastructureImages = {"VBCSCompiler.exe"}});
+    ASSERT_TRUE(quiet.has_value());
+    EXPECT_TRUE((*quiet)->wait().success);
+    const auto second = launcher.launches().at(1);
+    EXPECT_EQ(second.terminatedContained, (std::vector<frost::io::ProcessId>{9101}));
+    EXPECT_FALSE(second.containerReleased);
+}
+
+TEST(BuildSession, OutputASurvivorHoldsOpenIsAbandonedAfterTheGrace) {
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.stdoutBytes = "  App.vcxproj -> C:\\out\\App.exe\n",
+                     .outputHeld = true,
+                     .leftovers = {{9002, "server.exe"}}});
+    Recorder recorder;
+    const auto started = std::chrono::steady_clock::now();
+    auto session =
+        BuildSession::start(launcher, toolSpec(), true, recorder.callbacks(), frost::systemClock(),
+                            {.infrastructureImages = {"mspdbsrv.exe"}, .outputGrace = std::chrono::milliseconds(50)});
+    ASSERT_TRUE(session.has_value());
+    const std::optional<BuildResult> result = (*session)->waitFor(std::chrono::seconds(30));
+    ASSERT_TRUE(result.has_value()) << "held output kept the build from finishing";
+    EXPECT_TRUE(result->success);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+    const auto launches = launcher.launches();
+    EXPECT_TRUE(launches[0].outputAbandoned);
+    EXPECT_TRUE(launches[0].containerReleased);
+    EXPECT_FALSE(launches[0].terminated);
+    frost::LockGuard lock(recorder.mutex);
+    ASSERT_EQ(recorder.lines.size(), 1U);
+    EXPECT_EQ(recorder.lines[0].second, "  App.vcxproj -> C:\\out\\App.exe");
 }
 
 } // namespace

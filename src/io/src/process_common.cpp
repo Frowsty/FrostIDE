@@ -154,6 +154,21 @@ Result<std::string> buildWindowsCommandLine(std::string_view executable, const s
     return commandLine;
 }
 
+// The defaults for IProcess implementations that cannot see their container (process.hpp).
+Result<std::vector<ContainedProcess>> IProcess::containedProcesses() {
+    return fail(ErrorCode::Unsupported, "this process cannot list its container");
+}
+
+Result<void> IProcess::terminateContained(ProcessId pid) {
+    return fail(ErrorCode::Unsupported, std::format("this process cannot end process {} of its container", pid));
+}
+
+Result<void> IProcess::releaseContainer() {
+    return fail(ErrorCode::Unsupported, "this process cannot release its container");
+}
+
+void IProcess::abandonOutput() noexcept {}
+
 Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec, std::string_view stdinData,
                                       IClock::Duration timeout) {
     auto process = launcher.launch(spec);

@@ -14,14 +14,21 @@
  * every line. A callback may call cancel(); it must not call wait() or destroy the session
  * (that would wait for itself). The UI marshals what it needs to its own thread.
  *
- * End of a build. When the process exits, the session ends whatever is still running in its
- * container (frost::io's Job Object or process group): a straggler such as a compiler's PDB server
- * that inherited the output pipe would otherwise hold it open, and no output would ever end.
- * Then the remaining output is read to its end and the result is published.
+ * End of a build. When the process exits, the session deals with whatever is still running in
+ * its container (frost::io's Job Object or process group), because a straggler such as a
+ * compiler's PDB server that inherited the output pipe would otherwise hold it open, and no output
+ * would ever end. By default it ends them all. With BuildSessionOptions::infrastructureImages it
+ * ends only the processes whose image is listed (build infrastructure: worker nodes, PDB and
+ * compiler servers), releases the container so everything else (a program a post-build step
+ * started) keeps running, as in Visual Studio, and when a survivor still holds the pipes after
+ * outputGrace, abandons the rest of the output. Then the remaining output is read to its end and
+ * the result is published.
  *
  * Cancellation. cancel() ends the whole process tree at once (IProcess::terminate on the Job
  * Object, which every descendant belongs to); the result then has cancelled = true and
- * success = false. A cancel() that comes after the process has exited changes nothing.
+ * success = false. A cancel() that comes after the process has exited changes nothing, and one
+ * that races with the exit (the process finished on its own just before the cancel reached it)
+ * reports the build as it finished: cancelled is set only when the cancel ended the process.
  */
 #pragma once
 
@@ -30,10 +37,12 @@
 #include "frost/core/error.hpp"
 #include "frost/io/process.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -61,6 +70,16 @@ struct BuildCallbacks {
     std::function<void(const BuildResult& result)> onFinished{};
 };
 
+// How a session treats the processes left in the build's container once the tool exits.
+struct BuildSessionOptions {
+    // Empty: end every process left in the container. Otherwise end only those whose image file
+    // name equals one of these (ASCII case ignored, "mspdbsrv.exe") and let the others run on.
+    std::vector<std::string> infrastructureImages{};
+    // How long the output may stay open after the tool exited while survivors run, before the
+    // session abandons it (IProcess::abandonOutput) and finishes.
+    std::chrono::milliseconds outputGrace{1000};
+};
+
 class BuildSession {
 public:
     /*
@@ -70,10 +89,9 @@ public:
      * clock must outlive the session. Errors: Untrusted; InvalidArgument (the spec breaks the
      * rules above); the launcher's errors.
      */
-    [[nodiscard]] static Result<std::unique_ptr<BuildSession>> start(io::IProcessLauncher& launcher,
-                                                                     const io::ProcessSpec& spec, bool trusted,
-                                                                     BuildCallbacks callbacks,
-                                                                     IClock& clock = systemClock());
+    [[nodiscard]] static Result<std::unique_ptr<BuildSession>>
+    start(io::IProcessLauncher& launcher, const io::ProcessSpec& spec, bool trusted, BuildCallbacks callbacks,
+          IClock& clock = systemClock(), BuildSessionOptions options = {});
 
     // Cancels a build that is still running, then waits for the session's threads.
     ~BuildSession();
