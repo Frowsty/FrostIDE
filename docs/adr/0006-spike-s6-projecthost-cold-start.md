@@ -52,10 +52,12 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
      the open request, the native solution read and project selection, the launch, the slowdown that the tree
      fill causes the host by running beside it, and the ingest after the response. The fill runs in parallel, so
      its own duration does not count as long as the fill finishes before the host's response. B23 ends when the
-     first project is streamed into the Solution tree, and the Solution view is part of the fill, so a fill that
-     outlasts the response puts its remaining time on the path too. Nothing measured R2b's tree fill. If the
-     launch waits for L1, the wait counts too. A cold cache shrinks the remainder further (decision 3). Medians of
-     the parts do not add exactly, so M2 times the whole interval.
+     first project is streamed into the Solution tree, and the Solution view is part of the fill, so a
+     Solution-view fill that outlasts the response can add up to its remaining time (parsing the response and
+     adding the project to the model can overlap with it). A File System scan still running then only slows
+     the path down. Nothing measured R2b's tree fill. If the launch waits for L1, the wait counts too. A cold
+     cache shrinks the remainder further (decision 3). Medians of the parts do not add exactly, so M2 times the
+     whole interval.
 2. **On an open whose first project has no valid cached record: pre-warm ProjectHost while trust is pending in a
    root that FrostIDE has no session state for (a first-ever open); skip the warm-up once trust is granted.**
    - **Scope.** This start rule applies only to an open in which the first project (decision 5) has no valid
@@ -189,7 +191,8 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
        - D3 waits for the samples: it stays not final until they are in and the user has fixed B23's
          first-project value. PLAN.md's order is kept for that value. It is not kept for the trees value if
          the user accepts the trees proposal below: S6 would then fix only the first-project value before D3
-         becomes final, and PLAN.md's B23 row changes under this option too.
+         becomes final, so PLAN.md's B23 row and its S6 spike-list line ("fixes B23 before D3 is final")
+         change under this option too.
      - **(ii) Final value from M2.** M2's B23 test, cold under 6 (e) with a warm sample alongside, sets the value.
        - Each cold M2 sample also needs a reboot or an elevated purge (PLAN.md section 4's "Cold"), so this moves
          the user's part to M2 rather than removing it.
@@ -203,7 +206,8 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
      trees measurement on R3, and the note says so.
      - This proposal is a change to PLAN.md, under option (i) as well as option (ii). PLAN.md's B23 row carries
        one "(final value set by S6)" note for both values ("p50 1.5 s / 3 s"), and `budgets.json` puts the
-       same note on this target. This ADR edits neither file.
+       same note on this target. Under option (i) the S6 spike-list line also no longer holds as written,
+       because S6 would fix only one of B23's two values. This ADR edits neither file.
      - 1.5 s stays the ceiling in the same way. The user decides.
    - This ADR does not edit `budgets.json`. Any change to a target needs an ADR and user approval.
 4. **MSBuild assemblies load through MSBuildLocator's resolver.** Binding them by `codeBase` to the VS copies (in
@@ -279,9 +283,10 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
       L1. If M2's path did wait, the wait would be on the path too;
     - beside the host: the tree fill (native readers, File System and Solution views) runs during the interval
       and competes for CPU and disk. As long as it finishes before the host's response, it adds to the interval
-      only through the slowdown it causes the host, not through its own duration. A fill that outlasts the
-      response also adds its remaining time, because B23 ends with the project streamed into the Solution tree.
-      R2b's tree fill was not measured. In the spike, no FrostIDE work ran beside the host;
+      only through the slowdown it causes the host, not through its own duration. A Solution-view fill that
+      outlasts the response can also add up to its remaining time, because B23 ends with the project streamed
+      into the Solution tree; a File System scan still running then only competes with the ingest. R2b's tree
+      fill was not measured. In the spike, no FrostIDE work ran beside the host;
     - after the response: parsing it, adding the project to the model, streaming it into the Solution tree, and
       the ETW marker that ends B23.
 
@@ -474,7 +479,8 @@ after the NuGet restore described in ADR 0005. Host.EXE returns 2 groups and 3 f
   - PLAN.md's B23 row, under either option of decision 3 if the user accepts the trees proposal, because its
     one "(final value set by S6)" note covers both values;
   - the M0 spike list's "fixes B23 before D3 is final" with the D3 row, if the first-project value moves to M2
-    (decision 3, option (ii)). PLAN.md's B23 row changes under that option as well;
+    (decision 3, option (ii)). PLAN.md's B23 row changes under that option as well. The spike-list line alone
+    also changes under option (i) if the user accepts the trees proposal;
   - PLAN.md's no-network-before-L1 rule (sections 2.1 and 2.2), if the user exempts the trusted project's own
     MSBuild logic before L1 (decision 2);
   - B23's method and preconditions, if M2 adopts path (c) for the first project (decision 2, option (A));
