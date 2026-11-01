@@ -159,8 +159,9 @@ simulator produces the events.
       scripted query.
     - Not adopted: a full Linux reader through libxkbcommon (a new direct dependency; question Q1 in the slice
       report), reading the Windows kbd*.dll tables (needs the WDK struct layout, a legal question; Q2), and the
-      optional xkeyboard-config data oracle (deferred; it would read MIT data files shipped with xkb-data,
-      read-only at test time, link and ship nothing).
+      optional xkeyboard-config data oracle (deferred; it would read data files shipped with xkb-data,
+      read-only at test time, link and ship nothing; xkb-data's copyright file mixes MIT and HPND-style
+      notices, and HPND is not on the allowlist, so this waits for the user's answer).
 
 New dependencies: none (no vcpkg port, no system library; Qt Gui only, already allowlisted). Budgets: no new IDs;
 `// Budget: B5.` marks the keystroke path and `// Budget: B1.` builtinKeymap and KeymapService::create.

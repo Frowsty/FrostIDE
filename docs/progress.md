@@ -143,8 +143,9 @@ them. Merge notes in them mark what has changed since.
 - **Keyboard-layout test oracle licence (`m1/input-keymap`).** libxkbcommon and xkeyboard-config (in WSL) could
   independently check the simulated de-DE, pl-PL and fr-FR tables (test-only, never shipped) and later read real
   Linux layouts. xkeyboard-config's HPND-style notice is not on the SPDX allowlist. Adopt it under an ADR? Until
-  then the tables are checked by hand-reviewed goldens plus Windows' own en-US layout. (ADR 0016 decision 13
-  describes the xkb-data files as MIT; the licence check for the ADR would settle which notices apply.)
+  then the tables are checked by hand-reviewed goldens plus Windows' own en-US layout. (Checked in WSL: xkb-data's
+  copyright file mixes MIT and HPND-style notices, and libxkbcommon0's is MIT with one HPND-style block; ADR 0016
+  decision 13 now says so.)
 - **de-DE comment shortcuts (`m1/input-keymap`).** On a German layout, Ctrl+/ and Ctrl+Shift+/ (comment line and
   comment block) cannot be typed under the chosen mapping policy; Ctrl+Num / works, and the keymap reports the gap.
   Keep that, or add a German-specific default (for example the '#' key)?
