@@ -1,0 +1,18 @@
+frost-keymap 1
+id sample-1
+name Sample keymap
+
+[default]
+editor.copy = Ctrl+C | Ctrl+Insert
+editor.paste = Ctrl+V
+vcs.commit = Ctrl+K
+editor.commentBlock = Ctrl+K, Ctrl+C | Ctrl+Shift+Slash
+search.everywhere = DoubleShift
+agent.terminal =
+
+[linux]
+vcs.commit = Ctrl+Alt+K
+
+[macos]
+editor.copy = Meta+C
+tools.macOnly = Meta+F1

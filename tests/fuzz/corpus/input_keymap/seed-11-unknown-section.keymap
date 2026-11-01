@@ -1,0 +1,5 @@
+frost-keymap 1
+id unknown-section
+name Unknown section
+[mac]
+editor.copy = Meta+C

@@ -1,0 +1,24 @@
+Ctrl+K, Ctrl+C
+Ctrl+K, C
+ctrl+shift+a
+Shift Ctrl A
+CTRL-ALT-DEL
+cmd+s
+ctrl++
+ctrl+-
+ctrl--
+ctrl plus
+num /
+ctrl+num+
+alt+1
+DoubleShift
+doublectrl
+F5
+esc
+a
+ctrl+k,c
+ctrl+
++
+-
+ctrl+@
+Ctrl+Alt+Shift+Meta+F24

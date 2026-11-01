@@ -1,0 +1,5 @@
+frost-keymap 1
+id minimal
+name Minimal
+[default]
+editor.copy = Ctrl+C

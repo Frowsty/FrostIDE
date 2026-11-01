@@ -1,0 +1,6 @@
+frost-keymap 1
+id directive-after-section
+name First
+[default]
+name Second
+editor.copy = Ctrl+C

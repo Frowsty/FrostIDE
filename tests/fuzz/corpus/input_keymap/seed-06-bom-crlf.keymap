@@ -1,0 +1,6 @@
+﻿frost-keymap 1
+id crlf
+name CRLF with BOM
+[default]
+editor.copy = Ctrl+C | Ctrl+Insert
+vcs.commit	=	Ctrl+K

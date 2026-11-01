@@ -1,0 +1,5 @@
+frost-keymap 1
+id bad
+name Bad Ã( í € À¯
+[default]
+editor.copy = Ctrl+C
