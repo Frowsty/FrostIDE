@@ -16,6 +16,7 @@
     { "name": "spdlog", "version>=": "1.17.0#1", "default-features": false },
     { "name": "sqlite3", "version>=": "3.54.1", "default-features": false, "features": ["omit-load-extension"] },
     { "name": "utf8proc", "version>=": "2.12.0" },
-    { "name": "xxhash", "version>=": "0.8.4" }
+    { "name": "xxhash", "version>=": "0.8.4" },
+    { "name": "yyjson", "version>=": "0.13.0" }
   ]
 }
