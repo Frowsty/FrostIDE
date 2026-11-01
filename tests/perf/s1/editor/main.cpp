@@ -3,8 +3,9 @@
 // s1_editor: one S1 run of one editor backend (ADR 0007).
 //
 //   s1_editor --backend raster|rhi [--content text|fill] [--scroll-blit] [--seconds 10]
-//             [--keys 50] [--size WxH] [--inject-cpu-ms MS] [--out report.json]
-//   s1_editor --backend raster|rhi --validate-delays [--trials 48] [--size WxH] [--out report.json]
+//             [--keys 50] [--size WxH] [--full-output] [--inject-cpu-ms MS] [--out report.json]
+//   s1_editor --backend raster|rhi --validate-delays [--trials 48] [--size WxH] [--full-output]
+//             [--out report.json]
 //   s1_editor --backend raster|rhi --first-frame [--content text|fill] [--out timings.jsonl]
 //
 // The fling run opens a frameless, topmost window over the work area of the
@@ -26,8 +27,11 @@
 // --content fill paints only the background and the marker. --scroll-blit
 // (raster) moves the backing store and paints only the exposed strip, as a
 // shipping raster editor would. --size runs in a smaller window at the work
-// area's top-left, to see which costs scale with the window area. A 10 s fling is
-// on screen for about 13 s; the window is closed before analysis.
+// area's top-left, to see which costs scale with the window area. --full-output
+// covers the whole output instead of the work area (5120 x 1440, over the
+// taskbar), where DWM may flip a borderless flip-model swap chain directly
+// instead of composing it; whether it did is not observed (no PresentMon). A 10 s
+// fling is on screen for about 13 s; the window is closed before analysis.
 //
 // Probe validation for both backends (s1_probe_validate covers a plain GDI window):
 //   --inject-cpu-ms MS  every other fling tick spins MS on the GUI thread once its
@@ -111,7 +115,8 @@ struct Options {
     bool scrollBlit = false;
     double seconds = 10.0;
     int keys = 50;
-    QSize size; // Empty: the whole work area.
+    QSize size; // Empty: the whole work area (or output).
+    bool fullOutput = false;
     double injectCpuMs = 0;
     bool validateDelays = false;
     int trials = 48; // Per injected delay.
@@ -140,6 +145,8 @@ Options parseOptions(const QStringList& args) {
             if (parts.size() == 2) {
                 options.size = QSize(parts[0].toInt(), parts[1].toInt());
             }
+        } else if (is(arg, "--full-output")) {
+            options.fullOutput = true;
         } else if (is(arg, "--inject-cpu-ms") && hasValue) {
             options.injectCpuMs = std::clamp(args[++i].toDouble(), 0.0, 4.0);
         } else if (is(arg, "--validate-delays")) {
@@ -443,11 +450,8 @@ int run(QApplication& app, const Options& options) {
     window->setWindowTitle(QStringLiteral("FrostIDE S1 spike"));
     window->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool);
     window->setAttribute(Qt::WA_ShowWithoutActivating);
-    QRect geometry = screen->availableGeometry();
-    if (!options.size.isEmpty()) {
-        geometry.setSize(options.size.boundedTo(geometry.size()));
-    }
-    window->setGeometry(geometry);
+    window->setGeometry(
+        frost::s1::windowRect(screen->availableGeometry(), screen->geometry(), options.size, options.fullOutput));
     ViewState state;
     state.fillOnly = options.fillOnly;
     view->setState(state);
@@ -482,6 +486,7 @@ int run(QApplication& app, const Options& options) {
         json.key("window").beginObject();
         json.field("left", client.left).field("top", client.top).field("width", client.width());
         json.field("height", client.height());
+        json.field("area", options.fullOutput ? "output" : "work-area");
         json.endObject();
         json.field("refreshPeriodMs", periodMs);
     };

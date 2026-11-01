@@ -19,8 +19,11 @@
 // Duplication probe reads five sample pixels inside the expected client area from
 // every desktop present:
 //   first frame   the first present after process start in which at least three
-//                 samples moved more than 24 levels away from the backdrop colour
-//                 (the window's first composed frame, even mid-animation);
+//                 samples moved more than 24 levels away from the backdrop colour.
+//                 During DWM's fade-in that is not the window's first composed
+//                 frame: in six diagnosed launches (ADR 0007) it was the third,
+//                 12.1 to 18.5 ms after the first present that differed at all, so
+//                 the endpoint is late by two or three refreshes;
 //   settled       the first present in which at least four samples are within 6
 //                 levels of the colour the window shows once idle;
 //   window seen   when EnumWindows first returned a visible, uncloaked window of
@@ -32,10 +35,12 @@
 // --mode warm launches the build-tree target once to prime the file cache and
 // then N times. --mode cold copies the target and its DLLs into a fresh directory
 // next to it with unbuffered I/O (COPY_FILE_NO_BUFFERING) before each launch, so
-// FrostIDE's own binaries are read from disk and have no prefetch trace; system
-// DLLs stay cached. A true post-reboot cold start is not possible from an agent
-// session (no reboot, and a standby-list purge needs elevation), so "cold" here
-// is that proxy; it also pays Defender's first scan of the new files. Exit codes:
+// the copies have no prefetch trace and the copy itself does not leave them in
+// the file cache. That they are read from disk at launch is not verified:
+// Defender may scan the new files when they are closed, which reads them into the
+// cache. System DLLs stay cached. A true post-reboot cold start is not possible
+// from an agent session (no reboot, and a standby-list purge needs elevation), so
+// "cold" here is that proxy, with a bias of unknown direction. Exit codes:
 // 0 valid, 2 setup error, 3 invalid run (session, access lost or capture failure;
 // the report says which).
 

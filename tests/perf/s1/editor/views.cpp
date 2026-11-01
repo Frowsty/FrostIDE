@@ -222,6 +222,14 @@ bool fitQuads(std::vector<QuadInstance>& quads, std::size_t capacity) {
     return true;
 }
 
+QRect windowRect(const QRect& available, const QRect& output, QSize size, bool fullOutput) {
+    QRect rect = fullOutput ? output : available;
+    if (!size.isEmpty()) {
+        rect.setSize(size.boundedTo(rect.size()));
+    }
+    return rect;
+}
+
 RasterView::RasterView(const TextModel& model, const TextFont& font, const Theme& theme)
     : m_model(model), m_font(font), m_theme(theme), m_cache(font, 4096, 1024) {
     // Every pixel is painted, so Qt need not erase first.

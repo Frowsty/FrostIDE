@@ -152,6 +152,12 @@ void buildQuads(const TextModel& model, const TextFont& font, const GlyphAtlas& 
 // capacity >= kMarkerCells and quads.size() >= kMarkerCells. O(kMarkerCells).
 bool fitQuads(std::vector<QuadInstance>& quads, std::size_t capacity);
 
+// The S1 window's rectangle: the screen's work area (`available`), or with
+// `fullOutput` the whole output (`output`, which covers the taskbar; a borderless
+// flip-model swap chain there may be flipped by DWM directly instead of composed).
+// A non-empty `size` shrinks the rectangle at its top-left, never past it. O(1).
+QRect windowRect(const QRect& available, const QRect& output, QSize size, bool fullOutput);
+
 // One completed paint (raster paintEvent or RHI render), in QPC ticks.
 struct PaintRecord {
     std::uint16_t marker = 0;

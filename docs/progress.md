@@ -6,34 +6,52 @@ what is next, blockers and open questions for the user.
 ## 2026-11-01: M0 spike S1 result (branch `m0/s1`)
 
 ### Done
-- **Quiet-window suite (run 3).** The coordinator ran `tests\perf\s1\run-s1.ps1` at bc20789 with the user's go,
+- **Run 3, the main suite.** The coordinator ran `tests\perf\s1\run-s1.ps1` at bc20789 with the user's go,
   2026-11-01 01:02-01:11: 47 steps, 8:29, every run valid. All 6 probe validations passed: the GDI window at the
   start and end, delays through the raster and QRhi paths, and the UI-CPU injection on both backends. The
-  machine was not idle: system CPU was 33-44 % from the user's software, and Wallpaper Engine was running.
-- **ADR 0007 finished** from run 3. Status stays proposed until the user answers its three questions.
-  - Raster fails B6 CPU at 5120x1392 in 5 of 5 rounds, even with fill only (p99 median 9.18 / 7.38 / 6.29 ms
-    for full repaint / scroll-blit / fill).
-  - QRhi passes CPU (p99 0.86 ms) and never drops a tick. It misses 1.5-4.9 % of refreshes, under the 5.0-9.3 %
-    floor of a trivial window, and its maximum interval is within 16.7 ms in 3 of 5 rounds.
-  - B1 warm: frost.exe p50 264.9 ms (n=20). QRhi adds about 215 ms to the first frame (474.6 against 257.7 ms in
-    the same executable), almost all of it inside the first `show()`; shader compilation is 6.5 ms.
-  - Runs 1 and 2 are kept only as supporting evidence under load.
+  desktop was the user's busy one (Wallpaper Engine, Discord, 33-44 % system CPU), not a quiet one.
+- **ADR 0007 fix round** after an independent verification of b2395cd. It corrects:
+  - the qpcVBlank claim (irregular, used only as a grid anchor);
+  - the earlier-runs section (it gave run 2's numbers for both runs and claimed an agreement run 1 does not
+    show);
+  - the floor claims;
+  - the B1 endpoint (the detector fires on about the third composed frame of the fade-in, 12-19 ms late);
+  - the cold proxy (bias of unknown direction);
+  - the B2/B15 cost of starting QRhi later.
+
+  It also discloses merged captures, and all cited raw data now lives in `E:\FrostBuilds\perf\m0\s1\`.
+- **Run 4, a floors follow-up** (01:43-01:48, 4:24 on screen, under the measurement lock).
+  - Changes: `s1_editor --full-output` (window over the whole output; `windowRect` with a unit test, 17 editor
+    tests) and `run-s1.ps1 -Suite floors`, which interleaves trivial 320x48 windows of both backends with QRhi
+    runs and adds one round at 5120x1440.
+  - Findings: trivial windows missed more than the QRhi editor (medians 7.8 % raster and 9.6 % QRhi, against
+    5.5 % for QRhi with text), so they are not a floor. Covering the whole output cut QRhi's misses to
+    0.56-1.25 %, with every interval at 13.9 ms (one round). A trivial QRhi window also switches its
+    vblank-to-screen level, so that is QRhi's present path, not the desktop.
+- Result, unchanged in direction: raster fails B6 CPU at 5120x1392 in every round (p99 medians 9.18 / 7.38 /
+  6.29 ms). QRhi passes CPU in 10 of 10 rounds (p99 0.86 ms); its missed and interval criteria are open. B1
+  warm fails before any editor work (frost.exe p50 264.9 ms). QRhi adds 216.9 ms to the first frame.
 
 ### Next
-- The user's answers to ADR 0007's questions. Then the independent review and merge of `m0/s1`.
-- M1: keep QRhi start-up off B1 (options in ADR 0007, Consequences); profile the first `show()`; check QRhi's
-  swap-chain frame latency.
-- When m0/io lands, port `tests/perf/s1/child_process.cpp` to `IProcessLauncher`.
+- The user's answers to ADR 0007's four questions. Then the independent review and merge of `m0/s1`.
+- M1: keep QRhi start-up off B1 without moving it onto B2 or B15 (options in ADR 0007, Consequences); profile
+  the first `show()`; check QRhi's swap-chain frame latency.
+- M1: a quiet-desktop control and PresentMon's present mode for QRhi, to explain its misses at the work area.
+- When m0/io lands, port `tests/perf/s1/child_process.cpp` (CreateProcessW today) to `IProcessLauncher`.
 
 ### Blockers
 - None. DWM ETW needs elevation, so it is deferred (ADR 0007).
 
 ### Questions for the user
-1. Approve QRhi as M1's editor renderer (the default on Windows, with raster as the oracle and RDP/WARP fallback)?
-2. How should B6 be gated, given that the desktop itself misses 5-9 % of refreshes with a 20.8 ms maximum
-   interval: a quiet desktop with the absolute budget, a same-session floor, or both?
+1. Approve QRhi as M1's editor renderer on Windows (the default, with raster as the oracle and RDP/WARP
+   fallback)?
+2. How should B6's missed and interval criteria be gated? The options are: a quiet desktop with the absolute
+   budget; the whole output (5120x1440) with the absolute budget; or deciding at M1 after a quiet-desktop
+   control and PresentMon. The ADR proposes the last, with no budget change.
 3. B1 warm fails before any editor work (frost.exe p50 264.9 ms against 150 ms; max of 20, 360.1 ms, against
    250 ms). Keep 150/250 ms as M1's target, or re-baseline?
+4. A true cold B1 run needs a reboot (first-frame steps first after logon) or an elevated RAMMap -Et before each
+   launch. Which, and when?
 
 ## 2026-10-31: M0 spike S1 (branch `m0/s1`)
 

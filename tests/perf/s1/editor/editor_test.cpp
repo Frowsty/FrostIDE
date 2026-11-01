@@ -258,6 +258,21 @@ TEST(S1Views, FitQuadsKeepsTheMarkerWhenGlyphsOverflow) {
     }
 }
 
+TEST(S1Views, WindowRectIsTheWorkAreaOrTheWholeOutput) {
+    // REF-W1: a 5120 x 1440 output whose taskbar leaves a 5120 x 1392 work area.
+    const QRect output(0, 0, 5120, 1440);
+    const QRect available(0, 0, 5120, 1392);
+    EXPECT_EQ(windowRect(available, output, QSize(), false), available);
+    EXPECT_EQ(windowRect(available, output, QSize(), true), output);
+    EXPECT_EQ(windowRect(available, output, QSize(320, 48), true), QRect(0, 0, 320, 48));
+    // A size larger than the area is clamped to it, per dimension.
+    EXPECT_EQ(windowRect(available, output, QSize(8000, 1440), false), available);
+    EXPECT_EQ(windowRect(available, output, QSize(1280, 4000), true), QRect(0, 0, 1280, 1440));
+    // A work area that does not start at the output's origin keeps its top-left.
+    EXPECT_EQ(windowRect(QRect(-1920, 40, 1920, 1000), QRect(-1920, 0, 1920, 1080), QSize(1280, 720), false),
+              QRect(-1920, 40, 1280, 720));
+}
+
 RunCounts fullCounts() {
     RunCounts counts;
     counts.flingFrames = 1400;

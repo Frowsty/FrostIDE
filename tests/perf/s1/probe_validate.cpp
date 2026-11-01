@@ -22,9 +22,10 @@
 //      missed refresh (cadence consistency >= 95 %). DWM's refresh period must
 //      match the measured vblank interval.
 //   C. Environment floor. The same animation for another 720 frames without any
-//      stall. The refreshes it missed are reported as the environment floor: a
-//      property of the machine (other windows making DWM skip compositions), not
-//      of the probe, and free of the stalls phase B injects on purpose.
+//      stall. The refreshes it missed are reported (as "environmentFloor") to show
+//      how disturbed the desktop was, free of the stalls phase B injects on purpose.
+//      Despite the name it is not a lower bound for other windows: a large
+//      flip-model window missed fewer refreshes on the same desktop (ADR 0007).
 //
 //   s1_probe_validate [--out report.json] [--trials N] [--diagnose]
 // Exit status: 0 validated, 1 validation failed, 2 setup error, 3 invalid run

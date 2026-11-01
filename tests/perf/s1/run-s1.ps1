@@ -14,21 +14,36 @@
 #   4. first frame (B1), warm, between the rounds: frost.exe, s1_editor's QRhi
 #      window and s1_editor's raster window, from process start; frost.exe
 #      cold-proxy last;
-#   5. s1_probe_validate again, for drift and a second environment floor.
+#   5. s1_probe_validate again, for drift and a second trivial-window sample.
+# -Suite floors (run 4 in ADR 0007) interleaves trivial windows with QRhi runs, to
+# see whether a trivial window is a floor under the editor's missed refreshes (it
+# was not: trivial windows missed more), and measures the whole output:
+#   1. s1_probe_validate, and the QRhi delay validation in a window covering the
+#      whole output (--full-output), where DWM may flip the swap chain directly;
+#   2. -Repeats rounds of four runs: a trivial QRhi window (fill only, 320x48, 5 s,
+#      flip-model swap chain), QRhi with text, the same trivial window on raster
+#      (GDI flush), and QRhi fill only; even rounds run in reverse order;
+#   3. after round 3 (or the last round, if fewer), one round at the whole output
+#      (5120x1440 on REF-W1, covering the taskbar): QRhi text, raster fill only,
+#      QRhi fill only;
+#   4. s1_probe_validate again.
+# The step names rhi-floor and gdi-floor are kept for the reports of run 4.
 # Every step keeps its window on screen for 20 s or less, never uses exclusive
 # fullscreen, never takes focus and closes what it opens. The estimated total is
 # printed before anything starts; -DryRun prints the plan and the estimate only.
 #
 #   powershell -ExecutionPolicy Bypass -File tests\perf\s1\run-s1.ps1 -BuildDir build\s1 -OutDir <dir>
-#              [-Repeats 5] [-ContinueUnvalidated] [-SkipFirstFrame] [-DryRun] [-SummaryOnly]
+#              [-Suite main|floors] [-Repeats 5] [-ContinueUnvalidated] [-SkipFirstFrame] [-DryRun]
+#              [-SummaryOnly]
 #
 # Validation policy: if the first s1_probe_validate does not pass (exit code 1, or
 # an invalid run the suite survives) the suite stops, because the probe itself is
 # not trustworthy, unless -ContinueUnvalidated is given; then every later row is
 # tagged "unvalidated". A backend validation (delays or CPU injection) that does
-# not pass tags that backend's rows and the suite goes on. An invalid run (exit code 3) stops the suite when the session itself
-# became invalid (locked, remote, monitor off) or after three invalid runs; a
-# setup error (exit code 2) stops it at once.
+# not pass tags that backend's rows and the suite goes on. An invalid run (exit
+# code 3) stops the suite when the session itself became invalid (locked, remote,
+# monitor off) or after three invalid runs; a setup error (exit code 2) stops it
+# at once.
 #
 # The Release configuration of s1_probe_validate, s1_editor, s1_first_frame and
 # frost must be built first. Reports are JSON files in -OutDir; summary.json and
@@ -39,6 +54,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $BuildDir,
     [Parameter(Mandatory = $true)] [string] $OutDir,
     [string] $Config = 'Release',
+    [ValidateSet('main', 'floors')] [string] $Suite = 'main',
     [ValidateRange(1, 10)] [int] $Repeats = 5,
     [switch] $ContinueUnvalidated,
     [switch] $SkipFirstFrame,
@@ -92,6 +108,28 @@ $editorConfigs = @(
     @{ Name = 'raster-text-1280'; Backend = 'raster'; Seconds = 5.5
         Args = @('--backend', 'raster', '--size', '1280x720', '--seconds', '3', '--keys', '0') }
 )
+# -Suite floors: trivial windows alternate with QRhi at the work area, plus one
+# round covering the whole output.
+$fullConfigs = @()
+if ($Suite -eq 'floors') {
+    $editorConfigs = @(
+        @{ Name = 'rhi-floor'; Backend = 'rhi'; Seconds = 7.5
+            Args = @('--backend', 'rhi', '--content', 'fill', '--size', '320x48', '--seconds', '5', '--keys', '0') },
+        @{ Name = 'rhi-text'; Backend = 'rhi'; Seconds = 13.5; Args = @('--backend', 'rhi') },
+        @{ Name = 'gdi-floor'; Backend = 'raster'; Seconds = 7.5
+            Args = @('--backend', 'raster', '--content', 'fill', '--size', '320x48', '--seconds', '5', '--keys', '0') },
+        @{ Name = 'rhi-fill'; Backend = 'rhi'; Seconds = 13.5; Args = @('--backend', 'rhi', '--content', 'fill') }
+    )
+    $fullConfigs = @(
+        @{ Name = 'rhi-text-full'; Backend = 'rhi'; Seconds = 13.5; Args = @('--backend', 'rhi', '--full-output') },
+        @{ Name = 'raster-fill-full'; Backend = 'raster'; Seconds = 13.5
+            Args = @('--backend', 'raster', '--content', 'fill', '--full-output') },
+        @{ Name = 'rhi-fill-full'; Backend = 'rhi'; Seconds = 13.5
+            Args = @('--backend', 'rhi', '--content', 'fill', '--full-output') }
+    )
+    $SkipFirstFrame = $true
+}
+$summaryConfigs = @($editorConfigs) + @($fullConfigs)
 
 # The first-frame blocks: 10 launches each (plus one priming launch when warm).
 $inProcess = Join-Path $out 'ff-inprocess.jsonl'
@@ -117,13 +155,18 @@ function Add-FirstFrame([string] $name, [string] $group, [string] $backend, [str
 }
 
 Add-Step 'validate-start' 'validate' 'validate' 'gdi' $validateExe @() 21
-foreach ($backend in 'raster', 'rhi') {
-    Add-Step "delays-$backend" 'delays' "delays-$backend" $backend $editorExe @(
-        '--backend', $backend, '--validate-delays', '--size', '1280x720') 9
-}
-foreach ($backend in 'rhi', 'raster') {
-    Add-Step "cpu-inject-$backend" 'inject' "cpu-inject-$backend" $backend $editorExe @(
-        '--backend', $backend, '--size', '1280x720', '--seconds', '5', '--keys', '0', '--inject-cpu-ms', '2') 7.5
+if ($Suite -eq 'floors') {
+    Add-Step 'delays-rhi-full' 'delays' 'delays-rhi-full' 'rhi' $editorExe @(
+        '--backend', 'rhi', '--validate-delays', '--full-output') 9
+} else {
+    foreach ($backend in 'raster', 'rhi') {
+        Add-Step "delays-$backend" 'delays' "delays-$backend" $backend $editorExe @(
+            '--backend', $backend, '--validate-delays', '--size', '1280x720') 9
+    }
+    foreach ($backend in 'rhi', 'raster') {
+        Add-Step "cpu-inject-$backend" 'inject' "cpu-inject-$backend" $backend $editorExe @(
+            '--backend', $backend, '--size', '1280x720', '--seconds', '5', '--keys', '0', '--inject-cpu-ms', '2') 7.5
+    }
 }
 for ($round = 1; $round -le $Repeats; $round++) {
     $order = $editorConfigs
@@ -132,6 +175,11 @@ for ($round = 1; $round -le $Repeats; $round++) {
     }
     foreach ($c in $order) {
         Add-Step "$($c.Name)-r$round" 'editor' $c.Name $c.Backend $editorExe $c.Args $c.Seconds
+    }
+    if ($round -eq [math]::Min(3, $Repeats)) {
+        foreach ($c in $fullConfigs) {
+            Add-Step "$($c.Name)-r1" 'editor' $c.Name $c.Backend $editorExe $c.Args $c.Seconds
+        }
     }
     if ($SkipFirstFrame) {
         continue
@@ -251,7 +299,7 @@ function Write-Summary {
 
     $editor = [ordered]@{}
     $tableRows = @()
-    foreach ($c in $editorConfigs) {
+    foreach ($c in $summaryConfigs) {
         $reports = @()
         $invalid = 0
         foreach ($step in @($plan | Where-Object { $_.Kind -eq 'editor' -and $_.Group -eq $c.Name })) {
@@ -281,6 +329,8 @@ function Write-Summary {
             vblankToScreenP50Ms = Get-Spread ($reports | ForEach-Object { $_.flingLatency.inputToScreenMs.p50 })
             readyToScreenP50Ms = Get-Spread ($reports | ForEach-Object { $_.flingLatency.readyToScreenMs.p50 })
             coalescedPercent = Get-Spread $coalesced
+            # Updates whose capture merged several presents: missed and max interval are upper bounds.
+            mergedCaptures = Get-Spread ($reports | ForEach-Object { $_.content.mergedCaptures })
             b5P50Ms = Get-Spread ($typed | ForEach-Object { $_.typing.inputToPaintEndMs.p50 })
             b5P99Ms = Get-Spread ($typed | ForEach-Object { $_.typing.inputToPaintEndMs.p99 })
             typingToScreenP50Ms = Get-Spread ($typed | ForEach-Object { $_.typing.latency.inputToScreenMs.p50 })
@@ -296,6 +346,7 @@ function Write-Summary {
             'CPU p99 ms' = Format-Spread $row.uiCpuP99Ms
             'Missed %' = Format-Spread $row.missedPercent 1
             'Max int ms' = Format-Spread $row.maxIntervalMs 1
+            'Merged' = Format-Spread $row.mergedCaptures 0
             'Vblank-screen p50' = Format-Spread $row.vblankToScreenP50Ms 1
             'B5 p99 ms' = Format-Spread $row.b5P99Ms
         }
