@@ -6,7 +6,7 @@
 # "stress", timing tests "perf". The verify scripts' debug leg excludes "stress"
 # (-LE '^stress$'); the -Full legs run every label. tests/fuzz builds the corpus replays here
 # (label unit); the libFuzzer targets themselves live in the separate fuzz trees (FROST_FUZZ,
-# label fuzz).
+# label fuzz). diff comes before fuzz because tests/fuzz reuses its support library.
 #
 # Every test also carries the module label mod.<directory> (mod.sched, mod.io, ...), which the
 # WSL TSan quick leg selects by (tools/verify_support.py tsan; ADR 0027 decision 5).
@@ -26,6 +26,7 @@ frost_add_test_directory(core)
 frost_add_test_directory(sched)
 frost_add_test_directory(io)
 frost_add_test_directory(text)
+frost_add_test_directory(diff)
 frost_add_test_directory(input)
 frost_add_test_directory(syntax)
 frost_add_test_directory(storage)

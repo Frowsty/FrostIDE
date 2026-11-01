@@ -1,0 +1,7 @@
+Stable 0 1 0 1 0 1
+Ours 1 2 1 2 1 2
+Stable 2 5 2 5 2 5
+Theirs 5 6 5 6 5 6
+Stable 6 7 6 7 6 7
+conflicts 0
+degraded 0

@@ -1,0 +1,22 @@
+@@ -71 +71,2 @@
+-    // violation), InvalidArgument (a directory), IoError. O(size).
++    // violation), InvalidArgument (a directory, or not a regular file: FIFOs, sockets and
++    // devices are refused without blocking), IoError. O(size).
+@@ -90,2 +91,4 @@
+-     * targets fail with PermissionDenied. SaveManager (M1) adds metadata and
+-     * symlink preservation on top of this primitive.
++     * targets fail with PermissionDenied. On POSIX the temporary file is created
++     * with mode 0600 and receives the final mode (the target's, or 0666 minus the
++     * umask) only once its content is complete. SaveManager (M1) adds metadata
++     * and symlink preservation on top of this primitive.
+@@ -113,2 +116,4 @@
+-    // Removes a file (or a symlink itself). Errors: NotFound, InvalidArgument (a
+-    // directory), PermissionDenied (includes read-only files on Windows), Busy.
++    // Removes a file, or a link itself: every entry listDirectory reports as Symlink
++    // (including Windows directory symlinks and junctions) is removed with removeFile on
++    // every platform, and the link is never followed. Errors: NotFound, InvalidArgument
++    // (a directory), PermissionDenied (includes read-only files on Windows), Busy.
+@@ -117 +122,2 @@
+-    // Removes an empty directory. Errors: NotFound, InvalidArgument (not a
++    // Removes an empty directory. A link to a directory is not a directory here
++    // (InvalidArgument; use removeFile). Errors: NotFound, InvalidArgument (not a

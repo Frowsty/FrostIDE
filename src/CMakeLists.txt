@@ -7,6 +7,8 @@ add_subdirectory(core)
 add_subdirectory(sched)
 add_subdirectory(io)
 add_subdirectory(text)
+# frost::diff (ADR 0019) needs only core and text, so fuzz trees build it too (its fuzz target).
+add_subdirectory(diff)
 # The editor model (ADR 0025) links RE2 and utf8proc from vcpkg; fuzz trees install no ports.
 if(NOT FROST_FUZZ)
     add_subdirectory(text/editor)

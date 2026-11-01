@@ -1,0 +1,2 @@
+conflicts 0
+degraded 0

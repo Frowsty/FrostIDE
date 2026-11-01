@@ -1,0 +1,4 @@
+@@ -29 +29,2 @@
+-// still holds; on x86-64 both variants compile to the same plain moves.
++// still holds; on x86-64 both variants compile to the same plain moves. The
++// price: TSan cannot check the release build's fence-based path (ADR 0002).

@@ -1,0 +1,22 @@
+<<<<<<< ours
+a
+B
+c
+d
+e
+f
+||||||| base
+a
+b
+c
+d
+e
+f
+=======
+a
+b
+c
+d
+E
+f
+>>>>>>> theirs

@@ -1,0 +1,13 @@
+@@ -29,8 +29,10 @@
+     bool selfTestOnScreen = false;
+ };
+ 
+-// Parses UTF-8 arguments (argv[1..], without the program name). Unknown options
+-// are an InvalidArgument error so typos are reported instead of ignored.
++// Parses UTF-8 arguments (argv[1..], without the program name). Every argument
++// starting with '-' before "--" is an option; unknown options (including
++// single-dash typos such as -version) are an InvalidArgument error, so they are
++// reported instead of being opened as paths.
+ [[nodiscard]] Result<CommandLine> parseCommandLine(std::span<const std::string_view> args);
+ 
+ // Usage text printed by --help and after a parse error.

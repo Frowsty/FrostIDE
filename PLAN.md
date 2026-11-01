@@ -227,13 +227,14 @@ FrostIDE/
   src/settings/                registry, scopes, migrations, importers
   src/sched/  src/io/          scheduler, SimExecutor; reactor, processes, file system, watchers, http
   src/text/  src/syntax/       piece tree, display map, undo, anchors, SaveManager; tree-sitter host
+  src/diff/                    histogram line diff, refinement, three-way merge cores (ADR 0019)
   src/input/                   shortcut matcher, keyboard layouts, keymaps, action registry, Find Action (Qt-free)
   src/storage/  src/rpc/       SQLite, FSEG, fingerprints, journal; transports and framing
   src/protocols/               generated LSP/DAP/MCP types
   src/project/                 solution/vcxproj readers, cache, CMake, presets, toolchains, trust
   src/lang/                    LSP client, diagnostics store, inspection registry, SARIF, CMake language
   src/build/  src/debug/       build drivers, run configs; DAP client, breakpoints
-  src/test_runner/  src/vcs/   test discovery; git, diff, merge, askpass broker
+  src/test_runner/  src/vcs/   test discovery; git (on src/diff's diff and merge), askpass broker
   src/term/  src/search/       PTY and VT engine; search, fuzzy matcher, trigram index
   src/agent/  src/diag/        Claude bridge, stream-json client, MCP core; crash, freeze, Collect Logs
   src/update/                  updater, ComponentDownloader

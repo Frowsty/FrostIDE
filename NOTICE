@@ -33,3 +33,7 @@ and compiled unmodified into FrostIDE:
   (third_party/grammars/xml);
 - tree-sitter-markdown 0.5.4, Copyright (c) 2021 Matthias Deiml
   (third_party/grammars/markdown).
+
+The histogram diff in src/diff follows the algorithm of JGit's HistogramDiff
+and HistogramDiffIndex (Copyright (C) 2010, Google Inc. and others; EDL-1.0,
+SPDX BSD-3-Clause). No JGit code is included.

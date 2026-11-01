@@ -1,0 +1,5 @@
+10100
+020
+# Absorbing after the slide loop instead would give [(0,1,0,0),(2,4,1,2)]; git 2.43 and 2.56 agree.
+0 3 0 0
+4 4 1 2
