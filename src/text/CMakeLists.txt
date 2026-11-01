@@ -1,19 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# frost::text (PLAN.md section 3.2; ADR 0013, ADR 0017, ADR 0018): the text buffer and its file
-# encodings. A persistent, reference-counted piece tree (SumTree<PieceTraits, 8>) over append-only
-# UTF-8 storage, O(1) snapshots readable from any thread, TextBuffer edits with normalised
-# TextChanges, and line/UTF-16 position conversions. Anchors, selections and Document's
-# transactional undo tree (ADR 0017) sit on top of TextBuffer. The load and save codec pipeline
-# (ADR 0018): BOMs, UTF-8/16/32, legacy code pages behind the ITextCodec seam (MultiByteToWideChar
-# on Windows, glibc iconv on Linux, both already linked), detection, EOL statistics and the save
-# guard.
+# frost::text (PLAN.md section 3.2; ADR 0013, ADR 0017, ADR 0018, ADR 0026): the text buffer, its
+# file encodings and its display map. A persistent, reference-counted piece tree
+# (SumTree<PieceTraits, 8>) over append-only UTF-8 storage, O(1) snapshots readable from any thread,
+# TextBuffer edits with normalised TextChanges, and line/UTF-16 position conversions. Anchors,
+# selections and Document's transactional undo tree (ADR 0017) sit on top of TextBuffer. The load
+# and save codec pipeline (ADR 0018): BOMs, UTF-8/16/32, legacy code pages behind the ITextCodec
+# seam (MultiByteToWideChar on Windows, glibc iconv on Linux, both already linked), detection, EOL
+# statistics and the save guard. The layered display map (ADR 0026) maps the text to display rows
+# through its ITextShaper seam.
 # Qt-free. Depends on core and on io (validUtf8Prefix, IFileSystem, OS error mapping).
 # TODO(M1): large-file mode with mapped originals (m1/large-file) joins here.
 
 set(frost_text_sources
     src/anchor.cpp
     src/anchor_set.cpp
+    src/display_block.cpp
+    src/display_fold.cpp
+    src/display_map.cpp
+    src/display_wrap.cpp
     src/document.cpp
     src/encoding.cpp
     src/encoding_detection.cpp
@@ -26,6 +31,7 @@ set(frost_text_sources
     src/storage.cpp
     src/text_buffer.cpp
     src/text_file.cpp
+    src/text_shaper.cpp
     src/text_summary.cpp
     src/undo_tree.cpp
     src/unicode_codec.cpp)
