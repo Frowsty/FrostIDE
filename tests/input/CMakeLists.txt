@@ -19,6 +19,8 @@
 set(frost_input_test_support
     support/golden.cpp
     support/matcher_rig.cpp
+    support/reachability.cpp
+    support/synthetic_layouts.cpp
     support/test_actions.cpp
     fuzz/keymap_fuzz_core.cpp)
 
@@ -31,6 +33,7 @@ frost_add_test(input_tests
         intellij_keymap_test.cpp
         keymap_format_test.cpp
         keymap_fuzz_replay_test.cpp
+        keymap_reachability_test.cpp
         keymap_service_test.cpp
         layout_test.cpp
         shortcut_layouts_test.cpp
