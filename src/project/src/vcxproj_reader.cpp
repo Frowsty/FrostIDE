@@ -10,9 +10,16 @@
 #include "xml.hpp"
 
 #include <array>
+#include <cstdlib>
 #include <format>
 #include <optional>
 #include <unordered_set>
+
+#ifdef _WIN32
+#include "frost/io/utf.hpp"
+
+#include <windows.h>
+#endif
 
 namespace frost::project {
 namespace {
@@ -84,9 +91,22 @@ std::optional<std::pair<std::string, std::string>> configurationCondition(std::s
     return std::pair{std::string(trim(right.substr(0, bar))), std::string(trim(right.substr(bar + 1)))};
 }
 
-// Expands $(Name) from `properties`; nullopt when a name is unknown, is a property function or
-// the text holds an item list @(...) or metadata %(...).
-std::optional<std::string> expandProperties(std::string_view text, const PropertyTable& properties) {
+// The table and the environment fallback one expansion looks names up in (vcxproj.hpp).
+struct Scope {
+    const PropertyTable& properties;
+    const EnvironmentLookup& environment; // Empty: the process environment.
+
+    [[nodiscard]] std::optional<std::string> lookup(std::string_view name) const {
+        if (auto it = properties.find(detail::toLowerAscii(name)); it != properties.end()) {
+            return it->second;
+        }
+        return environment ? environment(name) : processEnvironmentVariable(name);
+    }
+};
+
+// Expands $(Name) from the scope; nullopt when a name is unknown, is a property function or the
+// text holds an item list @(...) or metadata %(...).
+std::optional<std::string> expandProperties(std::string_view text, const Scope& scope) {
     std::string out;
     std::size_t i = 0;
     while (i < text.size()) {
@@ -100,11 +120,11 @@ std::optional<std::string> expandProperties(std::string_view text, const Propert
             if (name.empty() || name.find_first_of("[.:(") != std::string_view::npos) {
                 return std::nullopt;
             }
-            auto it = properties.find(detail::toLowerAscii(name));
-            if (it == properties.end()) {
+            auto value = scope.lookup(name);
+            if (!value) {
                 return std::nullopt;
             }
-            out += it->second;
+            out += *value;
             i = close + 1;
         } else if ((text[i] == '@' || text[i] == '%') && open) {
             return std::nullopt;
@@ -137,10 +157,10 @@ std::string normalizeFilterPath(std::string_view filter) {
 // through `warn` and skipped entries through `unresolved`.
 template<class Warn>
 std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view directory, std::string_view entry,
-                                        const PropertyTable& properties, std::vector<std::string>& unresolved,
-                                        bool& wildcard, Warn&& warn) {
+                                        const Scope& scope, std::vector<std::string>& unresolved, bool& wildcard,
+                                        Warn&& warn) {
     wildcard = false;
-    auto expanded = expandProperties(entry, properties);
+    auto expanded = expandProperties(entry, scope);
     if (!expanded) {
         unresolved.emplace_back(entry);
         return {};
@@ -172,7 +192,8 @@ std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view di
 
 class VcxprojParser {
 public:
-    VcxprojParser(io::IFileSystem& fs, VcxProject& project) : m_fs(fs), m_project(project) {}
+    VcxprojParser(io::IFileSystem& fs, VcxProject& project, const VcxprojOptions& options)
+        : m_fs(fs), m_project(project), m_scope{project.properties, options.environment} {}
 
     // Walks a <Project>, <When> or <Otherwise> element.
     void walk(const pugi::xml_node& parent) {
@@ -257,7 +278,7 @@ private:
                 continue; // Only unconditioned, non-reserved properties join the static table.
             }
             const std::string key = detail::toLowerAscii(name);
-            if (auto expanded = expandProperties(value, m_project.properties)) {
+            if (auto expanded = expandProperties(value, m_scope)) {
                 m_project.properties[key] = std::move(*expanded);
             } else {
                 m_project.properties.erase(key); // Redefined to something we cannot know statically.
@@ -310,9 +331,8 @@ private:
         const std::string guid = detail::normalizeGuid(elementText(detail::childElement(item, "Project")));
         for (std::string_view entry : detail::splitTrimmed(attribute(item, "Include"), ';')) {
             bool wildcard = false;
-            auto paths =
-                resolveInclude(m_fs, m_project.directory, entry, m_project.properties, m_project.unresolvedIncludes,
-                               wildcard, [this](std::string message) { warn(std::move(message)); });
+            auto paths = resolveInclude(m_fs, m_project.directory, entry, m_scope, m_project.unresolvedIncludes,
+                                        wildcard, [this](std::string message) { warn(std::move(message)); });
             for (std::string& path : paths) {
                 if (m_references.insert(detail::pathKey(path)).second) {
                     m_project.references.push_back(
@@ -329,7 +349,7 @@ private:
         }
         std::vector<detail::PathPattern> excludes;
         for (std::string_view entry : detail::splitTrimmed(attribute(item, "Exclude"), ';')) {
-            auto expanded = expandProperties(entry, m_project.properties);
+            auto expanded = expandProperties(entry, m_scope);
             auto pattern = expanded ? detail::PathPattern::make(m_project.directory, *expanded)
                                     : Result<detail::PathPattern>(fail(ErrorCode::InvalidArgument, "unknown property"));
             if (pattern) {
@@ -340,9 +360,8 @@ private:
         }
         for (std::string_view entry : detail::splitTrimmed(include, ';')) {
             bool wildcard = false;
-            auto paths =
-                resolveInclude(m_fs, m_project.directory, entry, m_project.properties, m_project.unresolvedIncludes,
-                               wildcard, [this](std::string message) { warn(std::move(message)); });
+            auto paths = resolveInclude(m_fs, m_project.directory, entry, m_scope, m_project.unresolvedIncludes,
+                                        wildcard, [this](std::string message) { warn(std::move(message)); });
             for (std::string& path : paths) {
                 bool excluded = false;
                 for (const detail::PathPattern& exclude : excludes) {
@@ -362,6 +381,7 @@ private:
 
     io::IFileSystem& m_fs;
     VcxProject& m_project;
+    const Scope m_scope; // The project's property table, then the environment.
     std::vector<std::pair<std::string, PerConfiguration>> m_perConfiguration;
     std::unordered_set<std::string> m_items;      // Path keys of m_project.items.
     std::unordered_set<std::string> m_references; // Path keys of m_project.references.
@@ -393,6 +413,35 @@ void seedProperties(VcxProject& project, const VcxprojOptions& options) {
 
 } // namespace
 
+std::optional<std::string> processEnvironmentVariable(std::string_view name) {
+    if (name.empty() || name.find_first_of(std::string_view("=\0", 2)) != std::string_view::npos) {
+        return std::nullopt;
+    }
+#ifdef _WIN32
+    auto wideName = io::toWide(name);
+    if (!wideName) {
+        return std::nullopt;
+    }
+    std::wstring value(256, L' ');
+    for (;;) {
+        const DWORD length = GetEnvironmentVariableW(wideName->c_str(), value.data(), static_cast<DWORD>(value.size()));
+        if (length == 0) {
+            return std::nullopt; // Unset (an empty variable cannot exist on Windows).
+        }
+        if (length < value.size()) {
+            value.resize(length);
+            auto utf8 = io::fromWide(value);
+            return utf8 ? std::optional<std::string>(std::move(*utf8)) : std::nullopt;
+        }
+        value.resize(length); // Too small: `length` is the size needed, terminator included.
+    }
+#else
+    const std::string key(name);
+    const char* value = std::getenv(key.c_str()); // NOLINT(concurrency-mt-unsafe): read-only use.
+    return value == nullptr ? std::nullopt : std::optional<std::string>(value);
+#endif
+}
+
 std::string_view toString(ItemType type) noexcept {
     for (const ItemTypeName& entry : kItemTypes) {
         if (entry.type == type && type != ItemType::Other) {
@@ -416,7 +465,7 @@ Result<VcxProject> parseVcxproj(io::IFileSystem& fs, std::string_view content, s
     project.directory = std::string(io::parentPath(*path));
     project.path = std::move(*path);
     seedProperties(project, options);
-    VcxprojParser parser(fs, project);
+    VcxprojParser parser(fs, project, options);
     parser.walk(doc.document_element());
     parser.finish();
     return project;
@@ -430,7 +479,8 @@ Result<VcxProject> readVcxproj(io::IFileSystem& fs, std::string_view projectPath
     return parseVcxproj(fs, *content, projectPath, options);
 }
 
-Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view content, const VcxProject& project) {
+Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view content, const VcxProject& project,
+                                        const VcxprojOptions& options) {
     const std::string path = project.path + ".filters";
     pugi::xml_document doc;
     if (auto parsed = detail::parseXml(doc, content, path, "Project"); !parsed) {
@@ -440,6 +490,7 @@ Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view co
     std::unordered_set<std::string> filterKeys;
     std::unordered_set<std::string> itemKeys;
     std::vector<std::string> unresolved;
+    const Scope scope{project.properties, options.environment};
     auto warn = [&out](std::string message) { out.warnings.push_back(std::move(message)); };
     for (pugi::xml_node group = doc.document_element().first_child(); group; group = group.next_sibling()) {
         if (!isElement(group, "ItemGroup")) {
@@ -463,8 +514,7 @@ Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view co
             const std::string filter = normalizeFilterPath(elementText(detail::childElement(item, "Filter")));
             for (std::string_view entry : detail::splitTrimmed(include, ';')) {
                 bool wildcard = false;
-                auto paths =
-                    resolveInclude(fs, project.directory, entry, project.properties, unresolved, wildcard, warn);
+                auto paths = resolveInclude(fs, project.directory, entry, scope, unresolved, wildcard, warn);
                 for (std::string& itemPath : paths) {
                     if (itemKeys.insert(detail::pathKey(itemPath)).second) {
                         out.assignments.push_back({.itemPath = std::move(itemPath), .filter = filter});
@@ -479,7 +529,7 @@ Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view co
     return out;
 }
 
-Result<FiltersFile> readVcxprojFilters(io::IFileSystem& fs, const VcxProject& project) {
+Result<FiltersFile> readVcxprojFilters(io::IFileSystem& fs, const VcxProject& project, const VcxprojOptions& options) {
     auto content = fs.readFile(project.path + ".filters");
     if (!content) {
         if (content.error().code() == ErrorCode::NotFound) {
@@ -487,7 +537,7 @@ Result<FiltersFile> readVcxprojFilters(io::IFileSystem& fs, const VcxProject& pr
         }
         return std::unexpected(std::move(content.error()));
     }
-    return parseVcxprojFilters(fs, *content, project);
+    return parseVcxprojFilters(fs, *content, project, options);
 }
 
 } // namespace frost::project

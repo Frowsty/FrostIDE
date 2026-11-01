@@ -12,8 +12,6 @@
 #include <optional>
 
 #ifdef _WIN32
-#include "frost/io/utf.hpp"
-
 #include <windows.h>
 #endif
 
@@ -22,6 +20,8 @@ namespace frost::build {
 namespace {
 
 constexpr io::PathStyle kWindows = io::PathStyle::Windows;
+// The build output language unless a request names another one (ADR 0035).
+constexpr std::string_view kEnglish = "en-US";
 
 #ifdef _WIN32
 // Builds started by this process, for unique PDB server endpoints.
@@ -65,24 +65,6 @@ Result<std::string> absolute(std::string_view path, std::string_view what) {
 
 std::string property(std::string_view name, std::string_view value) {
     return std::format("-p:{}={}", name, escapeMsBuildValue(value));
-}
-
-// The user's first Windows UI language ("en-US"), or "en-US" when it cannot be read.
-std::string userUiLanguage() {
-#ifdef _WIN32
-    ULONG count = 0;
-    ULONG size = 0;
-    if (GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, nullptr, &size) != FALSE && size > 1) {
-        std::wstring buffer(size, L'\0');
-        if (GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, buffer.data(), &size) != FALSE) {
-            const std::wstring_view first(buffer.c_str()); // The list is NUL-separated.
-            if (auto utf8 = io::fromWide(first); utf8 && !utf8->empty()) {
-                return std::move(*utf8);
-            }
-        }
-    }
-#endif
-    return "en-US";
 }
 
 } // namespace
@@ -192,17 +174,25 @@ Result<io::ProcessSpec> msbuildProcessSpec(const MsBuildRequest& request) {
     spec.arguments.emplace_back("-clp:NoSummary;ForceNoAlign;DisableConsoleColor");
 
     spec.workingDirectory = std::string(io::parentPath(file, kWindows));
+    const std::string language = request.uiLanguage.empty() ? std::string(kEnglish) : request.uiLanguage;
     spec.environment = {
-        {"DOTNET_CLI_UI_LANGUAGE", request.uiLanguage.empty() ? userUiLanguage() : request.uiLanguage},
+        {"DOTNET_CLI_UI_LANGUAGE", language},
         {"MSBUILDTERMINALLOGGER", "off"},
         {"MSBUILDDISABLENODEREUSE", "1"},
         {"NoDefaultCurrentDirectoryInExePath", std::nullopt},
     };
+    if (language == kEnglish) {
+        spec.environment.emplace_back("VSLANG", "1033"); // cl, link and the other tools in English too.
+    }
     spec.stdinMode = io::Stdio::Null;
     spec.stdoutMode = io::Stdio::Pipe;
     spec.stderrMode = io::Stdio::Pipe;
     spec.killOnClose = true;
     return spec;
+}
+
+std::vector<std::string> msbuildInfrastructureImages() {
+    return {"MSBuild.exe", "MSBuildTaskHost.exe", "mspdbsrv.exe", "VBCSCompiler.exe"};
 }
 
 Result<std::unique_ptr<BuildSession>> startMsBuild(io::IProcessLauncher& launcher, const MsBuildRequest& request,
@@ -218,7 +208,8 @@ Result<std::unique_ptr<BuildSession>> startMsBuild(io::IProcessLauncher& launche
     spec->environment.emplace_back(
         "_MSPDBSRV_ENDPOINT_",
         std::format("FrostIDE-{}-{}", GetCurrentProcessId(), g_buildCounter.fetch_add(1, std::memory_order_relaxed)));
-    return BuildSession::start(launcher, *spec, request.trusted, std::move(callbacks), clock);
+    return BuildSession::start(launcher, *spec, request.trusted, std::move(callbacks), clock,
+                               {.infrastructureImages = msbuildInfrastructureImages()});
 #else
     static_cast<void>(launcher);
     static_cast<void>(callbacks);

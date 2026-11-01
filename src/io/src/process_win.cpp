@@ -393,10 +393,11 @@ public:
     WindowsProcess(UniqueHandle process, UniqueHandle job, ProcessId pid, UniqueHandle in, UniqueHandle out,
                    UniqueHandle err)
         : m_process(std::move(process)), m_job(std::move(job)), m_pid(pid), m_in(std::move(in)), m_out(std::move(out)),
-          m_err(std::move(err)) {}
+          m_err(std::move(err)), m_abandon(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
 
-    // Members close in reverse order: pipes first, then the job (which ends the tree when
-    // killOnClose was set), then the process handle.
+    // Members close in reverse order: the abandon event and the pipes first, then the job (which
+    // ends the tree when killOnClose was set and releaseContainer() was not called), then the
+    // process handle.
     ~WindowsProcess() override = default;
 
     ProcessId pid() const noexcept override { return m_pid; }
@@ -422,10 +423,10 @@ public:
     void closeStdin() noexcept override { m_in.pipe.reset(); }
 
     Result<std::size_t> readStdout(std::span<char> buffer) override {
-        return blockingRead(m_out, buffer, "readStdout");
+        return blockingRead(m_out, buffer, "readStdout", m_abandon.get());
     }
     Result<std::size_t> readStderr(std::span<char> buffer) override {
-        return blockingRead(m_err, buffer, "readStderr");
+        return blockingRead(m_err, buffer, "readStderr", m_abandon.get());
     }
 
     Result<ExitStatus> wait(std::optional<IClock::Duration> timeout) override {
@@ -462,6 +463,86 @@ public:
 
     Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) override;
 
+    Result<std::vector<ContainedProcess>> containedProcesses() override {
+        if (!m_job.valid()) {
+            return fail(ErrorCode::Unsupported, std::format("process {} is not contained in a job", m_pid));
+        }
+        // Room for 64 ids first; ERROR_MORE_DATA means the job holds more, so the buffer doubles.
+        std::vector<ULONG_PTR> storage(64 + 2);
+        for (;;) {
+            auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
+            const auto bytes = static_cast<DWORD>(storage.size() * sizeof(ULONG_PTR));
+            if (QueryInformationJobObject(m_job.get(), JobObjectBasicProcessIdList, list, bytes, nullptr) != FALSE) {
+                std::vector<ContainedProcess> processes;
+                processes.reserve(list->NumberOfProcessIdsInList);
+                for (DWORD i = 0; i < list->NumberOfProcessIdsInList; ++i) {
+                    const auto pid = static_cast<ProcessId>(list->ProcessIdList[i]);
+                    processes.push_back({pid, imageNameOf(pid)});
+                }
+                return processes;
+            }
+            if (GetLastError() != ERROR_MORE_DATA || storage.size() > (std::size_t{1} << 20)) {
+                return std::unexpected(lastWin32Error("QueryInformationJobObject(BasicProcessIdList)"));
+            }
+            storage.resize(storage.size() * 2);
+        }
+    }
+
+    Result<void> terminateContained(ProcessId pid) override {
+        if (!m_job.valid()) {
+            return fail(ErrorCode::Unsupported, std::format("process {} is not contained in a job", m_pid));
+        }
+        const UniqueHandle target(OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                                              FALSE, static_cast<DWORD>(pid)));
+        if (!target.valid()) {
+            const DWORD error = GetLastError();
+            // ERROR_INVALID_PARAMETER: no process has this id any more, so it has exited.
+            if (error == ERROR_INVALID_PARAMETER) {
+                return {};
+            }
+            return std::unexpected(win32Error(error, "OpenProcess"));
+        }
+        // The id may have been reused by a process outside the job since it was listed.
+        BOOL inJob = FALSE;
+        if (IsProcessInJob(target.get(), m_job.get(), &inJob) == FALSE) {
+            return std::unexpected(lastWin32Error("IsProcessInJob"));
+        }
+        if (inJob == FALSE) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("process {} is not in the job of process {}", pid, m_pid));
+        }
+        if (WaitForSingleObject(target.get(), 0) == WAIT_OBJECT_0) {
+            return {};
+        }
+        if (TerminateProcess(target.get(), static_cast<UINT>(kTerminatedExitCode)) == FALSE &&
+            WaitForSingleObject(target.get(), 0) != WAIT_OBJECT_0) {
+            return std::unexpected(lastWin32Error("TerminateProcess"));
+        }
+        return {};
+    }
+
+    Result<void> releaseContainer() override {
+        if (!m_job.valid()) {
+            return fail(ErrorCode::Unsupported, std::format("process {} is not contained in a job", m_pid));
+        }
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        if (QueryInformationJobObject(m_job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits),
+                                      nullptr) == FALSE) {
+            return std::unexpected(lastWin32Error("QueryInformationJobObject(ExtendedLimitInformation)"));
+        }
+        limits.BasicLimitInformation.LimitFlags &= ~static_cast<DWORD>(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+        if (SetInformationJobObject(m_job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)) == FALSE) {
+            return std::unexpected(lastWin32Error("SetInformationJobObject"));
+        }
+        return {};
+    }
+
+    void abandonOutput() noexcept override {
+        if (m_abandon.valid()) {
+            SetEvent(m_abandon.get());
+        }
+    }
+
 private:
     // A parent-side pipe end with the event its overlapped operations signal.
     struct Stream {
@@ -472,9 +553,27 @@ private:
         bool eof = false;
     };
 
+    // The file name of process `pid`'s executable, or "" when it cannot be read.
+    static std::string imageNameOf(ProcessId pid) {
+        const UniqueHandle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid)));
+        if (!process.valid()) {
+            return {};
+        }
+        std::wstring path(32768, L'\0');
+        auto size = static_cast<DWORD>(path.size());
+        if (QueryFullProcessImageNameW(process.get(), 0, path.data(), &size) == FALSE) {
+            return {};
+        }
+        path.resize(size);
+        const std::size_t slash = path.find_last_of(L"\\/");
+        return fromWide(slash == std::wstring::npos ? path : path.substr(slash + 1)).value_or("");
+    }
+
     // One overlapped ReadFile/WriteFile, waited for to completion. Returns the byte count or
-    // the Win32 error code.
-    static std::expected<DWORD, DWORD> blockingIo(Stream& stream, bool read, char* data, DWORD size) noexcept {
+    // the Win32 error code. A signalled `abandon` event (reads only) cancels the operation,
+    // which then fails with ERROR_OPERATION_ABORTED unless it had completed already.
+    static std::expected<DWORD, DWORD> blockingIo(Stream& stream, bool read, char* data, DWORD size,
+                                                  HANDLE abandon = nullptr) noexcept {
         if (!stream.event.valid()) {
             return std::unexpected(static_cast<DWORD>(ERROR_INVALID_HANDLE));
         }
@@ -485,6 +584,13 @@ private:
         if (started == FALSE && GetLastError() != ERROR_IO_PENDING) {
             return std::unexpected(GetLastError());
         }
+        if (abandon != nullptr) {
+            // The lowest signalled index wins, so a completed read is never taken for an abandon.
+            const std::array<HANDLE, 2> handles{overlapped.hEvent, abandon};
+            if (WaitForMultipleObjects(2, handles.data(), FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
+                CancelIoEx(stream.pipe.get(), &overlapped);
+            }
+        }
         DWORD done = 0;
         if (GetOverlappedResult(stream.pipe.get(), &overlapped, &done, TRUE) == FALSE) {
             return std::unexpected(GetLastError());
@@ -492,15 +598,23 @@ private:
         return done;
     }
 
-    static Result<std::size_t> blockingRead(Stream& stream, std::span<char> buffer, std::string_view operation) {
+    static Result<std::size_t> blockingRead(Stream& stream, std::span<char> buffer, std::string_view operation,
+                                            HANDLE abandon) {
         if (!stream.pipe.valid()) {
             return fail(ErrorCode::InvalidArgument, std::format("{}: the stream is not a pipe", operation));
         }
+        const auto abandoned = [abandon] {
+            return abandon != nullptr && WaitForSingleObject(abandon, 0) == WAIT_OBJECT_0;
+        };
         while (!stream.eof && !buffer.empty()) {
+            if (abandoned()) {
+                stream.eof = true;
+                break;
+            }
             const DWORD size = static_cast<DWORD>(std::min<std::size_t>(buffer.size(), kPipeBufferBytes));
-            auto got = blockingIo(stream, /*read=*/true, buffer.data(), size);
+            auto got = blockingIo(stream, /*read=*/true, buffer.data(), size, abandon);
             if (!got) {
-                if (isEndOfPipe(got.error())) {
+                if (isEndOfPipe(got.error()) || (got.error() == ERROR_OPERATION_ABORTED && abandoned())) {
                     stream.eof = true;
                     break;
                 }
@@ -528,6 +642,7 @@ private:
     Stream m_in;
     Stream m_out;
     Stream m_err;
+    UniqueHandle m_abandon; // Manual-reset; set by abandonOutput(), never reset.
 };
 
 /*

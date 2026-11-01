@@ -2,9 +2,11 @@
 //
 // Real vswhere and MSBuild (Windows, label "msbuild"): discovery on this machine, and builds of the
 // tiny fixture solution (fixtures/tiny_sln: a static library and a program that links it) copied
-// into a work directory whose name has a space and a non-ASCII character. Each build takes about a
-// second. A machine without Visual Studio skips these tests.
+// into a work directory whose name has a space and a non-ASCII character, directly and through
+// BuildService (trust, diagnostics with absolute paths). Each build takes about a second. A machine
+// without Visual Studio skips these tests.
 
+#include "frost/build/build_service.hpp"
 #include "frost/build/msbuild_driver.hpp"
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/core/mutex.hpp"
@@ -12,6 +14,8 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
+#include "frost/project/solution_model.hpp"
+#include "frost/project/trust_store.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
@@ -22,6 +26,7 @@
 #include <condition_variable>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -439,6 +444,73 @@ TEST(MsBuildBuild, CancelEndsTheWholeProcessTree) {
         EXPECT_EQ(WaitForSingleObject(handle, 10'000), WAIT_OBJECT_0) << "a process of the build outlived the cancel";
         CloseHandle(handle);
     }
+}
+
+// The warning and the error of the diagnostics test, now through BuildService: the untrusted copy
+// waits for trust, then MSBuild runs and both diagnostics arrive with absolute, jumpable paths.
+TEST(MsBuildBuild, BuildServiceBuildsAndResolvesTheDiagnostics) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir work("service", "tiny_sln");
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    const std::string mainPath = work.join("App\\main.cpp");
+    ASSERT_TRUE(fs.writeFileAtomic(mainPath, "#include \"lib.h\"\n"
+                                             "\n"
+                                             "[[deprecated(\"use tinyAnswer\")]] int oldAnswer();\n"
+                                             "\n"
+                                             "int main() {\n"
+                                             "    int value = oldAnswer();\n"
+                                             "    return tinyAnswer() + value + undeclared_thing;\n"
+                                             "}\n")
+                    .has_value());
+    auto loaded = frost::project::SolutionModel::load(fs, work.join("Tiny.sln"));
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    auto solution = std::make_shared<const frost::project::SolutionModel>(std::move(*loaded));
+    auto store = frost::project::TrustStore::open(fs, work.join("data\\trusted-roots.txt"));
+    ASSERT_TRUE(store.has_value()) << store.error().describe();
+
+    auto service = frost::build::BuildService::create(
+        fs, frost::io::realProcessLauncher(), **store,
+        {.stateFilePath = work.join("data\\active-configurations.txt"), .msbuildPath = msbuild->msbuildPath});
+    ASSERT_TRUE(service->openSolution(solution).has_value());
+    EXPECT_EQ(service->activeConfiguration()->name(), "Debug|x64");
+    ASSERT_TRUE(service->build(BuildAction::Rebuild).has_value());
+    EXPECT_EQ(service->state(), frost::build::BuildState::NeedsTrust);
+    const std::vector<std::string> roots = service->untrustedRoots();
+    ASSERT_EQ(roots.size(), 1U);
+    EXPECT_TRUE(sameFile(roots[0], solution->directory())) << roots[0];
+    ASSERT_TRUE(service->trust(roots[0]).has_value());
+    ASSERT_TRUE(service->waitForIdle(kBuildTimeout)) << "the build did not finish in time";
+
+    const std::optional<frost::build::BuildOutcome> outcome = service->lastOutcome();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_FALSE(outcome->succeeded());
+    EXPECT_FALSE(outcome->error.has_value()) << outcome->error->describe();
+    EXPECT_FALSE(outcome->result.cancelled);
+    EXPECT_EQ(outcome->counts.errors, 1U) << describe(outcome->result);
+    EXPECT_EQ(outcome->counts.warnings, 1U) << describe(outcome->result);
+
+    const std::vector<frost::build::BuildDiagnostic> forMain = service->diagnosticsForDocument(mainPath);
+    ASSERT_EQ(forMain.size(), 2U) << describe(outcome->result);
+    for (const frost::build::BuildDiagnostic& d : forMain) {
+        EXPECT_TRUE(sameFile(d.path, mainPath)) << d.path;
+        EXPECT_TRUE(frost::io::isAbsolutePath(d.path)) << d.path;
+        EXPECT_TRUE(d.jumpable) << d.diagnostic.code;
+    }
+    // cl's order of the two is its own; compare them by code.
+    const auto lineOf = [&forMain](std::string_view code) {
+        const auto it = std::ranges::find_if(
+            forMain, [code](const frost::build::BuildDiagnostic& d) { return d.diagnostic.code == code; });
+        return it == forMain.end() ? -1 : it->diagnostic.line;
+    };
+    EXPECT_EQ(lineOf("C4996"), 6);
+    EXPECT_EQ(lineOf("C2065"), 7);
+    const std::vector<frost::build::DiagnosticFileGroup> groups = service->diagnosticsByFile();
+    ASSERT_FALSE(groups.empty());
+    EXPECT_TRUE(sameFile(groups[0].file, mainPath)) << groups[0].file;
+    service.reset();
 }
 
 } // namespace

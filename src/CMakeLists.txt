@@ -9,13 +9,11 @@ add_subdirectory(io)
 add_subdirectory(text)
 add_subdirectory(input)
 # Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash) and project (pugixml) are left
-# out of them.
+# out of them, and build with them (it depends on project).
 if(NOT FROST_FUZZ)
     add_subdirectory(storage)
     add_subdirectory(project)
-endif()
-add_subdirectory(build)
-if(NOT FROST_FUZZ)
+    add_subdirectory(build)
     # Crash reports and logging need crashpad, cpptrace and spdlog, which fuzz trees do not install.
     add_subdirectory(diag)
 endif()

@@ -31,14 +31,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <format>
 #include <thread>
 #include <tuple>
 #include <vector>
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
@@ -105,17 +109,93 @@ ExitStatus statusFromSiginfo(const siginfo_t& info) noexcept {
     return ExitStatus{128 + info.si_status, info.si_status}; // CLD_KILLED or CLD_DUMPED.
 }
 
+// The read and write ends of a non-blocking close-on-exec pipe, or two invalid descriptors.
+std::pair<UniqueFd, UniqueFd> makeWakePipe() noexcept {
+    std::array<int, 2> fds{-1, -1};
+    if (::pipe2(fds.data(), O_CLOEXEC | O_NONBLOCK) != 0) {
+        return {};
+    }
+    return {UniqueFd(fds[0]), UniqueFd(fds[1])};
+}
+
+// Reads a small /proc file whole; "" when it cannot be read.
+std::string readProcFile(const std::string& path) {
+    const UniqueFd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+    if (!fd.valid()) {
+        return {};
+    }
+    std::string content;
+    std::array<char, 4096> chunk{};
+    for (;;) {
+        const ssize_t got = ::read(fd.get(), chunk.data(), chunk.size());
+        if (got > 0) {
+            content.append(chunk.data(), static_cast<std::size_t>(got));
+        } else if (got == 0 || errno != EINTR) {
+            return content;
+        }
+    }
+}
+
+// The live (not zombie) processes whose process group is `group`, from /proc (Linux only).
+Result<std::vector<ContainedProcess>> processGroupMembers(pid_t group) {
+#ifdef __linux__
+    DIR* dir = ::opendir("/proc");
+    if (dir == nullptr) {
+        return std::unexpected(errnoError(errno, "opendir(/proc)"));
+    }
+    std::vector<ContainedProcess> members;
+    while (const dirent* entry = ::readdir(dir)) {
+        const std::string_view name(entry->d_name);
+        ProcessId pid = 0;
+        const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), pid);
+        if (error != std::errc{} || end != name.data() + name.size() || pid == 0) {
+            continue;
+        }
+        // /proc/<pid>/stat: "pid (comm) state ppid pgrp ..."; comm may hold spaces and parentheses.
+        const std::string stat = readProcFile(std::format("/proc/{}/stat", pid));
+        const std::size_t open = stat.find('(');
+        const std::size_t close = stat.rfind(')');
+        if (open == std::string::npos || close == std::string::npos || close < open) {
+            continue;
+        }
+        char state = '?';
+        long parent = 0;
+        long processGroup = 0;
+        const std::string rest = stat.substr(close + 1);
+        if (std::sscanf(rest.c_str(), " %c %ld %ld", &state, &parent, &processGroup) != 3 || state == 'Z' ||
+            processGroup != static_cast<long>(group)) {
+            continue;
+        }
+        std::string image = stat.substr(open + 1, close - open - 1); // comm, at most 15 bytes.
+        std::array<char, 4096> target{};
+        const ssize_t length = ::readlink(std::format("/proc/{}/exe", pid).c_str(), target.data(), target.size());
+        if (length > 0 && static_cast<std::size_t>(length) < target.size()) {
+            const std::string_view path(target.data(), static_cast<std::size_t>(length));
+            image = std::string(path.substr(path.rfind('/') + 1));
+        }
+        members.push_back({pid, std::move(image)});
+    }
+    ::closedir(dir);
+    return members;
+#else
+    static_cast<void>(group);
+    return fail(ErrorCode::Unsupported, "listing a process group needs Linux's /proc");
+#endif
+}
+
 class PosixProcess final : public IProcess {
 public:
     PosixProcess(pid_t pid, bool ownGroup, UniqueFd in, UniqueFd out, UniqueFd err)
         : m_pid(pid), m_ownGroup(ownGroup), m_pidfd(detail::openPidfd(pid)), m_in(std::move(in)), m_out(std::move(out)),
-          m_err(std::move(err)) {}
+          m_err(std::move(err)) {
+        std::tie(m_abandonRead, m_abandonWrite) = makeWakePipe();
+    }
 
     ~PosixProcess() override {
         m_in.reset();
         m_out.reset();
         m_err.reset();
-        if (m_ownGroup) {
+        if (m_ownGroup && !m_released.load()) {
             // The zombie (or live) leader keeps the group id reserved, so this reaches only our group.
             ::kill(-m_pid, SIGKILL);
             reap(0);
@@ -168,6 +248,51 @@ public:
     }
     Result<std::size_t> readStderr(std::span<char> buffer) override {
         return blockingRead(m_err, buffer, "readStderr");
+    }
+
+    Result<std::vector<ContainedProcess>> containedProcesses() override {
+        if (!m_ownGroup) {
+            return fail(ErrorCode::Unsupported, std::format("process {} does not lead its own process group", m_pid));
+        }
+        return processGroupMembers(m_pid);
+    }
+
+    Result<void> terminateContained(ProcessId pid) override {
+        if (!m_ownGroup) {
+            return fail(ErrorCode::Unsupported, std::format("process {} does not lead its own process group", m_pid));
+        }
+        const auto target = static_cast<pid_t>(pid);
+        const pid_t group = ::getpgid(target);
+        if (group < 0) {
+            if (errno == ESRCH) {
+                return {}; // Already gone.
+            }
+            return std::unexpected(errnoError(errno, "getpgid"));
+        }
+        if (group != m_pid) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("process {} is not in the process group of process {}", pid, m_pid));
+        }
+        if (::kill(target, SIGKILL) != 0 && errno != ESRCH) {
+            return std::unexpected(errnoError(errno, "kill"));
+        }
+        return {};
+    }
+
+    Result<void> releaseContainer() override {
+        if (!m_ownGroup) {
+            return fail(ErrorCode::Unsupported, std::format("process {} does not lead its own process group", m_pid));
+        }
+        m_released.store(true);
+        return {};
+    }
+
+    void abandonOutput() noexcept override {
+        m_abandoned.store(true);
+        if (m_abandonWrite.valid()) {
+            const char wake = 1;
+            static_cast<void>(::write(m_abandonWrite.get(), &wake, 1)); // Full or failed: already awake.
+        }
     }
 
     Result<ExitStatus> wait(std::optional<IClock::Duration> timeout) override {
@@ -229,18 +354,24 @@ public:
     Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) override;
 
 private:
-    static Result<std::size_t> blockingRead(UniqueFd& fd, std::span<char> buffer, std::string_view operation) {
+    // A blocking read that abandonOutput() ends: it polls the pipe together with the wake pipe.
+    Result<std::size_t> blockingRead(UniqueFd& fd, std::span<char> buffer, std::string_view operation) {
         if (!fd.valid()) {
             return fail(ErrorCode::InvalidArgument, std::format("{}: the stream is not a pipe", operation));
         }
         for (;;) {
+            if (m_abandoned.load()) {
+                return std::size_t{0};
+            }
             const ssize_t got = ::read(fd.get(), buffer.data(), buffer.size());
             if (got >= 0) {
                 return static_cast<std::size_t>(got);
             }
             if (errno == EAGAIN) {
-                if (const int pollError = pollOne(fd.get(), POLLIN); pollError != 0) {
-                    return std::unexpected(errnoError(pollError, operation));
+                std::array<pollfd, 2> entries{pollfd{fd.get(), POLLIN, 0}, pollfd{m_abandonRead.get(), POLLIN, 0}};
+                const nfds_t count = m_abandonRead.valid() ? 2 : 1;
+                if (::poll(entries.data(), count, -1) < 0 && errno != EINTR) {
+                    return std::unexpected(errnoError(errno, operation));
                 }
             } else if (errno != EINTR) {
                 return std::unexpected(errnoError(errno, operation));
@@ -267,6 +398,11 @@ private:
     UniqueFd m_in;
     UniqueFd m_out;
     UniqueFd m_err;
+    // abandonOutput() writes a byte here to wake blocked readers; never drained, so it stays readable.
+    UniqueFd m_abandonRead;
+    UniqueFd m_abandonWrite;
+    std::atomic<bool> m_abandoned{false};
+    std::atomic<bool> m_released{false}; // releaseContainer(): the destructor leaves the group running.
     Mutex m_mutex;
     std::optional<ExitStatus> m_status FROST_GUARDED_BY(m_mutex);
 };

@@ -5,7 +5,8 @@
 // empty and non-ASCII arguments), exit codes, stdin piping, more than 1 MB on
 // both output pipes at once, timeouts with termination, environment overrides,
 // working directories, handle inheritance, the absolute-path and batch-file
-// rules, process-tree containment and concurrent launches; on Windows also the
+// rules, process-tree containment (listing, ending one process, releasing the
+// container, abandoning held output) and concurrent launches; on Windows also the
 // image-path forms (ProcessSpec::imagePathForm) and the child's desktop
 // (ProcessSpec::desktop: a private desktop from tests/support/private_desktop.hpp, as
 // the child reports it and as its window shows, and one that does not exist); on POSIX,
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -1071,6 +1073,68 @@ TEST(RealProcessLauncher, GrandchildHoldingStdoutDoesNotHangCommunicate) {
     EXPECT_LT(elapsed, 30s);
     EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the timeout left the grandchild running";
     grandchild.kill();
+}
+
+TEST(RealProcessLauncher, ContainedProcessesListsTheTreeAndEndsOneOfIt) {
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild", "exit"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+    EXPECT_EQ((*process)->wait(30s).value().exitCode, 0);
+
+    auto listed = (*process)->containedProcesses();
+    ASSERT_TRUE(listed.has_value()) << listed.error().describe();
+    const auto entry =
+        std::ranges::find_if(*listed, [pid](const frost::io::ContainedProcess& p) { return p.pid == pid; });
+    ASSERT_NE(entry, listed->end()) << "the grandchild is not listed in its container";
+    EXPECT_TRUE(entry->imageName.starts_with("io_test_child")) << entry->imageName;
+
+    // A process outside the container (this test) is refused, not ended.
+#ifdef _WIN32
+    const auto self = static_cast<frost::io::ProcessId>(GetCurrentProcessId());
+#else
+    const auto self = static_cast<frost::io::ProcessId>(getpid());
+#endif
+    EXPECT_EQ((*process)->terminateContained(self).error().code(), ErrorCode::InvalidArgument);
+
+    ASSERT_TRUE((*process)->terminateContained(pid).has_value());
+    EXPECT_TRUE(grandchild.exitsWithin(30s)) << "terminateContained left the grandchild running";
+    grandchild.kill();
+}
+
+TEST(RealProcessLauncher, AbandonedOutputEndsReadsAndAReleasedContainerOutlivesTheProcess) {
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild", "exit"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+    EXPECT_EQ((*process)->wait(30s).value().exitCode, 0);
+
+    // The grandchild holds stdout open, so a read blocks until the output is abandoned.
+    std::atomic<bool> readDone{false};
+    frost::Result<std::size_t> got = std::size_t{99};
+    std::thread reader([&] {
+        std::array<char, 64> buffer{};
+        got = (*process)->readStdout(buffer);
+        readDone = true;
+    });
+    std::this_thread::sleep_for(200ms);
+    EXPECT_FALSE(readDone.load()) << "the read returned while the grandchild still held stdout";
+    (*process)->abandonOutput();
+    reader.join();
+    ASSERT_TRUE(got.has_value()) << got.error().describe();
+    EXPECT_EQ(*got, 0u);
+    std::array<char, 64> buffer{};
+    EXPECT_EQ((*process)->readStderr(buffer).value(), 0u); // Later reads end at once too.
+
+    ASSERT_TRUE((*process)->releaseContainer().has_value());
+    process->reset();
+    EXPECT_FALSE(grandchild.exitsWithin(500ms)) << "the released container still ended the grandchild";
+    grandchild.kill();
+    EXPECT_TRUE(grandchild.exitsWithin(30s));
 }
 
 TEST(RealProcessLauncher, ConcurrentLaunchesDoNotLeakPipeEnds) {
