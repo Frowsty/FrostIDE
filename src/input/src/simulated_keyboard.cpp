@@ -48,6 +48,19 @@ void setText(KeyEvent& event, char32_t a, char32_t b = 0) noexcept {
 
 } // namespace
 
+char32_t simulatedKeyCharHint(const LayoutTable& truth, Code code, bool shift) noexcept {
+    if (!isWritingKey(code)) {
+        return 0;
+    }
+    const KeyLevels levels = truth.levels(code);
+    const Level level = shift ? Level::Shift : Level::Base;
+    const char32_t c = levels.at(level);
+    if (levels.dead(level) || c <= U' ' || c >= 0x7F) {
+        return 0;
+    }
+    return c >= U'A' && c <= U'Z' ? c + 0x20 : c;
+}
+
 SimulatedKeyboard::SimulatedKeyboard(const LayoutTable& truth, KeyPlatform platform, const IClock& clock) noexcept
     : m_truth(&truth), m_clock(&clock), m_clockStart(clock.steadyNow()), m_platform(platform) {}
 
@@ -111,11 +124,9 @@ KeyEvent SimulatedKeyboard::makeEvent(KeyEventType type, Code code, bool autoRep
     event.numLock = m_numLock;
     event.imeComposing = m_imeComposing;
     if (m_platform != KeyPlatform::Windows && isWritingKey(code) && !event.altGr) {
-        const char32_t base = m_truth->levels(code).base;
-        const char32_t folded = base >= U'A' && base <= U'Z' ? base + 0x20 : base;
-        if (folded >= U'a' && folded <= U'z' && !m_truth->levels(code).dead(Level::Base)) {
-            event.keyCharHint = folded;
-        }
+        // Qt's key() on X11: the character of the current Shift level.
+        const bool shift = m_down[index(Code::ShiftLeft)] || m_down[index(Code::ShiftRight)];
+        event.keyCharHint = simulatedKeyCharHint(*m_truth, code, shift);
     }
     return event;
 }

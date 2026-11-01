@@ -389,6 +389,30 @@ TEST(ShortcutSequences, CompletingKeyAutorepeatIsConsumedUntilRelease) {
     }
     static_cast<void>(rig.release(Code::KeyC));
     EXPECT_EQ(rig.press(Code::KeyC).fired, "editor.copy") << "after the release Ctrl+C is itself again";
+    // The release cleared the swallowed key, so the new press's autorepeat repeats it.
+    const Step held = rig.press(Code::KeyC);
+    EXPECT_TRUE(held.keyEvent.autoRepeat);
+    EXPECT_EQ(held.fired, "editor.copy");
+}
+
+// The release of the swallowed key ends the swallowing for good: typing that key again
+// autorepeats normally, with or without the modifiers.
+TEST(ShortcutSequences, SwallowedKeyRepeatsAgainAfterItsRelease) {
+    MatcherRig rig(enUs(), KeyPlatform::Windows, kSequences);
+    static_cast<void>(rig.press(Code::ControlLeft));
+    static_cast<void>(rig.tap(Code::KeyK));
+    EXPECT_EQ(rig.press(Code::KeyC).fired, "test.commentBlock");
+    static_cast<void>(rig.release(Code::KeyC));
+    static_cast<void>(rig.release(Code::ControlLeft));
+    const Step first = rig.press(Code::KeyC);
+    EXPECT_FALSE(first.keyEvent.autoRepeat);
+    EXPECT_EQ(first.keyResult.outcome, MatchOutcome::PassThrough);
+    for (int i = 0; i < 3; ++i) {
+        const Step repeat = rig.press(Code::KeyC);
+        EXPECT_TRUE(repeat.keyEvent.autoRepeat);
+        EXPECT_EQ(repeat.keyResult.outcome, MatchOutcome::PassThrough) << "'c' keeps repeating, " << i;
+        EXPECT_EQ(typed(repeat.keyEvent, KeyPlatform::Windows), U"c");
+    }
 }
 
 TEST(ShortcutSequences, CancellingKeyAutorepeatIsConsumedUntilRelease) {

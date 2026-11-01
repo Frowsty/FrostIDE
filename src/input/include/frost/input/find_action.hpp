@@ -79,8 +79,9 @@ struct FindActionOptions {
 inline constexpr std::size_t kMaxFindActionQueryBytes = 256;
 
 // True when `query` enters the shortcut tier: it parses with parseSequence(Lenient) and
-// contains a modifier, is a function key F1..F24, or contains an explicit '+' or ", ".
-// Bare words ("up", "end", "tab") and bare letters never do.
+// is a gesture ("DoubleShift", "doubleshift"), contains a modifier, is a function key
+// F1..F24, or contains an explicit '+' or ", ". Bare key words ("up", "end", "tab") and
+// bare letters never do.
 [[nodiscard]] bool isShortcutQuery(std::string_view query);
 
 /*
@@ -98,7 +99,9 @@ public:
      * same focus keys for tryInvoke, with `level` and `trusted` re-read from the live state
      * (trust may be revoked while the popup is open). Empty or whitespace-only queries
      * return no hits.
-     * O(A * L * Q) for A actions, text length L and query length Q (Q <= 256 bytes).
+     * O(A * L * (L + Q)) for A actions, name or synonym length L and query length Q
+     * (Q <= 256 bytes): the subsequence tier scans forward from every start that matches
+     * the query's first character.
      */
     [[nodiscard]] std::vector<FindActionHit> query(std::string_view text, const BindingIndex& bindings,
                                                    const ActionContext& context, FindActionOptions options = {}) const;

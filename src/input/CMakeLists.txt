@@ -30,6 +30,6 @@ frost_add_library(input LAYER input
     SOURCES ${frost_input_sources}
     DEPS frost::core)
 if(WIN32)
-    # The read-only layout reader and key-state probe (layout_reader_win.cpp).
+    # The read-only active-layout reader (layout_reader_win.cpp).
     target_link_libraries(frost_input PRIVATE user32)
 endif()

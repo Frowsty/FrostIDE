@@ -93,6 +93,14 @@ TEST(DoubleShift, MixedTimestampsFallBackToSteadyTime) {
     rig.keyboard.setOsTimestamps(false); // The second tap has no OS time.
     rig.keyboard.advance(5s);            // A wild OS-tick jump is ignored on the steady basis.
     EXPECT_EQ(rig.tap(Code::ShiftLeft).fired, "search.everywhere");
+
+    // Only the final release lacks an OS time: the steady clock still decides.
+    rig.resetKeyboard();
+    rig.keyboard.setOsTimestamps(true);
+    static_cast<void>(rig.tap(Code::ShiftLeft));
+    static_cast<void>(rig.press(Code::ShiftLeft));
+    rig.keyboard.setOsTimestamps(false);
+    EXPECT_EQ(rig.release(Code::ShiftLeft).fired, "search.everywhere");
 }
 
 TEST(DoubleShift, HeldFirstPressDoesNotFireButSlides) {
@@ -120,6 +128,13 @@ TEST(DoubleShift, KeyBetweenTapsDoesNotFire) {
     static_cast<void>(rig.tap(Code::ShiftLeft));
     static_cast<void>(rig.tap(Code::AltLeft)); // Another modifier between the taps.
     EXPECT_TRUE(rig.tap(Code::ShiftLeft).fired.empty());
+
+    // A key pressed (and still held) between the taps: its press alone interrupts.
+    rig.resetKeyboard();
+    static_cast<void>(rig.tap(Code::ShiftLeft));
+    static_cast<void>(rig.press(Code::KeyX));
+    EXPECT_TRUE(rig.tap(Code::ShiftLeft).fired.empty()) << "X is still down";
+    static_cast<void>(rig.release(Code::KeyX));
 }
 
 TEST(DoubleShift, CtrlHeldDuringTheTapsDoesNotFire) {
@@ -142,6 +157,10 @@ TEST(DoubleShift, OverlappingShiftKeysDoNotFire) {
     static_cast<void>(rig.press(Code::ShiftRight));
     static_cast<void>(rig.release(Code::ShiftRight));
     EXPECT_TRUE(rig.release(Code::ShiftLeft).fired.empty()) << "the release is not of the key just pressed";
+    // That ShiftLeft release came after the ShiftRight tap, so it interrupts: one more
+    // tap does not complete a pair with the ShiftRight tap.
+    EXPECT_TRUE(rig.tap(Code::ShiftLeft).fired.empty());
+    EXPECT_EQ(rig.tap(Code::ShiftLeft).fired, "search.everywhere");
 }
 
 TEST(DoubleShift, TripleTapFiresOnce) {

@@ -32,9 +32,9 @@
  *   Alt+key gives the key's character (WM_SYSCHAR), which typedText() rejects.
  *
  *   X11 and Wayland. AltRight selects level 3 and sets altGr only when truth.hasAltGr();
- *   otherwise it is plain Alt. Ctrl+Alt never selects level 3. keyCharHint is the lowercase
- *   Latin letter when the truth table's base character of the code is a-z and AltGr is not
- *   held (Qt's key() on X11); otherwise 0.
+ *   otherwise it is plain Alt. Ctrl+Alt never selects level 3. keyCharHint is
+ *   simulatedKeyCharHint() (Qt's key() on X11: the printable ASCII character of the current
+ *   Shift level, letters lowercase) when AltGr is not held; otherwise 0.
  *
  *   Dead keys. A dead press without Ctrl, Alt or Meta (on Windows, Ctrl+Alt counts as
  *   AltGr here) delivers an event with deadKey set and no text, and makes a composition
@@ -84,6 +84,11 @@ enum class SimulatedLayoutId : std::uint8_t { EnUs, DeDe, PlPl, FrFr };
 [[nodiscard]] const LayoutTable& linuxM1Layout() noexcept;
 // "en-US", "de-DE", "pl-PL", "fr-FR".
 [[nodiscard]] std::string_view simulatedLayoutName(SimulatedLayoutId id) noexcept;
+// The keyCharHint SimulatedKeyboard reports on X11 and Wayland for a press of `code`
+// without AltGr: the printable ASCII character `truth` gives the base level (or the Shift
+// level when `shift`), letters folded to lowercase; 0 for dead levels, other characters
+// and non-writing codes. O(1), thread-safe.
+[[nodiscard]] char32_t simulatedKeyCharHint(const LayoutTable& truth, Code code, bool shift) noexcept;
 
 class SimulatedKeyboard {
 public:

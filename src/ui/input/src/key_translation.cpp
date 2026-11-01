@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // translateKeyEvent and currentKeyPlatform (frost/ui/key_translation.hpp; ADR 0016
-// decisions 2, 4 and 5): QKeyEvent to frost::input::KeyEvent.
+// decisions 2, 4, 5 and 12): QKeyEvent to frost::input::KeyEvent.
 
 #include "frost/ui/key_translation.hpp"
 
@@ -267,17 +267,21 @@ input::KeyEvent translateKeyEvent(const QKeyEvent& event, const KeyTranslationCo
     // AltGr.
     // QKeyEvent::modifiers() also reports GroupSwitchModifier for the Key_AltGr key itself
     // (windows:altgr), which may still carry the synthetic Ctrl+Alt, so the refinement
-    // runs whichever way altGr was detected.
+    // runs whichever way altGr was detected. It reads the per-side bits Qt captured when it
+    // processed this key message, never the live key state, which may already reflect a
+    // later message (an AltGr release retrieved before this press is delivered).
     bool altGr = qtMods.testFlag(Qt::GroupSwitchModifier);
     if (platform == KeyPlatform::Windows) {
-        if (mods.has(Modifier::Ctrl) && mods.has(Modifier::Alt) &&
-            context.keyState.isDown(input::PlatformVk::RightAlt) && context.layout.hasAltGr()) {
+        const std::uint32_t native = event.nativeModifiers();
+        const bool rightAlt = (native & windows_native::kAltRight) != 0;
+        const bool anyCtrl = (native & (windows_native::kControlLeft | windows_native::kControlRight)) != 0;
+        if (mods.has(Modifier::Ctrl) && mods.has(Modifier::Alt) && rightAlt && anyCtrl && context.layout.hasAltGr()) {
             altGr = true;
             mods = mods.without(Modifier::Ctrl).without(Modifier::Alt);
-            if (context.keyState.isDown(input::PlatformVk::LeftAlt)) {
+            if ((native & windows_native::kAltLeft) != 0) {
                 mods = mods.with(Modifier::Alt);
             }
-            if (context.keyState.isDown(input::PlatformVk::RightCtrl)) {
+            if ((native & windows_native::kControlRight) != 0) {
                 mods = mods.with(Modifier::Ctrl);
             }
         }
@@ -333,8 +337,10 @@ input::KeyEvent translateKeyEvent(const QKeyEvent& event, const KeyTranslationCo
         out.textLength = 0;
     }
 
-    if (platform != KeyPlatform::Windows && key >= Qt::Key_A && key <= Qt::Key_Z) {
-        out.keyCharHint = U'a' + static_cast<char32_t>(key - Qt::Key_A);
+    // Qt::Key values 0x21..0x7E are the printable ASCII characters, letters in uppercase.
+    if (platform != KeyPlatform::Windows && key > 0x20 && key < 0x7F) {
+        out.keyCharHint = key >= Qt::Key_A && key <= Qt::Key_Z ? U'a' + static_cast<char32_t>(key - Qt::Key_A)
+                                                               : static_cast<char32_t>(key);
     }
     return out;
 }

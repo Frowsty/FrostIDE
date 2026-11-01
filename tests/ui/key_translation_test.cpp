@@ -2,9 +2,10 @@
 //
 // KeyTranslation: frost::ui::translateKeyEvent over constructed QKeyEvents (offscreen; no
 // window is shown and nothing reaches the OS). Windows mode: scan codes and their traps,
-// ShortcutOverride, the AltGr refinement with a scripted key-state probe, VK_PROCESSKEY,
-// NumLock inference, dead keys, text, modifier normalisation, timestamps and fallback
-// codes. X11 and Wayland modes: evdev codes, Mod5 and GroupSwitch, and keyCharHint.
+// ShortcutOverride, the AltGr refinement from the event's per-side native modifiers,
+// VK_PROCESSKEY, NumLock inference, dead keys, text, modifier normalisation, timestamps and
+// fallback codes. X11 and Wayland modes: evdev codes, Mod5 and GroupSwitch, and
+// keyCharHint. NativeKeyDelivery (native_key_delivery_test.cpp) covers real Qt delivery.
 
 #include "frost/core/clock.hpp"
 #include "frost/input/key.hpp"
@@ -31,8 +32,8 @@ using input::KeyEvent;
 using input::KeyPlatform;
 using input::Modifier;
 using input::Modifiers;
-using input::PlatformVk;
 using input::SimulatedLayoutId;
+namespace native = windows_native;
 
 constexpr std::uint32_t kVkProcessKey = 0xE5;
 constexpr std::uint32_t kX11Mod5 = 0x80;
@@ -42,7 +43,7 @@ struct Rig {
         : platform(p), layout(&input::simulatedLayout(id)) {}
 
     [[nodiscard]] KeyEvent translate(const QKeyEvent& event) const {
-        return translateKeyEvent(event, KeyTranslationContext{platform, *layout, keys, ime, clock});
+        return translateKeyEvent(event, KeyTranslationContext{platform, *layout, ime, clock});
     }
     [[nodiscard]] KeyEvent press(int key, Qt::KeyboardModifiers mods, std::uint32_t scan, const QString& text = {},
                                  std::uint32_t vk = 0, std::uint32_t nativeMods = 0) const {
@@ -58,7 +59,6 @@ struct Rig {
 
     KeyPlatform platform;
     const input::LayoutTable* layout;
-    input::ScriptedKeyStateProbe keys;
     ImeTracker ime;
     ManualClock clock;
 };
@@ -124,65 +124,105 @@ TEST(KeyTranslation, AltGrRefinementOnWindows) {
     const Qt::KeyboardModifiers ctrlAlt = Qt::ControlModifier | Qt::AltModifier;
     {
         // de AltGr+Q: Windows reports Ctrl+Alt; the physical keys are RightAlt and AltGr's fake LeftCtrl.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
-        rig.keys.set(PlatformVk::RightAlt, true);
-        rig.keys.set(PlatformVk::LeftCtrl, true);
-        const KeyEvent e = rig.press(Qt::Key_At, ctrlAlt, 0x10, QStringLiteral("@"));
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
+        const KeyEvent e = rig.press(Qt::Key_At, ctrlAlt, 0x10, QStringLiteral("@"), 'Q', native::kAltGr);
         EXPECT_TRUE(e.altGr);
         EXPECT_EQ(e.modifiers, Modifiers{});
         EXPECT_EQ(e.code, Code::KeyQ);
         EXPECT_EQ(textOf(e), U"@");
     }
     {
-        // Left Ctrl + left Alt is a real Ctrl+Alt chord.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
-        rig.keys.set(PlatformVk::LeftAlt, true);
-        rig.keys.set(PlatformVk::LeftCtrl, true);
-        const KeyEvent e = rig.press(Qt::Key_L, ctrlAlt, 0x26);
-        EXPECT_FALSE(e.altGr);
-        EXPECT_EQ(e.modifiers, Modifier::Ctrl | Modifier::Alt);
+        // Left Ctrl + left Alt is a real Ctrl+Alt chord; so are right Ctrl + left Alt.
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
+        for (const std::uint32_t nativeMods :
+             {native::kControlLeft | native::kAltLeft, native::kControlRight | native::kAltLeft}) {
+            const KeyEvent e = rig.press(Qt::Key_L, ctrlAlt, 0x26, {}, 'L', nativeMods);
+            EXPECT_FALSE(e.altGr) << nativeMods;
+            EXPECT_EQ(e.modifiers, Modifier::Ctrl | Modifier::Alt) << nativeMods;
+        }
     }
     {
-        // en-US has no AltGr: right Alt is Alt, and RightAlt with Ctrl stays Ctrl+Alt.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::EnUs);
-        rig.keys.set(PlatformVk::RightAlt, true);
-        const KeyEvent alt = rig.press(Qt::Key_L, Qt::AltModifier, 0x26);
+        // en-US has no AltGr: right Alt is Alt, and right Alt with Ctrl stays Ctrl+Alt.
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::EnUs);
+        const KeyEvent alt = rig.press(Qt::Key_L, Qt::AltModifier, 0x26, {}, 'L', native::kAltRight);
         EXPECT_FALSE(alt.altGr);
         EXPECT_EQ(alt.modifiers, Modifiers(Modifier::Alt));
-        rig.keys.set(PlatformVk::LeftCtrl, true);
-        const KeyEvent chord = rig.press(Qt::Key_L, ctrlAlt, 0x26);
+        const KeyEvent chord = rig.press(Qt::Key_L, ctrlAlt, 0x26, {}, 'L', native::kAltGr);
         EXPECT_FALSE(chord.altGr);
         EXPECT_EQ(chord.modifiers, Modifier::Ctrl | Modifier::Alt);
     }
     {
         // AltGr + right Ctrl: AltGr plus a real Ctrl; AltGr + left Alt: AltGr plus Alt.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
-        rig.keys.set(PlatformVk::RightAlt, true);
-        rig.keys.set(PlatformVk::LeftCtrl, true);
-        rig.keys.set(PlatformVk::RightCtrl, true);
-        const KeyEvent ctrl = rig.press(Qt::Key_Q, ctrlAlt, 0x10);
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
+        const KeyEvent ctrl = rig.press(Qt::Key_Q, ctrlAlt, 0x10, {}, 'Q', native::kAltGr | native::kControlRight);
         EXPECT_TRUE(ctrl.altGr);
         EXPECT_EQ(ctrl.modifiers, Modifiers(Modifier::Ctrl));
-        rig.keys.set(PlatformVk::RightCtrl, false);
-        rig.keys.set(PlatformVk::LeftAlt, true);
-        const KeyEvent alt = rig.press(Qt::Key_Q, ctrlAlt | Qt::ShiftModifier, 0x10);
+        const KeyEvent alt = rig.press(Qt::Key_Q, ctrlAlt | Qt::ShiftModifier, 0x10, {}, 'Q',
+                                       native::kAltGr | native::kAltLeft | native::kShiftLeft);
         EXPECT_TRUE(alt.altGr);
         EXPECT_EQ(alt.modifiers, Modifier::Alt | Modifier::Shift);
+        // Right Ctrl + right Alt (Windows still adds the fake left Ctrl): AltGr plus Ctrl.
+        const KeyEvent rightOnly =
+            rig.press(Qt::Key_Q, ctrlAlt, 0x10, {}, 'Q', native::kControlRight | native::kAltRight);
+        EXPECT_TRUE(rightOnly.altGr);
+        EXPECT_EQ(rightOnly.modifiers, Modifiers(Modifier::Ctrl));
     }
     {
         // The windows:altgr platform option reports GroupSwitchModifier instead.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
         const KeyEvent e = rig.press(Qt::Key_At, Qt::GroupSwitchModifier, 0x10, QStringLiteral("@"));
         EXPECT_TRUE(e.altGr);
         EXPECT_EQ(e.modifiers, Modifiers{});
     }
     {
-        // Without RightAlt down, Ctrl+Alt is never AltGr, whatever the layout.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::PlPl);
-        const KeyEvent e = rig.press(Qt::Key_L, ctrlAlt, 0x26);
-        EXPECT_FALSE(e.altGr);
-        EXPECT_EQ(e.modifiers, Modifier::Ctrl | Modifier::Alt);
+        // Without the right Alt bit, Ctrl+Alt is never AltGr, whatever the layout; Meta and
+        // Shift bits do not matter.
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::PlPl);
+        for (const std::uint32_t nativeMods :
+             {native::kControlLeft | native::kAltLeft, native::kControlLeft | native::kAltLeft | native::kShiftRight,
+              native::kControlLeft | native::kAltLeft | native::kMetaRight}) {
+            const KeyEvent e = rig.press(Qt::Key_L, ctrlAlt, 0x26, {}, 'L', nativeMods);
+            EXPECT_FALSE(e.altGr) << nativeMods;
+            EXPECT_TRUE(e.modifiers.has(Modifier::Ctrl) && e.modifiers.has(Modifier::Alt)) << nativeMods;
+        }
     }
+}
+
+/*
+ * The refinement reads the per-side state Qt captured when it processed the key message
+ * (nativeModifiers), never the live key state at delivery: Qt's Windows plugin queues key
+ * events and delivers them after later messages were retrieved, so during a UI stall the
+ * AltGr release (or a later AltGr press) is already in the live state. The same QKeyEvent
+ * therefore always translates the same way. The review's case: pl-PL AltGr+L typed during
+ * a stall must stay 'ł' text, and LCtrl+LAlt+L must stay Reformat Code.
+ */
+TEST(KeyTranslation, WindowsAltGrUsesTheMessageTimeModifiers) {
+    const Qt::KeyboardModifiers ctrlAlt = Qt::ControlModifier | Qt::AltModifier;
+    const Rig pl(KeyPlatform::Windows, SimulatedLayoutId::PlPl);
+    const QKeyEvent altGrL(QEvent::KeyPress, Qt::Key_L, ctrlAlt, 0x26, 'L', native::kAltGr, QString::fromUtf8("ł"));
+    for (int delivery = 0; delivery < 3; ++delivery) {
+        const KeyEvent e = pl.translate(altGrL);
+        EXPECT_TRUE(e.altGr) << delivery;
+        EXPECT_EQ(e.modifiers, Modifiers{}) << delivery;
+        EXPECT_FALSE(input::strokeFromEvent(e, *pl.layout).has_value()) << "AltGr text, never Ctrl+Alt+L";
+    }
+    const QKeyEvent chordL(QEvent::KeyPress, Qt::Key_L, ctrlAlt, 0x26, 'L', native::kControlLeft | native::kAltLeft);
+    const KeyEvent chord = pl.translate(chordL);
+    EXPECT_FALSE(chord.altGr);
+    EXPECT_EQ(input::strokeFromEvent(chord, *pl.layout),
+              (input::Stroke{Modifier::Ctrl | Modifier::Alt, input::Key::L}));
+}
+
+// A synthesized event (QTest, the automation endpoint) has no per-side bits: Ctrl+Alt is
+// taken as reported, so it matches Ctrl+Alt bindings; GroupSwitchModifier still means AltGr.
+TEST(KeyTranslation, SynthesizedCtrlAltStaysCtrlAlt) {
+    const Rig pl(KeyPlatform::Windows, SimulatedLayoutId::PlPl);
+    const KeyEvent e = pl.translate(QKeyEvent(QEvent::KeyPress, Qt::Key_L, Qt::ControlModifier | Qt::AltModifier));
+    EXPECT_FALSE(e.altGr);
+    EXPECT_EQ(e.modifiers, Modifier::Ctrl | Modifier::Alt);
+    EXPECT_TRUE(e.codeFromFallback);
+    const KeyEvent group = pl.translate(QKeyEvent(QEvent::KeyPress, Qt::Key_L, Qt::GroupSwitchModifier));
+    EXPECT_TRUE(group.altGr);
 }
 
 TEST(KeyTranslation, ImeComposition) {
@@ -242,18 +282,15 @@ TEST(KeyTranslation, DeadKeysOnWindowsFromTheTable) {
     }
     {
         // fr AltGr+Digit2 is the dead tilde, selected by the refined AltGr level.
-        Rig rig(KeyPlatform::Windows, SimulatedLayoutId::FrFr);
+        const Rig rig(KeyPlatform::Windows, SimulatedLayoutId::FrFr);
         ASSERT_TRUE(rig.layout->levels(Code::Digit2).dead(input::Level::AltGr));
-        rig.keys.set(PlatformVk::RightAlt, true);
-        rig.keys.set(PlatformVk::LeftCtrl, true);
-        const KeyEvent e = rig.press(Qt::Key_unknown, Qt::ControlModifier | Qt::AltModifier, 0x03);
+        const KeyEvent e =
+            rig.press(Qt::Key_unknown, Qt::ControlModifier | Qt::AltModifier, 0x03, {}, '2', native::kAltGr);
         EXPECT_TRUE(e.altGr);
         EXPECT_EQ(e.deadKey, U'~');
         // Physical Ctrl+Alt also selects the AltGr level on Windows.
-        rig.keys.clear();
-        rig.keys.set(PlatformVk::LeftAlt, true);
-        rig.keys.set(PlatformVk::LeftCtrl, true);
-        const KeyEvent chord = rig.press(Qt::Key_unknown, Qt::ControlModifier | Qt::AltModifier, 0x03);
+        const KeyEvent chord = rig.press(Qt::Key_unknown, Qt::ControlModifier | Qt::AltModifier, 0x03, {}, '2',
+                                         native::kControlLeft | native::kAltLeft);
         EXPECT_FALSE(chord.altGr);
         EXPECT_EQ(chord.deadKey, U'~');
     }
@@ -415,28 +452,27 @@ TEST(KeyTranslation, FallbackCodesForShiftedCharacters) {
 // models it); on a layout without AltGr the right Alt key is Alt.
 TEST(KeyTranslation, AltGrKeyPressItself) {
     const Qt::KeyboardModifiers ctrlAlt = Qt::ControlModifier | Qt::AltModifier;
-    Rig de(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
-    de.keys.set(PlatformVk::RightAlt, true);
-    de.keys.set(PlatformVk::LeftCtrl, true);
+    const Rig de(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
     // Qt reports the key as Key_Alt by default and as Key_AltGr (with GroupSwitchModifier)
     // under the windows:altgr option; both still carry the synthetic Ctrl+Alt.
     for (const int key : {Qt::Key_Alt, Qt::Key_AltGr}) {
-        const KeyEvent press = de.press(key, ctrlAlt, 0x138);
+        const KeyEvent press = de.press(key, ctrlAlt, 0x138, {}, 0x12, native::kAltGr);
         EXPECT_EQ(press.code, Code::AltRight) << key;
         EXPECT_TRUE(press.altGr) << key;
         EXPECT_EQ(press.modifiers, Modifiers{}) << key;
     }
     // A character typed with windows:altgr: GroupSwitchModifier plus the synthetic Ctrl+Alt.
-    const KeyEvent at = de.press(Qt::Key_At, ctrlAlt | Qt::GroupSwitchModifier, 0x10, QStringLiteral("@"));
+    const KeyEvent at =
+        de.press(Qt::Key_At, ctrlAlt | Qt::GroupSwitchModifier, 0x10, QStringLiteral("@"), 'Q', native::kAltGr);
     EXPECT_TRUE(at.altGr);
     EXPECT_EQ(at.modifiers, Modifiers{});
-    de.keys.set(PlatformVk::LeftAlt, true);
-    EXPECT_EQ(de.press(Qt::Key_At, ctrlAlt | Qt::GroupSwitchModifier, 0x10, QStringLiteral("@")).modifiers,
+    EXPECT_EQ(de.press(Qt::Key_At, ctrlAlt | Qt::GroupSwitchModifier, 0x10, QStringLiteral("@"), 'Q',
+                       native::kAltGr | native::kAltLeft)
+                  .modifiers,
               Modifiers(Modifier::Alt))
         << "a real left Alt held with AltGr stays";
-    Rig us(KeyPlatform::Windows, SimulatedLayoutId::EnUs);
-    us.keys.set(PlatformVk::RightAlt, true);
-    const KeyEvent alt = us.press(Qt::Key_Alt, Qt::AltModifier, 0x138);
+    const Rig us(KeyPlatform::Windows, SimulatedLayoutId::EnUs);
+    const KeyEvent alt = us.press(Qt::Key_Alt, Qt::AltModifier, 0x138, {}, 0x12, native::kAltRight);
     EXPECT_FALSE(alt.altGr);
     EXPECT_EQ(alt.modifiers, Modifiers(Modifier::Alt));
 }
@@ -469,7 +505,7 @@ TEST(KeyTranslation, X11AltGrAndKeyCharHint) {
     const std::uint32_t q = x11.scanOf(Code::KeyQ);
     const KeyEvent mod5 = x11.press(Qt::Key_At, Qt::NoModifier, q, QStringLiteral("@"), 0, kX11Mod5);
     EXPECT_TRUE(mod5.altGr);
-    EXPECT_EQ(mod5.keyCharHint, 0U) << "Key_At is not a letter";
+    EXPECT_EQ(mod5.keyCharHint, U'@') << "printable ASCII keys are hints";
     const KeyEvent group = x11.press(Qt::Key_At, Qt::GroupSwitchModifier, q, QStringLiteral("@"));
     EXPECT_TRUE(group.altGr);
     const KeyEvent plain = x11.press(Qt::Key_Q, Qt::ControlModifier, q);
@@ -478,11 +514,20 @@ TEST(KeyTranslation, X11AltGrAndKeyCharHint) {
     EXPECT_EQ(plain.modifiers, Modifiers(Modifier::Ctrl));
     EXPECT_EQ(x11.press(Qt::Key_Z, Qt::NoModifier, x11.scanOf(Code::KeyY)).keyCharHint, U'z');
     EXPECT_EQ(x11.press(Qt::Key_F1, Qt::NoModifier, x11.scanOf(Code::F1)).keyCharHint, 0U);
-    // X11 has no Ctrl+Alt refinement: Ctrl+Alt stays Ctrl+Alt even with RightAlt "down".
-    Rig refined(KeyPlatform::X11, SimulatedLayoutId::DeDe);
-    refined.keys.set(PlatformVk::RightAlt, true);
-    refined.keys.set(PlatformVk::LeftCtrl, true);
-    const KeyEvent ctrlAlt = refined.press(Qt::Key_Q, Qt::ControlModifier | Qt::AltModifier, q);
+    // Punctuation hints: French KeyM reports Key_Comma, with Shift Key_Question.
+    const std::uint32_t m = x11.scanOf(Code::KeyM);
+    EXPECT_EQ(x11.press(Qt::Key_Comma, Qt::ControlModifier, m).keyCharHint, U',');
+    EXPECT_EQ(x11.press(Qt::Key_Question, Qt::ControlModifier | Qt::ShiftModifier, m).keyCharHint, U'?');
+    EXPECT_EQ(x11.press(Qt::Key_AsciiTilde, Qt::NoModifier, m).keyCharHint, U'~');
+    EXPECT_EQ(x11.press(Qt::Key_Exclam, Qt::NoModifier, m).keyCharHint, U'!');
+    // Not printable ASCII: Space, Latin-1 (Key_Eacute), named keys.
+    EXPECT_EQ(x11.press(Qt::Key_Space, Qt::NoModifier, x11.scanOf(Code::Space)).keyCharHint, 0U);
+    EXPECT_EQ(x11.press(Qt::Key_Eacute, Qt::NoModifier, x11.scanOf(Code::Digit2)).keyCharHint, 0U);
+    EXPECT_EQ(x11.press(Qt::Key_Dead_Circumflex, Qt::NoModifier, x11.scanOf(Code::BracketLeft)).keyCharHint, 0U);
+    // X11 has no Ctrl+Alt refinement: Ctrl+Alt stays Ctrl+Alt whatever the native bits
+    // (0x42 is Lock and Mod4 on X11, not Mod5).
+    const KeyEvent ctrlAlt =
+        x11.press(Qt::Key_Q, Qt::ControlModifier | Qt::AltModifier, q, {}, 0, native::kControlLeft | native::kAltRight);
     EXPECT_FALSE(ctrlAlt.altGr);
     EXPECT_EQ(ctrlAlt.modifiers, Modifier::Ctrl | Modifier::Alt);
 

@@ -210,16 +210,17 @@ TEST(LayoutMapping, Goldens) {
 }
 
 TEST(LayoutMapping, LinuxM1GoldenWithHintsFromEachTruth) {
-    std::string out = "# linuxM1Layout() (LettersByLabel) with the keyCharHint each truth table's base letter "
-                      "gives. Consistency golden.\n";
+    std::string out = "# linuxM1Layout() (LettersByLabel) with the keyCharHint SimulatedKeyboard gives for each "
+                      "truth table, without and with Shift. Consistency golden.\n";
     for (const SimulatedLayoutId id : kLayouts) {
         const LayoutTable& truth = simulatedLayout(id);
         out += std::format("truth {}\n", simulatedLayoutName(id));
         for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlYen); ++i) {
             const auto code = static_cast<Code>(i);
-            const char32_t base = truth.levels(code).base;
-            const char32_t hint = base >= U'a' && base <= U'z' && !truth.levels(code).dead(Level::Base) ? base : 0;
-            out += std::format("  {:<14}-> {}\n", codeName(code), keyName(linuxM1Layout().logicalKey(code, hint)));
+            const Key base = linuxM1Layout().logicalKey(code, simulatedKeyCharHint(truth, code, false));
+            const Key shift = linuxM1Layout().logicalKey(code, simulatedKeyCharHint(truth, code, true));
+            out += std::format("  {:<14}-> {}{}\n", codeName(code), keyName(base),
+                               shift == base ? std::string() : std::format(", Shift -> {}", keyName(shift)));
         }
     }
     test::expectGolden("layout-mapping-linux-m1.txt", out);
@@ -389,6 +390,102 @@ TEST(LayoutMapping, LettersByLabel) {
     EXPECT_EQ(m1.logicalKey(Code::IntlBackslash, U'<'), Key::None);
     EXPECT_EQ(m1.logicalKey(Code::F5, U'a'), Key::F5) << "hints apply to writing keys only";
     EXPECT_EQ(m1.logicalKey(Code::Digit1, U'a'), Key::A) << "a hint letter wins on any writing key";
+
+    // A letter-area key labelled with punctuation is never its position's letter.
+    EXPECT_EQ(m1.logicalKey(Code::KeyM, U','), Key::Comma) << "French ',' on KeyM: character dispatch";
+    EXPECT_EQ(m1.logicalKey(Code::KeyZ, U';'), Key::Semicolon) << "Dvorak ';' on KeyZ";
+    EXPECT_EQ(m1.logicalKey(Code::KeyQ, U'\''), Key::Quote) << "Dvorak ''' on KeyQ";
+    EXPECT_EQ(m1.logicalKey(Code::KeyM, U'?'), Key::None) << "French Shift+KeyM: '?' names no key";
+    EXPECT_EQ(m1.logicalKey(Code::KeyW, U'<'), Key::None);
+    EXPECT_EQ(m1.logicalKey(Code::KeyA, U'1'), Key::None) << "a digit is not a letter either";
+    EXPECT_EQ(m1.logicalKey(Code::KeyC, 0x0421), Key::C) << "a non-ASCII (Cyrillic) hint stays positional";
+    EXPECT_EQ(m1.logicalKey(Code::KeyM, U' '), Key::M) << "only printable ASCII counts";
+    // Outside the letter area punctuation stays positional (Linux punctuation is positional in M1).
+    EXPECT_EQ(m1.logicalKey(Code::Comma, U';'), Key::Comma);
+    EXPECT_EQ(m1.logicalKey(Code::Digit6, U'-'), Key::Digit6) << "digit-row keys stay positional";
+    EXPECT_EQ(m1.logicalKey(Code::Period, U':'), Key::Period);
+    // FullTable mode ignores hints.
+    const LayoutTable& us = simulatedLayout(SimulatedLayoutId::EnUs);
+    EXPECT_EQ(us.logicalKey(Code::KeyM, U','), Key::M);
+    EXPECT_EQ(us.logicalKey(Code::KeyY, U'z'), Key::Y);
+}
+
+TEST(LayoutMapping, SimulatedKeyCharHints) {
+    const LayoutTable& fr = simulatedLayout(SimulatedLayoutId::FrFr);
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::KeyQ, false), U'a');
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::KeyQ, true), U'a') << "letters fold to lowercase";
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::KeyM, false), U',');
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::KeyM, true), U'?');
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::Digit2, false), 0U) << "'é' is not ASCII";
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::Digit2, true), U'2');
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::BracketLeft, false), 0U) << "a dead level gives no hint";
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::F1, false), 0U);
+    EXPECT_EQ(simulatedKeyCharHint(fr, Code::Space, false), 0U);
+}
+
+// strokeFromEvent's AltGr policy (ADR 0016 decision 4), on hand-built events.
+TEST(StrokeFromEvent, AltGrPolicy) {
+    const LayoutTable& de = simulatedLayout(SimulatedLayoutId::DeDe);
+    ASSERT_EQ(de.levels(Code::KeyQ).altGr, U'@');
+    ASSERT_EQ(de.levels(Code::KeyL).altGr, 0U);
+    ASSERT_EQ(de.levels(Code::KeyL).altGrShift, 0U);
+    const auto altGrPress = [](Code code, Modifiers mods) {
+        KeyEvent e;
+        e.code = code;
+        e.altGr = true;
+        e.modifiers = mods;
+        return e;
+    };
+    // The level holds a character: text, even when the event carries none.
+    EXPECT_FALSE(strokeFromEvent(altGrPress(Code::KeyQ, {}), de).has_value());
+    // Printable text wins even where the table's level is empty.
+    KeyEvent typed = altGrPress(Code::KeyL, {});
+    typed.text = {U'ł', 0};
+    typed.textLength = 1;
+    EXPECT_FALSE(strokeFromEvent(typed, de).has_value());
+    // Nothing to produce: Ctrl+Alt, plus Shift and Meta as held.
+    const Modifiers ctrlAlt = Modifier::Ctrl | Modifier::Alt;
+    EXPECT_EQ(strokeFromEvent(altGrPress(Code::KeyL, {}), de), (Stroke{ctrlAlt, Key::L}));
+    EXPECT_EQ(strokeFromEvent(altGrPress(Code::KeyL, Modifier::Shift), de),
+              (Stroke{ctrlAlt | Modifier::Shift, Key::L}));
+    EXPECT_EQ(strokeFromEvent(altGrPress(Code::KeyL, Modifier::Meta), de), (Stroke{ctrlAlt | Modifier::Meta, Key::L}));
+    EXPECT_EQ(strokeFromEvent(altGrPress(Code::KeyL, Modifier::Shift | Modifier::Meta), de),
+              (Stroke{ctrlAlt | Modifier::Shift | Modifier::Meta, Key::L}));
+    // Shift selects the AltGr+Shift level: de AltGr+Shift+Q is empty, so it is a stroke.
+    ASSERT_EQ(de.levels(Code::KeyQ).altGrShift, 0U);
+    EXPECT_EQ(strokeFromEvent(altGrPress(Code::KeyQ, Modifier::Shift), de),
+              (Stroke{ctrlAlt | Modifier::Shift, Key::Q}));
+}
+
+TEST(KeyEventText, TextViewIsClampedToTheArray) {
+    KeyEvent e;
+    e.text = {U'a', U'b'};
+    e.textLength = 7; // Out of contract: a producer that does not clamp.
+    EXPECT_EQ(e.textView(), U"ab");
+    EXPECT_EQ(typedText(e, KeyPlatform::Windows), U"ab");
+    e.textLength = 1;
+    EXPECT_EQ(e.textView(), U"a");
+    e.textLength = 0;
+    EXPECT_TRUE(e.textView().empty());
+}
+
+// typedText's AltGr clause: AltGr text is typed even with Ctrl or Meta held (X11 AltGr+Ctrl,
+// Windows AltGr+RightCtrl), where the plain rule would reject it.
+TEST(KeyEventText, AltGrTextIsTypedWithCommandModifiers) {
+    KeyEvent e;
+    e.text = {U'ł', 0};
+    e.textLength = 1;
+    e.altGr = true;
+    for (const Modifiers mods :
+         {Modifiers(Modifier::Ctrl), Modifiers(Modifier::Meta), Modifier::Ctrl | Modifier::Alt}) {
+        e.modifiers = mods;
+        EXPECT_EQ(typedText(e, KeyPlatform::X11), U"ł");
+        EXPECT_EQ(typedText(e, KeyPlatform::Windows), U"ł");
+    }
+    e.altGr = false;
+    e.modifiers = Modifier::Ctrl;
+    EXPECT_TRUE(typedText(e, KeyPlatform::X11).empty());
+    EXPECT_TRUE(typedText(e, KeyPlatform::Windows).empty());
 }
 
 // A scripted query answering from a LayoutTable, with optional overrides per code.

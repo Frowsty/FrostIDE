@@ -6,9 +6,11 @@
 /*
  * A model of the Windows layouts named; X11 layouts define more level-3 characters.
  * Every cell was transcribed from, and checked against, Microsoft's public layout charts
- * (learn.microsoft.com/globalization/windows-keyboard-layouts, generated from Windows 11
- * 26H2): US (KBDUS, 00000409), German (KBDGR, 00000407), Polish (Programmers) (KBDPL1,
- * 00000415) and French (Legacy, AZERTY) (KBDFR, 0000040C). Columns: base, Shift, AltGr
+ * (learn.microsoft.com/globalization/windows-keyboard-layouts, the interactive pages for
+ * KBDUS, KBDGR, KBDPL1 and KBDFR, retrieved 2026-11-01; the Polish page is dated
+ * 2024-10-24, the others carry no date or Windows version): US (KBDUS, 00000409), German
+ * (KBDGR, 00000407), Polish (Programmers) (KBDPL1, 00000415) and French (Legacy, AZERTY)
+ * (KBDFR, 0000040C). Columns: base, Shift, AltGr
  * (Ctrl+Alt), AltGr+Shift, dead mask. The compositions are every dead key's entries in the
  * charts (the vowels and y, n, c and the Polish letters where defined, their uppercase,
  * and Space).

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Keyboard-layout tables and the layout-aware mapping from physical codes to logical keys
-// (PLAN.md section 2.2 "Keyboard and IME", ADR 0016 decision 3), strokeFromEvent, the
-// read-only active-layout reader, and the key-state probe the ui adapter uses to tell
-// AltGr from Ctrl+Alt.
+// (PLAN.md section 2.2 "Keyboard and IME", ADR 0016 decision 3), strokeFromEvent and the
+// read-only active-layout reader.
 #pragma once
 
 #include "frost/core/error.hpp"
@@ -58,8 +57,9 @@ struct KeyLevels {
 
 // How a table maps writing codes to logical keys (see the policy comment on detail::computeLayout below).
 //   FullTable:      the complete policy over the table's characters (Windows, simulated layouts).
-//   LettersByLabel: letters follow the event's keyCharHint, everything else is positional
-//                   (Linux in M1, where no full table is read; ADR 0016 decision 12).
+//   LettersByLabel: letters follow the event's keyCharHint, a letter-area key whose hint is
+//                   punctuation follows it too (LayoutTable::logicalKey), everything else is
+//                   positional (Linux in M1, where no full table is read; ADR 0016 decision 12).
 enum class MappingMode : std::uint8_t { FullTable, LettersByLabel };
 
 // One dead-key composition: `dead` (spacing form) followed by `base` produces `composed`.
@@ -97,6 +97,24 @@ enum class LayoutError : std::uint8_t {
 
 // Not constexpr: calling it during constant evaluation makes an invalid consteval-built table a compile error.
 void invalidLayoutTable() noexcept;
+
+// The key of one of the 11 US punctuation characters (` - = [ ] \ ; ' , . /), or None. O(1).
+[[nodiscard]] constexpr Key usPunctuationKey(char32_t c) noexcept {
+    switch (c) {
+    case U'`': return Key::Backquote;
+    case U'-': return Key::Minus;
+    case U'=': return Key::Equal;
+    case U'[': return Key::BracketLeft;
+    case U']': return Key::BracketRight;
+    case U'\\': return Key::Backslash;
+    case U';': return Key::Semicolon;
+    case U'\'': return Key::Quote;
+    case U',': return Key::Comma;
+    case U'.': return Key::Period;
+    case U'/': return Key::Slash;
+    default: return Key::None;
+    }
+}
 
 } // namespace detail
 
@@ -140,17 +158,30 @@ public:
     // True if any key has a non-zero AltGr or AltGr+Shift character.
     [[nodiscard]] constexpr bool hasAltGr() const noexcept { return m_hasAltGr; }
 
-    // The logical key of `code`. keyCharHint is used only in LettersByLabel mode, where a
-    // writing code whose hint folds to a-z maps to that letter. O(1) via a precomputed
-    // array, noexcept. Budget: B5.
+    /*
+     * The logical key of `code`. keyCharHint (KeyEvent::keyCharHint) is used only in
+     * LettersByLabel mode, for writing codes:
+     *   - a hint that folds to a-z maps to that letter, on any writing code;
+     *   - on a letter-area code (KeyA..KeyZ), any other printable ASCII hint means the key
+     *     is not the US letter of its position: one of the 11 US punctuation characters
+     *     maps to that key (character dispatch, as FullTable rule 3.3: French ',' on KeyM
+     *     is Comma), anything else ('?', '!', a digit) to None;
+     *   - otherwise (no hint, a non-ASCII hint such as a Cyrillic letter, or a code outside
+     *     the letter area) the positional key.
+     * So a punctuation-labelled letter-area key never fires its position's letter bindings.
+     * O(1) via a precomputed array, noexcept. Budget: B5.
+     */
     [[nodiscard]] constexpr Key logicalKey(Code code, char32_t keyCharHint = 0) const noexcept {
         if (index(code) >= kCodeCount) {
             return Key::None;
         }
-        if (m_mode == MappingMode::LettersByLabel && isWritingKey(code)) {
+        if (m_mode == MappingMode::LettersByLabel && isWritingKey(code) && keyCharHint != 0) {
             const char32_t hint = keyCharHint >= U'A' && keyCharHint <= U'Z' ? keyCharHint + 0x20 : keyCharHint;
             if (hint >= U'a' && hint <= U'z') {
                 return static_cast<Key>(index(Key::A) + (hint - U'a'));
+            }
+            if (isLetterAreaKey(code) && hint > U' ' && hint < 0x7F) {
+                return detail::usPunctuationKey(hint);
             }
         }
         return m_logical[index(code)];
@@ -261,49 +292,13 @@ protected:
  * callers then fall back to simulatedLayout(SimulatedLayoutId::EnUs) and log.
  *
  * Elsewhere: returns linuxM1Layout(), the en-US table in LettersByLabel mode. This is an
- * M1 limitation (ADR 0016 decision 12): letters follow labels, everything else is
- * positional.
+ * M1 limitation (ADR 0016 decision 12): letters follow labels, a letter-area key labelled
+ * with punctuation follows its label (or maps to None), everything else is positional.
  *
  * Must be called on the UI thread (the layout is per thread). About 200 ToUnicodeEx
  * calls, well under 1 ms. Called at start-up and on QEvent::KeyboardLayoutChange.
  */
 [[nodiscard]] Result<LayoutTable> readActiveLayout();
-
-// The keys whose physical state the ui adapter reads to tell AltGr from Ctrl+Alt on Windows.
-enum class PlatformVk : std::uint8_t { LeftAlt, RightAlt, LeftCtrl, RightCtrl };
-
-// Physical key state for the message being processed. Implementations must be cheap and
-// noexcept; called on the UI thread from translateKeyEvent.
-class IKeyStateProbe {
-public:
-    [[nodiscard]] virtual bool isDown(PlatformVk key) const noexcept = 0;
-
-protected:
-    IKeyStateProbe() = default;
-    IKeyStateProbe(const IKeyStateProbe&) = default;
-    IKeyStateProbe& operator=(const IKeyStateProbe&) = default;
-    ~IKeyStateProbe() = default;
-};
-
-// The test double: every key up until set() says otherwise. Not thread-safe.
-class ScriptedKeyStateProbe final : public IKeyStateProbe {
-public:
-    [[nodiscard]] bool isDown(PlatformVk key) const noexcept override { return m_down[static_cast<std::size_t>(key)]; }
-    void set(PlatformVk key, bool down) noexcept { m_down[static_cast<std::size_t>(key)] = down; }
-    void clear() noexcept { m_down = {}; }
-
-private:
-    std::array<bool, 4> m_down{};
-};
-
-#ifdef _WIN32
-// GetKeyState for the left/right Alt and Ctrl virtual keys: the calling thread's key
-// state, synchronised with the message being processed. Stateless.
-class Win32KeyStateProbe final : public IKeyStateProbe {
-public:
-    [[nodiscard]] bool isDown(PlatformVk key) const noexcept override;
-};
-#endif
 
 /*
  * The mapping core, a constexpr function shared by make() and build(). The policy
@@ -323,7 +318,8 @@ public:
  *          None; on IntlBackslash, IntlRo and IntlYen, None.
  *      3.5 a table with no Latin letter at base on any letter-area key (a non-Latin
  *          layout) maps every writing key positionally (Intl* keys are None).
- *   4. LettersByLabel mode: writing keys are positional; logicalKey() lets a hint letter win.
+ *   4. LettersByLabel mode: writing keys are positional; logicalKey() lets a hint letter win,
+ *      and dispatches a letter-area key with a punctuation hint by character (or to None).
  * Two physical keys may map to the same logical key (harmless); a logical key no code maps
  * to is unreachable, and KeymapService reports bindings on it.
  */
@@ -332,10 +328,7 @@ constexpr detail::LayoutError detail::computeLayout(LayoutTable& table, std::str
                                                     std::span<const Composition> compositions) noexcept {
     constexpr auto validChar = [](char32_t c) { return c <= 0x10FFFF && !(c >= 0xD800 && c <= 0xDFFF); };
     constexpr auto fold = [](char32_t c) { return c >= U'A' && c <= U'Z' ? c + 0x20 : c; };
-    constexpr auto isPunct = [](char32_t c) {
-        return c == U'`' || c == U'-' || c == U'=' || c == U'[' || c == U']' || c == U'\\' || c == U';' || c == U'\'' ||
-               c == U',' || c == U'.' || c == U'/';
-    };
+    constexpr auto isPunct = [](char32_t c) { return usPunctuationKey(c) != Key::None; };
     // The key a US-positional mapping gives a writing code: its usBaseChar's key (Intl* None).
     constexpr auto positional = [](Code code) -> Key {
         const std::size_t i = index(code);
@@ -357,22 +350,6 @@ constexpr detail::LayoutError detail::computeLayout(LayoutTable& table, std::str
         case Code::Comma: return Key::Comma;
         case Code::Period: return Key::Period;
         case Code::Slash: return Key::Slash;
-        default: return Key::None;
-        }
-    };
-    constexpr auto punctKey = [](char32_t c) -> Key {
-        switch (c) {
-        case U'`': return Key::Backquote;
-        case U'-': return Key::Minus;
-        case U'=': return Key::Equal;
-        case U'[': return Key::BracketLeft;
-        case U']': return Key::BracketRight;
-        case U'\\': return Key::Backslash;
-        case U';': return Key::Semicolon;
-        case U'\'': return Key::Quote;
-        case U',': return Key::Comma;
-        case U'.': return Key::Period;
-        case U'/': return Key::Slash;
         default: return Key::None;
         }
     };
@@ -481,7 +458,7 @@ constexpr detail::LayoutError detail::computeLayout(LayoutTable& table, std::str
                 key = static_cast<Key>(index(Key::A) + (c - U'a')); // Rule 3.2.
                 dispatched[i] = true;
             } else if (!levels.dead(Level::Base) && isPunct(c)) {
-                key = punctKey(c); // Rule 3.3.
+                key = usPunctuationKey(c); // Rule 3.3.
                 dispatched[i] = true;
             } else if (isUsPunctuationKey(code)) {
                 key = positional(code); // Rule 3.4, punctuation position.

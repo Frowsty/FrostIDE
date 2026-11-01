@@ -11,6 +11,7 @@
 #include "frost/input/key.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
@@ -38,8 +39,10 @@ enum class KeyEventType : std::uint8_t { Press, Release };
  * through WM_SYSCHAR). Whether a widget should insert it is typedText()'s decision.
  * deadKey is non-zero when this press is a dead key (the spacing form: U+005E '^', U+00B4,
  * U+0060, U+007E, U+00A8, ...); the press then carries no text. keyCharHint is the
- * lowercase Latin letter Qt reports as the key on X11 and Wayland (0 on Windows), used by
- * the LettersByLabel mapping mode.
+ * printable ASCII character Qt reports as the key on X11 and Wayland, letters folded to
+ * lowercase ('q', ',', '?': Qt reports the character of the current Shift level, so
+ * Shift+',' on US is '<'); 0 for other keys and on Windows. The LettersByLabel mapping
+ * mode uses it. textLength is at most text.size(); larger values are clamped by readers.
  *
  * osTimeMs is the OS event time in milliseconds (GetMessageTime on Windows, the X server
  * time on X11): a 32-bit counter that wraps, compared only through unsigned differences;
@@ -70,8 +73,12 @@ struct KeyEvent {
 
     // True when any produced code point is printable: >= U+0020 and != U+007F. O(1).
     [[nodiscard]] bool hasPrintableText() const noexcept;
-    // The produced text; a view into this event, valid while it lives.
-    [[nodiscard]] std::u32string_view textView() const noexcept { return {text.data(), textLength}; }
+    // The produced text, at most text.size() code points whatever textLength says; a view
+    // into this event, valid while it lives. O(1).
+    [[nodiscard]] std::u32string_view textView() const noexcept {
+        const std::size_t length = textLength;
+        return {text.data(), length < text.size() ? length : text.size()};
+    }
 };
 static_assert(std::is_trivially_copyable_v<KeyEvent>, "KeyEvent travels by value on the keystroke path");
 static_assert(sizeof(KeyEvent) <= 40, "KeyEvent stays within 40 bytes");

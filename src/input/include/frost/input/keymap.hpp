@@ -104,15 +104,24 @@ private:
     std::array<bool, 4> m_present{};
 };
 
-// Parses format v1. Errors: Corrupt "keymap line L, column C: <reason>" (invalid UTF-8,
-// NUL or control bytes, a missing or duplicate header, bad directives, unknown or
-// duplicated sections, a directive after a section, a binding outside a section,
-// duplicates, bad sequences, a line over 4096 bytes); Unsupported for another format
-// version; OutOfRange for input over 1 MiB. O(n).
+// The most sequences one keymap line may list (as for an override, kMaxSequencesPerOverride).
+inline constexpr std::size_t kMaxSequencesPerBinding = 8;
+
+/*
+ * Parses format v1. Errors: Corrupt "keymap line L, column C: <reason>" (invalid UTF-8,
+ * NUL or control bytes, a missing or duplicate header, bad directives, unknown or
+ * duplicated sections, a directive after a section, a binding outside a section,
+ * duplicates, bad sequences, more than kMaxSequencesPerBinding sequences on a line, a
+ * line over 4096 bytes); Unsupported for another format version; OutOfRange for input
+ * over 1 MiB, or input whose canonical form (formatKeymap) would be over 1 MiB, so that
+ * every parsed keymap formats to text this function accepts. O(n log B) for n bytes and
+ * B bindings.
+ */
 [[nodiscard]] Result<Keymap> parseKeymap(std::string_view text);
 // The canonical text: header, id, name, then the present sections in the order default,
 // windows, linux, macos, each line as `id = A | B` (or `id =`), LF line ends, no comments.
-// parseKeymap(formatKeymap(k)) == k, and formatting is a fixpoint.
+// For every k parseKeymap returned, parseKeymap(formatKeymap(k)) == k, and formatting is
+// a fixpoint: canonical lines fit 4096 bytes and the canonical text 1 MiB.
 [[nodiscard]] std::string formatKeymap(const Keymap& keymap);
 
 // Parses the built-in keymap `id` from its embedded text on each call (no statics; the

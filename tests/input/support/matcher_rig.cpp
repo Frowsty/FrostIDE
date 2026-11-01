@@ -23,23 +23,18 @@ const LayoutTable& productTable(const LayoutTable& truth, KeyPlatform platform) 
     return platform == KeyPlatform::Windows ? truth : linuxM1Layout();
 }
 
-char32_t simulatedHint(const LayoutTable& truth, KeyPlatform platform, Code code) noexcept {
-    if (platform == KeyPlatform::Windows || !isWritingKey(code)) {
-        return 0;
-    }
-    const KeyLevels levels = truth.levels(code);
-    const char32_t base = levels.base >= U'A' && levels.base <= U'Z' ? levels.base + 0x20 : levels.base;
-    return base >= U'a' && base <= U'z' && !levels.dead(Level::Base) ? base : 0;
+char32_t simulatedHint(const LayoutTable& truth, KeyPlatform platform, Code code, bool shift) noexcept {
+    return platform == KeyPlatform::Windows ? 0 : simulatedKeyCharHint(truth, code, shift);
 }
 
-std::optional<Code> physicalCodeFor(Key key, const LayoutTable& truth, KeyPlatform platform) {
+std::optional<Code> physicalCodeFor(Key key, const LayoutTable& truth, KeyPlatform platform, bool shift) {
     const LayoutTable& table = productTable(truth, platform);
     for (std::size_t i = 1; i < kCodeCount; ++i) {
         const auto code = static_cast<Code>(i);
         if (isModifierKey(code) || code == Code::CapsLock || code == Code::NumLock || code == Code::ScrollLock) {
             continue;
         }
-        if (table.logicalKey(code, simulatedHint(truth, platform, code)) == key) {
+        if (table.logicalKey(code, simulatedHint(truth, platform, code, shift)) == key) {
             return code;
         }
     }

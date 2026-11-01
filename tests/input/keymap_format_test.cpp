@@ -2,7 +2,8 @@
 //
 // KeymapFormat: the keymap format v1 parser and formatter (keymap.hpp): a golden of the
 // canonical form, every error with its line and column, the accepted variations, section
-// resolution and the format/parse round-trip property.
+// resolution, the size caps (input, canonical form, sequences per line) and the
+// format/parse round-trip property.
 
 #include "frost/input/keymap.hpp"
 
@@ -10,9 +11,14 @@
 #include "input/support/test_actions.hpp"
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <format>
 #include <random>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace frost::input {
 namespace {
@@ -198,6 +204,142 @@ TEST(KeymapFormat, SizeCap) {
     text.resize(std::size_t{1} << 20);
     text.back() = '\n';
     EXPECT_TRUE(parseKeymap(text).has_value()) << "exactly 1 MiB is accepted";
+}
+
+// The distinct Strict function-key sequences "<mods>+F<n>", in a fixed order.
+std::vector<std::string> functionKeySequences() {
+    std::vector<std::string> out;
+    for (unsigned bits = 0; bits < 16; ++bits) {
+        for (int n = 1; n <= 24; ++n) {
+            out.push_back(formatSequence(
+                Sequence::of(Stroke{Modifiers::fromBits(static_cast<std::uint8_t>(bits)),
+                                    static_cast<Key>(index(Key::F1) + static_cast<std::size_t>(n - 1))})));
+        }
+    }
+    return out;
+}
+
+// An action lists at most kMaxSequencesPerBinding sequences, so a compact line that fits
+// 4096 bytes cannot format into a line that does not (the canonical form adds spacing).
+TEST(KeymapFormat, SequencesPerBindingAreCapped) {
+    const std::vector<std::string> sequences = functionKeySequences();
+    const auto keymapWith = [&](std::size_t count, std::string_view separator) {
+        std::string line = "a.b=";
+        for (std::size_t i = 0; i < count; ++i) {
+            line += (i == 0 ? "" : std::string(separator)) + sequences[i];
+        }
+        return "frost-keymap 1\nid x\nname X\n[default]\n" + line + "\n";
+    };
+    const auto eight = parseKeymap(keymapWith(kMaxSequencesPerBinding, "|"));
+    ASSERT_TRUE(eight.has_value()) << eight.error().message();
+    EXPECT_EQ(eight->section(KeymapSection::Default)[0].sequences.size(), kMaxSequencesPerBinding);
+    const auto nine = parseKeymap(keymapWith(kMaxSequencesPerBinding + 1, " | "));
+    ASSERT_FALSE(nine.has_value());
+    EXPECT_EQ(nine.error().code(), ErrorCode::Corrupt);
+    EXPECT_TRUE(nine.error().message().starts_with("keymap line 5, column ")) << nine.error().message();
+    EXPECT_NE(nine.error().message().find("more than 8 sequences"), std::string::npos) << nine.error().message();
+
+    // The review's case: one compact 4094-byte line of 348 sequences.
+    std::string line = "a.b=";
+    std::size_t count = 0;
+    while (count < sequences.size() && line.size() + 1 + sequences[count].size() <= 4094) {
+        line += (count == 0 ? "" : "|") + sequences[count];
+        ++count;
+    }
+    ASSERT_GT(count, kMaxSequencesPerBinding);
+    const auto compact = parseKeymap("frost-keymap 1\nid x\nname X\n[default]\n" + line + "\n");
+    ASSERT_FALSE(compact.has_value());
+    EXPECT_EQ(compact.error().code(), ErrorCode::Corrupt);
+}
+
+// The longest canonical line the parser can accept still fits the 4096-byte line limit:
+// a 64-byte id and kMaxSequencesPerBinding of the longest two-stroke sequences.
+TEST(KeymapFormat, CanonicalLinesFitTheLineLimit) {
+    std::size_t longestStroke = 0;
+    Stroke longest{};
+    for (unsigned bits = 0; bits < 16; ++bits) {
+        for (std::size_t k = 1; k < kKeyCount; ++k) {
+            const Stroke stroke{Modifiers::fromBits(static_cast<std::uint8_t>(bits)), static_cast<Key>(k)};
+            const std::string text = formatSequence(Sequence::of(stroke, stroke));
+            if (text.size() > longestStroke) {
+                longestStroke = text.size();
+                longest = stroke;
+            }
+        }
+    }
+    const std::string id = "a." + std::string(62, 'b');
+    ASSERT_TRUE(isValidActionId(id));
+    std::string line = id + " =";
+    // "<id> =", then " " + the first sequence and " | " + each further one.
+    const std::size_t bound =
+        line.size() + 1 + kMaxSequencesPerBinding * longestStroke + (kMaxSequencesPerBinding - 1) * 3;
+    EXPECT_LE(bound, 4096U) << "longest sequence " << longestStroke << " bytes";
+    // A real line of that shape: the longest first stroke, distinct second strokes.
+    for (std::size_t i = 0; i < kMaxSequencesPerBinding; ++i) {
+        const Stroke second{longest.mods, static_cast<Key>(1 + i)};
+        line += (i == 0 ? " " : " | ") + formatSequence(Sequence::of(longest, second));
+    }
+    EXPECT_LE(line.size(), bound);
+    const auto keymap = parseKeymap("frost-keymap 1\nid x\nname X\n[default]\n" + line + "\n");
+    ASSERT_TRUE(keymap.has_value()) << keymap.error().message();
+    const std::string formatted = formatKeymap(*keymap);
+    const auto again = parseKeymap(formatted);
+    ASSERT_TRUE(again.has_value()) << again.error().message();
+    EXPECT_EQ(*again, *keymap);
+}
+
+// A compact file within 1 MiB whose canonical form is not is rejected, so the round trip
+// holds for every keymap the parser returns; one whose canonical form fits is accepted.
+TEST(KeymapFormat, CanonicalFormFitsTheSizeCap) {
+    const auto compactKeymap = [](std::size_t limit) {
+        std::string text = "frost-keymap 1\nid x\nname X\n[default]\n";
+        for (std::size_t i = 0;; ++i) {
+            std::string line = "a.b" + std::to_string(i) + "=Ctrl+F1|Ctrl+F2\n";
+            if (text.size() + line.size() > limit) {
+                break;
+            }
+            text += line;
+        }
+        return text;
+    };
+    const std::string big = compactKeymap(std::size_t{1} << 20);
+    ASSERT_LE(big.size(), std::size_t{1} << 20);
+    const auto rejected = parseKeymap(big);
+    ASSERT_FALSE(rejected.has_value());
+    EXPECT_EQ(rejected.error().code(), ErrorCode::OutOfRange);
+    EXPECT_NE(rejected.error().message().find("canonical form"), std::string::npos) << rejected.error().message();
+
+    // 80% of the cap: the canonical form's 4 more bytes per line of about 25 keep it inside.
+    const std::string fits = compactKeymap((std::size_t{1} << 20) * 80 / 100);
+    const auto accepted = parseKeymap(fits);
+    ASSERT_TRUE(accepted.has_value()) << accepted.error().message();
+    const std::string formatted = formatKeymap(*accepted);
+    EXPECT_GT(formatted.size(), fits.size());
+    EXPECT_LE(formatted.size(), std::size_t{1} << 20);
+    const auto again = parseKeymap(formatted);
+    ASSERT_TRUE(again.has_value()) << again.error().message();
+    EXPECT_EQ(*again, *accepted);
+}
+
+// Many bindings with ids in descending order (the worst case of a sorted-vector insert;
+// InputPerf.KeymapParseDescendingIds times it) parse, and a late duplicate is found.
+TEST(KeymapFormat, ManyBindingsInDescendingOrder) {
+    constexpr int kCount = 60000;
+    std::string text = "frost-keymap 1\nid x\nname X\n[default]\n";
+    for (int i = kCount; i > 0; --i) {
+        text += std::format("a.x{:06} =\n", i);
+    }
+    const auto keymap = parseKeymap(text);
+    ASSERT_TRUE(keymap.has_value()) << keymap.error().message();
+    EXPECT_EQ(keymap->section(KeymapSection::Default).size(), static_cast<std::size_t>(kCount));
+    // A duplicate far from its first occurrence is still found, with its line.
+    text += "a.x000001 =\n";
+    const auto duplicate = parseKeymap(text);
+    ASSERT_FALSE(duplicate.has_value());
+    EXPECT_TRUE(duplicate.error().message().starts_with(std::format("keymap line {}, column 1: action 'a.x000001' "
+                                                                    "appears twice",
+                                                                    kCount + 5)))
+        << duplicate.error().message();
 }
 
 // A random valid keymap: random sections, action ids and Strict sequences.

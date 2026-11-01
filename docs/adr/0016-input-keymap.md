@@ -25,7 +25,9 @@ simulator produces the events.
    (`src/ui/input`, ui layer) is the Qt adapter: `translateKeyEvent` and `ImeTracker`. It lives in neither core
    (it is product logic with its own data) nor ui (the matcher must be testable without Qt and usable by the
    automation endpoint). FindActionModel at rank 4 cannot use `frost::search` (rank 7); when the M2 fuzzy
-   matcher lands, either its core moves to a low layer or the model moves up.
+   matcher lands, either its core moves to a low layer or the model moves up. PLAN.md section 3.2 does not list
+   `src/input` and `src/ui/input` yet; until it does, this decision is their record, and the `input` rank line in
+   `cmake/FrostLayers.cmake` cites it.
 2. **Key model.** `Code` is the physical key, named after W3C `code` values (from the Windows 9-bit scan code or
    the evdev code). `Key` is the logical key, named after its US-QWERTY key; bindings store Keys. Writing keys
    (KeyA..IntlYen) produce characters; typing keys (letters, digits, the 11 US punctuation keys, Space) may never
@@ -41,7 +43,12 @@ simulator produces the events.
       US key of its position on punctuation positions, to the US letter on letter-area positions unless another
       key produces that letter, and to nothing on IntlBackslash, IntlRo and IntlYen; a non-Latin layout is
       positional throughout;
-   4. LettersByLabel (Linux in M1): letters follow the event's keyCharHint, everything else is positional.
+   4. LettersByLabel (Linux in M1): letters follow the event's keyCharHint (the printable ASCII character Qt
+      reports as the key, of the current Shift level); a letter-area key whose hint is one of the 11 US
+      punctuation characters is that key (character dispatch, as rule 3: French ',' on KeyM is Comma) and one
+      whose hint is any other ASCII character ('?') is None, so a punctuation-labelled key never fires its
+      position's letter bindings (a review finding: on fr-FR, Ctrl+Alt+',' fired Extract Method and Ctrl+Shift+'?'
+      Matching Brace); everything else is positional.
    Facts from the simulated tables (goldens `layout-mapping-*.txt`): de-DE swaps Y and Z, dispatches ',' '.' '-'
    by character and has no '/' (so Ctrl+Slash and Ctrl+Shift+Slash are reachable only through their numpad
    alternatives; KeymapService reports them as unreachable); fr-FR remaps A/Q, Z/W and M; pl-PL equals en-US at
@@ -53,10 +60,20 @@ simulator produces the events.
    as Ctrl+Alt. Physical left Ctrl + left Alt matches Ctrl+Alt bindings even where Windows would produce AltGr
    text: on pl-PL, LCtrl+LAlt+L is Reformat Code while RAlt+L still types 'ł'. `typedText()` decides what a
    widget inserts: printable text with no Ctrl/Alt/Meta, with AltGr, or with Windows Ctrl+Alt; never Windows
-   Alt+letter (WM_SYSCHAR). The Windows adapter tells AltGr from Ctrl+Alt with `GetKeyState` on the left/right
-   Alt and Ctrl keys (`IKeyStateProbe`), discarding AltGr's fake left Ctrl. The refinement runs whenever Ctrl+Alt
-   is reported with right Alt down on an AltGr layout, also when Qt already reports GroupSwitchModifier (the
-   `windows:altgr` option, and the `Key_AltGr` key itself). The AltGr key's own press is AltGr, not Alt. Synthesized
+   Alt+letter (WM_SYSCHAR). The Windows adapter tells AltGr from Ctrl+Alt by the per-side bits of
+   `QKeyEvent::nativeModifiers()` (`frost::ui::windows_native`: ShiftLeft 0x01, ControlLeft 0x02, AltLeft 0x04,
+   MetaLeft 0x08, ShiftRight 0x10, ControlRight 0x20, AltRight 0x40, MetaRight 0x80; AltGr reads 0x42), discarding
+   AltGr's fake left Ctrl. Qt reads them while it processes the key message, but queues the QKeyEvent and delivers
+   it only after the dispatcher has retrieved later messages. The first design read the live key state
+   (`GetKeyState` through an `IKeyStateProbe`) at delivery, which during a UI stall could already show a later
+   AltGr release, so pl-PL AltGr+L ran Reformat Code instead of typing 'ł', or the reverse (a review finding).
+   `NativeKeyDelivery` reproduces both cases on a real, never-shown window (posted messages and the test thread's
+   own key state only) and fails with the live-state logic. The bit values are undocumented Qt internals, observed
+   on Qt 6.12; `NativeKeyDelivery.NativeModifierBits` pins them, so a Qt upgrade that changes them fails the
+   tests. Events without per-side bits (QTest, the automation endpoint) keep Ctrl+Alt as reported. The refinement
+   runs whenever Ctrl+Alt is reported with the right-Alt bit and a Ctrl bit on an AltGr layout, also when Qt
+   already reports GroupSwitchModifier (the `windows:altgr` option, and the `Key_AltGr` key itself). The AltGr
+   key's own press is AltGr, not Alt. Synthesized
    events without a scan code take their `Code` from the Qt::Key: named keys by table, letters, digits and the 11
    US punctuation keys through the layout, and other printable characters (Key_Question, Key_Adiaeresis) through
    the writing key whose base or Shift level produces them.
@@ -79,13 +96,21 @@ simulator produces the events.
 8. **Keymap format v1** (`frost-keymap 1`): UTF-8, comments on their own lines, `id` and `name` directives,
    sections `[default]`, `[windows]`, `[linux]`, `[macos]`, lines `action.id = A | B` in the Strict syntax, and
    `action.id =` for an explicit unbinding. Errors are Corrupt with line and column (a duplicate header is
-   reported as such), Unsupported for other versions, OutOfRange over 1 MiB; lines are at most 4096 bytes.
+   reported as such), Unsupported for other versions, OutOfRange over 1 MiB; lines are at most 4096 bytes. An
+   action lists at most 8 sequences (`kMaxSequencesPerBinding`, as for an override), and a file whose canonical
+   form would be over 1 MiB is OutOfRange too, so `parseKeymap(formatKeymap(k)) == k` holds for every parsed
+   keymap: the canonical form's " = " and " | " spacing made a compact 4094-byte line 4790 bytes long (a review
+   finding; seed `seed-18-compact-long-line.keymap`). Duplicate actions are found with a per-section `std::set`
+   (O(log B) per line), because a sorted-vector insert was quadratic for ids in descending order (0.88 s for
+   80,000 lines), and imported keymaps (row 227, M11) are untrusted input.
    Resolution: a platform section line wins, else the default line; on macOS only, unlisted default lines are
    derived by swapping Ctrl and Meta. Every derivation collision is resolved in `[macos]` by a fact from the
    public macOS reference card or by an explicit unbinding; the MacOSConflicts test enforces it. macOS is
-   defined but untested (D24). The IntelliJ data is written from public documentation facts (the published
-   default-keymap reference cards) only; no JetBrains file or code was consulted, and doubtful entries are left
-   out. The keymap is a raw string in `keymap_intellij.cpp`, parsed on each `builtinKeymap()` call (B1).
+   defined but untested (D24). The IntelliJ data is written from public documentation facts only: the IntelliJ
+   IDEA Help pages "Predefined Windows keymap" and "Predefined macOS keymap", and the published default-keymap
+   reference cards. These are documentation, not code; no JetBrains keymap file or source was consulted, and
+   doubtful entries are left out. The keymap is a raw string in `keymap_intellij.cpp`, parsed on each
+   `builtinKeymap()` call (B1).
    Action ids are `group.camelCaseName`, with the groups editor, code, search, navigate, refactor, window, file,
    view, vcs, run, debug, build, bookmarks, tools and agent. The keymap may name actions later milestones
    register; they are inert until registered. `BindingIndex::build` applies overrides through an id-to-position
@@ -121,12 +146,14 @@ simulator produces the events.
     `ToUnicodeEx` with flag 0x4 (keyboard state unchanged), so a dead key the user has pending is never
     consumed. It only queries the calling thread's current layout and never changes the user's input
     configuration. Linux in M1: `linuxM1Layout()`, the en-US table in LettersByLabel mode (letters follow labels,
-    punctuation is positional). The guard test `input.NoLayoutSwitching` scans the sources for the OS calls and
+    a letter-area key labelled with punctuation follows its label or is None, other punctuation is positional).
+    The guard test `input.NoLayoutSwitching` scans the sources for the OS calls and
     tools that would change or load layouts or inject input, and a fixture proves the scan detects each name.
 13. **Oracles.**
     - Independent: the read-only Win32 cross-checks on whatever layout is active (`MapVirtualKeyExW` characters
-      and dead flags, `VkKeyScanExW` round trips, named scan codes), and equality with the simulated en-US
-      table when the active KLID is 00000409 (it is on REF-W1, and the check passes).
+      and dead flags, `VkKeyScanExW` round trips, named scan codes), equality with the simulated en-US
+      table when the active KLID is 00000409 (it is on REF-W1, and the check passes), and Qt's own Windows
+      plugin in `NativeKeyDelivery` (real message processing and queued delivery; not real input).
     - Consistency checks: the layout, keymap and Find Action goldens, the simulator-driven suites
       (ShortcutLayouts, ShortcutSequences, DoubleShift, the random-stream property) and the reader over a
       scripted query.
@@ -140,15 +167,17 @@ New dependencies: none (no vcpkg port, no system library; Qt Gui only, already a
 
 ## Measurements
 REF-W1, clang-cl Release (win-clangcl), `input_perf_tests`, medians of three runs:
-- `builtinKeymap("intellij")` plus `BindingIndex::build` (the whole IntelliJ keymap): 0.171-0.192 ms (bound 1 ms,
-  B1).
-- `ShortcutMatcher::feed` over 1M mixed de-DE events: 17-18 ns per event (bound 2 µs, B5).
-- Find Action query over 500 actions: 0.43 ms (bound 2 ms).
+- `builtinKeymap("intellij")` plus `BindingIndex::build` (the whole IntelliJ keymap): 0.199-0.205 ms (bound 1 ms,
+  B1; 0.171-0.192 ms before the canonical-size accounting).
+- `ShortcutMatcher::feed` over 1M mixed de-DE events: 17 ns per event (bound 2 µs, B5).
+- Find Action query over 500 actions: 0.42 ms (bound 2 ms).
+- `parseKeymap` of 80,000 explicit unbindings: 24.6-27.0 ms with ids ascending or descending, a ratio of
+  0.99-1.02 (bound 3); the review measured 13.8 ms ascending and 877 ms descending with the sorted vector.
 - Allocations on the keystroke path: 0 bytes over 10,000 mixed `handle`/`peek` calls after warm-up
   (`input_alloc_tests`, Debug and Release).
-- Tests: input_tests 214, input_stress_tests 8 (50,000 streams of 32 events per layout and platform, 55-66 s
-  in Debug), input_alloc_tests 1, input_layout_os_tests 5, input_perf_tests 3, ui_input_tests 28, and the two
-  guard tests.
+- Tests: input_tests 223, input_stress_tests 8 (50,000 streams of 32 events per layout and platform, 49-66 s
+  in Debug), input_alloc_tests 1, input_layout_os_tests 5, input_perf_tests 4, ui_input_tests 31,
+  ui_input_native_tests 3 (Windows only), and the two guard tests.
 
 ## Consequences
 - The composition root (m1/shell-frame with m1/settings) implements IKeymapSettings over the application keys
@@ -166,13 +195,17 @@ REF-W1, clang-cl Release (win-clangcl), `input_perf_tests`, medians of three run
   opened, persists usage, shows names as plain text, and builds the Keymap page on `strokeFromEvent`,
   `conflicts()`, `unreachableBindings()` and DisabledReason.
 - m1/automation-bench verifies the real native key path (scan-code encoding, the Windows dead-key signal,
-  modifier conventions, timestamps) on the real desktop; this slice tests synthesized QKeyEvents only.
+  modifier conventions including the `windows_native` bits under real AltGr and Ctrl+Alt input, timestamps) on
+  the real desktop; this slice tests synthesized QKeyEvents and posted messages only.
 - Fuzzing: `tests/fuzz/corpus/input_keymap` and `runKeymapFuzzInput` are ready; once FrostFuzz.cmake is on the
   base (m1/piece-tree), the integrator registers `input_keymap` and deletes the KeymapFuzzReplay test.
 - M11: desktop-environment conflicts on Linux (GNOME and KDE take Ctrl+Alt+arrows and Ctrl+Alt+L), the other
   built-in keymaps, and macOS once a test leg exists.
 - Known approximations: macOS `code.smartCompletion` stays derived (Shift+Meta+Space), as no override for it
-  was confirmed for this slice; Linux punctuation is positional until a real layout reader lands.
+  was confirmed for this slice. Until a real Linux layout reader lands: punctuation keys outside the letter area
+  are positional; Qt reports the Shift level's character, so a letter-area punctuation key is reachable only
+  where that character is US punctuation (fr-FR Ctrl+Shift+Comma cannot be typed on KeyM, which reports '?');
+  and a letter-area key whose hint is not ASCII (no Qt::Key value in 0x21..0x7E) stays positional.
 
 ## Alternatives considered
 - JSON keymaps with yyjson: a dependency m1/settings adds with its own ADR, so a merge clash; the line format is

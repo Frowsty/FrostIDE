@@ -228,7 +228,7 @@ TEST_P(ShortcutLayouts, CtrlAltBindingsFireWithLeftKeys) {
                 stroke.mods.has(Modifier::Meta)) {
                 continue;
             }
-            const auto code = test::physicalCodeFor(stroke.key, truth(), platform());
+            const auto code = test::physicalCodeFor(stroke.key, truth(), platform(), stroke.mods.has(Modifier::Shift));
             if (!code) {
                 continue; // Unreachable bindings are EveryBindingReachableOrListed's subject.
             }
@@ -281,6 +281,38 @@ TEST_P(ShortcutLayouts, AltGrWithoutCharacterActsAsCtrlAlt) {
         rig.resetKeyboard();
         EXPECT_EQ(chordOf(rig, {Code::AltRight}, Code::KeyL).fired, "code.reformat");
     }
+
+    // AltGr+Shift with an empty AltGr+Shift level is Ctrl+Alt+Shift (no hint under AltGr).
+    std::size_t firedShift = 0;
+    for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlYen); ++i) {
+        const auto code = static_cast<Code>(i);
+        if (truth().levels(code).altGrShift != 0 || rig.table->levels(code).altGrShift != 0) {
+            continue;
+        }
+        const Key key = rig.table->logicalKey(code);
+        const Stroke reading{Modifier::Ctrl | Modifier::Alt | Modifier::Shift, key};
+        if (key == Key::None || rig.index.single(reading).empty()) {
+            continue;
+        }
+        rig.resetKeyboard();
+        const Step step = chordOf(rig, {Code::AltRight, Code::ShiftLeft}, code);
+        EXPECT_EQ(step.keyResult.outcome, MatchOutcome::Fire) << "AltGr+Shift+" << codeName(code);
+        EXPECT_TRUE(contains(rig.index.single(reading), step.keyResult.action)) << codeName(code);
+        ++firedShift;
+    }
+    EXPECT_GT(firedShift, 0U);
+    if (layoutId() == SimulatedLayoutId::DeDe) {
+        ASSERT_EQ(truth().levels(Code::KeyL).altGrShift, 0U);
+        rig.resetKeyboard();
+        EXPECT_EQ(chordOf(rig, {Code::AltRight, Code::ShiftLeft}, Code::KeyL).fired, "code.reformatFile")
+            << "not code.reformat: Shift stays";
+    }
+    // AltGr+Meta keeps Meta: Ctrl+Alt+Meta.
+    rig.resetKeyboard();
+    const Step meta = chordOf(rig, {Code::AltRight, Code::MetaLeft}, Code::F7);
+    EXPECT_TRUE(meta.keyEvent.altGr);
+    EXPECT_EQ(strokeFromEvent(meta.keyEvent, *rig.table),
+              (Stroke{Modifier::Ctrl | Modifier::Alt | Modifier::Meta, Key::F7}));
 }
 
 // (e) Every single-stroke binding fires from the physical key the product maps to its
@@ -295,7 +327,7 @@ TEST_P(ShortcutLayouts, EveryBindingReachableOrListed) {
                 continue;
             }
             const Stroke stroke = s.first();
-            const auto code = test::physicalCodeFor(stroke.key, truth(), platform());
+            const auto code = test::physicalCodeFor(stroke.key, truth(), platform(), stroke.mods.has(Modifier::Shift));
             if (!code) {
                 unreachable.push_back(formatSequence(s));
                 continue;
@@ -365,8 +397,20 @@ TEST_P(ShortcutLayouts, NamedExamples) {
         const Step m = rig.stroke(ctrl, Code::KeyM);
         rig.resetKeyboard();
         const Step comma = rig.stroke(ctrl, Code::Comma);
-        EXPECT_EQ(strokeFromEvent(m.keyEvent, *rig.table), (Stroke{ctrl, windows() ? Key::Comma : Key::M}));
+        // KeyM types ',' ('?' with Shift): it is Comma on both platforms (on Linux through the
+        // ',' hint), and never the letter M, which is the key typing 'm' (Semicolon).
+        EXPECT_EQ(strokeFromEvent(m.keyEvent, *rig.table), (Stroke{ctrl, Key::Comma}));
         EXPECT_EQ(strokeFromEvent(comma.keyEvent, *rig.table), (Stroke{ctrl, windows() ? Key::Semicolon : Key::Comma}));
+        const Modifiers ctrlAlt = Modifier::Ctrl | Modifier::Alt;
+        EXPECT_EQ(fire(rig, ctrlAlt, Code::KeyM), "") << "Ctrl+Alt+',' is not Ctrl+Alt+M";
+        EXPECT_EQ(fire(rig, ctrlShift, Code::KeyM), "") << "Ctrl+Shift+'?' is not Ctrl+Shift+M";
+        EXPECT_EQ(fire(rig, ctrlAlt, Code::Semicolon), "refactor.extractMethod");
+        EXPECT_EQ(fire(rig, ctrlShift, Code::Semicolon), "navigate.matchingBrace");
+        rig.resetKeyboard();
+        const Step question = rig.stroke(ctrlShift, Code::KeyM);
+        EXPECT_EQ(strokeFromEvent(question.keyEvent, *rig.table),
+                  windows() ? std::optional<Stroke>(Stroke{ctrlShift, Key::Comma}) : std::nullopt)
+            << "Linux sees only the Shift level's '?', which names no key";
         break;
     }
     case SimulatedLayoutId::PlPl: {

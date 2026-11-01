@@ -1,4 +1,4 @@
-# linuxM1Layout() (LettersByLabel) with the keyCharHint each truth table's base letter gives. Consistency golden.
+# linuxM1Layout() (LettersByLabel) with the keyCharHint SimulatedKeyboard gives for each truth table, without and with Shift. Consistency golden.
 truth en-US
   KeyA          -> A
   KeyB          -> B
@@ -165,7 +165,7 @@ truth fr-FR
   KeyJ          -> J
   KeyK          -> K
   KeyL          -> L
-  KeyM          -> M
+  KeyM          -> Comma, Shift -> None
   KeyN          -> N
   KeyO          -> O
   KeyP          -> P

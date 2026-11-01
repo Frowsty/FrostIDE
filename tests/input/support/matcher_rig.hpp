@@ -45,11 +45,14 @@ struct Step {
 [[nodiscard]] KeymapPlatform keymapPlatformFor(KeyPlatform platform) noexcept;
 // The table the product's matcher sees on `platform`: `truth` on Windows, linuxM1Layout() elsewhere.
 [[nodiscard]] const LayoutTable& productTable(const LayoutTable& truth, KeyPlatform platform) noexcept;
-// The keyCharHint SimulatedKeyboard reports for `code` without AltGr.
-[[nodiscard]] char32_t simulatedHint(const LayoutTable& truth, KeyPlatform platform, Code code) noexcept;
+// The keyCharHint SimulatedKeyboard reports for `code` without AltGr, with Shift held or not.
+[[nodiscard]] char32_t simulatedHint(const LayoutTable& truth, KeyPlatform platform, Code code,
+                                     bool shift = false) noexcept;
 // The first code (in Code order, modifiers and locks excluded) whose press the product
-// table maps to `key`, with the simulator's hint; nullopt when the key is unreachable.
-[[nodiscard]] std::optional<Code> physicalCodeFor(Key key, const LayoutTable& truth, KeyPlatform platform);
+// table maps to `key`, with the simulator's hint for that Shift state; nullopt when the
+// key is unreachable.
+[[nodiscard]] std::optional<Code> physicalCodeFor(Key key, const LayoutTable& truth, KeyPlatform platform,
+                                                  bool shift = false);
 // The left modifier keys of a modifier set, in the order Ctrl, Alt, Shift, Meta.
 [[nodiscard]] std::vector<Code> modifierCodes(Modifiers mods);
 

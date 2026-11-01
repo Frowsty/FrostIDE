@@ -284,11 +284,11 @@ enum class SyntaxMode : std::uint8_t { Strict, Lenient };
  * spaces separate tokens; a separator character at the start of a stroke, at the end, or
  * directly after another separator is the key itself ("ctrl+-", "ctrl--", "ctrl++");
  * strokes are separated by a comma that follows a key ("ctrl+k, ctrl+c", "ctrl+k,c").
- * Aliases: Control->Ctrl; Cmd, Command, Win, Super->Meta; Option->Alt; Esc, Return, Del,
- * Ins, PgUp, PgDn; "num /", "num+", "num-", "num*", "num." and "num 0".."num 9" for the
- * numpad; "comma" and "plus". Single characters a-z, 0-9, ` - = [ ] \ ; ' , . / name their
- * US key; '+' and "plus" mean Equal (on US, '+' is on the '=' key). Lenient accepts
- * typing keys without modifiers ("a" parses).
+ * Aliases: Control->Ctrl; Cmd, Command, Win, Super->Meta; Option, Opt->Alt; Esc, Return,
+ * Del, Ins, PgUp, PgDn, PgDown, Menu (ContextMenu); "num /", "num+", "num-", "num*",
+ * "num." and "num 0".."num 9" for the numpad; "comma", "dot" (Period) and "plus". Single
+ * characters a-z, 0-9, ` - = [ ] \ ; ' , . / name their US key; '+' and "plus" mean Equal
+ * (on US, '+' is on the '=' key). Lenient accepts typing keys without modifiers ("a" parses).
  *
  * Errors: InvalidArgument with the message "column N: <reason>" (N 1-based, in bytes).
  * O(n) in the length of `text`; allocates only for the error message.

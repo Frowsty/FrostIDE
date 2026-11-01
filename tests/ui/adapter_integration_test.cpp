@@ -4,7 +4,8 @@
 // KeymapService with the built-in IntelliJ keymap, as the shell's event filter will run
 // them (offscreen; no window, no OS input). Covers the M1 exit cases end to end: a Polish
 // Ctrl+Alt chord fires, German AltGr text passes through, IME composition blocks the
-// double-Shift gesture, and a QTest-style event without a scan code still fires.
+// double-Shift gesture, a QTest-style event without a scan code still fires, and on Linux
+// (the product's LettersByLabel table) the French ',' key is not the letter M.
 
 #include "frost/core/clock.hpp"
 #include "frost/input/action.hpp"
@@ -21,6 +22,7 @@
 #include <QString>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -34,8 +36,8 @@ using input::KeyEvent;
 using input::KeyPlatform;
 using input::MatchOutcome;
 using input::MatchResult;
-using input::PlatformVk;
 using input::SimulatedLayoutId;
+namespace native = windows_native;
 
 // The registry of every action the built-in keymap names, enabled everywhere.
 void registerIntelliJActions(input::ActionRegistry& registry) {
@@ -58,11 +60,15 @@ void registerIntelliJActions(input::ActionRegistry& registry) {
 
 class AdapterIntegration : public ::testing::Test {
 protected:
+    // The product's set-up for `platform`: on Windows the active layout's full table (here
+    // the simulated one) and the Windows keymap; on X11 linuxM1Layout() and the Linux keymap.
     void start(KeyPlatform platform, SimulatedLayoutId layout) {
         registerIntelliJActions(m_registry);
         m_platform = platform;
-        m_layout = &input::simulatedLayout(layout);
-        auto service = input::KeymapService::create(m_registry, m_settings, input::KeymapPlatform::Windows, *m_layout);
+        const bool windows = platform == KeyPlatform::Windows;
+        m_layout = windows ? &input::simulatedLayout(layout) : &input::linuxM1Layout();
+        auto service = input::KeymapService::create(
+            m_registry, m_settings, windows ? input::KeymapPlatform::Windows : input::KeymapPlatform::Linux, *m_layout);
         ASSERT_TRUE(service.has_value());
         m_service.emplace(std::move(*service));
     }
@@ -78,13 +84,14 @@ protected:
         if (type != QEvent::KeyPress && type != QEvent::KeyRelease && type != QEvent::ShortcutOverride) {
             return std::nullopt;
         }
-        const KeyEvent translated = translateKeyEvent(
-            static_cast<const QKeyEvent&>(event), KeyTranslationContext{m_platform, *m_layout, m_keys, m_ime, m_clock});
+        const KeyEvent translated = translateKeyEvent(static_cast<const QKeyEvent&>(event),
+                                                      KeyTranslationContext{m_platform, *m_layout, m_ime, m_clock});
         return m_service->handle(translated, m_context);
     }
+    // A key event with the native modifiers Qt captured for it (windows_native bits on Windows).
     MatchResult key(QEvent::Type type, int qtKey, Qt::KeyboardModifiers mods, std::uint32_t scan,
-                    const QString& text = {}) {
-        return *deliver(QKeyEvent(type, qtKey, mods, scan, 0, 0, text));
+                    std::uint32_t nativeMods = 0, const QString& text = {}) {
+        return *deliver(QKeyEvent(type, qtKey, mods, scan, 0, nativeMods, text));
     }
     [[nodiscard]] std::string fired(const MatchResult& result) const {
         return result.outcome == MatchOutcome::Fire ? m_registry.info(result.action).id : std::string();
@@ -93,7 +100,6 @@ protected:
     input::ActionRegistry m_registry;
     input::MemoryKeymapSettings m_settings;
     ManualClock m_clock;
-    input::ScriptedKeyStateProbe m_keys;
     ImeTracker m_ime;
     KeyPlatform m_platform = KeyPlatform::Windows;
     const input::LayoutTable* m_layout = nullptr;
@@ -107,31 +113,26 @@ constexpr auto kRelease = QEvent::KeyRelease;
 TEST_F(AdapterIntegration, PolishCtrlAltLFires) {
     start(KeyPlatform::Windows, SimulatedLayoutId::PlPl);
     const Qt::KeyboardModifiers ctrlAlt = Qt::ControlModifier | Qt::AltModifier;
-    m_keys.set(PlatformVk::LeftCtrl, true);
-    EXPECT_EQ(key(kPress, Qt::Key_Control, Qt::ControlModifier, 0x1D).outcome, MatchOutcome::PassThrough);
-    m_keys.set(PlatformVk::LeftAlt, true);
-    EXPECT_EQ(key(kPress, Qt::Key_Alt, ctrlAlt, 0x38).outcome, MatchOutcome::PassThrough);
-    EXPECT_EQ(fired(key(kPress, Qt::Key_L, ctrlAlt, 0x26)), "code.reformat");
-    EXPECT_EQ(key(kRelease, Qt::Key_L, ctrlAlt, 0x26).outcome, MatchOutcome::PassThrough);
+    const std::uint32_t chord = native::kControlLeft | native::kAltLeft;
+    EXPECT_EQ(key(kPress, Qt::Key_Control, Qt::ControlModifier, 0x1D, native::kControlLeft).outcome,
+              MatchOutcome::PassThrough);
+    EXPECT_EQ(key(kPress, Qt::Key_Alt, ctrlAlt, 0x38, chord).outcome, MatchOutcome::PassThrough);
+    EXPECT_EQ(fired(key(kPress, Qt::Key_L, ctrlAlt, 0x26, chord)), "code.reformat");
+    EXPECT_EQ(key(kRelease, Qt::Key_L, ctrlAlt, 0x26, chord).outcome, MatchOutcome::PassThrough);
 
     // AltGr+L on the same layout types 'ł' instead.
-    m_keys.clear();
-    m_keys.set(PlatformVk::RightAlt, true);
-    m_keys.set(PlatformVk::LeftCtrl, true);
-    const MatchResult altGr = key(kPress, 0x0141, ctrlAlt, 0x26, QString::fromUtf8("\xC5\x82"));
+    const MatchResult altGr = key(kPress, 0x0141, ctrlAlt, 0x26, native::kAltGr, QString::fromUtf8("\xC5\x82"));
     EXPECT_EQ(altGr.outcome, MatchOutcome::PassThrough);
 }
 
 TEST_F(AdapterIntegration, GermanAltGrQPassesThrough) {
     start(KeyPlatform::Windows, SimulatedLayoutId::DeDe);
-    m_keys.set(PlatformVk::RightAlt, true);
-    m_keys.set(PlatformVk::LeftCtrl, true);
     const Qt::KeyboardModifiers ctrlAlt = Qt::ControlModifier | Qt::AltModifier;
-    EXPECT_EQ(key(kPress, Qt::Key_Control, Qt::ControlModifier, 0x1D).outcome, MatchOutcome::PassThrough);
-    EXPECT_EQ(key(kPress, Qt::Key_AltGr, ctrlAlt, 0x138).outcome, MatchOutcome::PassThrough);
-    QKeyEvent at(kPress, Qt::Key_At, ctrlAlt, 0x10, 0, 0, QStringLiteral("@"));
-    const KeyEvent translated =
-        translateKeyEvent(at, KeyTranslationContext{m_platform, *m_layout, m_keys, m_ime, m_clock});
+    EXPECT_EQ(key(kPress, Qt::Key_Control, Qt::ControlModifier, 0x1D, native::kControlLeft).outcome,
+              MatchOutcome::PassThrough);
+    EXPECT_EQ(key(kPress, Qt::Key_AltGr, ctrlAlt, 0x138, native::kAltGr).outcome, MatchOutcome::PassThrough);
+    QKeyEvent at(kPress, Qt::Key_At, ctrlAlt, 0x10, 0, native::kAltGr, QStringLiteral("@"));
+    const KeyEvent translated = translateKeyEvent(at, KeyTranslationContext{m_platform, *m_layout, m_ime, m_clock});
     EXPECT_EQ(input::typedText(translated, m_platform), U"@");
     EXPECT_EQ(deliver(at)->outcome, MatchOutcome::PassThrough);
 }
@@ -140,7 +141,7 @@ TEST_F(AdapterIntegration, ImeCompositionBlocksDoubleShift) {
     start(KeyPlatform::Windows, SimulatedLayoutId::EnUs);
     const auto shiftTap = [&] {
         MatchResult last;
-        last = key(kPress, Qt::Key_Shift, Qt::ShiftModifier, 0x2A);
+        last = key(kPress, Qt::Key_Shift, Qt::ShiftModifier, 0x2A, native::kShiftLeft);
         last = key(kRelease, Qt::Key_Shift, Qt::NoModifier, 0x2A);
         return last;
     };
@@ -169,6 +170,9 @@ TEST_F(AdapterIntegration, QTestStyleEventWithoutScanCodeFires) {
     // The same through ShortcutOverride, which the shell sees first.
     const MatchResult override = *deliver(QKeyEvent(QEvent::ShortcutOverride, Qt::Key_S, Qt::ControlModifier));
     EXPECT_EQ(fired(override), "file.saveAll");
+    // Synthesized Ctrl+Alt carries no per-side bits, so it is Ctrl+Alt even on an AltGr layout.
+    const MatchResult ctrlAlt = *deliver(QKeyEvent(kPress, Qt::Key_L, Qt::ControlModifier | Qt::AltModifier));
+    EXPECT_EQ(fired(ctrlAlt), "code.reformat");
 }
 
 TEST_F(AdapterIntegration, X11CtrlAltLFiresOnPolish) {
@@ -177,9 +181,25 @@ TEST_F(AdapterIntegration, X11CtrlAltLFiresOnPolish) {
     const std::uint32_t l = input::evdevFor(Code::KeyL) + 8U;
     EXPECT_EQ(fired(key(kPress, Qt::Key_L, ctrlAlt, l)), "code.reformat");
     // X11 AltGr (Mod5) + L types 'ł'.
-    const MatchResult altGr =
-        *deliver(QKeyEvent(kPress, 0x0142, Qt::NoModifier, l, 0, 0x80, QString::fromUtf8("\xC5\x82")));
+    const MatchResult altGr = key(kPress, 0x0142, Qt::NoModifier, l, 0x80, QString::fromUtf8("\xC5\x82"));
     EXPECT_EQ(altGr.outcome, MatchOutcome::PassThrough);
+}
+
+// French AZERTY on Linux: the key typing ',' (code KeyM; Qt reports Key_Comma) is Comma,
+// and the key typing 'm' (code Semicolon) is M, so Ctrl+Alt+',' is not Extract Method and
+// Ctrl+Shift+'?' is not Matching Brace.
+TEST_F(AdapterIntegration, X11FrenchCommaKeyIsNotTheLetterM) {
+    start(KeyPlatform::X11, SimulatedLayoutId::FrFr);
+    const Qt::KeyboardModifiers ctrlAlt = Qt::ControlModifier | Qt::AltModifier;
+    const Qt::KeyboardModifiers ctrlShift = Qt::ControlModifier | Qt::ShiftModifier;
+    const std::uint32_t commaKey = input::evdevFor(Code::KeyM) + 8U;
+    const std::uint32_t mKey = input::evdevFor(Code::Semicolon) + 8U;
+    EXPECT_EQ(fired(key(kPress, Qt::Key_Comma, ctrlAlt, commaKey)), "");
+    EXPECT_EQ(fired(key(kPress, Qt::Key_M, ctrlAlt, mKey)), "refactor.extractMethod");
+    EXPECT_EQ(fired(key(kPress, Qt::Key_Question, ctrlShift, commaKey)), "");
+    EXPECT_EQ(fired(key(kPress, Qt::Key_M, ctrlShift, mKey)), "navigate.matchingBrace");
+    // AZERTY letters follow their labels: the key typing 'a' (code KeyQ) is A.
+    EXPECT_EQ(fired(key(kPress, Qt::Key_A, ctrlShift, input::evdevFor(Code::KeyQ) + 8U)), "search.findAction");
 }
 
 } // namespace

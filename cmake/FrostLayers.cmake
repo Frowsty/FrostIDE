@@ -36,6 +36,7 @@ set(FROST_LAYER_RANK_io 3)
 set(FROST_LAYER_RANK_text 4)
 set(FROST_LAYER_RANK_storage 4)
 set(FROST_LAYER_RANK_rpc 4)
+# input (src/input, frost::input): not in PLAN.md section 3.2 yet; ADR 0016 decision 1 records it.
 set(FROST_LAYER_RANK_input 4)
 set(FROST_LAYER_RANK_syntax 5)
 set(FROST_LAYER_RANK_settings 5)

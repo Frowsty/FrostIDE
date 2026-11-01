@@ -57,6 +57,35 @@ TEST(InputPerf, KeymapAndIndexBuild) {
     report("keymap_and_index_build_ms", medianOf(samples), 1.0, "ms"); // Budget: B1.
 }
 
+// An imported keymap is untrusted input (row 227): 80,000 bindings in descending id order
+// must parse in about the time ascending ones take (a sorted-vector duplicate check made
+// this 63 times slower). Reported as the descending/ascending ratio.
+TEST(InputPerf, KeymapParseDescendingIds) {
+    constexpr int kCount = 80'000;
+    const auto keymapText = [&](bool descending) {
+        std::string text = "frost-keymap 1\nid x\nname X\n[default]\n";
+        for (int i = 0; i < kCount; ++i) {
+            text += std::format("a.x{:05} =\n", descending ? kCount - i : i + 1);
+        }
+        return text;
+    };
+    const auto timeParse = [](const std::string& text) {
+        std::vector<double> samples;
+        for (int i = 0; i < 5; ++i) {
+            const auto start = Clock::now();
+            const auto keymap = parseKeymap(text);
+            samples.push_back(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+            EXPECT_TRUE(keymap.has_value());
+        }
+        return medianOf(samples);
+    };
+    const double ascending = timeParse(keymapText(false));
+    const double descending = timeParse(keymapText(true));
+    std::cout << std::format("[ perf ] keymap parse of {} bindings: ascending {:.1f} ms, descending {:.1f} ms\n",
+                             kCount, ascending, descending);
+    report("keymap_parse_descending_over_ascending", descending / ascending, 3.0, "x");
+}
+
 TEST(InputPerf, MatcherFeed) {
     ActionRegistry registry;
     const Keymap keymap = test::intellij();

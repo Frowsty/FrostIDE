@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The Win32 active-layout reader and key-state probe (layout.hpp; ADR 0016 decision 12).
+// The Win32 active-layout reader (layout.hpp; ADR 0016 decision 12).
 /*
- * This file only queries: it reads the calling thread's current keyboard layout and key
- * state, and never changes the user's input configuration (no layout is selected, loaded
+ * This file only queries: it reads the calling thread's current keyboard layout, and
+ * never changes the user's input configuration (no layout is selected, loaded
  * or removed, and no input is generated). ToUnicodeEx runs with flag 0x4 ("do not change
  * keyboard state", Windows 10 1607 and later), so a dead key the user has pending is
  * neither consumed nor disturbed. Wide APIs only.
@@ -127,17 +127,6 @@ Result<LayoutTable> readActiveLayout() {
                                                                       : std::format("{:08X}", language);
     const Win32LayoutQuery query(layout, std::move(locale), std::move(klid));
     return buildLayoutTable(query);
-}
-
-bool Win32KeyStateProbe::isDown(PlatformVk key) const noexcept {
-    int vk = VK_LMENU;
-    switch (key) {
-    case PlatformVk::LeftAlt: vk = VK_LMENU; break;
-    case PlatformVk::RightAlt: vk = VK_RMENU; break;
-    case PlatformVk::LeftCtrl: vk = VK_LCONTROL; break;
-    case PlatformVk::RightCtrl: vk = VK_RCONTROL; break;
-    }
-    return (static_cast<unsigned short>(GetKeyState(vk)) & 0x8000U) != 0;
 }
 
 } // namespace frost::input

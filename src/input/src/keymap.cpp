@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -105,8 +106,25 @@ Result<Keymap> parseKeymap(std::string_view text) {
     bool haveId = false;
     bool haveName = false;
     int section = -1;
-    // Per section, the action ids seen so far (sorted), for duplicate detection.
-    std::array<std::vector<std::string_view>, 4> seenActions;
+    // Per section, the action ids seen so far, for duplicate detection: O(log B) per line,
+    // so a hostile file (ids in descending order) cannot make the check quadratic.
+    std::array<std::set<std::string_view>, 4> seenActions;
+    /*
+     * The size formatKeymap() will give the keymap, kept within kMaxKeymapBytes so that
+     * parseKeymap(formatKeymap(k)) == k holds for every parsed k: the canonical form adds
+     * " = " and " | " spacing a compact file may omit. Canonical lines stay within
+     * kMaxLineBytes because ids are at most 64 bytes and an action has at most
+     * kMaxSequencesPerBinding sequences (KeymapFormat.CanonicalLinesFitTheLineLimit).
+     */
+    std::size_t canonicalBytes = 0;
+    const auto addCanonical = [&](std::size_t bytes) {
+        canonicalBytes += bytes;
+        return canonicalBytes <= kMaxKeymapBytes;
+    };
+    const auto canonicalTooLarge = [&] {
+        return fail(ErrorCode::OutOfRange,
+                    std::format("keymap's canonical form is over 1 MiB (input {} bytes)", text.size()));
+    };
 
     std::size_t lineNumber = 0;
     std::size_t start = 0;
@@ -152,6 +170,7 @@ Result<Keymap> parseKeymap(std::string_view text) {
         if (!haveHeader) {
             if (line == "frost-keymap 1") {
                 haveHeader = true;
+                static_cast<void>(addCanonical(std::string_view("frost-keymap 1\n").size()));
                 continue;
             }
             const std::string_view version = line.starts_with("frost-keymap ") ? line.substr(13) : std::string_view();
@@ -189,6 +208,7 @@ Result<Keymap> parseKeymap(std::string_view text) {
                 }
                 keymap.m_id = std::string(value);
                 haveId = true;
+                static_cast<void>(addCanonical(3 + value.size() + 1)); // "id <value>\n"
             } else {
                 if (haveName) {
                     return corrupt(lineNumber, 1, "duplicate name directive");
@@ -198,6 +218,7 @@ Result<Keymap> parseKeymap(std::string_view text) {
                 }
                 keymap.m_name = std::string(value);
                 haveName = true;
+                static_cast<void>(addCanonical(5 + value.size() + 1)); // "name <value>\n"
             }
             continue;
         }
@@ -221,6 +242,9 @@ Result<Keymap> parseKeymap(std::string_view text) {
             }
             keymap.m_present[index] = true;
             section = static_cast<int>(index);
+            if (!addCanonical(2 + name.size() + 2)) { // "\n[<name>]\n"
+                return canonicalTooLarge();
+            }
             continue;
         }
 
@@ -247,15 +271,13 @@ Result<Keymap> parseKeymap(std::string_view text) {
             return corrupt(lineNumber, pos + 1, "expected '='");
         }
         ++pos;
-        auto& seen = seenActions[static_cast<std::size_t>(section)];
-        const auto seenAt = std::ranges::lower_bound(seen, actionId);
-        if (seenAt != seen.end() && *seenAt == actionId) {
+        if (!seenActions[static_cast<std::size_t>(section)].insert(actionId).second) {
             return corrupt(lineNumber, 1, std::format("action '{}' appears twice in this section", actionId));
         }
-        seen.insert(seenAt, actionId);
 
         Binding binding;
         binding.actionId = std::string(actionId);
+        std::size_t canonicalLine = actionId.size() + 3; // "<id> =" and the line end.
         while (pos < line.size() && isBlank(line[pos])) {
             ++pos;
         }
@@ -271,6 +293,10 @@ Result<Keymap> parseKeymap(std::string_view text) {
                 if (piece.empty()) {
                     return corrupt(lineNumber, pieceStart + 1, "empty sequence");
                 }
+                if (binding.sequences.size() == kMaxSequencesPerBinding) {
+                    return corrupt(lineNumber, pieceStart + 1,
+                                   std::format("more than {} sequences for one action", kMaxSequencesPerBinding));
+                }
                 auto sequence = parseSequence(piece, SyntaxMode::Strict);
                 if (!sequence) {
                     return corrupt(lineNumber, pieceStart + 1, sequence.error().message());
@@ -278,12 +304,17 @@ Result<Keymap> parseKeymap(std::string_view text) {
                 if (std::ranges::find(binding.sequences, *sequence) != binding.sequences.end()) {
                     return corrupt(lineNumber, pieceStart + 1, std::format("duplicate sequence '{}'", piece));
                 }
+                // Strict text is canonical, so the piece is what formatKeymap() writes.
+                canonicalLine += (binding.sequences.empty() ? 1 : 3) + piece.size();
                 binding.sequences.push_back(*sequence);
                 if (bar == std::string_view::npos) {
                     break;
                 }
                 pos = bar + 1;
             }
+        }
+        if (!addCanonical(canonicalLine)) {
+            return canonicalTooLarge();
         }
         keymap.m_sections[static_cast<std::size_t>(section)].push_back(std::move(binding));
     }

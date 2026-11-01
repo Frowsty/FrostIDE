@@ -10,10 +10,34 @@
 #include "frost/input/layout.hpp"
 #include "frost/ui/ime_tracker.hpp"
 
+#include <cstdint>
+
 class QKeyEvent;
 class QString;
 
 namespace frost::ui {
+
+/*
+ * The per-side modifier bits of QKeyEvent::nativeModifiers() under Qt's "windows" platform
+ * plugin. Qt reads them from the thread's key state while it processes the key message,
+ * so they describe that message even when Qt delivers the QKeyEvent later, after the
+ * dispatcher has already retrieved later key messages (GetKeyState at delivery time can
+ * already show a later release). Qt does not document the values; they were observed with
+ * Qt 6.12 (ADR 0016 decision 4) and NativeKeyDelivery pins them on a real, never-shown
+ * window. Synthesized events (QTest, the automation endpoint) carry 0.
+ */
+namespace windows_native {
+inline constexpr std::uint32_t kShiftLeft = 0x01;
+inline constexpr std::uint32_t kControlLeft = 0x02;
+inline constexpr std::uint32_t kAltLeft = 0x04;
+inline constexpr std::uint32_t kMetaLeft = 0x08;
+inline constexpr std::uint32_t kShiftRight = 0x10;
+inline constexpr std::uint32_t kControlRight = 0x20;
+inline constexpr std::uint32_t kAltRight = 0x40;
+inline constexpr std::uint32_t kMetaRight = 0x80;
+// AltGr as Windows reports it: right Alt plus the fake left Ctrl it generates.
+inline constexpr std::uint32_t kAltGr = kControlLeft | kAltRight;
+} // namespace windows_native
 
 // The key semantics of the platform plugin named `name`: "windows" is Windows, "xcb"
 // X11, any name starting with "wayland" Wayland; "offscreen", "minimal" and others give
@@ -26,7 +50,6 @@ namespace frost::ui {
 struct KeyTranslationContext {
     input::KeyPlatform platform;
     const input::LayoutTable& layout;
-    const input::IKeyStateProbe& keyState;
     const ImeTracker& ime;
     const IClock& clock;
 };
@@ -45,9 +68,12 @@ struct KeyTranslationContext {
  *     and cleared on its release (the AltGr refinement below then applies, so a Windows
  *     AltGr press reports altGr without Alt).
  *   - altGr (Windows): Qt::GroupSwitchModifier (the windows:altgr platform option), or Ctrl
- *     and Alt both reported while keyState says RightAlt is down on a layout with AltGr;
- *     in that second case (also with GroupSwitchModifier) Alt becomes LeftAlt's state and
- *     Ctrl RightCtrl's (LeftCtrl is AltGr's fake Ctrl).
+ *     and Alt both reported while the event's nativeModifiers() hold windows_native::
+ *     kAltRight and a Ctrl bit on a layout with AltGr; in that second case (also with
+ *     GroupSwitchModifier) Alt becomes kAltLeft's state and Ctrl kControlRight's
+ *     (kControlLeft is AltGr's fake Ctrl). The live key state (GetKeyState) is never read:
+ *     it may already belong to a later message. An event without per-side bits (QTest,
+ *     the automation endpoint) keeps Ctrl+Alt as reported.
  *     X11 and Wayland: GroupSwitchModifier, or on X11 Mod5 in the native modifiers (the
  *     usual ISO_Level3_Shift mapping); best effort.
  *   - imeComposing: ime.composing(), or on Windows the VK_PROCESSKEY virtual key.
@@ -55,8 +81,9 @@ struct KeyTranslationContext {
  *   - deadKey: Windows reads the layout table first (no text and the dead bit of the level
  *     Shift and AltGr or Ctrl+Alt select), then Qt::Key_Dead_*; X11 and Wayland use
  *     Qt::Key_Dead_* only. A dead press carries no text.
- *   - text: QKeyEvent::text(), at most two code points; keyCharHint: the a-z letter of
- *     Key_A..Key_Z on X11 and Wayland, 0 on Windows.
+ *   - text: QKeyEvent::text(), at most two code points; keyCharHint: on X11 and Wayland the
+ *     printable ASCII character of the Qt::Key (0x21..0x7E), Key_A..Key_Z as a-z; 0 for
+ *     other keys and on Windows.
  *   - time: clock.steadyNow(); osTimeMs: the Qt timestamp (32-bit OS milliseconds).
  * noexcept, no allocation. Budget: B5.
  */
