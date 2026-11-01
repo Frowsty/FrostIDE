@@ -347,12 +347,27 @@ present. WSL2 Ubuntu 24.04.5, kernel 6.18.54.1, a 6 GB VM with 24 vCPUs, ext4.
 **Method.**
 - vcpkg ran in classic mode outside the repository with `VCPKG_MAX_CONCURRENCY=4` and `--binarysource=clear`,
   using the repository triplets plus that pass's item 5 block (**nf** in the first two passes; **nc** and
-  **ns** in the second fix round). Build trees were in the session scratchpad on Windows and in
-  `~/frost-tracy-spike` (`~/frost-tracy-spike2` for the second fix round) on ext4 in WSL.
+  **ns** in the second fix round). Build trees were in a temporary session directory on Windows and in
+  `~/frost-tracy-spike` (`~/frost-tracy-spike2` for the second fix round) on ext4 in WSL. They are not part
+  of the record; the last bullet says where the raw data is kept.
 - Consumers were built with the repository toolchain files and `FrostCompilerOptions.cmake`. Timings come from
   Release builds (/O2, -O3).
 - In the first two passes, "default" means `tracy[core,on-demand]` with the **nf** options, and "fibers" adds
   `fibers`.
+- The raw data is kept outside the repository in `E:\FrostBuilds\perf\m0\tracy\`. Its `README.txt` maps
+  each directory, and each group of logs in it, to the section it backs:
+  - `first-pass\` holds the first pass's logs, the Tracy port's own build logs (`port-build-logs\`, the
+    source of the first four rows of the "Warnings" table), the scripts and probe sources, and the 42 saved traces;
+  - `rework-pass\` holds the "Task zones" runs and their conditions, the **nf** warning checks of our consumers,
+    the override check, and the 40 connected captures;
+  - `second-fix-round\` holds the symbol-probe and task-probe runs (`logs\win-measure.log`,
+    `logs\wsl-measure-lock2.log`, `logs\wsl-measure-lock1.log`), the lock records, the **nc** and **ns**
+    build, warning and import logs, the scripts with `symprobe.cpp`, and the 33 connected captures;
+  - `third-fix-round\` holds the script that recomputed the third fix round's figures;
+  - `verify-1\` to `verify-3\` hold the independent verifiers' re-runs and recompute scripts.
+
+  Three csvexport dumps of first-pass traces (18–64 MiB each) were not kept; csvexport 0.14.1 regenerates
+  them from the saved traces.
 
 **Load.** First pass (2026-10-31): `lghub_agent` held 43.3 GB of private memory, and other agents were building.
 Commit headroom was 1.4–3.4 GB during the Windows runs. Treat the numbers as upper bounds. The rework pass
@@ -482,7 +497,8 @@ over mirrored loopback, so the WSL rows also measure that path.
 - **Why csvexport shows fewer empty zones.** Without the spin, csvexport counts 0–10% fewer zones than were
   captured, because the server's statistics skip zero-length zones: 2.4–2.9% (Windows default), 1.3–1.7%
   (Windows fibers), 7.6–9.7% (WSL default) and 0% (WSL fibers). Zone durations cluster at about 10 ns steps on
-  this machine, with some 1, 9 and 19 ns values (duration histogram in the raw logs).
+  this machine, with some 1, 9 and 19 ns values (duration histogram in the
+  raw data, `first-pass\logs\zone-duration-histogram.txt`; see Method).
 - **Why fibers cost so much.** The fibers cost is the serial queue. `TRACY_FIBERS` sends every zone event
   through `Profiler::QueueSerial()`, which takes `m_serialLock` (`std::shared_mutex` under `_MSC_VER`, otherwise
   `std::mutex`). The sender thread also polls that lock with `try_lock`. Windows shows little cost at one thread
@@ -523,11 +539,13 @@ because WSL clients can only be captured across the VM boundary here.
   under this pass's load; "Symbol worker and shutdown" shows what the shutdown time depends on.
 - **Conditions.** The `tracy` measurement lock was held from 01:33:44 to 01:35:15 on 2026-11-01. At its start:
   free commit 25.2 GB of 64.1 GB, free physical memory 9.8 GB, system CPU 36.6%, none of our builds running
-  (the `measure-begin` record is in the raw logs). The user's own processes were running and were left alone:
-  4 FrostEditor (each with a `FrostEditor.com` process), 2 FrostServices and 25 FrostRuntime processes from
-  `E:\r11`, Discord and Wallpaper Engine (the first version of this paragraph said "about 30" FrostRuntime
-  processes; the recorded list has 25). `lghub_agent` held 178 MB of private memory at this point, so the first pass's 43 GB
-  pressure was gone. The WSL VM had booted at 01:35 (load average 0.23–0.29, 4.0 GB of 5.9 GB free).
+  (raw data: `rework-pass\measure-begin.out` for the `measure-begin` record and
+  `rework-pass\conditions-processes.txt` for the process list). The user's own processes were
+  running and were left alone: 4 FrostEditor (each with a `FrostEditor.com` process), 2 FrostServices and 25
+  FrostRuntime processes from `E:\r11`, Discord and Wallpaper Engine (the first version of this paragraph said
+  "about 30" FrostRuntime processes; the recorded list has 25). `lghub_agent` held 178 MB of private memory at
+  this point, so the first pass's 43 GB pressure was gone. The WSL VM had booted at 01:35 (load average
+  0.23–0.29, 4.0 GB of 5.9 GB free).
 
 ### Symbol worker and shutdown (second fix round)
 The ShutdownProfiler figures above came from probes that load almost no DLLs and shut down about 30 ms after
@@ -585,9 +603,10 @@ zone), p50 (min–max):
 - **The symbol preload is what made the Windows figures large.** With **nf**, a shutdown soon after start
   waited for the preload: p50 64.5 ms with 24–25 modules, 151.1 ms with Qt's three DLLs loaded (51 modules),
   and 112.1 ms in the task probe, whose shutdown comes about 30 ms after start, sooner than the symbol probe's
-  (which first records the state). After 5 or 15 s the preload was done and **nf** fell to p50 41–50 ms. **nc** and **ns** took 32–64 ms in every Windows cell, whatever the
-  modules. A real FrostIDE process loads more than these three Qt DLLs (platform plugin, graphics stack), so
-  **nf** would wait longer than measured here; that was not measured.
+  (which first records the state). After 5 or 15 s the preload was done and **nf** fell to p50 41–50 ms.
+  **nc** and **ns** took 32–64 ms in every Windows cell, whatever the modules. A real FrostIDE process loads
+  more than these three Qt DLLs (platform plugin, graphics stack), so **nf** would wait longer than measured
+  here; that was not measured.
 - **WSL.** **nf** took about 60 ms soon after start (the libbacktrace setup and `/proc/kallsyms` read), and
   **nc** and **ns** 20.6 ms; after 5 s all three took 22–41 ms. Loading Qt made no difference, because
   libbacktrace loads nothing up front.

@@ -30,6 +30,11 @@ what is next, blockers and open questions for the user.
     `dbghelp.dll` or changes `_NT_SYMBOL_PATH`;
   - the first WSL hold of the lock (lock 1) is compared cell by cell with lock 2, including its outliers;
   - the cost of giving up call stacks and system tracing is stated, in the ADR and in question 1 below.
+- The raw data the ADR relies on now lives in `E:\FrostBuilds\perf\m0\tracy\` (254 MiB): the logs, scripts,
+  probe sources and captures of the three measurement passes, the third fix round's recompute script, and the
+  three verifiers' re-runs and recompute scripts. Its `README.txt` maps each directory to the ADR section it
+  backs, and the ADR's Method names it. Tracy's sources, the vcpkg and consumer build trees and the binaries
+  were not kept.
 - PLAN.md is unchanged on this branch. The previous round's edit of the Dependencies line was reverted: the
   wording is a question for the user, not a change made without approval.
 
