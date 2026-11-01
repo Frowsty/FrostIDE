@@ -64,13 +64,22 @@ directory where a file is → AlreadyExists).
   `fsync` of the directory on POSIX. On any failure the temp file is removed and the old content is intact.
   POSIX metadata: a new file is created with `open(O_CREAT, 0666)` and no `fchmod`, so the kernel applies
   the umask or, where the directory has one, its default ACL, as for a file any other program creates
-  there. A replaced file's temp file is created `0600` and, once its content is written, receives the
-  target's owner and group (`fchown`, which needs CAP_CHOWN for the owner and membership for the group)
-  and then its permission bits (`fchmod`, after `fchown` because that clears set-id bits). What cannot be
-  carried over fails safe: a different group drops the group bits and S_ISGID, a different owner drops
-  S_ISUID. POSIX ACLs and extended attributes are not carried over. Windows does not carry over
-  attributes, ACLs, alternate streams or hard links (the SaveManager owns that policy in M1). TODO(M1):
-  sweep stale temp files left by crashes.
+  there. A replaced file's temp file is created `0600` and, once its content is written, loses any access
+  ACL it inherited from the directory's default ACL (its named entries would otherwise read the target's
+  group bits as their mask), receives the target's owner and group (`fchown`, which needs CAP_CHOWN for
+  the owner and membership for the group), then its permission bits (`fchmod`, after `fchown` because
+  that clears set-id bits), and last the target's access ACL (`system.posix_acl_access`, after `fchmod`
+  because that rewrites the ACL mask) when owner and group were both kept. What cannot be carried over
+  fails safe, so no one gets more access than the target gave them (`replacementMode` in
+  `src/io/src/internal.hpp`, unit-tested on every platform): a different group drops S_ISGID and gives the
+  group and other classes only what both had (0664 becomes 0644, 0640 becomes 0600), since old members
+  become others and others may become members; a different owner drops S_ISUID and limits both classes to
+  the owner's bits; an ACL that is not copied, or whose copy fails, leaves both classes only what every
+  non-owner entry granted, because named entries may deny. Other extended attributes are not carried
+  over. A read-only target is replaced on POSIX (rename needs write access to the directory only) and
+  keeps its mode; Windows refuses it with PermissionDenied. Windows does not carry over attributes, ACLs,
+  alternate streams or hard links (the SaveManager owns that policy in M1). TODO(M1): sweep stale temp
+  files left by crashes.
 - `readFile` reads regular files only: FIFOs, sockets and devices fail with InvalidArgument without
   blocking (POSIX opens with `O_NONBLOCK | O_NOCTTY` and checks `fstat` before reading; Windows checks
   `GetFileType`). Sockets, which refuse `open` with ENXIO, are reported the same way rather than as
@@ -130,8 +139,14 @@ directory where a file is → AlreadyExists).
   `killOnClose`, a new session (`POSIX_SPAWN_SETSID`, glibc ≥ 2.26). The session's process group has the
   child's pid as its id, so `kill(-pid)` ends the tree, and it has no controlling terminal: a tool that
   opens `/dev/tty` for a prompt gets ENXIO and fails, where in a mere new process group it would be a
-  background job of the IDE's terminal and be stopped by SIGTTIN while `wait` blocks. An inherited
-  terminal stdin is therefore passed through unchanged. `wait` uses `waitid(WNOWAIT)` (with a pidfd where available) so the
+  background job of the IDE's terminal and be stopped by SIGTTIN while `wait` blocks. Being outside the
+  terminal's job control also means such a child could read an inherited terminal stdin while another job
+  is in the foreground (the shell, after `frost &`), splitting the user's keystrokes, a typed password
+  included, and change the terminal's modes without SIGTTOU. A contained child's inherited terminal stdin is
+  therefore replaced by `/dev/null`; terminal stdout and stderr are kept, and without `killOnClose` the
+  child shares the IDE's job control and gets the terminal. A launch-time check of the foreground
+  process group (`tcgetpgrp`) would not do: the user can background the IDE later, and the session child
+  would never notice. `wait` uses `waitid(WNOWAIT)` (with a pidfd where available) so the
   zombie is kept until the `IProcess` is destroyed and a later `kill` can never hit a recycled pid. Writes
   to a child that closed stdin block SIGPIPE for the calling thread and consume it, so a broken pipe is an
   error value, never a signal.

@@ -480,10 +480,19 @@ bool reachesChild(int fd) noexcept {
     return flags >= 0 && (flags & FD_CLOEXEC) == 0;
 }
 
-// What Stdio::Inherit means for standard descriptor `target` (see process.hpp): the
-// null device when this process has no inheritable descriptor there.
-Stdio effectiveMode(Stdio mode, int target) noexcept {
-    if (mode == Stdio::Inherit && !reachesChild(target)) {
+/*
+ * What Stdio::Inherit means for standard descriptor `target` (see process.hpp): the
+ * null device when this process has no inheritable descriptor there, and for a
+ * terminal stdin of a `contained` child. That child leads its own session, outside
+ * the terminal's job control, so it could read the terminal while another job (the
+ * shell that started a backgrounded IDE) is in the foreground, splitting the user's
+ * keystrokes, a typed password included. Terminal stdout and stderr are kept.
+ */
+Stdio effectiveMode(Stdio mode, int target, bool contained) noexcept {
+    if (mode != Stdio::Inherit) {
+        return mode;
+    }
+    if (!reachesChild(target) || (target == STDIN_FILENO && contained && ::isatty(target) == 1)) {
         return Stdio::Null;
     }
     return mode;
@@ -510,9 +519,9 @@ public:
             return std::unexpected(std::move(valid.error()));
         }
         // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.
-        const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO);
-        const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO);
-        const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO);
+        const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO, spec.killOnClose);
+        const Stdio stdoutMode = effectiveMode(spec.stdoutMode, STDOUT_FILENO, spec.killOnClose);
+        const Stdio stderrMode = effectiveMode(spec.stderrMode, STDERR_FILENO, spec.killOnClose);
         PipeEnds in;
         PipeEnds out;
         PipeEnds err;

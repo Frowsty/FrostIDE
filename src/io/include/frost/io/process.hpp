@@ -35,7 +35,8 @@
  * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; on POSIX it leads a new session, and so a
  * new process group, without a controlling terminal (opening /dev/tty fails
  * with ENXIO, so terminal prompts fail fast instead of stopping the child with
- * SIGTTIN). terminate() then ends the whole tree, and destroying the IProcess
+ * SIGTTIN; an inherited terminal stdin becomes the null device, see
+ * Stdio::Inherit). terminate() then ends the whole tree, and destroying the IProcess
  * ends whatever is still running in it. Without killOnClose only the child
  * itself is terminated, destroying the IProcess leaves it running, and on POSIX
  * it shares this process's session and terminal.
@@ -62,6 +63,10 @@ enum class Stdio : unsigned char {
     // The parent's handle, or the null device if the parent has none that a child could
     // inherit (a GUI process; on POSIX a closed descriptor, or one marked close-on-exec,
     // such as a descriptor frost::io itself opened in a slot the process had closed).
+    // POSIX with killOnClose: a terminal stdin is replaced by the null device too. The
+    // contained child's session is outside the terminal's job control, so it could read
+    // the terminal while the shell is in the foreground (after `frost &`, say) and take
+    // keystrokes meant for it. Terminal stdout and stderr are kept.
     Inherit,
     Null,            // The null device: reads see EOF, writes are discarded.
     Pipe,            // A pipe to the IProcess.

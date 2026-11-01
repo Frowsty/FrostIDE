@@ -9,10 +9,12 @@
 
 #include "internal.hpp"
 #include <sys/stat.h>
+#include <sys/xattr.h>
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -120,15 +122,59 @@ Result<UniqueFd> openForReading(const std::string& checked, std::string_view pat
     }
 }
 
+// The extended attribute that holds a file's POSIX access ACL (acl(5)).
+constexpr const char* kAccessAcl = "system.posix_acl_access";
+
+// Whether an xattr call's errno value means "no ACL here": none is set (ENODATA), or the
+// file system has no ACLs (EOPNOTSUPP, which is also ENOTSUP on Linux; ENOSYS for some FUSE).
+bool meansNoAcl(int error) noexcept { return error == ENODATA || error == EOPNOTSUPP || error == ENOSYS; }
+
+// Reads the access ACL of `path` (following symlinks, like stat) into `acl`: nullopt when
+// it has none. Returns 0 or an errno value.
+int readAccessAcl(const std::string& path, std::optional<std::string>& acl) {
+    acl.reset();
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const ssize_t size = ::getxattr(path.c_str(), kAccessAcl, nullptr, 0);
+        if (size <= 0) {
+            if (size == 0) {
+                acl.emplace(); // Malformed, so treated as granting non-owners nothing.
+                return 0;
+            }
+            return meansNoAcl(errno) ? 0 : errno;
+        }
+        std::string value(static_cast<std::size_t>(size), '\0');
+        const ssize_t got = ::getxattr(path.c_str(), kAccessAcl, value.data(), value.size());
+        if (got >= 0) {
+            value.resize(static_cast<std::size_t>(got));
+            acl = std::move(value);
+            return 0;
+        }
+        if (errno != ERANGE) { // ERANGE: the ACL grew between the two calls; ask again.
+            return meansNoAcl(errno) ? 0 : errno;
+        }
+    }
+    return ERANGE;
+}
+
 /*
- * Gives the temp file `fd` the replaced target's owner, group and permission bits,
- * as far as this process may: the owner only with CAP_CHOWN, the group only if this
- * process belongs to it (some file systems, such as vfat or drvfs, ignore both). Bits
- * that would otherwise grant access to someone else are dropped: the group bits and
- * S_ISGID when the group differs, S_ISUID when the owner does. fchown runs before
- * fchmod because it clears the set-id bits. Returns 0 or an errno value.
+ * Gives the temp file `fd` the replaced target's owner, group, permission bits and
+ * access ACL (`acl`, nullopt if it has none), as far as this process may: the owner
+ * only with CAP_CHOWN, the group only if this process belongs to it (some file
+ * systems, such as vfat or drvfs, ignore both), and the ACL only when both are kept.
+ * Whatever cannot be kept fails safe (detail::replacementMode). Order matters:
+ *   1. An access ACL the temp file inherited from the directory's default ACL is
+ *      removed while this process still owns the file: it is not the target's, and
+ *      its named entries would read the target's group bits as their mask.
+ *   2. fchown, which clears the set-id bits, so it precedes fchmod.
+ *   3. fchmod with the fail-safe mode, which is what remains if the ACL copy fails.
+ *   4. The ACL, after fchmod, which would otherwise overwrite its mask. Best effort:
+ *      the kernel derives the group bits from the ACL mask and keeps the set-id bits.
+ * Returns 0 or an errno value.
  */
-int copyOwnershipAndMode(int fd, const struct stat& existing) noexcept {
+int copyOwnershipAndMode(int fd, const struct stat& existing, const std::optional<std::string>& acl) noexcept {
+    if (::fremovexattr(fd, kAccessAcl) != 0 && !meansNoAcl(errno)) {
+        return errno;
+    }
     if (::fchown(fd, existing.st_uid, existing.st_gid) != 0) {
         static_cast<void>(::fchown(fd, static_cast<uid_t>(-1), existing.st_gid)); // EPERM is fine.
     }
@@ -136,14 +182,22 @@ int copyOwnershipAndMode(int fd, const struct stat& existing) noexcept {
     if (::fstat(fd, &now) != 0) {
         return errno;
     }
-    mode_t mode = existing.st_mode & 07777;
-    if (now.st_uid != existing.st_uid) {
-        mode &= static_cast<mode_t>(~S_ISUID);
+    const bool ownerKept = now.st_uid == existing.st_uid;
+    const bool groupKept = now.st_gid == existing.st_gid;
+    std::optional<detail::AclFloor> floor;
+    if (acl) {
+        // A value this code cannot parse grants the non-owner classes nothing until it is copied.
+        floor = detail::accessAclFloor(*acl).value_or(detail::AclFloor{});
     }
-    if (now.st_gid != existing.st_gid) {
-        mode &= static_cast<mode_t>(~(S_ISGID | S_IRWXG));
+    const auto mode =
+        static_cast<mode_t>(detail::replacementMode(existing.st_mode & 07777, ownerKept, groupKept, floor));
+    if (::fchmod(fd, mode) != 0) {
+        return errno;
     }
-    return ::fchmod(fd, mode) == 0 ? 0 : errno;
+    if (acl && ownerKept && groupKept) {
+        static_cast<void>(::fsetxattr(fd, kAccessAcl, acl->data(), acl->size(), 0));
+    }
+    return 0;
 }
 
 // Writes all of `data`, retrying on EINTR and short writes. Returns 0 or an errno value.
@@ -228,14 +282,20 @@ public:
         }
         /*
          * Replacing a file: the temp file is created 0600 and gets the target's owner,
-         * group and mode (copyOwnershipAndMode) only once its content is complete, so
-         * no one else can open it meanwhile. Creating one: the temp file is created
-         * 0666 like any open(O_CREAT, 0666), so the umask or the directory's default
-         * ACL decides its mode, exactly as for files other programs create there.
+         * group, mode and access ACL (copyOwnershipAndMode) only once its content is
+         * complete, so no one else can open it meanwhile. Creating one: the temp file
+         * is created 0666 like any open(O_CREAT, 0666), so the umask or the directory's
+         * default ACL decides its mode, exactly as for files other programs create there.
          */
         struct stat existing{};
         const bool hadTarget = ::stat(target->c_str(), &existing) == 0 && S_ISREG(existing.st_mode);
         const mode_t createMode = hadTarget ? 0600 : 0666;
+        std::optional<std::string> acl;
+        if (hadTarget) {
+            if (const int error = readAccessAcl(*target, acl); error != 0) {
+                return std::unexpected(errnoError(error, "writeFileAtomic: read the access ACL of", path));
+            }
+        }
 
         std::string tempPath;
         UniqueFd fd;
@@ -262,7 +322,7 @@ public:
             return abandon(errnoError(error, "writeFileAtomic: write temp file for", path));
         }
         if (hadTarget) {
-            if (const int error = copyOwnershipAndMode(fd.get(), existing); error != 0) {
+            if (const int error = copyOwnershipAndMode(fd.get(), existing, acl); error != 0) {
                 return abandon(errnoError(error, "writeFileAtomic: copy owner and permissions for", path));
             }
         }

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Private helpers shared by frost::io's implementation files: RAII wrappers for
-// OS handles and descriptors, process-unique names, and small error builders.
-// Not installed; nothing outside src/io includes this.
+// OS handles and descriptors, process-unique names, small error builders, and the
+// POSIX permission rules of writeFileAtomic. Not installed; outside src/io only
+// io_unit_tests includes this, to test the pure helpers on every platform.
 #pragma once
 
 #include "frost/core/clock.hpp"
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -50,6 +52,50 @@ inline constexpr std::string_view kAtomicTempMarker = ".frost-tmp-";
 
 // CreateProcessW's command-line limit in UTF-16 units, including the terminator.
 inline constexpr std::size_t kMaxWindowsCommandLineUnits = 32767;
+
+/*
+ * What a POSIX access ACL (acl(5)) granted every non-owner, as permission triples
+ * (0-7, read 4, write 2, execute 1). `group`: the permissions every member of the
+ * owning group had, whichever entry applied to them (the owning-group entry, or a
+ * named-user entry, which takes precedence), each limited by the mask. `other`: the
+ * permissions every other non-owner had (the other entry, or a named-user or
+ * named-group entry, masked). Named entries can grant less than their class, so a
+ * file that loses the ACL must not give the classes more than these.
+ */
+struct AclFloor {
+    std::uint32_t group = 0;
+    std::uint32_t other = 0;
+
+    friend bool operator==(const AclFloor&, const AclFloor&) = default;
+};
+
+/*
+ * Parses a system.posix_acl_access attribute value in the kernel's format
+ * (linux/posix_acl_xattr.h: a little-endian version word 2, then 8-byte entries of
+ * a 16-bit tag, 16-bit permissions and a 32-bit id). nullopt if it is malformed:
+ * wrong size or version, an unknown tag, or no owning-group or other entry.
+ * Pure and portable. O(entries).
+ */
+[[nodiscard]] std::optional<AclFloor> accessAclFloor(std::string_view xattr) noexcept;
+
+/*
+ * The permission bits (07777) writeFileAtomic gives a POSIX replacement file, from
+ * the replaced target's `mode` (st_mode & 07777), whether this process could keep
+ * its owner and group, and `acl`, the floor of the target's access ACL when it has
+ * one. Every rule only removes bits, so no one gets more access than the target
+ * gave them:
+ *   - acl: the group and other classes keep only acl->group and acl->other (the
+ *     mode's group bits are the ACL mask, and named entries may deny). When the
+ *     ACL is then copied, it restores the exact classes.
+ *   - !groupKept: old group members become others and some others become members,
+ *     so both classes keep only what both had (group & other), and S_ISGID goes:
+ *     0644 stays 0644, 0664 becomes 0644, 0640 and 0604 become 0600.
+ *   - !ownerKept: the old owner becomes a member or an other, so both classes keep
+ *     only what the owner had, and S_ISUID goes: 0644 stays, 0077 becomes 0000.
+ * Pure and portable; unit-tested on every platform.
+ */
+[[nodiscard]] std::uint32_t replacementMode(std::uint32_t mode, bool ownerKept, bool groupKept,
+                                            std::optional<AclFloor> acl) noexcept;
 
 // The steady-clock time `timeout` from now, saturated at time_point::max() so that
 // a huge timeout (IClock::Duration::max() as "no limit") never overflows.

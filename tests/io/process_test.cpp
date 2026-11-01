@@ -916,9 +916,9 @@ TEST(RealProcessLauncher, InheritedStdinFallsBackToTheNullDevice) {
     ASSERT_TRUE(occupied->has_value()) << occupied->error().describe();
     EXPECT_EQ((*occupied)->stdoutBytes, "inherited\n");
 
-    // A terminal is inherited as it is, with or without killOnClose: a contained child leads
-    // its own session, where the terminal is not its controlling one, so reading it cannot
-    // stop the child with SIGTTIN.
+    // A terminal stdin reaches only an uncontained child, which shares this process's job
+    // control. A contained child leads its own session, outside that job control, so it
+    // could read the terminal while the shell is in the foreground; it gets the null device.
     const int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
     ASSERT_GE(master, 0);
     ASSERT_EQ(grantpt(master), 0);
@@ -928,15 +928,22 @@ TEST(RealProcessLauncher, InheritedStdinFallsBackToTheNullDevice) {
     ASSERT_EQ(isatty(terminal), 1);
     ProcessSpec onTerminal = childSpec({"probe-handle", "stdin", fileIdentity(terminal)});
     onTerminal.stdinMode = Stdio::Inherit;
-    std::optional<frost::Result<ProcessResult>> contained;
-    withStdin(terminal, [&] { contained = run(onTerminal); });
+    ProcessSpec onNull = spec; // Probes for /dev/null, also with an inherited stdin.
+    std::optional<frost::Result<ProcessResult>> containedTerminal;
+    std::optional<frost::Result<ProcessResult>> containedNull;
+    withStdin(terminal, [&] {
+        containedTerminal = run(onTerminal);
+        containedNull = run(onNull);
+    });
     onTerminal.killOnClose = false;
     std::optional<frost::Result<ProcessResult>> shared;
     withStdin(terminal, [&] { shared = run(onTerminal); });
     close(terminal);
     close(master);
-    ASSERT_TRUE(contained->has_value()) << contained->error().describe();
-    EXPECT_EQ((*contained)->stdoutBytes, "inherited\n");
+    ASSERT_TRUE(containedTerminal->has_value()) << containedTerminal->error().describe();
+    EXPECT_EQ((*containedTerminal)->stdoutBytes, "not inherited\n");
+    ASSERT_TRUE(containedNull->has_value()) << containedNull->error().describe();
+    EXPECT_EQ((*containedNull)->stdoutBytes, "inherited\n");
     ASSERT_TRUE(shared->has_value()) << shared->error().describe();
     EXPECT_EQ((*shared)->stdoutBytes, "inherited\n");
 }

@@ -2,8 +2,9 @@
 //
 // Integration tests for the real IFileSystem against the disk: byte-exact
 // round trips, atomic replacement (no temp files left, old content kept on
-// failure), listings, error-code mapping, non-ASCII names, and on Windows
-// paths longer than MAX_PATH, which must work even with LongPathsEnabled = 0.
+// failure, read-only targets, and on POSIX the owner, mode and ACL rules),
+// listings, error-code mapping, non-ASCII names, and on Windows paths longer
+// than MAX_PATH, which must work even with LongPathsEnabled = 0.
 
 #include "frost/core/clock.hpp"
 #include "frost/io/file_system.hpp"
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <format>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,14 +33,17 @@
 
 #include <windows.h>
 #else
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <sys/xattr.h>
 
 #include <cerrno>
 
 #include <fcntl.h>
+#include <sched.h>
 #include <unistd.h>
 #endif
 
@@ -130,6 +135,23 @@ TEST(RealFileSystem, FailedReplaceKeepsTheOldContent) {
     EXPECT_TRUE(result.error().code() == ErrorCode::PermissionDenied || result.error().code() == ErrorCode::Busy)
         << result.error().describe();
     EXPECT_EQ(fs().readFile(file).value(), "old content");
+    EXPECT_TRUE(noTempFiles(dir.path()));
+}
+
+TEST(RealFileSystem, ReadOnlyTargetsAreRefused) {
+    // MoveFileExW does not replace a file with FILE_ATTRIBUTE_READONLY (POSIX does; see
+    // ReadOnlyTargetsAreReplaced there).
+    const ScratchDir dir("fs-readonly-target");
+    const std::string file = dir.join("frozen.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+    const std::wstring wide = frost::io::toWin32Path(file).value();
+    ASSERT_NE(SetFileAttributesW(wide.c_str(), FILE_ATTRIBUTE_READONLY), FALSE);
+    const auto result = fs().writeFileAtomic(file, "new");
+    // Cleared before any assertion can return, so ScratchDir can remove the file.
+    ASSERT_NE(SetFileAttributesW(wide.c_str(), FILE_ATTRIBUTE_NORMAL), FALSE);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied) << result.error().describe();
+    EXPECT_EQ(fs().readFile(file).value(), "old");
     EXPECT_TRUE(noTempFiles(dir.path()));
 }
 
@@ -407,9 +429,25 @@ TEST(RealFileSystem, NewFilesGetTheUmaskMode) {
     EXPECT_EQ(info.st_mode & 07777, 0640u); // 0666 & ~027, as open(O_CREAT) would give.
 }
 
+// POSIX ACL entry tags (acl(5), linux/posix_acl.h).
+constexpr std::uint16_t kUserObj = 0x01;
+constexpr std::uint16_t kUser = 0x02;
+constexpr std::uint16_t kGroupObj = 0x04;
+constexpr std::uint16_t kMask = 0x10;
+constexpr std::uint16_t kOther = 0x20;
+
+constexpr const char* kAccessAcl = "system.posix_acl_access";
+constexpr const char* kDefaultAcl = "system.posix_acl_default";
+
+struct AclEntry {
+    std::uint16_t tag;
+    std::uint16_t permissions;
+    std::uint32_t id = 0xffffffffu; // ACL_UNDEFINED_ID, for entries that name no user or group.
+};
+
 // A POSIX ACL in the kernel's extended-attribute format (linux/posix_acl_xattr.h):
 // a little-endian version word 2, then (tag, permissions, id) entries.
-std::string aclXattr(std::initializer_list<std::pair<std::uint16_t, std::uint16_t>> entries) {
+std::string aclXattr(std::initializer_list<AclEntry> entries) {
     std::string out;
     const auto put = [&out](std::uint32_t value, int bytes) {
         for (int i = 0; i < bytes; ++i) {
@@ -417,12 +455,31 @@ std::string aclXattr(std::initializer_list<std::pair<std::uint16_t, std::uint16_
         }
     };
     put(2, 4);
-    for (const auto& [tag, permissions] : entries) {
-        put(tag, 2);
-        put(permissions, 2);
-        put(0xffffffffu, 4); // ACL_UNDEFINED_ID: the entries used here name no user or group.
+    for (const AclEntry& entry : entries) {
+        put(entry.tag, 2);
+        put(entry.permissions, 2);
+        put(entry.id, 4);
     }
     return out;
+}
+
+// Sets the ACL attribute `name` of `path`. Returns 0 or the errno value: EOPNOTSUPP (also
+// ENOTSUP on Linux) means the file system has no POSIX ACLs.
+int setAcl(const std::string& path, const char* name, const std::string& acl) {
+    return setxattr(path.c_str(), name, acl.data(), acl.size(), 0) == 0 ? 0 : errno;
+}
+
+// The access ACL of `path`, or nullopt when it has none.
+std::optional<std::string> accessAcl(const std::string& path) {
+    std::string value(4096, '\0');
+    const ssize_t got = getxattr(path.c_str(), kAccessAcl, value.data(), value.size());
+    if (got < 0) {
+        const int error = errno;
+        EXPECT_EQ(error, ENODATA) << path;
+        return std::nullopt;
+    }
+    value.resize(static_cast<std::size_t>(got));
+    return value;
 }
 
 TEST(RealFileSystem, NewFilesFollowTheDirectorysDefaultAcl) {
@@ -431,13 +488,9 @@ TEST(RealFileSystem, NewFilesFollowTheDirectorysDefaultAcl) {
     const ScratchDir dir("fs-acl");
     const std::string shared = dir.join("shared");
     ASSERT_TRUE(fs().createDirectories(shared).has_value());
-    constexpr std::uint16_t kUserObj = 0x01;
-    constexpr std::uint16_t kGroupObj = 0x04;
-    constexpr std::uint16_t kOther = 0x20;
     const std::string acl = aclXattr({{kUserObj, 7}, {kGroupObj, 7}, {kOther, 0}});
-    if (setxattr(shared.c_str(), "system.posix_acl_default", acl.data(), acl.size(), 0) != 0) {
-        const int error = errno;
-        if (error == EOPNOTSUPP) { // Also ENOTSUP on Linux.
+    if (const int error = setAcl(shared, kDefaultAcl, acl); error != 0) {
+        if (error == EOPNOTSUPP) {
             GTEST_SKIP() << "the file system under " << shared << " has no POSIX ACL support";
         }
         FAIL() << "setxattr(system.posix_acl_default) failed: errno " << error;
@@ -486,6 +539,216 @@ TEST(RealFileSystem, ReplacingKeepsOwnerGroupAndSetIdBitsWherePermitted) {
     EXPECT_EQ(info.st_gid, group) << (group == getegid() ? "(no second group to test with)" : "");
     EXPECT_EQ(info.st_mode & 07777, 04750u);
     EXPECT_EQ(fs().readFile(file).value(), "new");
+}
+
+TEST(RealFileSystem, ReplacingKeepsTheAccessAcl) {
+    // Sharing one file with one person: 0640 plus `setfacl -m u:65534:rw`, so the mask is
+    // rw- and st_mode reads 0660. Its group bits are the mask, not the group's permissions:
+    // copying only the mode would give the whole group write access and lock out the user.
+    const ScratchDir dir("fs-acl-keep");
+    const std::string file = dir.join("shared.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+    ASSERT_EQ(chmod(file.c_str(), 0640), 0);
+    const std::string acl = aclXattr({{kUserObj, 6}, {kUser, 6, 65534}, {kGroupObj, 4}, {kMask, 6}, {kOther, 0}});
+    if (const int error = setAcl(file, kAccessAcl, acl); error != 0) {
+        if (error == EOPNOTSUPP) {
+            GTEST_SKIP() << "the file system under " << file << " has no POSIX ACL support";
+        }
+        FAIL() << "setxattr(system.posix_acl_access) failed: errno " << error;
+    }
+    ASSERT_TRUE(fs().writeFileAtomic(file, "new").has_value());
+    EXPECT_EQ(accessAcl(file), acl);
+    struct stat info{};
+    ASSERT_EQ(stat(file.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 07777, 0660u);
+    EXPECT_EQ(fs().readFile(file).value(), "new");
+}
+
+TEST(RealFileSystem, ReplacingDropsAnAclInheritedFromTheDirectory) {
+    // The temp file inherits the directory's default ACL as its access ACL. The target has
+    // none, so the result must have none either: the named user's rwx would otherwise be
+    // limited only by the target's group bits, here r--, which the user never had.
+    const ScratchDir dir("fs-acl-inherit");
+    const std::string shared = dir.join("shared");
+    ASSERT_TRUE(fs().createDirectories(shared).has_value());
+    const std::string file = shared + "/plain.txt";
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+    ASSERT_EQ(chmod(file.c_str(), 0640), 0);
+    const std::string inherited = aclXattr({{kUserObj, 7}, {kUser, 7, 65534}, {kGroupObj, 5}, {kMask, 7}, {kOther, 0}});
+    if (const int error = setAcl(shared, kDefaultAcl, inherited); error != 0) {
+        if (error == EOPNOTSUPP) {
+            GTEST_SKIP() << "the file system under " << shared << " has no POSIX ACL support";
+        }
+        FAIL() << "setxattr(system.posix_acl_default) failed: errno " << error;
+    }
+    ASSERT_TRUE(fs().writeFileAtomic(file, "new").has_value());
+    EXPECT_FALSE(accessAcl(file).has_value());
+    struct stat info{};
+    ASSERT_EQ(stat(file.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 07777, 0640u);
+    EXPECT_EQ(fs().readFile(file).value(), "new");
+}
+
+// A supplementary group of this process other than its effective group, if it has one.
+std::optional<gid_t> supplementaryGroup() {
+    std::vector<gid_t> groups(static_cast<std::size_t>(std::max(getgroups(0, nullptr), 0)));
+    const int count = getgroups(static_cast<int>(groups.size()), groups.data());
+    for (int i = 0; i < count; ++i) {
+        if (groups[static_cast<std::size_t>(i)] != getegid()) {
+            return groups[static_cast<std::size_t>(i)];
+        }
+    }
+    return std::nullopt;
+}
+
+// Writes `text` to the /proc control file `path`; whether all of it was accepted.
+bool writeControlFile(const char* path, std::string_view text) noexcept {
+    const int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+    const bool written = write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size());
+    close(fd);
+    return written;
+}
+
+// The exit status of inUserNamespace's child when it could not map its ids.
+constexpr int kNoUserNamespace = 77;
+
+// What inUserNamespace hands its child: the body and the id maps to write.
+template<class Body>
+struct NamespaceChild {
+    Body& body;
+    std::string uidMap;
+    std::string gidMap;
+
+    // The clone() entry point; its result is the child's exit status. Unprivileged
+    // processes must deny setgroups before they may write a gid map.
+    static int run(void* self) {
+        auto& child = *static_cast<NamespaceChild*>(self);
+        if (!writeControlFile("/proc/self/uid_map", child.uidMap) ||
+            !writeControlFile("/proc/self/setgroups", "deny") ||
+            !writeControlFile("/proc/self/gid_map", child.gidMap)) {
+            return kNoUserNamespace;
+        }
+        return child.body();
+    }
+};
+
+/*
+ * Runs `body` in a child process inside a new user namespace that maps only this
+ * process's uid and gid. Every other id, supplementary groups included, then shows as
+ * the overflow id, and fchown to it fails with EINVAL: a group this process cannot keep,
+ * without needing root to set one up. Returns what `body` returned (0-76), or nullopt
+ * where unprivileged user namespaces are unavailable.
+ *
+ * clone(CLONE_NEWUSER) rather than fork + unshare: unshare(CLONE_NEWUSER) refuses a
+ * multithreaded caller, and under ThreadSanitizer a forked child already runs TSan's
+ * background thread. Without CLONE_VM the child gets a copy of this address space, as
+ * with fork, running on a stack of its own; when `body` returns, glibc ends the child
+ * with the exit system call, so no test-framework or exit handlers run twice.
+ */
+template<class Body>
+std::optional<int> inUserNamespace(Body body) {
+    NamespaceChild<Body> setup{body, std::format("{} {} 1", geteuid(), geteuid()),
+                               std::format("{} {} 1", getegid(), getegid())};
+    // mmap, not the heap: AddressSanitizer would otherwise see stack frames inside a heap block.
+    constexpr std::size_t kStackBytes = 1024 * 1024;
+    void* stack = mmap(nullptr, kStackBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+    if (stack == MAP_FAILED) {
+        ADD_FAILURE() << "mmap failed: errno " << errno;
+        return -1;
+    }
+    const pid_t child =
+        clone(&NamespaceChild<Body>::run, static_cast<char*>(stack) + kStackBytes, CLONE_NEWUSER | SIGCHLD, &setup);
+    const int cloneError = errno;
+    int status = 0;
+    while (child > 0 && waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    munmap(stack, kStackBytes);
+    if (child < 0) {
+        // EPERM, ENOSPC, EUSERS: unprivileged user namespaces are disabled or exhausted here.
+        if (cloneError == EPERM || cloneError == ENOSPC || cloneError == EUSERS) {
+            return std::nullopt;
+        }
+        ADD_FAILURE() << "clone(CLONE_NEWUSER) failed: errno " << cloneError;
+        return -1;
+    }
+    if (!WIFEXITED(status)) {
+        ADD_FAILURE() << "the namespace child did not exit normally: status " << status;
+        return -1;
+    }
+    if (WEXITSTATUS(status) == kNoUserNamespace) {
+        return std::nullopt;
+    }
+    return WEXITSTATUS(status);
+}
+
+TEST(RealFileSystem, ReplacingNarrowsTheModeWhereTheGroupCannotBeKept) {
+    // In the namespace this user's supplementary group is unmapped: the replacement file
+    // gets the process's own group, so the mode must not grant anyone more than before.
+    const std::optional<gid_t> group = supplementaryGroup();
+    if (!group) {
+        GTEST_SKIP() << "this user has no supplementary group to lose";
+    }
+    const ScratchDir dir("fs-lost-group");
+    const std::string plain = dir.join("plain.txt");
+    const std::string denied = dir.join("denied.txt");
+    for (const std::string& file : {plain, denied}) {
+        ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+        ASSERT_EQ(chown(file.c_str(), static_cast<uid_t>(-1), *group), 0);
+    }
+    ASSERT_EQ(chmod(plain.c_str(), 02664), 0);
+    ASSERT_EQ(chmod(denied.c_str(), 0664), 0);
+    // user:65534:--- shuts out one user whom the group and other classes would let read.
+    const int aclError = setAcl(denied, kAccessAcl,
+                                aclXattr({{kUserObj, 6}, {kUser, 0, 65534}, {kGroupObj, 4}, {kMask, 6}, {kOther, 4}}));
+    ASSERT_TRUE(aclError == 0 || aclError == EOPNOTSUPP) << "setxattr failed: errno " << aclError;
+    const bool withAcl = aclError == 0;
+
+    const std::optional<int> outcome = inUserNamespace([&] {
+        if (!fs().writeFileAtomic(plain, "new").has_value()) {
+            return 1;
+        }
+        if (withAcl && !fs().writeFileAtomic(denied, "new").has_value()) {
+            return 2;
+        }
+        return 0;
+    });
+    if (!outcome) {
+        GTEST_SKIP() << "unprivileged user namespaces are unavailable";
+    }
+    ASSERT_EQ(*outcome, 0) << "writeFileAtomic failed in the namespace";
+
+    // rw-rw-r-- with S_ISGID: old members may now be others, and others may be members of
+    // the new group, so both classes keep only r--, and S_ISGID goes.
+    struct stat info{};
+    ASSERT_EQ(stat(plain.c_str(), &info), 0);
+    EXPECT_NE(info.st_gid, *group);
+    EXPECT_EQ(info.st_mode & 07777, 0644u);
+    EXPECT_EQ(fs().readFile(plain).value(), "new");
+    if (withAcl) {
+        // The ACL is not copied to a file with another group; without it, the denied user
+        // would fall into the group or other class, so both get only what the user had.
+        ASSERT_EQ(stat(denied.c_str(), &info), 0);
+        EXPECT_EQ(info.st_mode & 07777, 0600u);
+        EXPECT_FALSE(accessAcl(denied).has_value());
+        EXPECT_EQ(fs().readFile(denied).value(), "new");
+    }
+}
+
+TEST(RealFileSystem, ReadOnlyTargetsAreReplaced) {
+    // rename needs write access to the directory only, so POSIX replaces a 0444 file (Windows
+    // refuses; see ReadOnlyTargetsAreRefused), and the new file keeps the read-only mode.
+    const ScratchDir dir("fs-readonly-target");
+    const std::string file = dir.join("frozen.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+    ASSERT_EQ(chmod(file.c_str(), 0444), 0);
+    ASSERT_TRUE(fs().writeFileAtomic(file, "new").has_value());
+    EXPECT_EQ(fs().readFile(file).value(), "new");
+    struct stat info{};
+    ASSERT_EQ(stat(file.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 07777, 0444u);
 }
 
 TEST(RealFileSystem, ReadFileRefusesSockets) {

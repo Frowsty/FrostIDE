@@ -66,4 +66,74 @@ bool isBatchFileName(std::string_view path) noexcept {
     return extension == ".bat" || extension == ".cmd";
 }
 
+std::optional<AclFloor> accessAclFloor(std::string_view xattr) noexcept {
+    constexpr std::size_t kHeaderBytes = 4;
+    constexpr std::size_t kEntryBytes = 8;
+    constexpr std::uint32_t kVersion = 2;
+    // Tags (linux/posix_acl.h, acl(5)).
+    constexpr std::uint32_t kUserObj = 0x01;
+    constexpr std::uint32_t kUser = 0x02;
+    constexpr std::uint32_t kGroupObj = 0x04;
+    constexpr std::uint32_t kGroup = 0x08;
+    constexpr std::uint32_t kMask = 0x10;
+    constexpr std::uint32_t kOther = 0x20;
+    const auto byteAt = [xattr](std::size_t at) {
+        return static_cast<std::uint32_t>(static_cast<unsigned char>(xattr[at]));
+    };
+    const auto le16 = [&byteAt](std::size_t at) { return byteAt(at) | (byteAt(at + 1) << 8); };
+    if (xattr.size() < kHeaderBytes || (xattr.size() - kHeaderBytes) % kEntryBytes != 0 ||
+        (le16(0) | (le16(2) << 16)) != kVersion) {
+        return std::nullopt;
+    }
+    std::optional<std::uint32_t> groupObj;
+    std::optional<std::uint32_t> other;
+    std::uint32_t mask = 7; // Without a mask entry (no named entries) nothing is limited.
+    std::uint32_t namedUsers = 7;
+    std::uint32_t namedGroups = 7;
+    for (std::size_t at = kHeaderBytes; at < xattr.size(); at += kEntryBytes) {
+        const std::uint32_t permissions = le16(at + 2) & 7u;
+        switch (le16(at)) {
+        case kUserObj: break; // The owner's entry, which the mask does not limit.
+        case kUser: namedUsers &= permissions; break;
+        case kGroupObj: groupObj = permissions; break;
+        case kGroup: namedGroups &= permissions; break;
+        case kMask: mask = permissions; break;
+        case kOther: other = permissions; break;
+        default: return std::nullopt;
+        }
+    }
+    if (!groupObj || !other) {
+        return std::nullopt;
+    }
+    // The mask limits the whole group class: the owning-group entry and every named entry.
+    namedUsers &= mask;
+    namedGroups &= mask;
+    return AclFloor{*groupObj & mask & namedUsers, *other & namedUsers & namedGroups};
+}
+
+std::uint32_t replacementMode(std::uint32_t mode, bool ownerKept, bool groupKept,
+                              std::optional<AclFloor> acl) noexcept {
+    constexpr std::uint32_t kSetUid = 04000;
+    constexpr std::uint32_t kSetGid = 02000;
+    std::uint32_t special = mode & 07000;
+    const std::uint32_t owner = (mode >> 6) & 7u;
+    std::uint32_t group = (mode >> 3) & 7u;
+    std::uint32_t other = mode & 7u;
+    if (acl) {
+        group &= acl->group;
+        other &= acl->other;
+    }
+    if (!groupKept) {
+        special &= ~kSetGid;
+        group &= other;
+        other = group;
+    }
+    if (!ownerKept) {
+        special &= ~kSetUid;
+        group &= owner;
+        other &= owner;
+    }
+    return special | (owner << 6) | (group << 3) | other;
+}
+
 } // namespace frost::io::detail

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for frost::io:
-#   io_unit_tests          pure logic and the doubles (MemFs, ScriptedProcessLauncher), label "unit";
+#   io_unit_tests          pure logic (including private helpers of src/io/src/internal.hpp) and the
+#                          doubles (MemFs, ScriptedProcessLauncher), label "unit";
 #   io_integration_tests   the real file system and real processes, label "integration";
 #   io_test_child          the helper program the process tests launch (not a test itself).
 
@@ -11,10 +12,12 @@ frost_add_test(io_unit_tests
         os_error_test.cpp
         path_test.cpp
         process_spec_test.cpp
+        replacement_mode_test.cpp
         scripted_process_test.cpp
         utf_test.cpp
     DEPS frost::io)
-target_include_directories(io_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+# src/io/src: replacement_mode_test.cpp tests pure helpers of the private internal.hpp.
+target_include_directories(io_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/io/src)
 if(WIN32)
     # CommandLineToArgvW, the oracle for the Windows quoting tests.
     target_link_libraries(io_unit_tests PRIVATE shell32)
