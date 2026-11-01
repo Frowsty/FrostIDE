@@ -45,8 +45,10 @@ lane)`, `clock()`, `currentLane()`, `stopToken()`, `addTimer`/`cancelTimer`, and
   `JoinHandle<T>` that can be awaited, `join()`ed from a non-worker thread, or `detach()`ed. A join state
   machine (Pending → Awaiting/Blocking → Done) on one atomic makes completion and awaiting race-free.
   A result can be taken once; a second take is a contract violation, not a moved-from value.
-- Lifetime: shutdown drains, so every handle is ready once its scheduler is gone. A ready handle may
-  outlive its scheduler, and `join()` then only takes the result. A pending handle must not outlive it.
+- Lifetime: shutdown drains, so once its scheduler is gone every handle whose task only waited on that
+  scheduler is ready (a task suspended on another scheduler or an external event is not part of the drain).
+  A ready handle may outlive its scheduler, and `join()` then only takes the result. A pending handle must
+  not outlive it.
 - `spawn(lane, task, token)` (T must be `Result<U>` or `void`) skips the body if `token` is stopped before
   the task starts: the handle reports `cancelledBeforeStart()`, and the result is `ErrorCode::Cancelled`
   (for `void`, nothing). Cancellation while running is cooperative: tasks check their token, and sleeps
@@ -99,9 +101,9 @@ Dispatching a lane resets its counter.
   test clock re-evaluate deadlines.
 - **Shutdown = drain**: `shutdown()` (also run by the destructor) requests the pool's stop token, completes
   every pending and future sleep immediately with `false`, runs all remaining work to completion, then joins
-  the workers. Nothing is destroyed half-run, so every `JoinHandle` completes; tasks that loop must check
-  `stopToken()` or their own token. An `m_outstanding` counter (queued + running segments + pending timers)
-  detects quiescence for `shutdown()` and `waitIdle()`.
+  the workers. Nothing is destroyed half-run, so every `JoinHandle` whose task only waits on this pool
+  completes; tasks that loop must check `stopToken()` or their own token. An `m_outstanding` counter
+  (queued + running segments + pending timers) detects quiescence for `shutdown()` and `waitIdle()`.
 
 ### Chase-Lev deque
 `ChaseLevDeque<T>` follows Chase and Lev (SPAA 2005) with the C11 orderings of Lê, Pop, Cohen and Zappa

@@ -95,6 +95,7 @@ class BootstrapPythonCheckTest(TempDirTestCase):
         for line in lines[len(accepted + too_old):]:
             self.assertTrue(line.startswith("fail "), line)
             self.assertIn("could not read the Python version", line)
+            self.assertIn(r"delete X:\venv", line)
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell scripts")

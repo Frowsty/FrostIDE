@@ -13,6 +13,12 @@
 # matches the pin. Linux has no pin (tools/bootstrap-wsl.sh installs no sccache), so
 # there the default is OFF and the build is unchanged.
 #
+# The path found is cached in FROST_SCCACHE_EXECUTABLE and checked again on every
+# configure. A cached path that no longer runs or no longer reports the pin (the lock
+# moved to a new version, say) is dropped and searched for once more, so an existing
+# tree picks up a newly pinned sccache instead of quietly building without one.
+# tests/cmake/check_compiler_cache.cmake covers these cases.
+#
 # On Windows the cache must stay off the system drive (D1). sccache's server reads
 # SCCACHE_DIR when it starts, so this file requires SCCACHE_DIR in the configure
 # environment (tools/env.ps1 sets E:\sdk\sccache-cache) and builds without sccache
@@ -49,6 +55,13 @@ string(JSON _frost_sccache_pin ERROR_VARIABLE _frost_sccache_pin_error
 if(_frost_sccache_pin_error)
     set(_frost_sccache_pin "")
 endif()
+# How to get the pinned sccache, for the status line when it is missing. Only Windows
+# has a pin today; the Linux text is for a future pin.
+if(WIN32)
+    set(_frost_sccache_fix "run tools/bootstrap.ps1, then tools/env.ps1")
+else()
+    set(_frost_sccache_fix "install sccache ${_frost_sccache_pin} in $FROST_SDK/sccache-${_frost_sccache_pin} or on PATH")
+endif()
 
 # Finds the pinned sccache. _frost_sccache_reason explains a miss for the status line.
 set(_frost_sccache_found OFF)
@@ -60,22 +73,58 @@ else()
     if(DEFINED ENV{FROST_SDK})
         file(TO_CMAKE_PATH "$ENV{FROST_SDK}/sccache-${_frost_sccache_pin}" _frost_sccache_hints)
     endif()
-    find_program(FROST_SCCACHE_EXECUTABLE sccache HINTS ${_frost_sccache_hints}
-                 DOC "sccache used as the compiler launcher when FROST_SCCACHE is ON")
-    if(NOT FROST_SCCACHE_EXECUTABLE)
-        set(_frost_sccache_reason "sccache ${_frost_sccache_pin} not found (run tools/bootstrap.ps1, then tools/env.ps1)")
-    else()
-        # `sccache --version` prints "sccache 0.19.0" and does not start the server.
-        execute_process(COMMAND "${FROST_SCCACHE_EXECUTABLE}" --version
-                        OUTPUT_VARIABLE _frost_sccache_version_text ERROR_QUIET
-                        RESULT_VARIABLE _frost_sccache_version_status OUTPUT_STRIP_TRAILING_WHITESPACE)
-        string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" _frost_sccache_version "${_frost_sccache_version_text}")
-        if(NOT _frost_sccache_version_status EQUAL 0 OR NOT _frost_sccache_version STREQUAL _frost_sccache_pin)
-            set(_frost_sccache_reason
-                "${FROST_SCCACHE_EXECUTABLE} reports '${_frost_sccache_version_text}', not the pinned ${_frost_sccache_pin}")
+    # find_program() does not search while FROST_SCCACHE_EXECUTABLE holds a path, so in
+    # a tree configured before the pin moved (or before that sccache was removed) the
+    # hints and PATH would never be read again. A path that was already cached, or given
+    # with -DFROST_SCCACHE_EXECUTABLE, and that fails the check below is therefore
+    # dropped and the search runs a second time; the second result stands either way.
+    set(_frost_sccache_retry OFF)
+    if(DEFINED CACHE{FROST_SCCACHE_EXECUTABLE} AND NOT "$CACHE{FROST_SCCACHE_EXECUTABLE}" MATCHES "NOTFOUND$")
+        set(_frost_sccache_retry ON)
+    endif()
+    set(_frost_sccache_dropped "")      # "the cached <path> was dropped because ...", for the reason
+    set(_frost_sccache_dropped_path "")
+    foreach(_frost_sccache_attempt RANGE 1)
+        find_program(FROST_SCCACHE_EXECUTABLE sccache HINTS ${_frost_sccache_hints}
+                     DOC "sccache used as the compiler launcher when FROST_SCCACHE is ON")
+        set(_frost_sccache_problem "")
+        if(NOT FROST_SCCACHE_EXECUTABLE)
+            set(_frost_sccache_reason "sccache ${_frost_sccache_pin} not found")
         else()
-            set(_frost_sccache_found ON)
+            # `sccache --version` prints "sccache 0.19.0" and does not start the server.
+            execute_process(COMMAND "${FROST_SCCACHE_EXECUTABLE}" --version
+                            OUTPUT_VARIABLE _frost_sccache_version_text ERROR_QUIET
+                            RESULT_VARIABLE _frost_sccache_version_status OUTPUT_STRIP_TRAILING_WHITESPACE)
+            string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" _frost_sccache_version "${_frost_sccache_version_text}")
+            if(NOT _frost_sccache_version_status EQUAL 0)
+                set(_frost_sccache_problem "failed to run --version (${_frost_sccache_version_status})")
+            elseif(NOT _frost_sccache_version STREQUAL _frost_sccache_pin)
+                set(_frost_sccache_problem
+                    "reports '${_frost_sccache_version_text}', not the pinned ${_frost_sccache_pin}")
+            else()
+                set(_frost_sccache_found ON)
+                break()
+            endif()
+            set(_frost_sccache_reason "${FROST_SCCACHE_EXECUTABLE} ${_frost_sccache_problem}")
         endif()
+        if(NOT _frost_sccache_retry)
+            break()
+        endif()
+        set(_frost_sccache_retry OFF)
+        if(FROST_SCCACHE_EXECUTABLE)
+            set(_frost_sccache_dropped_path "${FROST_SCCACHE_EXECUTABLE}")
+            set(_frost_sccache_dropped
+                "the cached ${FROST_SCCACHE_EXECUTABLE} was dropped because it ${_frost_sccache_problem}")
+        endif()
+        unset(FROST_SCCACHE_EXECUTABLE CACHE)
+    endforeach()
+    if(NOT _frost_sccache_found)
+        # The drop is worth mentioning only when the second search ended somewhere else.
+        if(NOT _frost_sccache_dropped STREQUAL ""
+           AND NOT "${_frost_sccache_dropped_path}" STREQUAL "${FROST_SCCACHE_EXECUTABLE}")
+            string(APPEND _frost_sccache_reason "; ${_frost_sccache_dropped}")
+        endif()
+        string(APPEND _frost_sccache_reason "; ${_frost_sccache_fix}")
     endif()
 endif()
 

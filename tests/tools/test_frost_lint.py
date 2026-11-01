@@ -72,6 +72,15 @@ class FixtureTest(TempDirTestCase):
         self.assertEqual(status, 2)
         self.assertIn("fatal: bad index file", stderr.getvalue())
 
+    def test_unreadable_tree_is_an_environment_error(self) -> None:
+        # An OSError while listing the tree (an unreadable .gitignore, say) also exits 2.
+        error = PermissionError(13, "Permission denied", str(self.tmp / "locked"))
+        stderr = io.StringIO()
+        with mock.patch.object(frost_lint, "list_repo_files", side_effect=error), contextlib.redirect_stderr(stderr):
+            status = frost_lint.main(["--repo", str(self.tmp)])
+        self.assertEqual(status, 2)
+        self.assertIn("Permission denied", stderr.getvalue())
+
     def test_old_python_is_an_environment_error(self) -> None:
         # Pretends to be Python 3.10 before the version check runs.
         code = ("import runpy, sys; sys.version_info = (3, 10, 0, 'final', 0); "

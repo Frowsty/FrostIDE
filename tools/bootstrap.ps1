@@ -127,12 +127,15 @@ function Invoke-NativeQuiet([scriptblock]$Command) {
 
 # Throws unless $VersionText, the "major.minor.micro" that $Interpreter printed for
 # sys.version_info, is $MinPython or newer. Text that is not a version (an
-# interpreter that failed to start, say) also throws. $Venv is named in the message
-# because an existing venv keeps the interpreter it was created with.
+# interpreter that failed to start, say) also throws. Both messages name $Venv to
+# delete: an existing venv keeps the interpreter it was created with, and
+# Install-PythonTools recreates it only when python.exe is missing, so a venv whose
+# base Python was uninstalled stays broken until it is deleted.
 function Assert-PythonVersion([string]$VersionText, [string]$Interpreter, [string]$Venv) {
     $text = "$VersionText".Trim()
     if ($text -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
-        throw "could not read the Python version of $Interpreter (got '$text')"
+        throw ("could not read the Python version of $Interpreter (got '$text'). If its base Python was " +
+               "removed or replaced, put Python $MinPython or newer on PATH, delete $Venv and run the bootstrap again.")
     }
     $version = [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
     if ($version -lt $MinPython) {
