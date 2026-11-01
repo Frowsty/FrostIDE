@@ -126,36 +126,29 @@ them. Merge notes in them mark what has changed since.
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; `m1/input-keymap` lists none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
-### Questions for the user
-- **TextSummary provenance (clean room).** TextSummary's line metrics (`firstLineChars`, `lastLineChars`,
-  `lastLineUtf16`, `longestLineChars`, `longestLine`) and their combine rule match, field for field, the
-  `TextSummary` of Zed's GPL rope crate, which was never opened. A longest-line monoid needs exactly this data. The
-  review's details are in the piece-tree slice's question below. Which do you want?
-  - (a) Accept the provenance record in `text_summary.hpp` and ADR 0013. Recommended; the slice is merged on that
-    basis.
-  - (b) Redesign the fields.
-  - (c) Cite a public description. Not recommended: the known post quotes GPL code.
-- **IntelliJ keymap provenance (legal; `m1/input-keymap`, ADR 0016 decision 8).** The built-in IntelliJ-compatible
-  keymap takes only shortcut facts (which key does what) from JetBrains' public IntelliJ IDEA Help pages
-  ("Predefined Windows keymap", "Predefined macOS keymap") and the published reference cards. No intellij-community
-  code or keymap XML was opened, and the ids, names and file format are our own. Is that acceptable? Recommended:
-  yes, shortcut assignments are functional facts. The slice is merged on that basis.
-- **Keyboard-layout test oracle licence (`m1/input-keymap`).** libxkbcommon and xkeyboard-config (in WSL) could
-  independently check the simulated de-DE, pl-PL and fr-FR tables (test-only, never shipped) and later read real
-  Linux layouts. xkeyboard-config's HPND-style notice is not on the SPDX allowlist. Adopt it under an ADR? Until
-  then the tables are checked by hand-reviewed goldens plus Windows' own en-US layout. (Checked in WSL: xkb-data's
-  copyright file mixes MIT and HPND-style notices, and libxkbcommon0's is MIT with one HPND-style block; ADR 0016
-  decision 13 now says so.)
-- **de-DE comment shortcuts (`m1/input-keymap`).** On a German layout, Ctrl+/ and Ctrl+Shift+/ (comment line and
-  comment block) cannot be typed under the chosen mapping policy; Ctrl+Num / works, and the keymap reports the gap.
-  Keep that, or add a German-specific default (for example the '#' key)?
-- **Linux punctuation shortcuts in M1 (`m1/input-keymap`).** Linux in M1 has no xkb reader: letters map by label,
-  punctuation by US position, so punctuation shortcuts can differ from Windows on non-US Linux layouts. Acceptable
-  for M1? (The M1 exit's layout tests are simulated.)
-- **A fourth simulated layout (`m1/input-keymap`).** Add Windows 11's newer "French (Standard, AZERTY)" (NF
-  Z71-300) now, or later? The simulated fr-FR is KBDFR, the legacy AZERTY.
-- **PLAN.md section 3.2 (`m1/input-keymap`).** The repository layout does not list `src/input` (frost::input) or
-  `src/ui/input` (frost::ui_input). Add them? ADR 0016 decision 1 records them meanwhile.
+### User decisions (2026-11-01, evening)
+The user answered the open questions; their words are quoted.
+- **TextSummary provenance (ADR 0013):** "Accept record", option (a). Nothing changes; ADR 0013's Sources say so.
+- **IntelliJ keymap provenance (ADR 0016 decision 8):** "Yes it's acceptable and okay".
+- **The xkb test oracle's licence:** "Do what you recommend. I'm not sure here. Please elaborate what my options
+  are." Adopted as recommended: an ADR approves libxkbcommon and xkeyboard-config by name (MIT plus HPND-style
+  notices; HPND is not added to the general allowlist). They are used test-only now, as an independent oracle for the
+  simulated layouts in `m1/keymap-de`, and later as the Linux active-layout reader. Qt's Linux platform plugins
+  already load libxkbcommon, so the later reader adds no new shipped library.
+- **The restart's cost (ADR 0012):** about 10 ms against the 5 ms quoted: "It's OK".
+- **Elevated starts from 260+ paths (ADR 0012):** "Keep refusal".
+- **The shell's 260-unit limit (ADR 0012):** "If this 260+ limit is a hard limit on windows for built in windows
+  things we shouldn't be putting this much resources into circumventing it". Long install paths are frozen as built:
+  no further work on install directories of 260+ units, and an OS limit that Windows' own tools cannot pass is
+  documented, not worked around. The built launcher and restart stay; their tests take about 2.3 s of a Windows test
+  run. Long paths of project files (deep source trees) are ordinary file I/O and stay supported.
+- **German keyboards (ADR 0016):** "Support german keyboard layout". `m1/keymap-de` makes every default shortcut
+  reachable on de-DE, including comment line and block.
+- **Linux punctuation shortcuts in M1:** "It's okay for M1".
+- **French (Standard, AZERTY):** "Can be done later". Recorded as a later item in ADR 0016.
+- **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
+- **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
+  reordered into a thin path to a first usable build (ADR 0029, in progress).
 
 ### Slice record: `m1/input-keymap` (ADR 0016)
 

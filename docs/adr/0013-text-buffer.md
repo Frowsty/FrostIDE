@@ -307,3 +307,6 @@ harness caps stay at the spec's values (512 ops, documents of 64 KiB, a full che
   found the CR, CRLF and lone-CR rules, `lineFeeds`, per-byte counting and the tie-breaking original. Recorded
   here and in `text_summary.hpp`; how to treat the resemblance is a question for the user (progress log).
 - No function is a close port of any upstream code, so no NOTICE entry or upstream copyright line is needed.
+
+- **User decision (2026-11-01, evening):** the user accepted this provenance record ("Accept record", option (a)); the
+  fields stay as they are.

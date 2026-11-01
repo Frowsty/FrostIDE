@@ -227,6 +227,7 @@ FrostIDE/
   src/settings/                registry, scopes, migrations, importers
   src/sched/  src/io/          scheduler, SimExecutor; reactor, processes, file system, watchers, http
   src/text/  src/syntax/       piece tree, display map, undo, anchors, SaveManager; tree-sitter host
+  src/input/                   shortcut matcher, keyboard layouts, keymaps, action registry, Find Action (Qt-free)
   src/storage/  src/rpc/       SQLite, FSEG, fingerprints, journal; transports and framing
   src/protocols/               generated LSP/DAP/MCP types
   src/project/                 solution/vcxproj readers, cache, CMake, presets, toolchains, trust
@@ -236,7 +237,8 @@ FrostIDE/
   src/term/  src/search/       PTY and VT engine; search, fuzzy matcher, trigram index
   src/agent/  src/diag/        Claude bridge, stream-json client, MCP core; crash, freeze, Collect Logs
   src/update/                  updater, ComponentDownloader
-  src/ui/  src/app/            Qt widgets and renderers; entry point, shell integration, automation (only Qt users)
+  src/ui/  src/app/            Qt widgets and renderers (src/ui/input: the QKeyEvent adapter); entry point, shell
+                               integration, automation (only Qt users)
   engines/                     frost-clangd, frost-analyzer, frost-format, frost-dbgeng-dap, frostide-mcp, frost-askpass
   dotnet/                      FrostIDE.ProjectHost, FrostIDE.MSBuildLogger
   tools/                       bootstrap, verify, perf, package, corpus-fetch, frost-lint, licensecheck, codegen, featurecheck, bench, synth-xl

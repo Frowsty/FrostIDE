@@ -208,6 +208,17 @@ REF-W1, clang-cl Release (win-clangcl), `input_perf_tests`, medians of three run
   where that character is US punctuation (fr-FR Ctrl+Shift+Comma cannot be typed on KeyM, which reports '?');
   and a letter-area key whose hint is not ASCII (no Qt::Key value in 0x21..0x7E) stays positional.
 
+## User decisions (2026-11-01, evening)
+- **Decision 8 (keymap provenance):** "Yes it's acceptable and okay".
+- **The xkb oracle (decision 13):** "Do what you recommend". libxkbcommon and xkeyboard-config are approved by
+  name in their own ADR (MIT plus HPND-style notices; HPND is not added to the general allowlist): test-only now,
+  in `m1/keymap-de`, and the Linux active-layout reader later.
+- **de-DE:** "Support german keyboard layout". `m1/keymap-de` makes every default shortcut, comment line and
+  block included, reachable on a German layout; this supersedes the Ctrl+Num / gap described above.
+- **Linux punctuation in M1 (decision 12):** "It's okay for M1".
+- **French (Standard, AZERTY):** "Can be done later". A later item (M11, Rider UX parity), not M1.
+- **Repository layout (decision 1):** "Yes add them". PLAN.md section 3.2 lists `src/input` and `src/ui/input`.
+
 ## Alternatives considered
 - JSON keymaps with yyjson: a dependency m1/settings adds with its own ADR, so a merge clash; the line format is
   also easier to review.

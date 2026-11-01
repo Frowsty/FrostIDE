@@ -518,6 +518,17 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   not met while LongPathsEnabled=0 and that one ASan test fails; both are left to the branch that edits PLAN.md.
   (Done 2026-11-01 in M0's exit record on `m0/foundation`: both now say that the criterion is met.)
 
+## User decisions (2026-11-01, evening)
+- **The restart's cost:** about 10 ms against the 5 ms the option named: "It's OK".
+- **Elevated starts from 260+ paths:** "Keep refusal". Decision 8's refusal stands, and no administrator-owned link
+  location is built.
+- **No further work on long install paths:** "If this 260+ limit is a hard limit on windows for built in windows
+  things we shouldn't be putting this much resources into circumventing it". The Windows shell cannot launch from
+  such a path, so this support is frozen as built. The launcher and the restart stay (built, reviewed, and about
+  2.3 s of a Windows test run), but no more work goes into install directories of 260+ units. A future failure
+  there gets a clear message rather than a new workaround. Long paths of project files are ordinary file I/O and are
+  not affected.
+
 ## Alternatives considered
 - **Strip RT_MANIFEST 2 from the deployed DLLs** (design B; probe 10; for the ASan runtime alone, branch
   `m0/e4-asan-runtime`): works, but modifies vendor binaries (their Authenticode signatures must go) and must be
