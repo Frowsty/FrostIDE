@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // AnchorSet (ADR 0017, decisions 2 and 3): creation, resolution, release, the deletion-boundary
-// tables, raw edits at a CR, piles of anchors, label exhaustion, the splice and sweep paths,
-// moves, stats and a 200-seed comparison with a naive model.
+// tables, raw edits at a CR, piles of anchors, label exhaustion, the splice and sweep paths, the
+// per-move and bulk move paths and their measured thresholds (white-box: the private
+// anchor_paths.hpp), moves, stats and a 200-seed comparison with a naive model.
 
 #include "frost/sched/detail/split_mix64.hpp"
 #include "frost/text/anchor_set.hpp"
 #include "frost/text/document.hpp"
 
+#include "anchor_paths.hpp"
 #include "text/support/undo_oracle.hpp"
 #include <gtest/gtest.h>
 
@@ -16,9 +18,11 @@
 #include <bit>
 #include <cstdint>
 #include <format>
+#include <initializer_list>
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -314,6 +318,139 @@ TEST(AnchorSet, SpliceAndSweepAgree) {
     }
 }
 
+// Random sets and chains of transforms: one chain through the forced splice path and one through
+// the forced sweep path stay structurally equal after every step, and match the rule.
+TEST(AnchorSet, SpliceAndSweepAgreeAlongChains) {
+    SplitMix64 rng(0xC4A1);
+    for (int round = 0; round < 100; ++round) {
+        std::uint64_t size = 1 + rng.below(200);
+        AnchorSet splice(0, ByteOffset{size});
+        std::vector<std::tuple<AnchorId, std::uint64_t, Bias>> anchors;
+        for (std::uint64_t i = 0, count = rng.below(150); i < count; ++i) {
+            const std::uint64_t offset = rng.below(3) == 0 ? size / 3 : rng.below(size + 1);
+            const Bias bias = rng.below(2) == 0 ? Bias::Left : Bias::Right;
+            auto [next, id] = splice.withAnchor(ByteOffset{offset}, bias);
+            splice = next;
+            anchors.emplace_back(id, offset, bias);
+        }
+        AnchorSet sweep = splice;
+        for (std::uint64_t step = 1; step <= 12; ++step) {
+            std::vector<RawEdit> batch;
+            std::uint64_t cursor = rng.below(size / 2 + 1);
+            while (cursor <= size && batch.size() < 8 && rng.below(4) != 0) {
+                const std::uint64_t a = std::min(size, cursor + rng.below(12));
+                const std::uint64_t b = std::min(size, a + rng.below(rng.below(4) == 0 ? 40 : 5));
+                batch.push_back(edit(a, b, rng.below(3) == 0 ? 0 : rng.below(9)));
+                cursor = b;
+            }
+            splice = splice.transformedForTesting(batch, step, false);
+            sweep = sweep.transformedForTesting(batch, step, true);
+            ASSERT_TRUE(splice.sameStructureForTesting(sweep)) << "round " << round << " step " << step;
+            for (auto& [id, offset, bias] : anchors) {
+                offset = oracleMapBatch(offset, bias, batch);
+                ASSERT_EQ(at(splice, id), offset) << "round " << round << " step " << step;
+            }
+            size = splice.textSize().value();
+        }
+        ASSERT_TRUE(splice.checkInvariants().has_value()) << splice.checkInvariants().error().describe();
+    }
+}
+
+// Random moves (no-op moves, ties, both biases) through the forced per-move and bulk paths: equal
+// offsets and biases for every anchor, valid sets, along chains of moves and inserts.
+TEST(AnchorSet, PerMoveAndBulkAgree) {
+    SplitMix64 rng(0xB01C);
+    for (int round = 0; round < 100; ++round) {
+        const std::uint64_t size = 1 + rng.below(120);
+        AnchorSet perMove(0, ByteOffset{size});
+        std::vector<AnchorId> ids;
+        for (std::uint64_t i = 0, count = 1 + rng.below(120); i < count; ++i) {
+            auto [next, id] = perMove.withAnchor(ByteOffset{rng.below(4) == 0 ? size / 2 : rng.below(size + 1)},
+                                                 rng.below(2) == 0 ? Bias::Left : Bias::Right);
+            perMove = next;
+            ids.push_back(id);
+        }
+        AnchorSet bulk = perMove;
+        for (int step = 0; step < 8; ++step) {
+            std::vector<ResolvedAnchor> moves;
+            for (const AnchorId id : ids) {
+                if (rng.below(4) == 0) {
+                    // A move to the current offset is a no-op on both paths.
+                    const std::uint64_t to = rng.below(5) == 0 ? at(perMove, id) : rng.below(size + 1);
+                    moves.push_back(ResolvedAnchor{id, ByteOffset{to}, Bias::Left});
+                }
+            }
+            perMove = perMove.withMovedForTesting(moves, false);
+            bulk = bulk.withMovedForTesting(moves, true);
+            ASSERT_EQ(perMove.all(), bulk.all()) << "round " << round << " step " << step;
+            ASSERT_TRUE(perMove.checkInvariants().has_value()) << perMove.checkInvariants().error().describe();
+            ASSERT_TRUE(bulk.checkInvariants().has_value()) << bulk.checkInvariants().error().describe();
+            // New anchors after the moves land in the same order on both.
+            const ByteOffset fresh{rng.below(size + 1)};
+            const Bias bias = rng.below(2) == 0 ? Bias::Left : Bias::Right;
+            auto [p, pid] = perMove.withAnchor(fresh, bias);
+            auto [b, bid] = bulk.withAnchor(fresh, bias);
+            ASSERT_EQ(pid, bid);
+            perMove = p;
+            bulk = b;
+            ids.push_back(pid);
+            ASSERT_EQ(perMove.all(), bulk.all()) << "round " << round << " step " << step << " after an insert";
+        }
+    }
+}
+
+/*
+ * The path thresholds (anchor_paths.hpp) at the crossovers measured with forced paths on REF-W1
+ * (ADR 0017, "Path thresholds"): at n = 101,000 anchors moves pay off in bulk from about r = 713
+ * and transforms as a sweep from about m = 300-370 steps. The first version's factor 1 kept the
+ * per-step paths up to r = m = 5941 there.
+ */
+TEST(AnchorSet, PathThresholdsFollowMeasuredCrossovers) {
+    using frost::text::detail::preferBulkMove;
+    using frost::text::detail::preferSweep;
+    constexpr std::uint64_t n = 101'000; // ceil(log2(n + 2)) = 17.
+    EXPECT_FALSE(preferBulkMove(500, n));
+    EXPECT_TRUE(preferBulkMove(1000, n));
+    EXPECT_FALSE(preferSweep(200, n));
+    EXPECT_TRUE(preferSweep(400, n));
+    // The measured crossovers at the other scales (moves r, transforms m), within the 1.25x steps
+    // of the probe: n = 10k: r 78, m 41-51; n = 1M: r 5301-6626, m 2715-3393.
+    EXPECT_FALSE(preferBulkMove(40, 10'000));
+    EXPECT_TRUE(preferBulkMove(160, 10'000));
+    EXPECT_FALSE(preferSweep(20, 10'000));
+    EXPECT_TRUE(preferSweep(100, 10'000));
+    EXPECT_FALSE(preferBulkMove(3'000, 1'000'000));
+    EXPECT_TRUE(preferBulkMove(12'000, 1'000'000));
+    EXPECT_FALSE(preferSweep(1'500, 1'000'000));
+    EXPECT_TRUE(preferSweep(6'000, 1'000'000));
+    // One edit step or one move never takes a whole-set path on a set worth splicing.
+    EXPECT_FALSE(preferSweep(1, 1'000));
+    EXPECT_FALSE(preferBulkMove(1, 1'000));
+}
+
+TEST(AnchorSet, FindIsResolveWithoutAnError) {
+    AnchorSet set(0, ByteOffset{20});
+    EXPECT_FALSE(set.find(AnchorId{1}).has_value()); // Empty set.
+    auto [one, a] = set.withAnchor(ByteOffset{4}, Bias::Left);
+    auto [two, b] = one.withAnchor(ByteOffset{9}, Bias::Right);
+    auto [three, c] = two.withAnchor(ByteOffset{2}, Bias::Left);
+    const AnchorSet released = three.without(b).value();
+    for (const AnchorSet* s : std::initializer_list<const AnchorSet*>{&one, &two, &three, &released}) {
+        for (const AnchorId id : {a, b, c, AnchorId{0}, AnchorId{c.value + 1}, AnchorId{~std::uint64_t{0}}}) {
+            const Result<ByteOffset> resolved = s->resolve(id);
+            const std::optional<ByteOffset> found = s->find(id);
+            ASSERT_EQ(found.has_value(), resolved.has_value()) << id.value;
+            if (found) {
+                EXPECT_EQ(*found, *resolved);
+            } else {
+                EXPECT_EQ(resolved.error().code(), ErrorCode::NotFound);
+            }
+        }
+    }
+    EXPECT_EQ(released.find(c), ByteOffset{2});
+    EXPECT_FALSE(released.find(b).has_value()); // Released: below the newest id, still absent.
+}
+
 TEST(AnchorSet, ResolveRangeOrder) {
     AnchorSet set(0, ByteOffset{10});
     std::vector<AnchorId> ids;
@@ -390,7 +527,9 @@ TEST(AnchorSet, StatsAreValues) {
 
 // 200 seeds x 2000 ops of create, release, transform and move against a naive vector.
 // One seed of MatchesNaiveModel: 2000 random ops against a naive vector model; "" or the first
-// difference.
+// difference. Transforms and moves cycle through the default path choice and both forced paths, so
+// each path meets the model at every set size (the measured thresholds send small sets to the
+// sweep and bulk paths almost always); moves are forced one by one only in batches of up to three.
 std::string runNaiveSeed(std::uint64_t seed) {
     struct Naive {
         AnchorId id;
@@ -432,7 +571,9 @@ std::string runNaiveSeed(std::uint64_t seed) {
                 a.offset = oracleMapBatch(a.offset, a.bias, batch);
             }
             size = static_cast<std::uint64_t>(static_cast<std::int64_t>(size) + delta);
-            set = set.transformed(batch, ++version);
+            // The default path choice, then each path forced (op % 3, so the ops stay the same).
+            set = op % 3 == 0 ? set.transformed(batch, ++version)
+                              : set.transformedForTesting(batch, ++version, op % 3 == 2);
         } else if (!model.empty()) {
             std::vector<ResolvedAnchor> moves;
             const std::uint64_t count = rng.below(8) == 0 ? model.size() : 1 + rng.below(3);
@@ -446,7 +587,15 @@ std::string runNaiveSeed(std::uint64_t seed) {
                 model[i].offset = rng.below(size + 1);
                 moves.push_back(ResolvedAnchor{model[i].id, ByteOffset{model[i].offset}, model[i].bias});
             }
-            set = set.withMoved(moves);
+            /*
+             * The same cycle, but a batch moving more than three anchors is never forced one by one:
+             * moving every anchor (one batch in eight) is the bulk path's case, which the default
+             * takes there, and forcing it per move tripled the Debug time (ADR 0017, test times).
+             * PerMoveAndBulkAgree compares the forced paths on larger batches.
+             */
+            const bool perMoveAllowed = moves.size() <= 3;
+            set = op % 3 == 0 || (op % 3 == 1 && !perMoveAllowed) ? set.withMoved(moves)
+                                                                  : set.withMovedForTesting(moves, op % 3 == 2);
         }
         const auto where = [&] { return std::format("seed {} op {}", seed, op); };
         if (op % 100 == 99 || op == 1999) {

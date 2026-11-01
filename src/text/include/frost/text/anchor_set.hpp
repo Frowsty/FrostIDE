@@ -36,6 +36,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -102,6 +103,10 @@ public:
     // The offset of anchor `id`. Errors: NotFound when the set has no such anchor. O(B log n).
     // Budget: B5.
     [[nodiscard]] Result<ByteOffset> resolve(AnchorId id) const noexcept;
+    // resolve() without the error: the offset of anchor `id`, or nullopt when the set has no such
+    // anchor. Never allocates; O(1) for an id newer than every anchor of the set (Document's
+    // restore scan asks about anchors created after the set was taken), else O(B log n).
+    [[nodiscard]] std::optional<ByteOffset> find(AnchorId id) const noexcept;
     // The offset and bias of anchor `id`. Errors: NotFound. O(B log n).
     [[nodiscard]] Result<Anchor> anchor(AnchorId id) const noexcept;
 
@@ -125,16 +130,20 @@ public:
      * ignored); a move to the anchor's current offset is skipped. A moved anchor goes after every
      * anchor of its class at the new offset. Precondition: every id exists, every offset <=
      * textSize(), each id at most once. O(r B log n) amortised for the r real moves, or a bulk
-     * rebuild of all three trees when r * ceil(log2(n + 2)) > n: O(n log n) (its index is sorted
-     * by id once; see ADR 0017).
+     * rebuild of all three trees in O(n log n) (its index is sorted by id once) when the measured
+     * cost model of anchor_paths.hpp prefers it: r * 8 * ceil(log2(n + 2)) > n (ADR 0017).
      */
     [[nodiscard]] AnchorSet withMoved(std::span<const ResolvedAnchor> moves) const noexcept;
+    // The same with the bulk path forced on (forceBulk) or off. Not public API: the white-box test
+    // that both paths agree and the path-cost probes.
+    [[nodiscard]] AnchorSet withMovedForTesting(std::span<const ResolvedAnchor> moves, bool forceBulk) const noexcept;
     /*
      * Maps every anchor through `batch` (anchor.hpp's rule), sets version() to `newVersion` and
      * textSize() to the size after the batch. Precondition (FROST_PRE): the batch is valid for a
      * text of textSize() bytes and sorted like applyEdits. Per step O(B log n + k) by splices, k
      * the anchors collapsed into a replaced range (O(B log n) when they already share one offset),
-     * or O(n + m) by one sweep when m * ceil(log2(n + 2)) > n. The two paths give identical sets.
+     * or O(n + m) by one sweep when the measured cost model of anchor_paths.hpp prefers it:
+     * m * 16 * ceil(log2(n + 2)) > n for the m non-no-op steps. The two paths give identical sets.
      * Budget: B5.
      */
     [[nodiscard]] AnchorSet transformed(std::span<const RawEdit> batch, std::uint64_t newVersion) const noexcept;
@@ -180,6 +189,8 @@ private:
     void updateIndexLabels(std::vector<std::pair<std::uint64_t, std::uint64_t>>& relabelled) noexcept;
     [[nodiscard]] AnchorSet transformImpl(std::span<const RawEdit> batch, std::uint64_t newVersion,
                                           int path) const noexcept;
+    // path: 0 chooses by the cost model, 1 forces the per-move path, 2 the bulk rebuild.
+    [[nodiscard]] AnchorSet movedImpl(std::span<const ResolvedAnchor> moves, int path) const noexcept;
     [[nodiscard]] AnchorSet movedBulk(std::span<const ResolvedAnchor> moves) const noexcept;
 
     detail::AnchorTree m_left;

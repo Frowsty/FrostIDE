@@ -40,14 +40,18 @@ PieceTree sliceOf(const PieceTree& tree, std::uint64_t a, std::uint64_t b) noexc
  * runs already passed; minY and maxY bound the current run in Y. For a run:
  *   before   = [minY - dR, maxY - dR - ΔR)   (X: no kept byte of the run is outside it)
  *   after    = [minY + dE, maxY + dE + ΔE)   (Z)
- *   removed  = Y[minY, r1.after.begin) + r1.removed + Y[r1.after.end, r2.after.begin) + ... +
- *              rk.removed + Y[rk.after.end, maxY)   (Y's kept bytes are X's bytes)
+ *   removed  = X[before]
  *   inserted = Z[after)
  * Within a run every Y byte lies in a region or an edit (the closed intervals touch), and between
  * runs at least one Y byte lies in neither, so the output is canonical.
+ *
+ * The removed bytes equal the spec's Y[minY, r1.after.begin) + r1.removed + ... + rk.removed +
+ * Y[rk.after.end, maxY) (Y's kept bytes are X's bytes), but are cut from X in one piece: building
+ * them from Y's pieces would add a one-byte piece per coalesced backspace (a review found 1000
+ * pieces for 1000 backspaces), which undo would then splice into the live tree.
  */
 std::vector<Region> composeRegions(std::span<const Region> regions, std::span<const RawEdit> batch,
-                                   const PieceTree& yTree, const PieceTree& zTree) noexcept {
+                                   const PieceTree& xTree, const PieceTree& zTree) noexcept {
     std::vector<Region> out;
     out.reserve(regions.size() + batch.size());
     std::size_t ri = 0;
@@ -108,16 +112,9 @@ std::vector<Region> composeRegions(std::span<const Region> regions, std::span<co
             deltaE += lengthDelta(batch[k].newBytes, batch[k].range.size());
         }
         std::int64_t deltaR = 0;
-        PieceTree removed;
-        std::uint64_t position = minY;
         for (std::size_t k = r0; k < ri; ++k) {
-            const Region& r = regions[k];
-            deltaR += lengthDelta(r.after.size(), r.before.size());
-            removed = PieceTree::concat(removed, sliceOf(yTree, position, r.after.begin.value()));
-            removed = PieceTree::concat(removed, r.removed);
-            position = r.after.end.value();
+            deltaR += lengthDelta(regions[k].after.size(), regions[k].before.size());
         }
-        removed = PieceTree::concat(removed, sliceOf(yTree, position, maxY));
         const ByteRange before{ByteOffset{shifted(minY, -dR)}, ByteOffset{shifted(shifted(maxY, -dR), -deltaR)}};
         const ByteRange after{ByteOffset{shifted(minY, dE)}, ByteOffset{shifted(shifted(maxY, dE), deltaE)}};
         dE += deltaE;
@@ -125,8 +122,9 @@ std::vector<Region> composeRegions(std::span<const Region> regions, std::span<co
         if (before.empty() && after.empty()) {
             continue; // The run netted to no change.
         }
-        out.push_back(
-            Region{before, after, std::move(removed), sliceOf(zTree, after.begin.value(), after.end.value())});
+        FROST_ASSERT(before.end.value() <= xTree.summary().bytes && after.end.value() <= zTree.summary().bytes);
+        out.push_back(Region{before, after, sliceOf(xTree, before.begin.value(), before.end.value()),
+                             sliceOf(zTree, after.begin.value(), after.end.value())});
     }
     return out;
 }
@@ -205,10 +203,17 @@ void UndoTree::eraseSubtree(std::uint64_t id) noexcept {
     while (!pending.empty()) {
         const std::uint64_t next = pending.back();
         pending.pop_back();
-        const UndoNode& doomed = node(next);
-        pending.insert(pending.end(), doomed.children.begin(), doomed.children.end());
-        nodes.erase(next);
+        NodeMap::node_type doomed = nodes.extract(next);
+        FROST_ASSERT(!doomed.empty());
+        pending.insert(pending.end(), doomed.mapped().children.begin(), doomed.mapped().children.end());
+        dropped.push_back(std::move(doomed)); // Freed later (releaseDropped).
         --nodeCount;
+    }
+}
+
+void UndoTree::releaseDropped(std::size_t count) noexcept {
+    for (; count > 0 && !dropped.empty(); --count) {
+        dropped.pop_back();
     }
 }
 
@@ -327,6 +332,10 @@ Result<void> UndoTree::checkShape(std::uint32_t maxTransactions) const noexcept 
     if (nodeCount - 1 > maxTransactions) {
         return fail(ErrorCode::Internal,
                     std::format("U3: {} transactions exceed the cap of {}", nodeCount - 1, maxTransactions));
+    }
+    if (dropped.size() > maxTransactions) {
+        return fail(ErrorCode::Internal, std::format("U3: {} dropped nodes wait to be freed, more than the cap of {}",
+                                                     dropped.size(), maxTransactions));
     }
     std::sort(ids.begin(), ids.end());
     std::sort(stateIds.begin(), stateIds.end());

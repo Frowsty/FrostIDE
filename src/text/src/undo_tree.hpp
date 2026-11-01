@@ -14,7 +14,14 @@
  * r_{i+1}.before.begin (at least one kept byte between them, likewise in Y),
  * r_i.after.begin - r_i.before.begin is the sum of the earlier regions' length deltas, and no
  * region has both ranges empty. The slices are PieceTrees of existing pieces, so a transaction
- * retains no Snapshot and copies no text.
+ * retains no Snapshot and copies no text. A removed slice is always cut from X's own tree in one
+ * piece (the compose base, below), so it holds X's pieces over `before`, at most two of them cut:
+ * a run of k coalesced backspaces keeps a slice of about k / maxPieceBytes + 2 pieces, not k
+ * one-byte pieces, and undo puts those pieces back into the live tree.
+ *
+ * The compose base. While the current node accepts edits (its transaction is open, or it is the
+ * open group's node), UndoTree keeps X's piece tree beside it; it retains only the nodes X no
+ * longer shares with the live text and is dropped when the node is sealed.
  *
  * Nodes live in an unordered_map keyed by id. The map is never iterated (traversals walk from the
  * root through children lists), so runs stay deterministic.
@@ -54,15 +61,16 @@ struct Region {
 
 /*
  * Composes the raw batch `batch` (coordinates of Y, ascending, no no-ops) into `regions` (X -> Y),
- * giving the regions X -> Z, where Z is the text after the batch. yTree is Y's piece tree and zTree
- * Z's. Regions (their after ranges) and edits are merged in begin order as closed intervals; each
- * maximal run of touching items becomes one region, whose removed slice joins Y's kept bytes and
- * the runs' removed slices and whose inserted slice is cut from Z; a run that nets to no change
- * (both ranges empty) is dropped, and a run that is a single region is kept with its after range
- * shifted. O(p + m) to merge plus O(B log n + P) per slice cut.
+ * giving the regions X -> Z, where Z is the text after the batch. xTree is X's piece tree (Y's when
+ * `regions` is empty, since then X == Y) and zTree Z's. Regions (their after ranges) and edits are
+ * merged in begin order as closed intervals; each maximal run of touching items becomes one region,
+ * whose removed slice is cut from X over its before range and whose inserted slice is cut from Z
+ * over its after range; a run that nets to no change (both ranges empty) is dropped, and a run that
+ * is a single region is kept with its after range shifted. O(p + m) to merge plus O(B log n + P)
+ * per slice cut (two per merged run).
  */
 [[nodiscard]] std::vector<Region> composeRegions(std::span<const Region> regions, std::span<const RawEdit> batch,
-                                                 const PieceTree& yTree, const PieceTree& zTree) noexcept;
+                                                 const PieceTree& xTree, const PieceTree& zTree) noexcept;
 
 // U4 for one node: canonical regions within texts of xSize and ySize bytes, slice sizes equal to
 // their ranges. ErrorCode::Internal naming the violation. O(regions).
@@ -101,6 +109,12 @@ struct Composition {
 // The tree plus the state Document keeps beside it. Plain data with helpers; Document maintains
 // the invariants (Document::checkInvariants checks them).
 struct UndoTree {
+    using NodeMap = std::unordered_map<std::uint64_t, UndoNode>;
+
+    // Nodes of dropped subtrees freed per later operation (releaseDropped). Freeing one node costs
+    // about 1.3 us on REF-W1 with 10k-100k anchors (its slices and anchor-set path copies).
+    static constexpr std::size_t kReleasedPerOp = 4;
+
     UndoTree() noexcept;
 
     [[nodiscard]] UndoNode& node(std::uint64_t id) noexcept;
@@ -114,8 +128,21 @@ struct UndoTree {
     // Applies the history cap after a node was created (decision 11, section 3.10): while the
     // nodes excluding the root exceed `maxTransactions`, drop the root's oldest child subtree that
     // does not hold the current node (repairing the root's redo child), or re-root when the root
-    // has one child. Never removes the current node or its ancestors.
+    // has one child. Never removes the current node or its ancestors. A dropped subtree leaves the
+    // tree at once (O(1) per node) but is freed later by releaseDropped, so the keystroke that
+    // drops an old redo branch of up to maxTransactions nodes does not pay for freeing it.
     void prune(std::uint32_t maxTransactions) noexcept;
+    // Frees up to `count` nodes that prune dropped (any order). Document calls it once per
+    // recorded change, undo and redo with kReleasedPerOp. After a drop of s nodes the cap is
+    // reached again only after s more new nodes, each freeing kReleasedPerOp >= 1 of them, so
+    // `dropped` holds at most one dropped subtree: at most maxTransactions nodes. O(count) node
+    // destructions.
+    void releaseDropped(std::size_t count) noexcept;
+    // Drops the compose base (header comment): the current node stopped accepting edits.
+    void dropComposeBase() noexcept {
+        composeBase = {};
+        composeBaseNode = kNoNode;
+    }
     // Removes leaf `id` (rollback): the parent's redo child becomes `previousRedoChild` if it still
     // exists, else the parent's child with the largest sequence, else none.
     void removeLeaf(std::uint64_t id, std::uint64_t previousRedoChild) noexcept;
@@ -124,7 +151,14 @@ struct UndoTree {
     // U3 (Document::checkInvariants). O(nodes).
     [[nodiscard]] Result<void> checkShape(std::uint32_t maxTransactions) const noexcept;
 
-    std::unordered_map<std::uint64_t, UndoNode> nodes;
+    NodeMap nodes;
+    // Subtrees the history cap removed, waiting for releaseDropped; not part of the tree (nodeCount
+    // excludes them). Destroyed with the UndoTree, before the TextBuffer.
+    std::vector<NodeMap::node_type> dropped;
+    // X of the current node while it accepts edits; composeBaseNode is that node, or kNoNode when
+    // no base is held (Document::checkInvariants, U8).
+    PieceTree composeBase;
+    std::uint64_t composeBaseNode = kNoNode;
     std::uint64_t root = 0;
     std::uint64_t current = 0;
     std::uint64_t nextId = 1;

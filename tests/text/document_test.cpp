@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -395,6 +396,105 @@ TEST(DocumentUndo, HistoryCapPrunes) {
     }
 }
 
+// The history cap removes a dropped redo branch from the tree at once but frees its nodes a few per
+// later operation (UndoTree::kReleasedPerOp), so the keystroke that drops it stays cheap.
+TEST(DocumentUndo, HistoryCapDefersDroppedBranch) {
+    using frost::text::detail::UndoTree;
+    Fixture f("", DocumentOptions{.maxTransactions = 12});
+    for (std::uint64_t i = 0; i < 10; ++i) {
+        (void)f.doc.replace(range(i, i), "a", EditContext{}).value(); // Branch A: 10 transactions.
+    }
+    for (int i = 0; i < 10; ++i) {
+        (void)f.doc.undo().value();
+    }
+    (void)f.doc.replace(range(0, 0), "b", EditContext{}).value(); // Branch B: 11 transactions,
+    (void)f.doc.replace(range(1, 1), "b", EditContext{}).value(); // 12,
+    EXPECT_TRUE(f.doc.undoTreeForTesting().dropped.empty());
+    (void)f.doc.replace(range(2, 2), "b", EditContext{}).value(); // 13 > 12: A's 10 nodes go.
+    EXPECT_EQ(f.doc.undoState().transactions, 3u);
+    EXPECT_EQ(f.doc.undoTreeForTesting().dropped.size(), 10 - UndoTree::kReleasedPerOp);
+    ASSERT_TRUE(valid(f.doc));
+    (void)f.doc.replace(range(3, 3), "b", EditContext{}).value();
+    EXPECT_EQ(f.doc.undoTreeForTesting().dropped.size(), 10 - 2 * UndoTree::kReleasedPerOp);
+    (void)f.doc.undo().value(); // Undo and redo free dropped nodes too.
+    EXPECT_TRUE(f.doc.undoTreeForTesting().dropped.empty());
+    EXPECT_EQ(text(f.doc), "bbb");
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(f.doc.undo().has_value());
+    }
+    EXPECT_EQ(text(f.doc), "");
+    EXPECT_EQ(f.doc.undoState().redoBranches, 1u); // Only B survives.
+    EXPECT_EQ(f.doc.undo().error().code(), ErrorCode::NotFound);
+    EXPECT_TRUE(valid(f.doc));
+}
+
+std::size_t pieceCount(const frost::text::detail::PieceTree& tree) {
+    std::size_t count = 0;
+    for (frost::text::detail::PieceTree::Cursor c = tree.first(); c.item() != nullptr; c.next()) {
+        ++count;
+    }
+    return count;
+}
+
+/*
+ * Coalesced delete runs and groups of deletes keep the removed text as the parent text's own
+ * pieces (a review found one one-byte piece per keystroke, both in the history and, after undo, in
+ * the live tree): a run removing k bytes keeps a slice of at most k / maxPieceBytes + 2 pieces, and
+ * its undo leaves the document at most two pieces larger than before the run (the two cuts).
+ */
+TEST(DocumentUndo, DeleteRunsKeepWholePieces) {
+    std::string initial;
+    for (int i = 0; i < 20'000; ++i) {
+        initial += static_cast<char>('a' + i % 26);
+    }
+    constexpr std::uint64_t kDeletes = 1000;
+    for (const std::uint32_t maxPieceBytes : {4096u, 16u}) {
+        for (const int mode : {0, 1, 2}) { // DeleteBackward, DeleteForward, a group of backspaces.
+            const std::string label = std::format("maxPieceBytes {} mode {}", maxPieceBytes, mode);
+            Fixture f(initial, {}, TextBufferOptions{.maxPieceBytes = maxPieceBytes});
+            const std::size_t piecesBefore = pieceCount(f.doc.text().pieceTree());
+            if (mode == 2) {
+                ASSERT_TRUE(f.doc.beginGroup(EditContext{}).has_value());
+            }
+            std::uint64_t cursor = 12'345;
+            for (std::uint64_t i = 0; i < kDeletes; ++i) {
+                if (mode == 1) {
+                    (void)f.doc
+                        .replace(range(cursor, cursor + 1), "",
+                                 EditContext{EditKind::DeleteForward, caret(cursor), caret(cursor)})
+                        .value();
+                } else {
+                    (void)f.doc
+                        .replace(range(cursor - 1, cursor), "",
+                                 EditContext{EditKind::DeleteBackward, caret(cursor), caret(cursor - 1)})
+                        .value();
+                    --cursor;
+                }
+                if (i % 250 == 0) {
+                    ASSERT_TRUE(valid(f.doc)) << label; // U5 compares the removed slice with X.
+                }
+            }
+            if (mode == 2) {
+                ASSERT_TRUE(f.doc.endGroup({}).has_value());
+            }
+            ASSERT_EQ(f.doc.undoState().transactions, 1u) << label;
+            const auto& regions = f.doc.undoTreeForTesting().currentNode().regions;
+            ASSERT_EQ(regions.size(), 1u) << label;
+            EXPECT_EQ(regions[0].removed.summary().bytes, kDeletes) << label;
+            EXPECT_LE(pieceCount(regions[0].removed), kDeletes / maxPieceBytes + 2) << label;
+            const std::string afterRun = text(f.doc);
+            (void)f.doc.undo().value();
+            EXPECT_EQ(text(f.doc), initial) << label;
+            EXPECT_LE(pieceCount(f.doc.text().pieceTree()), piecesBefore + 2) << label;
+            (void)f.doc.redo().value();
+            EXPECT_EQ(text(f.doc), afterRun) << label;
+            (void)f.doc.undo().value();
+            EXPECT_LE(pieceCount(f.doc.text().pieceTree()), piecesBefore + 2) << label;
+            EXPECT_TRUE(valid(f.doc)) << label;
+        }
+    }
+}
+
 TEST(DocumentUndo, StateIdTracksSavedState) {
     Fixture f("text");
     const std::uint64_t saved = f.doc.undoState().stateId;
@@ -634,6 +734,30 @@ TEST(DocumentGroup, Rollback) {
     EXPECT_TRUE(valid(f.doc));
     (void)f.doc.redo().value();
     EXPECT_EQ(text(f.doc), ">hello world");
+}
+
+// The parent's earlier redo child comes back even when it is not its last child (the review's
+// mutation "rollback ignores the previous redoChild" passed DocumentGroup.Rollback, whose parent
+// had one child).
+TEST(DocumentGroup, RollbackRestoresEarlierRedoChild) {
+    Fixture f("text");
+    (void)f.doc.replace(range(0, 0), "A", EditContext{}).value();
+    (void)f.doc.undo().value();
+    (void)f.doc.replace(range(0, 0), "B", EditContext{}).value();
+    (void)f.doc.undo().value();
+    (void)f.doc.redo(0u).value(); // Back into A, then out: the root's redo child is A, not B.
+    (void)f.doc.undo().value();
+    const auto& root = f.doc.undoTreeForTesting().currentNode();
+    ASSERT_EQ(root.children.size(), 2u);
+    const std::uint64_t redoChild = root.redoChild;
+    ASSERT_EQ(redoChild, root.children.front());
+    ASSERT_TRUE(f.doc.beginGroup(EditContext{}).has_value());
+    (void)f.doc.replace(range(4, 4), "!", EditContext{}).value();
+    (void)f.doc.rollbackGroup().value();
+    EXPECT_EQ(f.doc.undoTreeForTesting().currentNode().redoChild, redoChild);
+    (void)f.doc.redo().value();
+    EXPECT_EQ(text(f.doc), "Atext");
+    EXPECT_TRUE(valid(f.doc));
 }
 
 TEST(DocumentGroup, RollbackAfterPrune) {

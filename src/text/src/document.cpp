@@ -56,6 +56,12 @@ std::string sliceText(const detail::PieceTree& slice) {
     return out;
 }
 
+// The bytes [a, b) of `tree`. O(B log n + P + (b - a)).
+std::string treeText(const detail::PieceTree& tree, std::uint64_t a, std::uint64_t b) {
+    const detail::PieceTree right = detail::splitAtByte(tree, a).second;
+    return sliceText(detail::splitAtByte(right, b - a).first);
+}
+
 std::int64_t sizeDelta(const UndoNode& node) noexcept {
     std::int64_t delta = 0;
     for (const detail::Region& r : node.regions) {
@@ -227,25 +233,32 @@ void Document::recordChange(const detail::PieceTree& before, std::span<const Raw
             created.anchorsBefore = anchorsBefore;
             u.current = created.id;
             u.groupNode = created.id;
+            u.composeBase = before; // X of the group (undo_tree.hpp, the compose base).
+            u.composeBaseNode = created.id;
             u.prune(m_options.maxTransactions);
         }
         UndoNode& group = u.currentNode();
-        group.regions = detail::composeRegions(group.regions, edits, before, after);
+        FROST_ASSERT(u.composeBaseNode == group.id);
+        group.regions = detail::composeRegions(group.regions, edits, u.composeBase, after);
         group.lastEdit = now;
         group.stateId = ++u.stateCounter;
+        u.releaseDropped(UndoTree::kReleasedPerOp);
         return;
     }
     UndoNode& current = u.currentNode();
     // Decision 7. The current node is never the root when open (U8).
     if (current.open && coalescable(kind) && kind == current.kind &&
         now - current.lastEdit <= m_options.coalesceWindow && context.selectionsBefore == current.selectionsAfter) {
-        current.regions = detail::composeRegions(current.regions, edits, before, after);
+        FROST_ASSERT(u.composeBaseNode == current.id);
+        current.regions = detail::composeRegions(current.regions, edits, u.composeBase, after);
         current.selectionsAfter = context.selectionsAfter;
         current.lastEdit = now;
         current.stateId = ++u.stateCounter;
+        u.releaseDropped(UndoTree::kReleasedPerOp);
         return;
     }
     current.open = false;
+    u.dropComposeBase();
     UndoNode& created = u.createChild(u.current);
     created.kind = kind;
     created.regions = detail::composeRegions({}, edits, before, after);
@@ -255,19 +268,35 @@ void Document::recordChange(const detail::PieceTree& before, std::span<const Raw
     created.lastEdit = now;
     created.open = coalescable(kind);
     created.stateId = ++u.stateCounter;
+    if (created.open) {
+        u.composeBase = before;
+        u.composeBaseNode = created.id;
+    }
     u.current = created.id;
     u.prune(m_options.maxTransactions);
+    u.releaseDropped(UndoTree::kReleasedPerOp);
 }
 
-void Document::breakCoalescing() noexcept { m_undo->currentNode().open = false; }
+void Document::breakCoalescing() noexcept {
+    UndoTree& u = *m_undo;
+    u.currentNode().open = false;
+    if (u.groupNode == kNoNode) {
+        u.dropComposeBase(); // An open group's node keeps its base until endGroup.
+    }
+}
 
 std::vector<TextChange> Document::replay(std::span<const detail::SliceEdit> slices, std::span<const RawEdit> raw,
                                          const AnchorSet& restoreFrom, std::span<const ByteRange> ranges) noexcept {
     std::vector<TextChange> changes = m_buffer.replaySlices(slices);
     AnchorSet mapped = m_anchors.transformed(raw, m_buffer.version());
-    // The restore scan (header comment): the anchors in each closed range, matched by id with the
-    // anchors of `restoreFrom` in the same range; one outside it (not expected, by the argument
-    // above) is looked up directly.
+    /*
+     * The restore scan (header comment): the anchors in each closed range, matched by id with the
+     * anchors of `restoreFrom` in the same range. Any other anchor is looked up with find(), which
+     * rejects an id newer than all of restoreFrom's in O(1) and never allocates. Those are the
+     * anchors created after restoreFrom was taken (for example inside a paste whose undo collapses
+     * them), the only kind the scan can meet there: an older live anchor is in restoreFrom (ids
+     * are never reused) and, by the argument above, in the same closed range.
+     */
     std::vector<ResolvedAnchor> moves;
     for (const ByteRange& range : ranges) {
         std::vector<ResolvedAnchor> here = mapped.resolveRange(range);
@@ -285,7 +314,7 @@ std::vector<TextChange> Document::replay(std::span<const detail::SliceEdit> slic
             ByteOffset target = anchor.offset;
             if (k < there.size() && there[k].id == anchor.id) {
                 target = there[k].offset;
-            } else if (Result<ByteOffset> elsewhere = restoreFrom.resolve(anchor.id); elsewhere) {
+            } else if (const std::optional<ByteOffset> elsewhere = restoreFrom.find(anchor.id)) {
                 target = *elsewhere;
             }
             if (target != anchor.offset) {
@@ -316,8 +345,10 @@ ChangeSet Document::undoNode(std::uint64_t id, ChangeOrigin origin) noexcept {
     }
     std::vector<TextChange> changes = replay(slices, raw, node.anchorsBefore, ranges);
     node.open = false;
+    u.dropComposeBase(); // `id` is the current node (undo, or the open group's node at rollback).
     u.current = node.parent;
     u.node(node.parent).redoChild = id;
+    u.releaseDropped(UndoTree::kReleasedPerOp);
     ChangeSet out;
     out.origin = origin;
     out.baseVersion = baseVersion;
@@ -381,8 +412,10 @@ Result<ChangeSet> Document::redo(std::optional<std::uint32_t> branch) noexcept {
     }
     std::vector<TextChange> changes = replay(slices, raw, child.anchorsAfter, ranges);
     current.open = false;
+    u.dropComposeBase();
     current.redoChild = id;
     u.current = id;
+    u.releaseDropped(UndoTree::kReleasedPerOp);
     ChangeSet out;
     out.origin = ChangeOrigin::Redo;
     out.baseVersion = baseVersion;
@@ -400,6 +433,7 @@ Result<void> Document::beginGroup(const EditContext& context) noexcept {
     }
     if (u.groupDepth == 0) {
         u.currentNode().open = false;
+        u.dropComposeBase();
         u.groupKind = context.kind;
         u.groupSelectionsBefore = context.selectionsBefore;
         u.groupNode = kNoNode;
@@ -421,6 +455,7 @@ Result<void> Document::endGroup(const SelectionSet& selectionsAfter) noexcept {
         u.node(u.groupNode).selectionsAfter = selectionsAfter;
     }
     u.currentNode().open = false;
+    u.dropComposeBase();
     u.groupNode = kNoNode;
     u.groupSelectionsBefore = {};
     u.groupPreviousRedoChild = kNoNode;
@@ -633,13 +668,29 @@ Result<void> Document::checkInvariants() const noexcept {
             pending.emplace_back(childId, childSize);
         }
     }
-    // U5.
+    // U5. While the compose base is held (U8), the removed slices are X's bytes as well.
     if (u.current != u.root) {
-        for (const detail::Region& r : u.currentNode().regions) {
+        const UndoNode& current = u.currentNode();
+        const bool baseHeld = u.composeBaseNode == u.current;
+        const std::int64_t delta = sizeDelta(current);
+        const std::uint64_t committedSize = committed.size().value();
+        const std::uint64_t xSize = delta >= 0 ? committedSize - static_cast<std::uint64_t>(delta)
+                                               : committedSize + static_cast<std::uint64_t>(-delta);
+        if (baseHeld && u.composeBase.summary().bytes != xSize) {
+            return fail(ErrorCode::Internal, std::format("U5: the compose base has {} bytes, the parent text {}",
+                                                         u.composeBase.summary().bytes, xSize));
+        }
+        for (const detail::Region& r : current.regions) {
             if (sliceText(r.inserted) != committed.text(r.after)) {
                 return fail(ErrorCode::Internal,
                             std::format("U5: the inserted slice of [{}, {}) differs from the committed text",
                                         r.after.begin, r.after.end));
+            }
+            if (baseHeld &&
+                sliceText(r.removed) != treeText(u.composeBase, r.before.begin.value(), r.before.end.value())) {
+                return fail(ErrorCode::Internal,
+                            std::format("U5: the removed slice of [{}, {}) differs from the compose base",
+                                        r.before.begin, r.before.end));
             }
         }
     }
@@ -673,6 +724,18 @@ Result<void> Document::checkInvariants() const noexcept {
             return fail(ErrorCode::Internal, std::format("U8: node {} is open", at));
         }
         walk.insert(walk.end(), n.children.begin(), n.children.end());
+    }
+    // U8 (the compose base): held, for the current node, exactly while that node accepts edits.
+    const bool accepting =
+        u.current != u.root && (u.currentNode().open || (u.groupNode != kNoNode && u.groupNode == u.current));
+    if (accepting != (u.composeBaseNode != kNoNode) ||
+        (u.composeBaseNode != kNoNode && u.composeBaseNode != u.current)) {
+        return fail(ErrorCode::Internal,
+                    std::format("U8: the compose base belongs to node {}, the current node {} {}", u.composeBaseNode,
+                                u.current, accepting ? "accepts edits" : "accepts none"));
+    }
+    if (u.composeBaseNode == kNoNode && !u.composeBase.empty()) {
+        return fail(ErrorCode::Internal, "U8: a dropped compose base still holds pieces");
     }
     return {};
 }

@@ -12,10 +12,11 @@
 #   text_tests         anchors, AnchorSet, SelectionSet, Document (undo, coalescing, groups, IME),
 #                      region composition (white-box), the 200-seed undo differential against the
 #                      UndoOracle, the undo identity properties and concurrent anchor readers
-#   text_stress_tests  the undo differential at 500k ops and concurrent anchor readers at 500k ops
+#   text_stress_tests  the undo differential at 500k ops, the same with thousands of anchors at
+#                      100k ops, and concurrent anchor readers at 500k ops
 #   text_perf_tests    Document typing and undo/redo latency (B5 text sub-budget) and the anchor and
 #                      caret report
-# The white-box tests read the library's private undo_tree.hpp (src/text/src).
+# The white-box tests read the library's private undo_tree.hpp and anchor_paths.hpp (src/text/src).
 add_subdirectory(support)
 
 frost_add_test(text_tests

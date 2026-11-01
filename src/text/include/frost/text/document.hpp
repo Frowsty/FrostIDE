@@ -10,7 +10,13 @@
  * storage (nothing is copied). Undo and redo replay those slices through TextBuffer::replaySlices,
  * so their TextChanges are precise and LSP-replayable, at a cost independent of the edited size. A
  * new transaction becomes a new child of the current node, so older children survive as redo
- * branches; redo() follows the most recently created or undone-from child.
+ * branches; redo() follows the most recently created or undone-from child. Removed slices are cut
+ * from the parent text's own tree, so a run of coalesced deletes keeps whole pieces. When the
+ * history cap drops an old redo branch, its nodes are freed a few per later operation, not all in
+ * the keystroke that dropped them.
+ *
+ * TODO(M11): chronological undo traversal (Vim-style g-/g+), jumping to a state, an undo-tree
+ * enumeration API and the undo-tree / Local History view (feature row 218).
  *
  * Coalescing (decision 7). An edit joins the current node's open transaction iff its kind is
  * Typing, DeleteBackward or DeleteForward and equals the transaction's, the transaction is open,
@@ -259,13 +265,16 @@ public:
      * Checks U1-U8 (ADR 0017): U1 the TextBuffer invariants; U2 the registry's invariants, its
      * version and size match the text, every anchor is on a char boundary; U3 the tree's shape
      * (parent and children agree, redoChild is a child and none exactly when there are none, the
-     * current node is reachable, nodes - 1 <= maxTransactions, sequences increase along children,
-     * unique ids and stateIds); U4 every node's regions are canonical with slice sizes equal to
-     * their ranges and anchor sets sized like X and Y; U5 the current node's inserted slices equal
-     * the committed text; U6 while composing, the text is base[0, start) + preedit + base[start, ..)
-     * over shared storage; U7 a group and a composition are never active together and the group
-     * node is current; U8 an open transaction is the current non-root node with a coalescable kind
-     * and no group open. Returns ErrorCode::Internal naming the first violation. Writer thread;
+     * current node is reachable, nodes - 1 <= maxTransactions, at most maxTransactions dropped
+     * nodes wait to be freed, sequences increase along children, unique ids and stateIds); U4 every
+     * node's regions are canonical with slice sizes equal to their ranges and anchor sets sized
+     * like X and Y; U5 the current node's inserted slices equal the committed text and, while it
+     * accepts edits, its removed slices equal its parent text (the compose base); U6 while
+     * composing, the text is base[0, start) + preedit + base[start, ..) over shared storage; U7 a
+     * group and a composition are never active together and the group node is current; U8 an open
+     * transaction is the current non-root node with a coalescable kind and no group open, and the
+     * compose base is held exactly while the current node accepts edits (open, or the open
+     * group's node). Returns ErrorCode::Internal naming the first violation. Writer thread;
      * O(bytes + anchors B log n + regions).
      */
     [[nodiscard]] Result<void> checkInvariants() const noexcept;

@@ -13,7 +13,8 @@
  * cleared, the whole space at i = 64) and count its entries n_i; at the first i with
  * n_i + 1 <= t_i = floor((4/3)^i), spread the block's entries and one free slot (right after lo)
  * evenly over the block. That gives amortised O(log n) relabelled entries per insertion. The code
- * here is written from the paper's description.
+ * here is written from the slice spec's description of that algorithm (its section 4.3); the
+ * paper itself was not consulted (ADR 0017, Sources).
  *
  * Splices (section 4.2 of the slice spec). For one step [a, b) -> n:
  *   Left tree:  split at the first offset > a (anchors at a keep their offset); the middle,
@@ -29,11 +30,11 @@
 
 #include "frost/core/assert.hpp"
 
+#include "anchor_paths.hpp"
 #include "batch_mapper.hpp"
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <format>
 #include <tuple>
 
@@ -46,6 +47,7 @@ using detail::AnchorIndexEntry;
 using detail::AnchorIndexSummary;
 using detail::AnchorSummary;
 using detail::AnchorTree;
+using detail::ceilLog2;
 
 constexpr std::uint64_t kNoLabelAbove = ~std::uint64_t{0}; // 2^64 - 1: no right neighbour.
 constexpr std::uint64_t kMaxLabel = kNoLabelAbove - 1;     // 2^64 - 2.
@@ -65,9 +67,6 @@ constexpr std::array<std::uint64_t, 65> kThresholds = [] {
 }();
 static_assert(kThresholds[1] == 1 && kThresholds[8] == 9, "t_i = floor((4/3)^i)");
 static_assert(kThresholds[64] > AnchorSet::kMaxAnchors, "a relabel of the whole label space always succeeds");
-
-// ceil(log2(x)) for x >= 1.
-constexpr std::uint64_t ceilLog2(std::uint64_t x) noexcept { return static_cast<std::uint64_t>(std::bit_width(x - 1)); }
 
 constexpr std::uint64_t shifted(std::uint64_t x, std::int64_t delta) noexcept {
     return delta >= 0 ? x + static_cast<std::uint64_t>(delta) : x - static_cast<std::uint64_t>(-delta);
@@ -224,9 +223,19 @@ bool byOffsetBiasId(const ResolvedAnchor& x, const ResolvedAnchor& y) noexcept {
 AnchorSet::AnchorSet(std::uint64_t version, ByteOffset textSize) noexcept : m_version(version), m_textSize(textSize) {}
 
 Result<ByteOffset> AnchorSet::resolve(AnchorId id) const noexcept {
+    if (const std::optional<ByteOffset> found = find(id)) {
+        return *found;
+    }
+    return fail(ErrorCode::NotFound, std::format("no anchor with id {}", id.value));
+}
+
+std::optional<ByteOffset> AnchorSet::find(AnchorId id) const noexcept {
+    if (id.value > m_index.summary().maxId) {
+        return std::nullopt; // Newer than every anchor here (an empty index has maxId 0).
+    }
     const AnchorIndexEntry* entry = findIndexEntry(m_index, id.value);
     if (entry == nullptr) {
-        return fail(ErrorCode::NotFound, std::format("no anchor with id {}", id.value));
+        return std::nullopt;
     }
     return ByteOffset{findByLabel(tree(entry->bias), entry->label).second};
 }
@@ -385,12 +394,17 @@ Result<AnchorSet> AnchorSet::without(AnchorId id) const noexcept {
     return out;
 }
 
-AnchorSet AnchorSet::withMoved(std::span<const ResolvedAnchor> moves) const noexcept {
+AnchorSet AnchorSet::withMoved(std::span<const ResolvedAnchor> moves) const noexcept { return movedImpl(moves, 0); }
+
+AnchorSet AnchorSet::withMovedForTesting(std::span<const ResolvedAnchor> moves, bool forceBulk) const noexcept {
+    return movedImpl(moves, forceBulk ? 2 : 1);
+}
+
+AnchorSet AnchorSet::movedImpl(std::span<const ResolvedAnchor> moves, int path) const noexcept {
     if (moves.empty()) {
         return *this;
     }
-    const std::uint64_t n = size();
-    if (moves.size() * ceilLog2(n + 2) > n) {
+    if (path == 2 || (path == 0 && detail::preferBulkMove(moves.size(), size()))) {
         return movedBulk(moves);
     }
     AnchorSet out = *this;
@@ -511,8 +525,7 @@ AnchorSet AnchorSet::transformImpl(std::span<const RawEdit> batch, std::uint64_t
     if (steps == 0 || empty()) {
         return out;
     }
-    const std::uint64_t n = size();
-    const bool sweep = path == 2 || (path == 0 && steps * ceilLog2(n + 2) > n);
+    const bool sweep = path == 2 || (path == 0 && detail::preferSweep(steps, size()));
     if (sweep) {
         detail::BatchMapper leftMapper(batch);
         detail::BatchMapper rightMapper = leftMapper;
