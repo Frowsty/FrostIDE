@@ -193,13 +193,17 @@ public:
     frost::Result<std::vector<frost::io::DirEntry>> listDirectory(std::string_view path) override {
         auto entries = m_inner.listDirectory(path);
         if (entries) {
-            for (const std::string& link : links) {
-                if (frost::io::parentPath(link) == path) {
-                    entries->push_back({std::string(frost::io::fileName(link)), frost::io::FileType::Symlink});
-                }
-            }
+            addLinks(path, *entries);
         }
         return entries;
+    }
+    // The same entries as listDirectory(), with MemFs's issues (ADR 0020).
+    frost::Result<frost::io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        auto listing = m_inner.listDirectoryWithDiagnostics(path);
+        if (listing) {
+            addLinks(path, listing->entries);
+        }
+        return listing;
     }
     frost::Result<void> createDirectories(std::string_view path) override { return m_inner.createDirectories(path); }
     frost::Result<void> removeFile(std::string_view path) override {
@@ -213,6 +217,15 @@ public:
     frost::Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
 
 private:
+    // Appends each entry of `links` whose parent is `path`, as a Symlink.
+    void addLinks(std::string_view path, std::vector<frost::io::DirEntry>& entries) const {
+        for (const std::string& link : links) {
+            if (frost::io::parentPath(link) == path) {
+                entries.push_back({std::string(frost::io::fileName(link)), frost::io::FileType::Symlink});
+            }
+        }
+    }
+
     frost::io::MemFs& m_inner;
 };
 
