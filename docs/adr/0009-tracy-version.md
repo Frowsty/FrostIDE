@@ -1,6 +1,12 @@
 # ADR 0009: Tracy version
 
-- Status: accepted for the version: Tracy 0.14.1 (item 1). Using Tracy in FrostIDE at all (items 2–9) is
+- Status: accepted, items 1–9. **Decided 2026-11-01 (ADR 0011, D1–D3)**, on the user's instruction of that day
+  to follow the recommendation: the dev-builds-only exception to the listener policy is granted for Tracy
+  (option (a), D1) under item 3's conditions and item 5's options, so items 2–9 are decisions and M1's work list
+  (Consequences) applies; budget and perf runs never start Tracy (D2); PLAN.md's dependency entry now reads
+  "tracy (version chosen in M0: 0.14.1 from the vcpkg baseline; use under the dev-builds-only listener exception
+  of ADR 0009)" (D3). Until then the status read:
+  accepted for the version: Tracy 0.14.1 (item 1). Using Tracy in FrostIDE at all (items 2–9) is
   **conditional on the user's approval** of an exception to the listener policy (PLAN.md 2.2 "Local listeners"
   and 5.2): Tracy's client is an unauthenticated TCP listener, and it can have neither a token nor an ACL. Until
   the user grants that exception, M1 adds nothing (no `vcpkg.json` entry, no `FROST_TRACY` option, no 5.2 row),
@@ -146,6 +152,7 @@ Measurements, "Symbol worker and shutdown".
      (pinned in M0)". Nothing in `vcpkg.json` names tracy yet, because tracy is not a dependency until M1, and
      only if the exception is granted. PLAN.md is unchanged: a clearer wording of its dependency entry is
      proposed to the user, not applied.
+     **Decided 2026-11-01 (ADR 0011, D3):** the wording is applied, adjusted for the granted exception.
    - An `overrides` entry is possible today without the dependency, and frost-licensecheck accepts it (measured,
      see "Pinning check"). It changes nothing that vcpkg installs while tracy is not a dependency, so it would
      only record intent; it is added together with the dependency in M1 instead.
@@ -164,6 +171,7 @@ Measurements, "Symbol worker and shutdown".
        install). EXACT does not see the port version: a 0.14.1#2 with other patches or options would pass it. The
        override covers that.
 3. **Dev builds only, off unless explicitly enabled for a run.** These are the conditions of the exception.
+   **Decided 2026-11-01 (ADR 0011, D1):** the exception is granted under these conditions.
    - Tracy is linked only when a `FROST_TRACY` CMake option is on. Only the dev presets may turn it on;
      configure fails if it is on in a release or packaging preset. Release and shipped builds contain no Tracy
      code (test in Consequences).
@@ -174,7 +182,7 @@ Measurements, "Symbol worker and shutdown".
      `TRACY_NO_CODE_TRANSFER`, `TRACY_MANUAL_LIFETIME`, `TRACY_NO_CALLSTACK`, `TRACY_NO_SYSTEM_TRACING`, no crash
      handler.
    - Budget and perf runs (`frost-bench`, `verify -Perf`) never start it. This rule is new and awaits the
-     user's confirmation too.
+     user's confirmation too. **Decided 2026-11-01 (ADR 0011, D2):** confirmed.
    - The developer starts it only on a machine without untrusted local processes or other users, and knows
      that, while it runs, a local process can read the IDE's memory (threat model).
 4. **Manifest entry for M1.** M1 adds `{ "name": "tracy", "default-features": false, "features": ["on-demand"] }`,

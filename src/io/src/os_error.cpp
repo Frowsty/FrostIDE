@@ -64,8 +64,12 @@ ErrorCode errorCodeFromErrno(int errnoValue) noexcept {
 }
 
 Error errnoError(int errnoValue, std::string_view operation, std::string_view path, std::source_location where) {
-    // generic_category().message is thread-safe (unlike strerror). On glibc it follows LC_MESSAGES, which Qt
-    // sets from the environment, so English is guaranteed only in a "C"-locale process (see os_error.hpp).
+    /*
+     * generic_category().message is thread-safe (unlike strerror). On glibc it follows LC_MESSAGES, which Qt
+     * sets from the environment, so English is guaranteed only in a "C"-locale process (see os_error.hpp).
+     * TODO(M1): make the text English in every locale (for example strerror_l with a "C" locale from newlocale),
+     * with a test under a translated locale, which this WSL lacks (comment-accuracy round 2; ADR 0011, G3).
+     */
     const std::string detail = std::format("{} (errno {})", std::generic_category().message(errnoValue), errnoValue);
     return Error(errorCodeFromErrno(errnoValue), formatMessage(operation, path, detail), where);
 }

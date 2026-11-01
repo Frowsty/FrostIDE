@@ -1,6 +1,10 @@
 # ADR 0008: Spike S7, stock clangd index load and first workspace/symbol on R3
 
-- Status: accepted, except two points that are proposed, pending the user's confirmation: B24's M3 value of
+- Status: accepted. **Decided 2026-11-01 (ADR 0011, C1 and C2)**, on the user's instruction of that day to
+  follow the recommendation: B24's M3 value of p50 18.4 s and the quiet-machine requirement for the M3 gate are
+  confirmed (decisions 1 and 2, C1), and `tests/corpus/manifest.json` pins R3's configuration for all R3 budgets
+  (C2). Until then the status read:
+  accepted, except two points that are proposed, pending the user's confirmation: B24's M3 value of
   p50 18.4 s (decision 1) and the quiet-machine requirement for the M3 gate (decision 2, machine state). Both
   decisions state the question for the user. Decision 2 also asks whether the corpus manifest should pin R3's
   configuration.
@@ -32,6 +36,7 @@ workload had ended.
    run (see Measurements).
    **Question for the user:** confirm 18.4 s from the quiet control, or choose otherwise, for example 25.1 s from
    the runs under your workload, or a re-measurement that also makes the DXGI check.
+   **Decided 2026-11-01 (ADR 0011, C1):** 18.4 s is confirmed; `budgets.json`'s note says so.
 2. **What the baseline measures, and so what an M3 run must reproduce to compare with it.**
    - *Clock and sample.* The clock starts at clangd's launch, and the restored editor's file is opened at once. The
      sample is the later of two events: the first `workspace/symbol` answer for `SmallVector` that comes from the
@@ -52,6 +57,7 @@ workload had ended.
      it retries indexing them only about 1.05 s after the index serves, after the B24 sample.
      **Question for the user:** should `tests/corpus/manifest.json` pin this configuration for all R3 budgets?
      Nothing is pinned on this branch.
+     **Decided 2026-11-01 (ADR 0011, C2):** yes; the manifest's R3 entry pins this configuration.
    - *Index and file cache.* A complete, valid persisted index built by the same clangd with the same flags
      (`--background-index -j=4`), and a warm file cache: one untimed warm-up run comes first.
    - *Machine state; the quiet-machine requirement is proposed, pending the user's confirmation.* PLAN.md already
@@ -67,6 +73,7 @@ workload had ended.
      **Question for the user:** should the M3 gate require a quiet REF-W1, with your heavy workload closed and the
      run scheduled with you? If not, decision 1 needs another value: under the workload of set 1, every run of
      stock clangd itself took longer than 18.4 s (19.77–22.45 s).
+     **Decided 2026-11-01 (ADR 0011, C1):** yes, the M3 gate runs on a quiet machine with heavy workloads closed.
 3. **Stock clangd answers from the full persisted index or not at all.** No shard is loaded lazily. Each verbose
    log (3 runs in each set, and the sanity run) has exactly one `building version 1 after loading index from disk`
    and one `serving version 1 (2051929463 bytes)`. Every persisted answer came at most 0.10 s after that line,

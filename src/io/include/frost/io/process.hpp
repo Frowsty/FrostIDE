@@ -88,9 +88,11 @@ struct ProcessSpec {
     // TODO(M2): an environment policy per launch class. frost's start-up sets
     // NoDefaultCurrentDirectoryInExePath=1 (frost/app/startup.hpp) and every child inherits
     // it, so cmd.exe in user build scripts (MSBuild Exec tasks, pre/post-build events, CMake
-    // configure) no longer runs a tool from its current directory by bare name. The M2 trust
-    // ADR records whether trusted user-script children get it stripped (Visual Studio's
-    // behaviour) or keep it; restricted children (read-only git, clangd, bundled tools) keep it.
+    // configure) no longer runs a tool from its current directory by bare name. Decided in
+    // ADR 0011 (E2): trusted user-script children (MSBuild Exec tasks and build events, CMake
+    // configure, later Build/Run and the terminal) get it stripped from their environment, for
+    // Visual Studio-compatible cmd.exe behaviour; restricted children (read-only git, clangd,
+    // bundled tools) keep it. The M2 launcher policy implements that.
     std::vector<std::pair<std::string, std::optional<std::string>>> environment{};
 
     Stdio stdinMode = Stdio::Null;

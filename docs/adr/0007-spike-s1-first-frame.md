@@ -1,6 +1,10 @@
 # ADR 0007: Spike S1, editor rendering at 5120x1440 @ 144 Hz and first frame
 
-- Status: proposed. It needs the user's answers to the four questions below. The measurements are run 3 (the
+- Status: accepted. **Decided 2026-11-01 (ADR 0011, A1–A4)**, on the user's instruction of that day to follow
+  the recommendation: decision 1 (QRhi as M1's editor renderer on Windows) and question 2's option (c) are
+  accepted; question 3 keeps 150/250 ms as M1's B1 target (A3), and question 4 takes the reboot method (A4).
+  Until then the status read:
+  proposed. It needs the user's answers to the four questions below. The measurements are run 3 (the
   main suite, five interleaved rounds) and run 4 (a follow-up with interleaved trivial windows and one round
   covering the whole output), both on 2026-11-01. All probe validations passed in both runs. The desktop was the
   user's normal, busy desktop, not a quiet one.
@@ -25,6 +29,8 @@ compositions" are measured here as refreshes in which the window showed no new c
    fails B6's CPU criterion at 5120x1392 by its own cost in every round. QRhi passes it in all 10 rounds of runs 3
    and 4, using about a sixth of the budget (p99 0.86 ms against 5 ms). But it adds 216.9 ms to the first frame
    (the p50 difference), and starting it later moves that cost onto B2 and B15 instead (Consequences).
+
+   **Decided 2026-11-01 (ADR 0011, A1):** approved; decision 1 is accepted.
 2. **How should B6's missed and interval criteria be gated?** What is known:
    - QRhi with text at the work area (5120x1392) missed 1.5–9.2 % of refreshes over 10 rounds, and its maximum
      content interval was within 16.7 ms in 6 of them. Its own CPU cost does not explain this: p99 under 1 ms,
@@ -50,17 +56,27 @@ compositions" are measured here as refreshes in which the window showed no new c
    This ADR proposes (c) and no budget change; any budget change needs your approval. The earlier draft's option
    of gating against a same-session trivial-window floor is withdrawn, because run 4 shows that such a window
    misses more than the editor.
+
+   **Decided 2026-11-01 (ADR 0011, A2):** option (c), with no budget change.
 3. **B1 warm fails today, before any editor work.** frost.exe's first frame is p50 264.9 ms against 150 ms, and
    the maximum of 20 launches (which nearest-rank p99 equals here) is 360.1 ms against 250 ms. Its window is
    first seen at p50 248.2 ms (polled). QRhi on the first-frame path would add 216.9 ms more. Should M1 keep the
    150/250 ms budget as the target (startup profiling, ETW markers, QRhi start-up off the first frame), or should
    B1 be re-baselined?
+
+   **Decided 2026-11-01 (ADR 0011, A3):** M1 keeps 150/250 ms as the target; B1 is not re-baselined.
 4. **When can a true cold B1 run happen?** The cold numbers here come from a proxy whose bias has an unknown
    direction (Caveats). budgets.json's cold conditions (after a reboot, or after a standby-list purge with
    RAMMap -Et) are not met. Either needs you: a reboot, with the first-frame steps run first after logon, or an
    elevated RAMMap -Et before each launch. Which do you prefer, and when?
 
+   **Decided 2026-11-01 (ADR 0011, A4):** a reboot. M1 builds a harness that runs the first-frame steps first
+   after logon, and the user reboots when it suits them.
+
 ## Decision (proposed)
+**Decided 2026-11-01 (ADR 0011):** decision 1 and question 2's option (c) are accepted; see the notes under the
+questions above.
+
 1. **M1 builds the QRhiWidget glyph-atlas backend as the default editor renderer on Windows** (the PLAN.md
    contingency, risk T10). Raster fails S1 at 5120x1392 by its own cost, in every one of 5 rounds:
    - UI CPU p99 is 9.18 ms (median of 5 rounds) with full repaint, 7.38 ms with scroll-blit, and 6.29 ms even

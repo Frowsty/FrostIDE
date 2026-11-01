@@ -1,6 +1,8 @@
 # ADR 0002: Scheduler (frost::sched)
 
-- Status: proposed
+- Status: accepted. **Decided 2026-11-01 (ADR 0011, G2)**, on the user's instruction of that day to follow the
+  recommendation: `m0/sched` is merged and was independently reviewed, and its M0 exit numbers are met,
+  including the exit-scale TSan re-run on 3563873. Until then the status read: proposed
 - Date: 2026-10-31
 - Plan reference: PLAN.md section 2 ("Scheduler" row), 3.3 (threading), 6.1 (concurrency tests),
   6.2 (IScheduler → SimExecutor), 7 (M0 deliverables and exit)

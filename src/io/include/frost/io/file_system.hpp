@@ -107,7 +107,9 @@ public:
      *
      * Read-only targets: Windows refuses to replace them (PermissionDenied). POSIX
      * replaces them, because rename needs write access to the directory only, and
-     * the new file keeps the read-only mode.
+     * the new file keeps the read-only mode. TODO(M1): refuse a non-writable target
+     * with PermissionDenied on POSIX too, matching Windows, with a test; M1's
+     * SaveManager then offers an explicit "overwrite read-only file" action (ADR 0011, E3).
      *
      * Not preserved from an existing target: extended attributes other than the
      * POSIX access ACL; Windows attributes, ACLs and alternate streams; hard-link

@@ -3,6 +3,173 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-01 (morning): M0 decisions
+
+At about 09:10 the user answered the M0 questions (A1–G1 in the entry below, and E5, G2 and G3 from the demo
+pack) with one instruction: "Follow your own recommendation what to do. The path limit should be no problem now,
+I've enabled long paths". Every question is decided as recommended, on that instruction. ADR 0011 records each
+decision with its basis, its consequence and where it is implemented. The work is on branch `m0/decisions`, from
+`m0/foundation` at 593e15f; it is not merged and not pushed.
+
+### Done
+#### The decisions in short (ADR 0011)
+- **A, renderer and first frame** (ADR 0007, now accepted). QRhi is M1's editor renderer on Windows; raster stays
+  the golden oracle and the RDP/WARP fallback, and Linux keeps raster (A1). B6's missed and interval criteria are
+  gated at M1, after a quiet-desktop control and PresentMon's present mode (A2, option (c)). B1 keeps 150/250 ms
+  (A3). Cold B1 is measured after reboots, through a logon harness that M1 builds (A4).
+- **B, ProjectHost and B23** (ADRs 0005 and 0006).
+  - B1: option (i). Each ordinary reboot yields one cold S6 sample through the same harness. D3 stays provisional
+    until 10 samples exist, and 3 s stays the ceiling. M2 depends on D3, so the samples are needed before M2.
+  - B2: the trees target (1.5 s) stays provisional until M2's first trees measurement on R3.
+  - B3: all five B23 preconditions of ADR 0006 decision 6 are in `budgets.json`.
+  - B4: ProjectHost before L1 in a trusted root, with evaluation kept off the network until L1, is M2's target
+    (answer 2). Waiting for L1 is the fallback; changing PLAN.md's network rule is rejected.
+  - B5: the UWP workload waits for M2 (installer command below).
+  - B6: `%LOCALAPPDATA%\vcpkg` is to be deleted after a check. The check did not pass as written, so nothing was
+    deleted (below).
+  - B7: R2b's Windows SDK prerequisite is 10.0.26100.0.
+- **C, clangd index** (ADR 0008, now accepted). B24's M3 value of p50 18.4 s is confirmed, and the M3 gate runs
+  on a quiet machine (C1). The corpus manifest pins R3's configuration (C2). C3 is noted, with no decision.
+- **D, Tracy** (ADR 0009, now accepted). The dev-builds-only listener exception is granted under ADR 0009's
+  conditions (D1, option (a)). Budget and perf runs never start Tracy (D2). PLAN.md's dependency entry has the
+  new wording (D3).
+- **E, start-up and paths.**
+  - E1: the switch does not lift the limit (below). frost is to start from every directory length with the switch
+    on or off; that is the `m0/longpath` work.
+  - E2: in M2, trusted user-script children get NoDefaultCurrentDirectoryInExePath stripped; restricted children
+    keep it.
+  - E3: in M1, frost::io refuses non-writable POSIX targets, and the SaveManager offers an explicit overwrite.
+  - E4: if the E1 fix makes `PlatformPluginPathBoundary`'s ASan case pass, or makes it moot, `m0/e4-asan-runtime`
+    is not merged and stays pushed for the record. Otherwise it is merged (option (d)).
+  - E5: once the E1 fix lands, matrix row I7 gets `FrostProcess.SelfTestPasses` and the long-path launch tests
+    as its acceptance tests.
+- **F, machine and tooling.** No action on G HUB (F1). No Linux sccache; M1 caches or avoids the FindOpenGL
+  searches instead (F2, TODO below). B28 reads the full default build, and its method fixes the probe files and
+  the job counts (F3; ADR 0010 decision 2 accepted).
+- **G, sign-off.** M0 is signed off once `verify -Full` is green on both platforms at `m0/foundation`'s final
+  head and every item is recorded. Then that commit is tagged `m0` (annotated, with the `-Full` footer), `main` is
+  created from it, and both are pushed. Starting M1 is a separate question (G1). ADR 0002 is accepted (G2). One
+  more comment-accuracy round covers the `m0/dll-copy` build code and the E1 fix, and the POSIX strerror text gets
+  a TODO(M1) (G3).
+
+#### Applied on `m0/decisions`
+- `docs/adr/0011-m0-decisions.md` (new).
+- ADR statuses, each with a "Decided 2026-11-01 (ADR 0011)" note beside the original text, which is kept: 0002
+  (accepted); 0006 (decisions 2, 3 and 6, and the trees proposal); 0007 (decision 1, question 2's option (c),
+  questions 3 and 4); 0008 (decisions 1 and 2, the R3 pin); 0009 (the exception, so items 2–9; item 3's rule; the
+  wording); 0010 (decision 2).
+- PLAN.md: B23's row note and the S6 spike-list line (B1, B2), the Tracy wording (D3), and R2b's Windows SDK in
+  section 4 (B7). Nothing else.
+- `tests/perf/budgets.json`: B23's five preconditions and its trees note, B24's M3 note (now confirmed) and
+  B28's method. No target value changed. `plan_target` of B23 follows PLAN.md's new cell, as
+  `tests/tools/test_budgets.py` requires.
+- `tests/corpus/manifest.json`: R2b's SDK prerequisite, and an R3 `configuration` with S7's configure command
+  (placeholders for the checkout and the SDK root). The manifest test in `tests/tools/test_corpus_fetch.py` now
+  asserts both pins; against the old manifest it fails.
+- Comments only: the TODO(M2) on `ProcessSpec::environment` records E2's decision; new TODO(M1)s at
+  `writeFileAtomic`'s read-only paragraph (E3) and at `errnoError`'s strerror text (G3).
+
+#### Long paths with LongPathsEnabled = 1 (E1, E4)
+- Measured at 09:00 with the switch on, by the method of the `-Full` finding (`exit-full\scripts`), on the
+  Release, Debug and ASan builds of frost.exe from `-Full` at 2c499a2. ADR 0011 has the table. Log:
+  `E:\FrostBuilds\perf\m0\longpaths-on\run.log`; the scripts and `results.jsonl` are in its `scripts\`.
+- **The switch does not lift the limit.** Every DLL that embeds RT_MANIFEST 2 still fails to load beyond 250
+  UTF-16 units, at the same lengths as with the switch off.
+- **frost is now worse on this machine.** Its start-up check trusts the switch and no longer refuses:
+  - Release: at 225 units the self-test passes. From 226 to 235 units (the plugin at 251–260) the run times out
+    at 60 s: Qt fails to load the plugin and waits on its message box (on the hidden desktop). From 236 to 249
+    units frost ends with 0xC0000106 before `main`, as before. At 250 (the `\\?\` launch) it times out again.
+  - Debug: the same pattern one unit earlier, with 0xC0000409 (Qt's qFatal) instead of the timeouts: 224 passes,
+    225–234 and 250 abort, 235–249 end with 0xC0000106.
+  - ASan: 0xC0000106 from 218 to 249 units, so `PlatformPluginPathBoundary` (225 and 226 units) still fails in
+    the ASan tree; at 250 it times out.
+  - The ranges are sampled at their ends only.
+- With the switch off, frost refused cleanly (exit 1) from 226 units (Release) or 225 (Debug) to the start of the
+  0xC0000106 range, and from 250 on. Until the E1 fix lands, frost started from such a directory here shows a
+  dialog or aborts, and the refusal message's advice to turn the switch on is wrong (G3: the E1 fix replaces it).
+- `FrostProcess.RunsFromPathLongerThanMaxPath` no longer skips, and `ReportsLongPathLimitCleanly` now skips: both
+  follow the switch. So the Windows legs of `verify` run the long-path tests against the new behaviour (see
+  Verification).
+
+#### B6: `%LOCALAPPDATA%\vcpkg` was not deleted
+- Listed recursively (creation and modification times) on 2026-11-01: 4,204 files in 110 directories,
+  558,106,723 bytes (532 MiB): `archives\` 6,292,779 bytes (3 files), `downloads\` 415,726,990 (1,040) and
+  `registries\` 136,086,954 (3,161).
+- No running process has its executable there or names the directory on its command line. Open handles were not
+  enumerated: no handle tool is installed.
+- Every entry was created on 2026-10-31, between 18:52:29 and 20:55:17. But 1,038 files have older modification
+  times, back to 2018-01-28. All of them are in `downloads\tools\powershell-core-7.5.3-windows` (931),
+  `downloads\tools\7zip-25.01-windows` (106) and `downloads\tools\ninja` (1), which vcpkg extracted at 20:55 from
+  the archives it had just downloaded; the extraction kept the archives' timestamps (ADR 0005 says the same).
+- `archives\` (18:52) holds binary-cache packages of gtest, vcpkg-cmake and vcpkg-cmake-config, FrostIDE's own
+  dependencies. ADR 0005 says it predates S2's run and is not from it; most likely a FrostIDE configure without
+  `tools\env.ps1` wrote it (not traced).
+- The rule was to delete nothing if anything is older, so nothing was deleted (question below).
+- **Third-party builds must run under `tools\env.ps1`** (dot-sourced), which sends vcpkg's downloads
+  (`VCPKG_DOWNLOADS`) and binary cache (`VCPKG_DEFAULT_BINARY_CACHE`) to E:. It sets no registries cache
+  (vcpkg's `X_VCPKG_REGISTRIES_CACHE`, which defaults to `%LOCALAPPDATA%\vcpkg\registries`), so a registry clone
+  like the 136 MB here would still land on C:. Whether S2's run had `env.ps1` active is not recorded.
+
+#### B5: the installer command for M2 (not run)
+The user runs it from an elevated prompt when M2 evaluates TerminalAppLib:
+
+```
+"C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" --add Microsoft.VisualStudio.Workload.UniversalBuildTools --add Microsoft.VisualStudio.ComponentGroup.UWP.VC.BuildTools --passive --norestart
+```
+
+- The IDs come from the installed instance's catalog (VS 2022 Build Tools 17.14.37710.0, instance 39ecdf9a) on
+  2026-11-01. The workload is titled "WinUI application development build tools" there, and the component group
+  "C++ (v143) Universal Windows Platform tools". The group brings C++/WinRT
+  (`Microsoft.Windows.CppWinRT.Dev17`) and the ARM, ARM64 and ARM64EC compilers. The download size was not
+  measured.
+- TerminalAppLib sets `ApplicationType=Windows Store` (ADR 0005). Whether these two are enough for it is checked
+  in M2; re-read the IDs from the catalog then, because the installer may have moved on.
+
+#### F2: TODO(M1)
+- TODO(M1): cache or avoid the Linux configure's two FindOpenGL `find_path` searches for `GL/glu.h` and
+  `GL/xmesa.h` (about 15 s of each configure; ADR 0010's follow-up). First test whether the 38 `/mnt` PATH entries
+  make them slow.
+
+#### Verification
+- Checks in the worktree: frost-lint ok (280 files), featurecheck ok, `git diff --check` clean (staged tree), the
+  tools tests 80/80 (frost_lint, licensecheck, featurecheck, corpus_fetch, budgets, windows_scripts), and
+  clang-format on the three touched C++ files.
+- `tools\verify.ps1 -Quick -Jobs 4` in the worktree after `night.py build-gate` (09:33–09:36, 164 s, a fresh
+  build tree): **FAILED** on two Windows tests; everything else is green. `FAILED: Verified: win debug 365/368
+  (1 skipped), wsl debug 334/334, wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok,
+  tidy not-run`.
+  - The failures are `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`,
+    both 0xC0000409 with Qt's "no Qt platform plugin could be initialized". The skip is now
+    `ReportsLongPathLimitCleanly`. All three follow LongPathsEnabled: until today the first skipped and the second
+    passed in this Debug tree. It is the switch-on behaviour measured at 09:00 (above), not this branch, which
+    changes only comments in `src/`.
+  - The same filter run from `m0/foundation`'s own Debug build (`E:\dev\FrostIDE\build\win-clangcl`, built by
+    `-Full` at 2c499a2) fails the same two tests the same way. So `verify -Quick` is red on this machine for
+    every branch until the E1 fix (`m0/longpath`) lands. This branch does not touch `src/app` or `tests/app`.
+
+### Next
+- `m0/longpath` (another workflow): the E1 fix. Then, in order: E4's outcome; I7's acceptance tests (E5); the
+  comment-accuracy round over the `m0/dll-copy` build code and the E1 fix (G3); `verify -Full` on both platforms
+  at `m0/foundation`'s final head; then G1 (tag `m0`, create `main`, push both).
+- Merge `m0/decisions` after its review. PLAN.md's M0 status paragraph and next-step line are left for the final
+  integration, together with two lines this branch leaves alone: the S7 spike-list sentence still calls B24's M3
+  value "Proposed, pending the user's confirmation" (C1 confirms it), and the spike list's "Tracy version: 0.13.1
+  or 0.14.1" still reads as open (ADR 0009 chose 0.14.1).
+- Proposed, not done: set `X_VCPKG_REGISTRIES_CACHE` in `tools\env.ps1`, so vcpkg's registry clones go to E:
+  too.
+- M1, M2 and M3 work from the decisions: ADR 0011, Consequences.
+
+### Blockers
+- Sign-off waits on the E1 fix (`m0/longpath`) and on a green `verify -Full` (G1).
+- With the switch on, frost started from a directory of 226–235 or 250+ units shows Qt's dialog or aborts, until
+  the E1 fix lands. For the same reason `verify -Quick` on Windows fails two long-path tests on every branch here
+  (Verification), so no branch meets CLAUDE.md's definition of done until then.
+
+### Questions for the user
+- **B6.** Delete `%LOCALAPPDATA%\vcpkg` anyway? Every entry was created on 2026-10-31, but 1,038 extracted files
+  keep their archives' older modification times, and `archives\` (6.3 MB) is not from S2's run. All of it is
+  vcpkg cache that vcpkg downloads or rebuilds when it needs it. Recommendation: yes, delete all of it.
+
 ## 2026-11-01: M0 overnight run and exit verification (`m0/foundation`)
 
 This entry consolidates the five entries that tonight's branches appended (S1 on 2026-10-31 and on 2026-11-01,
@@ -316,21 +483,28 @@ commit d41f2a1, which carries its own).
 Groups A to G as consolidated tonight; questions marked **(new)** come from this exit verification and from
 consolidating this log.
 
+**All of them were decided on 2026-11-01**, on the user's instruction to follow the recommendation: see ADR 0011
+and the entry "2026-11-01 (morning): M0 decisions" above. Each question below keeps its text, with a pointer.
+
 **A. Renderer and first frame (S1, ADR 0007)**
 - **A1.** Approve QRhi as M1's editor renderer on Windows? Raster stays as the golden oracle and the RDP/WARP
   fallback; Linux keeps raster until a Linux S1 leg runs. Raster fails B6's 5 ms UI-CPU limit by its own cost in
   every round (p99 6.3-9.2 ms at 5120x1392). QRhi passes with p99 below 1 ms, but its start-up adds about 210 ms to
   the first show().
+  - **Decided 2026-11-01** (ADR 0011, A1): approved.
 - **A2.** How should B6's missed-refresh and interval criteria be gated?
   - (a) a quiet desktop with the absolute budget;
   - (b) the whole output (5120x1440) with the absolute budget: QRhi fill passed all three criteria there in one
     round;
   - (c) decide at M1, after a quiet-desktop control and PresentMon's present mode for QRhi. ADR 0007 proposes (c),
     with no budget change.
+  - **Decided 2026-11-01** (ADR 0011, A2): option (c), with no budget change.
 - **A3.** B1 warm already fails before any editor work exists: frost.exe p50 264.9 ms against 150 ms, and the max of
   20 launches is 360.1 ms against 250 ms. Keep 150/250 ms as M1's target, or re-baseline?
+  - **Decided 2026-11-01** (ADR 0011, A3): keep 150/250 ms; no re-baseline.
 - **A4.** A true cold B1 measurement needs either a reboot (first-frame steps run first after logon) or an elevated
   RAMMap -Et before each launch. Which, and when?
+  - **Decided 2026-11-01** (ADR 0011, A4): the reboot method, through a logon harness that M1 builds.
 
 **B. ProjectHost and B23 (S2/S6, ADRs 0005 and 0006)**
 - **B1.** How is B23's "first project streamed" final value (R2b, p50 3 s) set, and with it when D3 becomes final?
@@ -340,37 +514,49 @@ consolidating this log.
   - (ii) M2's cold B23 test sets the value. Your part moves to M2. M2 builds the C# ProjectHost before B23 is fixed,
     which inverts PLAN's "S6 fixes B23 before D3 is final": a plan change to PLAN's S6 line and D3 row.
   - Under either option, 3 s stays the ceiling unless an ADR with your approval raises it.
+  - **Decided 2026-11-01** (ADR 0011, B1): option (i), with the samples collected passively, one per ordinary
+    reboot.
 - **B2.** B23's trees target (R3, 1.5 s) stays provisional until M2's first trees measurement. That is also a change
   to PLAN's B23 row ("final value set by S6").
+  - **Decided 2026-11-01** (ADR 0011, B2): accepted.
 - **B3.** B23's proposed preconditions (ADR 0006 decision 6), to be written into budgets.json if you approve:
   - packages restored;
   - Debug|x64;
   - the first project chosen by decision 5's rule (Host.EXE);
   - trust granted at the open request;
   - the gating sample cold.
+  - **Decided 2026-11-01** (ADR 0011, B3): all five, now in `budgets.json`.
 - **B4.** Whether ProjectHost may start before L1 in an already-trusted root (ADR 0006 decision 2 gives three
   answers). It would put about 2 s of host work beside the tree fill and run project MSBuild logic before L1
   (PLAN's no-network-before-L1 rule).
+  - **Decided 2026-11-01** (ADR 0011, B4): answer 2 is M2's target, answer 3 the fallback, answer 1 rejected.
 - **B5.** Installing Visual Studio's "Universal Windows Platform development" workload, needed to evaluate R2b's
   TerminalAppLib (C++/WinRT).
+  - **Decided 2026-11-01** (ADR 0011, B5): deferred to M2; the installer command is in the entry above.
 - **B6.** About 552 MB of third-party downloads that vcpkg left on C: during the spikes: keep or delete?
+  - **Decided 2026-11-01** (ADR 0011, B6): delete after a check. The check did not pass as written, so nothing
+    was deleted yet (entry above).
 - **B7 (new).** May PLAN.md section 4 and `tests/corpus/manifest.json` give R2b's Windows SDK prerequisite as
   10.0.26100.0 instead of 10.0.22621? The pinned R2b commit defaults to 10.0.26100.0, and `sdk/sdk.lock.json` pins
   it (ADR 0005, Consequences; ADR 0006, follow-ups). Neither file was changed.
+  - **Decided 2026-11-01** (ADR 0011, B7): yes; both files now say 10.0.26100.0.
 
 **C. clangd index (S7, ADR 0008)**
 - **C1.** Confirm B24's M3 value of 18.4 s (quiet-machine baseline p50 15.31 s x 1.2; it was 20.93 s under your
   FrostEditor workload) and the requirement that the M3 gate runs on a quiet machine with heavy workloads closed.
   tests/perf/budgets.json already carries max 18.4 s for this target, which had no value before; its note marks it
   as proposed and waiting for you. If you choose another value, it changes.
+  - **Decided 2026-11-01** (ADR 0011, C1): confirmed, with the quiet-machine requirement.
 - **C2.** Should tests/corpus/manifest.json pin R3's configuration (LLVM_ENABLE_PROJECTS=clang, Release, Ninja,
   clang-cl) for all R3 budgets?
+  - **Decided 2026-11-01** (ADR 0011, C2): yes; pinned.
 - **C3.** Budget risks to note, no decision now:
   - B24's M13 target (p50 2 s) is about 10x faster than stock clangd on R3, which loads the whole index on one core
     before answering.
   - A warm clangd on R3 holds 3.16 GiB, most of B26's 4 GB idle budget.
   - Note (new): ADR 0008 says about 8×, from the quiet-machine p50 of 15.3 s; about 10× matches the 20.9 s under
     your workload.
+  - **Noted 2026-11-01** (ADR 0011, C3): no decision.
 
 **D. Tracy (ADR 0009)**
 - **D1.** Tracy's listener is an unauthenticated 127.0.0.1 TCP port. While it runs, any local process (and, for WSL,
@@ -381,10 +567,14 @@ consolidating this log.
     listener-enumeration and release-build tests.
   - (b) Decline: no Tracy; profiling uses ETW, Perfetto export and external sampling profilers.
   - (c) Defer to M1.
+  - **Decided 2026-11-01** (ADR 0011, D1): option (a).
 - **D2.** Confirm the rule that budget and perf runs (frost-bench, verify -Perf) never start Tracy. StartupProfiler
   costs about 215 ms on the first-frame path.
+  - **Decided 2026-11-01** (ADR 0011, D2): confirmed.
 - **D3.** Optional wording: change PLAN.md's "tracy (pinned in M0)" to "tracy (version chosen in M0: 0.14.1 from the
   vcpkg baseline; use pending the listener exception in ADR 0009)".
+  - **Decided 2026-11-01** (ADR 0011, D3): applied, adjusted for D1 (a): "use under the dev-builds-only listener
+    exception of ADR 0009".
 
 **E. Start-up and paths**
 - **E1.** The M0 exit criterion "launch from a path with ... >260 characters" is not met on this machine, and the
@@ -401,12 +591,18 @@ consolidating this log.
   - (c) Fund a workaround: a Qt patch (LGPL obligations) or a short-path plugin copy.
   - (d) Re-execute frost through GetShortPathNameW when the switch is off. It was measured to work tonight; it does
     not help on volumes without 8.3 names (Dev Drive, ReFS).
+  - **Decided 2026-11-01** (ADR 0011, E1): the user enabled the switch, and it does not lift the limit (measured,
+    entry above). frost is fixed to start from every directory length, whether the switch is on or off
+    (`m0/longpath`); the criterion stays.
 - **E2.** By M2: should trusted user-script children (MSBuild Exec and build events, CMake configure, later
   Build/Run and the terminal) get Visual Studio-compatible cmd.exe behaviour, with
   NoDefaultCurrentDirectoryInExePath stripped? Or keep the hardened behaviour, where a tool in the current directory
   must be called as .\tool? Restricted children keep it either way.
+  - **Decided 2026-11-01** (ADR 0011, E2): yes, in M2; restricted children keep the hardened behaviour.
 - **E3.** On POSIX, saving over a read-only (0444) file replaces it silently, because rename needs only directory
   write access. Should frost::io or M1's SaveManager refuse or warn on non-writable POSIX targets?
+  - **Decided 2026-11-01** (ADR 0011, E3): frost::io refuses with PermissionDenied on POSIX too (M1), and the
+    SaveManager offers an explicit "overwrite read-only file" action.
 - **E4 (new).** Tonight's `verify.ps1 -Full` failed one test, `FrostProcess.PlatformPluginPathBoundary`, in the
   Windows ASan tree; every other leg is green. Measured: while LongPathsEnabled=0, the 250-unit limit also applies
   to frost.exe's own DLLs when frost starts through a plain path (shorter than MAX_PATH). The loader then ends the
@@ -480,20 +676,28 @@ consolidating this log.
         (harmless today: the directory holds only the .dll). Open: a code change, left for the branch's next
         code commit rather than another `-Full` tonight.
     - Evidence: `E:\FrostBuilds\perf\m0\exit-full\e4-option-d\` (`README.txt` maps it).
+  - **Decided 2026-11-01** (ADR 0011, E4): if the E1 fix makes the ASan case pass, or makes it moot, on its own,
+    `m0/e4-asan-runtime` is not merged and stays pushed for the record; otherwise it is merged (option (d)).
 
 **F. Machine and tooling**
 - **F1.** Logitech G HUB (lghub_agent.exe) holds about 43 GB of commit. Restarting it would give the builds
   headroom: an -j=8 clangd index ran out of commit tonight.
+  - **Decided 2026-11-01** (ADR 0011, F1): no action; the 43 GB was transient.
 - **F2.** Linux has no sccache: no pin in sdk.lock.json and bootstrap-wsl.sh installs none. Adding one needs a
   lock-file pin and an ADR. Do you want it?
+  - **Decided 2026-11-01** (ADR 0011, F2): no; M1 caches or avoids the FindOpenGL searches instead.
 - **F3 (new).** B28's "rebuilt and linked" (ADR 0010, question 1): should it be (a) the full default build after the
   change (proposed; core p50 3.09 s, main 3.33 s, sched 1.16 s), (b) `--target frost` (core 1.58 s, main 3.33 s), or
   (c) the executable or executables that cover the change, such as the changed module's test target? Should
   budgets.json's B28 method also fix the probe files and the job counts? Every reading meets the target at M0, so
   nothing waits on the answer.
+  - **Decided 2026-11-01** (ADR 0011, F3): (a), and yes: the probe files and the job counts are fixed.
 
 **G. Sign-off**
 - **G1.** M0 sign-off: after it, tag the M0 build, create main from m0/foundation and push it, then start M1.
+  - **Decided 2026-11-01** (ADR 0011, G1): signed off once `verify -Full` is green on both platforms at
+    `m0/foundation`'s final head and every item is recorded; then tag `m0`, create `main` and push both. Starting
+    M1 is a separate question. Not signed off yet.
 
 ## 2026-10-31: M0 bootstrap, session 1
 

@@ -423,18 +423,18 @@
       "id": "B23",
       "metric": "First-ever open of a new root",
       "plan_metric": "First-ever open of a new root. **Trees** are measured in restricted mode: the File System view plus the native-reader Solution or CMake target tree. For R3, a build directory already configured with the `client-frostide` query is required; without one, only the File System view is promised. **First project streamed** is measured after trust: the trust click is excluded from the timing, and ProjectHost cold start is included. budgets.json records these preconditions.",
-      "plan_target": "p50 1.5 s / 3 s (final value set by S6)",
+      "plan_target": "p50 1.5 s / 3 s (trees: provisional until M2's first trees measurement; first project: final value set by S6)",
       "plan_corpus": "R3 / R2b",
       "plan_gate": "M2",
       "variants": ["trees", "first project streamed"],
       "percentiles": ["p50"],
       "targets": [
-        { "variant": "trees", "corpus": "R3", "percentile": "p50", "max": 1.5, "unit": "s", "note": "final value set by S6" },
+        { "variant": "trees", "corpus": "R3", "percentile": "p50", "max": 1.5, "unit": "s", "note": "Provisional until M2's first B23 trees measurement on R3 (ADR 0006 decision 3's trees proposal, accepted in ADR 0011, B2). S6 gives no evidence for this value; 1.5 s stays the ceiling." },
         { "variant": "first project streamed", "corpus": "R2b", "percentile": "p50", "max": 3, "unit": "s", "note": "final value set by S6" }
       ],
       "corpus": ["R3", "R2b"],
       "level": "L1",
-      "preconditions": "Trees: measured in restricted mode; the File System view plus the native-reader Solution or CMake target tree. For R3 a build directory already configured with the client-frostide File API query is required; without one only the File System view is promised. First project streamed: measured after trust; the trust click is excluded from the timing and ProjectHost cold start is included.",
+      "preconditions": "Trees: measured in restricted mode; the File System view plus the native-reader Solution or CMake target tree. For R3 a build directory already configured with the client-frostide File API query is required; without one only the File System view is promised. First project streamed: measured after trust; the trust click is excluded from the timing and ProjectHost cold start is included. Also for first project streamed (ADR 0006 decision 6, accepted in ADR 0011, B3): (a) R2b's NuGet packages are restored with the repository's own dep\\nuget\\nuget.exe; (b) the active solution configuration is Debug|x64; (c) the first project streamed is chosen by ADR 0006 decision 5's rule (solution-file order, C++ projects that build in the active configuration; Host.EXE on R2b); (d) trust is granted as soon as the open request is made, so the excluded trust click takes no time and no ProjectHost warm-up runs; if ProjectHost's launch waits for L1 (ADR 0011, B4's fallback), the timed interval holds that wait; (e) the gating sample is cold (defaults.cold), and a warm-cache sample is reported alongside.",
       "method": "Open request to the trees painted, and to the first project streamed from ProjectHost (ETW markers).",
       "gate": [{ "milestone": "M2" }]
     },
@@ -448,7 +448,7 @@
       "variants": [],
       "percentiles": ["p50", "p99"],
       "targets": [
-        { "gate": "M3", "percentile": "p50", "max": 18.4, "relative": "S7 baseline x1.2", "unit": "s", "note": "Proposed, pending the user's confirmation (ADR 0008): S7 baseline p50 15.31 s x1.2 = 18.37 s, from the quiet-machine control on REF-W1, 20 runs: clangd launch to both answers from the persisted index; R3 at 7a941dfb2 configured with Ninja, LLVM_ENABLE_PROJECTS=clang, CMAKE_BUILD_TYPE=Release and the clang-cl toolchain file, TableGen targets and 21 generated headers built; CMake's compile_commands.json (5945 entries); a complete index built with --background-index -j=4 (12,364 shards); warm file cache; unlocked input desktop, active console session and no user input. The PLAN 6.3 precheck's DXGI monitor-power item was not done (WMI listed the monitor as Availability 8, Off Line). No heavy user workload ran; requiring that of the M3 gate is also proposed, pending the user's confirmation. Under the user's workload the same runs gave p50 20.93 s (x1.2 = 25.1 s)." },
+        { "gate": "M3", "percentile": "p50", "max": 18.4, "relative": "S7 baseline x1.2", "unit": "s", "note": "Confirmed 2026-11-01 (ADR 0011, C1; ADR 0008 decisions 1 and 2): S7 baseline p50 15.31 s x1.2 = 18.37 s, from the quiet-machine control on REF-W1, 20 runs: clangd launch to both answers from the persisted index; R3 at 7a941dfb2 configured with Ninja, LLVM_ENABLE_PROJECTS=clang, CMAKE_BUILD_TYPE=Release and the clang-cl toolchain file, TableGen targets and 21 generated headers built; CMake's compile_commands.json (5945 entries); a complete index built with --background-index -j=4 (12,364 shards); warm file cache; unlocked input desktop, active console session and no user input. The PLAN 6.3 precheck's DXGI monitor-power item was not done (WMI listed the monitor as Availability 8, Off Line). No heavy user workload ran, and the M3 gate must also run on a quiet REF-W1 with the user's heavy workloads closed (confirmed with the value). Under the user's workload the same runs gave p50 20.93 s (x1.2 = 25.1 s)." },
         { "gate": "M13", "percentile": "p50", "max": 2, "unit": "s" },
         { "gate": "M13", "percentile": "p99", "max": 3, "unit": "s" }
       ],
@@ -523,7 +523,7 @@
       ],
       "corpus": ["R1"],
       "preconditions": "FrostIDE itself (R1) on REF-W1; the Debug build uses sccache (PLAN.md section 6.4).",
-      "method": "Wall time from a one-.cpp change to the rebuilt, linked target; wall time of tools/verify.ps1 -Quick.",
+      "method": "One-.cpp rebuild: wall time from a one-.cpp change in an up-to-date tree to the end of the full default build (cmake --build build\\win-clangcl --config Debug, ninja's default parallelism), which rebuilds and relinks every executable the change reaches. The change inserts a new probe constant into one of src/core/src/error.cpp, src/app/src/main.cpp or src/sched/src/lane.cpp, so every timed compile is an sccache miss. verify -Quick: wall time of tools/verify.ps1 -Quick -Jobs 4 after such a change. ADR 0010 (method, decisions 2 and 3; decision 2 accepted in ADR 0011, F3).",
       "gate": [{ "milestone": "M0" }]
     }
   ]
