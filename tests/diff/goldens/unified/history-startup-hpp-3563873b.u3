@@ -1,0 +1,13 @@
+@@ -107,9 +107,9 @@
+  * FrostProcess.PlatformPluginPathBoundary checks that Qt loads a 250-unit plugin and that
+  * frost refuses 251; measure again when Windows or Qt is upgraded.
+  */
+-// TODO(M1): on a plain launch the same limit kills frost before main() (0xC0000106, no message) once a
+-// DLL next to frost.exe passes it: directories of 236-249 units in Release, 235-249 in Debug (ADR 0003,
+-// Consequences). This check never runs there. Question E4, option (b), in docs/progress.md.
++// TODO(M1): on a plain launch the same limit kills frost before main() (0xC0000106, no message) once one
++// of frost.exe's static imports beside it passes it: directories of 236-249 units in Release, 235-249 in
++// Debug (ADR 0003, Consequences). This check never runs there. Question E4, option (b), in docs/progress.md.
+ inline constexpr std::size_t kQtPluginPathLimitUnits = 250;
+ 
+ // The platform plugins Qt tries, in order, for a QT_QPA_PLATFORM value: its ';'-separated

@@ -6,12 +6,13 @@
 # "stress", timing tests "perf". The verify scripts' debug leg excludes "stress"
 # (-LE stress); the -Full legs run every label. tests/fuzz builds the corpus replays here
 # (label unit); the libFuzzer targets themselves live in the separate fuzz trees (FROST_FUZZ,
-# label fuzz).
+# label fuzz). diff comes before fuzz because tests/fuzz reuses its support library.
 add_subdirectory(compat)
 add_subdirectory(core)
 add_subdirectory(sched)
 add_subdirectory(io)
 add_subdirectory(text)
+add_subdirectory(diff)
 add_subdirectory(fuzz)
 add_subdirectory(perf)
 add_subdirectory(toolchain_probe)

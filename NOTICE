@@ -5,3 +5,5 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party components and their licences are listed in the software bill of
 materials produced by tools/licensecheck.py.
+
+The histogram diff in src/diff follows the algorithm of JGit's HistogramDiff and HistogramDiffIndex (Copyright (C) 2010, Google Inc. and others; EDL-1.0, SPDX BSD-3-Clause). No JGit code is included.

@@ -1,0 +1,9 @@
+top
+<<<<<<< ours
+ours 1
+ours 2
+||||||| base
+=======
+theirs 1
+>>>>>>> theirs
+bottom
