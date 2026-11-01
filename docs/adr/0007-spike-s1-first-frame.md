@@ -32,10 +32,11 @@ compositions" are measured here as refreshes in which the window showed no new c
    - With the window covering the whole output (5120x1440, over the taskbar), one round: QRhi missed 1.25 % with
      text and 0.56 % with fill only, with a 13.9 ms maximum interval in both. Whether DWM flipped the swap chain
      directly there (independent flip) was not observed.
-   - Trivial 320x48 windows interleaved on the same desktop missed more than the QRhi editor in the same rounds:
-     medians 7.8 % (Qt raster) and 9.6 % (QRhi), against 5.5 % for QRhi with text and 4.4 % with fill only. So
-     a trivial window is not a floor under a large window's misses, and where QRhi's work-area misses come from
-     is not established.
+   - Trivial 320x48 windows interleaved on the same desktop missed more than the QRhi editor in 19 of 20
+     per-round pairs. The exception is round 2, where the trivial raster window missed 6.9 % and QRhi with text
+     9.2 %. The medians were 7.8 % (Qt raster) and 9.6 % (QRhi), against 5.5 % for QRhi with text and 4.4 %
+     with fill only. So a trivial window is not a floor under a large window's misses, and where QRhi's
+     work-area misses come from is not established.
    - The desktop was busy (Wallpaper Engine, Discord, 33–61 % system CPU). No quiet-desktop control was run.
 
    The options are:
@@ -105,9 +106,13 @@ compositions" are measured here as refreshes in which the window showed no new c
      320x48 with fill only, on both backends;
    - the number of merged captures in each run.
 
-   The trivial windows show how disturbed the desktop was. They are not a lower bound: in run 4 they missed more
-   than the QRhi editor did. So they never adjust a verdict. A backend's own fill-only run is not a floor either,
-   because raster's fill-only frame already drops ticks through its own CPU cost.
+   The trivial windows are recorded as context only, and they never adjust a verdict. They are not a lower
+   bound: in run 4 they missed more than the QRhi editor did. Nor do they track the editor round by round, so
+   they do not show how disturbed the desktop was for it. In round 2 the trivial raster window had its lowest
+   rate (6.9 %) while QRhi with text had its highest (9.2 %). In rounds 3 and 4, either side of the
+   whole-output round, they missed 8.2–9.6 % while QRhi with fill only missed 0.56 % at the whole output. A
+   backend's own fill-only run is not a floor either, because raster's fill-only frame already drops ticks
+   through its own CPU cost.
 8. **Linux keeps PLAN's default, raster, for now.** S1 measured nothing on Linux: the probes are Windows-only,
    and WSL has no display they could measure. The Linux renderer is chosen after an S1 leg on a Linux desktop
    measures both backends (M1).
@@ -130,6 +135,9 @@ compositions" are measured here as refreshes in which the window showed no new c
   - The measurement lock was held throughout. measure-begin at 01:43:03 recorded 26.1 GB free commit, 35.5 %
     system CPU and no FrostIDE builds; measure-end was at 01:47:41 (`lock-begin.txt`, `lock-end.txt`).
     `environment.json` read 61 % at the start (an instantaneous sample) and 34 % at the end.
+  - The console log is `run4-floors\s1-run4.log`. `run-s1.ps1` was edited after run 4 (at 01:55), in
+    comments only; `run4-floors\run-s1-as-run4.ps1` is the script as run 4 ran it, reconstructed by
+    reverting those comment edits.
 - The machine was not idle in either run. The user's own software was running: Discord, Wallpaper Engine,
   FanControl, Razer software and Steam, plus FrostEditor.exe processes from another session in run 3.
 - Machine: REF-W1, AMD Ryzen 9 5900X (12 cores, 24 threads), RTX 4070 SUPER (driver 32.0.16.1742).
@@ -144,7 +152,7 @@ compositions" are measured here as refreshes in which the window showed no new c
   rough spreads, not tight intervals.
 - The raw data is kept outside the repository in `E:\FrostBuilds\perf\m0\s1\`:
   - `run3\` and `run4-floors\` hold one JSON report per step, `summary.json`, `environment.json`, the start
-    conditions and lock records, and run 3's suite log;
+    conditions and lock records, and each run's suite log (`s1-run3.log`, `s1-run4.log`);
   - `run1\` and `run2\` hold the earlier runs;
   - `b1-fade-diagnosis\` holds the independent verifier's six diagnostic first-frame launches (FROST_S1_DIAGNOSE
     logs and `fade.py`) and its recomputation script;
@@ -218,9 +226,10 @@ new content. The window is 5120x1392, the work area. Each cell gives min / media
   - Raster's median was 20.8 ms at full size and 13.8 ms at 1280x720 in every round.
   - QRhi's median settled per run at one of two levels: 20.8 or 27.7 ms at full size (27.7 ms in 3 of 5 text
     rounds and 4 of 5 fill rounds), and 13.8 or 27.7 ms at 1280x720 (27.7 ms in 1 of 5).
-  - So QRhi's present path sometimes queues one or two extra frames. Run 4 shows that this belongs to the
-    present path, not the content or the desktop. A trivial 320x48 QRhi window switched between 13.8, 20.8
-    and 27.7 ms too, while an interleaved trivial raster window stayed at 13.8 ms in 5 of 5 rounds. Typing does
+  - So QRhi's present path sometimes queues one or two extra frames. Run 4 shows that this is specific to
+    QRhi's present path and does not depend on the editor's content: a trivial 320x48 QRhi window switched
+    between 13.8, 20.8 and 27.7 ms too, while an interleaved trivial raster window stayed at 13.8 ms in 5 of 5
+    rounds. With no quiet-desktop control, the desktop's part in it is unknown. Typing does
     not show it: input to screen p50 was 12.0 ms on QRhi against 12.8 ms on raster.
 
 **B5.** The test sends 50 keys, 23 ms apart and not aligned to vblank. Each inserts a character and repaints the
@@ -258,9 +267,10 @@ raster fill only and QRhi fill only.
 
 - At the work area, QRhi repeated run 3: CPU passed 10 of 10 rounds over both runs, and missed refreshes were
   never within 1 %. Run 4's text rounds missed a little more than run 3's (median 5.5 against 4.0 %).
-- By median, the trivial windows missed more than the QRhi editor in the same rounds (7.8 and 9.6 % against 5.5
-  and 4.4 %). A trivial window therefore shows how disturbed the desktop is, but it is not a floor under a large
-  window's misses (Decision 7).
+- The trivial windows missed more than the QRhi editor in 19 of 20 per-round pairs (medians 7.8 and 9.6 %
+  against 5.5 and 4.4 %). The exception is round 2: trivial raster 6.9 %, QRhi with text 9.2 %. A trivial window
+  is therefore not a floor under a large window's misses. It does not track the editor round by round either,
+  so it is context only (Decision 7).
 - Covering the whole output cut QRhi's misses to 0.56–1.25 % and kept every interval at 13.9 ms. Raster did not
   change (38.8 % against 38.5–46.4 % at the work area in run 3). One explanation fits but was not tested: DWM may
   flip a borderless flip-model swap chain that covers the output directly, or put a large one on an overlay
@@ -344,9 +354,11 @@ breakdown is not measured here; M1 profiles it.
 ### Earlier runs (under load; supporting only)
 Runs 1 and 2 (2026-10-31) measured each configuration once, while two or three agent builds and a video ran.
 Run 3 supersedes their numbers.
-- **Run 1** used the harness before the spin fix (Methods). Every CPU figure in it is close to one refresh period
-  and is not a measurement of the backends. Raster's p99 was 9.21, 7.39 and 6.71 ms (full repaint, scroll-blit,
-  fill only). QRhi's was 6.85 ms with text and 6.95 ms with fill only, so QRhi's fill-only run is above raster's.
+- **Run 1** used the harness before the spin fix (Methods), which put a floor of about one refresh period
+  (6.3–7.0 ms) under every CPU figure. Figures near that floor measure the harness, not the backend: QRhi's
+  6.85 ms with text and 6.95 ms with fill only, raster's 6.71 ms with fill only and 6.98 ms at 1280x720. So
+  QRhi's fill-only run is above raster's. Raster's full repaint (9.21 ms, about 1.3 periods) and scroll-blit
+  (7.39 ms) were above the floor and close to run 3's 9.18 and 7.38 ms.
   - Raster missed 39.7–52.0 % of refreshes at full size, and QRhi 1.6–3.4 %.
   - An earlier version of `s1_first_frame` (frost.exe only, 8 valid warm launches) gave a warm first frame of
     p50 245.5 ms and a cold-proxy p50 of 330.5 ms.

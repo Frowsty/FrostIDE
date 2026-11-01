@@ -19,15 +19,17 @@ what is next, blockers and open questions for the user.
   - the cold proxy (bias of unknown direction);
   - the B2/B15 cost of starting QRhi later.
 
-  It also discloses merged captures, and all cited raw data now lives in `E:\FrostBuilds\perf\m0\s1\`.
+  It also discloses merged captures, and all cited raw data now lives in `E:\FrostBuilds\perf\m0\s1\`
+  (run 4's console log is `run4-floors\s1-run4.log`).
 - **Run 4, a floors follow-up** (01:43-01:48, 4:24 on screen, under the measurement lock).
   - Changes: `s1_editor --full-output` (window over the whole output; `windowRect` with a unit test, 17 editor
     tests) and `run-s1.ps1 -Suite floors`, which interleaves trivial 320x48 windows of both backends with QRhi
     runs and adds one round at 5120x1440.
-  - Findings: trivial windows missed more than the QRhi editor (medians 7.8 % raster and 9.6 % QRhi, against
-    5.5 % for QRhi with text), so they are not a floor. Covering the whole output cut QRhi's misses to
+  - Findings: trivial windows missed more than the QRhi editor in 19 of 20 per-round pairs (medians 7.8 %
+    raster and 9.6 % QRhi, against 5.5 % for QRhi with text), so they are not a floor, and they do not track
+    the editor round by round, so they are context only. Covering the whole output cut QRhi's misses to
     0.56-1.25 %, with every interval at 13.9 ms (one round). A trivial QRhi window also switches its
-    vblank-to-screen level, so that is QRhi's present path, not the desktop.
+    vblank-to-screen level, so the switching is specific to QRhi's present path.
 - Result, unchanged in direction: raster fails B6 CPU at 5120x1392 in every round (p99 medians 9.18 / 7.38 /
   6.29 ms). QRhi passes CPU in 10 of 10 rounds (p99 0.86 ms); its missed and interval criteria are open. B1
   warm fails before any editor work (frost.exe p50 264.9 ms). QRhi adds 216.9 ms to the first frame.
