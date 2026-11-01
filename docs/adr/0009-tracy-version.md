@@ -4,12 +4,17 @@
   **conditional on the user's approval** of an exception to the listener policy (PLAN.md 2.2 "Local listeners"
   and 5.2): Tracy's client is an unauthenticated TCP listener, and it can have neither a token nor an ACL. Until
   the user grants that exception, M1 adds nothing (no `vcpkg.json` entry, no `FROST_TRACY` option, no 5.2 row),
-  and items 2–9 are a plan, not a decision. If the user declines, see "If the exception is declined" under
-  Alternatives. This ADR is the dependency ADR for tracy (CLAUDE.md "Licences").
+  and items 2–9 are a plan, not a decision. The question for the user also covers item 5 as it stands: granting
+  the exception means accepting `TRACY_NO_CALLSTACK` and `TRACY_NO_SYSTEM_TRACING`, so Tracy captures no call
+  stacks, no samples and no context switches ("Keeping call stacks" under Alternatives). If the user declines,
+  see "If the exception is declined" under Alternatives. This ADR is the dependency ADR for tracy (CLAUDE.md
+  "Licences").
 - Date: 2026-10-31; revised 2026-11-01 after independent verification (threat model, shutdown order, warnings,
   pinning, and the per-zone cost of the prescribed task zones), and again after the second verification
   (Tracy's symbol worker and DbgHelp, which add `TRACY_NO_CALLSTACK` and `TRACY_NO_SYSTEM_TRACING` to item 5;
-  the shutdown figures; the release SBOM; the override's precondition).
+  the shutdown figures; the release SBOM; the override's precondition). The third verification confirmed it;
+  its four low findings are fixed (one rounding slip, the scope of the DbgHelp measurement, the lock-1 runs, and
+  what giving up call stacks costs).
 - Plan reference: PLAN.md section 2 ("Self-diagnostics": Tracy in dev builds), 2.1 ("Dependencies": "tracy
   (pinned in M0)"; startup hygiene; DbgHelp delay-loaded), 2.2 ("Local listeners", "Privacy and network",
   freeze reports), 5.2, budgets B1, B5, B20 and B21, M0 decision "Tracy version: 0.13.1 or 0.14.1"
@@ -224,9 +229,10 @@ Measurements, "Symbol worker and shutdown".
    - **`NO_CODE_TRANSFER`:** a connected server cannot make the client open source files or copy code bytes. It
      can still read memory (threat model).
    - **`NO_CALLSTACK`:** no symbol worker thread, no DbgHelp calls, no change to `_NT_SYMBOL_PATH`, no symbol
-     preload ("Tracy's symbol worker"). Measured: one thread fewer while started on both OSes, `dbghelp.dll`
-     neither imported nor loaded, `_NT_SYMBOL_PATH` left unset, and a `ShutdownProfiler` that no longer
-     depends on the loaded modules. The alternative, `TRACY_DBGHELP_LOCK`, is under Alternatives.
+     preload ("Tracy's symbol worker"). Measured, with probes that call no DbgHelp themselves and always started
+     with `_NT_SYMBOL_PATH` unset: one thread fewer while started on both OSes, no `dbghelp.dll` import and no
+     load by Tracy, `_NT_SYMBOL_PATH` still unset after `StartupProfiler`, and a `ShutdownProfiler` that no
+     longer depends on the loaded modules. The alternative, `TRACY_DBGHELP_LOCK`, is under Alternatives.
    - **`NO_SYSTEM_TRACING`:** no context-switch or sampling capture, and no external thread-name queries that
      nothing would answer once call stacks are off ("Tracy's symbol worker"). Measured: in WSL, where the
      other configurations ran a system-tracing thread, one thread fewer; it also removes the 5 clang-cl
@@ -238,9 +244,15 @@ Measurements, "Symbol worker and shutdown".
      `StartupProfiler` publishes the started flag only after the profiler is fully built
      (`TracyProfiler.cpp:1265-1272`). For the rest of the process it is safe only with item 5's
      `TRACY_NO_CALLSTACK`: with the port defaults, the symbol worker it starts calls DbgHelp concurrently with
-     FrostIDE's own DbgHelp users and rewrites `_NT_SYMBOL_PATH` ("Tracy's symbol worker"). With item 5,
-     `_NT_SYMBOL_PATH` stays unset and `dbghelp.dll` is never loaded (measured), but `StartupProfiler` still
-     loads further system DLLs (9 more modules on Windows, measured; which ones was not recorded).
+     FrostIDE's own DbgHelp users and rewrites `_NT_SYMBOL_PATH` ("Tracy's symbol worker"). With item 5, Tracy
+     itself neither loads `dbghelp.dll` nor changes `_NT_SYMBOL_PATH`. That was measured in a probe that uses
+     no DbgHelp of its own and started with the variable unset. The source agrees for any starting state: the
+     client's DbgHelp calls and its only `SetEnvironmentVariableA` call (`TracyCallstack.cpp:682`) are all in
+     `TracyCallstack.cpp`, which `TRACY_NO_CALLSTACK` compiles out. In FrostIDE, `dbghelp.dll` is still
+     loaded by FrostIDE's own users (the delay load in `frost.exe`, cpptrace, the freeze-report sampler;
+     Context), and `_NT_SYMBOL_PATH` keeps whatever value the developer set; Tracy changes neither.
+     `StartupProfiler` still loads further system DLLs (9 more modules on Windows, measured; which ones was
+     not recorded).
    - **At most once per process.** Each thread keeps its own producer token in a `thread_local` built on first
      use, with a raw pointer into the profiler's queue (`ProducerWrapper`, `:1239-1244`; `:1370`).
      `StartupProfiler` refreshes only the calling thread's token (`:1270`), and `ShutdownProfiler` resets the
@@ -529,6 +541,10 @@ The ShutdownProfiler figures above came from probes that load almost no DLLs and
    includes a system-wide thread snapshot, so "0 ms" is not an immediate shutdown);
 4. times `ShutdownProfiler`, unconnected.
 
+The probe calls no DbgHelp function and never sets `_NT_SYMBOL_PATH`, and every Windows run started with the
+variable unset. So the `dbghelp.dll` and `_NT_SYMBOL_PATH` rows below show only what Tracy does. A FrostIDE
+process loads `dbghelp.dll` through its own users, and a developer may have set the variable (item 6).
+
 5 runs per cell, in 5 interleaved rounds (each round runs every cell once). Then 3 runs of **nf** with Qt and a
 15,000 ms sleep on Windows, to check that 5 s is past the preload. The task probe's prescribed zone ("name",
 started without a server, 10M zones, then `ShutdownProfiler` about 30 ms after start) ran in the same rounds, 5
@@ -563,7 +579,7 @@ zone), p50 (min–max):
 |---|---|---|---|
 | Started, no server, ns per zone | 3.20 (3.18–3.29) | 2.96 (2.94–3.00) | 2.95 (2.94–2.99) |
 | Connected, 1 thread, ns per zone | 50.1 (46.2–50.8) | 49.1 (46.7–50.2) | 48.6 (47.5–64.5) |
-| Connected, 4 threads, ns per zone | 55.9 (54.5–56.0) | 55.9 (54.3–56.8) | 54.7 (54.1–56.3) |
+| Connected, 4 threads, ns per zone | 55.9 (54.5–56.0) | 55.8 (54.3–56.8) | 54.7 (54.1–56.3) |
 | WSL: started, no server, ns per zone | 2.66 (2.55–2.71) | 2.70 (2.67–2.81) | 2.09 (2.04–2.13) |
 
 - **The symbol preload is what made the Windows figures large.** With **nf**, a shutdown soon after start
@@ -594,11 +610,38 @@ zone), p50 (min–max):
   start: free commit 31.4 GB of 64.1 GB, free physical memory 10.3 GB, system CPU 5.5%, none of our builds
   running. The user's own processes were left alone: Discord (6 processes), Wallpaper Engine and
   `lghub_agent` (189 MB private); no `E:\r11` process was running. The WSL VM had restarted at 02:25 (load
-  average 0.00 at 02:25:35, 0.09 at the end). An earlier hold of the same lock (02:14:56 to 02:17:16, system
-  CPU 10.2%) ran only the WSL part for **nf** and **nc**, because Windows PowerShell refused the unsigned
-  Windows scripts. Its 40 symbol-probe runs agree with the table (**nf** 57.7–78.2 ms and **nc** 20.6–40.6 ms
-  soon after start; 22.0–40.6 ms for both after 5 s); its 10 task-probe runs gave **nf** 36.0–90.1 ms and
-  **nc** 31.0–35.6 ms.
+  average 0.00 at 02:25:35, 0.09 at the end). This hold is "lock 2" below. An earlier hold of the same lock
+  ("lock 1", 02:14:56 to 02:17:16) ran only the WSL part for **nf** and **nc**, because Windows PowerShell
+  refused the unsigned Windows scripts. At its start system CPU was 10.2%; the WSL VM had been up 4 minutes,
+  and its load average was 0.95 when the runs began and 4.79 at the end. Lock 1's 50 runs are not in the
+  tables above; "Lock 1 against lock 2" compares them.
+
+**Lock 1 against lock 2 (WSL).** The same WSL cells, p50 (min–max), lock 1 / lock 2 (lock 2's figures are the
+ones in the tables above):
+
+| WSL, lock 1 / lock 2 | **nf** | **nc** |
+|---|---|---|
+| Symbol probe, no extra libraries, sleep 0, ms | 61.5 (57.7–75.6) / 60.7 (60.0–61.5) | 22.2 (20.6–38.9) / 20.6 (20.6–20.7) |
+| Symbol probe, Qt loaded, sleep 0, ms | 60.9 (59.2–78.2) / 60.5 (59.2–62.4) | 21.1 (20.6–40.6) / 20.6 (20.6–20.7) |
+| Symbol probe, no extra libraries, sleep 5 s, ms | 23.5 (22.0–39.1) / 33.1 (21.9–40.4) | 29.7 (22.7–40.6) / 34.2 (29.5–35.2) |
+| Symbol probe, Qt loaded, sleep 5 s, ms | 31.6 (25.6–39.0) / 30.3 (22.2–36.8) | 30.4 (24.4–39.9) / 31.9 (23.7–35.9) |
+| Task probe, `ShutdownProfiler` ~30 ms after start, ms | 49.9 (36.0–90.1) / 36.7 (36.2–39.1) | 33.7 (31.0–35.6) / 33.9 (32.8–34.2) |
+| Task probe, prescribed zone, started, no server, ns per zone | 4.48 (2.63–4.90) / 2.66 (2.55–2.71) | 2.80 (2.68–4.60) / 2.70 (2.67–2.81) |
+
+Lock 1 corroborates the medians soon after start and the spread after 5 s, but not the tight ranges of lock 2
+or the **nf** task probe:
+- Soon after start, the symbol probe's medians agree within 1.6 ms. Lock 1 had slow single runs that lock 2
+  did not: **nc** reached 38.9 and 40.6 ms (lock 2: 20.6–20.7 ms) and **nf** 75.6 and 78.2 ms (lock 2: at
+  most 62.4 ms).
+- After 5 s, the ranges over the four **nf** and **nc** cells agree (22.0–40.6 against 21.9–40.4 ms), but
+  the medians differ by up to 9.5 ms.
+- In the task probe, **nf** shut down at p50 49.9 ms with one run at 90.1 ms (lock 2: p50 36.7 ms, at most
+  39.1 ms), and its zone cost p50 4.48 ns against 2.66 ns. The **nc** medians agree (33.7 against 33.9 ms,
+  2.80 against 2.70 ns), though one lock-1 zone run took 4.60 ns.
+
+The tables and every figure quoted from them use lock 2 only. Lock 1 ran under more load: system CPU 10.2%
+against 5.5% at the start of each hold, and a VM load average of 0.95 and 4.79 at the start and end of its
+runs, against 0.00 and 0.09. Whether that caused its outliers was not investigated.
 
 ### Pinning check
 - **Override without the dependency.** vcpkg 2026-09-26 in manifest mode, `install --dry-run` with the
@@ -700,7 +743,21 @@ zone), p50 (min–max):
   the lock functions, and every in-process DbgHelp user would have to take the same lock, including cpptrace,
   whose DbgHelp calls FrostIDE does not control (whether cpptrace can take an external lock was not checked).
   Tracy would still rewrite `_NT_SYMBOL_PATH` and preload symbols for every module, possibly from a symbol
-  server. FrostIDE's zones never capture call stacks (item 8), so this buys nothing. Rejected.
+  server. FrostIDE's zones never capture call stacks (item 8), but that does not make this worthless. Item 5
+  drops system tracing chiefly because, without call stacks, its thread-name queries would go unanswered
+  ("Tracy's symbol worker"). Keeping call stacks could keep system tracing, and the two give Tracy's sampled
+  call stacks and context-switch data:
+  - on Linux, where the kernel's perf and tracing permissions allow it, with software sampling through
+    `PERF_SAMPLE_CALLCHAIN` (`TracySysTrace.cpp:826-871`). In WSL the system-tracing thread did start with
+    **nf**; what it captured was not checked;
+  - on Windows only when elevated, which FrostIDE never is.
+
+  Item 5 gives this up. Sampling and context switches are lost only on Linux, since Windows never had them
+  for FrostIDE, and external sampling profilers have to cover them. Rejected for item 5. Granting the
+  exception means accepting that loss (Status). If the user wants sampled call stacks in Tracy, item 5 has
+  to be revisited first. On Linux that brings the symbol worker back, with its slower shutdown (WSL p50
+  about 60 ms against 20.6 ms soon after start) and the address resolution of the threat model. On Windows
+  sampling needs elevation anyway. Not evaluated further.
 - **`TRACY_NO_DBGHELP_INIT_LOAD=1` or `TRACY_SYMBOL_OFFLINE_RESOLVE`.** The environment variable skips only the
   preload (`TracyCallstack.cpp:847-857`): `SymInitialize`, the `_NT_SYMBOL_PATH` rewrite and the unshared
   DbgHelp use remain. The verifier measured it shortening Windows `ShutdownProfiler` from 121.8–142.7 ms to
