@@ -5,14 +5,112 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first three slices, each merged with `git merge --no-ff` in the main worktree under D23 after the
-slice's independent reviews: `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
-3db37c5) and `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b). The slice records follow this entry's sections as
-subsections, newest first: `m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes (neither
-branch kept a record in this log), then `m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them
-mark what has changed since.
+`main` has M1's first five slices and the switch to the feature-first phase, each merged with `git merge --no-ff`
+in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
+3db37c5), `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b) and `m1/theme-icons` at 73a5143 (merge 94ed47d) merged after
+the slice's independent reviews. `m1/process-feature-first` at d5f4082 (merge 5612d23) and `m1/storage` at 39837c1
+(merge e9c3214) are the first feature-first batch (ADR 0031): a slice merges after its own `-Quick`, and each batch
+gets one `-Quick` of the merged tree. The slice records follow this entry's sections as subsections, newest first:
+`m1/storage`'s, `m1/theme-icons`'s, `m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes
+(none of these branches kept a record in this log), then `m1/piece-tree`'s two, kept as the branch wrote them.
+Merge notes in them mark what has changed since.
 
 ### Done
+
+#### The feature-first phase (ADR 0031)
+- **Process:** the feature-first phase until U1 (ADR 0031, the user's decision of 2026-11-01). One agent per slice,
+  simple functional tests, `-Quick`, batch merges. Design critics, independent reviews, sanitizers, fuzzing, stress
+  runs, perf gates, goldens and `-Full` move to a hardening phase after U1. CLAUDE.md's definition of done and
+  PLAN.md 6.7 point to it. Docs only. Existing tests, budgets and warnings are not weakened; what each slice skips
+  goes to this entry's "Deferred to the hardening phase (ADR 0031)" list.
+- **ADR 0031 cites ADR 0029** (the thin path to U1, the M4 exit), which is not on `main` yet: it is on
+  `plan/thin-path` (acf560a, 4d18dd5). The number is the branch's own; no other ADR uses it.
+- **The in-flight M1 slices were saved before the PC restart** as local WIP commits (feature-first phase,
+  unverified, not pushed): `m1/syntax` (3c86bd1), `m1/keymap-de` (a2b2570), `m1/io-reactor-watch` (e7daf37),
+  `m1/crash-diag` (be509f2), `m1/verify-tooling` (bfd769a), `m1/encodings` (0893943) and `m1/diff-merge`
+  (4d14df6). `m1/display-map` had nothing to save: its branch has no commit of its own yet (it is at 2fef6ee). Lean
+  agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`.
+
+#### Merge of `m1/process-feature-first` (5612d23)
+- **The merge** (5612d23) of `m1/process-feature-first` (d5f4082) into `main` at 94ed47d: ADR 0031 and its pointers
+  in CLAUDE.md (definition of done, working agreement) and PLAN.md 6.7. Docs only, no conflicts. ADR 0031; the
+  number is unchanged and no other ADR on `main` uses it.
+- **The slice's verification at d5f4082:** frost_lint ok, `git diff --check` clean; docs only, no build.
+
+#### Merge of `m1/storage` (e9c3214)
+- **The merge** (e9c3214) of `m1/storage` (39837c1) into `main` at 5612d23: frost::storage on SQLite 3.54.1 and
+  xxHash 0.8.4 (ae718c4), the fixes from the slice's two reviews (4472c64), which an independent re-review
+  approved, and the documentation of its one low item (39837c1); the slice record below says what they hold. ADR
+  0014; the number is unchanged and no other ADR on `main` uses it (`main`'s ADRs after 0010 are now 0011 to 0017
+  and 0031).
+- **Three conflicts**, each resolved so that both sides' intent survives:
+  - `REUSE.toml`: both sides added tables after the generic Apache-2.0 rules. `main`'s pinned-asset tables (ADR
+    0015) and the slice's `third_party/vcpkg-ports/**` table (MIT, "override", ADR 0014) are both kept, the ports'
+    table first, so the `tests/ui/goldens/**` table stays the last one, as its comment says. No path matches both.
+  - `src/CMakeLists.txt` and `tests/CMakeLists.txt`: `main`'s `text` and `input` (and `tests/fuzz`) and the slice's
+    `storage` are all kept, in the order text, input, storage (then fuzz). `src/storage` keeps its `NOT FROST_FUZZ`
+    guard; fuzz trees build only `tests/fuzz`, so `tests/storage` needs none. text, input and storage share rank 4
+    and storage depends only on io.
+  - Merged without conflict: the root `CMakeLists.txt` (`find_package` of unofficial-sqlite3 and xxHash outside fuzz
+    trees), `CMakePresets.json` (`VCPKG_OVERLAY_PORTS` in the base preset), `vcpkg.json` (sqlite3 3.54.1 with
+    `omit-load-extension`, xxhash 0.8.4) and `tests/features/matrix.json` (rows 218, Local History, and I2
+    `in-progress`).
+- **The FrostProcess failures that the slice's verification lists as known no longer apply.** It ran on its pre-M0
+  base 593e15f, where `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`
+  fail and one test is skipped until `m0/longpath`. `main` has `m0/longpath` (ADR 0012); the merged tree's results
+  are below.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 42.2 GB commit free), `cmake --preset
+  win-clangcl` (vcpkg installed sqlite3 3.54.1 from the overlay port and xxhash 0.8.4) and `cmake --build --preset
+  win-clangcl-debug -j 8`: exit 0, 56 steps, no compiler warning (only Qt's own "No qtpaths executable found"
+  configure notice).
+
+#### Verification (batch, merged tree e9c3214)
+- Before the batch run: frost_lint ok, `git diff --check` clean, and the Windows Debug build after the storage
+  merge (above).
+- `toolserify.ps1 -Quick -Jobs 8` on e9c3214 (with this record uncommitted) through `run_hidden_nobox.py` (a
+  hidden desktop; no window opened on it), after `night.py build-gate` (no lock, 42.0 GB commit free), 367.4 s,
+  exit 0. Windows ran its Debug leg and the checks; WSL ran `tools/verify.sh` in the ext4 mirror
+  (`~/frost-src-e235f3842261`): `Verified: win debug 1134/1134, wsl debug 1048/1048, wsl licensecheck ok, format
+  ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run` (frost-lint 815 files; licensecheck 17
+  packages on Windows, 12 on WSL). No test failed or was skipped. The test steps took 196.4 s (Windows) and
+  113.9 s (WSL).
+- **No test was lost in the three merges** (theme-icons, process, storage). Against the undo-anchors merge (win
+  debug 832/832, wsl debug 745/745), the tree adds 302 tests on Windows and 303 on WSL. That is what the two code
+  slices added over their base 593e15f (368 and 334 tests): `m1/theme-icons` 137 and 133 (505 and 467 at
+  73a5143), `m1/storage` 165 and 170 (533 and 504 at 4472c64). The process slice is docs only.
+- `-Quick` builds no ASan, TSan or fuzz tree. Fuzz trees build neither storage (`NOT FROST_FUZZ`) nor `src/ui`, so
+  these merges add nothing to them. The slices' own sanitizer results stand: storage's at 4472c64 (win asan
+  189/189, wsl asan 194/194, wsl tsan 194/194) and theme-icons' at 73a5143 (the slice record). `-Full` of `main`
+  is in "Deferred to the hardening phase (ADR 0031)".
+
+#### Merge of `m1/theme-icons` (94ed47d)
+- **The merge** (94ed47d) of `m1/theme-icons` (73a5143) into `main` at 2fef6ee: themes, icons, fonts, compact mode,
+  IDE zoom and HiDPI (0e4b02d) and the fixes from the slice's two reviews (73a5143); the slice record below says
+  what they hold. ADR 0015; the number is unchanged and no other ADR on `main` uses it (`main`'s ADRs after 0010
+  are now 0011 to 0013 and 0015 to 0017). ADR 0015 stays "proposed" while its six questions are open (Questions
+  for the user).
+- **Two conflicts**, both add/add of a CMake list that each side created, each resolved so that both sides' intent
+  survives:
+  - `src/ui/CMakeLists.txt`: `main`'s `add_subdirectory(input)` (frost::ui_input, ADR 0016) and the slice's `model`
+    and `theme_compiler` subdirectories and its `frost::ui` library (sources in `src/ui/src`, headers in
+    `src/ui/include/frost/ui`, AUTOMOC) are all kept; the header comment names all four libraries. No header name
+    is shared between `src/ui/input/include/frost/ui` and `src/ui/include/frost/ui`.
+  - `tests/ui/CMakeLists.txt`: `main`'s `ui_input_tests` and `ui_input_native_tests` (`FROST_QT_TEST_PLATFORM`
+    "windows") and the slice's eight test executables, its fuzz harness libraries and `frost_ui_test_support` are
+    all kept; the header comment lists all ten executables.
+  - Merged without conflict: the root `CMakeLists.txt` (`tools/theme_compiler`, `tools/icon_baker` and `resources`
+    under `FROST_BUILD_UI`), `tests/features/matrix.json` (rows 243 and 244 `in-progress`, with the slice's
+    acceptance tests), `REUSE.toml`, `NOTICE`, `.gitattributes`, `tools/frost_lint.py` (the `qt-svg` rule),
+    `tools/licensecheck.py` (the asset gate over `resources/assets.lock.json`) and `tests/tools`. `src/CMakeLists.txt`
+    and `tests/CMakeLists.txt` already had the slice's `add_subdirectory(ui)` from the input-keymap merge.
+- **The FrostProcess failures that the slice's verification lists as known no longer apply.** It ran on its pre-M0
+  base 593e15f, where `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`
+  fail and one test is skipped until `m0/longpath`. `main` has `m0/longpath` (ADR 0012); the merged tree's results
+  are below.
+
+#### Verification (merged tree 94ed47d)
+- Not run on its own: the PC restart stopped the `-Quick` of 94ed47d before it finished, and no result was kept.
+  The batch verification of e9c3214 above, whose tree contains 94ed47d, covers it.
 
 #### Merge of `m1/undo-anchors` (3163d0b)
 - **The merge** (3163d0b) of `m1/undo-anchors` (7ae2ab5) into `main` at 0110eff: frost::text's Document (81afd3a)
@@ -40,7 +138,7 @@ mark what has changed since.
   wsl debug 667/667) the slice adds 78 tests on each OS. That is what it added over its base 6fb6826: 516 and 482
   at 7ae2ab5, against 438 and 404 at the piece-tree head, so no test was lost in the merge. The test steps took
   136.0 s (Windows) and 81.6 s (WSL). The run rebuilt the text library and its tests in the WSL mirror, so it is
-  not a B28 sample; re-measuring B28 is in Next.
+  not a B28 sample; re-measuring B28 is in Next (now "Deferred to the hardening phase").
 - `-Quick` builds no ASan, TSan or fuzz tree. The merge had no conflicts and changes no build flag, so the slice's
   own sanitizer results at 7ae2ab5 (151/151 on each of Windows ASan, WSL ASan+UBSan and WSL TSan) and its `-Full`
   fuzz legs at 81afd3a (win fuzz 2/2, wsl fuzz 2/2) stand. Fuzz trees now build `frost_text_test_support` with the
@@ -64,8 +162,8 @@ mark what has changed since.
   `tests/input/CMakeLists.txt` and `keymap_fuzz_replay_test.cpp` leave it to the integrator, once
   `cmake/FrostFuzz.cmake` is on the base, to register `input_keymap` with `frost_add_fuzz_target` and delete the
   `KeymapFuzzReplay` test. FrostFuzz.cmake is on `main` now, but a new fuzz target needs a fuzz-tree build and smoke
-  on both OSes, which `-Quick` does not cover, so it is a follow-up (Next). Until then `KeymapFuzzReplay` replays
-  `tests/fuzz/corpus/input_keymap` in every normal tree, as on the branch.
+  on both OSes, which `-Quick` does not cover, so it is a follow-up (Next, now "Deferred to the hardening phase").
+  Until then `KeymapFuzzReplay` replays `tests/fuzz/corpus/input_keymap` in every normal tree, as on the branch.
 - **The FrostProcess failures that the slice's verification lists as known no longer apply.** It ran on its pre-M0
   base 593e15f, where `FrostProcess.RunsFromPathLongerThanMaxPath` and `FrostProcess.PlatformPluginPathBoundary`
   fail until `m0/longpath`. `main` has `m0/longpath` (ADR 0012); the merged tree's results are below.
@@ -140,28 +238,87 @@ mark what has changed since.
   Every compile command there has `-fsanitize=address` and `-fsanitize=fuzzer-no-link`.
 
 ### Next
-- **The `input_keymap` fuzz target** (ADR 0016, Consequences; the `TODO(M1)`s named above): register it with
-  `frost_add_fuzz_target` over `runKeymapFuzzInput` and `tests/fuzz/corpus/input_keymap`, build and smoke it in
-  `win-clangcl-fuzz` and `linux-clang-fuzz`, and only then delete `KeymapFuzzReplay`. That test also runs seeded
-  mutations of the corpus, so its removal must not lose them (keep them as a unit test, or show the fuzz legs
-  cover them); nothing is weakened.
+- **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/display-map`, `m1/keymap-de`,
+  `m1/io-reactor-watch`, `m1/crash-diag`, `m1/verify-tooling`, `m1/encodings` and `m1/diff-merge`, merged in batches
+  as each passes its own `-Quick`.
+- **The frost::storage consumers** (ADR 0014): SaveManager, autosave and external-change merge (row I2), the Local
+  History UI (row 218), and FSEG segments, the cache-key path normaliser and ProjectModelCache (`TODO(M2)` in
+  `src/storage/CMakeLists.txt`).
 - **The frost::input consumers** that ADR 0016's Consequences names: `m1/shell-frame` with `m1/settings`
   (IKeymapSettings, the dispatch filter, menus), `m1/editor-view` and `m1/editor-model` (the editor actions and
   contexts), `m1/shell-nav` (the Find Action popup and the Keymap page) and `m1/automation-bench` (the real native
   key path on the real desktop, which needs your approval while you are at the PC).
-- The other M1 slices. `m1/encodings` and `m1/diff-merge` have worktrees on 6fb6826, the piece-tree head;
-  `m1/storage` and `m1/theme-icons` are as the entry "M0 complete" describes.
-  Then `m1/large-file` (mapped originals, B15 at the buffer level, the background release of big trees:
-  `TODO(M1)` in `snapshot.hpp`) and the editor model (the slice record "M1 first slice", "Next").
-- Re-measure B28 with ADR 0010's harness (the slice record "M1 first slice", "B28 effect").
+- **The frost::ui consumers** that ADR 0015's Consequences names: `m1/shell-frame` (`install()` from `main()`,
+  InstallReport warnings, `resources/` in `tests/app`, B1 on screen, the shell on IslandHost and IslandFrame),
+  `m1/settings` (the IAppearanceSettings adapter with live reload) and `m1/editor-view` (editor colour keys and
+  `ensureEditorFonts()`); `m1/large-file`'s mapping API for the atlases (ADR 0015 question 4).
+- The other M1 slices: `m1/large-file` (mapped originals, B15 at the buffer level, the background release of big
+  trees: `TODO(M1)` in `snapshot.hpp`) and the editor model (the slice record "M1 first slice", "Next").
 - The M1 work from ADR 0011's Consequences and ADR 0012's `TODO(M1)`s (entry "M0 complete").
+
+### Deferred to the hardening phase (ADR 0031)
+Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first.
+- **From `m1/storage`** (ADR 0014, low): `openStore` and `Database::open` do not yet re-check the path after
+  locking, as `HotExitJournal::create` does, so the residual POSIX removal race stays open (`store.hpp` and ADR 0014
+  decision 8 state it, 39837c1).
+- **From `m1/storage`'s verification:** perf-smoke and coverage were not run; `tools/perf.ps1 -Smoke` and a coverage
+  leg do not exist yet (ADR 0014, Context, "Tooling gaps"). The journal fuzz target waits for fuzz trees that
+  install vcpkg ports (ADR 0014 question 4, under Questions for the user).
+- **`-Full` of `main`** (Release, ASan, TSan and the fuzz legs). The M1 merges since the `m0` sign-off ran
+  `-Quick` only; each slice's own sanitizer results stand (the slice records).
+- **The theme and icon-atlas fuzz targets** (moved from Next; ADR 0015, Consequences: the `TODO(M1)` "after
+  m1/piece-tree", which is on `main` now): libFuzzer adapters for `tests/ui/fuzz/theme_blob_harness.cpp` and
+  `icon_atlas_harness.cpp`, registered with `frost_add_fuzz_target` over `tests/fuzz/corpus/theme_blob` and
+  `icon_atlas`. `frost::ui_model` is Qt-free but lives under `src/ui`, which fuzz trees skip (`FROST_FUZZ` needs
+  `FROST_BUILD_UI=OFF`), so the registration has to build ui_model there; the `theme_json` harness needs Qt Core
+  until the theme compiler moves to m1/settings' JSON library. It needs a fuzz-tree build and smoke on both OSes,
+  which `-Quick` does not cover. Until then `ui_model_tests`' `fuzz_replay_test.cpp` replays the corpora in every
+  normal tree, as on the branch.
+- **The `input_keymap` fuzz target** (moved from Next; ADR 0016, Consequences; the `TODO(M1)`s named above):
+  register it with `frost_add_fuzz_target` over `runKeymapFuzzInput` and `tests/fuzz/corpus/input_keymap`, build
+  and smoke it in `win-clangcl-fuzz` and `linux-clang-fuzz`, and only then delete `KeymapFuzzReplay`. That test
+  also runs seeded mutations of the corpus, so its removal must not lose them (keep them as a unit test, or show
+  the fuzz legs cover them); nothing is weakened.
+- **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
-  `m1/input-keymap` and `m1/undo-anchors` name none.
+  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons` and `m1/storage` name none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
+From `m1/storage` (ADR 0014, Consequences; the conservative choice is implemented), asked at its merge:
+- **ADR 0014 Q1:** where should SaveManager live, given that `src/text` and `src/storage` share FrostLayers rank 4
+  (and equal ranks may not depend on each other)?
+- **ADR 0014 Q2:** Linux file modes for the user-data stores (local history, hot-exit journal): keep the umask's
+  (current, as SQLite creates them) or force 0600?
+- **ADR 0014 Q3:** should disk full get its own ErrorCode rather than IoError?
+- **ADR 0014 Q4:** who owns the journal fuzz target once fuzz trees install vcpkg ports?
+- **ADR 0014 Q5:** how long should quarantined copies be kept before M3's cache budget prunes them (currently: until
+  then)?
+- **ADR 0014 Q6:** should Invalidate Caches offer to clear local history (currently: never, it is user data)?
+
+From `m1/theme-icons` (ADR 0015), asked at its merge:
+- **Glacier Classic** is a dark, flat theme in the spirit of Darcula (no island gaps or radius). Should it be light
+  and flat instead, or both? (One JSON file either way.)
+- **The default on a fresh profile:** Glacier Dark with Sync with OS off (Rider's default); the first-run wizard can
+  offer Sync later. Or Sync with OS on by default?
+- **IDE zoom steps** 80/90/100/110/125/150/175/200%, with any stored value from 50 to 300% accepted. OK?
+- **ADR 0015 Q1:** Glacier Classic is held to the 1.20:1 island-contrast rule (it passes at 1.25:1). Should a flat
+  theme be exempt?
+- **ADR 0015 Q2 (licence):** goldens that show rendered Lucide icons are annotated "Apache-2.0 AND ISC AND MIT"
+  with the FrostIDE, Lucide and Feather copyright lines. Acceptable, or should goldens use only FrostIDE-authored
+  icons?
+- **ADR 0015 Q3:** unchecked check-box borders meet WCAG 1.4.11's 3:1 in every theme (stricter than "borders only
+  in High Contrast"). Confirm.
+- **ADR 0015 Q4:** icon atlases are read into memory, not memory-mapped (PLAN.md 3.4 says mapped); they are 10 to
+  240 KB. Confirm.
+- **ADR 0015 Q5:** TSan runs of the Qt widget tests suppress reports raised inside libQt6Core, Gui and Widgets
+  (`called_from_lib`), so they see less than default TSan. Approve, or skip TSan for those executables until an
+  instrumented Qt exists?
+- **ADR 0015 Q6:** the golden comparator allows up to 16 pixels differing by up to 32 per channel (every golden
+  matches with 0 difference today). Confirm, or tighten (for example to 8 pixels)?
+
 From `m1/undo-anchors` (ADR 0017), asked at its merge:
 - **Undo defaults** (non-blocking; they become settings later): consecutive typing, backspace and delete merge into
   one undo step within 1000 ms while the caret stays put; history is capped at 1000 steps per document. Keep, or
@@ -199,6 +356,78 @@ The user answered the open questions; their words are quoted.
 - **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
 - **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
   reordered into a thin path to a first usable build (ADR 0029, in progress).
+
+### Slice record: `m1/storage` (ADR 0014)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A slice reviewed under the
+old full process, before the switch (ADR 0031, Consequences): build, two independent reviews, fixes (4472c64), an
+independent re-review of the fix commit (approve; weakening: no), and the re-review's one low item documented
+(39837c1). Worktree `.claude\worktrees\m1-storage`, branch from `m0/foundation` (593e15f). (Merge note: merged into
+`main` as e9c3214 and pushed; the M1 entry above.)
+
+#### Done
+- **A new `src/storage` layer** (frost::storage, FrostLayers rank 4, Qt-free, depends on io): SQLite 3.54.1 as an
+  overlay port (blessing) and xxHash 0.8.4 (BSD-2-Clause), both linked PRIVATE.
+- **Database, Statement and Transaction:** a Result API over SQLite in WAL mode with run-time build checks, hardened
+  connections (DEFENSIVE, no DQS, untrusted schema, no extensions), a steady-deadline busy handler with interrupts,
+  a WAL hook that never fails a commit, the win32-longpath VFS on Windows and one SQLite-to-ErrorCode table.
+- **Stores:** schema versioning (application_id plus user_version, one transaction per migration), `openStore` with
+  quick_check and quarantine of corrupt files (byte-identical copies under SQLite's EXCLUSIVE lock), removal in the
+  safe order, and close within B20's 200 ms.
+- **The hot-exit journal** (one EXCLUSIVE-locked journal per process, whole-entry puts in chunks with XXH3-128
+  checksums, clean marks, a recovery scan that skips live journals and offers damaged ones for salvage) and **local
+  history** (content-addressed revisions with byte-verified dedup, retention by age and size).
+- **Fingerprints:** XXH3-64 and XXH3-128, canonical big-endian form and hex.
+- **The fixes from the two reviews** (4472c64): POSIX quarantine and removal no longer act by name on a file another
+  instance replaced while they waited (`SQLITE_FCNTL_HAS_MOVED`); `Transaction::rollback` never finishes while
+  autocommit is 0; the history crash oracle compares content; Windows removal is deadline-bounded through
+  `io::removeFile`. The re-review's one low was documentation: 39837c1 states the residual POSIX removal race
+  accurately.
+- **Tests** (`tests/storage`): unit (wrapper, schema and goldens, quarantine, journal, local history, a retention
+  oracle, a fault-injecting VFS), integration (crash consistency by killing a child through IProcessLauncher,
+  concurrency) and stress. Rows 218 and I2 of `tests/features/matrix.json` are `in-progress`.
+- **Verification at 4472c64** (39837c1 changes comments and docs only): win debug 530/533 (1 skipped, plus the two
+  FrostProcess long-path failures known on its pre-M0 base), wsl debug 504/504, storage win asan 189/189, wsl asan
+  194/194, wsl tsan 194/194; lint, format, licence and featurecheck ok; with the HAS_MOVED check disabled and a
+  single ROLLBACK attempt, the 5 tests aimed at them fail (mutation check); perf-smoke not run, coverage not
+  measured. (Merge note: those failures and the skip no longer apply on `main`; the M1 entry above.)
+
+#### Left
+- The low item and the tooling gaps in the M1 entry's "Deferred to the hardening phase (ADR 0031)".
+- The six questions in the M1 entry's "Questions for the user", marked as `m1/storage`'s.
+
+### Slice record: `m1/theme-icons` (ADR 0015)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A standard-tier slice under
+the old full process: design, critic, build, two independent reviews, fixes. The fix agent was cut off by the usage
+limit, and a finisher ran the final verification and committed the fixes (73a5143). Worktree
+`.claude\worktrees\m1-theme-icons`, branch from `m0/foundation` (593e15f). (Merge note: merged into `main` as
+94ed47d and pushed; the M1 entry above.)
+
+#### Done
+- **A new `src/ui` layer** (frost::ui, Qt allowed), with the Qt-free frost::ui_model and frost::ui_theme_compiler
+  (Qt Core) beside it.
+- **FrostStyle**, a QProxyStyle over Fusion. The palette is applied in `polish` and through
+  `QApplication::setPalette`, so OS palettes cannot leak in.
+- **Themes:** a build-time `.theme.json` to blob compiler (`frost-themec`; no JSON parsing at start-up, a bounded
+  duplicate-key pre-scan). Glacier Dark, Light, Classic and High Contrast, plus Sync with OS on Windows and Linux;
+  when the chosen theme fails to load, glacier-dark is the fallback. Contrast tests: the island rule 1.20:1, and
+  WCAG for High Contrast and for check-box borders.
+- **Icons:** `frost-icon-baker` bakes Lucide SVGs (ISC) into atlases at 7 scales; Qt Svg is used only in the baker
+  (frost-lint's `qt-svg` rule).
+- **Fonts:** JetBrains Mono 2.304 and Inter 4.1 (OFL-1.1), pinned by SHA-256 in `resources/assets.lock.json` and
+  checked by licensecheck's asset gate.
+- **Compact mode and IDE zoom**, and offscreen screenshot goldens in both main themes at 100, 125, 150 and 175%;
+  all match with 0 difference today.
+- **Verification at 73a5143** (`verify -Full -Jobs 6`): win debug 502/505, release 505/508, asan 506/509 (each only
+  the two FrostProcess long-path failures known on its pre-M0 base, plus 1 skip), wsl debug 467/467, asan 471/471,
+  tsan 470/470 (the Qt widget tests 64/64, 0 TSan reports); lint, format, licence and featurecheck ok. (Merge note:
+  those failures and the skip no longer apply on `main`; the M1 entry above.)
+
+#### Left
+- Five low items, recorded in ADR 0015: List and Tree selection contrast compositing, reserved theme keys, and a
+  note on the 14 px design size.
+- The nine questions in the M1 entry's "Questions for the user", marked as `m1/theme-icons`'s.
 
 ### Slice record: `m1/undo-anchors` (ADR 0017)
 
