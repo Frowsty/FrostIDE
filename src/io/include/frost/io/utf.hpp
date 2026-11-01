@@ -20,20 +20,29 @@
  *     (frost/io/path.hpp does for paths).
  *
  * The codec is a straightforward implementation of table 3-7 (no third-party
- * code). All functions are pure and thread-safe. Cost is O(n) with an ASCII
- * fast path; the output is allocated once at its final size.
+ * code). All functions are pure and thread-safe. Cost is O(n); validation has
+ * an ASCII fast path; the output is allocated once at its final size.
  */
 #pragma once
 
 #include "frost/core/error.hpp"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
 namespace frost::io {
 
 // True when `utf8` is well-formed UTF-8 (policy above). O(n), never allocates.
+// Equivalent to validUtf8Prefix(utf8) == utf8.size().
 [[nodiscard]] bool isValidUtf8(std::string_view utf8) noexcept;
+
+// The length in bytes of the longest well-formed prefix of `utf8` (policy above): utf8.size()
+// when the whole input is well formed, otherwise the offset of the first byte of the first
+// ill-formed sequence, which is the offset error messages report. O(n) with an ASCII fast path
+// over 8-byte words, never allocates; pure and thread-safe. frost::text validates loads and
+// inserts with it.
+[[nodiscard]] std::size_t validUtf8Prefix(std::string_view utf8) noexcept;
 
 // Converts UTF-8 to UTF-16. Errors: InvalidArgument for ill-formed input.
 [[nodiscard]] Result<std::u16string> utf8ToUtf16(std::string_view utf8);

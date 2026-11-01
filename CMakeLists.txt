@@ -33,6 +33,39 @@ include(FrostCompilerCache)
 option(FROST_BUILD_TESTS "Build the test suites" ON)
 option(FROST_BUILD_UI "Build Qt-based targets (src/ui, src/app)" ON)
 set(FROST_SANITIZE "" CACHE STRING "Sanitizers to enable: address;undefined, thread or memory")
+# Fuzz trees (presets win-clangcl-fuzz, linux-clang-fuzz; cmake/FrostFuzz.cmake, ADR 0013). -Full
+# runs each target for FROST_FUZZ_SECONDS = 60; longer runs (600 s for the M1 exit, 1800 s for a
+# future -Nightly) use separate build trees, so the -Full tree's cache keeps 60.
+option(FROST_FUZZ "Build libFuzzer targets instead of corpus replays (needs ASan, no tests, no UI)" OFF)
+set(FROST_FUZZ_SECONDS 60 CACHE STRING "Seconds each CTest fuzz.<name> run fuzzes")
+
+if(FROST_FUZZ)
+    if(NOT "address" IN_LIST FROST_SANITIZE)
+        message(FATAL_ERROR "FROST_FUZZ needs AddressSanitizer: FROST_SANITIZE must contain address")
+    endif()
+    if(FROST_BUILD_UI)
+        message(FATAL_ERROR "FROST_FUZZ needs FROST_BUILD_UI=OFF (fuzz trees are Qt-free)")
+    endif()
+    if(FROST_BUILD_TESTS)
+        # gtest from the /MD triplet cannot link into /MT objects; normal trees build the replays.
+        message(FATAL_ERROR "FROST_FUZZ needs FROST_BUILD_TESTS=OFF (normal trees build the corpus replays)")
+    endif()
+    if(MSVC AND NOT CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL "MultiThreaded")
+        # The pinned clang_rt.fuzzer-x86_64.lib records RuntimeLibrary=MT_StaticRelease and
+        # _ITERATOR_DEBUG_LEVEL=0 (RelWithDebInfo matches); lld-link's /failifmismatch rejects
+        # any other CRT. Its STL imports are defined by the pinned 14.44 libcpmt (ADR 0013).
+        message(FATAL_ERROR "FROST_FUZZ under clang-cl needs CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded "
+                            "(got '${CMAKE_MSVC_RUNTIME_LIBRARY}')")
+    endif()
+    add_compile_options(-fsanitize=fuzzer-no-link)
+    if(MSVC)
+        # The same library records annotate_string=0 and annotate_vector=0 while ASan TUs record 1,
+        # which fails /failifmismatch; fuzz trees lose std::string/vector container-overflow checks
+        # (the Windows ASan tree keeps them; ADR 0013).
+        add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
+    endif()
+    message(STATUS "FrostIDE fuzz targets: ${FROST_FUZZ_SECONDS} s per CTest run")
+endif()
 
 include(FrostCompilerOptions)
 include(FrostLayers)
@@ -74,7 +107,12 @@ if(FROST_SANITIZE)
         endif()
         # /Oy- is clang-cl's spelling of -fno-omit-frame-pointer (keeps ASan stacks complete).
         set(FROST_SANITIZE_COMPILE_OPTIONS -fsanitize=address /Oy-)
-        set(FROST_SANITIZE_LINK_OPTIONS ${FROST_ASAN_LINK_OPTIONS})
+        # The static CRT (/MT, the fuzz trees) takes the static runtime thunk; /MD the dynamic one.
+        if(CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL "MultiThreaded")
+            set(FROST_SANITIZE_LINK_OPTIONS ${FROST_ASAN_STATIC_LINK_OPTIONS})
+        else()
+            set(FROST_SANITIZE_LINK_OPTIONS ${FROST_ASAN_LINK_OPTIONS})
+        endif()
         # The ASan runtime DLL, copied next to every executable by frost_copy_runtime_dlls,
         # and loaded first by frost.exe's launcher (src/app/CMakeLists.txt).
         set(FROST_ASAN_RUNTIME_DLL "${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
@@ -103,13 +141,18 @@ endif()
 # the top-level directory, where FrostLayers resolves namespaced dependencies.
 find_package(Threads REQUIRED)
 
-if(FROST_BUILD_TESTS)
+if(FROST_BUILD_TESTS OR FROST_FUZZ)
     enable_testing()
+endif()
+if(FROST_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
     include(GoogleTest)
 endif()
+include(FrostFuzz)
 
 add_subdirectory(src)
 if(FROST_BUILD_TESTS)
     add_subdirectory(tests)
+elseif(FROST_FUZZ)
+    add_subdirectory(tests/fuzz)
 endif()
