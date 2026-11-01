@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # FrostLayers.cmake: target helpers that enforce the module layering at configure
-# time. The layer ranks below are the source of truth for the dependency order of
-# the modules listed in PLAN.md section 3.2; the Qt rule is PLAN.md section 2
-# ("Process model and IPC") and section 6.5.
+# time and give executables their runtime DLLs. The layer ranks below are the source
+# of truth for the dependency order of the modules listed in PLAN.md section 3.2; the
+# Qt rule is PLAN.md section 2 ("Process model and IPC") and section 6.5.
 #
 # Every FrostIDE library belongs to a layer with a rank. A library may depend
 # only on libraries of a strictly lower rank, or on libraries of its own layer.
@@ -16,6 +16,12 @@
 # target_link_libraries, or Qt reached through a wrapper target, are caught too.
 # Setting FROST_LAYERS_REPORT_ALL reports violations with SEND_ERROR instead of
 # FATAL_ERROR, so tests/cmake can see every diagnostic of a fixture in one run.
+#
+# The file also makes executables runnable from the build tree on Windows:
+# frost_copy_runtime_dlls registers an executable, and a second deferred pass
+# (_frost_add_runtime_dll_copies) gives each output directory that holds a registered
+# executable one target that copies the runtime DLLs of all its executables and orders
+# every executable there after it. Its output-directory checks run on every platform.
 #
 #   frost_add_library(<name> LAYER <layer> [SOURCES ...] [DEPS frost libs...]
 #                     [THIRD_PARTY imported targets...] [INTERFACE])
@@ -267,12 +273,14 @@ endfunction()
 # such a step: vcpkg's toolchain gives each executable a z-applocal POST_BUILD step
 # (its add_executable override; VCPKG_APPLOCAL_DEPS) that opens every DLL the
 # executable imports from beside it, recursively, and would copy missing ones from
-# vcpkg's installed bin directory. That directory stays empty while the triplets link
-# statically, so z-applocal copies nothing today, but it reads the copied Qt and ASan
-# DLLs on every run. That read is what failed in 51e9a05's fresh tests/perf/s1
-# directory: vcpkg printed "open_for_read(...Qt6Widgetsd.dll): permission denied" when
-# one executable's z-applocal opened the DLL while the other executable's POST_BUILD
-# copy was writing it, a reader against a writer. So one custom target per output
+# vcpkg's installed bin directory. That directory does not exist while the triplets
+# link statically (VCPKG_LIBRARY_LINKAGE static), so z-applocal copies nothing today,
+# but it reads the copied Qt and ASan DLLs on every run. That read is what failed in
+# the first verify of the merged tree (87f376a, the merge of m0/s1), in its fresh
+# tests/perf/s1 directory: vcpkg printed "open_for_read(...Qt6Widgetsd.dll): permission
+# denied" when one executable's z-applocal opened the DLL while the other executable's
+# POST_BUILD copy was writing it, a reader against a writer (51e9a05, the stopgap that
+# ordered that pair, calls it two writers). So one custom target per output
 # directory makes the copies (_frost_add_runtime_dll_copies, at the end of configure),
 # never a step per executable, and every executable in the directory, registered here
 # or not, is ordered after it: its compiles and its link wait for the copy, so the
@@ -306,8 +314,11 @@ endfunction()
 # Deferred (end of configure, once the output-directory properties are final). Finds
 # every executable of the build through each directory's BUILDSYSTEM_TARGETS and groups
 # them by runtime output directory. Each directory that holds a target registered by
-# frost_copy_runtime_dlls gets one custom target, frost_runtime_dlls_<directory>, that
-# copies the union of the group's DLLs into the directory, and every executable of the
+# frost_copy_runtime_dlls gets one custom target, frost_runtime_dlls_<directory>
+# (<directory> is the output directory relative to the build tree as a C identifier,
+# e.g. frost_runtime_dlls_tests_perf_s1; the build tree's own is plain
+# frost_runtime_dlls, and a clashing name gets a numeric suffix), that copies the
+# union of the group's DLLs into the directory, and every executable of the
 # group, registered or not, depends on it. The search keeps the rule above when a
 # registration is missing (s1_probe_validate and s1_first_frame had none and shared
 # tests/perf/s1 with s1_editor), instead of relying on every call site. Multi-config
@@ -316,8 +327,8 @@ endfunction()
 # The copy target always runs, so DLLs deleted from a directory come back with the next
 # build. copy_if_different compares contents and leaves current DLLs alone; that costs
 # an up-to-date build one cmake -E process per directory, in parallel: about 90 ms
-# where the three Qt Debug DLLs are compared, 15 ms elsewhere (measured 2026-11-01;
-# B28 dev loop). The old POST_BUILD copy paid the same after every relink of each
+# where the three Qt Debug DLLs are compared, 15 ms elsewhere (measured 2026-11-01).
+# Budget: B28. The old POST_BUILD copy paid the same after every relink of each
 # executable. copy_if_newer would be cheaper but would keep a newer DLL when Qt is
 # downgraded. Windows only, after the checks.
 function(_frost_add_runtime_dll_copies)
@@ -413,8 +424,10 @@ function(_frost_add_runtime_dll_copies)
         endforeach()
         set(dlls "$<REMOVE_DUPLICATES:${dlls}>")
         # All members share the directory; $<TARGET_FILE_DIR> adds its configuration
-        # subdirectory. File-name expressions add no target dependency (CMP0112), so
-        # naming a member here does not make the copy wait for it.
+        # subdirectory. Target-file component expressions such as $<TARGET_FILE_DIR>
+        # add no target dependency (CMP0112, NEW under cmake_minimum_required(VERSION
+        # 4.0)), and $<TARGET_RUNTIME_DLLS> adds none either, so naming the members
+        # here does not make the copy wait for them.
         list(GET members 0 first)
         if(FROST_ASAN_RUNTIME_DLL)
             set(verb copy_if_different)
@@ -443,6 +456,8 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_add_runtime_dll
 # directory before creating the QApplication, so ctest needs no environment setup.
 # LABELS defaults to unit. On Windows the test embeds the FrostIDE manifest
 # (test_manifest.rc) and the linker's own manifest is disabled.
+# Tests are built with TEST options and, like the executables of frost_add_executable,
+# get their runtime DLLs through frost_copy_runtime_dlls.
 function(frost_add_test name)
     cmake_parse_arguments(ARG "QT" "" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
     if(ARG_QT)
