@@ -40,8 +40,12 @@ struct SelfTestReport {
 // contents and long paths.
 [[nodiscard]] std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening);
 
-// Checks that need a live QApplication on the calling (GUI) thread: DPI
-// awareness and creating, showing and closing the main window.
+/*
+ * Checks that need a live QApplication (precondition) on the calling GUI thread: the
+ * platform plugin in use, per-monitor v2 DPI awareness on Windows, and creating, showing
+ * and closing a MainWindow. Blocks for up to 5 s while it pumps the event loop waiting
+ * for the window to be exposed; on a native platform the window is visible on screen.
+ */
 [[nodiscard]] std::vector<SelfTestCheck> runGuiChecks();
 
 } // namespace frost::app

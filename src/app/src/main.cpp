@@ -3,8 +3,10 @@
 // Entry point of frost, the FrostIDE executable.
 //
 // Start-up order matters for the budgets in PLAN.md section 4 (B1 first frame):
-// arguments are parsed before Qt exists, so --version, --help and --selftest
-// never initialise the GUI stack they do not need. The process is hardened
+// arguments are parsed before Qt exists, so --version and --help never initialise
+// the GUI stack, and --selftest initialises it (offscreen by default) only after its
+// process and plugin checks. Qt gets only the program name, so no argument (not even
+// one after "--") becomes a Qt option such as -platform. The process is hardened
 // (frost/app/startup.hpp) before anything else can load a DLL or start a process.
 //
 // Exit status: 0 success, 1 self-test failed, 2 usage error, 4 frost cannot start in this
@@ -172,7 +174,11 @@ int main(int argc, char** argv) {
         if (!plugins->warning.empty()) {
             report.checks.push_back({"other-plugin-paths", false, false, std::move(plugins->warning)});
         }
-        QApplication app(argc, argv);
+        // frost parsed the arguments; paths after "--" must not become Qt options such as
+        // -platform, so Qt gets only the program name. Qt keeps a reference to the count,
+        // so it lives as long as `app`.
+        int qtArgc = argc > 0 ? 1 : 0;
+        QApplication app(qtArgc, argv);
         for (auto& check : frost::app::runGuiChecks()) {
             report.checks.push_back(std::move(check));
         }
@@ -187,7 +193,9 @@ int main(int argc, char** argv) {
         reportStartupFailure(consoleCodePage, plugins.error().message());
         return 4;
     }
-    QApplication app(argc, argv);
+    // As in the self-test: Qt gets only the program name, never the user's arguments.
+    int qtArgc = argc > 0 ? 1 : 0;
+    QApplication app(qtArgc, argv);
     QApplication::setApplicationName(QStringLiteral("FrostIDE"));
     QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
     frost::app::MainWindow window;

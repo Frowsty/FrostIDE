@@ -10,8 +10,8 @@ frost_add_test(app_tests QT
     SOURCES command_line_test.cpp main_window_test.cpp
     DEPS frost::app)
 
-# Start-up hardening changes process-wide state for good, so it gets its own binary
-# (and gtest_discover_tests runs each test in its own process).
+# Start-up hardening cannot be undone; StartupHardeningDeathTest applies it only in a
+# death-test child of this binary, which needs no QApplication (no Qt test main).
 frost_add_test(app_startup_tests
     SOURCES startup_test.cpp
     DEPS frost::app frost::io)
