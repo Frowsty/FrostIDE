@@ -1,6 +1,13 @@
 # ADR 0006: Spike S6, ProjectHost cold start
 
-- Status: accepted (fixture, R2a and R2b), apart from three parts that are only proposed and wait for the user:
+- Status: accepted (fixture, R2a and R2b), the three proposed parts included. **Decided 2026-11-01 (ADR 0011,
+  B1–B4)**, on the user's instruction of that day to follow the recommendation: decision 3 takes option (i), with
+  the cold samples collected passively, one per ordinary reboot (B1), and its trees proposal is accepted (B2);
+  decision 6's five preconditions are accepted (B3); decision 2's question takes answer 2 as M2's target, with
+  answer 3 as the fallback and answer 1 rejected (B4). D3 stays not final until the ten cold samples are in and
+  the user has fixed B23's first-project value from them. Decision 2's options against first-use JIT stay open
+  M2 options. Until then the status read:
+  accepted (fixture, R2a and R2b), apart from three parts that are only proposed and wait for the user:
   how B23's final values are set, which also decides when D3 becomes final (decision 3); the B23 preconditions
   (decision 6); and whether a trusted root launches ProjectHost before L1 (decision 2). Decision 1 keeps path (b)
   as M2's plan but does not make D3 final. Decision 2's options against first-use JIT are open M2 options, not
@@ -111,6 +118,9 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
         time on R2b.
 
      Whichever answer is chosen, M2 measures the host's effect on L1 and on the tree fill.
+
+     **Decided 2026-11-01 (ADR 0011, B4):** answer 2 is M2's target; answer 3 is the fallback if answer 2 proves
+     infeasible; answer 1 is rejected. PLAN.md does not change now.
    - **First-use JIT with no warm-up.** When trust comes before the host starts, which includes the gating case
      under 6 (d), no warm-up runs. All of the host's first-use JIT is then on B23's first-project path, and the
      warm-up does nothing against it. Binding Microsoft.Build to VS's copies made no difference either
@@ -200,6 +210,10 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
          measurement it gates.
        - D3: M2 builds the C# ProjectHost (about 3k lines, PLAN.md section 2, path (b)) before B23 is fixed,
          which inverts PLAN.md's gate. PLAN.md's S6 line and its D3 row change, so this is a plan change.
+
+     **Decided 2026-11-01 (ADR 0011, B1):** option (i). The cold samples are collected passively: one per
+     ordinary reboot, through the logon harness that M1 builds for cold B1. D3 stays not final until 10 samples
+     exist and the user has fixed B23's first-project value from them.
    - **The trees target.** S6 gives no evidence for the trees value (R3, p50 1.5 s; see Context), and no M0
      spike measures the native readers. Removing that target's "final value set by S6" note on the strength of
      S6 would finalise 1.5 s with nothing behind it. Proposed: 1.5 s stays provisional until M2's first B23
@@ -209,6 +223,9 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
        same note on this target. Under option (i) the S6 spike-list line also no longer holds as written,
        because S6 would fix only one of B23's two values. This ADR edits neither file.
      - 1.5 s stays the ceiling in the same way. The user decides.
+
+     **Decided 2026-11-01 (ADR 0011, B2):** accepted. PLAN.md's B23 row note and S6 spike-list line, and
+     `budgets.json`'s note on the trees target, now say so.
    - This ADR does not edit `budgets.json`. Any change to a target needs an ADR and user approval.
 4. **MSBuild assemblies load through MSBuildLocator's resolver.** Binding them by `codeBase` to the VS copies (in
    the hope of using VS's native images) made no measurable difference.
@@ -249,6 +266,9 @@ supervisor and the ETW markers. That path first exists in M2, so S6 can time onl
 
    If the user approves, `budgets.json`'s B23 preconditions and PLAN.md's B23 row take these over, together
    with the user's choice of how the final values are set (decision 3).
+
+   **Decided 2026-11-01 (ADR 0011, B3):** all five are accepted. `budgets.json`'s B23 preconditions state them;
+   PLAN.md's B23 row already defers its preconditions to `budgets.json`.
 
 ## Measurements
 - **Machine and toolchain.**

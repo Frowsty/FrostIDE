@@ -23,6 +23,12 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(corpora["R3"]["licence"], "Apache-2.0 WITH LLVM-exception")
         self.assertEqual(corpora["R2a"]["licence"], "GPL-3.0-or-later")
         self.assertEqual(corpora["R2b"]["licence"], "MIT")
+        # ADR 0011: R2b's SDK prerequisite (B7) and R3's configuration, pinned for every R3 budget (C2).
+        self.assertIn("Windows SDK 10.0.26100.0", corpora["R2b"]["prerequisites"])
+        r3_args = corpora["R3"]["configuration"]["cmake_args"]
+        for arg in ("Ninja", "-DLLVM_ENABLE_PROJECTS=clang", "-DCMAKE_BUILD_TYPE=Release"):
+            self.assertIn(arg, r3_args)
+        self.assertTrue(any(a.endswith("/cmake/toolchains/windows-clangcl.cmake") for a in r3_args), r3_args)
         for entry in corpora.values():
             self.assertTrue(entry["url"].startswith("https://github.com/"), entry["url"])
 

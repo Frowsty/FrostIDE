@@ -5,9 +5,9 @@
 #
 # It also points every tool cache that would otherwise land in the user profile on
 # the system drive at the SDK root (D1): the NuGet package folder and its HTTP and
-# plugin caches, the .NET CLI home, the vcpkg downloads and sccache; the vcpkg binary
-# cache goes to <SDK drive>\vcpkg-cache. It sets DOTNET_ROOT to the pinned .NET SDK
-# and turns off tool telemetry. Nothing is persisted machine-wide.
+# plugin caches, the .NET CLI home, the vcpkg downloads and registry clones, and
+# sccache; the vcpkg binary cache goes to <SDK drive>\vcpkg-cache. It sets DOTNET_ROOT
+# to the pinned .NET SDK and turns off tool telemetry. Nothing is persisted machine-wide.
 #
 # Moving the .NET CLI home (DOTNET_CLI_HOME) has side effects in these sessions:
 #  - Global tools: `dotnet tool install -g` installs into <SDK root>\dotnet-home\.dotnet\tools,
@@ -48,6 +48,11 @@ $env:VCPKG_ROOT = Join-Path $SdkRoot 'vcpkg'
 $env:VCPKG_DISABLE_METRICS = '1'
 $env:VCPKG_DOWNLOADS = Join-Path $SdkRoot '_downloads\vcpkg'
 $env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path (Split-Path -Qualifier $SdkRoot) 'vcpkg-cache'
+# vcpkg's registry clones (its git and git-trees folders). Unset, they go to
+# %LOCALAPPDATA%\vcpkg\registries on C:, where S2's reference build left 136 MB (ADR 0005). vcpkg
+# reads it only under this experimental X_ name and rejects a value that is not an absolute
+# path to a directory.
+$env:X_VCPKG_REGISTRIES_CACHE = Join-Path $SdkRoot 'vcpkg-registries'
 $env:DOTNET_ROOT = Join-Path $SdkRoot "dotnet-$($lock.windows.dotnet.version)"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
@@ -62,9 +67,11 @@ $env:SCCACHE_DIR = Join-Path $SdkRoot 'sccache-cache'
 $env:GH_NO_UPDATE_NOTIFIER = '1'
 
 # Create the cache directories up front: vcpkg refuses to start when its binary
-# cache directory does not exist, and the others then exist before any tool runs.
-$cacheDirs = @($env:VCPKG_DOWNLOADS, $env:VCPKG_DEFAULT_BINARY_CACHE, $env:DOTNET_CLI_HOME, $env:NUGET_PACKAGES,
-    $env:NUGET_HTTP_CACHE_PATH, $env:NUGET_PLUGINS_CACHE_PATH, $env:SCCACHE_DIR)
+# cache directory does not exist, it rejects a registries cache that is not a
+# directory, and the others then exist before any tool runs.
+$cacheDirs = @($env:VCPKG_DOWNLOADS, $env:VCPKG_DEFAULT_BINARY_CACHE, $env:X_VCPKG_REGISTRIES_CACHE,
+    $env:DOTNET_CLI_HOME, $env:NUGET_PACKAGES, $env:NUGET_HTTP_CACHE_PATH, $env:NUGET_PLUGINS_CACHE_PATH,
+    $env:SCCACHE_DIR)
 foreach ($dir in $cacheDirs) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 }

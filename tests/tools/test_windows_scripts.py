@@ -59,14 +59,18 @@ foreach ($version in $Versions) {
 }
 """
 
-# Dot-sources env.ps1 with the given SDK root and prints the variables it sets as NAME=VALUE.
+# Dot-sources env.ps1 with the given SDK root and prints the variables it sets as NAME=VALUE. It clears them
+# first: the child inherits this process's environment, so a value left by an earlier dot-sourcing of env.ps1
+# would otherwise pass for one that env.ps1 does not set.
 _ENV_DUMP = r"""
 param([string]$EnvScript, [string]$SdkRoot)
 $ErrorActionPreference = 'Stop'
+$names = @('FROST_SDK', 'DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH',
+           'SCCACHE_DIR', 'VCPKG_DOWNLOADS', 'VCPKG_DEFAULT_BINARY_CACHE', 'X_VCPKG_REGISTRIES_CACHE',
+           'DOTNET_ADD_GLOBAL_TOOLS_TO_PATH', 'DOTNET_GENERATE_ASPNET_CERTIFICATE')
+foreach ($name in $names) { Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue }
 . $EnvScript -SdkRoot $SdkRoot 3>$null
-foreach ($name in @('FROST_SDK', 'DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH',
-                    'NUGET_PLUGINS_CACHE_PATH', 'SCCACHE_DIR', 'VCPKG_DOWNLOADS', 'VCPKG_DEFAULT_BINARY_CACHE',
-                    'DOTNET_ADD_GLOBAL_TOOLS_TO_PATH', 'DOTNET_GENERATE_ASPNET_CERTIFICATE')) {
+foreach ($name in $names) {
     "$name=$([Environment]::GetEnvironmentVariable($name))"
 }
 """
@@ -113,8 +117,9 @@ class EnvCacheRedirectionTest(TempDirTestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
         sdk_drive = ntpath.splitdrive(sdk)[0].upper()
+        # X_VCPKG_REGISTRIES_CACHE: vcpkg's registry clones, %LOCALAPPDATA%\vcpkg\registries when it is unset.
         for name in ("DOTNET_CLI_HOME", "NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH", "NUGET_PLUGINS_CACHE_PATH",
-                     "SCCACHE_DIR", "VCPKG_DOWNLOADS"):
+                     "SCCACHE_DIR", "VCPKG_DOWNLOADS", "X_VCPKG_REGISTRIES_CACHE"):
             self.assertTrue(ntpath.normcase(values[name]).startswith(ntpath.normcase(sdk) + "\\"),
                             f"{name}={values[name]} is not under {sdk}")
             self.assertTrue(Path(values[name]).is_dir(), f"{name}: {values[name]} was not created")

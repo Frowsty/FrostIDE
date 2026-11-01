@@ -4,14 +4,15 @@
 # tests/cmake. The rule under test: no build step may read or write a copied DLL in an
 # output directory unless it is ordered after that directory's copy. Every executable
 # there has such a step: vcpkg's z-applocal POST_BUILD step opens the DLLs it imports
-# from beside it. In 51e9a05's fresh tests/perf/s1 directory, one executable's
-# z-applocal opened Qt6Widgetsd.dll while the other's POST_BUILD copy was writing it, a
-# reader against a writer, and vcpkg failed with "open_for_read(...): permission
-# denied". The helper must therefore copy once per output directory and configuration,
-# and order every executable in the directory after that copy, also one that was never
-# registered. This script configures tests/cmake/runtime_dlls_fixture with Ninja
-# Multi-Config and the build's own toolchain (without vcpkg, so the fixture has no
-# z-applocal step; the order check stands for it), then checks, on Windows:
+# from beside it. In the fresh tests/perf/s1 directory of the merged tree's first
+# verify (87f376a; 51e9a05 was the stopgap), one executable's z-applocal opened
+# Qt6Widgetsd.dll while the other's POST_BUILD copy was writing it, a reader against a
+# writer, and vcpkg failed with "open_for_read(...): permission denied". The helper
+# must therefore copy once per output directory and configuration, and order every
+# executable in the directory after that copy, also one that was never registered.
+# This script configures tests/cmake/runtime_dlls_fixture with Ninja Multi-Config and
+# the build's own toolchain (without vcpkg, so the fixture has no z-applocal step; the
+# order check stands for it), then checks, on Windows:
 #   1. structure: in the generated Ninja files of Debug and Release, each of the
 #      fixture's three output directories is the destination of copy_if_different on
 #      exactly one line (one build edge), so no two edges can write the same file;
@@ -23,10 +24,10 @@
 #      shared_c (registered, links no stand-in) in Debug and shared_raw in Release;
 #   4. result: after parallel builds of both configurations every output directory
 #      holds the union of its executables' DLLs (shared_raw's included) and the ASan
-#      stand-in, nothing else, and they come back after the DLLs and executables are
-#      deleted;
-#   5. without the ASan stand-in, a directory with nothing to copy gets no DLLs and
-#      the others get only theirs;
+#      stand-in, and no other DLL; after shared/Debug's DLLs and executables are
+#      deleted, a Debug build brings them back;
+#   5. without the ASan stand-in (Debug only), top_plain's directory, which has
+#      nothing to copy, gets no DLLs, and shared/ gets only its own;
 # on Linux, that nothing is copied at all. On both, a registered and an unregistered
 # executable with a per-configuration output directory must each fail configure with
 # the helper's message.

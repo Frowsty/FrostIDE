@@ -1,6 +1,9 @@
 # ADR 0010: Budget B28, the dev loop on R1
 
-- Status: accepted for M0. B28 is met on both of its variants, under each reading of "rebuilt and linked"
+- Status: accepted. **Decided 2026-11-01 (ADR 0011, F3)**, on the user's instruction of that day to follow the
+  recommendation: decision 2 is accepted, so the full default build gates B28 from M1 on, and `budgets.json`'s
+  B28 method fixes the probe files and the job counts. Until then the status read:
+  accepted for M0. B28 is met on both of its variants, under each reading of "rebuilt and linked"
   measured here. Which reading gates B28 from M1 on is proposed (decision 2) and waits for the user (question 1).
   No budget, test or warning changes.
 - Date: 2026-11-01
@@ -41,6 +44,8 @@ Neither text says which target counts as "rebuilt and linked". PLAN.md has "rebu
    `--target frost` is measured and reported alongside. It is the reading that `budgets.json`'s singular "the
    rebuilt, linked target" suggests. At M0 both readings meet the target with a wide margin, so nothing waits on
    the answer.
+
+   **Decided 2026-11-01 (ADR 0011, F3):** accepted.
 3. **Probe files.** Each one-.cpp change goes to one of three files:
    - `src/core/src/error.cpp` ("core"): `frost` and 14 other executables link it, so it has the widest fan-out
      (15 executables relink);
@@ -257,3 +262,6 @@ That matches the verify series' WSL legs (42.4–46.0 s).
    Should `budgets.json`'s B28 method then also fix the probe files (here core, main.cpp and sched) and the job
    counts (here ninja's default for the rebuild, and `-Jobs 4` for `verify -Quick`)? All readings meet the
    target at M0, so nothing waits on the answer.
+
+   **Decided 2026-11-01 (ADR 0011, F3):** (a), and yes: `budgets.json`'s B28 method fixes the three probe files,
+   ninja's default parallelism for the rebuild and `-Jobs 4` for `verify -Quick`.
