@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- A build that runs for two minutes unless it is cancelled (tests/build/msbuild_build_test.cpp):
+     it announces itself, then waits on PING.EXE in an Exec task, so cmd.exe and ping.exe run
+     below MSBuild while the test cancels it. -->
+<Project DefaultTargets="Build">
+  <Target Name="Build">
+    <Message Importance="high" Text="frost-slow-build-started" />
+    <Exec Command="&quot;$(SystemRoot)\System32\PING.EXE&quot; -n 120 127.0.0.1 &gt; NUL" />
+  </Target>
+  <Target Name="Rebuild" DependsOnTargets="Build" />
+  <Target Name="Clean" />
+</Project>

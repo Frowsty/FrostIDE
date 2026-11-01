@@ -66,7 +66,7 @@ TEST(Error, FormatsThroughStdFormat) {
 
 TEST(Error, ToStringCoversEveryCode) {
     using enum frost::ErrorCode;
-    // Every enumerator, in declaration order; Internal is the last one.
+    // Every enumerator, in declaration order; Untrusted is the last one.
     const std::pair<frost::ErrorCode, std::string_view> expected[] = {
         {Unknown, "Unknown"},
         {InvalidArgument, "InvalidArgument"},
@@ -81,8 +81,9 @@ TEST(Error, ToStringCoversEveryCode) {
         {Timeout, "Timeout"},
         {Busy, "Busy"},
         {Internal, "Internal"},
+        {Untrusted, "Untrusted"},
     };
-    static_assert(static_cast<int>(Internal) + 1 == std::size(expected), "update this table with ErrorCode");
+    static_assert(static_cast<int>(Untrusted) + 1 == std::size(expected), "update this table with ErrorCode");
     for (const auto& [code, name] : expected) {
         EXPECT_EQ(frost::toString(code), name);
     }

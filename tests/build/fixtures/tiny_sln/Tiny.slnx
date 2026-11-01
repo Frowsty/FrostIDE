@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="App/App.vcxproj" />
+  <Project Path="Lib/Lib.vcxproj" />
+</Solution>

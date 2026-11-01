@@ -25,6 +25,7 @@ std::string_view toString(ErrorCode code) noexcept {
     case ErrorCode::Timeout: return "Timeout";
     case ErrorCode::Busy: return "Busy";
     case ErrorCode::Internal: return "Internal";
+    case ErrorCode::Untrusted: return "Untrusted";
     }
     // Values outside the enumeration can arrive through IPC; they must still print.
     return "ErrorCode(?)";
