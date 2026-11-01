@@ -1,0 +1,9 @@
+start
+=======
+<<<<<<<< ours
+ours end
+|||||||| base
+end
+========
+theirs end
+>>>>>>>> theirs

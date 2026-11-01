@@ -1,0 +1,41 @@
+@@ -68,7 +68,8 @@
+ class IFileSystem {
+ public:
+     // Returns the whole file. Errors: NotFound, PermissionDenied, Busy (Windows sharing
+-    // violation), InvalidArgument (a directory), IoError. O(size).
++    // violation), InvalidArgument (a directory, or not a regular file: FIFOs, sockets and
++    // devices are refused without blocking), IoError. O(size).
+     [[nodiscard]] virtual Result<std::string> readFile(std::string_view path) = 0;
+ 
+     /*
+@@ -87,8 +88,10 @@
+      * Not preserved from an existing target: Windows attributes, ACLs and
+      * alternate streams, hard-link identity and symlinks (a symlink at `path` is
+      * replaced by a regular file). POSIX permission bits are kept. Read-only
+-     * targets fail with PermissionDenied. SaveManager (M1) adds metadata and
+-     * symlink preservation on top of this primitive.
++     * targets fail with PermissionDenied. On POSIX the temporary file is created
++     * with mode 0600 and receives the final mode (the target's, or 0666 minus the
++     * umask) only once its content is complete. SaveManager (M1) adds metadata
++     * and symlink preservation on top of this primitive.
+      * TODO(M1): sweep stale .frost-tmp-* files left by killed processes.
+      *
+      * Errors: NotFound (parent directory missing), PermissionDenied, Busy,
+@@ -110,11 +113,14 @@
+     // Errors: AlreadyExists (it or a parent exists as a non-directory), PermissionDenied, IoError.
+     [[nodiscard]] virtual Result<void> createDirectories(std::string_view path) = 0;
+ 
+-    // Removes a file (or a symlink itself). Errors: NotFound, InvalidArgument (a
+-    // directory), PermissionDenied (includes read-only files on Windows), Busy.
++    // Removes a file, or a link itself: every entry listDirectory reports as Symlink
++    // (including Windows directory symlinks and junctions) is removed with removeFile on
++    // every platform, and the link is never followed. Errors: NotFound, InvalidArgument
++    // (a directory), PermissionDenied (includes read-only files on Windows), Busy.
+     [[nodiscard]] virtual Result<void> removeFile(std::string_view path) = 0;
+ 
+-    // Removes an empty directory. Errors: NotFound, InvalidArgument (not a
++    // Removes an empty directory. A link to a directory is not a directory here
++    // (InvalidArgument; use removeFile). Errors: NotFound, InvalidArgument (not a
+     // directory), IoError (not empty), PermissionDenied, Busy.
+     [[nodiscard]] virtual Result<void> removeDirectory(std::string_view path) = 0;
+ 

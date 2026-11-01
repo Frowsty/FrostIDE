@@ -8,6 +8,8 @@
 #   io_ignore_rules  frost::io's gitignore matcher against a backtracking reference (ADR 0020)
 #   text_decode      frost::text's encodings: the lossy Unicode decoders against independent
 #                    oracles and the load/save pipeline over platform and fake codecs (ADR 0018)
+#   diff_merge       frost::diff line diffs, refinement and three-way merges against the support
+#                    library's independent appliers and invariants (ADR 0019)
 
 # The text test support libraries (frost_text_test_support and frost_text_encoding_test_support):
 # already targets in normal trees (tests/text), added here in fuzz trees. Their source is not a
@@ -36,3 +38,15 @@ frost_add_fuzz_target(text_decode
         text_decode_fuzzer.cpp
     DEPS frost_text_encoding_test_support
     CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/text_decode)
+# The diff test support library: a target in normal trees (tests/diff, added before this
+# directory), added here in fuzz trees, where only it (not the git support) is built.
+if(NOT TARGET frost_diff_test_support)
+    add_subdirectory(${FROST_SOURCE_DIR}/tests/diff/support ${CMAKE_BINARY_DIR}/tests/diff/support)
+endif()
+
+frost_add_fuzz_target(diff_merge
+    SOURCES
+        diff_merge_harness.cpp
+        diff_merge_fuzzer.cpp
+    DEPS frost_diff_test_support
+    CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/diff_merge)

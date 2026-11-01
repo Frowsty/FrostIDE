@@ -1,0 +1,3 @@
+Conflict 0 6 0 6 0 6
+conflicts 1
+degraded 1

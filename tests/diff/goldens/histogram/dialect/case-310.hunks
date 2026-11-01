@@ -1,0 +1,10 @@
+242013001211
+2412013011111
+# hist.gen Random(1) case 310: git 2.43 (classic) and git 2.56 (new) differ
+classic:
+2 2 2 3
+7 10 8 11
+new:
+2 2 2 3
+7 8 8 8
+9 10 9 11

@@ -1,0 +1,33 @@
+@@ -1,7 +1,8 @@
+ // SPDX-License-Identifier: Apache-2.0
+ //
+ // Command-line parsing for frost (the IDE executable). Parsing happens before
+-// Qt is initialised so that --version and --selftest never pay for GUI start-up.
++// Qt is initialised so that --version and --help never pay for GUI start-up, and
++// --selftest runs its process and plugin checks before QApplication exists.
+ #pragma once
+ 
+ #include "frost/core/error.hpp"
+@@ -15,7 +16,9 @@
+ 
+ // What the process should do after parsing.
+ enum class Mode {
+-    Gui,      // Normal start: open the main window (and any paths given).
++    // Normal start: open the main window. Positional paths are parsed but not opened yet.
++    // TODO(M2): open them (`frost <path>`, PLAN.md 2.2 shell integration, M2 exit).
++    Gui,
+     Version,  // Print version information and exit.
+     Help,     // Print usage and exit.
+     SelfTest, // Run the built-in self-test and exit with its status.
+@@ -32,7 +35,10 @@
+ // Parses UTF-8 arguments (argv[1..], without the program name). Every argument
+ // starting with '-' before "--" is an option; unknown options (including
+ // single-dash typos such as -version) are an InvalidArgument error, so they are
+-// reported instead of being opened as paths.
++// reported instead of being opened as paths. Two different mode options (e.g.
++// --version --selftest) are also an InvalidArgument error; repeating one, or combining
++// --selftest with --selftest=onscreen, is allowed. Pure and thread-safe; O(total length
++// of the arguments).
+ [[nodiscard]] Result<CommandLine> parseCommandLine(std::span<const std::string_view> args);
+ 
+ // Usage text printed by --help and after a parse error.
