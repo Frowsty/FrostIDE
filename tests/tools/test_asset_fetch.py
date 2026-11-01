@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for tools/asset_fetch.py (ADR 0015): the manifest schema, the offline --verify mode
-# (including the committed resources/assets.lock.json), and --fetch/--pin against local file://
-# archives (the test-only --allow-file-urls), covering archive and member hash checks,
+# (including the committed resources/assets.lock.json), vendor locks (ADR 0023: their schema and
+# nested-path verification, including the committed third_party/vendor.lock.json), and
+# --fetch/--pin against local file:// archives (the test-only --allow-file-urls), covering archive
+# and member hash checks,
 # duplicate, missing and oversized members, extra files, cross-checks, fresh download
 # directories, all-or-nothing writes and usage errors, plus the hardening: unpinned hashes
 # refused by --fetch, https-only redirects, the download size limit, corrupt member data,
@@ -159,6 +161,69 @@ class ManifestSchemaTest(FetchTestCase):
         text = asset_fetch.format_manifest(self.document)
         self.assertEqual(json.loads(text), self.document)
         self.assertIn('    {"member": "pkg/OFL.txt"', text.replace("      ", "    "))
+
+
+class VendorLockTest(FetchTestCase):
+    """Vendor locks (ADR 0023): the schema differences and offline verification of nested paths."""
+
+    def vendor_document(self) -> dict:
+        document = copy.deepcopy(self.document)
+        component = document.pop("assets")[0]
+        component.update({"archive": "demo-1.0.tar.gz", "dest": "third_party/demo", "commit": "0" * 40,
+                          "purl": "pkg:github/demo/demo@v1.0"})
+        component["files"][0]["path"] = "src/Demo-Regular.ttf"
+        document["components"] = [component]
+        return document
+
+    def test_schema(self) -> None:
+        document = self.vendor_document()
+        components = asset_fetch.validate_manifest(document, "v", allow_file_urls=True)
+        self.assertEqual([c["id"] for c in components], ["demo"])
+        for mutate, fragment in (
+            (lambda c: c.update(archive="demo-1.0.zip"), ".tar.gz"),
+            (lambda c: c.update(dest="resources/demo"), "below third_party/"),
+            (lambda c: c.update(commit="abc123"), "commit"),
+            (lambda c: c.pop("purl"), "purl"),
+            (lambda c: c["files"][0].update(path="src/../x"), "relative path of basenames"),
+        ):
+            broken = copy.deepcopy(document)
+            mutate(broken["components"][0])
+            with self.assertRaises(asset_fetch.ManifestError) as caught:
+                asset_fetch.validate_manifest(broken, "v", allow_file_urls=True)
+            self.assertIn(fragment, str(caught.exception))
+        # Asset manifests keep basename paths.
+        assets = copy.deepcopy(self.document)
+        assets["assets"][0]["files"][0]["path"] = "src/Demo-Regular.ttf"
+        with self.assertRaises(asset_fetch.ManifestError) as caught:
+            asset_fetch.validate_manifest(assets, "m", allow_file_urls=True)
+        self.assertIn("must be a basename", str(caught.exception))
+
+    def test_verify_nested_paths(self) -> None:
+        document = self.vendor_document()
+        component = document["components"][0]
+        dest = self.repo / component["dest"]
+        for entry in component["files"]:
+            (dest / entry["path"]).parent.mkdir(parents=True, exist_ok=True)
+            (dest / entry["path"]).write_bytes(MEMBERS[entry["member"]])
+        (dest / "EXTRA.txt").write_bytes(EXTRA)
+        manifest = self.repo / "third_party" / "vendor.lock.json"
+        manifest.write_text(json.dumps(document), encoding="utf-8")
+        args = ("asset_fetch.py", "--repo", str(self.repo), "--manifest", str(manifest), "--allow-file-urls")
+        result = run_tool(*args)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (dest / "src" / "Demo-Regular.ttf").write_bytes(b"changed")
+        result = run_tool(*args)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("third_party/demo/src/Demo-Regular.ttf: SHA-256 differs", result.stdout)
+        # Fetching and pinning .tar.gz archives is not implemented yet: a usage error.
+        result = run_tool(*args, "--fetch", "--download-dir", str(self.downloads))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--verify only", result.stderr)
+
+    def test_committed_vendor_lock_verifies(self) -> None:
+        result = run_tool("asset_fetch.py", "--repo", str(REPO), "--manifest",
+                          str(REPO / "third_party" / "vendor.lock.json"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class VerifyTest(FetchTestCase):

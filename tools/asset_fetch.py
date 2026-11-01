@@ -3,7 +3,8 @@
 #
 # asset_fetch.py: fetches and verifies the pinned third-party assets that FrostIDE bundles
 # (the Inter and JetBrains Mono fonts and the Lucide stopgap icons), as listed in
-# resources/assets.lock.json (ADR 0015, PLAN.md section 2 "Icons and fonts" and risk L7).
+# resources/assets.lock.json (ADR 0015, PLAN.md section 2 "Icons and fonts" and risk L7), and
+# verifies the vendored sources of third_party/vendor.lock.json (ADR 0023; --manifest).
 #
 #   python tools/asset_fetch.py [--repo <path>] [--manifest <file>] [--verify]
 #   python tools/asset_fetch.py ... --fetch [--only <id>]... [--download-dir <dir>]
@@ -30,6 +31,11 @@
 #             `crossCheckBase` (the tagged repository tree) followed by the member name.
 #             Rewrites the manifest.
 #   --list    prints the archive's members (size and name), for choosing `member` names.
+#
+# Vendor locks (a "components" list instead of "assets") pin source trees: each component's
+# dest lies below third_party/, its archive is a .tar.gz, its file paths may name
+# subdirectories (each component a basename), and it records the upstream commit (40 hex
+# digits) and a package URL (purl). They support --verify only.
 #
 # Network use: only --fetch, --pin and --list download anything (urllib, https only, and
 # redirects are followed only to https URLs; the test-only --allow-file-urls also accepts
@@ -60,6 +66,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MANIFEST_FILE = "resources/assets.lock.json"
+# The vendored-sources lock (ADR 0023): the same schema with the differences in the header.
+VENDOR_MANIFEST_FILE = "third_party/vendor.lock.json"
 # Members larger than this (bytes) are refused unless the asset sets maxMemberBytes.
 DEFAULT_MAX_MEMBER_BYTES = 16 * 1024 * 1024
 # Download timeout per request, seconds.
@@ -72,6 +80,7 @@ MAX_API_REPLY_BYTES = 8 * 1024 * 1024
 REQUIRED_FIELDS = ("id", "name", "version", "url", "archive", "sha256", "crossCheck", "licence", "copyright",
                    "reservedFontNames", "modified", "homepage", "dest", "licenceFile", "files", "adr")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _GITHUB_RELEASE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/]+)$")
 # Windows device names, which name a device rather than a file with any extension and in any case.
@@ -117,12 +126,17 @@ def _safe_member(name: object) -> bool:
     return all(part not in ("", ".", "..") for part in name.split("/")) and ":" not in name
 
 
-def _safe_dest(dest: object) -> bool:
-    """True for a POSIX directory path below resources/ whose every component is a basename."""
+def _safe_dest(dest: object, root: str = "resources") -> bool:
+    """True for a POSIX directory path below `root`/ whose every component is a basename."""
     if not _safe_member(dest):
         return False
     parts = dest.split("/")
-    return len(parts) >= 2 and parts[0] == "resources" and all(is_basename(part) for part in parts)
+    return len(parts) >= 2 and parts[0] == root and all(is_basename(part) for part in parts)
+
+
+def _safe_relpath(path: object) -> bool:
+    """True for a relative POSIX path whose every component is a basename (vendor locks)."""
+    return _safe_member(path) and all(is_basename(part) for part in path.split("/"))
 
 
 def _url_ok(url: object, allow_file_urls: bool) -> bool:
@@ -138,14 +152,19 @@ def _hash_ok(value: object) -> bool:
 
 def validate_manifest(document: object, where: str, allow_file_urls: bool = False) -> list[dict]:
     """
-    Checks the manifest schema (resources/assets.lock.json, schemaVersion 1) and returns its
-    asset list. Raises ManifestError naming the first problem. Pure.
+    Checks the manifest schema (resources/assets.lock.json or a vendor lock such as
+    third_party/vendor.lock.json, schemaVersion 1) and returns its asset (component) list.
+    Raises ManifestError naming the first problem. Pure.
     """
     if not isinstance(document, dict) or document.get("schemaVersion") != 1:
         raise ManifestError(f"{where}: schemaVersion must be 1")
-    assets = document.get("assets")
+    vendored = is_vendor_lock(document)
+    key = "components" if vendored else "assets"
+    assets = document.get(key)
     if not isinstance(assets, list) or not assets:
-        raise ManifestError(f"{where}: 'assets' must be a non-empty list")
+        raise ManifestError(f"{where}: '{key}' must be a non-empty list")
+    suffix = ".tar.gz" if vendored else ".zip"
+    safe_path = _safe_relpath if vendored else is_basename
     seen: set[str] = set()
     for asset in assets:
         if not isinstance(asset, dict):
@@ -161,8 +180,13 @@ def validate_manifest(document: object, where: str, allow_file_urls: bool = Fals
         seen.add(asset["id"])
         if not _url_ok(asset["url"], allow_file_urls):
             raise ManifestError(f"{label}: url must be https")
-        if not is_basename(asset["archive"]) or not asset["archive"].endswith(".zip"):
-            raise ManifestError(f"{label}: archive must be the basename of a .zip")
+        if not is_basename(asset["archive"]) or not asset["archive"].endswith(suffix):
+            raise ManifestError(f"{label}: archive must be the basename of a {suffix}")
+        if vendored:
+            if not isinstance(asset.get("commit"), str) or not _COMMIT.match(asset["commit"]):
+                raise ManifestError(f"{label}: commit must be 40 lower-case hex digits")
+            if not isinstance(asset.get("purl"), str) or not asset["purl"].startswith("pkg:"):
+                raise ManifestError(f"{label}: purl must be a package URL ('pkg:...')")
         if not _hash_ok(asset["sha256"]):
             raise ManifestError(f"{label}: sha256 must be empty or 64 lower-case hex digits")
         for key in ("name", "version", "crossCheck", "licence", "homepage", "adr"):
@@ -176,8 +200,9 @@ def validate_manifest(document: object, where: str, allow_file_urls: bool = Fals
             raise ManifestError(f"{label}: reservedFontNames must be a list of strings")
         if not isinstance(asset["modified"], bool):
             raise ManifestError(f"{label}: modified must be true or false")
-        if not _safe_dest(asset["dest"]):
-            raise ManifestError(f"{label}: dest must be a directory below resources/")
+        root = "third_party" if vendored else "resources"
+        if not _safe_dest(asset["dest"], root):
+            raise ManifestError(f"{label}: dest must be a directory below {root}/")
         if not _safe_member(asset["adr"]):
             raise ManifestError(f"{label}: adr must be a repository-relative path")
         base = asset.get("crossCheckBase")
@@ -200,8 +225,9 @@ def validate_manifest(document: object, where: str, allow_file_urls: bool = Fals
             if entry["member"] in members:
                 raise ManifestError(f"{label}: member {entry['member']} listed twice")
             members.add(entry["member"])
-            if not is_basename(entry.get("path")):
-                raise ManifestError(f"{label}: path {entry.get('path')!r} must be a basename")
+            if not safe_path(entry.get("path")):
+                raise ManifestError(f"{label}: path {entry.get('path')!r} must be a "
+                                    f"{'relative path of basenames' if vendored else 'basename'}")
             if not _hash_ok(entry.get("sha256")):
                 raise ManifestError(f"{label}: {entry['path']}: sha256 must be empty or 64 hex digits")
             if "crossCheckUrl" in entry and not _url_ok(entry["crossCheckUrl"], allow_file_urls):
@@ -225,6 +251,11 @@ def validate_manifest(document: object, where: str, allow_file_urls: bool = Fals
         if asset["licenceFile"] not in paths:
             raise ManifestError(f"{label}: licenceFile {asset['licenceFile']!r} is not one of the listed files")
     return assets
+
+
+def is_vendor_lock(document: dict) -> bool:
+    """True for a vendor lock (a "components" list, ADR 0023) rather than an asset manifest."""
+    return "components" in document
 
 
 def load_manifest(path: Path, allow_file_urls: bool = False) -> tuple[dict, list[dict]]:
@@ -539,6 +570,10 @@ def main(argv: list[str] | None = None) -> int:
         document, assets = load_manifest(manifest, args.allow_file_urls)
     except ManifestError as error:
         print(f"asset_fetch: {error}", file=sys.stderr)
+        return 2
+    if is_vendor_lock(document) and (args.fetch or args.pin or args.list):
+        # TODO(M1): fetch and pin .tar.gz source archives (tarfile with the zip path's checks).
+        print("asset_fetch: vendor locks support --verify only", file=sys.stderr)
         return 2
     known = {a["id"] for a in assets}
     for asset_id in args.only or []:

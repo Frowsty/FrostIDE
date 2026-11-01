@@ -24,7 +24,8 @@
 #   qt-svg        Qt Svg headers are included only under **/icon_baker/** (ADR 0015 decision 7:
 #                 the runtime draws baked atlases and never renders SVG);
 #   no-ci         there is no .github/workflows directory (D24).
-# Byte-exact data (fixtures, goldens, fuzz corpora; DATA_GLOBS) only needs REUSE coverage.
+# Byte-exact data (fixtures, goldens, fuzz corpora; DATA_GLOBS) and vendored third-party
+# sources (VENDORED_GLOBS) only need REUSE coverage.
 #
 # Output: one "path:line: rule: message" line per violation on stdout and a one-line
 # summary on stderr. Exit status: 0 clean, 1 violations, 2 usage or environment error.
@@ -71,6 +72,11 @@ CLOSED_MILESTONES: frozenset[int] = frozenset()
 # byte-identical, so only the REUSE coverage rule applies to them. Mirrors the `-text`
 # entries in .gitattributes.
 DATA_GLOBS = ("tests/**/fixtures/**", "tests/**/goldens/**", "tests/fuzz/corpus/**")
+
+# Vendored third-party sources, byte-identical to their pins in third_party/vendor.lock.json
+# (ADR 0023): our header and code rules do not apply to them, only REUSE coverage (REUSE.toml
+# names their upstream copyright and licence). Mirrors the `-text` entries in .gitattributes.
+VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**")
 
 # Directories exempt from the banned-C++26 rule only (every other rule still applies):
 #   src/compat/**                   the compat layer may wrap or probe C++26 library
@@ -148,6 +154,9 @@ class Syntax:
 
     name: str
     lexer: str  # "c", "csharp", "hash", "xml" or "bat"
+    # The "hash" lexer's line-comment character; tree-sitter queries use ';' (and '#' starts
+    # their predicates).
+    comment_char: str = "#"
     # Options for the "hash" lexer.
     quotes: tuple[str, ...] = ()  # single-line string delimiters
     triple_quotes: bool = False  # Python/TOML """...""" and '''...''' strings
@@ -173,6 +182,8 @@ INI = Syntax("INI", "hash", ini=True)
 # INI scanner also reads a leading ';' as one; harmless, since only comments are checked.
 GIT_PATTERNS = Syntax("git pattern file", "hash", ini=True)
 XML = Syntax("XML", "xml")
+# tree-sitter queries (src/syntax/queries/**): ';' line comments, '"' strings with \ escapes.
+TREE_SITTER_QUERY = Syntax("tree-sitter query", "hash", quotes=('"',), comment_char=";")
 BATCH = Syntax("batch", "bat")
 
 # Source files: extension -> syntax. Every file listed here (outside DATA_GLOBS) needs an
@@ -195,6 +206,7 @@ SOURCE_SYNTAX_BY_SUFFIX: dict[str, Syntax] = {
     ".xml": XML, ".manifest": XML, ".natvis": XML, ".props": XML, ".targets": XML,
     ".csproj": XML, ".wxs": XML, ".xsd": XML,
     ".bat": BATCH, ".cmd": BATCH,
+    ".scm": TREE_SITTER_QUERY,
 }
 # Source files recognised by their full name.
 SOURCE_SYNTAX_BY_NAME: dict[str, Syntax] = {
@@ -286,6 +298,7 @@ def compile_globs(patterns) -> re.Pattern[str]:
 
 
 _DATA_RE = compile_globs(DATA_GLOBS)
+_VENDORED_RE = compile_globs(VENDORED_GLOBS)
 _CPP26_EXEMPT_RE = compile_globs(CPP26_EXEMPT_GLOBS)
 _EXE_SEARCH_EXEMPT_RE = compile_globs(EXE_SEARCH_EXEMPT_GLOBS)
 _QT_SVG_ALLOWED_RE = compile_globs(QT_SVG_ALLOWED_GLOBS)
@@ -294,6 +307,11 @@ _QT_SVG_ALLOWED_RE = compile_globs(QT_SVG_ALLOWED_GLOBS)
 def is_data_path(rel_path: str) -> bool:
     """True for byte-exact data files (fixtures, goldens, fuzz corpora)."""
     return _DATA_RE.match(rel_path) is not None
+
+
+def is_vendored_path(rel_path: str) -> bool:
+    """True for vendored third-party sources (VENDORED_GLOBS)."""
+    return _VENDORED_RE.match(rel_path) is not None
 
 
 @dataclass
@@ -585,7 +603,7 @@ def _scan_hash(text: str, syntax: Syntax) -> Scan:
                 _blank(buf, m.end(), end - len(close))
                 i = end
                 continue
-        if c == "#":
+        if c == syntax.comment_char:
             prev = text[i - 1] if i > 0 else "\n"
             if not syntax.hash_word_start or prev in " \t\r\n;&|()":
                 j = text.find("\n", i)
@@ -1065,7 +1083,7 @@ def lint(repo: Path, files: list[str] | None = None) -> list[Violation]:
             if "SPDX-License-Identifier:" not in text:
                 violations.append(Violation(rel, 1, "reuse", "sidecar lacks an SPDX-License-Identifier line"))
             continue
-        if is_data_path(rel) or source_syntax(rel) is None:
+        if is_data_path(rel) or is_vendored_path(rel) or source_syntax(rel) is None:
             if not reuse_covered(rel, reuse, file_set):
                 violations.append(Violation(
                     rel, 1, "reuse",

@@ -8,6 +8,8 @@ add_subdirectory(sched)
 add_subdirectory(io)
 add_subdirectory(text)
 add_subdirectory(input)
+# frost::syntax builds in fuzz trees too: it needs no vcpkg port (tree-sitter is vendored, ADR 0023).
+add_subdirectory(syntax)
 # Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash) is left out of them.
 if(NOT FROST_FUZZ)
     add_subdirectory(storage)
