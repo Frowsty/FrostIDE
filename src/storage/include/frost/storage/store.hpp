@@ -18,8 +18,11 @@
  * beside a non-empty database whatever database wrote it, but deletes a -wal beside a missing
  * or empty one on the first read, so removing the main file first is the safe order. A rollback
  * journal (-journal) goes last, for the same reason. Companions are removed only under the lock
- * of a main file: when it is missing, an empty placeholder is created exclusively first, so the
- * live -wal and -shm of a store that someone creates at that instant are never deleted.
+ * of a main file: when it is missing, an empty placeholder is created exclusively first. This
+ * narrows, but on POSIX does not close, the race with a process that creates a store at the same
+ * path at that instant: one whose open lands on the placeholder, or whose -wal and -shm appear
+ * during the main file's unlink and directory sync, can lose its new store (ADR 0014 decision 8,
+ * residual POSIX race). On Windows such an open fails with Busy instead.
  *
  * Quarantine (CorruptPolicy::Quarantine): with SQLite's EXCLUSIVE lock held through the VFS, the
  * main file and its -wal are streamed in 64 KiB blocks into "<path>.corrupt-<UTC

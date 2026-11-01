@@ -112,9 +112,12 @@
    the locked handles (xFileSize, with a 1-byte read for the size the unix VFS reports as empty, ticket
    #3260), and are synced before anything is removed. Removal order: main file, -wal, -shm, -journal.
    Companions are removed only under the lock of a main file: beside a missing one, an empty placeholder is
-   created exclusively first, so the live -wal and -shm of a store created at that instant are never deleted.
-   Residual POSIX race: a process that opens the file in the instant before the unlink keeps an unlinked inode
-   (on Windows SQLite opens without FILE_SHARE_DELETE, so the race fails with Busy). In EXCLUSIVE locking mode
+   created exclusively first. That narrows the race with a store created at the same path at that instant but
+   does not close it on POSIX. Residual POSIX race: a process that opens the file in the instant before the
+   unlink keeps an unlinked inode; one whose open lands on the placeholder, or whose -wal and -shm appear during
+   the main file's unlink and directory fsync, can lose its new store. HotExitJournal::create re-checks the
+   path after locking; openStore and Database::open do not yet (found in the fix re-review; low, left open).
+   On Windows SQLite opens without FILE_SHARE_DELETE, so the race fails with Busy. In EXCLUSIVE locking mode
    SQLite leaves a zeroed -journal after the switch to WAL; open() deletes it through the VFS.
 9. **Corrupt handling.** `openStore(..., CorruptPolicy::Quarantine)` moves a Corrupt file (and its -wal) to
    `<path>.corrupt-<UTC yyyymmddTHHMMSSZ>[-n]` and opens a fresh store; Unsupported, Busy, PermissionDenied and
