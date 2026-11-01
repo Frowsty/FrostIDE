@@ -204,6 +204,20 @@ deadlock or timeout was seen in 30 repeated ctest runs of the handle-inheritance
   reports that instead of letting Qt abort. In
   `tests/app/frost_process_test.cpp`, `RunsFromPathLongerThanMaxPath` skips there, so the M0 exit
   criterion stays visibly unmet, and `ReportsLongPathLimitCleanly` covers the report.
+- The same limit applies to frost's own start-up DLLs (measured 2026-11-01 at 2c499a2 with
+  `LongPathsEnabled = 0`; raw data in `E:\FrostBuilds\perf\m0\exit-full\`). When frost.exe is started
+  through its plain path, as frost::io's launcher does below MAX_PATH, the loader refuses every DLL next
+  to frost.exe that embeds RT_MANIFEST resource 2 once that DLL's path is longer than 250 units. It ends
+  the process with 0xC0000106 (STATUS_NAME_TOO_LONG) before `main` runs, so the start-up check never runs
+  and no message appears. Release frost dies that way from directories of 236 to 249 units
+  (`Qt6Widgets.dll`), Debug from 235 to 249 (`Qt6Widgetsd.dll`). Below that range the start-up check
+  refuses cleanly. From 250 units on (frost.exe's path reaches 260) the launcher uses the `\\?\` form,
+  frost starts, and the check refuses cleanly again. ASan trees put clang's ASan runtime next to every
+  executable. Its longer name (`clang_rt.asan_dynamic-x86_64.dll`, 32 units) starts the range at 218
+  units: the runtime loads at 250 units and fails at 251. So `PlatformPluginPathBoundary`, whose
+  directories are 225 and 226 units long, fails there. TODO(M1): make frost refuse cleanly from every
+  directory length (question E4, option (b), in `docs/progress.md`), together with the launch beyond
+  MAX_PATH itself (question E1).
 - Process-wide hardening that PLAN.md 3.5 lists next to the launcher (`SetDefaultDllDirectories`,
   `NoDefaultCurrentDirectoryInExePath`) belongs to app startup (`src/app/include/frost/app/startup.hpp`),
   not to frost::io. As a consequence, DLLs are no longer found through PATH, and
