@@ -120,9 +120,11 @@ endif()
 # link; CMake links with lld-link directly, so they are passed explicitly. These
 # are the same three inputs `clang-cl -fsanitize=address -###` shows for /MD:
 # the runtime import library, the SEH interceptor and the whole-archive thunk.
-# The root CMakeLists.txt adds them for FROST_SANITIZE=address; port builds for
-# the x64-windows-clangcl-asan triplet (VCPKG_C_FLAGS contains -fsanitize=address)
-# get them here, including in CMake's own try_compile checks.
+# For FROST_SANITIZE=address the root CMakeLists.txt puts them into
+# FROST_SANITIZE_LINK_OPTIONS, which frost_apply_compile_options adds per target
+# (cmake/FrostCompilerOptions.cmake; frost.exe's launcher opts out, ADR 0012); port
+# builds for the x64-windows-clangcl-asan triplet (VCPKG_C_FLAGS contains
+# -fsanitize=address) get them here, including in CMake's own try_compile checks.
 string(REGEX MATCH "^[0-9]+" _frost_llvm_major "${_frost_llvm_version}")
 set(FROST_ASAN_RUNTIME_DIR "${FROST_LLVM_ROOT}/lib/clang/${_frost_llvm_major}/lib/windows")
 set(FROST_ASAN_LINK_OPTIONS

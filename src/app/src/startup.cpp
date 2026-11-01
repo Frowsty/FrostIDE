@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Implementation of frost's start-up hardening and checks (see
-// frost/app/startup.hpp). Platform specifics are confined to the #ifdef _WIN32 blocks.
+// Implementation of frost's start-up guards and plugin pinning (see frost/app/startup.hpp).
+// The hardening itself is in startup_core.cpp. Platform specifics are confined to the
+// #ifdef _WIN32 blocks.
 
 #include "frost/app/startup.hpp"
 
+#include <QByteArray>
+#include <QString>
+#include <QtGlobal>
+
 #include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <format>
 #include <string>
 #include <string_view>
@@ -53,43 +64,6 @@ std::string toUtf8(std::u16string_view text) {
     return out;
 }
 
-constexpr char16_t asciiLower(char16_t c) noexcept {
-    return c >= u'A' && c <= u'Z' ? static_cast<char16_t>(c + (u'a' - u'A')) : c;
-}
-
-// Whether `text` equals the ASCII string `ascii`, ignoring ASCII case.
-bool equalsAsciiNoCase(std::u16string_view text, std::string_view ascii) noexcept {
-    if (text.size() != ascii.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        if (asciiLower(text[i]) != asciiLower(static_cast<unsigned char>(ascii[i]))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Whether `path` is a plugin for one of `platforms` (see evaluatePluginPaths()).
-bool isPlatformPlugin(std::u16string_view path, std::span<const std::string> platforms) {
-    const std::size_t slash = path.find_last_of(u"\\/");
-    if (slash == std::u16string_view::npos || slash == 0) {
-        return false;
-    }
-    const std::size_t parentSlash = path.find_last_of(u"\\/", slash - 1);
-    if (parentSlash == std::u16string_view::npos ||
-        !equalsAsciiNoCase(path.substr(parentSlash + 1, slash - parentSlash - 1), "platforms")) {
-        return false;
-    }
-    const std::u16string_view file = path.substr(slash + 1);
-    for (const std::string& platform : platforms) {
-        if (equalsAsciiNoCase(file, "q" + platform + ".dll") || equalsAsciiNoCase(file, "q" + platform + "d.dll")) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // "qa.dll or qad.dll" for {"a"}; "qa.dll, qad.dll, qb.dll or qbd.dll" for {"a", "b"}.
 std::string pluginFileNames(std::span<const std::string> platforms) {
     std::vector<std::string> names;
@@ -114,47 +88,47 @@ std::string quotedNames(std::span<const std::string> platforms) {
     return out;
 }
 
+// The handler installCommandLineFatalHandler() replaced, and the code page it restores. Written
+// on the main thread before QApplication exists; read by whichever thread reports a message.
+constinit std::atomic<QtMessageHandler> previousMessageHandler{nullptr};
+constinit std::atomic<const unsigned*> fatalCodePageToRestore{nullptr};
+constinit std::atomic<bool> fatalHandlerInstalled{false};
+
+void commandLineMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& message) {
+    if (type == QtFatalMsg) {
+        const QByteArray text = message.toUtf8();
+        std::fprintf(stderr, "frost: Qt fatal error: %s\n", text.constData());
+        std::fflush(stdout);
+        std::fflush(stderr);
+#ifdef _WIN32
+        if (const unsigned* codePage = fatalCodePageToRestore.load(); codePage != nullptr && *codePage != 0) {
+            SetConsoleOutputCP(*codePage);
+        }
+#endif
+        std::_Exit(4);
+    }
+    if (QtMessageHandler previous = previousMessageHandler.load(); previous != nullptr) {
+        previous(type, context, message);
+    }
+}
+
 #ifdef _WIN32
 
-// This executable's path as GetModuleFileNameW reports it (possibly \\?\-prefixed, or with
-// 8.3 short components, when the process was started through such a path), or "" on failure.
-std::wstring modulePath() {
-    // The longest path Windows supports, with its NUL.
-    constexpr std::size_t kMaxUnits = 32768;
-    std::wstring path(MAX_PATH, L'\0');
-    while (true) {
-        const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-        if (length == 0) {
-            return {};
-        }
-        if (length < path.size()) {
-            path.resize(length);
-            return path;
-        }
-        if (path.size() >= kMaxUnits) {
-            return {};
-        }
-        path.resize(std::min(path.size() * 2, kMaxUnits));
-    }
+constexpr char16_t asciiLower(char16_t c) noexcept {
+    return c >= u'A' && c <= u'Z' ? static_cast<char16_t>(c + (u'a' - u'A')) : c;
 }
 
-// `path` without a \\?\ or \\?\UNC\ prefix: the form Qt and other Win32 callers use.
-std::wstring withoutExtendedPrefix(std::wstring path) {
-    if (path.starts_with(L"\\\\?\\UNC\\")) {
-        return L"\\\\" + path.substr(8);
+// Whether `text` equals the ASCII string `ascii`, ignoring ASCII case.
+bool equalsAsciiNoCase(std::u16string_view text, std::string_view ascii) noexcept {
+    if (text.size() != ascii.size()) {
+        return false;
     }
-    if (path.starts_with(L"\\\\?\\")) {
-        return path.substr(4);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (asciiLower(text[i]) != asciiLower(static_cast<unsigned char>(ascii[i]))) {
+            return false;
+        }
     }
-    return path;
-}
-
-// The \\?\ form of an absolute path, which Win32 accepts at any length.
-std::wstring extendedPath(const std::wstring& path) {
-    if (path.starts_with(L"\\\\")) {
-        return L"\\\\?\\UNC\\" + path.substr(2);
-    }
-    return L"\\\\?\\" + path;
+    return true;
 }
 
 // The value of environment variable `name`, or "" if it is unset or empty.
@@ -167,6 +141,23 @@ std::wstring environmentVariable(const wchar_t* name) {
     const DWORD written = GetEnvironmentVariableW(name, value.data(), units);
     value.resize(written < units ? written : 0);
     return value;
+}
+
+std::u16string toU16(std::wstring_view text) { return {text.begin(), text.end()}; }
+
+// FormatMessageW's text for a Win32 error in UTF-8, without the trailing line break.
+std::string win32Message(DWORD error) {
+    wchar_t* buffer = nullptr;
+    const DWORD units =
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       nullptr, error, 0, reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
+    std::wstring text = units > 0 && buffer != nullptr ? std::wstring(buffer, units) : std::wstring(L"unknown error");
+    LocalFree(buffer);
+    while (!text.empty() &&
+           (text.back() == L'\n' || text.back() == L'\r' || text.back() == L' ' || text.back() == L'.')) {
+        text.pop_back();
+    }
+    return toUtf8(toU16(text));
 }
 
 // Calls `onEntry(name, isDirectory)` for each entry matching `pattern` (a \\?\ path with
@@ -191,39 +182,131 @@ void forEachEntry(const std::wstring& pattern, const F& onEntry) {
 // Whether `name` ends in ".dll" (ASCII case-insensitive). A "*.dll" pattern alone also
 // matches longer extensions such as ".dllx" through their 8.3 short names.
 bool hasDllExtension(std::wstring_view name) noexcept {
-    return name.size() > 4 && equalsAsciiNoCase(std::u16string(name.end() - 4, name.end()), ".dll");
+    return name.size() > 4 && equalsAsciiNoCase(toU16(name.substr(name.size() - 4)), ".dll");
+}
+
+// The install directory (frost.exe's) as the launcher loads from it (extendedDirectoryOf():
+// normalised, 8.3 short components kept), without a \\?\ prefix, or "" if it cannot be
+// determined.
+std::wstring installDirectory() {
+    const std::wstring exe = modulePath();
+    return exe.empty() ? std::wstring() : withoutExtendedPrefix(extendedDirectoryOf(exe));
+}
+
+// `path` (absolute) with "." and ".." components resolved, as Win32 resolves them in a plain
+// path; the \\?\ form would take them literally. `path` itself if GetFullPathNameW fails.
+std::wstring resolvedPath(const std::wstring& path) {
+    const DWORD units = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+    if (units == 0) {
+        return path;
+    }
+    std::wstring out(units, L'\0');
+    const DWORD written = GetFullPathNameW(path.c_str(), units, out.data(), nullptr);
+    if (written == 0 || written >= units) {
+        return path;
+    }
+    out.resize(written);
+    return out;
+}
+
+// What a DLL's import directory says about it (importsOf()).
+struct ImportScan {
+    DWORD error = ERROR_SUCCESS; // Why the file could not be mapped; ERROR_SUCCESS if it was.
+    bool importsDll = false;     // Whether it imports the DLL asked for.
+};
+
+// The ASCII string at `rva` of an image mapped `size` bytes long, or "" if it does not end
+// inside the image.
+std::string_view imageString(const std::byte* base, std::size_t size, DWORD rva) {
+    if (rva >= size) {
+        return {};
+    }
+    const auto* begin = reinterpret_cast<const char*>(base + rva);
+    const void* end = std::memchr(begin, '\0', size - rva);
+    return end == nullptr ? std::string_view()
+                          : std::string_view(begin, static_cast<std::size_t>(static_cast<const char*>(end) - begin));
+}
+
+/*
+ * Whether the DLL at `extended` (a \\?\ path) imports `dll` (ASCII, compared without case),
+ * read from its import directory. The file is mapped as an image resource, so no code runs
+ * and no import resolves; every RVA is checked against the image size, because the file is
+ * not trusted to be well formed. The error is GetLastError() of a file that cannot be mapped
+ * (193 for one that is not a PE image).
+ */
+ImportScan importsOf(const std::wstring& extended, std::string_view dll) {
+    HMODULE mapped =
+        LoadLibraryExW(extended.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (mapped == nullptr) {
+        return {GetLastError(), false};
+    }
+    // The handle's low bits mark a data-file mapping; the image starts at the aligned address.
+    const auto* base =
+        reinterpret_cast<const std::byte*>(reinterpret_cast<std::uintptr_t>(mapped) & ~std::uintptr_t{3});
+    ImportScan scan;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    const std::size_t size = nt->OptionalHeader.SizeOfImage;
+    if (nt->OptionalHeader.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_IMPORT) {
+        const IMAGE_DATA_DIRECTORY entry = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        for (std::size_t offset = entry.VirtualAddress;
+             entry.VirtualAddress != 0 && offset + sizeof(IMAGE_IMPORT_DESCRIPTOR) <= size;
+             offset += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+            const auto* descriptor = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + offset);
+            if (descriptor->Name == 0) {
+                break;
+            }
+            const std::string_view name = imageString(base, size, descriptor->Name);
+            if (equalsAsciiNoCase(std::u16string(name.begin(), name.end()), dll)) {
+                scan.importsDll = true;
+                break;
+            }
+        }
+    }
+    FreeLibrary(mapped);
+    return scan;
+}
+
+// The platform of `platforms` whose plugin `candidate` is (q<p>.dll or q<p>d.dll), or "".
+std::string platformOf(std::u16string_view candidate, std::span<const std::string> platforms) {
+    const std::size_t slash = candidate.find_last_of(u"\\/");
+    const std::u16string_view file = slash == std::u16string_view::npos ? candidate : candidate.substr(slash + 1);
+    for (const std::string& platform : platforms) {
+        if (equalsAsciiNoCase(file, "q" + platform + ".dll") || equalsAsciiNoCase(file, "q" + platform + "d.dll")) {
+            return platform;
+        }
+    }
+    return {};
+}
+
+// The search flags for plugins (see loadPlatformPlugin()).
+constexpr DWORD kPluginLoadFlags = LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+
+// The WH_CBT hook of guardCommandLineDialogs(): refuses dialog windows.
+LRESULT CALLBACK refuseDialogs(int code, WPARAM wParam, LPARAM lParam) {
+    if (code == HCBT_CREATEWND) {
+        auto* window = reinterpret_cast<HWND>(wParam);
+        wchar_t className[16] = {};
+        if (GetClassNameW(window, className, 16) > 0 && std::wstring_view(className) == L"#32770") {
+            const auto* create = reinterpret_cast<const CBT_CREATEWNDW*>(lParam);
+            std::wstring title;
+            if (create != nullptr && create->lpcs != nullptr && create->lpcs->lpszName != nullptr &&
+                !IS_INTRESOURCE(create->lpcs->lpszName)) {
+                title = create->lpcs->lpszName;
+            }
+            const std::string text = toUtf8(toU16(title));
+            std::fprintf(stderr, "frost: refused to show a dialog in a command-line mode: %s\n", text.c_str());
+            std::fflush(stderr);
+            // A non-zero result fails the creation, so MessageBoxW returns 0 without waiting.
+            return 1;
+        }
+    }
+    return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
 #endif
 
 } // namespace
-
-bool ProcessHardening::complete() const noexcept {
-#ifdef _WIN32
-    return defaultDllDirectories && dllDirectoryCleared && safeSearchPathMode && exeSearchSkipsCurrentDirectory;
-#else
-    return true;
-#endif
-}
-
-ProcessHardening hardenProcess() {
-    ProcessHardening state;
-#ifdef _WIN32
-    state.defaultDllDirectories = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) != FALSE;
-    state.dllDirectoryCleared = SetDllDirectoryW(L"") != FALSE;
-    // Repeating the same permanent mode succeeds. Any other mode after a permanent one fails
-    // with ERROR_ACCESS_DENIED, and since PERMANENT can only be combined with safe mode,
-    // that failure also means safe mode is in force.
-    state.safeSearchPathMode =
-        SetSearchPathMode(BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE | BASE_SEARCH_PATH_PERMANENT) != FALSE ||
-        GetLastError() == ERROR_ACCESS_DENIED;
-    // Children inherit the variable; whether user build scripts keep it is decided per
-    // launch (the TODO(M2) on ProcessSpec::environment in frost/io/process.hpp).
-    SetEnvironmentVariableW(L"NoDefaultCurrentDirectoryInExePath", L"1");
-    state.exeSearchSkipsCurrentDirectory = NeedCurrentDirectoryForExePathW(L"frost-probe.exe") == FALSE;
-#endif
-    return state;
-}
 
 void suppressCrashDialogs() {
 #ifdef _WIN32
@@ -239,6 +322,26 @@ void suppressCrashDialogs() {
     }
 #endif
 #endif
+}
+
+bool guardCommandLineDialogs() {
+#ifdef _WIN32
+    return SetWindowsHookExW(WH_CBT, refuseDialogs, nullptr, GetCurrentThreadId()) != nullptr;
+#else
+    return true;
+#endif
+}
+
+void installCommandLineFatalHandler(const unsigned* consoleCodePageToRestore) {
+    fatalCodePageToRestore.store(consoleCodePageToRestore);
+    if (!fatalHandlerInstalled.exchange(true)) {
+        // Qt returns its default handler when none was installed, so `previous` is never null.
+        previousMessageHandler.store(qInstallMessageHandler(commandLineMessageHandler));
+    }
+}
+
+bool pluginPathExceedsLoaderLimit(std::size_t dirUnits, std::size_t longestRelativeUnits) noexcept {
+    return dirUnits + 1 + longestRelativeUnits > kLoaderPlainPathLimitUnits;
 }
 
 std::vector<std::string> platformPluginNames(std::string_view qpaPlatform) {
@@ -261,92 +364,194 @@ std::vector<std::string> platformPluginNames(std::string_view qpaPlatform) {
     return names;
 }
 
-Result<PluginPathReport> evaluatePluginPaths(std::span<const std::u16string> pluginPaths,
-                                             std::span<const std::string> platforms, std::u16string_view dir,
-                                             bool requirePresence, bool longPathsEffective) {
-    const std::u16string* shortestPlatform = nullptr;
-    const std::u16string* longestOther = nullptr;
-    std::size_t othersTooLong = 0;
-    for (const auto& path : pluginPaths) {
-        if (isPlatformPlugin(path, platforms)) {
-            if (shortestPlatform == nullptr || path.size() < shortestPlatform->size()) {
-                shortestPlatform = &path;
-            }
-        } else if (!longPathsEffective && path.size() > kQtPluginPathLimitUnits) {
-            ++othersTooLong;
-            if (longestOther == nullptr || path.size() > longestOther->size()) {
-                longestOther = &path;
-            }
+std::vector<std::u16string> platformPluginCandidates(std::span<const std::u16string> dirs,
+                                                     std::span<const std::string> platforms, bool debugQt) {
+    std::vector<std::u16string> candidates;
+    candidates.reserve(dirs.size() * platforms.size());
+    for (const std::string& platform : platforms) {
+        // Platform names are ASCII (Qt's plugin keys), so widening byte by byte is exact.
+        const std::string file = "q" + platform + (debugQt ? "d.dll" : ".dll");
+        for (const std::u16string& dir : dirs) {
+            std::u16string candidate = dir;
+            candidate += u'\\';
+            candidate.append(file.begin(), file.end());
+            candidates.push_back(std::move(candidate));
         }
     }
-
-    PluginPathReport report;
-    if (shortestPlatform == nullptr) {
-        if (requirePresence) {
-            return fail(ErrorCode::NotFound,
-                        std::format("Qt's platform plugin {} is missing: {}\\platforms holds no {}. Reinstall "
-                                    "FrostIDE or copy the whole installation directory, not only frost.exe.",
-                                    quotedNames(platforms), toUtf8(dir), pluginFileNames(platforms)));
-        }
-        report.detail = std::format("platform plugin {} not checked: QT_PLUGIN_PATH, QT_QPA_PLATFORM_PLUGIN_PATH "
-                                    "or qt.conf may supply it",
-                                    quotedNames(platforms));
-    } else if (!longPathsEffective && shortestPlatform->size() > kQtPluginPathLimitUnits) {
-        return fail(ErrorCode::Unsupported,
-                    std::format("Qt cannot load its platform plugin {} ({} characters, more than the {} it can "
-                                "load a plugin from while long paths are disabled system-wide). Enable "
-                                "LongPathsEnabled under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem "
-                                "(needs administrator rights) or start FrostIDE from a shorter directory.",
-                                toUtf8(*shortestPlatform), shortestPlatform->size(), kQtPluginPathLimitUnits));
-    } else {
-        report.detail = std::format("Qt can load its platform plugin {}", toUtf8(*shortestPlatform));
-    }
-    if (longestOther != nullptr) {
-        report.warning =
-            std::format("Qt will skip {} plugin(s) longer than the {} characters it can load a plugin "
-                        "from while long paths are disabled system-wide, the longest being {} ({} "
-                        "characters); FrostIDE starts without them",
-                        othersTooLong, kQtPluginPathLimitUnits, toUtf8(*longestOther), longestOther->size());
-    }
-    return report;
+    return candidates;
 }
 
-Result<PluginPathReport> checkPluginPaths() {
+std::string missingPlatformPluginMessage(std::span<const std::string> platforms, std::u16string_view dir) {
+    return std::format("Qt's platform plugin {} is missing: {}\\platforms holds no {}. Reinstall FrostIDE or copy "
+                       "the whole installation directory, not only frost.exe.",
+                       quotedNames(platforms), toUtf8(dir), pluginFileNames(platforms));
+}
+
+Result<std::u16string> loadPlatformPlugin(std::span<const std::u16string> candidates,
+                                          std::span<const std::string> platforms) {
 #ifdef _WIN32
-    const std::wstring exe = withoutExtendedPrefix(modulePath());
-    const std::size_t slash = exe.find_last_of(L'\\');
-    if (exe.empty() || slash == std::wstring::npos) {
+    for (const std::u16string& candidate : candidates) {
+        const std::wstring extended = extendedPath(std::wstring(candidate.begin(), candidate.end()));
+        if (GetFileAttributesW(extended.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            continue;
+        }
+        if (LoadLibraryExW(extended.c_str(), nullptr, kPluginLoadFlags) != nullptr) {
+            return candidate;
+        }
+        const DWORD error = GetLastError();
+        return fail(ErrorCode::IoError,
+                    std::format("Qt's platform plugin \"{}\" cannot be loaded from {}: {} (win32 error {})",
+                                platformOf(candidate, platforms), toUtf8(candidate), win32Message(error), error));
+    }
+    return fail(ErrorCode::NotFound, std::format("no plugin for Qt's platform {} exists", quotedNames(platforms)));
+#else
+    static_cast<void>(candidates);
+    static_cast<void>(platforms);
+    return fail(ErrorCode::Unsupported, "frost pins Qt's platform plugin on Windows only");
+#endif
+}
+
+#ifdef _WIN32
+
+std::u16string platformPluginOverrideDirectory(std::u16string_view value) {
+    std::wstring custom(value.begin(), value.end());
+    std::replace(custom.begin(), custom.end(), L'/', L'\\');
+    if (custom.starts_with(L"\\\\?\\")) {
+        custom = withoutExtendedPrefix(custom);
+    }
+    const bool absolute = (custom.size() >= 3 && custom[1] == L':' && custom[2] == L'\\') ||
+                          (custom.size() > 2 && custom.starts_with(L"\\\\"));
+    if (!absolute) {
+        return {};
+    }
+    // The pin goes through \\?\, which takes "." and ".." components, trailing dots and repeated
+    // separators literally where Qt and Win32 resolve them; a \\.\ device path is resolved the
+    // same way and loses its prefix.
+    custom = resolvedPath(custom);
+    if (custom.starts_with(L"\\\\.\\")) {
+        custom[2] = L'?';
+        custom = withoutExtendedPrefix(custom);
+    }
+    while (custom.size() > 3 && custom.back() == L'\\') {
+        custom.pop_back();
+    }
+    return toU16(custom);
+}
+
+#endif
+
+Result<PlatformPluginReport> preparePlatformPlugin() {
+#ifdef _WIN32
+    const std::wstring dir = installDirectory();
+    if (dir.empty()) {
         return fail(ErrorCode::IoError, "cannot determine the path of frost's executable");
     }
-    // Measured as GetModuleFileNameW reports it, short 8.3 components included: Qt derives
-    // its plugin paths from the same call (FrostProcess.RunsThroughShortNamesOfALongPath).
-    const std::wstring dir = exe.substr(0, slash);
-    // Qt looks for plugins in per-type directories below the executable's directory
-    // (platforms, styles, ...), so one level is enough.
-    std::vector<std::u16string> plugins;
-    forEachEntry(extendedPath(dir) + L"\\*", [&](std::wstring_view sub, bool isDirectory) {
-        if (!isDirectory) {
-            return;
-        }
-        const std::wstring subdir = dir + L"\\" + std::wstring(sub);
-        forEachEntry(extendedPath(subdir) + L"\\*.dll", [&](std::wstring_view file, bool fileIsDirectory) {
-            if (!fileIsDirectory && hasDllExtension(file)) {
-                const std::wstring full = subdir + L"\\" + std::wstring(file);
-                plugins.emplace_back(full.begin(), full.end());
-            }
-        });
-    });
+    const std::vector<std::string> platforms =
+        platformPluginNames(toUtf8(toU16(environmentVariable(L"QT_QPA_PLATFORM"))));
+    // Qt loads only plugins built like itself; the debug build's DLL names end in "d".
+    const bool debugQt = GetModuleHandleW(L"Qt6Cored.dll") != nullptr;
+    // Qt's order: QT_QPA_PLATFORM_PLUGIN_PATH first, then <library path>\platforms.
+    std::vector<std::u16string> dirs;
+    if (std::u16string custom =
+            platformPluginOverrideDirectory(toU16(environmentVariable(L"QT_QPA_PLATFORM_PLUGIN_PATH")));
+        !custom.empty()) {
+        dirs.push_back(std::move(custom));
+    }
+    dirs.push_back(toU16(dir + L"\\platforms"));
+    const std::vector<std::u16string> candidates = platformPluginCandidates(dirs, platforms, debugQt);
+    auto loaded = loadPlatformPlugin(candidates, platforms);
+    if (loaded) {
+        return PlatformPluginReport{"loaded Qt's platform plugin " + toUtf8(*loaded)};
+    }
+    if (loaded.error().code() != ErrorCode::NotFound) {
+        return std::unexpected(std::move(loaded.error()));
+    }
     // Qt also finds plugins through these; with any of them set, it may not need ours.
     const bool redirected = !environmentVariable(L"QT_PLUGIN_PATH").empty() ||
                             !environmentVariable(L"QT_QPA_PLATFORM_PLUGIN_PATH").empty() ||
                             GetFileAttributesW((extendedPath(dir) + L"\\qt.conf").c_str()) != INVALID_FILE_ATTRIBUTES;
-    const std::wstring platform = environmentVariable(L"QT_QPA_PLATFORM");
-    const std::vector<std::string> platforms =
-        platformPluginNames(toUtf8(std::u16string(platform.begin(), platform.end())));
-    return evaluatePluginPaths(plugins, platforms, std::u16string(dir.begin(), dir.end()), !redirected,
-                               longPathsEffective());
+    if (redirected) {
+        return PlatformPluginReport{std::format("platform plugin {} not checked: QT_PLUGIN_PATH, "
+                                                "QT_QPA_PLATFORM_PLUGIN_PATH or qt.conf may supply it",
+                                                quotedNames(platforms))};
+    }
+    return fail(ErrorCode::NotFound, missingPlatformPluginMessage(platforms, toU16(dir)));
 #else
-    return PluginPathReport{"not checked on this platform: Qt reports a missing plugin itself", {}};
+    return PlatformPluginReport{"not checked on this platform: Qt reports a missing plugin itself"};
+#endif
+}
+
+PluginPreloadReport preloadOtherPlugins() {
+#ifdef _WIN32
+    const std::wstring dir = installDirectory();
+    if (dir.empty()) {
+        return {false, "cannot determine the path of frost's executable"};
+    }
+    const std::wstring extended = extendedPath(dir);
+    // Qt looks for plugins in per-type directories below the install directory (styles,
+    // imageformats, ...); the platform plugin is preparePlatformPlugin()'s.
+    std::vector<std::wstring> plugins;
+    std::size_t longest = 0;
+    forEachEntry(extended + L"\\*", [&](std::wstring_view sub, bool isDirectory) {
+        if (!isDirectory || equalsAsciiNoCase(toU16(sub), "platforms")) {
+            return;
+        }
+        const std::wstring type(sub);
+        forEachEntry(extended + L"\\" + type + L"\\*.dll", [&](std::wstring_view file, bool fileIsDirectory) {
+            if (!fileIsDirectory && hasDllExtension(file)) {
+                plugins.push_back(type + L"\\" + std::wstring(file));
+                longest = std::max(longest, plugins.back().size());
+            }
+        });
+    });
+    if (plugins.empty()) {
+        return {true, "no other plugins are deployed"};
+    }
+    const std::size_t longestPath = dir.size() + 1 + longest;
+    if (!pluginPathExceedsLoaderLimit(dir.size(), longest)) {
+        return {true, std::format("not needed: {} plugin(s), the longest path {} UTF-16 units, within the "
+                                  "loader's {}-unit limit",
+                                  plugins.size(), longestPath, kLoaderPlainPathLimitUnits)};
+    }
+    /*
+     * Only DLLs that import the Qt6Core this process loaded are loaded: every Qt plugin imports
+     * it, and Qt itself refuses a plugin of its other build (debug or release) or a DLL that is
+     * no plugin. Loading those would bring in a second Qt (qsvgd.dll pulls in Qt6Cored.dll) or
+     * run foreign DllMain code. The gate above counts every listed DLL, so it may preload when
+     * only a skipped DLL is long; that costs the import scans and nothing else.
+     */
+    const std::string_view qtCore = GetModuleHandleW(L"Qt6Cored.dll") != nullptr ? "Qt6Cored.dll" : "Qt6Core.dll";
+    std::size_t candidates = 0;
+    std::size_t loaded = 0;
+    std::string skipped;
+    std::string failures;
+    for (const std::wstring& plugin : plugins) {
+        const std::wstring path = extended + L"\\" + plugin;
+        const ImportScan scan = importsOf(path, qtCore);
+        DWORD error = scan.error;
+        if (error == ERROR_SUCCESS && !scan.importsDll) {
+            skipped += std::format("{}{}", skipped.empty() ? "" : ", ", toUtf8(toU16(plugin)));
+            continue;
+        }
+        ++candidates;
+        if (error == ERROR_SUCCESS) {
+            if (LoadLibraryExW(path.c_str(), nullptr, kPluginLoadFlags) != nullptr) {
+                ++loaded;
+                continue;
+            }
+            error = GetLastError();
+        }
+        failures += std::format("{}{} ({}, win32 error {})", failures.empty() ? "" : ", ", toUtf8(toU16(plugin)),
+                                win32Message(error), error);
+    }
+    return {loaded == candidates,
+            std::format("loaded {} of {} plugin(s) through \\\\?\\ (the longest path is {} UTF-16 units, beyond the "
+                        "loader's {}-unit limit){}{}{}{}",
+                        loaded, candidates, longestPath, kLoaderPlainPathLimitUnits,
+                        skipped.empty() ? "" : std::format("; skipped, as they do not import {}: ", qtCore), skipped,
+                        failures.empty() ? "" : "; Qt will skip ", failures)};
+#else
+    return {true, "not needed on this platform"};
 #endif
 }
 

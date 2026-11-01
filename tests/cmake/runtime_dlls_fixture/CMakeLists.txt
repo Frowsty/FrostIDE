@@ -8,7 +8,8 @@
 #             shared_raw, a plain add_executable that is never registered (an executable
 #             whose registration was forgotten, as s1_probe_validate's and s1_first_frame's
 #             was before frost_add_executable registered them) and links a stand-in
-#             nobody else does;
+#             nobody else does, and shared_lib, a shared library (frost_app.dll's shape:
+#             never registered, since only executables are) that links a third stand-in;
 #   top_plain in this directory's own output directory, linking nothing, so without the
 #             ASan stand-in its directory has no DLLs at all;
 #   bin_a/    and bin_root here: both set RUNTIME_OUTPUT_DIRECTORY to <build>/bin (one
@@ -35,10 +36,10 @@ if(FIXTURE_ASAN)
 endif()
 if(WIN32)
     # Stand in for imported shared libraries (fake::qt for a Qt module, fake::extra for
-    # one only shared_raw links): DLLs that are never loaded, and import libraries
-    # that are empty archives (just the magic, with a bare LF, which file(WRITE) would
-    # turn into CRLF), so linking them adds nothing.
-    foreach(module IN ITEMS qt extra)
+    # one only shared_raw links, fake::lib for one only shared_lib links): DLLs that are
+    # never loaded, and import libraries that are empty archives (just the magic, with a
+    # bare LF, which file(WRITE) would turn into CRLF), so linking them adds nothing.
+    foreach(module IN ITEMS qt extra lib)
         file(WRITE "${fake}/fake_${module}.dll" "stand-in\n")
         file(CONFIGURE OUTPUT "${fake}/fake_${module}.lib" CONTENT "!<arch>\n" NEWLINE_STYLE UNIX)
         add_library(fake::${module} SHARED IMPORTED)

@@ -5,7 +5,11 @@
 // empty and non-ASCII arguments), exit codes, stdin piping, more than 1 MB on
 // both output pipes at once, timeouts with termination, environment overrides,
 // working directories, handle inheritance, the absolute-path and batch-file
-// rules, process-tree containment and concurrent launches.
+// rules, process-tree containment and concurrent launches; on Windows also the
+// image-path forms (ProcessSpec::imagePathForm) and the child's desktop
+// (ProcessSpec::desktop: a private desktop from tests/support/private_desktop.hpp, as
+// the child reports it and as its window shows, and one that does not exist); on POSIX,
+// that both fields are ignored.
 
 #include "frost/core/mutex.hpp"
 #include "frost/io/file_system.hpp"
@@ -32,6 +36,8 @@
 
 #ifdef _WIN32
 #include "frost/io/utf.hpp"
+
+#include "support/private_desktop.hpp"
 
 #include <windows.h>
 // ConvertSidToStringSidW; sddl.h needs windows.h first.
@@ -274,6 +280,197 @@ TEST(RealProcessLauncher, ExecutableBeyondMaxPath) {
     ASSERT_EQ(result->exitCode, 0) << "the copied child did not run: " << result->stderrBytes;
     EXPECT_EQ(reportedArguments(result->stdoutBytes, "crt"), (std::vector<std::string>{"long"}));
 }
+
+#ifdef _WIN32
+// Whether this process's long paths are effective: RtlAreLongPathsEnabled (ntdll), true only
+// when LongPathsEnabled=1 and the test's manifest (FROST_TEST_MANIFEST_RC) is longPathAware.
+bool longPathsEffective() {
+    using Query = BOOLEAN(NTAPI*)();
+    const FARPROC proc = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAreLongPathsEnabled");
+    return proc != nullptr && reinterpret_cast<Query>(reinterpret_cast<void*>(proc))() != FALSE;
+}
+
+// A copy of io_test_child in a directory beyond MAX_PATH below `dir`; returns its path.
+std::string deepChildCopy(const ScratchDir& dir) {
+    const std::string copy = frost::io::joinPath(deepDirectory(dir.path()), "child ✓.exe").value();
+    const auto image = frost::io::realFileSystem().readFile(childPath());
+    EXPECT_TRUE(image.has_value()) << image.error().describe();
+    EXPECT_TRUE(frost::io::realFileSystem().writeFileAtomic(copy, image.value_or(std::string())).has_value());
+    return copy;
+}
+
+TEST(RealProcessLauncher, LaunchesThroughExtendedImagePathBelowMaxPath) {
+    // Extended adds the prefix even where Auto would not, and the child sees that form as
+    // its own image path (so does the loader for the DLLs beside it).
+    ProcessSpec spec = childSpec({"image-path"});
+    ASSERT_LT(frost::io::utf8ToUtf16(spec.executable).value().size(), std::size_t{MAX_PATH}) << spec.executable;
+    spec.imagePathForm = frost::io::ImagePathForm::Extended;
+    auto result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
+    EXPECT_EQ(reportedValue(result->stdoutBytes, "image"), "\\\\?\\" + childPath()) << result->stdoutBytes;
+
+    // Control: Auto keeps the plain form below MAX_PATH.
+    spec.imagePathForm = frost::io::ImagePathForm::Auto;
+    result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(reportedValue(result->stdoutBytes, "image"), childPath()) << result->stdoutBytes;
+
+    // Beyond MAX_PATH, Auto and Extended agree.
+    const ScratchDir dir("proc-extended-exe");
+    spec.executable = deepChildCopy(dir);
+    findChildDlls(spec);
+    for (const auto form : {frost::io::ImagePathForm::Auto, frost::io::ImagePathForm::Extended}) {
+        spec.imagePathForm = form;
+        result = run(spec);
+        ASSERT_TRUE(result.has_value()) << result.error().describe();
+        ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
+        EXPECT_EQ(reportedValue(result->stdoutBytes, "image"), "\\\\?\\" + spec.executable) << result->stdoutBytes;
+    }
+}
+
+TEST(RealProcessLauncher, LaunchesThroughPlainImagePath) {
+    // Below MAX_PATH, Plain is what Auto does.
+    ProcessSpec spec = childSpec({"image-path"});
+    spec.imagePathForm = frost::io::ImagePathForm::Plain;
+    auto result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
+    EXPECT_EQ(reportedValue(result->stdoutBytes, "image"), childPath()) << result->stdoutBytes;
+
+    // Beyond MAX_PATH, Plain still never adds the prefix. CreateProcessW then accepts the
+    // path only if this process's long paths are effective, and the child sees it unchanged.
+    const ScratchDir dir("proc-plain-exe");
+    spec.executable = deepChildCopy(dir);
+    findChildDlls(spec);
+    result = run(spec);
+    if (!longPathsEffective()) {
+        EXPECT_FALSE(result.has_value()) << "a plain path of " << spec.executable.size()
+                                         << " bytes started although long paths are not effective";
+        return;
+    }
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
+    EXPECT_EQ(reportedValue(result->stdoutBytes, "image"), spec.executable) << result->stdoutBytes;
+}
+
+TEST(RealProcessLauncher, RunsChildOnTheGivenDesktop) {
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    ProcessSpec spec = childSpec({"desktop"});
+    spec.desktop = desktop.name();
+    auto result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stdoutBytes << result->stderrBytes;
+    EXPECT_EQ(reportedValue(result->stdoutBytes, "desktop"), desktop.name()) << result->stdoutBytes;
+
+    // Control: without a desktop the child shares this thread's, which is not the private one.
+    const std::string own = frost::test::PrivateDesktop::threadDesktopName();
+    ASSERT_FALSE(own.empty());
+    spec.desktop.clear();
+    result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(reportedValue(result->stdoutBytes, "desktop"), own) << result->stdoutBytes;
+    EXPECT_NE(own, desktop.name());
+}
+
+// The top-level windows of class "Static" that process `pid` owns on `desktop`, shown or not.
+std::vector<HWND> staticWindowsOf(HDESK desktop, DWORD pid) {
+    struct Search {
+        DWORD pid;
+        std::vector<HWND> found;
+    } search{pid, {}};
+    const WNDENUMPROC collect = [](HWND window, LPARAM context) -> BOOL {
+        auto& into = *reinterpret_cast<Search*>(context);
+        DWORD owner = 0;
+        GetWindowThreadProcessId(window, &owner);
+        std::array<wchar_t, 32> className{};
+        const int length = GetClassNameW(window, className.data(), static_cast<int>(className.size()));
+        if (owner == into.pid && std::wstring_view(className.data(), static_cast<std::size_t>(length)) == L"Static") {
+            into.found.push_back(window);
+        }
+        return TRUE;
+    };
+    // FALSE also means "no windows at all", so the result alone is the answer.
+    static_cast<void>(EnumDesktopWindows(desktop, collect, reinterpret_cast<LPARAM>(&search)));
+    return search.found;
+}
+
+TEST(RealProcessLauncher, ChildWindowsLandOnTheGivenDesktop) {
+    // RunsChildOnTheGivenDesktop trusts the child's report; this looks from the parent's side.
+    // A window belongs to the desktop of the thread that creates it, so the child's window
+    // (never shown, so it would stay invisible even on the user's desktop) must turn up when
+    // this process enumerates the private desktop.
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    ProcessSpec spec = childSpec({"window"});
+    spec.stdinMode = Stdio::Pipe;
+    spec.desktop = desktop.name();
+    auto process = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const auto pid = static_cast<DWORD>((*process)->pid());
+    // The child creates its window right after start and keeps it until stdin closes; a
+    // child that exits first (it could not create one) ends the wait early.
+    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    std::vector<HWND> found = staticWindowsOf(desktop.handle(), pid);
+    while (found.empty() && std::chrono::steady_clock::now() < deadline && !(*process)->wait(0ms).has_value()) {
+        std::this_thread::sleep_for(10ms);
+        found = staticWindowsOf(desktop.handle(), pid);
+    }
+    (*process)->closeStdin();
+    const auto result = (*process)->communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes << result->stderrBytes;
+    ASSERT_EQ(found.size(), 1u) << "the child's window is not on the private desktop: " << result->stdoutBytes;
+    EXPECT_EQ(rawValue(result->stdoutBytes, "window:"), std::to_string(reinterpret_cast<std::uintptr_t>(found[0])));
+}
+
+TEST(RealProcessLauncher, MissingDesktopEndsTheChildBeforeItRuns) {
+    /*
+     * A desktop that does not exist is not a launch error (see ProcessSpec::desktop):
+     * CreateProcessW succeeds, the child's user32 cannot attach to the desktop and fails
+     * to initialise, and the loader ends the child with STATUS_DLL_INIT_FAILED before its
+     * main runs. So it never runs elsewhere, on the user's desktop say, and prints nothing.
+     * The loader raises that as a hard error, which NoHardErrorBoxes keeps from becoming a box.
+     */
+    const frost::test::NoHardErrorBoxes noHardErrorBoxes;
+    const frost::test::PrivateDesktop existing;
+    ASSERT_TRUE(existing.valid());
+    ProcessSpec spec = childSpec({"desktop"});
+    spec.desktop = existing.name() + "-missing"; // In this window station, under a name nobody created.
+    const auto result = run(spec, {}, 60s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(static_cast<DWORD>(result->exitCode), DWORD{0xC0000142}) // STATUS_DLL_INIT_FAILED
+        << result->exitCode << " " << result->stderrBytes;
+    EXPECT_EQ(result->stdoutBytes, "");
+}
+
+TEST(RealProcessLauncher, RejectsDesktopNameWithNul) {
+    // CreateProcessW would read a NUL as the end of the name and start the child elsewhere.
+    // Should the check ever fail, the child dies as in MissingDesktopEndsTheChildBeforeItRuns,
+    // so its hard error must not become a box either.
+    const frost::test::NoHardErrorBoxes noHardErrorBoxes;
+    for (const std::string& name : {std::string("WinSta0\\frost\0Default", 21), std::string("WinSta0\\\xff")}) {
+        ProcessSpec spec = childSpec({"exit", "0"});
+        spec.desktop = name;
+        const auto result = frost::io::realProcessLauncher().launch(spec);
+        ASSERT_FALSE(result.has_value()) << "started with desktop " << name;
+        EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument) << result.error().describe();
+    }
+}
+#else
+TEST(RealProcessLauncher, WindowsOnlyFieldsAreIgnoredOnPosix) {
+    // imagePathForm and desktop only steer CreateProcessW. posix_spawn never reads them, so a
+    // \\?\ form or a desktop that exists nowhere changes nothing here.
+    ProcessSpec spec = childSpec({"argv", "plain"});
+    spec.imagePathForm = frost::io::ImagePathForm::Extended;
+    spec.desktop = "WinSta0\\frost-no-such-desktop";
+    const auto result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0) << result->stderrBytes;
+    EXPECT_EQ(reportedArguments(result->stdoutBytes, "crt"), (std::vector<std::string>{"plain"}));
+}
+#endif
 
 TEST(RealProcessLauncher, WorkingDirectoryBeyondMaxPath) {
     const ScratchDir dir("proc-long-cwd");

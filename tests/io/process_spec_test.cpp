@@ -163,6 +163,27 @@ TEST(ProcessSpec, OtherFieldsAreChecked) {
     EXPECT_EQ(validate(spec, false), ErrorCode::Unknown);
 }
 
+TEST(ProcessSpec, DesktopNameIsCheckedOnWindowsOnly) {
+    // STARTUPINFOW::lpDesktop: a NUL would cut the name short, and it must convert to UTF-16.
+    // POSIX ignores the field, so it refuses nothing there.
+    for (const std::string& name : {std::string("WinSta0\\a\0b", 11), std::string("WinSta0\\\xff")}) {
+        ProcessSpec windows = specFor("C:\\tools\\git.exe");
+        ProcessSpec posix = specFor("/usr/bin/git");
+        windows.desktop = posix.desktop = name;
+        EXPECT_EQ(validate(windows, true), ErrorCode::InvalidArgument);
+        EXPECT_EQ(validate(posix, false), ErrorCode::Unknown);
+    }
+    ProcessSpec valid = specFor("C:\\tools\\git.exe");
+    valid.desktop = "WinSta0\\frost-test-\xc3\xa4";
+    EXPECT_EQ(validate(valid, true), ErrorCode::Unknown);
+    // The image-path form needs no validation: every value is a valid request.
+    for (const auto form :
+         {frost::io::ImagePathForm::Auto, frost::io::ImagePathForm::Plain, frost::io::ImagePathForm::Extended}) {
+        valid.imagePathForm = form;
+        EXPECT_EQ(validate(valid, true), ErrorCode::Unknown);
+    }
+}
+
 TEST(ProcessSpec, WindowsNeedsWellFormedUtf8EverywhereItConverts) {
     // CreateProcessW takes UTF-16, so the launcher converts the working directory and the
     // environment too; what it cannot convert is refused up front, as for the command line.

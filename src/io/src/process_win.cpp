@@ -291,14 +291,18 @@ Result<std::wstring> buildEnvironmentBlock(const ProcessSpec& spec) {
     return out;
 }
 
-// Plain form below MAX_PATH (what children expect to see as their image path and current
-// directory), extended-length form beyond it.
-Result<std::wstring> launchPath(const std::string& normalized) {
-    auto wide = toWide(normalized);
-    if (!wide) {
-        return wide;
+/*
+ * The UTF-16 spelling handed to CreateProcessW for the normalised path `normalized`
+ * (see ImagePathForm). Auto: the plain form below MAX_PATH (what children expect to see as
+ * their image path and current directory), the extended-length form from there on. Plain:
+ * always the normalised spelling. Extended: always toWin32Path's \\?\ or \\?\UNC\ form.
+ */
+Result<std::wstring> launchPath(const std::string& normalized, ImagePathForm form) {
+    if (form == ImagePathForm::Extended) {
+        return toWin32Path(normalized);
     }
-    if (wide->size() < MAX_PATH) {
+    auto wide = toWide(normalized);
+    if (!wide || form == ImagePathForm::Plain || wide->size() < MAX_PATH) {
         return wide;
     }
     return toWin32Path(normalized);
@@ -695,7 +699,7 @@ public:
         if (!executable) {
             return std::unexpected(std::move(executable.error()));
         }
-        auto applicationName = launchPath(*executable);
+        auto applicationName = launchPath(*executable, spec.imagePathForm);
         if (!applicationName) {
             return std::unexpected(std::move(applicationName.error()));
         }
@@ -715,13 +719,22 @@ public:
         std::wstring workingDirectory;
         if (!spec.workingDirectory.empty()) {
             auto normalized = normalizePath(spec.workingDirectory, PathStyle::Windows);
-            auto wide =
-                normalized ? launchPath(*normalized) : Result<std::wstring>(std::unexpected(normalized.error()));
+            auto wide = normalized ? launchPath(*normalized, ImagePathForm::Auto)
+                                   : Result<std::wstring>(std::unexpected(normalized.error()));
             if (!wide) {
                 return std::unexpected(std::move(wide.error()));
             }
             normalizedDirectory = std::move(*normalized);
             workingDirectory = std::move(*wide);
+        }
+        // lpDesktop is a non-const LPWSTR, so it points into this buffer; empty means the parent's desktop.
+        std::wstring desktop;
+        if (!spec.desktop.empty()) {
+            auto wide = toWide(spec.desktop);
+            if (!wide) {
+                return std::unexpected(std::move(wide.error()).withContext("desktop name"));
+            }
+            desktop = std::move(*wide);
         }
         std::wstring environment;
         const bool customEnvironment = spec.cleanEnvironment || !spec.environment.empty();
@@ -799,6 +812,7 @@ public:
         startup.StartupInfo.hStdInput = in->child.get();
         startup.StartupInfo.hStdOutput = out->child.get();
         startup.StartupInfo.hStdError = childErr;
+        startup.StartupInfo.lpDesktop = desktop.empty() ? nullptr : desktop.data();
         startup.lpAttributeList = attributes;
         DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
         // A GUI parent has no console; without this flag every console tool would open a window.

@@ -11,7 +11,7 @@
  *   - launch() validates the spec exactly like the real launcher
  *     (validateProcessSpec with the platform's rules), so code that would be
  *     rejected for real is rejected here too. Every launch, valid or not, is
- *     recorded.
+ *     recorded with its whole spec, the image-path form and desktop included.
  *   - Each valid launch takes the next ScriptedProcess from the queue (FIFO).
  *     If that script has an `expectExecutable` and the launch names a
  *     different executable (exact string comparison), launch() fails with

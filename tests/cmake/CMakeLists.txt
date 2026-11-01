@@ -8,9 +8,10 @@
 # sccache that fails the version check is searched for again
 # (tests/cmake/check_compiler_cache.cmake).
 # FrostRuntimeDlls.CopiesOncePerDirectory configures and builds a fixture whose
-# executables share output directories and checks that each directory gets its DLLs
-# from exactly one copy step per configuration, and that every executable there,
-# registered or not, is ordered after it (tests/cmake/check_runtime_dlls.cmake).
+# executables and shared library share output directories and checks that each directory
+# gets its DLLs from exactly one copy step per configuration, and that every executable and
+# shared library there, registered or not, is ordered after it
+# (tests/cmake/check_runtime_dlls.cmake).
 if(VCPKG_CHAINLOAD_TOOLCHAIN_FILE)
     set(_frost_fixture_toolchain "${VCPKG_CHAINLOAD_TOOLCHAIN_FILE}")
 else()

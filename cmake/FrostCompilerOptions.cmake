@@ -3,10 +3,17 @@
 # FrostCompilerOptions.cmake: the per-compiler warning sets, language mode and
 # hardening flags from PLAN.md section 2 ("Warnings", "C++23/26 policy").
 #
-# frost_apply_compile_options(<target> <PRODUCTION|TEST>) applies them.
+# frost_apply_compile_options(<target> <PRODUCTION|TEST> [NO_SANITIZE]) applies them.
 # PRODUCTION code additionally gets -Wglobal-constructors and
 # -Wexit-time-destructors (startup hygiene, PLAN.md section 2.1); test code is
 # exempt because GoogleTest's TEST() macros register through static objects.
+# The sanitizer flags of FROST_SANITIZE (FROST_SANITIZE_COMPILE_OPTIONS and
+# FROST_SANITIZE_LINK_OPTIONS, set by the root CMakeLists.txt) are applied here too, per
+# target, so that every FrostIDE target agrees on the runtime. NO_SANITIZE leaves them out;
+# only frost.exe's Windows launcher uses it (src/app/CMakeLists.txt): it is a dozen loader
+# calls that must run before any DLL beside it loads, and an instrumented launcher imports
+# the ASan runtime, whose RT_MANIFEST 2 brings back the loader's kill before main on long
+# plain starts (ADR 0012).
 
 include_guard(GLOBAL)
 
@@ -25,8 +32,16 @@ set(FROST_CLANG_WARNINGS
 set(FROST_STARTUP_HYGIENE_WARNINGS -Wglobal-constructors -Wexit-time-destructors)
 
 function(frost_apply_compile_options target kind)
+    cmake_parse_arguments(ARG "NO_SANITIZE" "" "" ${ARGN})
     if(NOT kind MATCHES "^(PRODUCTION|TEST)$")
         message(FATAL_ERROR "frost_apply_compile_options: kind must be PRODUCTION or TEST, got '${kind}'")
+    endif()
+    if(ARG_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "frost_apply_compile_options: unexpected arguments '${ARG_UNPARSED_ARGUMENTS}'")
+    endif()
+    if(NOT ARG_NO_SANITIZE)
+        target_compile_options(${target} PRIVATE ${FROST_SANITIZE_COMPILE_OPTIONS})
+        target_link_options(${target} PRIVATE ${FROST_SANITIZE_LINK_OPTIONS})
     endif()
 
     # C++23 baseline compiled in C++26 mode (/std:c++latest or -std=c++26), extensions off.
