@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# frost::app (the application library: command line, main window, self-test)
-# and frost, the IDE executable. The library exists so tests can exercise the
-# same code the executable runs.
+# frost::app (the application library: command line, start-up hardening and checks,
+# main window, self-test) and frost, the IDE executable. The library exists so tests
+# can exercise the same code the executable runs.
 
 frost_add_library(app LAYER app
     SOURCES
@@ -15,8 +15,8 @@ frost_add_library(app LAYER app
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
-    # CommandLineToArgvW (shell32) and the DPI-awareness APIs (user32).
-    target_link_libraries(frost_app PRIVATE shell32 user32)
+    # The DPI-awareness APIs in selftest.cpp (user32).
+    target_link_libraries(frost_app PRIVATE user32)
 endif()
 
 set(frost_sources src/main.cpp)
@@ -41,6 +41,8 @@ if(WIN32)
     # in the current directory or PATH; hardenProcess() covers later LoadLibrary calls.
     # The self-test reads the value back from the image (check "dependent-load-flags").
     target_link_options(frost PRIVATE /MANIFEST:NO /DEPENDENTLOADFLAG:0xA00)
+    # CommandLineToArgvW (shell32) and MessageBoxW (user32) in main.cpp.
+    target_link_libraries(frost PRIVATE shell32 user32)
     frost_copy_runtime_dlls(frost)
     # Platform plugins are loaded from <exe dir>/platforms: the native one and
     # the offscreen one used by --selftest.

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Integration tests that run the real frost executable (PLAN.md section 7,
-// M0 exit): --version, --help, error exit codes, the built-in self-test, and
-// launching from a directory whose path has non-ASCII characters and spaces,
-// and from one longer than MAX_PATH (260 characters) on Windows, plus the start-up
-// check's reports when Qt could not load its platform plugin (frost/app/startup.hpp).
+// M0 exit): --version, --help, error exit codes, the built-in self-test (also that
+// arguments after "--" never reach Qt), and launching from a directory whose path has
+// non-ASCII characters and spaces, and from one longer than MAX_PATH (260 characters) on
+// Windows, also through its 8.3 short name; the 250-unit plugin-path limit from both sides
+// (kQtPluginPathLimitUnits); and the start-up check's reports when Qt could not load its
+// platform plugin (frost/app/startup.hpp).
 // Processes are started through frost::io's production IProcessLauncher.
 
 #include "frost/io/path.hpp"
@@ -39,13 +41,17 @@ using frost::test::ScratchDir;
 std::string frostExe() { return frost::io::normalizePath(FROST_EXE_PATH).value(); }
 
 struct FrostRun {
-    int exitCode = -1;      // The child's exit status; -1 if it could not be run.
-    std::string output;     // stdout and stderr, interleaved as the child wrote them.
-    std::string startError; // Why it could not be run, when exitCode == -1.
+    // The child's exit status; -1 if it could not be started, did not finish within
+    // runFrost's 120 s timeout, or its output could not be read.
+    int exitCode = -1;
+    std::string output; // stdout and stderr, interleaved as the child wrote them.
+    // What went wrong (launch error, Timeout or IoError) when exitCode == -1.
+    std::string startError;
 };
 
 // Runs `exe` with `args` and collects its combined output (stderr merged into stdout).
-// `environment` overrides apply on top of the test's own environment.
+// `environment` overrides apply on top of the test's own environment. Waits at most
+// 120 s; on timeout the child's process tree is killed and exitCode is -1.
 FrostRun runFrost(const std::string& exe, std::vector<std::string> args,
                   std::vector<std::pair<std::string, std::optional<std::string>>> environment = {}) {
     frost::io::ProcessSpec spec;
@@ -148,6 +154,25 @@ TEST(FrostProcess, SelfTestPasses) {
         << result.output;
 #endif
     EXPECT_NE(result.output.find("ok   plugin-paths"), std::string::npos) << result.output;
+}
+
+TEST(FrostProcess, SelfTestIgnoresQtOptionsAfterDoubleDash) {
+    /*
+     * Arguments after "--" are paths for frost, never options for Qt. Passed on to Qt,
+     * "-platform minimal" would replace the offscreen platform that the start-up plugin
+     * check had just checked, and Qt would abort (it has no minimal plugin next to frost on
+     * Windows) or run on another platform. Runs offscreen and opens no window.
+     */
+    std::vector<std::pair<std::string, std::optional<std::string>>> environment{{"QT_QPA_PLATFORM", std::nullopt}};
+#ifdef _WIN32
+    // As ownPluginsOnly() below: only <exe dir>/platforms may supply the plugin.
+    environment.emplace_back("QT_PLUGIN_PATH", std::nullopt);
+    environment.emplace_back("QT_QPA_PLATFORM_PLUGIN_PATH", std::nullopt);
+#endif
+    const auto result = runFrost(frostExe(), {"--selftest", "--", "-platform", "minimal"}, environment);
+    ASSERT_EQ(result.exitCode, 0) << result.startError << result.output;
+    EXPECT_NE(result.output.find("selftest: PASSED"), std::string::npos) << result.output;
+    EXPECT_NE(result.output.find("platform plugin 'offscreen'"), std::string::npos) << result.output;
 }
 
 TEST(FrostProcess, RunsFromNonAsciiPathWithSpaces) {
@@ -258,10 +283,13 @@ TEST(FrostProcess, RunsFromPathLongerThanMaxPath) {
      * PLAN.md's M0 exit criterion. frost::io creates the tree and starts the process
      * through \\?\ paths, which work whatever LongPathsEnabled says (io_integration_tests
      * launches a helper from such a directory), and the loader does find frost's DLLs
-     * there. Qt, though, cannot load a plugin from a path longer than 250 characters
-     * unless the frost manifest's longPathAware setting is backed by the system-wide
-     * switch (kQtPluginPathLimitUnits in frost/app/startup.hpp). So this test needs the
-     * switch, and skips without it: the criterion stays visibly unmet on such a machine.
+     * there. Qt's plugins, though, do not load from a path longer than 250 units while the
+     * system-wide switch is off: LoadLibraryW, which Qt uses for them, fails beyond that
+     * length for a DLL that embeds an isolation-aware manifest, as Qt's DLLs do
+     * (kQtPluginPathLimitUnits in frost/app/startup.hpp). So this test needs the switch,
+     * which the frost manifest's longPathAware setting depends on, and skips without it:
+     * the criterion stays visibly unmet on such a machine. Whether the switch lifts the
+     * loader's limit has not been measured; this test, run with the switch on, measures it.
      * ReportsLongPathLimitCleanly covers what frost does there instead.
      */
     if (!systemLongPathsEnabled()) {
@@ -282,8 +310,8 @@ TEST(FrostProcess, ReportsLongPathLimitCleanly) {
     // promptly why it cannot start instead of letting Qt abort. This is not the M0 exit
     // criterion, which asks for a launch that works.
     if (systemLongPathsEnabled()) {
-        GTEST_SKIP() << "LongPathsEnabled=1 on this machine: frost starts from long paths, so there is no limit "
-                        "to report (RunsFromPathLongerThanMaxPath covers it)";
+        GTEST_SKIP() << "LongPathsEnabled=1 on this machine: frost does not refuse long paths then, and "
+                        "RunsFromPathLongerThanMaxPath measures whether they launch";
     }
     const ScratchDir scratch("app-process-long-report");
     const std::string exe = copyFrostTo(longDirectoryIn(scratch));
@@ -297,15 +325,19 @@ TEST(FrostProcess, RunsThroughShortNamesOfALongPath) {
     /*
      * Started through the 8.3 short name of a directory beyond MAX_PATH, frost sees its
      * own path in that form, and so does Qt: it loads its platform plugin through the short
-     * path, whatever LongPathsEnabled says (measured 2026-11-01 with Qt 6.12.0). The
-     * start-up check must therefore measure the form GetModuleFileNameW reports; measuring
-     * the long form would refuse a launch that works. If Qt ever moves to the long form,
-     * this fails with Qt's own abort instead of a clean report, and the check has to follow.
+     * path with LongPathsEnabled=0 (measured 2026-11-01 with Qt 6.12.0; the switch has never
+     * been on here). The start-up check must therefore measure the form GetModuleFileNameW
+     * reports; measuring the long form would refuse a launch that works. If Qt ever moves to
+     * the long form, this fails while LongPathsEnabled=0 with Qt's own abort instead of a
+     * clean report, and the check has to follow. With the switch on it can tell only if the
+     * switch does not lift the loader's limit, which has not been measured
+     * (kQtPluginPathLimitUnits).
      */
     const ScratchDir scratch("app-process-short");
     const std::string exe = copyFrostTo(longDirectoryIn(scratch));
     const std::string shortExe = convertedPath(exe, true);
-    // "\platforms\qoffscreend.dll" is 26 units; the short form must be within Qt's limit.
+    // "\platforms\qoffscreend.dll" is 26 units; the short form must be within the 250-unit
+    // plugin-path limit (kQtPluginPathLimitUnits).
     if (shortExe.empty() || frost::io::parentPath(shortExe).size() + 26 > 250) {
         GTEST_SKIP() << "the temp directory's volume does not generate 8.3 short names (got '" << shortExe << "')";
     }
@@ -334,12 +366,15 @@ std::string offscreenPluginName() {
     return {};
 }
 
-// `base` (ASCII) extended by path components to exactly `units` characters.
-// Precondition: units == base.size() or units >= base.size() + 2.
+// Length of `utf8` in UTF-16 code units, the unit kQtPluginPathLimitUnits counts.
+std::size_t utf16Units(std::string_view utf8) { return frost::io::utf8ToUtf16(utf8).value().size(); }
+
+// `base` extended by ASCII path components to exactly `units` UTF-16 code units.
+// Precondition: units == utf16Units(base) or units >= utf16Units(base) + 2.
 std::string padToLength(std::string base, std::size_t units) {
-    while (base.size() < units) {
+    while (utf16Units(base) < units) {
         // Components stay well below the 255-unit limit, and never leave a remainder of 1.
-        const std::size_t remaining = units - base.size();
+        const std::size_t remaining = units - utf16Units(base);
         base = frost::io::joinPath(base, std::string(remaining - 1 <= 200 ? remaining - 1 : 100, 'b')).value();
     }
     return base;
@@ -347,12 +382,16 @@ std::string padToLength(std::string base, std::size_t units) {
 
 TEST(FrostProcess, PlatformPluginPathBoundary) {
     /*
-     * Pins kQtPluginPathLimitUnits (250, frost/app/startup.hpp; this binary runs frost and
-     * does not link frost::app) from both sides, with the plugin the self-test uses. At
-     * 250 characters Qt must load it: if Qt's limit ever drops, this fails instead of
-     * frost letting Qt abort. At 251, frost must refuse while long paths are off, and
-     * start while they are on. The scratch path is taken in its long form, so the lengths
-     * are what frost and Qt see.
+     * kQtPluginPathLimitUnits (250, frost/app/startup.hpp; this binary runs frost and does
+     * not link frost::app), with the plugin the self-test uses. While LongPathsEnabled=0
+     * (as on the reference machine) this pins the limit from both sides: at 250 units Qt
+     * must load the plugin, so a lower limit fails here rather than letting Qt abort; at
+     * 251 frost must refuse. With the switch on, frost applies no limit and the test checks
+     * only that frost also starts at 251 (the first such run measures whether the switch
+     * lifts the loader's limit); it cannot see the limit that holds with the switch off, so
+     * re-measure that with the switch off.
+     * The scratch path is taken in its long form and lengths are counted in UTF-16 units,
+     * so they are what frost and Qt see.
      */
     constexpr std::size_t kLimit = 250;
     const std::string plugin = offscreenPluginName();
@@ -362,7 +401,10 @@ TEST(FrostProcess, PlatformPluginPathBoundary) {
     ASSERT_FALSE(base.empty()) << scratch.path();
     const std::size_t suffix = std::string_view("\\platforms\\").size() + plugin.size();
 
-    const std::string atLimit = padToLength(frost::io::joinPath(base, "a").value(), kLimit - suffix);
+    // The first components are non-ASCII (two UTF-8 bytes, one UTF-16 unit each), so every
+    // machine checks that the lengths are counted in UTF-16 units.
+    const std::string atLimit = padToLength(frost::io::joinPath(base, "\xC3\xA4").value(), kLimit - suffix);
+    ASSERT_EQ(utf16Units(atLimit) + suffix, kLimit) << atLimit;
     auto started = std::chrono::steady_clock::now();
     const auto loads = runFrost(copyFrostTo(atLimit), {"--selftest"}, ownPluginsOnly());
     EXPECT_EQ(loads.exitCode, 0) << loads.startError << loads.output;
@@ -371,7 +413,8 @@ TEST(FrostProcess, PlatformPluginPathBoundary) {
     EXPECT_NE(loads.output.find("selftest: PASSED"), std::string::npos) << loads.output;
     EXPECT_LT(std::chrono::steady_clock::now() - started, 30s);
 
-    const std::string beyond = padToLength(frost::io::joinPath(base, "b").value(), kLimit + 1 - suffix);
+    const std::string beyond = padToLength(frost::io::joinPath(base, "\xC3\xB6").value(), kLimit + 1 - suffix);
+    ASSERT_EQ(utf16Units(beyond) + suffix, kLimit + 1) << beyond;
     started = std::chrono::steady_clock::now();
     const auto refused = runFrost(copyFrostTo(beyond), {"--selftest"}, ownPluginsOnly());
     if (systemLongPathsEnabled()) {

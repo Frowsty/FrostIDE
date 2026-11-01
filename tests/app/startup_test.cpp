@@ -3,11 +3,13 @@
 // Tests for frost's start-up hardening and checks (frost/app/startup.hpp): which platform
 // plugin Qt will use and the path-length rule for loading it, that the hardened process
 // no longer loads a DLL planted in the current directory (and what it does not cover),
-// and that suppressCrashDialogs() switches every dialog source off. A separate binary
-// from app_tests, because hardenProcess() changes process-wide state for good.
+// and that suppressCrashDialogs() switches every dialog source off. hardenProcess() runs
+// only in a death-test child (StartupHardeningDeathTest), because it cannot be undone; the
+// binary is separate from app_tests so that child starts without a QApplication.
 
 #include "frost/app/startup.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/utf.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gmock/gmock.h>
@@ -61,11 +63,11 @@ TEST(StartupPlatformNames, SplitsFallbacksAndDropsOptions) {
 }
 
 TEST(StartupPluginPaths, AcceptsThePlatformPluginUpToTheLimit) {
-    const std::vector<std::u16string> paths{platformPluginOfLength(40),
-                                            platformPluginOfLength(kQtPluginPathLimitUnits)};
-    const auto report = evaluatePluginPaths(paths, kWindows, u"C:\\frost", true, false);
+    // The only candidate is exactly at the limit, so it decides the result on its own.
+    const std::u16string atLimit = platformPluginOfLength(kQtPluginPathLimitUnits);
+    const auto report = evaluatePluginPaths(std::vector{atLimit}, kWindows, u"C:\\frost", true, false);
     ASSERT_TRUE(report.has_value()) << report.error().message();
-    EXPECT_THAT(report->detail, testing::StartsWith("Qt can load its platform plugin C:\\pp"));
+    EXPECT_EQ(report->detail, "Qt can load its platform plugin " + frost::io::utf16ToUtf8(atLimit).value());
     EXPECT_EQ(report->warning, "");
 }
 
@@ -369,7 +371,8 @@ private:
  * GoogleTest itself clears _WRITE_ABORT_MSG and _CALL_REPORTFAULT, sends CRT errors to
  * stderr and sets the SEM_* flags in every test process and death-test child, so an abort
  * test cannot tell whether suppressCrashDialogs() does anything. This test therefore
- * restores the dialog-showing defaults, calls it, and reads every setting back. Nothing
+ * switches every dialog source on (a superset of the defaults), calls it, and reads every
+ * setting back. Nothing
  * aborts, so a regression fails an assertion instead of opening a dialog; the process's
  * previous settings are restored at the end.
  */
@@ -392,7 +395,9 @@ TEST(StartupCrashDialogs, SwitchesEveryDialogSourceOff) {
 #endif
     const SavedCrashSettings saved;
 
-    // The defaults of a GUI-subsystem program, where each of these would show a dialog.
+    // Every dialog source switched on: a superset of a GUI-subsystem program's defaults (the
+    // CRT sets only one of the two abort bits per build flavour, and _CRT_WARN goes to the
+    // debugger by default), so suppressCrashDialogs() must clear each one.
     _set_abort_behavior(kAbortBits, kAbortBits);
     _set_error_mode(_OUT_TO_MSGBOX);
     SetErrorMode(0);
