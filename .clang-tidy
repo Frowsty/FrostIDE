@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# clang-tidy configuration for FrostIDE (PLAN.md 6.4 step 2; ADR 0027 decision 1), read by the pinned
+# clang-tidy (LLVM 23.1.4) that tools/verify_support.py runs from both verify scripts: on the changed
+# files' translation units in -Quick, on every TU in -Full. Every finding fails the gate
+# (WarningsAsErrors). Directories may narrow this set with their own .clang-tidy that inherits it
+# (src/app and tests/app, for the frozen start-up code); a changed .clang-tidy makes tidy check every TU.
+#
+# The set is curated: the families that find real defects (bugprone, performance) minus the checks
+# below, plus single checks from modernize, readability, misc, cppcoreguidelines, google and
+# concurrency. The re-survey that chose it ran every TU of the Debug trees on both systems (104 on
+# Windows, 89 on Linux) with the final set and the excluded checks switched back on; its counts are
+# findings on the tree at the commit that added this file (Windows/Linux), and every finding of an
+# enabled check was fixed or carries a NOLINT with its reason:
+#   -bugprone-easily-swappable-parameters  36/28: style; adjacent same-type parameters (two offsets, a
+#       path and its contents) are the APIs' natural shape, and named types for each would not pay
+#   -bugprone-signed-bitwise  154/153: flag masks; the Win32, POSIX and Qt flag constants are signed ints
+#   -bugprone-unchecked-optional-access  39/51: the dataflow model does not follow the checks the code
+#       makes (gtest's ASSERT_TRUE(x.has_value()), early returns), so nearly every report is a false alarm
+#   -bugprone-exception-escape  32/12: noexcept functions and main call std:: code that can throw (mostly
+#       allocation); the code treats std::bad_alloc as fatal, and the policy is ADR 0027's question 4
+#   -bugprone-implicit-widening-of-multiplication-result  23/22: size arithmetic on small 32-bit counts
+#       (pages, chunk sizes) that cannot overflow before the widening
+#   -bugprone-misplaced-widening-cast  9/9: the same pattern in the perf probes and text tests
+#   -bugprone-unhandled-exception-at-new  1/1: ref.hpp's allocation may throw std::bad_alloc on purpose,
+#       which, as everywhere, ends the program
+#   -bugprone-random-generator-seed  2/1: the tests seed their generators with constants to be reproducible
+#   -bugprone-casting-through-void  7/0: GetProcAddress results become function pointers through void*,
+#       the cast that clang's -Wcast-function-type-mismatch accepts; 5 of the 7 are in the frozen start-up code
+#   -bugprone-multi-level-implicit-pointer-conversion  7/0: Win32 APIs take void* for pointer-to-pointer
+#       arguments (LocalFree(argv), UpdateProcThreadAttribute); 1 of the 7 is in the frozen start-up code
+#   -performance-enum-size  4/3: an enum's base type is left to the compiler unless a layout needs it
+#   -performance-no-int-to-ptr  12/0: Win32 handles and resource IDs are integers by API contract
+#   -performance-inefficient-string-concatenation  5/2: one-off messages, where clarity beats allocations
+#   -performance-inefficient-vector-operation  23/24: test and setup loops of a few elements
+#   (not enabled) misc-misplaced-const  16/0: `const HANDLE` is meant as the constant pointer it is
+#   (not enabled) clang-analyzer-*  -/-: speed; it made single TUs 1.1 to 30 times slower (tests/io/process_test.cpp
+#       2.9 s to 84.5 s), too slow for every -Quick; a later ADR may run it in -Full
+# misc-confusable-identifiers is enabled: --enable-check-profile gives it about 1 ms per TU (at most
+# 4 ms), and six TUs timed with and without it differ by -0.02 to +0.12 s, inside run-to-run noise.
+#
+# Suppressions: only `// NOLINT(<check>): <reason>` or `// NOLINTNEXTLINE(<check>): <reason>`, naming
+# the check and saying why the code is right; never a bare NOLINT and never a whole-file switch.
+# HeaderFilterRegex stays empty here: verify_support.py passes --header-filter for <repo>/src and
+# <repo>/tests, anchored at the repository root, so generated headers under build/ stay out.
+Checks: >-
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-signed-bitwise,
+  -bugprone-unchecked-optional-access,
+  -bugprone-exception-escape,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-misplaced-widening-cast,
+  -bugprone-unhandled-exception-at-new,
+  -bugprone-random-generator-seed,
+  -bugprone-casting-through-void,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  performance-*,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  -performance-inefficient-string-concatenation,
+  -performance-inefficient-vector-operation,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  modernize-redundant-void-arg,
+  modernize-use-emplace,
+  modernize-loop-convert,
+  modernize-make-unique,
+  modernize-make-shared,
+  modernize-use-using,
+  modernize-deprecated-headers,
+  readability-container-size-empty,
+  readability-redundant-string-cstr,
+  readability-misleading-indentation,
+  readability-duplicate-include,
+  readability-redundant-control-flow,
+  readability-redundant-smartptr-get,
+  readability-static-definition-in-anonymous-namespace,
+  readability-delete-null-pointer,
+  readability-redundant-declaration,
+  misc-redundant-expression,
+  misc-unused-using-decls,
+  misc-unused-alias-decls,
+  misc-throw-by-value-catch-by-reference,
+  misc-uniqueptr-reset-release,
+  misc-definitions-in-headers,
+  misc-static-assert,
+  misc-misleading-identifier,
+  misc-misleading-bidirectional,
+  misc-confusable-identifiers,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-virtual-class-destructor,
+  cppcoreguidelines-missing-std-forward,
+  cppcoreguidelines-prefer-member-initializer,
+  google-explicit-constructor,
+  concurrency-thread-canceltype-asynchronous
+WarningsAsErrors: '*'
+HeaderFilterRegex: ''
+SystemHeaders: false
+FormatStyle: none
+CheckOptions:
+  # `(void)call()` is the codebase's explicit "result deliberately ignored".
+  bugprone-unused-return-value.AllowCastToVoid: true
+  # The Win32 conversion APIs take an explicit length, so a string_view's data() is safe there.
+  bugprone-suspicious-stringview-data-usage.AllowedCallees: 'MultiByteToWideChar;WideCharToMultiByte'

@@ -45,8 +45,9 @@
 #include <spawn.h>
 #include <unistd.h>
 
-// The process environment (POSIX names it here; glibc also declares it in <unistd.h> under _GNU_SOURCE).
-extern char** environ;
+// The process environment. POSIX requires the application to declare environ; <unistd.h> declares it only
+// under _GNU_SOURCE, which libstdc++ defines, so clang-tidy sees this declaration as redundant.
+extern char** environ; // NOLINT(readability-redundant-declaration): POSIX requires the declaration
 
 namespace frost::io {
 namespace {

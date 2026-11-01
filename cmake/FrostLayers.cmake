@@ -476,12 +476,37 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_add_runtime_dll
 # QT marks tests that need Qt at runtime. They link tests/support/qt_test_main.cpp
 # instead of gtest_main: it selects the offscreen platform and Qt's plugin
 # directory before creating the QApplication, so ctest needs no environment setup.
-# LABELS defaults to unit. On Windows the test embeds the FrostIDE manifest
-# (test_manifest.rc) and the linker's own manifest is disabled.
-# Tests are built with TEST options and, like the executables of frost_add_executable,
-# get their runtime DLLs through frost_copy_runtime_dlls.
+# LABELS is the test kind, exactly one of unit, integration, stress or perf (default unit).
+# The module label (mod.<directory>) comes from the test directory: tests/CMakeLists.txt adds
+# each directory through frost_add_test_directory, which sets CMAKE_DIRECTORY_LABELS. A second
+# label here cannot work: gtest_discover_tests writes every PROPERTIES list element as its own
+# bracket argument (CMake 4.4.5's GoogleTestAddTests.cmake), so "unit;x" would become a property
+# named x, which is why more than one label is a configure error.
+# On Windows the test embeds the FrostIDE manifest (test_manifest.rc) and the linker's own
+# manifest is disabled. Tests are built with TEST options and, like the executables of
+# frost_add_executable, get their runtime DLLs through frost_copy_runtime_dlls.
+#
+# Scheduling keywords for parallel ctest (verify.ps1 runs ctest -j; ADR 0027 decision 3). They
+# apply to every test the executable's discovery adds, so a lock covers the whole executable:
+#   RUN_SERIAL            the tests run with nothing else in parallel;
+#   RESOURCE_LOCK <name>  tests holding the same lock never overlap (one lock name per executable);
+#   PROCESSORS <n>        each test counts as n of ctest's -j slots.
+# Policy for new tests (ADR 0027):
+#   - a test that starts frost.exe, creates a desktop or a window, starts console helpers on a
+#     private desktop, or touches per-user state shared with other tests takes
+#     RESOURCE_LOCK frost_desktop;
+#   - a test that asserts wall-clock latency takes RUN_SERIAL;
+#   - a test that starts many threads declares PROCESSORS.
 function(frost_add_test name)
-    cmake_parse_arguments(ARG "QT" "" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
+    cmake_parse_arguments(ARG "QT;RUN_SERIAL" "RESOURCE_LOCK;PROCESSORS" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
+    list(LENGTH ARG_LABELS label_count)
+    if(label_count GREATER 1)
+        message(FATAL_ERROR "frost_add_test(${name}): LABELS takes one kind label (got '${ARG_LABELS}'); "
+                            "the module label comes from frost_add_test_directory (tests/CMakeLists.txt)")
+    endif()
+    if(DEFINED ARG_PROCESSORS AND NOT ARG_PROCESSORS MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "frost_add_test(${name}): PROCESSORS needs a positive integer (got '${ARG_PROCESSORS}')")
+    endif()
     if(ARG_QT)
         add_executable(${name} ${ARG_SOURCES} ${FROST_SOURCE_DIR}/tests/support/qt_test_main.cpp)
         target_link_libraries(${name} PRIVATE ${ARG_DEPS} ${ARG_THIRD_PARTY} Qt6::Widgets GTest::gtest GTest::gmock)
@@ -501,8 +526,18 @@ function(frost_add_test name)
     if(NOT ARG_LABELS)
         set(ARG_LABELS unit)
     endif()
+    set(properties LABELS ${ARG_LABELS})
+    if(ARG_RUN_SERIAL)
+        list(APPEND properties RUN_SERIAL TRUE)
+    endif()
+    if(ARG_RESOURCE_LOCK)
+        list(APPEND properties RESOURCE_LOCK ${ARG_RESOURCE_LOCK})
+    endif()
+    if(ARG_PROCESSORS)
+        list(APPEND properties PROCESSORS ${ARG_PROCESSORS})
+    endif()
     gtest_discover_tests(${name}
         DISCOVERY_MODE PRE_TEST
         DISCOVERY_TIMEOUT 60
-        PROPERTIES LABELS "${ARG_LABELS}")
+        PROPERTIES ${properties})
 endfunction()

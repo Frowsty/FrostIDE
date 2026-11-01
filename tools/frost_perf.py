@@ -281,10 +281,11 @@ def write_json_atomic(path: Path, document: Any) -> None:
 class ProbeJournal:
     """
     The record that makes probe edits recoverable: <run dir>\\probes.json lists each probed file
-    with the SHA-256 of its original bytes and of the harness's last write, and originals\\<key>.orig
-    holds the original bytes. The journal is rewritten atomically before every probe write, so
-    after a kill the file holds either the original or the last recorded write. Not thread-safe;
-    one harness thread writes probes.
+    with the SHA-256 of its original bytes, of the harness's last write and of the write before it,
+    and originals\\<key>.orig holds the original bytes. The journal is rewritten atomically before
+    every probe write, so after a kill the file holds the original, the last recorded write, or (a
+    kill between the journal and the file write) the write before it. Not thread-safe; one harness
+    thread writes probes.
     """
 
     def __init__(self, run_dir: Path, repo: Path, git_dir: Path, files: dict[str, Path]) -> None:
@@ -303,7 +304,8 @@ class ProbeJournal:
             write_atomic(originals / f"{key}.orig", data)
             digest = sha256(data)
             self.entries[key] = {"key": key, "path": str(path), "original": str(originals / f"{key}.orig"),
-                                 "original_sha256": digest, "last_written_sha256": digest}
+                                 "original_sha256": digest, "last_written_sha256": digest,
+                                 "previous_written_sha256": digest}
         self._save()
         write_atomic(self.git_dir / POINTER_NAME, (str(self.run_dir) + "\n").encode("utf-8"))
 
@@ -322,6 +324,7 @@ class ProbeJournal:
         if sha256(current) not in (entry["original_sha256"], entry["last_written_sha256"]):
             raise RunInvalid(f"{path} changed outside the harness; not overwritten (original: {entry['original']})")
         data = insert_probe(current, n)
+        entry["previous_written_sha256"] = sha256(current)
         entry["last_written_sha256"] = sha256(data)
         self._save()
         write_atomic(path, data)
@@ -331,8 +334,9 @@ def restore_journal(journal_path: Path) -> list[str]:
     """
     Restores every file of a probe journal to its original bytes and returns the problems (empty
     when all are restored). A file already at its original bytes is left alone; one at the last
-    recorded write is rewritten from originals\\<key>.orig; any other file is not touched and is
-    reported with the path of its original. Removes the pointer file when nothing is left over.
+    recorded write or the write before it is rewritten from originals\\<key>.orig; any other file is
+    not touched and is reported with the path of its original. Removes the pointer file when nothing
+    is left over.
     """
     try:
         journal = json.loads(Path(journal_path).read_text(encoding="utf-8"))
@@ -349,7 +353,8 @@ def restore_journal(journal_path: Path) -> list[str]:
         digest = sha256(current)
         if digest == entry["original_sha256"]:
             continue
-        if digest != entry["last_written_sha256"]:
+        # Journals written before previous_written_sha256 existed name only the last write.
+        if digest not in (entry["last_written_sha256"], entry.get("previous_written_sha256")):
             problems.append(f"{path} changed outside the harness; not overwritten. Its original is {entry['original']}")
             continue
         original = Path(entry["original"]).read_bytes()
@@ -526,13 +531,30 @@ class Tools:
     verify_base: bool | None = None
 
 
+def run_build_command(cmd: list[str], timeout: float) -> tuple[int | None, bytes]:
+    """
+    Runs one build command (absolute executable, no shell) with stdout and stderr merged and stdin
+    closed; returns (exit status, output), or (None, partial output) after killing it on `timeout`
+    seconds. Hooks.run_build's default.
+    """
+    try:
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              timeout=timeout, check=False)
+        return proc.returncode, proc.stdout
+    except subprocess.TimeoutExpired as expired:
+        return None, (expired.stdout or b"") + b"\n(killed on timeout)"
+
+
 @dataclass
 class Hooks:
     """
     Test seams. clock: the timer around timed commands (called once before and once after each,
     and per streamed line). timestamp: the run directory's YYYYMMDDTHHMMSS. after_probe_write:
     called with (key, path, n) after each probe write. cpu_sample_s: GetSystemTimes interval.
-    distro_wait_s and sleep: the wsl-leg stop wait.
+    distro_wait_s and sleep: the wsl-leg stop wait. run_build: runs the settle and timed
+    `cmake --build` commands (run_build_command); the self-tests' long gated series replace it with
+    an in-process fake, because hundreds of fake-tool processes made that suite the longest
+    Windows test.
     """
 
     clock: Callable[[], float] = time.perf_counter
@@ -541,6 +563,7 @@ class Hooks:
     cpu_sample_s: float = 3.0
     distro_wait_s: float = WSL_STOP_WAIT_S
     sleep: Callable[[float], None] = time.sleep
+    run_build: Callable[[list[str], float], tuple[int | None, bytes]] = run_build_command
 
 
 def _system32(*parts: str) -> str | None:
@@ -854,15 +877,9 @@ class B28Harness:
         log = ctx.log(tag)
         log.parent.mkdir(parents=True, exist_ok=True)
         t0 = ctx.hooks.clock()
-        try:
-            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                  timeout=BUILD_TIMEOUT_S, check=False)
-            code: int | None = proc.returncode
-            out = proc.stdout.decode("utf-8", "replace")
-        except subprocess.TimeoutExpired as expired:
-            code = None
-            out = (expired.stdout or b"").decode("utf-8", "replace") + "\n(killed on timeout)"
+        code, raw = ctx.hooks.run_build(cmd, BUILD_TIMEOUT_S)
         wall = ctx.hooks.clock() - t0
+        out = raw.decode("utf-8", "replace")
         with log.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(f"# {_iso_now()} {subprocess.list2cmdline(cmd)}\n# exit {code}, wall {wall:.3f} s\n")
             handle.write(out.replace("\r\n", "\n"))

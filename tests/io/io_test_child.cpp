@@ -37,10 +37,14 @@
 //   window             Windows: creates a top-level window that is never shown, prints
 //                      "window:<handle in decimal>", and keeps it until stdin reaches EOF
 //
+// Numeric arguments (exit, sleep, probe-handle on POSIX) must be whole decimal ints, or it exits with
+// status 65; an unknown mode or a wrong argument count exits with 64.
+//
 // It deliberately uses only the OS and C runtime, not frost::io, so it is an
 // independent oracle for the launcher's quoting, environment and directory handling.
 
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -49,6 +53,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -73,8 +78,9 @@
 #include <spawn.h>
 #include <unistd.h>
 
-// POSIX names it; glibc declares it in <unistd.h> only under _GNU_SOURCE, so it is declared here too.
-extern char** environ;
+// POSIX requires the application to declare environ; <unistd.h> declares it only under _GNU_SOURCE, which
+// libstdc++ defines, so clang-tidy sees this declaration as redundant.
+extern char** environ; // NOLINT(readability-redundant-declaration): POSIX requires the declaration
 #endif
 
 namespace {
@@ -93,6 +99,19 @@ std::string hex(const std::string& bytes) {
 void writeRaw(std::FILE* stream, const std::string& bytes) { std::fwrite(bytes.data(), 1, bytes.size(), stream); }
 
 void line(const std::string& text) { writeRaw(stdout, text + "\n"); }
+
+// The decimal int that is all of `text`. Anything else ends the program with status 65 (EX_DATAERR, unlike
+// the usage error's 64) and a message, so a malformed argument fails a test instead of reading as 0.
+int number(const std::string& text) {
+    int value = 0;
+    const char* const end = text.data() + text.size();
+    const std::from_chars_result parsed = std::from_chars(text.data(), end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        std::fprintf(stderr, "io_test_child: not a number: \"%s\"\n", text.c_str());
+        std::exit(65);
+    }
+    return value;
+}
 
 // Copies stdin to the given streams until EOF.
 void copyStdin(bool alsoStderr) {
@@ -237,7 +256,7 @@ int run(const std::vector<std::string>& args) {
         return 0;
     }
     if (mode == "exit" && args.size() == 3) {
-        return std::atoi(args[2].c_str());
+        return number(args[2]);
     }
     if (mode == "cat" || mode == "tee") {
         copyStdin(mode == "tee");
@@ -254,7 +273,7 @@ int run(const std::vector<std::string>& args) {
         return 0;
     }
     if (mode == "sleep" && args.size() == 3) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(args[2].c_str())));
+        std::this_thread::sleep_for(std::chrono::milliseconds(number(args[2])));
         return 0;
     }
     if (mode == "probe-handle" && args.size() == 4) {
@@ -287,7 +306,7 @@ int run(const std::vector<std::string>& args) {
         line(same ? "inherited" : "not inherited");
 #else
         struct stat info{};
-        const bool same = fstat(isStdin ? 0 : std::atoi(args[2].c_str()), &info) == 0 &&
+        const bool same = fstat(isStdin ? 0 : number(args[2]), &info) == 0 &&
                           std::to_string(info.st_dev) + ":" + std::to_string(info.st_ino) == args[3];
         line(same ? "inherited" : "not inherited");
 #endif

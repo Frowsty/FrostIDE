@@ -1,0 +1,12 @@
+Test project E:/x/build
+
+0% tests passed, 2 tests failed out of 2
+
+The following tests FAILED:
+	  1 - a.one (Failed)
+	  2 - a.two (Timeout)                                 mod.io integration
+Errors while running CTest
+
+Test project E:/x/build
+
+50% tests passed, 1 tests failed out of 2

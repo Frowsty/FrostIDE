@@ -117,8 +117,9 @@ std::vector<std::string_view> pieces(const Snapshot& snapshot) {
 }
 
 // Applies one replace and checks the exact normalised change and its replay.
-void expectChange(std::string initial, std::uint64_t a, std::uint64_t b, std::string_view text, std::uint64_t start,
-                  std::uint64_t oldEnd, std::uint64_t newEnd, Point startPoint, Point oldEndPoint, Point newEndPoint) {
+void expectChange(const std::string& initial, std::uint64_t a, std::uint64_t b, std::string_view text,
+                  std::uint64_t start, std::uint64_t oldEnd, std::uint64_t newEnd, Point startPoint, Point oldEndPoint,
+                  Point newEndPoint) {
     SCOPED_TRACE(::testing::Message() << "replace [" << a << ", " << b << ") with " << text.size() << " bytes");
     TextBuffer buffer = load(initial, 4);
     const Result<TextChange> change = buffer.replace(range(a, b), text);

@@ -165,7 +165,8 @@ private:
     [[nodiscard]] std::uint64_t randomLength(ByteSource& source) const;
     [[nodiscard]] std::string randomText(ByteSource& source, std::uint64_t maxBytes) const;
 
-    [[nodiscard]] Result<void> edit(ByteSource& source, int api, std::uint64_t a, std::uint64_t b, std::string text);
+    [[nodiscard]] Result<void> edit(ByteSource& source, int api, std::uint64_t a, std::uint64_t b,
+                                    const std::string& text);
     [[nodiscard]] Result<void> batch(ByteSource& source);
     [[nodiscard]] Result<void> restore(ByteSource& source);
     [[nodiscard]] Result<void> reload();

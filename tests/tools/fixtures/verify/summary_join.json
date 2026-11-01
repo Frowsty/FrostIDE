@@ -1,0 +1,12 @@
+[
+  {"items": ["debug 405/405", "licensecheck ok"], "line": "debug 405/405, licensecheck ok"},
+  {"items": ["debug 62/63 (1 skipped, 1 disabled)", "tidy ok (2 TUs)", "licensecheck ok"],
+   "line": "debug 62/63 (1 skipped, 1 disabled), tidy ok (2 TUs), licensecheck ok"},
+  {"items": ["tidy FAILED (3 findings in 2 files; tool error in 1 TUs)"], "line": "tidy FAILED (3 findings in 2 files; tool error in 1 TUs)"},
+  {"items": ["tidy ok (114 TUs; all files: no changed-file list: base [x] missing)", "tsan-quick not-needed"],
+   "line": "tidy ok (114 TUs; all files: no changed-file list: base [x] missing), tsan-quick not-needed"},
+  {"items": ["a (b (c, d), e)", "f"], "line": "a (b (c, d), e), f"},
+  {"items": ["a,b", "c"], "line": "a,b, c"},
+  {"items": ["only"], "line": "only"},
+  {"items": [], "line": ""}
+]

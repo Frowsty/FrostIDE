@@ -262,8 +262,8 @@ TEST(SchedStress, DequeOwnerAndThievesLongRun) {
         });
     }
     SplitMix64 rng(42);
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        deque.push(&values[i]);
+    for (std::uint32_t& value : values) {
+        deque.push(&value);
         // Bursts of pops keep the deque near empty, where owner/thief races on the last element happen.
         if (rng.below(3) == 0) {
             for (std::uint64_t n = rng.below(4); n > 0; --n) {

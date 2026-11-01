@@ -1,0 +1,27 @@
+Test project /home/u/frost-src/build/linux-clang
+    Start 1: a.pass
+1/5 Test #1: a.pass ...........................   Passed    0.01 sec
+    Start 2: a.skip
+2/5 Test #2: a.skip ...........................***Skipped   0.01 sec
+    Start 3: a.fail
+3/5 Test #3: a.fail ...........................***Failed    0.02 sec
+    Start 4: a.disabled
+4/5 Test #4: a.disabled .......................***Not Run (Disabled)   0.00 sec
+    Start 5: a.other
+5/5 Test #5: a.other ..........................   Passed    0.01 sec
+
+75% tests passed, 1 tests failed out of 4
+
+Label Time Summary:
+mod.sub        =   0.05 sec*proc (4 tests)
+unit           =   0.04 sec*proc (3 tests)
+
+Total Test time (real) =   0.09 sec
+
+The following tests did not run:
+	  2 - a.skip (Skipped)
+	  4 - a.disabled (Disabled)
+
+The following tests FAILED:
+	  3 - a.fail (Failed)                                   mod.sub unit
+Errors while running CTest

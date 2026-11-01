@@ -1,0 +1,8 @@
+{
+  "all_passed.txt": "3/3",
+  "mixed.txt": "2/4 (1 skipped, 1 disabled)",
+  "all_skipped.txt": "0/2 (2 skipped)",
+  "no_tests.txt": null,
+  "two_summaries.txt": "1/2",
+  "disabled_only.txt": "2/2 (1 disabled)"
+}

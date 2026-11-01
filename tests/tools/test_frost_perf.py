@@ -5,7 +5,9 @@
 # split, the budgets.json binding of the B28 harness, the WSL path conversion, and end-to-end runs
 # in a temporary git repository with fake cmake, sccache, verify and wsl commands (Python scripts
 # injected through frost_perf.Tools), including the failure, interrupt, kill and external-edit
-# paths. Nothing runs a real build, and every result goes to a temporary results root.
+# paths. The two ten-round gated series swap the fake cmake process for an in-process stand-in
+# (Hooks.run_build), which keeps this suite from being the longest Windows test; the other runs keep
+# the subprocess path. Nothing runs a real build, and every result goes to a temporary results root.
 
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import sys
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools_test_support import FIXTURES, REPO, TOOLS, TempDirTestCase, clean_env, git
 
@@ -328,25 +331,46 @@ class EndToEndTest(TempDirTestCase):
             (self.fakes / f"fake_{name}.py").write_text(textwrap.dedent(text), encoding="utf-8")
         self.root = self.tmp / "perf"
         self._stamp = 0
+        self._builds = 0
 
     def fake_tools(self, verify_base: bool = False, sccache: bool = True) -> dict:
         """The Tools fields for the fakes, as JSON-compatible lists (sccache=False: no sccache, as on Linux)."""
-        prefix = lambda name: [sys.executable, "-B", "-S", str(self.fakes / f"fake_{name}.py")]  # noqa: E731
+        # The base interpreter, not a venv's python.exe: on Windows that is a launcher that starts the
+        # base interpreter as a second process, which made every fake call about 70 % dearer.
+        python = getattr(sys, "_base_executable", None) or sys.executable
+        prefix = lambda name: [python, "-B", "-S", str(self.fakes / f"fake_{name}.py")]  # noqa: E731
         return {"cmake": prefix("cmake"), "ninja": None, "sccache": prefix("sccache") if sccache else None,
                 "powershell": None, "wsl": prefix("wsl"), "verify_command": prefix("verify"),
                 "verify_base": verify_base}
+
+    def in_process_build(self, cmd: list[str], timeout: float) -> tuple[int, bytes]:
+        """
+        Hooks.run_build stand-in for the long gated series: what fake_cmake.py does (one .ninja_log
+        edge per call), without starting a process. The subprocess path keeps its own tests.
+        """
+        self._builds += 1
+        build = Path(cmd[cmd.index("--build") + 1])
+        build.mkdir(parents=True, exist_ok=True)
+        log = build / ".ninja_log"
+        with log.open("a", encoding="utf-8", newline="\n") as handle:
+            if log.stat().st_size == 0:
+                handle.write("# ninja log v7\n")
+            handle.write(f"0\t{self._builds}\t1\tobj/call{self._builds}.obj\tff\n")
+        return 0, f"[1/1] Building CXX object obj/call{self._builds}.obj\n".encode()
 
     def timestamp(self) -> str:
         self._stamp += 1
         return f"20261101T{self._stamp:06d}"
 
     def run_perf(self, *argv: str, clock=None, after_probe_write=None, verify_base: bool = False,
-                 timestamp=None, sccache: bool = True) -> tuple[int, str, str]:
-        """Runs frost_perf.main in-process; returns (exit status, stdout, stderr)."""
+                 timestamp=None, sccache: bool = True, in_process: bool = False) -> tuple[int, str, str]:
+        """Runs frost_perf.main in-process; returns (exit status, stdout, stderr). in_process: no build processes."""
         hooks = frost_perf.Hooks(cpu_sample_s=0, timestamp=timestamp or self.timestamp,
                                  after_probe_write=after_probe_write, distro_wait_s=0)
         if clock is not None:
             hooks.clock = clock
+        if in_process:
+            hooks.run_build = self.in_process_build
         out, err = io.StringIO(), io.StringIO()
         full = ["-Repo", str(self.repo), "-PerfRoot", str(self.root), *argv]
         tools = frost_perf.Tools(**self.fake_tools(verify_base, sccache))
@@ -401,9 +425,13 @@ class EndToEndTest(TempDirTestCase):
         self.assertLessEqual(written, {"repo", "perf", "fakes"})
 
     def test_the_method_count_gives_a_gated_verdict(self) -> None:
-        code, out, err = self.run_perf("-Variant", "rebuild", "-Runs", "10", "-Warmup", "0", sccache=False)
+        code, out, err = self.run_perf("-Variant", "rebuild", "-Runs", "10", "-Warmup", "0", sccache=False,
+                                       in_process=True)
         self.assertEqual(code, 0, out + err)
-        _, summary = self.load(self.run_dirs()[0])
+        runs, summary = self.load(self.run_dirs()[0])
+        # Ten rounds of five probes, each a settle and a timed build, each timed build one log edge.
+        self.assertEqual((len(runs), self._builds), (50, 100))
+        self.assertTrue(all(len(r["b28"]["ninja_log_edges"]) == 1 for r in runs))
         variant = summary["variants"]["rebuild"]
         self.assertEqual((variant["verdict"], variant["n"]), ("ok", 10))
         self.assertIn(variant["worst_probe"], ("core", "main", "sched"))
@@ -413,7 +441,7 @@ class EndToEndTest(TempDirTestCase):
     def test_over_budget_exits_1(self) -> None:
         ticks = iter(range(0, 1_000_000, 25))
         code, out, err = self.run_perf("-Variant", "rebuild", "-Runs", "10", "-Warmup", "0",
-                                       clock=lambda: float(next(ticks)), sccache=False)
+                                       clock=lambda: float(next(ticks)), sccache=False, in_process=True)
         self.assertEqual(code, 1, out + err)
         _, summary = self.load(self.run_dirs()[0])
         self.assertEqual(summary["variants"]["rebuild"]["verdict"], "over")
@@ -478,6 +506,29 @@ class EndToEndTest(TempDirTestCase):
         self.assertEqual(code, 3)
         self.assertIn("changed outside the harness", err)
         self.assertEqual((self.repo / frost_perf.B28_PROBE_FILES["core"]).read_bytes(), edited)
+
+    def test_a_kill_between_the_journal_and_the_probe_write_is_restorable(self) -> None:
+        # The second probe write of core is cut off after the journal names it but before the file
+        # changes, so the file still holds the first write: -Restore must accept that state too.
+        path = self.repo / frost_perf.B28_PROBE_FILES["core"]
+        run_dir = self.tmp / "run"
+        journal = frost_perf.ProbeJournal(run_dir, self.repo, self.tmp / "gitdir", {"core": path})
+        journal.begin()
+        journal.write_probe("core", 1)
+        first = path.read_bytes()
+        real_write = frost_perf.write_atomic
+
+        def killed(target: Path, data: bytes) -> None:
+            if Path(target) == path:
+                raise KeyboardInterrupt
+            real_write(target, data)
+
+        with mock.patch.object(frost_perf, "write_atomic", killed), self.assertRaises(KeyboardInterrupt):
+            journal.write_probe("core", 2)
+        self.assertEqual(path.read_bytes(), first)
+        self.assertEqual(frost_perf.restore_journal(run_dir / "probes.json"), [])
+        self.assertEqual(path.read_bytes(), self.originals["core"])
+        self.assertFalse((self.tmp / "gitdir" / frost_perf.POINTER_NAME).exists())
 
     def test_dirty_or_probed_files_exit_2_before_any_write(self) -> None:
         core = self.repo / frost_perf.B28_PROBE_FILES["core"]

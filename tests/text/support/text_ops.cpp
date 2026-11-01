@@ -406,7 +406,7 @@ void OpDriver::pushSnapshot(ByteSource& source) {
     m_ringNext = (m_ringNext + 1) % kRingSize;
 }
 
-Result<void> OpDriver::edit(ByteSource& source, int api, std::uint64_t a, std::uint64_t b, std::string text) {
+Result<void> OpDriver::edit(ByteSource& source, int api, std::uint64_t a, std::uint64_t b, const std::string& text) {
     static constexpr const char* kKinds[] = {"insert", "erase", "replace"};
     record(kKinds[api], a, b, text);
     const std::uint64_t versionBefore = m_buffer.version();

@@ -22,8 +22,10 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-# Environment variables that would let a test read the real SDK or corpus root.
-_SCRUBBED = ("FROST_QT_ROOT", "FROST_CORPUS_ROOT", "SOURCE_DATE_EPOCH")
+# Environment variables that would let a test read the real SDK, corpus or perf results root, or
+# inherit a running verify's own settings (ADR 0027).
+_SCRUBBED = ("FROST_QT_ROOT", "FROST_CORPUS_ROOT", "SOURCE_DATE_EPOCH", "FROST_PERF_ROOT", "FROST_CHANGED_FILES",
+             "FROST_VERIFY_BASE", "FROST_MIRROR")
 
 
 def clean_env(**extra: str) -> dict[str, str]:

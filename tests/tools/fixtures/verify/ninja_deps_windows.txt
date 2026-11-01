@@ -1,0 +1,31 @@
+src/core/CMakeFiles/frost_core.dir/Debug/src/assert.cpp.obj: #deps 4, deps mtime 8152581889674610 (VALID)
+    @ROOT@/src/core/src/assert.cpp
+    @ROOT@/src/core/include/frost/core/assert.hpp
+    C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/include/source_location
+    @ROOT@/src/compat/include/frost/compat/function_ref.hpp
+
+src/core/CMakeFiles/frost_core.dir/Debug/src/error.cpp.obj: #deps 3, deps mtime 8152581889674611 (STALE)
+    @ROOT@/src/core/src/error.cpp
+    @ROOT@/src/core/include/frost/core/error.hpp
+    @ROOT@/src/core/include/frost/core/assert.hpp
+
+tests/core/CMakeFiles/core_tests.dir/Debug/error_test.cpp.obj: #deps 3, deps mtime 8152581889674612 (VALID)
+    @ROOT@/tests/core/error_test.cpp
+    @ROOT@/src/core/include/frost/core/error.hpp
+    @ROOT@/src/compat/include/frost/compat/function_ref.hpp
+
+tests/core/CMakeFiles/core_tests.dir/Debug/assert_test.cpp.obj: #deps 2, deps mtime 8152581889674613 (VALID)
+    @ROOT@/tests/core/assert_test.cpp
+    @ROOT@/tests/support/test_env.hpp
+
+tests/toolchain_probe/CMakeFiles/probe.dir/Debug/banned/reflection.cpp.obj: #deps 2, deps mtime 8152581889674614 (VALID)
+    @ROOT@/tests/toolchain_probe/banned/reflection.cpp
+    @ROOT@/src/core/include/frost/core/probe_only.hpp
+
+src/io/CMakeFiles/frost_io.dir/Debug/src/process_win.cpp.obj: #deps 3, deps mtime 8152581889674615 (VALID)
+    @ROOT@/src/io/src/process_win.cpp
+    ../../src/io/src/process_internal.hpp
+    @ROOT@/src/compat/include/frost/compat/function_ref.hpp
+
+gtest/CMakeFiles/gtest.dir/Debug/gtest-all.cc.obj: #deps 1, deps mtime 8152581889674616 (VALID)
+    @ROOT@/tests/support/gtest_only.hpp

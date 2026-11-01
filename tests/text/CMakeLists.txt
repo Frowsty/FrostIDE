@@ -8,6 +8,9 @@
 #   text_perf_tests    perf:   edit latency (B5 text sub-budget, asserted only in optimised, unsanitised
 #                              builds), load throughput (B15 projection) and seek latency
 # support/ holds the oracle and op driver they share with the fuzz target (tests/fuzz).
+# Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): text_tests runs concurrent readers
+# (PROCESSORS 2), the stress runs PROCESSORS 4 (-Full only), and the perf test asserts edit latency
+# in Release, so it runs with nothing beside it (RUN_SERIAL).
 add_subdirectory(support)
 
 frost_add_test(text_tests
@@ -18,14 +21,16 @@ frost_add_test(text_tests
         text_buffer_test.cpp
         text_summary_test.cpp
     DEPS frost::text frost_text_test_support
-    LABELS unit)
+    LABELS unit
+    PROCESSORS 2)
 target_include_directories(text_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
 frost_add_test(text_stress_tests
     SOURCES
         stress_test.cpp
     DEPS frost::text frost_text_test_support
-    LABELS stress)
+    LABELS stress
+    PROCESSORS 4)
 target_include_directories(text_stress_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
 # The perf tests read detail::treeStats from the library's private piece_tree.hpp; frost::sched
@@ -34,5 +39,6 @@ frost_add_test(text_perf_tests
     SOURCES
         perf_test.cpp
     DEPS frost::text frost::sched
-    LABELS perf)
+    LABELS perf
+    RUN_SERIAL)
 target_include_directories(text_perf_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/text/src)
