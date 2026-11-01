@@ -26,11 +26,12 @@ using frost::io::ScriptedProcess;
 using frost::io::ScriptedProcessLauncher;
 using frost::io::Stdio;
 
-// An absolute path in this platform's syntax.
+// An absolute path in this platform's syntax (a constant array: constructing a static std::string could
+// throw before main).
 #ifdef _WIN32
-const std::string kTool = "C:\\tools\\git.exe";
+constexpr char kTool[] = "C:\\tools\\git.exe";
 #else
-const std::string kTool = "/usr/bin/git";
+constexpr char kTool[] = "/usr/bin/git";
 #endif
 
 ProcessSpec gitStatus() {

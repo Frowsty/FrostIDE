@@ -53,7 +53,9 @@ public:
         requires(!std::is_same_v<std::remove_cvref_t<F>, function_ref> &&
                  !std::is_member_pointer_v<std::remove_cvref_t<F>> && !std::is_function_v<std::remove_reference_t<F>> &&
                  std::is_invocable_r_v<R, std::remove_reference_t<F>&, Args...>)
-    function_ref(F&& callable) noexcept // NOLINT(google-explicit-constructor)
+    // Implicit like std::function_ref; it binds the callable by address, so it never forwards it.
+    // NOLINTNEXTLINE(google-explicit-constructor, cppcoreguidelines-missing-std-forward): like std::function_ref
+    function_ref(F&& callable) noexcept
         : m_bound{.object = const_cast<void*>(static_cast<const void*>(std::addressof(callable)))},
           m_thunk([](Bound bound, Args... args) -> R {
               using Object = std::remove_reference_t<F>;

@@ -261,13 +261,7 @@ struct LaunchResult {
 // header comment). Out-of-context hooks run on this thread while it pumps messages.
 class TopmostHook {
 public:
-    explicit TopmostHook(DWORD pid) {
-        s_pid = pid;
-        s_raised = false;
-        s_beforeShow = false;
-        m_hook = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, nullptr, &TopmostHook::onEvent, pid, 0,
-                                 WINEVENT_OUTOFCONTEXT);
-    }
+    explicit TopmostHook(DWORD pid) : m_hook(install(pid)) {}
     ~TopmostHook() {
         if (m_hook != nullptr) {
             UnhookWinEvent(m_hook);
@@ -280,6 +274,16 @@ public:
     [[nodiscard]] static bool raisedBeforeShow() noexcept { return s_beforeShow; }
 
 private:
+    // Resets the shared state for `pid`, then installs the hook (in that order, so no event can see the old
+    // state); returns the hook, or nullptr if SetWinEventHook failed.
+    static HWINEVENTHOOK install(DWORD pid) {
+        s_pid = pid;
+        s_raised = false;
+        s_beforeShow = false;
+        return SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, nullptr, &TopmostHook::onEvent, pid, 0,
+                               WINEVENT_OUTOFCONTEXT);
+    }
+
     static void CALLBACK onEvent(HWINEVENTHOOK /*hook*/, DWORD /*event*/, HWND hwnd, LONG object, LONG child,
                                  DWORD /*thread*/, DWORD /*time*/) {
         if (object != OBJID_WINDOW || child != CHILDID_SELF || hwnd == nullptr ||

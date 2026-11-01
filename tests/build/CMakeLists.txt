@@ -5,7 +5,9 @@
 #                        instance selection, the MSBuild command line and BuildSession against the
 #                        scripted launcher, label "unit" (every platform);
 #   build_msbuild_tests  real vswhere and MSBuild against the tiny fixture solution (fixtures/), label
-#                        "integration;msbuild", Windows only. Filter with ctest -L msbuild or -LE msbuild.
+#                        "integration" (so RESOURCE_LOCK frost_desktop; ADR 0027), Windows only. Filter
+#                        with ctest -R "^MsBuild(Discovery|Build)\." or -E; the second label "msbuild"
+#                        waits for several labels in frost_add_test, which takes one kind label today.
 #                        The builds run in a work directory under this build tree, not under %TEMP%, where
 #                        MSBuild warns about intermediate directories (MSB8029).
 
@@ -25,7 +27,7 @@ if(WIN32)
     frost_add_test(build_msbuild_tests
         SOURCES msbuild_build_test.cpp
         DEPS frost::build
-        LABELS integration msbuild)
+        LABELS integration)
     target_include_directories(build_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
     target_compile_definitions(build_msbuild_tests PRIVATE
         FROST_BUILD_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

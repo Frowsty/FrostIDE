@@ -162,7 +162,7 @@ TEST(TextDifferential, ReproduceCommandRoundTrips) {
 }
 
 TEST(TextDifferential, SettingsDefaultsAndBadValues) {
-    const auto only = [](std::string_view variable, std::string value) {
+    const auto only = [](std::string_view variable, const std::string& value) {
         return [variable, value](std::string_view name) { return name == variable ? value : std::string(); };
     };
     const Result<QuickSettings> defaults = quickSettings(only("UNSET", "1"));

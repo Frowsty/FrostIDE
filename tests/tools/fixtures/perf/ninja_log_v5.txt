@@ -1,0 +1,5 @@
+# ninja log v5
+0	1220	1730000000	src/core/CMakeFiles/frost_core.dir/Debug/src/error.cpp.obj	4f3c2a1b0e9d8c7f
+1221	1240	1730000001	src/core/Debug/frost_core.lib	1a2b3c4d5e6f7081
+garbage
+1241	1600	1730000002	Debug/frost.exe	aa55aa55aa55aa55

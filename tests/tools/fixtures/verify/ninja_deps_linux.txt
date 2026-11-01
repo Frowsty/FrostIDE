@@ -1,0 +1,10 @@
+src/core/CMakeFiles/frost_core.dir/Debug/src/assert.cpp.o: #deps 4, deps mtime 1793555117333761277 (VALID)
+    @ROOT@/src/core/src/assert.cpp
+    @ROOT@/src/core/include/frost/core/assert.hpp
+    /usr/include/c++/14/source_location
+    @ROOT@/src/compat/include/frost/compat/function_ref.hpp
+
+src/io/CMakeFiles/frost_io.dir/Debug/src/process_posix.cpp.o: #deps 3, deps mtime 1793555117333761278 (STALE)
+    @ROOT@/src/io/src/process_posix.cpp
+    ../../src/io/src/process_internal.hpp
+    @ROOT@/src/compat/include/frost/compat/function_ref.hpp

@@ -46,7 +46,9 @@ add_test(NAME FrostRuntimeDlls.CopiesOncePerDirectory
         -DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
         -DTOOLCHAIN=${_frost_fixture_toolchain}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_runtime_dlls.cmake)
-set_tests_properties(FrostRuntimeDlls.CopiesOncePerDirectory PROPERTIES LABELS unit TIMEOUT 180)
+# PROCESSORS 4 for parallel ctest (ADR 0027 decision 3): the fixture build runs ninja with its
+# default parallelism, so it counts as several of ctest's -j slots.
+set_tests_properties(FrostRuntimeDlls.CopiesOncePerDirectory PROPERTIES LABELS unit TIMEOUT 180 PROCESSORS 4)
 
 if(NOT FROST_SANITIZE)
     # The LLVM tools beside the compiler (the pinned LLVM; never a PATH search).

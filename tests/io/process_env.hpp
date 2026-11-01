@@ -65,13 +65,13 @@ namespace frost::test {
 // Opened while the process is known to be alive, so the id cannot have been reused.
 class ProcessWatch {
 public:
-    explicit ProcessWatch(io::ProcessId pid) {
 #ifdef _WIN32
-        m_handle = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid);
+    explicit ProcessWatch(io::ProcessId pid)
+        : m_handle(OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid)) {}
 #else
-        m_fd = static_cast<int>(syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0));
+    explicit ProcessWatch(io::ProcessId pid)
+        : m_fd(static_cast<int>(syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0))) {}
 #endif
-    }
     ~ProcessWatch() {
 #ifdef _WIN32
         if (m_handle != nullptr) {

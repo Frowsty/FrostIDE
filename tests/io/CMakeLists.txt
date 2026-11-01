@@ -64,6 +64,10 @@ if(WIN32)
     target_link_libraries(io_test_child PRIVATE shell32 advapi32 user32)
 endif()
 
+# RESOURCE_LOCK frost_desktop, the integration label's default (frost_add_test's policy; ADR 0027
+# decision 3): the process tests create private desktops and windows and start io_test_child on
+# them, as the tests/app process tests do, so the executables holding the lock never overlap.
+# io_unit_tests (pure logic and the doubles) takes none.
 frost_add_test(io_integration_tests
     SOURCES
         async_process_test.cpp

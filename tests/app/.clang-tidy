@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# clang-tidy for tests/app: the same narrowing as src/app/.clang-tidy, for the frozen start-up tests
+# (tests/app/*.cpp; ADR 0027 decision 1 and question 5). Counts are findings in src/app and tests/app
+# (Windows/Linux):
+#   -bugprone-suspicious-stringview-data-usage  1/0: src/app/src/selftest.cpp passes _wcsicmp the data() of
+#       a suffix view of WIN32_FIND_DATAW::cFileName, which ends at that array's terminator
+#   -modernize-deprecated-headers  2/0: src/app/src/startup.cpp and tests/app/startup_test.cpp include
+#       <stdlib.h> for the CRT's _set_abort_behavior and _set_error_mode, which <cstdlib> does not promise
+InheritParentConfig: true
+Checks: '-bugprone-suspicious-stringview-data-usage,-modernize-deprecated-headers'

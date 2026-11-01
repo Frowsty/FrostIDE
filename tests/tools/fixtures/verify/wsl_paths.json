@@ -1,0 +1,10 @@
+[
+  {"windows": "E:\\dev\\FrostIDE", "wsl": "/mnt/e/dev/FrostIDE"},
+  {"windows": "E:\\dev\\FrostIDE\\.claude\\worktrees\\m1-verify-tooling\\tools\\verify.sh", "wsl": "/mnt/e/dev/FrostIDE/.claude/worktrees/m1-verify-tooling/tools/verify.sh"},
+  {"windows": "C:\\Users\\a b\\Frost IDE\\list.txt", "wsl": "/mnt/c/Users/a b/Frost IDE/list.txt"},
+  {"windows": "e:\\lower\\case", "wsl": "/mnt/e/lower/case"},
+  {"windows": "D:\\", "wsl": "/mnt/d/"},
+  {"windows": "E:/forward/slashes", "wsl": "/mnt/e/forward/slashes"},
+  {"windows": "E:\\dev\\\u00e4 \u6d4b\\x.txt", "wsl": "/mnt/e/dev/\u00e4 \u6d4b/x.txt"},
+  {"windows": "E:\\FrostBuilds\\perf\\m1\\b28\\20261101T120000-5f377e7-after\\wsl-changed-00.txt", "wsl": "/mnt/e/FrostBuilds/perf/m1/b28/20261101T120000-5f377e7-after/wsl-changed-00.txt"}
+]

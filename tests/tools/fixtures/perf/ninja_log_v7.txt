@@ -1,0 +1,8 @@
+# ninja log v7
+25	52	8152581889126568	CMakeFiles/frost_runtime_dlls_tests_io-Debug	f4591f23c3d1b3ce
+60	1290	8152581901234567	src/core/CMakeFiles/frost_core.dir/Debug/src/error.cpp.obj	9a8b7c6d5e4f3a2b
+not a ninja log line
+1290	1312	8152581901456789	src/core/Debug/frost_core.lib	1122334455667788
+x	y	z	w	v
+1313
+1312	1650	8152581904567890	Debug/frost.exe	aabbccddeeff0011

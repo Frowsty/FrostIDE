@@ -1,0 +1,9 @@
+Test project E:/x/build
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   0.10 sec
+
+The following tests did not run:
+	  1 - a.one (Skipped)
+	  2 - a.two (Skipped)

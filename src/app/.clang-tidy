@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# clang-tidy for src/app: the repository's .clang-tidy minus two checks that fire only in the frozen
+# start-up code here and in tests/app (startup*.cpp/.hpp, launcher.cpp, main.cpp, selftest.cpp and
+# tests/app/*.cpp, which ADR 0027's slice did not edit; question 5 asks whether they may be fixed). A
+# check that fires there and anywhere else is excluded at the root instead, and a finding elsewhere is
+# fixed (ADR 0027 decision 1). The narrowing covers all of src/app, whose other files have no finding of
+# either check. Counts are findings in src/app and tests/app (Windows/Linux):
+#   -bugprone-suspicious-stringview-data-usage  1/0: src/app/src/selftest.cpp passes _wcsicmp the data() of
+#       a suffix view of WIN32_FIND_DATAW::cFileName, which ends at that array's terminator
+#   -modernize-deprecated-headers  2/0: src/app/src/startup.cpp and tests/app/startup_test.cpp include
+#       <stdlib.h> for the CRT's _set_abort_behavior and _set_error_mode, which <cstdlib> does not promise
+InheritParentConfig: true
+Checks: '-bugprone-suspicious-stringview-data-usage,-modernize-deprecated-headers'

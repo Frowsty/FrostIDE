@@ -287,10 +287,10 @@ struct DuplicationProbe::Impl {
     }
 };
 
-DuplicationProbe::DuplicationProbe(std::unique_ptr<Impl> impl) : m_impl(std::move(impl)) {
-    LockGuard lock(m_mutex);
-    m_watch = m_impl->options.watch;
-}
+// m_watch is declared after m_impl, so m_impl is already set when m_watch is initialised. No lock: nothing
+// else can see the object yet.
+DuplicationProbe::DuplicationProbe(std::unique_ptr<Impl> impl)
+    : m_impl(std::move(impl)), m_watch(m_impl->options.watch) {}
 
 DuplicationProbe::~DuplicationProbe() { stop(); }
 

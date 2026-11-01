@@ -139,7 +139,7 @@ TEST(Task, ExceptionInResultTaskBecomesInternalError) {
 }
 
 Task<Result<int>> throwsCustom() {
-    throw 5; // Not derived from std::exception.
+    throw 5; // NOLINT(bugprone-std-exception-baseclass): the test checks that a non-std exception propagates
     co_return 0;
 }
 

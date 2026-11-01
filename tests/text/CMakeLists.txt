@@ -33,6 +33,10 @@
 #                                                 decode throughput and dense-invalid decoding (D17)
 # support/ holds the oracles, op drivers, fake codec and fixtures they share with the fuzz targets
 # (tests/fuzz).
+# Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): text_tests runs concurrent readers
+# (PROCESSORS 2), text_stress_tests runs PROCESSORS 4 (-Full only), the perf tests assert latency in
+# Release, so they run with nothing beside them (RUN_SERIAL, the perf label's default), and the
+# encodings integration tests hold RESOURCE_LOCK frost_desktop (the integration label's default).
 add_subdirectory(support)
 
 frost_add_test(text_tests
@@ -53,7 +57,8 @@ frost_add_test(text_tests
         text_shaper_test.cpp
         display_map_test.cpp
     DEPS frost::text frost_text_test_support
-    LABELS unit)
+    LABELS unit
+    PROCESSORS 2)
 target_include_directories(text_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_include_directories(text_tests PRIVATE ${FROST_SOURCE_DIR}/src/text/src)
 
@@ -62,7 +67,8 @@ frost_add_test(text_stress_tests
         stress_test.cpp
         undo_stress_test.cpp
     DEPS frost::text frost_text_test_support
-    LABELS stress)
+    LABELS stress
+    PROCESSORS 4)
 target_include_directories(text_stress_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
 # The perf tests read detail::treeStats from the library's private piece_tree.hpp (and the undo

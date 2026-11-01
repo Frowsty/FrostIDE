@@ -12,10 +12,13 @@
 #   ui_theme_compiler_tests      the .theme.json compiler, the shipped themes, frost-themec and
 #                                frost-icon-baker through their command lines (Qt Core);
 #   ui_tests                     FrostStyle, AppearanceManager, icons and fonts (offscreen);
-#   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, labels "unit;screenshot";
+#   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" (its second
+#                                label, "screenshot", waits for several labels in frost_add_test, which
+#                                takes one kind label today; ADR 0027);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
 #   ui_appearance_perf_tests     in-process start-up probes, label "perf";
-#   ui_native_tests              the windows platform plugin's palette and fonts (Windows).
+#   ui_native_tests              the windows platform plugin's palette and fonts (Windows), with
+#                                RESOURCE_LOCK frost_desktop (see below).
 
 frost_add_test(ui_input_tests QT
     SOURCES key_translation_test.cpp ime_tracker_test.cpp adapter_integration_test.cpp
@@ -121,7 +124,7 @@ _frost_ui_test_wiring(ui_tests)
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp
     DEPS frost::ui frost::io frost_ui_test_support
-    LABELS unit screenshot)
+    LABELS unit)
 _frost_ui_test_wiring(ui_screenshot_tests)
 
 # Registered twice: in a dpr-1 process, and with Qt's real scaling at 150% (*.qtscale150).
@@ -145,6 +148,9 @@ _frost_ui_test_wiring(ui_appearance_perf_tests)
 # The windows platform plugin's palette and class fonts against the theme (no widget is shown).
 # frost_add_test cannot pass an environment to its PRE_TEST discovery, so this repeats its QT
 # steps (qt_test_main, compile options, runtime DLLs, the manifest) with its own discovery.
+# Its native windows (never shown) hold RESOURCE_LOCK frost_desktop, as the process-level suites
+# do through the integration label's default (frost_add_test's policy; ADR 0027 decision 3), so
+# they never overlap with them under parallel ctest.
 if(WIN32)
     add_executable(ui_native_tests native/native_test.cpp ${FROST_SOURCE_DIR}/tests/support/qt_test_main.cpp)
     target_link_libraries(ui_native_tests PRIVATE frost::ui frost::io frost_ui_test_support Qt6::Widgets
@@ -159,5 +165,5 @@ if(WIN32)
     gtest_discover_tests(ui_native_tests
         DISCOVERY_MODE PRE_TEST
         DISCOVERY_TIMEOUT 60
-        PROPERTIES LABELS unit ENVIRONMENT "QT_QPA_PLATFORM=windows")
+        PROPERTIES LABELS unit ENVIRONMENT "QT_QPA_PLATFORM=windows" RESOURCE_LOCK frost_desktop)
 endif()
