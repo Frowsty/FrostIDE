@@ -3,11 +3,13 @@
 // ScratchDir: a uniquely named temporary directory for one test, created under
 // the system temp directory and removed (with everything in it) on destruction.
 //
-// The name contains a tag, the process id and a per-process counter, so tests
-// running concurrently (ctest -j, several worktrees, Windows and WSL at once)
-// never share or delete each other's directories. Creation and removal go
-// through frost::io's real file system, so trees deeper than MAX_PATH are
-// handled on Windows. Header-only; test code only.
+/*
+ * The name contains a tag, the process id and a per-process counter, so tests
+ * running concurrently (ctest -j, several worktrees, Windows and WSL at once)
+ * never share or delete each other's directories. Creation and removal go
+ * through frost::io's real file system, so trees deeper than MAX_PATH are
+ * handled on Windows. Header-only; test code only.
+ */
 #pragma once
 
 #include "frost/io/file_system.hpp"
@@ -31,14 +33,23 @@
 
 namespace frost::test {
 
-// Removes `path` and everything below it; missing paths are fine. Returns false on failure.
+/*
+ * Removes `path` and everything below it; missing paths are fine. Returns false on
+ * failure. A link at `path` or below it (a symlink, or a Windows junction) is removed
+ * itself and never followed, so nothing outside the tree is touched.
+ */
 inline bool removeTree(io::IFileSystem& fs, const std::string& path) {
+    // removeFile never follows a link; only a real directory is refused ("is a directory").
+    auto removed = fs.removeFile(path);
+    if (removed || removed.error().code() == ErrorCode::NotFound) {
+        return true;
+    }
+    if (removed.error().code() != ErrorCode::InvalidArgument) {
+        return false;
+    }
     auto entries = fs.listDirectory(path);
     if (!entries) {
-        if (entries.error().code() == ErrorCode::NotFound) {
-            return true;
-        }
-        return fs.removeFile(path).has_value(); // Not a directory.
+        return entries.error().code() == ErrorCode::NotFound;
     }
     bool ok = true;
     for (const io::DirEntry& entry : *entries) {
@@ -58,7 +69,10 @@ inline bool removeTree(io::IFileSystem& fs, const std::string& path) {
 class ScratchDir {
 public:
     // Creates "<temp>/frost-<tag>-<pid>-<n>"; `tag` may contain any characters valid in a file name.
+    // On failure records a test failure (ADD_FAILURE) and path() is empty.
     explicit ScratchDir(std::string_view tag) {
+        // Per-process sequence for directory names; only uniqueness matters, so no ordering is
+        // needed (a relaxed fetch_add would do).
         static std::atomic<unsigned> counter{0};
         std::error_code error;
         const std::filesystem::path temp = std::filesystem::temp_directory_path(error);
@@ -92,10 +106,15 @@ public:
     // The absolute, normalised UTF-8 path of the directory.
     [[nodiscard]] const std::string& path() const noexcept { return m_path; }
 
-    // path() joined with a relative `name`.
+    // path() joined with a relative `name`; records a test failure and returns "" if joinPath
+    // rejects `name` (absolute, empty or containing a NUL).
     [[nodiscard]] std::string join(std::string_view name) const {
         auto joined = io::joinPath(m_path, name);
-        return joined ? std::move(*joined) : std::string();
+        if (!joined) {
+            ADD_FAILURE() << joined.error().describe();
+            return {};
+        }
+        return std::move(*joined);
     }
 
 private:

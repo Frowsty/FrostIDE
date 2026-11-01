@@ -10,9 +10,11 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -159,6 +161,32 @@ TEST(ProcessSpec, OtherFieldsAreChecked) {
     spec.stdoutMode = Stdio::Pipe;
     spec.stderrMode = Stdio::MergeIntoStdout;
     EXPECT_EQ(validate(spec, false), ErrorCode::Unknown);
+}
+
+TEST(ProcessSpec, WindowsNeedsWellFormedUtf8EverywhereItConverts) {
+    // CreateProcessW takes UTF-16, so the launcher converts the working directory and the
+    // environment too; what it cannot convert is refused up front, as for the command line.
+    // POSIX hands the bytes to the kernel unchanged.
+    struct Case {
+        std::string workingDirectory;
+        std::vector<std::pair<std::string, std::optional<std::string>>> environment;
+    };
+    for (const Case& c : {Case{"\\w\xff", {}}, Case{"", {{"LANG", "\xff"}}}, Case{"", {{"\xff", "v"}}},
+                          Case{"", {{"A", "ok"}, {"B", "\xc3"}}}}) {
+        ProcessSpec windows = specFor("C:\\tools\\git.exe");
+        ProcessSpec posix = specFor("/usr/bin/git");
+        if (!c.workingDirectory.empty()) {
+            windows.workingDirectory = "C:" + c.workingDirectory;
+            posix.workingDirectory = "/w\xff";
+        }
+        windows.environment = posix.environment = c.environment;
+        EXPECT_EQ(validate(windows, true), ErrorCode::InvalidArgument) << windows.workingDirectory;
+        EXPECT_EQ(validate(posix, false), ErrorCode::Unknown) << posix.workingDirectory;
+    }
+    ProcessSpec valid = specFor("C:\\tools\\git.exe");
+    valid.workingDirectory = "C:\\w\xc3\xbc"; // U+00FC.
+    valid.environment = {{"LANG", "\xe6\xb5\x8b"}, {"\xc3\xbc", std::nullopt}};
+    EXPECT_EQ(validate(valid, true), ErrorCode::Unknown);
 }
 
 std::string quoted(std::string_view argument) {

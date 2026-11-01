@@ -4,7 +4,8 @@
 # UTF-8 <-> UTF-16 conversion, path rules (extended-length paths on Windows),
 # the IFileSystem and IProcessLauncher seams with their real implementations,
 # and the MemFs and ScriptedProcessLauncher doubles. Qt-free; depends on core only.
-# TODO(M1): the asio reactor (async pipes), file watchers and IHttpClient join here.
+# TODO(M1): the asio reactor (async pipes) and file watchers join here.
+# TODO(M5): IHttpClient (WinHTTP; the libcurl client for Linux follows in M6, PLAN.md section 2.2).
 
 set(frost_io_sources
     src/internal.cpp

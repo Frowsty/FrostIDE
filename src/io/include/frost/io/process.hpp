@@ -36,11 +36,14 @@
  * new process group, without a controlling terminal (opening /dev/tty fails
  * with ENXIO, so terminal prompts fail fast instead of stopping the child with
  * SIGTTIN; an inherited terminal stdin becomes the null device, see
- * Stdio::Inherit). terminate() then ends the whole tree, and destroying the IProcess
- * ends whatever is still running in it. Without killOnClose only the child
- * itself is terminated, destroying the IProcess leaves it running, and on POSIX
- * it shares this process's session and terminal.
- * TODO(M1): supervision with restart and backoff (PLAN.md section 3.1).
+ * Stdio::Inherit). terminate() then ends every process still in the container,
+ * and destroying the IProcess ends whatever is still running in it. On Windows
+ * that is the whole tree (descendants cannot break away from the job). On POSIX
+ * it is the child's process group: a descendant that starts its own session or
+ * group (setsid/setpgid, as daemons do) leaves it and is not ended. Without
+ * killOnClose only the child itself is terminated, destroying the IProcess
+ * leaves it running, and on POSIX it shares this process's session and terminal.
+ * TODO(M3): supervision with restart and backoff (PLAN.md section 3.1; the M3 supervisor).
  */
 #pragma once
 
@@ -88,7 +91,8 @@ struct ProcessSpec {
     Stdio stdoutMode = Stdio::Pipe;
     Stdio stderrMode = Stdio::Pipe;
 
-    // Contain the child's process tree (see the header comment).
+    // Contain the child and its descendants: a Job Object on Windows, a new session and process group
+    // on POSIX (see the header comment for what each covers).
     bool killOnClose = true;
 };
 
@@ -119,7 +123,8 @@ using ProcessId = std::uint32_t;
 /*
  * A running (or finished) child process. Owned through std::unique_ptr, so,
  * unlike the reference-passed seams, it has a public virtual destructor.
- * Destruction closes the pipes and, with killOnClose, ends the process tree.
+ * Destruction closes the pipes and, with killOnClose, ends every process still
+ * in the child's container (see the header comment).
  *
  * Thread safety: operations on different streams (stdin, stdout, stderr) and
  * wait()/terminate() may run concurrently from different threads; operations
@@ -148,8 +153,8 @@ public:
     // status; later calls return the same status. Errors: Timeout (still running), IoError.
     [[nodiscard]] virtual Result<ExitStatus> wait(std::optional<IClock::Duration> timeout = std::nullopt) = 0;
 
-    // Forcefully ends the process (or its tree, with killOnClose) with kTerminatedExitCode
-    // or SIGKILL. Succeeds if it has already exited. Does not wait; call wait() afterwards.
+    // Forcefully ends the process (with killOnClose, every process in its container) with
+    // kTerminatedExitCode or SIGKILL. Succeeds if it has already exited. Does not wait; call wait() afterwards.
     [[nodiscard]] virtual Result<void> terminate() = 0;
 
     /*
@@ -157,8 +162,9 @@ public:
      * until EOF, and waits for exit, all concurrently and bounded by `timeout` from
      * the call. Streams that are not pipes contribute no bytes. If the child closes
      * stdin early the rest of `stdinData` is dropped (not an error). When the deadline
-     * passes the process (tree) is terminated and reaped, and the call fails with
-     * Timeout; the partial output is discarded.
+     * passes the process is terminated as by terminate(), the call waits up to 5 s
+     * for the child to exit (it is reaped only when the IProcess is destroyed), and
+     * fails with Timeout; the partial output is discarded.
      * Errors: InvalidArgument (stdinData given but stdin is not a pipe), Timeout, IoError.
      */
     [[nodiscard]] virtual Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) = 0;
@@ -169,9 +175,14 @@ protected:
 
 class IProcessLauncher {
 public:
-    // Starts a process. Errors: InvalidArgument (see validateProcessSpec), Unsupported
-    // (batch files on Windows), NotFound (no such executable or working directory),
-    // PermissionDenied (not executable), IoError. Thread-safe.
+    /*
+     * Starts a process. Errors: InvalidArgument (a spec validateProcessSpec rejects; a
+     * working directory that is not a directory or, on Windows, too long to be a current
+     * directory; a file that is not an executable image), Unsupported (batch files on
+     * Windows), NotFound (no such executable or working directory), PermissionDenied (not
+     * executable), Busy (the executable is open for writing, or the system is out of
+     * processes), IoError. Thread-safe.
+     */
     [[nodiscard]] virtual Result<std::unique_ptr<IProcess>> launch(const ProcessSpec& spec) = 0;
 
 protected:
@@ -206,7 +217,9 @@ inline constexpr bool kWindowsProcessRules = false;
  * MergeIntoStdout only for stderr. With `windowsRules` also: Windows path syntax;
  * no .bat/.cmd executable (Unsupported), judged on both the given and the
  * normalised spelling, since "dir\t.bat\." starts dir\t.bat; no quote in the
- * executable; and a command line under CreateProcessW's 32,767-unit limit.
+ * executable; a command line under CreateProcessW's 32,767-unit limit; and
+ * well-formed UTF-8 in the command line, the working directory and the
+ * environment names and values (the launcher converts them to UTF-16).
  * Errors: InvalidArgument, Unsupported.
  */
 [[nodiscard]] Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules = kWindowsProcessRules);

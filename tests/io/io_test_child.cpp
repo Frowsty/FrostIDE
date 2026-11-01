@@ -67,7 +67,8 @@
 #include <spawn.h>
 #include <unistd.h>
 
-extern char** environ; // Declared by POSIX, but by no header.
+// POSIX names it; glibc declares it in <unistd.h> only under _GNU_SOURCE, so it is declared here too.
+extern char** environ;
 #endif
 
 namespace {

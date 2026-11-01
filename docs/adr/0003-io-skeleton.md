@@ -9,8 +9,8 @@
 Everything above `core` that touches the disk or starts a tool goes through `frost::io`. M0 needs the
 synchronous core of it: UTF-8/UTF-16 conversion, path handling, an `IFileSystem` with atomic writes, an
 `IProcessLauncher` that is the only way to start child processes, and the deterministic doubles PLAN.md 6.2
-names (MemFs with a virtual clock, scripted processes). The asio reactor, async pipes, file watchers,
-`IHttpClient` and supervised processes arrive in M1 and later.
+names (MemFs with a virtual clock, scripted processes). The asio reactor, async pipes and file watchers
+arrive in M1, supervised processes in M3 (the supervisor) and `IHttpClient` in M5 (Windows) and M6 (Linux).
 
 Constraints that shaped the design:
 - The reference Windows machine has `LongPathsEnabled = 0`, and users' machines often do too. Paths longer
@@ -110,7 +110,8 @@ directory where a file is → AlreadyExists).
   Windows), and per-stream `Inherit`/`Null`/`Pipe` (plus `MergeIntoStdout` for stderr). Every launcher
   validates specs with the same `validateProcessSpec`, including the Windows-only checks that
   `CreateProcessW` would otherwise fail later (no quote in the executable, a command line under 32,767
-  UTF-16 units), so the scripted double refuses exactly what the real launcher refuses.
+  UTF-16 units, well-formed UTF-8 in the command line, working directory and environment), so the
+  scripted double refuses every spec the real launcher refuses before touching the system.
 - `Inherit` never hands a child an invalid stream: a parent without such a standard handle (a GUI parent,
   a closed descriptor) gives the child the null device. On POSIX a descriptor marked close-on-exec counts
   as absent too: once a process closes, say, fd 0, the next descriptor frost::io opens (a pidfd, a pipe
@@ -137,7 +138,9 @@ directory where a file is → AlreadyExists).
 - Linux: `posix_spawn` (never `posix_spawnp`) with `pipe2(O_CLOEXEC)` pipes, `addclosefrom_np(3)` and
   `addchdir_np` (glibc ≥ 2.34; Ubuntu 24.04 ships 2.39), default signal mask and dispositions, and, when
   `killOnClose`, a new session (`POSIX_SPAWN_SETSID`, glibc ≥ 2.26). The session's process group has the
-  child's pid as its id, so `kill(-pid)` ends the tree, and it has no controlling terminal: a tool that
+  child's pid as its id, so `kill(-pid)` ends every process that stays in the group (a descendant that
+  calls `setsid` or `setpgid`, as daemons do, leaves it; on Windows the job holds the whole tree, since
+  descendants cannot break away), and it has no controlling terminal: a tool that
   opens `/dev/tty` for a prompt gets ENXIO and fails, where in a mere new process group it would be a
   background job of the IDE's terminal and be stopped by SIGTTIN while `wait` blocks. Being outside the
   terminal's job control also means such a child could read an inherited terminal stdin while another job
@@ -147,15 +150,19 @@ directory where a file is → AlreadyExists).
   child shares the IDE's job control and gets the terminal. A launch-time check of the foreground
   process group (`tcgetpgrp`) would not do: the user can background the IDE later, and the session child
   would never notice. `wait` uses `waitid(WNOWAIT)` (with a pidfd where available) so the
-  zombie is kept until the `IProcess` is destroyed and a later `kill` can never hit a recycled pid. Writes
+  zombie is kept until the `IProcess` is destroyed and a later `kill` can never hit a recycled pid, as
+  long as nothing else in the process reaps the child (no SIGCHLD `SIG_IGN` or `SA_NOCLDWAIT`, no
+  `waitpid(-1)`; the M1 child watcher must reap detached pids only). Writes
   to a child that closed stdin block SIGPIPE for the calling thread and consume it, so a broken pipe is an
   error value, never a signal.
 - `terminate()` reports exit code `kTerminatedExitCode` (137 = 128 + SIGKILL) on both platforms; POSIX also
   reports the signal.
 - Deadlines saturate: `timeout` values up to `Duration::max()` mean "effectively no deadline" instead of
-  overflowing `steady_clock::now() + timeout`.
+  overflowing `steady_clock::now() + timeout`. A single `poll` or `Wait*` call blocks for at most 2^30 ms
+  (about 12.4 days), and every wait re-checks its deadline when such a slice ends, so a far deadline is
+  never cut short; tests lower the slice to cover that loop.
 - Not yet: logging of the resolved launch (PLAN.md 3.5; TODO(M1) once core has logging), async pipes on the
-  reactor (TODO(M1)), supervision with restart (TODO(M1)).
+  reactor (TODO(M1)), supervision with restart (TODO(M3), the M3 supervisor).
 
 ### Doubles
 `MemFs` and `ScriptedProcessLauncher` live in `frost_io` itself, next to the interfaces they implement, so

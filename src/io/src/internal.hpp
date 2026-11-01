@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Private helpers shared by frost::io's implementation files: RAII wrappers for
-// OS handles and descriptors, process-unique names, small error builders, and the
-// POSIX permission rules of writeFileAtomic. Not installed; outside src/io only
-// io_unit_tests includes this, to test the pure helpers on every platform.
+// Private helpers shared by frost::io's implementation files (not installed).
+//
+/*
+ * RAII wrappers for OS handles and descriptors, process-unique names, small error
+ * builders, deadline and wait-slice arithmetic, and the POSIX permission rules of
+ * writeFileAtomic. Outside src/io only the io test binaries include this: to test
+ * the pure helpers on every platform, to name the temp-file marker, and to lower
+ * the wait slice.
+ */
 #pragma once
 
 #include "frost/core/clock.hpp"
@@ -26,20 +31,22 @@
 
 namespace frost::io::detail {
 
-// A number that is unique within this process (a relaxed atomic counter; only
-// uniqueness matters, not ordering). Used for temp-file and pipe names.
+// A number that is unique within this process (a relaxed atomic counter; only uniqueness matters, not
+// ordering). Used for writeFileAtomic's temp-file names; pipe names use random bits instead (process_win.cpp).
 [[nodiscard]] std::uint64_t nextUniqueId() noexcept;
 
 // The current process id.
 [[nodiscard]] std::uint32_t currentProcessId() noexcept;
 
-// The sibling temp-file name used by writeFileAtomic for `targetName`:
-// ".<name>.frost-tmp-<pid>-<id>". At most 64 bytes of the target name are used
-// (cut at a UTF-8 character boundary) so long names stay under the 255-unit
-// component limit of NTFS and ext4.
+/*
+ * The sibling temp-file name used by writeFileAtomic for `targetName`:
+ * ".<name>.frost-tmp-<pid>-<id>". At most 64 bytes of the target name are used
+ * (cut at a UTF-8 character boundary) so long names stay under the 255-unit
+ * component limit of NTFS and ext4.
+ */
 [[nodiscard]] std::string atomicTempName(std::string_view targetName, std::uint64_t id);
 
-// The marker every temp name contains; tests use it to prove none are left over.
+// The marker every temp name contains; the file-system tests use it to prove none are left over.
 inline constexpr std::string_view kAtomicTempMarker = ".frost-tmp-";
 
 // Errors with the operation-specific refinements documented in file_system.hpp.
@@ -58,9 +65,10 @@ inline constexpr std::size_t kMaxWindowsCommandLineUnits = 32767;
  * (0-7, read 4, write 2, execute 1). `group`: the permissions every member of the
  * owning group had, whichever entry applied to them (the owning-group entry, or a
  * named-user entry, which takes precedence), each limited by the mask. `other`: the
- * permissions every other non-owner had (the other entry, or a named-user or
- * named-group entry, masked). Named entries can grant less than their class, so a
- * file that loses the ACL must not give the classes more than these.
+ * permissions every other non-owner had (the other entry, which the mask never
+ * limits, or a named-user or named-group entry, masked). Named entries can grant
+ * less than their class, so a file that loses the ACL must not give the classes
+ * more than these.
  */
 struct AclFloor {
     std::uint32_t group = 0;
@@ -108,6 +116,26 @@ struct AclFloor {
     }
     return timeout >= TimePoint::max() - now ? TimePoint::max() : now + timeout;
 }
+
+// The default of maxWaitSliceMs(): 2^30 ms, about 12.4 days, which fits poll()'s int and stays below INFINITE.
+inline constexpr std::int64_t kDefaultMaxWaitSliceMs = std::int64_t{1} << 30;
+
+/*
+ * The longest single blocking wait (one poll() or Wait* call) in milliseconds,
+ * kDefaultMaxWaitSliceMs unless a test lowered it. A wait whose deadline is
+ * further away blocks in slices and re-checks the deadline after each, so a
+ * slice that ends is never mistaken for the deadline and even a timeout of
+ * IClock::Duration::max() does not end early. Thread-safe (relaxed atomic).
+ */
+[[nodiscard]] std::int64_t maxWaitSliceMs() noexcept;
+
+// Tests only: sets maxWaitSliceMs() (clamped to 1..kDefaultMaxWaitSliceMs), to exercise the slicing
+// without waiting for days. Waits already blocking keep their current slice. Thread-safe.
+void setMaxWaitSliceMsForTesting(std::int64_t milliseconds) noexcept;
+
+// The milliseconds one blocking wait may take when `left` remains until its deadline: rounded up
+// (so the wait does not end just short of it), at most maxWaitSliceMs(), and 0 once it has passed.
+[[nodiscard]] std::int64_t waitSliceMs(IClock::Duration left) noexcept;
 
 #ifdef _WIN32
 

@@ -101,8 +101,10 @@ TEST(OsError, Win32ErrorKeepsOperationPathNumberAndSystemText) {
     EXPECT_EQ(error.code(), ErrorCode::NotFound);
     EXPECT_NE(error.message().find("readFile 'C:\\no\\such\\file': "), std::string::npos) << error.message();
     EXPECT_NE(error.message().find("(win32 error 2)"), std::string::npos) << error.message();
-    // FormatMessageW supplied some text, with the trailing period and line break trimmed.
-    EXPECT_FALSE(error.message().ends_with("\n"));
+    // FormatMessageW supplied some text, with the trailing period and line break trimmed (the
+    // text sits in the middle of the message, before the number).
+    EXPECT_EQ(error.message().find_first_of("\r\n"), std::string::npos) << error.message();
+    EXPECT_EQ(error.message().find(". (win32 error"), std::string::npos) << error.message();
     EXPECT_GT(error.message().size(), std::string("readFile 'C:\\no\\such\\file': (win32 error 2)").size());
 }
 

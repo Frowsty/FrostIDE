@@ -42,9 +42,29 @@ IClock::SystemTime toSystemTime(FILETIME time) noexcept {
 // GetFileAttributesW, or INVALID_FILE_ATTRIBUTES.
 DWORD attributesOf(const std::wstring& widePath) noexcept { return GetFileAttributesW(widePath.c_str()); }
 
+// Whether the entry at `widePath` itself (a directory link included) has the directory attribute.
 bool isDirectory(const std::wstring& widePath) noexcept {
     const DWORD attributes = attributesOf(widePath);
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+/*
+ * Whether `widePath` reaches a directory once symlinks and junctions are followed,
+ * as status() decides it (and POSIX stat). A dangling link is not one: opening it
+ * fails with a NotFound code. When the open fails for another reason (a sharing
+ * violation, access denied), the entry's own directory attribute decides.
+ */
+bool reachesDirectory(const std::wstring& widePath) noexcept {
+    const UniqueHandle handle(CreateFileW(widePath.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                          FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!handle.valid()) {
+        return errorCodeFromWin32(GetLastError()) != ErrorCode::NotFound && isDirectory(widePath);
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileInformationByHandle(handle.get(), &info) == FALSE) {
+        return isDirectory(widePath);
+    }
+    return (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
 // Whether the entry at `widePath` is itself (not following it) a symbolic link or a junction,
@@ -313,7 +333,9 @@ public:
             }
         }
         while (!missing.empty()) {
-            Error error(ErrorCode::Unknown);
+            // ParentMissing here means the parent just made (or found) is gone again.
+            Error error(ErrorCode::NotFound, "createDirectories '" + std::string(path) + "': '" +
+                                                 std::string(missing.back()) + "' vanished while being created");
             if (makeDirectory(missing.back(), path, error) != MkdirOutcome::Done) {
                 return std::unexpected(std::move(error));
             }
@@ -391,10 +413,11 @@ private:
         if (code == ERROR_PATH_NOT_FOUND) {
             return MkdirOutcome::ParentMissing;
         }
-        // Volume roots answer ERROR_ACCESS_DENIED rather than ERROR_ALREADY_EXISTS.
-        const DWORD attributes = attributesOf(*wide);
-        if (attributes != INVALID_FILE_ATTRIBUTES) {
-            if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        // Volume roots answer ERROR_ACCESS_DENIED rather than ERROR_ALREADY_EXISTS. An existing
+        // entry counts as a directory only if links lead to one, so a dangling junction fails
+        // here, where it sits, as a dangling symlink does on POSIX.
+        if (attributesOf(*wide) != INVALID_FILE_ATTRIBUTES) {
+            if (reachesDirectory(*wide)) {
                 return MkdirOutcome::Done;
             }
             error = Error(ErrorCode::AlreadyExists, "createDirectories '" + std::string(original) + "': '" +

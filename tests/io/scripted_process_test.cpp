@@ -117,7 +117,12 @@ TEST(ScriptedProcessLauncher, AppliesTheWindowsCommandLineChecks) {
     batch.executable = "C:\\tools\\build.bat\\.";
     ProcessSpec device = gitStatus();
     device.executable = "\\\\.\\C:\\tools\\git.exe";
-    for (const ProcessSpec& spec : {quote, tooLong, batch, device}) {
+    // The launcher converts the environment and the working directory to UTF-16 as well.
+    ProcessSpec environment = gitStatus();
+    environment.environment = {{"LANG", "\xff"}};
+    ProcessSpec directory = gitStatus();
+    directory.workingDirectory = "C:\\w\xff";
+    for (const ProcessSpec& spec : {quote, tooLong, batch, device, environment, directory}) {
         const auto result = launcher.launch(spec);
         ASSERT_FALSE(result.has_value()) << spec.executable;
         EXPECT_TRUE(result.error().code() == ErrorCode::InvalidArgument ||
@@ -125,7 +130,7 @@ TEST(ScriptedProcessLauncher, AppliesTheWindowsCommandLineChecks) {
             << result.error().describe();
     }
     EXPECT_EQ(launcher.pendingScripts(), 1u);
-    EXPECT_EQ(launcher.launches().size(), 4u);
+    EXPECT_EQ(launcher.launches().size(), 6u);
 }
 #endif
 
@@ -141,6 +146,8 @@ TEST(ScriptedProcessLauncher, UnexpectedAndUnscriptedLaunchesFail) {
     ASSERT_FALSE(wrong.has_value());
     EXPECT_EQ(wrong.error().code(), ErrorCode::InvalidArgument);
     EXPECT_NE(wrong.error().message().find("unexpected launch"), std::string::npos);
+    EXPECT_EQ(launcher.pendingScripts(), 1u); // The script stays queued for the launch it expects.
+    EXPECT_FALSE(launcher.launches().at(1).launched);
 }
 
 TEST(ScriptedProcessLauncher, LaunchErrorsAreReturned) {

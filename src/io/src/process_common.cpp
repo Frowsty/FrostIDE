@@ -63,6 +63,10 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
         if (auto directory = normalizePath(spec.workingDirectory, style); !directory) {
             return std::unexpected(std::move(directory.error()).withContext("working directory"));
         }
+        // The Windows launcher converts it to UTF-16; normalizePath does not check the encoding.
+        if (windowsRules && !isValidUtf8(spec.workingDirectory)) {
+            return invalid("working directory is not valid UTF-8");
+        }
     }
     for (const std::string& argument : spec.arguments) {
         if (hasNul(argument)) {
@@ -90,6 +94,13 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
         }
         if (value && hasNul(*value)) {
             return invalid(std::format("environment variable '{}' contains a NUL character", name));
+        }
+        // The Windows environment block is UTF-16, so both must convert.
+        if (windowsRules && !isValidUtf8(name)) {
+            return invalid("environment variable name is not valid UTF-8");
+        }
+        if (windowsRules && value && !isValidUtf8(*value)) {
+            return invalid(std::format("environment variable '{}' is not valid UTF-8", name));
         }
     }
     if (spec.stdinMode == Stdio::MergeIntoStdout || spec.stdoutMode == Stdio::MergeIntoStdout) {

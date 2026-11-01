@@ -447,7 +447,9 @@ public:
             }
         }
         while (!missing.empty()) {
-            Error error(ErrorCode::Unknown);
+            // ParentMissing here means the parent just made (or found) is gone again.
+            Error error(ErrorCode::NotFound, "createDirectories '" + std::string(path) + "': '" +
+                                                 std::string(missing.back()) + "' vanished while being created");
             if (makeDirectory(missing.back(), path, error) != MkdirOutcome::Done) {
                 return std::unexpected(std::move(error));
             }

@@ -12,6 +12,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 
+#include "internal.hpp" // detail::maxWaitSliceMs and its test setter.
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -848,6 +849,42 @@ TEST(RealProcessLauncher, MaximalTimeoutsMeanNoDeadline) {
     auto process = frost::io::realProcessLauncher().launch(childSpec({"exit", "4"}));
     ASSERT_TRUE(process.has_value()) << process.error().describe();
     EXPECT_EQ((*process)->wait(frost::IClock::Duration::max()).value().exitCode, 4);
+}
+
+// Lowers detail::maxWaitSliceMs() for one scope and restores the previous value.
+class ShortWaitSlices {
+public:
+    explicit ShortWaitSlices(std::int64_t milliseconds) : m_saved(frost::io::detail::maxWaitSliceMs()) {
+        frost::io::detail::setMaxWaitSliceMsForTesting(milliseconds);
+    }
+    ~ShortWaitSlices() { frost::io::detail::setMaxWaitSliceMsForTesting(m_saved); }
+    ShortWaitSlices(const ShortWaitSlices&) = delete ("restores the slice once");
+    ShortWaitSlices& operator=(const ShortWaitSlices&) = delete ("restores the slice once");
+
+private:
+    std::int64_t m_saved;
+};
+
+TEST(RealProcessLauncher, FarDeadlinesOutlastManyWaitSlices) {
+    // A single poll() or Wait* call blocks for one slice at most (2^30 ms, about 12 days, by
+    // default); a slice that ends must not count as the deadline. With 20 ms slices a child that
+    // sleeps 300 ms spans many of them.
+    const ShortWaitSlices slices(20);
+    const auto result = run(childSpec({"sleep", "300"}), {}, frost::IClock::Duration::max());
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0);
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"sleep", "300"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const auto status = (*process)->wait(frost::IClock::Duration::max());
+    ASSERT_TRUE(status.has_value()) << status.error().describe();
+    EXPECT_EQ(status->exitCode, 0);
+    // A near deadline still ends both kinds of wait.
+    auto sleeper = frost::io::realProcessLauncher().launch(childSpec({"sleep", "60000"}));
+    ASSERT_TRUE(sleeper.has_value()) << sleeper.error().describe();
+    EXPECT_EQ((*sleeper)->wait(100ms).error().code(), ErrorCode::Timeout);
+    const auto timedOut = run(childSpec({"sleep", "60000"}), {}, 100ms);
+    ASSERT_FALSE(timedOut.has_value());
+    EXPECT_EQ(timedOut.error().code(), ErrorCode::Timeout) << timedOut.error().describe();
 }
 
 #ifndef _WIN32

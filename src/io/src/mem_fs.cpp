@@ -37,6 +37,9 @@ Error notFound(std::string_view operation, std::string_view path) {
 // The default root of a fresh MemFs: "/" or "C:\".
 std::string defaultRoot(PathStyle style) { return style == PathStyle::Windows ? "C:\\" : "/"; }
 
+// A drive letter, as normalizePath recognises one.
+constexpr bool isAsciiAlpha(char c) noexcept { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+
 } // namespace
 
 MemFs::MemFs(const IClock& clock, PathStyle style) : m_clock(clock), m_style(style) {
@@ -51,10 +54,11 @@ Result<std::string> MemFs::normalize(std::string_view path) const {
     }
     std::string& key = *normalized;
     // "\\?\C:\x" and "\\?\UNC\srv\share\x" name the same files as "C:\x" and "\\srv\share\x";
-    // only the name checks differ, and normalizePath has applied those already.
+    // only the name checks differ, and normalizePath has applied those already. "\\?\1:\x" is
+    // no drive form (normalizePath reads it as a generic verbatim root), so it stays as it is.
     if (key.starts_with("\\\\?\\")) {
         const std::string_view rest = std::string_view(key).substr(4);
-        if (rest.size() >= 3 && rest[1] == ':' && rest[2] == '\\') {
+        if (rest.size() >= 3 && isAsciiAlpha(rest[0]) && rest[1] == ':' && rest[2] == '\\') {
             key = std::string(rest);
         } else if (rest.size() >= 4 && (rest[0] == 'U' || rest[0] == 'u') && (rest[1] == 'N' || rest[1] == 'n') &&
                    (rest[2] == 'C' || rest[2] == 'c') && rest[3] == '\\') {
@@ -229,7 +233,7 @@ Result<void> MemFs::writeFileAtomic(std::string_view path, std::string_view data
         return std::unexpected(detail::isADirectoryError("writeFileAtomic", path));
     }
 
-    // Step 1: the temp file, visible to listDirectory like the real one.
+    // Step 1: the temp file (never observable: the lock is held throughout).
     auto temp = joinPath(parent, detail::atomicTempName(name, detail::nextUniqueId()), m_style);
     if (!temp) {
         return std::unexpected(std::move(temp.error()));

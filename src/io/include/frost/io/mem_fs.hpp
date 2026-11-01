@@ -18,6 +18,11 @@
  *     implementation's mkdir -p walk ("/a/new/../c" creates /a/new and /a/c). A
  *     final ".." is not an entry name for writeFileAtomic, removeFile and
  *     removeDirectory (InvalidArgument), as with the real implementation.
+ *     Another exception: in POSIX style a trailing separator or final "." after
+ *     a non-directory is dropped here ("/d/file/" reads /d/file), while the real
+ *     readFile, status, listDirectory, removeFile, removeDirectory and exists
+ *     hand that spelling to the kernel and fail with NotFound (ENOTDIR; exists
+ *     answers false). writeFileAtomic and createDirectories normalise in both.
  *   - Only "/" (POSIX) or "C:\" (Windows) exists initially; other roots (drives,
  *     "\\server\share\") exist once addRoot() is called, so code that assumes a
  *     drive is present fails here as it would on a machine without it. Drive
@@ -26,13 +31,15 @@
  *     trees, matching NTFS.
  *   - Errors use the same codes and refinements as file_system.hpp.
  *   - writeFileAtomic runs the same protocol as the real one: it creates a
- *     visible ".<name>.frost-tmp-*" entry, fills it, then renames it over the
- *     target, so faults can be injected at either step (FsOp::Write fails
- *     before the temp file exists, FsOp::AtomicRename after it has been
- *     written). Either way the target keeps its old content and the temp
- *     entry is removed.
- *   - Every successful mutation stamps the touched entry (and, for creations
- *     and removals, the parent directory) with clock.systemNow().
+ *     ".<name>.frost-tmp-<pid>-<n>" entry (<name> cut to its first 64 bytes),
+ *     fills it, then renames it over the target, all under one lock (no caller
+ *     can observe the temp entry), so faults can be injected at either step
+ *     (FsOp::Write fails before the temp file exists, FsOp::AtomicRename after
+ *     it has been written). Either way the target keeps its old content and
+ *     the temp entry is removed.
+ *   - Every successful mutation stamps the touched entry with clock.systemNow(),
+ *     and the parent directory too for every writeFileAtomic (the temp-file
+ *     rename changes the directory, as on disk), creation and removal.
  *   - Symlinks are not modelled.
  *
  * Fault injection. injectFault(op, path, code, count) makes the next `count`
@@ -91,15 +98,15 @@ public:
     Result<void> removeDirectory(std::string_view path) override;
     Result<bool> exists(std::string_view path) override;
 
-    // Makes the next `count` `op` operations on `path` fail with `code` (see above).
-    // `path` must be absolute (or empty for "any path"); a relative path is a contract violation.
+    // Makes the next `count` `op` operations on `path` fail with `code` (see above). `path` must be
+    // absolute (or empty for "any path") and `count` at least 1; anything else is a contract violation.
     void injectFault(FsOp op, std::string_view path, ErrorCode code, std::uint32_t count = 1);
 
     // Makes `root` ("D:\", "\\server\share\", ...) exist, empty. Precondition: `root`
     // is a root path under this MemFs's style. Adding an existing root does nothing.
     void addRoot(std::string_view root);
 
-    // Number of injected faults not yet triggered.
+    // Number of injected failures still to fire (the sum of the remaining counts).
     [[nodiscard]] std::size_t pendingFaults() const;
 
     // Every normalised path in the tree (files and directories, roots excluded),

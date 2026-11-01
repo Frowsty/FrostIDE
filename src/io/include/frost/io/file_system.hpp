@@ -56,8 +56,9 @@ struct FileStatus {
     friend bool operator==(const FileStatus&, const FileStatus&) = default;
 };
 
-// One listDirectory() entry: a name (one UTF-8 component, never "." or "..")
-// and the entry's own type, without following symlinks.
+// One listDirectory() entry: a name (one component, never "." or "..") and the entry's own type, without
+// following symlinks. The name is UTF-8 on Windows (names that are not valid UTF-16 are skipped); on POSIX it
+// is the raw bytes the kernel returns, which need not be valid UTF-8.
 struct DirEntry {
     std::string name;
     FileType type = FileType::Regular;
@@ -67,11 +68,13 @@ struct DirEntry {
 
 class IFileSystem {
 public:
-    // Returns the whole file. Errors: NotFound, PermissionDenied, Busy (Windows sharing
-    // violation; on POSIX a write lease that is still held after 90 s), InvalidArgument (a
-    // directory, or not a regular file: FIFOs, sockets and devices are refused without
-    // blocking), IoError. A POSIX file under another process's write lease is read once the
-    // lease is released or revoked. O(size).
+    /*
+     * Returns the whole file. Errors: NotFound, PermissionDenied, Busy (Windows sharing
+     * violation; on POSIX a write lease that is still held after 90 s), InvalidArgument (a
+     * directory, or not a regular file: FIFOs, sockets and devices are refused without
+     * blocking), IoError. A POSIX file under another process's write lease is read once the
+     * lease is released or revoked. O(size).
+     */
     [[nodiscard]] virtual Result<std::string> readFile(std::string_view path) = 0;
 
     /*
@@ -79,8 +82,9 @@ public:
      * readers and a crash observe either the complete old content or the
      * complete new content, never a mixture or a truncated file.
      *
-     * Protocol: write a temporary file in the same directory (".<name>.frost-tmp-*",
-     * created exclusively), flush it to stable storage, then rename it over the
+     * Protocol: write a temporary file in the same directory
+     * (".<name>.frost-tmp-<pid>-<n>", with <name> cut to its first 64 bytes, created
+     * exclusively), flush it to stable storage, then rename it over the
      * target in one step (MoveFileExW with MOVEFILE_REPLACE_EXISTING |
      * MOVEFILE_WRITE_THROUGH on Windows; rename() then an fsync of the directory
      * on POSIX). On any failure the temporary file is removed and the target is
@@ -107,12 +111,16 @@ public:
      *
      * Not preserved from an existing target: extended attributes other than the
      * POSIX access ACL; Windows attributes, ACLs and alternate streams; hard-link
-     * identity and symlinks (a symlink at `path` is replaced by a regular file).
+     * identity and symlinks: on POSIX a symlink at `path` is replaced by a regular
+     * file, which takes the owner, mode and access ACL of the file the link pointed
+     * to; on Windows a directory symlink or junction at `path` makes the call fail
+     * with InvalidArgument ("is a directory") and is left in place.
      * SaveManager (M1) adds metadata and symlink preservation on top of this
      * primitive. TODO(M1): sweep stale .frost-tmp-* files left by killed processes.
      *
      * Errors: NotFound (parent directory missing), PermissionDenied, Busy,
-     * InvalidArgument (the target is a directory), IoError (disk full, ...).
+     * InvalidArgument (the target is a directory, or on Windows a link to one),
+     * IoError (disk full, ...).
      */
     [[nodiscard]] virtual Result<void> writeFileAtomic(std::string_view path, std::string_view data) = 0;
 
@@ -120,20 +128,26 @@ public:
     // (including dangling links), PermissionDenied, IoError.
     [[nodiscard]] virtual Result<FileStatus> status(std::string_view path) = 0;
 
-    // The entries of a directory, sorted by name (byte-wise, i.e. by code point).
-    // Errors: NotFound, InvalidArgument (not a directory), PermissionDenied, IoError.
-    // Windows names that are not valid UTF-16 (lone surrogates) cannot be represented
-    // and are skipped. TODO(M1): surface them to the scanner as diagnostics.
+    /*
+     * The entries of a directory, sorted by name (byte-wise, i.e. by code point).
+     * Errors: NotFound, InvalidArgument (not a directory), PermissionDenied, IoError.
+     * Windows names that are not valid UTF-16 (lone surrogates) cannot be represented
+     * and are skipped; POSIX names are returned as the kernel's bytes, valid UTF-8 or
+     * not (see DirEntry). TODO(M1): surface both to the scanner as diagnostics.
+     */
     [[nodiscard]] virtual Result<std::vector<DirEntry>> listDirectory(std::string_view path) = 0;
 
-    // Creates `path` and any missing parents; succeeds if it already is a directory.
-    // Errors: AlreadyExists (it or a parent exists as a non-directory), PermissionDenied, IoError.
+    // Creates `path` and any missing parents; succeeds if it already is a directory (links are followed).
+    // Errors: NotFound (the root, drive or share does not exist), AlreadyExists (it or a parent exists as a
+    // non-directory, including a dangling link), PermissionDenied, IoError.
     [[nodiscard]] virtual Result<void> createDirectories(std::string_view path) = 0;
 
-    // Removes a file, or a link itself: every entry listDirectory reports as Symlink
-    // (including Windows directory symlinks and junctions) is removed with removeFile on
-    // every platform, and the link is never followed. Errors: NotFound, InvalidArgument
-    // (a directory), PermissionDenied (includes read-only files on Windows), Busy.
+    /*
+     * Removes a file, or a link itself: every entry listDirectory reports as Symlink
+     * (including Windows directory symlinks and junctions) is removed with removeFile on
+     * every platform, and the link is never followed. Errors: NotFound, InvalidArgument
+     * (a directory), PermissionDenied (includes read-only files on Windows), Busy.
+     */
     [[nodiscard]] virtual Result<void> removeFile(std::string_view path) = 0;
 
     // Removes an empty directory. A link to a directory is not a directory here
