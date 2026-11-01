@@ -5,19 +5,91 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-01: M1 in progress
 
-`main` has M1's first seven slices, the switch to the feature-first phase and the W1 plan, each merged with `git
-merge --no-ff` in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76), `m1/input-keymap` at c78db87 (merge
-3db37c5), `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b) and `m1/theme-icons` at 73a5143 (merge 94ed47d) merged after
-the slice's independent reviews. `m1/process-feature-first` at d5f4082 (merge 5612d23) and `m1/storage` at 39837c1
-(merge e9c3214) are the first feature-first batch (ADR 0031): a slice merges after its own `-Quick`, and each batch
-gets one `-Quick` of the merged tree. The second batch is `plan/w1` at 43ee979 (merge b7ce4fb), which puts W1, the
-work-ready build, before the rest of U1 (ADR 0032), and `m1/io-reactor-watch` at e0eaf75 (merge 4cce4c8). The third
-batch is `m1/encodings` at ab77994 (merge 6455c2b). The slice records follow this entry's sections as subsections,
-newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/theme-icons`'s, `m1/undo-anchors`'s and
-`m1/input-keymap`'s, written from their hand-off notes (none of these branches kept a record in this log), then
-`m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them mark what has changed since.
+`main` has M1's first nine slices, the switch to the feature-first phase, the W1 plan and W1's first slice, each
+merged with `git merge --no-ff` in the main worktree under D23. `m1/piece-tree` at 6fb6826 (merge 455bb76),
+`m1/input-keymap` at c78db87 (merge 3db37c5), `m1/undo-anchors` at 7ae2ab5 (merge 3163d0b) and `m1/theme-icons` at
+73a5143 (merge 94ed47d) merged after the slice's independent reviews. `m1/process-feature-first` at d5f4082 (merge
+5612d23) and `m1/storage` at 39837c1 (merge e9c3214) are the first feature-first batch (ADR 0031): a slice merges
+after its own `-Quick`, and each batch gets one `-Quick` of the merged tree. The second batch is `plan/w1` at 43ee979
+(merge b7ce4fb), which puts W1, the work-ready build, before the rest of U1 (ADR 0032), and `m1/io-reactor-watch` at
+e0eaf75 (merge 4cce4c8). The third batch is `m1/encodings` at ab77994 (merge 6455c2b). The fourth batch is
+`m1/keymap-de` at 8f80e22 (merge 9ca6a04), `m1/display-map` at 877893b (merge b36c089) and `w1/project-sln` at 15ba653
+(merge dcfd9ae). The slice records follow this entry's sections as subsections, newest first: `w1/project-sln`'s,
+`m1/display-map`'s, `m1/keymap-de`'s, `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/theme-icons`'s,
+`m1/undo-anchors`'s and `m1/input-keymap`'s, written from their hand-off notes (none of these branches kept a record
+in this log), then `m1/piece-tree`'s two, kept as the branch wrote them. Merge notes in them mark what has changed
+since.
 
 ### Done
+
+#### Merge of `m1/keymap-de` (9ca6a04)
+- **The merge** (9ca6a04) of `m1/keymap-de` (8f80e22) into `main` at abc014c: every default shortcut of the
+  built-in IntelliJ-compatible keymap is reachable on de-DE; the slice record below says what it holds. ADR 0030;
+  the number is unchanged and no other branch uses it. The slice also adds a pointer to ADR 0030 in ADR 0016's
+  user decisions. 8f80e22 replaces the WIP commit a2b2570 saved before the PC restart.
+- **No conflicts.** `tests/features/matrix.json` merged on its own: row 227's (keymaps) acceptance test is `ctest -R
+  ^(IntelliJKeymap|KeymapReachability)\.`, as on the branch.
+- **A behaviour change on Windows de-DE:** Ctrl+- was Fold Collapse and is now Comment Line (Ctrl+Shift+- Comment
+  Block); Fold Collapse moves to Ctrl+ß and Ctrl+Num-. This is JetBrains' documented Linux behaviour, so Windows
+  and Linux now agree (ADR 0030; reversible in one rule). Whether Comment Line should be Ctrl+# instead is asked
+  under Questions for the user.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 39.0 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own): exit 0, 79 steps, no compiler warning.
+
+#### Merge of `m1/display-map` (b36c089)
+- **The merge** (b36c089) of `m1/display-map` (877893b) into `main` at 9ca6a04: frost::text::DisplayMap; the slice
+  record below says what it holds. ADR 0026; the number is unchanged and no other branch uses it. Like ADR 0031
+  and 0032, ADR 0026 cites ADR 0029 (decision 9, the layer order), which is still only on `plan/thin-path`.
+- **One conflict**, resolved so that both sides' intent survives: `src/text/CMakeLists.txt`. `frost::text` builds
+  `main`'s anchor, document and undo-tree sources (ADR 0017) and codec sources with the per-OS `codec_win.cpp` or
+  `codec_posix.cpp` (ADR 0018) together with the slice's `text_shaper.cpp` and four `display_*.cpp` sources, in
+  one name-ordered list. The header comment describes ADR 0013, 0017, 0018 and 0026; its `TODO(M1)` keeps only
+  `m1/large-file`. `tests/text/CMakeLists.txt` merged without conflict: `text_tests` gains `text_shaper_test.cpp`
+  and `display_map_test.cpp`, next to the encodings executables.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 35.8 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own): exit 0, 34 steps, no compiler warning (only Qt's own
+  "No qtpaths executable found" configure notice).
+
+#### Merge of `w1/project-sln` (dcfd9ae)
+- **The merge** (dcfd9ae) of `w1/project-sln` (15ba653) into `main` at b36c089: frost::project, W1's static
+  `.sln`, `.slnx`, `.vcxproj` and `.vcxproj.filters` readers, SolutionModel and the trust store; the slice record
+  below says what they hold. ADR 0033 (pugixml 1.16, MIT, from the vcpkg baseline, PRIVATE to `frost_project`);
+  the number is unchanged and no other branch uses it (`main`'s ADRs after 0010 are now 0011 to 0018, 0020, 0026,
+  0030, 0031, 0032 and 0033). ADR 0034 (`w1/build-msbuild`) is not on any branch yet.
+- **No conflicts.** The root `CMakeLists.txt` finds pugixml next to SQLite and xxHash under `NOT FROST_FUZZ`;
+  `src/CMakeLists.txt` adds `project` under the same guard as `storage` (fuzz trees install no vcpkg ports);
+  `tests/CMakeLists.txt` adds `tests/project` after `tests/storage`; `vcpkg.json` lists asio 1.32.0, gtest 1.18.0,
+  pugixml 1.16, sqlite3 3.54.1 and xxhash 0.8.4, in name order. The `project` layer rank (6) was already in
+  `cmake/FrostLayers.cmake`. `git diff --check` flags only the fixture's CRLF files (`App.vcxproj`,
+  `App.vcxproj.filters`, `SdkApp.sln`), which are CRLF on purpose; `tests/**/fixtures/**` is `-text`.
+- **Orchestrator decision on the slice's trust question:** the trust file location
+  (`%LOCALAPPDATA%\FrostIDE\data\trusted-roots.txt`, XDG on Linux) is fine until M2's settings.
+- **The build after the merge commit:** `night.py build-gate` (no lock, 34.1 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own; vcpkg installed pugixml 1.16): exit 0, 35 steps, no
+  compiler warning (only Qt's own "No qtpaths executable found" configure notice).
+
+#### Verification (batch, merged tree dcfd9ae)
+- Before the batch run: the Windows Debug build after each of the three merges (above).
+- `tools\verify.ps1 -Quick -Jobs 8` on dcfd9ae (with this record uncommitted) through `run_hidden_nobox.py` (a hidden
+  desktop; no window opened on it), after `night.py build-gate` (no lock, 33.5 GB commit free), 510.3 s, exit 0.
+  Windows ran its Debug leg and the checks; WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 1520/1525 (5 skipped), wsl debug 1431/1436 (5 skipped), wsl licensecheck ok, format ok,
+  frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run` (frost-lint 1029 files; licensecheck 19 packages on
+  Windows, 14 on WSL). No test failed. The test steps took 265.5 s (Windows) and 175.1 s (WSL).
+- **The skips are the earlier batches' minus one:** on both OSes the four `WatcherPerf` tests (outside optimised,
+  unsanitised builds); on Windows `PollingWatcher.DirectorySymlinksAreNotFollowed` (creating a directory symlink
+  fails for this account); on WSL `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale` (no translated locale).
+  `LayoutOs.UsLayoutEqualsTheSimulatedTable`, which skipped in the last two batch runs and in `m1/keymap-de`'s own
+  run, ran and passed this time (the active keyboard layout was en-US). Every test of the three slices ran.
+- **No test was lost in the three merges.** Against the encodings merge (win debug 1454, wsl debug 1365) the tree
+  adds 71 tests on Windows and 71 on WSL. That is what the three slices added over their bases:
+  `m1/keymap-de` 10 on each OS (764 and 677 at 8f80e22, against 754 and 667 at 0110eff), `m1/display-map` 24 on
+  each OS (856 and 769 at 877893b, against 832 and 745 at 2fef6ee) and `w1/project-sln` 37 on each OS (1171 and
+  1085 at 15ba653, against 1134 and 1048 at e9c3214).
+- `-Quick` builds no ASan, TSan or fuzz tree. Fuzz trees build `src` without storage, project and the UI, so the
+  merges add the display map (`src/text`) and the layout rule 3.6 (`src/input`) to them; neither fuzz tree was
+  built. The slices' sanitizer, fuzz, stress and Release runs are in "Deferred to the hardening phase (ADR 0031)",
+  with `-Full` of `main`.
 
 #### Merge of `m1/encodings` (6455c2b)
 - **The merge** (6455c2b) of `m1/encodings` (ab77994) into `main` at 767312b: frost::text's load and save codec
@@ -82,7 +154,8 @@ newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/the
   before build, a trust prompt, build output, and an error list with click-to-jump and editor marks. Then clangd
   live diagnostics, navigation and completion, then the rest of U1. Docs only.
 - **Lean slices running:** `w1/project-sln` (ADR 0033) and `w1/build-msbuild` (ADR 0034). Neither number is on
-  `main` or on another branch yet; both slices are still at their base e9c3214.
+  `main` or on another branch yet; both slices are still at their base e9c3214. (Merge note: `w1/project-sln`
+  finished at 15ba653 and merged as dcfd9ae, above, with ADR 0033.)
 - **ADR 0032 cites ADR 0029** (the thin path), which is still only on `plan/thin-path`, as ADR 0031 does (below).
   No other ADR uses 0032.
 
@@ -153,8 +226,9 @@ newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/the
   `m1/crash-diag` (be509f2), `m1/verify-tooling` (bfd769a), `m1/encodings` (0893943) and `m1/diff-merge`
   (4d14df6). `m1/display-map` had nothing to save: its branch has no commit of its own yet (it is at 2fef6ee). Lean
   agents are finishing them, one per slice; each merges in a later batch after its own `-Quick`. (Merge notes:
-  `m1/io-reactor-watch` finished at e0eaf75 and merged as 4cce4c8, and `m1/encodings` finished at ab77994 and merged
-  as 6455c2b, both above.)
+  `m1/io-reactor-watch` finished at e0eaf75 and merged as 4cce4c8, `m1/encodings` finished at ab77994 and merged as
+  6455c2b, `m1/keymap-de` finished at 8f80e22 and merged as 9ca6a04, and `m1/display-map` finished at 877893b and
+  merged as b36c089, all above.)
 
 #### Merge of `m1/process-feature-first` (5612d23)
 - **The merge** (5612d23) of `m1/process-feature-first` (d5f4082) into `main` at 94ed47d: ADR 0031 and its pointers
@@ -363,13 +437,19 @@ newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/the
   Every compile command there has `-fsanitize=address` and `-fsanitize=fuzzer-no-link`.
 
 ### Next
-- **W1, the work-ready build** (ADR 0032), before the rest of U1: the lean slices `w1/project-sln` (ADR 0033: open
-  `.sln`/`.slnx`, the static readers, the Solution Explorer) and `w1/build-msbuild` (ADR 0034: Build, Rebuild and
-  Clean through the installed MSBuild, the build output and the error list), merged in batches as each passes its
-  own `-Quick`. Then clangd live diagnostics (how they get compile commands depends on the open question about the
-  "command-list file", under Questions for the user), then navigation and completion, then the rest of U1.
-- **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/display-map`, `m1/keymap-de`,
-  `m1/crash-diag`, `m1/verify-tooling` and `m1/diff-merge`, merged in batches as each passes its own `-Quick`.
+- **W1, the work-ready build** (ADR 0032), before the rest of U1: `w1/project-sln`'s static readers, SolutionModel and
+  trust store are on `main` (ADR 0033). Left: the Solution Explorer view and opening a `.sln`/`.slnx` from the command
+  line, File > Open and the recent list (on SolutionModel; environment-variable expansion joins it if the user's
+  answer under Questions for the user needs it), and `w1/build-msbuild` (ADR 0034: Build, Rebuild and Clean through
+  the installed MSBuild, `checkBuildTrust` before the first build, the build output and the error list), merged in
+  batches as each passes its own `-Quick`. Then clangd live diagnostics (how they get compile commands depends on the
+  open question about the "command-list file", under Questions for the user), then navigation and completion, then the
+  rest of U1.
+- **The in-flight M1 slices** (Done, "The feature-first phase"): `m1/syntax`, `m1/crash-diag`, `m1/verify-tooling`
+  and `m1/diff-merge`, merged in batches as each passes its own `-Quick`.
+- **The frost::text display-map consumers** (ADR 0026): `m1/editor-model` and `m1/editor-view` (mapping, painting
+  with DisplayRowCursor, hit testing, vertical caret movement, block decorations for the compare and merge views'
+  fillers), and M15's folds and inlays on the final fold and inlay interfaces.
 - **The frost::text encodings consumers** (ADR 0018): the SaveManager slice (row I2: `encodeForSave` and the lossy
   save guard keep BOM, EOL and encoding), the status bar's encoding and line-separator items (`formatStatus`,
   "Reload in", "Convert to"), `m1/settings` (the default legacy page and the separator for files without breaks,
@@ -385,8 +465,10 @@ newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/the
   `src/storage/CMakeLists.txt`).
 - **The frost::input consumers** that ADR 0016's Consequences names: `m1/shell-frame` with `m1/settings`
   (IKeymapSettings, the dispatch filter, menus), `m1/editor-view` and `m1/editor-model` (the editor actions and
-  contexts), `m1/shell-nav` (the Find Action popup and the Keymap page) and `m1/automation-bench` (the real native
-  key path on the real desktop, which needs your approval while you are at the PC).
+  contexts), `m1/shell-nav` (the Find Action popup and the Keymap page; Find Action must search the shortcuts'
+  display text, so that on de-DE "ctrl+-" finds Comment Line and "ctrl+ß" parses: `m1/keymap-de`'s known bug) and
+  `m1/automation-bench` (the real native key path on the real desktop, which needs your approval while you are at
+  the PC).
 - **The frost::ui consumers** that ADR 0015's Consequences names: `m1/shell-frame` (`install()` from `main()`,
   InstallReport warnings, `resources/` in `tests/app`, B1 on screen, the shell on IslandHost and IslandFrame),
   `m1/settings` (the IAppearanceSettings adapter with live reload) and `m1/editor-view` (editor colour keys and
@@ -397,6 +479,39 @@ newest first: `m1/encodings`'s, `m1/io-reactor-watch`'s, `m1/storage`'s, `m1/the
 
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first.
+- **From `w1/project-sln`** (ADR 0033), as its hand-off lists them:
+  - Fuzz targets for the `.sln`, `.slnx`, `.vcxproj` and `.filters` readers (they need a fuzz tree that installs
+    vcpkg ports, as ADR 0014 notes for storage).
+  - Sanitizer runs of `project_unit_tests`.
+  - Perf of `SolutionModel::load` against B23 on large solutions (R2a/R2b), and of wildcard walks.
+  - Stress: deep or huge wildcard trees (`globMatch` is exponential in the number of `**`) and very large `.sln`
+    files.
+  - A size cap on project and solution files before parsing.
+  - Non-ASCII case folding on Windows for path keys, lookups and trust.
+  - The trust store: resolve symlinks and junctions before comparing; multi-instance safety; move it into M2's
+    application settings.
+  - The MSBuild semantics the static reader skips: Remove/Update, environment-variable properties, property
+    functions, conditions, imported `.props`/`.targets` (M2 path (c)).
+  - Windows-absolute paths in project files read on Linux; non-UTF-8 ANSI `.sln` files.
+  - An independent review of the trust code (a security area).
+- **From `m1/display-map`** (ADR 0026), as its hand-off lists them:
+  - The display-map property test against a brute-force oracle (an M1 exit criterion) and long differential runs.
+  - Fuzzing and sanitizer runs over DisplayMap.
+  - B5 with soft wrap on, and memory per wrapped row (no measurements yet).
+  - Background or lazy wrapping of very large files and long lines.
+  - UAX #14 line breaking and UAX #29 grapheme clusters; UCD-generated width tables (the `TODO(M1)` in
+    `text_shaper.hpp`).
+  - An O(1)-per-row DisplayRowCursor.
+  - A hanging-indent option for continuation rows.
+  - Mutation and stress tests of the block splice.
+- **From `m1/keymap-de`** (ADR 0030), as its hand-off lists them:
+  - The xkb layout oracle (test-only, approved in ADR 0030; the `TODO(M1)` in its tests).
+  - The Linux active-layout reader through libxkbcommon (it needs a named system-library entry in
+    `tools/licensecheck.py`).
+  - Rule 3.6 on real de-CH, es and Nordic layout tables (M11).
+  - Sanitizer, fuzz and stress runs (`input_stress_tests` with the new rule), Release and `-Full` runs.
+  - An independent review of the layout-rule change.
+  - The real native key path on the real desktop (`m1/automation-bench`).
 - **From `m1/encodings`** (ADR 0018), as its hand-off lists them:
   - Mutation checks of `decodeBlocks` (review issue 1, test strength).
   - Measure the transient load peak (review issue 2: the payload-sized reservation that the shrink hides, which no
@@ -453,11 +568,21 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 
 ### Blockers
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
-  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons`, `m1/storage`, `plan/w1`, `m1/io-reactor-watch` and
-  `m1/encodings` name none.
+  `m1/input-keymap`, `m1/undo-anchors`, `m1/theme-icons`, `m1/storage`, `plan/w1`, `m1/io-reactor-watch`,
+  `m1/encodings`, `m1/keymap-de`, `m1/display-map` and `w1/project-sln` name none.
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
+From `w1/project-sln` (ADR 0033), asked in chat; the static reader's behaviour stands meanwhile:
+- **Your SDK's generated `.vcxproj` files:** do they name sources through environment variables or imported `.props`
+  files? If so, environment-variable expansion goes into the Solution Explorer slice. Today such files are missing
+  from the tree and listed in `SolutionModel::warnings()`.
+
+From `m1/keymap-de` (ADR 0030), asked in chat; the defaults are kept meanwhile:
+- **Build Solution:** keep IntelliJ's Ctrl+F9, or also bind Visual Studio's Ctrl+Shift+B (it would replace Go to Type
+  Declaration)?
+- **German Comment Line:** keep Ctrl+- (the key right of '.'), or prefer Ctrl+#?
+
 From `plan/w1` (ADR 0032), asked at its merge:
 - **The "command-list file":** what is the command-list file that your new-project script generates (is it
   `compile_commands.json`?). It decides how live diagnostics get their compile commands after W1: from that file,
@@ -532,6 +657,111 @@ The user answered the open questions; their words are quoted.
 - **PLAN.md section 3.2:** "Yes add them". `src/input` and `src/ui/input` are now listed.
 - **The roadmap:** "Yes I want something usable before a fully polished version". The milestones are being
   reordered into a thin path to a first usable build (ADR 0029, in progress).
+
+### Slice record: `w1/project-sln` (ADR 0033)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031) and W1's first (ADR 0032): one commit, 15ba653, on e9c3214. Worktree
+`.claude\worktrees\w1-project-sln`. (Merge note: merged into `main` as dcfd9ae and pushed; the M1 entry above.)
+
+#### Done
+- **frost::project** (`src/project`, layer project, Qt-free; pugixml 1.16, MIT, ADR 0033). Never runs MSBuild.
+- **Static readers:** `.sln` (Format 12; BOM, UTF-16, CRLF and LF; projects, folders, nesting, solution items,
+  solution configurations and the per-project mapping including Build.0); `.slnx` (build types x platforms,
+  nested folders, items, project overrides, dependencies); `.vcxproj` (GUID, namespace, configuration type and
+  toolset per configuration, configurations, every source, header, resource, image, natvis and custom-build item;
+  `../` paths; `*`, `?` and `**` wildcards with Exclude; `$(ProjectDir)`, `$(MSBuildThisFileDirectory)`,
+  `$(SolutionDir)` and in-file properties expanded; ProjectReference); `.vcxproj.filters` (nested and empty
+  filters).
+- **SolutionModel** for the Solution Explorer: stable node ids and reload-stable keys, children, kinds and paths;
+  C#, VB, F# and shared-items projects as "not supported yet" nodes; missing or unreadable projects as
+  "unavailable" nodes (never a failed open); the owning project, dependencies and the configuration mapping.
+- **The trust store** in `%LOCALAPPDATA%\FrostIDE\data\trusted-roots.txt` (XDG on Linux), with
+  `checkBuildTrust(store, model)` for the build slice.
+- **Tests:** 37 functional tests (`project_unit_tests`) over a hand-written SDK-shaped fixture
+  (`tests/project/fixtures/sdk_solution`, no proprietary content).
+- **Verification at 15ba653** (its own `-Quick`): win debug 1170/1171 (1 environment skip), wsl debug 1085/1085,
+  format, frost_lint, licensecheck and featurecheck ok.
+
+#### Known bugs
+- Files added only by imported `.props`/`.targets`, or named through environment variables or
+  `$(Configuration)`/`$(Platform)`, are missing from the tree (listed in `SolutionModel::warnings()`).
+- The `.slnx` default platform mapping is a heuristic (x86 to Win32; Any CPU to x64 or the first platform).
+- Two projects with the same GUID: GUID lookups return the first.
+- ProjectReferences to projects outside the solution are listed only in `ProjectInfo::externalReferences`, not in
+  the tree.
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `w1/project-sln`'s.
+- Its question (the SDK's environment variables and imported `.props`) is under the M1 entry's Questions for the
+  user; the orchestrator's decision on the trust file location is in the merge section above.
+
+### Slice record: `m1/display-map` (ADR 0026)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): it had no commit of its own before the PC restart, then one commit, 877893b, on
+2fef6ee. Worktree `.claude\worktrees\m1-display-map`. (Merge note: merged into `main` as b36c089 and pushed; the M1
+entry above.)
+
+#### Done
+- **frost::text::DisplayMap** (ADR 0026): four layers on SumTree in their final order. Identity fold and inlay
+  layers with their final query interfaces for M15; soft wrap off, by column or by width, with greedy breaks, wide
+  characters, ZWJ sequences and combining marks kept whole, and tabs measured from the row start; block
+  decorations above or below a line, anchored in a private AnchorSet so they follow edits and undo.
+- **Incremental updates:** `apply(ChangeSet, Snapshot)` re-wraps only the edited lines and returns a sorted
+  display-row patch.
+- **The ITextShaper seam** with the deterministic MonospaceTextShaper double.
+- **The API for editor-model and editor-view:** `toDisplayPoint`, `toOffset` and `toPoint` with Bias; `rowInfo` and
+  DisplayRowCursor for painting; `xAt`; cluster-aware `hitTest`; `moveVertically` with a goal x that skips block
+  rows; `checkInvariants`.
+- **Tests:** 25 functional tests in `text_tests` (about 0.2 s).
+- **Verification at 877893b** (its own `-Quick`): win 855/856 (1 environment skip), wsl 769/769.
+
+#### Known bugs
+- `reset(Snapshot)` drops all block decorations; callers must re-add them.
+- The width tables are approximate, hand-written UCD ranges.
+- `setWrap` and `setShaper` re-wrap synchronously and return a whole-map RowEdit (slow on very large files with
+  wrap on).
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/display-map`'s.
+- No questions for the user.
+
+### Slice record: `m1/keymap-de` (ADR 0030)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): saved as the WIP commit a2b2570 before the PC restart, then finished by a lean agent
+as one commit, 8f80e22, on 0110eff. Worktree `.claude\worktrees\m1-keymap-de`. (Merge note: merged into `main` as
+9ca6a04 and pushed; the M1 entry above.)
+
+#### Done
+- **Every default shortcut** of the built-in IntelliJ-compatible keymap is reachable on de-DE, on Windows and on
+  Linux under its M1 mapping (the user's decision "Support german keyboard layout", ADR 0016).
+- **Layout rule 3.6** (positional preference at punctuation, `src/input` `layout.hpp`) makes the '-' key right of
+  '.' the '/' shortcut key on de-DE: Comment Line is Ctrl+-, Comment Block Ctrl+Shift+-, and Fold Collapse moves to
+  Ctrl+ß and Ctrl+Num-. This matches JetBrains' documented Linux behaviour; Windows and Linux now agree.
+- **Synthesized key events** without scan codes match the hardware key for punctuation (`src/ui/input`
+  `key_translation.cpp`).
+- **Tests:** KeymapReachability (211 actions, 223 sequences; 0 gaps on de-DE and en-US; pl-PL and fr-FR checked,
+  no gaps), GermanDailyShortcuts, PositionalPreference with a 10k-seed property test. The old unreachable-binding
+  assertions moved to synthetic tables without a '/' key (moved, not weakened).
+- **ADR 0030** also records the user's by-name approval of libxkbcommon and xkeyboard-config (MIT plus HPND-style
+  notices; HPND is not on the general allowlist). Nothing is linked or shipped yet.
+- **Verification at 8f80e22** (its own `-Quick`): win debug 763/764 (1 skipped:
+  `LayoutOs.UsLayoutEqualsTheSimulatedTable`, the active layout was not en-US), wsl debug 677/677.
+
+#### Known bugs
+- Find Action parses shortcut queries with US key names: on de-DE "ctrl+-" finds Fold Collapse while the menu shows
+  Comment Line as Ctrl+-, and "ctrl+ß" does not parse (the fix goes into `m1/shell-nav`: search the display text;
+  Next).
+- A behaviour change on Windows de-DE: Ctrl+- was Fold Collapse and is now Comment Line.
+- Fold Expand (Ctrl+´), Quick Switch Scheme (Ctrl+^) and VCS Quick Popup (Alt+^) sit on dead keys on de-DE and may
+  compose on a real keyboard; Ctrl+Num+ is the Fold Expand alternative.
+
+#### Left
+- The items in the M1 entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/keymap-de`'s.
+- Its two questions (Build Solution's shortcut, the German Comment Line) are under the M1 entry's Questions for the
+  user.
 
 ### Slice record: `m1/encodings` (ADR 0018)
 
