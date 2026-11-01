@@ -9,8 +9,10 @@ M0's exit is met. `m0/decisions` and `m0/longpath` are merged into `m0/foundatio
 them: PLAN.md's M0 status and next-step lines, notes in ADRs 0011 and 0012, and pointers in the entries below. The
 launch from a path over 260 characters, the last unmet criterion, is met by ADR 0012, on two decisions by the user.
 The sign-off follows ADR 0011's G1: `verify -Full` on both platforms at `m0/foundation`'s final head, then, if it
-is green, the annotated tag `m0` with its footer on that commit, `main` created from it, and both pushed. The work
-was done in the main worktree, starting from `m0/foundation` at 593e15f, which was clean.
+is green, the annotated tag `m0` with its footer, `main` created from the tagged commit, and both pushed.
+`verify -Full` ran green at c87c56a (Verification, below). The commit that records it, "M0: sign-off record"
+(docs only), is the one tagged `m0` and the start of `main` (ADR 0011, G1 note). The work was done in the main
+worktree, starting from `m0/foundation` at 593e15f, which was clean.
 
 ### Done
 #### Landed on `m0/foundation`
@@ -30,7 +32,7 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
   E4, E5, G1, G3, Consequences) and ADR 0012 (the on-screen restart, the shell's limit); this entry; and the
   decided and done pointers in the entries below. Its commit message gives the on-screen restart's time as about
   16:00; it was about 16:30 (the fixes below).
-- **The exit record's check** (a read-only check of 09f428f) found 12 docs issues, all fixed in the next commit,
+- **c87c56a**, the exit record's fixes. A read-only check of 09f428f found 12 docs issues, all fixed in c87c56a,
   docs only, together with the on-screen README and the demo pack:
   - the restart's time (about 16:30, not 16:00);
   - the M0 status line's "S1 (ADR 0007, proposed)", now accepted;
@@ -44,6 +46,8 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
   - in the demo pack, row 16 back to pending until the push, its section 1 intro, and the new questions renamed
     LP1 and LP2, away from PLAN's load stages L0-L4;
   - which commit gets the tag (ADR 0011, G1 note).
+- **The sign-off record** (the commit tagged `m0`): the `-Full` footer of c87c56a here and in the demo pack,
+  docs only.
 - **Not merged:** `m0/e4-asan-runtime` (19157a8). It stays pushed for the record (E4, below).
 
 #### E1 in short: frost starts from any path length (ADR 0012)
@@ -132,13 +136,19 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
 - After each merge, on the merged tree: frost_lint ok (280 files, then 287), licensecheck ok, featurecheck ok, the
   tools tests 80/80 and `git diff --check` clean.
 - This exit record (docs only): frost_lint ok, featurecheck ok, licensecheck ok, `git diff --check` clean.
-- `verify -Full` at `m0/foundation`'s final head (the sign-off): <!--FULL-->
+- `verify -Full` at `m0/foundation`'s final head (the sign-off): c87c56a, `tools\verify.ps1 -Full -Jobs 8` on a
+  hidden desktop, 17:07-17:14, after `night.py build-gate` (no lock, 38.9 GB commit free), exit 0:
+  `Verified: win debug 415/415, win release 418/418, win asan 419/419, wsl debug 335/335, wsl asan 339/339, wsl
+  tsan 338/338, wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run`.
+  I7's six acceptance tests show `[ OK ]` in the Release and ASan legs, none skipped. Evidence:
+  `E:\FrostBuilds\perf\m0\signoff\` (`README.txt`, `verify_full.log`, the two ctest logs). The tagged sign-off
+  record is c87c56a plus this footer, docs only.
 
 ### Next
-- The sign-off (ADR 0011, G1). If `-Full` at the final head is green, record its footer in one more docs-only
-  commit ("M0: sign-off record"), tag that commit `m0` (annotated, with the `-Full` footer and a note that
-  `-Full` ran on its parent), create `main` from it, and push `m0/foundation`, `main`, `m0/decisions`,
-  `m0/longpath` and the tag.
+- The sign-off (ADR 0011, G1), right after this commit: tag it `m0` (annotated, with the `-Full` footer and a
+  note that `-Full` ran on its parent, c87c56a), create `main` from it, and push `m0/foundation`, `main`,
+  `m0/decisions`, `m0/longpath` and the tag, without a force. Then the demo pack marks rows 15, 16, 18, 21 and
+  26 as met.
 - **Next: M1.** It is already under way. `m1/piece-tree` has frost::text's piece tree (ADR 0013, three commits,
   not merged). `m1/storage`, `m1/input-keymap` and `m1/theme-icons` have worktrees but no commits yet, and
   `m1/diff-merge`, `m1/encodings` and `m1/undo-anchors` have worktrees on `m1/piece-tree`'s head (6fb6826),
@@ -150,7 +160,7 @@ was done in the main worktree, starting from `m0/foundation` at 593e15f, which w
 - ADR 0012's TODO(M2): sweep stale short links.
 
 ### Blockers
-- None for M0 apart from the `-Full` run at the final head.
+- None for M0: `-Full` is green at the final head (c87c56a).
 - B1 warm fails: about 195 ms on screen against p50 150 ms. That is M1 work (ADR 0011, A3), not an M0 exit
   criterion.
 
