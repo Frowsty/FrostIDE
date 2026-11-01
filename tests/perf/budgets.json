@@ -303,7 +303,7 @@
       "plan_metric": "F5 → breakpoint (up-to-date check included, compilation excluded) / step",
       "plan_target": "p50 1.0 s / 60 ms; p99 1.5 s / 100 ms",
       "plan_corpus": "R1",
-      "plan_gate": "M6",
+      "plan_gate": "M4",
       "variants": ["breakpoint", "step"],
       "percentiles": ["p50", "p99"],
       "targets": [
@@ -313,9 +313,9 @@
         { "variant": "step", "percentile": "p99", "max": 100, "unit": "ms" }
       ],
       "corpus": ["R1"],
-      "preconditions": "The build up-to-date check is included; compilation is excluded.",
+      "preconditions": "The build up-to-date check is included; compilation is excluded. Gated from M4 with U1's minimal debugger (ADR 0029, decision 12, moved from M6 with the feature; target unchanged).",
       "method": "F5 to the stopped event with the editor at the breakpoint; step request to the next stopped event painted (DAP and ETW markers).",
-      "gate": [{ "milestone": "M6" }]
+      "gate": [{ "milestone": "M4" }]
     },
     {
       "id": "B17",

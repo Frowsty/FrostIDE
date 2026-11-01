@@ -1,14 +1,16 @@
 # ADR 0029: Thin path to a first usable build
 
-- Status: proposed. D29 itself is the user's decision, quoted below. The sub-decisions under "Open questions" go
-  beyond the user's answer, and PLAN.md section 6.7 asks before any row moves or slice is redefined, so they go to
-  the user before this ADR is accepted and its branch merges.
+- Status: accepted (2026-11-01, evening). D29 itself is the user's decision, quoted below. The sub-decisions that
+  went beyond it were open questions Q1–Q5, which the user then answered ("Answers", below): Q1, Q2 and Q3 as
+  recommended, Q4 reversed (a minimal debugger in U1, decision 12) and Q5's thinner U1 declined.
 - Date: 2026-11-01; revised 2026-11-01 after the independent review (B23's path (c) gate, the U1 scenario's
   setup, recorders and steps, trust for Build, Run and the terminal, the MSBuild environment, the display-map
-  layers, the estimates, the P1 rows kept before Preview 0.1, the checks)
-- Plan reference: PLAN.md section 7 (roadmap, "First usable build (U1, the M4 exit)", M15–M17), Appendix A, section 4
-  (B15, B23), section 1.4 (P0 rows after Preview 0.1), sections 3.5 and 3.6 (trust, settings), section 9 (D29);
-  `tools/featurecheck.py`, `tools/frost_lint.py`, `tests/tools/test_budgets.py`
+  layers, the estimates, the P1 rows kept before Preview 0.1, the checks); revised again 2026-11-01 with the user's
+  answers (decision 12, the units, the scenario's debug steps)
+- Plan reference: PLAN.md section 7 (roadmap, "First usable build (U1, the M4 exit)", M4, M6, M15–M17), Appendix A,
+  section 4 (B15, B16, B23), section 1.4 (P0 rows after Preview 0.1), section 2 (Debuggers), sections 3.5 and 3.6
+  (trust, settings), section 9 (D29); ADR 0001 (lldb-dap); `tools/featurecheck.py`, `tools/frost_lint.py`,
+  `tests/tools/test_budgets.py`
 
 ## Context
 The user was asked: "Do you want a thin 'usable for real C++ work sooner' path (basic editor, CMake, clangd, build
@@ -41,44 +43,49 @@ Constraints set with the decision:
 1. **The first usable build (U1) is the M4 exit.** It is the smallest FrostIDE with which the user does real C++ work
    on a CMake project and on an MSVC .sln/.slnx/.vcxproj solution: open the project, browse it, edit with
    highlighting, data safety and the IntelliJ keymap, get clangd completion, diagnostics and navigation, build, open
-   build errors from the Build window, run, and use a terminal, which is also how Claude Code runs until the C1 bridge
-   (M5). PLAN.md section 7, "First usable build", lists what U1 contains under Open, Browse, Edit, Data safety,
-   Intelligence, Build and run, Terminal, Fast and Safe.
+   build errors from the Build window, run, debug with a minimal debugger (decision 12), and use a terminal, which is
+   also how Claude Code runs until the C1 bridge (M5). PLAN.md section 7, "First usable build", lists what U1
+   contains under Open, Browse, Edit, Data safety, Intelligence, Build and run, Debug, Terminal, Fast and Safe.
 2. **U1 has a scripted end-to-end acceptance scenario** on the existing corpora (`tests/e2e/u1`, frost-bench through
    the automation endpoint, a clean profile). PLAN.md section 7 gives the steps; their shape:
    - **Setup outside the scenario,** once per corpus pin: R3's build directory `E:\corpus\R3-build` is reconfigured
      from `E:\corpus\R3\llvm` with a toolchain file outside every worktree (its cache names a removed worktree's),
      with FrostIDE's `client-frostide` query, and `not` is built with its dependencies (`bin\not.exe` is absent
-     today); on Linux an ext4 checkout `~/corpus/R3` gets a pinned Linux configuration (none is pinned today). The
-     clean profile is seeded with an application-scope CMake profile naming the build directory (llvm's
-     CMakePresets.json gives none) and R3's persisted clangd index, so Find Usages and Switch Header/Source do not
-     depend on a cold index.
+     today); on Linux an ext4 checkout `~/corpus/R3` gets a pinned Linux configuration (none is pinned today), a
+     Debug build so that the Linux debug step's breakpoints bind and its locals are readable. The clean profile is
+     seeded with an application-scope CMake profile naming the build directory (llvm's CMakePresets.json gives none)
+     and R3's persisted clangd index, so Find Usages and Switch Header/Source do not depend on a cold index.
    - **Recorders:** the no-network recorder and the listener enumeration run throughout and assert on FrostIDE's own
-     process tree (frost, its crash handler, the engines and tools it supervises). The trees that Build, Run and the
-     terminal start are the user's code (MSBuild nodes, `mspdbsrv.exe`, Notepad++, the shell): recorded, not
-     asserted.
+     process tree (frost, its crash handler, the engines and tools it supervises, lldb-dap included). The trees that
+     Build, Run, Debug and the terminal start are the user's code (MSBuild nodes, `mspdbsrv.exe`, `not`, Notepad++,
+     the shell): recorded, not asserted.
    - **CMake on R3:** open `R3\llvm` in restricted mode (the target tree from the existing File API replies), trust;
      navigate `utils/not/not.cpp`; Find Usages and Switch Header/Source once L2 is reached; complete `llvm::outs()`
      at the top of `main`, before the early `return 1` of a run without arguments; inject an error; kill frost and
      get the dirty buffer back from the hot-exit journal; build (Save All writes the buffer first), open the error
-     from the Build window, fix, build; run `not` and see the injected output and exit code 1; revert the file from
-     the terminal and see the clean buffer reload; exit and reopen within B3 and B2.
+     from the Build window, fix, build; run `not` and see the injected output and exit code 1; on Linux, debug it (a
+     line breakpoint on the injected line, Step Into `llvm::outs()` and Step Out, Step Over past `--argc;`, a watch
+     and Evaluate, Continue to exit code 1); revert the file from the terminal and see the clean buffer reload; exit
+     and reopen within B3 and B2.
    - **MSVC on R2a:** open `PowerEditor\visual.net\notepadPlus.sln` in restricted mode, trust the root (the git work
      tree, which holds Scintilla and Lexilla), check clangd on `EncodingMapper.cpp`; select Debug|x64; inject an
      error, open MSVC's C2065 from the Build window, fix, build Notepad++, Scintilla and Lexilla; run Notepad++ with
-     its settings in a scratch directory and stop it through the Job Object.
+     its settings in a scratch directory and stop it through the Job Object; debug the cl.exe-built Notepad++ through
+     its PDB (a line breakpoint in `wWinMain`, the stack above the CRT start-up frames, stepping, a watch and
+     Evaluate, Continue, Pause to list its threads, Stop).
    - **Terminal:** the M4 Claude TUI probe, with its pre-seeded probe configuration and no prompt submitted.
      **Linux:** R2a's solution in approximate mode.
-   - It records B1, B2, B3, B8, B9, B10, B11, B17 and B20 samples (2x-budget smoke) and ends with
-     `git status --porcelain --untracked-files=no` empty for each corpus and only the root's `.frost/` untracked.
+   - It records B1, B2, B3, B8, B9, B10, B11, B17 and B20 samples (2x-budget smoke; B16's corpus is R1, so the
+     B-suite gates it) and ends with `git status --porcelain --untracked-files=no` empty for each corpus and only the
+     root's `.frost/` untracked.
 3. **M1–M4 shrink to their thin cores, and their deferred halves move.** M1's go to the new milestone M15, M2's and
-   M4's to M16 (the TODO window to M15), M3's to M17. The LLVM SDK artifacts go to M6, where the debugger first needs
-   them. No P0 or P1 row moves past Preview 0.1: the Rider-parity P1 rows that U1 does not need (rulers 252,
-   clipboard history 254, drag and drop 255, the TODO window 115) go to M15, not to M11. The table below lists every
-   move.
+   M4's to M16 (the TODO window to M15), M3's to M17. One block moves the other way: U1's minimal debugger comes
+   from M6 into M4 (decision 12), and the LLVM SDK artifacts, from which M4 builds lldb-dap, stay in M4. No P0 or P1
+   row moves past Preview 0.1: the Rider-parity P1 rows that U1 does not need (rulers 252, clipboard history 254,
+   drag and drop 255, the TODO window 115) go to M15, not to M11. The table below lists every move.
 4. **Order.** M0, M1, M2, M3, M4 (U1), M5 (dogfood v0.1), M15, M16, M17, M6 (Preview 0.1), then M7–M14. M5 comes
    before the completion milestones because Git and the Claude C1 bridge are the next most valuable things to a U1
-   user (open question Q3). M15–M17 come before M6, so every P0 row still lands by Preview 0.1 (PLAN.md section 1.4)
+   user (Q3, accepted). M15–M17 come before M6, so every P0 row still lands by Preview 0.1 (PLAN.md section 1.4)
    and the five P0 rows that already finished after Preview 0.1 (31, 99, 118, 227, 242) stay the only ones. With two
    agent streams (PLAN.md section 7, Levers), M15 and then M17 can run alongside M5; M16 needs both M5 and M15.
 5. **New milestone IDs M15, M16 and M17.** They are positions in the ladder only by section 7's order, not by number.
@@ -89,7 +96,7 @@ Constraints set with the decision:
    M17 → M15 fails). The budgets test compares gate milestones with the "Gate from" cell as whole IDs in both
    directions (a gate M1 no longer passes against a cell naming M15) and checks that every variant a gate or target
    names is declared. M0 joins frost-lint's `CLOSED_MILESTONES` after its sign-off.
-6. **Path (c) is U1's MSBuild evaluator; ProjectHost lands in M16** (open question Q1). `MSBuild.exe -getTargetResult`
+6. **Path (c) is U1's MSBuild evaluator; ProjectHost lands in M16** (Q1, accepted). `MSBuild.exe -getTargetResult`
    with the wrapper target of ADR 0005 runs the same MSBuild engine and the same design-time targets and global
    properties as ProjectHost (ADR 0005, decision 5), so M2's fidelity exit (every extracted command line compiles with
    `cl.exe /c` and matches msbuild-extractor-sample) applies unchanged, and M16 runs it again on ProjectHost. Path (c)
@@ -116,10 +123,13 @@ Constraints set with the decision:
    - the native window frame (M1); the frameless window replaces it (M15);
    - build output parsed from the console by code page and locale-independent anchors (M4); the MSBuild logger adds
      structured events (M16);
-   - Run builds the target first, after Save All (M4); the before-launch task list generalises it (M16).
+   - Run and Debug build the target first, after Save All (M4); the before-launch task list generalises it (M16);
+   - debugger values as lldb-dap's default formatters show them (M4); FrostIDE's LLDB STL formatters (M6) and natvis
+     through the DbgEng adapter (M10) replace them.
 8. **Budgets.** No target changes:
    - B15 (F1 first screen) moves from M1 to M15, with large-file mode, which U1 does not contain (it has the guard).
-   - B23's first project streamed is gated twice (open question Q2). At M2 on path (c), U1's evaluator, under the
+   - B16 (F5 → breakpoint / step, R1) moves from M6 to M4, with U1's minimal debugger (decision 12).
+   - B23's first project streamed is gated twice (Q2, accepted). At M2 on path (c), U1's evaluator, under the
      five preconditions of ADR 0011 B3, with `MSBuild.exe`'s cold start in place of ProjectHost's and the target in
      force at the M2 exit (3 s, or the final value if the user has set it from the S6 samples by then). At M16 on
      ProjectHost, as defined (ADR 0006, ADR 0011 B1), against the final value. This changes the M2 gate's method,
@@ -127,29 +137,58 @@ Constraints set with the decision:
      (c)'s Host.EXE at p50 331 ms with a warm file cache, against 1.90 s for a cold host, so 3 s looks reachable; a
      cold cache was not measured.
    Every other gate stays: B1, B5, B6, B19 (no project), B20 and B21 at M1; B2, B3, B4, B7, B13 (unindexed) and B23
-   (trees) at M2; B8–B11, B19 (R3), B22, B24 (M3 value), B25 and B26 at M3; B17 at M4; B14, B18 and B27 at M5; B16 at
-   M6; B12 at M7; B13 (indexed), B24 (final) and B26 (REF-L1) at M13; B28 at M0. `budgets.json` records both gates of
-   B23 (`"evaluator": "path (c)"` and `"ProjectHost"`) and B15's move in the preconditions.
+   (trees) at M2; B8–B11, B19 (R3), B22, B24 (M3 value), B25 and B26 at M3; B17 at M4; B14, B18 and B27 at M5; B12
+   at M7; B13 (indexed), B24 (final) and B26 (REF-L1) at M13; B28 at M0. `budgets.json` records both gates of B23
+   (`"evaluator": "path (c)"` and `"ProjectHost"`) and B15's and B16's moves in the preconditions.
 9. **The display map keeps its final shape from M1.** M1 builds all four layers in their order (folds → soft wraps →
    inlays → block decorations, PLAN.md section 2): the soft-wrap and block-decoration layers work, and the fold and
    inlay layers are identity layers. The block-decoration layer stays in M1 because the compare/merge view for a
    dirty buffer's external change (M1) and the diff viewer (M5) need its alignment fillers; the identity layers mean
    soft wrap's input does not change when M15 fills them, and M1's property test already runs on the final stack.
-10. **Trust covers U1's new ways to run code.** M4 refuses Build, Rebuild, Clean, Run and the build before Run in an
-    untrusted root; a planted File API reply that points an executable target at a binary in the repository, and a
-    `.frost/runConfigurations` command, never run before trust; the terminal in an untrusted root runs the
+10. **Trust covers U1's new ways to run code.** M4 refuses Build, Rebuild, Clean, Run, Debug and the build before Run
+    or Debug in an untrusted root, and starts no lldb-dap there (debugger init files such as the planted `.lldbinit`
+    were already blocked); a planted File API reply that points an executable target at a binary in the repository,
+    and a `.frost/runConfigurations` command, never run before trust; the terminal in an untrusted root runs the
     application-scope shell at its absolute path with NoDefaultCurrentDirectoryInExePath kept (ADR 0011, E2), so a
     command typed there never resolves to a planted binary. M4's exit extends the malicious-repository test to all of
     this. PLAN.md section 3.5 now names "MSBuild design-time builds (ProjectHost or path (c))" as blocked, defines a
     solution's root (its git work tree, or its directory outside one) and lets a CMake build directory outside the
     root be used only when the user chose it in an application-scope profile, never when a repository file names it.
-11. **Amended ADRs.** These carry an "Amended" header line that points here: ADR 0004 (milestone range, closed M0,
-    the run-order and gate checks), ADR 0006 (decision 1 is M16's plan; B23's two gates), ADR 0011 (B1's samples are
-    needed before M16, not M2, and M2 no longer depends on D3; B3's preconditions also apply to the path (c) gate; B4
-    is M16's target; B5 and E2 unchanged), ADR 0013 (`m1/large-file` is `m15/large-file`, its `TODO(M1)` a
-    `TODO(M15)`) and ADR 0016 (the Keymap page goes with the Settings dialog to M15; the Find Action popup stays in
-    M1). ADR 0017 is on `main` only: the merge updates its line about the `TODO(M1)` in `src/text/CMakeLists.txt`
-    (Consequences).
+11. **Amended ADRs.** These carry an "Amended" header line that points here: ADR 0001 (M4, not M6, sources
+    lldb-dap, by building it from the pinned LLVM sources on both operating systems; decision 12), ADR 0004
+    (milestone range, closed M0, the run-order and gate checks), ADR 0006 (decision 1 is M16's plan; B23's two
+    gates), ADR 0011 (B1's samples are needed before M16, not M2, and M2 no longer depends on D3; B3's preconditions
+    also apply to the path (c) gate; B4 is M16's target; B5 and E2 unchanged), ADR 0013 (`m1/large-file` is
+    `m15/large-file`, its `TODO(M1)` a `TODO(M15)`) and ADR 0016 (the Keymap page goes with the Settings dialog to
+    M15; the Find Action popup stays in M1). ADR 0017 is on `main` only: the merge updates its line about the
+    `TODO(M1)` in `src/text/CMakeLists.txt` (Consequences).
+12. **A minimal debugger is part of U1** (Q4, the recommendation reversed by the user). M4 gets, from M6:
+    - the DAP client (`IDebugAdapterClient`, its fake-dap double, the DAP 1.71 types from frost-codegen) and one
+      engine on Windows and Linux, lldb-dap, started under the supervisor at its absolute path. The official LLVM
+      23.1.4 packages give no usable lldb-dap (none on Windows; on Linux it links a libpython that Ubuntu 24.04 lacks,
+      S5), so M4 builds it from the pinned LLVM sources into E:\sdk and `~/sdk` and pins it in `sdk/sdk.lock.json`:
+      the LLVM SDK artifacts where S5 found gaps, which therefore stay in M4 (decision 3; ADR 0001 amended);
+    - Debug from a run configuration, after Save All and the build, as Run does; line breakpoints in the gutter,
+      kept per root in `.frost/workspace.json`; step over, into and out, continue, pause and stop; the Debug window
+      with the call stack, threads, variables, watches, Evaluate and the program's output; a stop at the faulting
+      frame on a crash or an unhandled exception. MSVC-built programs are debugged through their PDBs, DWARF
+      programs on Linux; values show as lldb-dap's default formatters give them (decision 7);
+    - matrix rows 175 (Debug window) and 178 (Evaluate, watches), owned by M4; rows 167 (debugger engine), 169 (line
+      breakpoints) and 173 (stepping), owned by M4 and completed in M6 (the GDB DAP profile; conditions, hit counts
+      and log messages; Run to Cursor and the other stepping actions); B16 at M4 (decision 8); FrostIDE debugging
+      itself (R1) and DAP conformance scenarios for every request and event M4 uses (M6 grows the suite to ≥60);
+    - **spike S10, first in M4:** lldb-dap 23.1.4 on R2a's cl.exe-built Notepad++ (Debug|x64, with PDBs) and on each
+      OS whether its default formatters need lldb's Python scripting, which settles ADR 0001's choice for the Linux
+      build. If S10 shows that lldb-dap cannot carry the scenario's Windows debug step, M4 stops and the user decides:
+      the alternative, the DbgEng adapter (M10), first needs the ComponentDownloader, network consent and a legal
+      review (D12, L5);
+    - no symbol servers or debuginfod: lldb-dap starts without `_NT_SYMBOL_PATH`, `_NT_ALT_SYMBOL_PATH` and
+      `DEBUGINFOD_URLS`, and the no-network test and the listener enumeration cover a debug session on each OS.
+
+    M6 keeps the rest of debugger v1 (the GDB DAP profile, function and exception breakpoints, the Breakpoints
+    dialog, conditions and log messages, Run to Cursor, Set Value, inline values, the debugger console, attach, LLDB
+    STL formatters, the CMake debugger, ptrace_scope detection), the test runner, installers and the updater; M10
+    keeps the DbgEng adapter. M5's packages carry M4's lldb-dap build.
 
 ### Moved items
 "Scope" is a PLAN.md section 7 scope item, "Exit" an exit criterion, "Gate" a budget gate, "Dep." a dependency.
@@ -211,12 +250,18 @@ Row numbers are Appendix A's. Every item is still required in its new milestone.
 | 52 | Gutter run icons for `main()` (row 164) | Scope | M4 | M16 | Still completes in M6. |
 | 53 | The CMakeLists language service (row 66) | Scope | M4 | M16 | |
 | 54 | The CMake cache viewer (row 13) | Scope | M4 | M16 | |
-| 55 | LLVM SDK artifacts where S5 found gaps | Scope | M4 | M6 | Merged with M6's Windows lldb-dap open item. |
+| 55 | The DAP client and lldb-dap on Windows and Linux (row 167's lldb part), with the Windows lldb-dap source that S5 left open, now built from the pinned LLVM sources | Scope | M6 | M4 | Decision 12 (Q4). The LLVM SDK artifacts it is built from stay in M4; this ADR's first draft had moved them to M6. Row 167's GDB DAP profile stays in M6. |
 | 56 | R5 builds from inside the IDE | Exit | M4 | M16 | R2b and R3 still build in M4. |
 | 57 | CMake completion and navigation goldens on R3's CMakeLists | Exit | M4 | M16 | |
-| 58 | Built SDK artifacts stored under E:\sdk and `~/sdk` and pinned in `sdk/sdk.lock.json` | Exit | M4 | M6 | |
+| 58 | FrostIDE debugs itself (R1) | Exit | M6 | M4 | Decision 12. The built SDK artifacts (lldb-dap) are stored under E:\sdk and `~/sdk` and pinned in `sdk/sdk.lock.json` at M4's exit, where they always were. |
 | 59 | D27 (ProjectHost runtime) | Dep. | M5 | M16 | M5's packages carry no ProjectHost yet. |
 | 60 | D17's conversion part | Dep. | M2 | M16 | Solution editing stays in M11. |
+| 61 | Line breakpoints (row 169) | Scope | M6 | M4 | Decision 12. Conditions, hit counts and log messages stay in M6, where the row completes. |
+| 62 | Stepping (row 173): over, into, out; continue, pause, stop | Scope | M6 | M4 | Run to Cursor and the other stepping actions stay in M6, where the row completes. |
+| 63 | The Debug window (row 175): call stack, threads, variables, the program's output | Scope | M6 | M4 | |
+| 64 | Evaluate and watches (row 178) | Scope | M6 | M4 | Set Value (row 179) stays in M6. |
+| 65 | B16 met | Exit, Gate | M6 | M4 | Target and corpus (R1) unchanged (decision 8). |
+| 66 | DAP conformance scenarios for the requests and events M4 uses | Exit | M6 | M4 | M6 grows the suite to ≥60 scenarios, M4's included. |
 
 **Added, not moved:**
 - M1: the identity fold and inlay layers and the property test on the full stack (decision 9); the large-file guard in
@@ -226,9 +271,14 @@ Row numbers are Appendix A's. Every item is still required in its new milestone.
   test, and live re-evaluation (decision 6); B23's first-project gate on path (c) (decision 8); a C# test-only
   SolutionPersistence oracle for the S50 equality test, which ProjectHost carried before; the solution-root and
   out-of-root build-directory rules and their malicious-repository cases (decision 10).
-- M4: Save All before Build and Run; the trust rules and tests for Build, Run and the terminal (decision 10); the U1
-  definition, the acceptance scenario with its setup (decision 2), the probe configuration of the TUI probe; M4
+- M4: Save All before Build, Run and Debug; the trust rules and tests for Build, Run, Debug and the terminal
+  (decision 10); the U1 definition, the acceptance scenario with its setup and its two debug steps (decision 2), the
+  probe configuration of the TUI probe; for the debugger (decision 12): spike S10, the crash fixtures built with
+  cl.exe and clang, variable goldens per OS for built-in types, pointers, arrays, structs and classes, the stop on
+  a crash or an unhandled exception, the symbol-server variables kept out of lldb-dap's environment, and a debug
+  session under the no-network test and the listener enumeration; R3's Linux configuration as a Debug build; M4
   depends on M3.
+- M5: its packages carry M4's lldb-dap build.
 - M15: the Settings pages for every key M1–M5 added, with a registry test; B5 and B6 rechecked with folds, inlays and
   several carets; the tests for rows 115, 252, 254 and 255.
 - M16: the malicious-repository test for imported run configurations and before-launch tasks.
@@ -241,13 +291,21 @@ Row numbers are Appendix A's. Every item is still required in its new milestone.
 | M1 | 11–13 | 8–9 | 3–4 (was 4–5) |
 | M2 | 12–14 | 9–10 | 5–6 (was 7–8) |
 | M3 | 10–12 | 7–8 | 7–8 (was 10–12) |
-| M4 (U1) | 9–11 | 6–7 | 9–10 (was 12–15) |
-| M15 | — | 6–7 | 13–15 |
-| M16 | — | 9–11 | 15–18 |
-| M17 | — | 5–6 | 17–20 |
-| M6 | 11–13 | 12–14 | 20–24 (was 17–21) |
+| M4 (U1) | 9–11 | 9–12 | 10–12 (was 12–15) |
+| M5 | 8–10 | 8–10 | 12–14 (was 14–17) |
+| M15 | — | 6–7 | 14–16 |
+| M16 | — | 9–11 | 16–19 |
+| M17 | — | 5–6 | 17–21 |
+| M6 | 11–13 | 9–11 | 20–24 (was 17–21) |
 | M11 | 9–11 | 9–11 | 31–38 (was 29–35) |
-| All milestones | 120–145 | 129–154 | M14 at 35–42 (was 33–40) |
+| All milestones | 120–145 | 129–156 | M14 at 35–43 (was 33–40) |
+
+The user's answer to Q4 moved U1's minimal debugger into M4 (decision 12): about 3 units from M6 (the DAP client,
+lldb-dap, line breakpoints, stepping, the Debug window, Evaluate and watches, B16 and FrostIDE debugging itself,
+with the LLVM SDK artifacts that this ADR's first draft had moved to M6), and up to 2 more for what U1 adds to it
+(spike S10, the trust and no-network cases of a debug session, the scenario's two debug steps and R3's Linux Debug
+configuration). M4 goes from 6–7 to 9–12 and M6 from 12–14 to 9–11; the milestones total 129–156, not 129–154.
+The paragraph below gives the estimates as the review left them, before that answer.
 
 The estimates changed in review. M16 takes in ProjectHost (about 3k lines of C#, StreamJsonRpc, workers and its fake),
 the MSBuild logger, conversion, New Project, the first-run wizard, C# with R5, the shell-integration commands, four
@@ -257,10 +315,10 @@ keeps the block-decoration layer and gains `m1/startup-b1`, `m1/keymap-fuzz`, th
 stand-in (8–9, not 7–8). M2 gains the oracle, the environment work and the path (c) gate (9–10). M4 gains the
 trust work and the scenario setup (6–7). M15 gains rows 115, 252, 254 and 255 and the settings pages, and loses
 the block layer (6–7); M11 returns to 9–11. The longer roadmap also spans more upgrades (5–7 LLVM majors and Qt
-minors instead of 5–6), so the upgrade track is 9–12 units, not 9–11. With it and 10% contingency the roadmap is
-152–183 weeks, about 2.9–3.5 years (was 142–172 weeks, 2.7–3.3 years). Months follow PLAN.md's model: cumulative
-units, plus the upgrade track's share and 10% contingency, at 4.33 weeks a month, rounded, month 1 being November
-2026 (it reproduces the old table exactly).
+minors instead of 5–6), so the upgrade track is 9–12 units, not 9–11. With it and 10% contingency the roadmap was
+152–183 weeks after the review and is 152–185 weeks with the debugger, about 2.9–3.6 years (was 142–172 weeks,
+2.7–3.3 years). Months follow PLAN.md's model: cumulative units, plus the upgrade track's share and 10%
+contingency, at 4.33 weeks a month, rounded, month 1 being November 2026 (it reproduces the old table exactly).
 
 ### M1 slices
 M1's remaining slices change as follows; the running ones keep their scope (the slice plan has the details).
@@ -294,18 +352,25 @@ directory, no `bin\not.exe`, a toolchain file path in a worktree that no longer 
 (12,364 shards) in `.cache\clangd\index`. `ExecuteAndWait` is called from `utils/not/not.cpp`,
 `lib/Support/GraphWriter.cpp` and `lib/Support/Signals.cpp`. `lib/Support/Program.cpp` includes the platform's
 `Program.inc`, which holds most definitions of `Program.h`, so the scenario switches between `WithColor.h` and
-`WithColor.cpp` instead.
+`WithColor.cpp` instead. For the debug steps, also checked on disk on 2026-11-01: `not.cpp`'s `main` starts with
+`bool ExpectCrash = false;`, then `++argv; --argc;`, and returns 1 at `if (argc == 0)` for a run without
+arguments; `R2a\PowerEditor\src\winmain.cpp`'s `wWinMain` calls `parseCommandLine(pCmdLine, params);` and then
+sets `isMultiInst`, `doFunctionListExport` and `doPrintAndQuit` from `params`. lldb-dap on cl.exe-built programs
+is not measured yet; that is spike S10's job (decision 12).
 
 ## Consequences
-- **Sooner:** U1 around month 9–10, 3–5 months before the old M4 exit (12–15) and 1–2 months before the old
-  "first usable checkpoint" (M3, 10–12), which had no build, run or terminal. M2 no longer waits for D3 or the S6 cold
-  samples.
-- **Costlier:** about 9 more units (129–154 against 120–145): three more milestone exits (demo packs, `-Full` and
+- **Sooner:** U1 around month 10–12, 2–3 months before the old M4 exit (12–15), with a debugger that the old plan
+  gave only at M6 (month 17–21); the old "first usable checkpoint" (M3, 10–12) had no build, run, debugger or
+  terminal. M2 no longer waits for D3 or the S6 cold samples.
+- **Costlier:** about 9–11 more units (129–156 against 120–145): three more milestone exits (demo packs, `-Full` and
   nightly runs, comment-accuracy reviews, sign-offs), the interim behaviours of decision 7 that later milestones
-  replace, work added for U1 (the scenario, the path (c) gate, the trust rules, the environment work) and work done
-  twice (the settings pages for keys added before the dialog). Preview 0.1 moves from month 17–21 to 20–24 and v1.0
-  from 33–40 to 35–42. The display map's layer design (PLAN.md section 2, "Editor rendering") and decision 9 keep
-  the fold and inlay layers from forcing a rewrite.
+  replace, work added for U1 (the scenario, the path (c) gate, the trust rules, the environment work, spike S10 and
+  the debug session's checks) and work done twice (the settings pages for keys added before the dialog). Preview
+  0.1 moves from month 17–21 to 20–24 and v1.0 from 33–40 to 35–43. The display map's layer design (PLAN.md section
+  2, "Editor rendering") and decision 9 keep the fold and inlay layers from forcing a rewrite.
+- **Riskier for M4:** lldb-dap's PDB and MSVC STL support is below Visual Studio's, and building lldb-dap is new
+  SDK work on both operating systems. Spike S10 runs first and stops M4 for the user's decision if it fails
+  (decision 12; PLAN.md section 8, T22).
 - **Slower until M16:** a cold open of an MSVC solution starts one MSBuild process per project and configuration
   instead of ProjectHost's workers, and the whole-environment fingerprint can invalidate more records than
   EnvironmentVariableRead capture would when the user's own environment changes. R2b's cold open is reported, not
@@ -314,9 +379,10 @@ directory, no `bin\not.exe`, a toolchain file path in a worktree that no longer 
   target, test or warning is weakened; every P0 and P1 row that was due by Preview 0.1 still lands by then; CLAUDE.md
   does not change.
 - **Done in this change:** PLAN.md (status, key decisions, the ladder, sections 1.1, 1.2, 1.4, 2, 2.2, 2.3, 3.4,
-  3.5, 3.6, 4, 7, 8, 9 and Appendix A); `tests/features/matrix.json` regenerated (41 rows change owner or completion;
-  statuses kept); `tests/perf/budgets.json` (B15, B23); the milestone range, the run-order and completion checks and
-  the closed M0 in `featurecheck.py` and `frost_lint.py`, the stricter gate checks in `test_budgets.py`, with tests
+  3.5, 3.6, 4, 6.4, 7, 8, 9 and Appendix A); `tests/features/matrix.json` regenerated (46 rows change owner or
+  completion, five of them the debugger rows 167, 169, 173, 175 and 178; statuses kept); `tests/perf/budgets.json`
+  (B15, B16, B23); the milestone range, the run-order and completion checks and the closed M0 in
+  `featurecheck.py` and `frost_lint.py`, the stricter gate checks in `test_budgets.py`, with tests
   and a ladder in featurecheck's fixture plan; the amended ADRs of decision 11; the to-do markers and comments whose
   work moved: `src/text/CMakeLists.txt` and `src/text/include/frost/text/snapshot.hpp` (large-file mode, now
   `TODO(M15)`), `tools/featurecheck.py` (the IntelliJ editor-settings checklist, now `TODO(M15)`),
@@ -336,8 +402,22 @@ directory, no `bin\not.exe`, a toolchain file path in a worktree that no longer 
   before it merges.
 - **Hand-off:** this branch does not edit `docs/progress.md`; the session that merges it records it there.
 
-## Open questions
-For the user before this ADR is accepted. Each has a recommendation; the branch implements the recommendation.
+## Answers
+The user answered the open questions below on 2026-11-01, in the evening: **"I agree with everything except 4 and
+5. I don't care for those savings"**. So:
+- **Q1 accepted:** path (c) is U1's MSBuild evaluator and ProjectHost lands in M16 (decision 6).
+- **Q2 accepted:** B23's first project is gated at M2 on path (c) and at M16 on ProjectHost (decision 8). This is
+  the user's approval that ADR 0006 decision 2 (A) asks for to change the M2 gate's method.
+- **Q3 accepted:** M5 runs right after U1, then M15, M16 and M17 (decision 4).
+- **Q4 reversed:** U1 has a minimal debugger: line breakpoints, stepping, the call stack, threads, variables and
+  watches, for MSVC-built programs through their PDBs, on Windows and Linux. It moves from M6 into M4 (decision 12),
+  at the cost the question named (M4 9–12 units instead of 6–7, U1 around month 10–12 instead of 9–10).
+- **Q5 declined:** U1 is not thinned further. Every item Q5 listed stays in U1, as the branch already had it.
+
+The questions as they were asked:
+
+## Open questions (answered)
+Asked before this ADR was accepted. Each had a recommendation, which the branch implemented.
 - **Q1. Path (c) as U1's MSBuild evaluator, ProjectHost in M16.** Recommended: yes. The alternative keeps ProjectHost
   in M2: about 2–3 more units before U1 (the C# host, StreamJsonRpc, its NuGet and licence checks, a supervisor
   protocol and its fake) for the same command lines that path (c) yields; U1 would then reopen solutions with warm
@@ -369,9 +449,17 @@ For the user before this ADR is accepted. Each has a recommendation; the branch 
   would slip past Preview 0.1, which needs the user's approval row by row (PLAN.md section 1.4).
 - **Rows 115, 252, 254 and 255 in M11** (this ADR's first draft). They would move from month 4–8 to 31–38, past
   Preview 0.1, which PLAN.md section 6.7 asks the user about; M15 keeps them before Preview 0.1 for the same work.
-- **Keep ProjectHost in M2.** Open question Q1.
+- **Keep ProjectHost in M2.** Q1; the user accepted path (c) instead.
 - **Report B23's first project at M2 without a gate** (this ADR's first draft). It leaves a feature U1 ships without
-  its budget, against the constraint that U1's budgets stay gated where the feature lands; open question Q2.
+  its budget, against the constraint that U1's budgets stay gated where the feature lands; Q2, answered with the
+  gate.
+- **Keep the debugger in M6** (Q4's recommendation). Rejected by the user ("Answers").
+- **The DbgEng adapter as U1's Windows debugger,** for natvis and full PDB fidelity. It needs the ComponentDownloader,
+  network consent and a legal review first (D12, L5), all later than M4; it stays M10's, and S10 decides whether
+  lldb-dap carries U1 (decision 12).
+- **A debugger in U1 on Linux only.** The user's daily work is MSVC solutions on Windows (ADR 0032), so U1 debugs
+  cl.exe-built programs through their PDBs.
+- **A thinner U1** (Q5). Declined by the user: "I don't care for those savings".
 - **Move the block-decoration layer to M15 too,** with the M1 merge view and M5's diff viewer aligning their panes
   some other way. That is a second alignment mechanism to build and later replace, and soft wrap's input would
   change when the fold layer arrives (decision 9).
