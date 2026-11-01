@@ -105,7 +105,8 @@ public:
      * fresh, and must still exist once it is locked (a recovery scan in another instance may
      * remove a new, still unlocked file as abandoned); otherwise create() retries with a new
      * random suffix (3 attempts). Creation is atomic (schema.hpp). Errors: as Database::open;
-     * IoError; InvalidArgument (chunkBytes); AlreadyExists after 3 failed attempts.
+     * IoError; InvalidArgument (chunkBytes, or a directory so long that a recovery scan could
+     * not quarantine the journal: see openStore); AlreadyExists after 3 failed attempts.
      */
     [[nodiscard]] static Result<HotExitJournal> create(std::string_view directory, IClock& clock = systemClock(),
                                                        const JournalOptions& options = {});
@@ -146,9 +147,10 @@ public:
     /*
      * Marks a clean shutdown (clean_shutdown = 1, committed while the lock is held) and closes.
      * Without entries (clean marks do not count) the files are then removed; otherwise they
-     * stay for the next start (hot exit). The object is unusable afterwards, whatever the
-     * result. Errors: those of the update and close; Busy when the removal finds the file open
-     * again (another instance's scan, which then removes it). Budget: B20.
+     * stay for the next start (hot exit). The removal waits at most 200 ms in all for other
+     * handles (the lock, and on Windows the delete). The object is unusable afterwards, whatever
+     * the result. Errors: those of the update and close; Busy when the removal finds the file
+     * open again (another instance's scan, which then removes it). Budget: B20.
      */
     [[nodiscard]] Result<void> closeCleanly();
 
@@ -245,7 +247,8 @@ struct RecoveryScan {
  * (another instance discarded them) are ignored. When several recovered journals hold the same
  * documentKey, the entry with the latest updatedAt is the newest.
  * Errors: only those of listing the directory; a missing directory gives an empty scan. Never
- * run it before the first frame; it waits up to lockWait per live journal. Budget: B1.
+ * run it before the first frame; it waits up to lockWait per live journal (and up to lockWait
+ * per removal or quarantine, for the lock and the delete together). Budget: B1.
  */
 [[nodiscard]] Result<RecoveryScan> findRecoverableJournals(std::string_view directory,
                                                            IClock::Duration lockWait = std::chrono::milliseconds(500),

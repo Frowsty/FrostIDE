@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Transaction: commit, rollback by destructor, nesting, inTransaction, read-only refusals and
-// SQLite's automatic rollbacks.
+// Transaction: commit, rollback by destructor, nesting, inTransaction, read-only refusals,
+// SQLite's automatic rollbacks, and rollback with an interrupt pending.
 
 #include "frost/storage/database.hpp"
 
 #include "support/scratch_dir.hpp"
 #include "support/storage_test_support.hpp"
 #include <gtest/gtest.h>
+
+#include <chrono>
 
 #include <sqlite3.h>
 
@@ -149,6 +151,69 @@ TEST_F(TransactionTest, RollbackAfterAutomaticRollbackIsHarmless) {
     EXPECT_FALSE(second->active());
     auto third = m_db->begin(TransactionKind::Immediate);
     EXPECT_TRUE(third.has_value());
+}
+
+/*
+ * An interrupt lands while a statement of the connection is still running (a stop callback
+ * firing mid-operation), so SQLite keeps the flag set and fails every new statement, ROLLBACK
+ * too. rollback() must still end SQLite's transaction and its write lock: afterwards begin()
+ * works, another connection can write, and the running statement reports Cancelled once (then
+ * runs again from the start).
+ */
+TEST_F(TransactionTest, RollbackEndsTheTransactionDespiteAPendingInterrupt) {
+    FROST_STORAGE_ASSERT_OK(m_db->execute("INSERT INTO t VALUES (1), (2), (3)"));
+    auto select = m_db->prepare("SELECT v FROM t ORDER BY v");
+    ASSERT_TRUE(select.has_value());
+    {
+        auto transaction = m_db->begin(TransactionKind::Immediate);
+        ASSERT_TRUE(transaction.has_value());
+        FROST_STORAGE_ASSERT_OK(m_db->execute("INSERT INTO t VALUES (4)"));
+        auto first = select->step();
+        ASSERT_TRUE(first.has_value() && *first); // A running statement.
+        EXPECT_EQ(select->columnInt64(0), 1);
+        m_db->interruptHandle().interrupt();
+        transaction->rollback();
+        EXPECT_FALSE(transaction->active());
+        EXPECT_NE(sqlite3_get_autocommit(m_db->nativeHandle()), 0)
+            << "rollback() returned while SQLite's transaction was still open";
+    }
+    auto next = select->step();
+    ASSERT_FALSE(next.has_value()) << "the interrupted statement started again silently";
+    EXPECT_EQ(next.error().code(), ErrorCode::Cancelled) << next.error().describe();
+    auto again = select->step();
+    ASSERT_TRUE(again.has_value() && *again) << (again ? "no row" : again.error().describe());
+    EXPECT_EQ(select->columnInt64(0), 1);
+    select->reset();
+    EXPECT_EQ(count(*m_db), 3); // The insert of 4 was rolled back.
+    {
+        auto transaction = m_db->begin(TransactionKind::Immediate);
+        ASSERT_TRUE(transaction.has_value()) << transaction.error().describe();
+        transaction->rollback();
+    }
+    auto options = fastOptions();
+    options.busyTimeout = std::chrono::milliseconds(300);
+    auto second = Database::open(m_dir.join("t.db"), options);
+    ASSERT_TRUE(second.has_value()) << second.error().describe();
+    FROST_STORAGE_ASSERT_OK(second->execute("INSERT INTO t VALUES (5)"));
+}
+
+// The destructor, with the statement still running and an interrupt pending, ends it too.
+TEST_F(TransactionTest, DestructorRollsBackDespiteAPendingInterrupt) {
+    FROST_STORAGE_ASSERT_OK(m_db->execute("INSERT INTO t VALUES (1), (2)"));
+    auto select = m_db->prepare("SELECT v FROM t");
+    ASSERT_TRUE(select.has_value());
+    {
+        auto transaction = m_db->begin(TransactionKind::Immediate);
+        ASSERT_TRUE(transaction.has_value());
+        FROST_STORAGE_ASSERT_OK(m_db->execute("INSERT INTO t VALUES (3)"));
+        ASSERT_TRUE(select->step().value_or(false));
+        m_db->interruptHandle().interrupt();
+    }
+    EXPECT_NE(sqlite3_get_autocommit(m_db->nativeHandle()), 0);
+    select = std::unexpected(frost::Error(ErrorCode::Unknown));
+    EXPECT_EQ(count(*m_db), 2);
+    auto transaction = m_db->begin(TransactionKind::Immediate);
+    EXPECT_TRUE(transaction.has_value()) << transaction.error().describe();
 }
 
 } // namespace

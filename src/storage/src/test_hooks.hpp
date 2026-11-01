@@ -44,5 +44,11 @@ inline constinit TestHook g_afterChunkWritten;
 inline constinit TestHook g_discardAfterCommit;
 // LocalHistory::prune: after the snapshot was loaded and its plan computed, before any delete.
 inline constinit TestHook g_pruneAfterSnapshot;
+// Quarantine and removal: after a VFS lock attempt found the file locked, before the sleep.
+inline constinit TestHook g_vfsLockBusy;
+// removeFiles: the main file is missing and a companion exists, before the placeholder is made.
+inline constinit TestHook g_removeFilesMainMissing;
+// Database::integrityCheck: after integrity_check passed, before foreign_key_check runs.
+inline constinit TestHook g_integrityBeforeForeignKeys;
 
 } // namespace frost::storage::detail

@@ -64,8 +64,8 @@ template<class... Args>
     return statement;
 }
 
-// Prepares, binds and runs a statement that returns no row (or whose rows are a RETURNING
-// clause the caller does not need: the first step's row is ignored). Returns changes().
+// Prepares, binds and runs a statement to completion, discarding every row it returns (none, or
+// a RETURNING clause the caller does not need). Returns changes().
 template<class... Args>
 [[nodiscard]] Result<std::int64_t> runSql(Database& db, std::string_view sql, const Args&... args) {
     auto statement = prepareBound(db, sql, args...);

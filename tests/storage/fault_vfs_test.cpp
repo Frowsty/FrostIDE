@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fault injection through the FaultVfs shim (support/fault_vfs.hpp): every write of a journal put
-// and of a store's creation fails in turn, checkpoint writes fail under commits, and syncs fail.
+// and every write and sync of a store's creation fails in turn; every sync and every truncate of
+// puts, a Truncate checkpoint and the close fails in turn; checkpoint writes fail under commits.
 // After each fault the files are reopened through the real VFS: the integrity check passes and
 // the data is the old state or the new one, never a mixture (the storage half of PLAN's "disk
 // full" injection).
@@ -201,18 +202,27 @@ constexpr Migration kFaultMigrations[] = {
 };
 constexpr SchemaSpec kFaultSpec{"fault store", kFaultId, "PRAGMA auto_vacuum=INCREMENTAL;", kFaultMigrations};
 
-TEST(FaultVfs, CreationSurvivesEveryWriteFailure) {
+/*
+ * Fails the call number `index` = 0, 1, ... of `op` during a store's creation (fresh schema,
+ * migrations, the switch to WAL), until a run in which the fault no longer fires. After each run
+ * the file, reopened through the real VFS, is fresh (then created now) or complete. At least
+ * `minimumPoints` + 1 points are swept.
+ */
+void creationSurvivesEveryFault(FaultVfs::Op op, int code, std::int64_t minimumPoints) {
     FaultVfs& vfs = FaultVfs::instance();
     ScratchDir dir("storage-fault");
     std::int64_t index = 0;
     for (; index < kMaxFaults; ++index) {
-        SCOPED_TRACE(std::format("write {}", index));
+        SCOPED_TRACE(std::format("fault {}", index));
         const std::string path = dir.join(std::format("create{}.db", index));
         vfs.reset();
-        vfs.failAt(FaultVfs::Op::Write, index, SQLITE_FULL);
+        vfs.failAt(op, index, code);
         OpenOptions options = fastOptions();
         options.vfs = FaultVfs::kName;
         options.schema = &kFaultSpec;
+        if (op == FaultVfs::Op::Sync) {
+            options.synchronous = Synchronous::Full; // Every commit syncs.
+        }
         bool succeeded = false;
         {
             auto db = Database::open(path, options);
@@ -245,7 +255,76 @@ TEST(FaultVfs, CreationSurvivesEveryWriteFailure) {
         }
     }
     EXPECT_LT(index, kMaxFaults);
-    EXPECT_GT(index, 2);
+    EXPECT_GT(index, minimumPoints);
+}
+
+TEST(FaultVfs, CreationSurvivesEveryWriteFailure) { creationSurvivesEveryFault(FaultVfs::Op::Write, SQLITE_FULL, 2); }
+
+TEST(FaultVfs, CreationSurvivesEverySyncFailure) {
+    creationSurvivesEveryFault(FaultVfs::Op::Sync, SQLITE_IOERR_FSYNC, 1);
+}
+
+/*
+ * Fails the call number `index` = 0, 1, ... of `op`, counted after a first put, during a put, a
+ * Truncate checkpoint, another put and the closing of the connection without a clean shutdown,
+ * until a run in which the fault no longer fires. Each run is then recovered through the real
+ * VFS: the journal is intact and holds the last put that reported success, or a later one whose
+ * outcome was unknown (an IoError). At least `minimumPoints` + 1 points are swept.
+ */
+void journalSurvivesEveryFault(FaultVfs::Op op, int code, std::int64_t minimumPoints) {
+    FaultVfs& vfs = FaultVfs::instance();
+    ScratchDir dir("storage-fault");
+    std::int64_t index = 0;
+    for (; index < kMaxFaults; ++index) {
+        SCOPED_TRACE(std::format("fault {}", index));
+        vfs.reset();
+        std::int64_t lastOk = 1;
+        bool allOk = true;
+        {
+            JournalOptions options = shimJournal();
+            options.synchronous = Synchronous::Full;
+            auto journal = HotExitJournal::create(dir.path(), frost::systemClock(), options);
+            ASSERT_TRUE(journal.has_value()) << journal.error().describe();
+            ASSERT_TRUE(putGeneration(*journal, 1).has_value());
+            vfs.reset();
+            vfs.failAt(op, index, code);
+            if (auto put = putGeneration(*journal, 2); put) {
+                lastOk = 2;
+            } else {
+                allOk = false;
+                EXPECT_EQ(put.error().code(), ErrorCode::IoError) << put.error().describe();
+            }
+            if (auto checkpointed = journal->database().checkpoint(CheckpointMode::Truncate); !checkpointed) {
+                allOk = false;
+                EXPECT_EQ(checkpointed.error().code(), ErrorCode::IoError) << checkpointed.error().describe();
+            }
+            if (auto put = putGeneration(*journal, 3); put) {
+                lastOk = 3;
+            } else {
+                allOk = false;
+                EXPECT_EQ(put.error().code(), ErrorCode::IoError) << put.error().describe();
+            }
+        } // A crash: no clean shutdown; the close's own checkpoint may meet the fault too.
+        const bool fired = vfs.fired();
+        vfs.reset();
+        const std::int64_t generation = recoverAndCheck(dir.path());
+        EXPECT_GE(generation, lastOk);
+        EXPECT_LE(generation, 3);
+        if (!fired) {
+            EXPECT_TRUE(allOk);
+            break;
+        }
+    }
+    EXPECT_LT(index, kMaxFaults);
+    EXPECT_GT(index, minimumPoints);
+}
+
+TEST(FaultVfs, JournalSurvivesEverySyncFailure) {
+    journalSurvivesEveryFault(FaultVfs::Op::Sync, SQLITE_IOERR_FSYNC, 2);
+}
+
+TEST(FaultVfs, JournalSurvivesEveryTruncateFailure) {
+    journalSurvivesEveryFault(FaultVfs::Op::Truncate, SQLITE_IOERR_TRUNCATE, 0);
 }
 
 TEST(FaultVfs, CheckpointWriteFailureDoesNotFailCommit) {

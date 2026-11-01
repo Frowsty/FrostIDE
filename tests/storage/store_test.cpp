@@ -1,23 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Store files: corrupt-file quarantine (byte-identical copies, streaming, Busy while open), the
-// Fail policy, truncated and damaged files, removeDatabaseFiles, and the WAL guarantees SQLite
-// gives (a torn tail, stale frames after a restart, a stale -wal beside a missing database).
+// Store files: corrupt-file quarantine (byte-identical copies, streaming, Busy while open, files
+// that vanish or are replaced while we wait, the path limit), the Fail policy, truncated and
+// damaged files, removeDatabaseFiles (also beside a store created meanwhile, or one that replaced
+// the file while the removal waited), and the WAL guarantees SQLite gives (a torn tail, stale
+// frames after a restart, a stale -wal beside a missing database).
 
 #include "frost/io/path.hpp"
 #include "frost/storage/database.hpp"
 #include "frost/storage/schema.hpp"
 #include "frost/storage/store.hpp"
 
+#include "database_files.hpp"
 #include "support/hook_guard.hpp"
 #include "support/scratch_dir.hpp"
 #include "support/storage_test_support.hpp"
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstddef>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <sqlite3.h>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -291,6 +302,334 @@ TEST(Store, QuarantineSparesAStoreThatReplacedTheCorruptFile) {
     }
     EXPECT_EQ(namesStartingWith(dir.path(), "s.db.corrupt-").size(), 1u);
 }
+
+// The corrupt file vanishes between our verdict and our lock (another instance quarantined it
+// and has not created its fresh store yet): openStore opens again and creates the store.
+TEST(Store, QuarantineOpensAgainWhenTheCorruptFileVanished) {
+    ScratchDir dir("storage-store");
+    const std::string path = dir.join("v.db");
+    writeBytes(path, randomBytes(8192, 9));
+    struct Vanish {
+        std::string path;
+        bool ran = false;
+        std::string error;
+    } vanish{path, false, {}};
+    HookGuard guard(
+        frost::storage::detail::g_openStoreBeforeQuarantine,
+        [](void* context) {
+            auto* state = static_cast<Vanish*>(context);
+            if (state->ran) {
+                return;
+            }
+            state->ran = true;
+            if (auto removed = frost::io::realFileSystem().removeFile(state->path); !removed) {
+                state->error = removed.error().describe();
+            }
+        },
+        &vanish);
+    auto outcome = openStore(path, storeOptions(), CorruptPolicy::Quarantine);
+    ASSERT_TRUE(vanish.ran);
+    ASSERT_TRUE(vanish.error.empty()) << vanish.error;
+    ASSERT_TRUE(outcome.has_value()) << outcome.error().describe();
+    EXPECT_FALSE(outcome->quarantined.has_value());
+    FROST_STORAGE_ASSERT_OK(outcome->database.execute("INSERT INTO t (v) VALUES (1)"));
+    EXPECT_TRUE(namesStartingWith(dir.path(), "v.db.corrupt-").empty());
+}
+
+/*
+ * Removal finds the main file missing but a stale -wal beside it, and at that instant another
+ * process creates a store at the path (the hook plays it) and keeps it open. The -wal and -shm it
+ * has now are live: the removal must not delete them, and reports Busy as for any open store.
+ */
+TEST(Store, RemovalSparesCompanionsOfAStoreCreatedMeanwhile) {
+    ScratchDir dir("storage-store");
+    const std::string path = dir.join("c.db");
+    writeBytes(path + "-wal", "stale");
+    struct Creator {
+        std::string path;
+        bool ran = false;
+        std::optional<Database> store;
+        std::string error;
+    } creator{path, false, std::nullopt, {}};
+    {
+        HookGuard guard(
+            frost::storage::detail::g_removeFilesMainMissing,
+            [](void* context) {
+                auto* state = static_cast<Creator*>(context);
+                if (state->ran) {
+                    return;
+                }
+                state->ran = true;
+                auto db = Database::open(state->path, storeOptions());
+                if (!db) {
+                    state->error = db.error().describe();
+                    return;
+                }
+                if (auto inserted = db->execute("INSERT INTO t (v) VALUES (7)"); !inserted) {
+                    state->error = inserted.error().describe();
+                    return;
+                }
+                state->store.emplace(std::move(*db));
+            },
+            &creator);
+        auto removed = frost::storage::detail::removeFiles(path, std::chrono::milliseconds(100));
+        ASSERT_TRUE(creator.ran);
+        ASSERT_TRUE(creator.error.empty()) << creator.error;
+        ASSERT_FALSE(removed.has_value()) << "removed the files of a store that is open";
+        EXPECT_EQ(removed.error().code(), ErrorCode::Busy) << removed.error().describe();
+    }
+    EXPECT_TRUE(fileExists(path));
+    EXPECT_TRUE(fileExists(path + "-wal"));
+    EXPECT_TRUE(fileExists(path + "-shm"));
+    ASSERT_TRUE(creator.store.has_value());
+    FROST_STORAGE_ASSERT_OK(creator.store->execute("INSERT INTO t (v) VALUES (8)"));
+    FROST_STORAGE_ASSERT_OK(creator.store->close());
+    auto reopened = Database::open(path, storeOptions());
+    ASSERT_TRUE(reopened.has_value()) << reopened.error().describe();
+    auto rows = reopened->prepare("SELECT count(*) FROM t");
+    ASSERT_TRUE(rows.has_value() && rows->step().value_or(false));
+    EXPECT_EQ(rows->columnInt64(0), 2);
+}
+
+#ifndef _WIN32
+// SQLite's EXCLUSIVE lock on a file, taken through the default VFS as another instance's
+// quarantine takes it (an in-process stand-in: the unix VFS sees in-process lock holders).
+class OtherInstanceLock {
+public:
+    explicit OtherInstanceLock(const std::string& path) : m_vfs(sqlite3_vfs_find(nullptr)) {
+        const auto words =
+            (static_cast<std::size_t>(m_vfs->szOsFile) + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
+        m_storage = std::make_unique<std::max_align_t[]>(words);
+        m_names =
+            sqlite3_create_filename(path.c_str(), (path + "-journal").c_str(), (path + "-wal").c_str(), 0, nullptr);
+        int outFlags = 0;
+        const int rc = m_vfs->xOpen(m_vfs, m_names, file(), SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_READWRITE, &outFlags);
+        m_open = file()->pMethods != nullptr;
+        m_locked = rc == SQLITE_OK && file()->pMethods->xLock(file(), SQLITE_LOCK_SHARED) == SQLITE_OK &&
+                   file()->pMethods->xLock(file(), SQLITE_LOCK_RESERVED) == SQLITE_OK &&
+                   file()->pMethods->xLock(file(), SQLITE_LOCK_EXCLUSIVE) == SQLITE_OK;
+    }
+    ~OtherInstanceLock() {
+        release();
+        sqlite3_free_filename(m_names);
+    }
+    OtherInstanceLock(const OtherInstanceLock&) = delete ("owns an open file");
+    OtherInstanceLock& operator=(const OtherInstanceLock&) = delete ("owns an open file");
+
+    [[nodiscard]] bool locked() const noexcept { return m_locked; }
+    // Unlocks and closes the file (the other instance is done with the old inode).
+    void release() noexcept {
+        if (m_open) {
+            static_cast<void>(file()->pMethods->xUnlock(file(), SQLITE_LOCK_NONE));
+            static_cast<void>(file()->pMethods->xClose(file()));
+            m_open = false;
+        }
+    }
+
+private:
+    [[nodiscard]] sqlite3_file* file() noexcept { return reinterpret_cast<sqlite3_file*>(m_storage.get()); }
+
+    sqlite3_vfs* m_vfs;
+    std::unique_ptr<std::max_align_t[]> m_storage;
+    sqlite3_filename m_names = nullptr;
+    bool m_open = false;
+    bool m_locked = false;
+};
+
+/*
+ * POSIX: another instance holds the quarantine lock while our openStore waits for it; it unlinks
+ * the corrupt file, creates a fresh store with a row at the same path (with `recreate`), and lets
+ * go of the old inode. Our lock then lands on that unlinked inode, which must be recognised as
+ * moved: nothing is copied or removed, and the path is opened again, so the other instance's
+ * store and row stay and ours is the same file. (On Windows the other instance could not delete a
+ * file our handle has open.)
+ */
+void expectWaitingQuarantineSparesTheReplacement(bool recreate) {
+    ScratchDir dir("storage-store");
+    const std::string path = dir.join("h.db");
+    writeBytes(path, randomBytes(std::size_t{64} << 10, 3));
+    struct Other {
+        std::string path;
+        bool recreate = false;
+        std::unique_ptr<OtherInstanceLock> lock;
+        std::optional<Database> store;
+        int busyCalls = 0;
+        std::string error;
+    } other{path, recreate, nullptr, std::nullopt, 0, {}};
+    HookGuard verdict(
+        frost::storage::detail::g_openStoreBeforeQuarantine,
+        [](void* context) {
+            auto* state = static_cast<Other*>(context);
+            if (state->lock == nullptr) {
+                state->lock = std::make_unique<OtherInstanceLock>(state->path);
+                if (!state->lock->locked()) {
+                    state->error = "the other instance's lock was not granted";
+                }
+            }
+        },
+        &other);
+    HookGuard busy(
+        frost::storage::detail::g_vfsLockBusy,
+        [](void* context) {
+            auto* state = static_cast<Other*>(context);
+            if (++state->busyCalls != 1 || state->lock == nullptr) {
+                return;
+            }
+            // The other instance's removal (under its lock), its fresh store, then its unlock.
+            if (::unlink(state->path.c_str()) != 0) {
+                state->error = "unlink failed";
+            }
+            if (state->recreate) {
+                auto fresh = Database::open(state->path, storeOptions());
+                if (!fresh) {
+                    state->error = fresh.error().describe();
+                } else if (auto inserted = fresh->execute("INSERT INTO t (v) VALUES (42)"); !inserted) {
+                    state->error = inserted.error().describe();
+                } else {
+                    state->store.emplace(std::move(*fresh));
+                }
+            }
+            state->lock->release();
+        },
+        &other);
+    auto outcome = openStore(path, storeOptions(), CorruptPolicy::Quarantine);
+    ASSERT_TRUE(other.error.empty()) << other.error;
+    ASSERT_GE(other.busyCalls, 1) << "our quarantine never waited for the other instance's lock";
+    ASSERT_TRUE(outcome.has_value()) << outcome.error().describe();
+    EXPECT_FALSE(outcome->quarantined.has_value()) << "quarantined " << outcome->quarantined->movedTo;
+    EXPECT_TRUE(namesStartingWith(dir.path(), "h.db.corrupt-").empty());
+    FROST_STORAGE_ASSERT_OK(outcome->database.execute("INSERT INTO t (v) VALUES (43)"));
+    if (recreate) {
+        ASSERT_TRUE(other.store.has_value());
+        auto seen = other.store->prepare("SELECT count(*) FROM t WHERE v IN (42, 43)");
+        ASSERT_TRUE(seen.has_value() && seen->step().value_or(false));
+        EXPECT_EQ(seen->columnInt64(0), 2) << "the other instance's store is no longer the file at the path";
+    }
+}
+
+TEST(Store, WaitingQuarantineSparesAStoreCreatedAfterTheUnlink) { expectWaitingQuarantineSparesTheReplacement(true); }
+
+TEST(Store, WaitingQuarantineOfAnUnlinkedFileOpensAgain) { expectWaitingQuarantineSparesTheReplacement(false); }
+
+/*
+ * POSIX, the same race for removal: another instance holds the lock while removeFiles waits for
+ * it, unlinks the store, creates a fresh one with a row at the same path and lets go of the old
+ * inode. Our lock then lands on that unlinked inode; removing by name would now unlink the other
+ * instance's live store. The removal must look at the path again instead, find the fresh store
+ * open (Busy) and leave it, with its row, at the path.
+ */
+TEST(Store, WaitingRemovalSparesAStoreCreatedAfterTheUnlink) {
+    ScratchDir dir("storage-store");
+    const std::string path = dir.join("r.db");
+    {
+        auto created = Database::open(path, storeOptions());
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        FROST_STORAGE_ASSERT_OK(created->close());
+    }
+    struct Other {
+        std::string path;
+        std::unique_ptr<OtherInstanceLock> lock;
+        std::optional<Database> store;
+        int busyCalls = 0;
+        std::string error;
+    } other{path, std::make_unique<OtherInstanceLock>(path), std::nullopt, 0, {}};
+    ASSERT_TRUE(other.lock->locked());
+    HookGuard busy(
+        frost::storage::detail::g_vfsLockBusy,
+        [](void* context) {
+            auto* state = static_cast<Other*>(context);
+            if (++state->busyCalls != 1) {
+                return;
+            }
+            // The other instance's removal (under its lock), its fresh store, then its unlock.
+            if (::unlink(state->path.c_str()) != 0) {
+                state->error = "unlink failed";
+            }
+            auto fresh = Database::open(state->path, storeOptions());
+            if (!fresh) {
+                state->error = fresh.error().describe();
+            } else if (auto inserted = fresh->execute("INSERT INTO t (v) VALUES (42)"); !inserted) {
+                state->error = inserted.error().describe();
+            } else {
+                state->store.emplace(std::move(*fresh));
+            }
+            state->lock->release();
+        },
+        &other);
+    auto removed = frost::storage::detail::removeFiles(path, std::chrono::milliseconds(300));
+    ASSERT_TRUE(other.error.empty()) << other.error;
+    ASSERT_GE(other.busyCalls, 1) << "the removal never waited for the other instance's lock";
+    ASSERT_FALSE(removed.has_value()) << "removed the other instance's fresh store";
+    EXPECT_EQ(removed.error().code(), ErrorCode::Busy) << removed.error().describe();
+    ASSERT_TRUE(other.store.has_value());
+    EXPECT_TRUE(fileExists(path));
+    EXPECT_TRUE(fileExists(path + "-wal"));
+    // A new connection reaches the other instance's store through the path.
+    auto reader = Database::open(path, storeOptions());
+    ASSERT_TRUE(reader.has_value()) << reader.error().describe();
+    auto seen = reader->prepare("SELECT count(*) FROM t WHERE v = 42");
+    ASSERT_TRUE(seen.has_value() && seen->step().value_or(false));
+    EXPECT_EQ(seen->columnInt64(0), 1) << "the store at the path is not the other instance's";
+}
+
+/*
+ * Linux: the unix VFS takes names below 512 bytes, and a quarantine copy's name is 25 bytes
+ * longer than the store's (plus a "-n" counter). A store path whose copy would not fit is refused
+ * by openStore up front, so it can never be created and then be impossible to quarantine; one
+ * byte shorter quarantines normally. quarantineFiles also checks the copy's name itself.
+ */
+TEST(Store, PathTooLongForQuarantineRefusedUpFront) {
+    ScratchDir dir("storage-store");
+    sqlite3_vfs* defaultVfs = sqlite3_vfs_find(nullptr);
+    ASSERT_NE(defaultVfs, nullptr);
+    const std::size_t limit = static_cast<std::size_t>(defaultVfs->mxPathname);
+    // About 300 bytes of directories, so every file name (copies included) stays under NAME_MAX.
+    std::string folder = dir.path();
+    while (folder.size() < 300) {
+        folder += "/" + std::string(60, 'd');
+    }
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(folder).has_value());
+    const auto storeNamed = [&folder](std::size_t pathBytes) {
+        return folder + "/" + std::string(pathBytes - folder.size() - 1 - 3, 's') + ".db";
+    };
+    // The longest path openStore takes with Quarantine: path + suffix + "-journal" below the limit.
+    const std::size_t longest = limit - 1 - 8 - frost::storage::detail::kQuarantineSuffixBytes;
+    const std::string fits = storeNamed(longest);
+    ASSERT_EQ(fits.size(), longest);
+    const std::string garbage = randomBytes(8192, 5);
+    writeBytes(fits, garbage);
+    {
+        auto outcome = openStore(fits, storeOptions(), CorruptPolicy::Quarantine);
+        ASSERT_TRUE(outcome.has_value()) << outcome.error().describe();
+        ASSERT_TRUE(outcome->quarantined.has_value());
+        EXPECT_EQ(readBytes(outcome->quarantined->movedTo), garbage);
+    }
+    const std::string tooLong = storeNamed(longest + 1);
+    writeBytes(tooLong, garbage);
+    auto refused = openStore(tooLong, storeOptions(), CorruptPolicy::Quarantine);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), ErrorCode::InvalidArgument) << refused.error().describe();
+    EXPECT_EQ(readBytes(tooLong), garbage);
+    // The limit is quarantine's: the Fail policy opens (and judges) the same path.
+    auto judged = openStore(tooLong, storeOptions(), CorruptPolicy::Fail);
+    ASSERT_FALSE(judged.has_value());
+    EXPECT_EQ(judged.error().code(), ErrorCode::Corrupt) << judged.error().describe();
+    // A path Database::open takes but whose copy's name cannot fit even without a counter.
+    const std::string noRoom = storeNamed(limit - 20);
+    writeBytes(noRoom, garbage);
+    frost::ManualClock clock;
+    auto direct = frost::storage::detail::quarantineFiles(noRoom, clock, std::chrono::seconds(1));
+    ASSERT_FALSE(direct.has_value());
+    EXPECT_EQ(direct.error().code(), ErrorCode::InvalidArgument) << direct.error().describe();
+    EXPECT_EQ(readBytes(noRoom), garbage);
+    std::size_t copies = 0;
+    for (const std::string& name : namesStartingWith(folder, "s")) {
+        const bool companion = name.ends_with("-wal") || name.ends_with("-shm") || name.ends_with("-journal");
+        copies += name.find(".corrupt-") != std::string::npos && !companion ? 1 : 0;
+    }
+    EXPECT_EQ(copies, 1u); // Only the quarantine of `fits`.
+}
+#endif
 
 TEST(Store, FailPolicyLeavesFileInPlace) {
     ScratchDir dir("storage-store");

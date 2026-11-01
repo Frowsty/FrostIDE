@@ -70,7 +70,10 @@ public:
      * Runs the statement to its next row: true when a row is available, false when it is done.
      * After an error, call reset() before reusing the statement. Errors: as sqlite_error.hpp maps
      * them (Busy, Cancelled after an interrupt, Corrupt, IoError, AlreadyExists for UNIQUE and
-     * PRIMARY KEY violations, InvalidArgument for other constraint violations, ...).
+     * PRIMARY KEY violations, InvalidArgument for other constraint violations, ...). Cancelled
+     * also when Transaction::rollback reset this running statement because an interrupt was
+     * pending (database.hpp); the statement is then reset, and its columns read as NULL until
+     * that step.
      */
     [[nodiscard]] Result<bool> step();
     // Steps once expecting no row, then resets (also on failure), so the statement can be
@@ -114,6 +117,7 @@ private:
     sqlite3_stmt* m_stmt = nullptr;             // Owned.
     bool m_hasRow = false;                      // The last step() returned a row.
     bool m_stepped = false;                     // Stepped since the last reset (binding is refused).
+    std::uint64_t m_rowResets = 0;              // Connection::statementResets at the last row.
 };
 
 } // namespace frost::storage

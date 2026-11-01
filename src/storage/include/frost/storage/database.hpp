@@ -168,14 +168,18 @@ public:
      * the WAL (normally bounded by walAutoCheckpointPages plus the last transaction; more when
      * readers kept the hook's checkpoints from completing) and removes -wal and -shm.
      * Precondition (FROST_PRE): no Statement and no open Transaction of this Database is alive.
-     * Afterwards the object is like a moved-from one. Budget: B20.
+     * Afterwards the object is like a moved-from one, whatever the result. Errors: Busy when a
+     * statement prepared through nativeHandle() is still unfinalized (SQLite then frees the
+     * handle once it is finalized). Budget: B20.
      */
     [[nodiscard]] Result<void> close();
 
     // Prepares exactly one statement. Trailing whitespace and comments are fine; trailing SQL
-    // is InvalidArgument. Errors: InvalidArgument (syntax), Busy (schema locked). O(SQL length).
+    // and a NUL byte anywhere are InvalidArgument. Errors: InvalidArgument (syntax, more than one
+    // statement, NUL), Busy (schema locked). O(SQL length).
     [[nodiscard]] Result<Statement> prepare(std::string_view sql);
-    // Runs one or more statements without parameters (DDL, PRAGMA), discarding any rows.
+    // Runs one or more statements without parameters (DDL, PRAGMA), discarding any rows. Errors:
+    // as prepare and Statement::step (a NUL byte is InvalidArgument and runs nothing).
     [[nodiscard]] Result<void> execute(std::string_view sql);
 
     /*
@@ -194,7 +198,8 @@ public:
     [[nodiscard]] Result<CheckpointResult> checkpoint(CheckpointMode mode = CheckpointMode::Passive);
     // PRAGMA quick_check. Corrupt carries the first 10 problems. Cancelled on a stop request. O(size).
     [[nodiscard]] Result<void> quickCheck(std::stop_token stop = {});
-    // PRAGMA integrity_check, then foreign_key_check. As quickCheck, but slower and thorough.
+    // PRAGMA integrity_check, then foreign_key_check. As quickCheck, but slower and thorough; a
+    // stop request cancels either pass.
     [[nodiscard]] Result<void> integrityCheck(std::stop_token stop = {});
 
     [[nodiscard]] std::int64_t lastInsertRowId() const noexcept;
@@ -235,7 +240,17 @@ public:
      * a commit never reach commit() (our WAL hook keeps them).
      */
     [[nodiscard]] Result<void> commit();
-    // Idempotent; a no-op when SQLite already rolled back (sqlite3_get_autocommit).
+    /*
+     * Rolls back. Idempotent; a no-op when SQLite already rolled back (sqlite3_get_autocommit).
+     * When an interrupt is pending (InterruptHandle::interrupt while another statement of the
+     * connection was running), SQLite fails every new statement, ROLLBACK too, until no statement
+     * is active, so rollback() then resets the connection's running statements and retries: the
+     * interrupt has cancelled them anyway, and their next step() reports Cancelled (their current
+     * row is gone; columns read as NULL). Should ROLLBACK still fail (only a new interrupt in the
+     * instant it starts, several times over, can do that), the transaction stays open and
+     * active() stays true; the destructor then ends the object, and begin() keeps refusing until
+     * close() rolls back. O(statements of the connection).
+     */
     void rollback() noexcept;
     // Whether the transaction is still open.
     [[nodiscard]] bool active() const noexcept { return m_connection != nullptr; }
@@ -244,6 +259,7 @@ private:
     friend class Database;
     explicit Transaction(detail::Connection* connection) noexcept : m_connection(connection) {}
     void finish() noexcept;
+    void end() noexcept; // rollback(), then finish() even if that failed: destructor, assignment.
 
     detail::Connection* m_connection = nullptr; // Not owned; null once ended.
 };

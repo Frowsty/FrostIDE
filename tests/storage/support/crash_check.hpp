@@ -159,11 +159,19 @@ inline void killJournalPutOnce(const std::string& dir, std::size_t size, std::ui
 }
 
 /*
- * Checks a local-history store after a kill of history-record-loop: integrity, every revision's
- * content verifies (size, chunk count, XXH3-128), no orphan chunks or blobs, chunk counts match,
- * and the revision count is the number of printed records or one more.
+ * Checks a local-history store after kills of history-record-loop: integrity, no orphan chunks
+ * or blobs, chunk counts match, and the revisions, in id order, are exactly what the children
+ * recorded. Child k ran with seed firstSeed + k and recorded historyContent(seed, n) under
+ * historyKey(n) for n = 1, 2, ...; it printed printed[k] records before the kill, so it made
+ * printed[k] revisions or one more (killed between a commit and its line). Each revision's
+ * content is read through LocalHistory::content, which verifies size, chunk count and XXH3-128,
+ * and must also equal the generator's bytes: the store's own checksums alone would accept bytes
+ * that are consistently wrong (chunks out of order, the wrong piece). Content mismatches are
+ * non-fatal failures. (A record equal to its path's newest revision adds nothing; with seeded
+ * contents that needs two empty ones, which is practically impossible.)
  */
-inline void verifyHistoryStore(const std::string& path, std::uint64_t printedTotal, std::uint64_t kills) {
+inline void verifyHistoryStore(const std::string& path, std::uint64_t firstSeed,
+                               const std::vector<std::uint64_t>& printed) {
     {
         RawDb raw(path);
         sqlite3_busy_timeout(raw.get(), 5000);
@@ -177,28 +185,60 @@ inline void verifyHistoryStore(const std::string& path, std::uint64_t printedTot
         EXPECT_EQ(raw.queryInt("SELECT count(*) FROM lh_blob b WHERE chunk_count != "
                                "(SELECT count(*) FROM lh_chunk c WHERE c.blob_id = b.id)"),
                   0);
-        const auto revisions = static_cast<std::uint64_t>(raw.queryInt("SELECT count(*) FROM lh_revision"));
-        EXPECT_GE(revisions, printedTotal);
-        EXPECT_LE(revisions, printedTotal + kills);
     }
     HistoryOptions options;
     options.busyTimeout = std::chrono::seconds(5);
     auto history = LocalHistory::open(path, systemClock(), options);
     ASSERT_TRUE(history.has_value()) << history.error().describe();
-    auto ids = history->database().prepare("SELECT id FROM lh_revision");
-    ASSERT_TRUE(ids.has_value());
-    std::vector<std::int64_t> all;
-    while (ids->step().value_or(false)) {
-        all.push_back(ids->columnInt64(0));
+    struct Revision {
+        std::int64_t id = 0;
+        std::string key;
+    };
+    std::vector<Revision> revisions;
+    {
+        auto rows = history->database().prepare("SELECT id, path_key FROM lh_revision ORDER BY id");
+        ASSERT_TRUE(rows.has_value()) << rows.error().describe();
+        while (rows->step().value_or(false)) {
+            revisions.push_back({rows->columnInt64(0), std::string(rows->columnText(1))});
+        }
     }
-    ids = std::unexpected(Error(ErrorCode::Unknown));
-    for (const std::int64_t id : all) {
-        std::uint64_t bytes = 0;
-        auto read = history->content(id, [&](std::string_view chunk) -> Result<void> {
-            bytes += chunk.size();
-            return {};
-        });
-        EXPECT_TRUE(read.has_value()) << "revision " << id << ": " << read.error().describe();
+    // A child's revision count: what it printed, or one more.
+    const auto checkCount = [&printed](std::size_t child, std::uint64_t made) {
+        EXPECT_GE(made, printed[child]) << "child " << child << " printed records the store does not hold";
+        EXPECT_LE(made, printed[child] + 1) << "child " << child << " has records it never reached";
+    };
+    std::size_t child = 0;
+    std::int64_t next = 1; // The next record of `child`.
+    for (const Revision& revision : revisions) {
+        auto content = history->content(revision.id);
+        if (!content) {
+            ADD_FAILURE() << "revision " << revision.id << ": " << content.error().describe();
+            return;
+        }
+        while (true) {
+            if (child >= printed.size()) {
+                ADD_FAILURE() << "revision " << revision.id << " is more than the children recorded";
+                return;
+            }
+            if (revision.key == historyKey(next) && *content == historyContent(firstSeed + child, next)) {
+                ++next;
+                break;
+            }
+            // Not the next record of `child`, so that child's records must have ended here.
+            const auto made = static_cast<std::uint64_t>(next - 1);
+            if (made < printed[child]) {
+                ADD_FAILURE() << "revision " << revision.id << " (" << revision.key << ", " << content->size()
+                              << " bytes) does not match record " << next << " of child " << child << ", which printed "
+                              << printed[child];
+                return;
+            }
+            checkCount(child, made);
+            ++child;
+            next = 1;
+        }
+    }
+    for (std::size_t later = child; later < printed.size(); ++later) {
+        checkCount(later, later == child ? static_cast<std::uint64_t>(next - 1) : 0);
     }
 }
 

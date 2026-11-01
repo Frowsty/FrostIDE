@@ -31,7 +31,8 @@ Statement::Statement(detail::Connection* connection, sqlite3_stmt* stmt) noexcep
 
 Statement::Statement(Statement&& other) noexcept
     : m_connection(std::exchange(other.m_connection, nullptr)), m_stmt(std::exchange(other.m_stmt, nullptr)),
-      m_hasRow(std::exchange(other.m_hasRow, false)), m_stepped(std::exchange(other.m_stepped, false)) {}
+      m_hasRow(std::exchange(other.m_hasRow, false)), m_stepped(std::exchange(other.m_stepped, false)),
+      m_rowResets(other.m_rowResets) {}
 
 Statement& Statement::operator=(Statement&& other) noexcept {
     if (this != &other) {
@@ -40,6 +41,7 @@ Statement& Statement::operator=(Statement&& other) noexcept {
         m_stmt = std::exchange(other.m_stmt, nullptr);
         m_hasRow = std::exchange(other.m_hasRow, false);
         m_stepped = std::exchange(other.m_stepped, false);
+        m_rowResets = other.m_rowResets;
     }
     return *this;
 }
@@ -105,10 +107,19 @@ Result<void> Statement::bindNull(int index) {
 
 Result<bool> Statement::step() {
     FROST_PRE(m_stmt != nullptr);
+    if (m_hasRow && m_rowResets != m_connection->statementResets) {
+        // Transaction::rollback reset this running statement under a pending interrupt: report
+        // the cancellation instead of starting it again from its first row.
+        m_hasRow = false;
+        m_stepped = false;
+        return fail(ErrorCode::Cancelled,
+                    std::format("step: interrupted, and reset by a rollback while running [sql: {}]", sql()));
+    }
     m_stepped = true;
     const int rc = sqlite3_step(m_stmt);
     if (rc == SQLITE_ROW) {
         m_hasRow = true;
+        m_rowResets = m_connection->statementResets;
         return true;
     }
     m_hasRow = false;

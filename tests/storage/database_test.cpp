@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Database: the open sequence (paths, modes, pragmas, read-only files, long paths), the WAL
-// hook, checkpoints, close behaviour, integrity checks and moves.
+// hook, checkpoints, close behaviour, integrity checks (and their cancellation), SQL text with a
+// NUL byte, and moves.
 
 #include "frost/io/path.hpp"
 #include "frost/storage/database.hpp"
 
 #include "support/fault_vfs.hpp"
+#include "support/hook_guard.hpp"
 #include "support/scratch_dir.hpp"
 #include "support/storage_test_support.hpp"
 #include <gtest/gtest.h>
 
+#include <stop_token>
 #include <string>
+#include <string_view>
 
 #include <sqlite3.h>
 
@@ -385,6 +389,57 @@ TEST(Database, QuickAndIntegrityCheckHealthyAndCancellable) {
     auto violation = db->integrityCheck();
     ASSERT_FALSE(violation.has_value());
     EXPECT_EQ(violation.error().code(), ErrorCode::Corrupt);
+}
+
+// A stop requested after integrity_check passed cancels the foreign-key pass too.
+TEST(Database, IntegrityCheckCancellableInTheForeignKeyPass) {
+    auto db = Database::openInMemory(fastOptions());
+    ASSERT_TRUE(db.has_value());
+    FROST_STORAGE_ASSERT_OK(
+        db->execute("CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (p INTEGER REFERENCES p(id));"
+                    "INSERT INTO p VALUES (1); INSERT INTO c VALUES (1);"));
+    std::stop_source stop;
+    frost::storage::test::HookGuard guard(
+        frost::storage::detail::g_integrityBeforeForeignKeys,
+        [](void* context) { static_cast<std::stop_source*>(context)->request_stop(); }, &stop);
+    auto cancelled = db->integrityCheck(stop.get_token());
+    ASSERT_TRUE(stop.stop_requested()) << "the hook did not run";
+    ASSERT_FALSE(cancelled.has_value()) << "the foreign-key pass ignored the stop request";
+    EXPECT_EQ(cancelled.error().code(), ErrorCode::Cancelled) << cancelled.error().describe();
+}
+
+// SQLite stops at a NUL byte: prepare would miss SQL after it, and execute could not advance.
+TEST(Database, SqlWithNulIsInvalidArgument) {
+    auto db = Database::openInMemory(fastOptions());
+    ASSERT_TRUE(db.has_value());
+    constexpr std::string_view kTwo("SELECT 1;\0SELECT 2;", 19);
+    auto prepared = db->prepare(kTwo);
+    ASSERT_FALSE(prepared.has_value()) << "prepare accepted SQL after a NUL";
+    EXPECT_EQ(prepared.error().code(), ErrorCode::InvalidArgument) << prepared.error().describe();
+    auto executed = db->execute(kTwo); // Looped forever before the check.
+    ASSERT_FALSE(executed.has_value());
+    EXPECT_EQ(executed.error().code(), ErrorCode::InvalidArgument) << executed.error().describe();
+    auto leading = db->execute(std::string_view("\0CREATE TABLE t (v INTEGER)", 27));
+    ASSERT_FALSE(leading.has_value());
+    EXPECT_EQ(leading.error().code(), ErrorCode::InvalidArgument);
+    // Nothing ran: the table does not exist.
+    auto missing = db->prepare("SELECT count(*) FROM t");
+    EXPECT_FALSE(missing.has_value());
+}
+
+// close() reports Busy, rather than success, when a statement prepared through nativeHandle()
+// keeps the connection alive; finalizing it completes the deferred close.
+TEST(Database, CloseReportsAStatementOutsideTheWrapper) {
+    ScratchDir dir("storage-db");
+    auto db = Database::open(dir.join("n.db"), fastOptions());
+    ASSERT_TRUE(db.has_value()) << db.error().describe();
+    sqlite3_stmt* foreign = nullptr;
+    ASSERT_EQ(sqlite3_prepare_v2(db->nativeHandle(), "SELECT 1", -1, &foreign, nullptr), SQLITE_OK);
+    auto closed = db->close();
+    EXPECT_FALSE(db->isOpen());
+    ASSERT_FALSE(closed.has_value()) << "close() reported success with a statement still alive";
+    EXPECT_EQ(closed.error().code(), ErrorCode::Busy) << closed.error().describe();
+    EXPECT_EQ(sqlite3_finalize(foreign), SQLITE_OK); // Frees the zombie connection.
 }
 
 TEST(Database, ExclusiveLockLeavesNoShmOrJournal) {

@@ -24,16 +24,27 @@ constexpr int kQuarantineAttempts = 3;
 /*
  * The verdict of Database::open on a quarantine copy, judged as the original was (same schema,
  * verification and VFS). Read-write without creation: a refusal never modifies the file, and a
- * copy that opens (and so may be migrated) or is fresh is deleted afterwards anyway.
+ * copy that opens (and so may be migrated) or is fresh is deleted afterwards anyway. Corrupt is
+ * still corrupt; a copy that opens, is empty (NotFound with allowFresh off) or is a newer
+ * version's store (Unsupported) means the original was replaced since the verdict. Any other
+ * error is the judgement failing, which the quarantine reports without removing anything.
  */
-bool copyStillCorrupt(const std::string& copyPath, const OpenOptions& options) {
+Result<bool> copyStillCorrupt(const std::string& copyPath, const OpenOptions& options) {
     OpenOptions check = options;
     check.mode = OpenMode::ReadWrite;
     check.allowFresh = false;
     check.exclusiveLock = false;
     check.checkpointOnClose = false;
     auto copy = Database::open(copyPath, check);
-    return !copy && copy.error().code() == ErrorCode::Corrupt;
+    if (copy) {
+        return false;
+    }
+    switch (copy.error().code()) {
+    case ErrorCode::Corrupt: return true;
+    case ErrorCode::NotFound:
+    case ErrorCode::Unsupported: return false;
+    default: return std::unexpected(std::move(copy.error()).withContext("judge the quarantine copy"));
+    }
 }
 
 } // namespace
@@ -41,14 +52,19 @@ bool copyStillCorrupt(const std::string& copyPath, const OpenOptions& options) {
 Result<StoreOpenOutcome> openStore(std::string_view path, const OpenOptions& options, CorruptPolicy policy) {
     FROST_PRE(options.schema != nullptr);
     IClock& clock = options.clock != nullptr ? *options.clock : systemClock();
+    const bool mayQuarantine = policy == CorruptPolicy::Quarantine && options.mode != OpenMode::ReadOnly;
+    if (mayQuarantine) {
+        if (auto room = detail::checkQuarantineRoom(path, options.vfs); !room) {
+            return std::unexpected(std::move(room.error()));
+        }
+    }
     for (int attempt = 1;; ++attempt) {
         auto opened = Database::open(path, options);
         if (opened) {
             return StoreOpenOutcome{std::move(*opened), std::nullopt};
         }
         // Only a damaged or foreign file is moved aside; a read-only open never removes anything.
-        if (opened.error().code() != ErrorCode::Corrupt || policy != CorruptPolicy::Quarantine ||
-            options.mode == OpenMode::ReadOnly) {
+        if (opened.error().code() != ErrorCode::Corrupt || !mayQuarantine) {
             return std::unexpected(std::move(opened.error()));
         }
         Error reason = std::move(opened.error());
@@ -60,7 +76,7 @@ Result<StoreOpenOutcome> openStore(std::string_view path, const OpenOptions& opt
             return std::unexpected(std::move(movedTo.error()).withContext(reason.message()));
         }
         if (!movedTo->has_value()) {
-            // Replaced since our verdict (another process quarantined it first): open it again.
+            // Gone or replaced since our verdict (another process quarantined it first): open again.
             if (attempt == kQuarantineAttempts) {
                 return fail(ErrorCode::Busy, std::format("open store '{}': the file changed during quarantine {} times",
                                                          path, kQuarantineAttempts));

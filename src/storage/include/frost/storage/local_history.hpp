@@ -26,10 +26,11 @@
  *   3. Orphans: every blob no revision references, in the snapshot or by a fresh anti-join
  *      (which also collects the orphans of an interrupted prune), is deleted with its chunks,
  *      but only while still unreferenced, so a blob another connection reused meanwhile stays.
- * Deletes run in batches of 500 per IMMEDIATE transaction; a stop request ends the prune after
- * the current batch with Cancelled (committed batches stay). Revisions recorded by other
- * connections after the snapshot are never removed by that prune. Afterwards the prune runs
- * PRAGMA incremental_vacuum and a Truncate checkpoint (Busy there is not an error).
+ * Deletes run in batches of 500 per IMMEDIATE transaction; a stop request interrupts the batch
+ * in flight, which rolls back, and ends the prune with Cancelled (batches committed before it
+ * stay; a later prune finishes the work, the orphan anti-join included). Revisions recorded by
+ * other connections after the snapshot are never removed by that prune. Afterwards the prune
+ * runs PRAGMA incremental_vacuum and a Truncate checkpoint (Busy there is not an error).
  *
  * The store is user data and lives outside <cache>: Invalidate Caches never removes it, only an
  * explicit user choice does (ADR 0014). Every call blocks; never call one on the UI thread.

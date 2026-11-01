@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // HotExitJournal and the recovery scan in one process: round trips at chunk boundaries, stale
-// generations, clean marks, cancellation, clean and crashed shutdowns, damaged chunks, ownership
-// by lock, and which files the scan matches, removes, quarantines or skips.
+// generations, clean marks, cancellation, clean and crashed shutdowns and their bounded removal,
+// damaged chunks and salvage, ownership by lock, paths too long to quarantine, and which files
+// the scan matches, removes, quarantines or skips.
 
 #include "frost/io/path.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 
+#include "database_files.hpp"
 #include "support/hook_guard.hpp"
 #include "support/scratch_dir.hpp"
 #include "support/storage_test_support.hpp"
@@ -680,7 +682,7 @@ TEST(HotExitJournal, DamagedJournalOfferedThenQuarantined) {
         pageSize = raw.queryInt("PRAGMA page_size");
         lastPage = raw.queryInt("PRAGMA page_count");
     }
-    // Zero the middle of a chunk page: the page structure breaks, so quick_check fails.
+    // Overwrite a whole chunk page with 0x5A bytes: its structure breaks, so quick_check fails.
     frost::storage::test::patchBytes(path, static_cast<std::size_t>((lastPage - 2) * pageSize),
                                      std::string(static_cast<std::size_t>(pageSize), '\x5A'));
     auto scan = findRecoverableJournals(dir.path(), kLockWait);
@@ -697,5 +699,132 @@ TEST(HotExitJournal, DamagedJournalOfferedThenQuarantined) {
     }
     EXPECT_EQ(quarantined, 1u);
 }
+
+/*
+ * Salvage: one overflow page of entry "b"'s content is overwritten (its next-page pointer too, so
+ * quick_check fails and the journal is offered as damaged). Entry "a", on other pages, still
+ * reads back intact; "b" is Corrupt, never wrong bytes.
+ */
+TEST(HotExitJournal, DamagedJournalSalvagesIntactEntries) {
+    ScratchDir dir("storage-journal");
+    const std::string contentA = randomBytes(20000, 11);
+    const std::string contentB = randomBytes(50000, 12);
+    std::string path;
+    {
+        auto journal = HotExitJournal::create(dir.path(), frost::systemClock(), fastJournal(4096));
+        ASSERT_TRUE(journal.has_value());
+        path = journal->path();
+        ASSERT_TRUE(put(*journal, document("a", 1), contentA).has_value());
+        ASSERT_TRUE(put(*journal, document("b", 1), contentB).has_value());
+    } // A crash; closing the connection still checkpoints the WAL into the main file.
+    ASSERT_FALSE(fileExists(path + "-wal"));
+    std::int64_t pageSize = 0;
+    {
+        frost::storage::test::RawDb raw(path);
+        pageSize = raw.queryInt("PRAGMA page_size");
+    }
+    ASSERT_GT(pageSize, 64);
+    // An overflow page holds a 4-byte next-page number, then payload: find one of b's.
+    const std::string bytes = readBytes(path);
+    const auto page = static_cast<std::size_t>(pageSize);
+    std::size_t target = 0;
+    for (std::size_t offset = page; offset + page <= bytes.size(); offset += page) {
+        if (contentB.find(std::string_view(bytes).substr(offset + 4, 64)) != std::string::npos) {
+            target = offset;
+            break;
+        }
+    }
+    ASSERT_NE(target, 0u) << "no overflow page of entry b found";
+    frost::storage::test::patchBytes(path, target, std::string(page, '\x5A'));
+    auto scan = findRecoverableJournals(dir.path(), kLockWait);
+    ASSERT_TRUE(scan.has_value());
+    ASSERT_EQ(scan->journals.size(), 1u);
+    RecoveredJournal recovered = std::move(scan->journals.front());
+    EXPECT_TRUE(recovered.damaged());
+    EXPECT_FALSE(recovered.endedCleanly());
+    auto entries = recovered.entries();
+    ASSERT_TRUE(entries.has_value()) << entries.error().describe();
+    ASSERT_EQ(entries->size(), 2u);
+    ASSERT_EQ((*entries)[0].state.documentKey, "a");
+    ASSERT_EQ((*entries)[1].state.documentKey, "b");
+    auto a = recovered.readContent((*entries)[0].id);
+    ASSERT_TRUE(a.has_value()) << a.error().describe();
+    EXPECT_TRUE(*a == contentA);
+    auto b = recovered.readContent((*entries)[1].id);
+    ASSERT_FALSE(b.has_value()) << "damaged content read back as complete";
+    EXPECT_EQ(b.error().code(), ErrorCode::Corrupt) << b.error().describe();
+    ASSERT_TRUE(std::move(recovered).discard().has_value());
+    EXPECT_FALSE(fileExists(path));
+}
+
+/*
+ * closeCleanly's removal is bounded (200 ms, B20) even when another handle without
+ * FILE_SHARE_DELETE is open on the file, as another instance's scan holds one between
+ * sqlite3_open_v2 and its first lock: on Windows the delete then fails with Busy within the bound
+ * (the win32 VFS's own retries took about 1.4 s); on POSIX the unlink goes through.
+ */
+TEST(HotExitJournal, CloseCleanlyRemovalIsBounded) {
+    ScratchDir dir("storage-journal");
+    auto journal = HotExitJournal::create(dir.path(), frost::systemClock(), fastJournal());
+    ASSERT_TRUE(journal.has_value()) << journal.error().describe();
+    const std::string path = journal->path();
+    frost::storage::test::RawDb other(path); // sqlite3_open_v2 opens the file; no lock until a read.
+    const auto started = std::chrono::steady_clock::now();
+    auto closed = journal->closeCleanly();
+    const auto took = std::chrono::steady_clock::now() - started;
+    EXPECT_LT(took, std::chrono::milliseconds(1000))
+        << std::chrono::duration_cast<std::chrono::milliseconds>(took).count() << " ms";
+#ifdef _WIN32
+    ASSERT_FALSE(closed.has_value());
+    EXPECT_EQ(closed.error().code(), ErrorCode::Busy) << closed.error().describe();
+    EXPECT_TRUE(fileExists(path)); // A later scan removes it (clean and empty).
+#else
+    ASSERT_TRUE(closed.has_value()) << closed.error().describe();
+    EXPECT_FALSE(fileExists(path));
+#endif
+}
+
+#ifndef _WIN32
+/*
+ * Linux: create() refuses a directory so long that a recovery scan could not quarantine the
+ * journal (the quarantine copy's name would exceed the unix VFS's 512 bytes: openStore's rule);
+ * a journal path one byte shorter is created.
+ */
+TEST(HotExitJournal, DirectoryTooLongForQuarantineRefused) {
+    ScratchDir dir("storage-journal");
+    sqlite3_vfs* defaultVfs = sqlite3_vfs_find(nullptr);
+    ASSERT_NE(defaultVfs, nullptr);
+    const std::size_t limit = static_cast<std::size_t>(defaultVfs->mxPathname);
+    std::size_t nameBytes = 0; // Journal names have a fixed length.
+    {
+        auto journal = HotExitJournal::create(dir.join("short"), frost::systemClock(), fastJournal());
+        ASSERT_TRUE(journal.has_value()) << journal.error().describe();
+        nameBytes = journal->path().size() - dir.join("short").size() - 1;
+    }
+    // A directory of exactly `bytes` bytes, in components well under NAME_MAX.
+    const auto folderOf = [&dir](std::size_t bytes, char fill) {
+        std::string folder = dir.path();
+        while (bytes - folder.size() > 200) {
+            folder += "/" + std::string(99, 'd');
+        }
+        folder += "/" + std::string(bytes - folder.size() - 1, fill);
+        return folder;
+    };
+    const std::size_t longest = limit - 1 - 8 - frost::storage::detail::kQuarantineSuffixBytes;
+    {
+        const std::string folder = folderOf(longest - 1 - nameBytes, 'a');
+        auto journal = HotExitJournal::create(folder, frost::systemClock(), fastJournal());
+        ASSERT_TRUE(journal.has_value()) << journal.error().describe();
+        EXPECT_EQ(journal->path().size(), longest);
+    }
+    const std::string folder = folderOf(longest - nameBytes, 'b');
+    auto refused = HotExitJournal::create(folder, frost::systemClock(), fastJournal());
+    ASSERT_FALSE(refused.has_value()) << refused->path();
+    EXPECT_EQ(refused.error().code(), ErrorCode::InvalidArgument) << refused.error().describe();
+    auto listed = frost::io::realFileSystem().listDirectory(folder);
+    ASSERT_TRUE(listed.has_value());
+    EXPECT_TRUE(listed->empty()) << "a file was created: " << listed->front().name;
+}
+#endif
 
 } // namespace

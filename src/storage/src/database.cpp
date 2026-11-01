@@ -372,16 +372,20 @@ Result<Database> openImpl(std::string_view rawPath, const OpenOptions& options, 
     return database;
 }
 
-// Removes the cached statement-free connection: the shared body of close() and ~Database.
+/*
+ * Closes the connection's SQLite handle: the shared body of close() and ~Database. Only a
+ * statement the wrapper does not know about (prepared through nativeHandle() and not finalized)
+ * makes sqlite3_close fail, with SQLITE_BUSY. The handle is then passed to sqlite3_close_v2,
+ * which frees it once that statement is finalized, and with `reportBusy` the BUSY is returned.
+ */
 int closeConnection(Connection& connection, bool reportBusy) noexcept {
     FROST_PRE(connection.liveStatements == 0 && connection.openTransactions == 0);
     if (connection.db == nullptr) {
         return SQLITE_OK;
     }
-    int rc = reportBusy ? sqlite3_close(connection.db) : sqlite3_close_v2(connection.db);
+    const int rc = reportBusy ? sqlite3_close(connection.db) : sqlite3_close_v2(connection.db);
     if (rc != SQLITE_OK) {
-        // Only an unfinalized statement can make sqlite3_close fail; close_v2 defers instead.
-        rc = sqlite3_close_v2(connection.db);
+        static_cast<void>(sqlite3_close_v2(connection.db));
     }
     connection.db = nullptr;
     return rc;
@@ -406,8 +410,24 @@ void DatabaseAccess::abandon(Database& db, bool keepWal) noexcept {
 
 namespace detail {
 
+namespace {
+
+// InvalidArgument for SQL text with a NUL byte: SQLite would silently ignore what follows it.
+Result<void> checkNoNul(std::string_view sql, std::string_view operation) {
+    if (sql.find('\0') != std::string_view::npos) {
+        return fail(ErrorCode::InvalidArgument, std::format("{}: the SQL text contains a NUL byte", operation));
+    }
+    return {};
+}
+
+} // namespace
+
 Result<void> executeSql(Connection& connection, std::string_view sql) {
     sqlite3* db = connection.db;
+    // sqlite3_prepare_v3 stops at a NUL without consuming it, which the loop below could not leave.
+    if (auto clean = checkNoNul(sql, "execute"); !clean) {
+        return clean;
+    }
     while (!sql.empty()) {
         if (sql.size() > static_cast<std::size_t>(INT_MAX)) {
             return fail(ErrorCode::OutOfRange, "SQL text longer than 2 GiB");
@@ -420,6 +440,11 @@ Result<void> executeSql(Connection& connection, std::string_view sql) {
         }
         const std::string_view current = sql.substr(0, static_cast<std::size_t>(tail - sql.data()));
         sql.remove_prefix(current.size());
+        if (current.empty()) {
+            // Defensive: nothing was consumed (only a NUL does that, refused above).
+            static_cast<void>(sqlite3_finalize(stmt));
+            return fail(ErrorCode::InvalidArgument, "execute: SQLite consumed none of the SQL text");
+        }
         if (stmt == nullptr) {
             continue; // Whitespace or a comment.
         }
@@ -556,6 +581,10 @@ Result<Statement> Database::prepare(std::string_view sql) {
     detail::Connection& connection = *m_connection;
     if (sql.size() > static_cast<std::size_t>(INT_MAX)) {
         return fail(ErrorCode::OutOfRange, "SQL text longer than 2 GiB");
+    }
+    // A NUL would hide the SQL after it from the trailing-statement check below.
+    if (auto clean = detail::checkNoNul(sql, "prepare"); !clean) {
+        return std::unexpected(std::move(clean.error()));
     }
     sqlite3_stmt* stmt = nullptr;
     const char* tail = nullptr;
@@ -698,12 +727,22 @@ Result<void> Database::integrityCheck(std::stop_token stop) {
     if (auto checked = runCheck(*this, "PRAGMA integrity_check(10)", stop); !checked) {
         return checked;
     }
+    detail::g_integrityBeforeForeignKeys.run();
+    // The second pass is cancellable like the first: checked before, interrupted during.
+    if (stop.stop_requested()) {
+        return fail(ErrorCode::Cancelled, "integrity check cancelled");
+    }
+    const InterruptHandle handle = interruptHandle();
+    std::stop_callback onStop(stop, [handle] { handle.interrupt(); });
     // foreign_key_check returns one row per violation (table, rowid, parent, fkid); none is healthy.
     auto statement = prepare("PRAGMA foreign_key_check");
     if (!statement) {
         return std::unexpected(std::move(statement.error()));
     }
     auto row = statement->step();
+    if (stop.stop_requested()) {
+        return fail(ErrorCode::Cancelled, "integrity check cancelled");
+    }
     if (!row) {
         return std::unexpected(std::move(row.error()));
     }
@@ -743,21 +782,56 @@ sqlite3* Database::nativeHandle() const noexcept {
 // ---------------------------------------------------------------------------------------------
 // Transaction
 
+namespace {
+
+// ROLLBACK attempts in Transaction::rollback; each retry needs a new interrupt to fail (see there).
+constexpr int kRollbackAttempts = 4;
+
+/*
+ * Resets every statement of the connection that is running (stepped, neither done nor reset)
+ * and, if there was one, bumps statementResets, which Statement::step reads to report the reset
+ * as Cancelled instead of silently starting the statement again. O(statements of the connection).
+ */
+void resetRunningStatements(Connection& connection) noexcept {
+    bool reset = false;
+    for (sqlite3_stmt* stmt = sqlite3_next_stmt(connection.db, nullptr); stmt != nullptr;
+         stmt = sqlite3_next_stmt(connection.db, stmt)) {
+        if (sqlite3_stmt_busy(stmt) != 0) {
+            static_cast<void>(sqlite3_reset(stmt));
+            reset = true;
+        }
+    }
+    if (reset) {
+        ++connection.statementResets;
+    }
+}
+
+} // namespace
+
 Transaction::Transaction(Transaction&& other) noexcept : m_connection(std::exchange(other.m_connection, nullptr)) {}
 
 Transaction& Transaction::operator=(Transaction&& other) noexcept {
     if (this != &other) {
-        rollback();
+        end();
         m_connection = std::exchange(other.m_connection, nullptr);
     }
     return *this;
 }
 
-Transaction::~Transaction() { rollback(); }
+Transaction::~Transaction() { end(); }
 
 void Transaction::finish() noexcept {
     --m_connection->openTransactions;
     m_connection = nullptr;
+}
+
+void Transaction::end() noexcept {
+    rollback();
+    if (m_connection != nullptr) {
+        // rollback() gave up (see there). The object ends anyway; SQLite's transaction stays
+        // open, so begin() keeps refusing (it checks sqlite3_get_autocommit) until close().
+        finish();
+    }
 }
 
 Result<void> Transaction::commit() {
@@ -774,15 +848,32 @@ Result<void> Transaction::commit() {
     return committed;
 }
 
+/*
+ * ROLLBACK can fail before it runs: SQLite clears a pending interrupt only when a statement
+ * starts while no other statement of the connection is active (sqlite3_step and the parser), so
+ * after InterruptHandle::interrupt with a statement still running, every new statement, ROLLBACK
+ * included, fails with SQLITE_INTERRUPT; ROLLBACK is a read-only program, so failing does not
+ * roll back either, and the transaction stays open with its write lock. A stop callback that
+ * fires just as ROLLBACK starts has the same effect. The retry therefore resets the running
+ * statements first (the interrupt cancels them anyway; resetRunningStatements), and then
+ * ROLLBACK, the only statement, clears the flag as it starts. Each further failure needs a new
+ * interrupt in that instant, so kRollbackAttempts is ample; after them the transaction is left
+ * open, as SQLite has it, rather than reported ended.
+ */
 void Transaction::rollback() noexcept {
     if (m_connection == nullptr) {
         return;
     }
-    if (sqlite3_get_autocommit(m_connection->db) == 0) {
-        // ROLLBACK fails only when no transaction is open, which autocommit just ruled out.
+    sqlite3* db = m_connection->db;
+    for (int attempt = 0; attempt < kRollbackAttempts && sqlite3_get_autocommit(db) == 0; ++attempt) {
+        if (attempt > 0) {
+            resetRunningStatements(*m_connection);
+        }
         static_cast<void>(detail::executeSql(*m_connection, "ROLLBACK"));
     }
-    finish();
+    if (sqlite3_get_autocommit(db) != 0) {
+        finish();
+    }
 }
 
 } // namespace frost::storage

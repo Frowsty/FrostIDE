@@ -29,6 +29,9 @@ struct Connection {
     // Statements alive and transactions open; close() requires both to be zero (FROST_PRE).
     int liveStatements = 0;
     int openTransactions = 0;
+    // Times Transaction::rollback reset running statements to end a transaction under a pending
+    // interrupt; a Statement that returned its row before the latest count was reset under it.
+    std::uint64_t statementResets = 0;
 
     // Busy handler: the total wait per lock attempt, and the deadline of the current attempt
     // (set when SQLite calls the handler with count 0).

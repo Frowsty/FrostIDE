@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // XXH3 fingerprints: the regression golden of the persisted format (goldens/xxh3_vectors.txt),
-// streaming against one-shot properties, the canonical form and hex parsing. xxHash's known
-// answers are not used: its BSD-2 sources and documentation publish none for these inputs, and
-// its test vectors are in GPL-2.0 files the clean-room rule excludes, so the golden is a
-// regression pin produced by this build (FROST_STORAGE_REGENERATE_GOLDENS=1 rewrites it), not an
-// independent oracle.
+// streaming against one-shot properties, the canonical form and hex parsing, and the wrapper
+// against xxHash's own API and canonical functions. xxHash's known answers are not used: its
+// BSD-2 sources and documentation publish none for these inputs, and its test vectors are in
+// GPL-2.0 files the clean-room rule excludes, so the golden is a regression pin produced by this
+// build (FROST_STORAGE_REGENERATE_GOLDENS=1 rewrites it), not an independent oracle.
 
 #include "frost/storage/fingerprint.hpp"
 
@@ -20,6 +20,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <xxhash.h>
 
 namespace {
 
@@ -188,6 +190,38 @@ TEST(Fingerprint, CanonicalBytesBigEndianAndOrderPreserving) {
         EXPECT_EQ(cmp < 0, order < 0);
         EXPECT_EQ(cmp == 0, order == 0);
         EXPECT_EQ(cmp > 0, order > 0);
+    }
+}
+
+/*
+ * The wrapper against xxHash's own API (linked into this test, outside frost::storage): the
+ * values, the (high, low) halves, and the canonical byte order of XXH128_canonicalFromHash and
+ * XXH64_canonicalFromHash, so a swapped half or byte order is caught without trusting the golden.
+ */
+TEST(Fingerprint, MatchesXxhashApiAndCanonicalForm) {
+    for (const std::size_t length : kGoldenLengths) {
+        const std::string input = goldenInput(length);
+        for (const std::uint64_t seed : kGoldenSeeds) {
+            SCOPED_TRACE(std::format("length {} seed {:x}", length, seed));
+            const XXH64_hash_t h64 = XXH3_64bits_withSeed(input.data(), input.size(), seed);
+            EXPECT_EQ(xxh3Hash64(input, seed), h64);
+            XXH64_canonical_t c64;
+            XXH64_canonicalFromHash(&c64, h64);
+            std::uint64_t bigEndian = 0;
+            for (const unsigned char byte : c64.digest) {
+                bigEndian = (bigEndian << 8) | byte;
+            }
+            EXPECT_EQ(bigEndian, xxh3Hash64(input, seed)); // The 64-bit canonical form is big-endian too.
+
+            const XXH128_hash_t h128 = XXH3_128bits_withSeed(input.data(), input.size(), seed);
+            const Fingerprint128 ours = xxh3Hash128(input, seed);
+            EXPECT_EQ(ours.high, h128.high64);
+            EXPECT_EQ(ours.low, h128.low64);
+            XXH128_canonical_t c128;
+            XXH128_canonicalFromHash(&c128, h128);
+            const auto bytes = ours.canonicalBytes();
+            EXPECT_EQ(std::memcmp(bytes.data(), c128.digest, 16), 0);
+        }
     }
 }
 

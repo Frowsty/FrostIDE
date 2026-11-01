@@ -65,7 +65,14 @@
    (InvalidArgument). A 1-byte file is Corrupt on every platform (Context). `PRAGMA journal_mode=WAL` is
    retried on Busy until busyTimeout: switching a new rollback-mode file upgrades a read transaction, and
    SQLite does not call the busy handler for that upgrade, so racing first opens failed at once (found by
-   `Schema.ConcurrentFirstOpenMigratesOnce` under WSL ASan).
+   `Schema.ConcurrentFirstOpenMigratesOnce` under WSL ASan). SQL text with a NUL byte is InvalidArgument in
+   `prepare` and `execute` (SQLite stops at the NUL, so `execute` looped and `prepare` missed trailing SQL).
+   `Transaction::rollback` survives a pending interrupt: SQLite clears the flag only when a statement starts
+   while none is active, so after an interrupt with another statement running every new statement, ROLLBACK
+   included, fails with SQLITE_INTERRUPT and the transaction keeps its write lock. rollback() then resets the
+   connection's running statements (their next `step` reports Cancelled instead of restarting) and retries;
+   it never reports a transaction ended that SQLite keeps open. `close` reports Busy when a statement prepared
+   through `nativeHandle()` is unfinalized, and `integrityCheck` is cancellable in its foreign-key pass too.
 5. **Our WAL hook.** After a commit that leaves at least walAutoCheckpointPages (1000) frames it runs a
    Passive checkpoint, which never waits for readers, and always returns SQLITE_OK: a checkpoint error never
    fails a commit (kept in the connection for diagnostics). An IoError from COMMIT is outcome-unknown: the
@@ -92,14 +99,23 @@
    a fresh file or a complete store. Each migration step re-reads user_version inside its own IMMEDIATE
    transaction, so concurrent first opens and upgrades migrate once.
 8. **Database files only through the VFS.** Quarantine and removal take SQLite's EXCLUSIVE lock through the
-   VFS (waiting up to busyTimeout, or 5 s for removeDatabaseFiles); a held lock is Busy. Copies stream in
-   64 KiB blocks through the VFS (the unix VFS asserts reads under 128 KiB in SQLITE_DEBUG builds), sized by
-   `io::status` rather than xFileSize (which reports a 1-byte file as empty), and are synced before anything
-   is removed. Removal order: main file, -wal,
-   -shm, -journal. Residual POSIX race: a process that opens the file in the instant before the unlink keeps
-   an unlinked inode (on Windows SQLite opens without FILE_SHARE_DELETE, so the race fails with Busy). In
-   EXCLUSIVE locking mode SQLite leaves a zeroed -journal after the switch to WAL; open() deletes it through
-   the VFS.
+   VFS; a held lock is Busy. One deadline (busyTimeout, 5 s for removeDatabaseFiles and journal discards,
+   200 ms for `closeCleanly`, lockWait for scans) bounds the whole wait for other handles, for the lock and
+   for the delete. On Windows the delete goes through `io::removeFile` with our own retries: the win32 VFS's
+   xDelete retries a sharing violation for about 1.4 s by itself (winRetryIoerr), which broke `closeCleanly`'s
+   200 ms (B20) and every scan's lockWait; Windows locks belong to handles, so a delete by name drops none.
+   A lock granted after a wait is checked with SQLITE_FCNTL_HAS_MOVED: on POSIX a waiter's descriptor can
+   name an inode that another instance unlinked (and perhaps replaced with a fresh store) meanwhile, and
+   judging, copying or removing by name after that lost the other instance's store (found in review). A moved
+   file is not touched: quarantine returns "replaced", removal looks at the path again. Copies stream in
+   64 KiB blocks through the VFS (the unix VFS asserts reads under 128 KiB in SQLITE_DEBUG builds), sized from
+   the locked handles (xFileSize, with a 1-byte read for the size the unix VFS reports as empty, ticket
+   #3260), and are synced before anything is removed. Removal order: main file, -wal, -shm, -journal.
+   Companions are removed only under the lock of a main file: beside a missing one, an empty placeholder is
+   created exclusively first, so the live -wal and -shm of a store created at that instant are never deleted.
+   Residual POSIX race: a process that opens the file in the instant before the unlink keeps an unlinked inode
+   (on Windows SQLite opens without FILE_SHARE_DELETE, so the race fails with Busy). In EXCLUSIVE locking mode
+   SQLite leaves a zeroed -journal after the switch to WAL; open() deletes it through the VFS.
 9. **Corrupt handling.** `openStore(..., CorruptPolicy::Quarantine)` moves a Corrupt file (and its -wal) to
    `<path>.corrupt-<UTC yyyymmddTHHMMSSZ>[-n]` and opens a fresh store; Unsupported, Busy, PermissionDenied and
    IoError are never quarantined, and a ReadOnly open removes nothing. A Corrupt error from a later call means
@@ -107,8 +123,14 @@
    it. The verdict is reached before the lock, and a fresh store is unlocked until its first read, so another
    process that quarantined the file first could otherwise lose its new store to our removal (POSIX unlinks
    it under its owner). Under the lock the byte-identical copy is therefore judged again with the same
-   options; when it is no longer Corrupt the copies are deleted, the file stays and is opened again (3
-   attempts, then Busy). Journal scans skip the re-check: journal names are never reused. TODO(M3):
+   options; when it is no longer Corrupt (it opens, is empty, or is a newer version's store) the copies are
+   deleted, the file stays and is opened again (3 attempts, then Busy). A file that vanished before the lock,
+   or moved (decision 8), is opened again the same way; a judgement that fails (an I/O error on the copy)
+   keeps the originals and is reported. Journal scans skip the re-check: journal names are never reused. A
+   store path whose quarantine copy's name (25 bytes longer, plus a "-n" counter) would exceed the VFS's
+   limit is refused by `openStore` up front with InvalidArgument (on Linux the last 37 bytes before 512), and
+   `HotExitJournal::create` refuses such a journal path the same way, so no store exists that could never be
+   quarantined; `quarantineFiles` checks the copy's name again. TODO(M3):
    quarantined copies count in the cache budget and are pruned (I11).
 10. **Hot-exit journal.** One file per process,
     `journal-<UTC yyyymmddTHHMMSSfffZ>-<16 hex from sqlite3_randomness>.db`, held with locking_mode=EXCLUSIVE
@@ -133,7 +155,8 @@
     them); age (`createdAt < now − maxAge`, the newest revision of each path protected when asked), then size
     (oldest unprotected first until the distinct referenced blobs fit), then orphans (the snapshot's and a
     fresh anti-join's, deleted only while still unreferenced, so a blob reused after the snapshot survives).
-    Deletes go in batches of 500 per IMMEDIATE transaction; a stop request ends after a batch. Afterwards
+    Deletes go in batches of 500 per IMMEDIATE transaction; a stop request interrupts the batch in flight,
+    which rolls back, and ends the prune (earlier batches stay committed; the next prune finishes). Afterwards
     `PRAGMA incremental_vacuum` (the store has auto_vacuum=INCREMENTAL) and a Truncate checkpoint.
     Future-dated revisions are never removed by age; a clock running backwards only reorders, because
     protection and dedup use the id.
@@ -153,7 +176,7 @@
     settings live in SQLite; file modes are the question below.
 15. **Later slices.** FSEG segments, the cache-key path normaliser and ProjectModelCache are TODO(M2) in
     `src/storage/CMakeLists.txt`; the cache disk budget and LRU are TODO(M3). The journal fuzz target waits
-    for a fuzz tree with ports; `CorruptionSweep` in the stress tests is its seed.
+    for a fuzz tree with ports; `Sweep/CorruptionShard` in the stress tests is its seed.
 
 ## Measurements
 Indicative only: the machine was not isolated for them. REF-W1 (Windows 11, 12 cores), win-clangcl

@@ -4,11 +4,12 @@
 // with IProcess::terminate(), which is TerminateProcess on its job or SIGKILL on its group (kill
 // -9), at random points after a reported commit, put or record. The survivors are checked through
 // the raw sqlite3 API (support/crash_check.hpp): every reported commit survives a process crash in
-// both synchronous modes, every transaction present is complete, and journals recover the old or
-// the new generation byte for byte.
+// both synchronous modes, every transaction present is complete, journals recover the old or the
+// new generation byte for byte, and local history holds exactly the records each child made.
 
 #include "frost/storage/database.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
+#include "frost/storage/local_history.hpp"
 #include "frost/storage/store.hpp"
 
 #include "support/child_process.hpp"
@@ -16,11 +17,13 @@
 #include "support/crash_protocol.hpp"
 #include "support/scratch_dir.hpp"
 #include "support/storage_test_support.hpp"
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <random>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -218,7 +221,7 @@ TEST(LocalHistoryCrash, KilledRecordKeepsBlobsConsistent) {
     ScratchDir dir("storage-history-crash");
     const std::string path = dir.join("history.db");
     std::mt19937_64 rng(31);
-    std::uint64_t printedTotal = 0;
+    std::vector<std::uint64_t> printed;
     constexpr std::uint64_t kKills = 6;
     for (std::uint64_t kill = 0; kill < kKills; ++kill) {
         SCOPED_TRACE(std::format("kill {}", kill));
@@ -227,12 +230,48 @@ TEST(LocalHistoryCrash, KilledRecordKeepsBlobsConsistent) {
         ASSERT_TRUE(child->waitFor("record ", 1 + rng() % 8).has_value());
         frost::storage::test::randomKillDelay(rng);
         child->kill();
-        printedTotal += static_cast<std::uint64_t>(std::max<std::int64_t>(child->lastNumber("record "), 0));
-        frost::storage::test::verifyHistoryStore(path, printedTotal, kill + 1);
-        if (HasFatalFailure()) {
+        printed.push_back(static_cast<std::uint64_t>(std::max<std::int64_t>(child->lastNumber("record "), 0)));
+        frost::storage::test::verifyHistoryStore(path, kSeed, printed);
+        if (HasFailure()) {
             return;
         }
     }
+}
+
+/*
+ * The history oracle itself: it accepts the records of two children (the second killed between a
+ * commit and its line), and fails a store whose content is consistent (checksums match) but not
+ * what the child recorded, or that lost a printed record.
+ */
+TEST(LocalHistoryCrash, VerifierChecksContentAndCounts) {
+    using frost::storage::test::historyContent;
+    using frost::storage::test::historyKey;
+    using frost::storage::test::verifyHistoryStore;
+    const auto build = [](const std::string& path, const std::vector<std::vector<std::string>>& children) {
+        auto history = frost::storage::LocalHistory::open(path);
+        ASSERT_TRUE(history.has_value()) << history.error().describe();
+        for (const auto& records : children) {
+            for (std::size_t i = 0; i < records.size(); ++i) {
+                const std::string key = historyKey(static_cast<std::int64_t>(i) + 1);
+                const std::string_view pieces[] = {records[i]};
+                auto recorded = history->record(key, "/work/" + key, frost::storage::RevisionKind::Save, {}, pieces);
+                ASSERT_TRUE(recorded.has_value()) << recorded.error().describe();
+            }
+        }
+    };
+    ScratchDir dir("storage-history-crash");
+    const std::string good = dir.join("good.db");
+    build(good, {{historyContent(kSeed, 1), historyContent(kSeed, 2)},
+                 {historyContent(kSeed + 1, 1), historyContent(kSeed + 1, 2), historyContent(kSeed + 1, 3)}});
+    verifyHistoryStore(good, kSeed, {2, 2});
+    std::string flipped = historyContent(kSeed, 2);
+    flipped[flipped.size() / 2] = static_cast<char>(flipped[flipped.size() / 2] ^ 1);
+    const std::string wrong = dir.join("wrong.db");
+    build(wrong, {{historyContent(kSeed, 1), flipped, historyContent(kSeed, 3)}});
+    EXPECT_NONFATAL_FAILURE(verifyHistoryStore(wrong, kSeed, {3}), "does not match record 2 of child 0");
+    const std::string lost = dir.join("lost.db");
+    build(lost, {{historyContent(kSeed, 1), historyContent(kSeed, 2)}});
+    EXPECT_NONFATAL_FAILURE(verifyHistoryStore(lost, kSeed, {3}), "printed records the store does not hold");
 }
 
 } // namespace

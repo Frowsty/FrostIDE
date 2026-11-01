@@ -21,8 +21,8 @@
 //   exit-clean DIR              a journal with one entry, closed cleanly: "done <path>", exit 0
 //   bank-writer DB SEED         transfers between the 16 bank accounts; "ready" once the
 //                               accounts exist, then "transfer <n>" every 50 transfers
-//   history-record-loop DB SEED records historyContent(SEED, n) for n = 1, 2, ... over 5 paths;
-//                               "record <n>" after each record returns
+//   history-record-loop DB SEED records historyContent(SEED, n) under historyKey(n) for
+//                               n = 1, 2, ...; "record <n>" after each record returns
 //
 // Exit status: 0 for a mode that ends, 2 for bad arguments, 3 for a storage error (printed as
 // "error <description>").
@@ -328,7 +328,7 @@ int historyRecordLoop(const std::string& path, std::uint64_t seed) {
     for (std::int64_t n = 1;; ++n) {
         const std::string content = test::historyContent(seed, n);
         const std::string_view pieces[] = {content};
-        const std::string key = std::format("src/file{}.cpp", n % 5);
+        const std::string key = test::historyKey(n);
         auto recorded = history->record(key, "/work/" + key, frost::storage::RevisionKind::Save, {}, pieces);
         if (!recorded) {
             return storageError(recorded.error());

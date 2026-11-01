@@ -64,8 +64,9 @@ constexpr std::size_t kMaxChunkBytes = std::size_t{64} << 20;
 constexpr int kCreateAttempts = 3;
 // Recovery connections are short-lived. Budget: B19.
 constexpr std::int64_t kRecoveryCacheKiB = 256;
-// closeCleanly's removal: our own lock is gone at once, so a longer wait only means another
-// instance's scan has the file open (it then removes it). Budget: B20.
+// closeCleanly's removal waits at most this long in all, for the lock and (Windows) the delete:
+// our own lock is gone at once, so a longer wait only means another instance's scan has the file
+// open (it then removes it). Budget: B20.
 constexpr IClock::Duration kCloseRemovalWait = std::chrono::milliseconds(200);
 
 constexpr std::string_view kEntryColumns =
@@ -223,6 +224,10 @@ Result<HotExitJournal> HotExitJournal::create(std::string_view directory, IClock
         auto path = io::joinPath(*dir, name);
         if (!path) {
             return std::unexpected(std::move(path.error()).withContext("create hot-exit journal"));
+        }
+        // A journal that a scan could not quarantine (its copy's name too long) is never created.
+        if (auto room = detail::checkQuarantineRoom(*path, options.vfs); !room) {
+            return std::unexpected(std::move(room.error()).withContext("create hot-exit journal"));
         }
         if (fileExists(*path)) {
             lastError = Error(ErrorCode::AlreadyExists, std::format("'{}' exists", *path));
@@ -623,10 +628,13 @@ Result<RecoveryScan> findRecoverableJournals(std::string_view directory, IClock:
                 break;
             case ErrorCode::Corrupt: {
                 // Journal names are never reused (create() starts again under a new name), so
-                // the file cannot have been replaced since the verdict: no re-check needed.
+                // the file cannot have been replaced since the verdict: no re-check needed. A
+                // nullopt means it vanished before our lock (another instance's scan moved it).
                 auto moved = detail::quarantineFiles(path, systemClock(), lockWait);
                 if (moved) {
-                    scan.unreadable.push_back({std::move(moved->value()), std::move(error)});
+                    if (moved->has_value()) {
+                        scan.unreadable.push_back({std::move(moved->value()), std::move(error)});
+                    }
                 } else if (moved.error().code() == ErrorCode::Busy) {
                     ++scan.inUse;
                 } else {

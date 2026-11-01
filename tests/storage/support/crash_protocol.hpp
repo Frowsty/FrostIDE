@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <random>
 #include <string>
 
@@ -83,5 +84,8 @@ inline std::string historyContent(std::uint64_t seed, std::int64_t n) {
     const std::uint64_t key = mix(seed, static_cast<std::uint64_t>(n), 0x48);
     return seededBytes(key, static_cast<std::size_t>(key % (300 * 1024)));
 }
+
+// The path key of history record `n`: five paths in turn.
+inline std::string historyKey(std::int64_t n) { return std::format("src/file{}.cpp", n % 5); }
 
 } // namespace frost::storage::test
