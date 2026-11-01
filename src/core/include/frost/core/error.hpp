@@ -36,6 +36,9 @@ enum class ErrorCode : std::uint16_t {
     Timeout,          // A deadline expired.
     Busy,             // The resource is temporarily unavailable; retry may succeed.
     Internal,         // A FrostIDE bug: an invariant did not hold.
+    // The operation would run project code (a build, a configure) in a folder the user has not
+    // trusted (PLAN.md section 3.5). Appended after Internal so earlier values keep their numbers.
+    Untrusted,
 };
 
 // Returns the enumerator name ("NotFound"), or "ErrorCode(?)" for values outside the enumeration.
