@@ -25,3 +25,11 @@ path = ["resources/**/*.png", "resources/**/*.ico", "resources/**/*.svg"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
+
+# vcpkg overlay ports copied from microsoft/vcpkg (MIT; LICENSE-vcpkg.txt in each port), ADR 0014.
+# "override" so the Apache-2.0 *.json entry above does not claim the ports' vcpkg.json files.
+[[annotations]]
+path = ["third_party/vcpkg-ports/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Microsoft Corporation and vcpkg contributors"
+SPDX-License-Identifier = "MIT"
