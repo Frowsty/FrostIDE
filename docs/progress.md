@@ -5,19 +5,131 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-02: M1 in progress
 
-`main` has the seventh and the sixth feature-first batches (ADR 0031), merged with `git merge --no-ff` in the main
-worktree under D23. The seventh, in this order: `w1/build-service` at 8d77400 (merge eb82b95), `m1/shell-frame` at
-9576c24 (merge b1d05bc), `w2/clangd-diagnostics` at e7d9ccc (merge db9d24e) and `m1/save-manager` at e2b2362 (merge
-5fbd262), then the label follow-up (8ee7a1d). The sixth, in this order: `m1/verify-tooling` at 2e286e0 (merge
-08b92fd), `m1/syntax` at 681c749 (merge b706290), `m1/editor-model` at 0b4aac1 (merge b2a6b49), `m1/diff-merge` at
-7851f95 (merge 88d75ac), `m1/settings` at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a),
-then one fix of the merged tree (358ffd3). Each slice passed its own `-Quick`, and each batch's merged tree was
-verified once (the Verification sections below). The earlier batches, their slice records and the open questions are
-in the entry "2026-11-01: M1 in progress". Its "Deferred to the hardening phase (ADR 0031)" list is carried forward
-into this entry's, which is now the running one. This entry's slice records follow its sections, newest first, written
-from the hand-off notes (none of the ten branches kept a record in this log).
+`main` has the eighth, the seventh and the sixth feature-first batches (ADR 0031), merged with `git merge --no-ff` in
+the main worktree under D23. The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
+follow-up (4a9954b), `w1/tool-windows` at c81008c (merge e574965) and an ADR-reference fix (791fa63). The seventh, in
+this order: `w1/build-service` at 8d77400 (merge eb82b95), `m1/shell-frame` at 9576c24 (merge b1d05bc),
+`w2/clangd-diagnostics` at e7d9ccc (merge db9d24e) and `m1/save-manager` at e2b2362 (merge 5fbd262), then the label
+follow-up (8ee7a1d). The sixth, in this order: `m1/verify-tooling` at 2e286e0 (merge 08b92fd), `m1/syntax` at 681c749
+(merge b706290), `m1/editor-model` at 0b4aac1 (merge b2a6b49), `m1/diff-merge` at 7851f95 (merge 88d75ac), `m1/settings`
+at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then one fix of the merged tree (358ffd3).
+Each slice passed its own `-Quick`, and each batch's merged tree was verified once (the Verification sections below).
+The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in progress". Its
+"Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now the running one.
+This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the twelve
+branches kept a record in this log).
 
 ### Done
+
+#### Merge of `m1/editor-view` (bde77a5, eighth batch)
+- **The merge** (bde77a5) of `m1/editor-view` (3acd71c) into `main` at 52eb3d6: frost::ui_editor (`src/ui/editor`)
+  with EditorView, the renderer seam with a raster backend, QtTextShaper, highlighting, key routing over the IntelliJ
+  keymap, the find/replace bar, Go to Line, IME, mouse, clipboard, live settings and the status/signals/factory API;
+  in the model `commands::pasteLines`, the `deleteLines` caret merge and `frost::text::kLongLineCapBytes`; the slice
+  record below says more. ADR 0037 (`docs/adr/0037-editor-view.md`); the number is unchanged and no other ADR on
+  `main` uses it. The branch's own merges of `m1/editor-model` 0b4aac1 (6ce7513), `m1/syntax` 681c749 (0976882) and
+  `m1/settings` 481fc26 (b50fb7d) were already on `main`, so those parts were no-ops.
+- **Six conflicts**, each resolved so that both sides' intent survives, and with the same resolutions as
+  `w1/workbench`'s own merge of the slice (591ad72, on 8ee7a1d, which is `main` without the seventh batch's record):
+  the merged tree equals 591ad72's apart from `docs/progress.md`, so `w1/workbench`'s later merge stays plain.
+  - `src/CMakeLists.txt`, `tests/CMakeLists.txt` and `vcpkg.json`: `main`'s text. The branch only lacked `main`'s later
+    additions (document, build, lang and diag; `frost_add_test_directory` and its guards; spdlog). Its
+    `add_subdirectory(text/editor)` is already done by `tests/text/CMakeLists.txt`, so the editor model's tests keep
+    `mod.text`.
+  - `src/ui/CMakeLists.txt`: both subdirectories (`shell`, then `editor`) and both header notes.
+  - `tests/ui/CMakeLists.txt`: `ui_editor_tests` after `ui_shell_tests`, with its line in the header list.
+  - `tests/features/matrix.json`: rows 57, 85, 94 and 250 take the slice's acceptance tests and `in-progress`; every
+    other row stays `main`'s (ADR 0029's milestones for rows 59, 66, 95, 246 and 251-256).
+- **The theme pins** (the pre-state): the slice adds 37 `Editor.*`/`Syntax.*` colour keys to the four Glacier themes and
+  updates `ui_model_tests`' `kExpectedRegistryHash` (0x229dd62c1484c1a3) and the pinned theme blob size, as the tests
+  instruct. `m1/shell-frame`'s merge changed neither pin: no commit between 023f354 and 52eb3d6 touches `src/ui/model`,
+  `src/ui/theme_compiler`, `resources/themes` or `tests/ui/model`, so the slice's values are the merged tree's and
+  nothing was recomputed. `Registry.TablesConsistent` and the theme blob tests passed in the batch run.
+- **The build after the merge commit:** `night.py build-gate` (35.4 GB commit free) and `cmake --build --preset
+  win-clangcl-debug -j 8`: exit 0, 150 steps.
+
+#### Long-line follow-up (4a9954b, eighth batch)
+- **kLongLineCapBytes in the load service** (the pre-state's follow-up): `m1/save-manager`'s placeholder
+  `kMaxEditableLineChars` (1 Mi characters) is now `kMaxEditableLineBytes = frost::text::kLongLineCapBytes` (1,000,000
+  bytes, ADR 0037), and `LoadServiceOptions::maxEditableLineChars` is `maxEditableLineBytes`. `ReadOnlyReason::LongLine`
+  now means a line of more bytes than the cap, its break excluded: the cap past which the editor view stops shaping a
+  row. ADR 0028 decision 7 names the new constant. Nothing else is wired (`w1/workbench` does that); neither
+  `w1/workbench` nor `m1/editor-rhi` uses the old names.
+- **Still O(1) for almost every text:** the snapshot summary counts the longest line in characters. Snapshot content is
+  well-formed UTF-8, so a line has one to four times as many bytes as characters: a text no larger than the cap, or
+  whose longest line has at most a quarter of the cap in characters, has no long line, and one whose longest line has
+  more characters than the cap has one. Only the texts in between are measured line by line (`Snapshot::linesFrom`,
+  O(size), at load).
+- **`m1/save-manager`'s test stays meaningful:** `LoadServiceTest.OverlongLinesOpenReadOnly` keeps its boundaries
+  (exactly the cap is editable, one byte more is read-only, a clean reload that brings a long line) and now checks
+  bytes, not characters: two-byte characters that fill the cap stay editable (a CRLF does not count), one more makes
+  the line long; a file whose line with the most characters is not the one with the most bytes; a large file of short
+  lines; and restored hot-exit text. The old rule fails the new cases.
+- **Slips on the way:** the first build failed on `text::LineIndex` (it is `frost::LineIndex`), and a PowerShell
+  `Set-Content -Encoding utf8` put a BOM on `load_service.cpp`; both were fixed before the commit.
+- **The build after the commit:** `night.py build-gate` (33.9 GB commit free) and the Debug build: exit 0, then
+  `document_unit_tests` 34/34 (hidden) and clang-format clean on the three changed sources.
+
+#### Merge of `w1/tool-windows` (e574965, eighth batch)
+- **The merge** (e574965) of `w1/tool-windows` (c81008c) into `main` at 4a9954b: frost::ui_toolwindows
+  (`src/ui/toolwindows`) with the Solution Explorer, the Build output pane, Problems, BuildActions with the shortcut
+  table, ConfigurationCombo, TrustDialog and TrustPrompter, BuildController with GUI-thread marshalling and
+  ISaveAllHandler, and in frost::input `KeymapService::setModuleDefaults`; the slice record below says more. ADR 0039
+  (`docs/adr/0039-build-tool-windows.md`); the number is unchanged and no other ADR on `main` uses it, and its "ADR
+  0035" is the build service, as on `main`. The branch's own merge (6a591e8) of `w1/build-service` 8d77400 was already
+  on `main`, so that part was a no-op.
+- **Three conflicts**, each resolved so that both sides' intent survives, and as in `w1/workbench`'s merge 43908a5: the
+  merged tree equals 43908a5's apart from `docs/progress.md` and the long-line follow-up.
+  - `src/io/include/frost/io/scripted_process_launcher.hpp`: both sides hold the same three ScriptedProcess fields
+    (`racesTerminate`, `outputHeld`, `leftovers`) in a different order; `main`'s order (after `chunkBytes` and
+    `chunkInterval`, from the seventh batch's merge of `w1/build-service`) stays.
+  - `tests/CMakeLists.txt`: `main`'s text; `tests/build` already comes in through `frost_add_test_directory`.
+  - `src/ui/CMakeLists.txt`: `toolwindows` joins after `shell` and `editor`.
+- **Orchestrator decisions on its questions:** Build Solution stays Ctrl+Shift+B (the Visual Studio habit) as the
+  single `kBuildShortcutDefaults` entry, although it shadows the IntelliJ keymap's Go to Type Declaration
+  (`navigate.typeDeclaration`) while a solution is open; Ctrl+Shift+B against Ctrl+F9 is the user's open question
+  (Questions for the user). The `StallHooks.ASlowSlotIsOneStallAndOneReport` flake it saw once under load is
+  `m1/crash-diag`'s known timing flake (that slice record's Known bugs); it is now in the deferred list as well.
+- **The build after the merge commit:** `night.py build-gate` (34.4 GB commit free) and the Debug build: exit 0, 152
+  steps.
+
+#### ADR-reference fix (791fa63, eighth batch)
+- `createEditorView`'s note in `src/ui/editor/include/frost/ui/editor/editor_view.hpp` named the shell's ADR as 0035,
+  its number before the seventh batch renumbered it; it reads ADR 0038 now. Comment only. `w1/workbench` and
+  `m1/editor-rhi` keep that line as 3acd71c has it, so their merges stay clean. No other reference in the two slices
+  is off: ADR 0039's "ADR 0035" is the build service, and ADR 0037's are 0011, 0025, 0026 and 0030.
+- **The build after the commit** (after the batch run): its Verification bullet below.
+
+#### Verification (eighth batch, merged tree e574965)
+- Before the batch run: the Windows Debug build after both merges and the long-line follow-up (above), and
+  `document_unit_tests` after the follow-up.
+- **The run** of `tools\verify.ps1 -Quick -Jobs 8`, on e574965 (clean tree; the ADR-reference fix and this record not
+  yet written), through `run_hidden_nobox.py` (a hidden desktop; no window opened on it), after `night.py build-gate`
+  (34.1 GB commit free): 519.3 s, exit code 0. Windows ran its Debug leg (ctest `-j 8`) and the checks; WSL ran
+  `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`): `Verified: win debug 2115/2121 (6 skipped), wsl
+  debug 2012/2018 (6 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by default), wsl
+  licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by default)`
+  (frost-lint 1872 files; licensecheck 39 packages on Windows, 35 on WSL). No test failed, so no slice was reverted
+  and no fix was needed. The test steps took 201.9 s (Windows, parallel at `-j 8`) and 232.0 s (WSL). Another
+  agent's verify ran beside it.
+- **No bad objects this time:** none of the seventh batch's SEH 0xc0000005 crashes in the ScriptedProcessLauncher
+  tests came back, so nothing was rebuilt with `SCCACHE_RECACHE=1`.
+- **After the run:** the ADR-reference fix (791fa63, one comment) was built (Debug, 37 steps, exit 0), checked
+  (clang-format, frost-lint 1872 files) and its 32 `Editor` tests in `mod.ui` passed (hidden ctest); a comment
+  cannot change the counts above.
+- **The skips:** the same six on each OS as in the seventh batch. Windows: the four `WatcherPerf` tests,
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` and `SafeWrite.SymlinksStayLinks` (no symlink right for this
+  account). WSL: the four `WatcherPerf` tests, `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale` and
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler` (Windows-only). The seven `msbuild` and 17
+  `screenshot` tests ran and passed on Windows.
+- **No test was lost:** no `TEST` line is removed between 52eb3d6 and e574965. Four assertion lines change on
+  purpose: the `deleteLines` caret merge (ADR 0037), the two theme pins (604 body bytes, a 676-byte blob) and the
+  long-line test's two-byte check, which now covers two documents. Against the seventh batch (win debug 2063, wsl
+  debug 1960) the tree adds 58 tests on each OS, the 58 `TEST` cases the slices add: `tests/ui` 54
+  (`ui_toolwindows_tests` 31, `ui_editor_tests` 23), `tests/text` 3 and `tests/input` 1. The long-line follow-up adds
+  cases to an existing test.
+- `-Quick` builds no ASan, TSan or fuzz tree. The slices' sanitizer, fuzz, stress and `-Full` runs are in "Deferred to
+  the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `w1/build-service` (eb82b95, seventh batch)
 - **The merge** (eb82b95) of `w1/build-service` (8d77400) into `main` at 12edb19: BuildService, diagnostic resolution
@@ -387,9 +499,14 @@ from the hand-off notes (none of the ten branches kept a record in this log).
   are in "Deferred to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 ### Next
-- **W1, the work-ready build** (ADR 0032): BuildService (ADR 0035) and the shell (ADR 0038) are on `main`. Next,
-  wiring BuildService into `src/ui` and `src/app`: the Build menu, the toolbar configuration combo, the output pane,
-  the error list, editor marks, the trust prompt and the Save All hook. W1 docks the Solution Explorer with
+- **W1, the work-ready build** (ADR 0032): BuildService (ADR 0035), the shell (ADR 0038), the editor view (ADR 0037)
+  and the build tool windows (ADR 0039) are on `main`, none of them wired into the app yet. Next, `w1/workbench` (in
+  flight, on 8ee7a1d with its own merges 591ad72 and 43908a5 of the two slices) wires them in. From `w1/tool-windows`'
+  hand-off: one BuildController and one BuildServiceBackend per main window; `registerActions`;
+  `setModuleDefaults(buildShortcutBindings())`; a TrustPrompter on the main window; ISaveAllHandler from the editor
+  host; `openFile`/`openLocation` to the editor; ConfigurationCombo and the BuildActions QActions on the toolbar;
+  `requestFailed` to notifications. From `m1/editor-view`'s: the error list feeds `setLineMarkers`, and the views of
+  one document share one SyntaxSession. W1 docks the Solution Explorer with
   `toolWindows().setContent("project", ...)` and the build output and problems windows with
   `setContent("run"/"problems", ...)`, registers `build.*` and `run.*` actions (which light up the toolbar slots and
   the Build/Run menus) and fills `mainToolbar().runConfigurations()`. Then opening a `.sln`/`.slnx` from the command
@@ -398,24 +515,30 @@ from the hand-off notes (none of the ten branches kept a record in this log).
   then the Solution providers; open, change, save and close from the editor's Document ChangeSets), squiggles from
   DiagnosticsStore, and a Problems window that merges build and live diagnostics; then completion and go-to-definition
   through `ClangdService::request()`. `w2/clangd-nav` (in flight) adds the MSBuild-evaluated compile-command provider.
-- **The shell's consumers** (ADR 0038): `m1/editor-view` implements IEditorFactory/IEditorView and replaces
-  PlaceholderEditorFactory in AppServices; adapters bind IShellSettings and IKeymapSettings to the m1/settings
+- **The shell's consumers** (ADR 0038): the editor view is on `main`; `w1/workbench` wraps `createEditorView` in the
+  shell's IEditorFactory (replacing PlaceholderEditorFactory in AppServices), maps EditorViewStatus to EditorStatus
+  and connects the status signals; adapters bind IShellSettings and IKeymapSettings to the m1/settings
   registry (in-memory defaults until then); `m1/shell-nav` builds Find Action on ListPopup. The shell's action ids are
   reserved (its merge section above).
 - **The SaveManager's consumers** (ADR 0028): one manager on the document thread; AutosaveController fed by input
   events, focus loss and a timer; the merge view driven by PendingMerge and `resolveExternalChange` (`m1/shell-nav`,
   with the Q5 labels above; changes on adjacent lines in both buffer and disk count as a conflict, the same rule as
   git); banners for `DiskState::OutOfDate` and `ReadOnlyReason::LongLine`; `restore()` after `findRecoverableJournals`
-  on startup. `m1/editor-view` sets `kMaxEditableLineChars` in `src/document/include/frost/document/load_service.hpp`.
-- **The in-flight slices:** `m1/editor-view` (with the multi-caret deleteLines fix), `m1/shell-nav` (Find Action, the
-  merge view, canonical real-case document paths) and `w2/clangd-nav`, merged in batches as each passes its own
-  `-Quick`.
-- **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` binds keys to `commands::*`, calls `Editor::run`,
-  supplies the Qt ITextShaper, sets `pageRows` from the viewport height and paints the EditorUpdate rows. A syntax or
-  index slice implements IOutlineProvider for next and previous member.
-- **The frost::syntax consumers** (ADR 0023): the editor applies each ChangeSet to SyntaxSession, calls `poll()` from
-  the parse-ready hook, takes highlights for the visible range, and uses `outline()` for next and previous member and
-  `enclosingRanges` for extend selection.
+  on startup; the editor host feeds the view's `setFileInfo`/`markSaved` (`w1/workbench`). The long-line rule uses
+  `kLongLineCapBytes` since this batch (the long-line follow-up above).
+- **The in-flight slices:** `w1/workbench` (the W1 wiring above), `m1/editor-rhi` (the QRhi glyph-atlas renderer
+  behind IEditorRenderer, on 3acd71c), `m1/shell-nav` (Find Action, the merge view, canonical real-case document
+  paths) and `w2/clangd-nav`, merged in batches as each passes its own `-Quick`.
+- **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` (on `main`) binds keys to `commands::*`, calls
+  `Editor::run`, supplies the Qt ITextShaper, sets `pageRows` from the viewport height, paints the EditorUpdate rows
+  and implements IOutlineProvider over the syntax outline (SyntaxOutlineProvider). An index slice may add a
+  semantic one.
+- **The frost::syntax consumers** (ADR 0023): the editor view (on `main`) applies each ChangeSet to SyntaxSession,
+  calls `poll()` from the parse-ready hook, takes highlights for the visible range and uses `outline()` for next and
+  previous member; `enclosingRanges` for extend selection is still unused. Sharing one SyntaxSession among the views
+  of a document is W1's.
+- **The editor view, later** (ADR 0037): the QRhi backend (`m1/editor-rhi`, in flight), Editor-only zoom
+  (Ctrl+wheel), and in the hardening phase the B5 measurement and the token-contrast thresholds.
 - **The frost::settings consumers** (ADR 0021): `m1/shell-nav` registers `settingsActions()` and opens the path that
   `prepareForEditing()` returns; the composition root binds the keymap, appearance and SaveManager readers to
   SettingsStore snapshots, feeds TrustStore decisions into `setProjectTrusted`, and starts `follow()` on watches of
@@ -427,6 +550,47 @@ from the hand-off notes (none of the ten branches kept a record in this log).
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
 `m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From the eighth batch's merges** (the integrator):
+  - A review of the long-line follow-up (4a9954b), document code: the byte rule's character bounds and its line walk;
+    and a measurement of that walk at load on a text near 128 MiB whose longest line has between a quarter of the cap
+    and the cap in characters (B5 and the load path).
+  - `StallHooks.ASlowSlotIsOneStallAndOneReport` (`tests/app`): `m1/crash-diag`'s known timing flake (its slice
+    record), seen once more under the full parallel verify load in `w1/tool-windows`' own run, where it passed alone
+    and on the re-run. It passed in this batch's run.
+- **From `w1/tool-windows`** (ADR 0039), as its hand-off lists them:
+  - Sanitizers (ASan/UBSan/TSan) over `ui_toolwindows_tests`, especially TSan on the BuildController relay.
+  - Fuzzing, stress runs, mutation checks, perf/budget gates, screenshot goldens, `verify -Full`.
+  - Independent review of the slice (feature-first phase, ADR 0031).
+  - Capping the output pane's own line count (the controller's replay is capped at 200 000 lines, but the
+    QPlainTextEdit is not).
+  - Problems grouped by file (optional in scope).
+  - Show All Files in the Solution Explorer (`TODO(M2)` in `solution_tree_model.hpp`).
+  - Highlighting the matched characters during speed search.
+  - A real `explorer.exe /select` and `xdg-open` launch check (only the spec and a scripted launch are tested).
+  - On-screen interaction tests (focus-out ending speed search, the context-menu popup, the window-modal trust dialog
+    over a real main window).
+  - Tests with an installed FrostStyle checking the actual icons and tint colours (tests run without a style, so icons
+    are null and tints use fallbacks).
+- **From `m1/editor-view`** (ADR 0037), as its hand-off lists them:
+  - Sanitizer builds (ASan/TSan/UBSan), fuzz targets and runs, stress or differential runs, mutation checks, `verify
+    -Full`: not run, as the feature-first phase requires.
+  - Perf and budget gates: measuring the InputToPaint marker against B5 (the hook is in place, nothing feeds ETW or the
+    budget yet); measuring `kLongLineCapBytes` against B5; the glyph-cache size.
+  - Editor screenshot goldens and pixel checks (tests read the display list only).
+  - Contrast thresholds for the `Syntax.*` token colours (only `Editor.foreground` on `Editor.background` is in the
+    contrast policy; `TODO(M1)` in `theme_registry.hpp`).
+  - The QRhi glyph-atlas renderer behind IEditorRenderer (raster only today; `m1/editor-rhi` is in flight).
+  - EditorSettingsBinding: reading `.editorconfig` off the GUI thread, and the race where a settings listener on
+    another thread runs while the binding is being destroyed.
+  - IME with several carets (only the primary caret composes), and the IME replacementStart/Length attributes.
+  - Paste with several carets does not split the clipboard text per caret; drag auto-scroll has no timer (it only
+    scrolls when the mouse moves).
+  - Caret column against glyphs for ZWJ emoji sequences and fallback fonts whose glyphs are wider than the shaper's
+    cells.
+  - `tr()` wrapping of the find bar, Go to Line and action names (`TODO(M1)`: it waited for `m1/shell-frame`'s
+    `tr.hpp`, which is on `main` now).
+  - Several views sharing one SyntaxSession per document (the W1 integration slice).
+  - Independent review of the text/editor model changes (moved to the hardening phase by ADR 0031).
 - **From the seventh batch's merges** (the integrator):
   - Find why the Windows Debug tree held a bad object in this batch (its Verification): 47 tests on
     ScriptedProcessLauncher crashed with 0xc0000005 until the objects compiled since the first merge were rebuilt with
@@ -715,20 +879,94 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 - **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
-- None. The hand-off notes of the seventh batch (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`,
-  `m1/save-manager`) and of the sixth (`m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings`,
-  `plan/thin-path`) name none; `m1/diff-merge`'s LongPathsEnabled item is not a blocker (its merge section above).
+- None. The hand-off notes of the eighth batch (`m1/editor-view`, `w1/tool-windows`), of the seventh
+  (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`, `m1/save-manager`) and of the sixth
+  (`m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings`, `plan/thin-path`) name none; `m1/diff-merge`'s
+  LongPathsEnabled item is not a blocker (its merge section above).
 - B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
 
 ### Questions for the user
-No slice of the seventh or the sixth batch asks one in its hand-off; the orchestrator's decisions on their questions
-are in the merge sections above. ADR 0019 Q5 (diff3-style markers and the save-manager prompt's labels), which the
-last integrator listed here, is decided: diff3 stays the default, and the labels are "Keep my version", "Take disk
-version" and "Compare..." (the merge section of `m1/save-manager` above).
+- **Build Solution's shortcut** (`w1/tool-windows`, ADR 0039): Ctrl+Shift+B (Visual Studio) or Ctrl+F9 (the IntelliJ
+  keymap's Build)? Until you decide, Build Solution is Ctrl+Shift+B, the single `kBuildShortcutDefaults` entry
+  (orchestrator decision). The shadowing that comes with it: Ctrl+Shift+B is also the IntelliJ keymap's Go to Type
+  Declaration (`navigate.typeDeclaration`), which Build Solution shadows while a solution is open; while a build runs,
+  or with no solution open, the build action is disabled and Ctrl+Shift+B falls through to Go to Type Declaration
+  (Visual Studio would report "build already in progress" instead; the slice record's known bug).
+
+Apart from that, no slice of the eighth, the seventh or the sixth batch asks one in its hand-off; the orchestrator's
+decisions on their questions are in the merge sections above. ADR 0019 Q5 (diff3-style markers and the save-manager
+prompt's labels), which the last integrator listed here, is decided: diff3 stays the default, and the labels are "Keep
+my version", "Take disk version" and "Compare..." (the merge section of `m1/save-manager` above).
 
 The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
 variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
 `m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `w1/tool-windows` (ADR 0039)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): c81008c on top of its merge 6a591e8 of `w1/build-service` 8d77400, whose conflicts it
+resolved by keeping both sides. Worktree `.claude\worktrees\w1-tool-windows`. (Merge note: merged into `main` as
+e574965; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::ui_toolwindows** (`src/ui/toolwindows`): the Solution Explorer, the Build output pane, Problems,
+  BuildActions with the shortcut table, ConfigurationCombo, TrustDialog/TrustPrompter, BuildController with GUI-thread
+  marshalling, and ISaveAllHandler.
+- **frost::input:** `KeymapService::setModuleDefaults`.
+- **ADR 0039** (`docs/adr/0039-build-tool-windows.md`) and `ui_toolwindows_tests` (31 tests).
+- **Verification at c81008c** (its own `-Quick`): win debug 1727/1732 (5 skipped), wsl debug 1624/1630 (6 skipped),
+  the checks ok (tidy not-run). Its first run had one unrelated StallHooks timing flake. Not merged or pushed by the
+  slice.
+
+#### Known bugs
+- Linux: Open Containing Folder launches `xdg-open` uncontained; the child is not reaped and stays a zombie until
+  FrostIDE exits (the existing io `TODO(M3)` for uncontained POSIX children).
+- While a build runs, or with no solution open, Ctrl+Shift+B falls through to `navigate.typeDeclaration` (the build
+  action is disabled, so the matcher tries the next candidate). Visual Studio would report "build already in
+  progress" instead.
+- `BuildController::openSolution` and `closeSolution` emit `diagnosticsCleared` after reading the backend's
+  diagnostics. If a backend still had diagnostics at that moment, the Problems view would drop them until the next
+  build. BuildService has none after an open, so this is latent.
+- Problems: Enter on a row with no location (a project-level message, say) is consumed and does nothing.
+- `StallHooks.ASlowSlotIsOneStallAndOneReport` (`tests/app`, not this slice) failed once under the full parallel
+  verify load on Windows and passed alone and on the re-run: a timing flake to look at in hardening.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `w1/tool-windows`'.
+- The wiring in this entry's Next (W1, now `w1/workbench`'s); its shortcut question is under Questions for the user.
+
+### Slice record: `m1/editor-view` (ADR 0037)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 3acd71c on 023f354 plus its merges of `m1/editor-model` 0b4aac1 (6ce7513),
+`m1/syntax` 681c749 (0976882) and `m1/settings` 481fc26 (b50fb7d). Worktree `.claude\worktrees\m1-editor-view`.
+(Merge note: merged into `main` as bde77a5; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::ui_editor** (`src/ui/editor`): EditorView, the renderer seam with a raster backend, QtTextShaper,
+  highlighting, key routing over the IntelliJ keymap, the find/replace bar, Go to Line, IME, mouse, clipboard, live
+  settings and a status/signals/factory API.
+- **Also in the commit:** the 37 theme keys, `pasteLines`, the `deleteLines` caret merge, `kLongLineCapBytes`, ADR
+  0037 (`docs/adr/0037-editor-view.md`), matrix rows 57, 85, 94 and 250 `in-progress`, and 23 offscreen tests.
+- **Verification at 3acd71c** (its own `-Quick`): win debug 1669/1674 (5 skipped), wsl debug 1580/1585 (5 skipped),
+  the checks ok. Not merged or pushed by the slice.
+
+#### Known bugs
+- Highlighting and row painting copy each visible row's bytes. Soft wrap is on by default, so long lines become many
+  short rows, but with wrap off a multi-megabyte line is still shaped up to `kLongLineCapBytes` per row, and `xAt` hit
+  tests on it are O(line length).
+- A view with an AppearanceManager follows zoom by rebuilding the font when the point size differs. Editor-only zoom
+  (Ctrl+wheel) is not implemented.
+- Without EditorKeyRouting (`services.keys` null) the view only types printable text: no navigation or shortcuts.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/editor-view`'s.
+- Its hand-off's Next: the shell wraps `createEditorView` in its IEditorFactory, maps EditorViewStatus to EditorStatus
+  and connects the status signals; the SaveManager feeds `setFileInfo`/`markSaved`; W1 wires the error list to
+  `setLineMarkers` and shares one SyntaxSession per document (all `w1/workbench`'s now). The load service's use of
+  `kLongLineCapBytes` is done (the long-line follow-up in this entry). Later: the QRhi backend (`m1/editor-rhi`, in
+  flight), and in the hardening phase the B5 measurement and the token-contrast thresholds.
 
 ### Slice record: `m1/save-manager` (ADR 0028)
 
@@ -747,7 +985,8 @@ feature-first phase (ADR 0031): e2b2362 on top of its merges of `m1/diff-merge` 
 - **ADR 0028** (`docs/adr/0028-save-manager.md`, short, 10 decisions). Feature rows I2 and 218 name the acceptance
   tests; both stay `in-progress` until the UI is wired.
 - **For the next slices:** the shell wiring in this entry's Next; `m1/editor-view` sets `kMaxEditableLineChars` in
-  `load_service.hpp`. Changes on adjacent lines in both buffer and disk count as a conflict (the same rule as git), so
+  `load_service.hpp` (merge note: done in the eighth batch's long-line follow-up, as `kMaxEditableLineBytes` =
+  `kLongLineCapBytes`). Changes on adjacent lines in both buffer and disk count as a conflict (the same rule as git), so
   the merge view must expect them.
 - **Verification at e2b2362** (its own `-Quick`): win debug 1691/1697 (6 skipped), wsl debug 1602/1607 (5 skipped),
   the checks ok (tidy not-run).
