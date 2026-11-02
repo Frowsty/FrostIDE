@@ -36,6 +36,7 @@ inline constexpr Key<bool> editorIndentGuides{"editor.indentGuides"};
 inline constexpr Key<std::int64_t> editorRightMargin{"editor.rightMargin"};
 inline constexpr Key<bool> editorShowRightMargin{"editor.showRightMargin"};
 inline constexpr Key<bool> editorCaretBlinking{"editor.caretBlinking"};
+inline constexpr Key<std::string> editorRenderer{"editor.renderer"};
 
 // Editor: code style.
 inline constexpr Key<std::int64_t> editorTabSize{"editor.tabSize"};

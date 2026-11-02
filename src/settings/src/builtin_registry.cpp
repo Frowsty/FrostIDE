@@ -86,6 +86,13 @@ struct Entry {
          "Editor/General/Appearance", boolSchema(), Value(true), kApplicationAndPersonal},
         {"editor.caretBlinking", "Caret blinking", "Makes the text caret blink.", "Editor/General/Appearance",
          boolSchema(), Value(true), kApplicationOnly},
+        {"editor.renderer", "Editor renderer",
+         "How the editor draws: auto uses the GPU (Direct3D 11) on Windows except in remote sessions and on a "
+         "software adapter, and the CPU elsewhere; raster always draws on the CPU; rhi always tries the GPU. A GPU "
+         "failure falls back to the CPU renderer.",
+         "Editor/General/Appearance",
+         enumSchema(options({{"auto", "Automatic"}, {"raster", "CPU (raster)"}, {"rhi", "GPU (QRhi)"}})), text("auto"),
+         kApplicationOnly, false, true},
 
         // Editor: code style.
         {"editor.tabSize", "Tab size", "How many columns a tab character advances (EditorConfig's tab_width).",

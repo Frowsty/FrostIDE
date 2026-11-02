@@ -13,7 +13,9 @@
 #                                frost-icon-baker through their command lines (Qt Core);
 #   ui_tests                     FrostStyle, AppearanceManager, icons and fonts (offscreen);
 #   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
-#                                IME, find/replace, Go to Line, highlighting and live settings;
+#                                IME, find/replace, Go to Line, highlighting and live settings; the
+#                                QRhi backend (ADR 0043) on a Direct3D 11 WARP device, or QRhi's Null
+#                                backend where Direct3D is missing, and the renderer switches;
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" (its second
 #                                label, "screenshot", waits for several labels in frost_add_test, which
 #                                takes one kind label today; ADR 0027);
@@ -126,6 +128,7 @@ _frost_ui_test_wiring(ui_tests)
 frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
+        editor/editor_rhi_test.cpp
         editor/editor_view_test.cpp
     DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
          frost::input frost::sched frost::io frost_ui_test_support)
