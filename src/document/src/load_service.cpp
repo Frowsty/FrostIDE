@@ -2,7 +2,7 @@
 //
 // The document load service (ADR 0028; ADR 0029 decision 7): reads through io::IFileSystem with
 // the 128 MiB guard, fingerprints the bytes for external-change checks, decodes with frost::text's
-// pipeline and marks texts with over-long lines read-only.
+// pipeline and marks texts with over-long lines (frost::text::kLongLineCapBytes) read-only.
 
 #include "frost/document/load_service.hpp"
 
@@ -31,8 +31,33 @@ Result<void> LoadService::checkSize(std::uint64_t bytes, std::string_view path) 
 }
 
 ReadOnlyReason LoadService::readOnlyReason(const text::Snapshot& text) const noexcept {
-    return text.summary().longestLineChars > m_options.maxEditableLineChars ? ReadOnlyReason::LongLine
-                                                                            : ReadOnlyReason::None;
+    /*
+     * The summary counts the longest line in characters, not bytes. Snapshot content is well-formed
+     * UTF-8, so a line has at least as many bytes as characters and at most four times as many:
+     * a text no larger than the cap, or whose longest line has at most a quarter of the cap in
+     * characters, has no long line, and one whose longest line has more characters than the cap
+     * has one. Only the texts in between are measured line by line.
+     */
+    const std::uint64_t cap = m_options.maxEditableLineBytes;
+    const text::TextSummary& summary = text.summary();
+    const std::uint64_t longestChars = summary.longestLineChars;
+    if (summary.bytes <= cap || longestChars * 4 <= cap) {
+        return ReadOnlyReason::None;
+    }
+    if (longestChars > cap) {
+        return ReadOnlyReason::LongLine;
+    }
+    auto lines = text.linesFrom(LineIndex{0});
+    if (!lines) {
+        return ReadOnlyReason::None; // Unreachable: every text has line 0.
+    }
+    text::LineInfo line;
+    while (lines->next(line)) {
+        if (line.content.size() > cap) {
+            return ReadOnlyReason::LongLine;
+        }
+    }
+    return ReadOnlyReason::None;
 }
 
 Result<RawFile> LoadService::read(std::string_view path) const {

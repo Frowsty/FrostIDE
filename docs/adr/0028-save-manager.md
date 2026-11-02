@@ -41,10 +41,11 @@
    Deleted files are reported once; autosave never recreates them.
 7. **Large-file guard.** All opens, reloads, merges and hot-exit restores go through `LoadService`.
    `kMaxOpenFileBytes` (128 MiB) and more is refused with `OutOfRange` from the file's status, before it is read.
-   A text whose longest line has more than `kMaxEditableLineChars` characters (1 Mi, a placeholder that
-   `m1/editor-view` sets) opens read-only. A reload or merge that would cross the threshold, or a merge that
-   cannot be built, keeps the buffer and its journal entry and marks the document `DiskState::OutOfDate`; saving
-   it then needs an explicit overwrite.
+   A text with a line of more than `kMaxEditableLineBytes` bytes opens read-only. That is
+   `frost::text::kLongLineCapBytes` (1,000,000 bytes, ADR 0037), the cap past which the editor view stops shaping
+   a row; it replaced the placeholder `kMaxEditableLineChars` (1 Mi characters) when `m1/editor-view` merged.
+   A reload or merge that would cross the threshold, or a merge that cannot be built, keeps the buffer and its
+   journal entry and marks the document `DiskState::OutOfDate`; saving it then needs an explicit overwrite.
 8. **Hot exit.** Journal generations come from one counter per manager and change with the committed state or the
    format. `journalDirty()` puts changed dirty (and out-of-date) buffers and clears entries of buffers that became
    clean. The encoding travels in the journal's opaque labels as nine `|` fields (name, loss, replacements, the two

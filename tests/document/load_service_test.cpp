@@ -2,22 +2,36 @@
 //
 // Unit tests for frost::document's LoadService on MemFs (ADR 0028; ADR 0029 decision 7): the
 // large-file guard at its boundary (a lowered limit; the real 128 MiB file is in the integration
-// tests), the read-only open of a text whose longest line exceeds the view's cap, the disk
+// tests), the read-only open of a text with a line longer than the view's cap in bytes, the disk
 // fingerprint, encoding overrides, and the guard on restored text.
 
 #include "frost/document/load_service.hpp"
 #include "frost/storage/fingerprint.hpp"
 #include "frost/text/encoding.hpp"
+#include "frost/text/large_file.hpp"
 
 #include "document_fixture.hpp"
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace frost::document::test {
 namespace {
 
 using LoadServiceTest = DocumentFixture;
+
+// `piece` repeated `count` times.
+std::string repeat(std::string_view piece, std::size_t count) {
+    std::string out;
+    out.reserve(piece.size() * count);
+    for (std::size_t i = 0; i < count; ++i) {
+        out += piece;
+    }
+    return out;
+}
 
 TEST_F(LoadServiceTest, RefusesFilesAtTheSizeLimit) {
     LoadServiceOptions limits;
@@ -47,27 +61,52 @@ TEST_F(LoadServiceTest, RefusesFilesAtTheSizeLimit) {
 }
 
 TEST_F(LoadServiceTest, OverlongLinesOpenReadOnly) {
-    // One line of exactly the cap is editable; one character more is not.
-    writeExternally("ok.txt", std::string(kMaxEditableLineChars, 'x') + "\nshort\n");
-    writeExternally("long.txt", "first\n" + std::string(kMaxEditableLineChars + 1, 'x') + "\n");
+    // The cap is the editor view's long-line cap (ADR 0037), in bytes.
+    EXPECT_EQ(kMaxEditableLineBytes, text::kLongLineCapBytes);
+    EXPECT_EQ(LoadServiceOptions{}.maxEditableLineBytes, std::uint64_t{1'000'000});
+    const std::size_t cap = kMaxEditableLineBytes;
+
+    // One line of exactly the cap is editable; one byte more is not.
+    writeExternally("ok.txt", std::string(cap, 'x') + "\nshort\n");
+    writeExternally("long.txt", "first\n" + std::string(cap + 1, 'x') + "\n");
     FileDocument* ok = open("ok.txt");
     FileDocument* longLine = open("long.txt");
     ASSERT_TRUE(ok != nullptr && longLine != nullptr);
     EXPECT_EQ(ok->readOnly(), ReadOnlyReason::None);
     EXPECT_EQ(longLine->readOnly(), ReadOnlyReason::LongLine);
 
-    // The cap counts characters, not bytes: two-byte characters up to the cap stay editable.
-    std::string twoByte;
-    for (std::uint32_t i = 0; i < kMaxEditableLineChars; ++i) {
-        twoByte += "\xC3\xA9";
-    }
-    writeExternally("accents.txt", twoByte);
+    // The cap counts bytes, not characters: two-byte characters filling exactly the cap stay
+    // editable (the CRLF break does not count), and one more makes the line long although it has
+    // only half the cap in characters.
+    writeExternally("accents.txt", repeat("\xC3\xA9", cap / 2) + "\r\n");
+    writeExternally("accents-long.txt", repeat("\xC3\xA9", cap / 2 + 1));
     FileDocument* accents = open("accents.txt");
-    ASSERT_NE(accents, nullptr);
+    FileDocument* accentsLong = open("accents-long.txt");
+    ASSERT_TRUE(accents != nullptr && accentsLong != nullptr);
     EXPECT_EQ(accents->readOnly(), ReadOnlyReason::None);
+    EXPECT_EQ(accentsLong->readOnly(), ReadOnlyReason::LongLine);
+
+    // The line with the most characters need not be the one with the most bytes: 600,000 ASCII
+    // characters, then 400,000 three-byte characters (1,200,000 bytes).
+    writeExternally("mixed.txt", std::string(600'000, 'a') + "\n" + repeat("\xE2\x82\xAC", 400'000) + "\n");
+    FileDocument* mixed = open("mixed.txt");
+    ASSERT_NE(mixed, nullptr);
+    EXPECT_EQ(mixed->readOnly(), ReadOnlyReason::LongLine);
+
+    // A text larger than the cap made of short lines is editable.
+    writeExternally("big.txt", repeat("short line\n", cap / 5));
+    FileDocument* big = open("big.txt");
+    ASSERT_NE(big, nullptr);
+    EXPECT_EQ(big->readOnly(), ReadOnlyReason::None);
+
+    // Restored text (the hot-exit journal) goes through the same rule.
+    const LoadService loader(fs);
+    auto restored = loader.fromUtf8(std::string(cap + 1, 'z'), "untitled:1");
+    ASSERT_TRUE(restored) << restored.error().describe();
+    EXPECT_EQ(restored->readOnly, ReadOnlyReason::LongLine);
 
     // A clean reload that brings an over-long line makes the document read-only too.
-    writeExternally("ok.txt", std::string(kMaxEditableLineChars + 5, 'y'));
+    writeExternally("ok.txt", std::string(cap + 5, 'y'));
     EXPECT_EQ(manager().checkDisk(*ok).kind, ExternalChangeKind::Reloaded);
     EXPECT_EQ(ok->readOnly(), ReadOnlyReason::LongLine);
 }

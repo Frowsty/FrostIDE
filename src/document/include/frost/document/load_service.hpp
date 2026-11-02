@@ -7,8 +7,8 @@
 /*
  * The large-file guard (until large-file mode, M15):
  *   - a file of kMaxOpenFileBytes (128 MiB) or more is refused with OutOfRange before it is read;
- *   - a text whose longest line has more than kMaxEditableLineChars characters loads, marked
- *     ReadOnlyReason::LongLine, so the editor opens it read-only;
+ *   - a text with a line of more than kMaxEditableLineBytes bytes (frost::text's long-line cap,
+ *     ADR 0037) loads, marked ReadOnlyReason::LongLine, so the editor opens it read-only;
  *   - a reload or merge that would cross the size threshold fails here, and the SaveManager keeps
  *     the buffer and its journal entry, marked out of date (DiskState::OutOfDate).
  * Thread safety: const members are safe from any thread when the file system and the codec
@@ -19,6 +19,7 @@
 #include "frost/core/error.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
+#include "frost/text/large_file.hpp"
 #include "frost/text/snapshot.hpp"
 #include "frost/text/text_buffer.hpp"
 #include "frost/text/text_codec.hpp"
@@ -35,21 +36,22 @@ namespace frost::document {
 // Files of this many bytes or more are refused (ADR 0029 decision 7): 128 MiB.
 inline constexpr std::uint64_t kMaxOpenFileBytes = std::uint64_t{128} << 20;
 
-// The longest line, in characters, that the editor view edits; a longer line opens the document
-// read-only. A named constant here; m1/editor-view sets the final value.
-inline constexpr std::uint32_t kMaxEditableLineChars = std::uint32_t{1} << 20;
+// The longest line, in bytes excluding its break, that the editor view edits; a longer line opens
+// the document read-only. It is frost::text::kLongLineCapBytes (1,000,000 bytes, ADR 0037), the
+// cap past which the view stops shaping and painting a row.
+inline constexpr std::uint64_t kMaxEditableLineBytes = text::kLongLineCapBytes;
 
 // Why a loaded document is read-only in the editor.
 enum class ReadOnlyReason : std::uint8_t {
     None,
-    LongLine, // A line is longer than LoadServiceOptions::maxEditableLineChars.
+    LongLine, // A line has more bytes than LoadServiceOptions::maxEditableLineBytes.
 };
 
 struct LoadServiceOptions {
     // Files of this size or more are refused (OutOfRange). FROST_PRE: >= 1.
     std::uint64_t maxFileBytes = kMaxOpenFileBytes;
-    // Texts with a longer line load read-only.
-    std::uint32_t maxEditableLineChars = kMaxEditableLineChars;
+    // Texts with a line of more bytes than this (its break excluded) load read-only.
+    std::uint64_t maxEditableLineBytes = kMaxEditableLineBytes;
     // Detection and buffer options for frost::text's decoder; its maxFileBytes is replaced by
     // maxFileBytes - 1, and an encoding passed to load() or decode() replaces its override.
     text::LoadOptions text{};
@@ -110,7 +112,12 @@ public:
     // The size rule alone: OutOfRange when `bytes` >= maxFileBytes, naming `path`. O(1).
     [[nodiscard]] Result<void> checkSize(std::uint64_t bytes, std::string_view path) const;
 
-    // The long-line rule alone. O(1) (the snapshot's summary).
+    /*
+     * The long-line rule alone: LongLine when a line has more than maxEditableLineBytes bytes.
+     * O(1) from the snapshot's summary for almost every text; only a text larger than the cap whose
+     * longest line has between a quarter of the cap and the cap in characters is scanned line by
+     * line, O(size).
+     */
     [[nodiscard]] ReadOnlyReason readOnlyReason(const text::Snapshot& text) const noexcept;
 
     [[nodiscard]] const LoadServiceOptions& options() const noexcept { return m_options; }
