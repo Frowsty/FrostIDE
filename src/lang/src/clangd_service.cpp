@@ -561,6 +561,11 @@ sched::Task<Result<Json>> ClangdService::request(std::string method, Json params
     co_return co_await client->request(std::move(method), std::move(params), std::move(token));
 }
 
+PositionEncoding ClangdService::encoding() const {
+    LockGuard lock(m_shared->mutex);
+    return m_shared->capabilities ? m_shared->capabilities->positionEncoding : PositionEncoding::Utf16;
+}
+
 Result<void> ClangdService::killServerForTesting() {
     std::shared_ptr<io::IAsyncProcess> process;
     {

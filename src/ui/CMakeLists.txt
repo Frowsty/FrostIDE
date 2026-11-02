@@ -7,7 +7,8 @@
 # qtr, the Qt wrapper of frost::i18n. frost::ui_shell (src/ui/shell) is the main-window shell (ADR 0038);
 # frost::ui_editor (src/ui/editor, the editor widget) is ADR 0037's and builds on frost::ui. frost::ui_run
 # (the Run console, its controller and the run actions) is ADR 0040's; it needs frost::build,
-# which fuzz trees do not build.
+# which fuzz trees do not build. frost::ui_lang (ADR 0041) holds the language-feature widgets and
+# their controller; it needs frost::lang, which fuzz trees leave out.
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
@@ -39,3 +40,6 @@ add_subdirectory(shell)
 add_subdirectory(editor)
 # The build-side tool windows (ADR 0039); after frost_ui, which they build on.
 add_subdirectory(toolwindows)
+if(TARGET frost_lang)
+    add_subdirectory(lang)
+endif()

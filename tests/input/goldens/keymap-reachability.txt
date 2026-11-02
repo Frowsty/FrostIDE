@@ -1,21 +1,21 @@
 # KeymapReachability over the built-in IntelliJ keymap. Consistency golden: the simulated layouts, SimulatedKeyboard and the matcher; dead-key strokes are informational.
-en-US Windows: 212 actions, 224 sequences, 0 gaps
-en-US X11: 212 actions, 224 sequences, 0 gaps
-de-DE Windows: 212 actions, 224 sequences, 0 gaps
+en-US Windows: 213 actions, 225 sequences, 0 gaps
+en-US X11: 213 actions, 225 sequences, 0 gaps
+de-DE Windows: 213 actions, 225 sequences, 0 gaps
   dead-key Alt+Backquote vcs.quickPopup
   dead-key Ctrl+Backquote view.quickSwitchScheme
   dead-key Ctrl+Equal editor.foldExpand
   dead-key Ctrl+Shift+Equal editor.foldExpandAll
-de-DE X11: 212 actions, 224 sequences, 0 gaps
+de-DE X11: 213 actions, 225 sequences, 0 gaps
   dead-key Alt+Backquote vcs.quickPopup
   dead-key Ctrl+Backquote view.quickSwitchScheme
   dead-key Ctrl+Equal editor.foldExpand
   dead-key Ctrl+Shift+Equal editor.foldExpandAll
-pl-PL Windows: 212 actions, 224 sequences, 0 gaps
-pl-PL X11: 212 actions, 224 sequences, 0 gaps
-fr-FR Windows: 212 actions, 224 sequences, 0 gaps
+pl-PL Windows: 213 actions, 225 sequences, 0 gaps
+pl-PL X11: 213 actions, 225 sequences, 0 gaps
+fr-FR Windows: 213 actions, 225 sequences, 0 gaps
   dead-key Ctrl+BracketLeft editor.codeBlockStart
   dead-key Ctrl+Shift+BracketLeft editor.codeBlockStartWithSelection
-fr-FR X11: 212 actions, 224 sequences, 0 gaps
+fr-FR X11: 213 actions, 225 sequences, 0 gaps
   dead-key Ctrl+BracketLeft editor.codeBlockStart
   dead-key Ctrl+Shift+BracketLeft editor.codeBlockStartWithSelection
