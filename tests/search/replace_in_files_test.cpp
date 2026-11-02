@@ -81,12 +81,11 @@ protected:
 
     static void setReadOnly(const std::string& file, bool readOnly) {
         std::error_code error;
-        std::filesystem::permissions(io::toStdPath(file).value(),
-                                     std::filesystem::perms::owner_write | std::filesystem::perms::group_write |
-                                         std::filesystem::perms::others_write,
-                                     readOnly ? std::filesystem::perm_options::remove
-                                              : std::filesystem::perm_options::add,
-                                     error);
+        std::filesystem::permissions(
+            io::toStdPath(file).value(),
+            std::filesystem::perms::owner_write | std::filesystem::perms::group_write |
+                std::filesystem::perms::others_write,
+            readOnly ? std::filesystem::perm_options::remove : std::filesystem::perm_options::add, error);
         ASSERT_FALSE(error) << error.message();
     }
 

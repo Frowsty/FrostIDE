@@ -155,7 +155,7 @@ TEST(FileMask, ParsesInclusionsAndExclusions) {
     ASSERT_TRUE(onlyExclusions);
     EXPECT_TRUE(onlyExclusions->matches("a.cpp"));
     EXPECT_FALSE(onlyExclusions->matches("a.txt"));
-    EXPECT_TRUE(globMatch("a?c.*", "a\xC3\xA9" "c.txt")); // '?' takes a whole UTF-8 character.
+    EXPECT_TRUE(globMatch("a?c.*", "a\303\251c.txt")); // '?' takes a whole UTF-8 character (U+00E9).
     EXPECT_FALSE(globMatch("a?c", "ac"));
     EXPECT_TRUE(globMatch("*", ""));
 }
@@ -201,8 +201,8 @@ TEST_F(TinySolution, SolutionScopeSearchesEveryProjectFile) {
 TEST_F(TinySolution, ProjectScopeSearchesTheCurrentFilesProject) {
     SearchScope scope;
     scope.kind = ScopeKind::Project;
-    scope.currentFile = *io::joinPath(directory, io::kNativePathStyle == io::PathStyle::Windows ? "App\\main.cpp"
-                                                                                                : "App/main.cpp");
+    scope.currentFile =
+        *io::joinPath(directory, io::kNativePathStyle == io::PathStyle::Windows ? "App\\main.cpp" : "App/main.cpp");
     FindRun run = runFind(loader, request(scope));
     ASSERT_TRUE(run.summary) << run.summary.error().describe();
     EXPECT_EQ(run.summary->filesMatched, 1U);

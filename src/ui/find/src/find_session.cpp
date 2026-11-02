@@ -94,9 +94,9 @@ void FindSession::start(FindSettings settings) {
             this, [this, generation, shared] { onBatch(generation, std::move(*shared)); }, Qt::QueuedConnection);
     };
     sched::IScheduler& scheduler = *m_services.scheduler;
-    m_job.emplace(scheduler.spawn(m_services.limits.lane,
-                                  run(scheduler, m_services.documents->loadService(), std::move(request),
-                                      std::move(sink), m_stop.get_token(), this, generation)));
+    m_job.emplace(
+        scheduler.spawn(m_services.limits.lane, run(scheduler, m_services.documents->loadService(), std::move(request),
+                                                    std::move(sink), m_stop.get_token(), this, generation)));
 }
 
 void FindSession::rerun() { start(m_settings); }

@@ -70,7 +70,9 @@ protected:
         pool = std::make_unique<sched::ThreadPool>(poolOptions);
     }
 
-    [[nodiscard]] FindSessionServices sessionServices() { return FindSessionServices{pool.get(), manager.get(), {}, {}}; }
+    [[nodiscard]] FindSessionServices sessionServices() {
+        return FindSessionServices{pool.get(), manager.get(), {}, {}};
+    }
 
     [[nodiscard]] FindSettings directorySettings(std::string pattern) const {
         FindSettings settings;
@@ -139,9 +141,8 @@ TEST_F(FindUi, PopupShowsResultsAndEnterOpensTheSelectedMatch) {
 
     // Down in the query field moves the selection; Enter opens it and closes the popup.
     std::optional<FindLocation> opened;
-    QObject::connect(&popup, &FindPopup::locationActivated, [&opened](const FindLocation& location) {
-        opened = location;
-    });
+    QObject::connect(&popup, &FindPopup::locationActivated,
+                     [&opened](const FindLocation& location) { opened = location; });
     sendKey(popup.queryField(), Qt::Key_Down);
     ASSERT_EQ(results->currentRow(), 1);
     const auto second = popup.currentMatch();

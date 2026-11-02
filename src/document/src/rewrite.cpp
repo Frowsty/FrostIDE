@@ -6,7 +6,6 @@
 // old bytes, and safeWrite.
 
 #include "frost/document/save_manager.hpp"
-
 #include "frost/text/text_buffer.hpp"
 #include "frost/text/text_file.hpp"
 
@@ -29,7 +28,8 @@ Result<RewriteOutcome> SaveManager::rewriteClosedFile(std::string_view path, Rew
         return std::unexpected(std::move(error).withContext("while rewriting " + file));
     };
     if (find(file) != nullptr) {
-        return context(Error(ErrorCode::Busy, std::format("'{}' is open in an editor; edit its document instead", file)));
+        return context(
+            Error(ErrorCode::Busy, std::format("'{}' is open in an editor; edit its document instead", file)));
     }
 
     // 1. Read and decode, keeping the old bytes for local history and the change check.

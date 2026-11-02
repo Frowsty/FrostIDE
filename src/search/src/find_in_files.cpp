@@ -243,8 +243,8 @@ sched::Task<Result<FindSummary>> findInFiles(sched::IScheduler& scheduler, const
             return std::ranges::none_of(
                 excludes, [name](const std::string& skip) { return equalsIgnoringAsciiCase(name, skip); });
         };
-        auto tree = co_await io::scanTree(loader.fileSystem(), scheduler, *request.target.directory, std::move(scan),
-                                          token);
+        auto tree =
+            co_await io::scanTree(loader.fileSystem(), scheduler, *request.target.directory, std::move(scan), token);
         if (!tree) {
             if (tree.error().code() == ErrorCode::Cancelled) {
                 summary.cancelled = true;

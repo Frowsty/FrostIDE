@@ -48,8 +48,8 @@ FindToolWindow::FindToolWindow(QWidget* parent) : QWidget(parent) {
     auto* bar = new QHBoxLayout();
     bar->setContentsMargins(4, 2, 4, 2);
     m_rerun = toolButton(this, icons::kActionsRefresh, label("Rerun"), label("Rerun"), "findRerun");
-    m_previous = toolButton(this, icons::kNavChevronUp, label("Previous"),
-                            label("Previous Occurrence (Ctrl+Alt+Up)"), "findPreviousOccurrence");
+    m_previous = toolButton(this, icons::kNavChevronUp, label("Previous"), label("Previous Occurrence (Ctrl+Alt+Up)"),
+                            "findPreviousOccurrence");
     m_next = toolButton(this, icons::kNavChevronDown, label("Next"), label("Next Occurrence (Ctrl+Alt+Down)"),
                         "findNextOccurrence");
     m_stop = toolButton(this, icons::kRunStop, label("Stop"), label("Stop"), "findStop");
@@ -130,8 +130,8 @@ void FindToolWindow::onFilesAdded(int first, int count) {
         fileRow->setData(0, find_detail::kFileIndexRole, f);
         fileRow->setData(0, find_detail::kMatchIndexRole, -1);
         fileRow->setData(0, find_detail::kDetailRole,
-                         QStringLiteral("%1   %2")
-                             .arg(fromUtf8(io::parentPath(file.path)), find_detail::matchesText(file.matches.size())));
+                         QStringLiteral("%1   %2").arg(fromUtf8(io::parentPath(file.path)),
+                                                       find_detail::matchesText(file.matches.size())));
         fileRow->setToolTip(0, fromUtf8(file.path));
         for (std::size_t m = 0; m < file.matches.size(); ++m) {
             const search::FindMatch& match = file.matches[m];
@@ -156,8 +156,8 @@ void FindToolWindow::updateStatus() {
     } else {
         const FindSettings& settings = m_session->settings();
         m_status->setText(QStringLiteral("\"%1\" %2: %3")
-                              .arg(fromUtf8(settings.query.pattern),
-                                   label(search::scopeName(settings.scope.kind)), m_session->statusText()));
+                              .arg(fromUtf8(settings.query.pattern), label(search::scopeName(settings.scope.kind)),
+                                   m_session->statusText()));
     }
     const bool running = m_session != nullptr && m_session->running();
     m_rerun->setEnabled(m_session != nullptr && !running);

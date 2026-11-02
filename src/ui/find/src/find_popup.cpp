@@ -37,8 +37,8 @@ using find_detail::toUtf8;
 
 namespace {
 
-constexpr std::array kScopeOrder{search::ScopeKind::Solution, search::ScopeKind::Project,
-                                 search::ScopeKind::Directory, search::ScopeKind::OpenFiles};
+constexpr std::array kScopeOrder{search::ScopeKind::Solution, search::ScopeKind::Project, search::ScopeKind::Directory,
+                                 search::ScopeKind::OpenFiles};
 
 QToolButton* toggleButton(QWidget* parent, const QString& text, const QString& tip, const char* name) {
     auto* button = new QToolButton(parent);
@@ -118,8 +118,8 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
         scopes->addWidget(button);
         m_scopes[i] = button;
     }
-    const bool solutionScope = settings.scope.kind == search::ScopeKind::Solution ||
-                               settings.scope.kind == search::ScopeKind::Project;
+    const bool solutionScope =
+        settings.scope.kind == search::ScopeKind::Solution || settings.scope.kind == search::ScopeKind::Project;
     m_scopes[0]->setEnabled(solutionOpen);
     m_scopes[1]->setEnabled(solutionOpen && !settings.scope.currentFile.empty());
     search::ScopeKind initial = settings.scope.kind;
@@ -204,9 +204,9 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
     layout->addLayout(footer);
 
     setFocusProxy(m_query);
-    for (QWidget* field : {static_cast<QWidget*>(m_query), static_cast<QWidget*>(m_replacement),
-                           static_cast<QWidget*>(m_mask), static_cast<QWidget*>(m_directory),
-                           static_cast<QWidget*>(m_results)}) {
+    for (QWidget* field :
+         {static_cast<QWidget*>(m_query), static_cast<QWidget*>(m_replacement), static_cast<QWidget*>(m_mask),
+          static_cast<QWidget*>(m_directory), static_cast<QWidget*>(m_results)}) {
         field->installEventFilter(this);
     }
     setMinimumSize(760, 540);
@@ -351,9 +351,10 @@ bool FindPopup::eventFilter(QObject* watched, QEvent* event) {
             return false;
         }
         const int page = std::max(1, m_results->height() / std::max(1, m_results->sizeHintForRow(0)));
-        const int step = key->key() == Qt::Key_Up ? -1 : key->key() == Qt::Key_Down ? 1
-                                                     : key->key() == Qt::Key_PageUp ? -page
-                                                                                    : page;
+        const int step = key->key() == Qt::Key_Up       ? -1
+                         : key->key() == Qt::Key_Down   ? 1
+                         : key->key() == Qt::Key_PageUp ? -page
+                                                        : page;
         moveSelection(step);
         return true;
     }

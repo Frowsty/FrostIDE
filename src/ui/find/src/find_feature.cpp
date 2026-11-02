@@ -74,8 +74,8 @@ Result<void> FindFeature::install() {
     const ShellEnvironment& env = m_window.environment();
     const QPointer<FindFeature> self(this);
 
-    const auto add = [&](std::string_view id, std::string_view name, std::string_view group,
-                         std::function<void()> run, std::function<bool()> enabled) -> Result<void> {
+    const auto add = [&](std::string_view id, std::string_view name, std::string_view group, std::function<void()> run,
+                         std::function<bool()> enabled) -> Result<void> {
         input::ActionSpec action;
         action.id = std::string(id);
         action.name = std::string(name);
@@ -104,12 +104,14 @@ Result<void> FindFeature::install() {
                      [this] { static_cast<void>(showPopup(true)); }, {});
     }
     if (result) {
-        result = add(find_actions::kNextOccurrence, "Next Occurrence", "Find",
-                     [this] { static_cast<void>(stepOccurrence(1)); }, hasOccurrences);
+        result = add(
+            find_actions::kNextOccurrence, "Next Occurrence", "Find", [this] { static_cast<void>(stepOccurrence(1)); },
+            hasOccurrences);
     }
     if (result) {
-        result = add(find_actions::kPreviousOccurrence, "Previous Occurrence", "Find",
-                     [this] { static_cast<void>(stepOccurrence(-1)); }, hasOccurrences);
+        result = add(
+            find_actions::kPreviousOccurrence, "Previous Occurrence", "Find",
+            [this] { static_cast<void>(stepOccurrence(-1)); }, hasOccurrences);
     }
     if (result) {
         result = add(find_actions::kFindWindow, "Find", "Tool Windows",
@@ -152,13 +154,14 @@ FindSettings FindFeature::initialSettings(bool replace) const {
     }
     if (!m_last) {
         // Solution by default with a solution; otherwise the folder, or the open files.
-        settings.scope.kind = solutionOpen                         ? search::ScopeKind::Solution
+        settings.scope.kind = solutionOpen                        ? search::ScopeKind::Solution
                               : !settings.scope.directory.empty() ? search::ScopeKind::Directory
                                                                   : search::ScopeKind::OpenFiles;
     }
     if (m_services.selectedText) {
         const QString selected = m_services.selectedText();
-        if (!selected.isEmpty() && !selected.contains(QLatin1Char('\n')) && !selected.contains(QChar::ParagraphSeparator)) {
+        if (!selected.isEmpty() && !selected.contains(QLatin1Char('\n')) &&
+            !selected.contains(QChar::ParagraphSeparator)) {
             const std::string text = toUtf8(selected);
             settings.query.pattern = settings.query.options.regex ? escapeRegex(text) : text;
         }
@@ -175,9 +178,8 @@ FindPopup* FindFeature::showPopup(bool replace) {
     m_popup = popup;
     connect(popup, &FindPopup::locationActivated, this, &FindFeature::openLocation);
     connect(popup, &FindPopup::openInFindWindowRequested, this, [this, popup] { openInFindWindow(*popup); });
-    connect(popup, &FindPopup::replaceRequested, this, [this, popup](bool all) {
-        static_cast<void>(this->replace(*popup, all));
-    });
+    connect(popup, &FindPopup::replaceRequested, this,
+            [this, popup](bool all) { static_cast<void>(this->replace(*popup, all)); });
     connect(popup, &Popup::closed, this, [this, popup] { m_last = popup->settings(); });
     popup->showCentered(&m_window, 0.12);
     return popup;
@@ -217,13 +219,18 @@ Result<search::ReplaceSummary> FindFeature::replace(FindPopup& popup, bool all) 
         search::replaceInFiles(*m_services.documents, request, m_services.documentEdited);
     NotificationCenter& notifications = m_window.notifications();
     if (!summary) {
-        notifications.notify(Notification{label("Replace in Files failed"), fromUtf8(summary.error().message()),
-                                          NotificationKind::Error, std::nullopt, {}});
+        notifications.notify(Notification{label("Replace in Files failed"),
+                                          fromUtf8(summary.error().message()),
+                                          NotificationKind::Error,
+                                          std::nullopt,
+                                          {}});
         return summary;
     }
-    notifications.notify(Notification{label("Replace in Files"), summaryText(*summary),
+    notifications.notify(Notification{label("Replace in Files"),
+                                      summaryText(*summary),
                                       summary->skipped.empty() ? NotificationKind::Info : NotificationKind::Warning,
-                                      std::nullopt, {}});
+                                      std::nullopt,
+                                      {}});
     m_last = popup.settings();
     if (all) {
         popup.closePopup(Popup::CloseReason::Accepted);

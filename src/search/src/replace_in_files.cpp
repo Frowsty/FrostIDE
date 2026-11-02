@@ -88,7 +88,8 @@ Result<ReplaceSummary> replaceInFiles(document::SaveManager& documents, const Re
             }
             auto edits = planEdits(*pattern, open->document().committedText(), plan, request.replacement, changed);
             if (!edits) {
-                skip(plan.path, changed ? ReplaceSkipReason::Changed : reasonFor(edits.error()), std::move(edits.error()));
+                skip(plan.path, changed ? ReplaceSkipReason::Changed : reasonFor(edits.error()),
+                     std::move(edits.error()));
                 continue;
             }
             std::vector<text::Edit> batch;
