@@ -63,7 +63,9 @@ enum class KeymapPlatform : std::uint8_t { Windows, Linux, MacOS };
  * `layout` (labelFor, uppercased with simpleUpper: Ctrl+BracketLeft is "Ctrl+Ü" on
  * de-DE), its US character when unreachable, and digit-row keys their digit ("Alt+1" on
  * AZERTY). Named keys read Enter, Esc, Page Up, Left and so on; numpad keys "Num /",
- * "Num 0". UTF-8. TODO(M1): m1/shell-frame wraps the parts in tr().
+ * "Num 0". UTF-8. Modifier and named-key names go through frost::i18n::tr (context
+ * "frost::input::keys"), so they are English unless a translator or pseudo-localization is on;
+ * key labels, digits and F-keys are never translated.
  */
 [[nodiscard]] std::string toDisplayText(const Sequence& sequence, const LayoutTable& layout, KeymapPlatform platform);
 

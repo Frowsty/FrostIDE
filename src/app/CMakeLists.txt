@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # frost::app (the application library: command line, start-up hardening and checks,
-# diagnostics wiring, main window, self-test) and the FrostIDE program built from it. The
-# library exists so tests can exercise the same code the program runs.
+# diagnostics wiring, the composition root's services and the main window over frost::ui_shell
+# (ADR 0038), self-test) and the FrostIDE program built from it. The library exists so tests can
+# exercise the same code the program runs.
 #
 # On Windows the program is two images (ADR 0012):
 #   frost.exe       the launcher (src/launcher.cpp): static CRT in every configuration, no
@@ -22,13 +23,14 @@ frost_add_library(app LAYER app
     SOURCES
         include/frost/app/diagnostics_qt.hpp
         include/frost/app/main_window.hpp
+        src/app_services.cpp
         src/command_line.cpp
         src/diagnostics_qt.cpp
         src/main_window.cpp
         src/selftest.cpp
         src/startup.cpp
         ${frost_startup_core_sources}
-    DEPS frost::core frost::io frost::diag
+    DEPS frost::ui_shell frost::ui frost::input frost::io frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
@@ -39,7 +41,7 @@ endif()
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
-        DEPS frost::app frost::core frost::diag
+        DEPS frost::app frost::ui_shell frost::ui frost::diag frost::core
         THIRD_PARTY Qt6::Widgets)
     # The crash handler frost starts lives beside the executable (frost/app/diagnostics_qt.hpp).
     frost_deploy_crashpad_handler(frost)
@@ -50,7 +52,7 @@ endif()
 # static library in the same directory.
 frost_add_library(app_shared LAYER app SHARED
     SOURCES src/main.cpp
-    DEPS frost::app frost::core frost::diag
+    DEPS frost::app frost::ui_shell frost::ui frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)
 # The crash handler frost_app.dll starts lives beside it (frost/app/diagnostics_qt.hpp).
 frost_deploy_crashpad_handler(frost_app_shared)

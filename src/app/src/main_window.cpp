@@ -1,39 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Implementation of the M0 main window (see frost/app/main_window.hpp).
+// MainWindow (frost/app/main_window.hpp). The private constructor reads the environment from the
+// services before the base class is built and keeps them alive in m_services; ~MainWindow tears
+// the shell down before m_services is destroyed.
 
 #include "frost/app/main_window.hpp"
 
-#include "frost/core/build_info.hpp"
-
-#include <QAction>
-#include <QApplication>
-#include <QLabel>
-#include <QMenuBar>
-#include <QStatusBar>
-#include <QString>
+#include <utility>
 
 namespace frost::app {
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setObjectName(QStringLiteral("FrostMainWindow"));
-    setWindowTitle(QStringLiteral("FrostIDE"));
-    resize(1280, 800);
+MainWindow::MainWindow(QWidget* parent) : MainWindow(std::make_unique<AppServices>(), parent) {}
 
-    // TODO(M1): route every user-visible string through frost::i18n::tr (PLAN.md section 2.2).
-    QMenu* fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
-    QAction* exitAction = fileMenu->addAction(QStringLiteral("E&xit"));
-    exitAction->setObjectName(QStringLiteral("actionExit"));
-    connect(exitAction, &QAction::triggered, this, &QWidget::close);
+MainWindow::MainWindow(ui::ShellEnvironment environment, QWidget* parent) : ui::ShellWindow(environment, parent) {}
 
-    auto* placeholder = new QLabel(QStringLiteral("FrostIDE %1").arg(QString::fromUtf8(build_info::kVersion)), this);
-    placeholder->setObjectName(QStringLiteral("placeholder"));
-    placeholder->setAlignment(Qt::AlignCenter);
-    setCentralWidget(placeholder);
+MainWindow::MainWindow(std::unique_ptr<AppServices> services, QWidget* parent)
+    : ui::ShellWindow(services->environment(), parent), m_services(std::move(services)) {}
 
-    statusBar()->showMessage(QStringLiteral("Ready"));
+MainWindow::~MainWindow() {
+    // The editors and the dispatcher refer to m_services; they go first.
+    teardown();
 }
-
-MainWindow::~MainWindow() = default;
 
 } // namespace frost::app

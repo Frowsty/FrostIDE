@@ -12,6 +12,9 @@
 #   ui_theme_compiler_tests      the .theme.json compiler, the shipped themes, frost-themec and
 #                                frost-icon-baker through their command lines (Qt Core);
 #   ui_tests                     FrostStyle, AppearanceManager, icons and fonts (offscreen);
+#   ui_shell_tests               frost::ui_shell (ADR 0038): the main-window shell, editor tabs,
+#                                tool windows, popups, notifications and background tasks over fake
+#                                editors and a simulated keyboard layout (offscreen);
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" (its second
 #                                label, "screenshot", waits for several labels in frost_add_test, which
 #                                takes one kind label today; ADR 0027);
@@ -120,6 +123,14 @@ frost_add_test(ui_tests QT
         widgets/style_test.cpp
     DEPS frost::ui frost::io frost_ui_test_support)
 _frost_ui_test_wiring(ui_tests)
+
+frost_add_test(ui_shell_tests QT
+    SOURCES
+        shell/editor_tabs_test.cpp
+        shell/notifications_test.cpp
+        shell/shell_window_test.cpp
+    DEPS frost::ui_shell frost::ui frost::input frost::io)
+_frost_ui_test_wiring(ui_shell_tests)
 
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp
