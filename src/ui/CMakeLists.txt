@@ -32,3 +32,5 @@ set_target_properties(frost_ui PROPERTIES AUTOMOC ON)
 
 add_subdirectory(shell)
 add_subdirectory(editor)
+# The build-side tool windows (ADR 0039); after frost_ui, which they build on.
+add_subdirectory(toolwindows)

@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <format>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace frost::input {
 
@@ -119,8 +121,34 @@ void KeymapService::apply(KeymapPreferences preferences, Keymap keymap) {
     rebuildIndex();
 }
 
+void KeymapService::setModuleDefaults(std::vector<Binding> defaults) {
+    m_moduleDefaults = std::move(defaults);
+    rebuildIndex();
+}
+
 void KeymapService::rebuildIndex() {
-    m_index = BindingIndex::build(m_keymap, m_platform, m_preferences.overrides, *m_registry);
+    if (m_moduleDefaults.empty()) {
+        m_index = BindingIndex::build(m_keymap, m_platform, m_preferences.overrides, *m_registry);
+    } else {
+        // Module defaults become overrides placed before the user's, for actions the keymap does not
+        // name; the user's later overrides replace them (BindingIndex applies overrides in order).
+        std::vector<std::string_view> named;
+        const std::vector<Binding> resolved = m_keymap.bindings(m_platform);
+        named.reserve(resolved.size());
+        for (const Binding& binding : resolved) {
+            named.push_back(binding.actionId);
+        }
+        std::ranges::sort(named);
+        std::vector<ActionOverride> overrides;
+        overrides.reserve(m_moduleDefaults.size() + m_preferences.overrides.size());
+        for (const Binding& binding : m_moduleDefaults) {
+            if (!std::ranges::binary_search(named, std::string_view(binding.actionId))) {
+                overrides.push_back(ActionOverride{binding.actionId, binding.sequences});
+            }
+        }
+        overrides.insert(overrides.end(), m_preferences.overrides.begin(), m_preferences.overrides.end());
+        m_index = BindingIndex::build(m_keymap, m_platform, overrides, *m_registry);
+    }
     m_indexRegistryGeneration = m_registry->generation();
     ++m_bindingsGeneration;
 }
