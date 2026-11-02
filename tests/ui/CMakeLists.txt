@@ -16,7 +16,9 @@
 #                                tool windows, popups, notifications and background tasks over fake
 #                                editors and a simulated keyboard layout (offscreen);
 #   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
-#                                IME, find/replace, Go to Line, highlighting and live settings;
+#                                IME, find/replace, Go to Line, highlighting and live settings; the
+#                                QRhi backend (ADR 0043) on a Direct3D 11 WARP device, or QRhi's Null
+#                                backend where Direct3D is missing, and the renderer switches;
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" with the
 #                                tag "screenshot" (ctest -L screenshot);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
@@ -138,6 +140,7 @@ _frost_ui_test_wiring(ui_shell_tests)
 frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
+        editor/editor_rhi_test.cpp
         editor/editor_view_test.cpp
     DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
          frost::input frost::sched frost::io frost_ui_test_support)

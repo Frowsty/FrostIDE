@@ -23,7 +23,8 @@ class EditorView;
 /*
  * What an EditorView reads from the settings (keys.hpp's editor.*, files.lineSeparator, ui.theme).
  * The defaults are the registry's (Rider-like: JetBrains Mono 13 pt, line height 1.2, 4 spaces, no
- * soft wrap, line numbers, a blinking caret, the right margin at 120). A plain value.
+ * soft wrap, line numbers, a blinking caret, the right margin at 120, the renderer on auto). A plain
+ * value.
  */
 struct EditorViewSettings {
     std::string fontFamily = "JetBrains Mono";
@@ -42,6 +43,8 @@ struct EditorViewSettings {
     std::string lineSeparator = "system";
     // ui.theme; the view paints with the installed FrostStyle's theme, this is informational.
     std::string themeId = "glacier-dark";
+    // editor.renderer: "auto", "raster" or "rhi" (editor_backend.hpp; ADR 0043).
+    std::string renderer = "auto";
 
     friend bool operator==(const EditorViewSettings&, const EditorViewSettings&) = default;
 };

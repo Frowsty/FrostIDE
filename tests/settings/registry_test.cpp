@@ -69,6 +69,7 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::editorRightMargin);
     expectTypedKey(key::editorShowRightMargin);
     expectTypedKey(key::editorCaretBlinking);
+    expectTypedKey(key::editorRenderer);
     expectTypedKey(key::editorTabSize);
     expectTypedKey(key::editorIndentSize);
     expectTypedKey(key::editorInsertSpaces);

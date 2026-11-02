@@ -122,10 +122,7 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     setFrameShape(QFrame::NoFrame);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_InputMethodEnabled, true);
-    viewport()->setAttribute(Qt::WA_InputMethodEnabled, true);
-    viewport()->setAttribute(Qt::WA_OpaquePaintEvent, true);
-    viewport()->setCursor(Qt::IBeamCursor);
-    viewport()->setMouseTracking(false);
+    configureViewport();
 
     if (m_services.appearance != nullptr) {
         // Registers JetBrains Mono on the first editor (ADR 0015 decision 9); a failure leaves the
@@ -189,6 +186,7 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     updateWrap();
     updateScrollBars();
     m_lastStatus = status();
+    selectRenderer(); // Raster now; the QRhi backend, when chosen, after the first frame.
 }
 
 EditorView::~EditorView() {
@@ -272,10 +270,16 @@ void EditorView::applySettings(const EditorViewSettings& settings) {
     const bool fontChanged = settings.fontFamily != m_settings.fontFamily || settings.fontSize != m_settings.fontSize ||
                              settings.lineSpacing != m_settings.lineSpacing ||
                              settings.ligatures != m_settings.ligatures || settings.tabSize != m_settings.tabSize;
+    const bool rendererChanged = settings.renderer != m_settings.renderer;
     m_settings = settings;
     m_editor->setSettings(modelSettings(m_settings));
     if (fontChanged) {
         rebuildFont();
+    }
+    if (rendererChanged) {
+        // A new editor.renderer value is a fresh start: an earlier QRhi failure is tried again.
+        m_rhiFailure.reset();
+        selectRenderer();
     }
     updateWrap();
     updateScrollBars();

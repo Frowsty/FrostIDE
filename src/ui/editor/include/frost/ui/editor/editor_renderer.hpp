@@ -3,7 +3,7 @@
 // The editor's rendering seam (PLAN.md section 2 "Editor rendering"; ADR 0011 A1, ADR 0037):
 // IEditorRenderer draws an EditorDisplayList, and the raster backend does it with QPainter and a
 // QGlyphRun cache. The QRhi glyph-atlas backend approved for Windows (ADR 0011 A1) implements the
-// same interface in a follow-up slice.
+// same interface in rhi_renderer.hpp (ADR 0043); editor_backend.hpp chooses between them.
 #pragma once
 
 #include "frost/ui/editor/display_list.hpp"

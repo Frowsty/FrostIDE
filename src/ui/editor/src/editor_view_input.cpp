@@ -9,6 +9,7 @@
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/editor/find_bar.hpp"
 #include "frost/ui/editor/go_to_line.hpp"
+#include "frost/ui/editor/rhi_renderer.hpp"
 
 #include <QFocusEvent>
 #include <QGuiApplication>
@@ -66,6 +67,11 @@ bool EditorView::event(QEvent* event) {
         }
         break;
     }
+    case QEvent::DevicePixelRatioChange:
+        // A DPI change or a move to another monitor: the raster backing store and the QRhi colour
+        // buffer follow the new ratio on the next paint, and the QRhi atlas is rebuilt for it.
+        viewport()->update();
+        break;
     default: break;
     }
     return QAbstractScrollArea::event(event);
@@ -84,7 +90,13 @@ bool EditorView::viewportEvent(QEvent* event) {
         }
         return true;
     }
-    return QAbstractScrollArea::viewportEvent(event);
+    const bool handled = QAbstractScrollArea::viewportEvent(event);
+    if (m_rhiViewport && (event->type() == QEvent::Paint || event->type() == QEvent::Resize)) {
+        // The view built the frame (Paint) or followed the size (Resize); the QRhiWidget must see
+        // the event too, to render that frame and to resize its colour buffer.
+        return false;
+    }
+    return handled;
 }
 
 QString EditorView::lineMarkerToolTip(QPointF at) const {

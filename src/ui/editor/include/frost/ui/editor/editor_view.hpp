@@ -19,6 +19,7 @@
 #include "frost/text/editor/search.hpp"
 #include "frost/ui/editor/display_list.hpp"
 #include "frost/ui/editor/editor_actions.hpp"
+#include "frost/ui/editor/editor_backend.hpp"
 #include "frost/ui/editor/editor_colors.hpp"
 #include "frost/ui/editor/editor_renderer.hpp"
 #include "frost/ui/editor/editor_settings.hpp"
@@ -28,6 +29,7 @@
 
 #include <QAbstractScrollArea>
 #include <QPointF>
+#include <QPointer>
 #include <QString>
 #include <QTimer>
 
@@ -48,6 +50,7 @@ class AppearanceManager;
 class EditorFindBar;
 class EditorKeyRouting;
 class GoToLinePopup;
+class RhiEditorViewport;
 
 // A gutter marker: an error or warning on buffer line `line` (W1's error list fills these).
 struct LineMarker {
@@ -109,7 +112,8 @@ struct InputToPaintSample {
  *   keys: key routing (null: the view types text from QKeyEvent::text() and runs no shortcuts);
  *   appearance: the theme and zoom, followed live, and the editor fonts (ensureEditorFonts()); when
  *     null the view follows FrostStyle::current(), or else paints with EditorColors::defaults();
- *   highlightBudget: the wall time one highlight query may take before it returns incomplete spans.
+ *   highlightBudget: the wall time one highlight query may take before it returns incomplete spans;
+ *   renderer: the renderer rule's environment and fault hooks (tests; editor_backend.hpp).
  */
 struct EditorServices {
     const syntax::LanguageRegistry* languages = nullptr;
@@ -119,6 +123,21 @@ struct EditorServices {
     AppearanceManager* appearance = nullptr;
     syntax::SyntaxOptions syntax{};
     IClock::Duration highlightBudget = std::chrono::milliseconds(4);
+    EditorRendererHooks renderer{};
+};
+
+/*
+ * Which backend draws the view (ADR 0043): `active` draws now; `mode` is the editor.renderer setting;
+ * `reason` is why (the rule's answer, or the failure the view fell back from); `pending` means the
+ * QRhi backend was chosen and waits for the first raster frame (ADR 0007 decision 3: QRhi's start-up
+ * stays off the first frame); `fallbacks` counts switches to raster after a QRhi failure.
+ */
+struct EditorRendererState {
+    EditorBackend active = EditorBackend::Raster;
+    EditorRendererMode mode = EditorRendererMode::Auto;
+    std::string reason;
+    bool pending = false;
+    std::uint32_t fallbacks = 0;
 };
 
 /*
@@ -137,6 +156,13 @@ struct EditorServices {
  * it to the renderer. Highlight spans are queried for the visible rows only and cached until the tree
  * or the rows change; while the worker reparses, the session's stale tree (edited to the current
  * text) keeps colouring. Budget: B5.
+ *
+ * Renderers (ADR 0043): the first frame is always raster. When editor.renderer's rule picks QRhi
+ * (chooseEditorBackend), the view swaps its viewport for a RhiEditorViewport after that frame, and
+ * back to a plain raster viewport when the setting changes, the QRhi cannot be created, the device
+ * is lost or the adapter turns out to be WARP under "auto". A swap keeps the editor model (document,
+ * selections, undo), the scroll position and the overlays; only the viewport widget is replaced, so
+ * callers must not keep viewport() pointers across rendererChanged().
  *
  * GUI thread only. Not copyable.
  */
@@ -226,6 +252,11 @@ public:
     [[nodiscard]] std::uint32_t firstVisibleRow() const noexcept;
     [[nodiscard]] std::uint32_t visibleRowCount() const noexcept;
     [[nodiscard]] IEditorRenderer& renderer() noexcept { return *m_renderer; }
+    // The renderer choice and why it was made.
+    [[nodiscard]] const EditorRendererState& rendererState() const noexcept { return m_rendererState; }
+    // Switches to the raster backend now and remembers `reason`, so the QRhi backend is not tried
+    // again until editor.renderer changes. The QRhi viewport's failures come here (queued).
+    void fallBackToRaster(std::string reason);
     // Whether the blinking caret is in its visible phase.
     [[nodiscard]] bool caretVisible() const noexcept { return m_caretOn; }
 
@@ -247,6 +278,8 @@ signals:
     void modifiedChanged(bool modified);
     // Any status() field changed.
     void statusChanged();
+    // The renderer backend changed (rendererState().active); viewport() is a new widget.
+    void rendererChanged();
 
 protected:
     bool event(QEvent* event) override;
@@ -277,6 +310,12 @@ private:
     void updateScrollBars();
     void updateOverlayGeometry();
     void restartBlink();
+    // Renderer choice (editor_view_renderer.cpp).
+    void configureViewport();
+    void selectRenderer();
+    void attachRhi();
+    void useRaster(std::string reason);
+    void installViewport(QWidget* viewport);
     [[nodiscard]] double zoomFactor() const noexcept;
     void followAppearance();
 
@@ -334,6 +373,12 @@ private:
     std::unique_ptr<QtTextShaper> m_shaper;
     std::unique_ptr<text::Editor> m_editor;
     std::unique_ptr<IEditorRenderer> m_renderer;
+    // The QRhi viewport while the QRhi backend draws (the scroll area owns it); null on raster.
+    QPointer<RhiEditorViewport> m_rhiViewport;
+    EditorRendererState m_rendererState;
+    // Why the QRhi backend failed in this view; it is not tried again until editor.renderer changes.
+    std::optional<std::string> m_rhiFailure;
+    bool m_rhiAttachQueued = false;
     std::unique_ptr<syntax::SyntaxSession> m_syntax;
     std::unique_ptr<SyntaxOutlineProvider> m_outline;
 

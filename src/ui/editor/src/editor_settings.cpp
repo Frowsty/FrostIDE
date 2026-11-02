@@ -41,6 +41,7 @@ template<class Source>
     out.showRightMargin = source.get(key::editorShowRightMargin);
     out.lineSeparator = source.get(key::filesLineSeparator);
     out.themeId = source.get(key::uiTheme);
+    out.renderer = source.get(key::editorRenderer);
     return out;
 }
 

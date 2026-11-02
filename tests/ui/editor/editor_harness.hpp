@@ -63,10 +63,14 @@ struct HarnessOptions {
     bool syntax = false;
     AppearanceManager* appearance = nullptr;
     EditorViewSettings settings{};
+    // The renderer rule's injected environment and fault hooks (ADR 0043).
+    EditorRendererHooks renderer{};
+    // False: the view is created but not shown (so nothing paints until the test shows it).
+    bool show = true;
 };
 
 /*
- * A shown (offscreen) 800 x 600 EditorView over `text`. Members in dependency order: the view is
+ * A shown (offscreen; options.show) 800 x 600 EditorView over `text`. Members in dependency order: the view is
  * destroyed first, then the routing, the document and the executor.
  */
 struct EditorHarness {
@@ -83,13 +87,16 @@ struct EditorHarness {
         services.keys = keys.get();
         services.clock = &sim;
         services.appearance = options.appearance;
+        services.renderer = options.renderer;
         if (options.syntax) {
             services.languages = &languages();
             services.scheduler = &sim;
         }
         view = createEditorView(document, options.path, services, options.settings);
         view->resize(800, 600);
-        view->show();
+        if (options.show) {
+            view->show();
+        }
         settle();
     }
 
