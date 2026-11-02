@@ -13,6 +13,7 @@
 
 #include "timeout.hpp"
 
+#include <algorithm>
 #include <deque>
 #include <format>
 #include <map>
@@ -155,6 +156,41 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         diagnostics.publish(std::move(*decoded));
     }
 
+    // Decodes a $/progress notification ({token, value: {kind, title?, message?, percentage?}}) and
+    // passes it to options.onProgress; malformed ones and other rounds' are dropped.
+    void onProgress(std::uint64_t fromRound, const Json& params) {
+        if (!options.onProgress) {
+            return;
+        }
+        {
+            LockGuard lock(mutex);
+            if (fromRound != round) {
+                return;
+            }
+        }
+        const Json* value = params.find("value");
+        const Json* token = params.find("token");
+        if (value == nullptr || !value->isObject() || token == nullptr) {
+            return;
+        }
+        ClangdProgress progress;
+        if (const std::string* text = token->asString()) {
+            progress.token = *text;
+        } else if (const auto number = token->asInteger()) {
+            progress.token = std::to_string(*number);
+        }
+        const std::string_view kind = value->stringAt("kind");
+        progress.kind = kind == "begin" ? ClangdProgress::Kind::Begin
+                        : kind == "end" ? ClangdProgress::Kind::End
+                                        : ClangdProgress::Kind::Report;
+        progress.title = std::string(value->stringAt("title"));
+        progress.message = std::string(value->stringAt("message"));
+        if (const auto percentage = value->integerAt("percentage")) {
+            progress.percentage = static_cast<int>(std::clamp<std::int64_t>(*percentage, 0, 100));
+        }
+        options.onProgress(progress);
+    }
+
     // Re-opens every document on a freshly initialized client. Caller holds the lock.
     void replayDocuments(LspClient& fresh) FROST_REQUIRES(mutex) {
         for (auto& [key, document] : documents) {
@@ -188,6 +224,14 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             log::write(level, kLogCategory, "{}", message);
         };
         out.onProtocolError = [](const Error& problem) { log::warn(kLogCategory, "protocol: {}", problem.describe()); };
+        out.onNotification = [weak, forRound](std::string_view method, const Json& params) {
+            if (method != "$/progress") {
+                return;
+            }
+            if (auto self = weak.lock()) {
+                self->onProgress(forRound, params);
+            }
+        };
         return out;
     }
 
@@ -511,6 +555,15 @@ Result<void> ClangdService::changeDocument(std::string_view path, const text::Ch
         }
     }
     return {};
+}
+
+std::optional<std::int64_t> ClangdService::documentVersion(std::string_view path) const {
+    LockGuard lock(m_shared->mutex);
+    const auto it = m_shared->documents.find(documentKey(path));
+    if (it == m_shared->documents.end()) {
+        return std::nullopt;
+    }
+    return it->second.version;
 }
 
 Result<void> ClangdService::saveDocument(std::string_view path) {

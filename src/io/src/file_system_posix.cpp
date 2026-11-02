@@ -657,7 +657,52 @@ public:
         return std::unexpected(std::move(result.error()));
     }
 
+    /*
+     * The lexical normal form, except that a path with a ".." component takes realpath's answer:
+     * normalizePath keeps ".." on POSIX (through a symbolic link it is not lexical), so ".../Lib/../a"
+     * and ".../a" would otherwise be two documents (ADR 0044). realpath resolves it as the kernel
+     * does, links included.
+     */
+    Result<std::string> canonicalPath(std::string_view path) override {
+        auto normalized = normalizePath(path, PathStyle::Posix);
+        if (!normalized) {
+            return normalized;
+        }
+        if (hasParentComponent(*normalized)) {
+            char* resolved = ::realpath(normalized->c_str(), nullptr);
+            if (resolved == nullptr) {
+                if (errno == ENOENT || errno == ENOTDIR) {
+                    return fail(ErrorCode::NotFound, std::string("no such file or directory: ").append(*normalized));
+                }
+                return std::unexpected(errnoError(errno, "canonicalPath", path));
+            }
+            std::string out(resolved);
+            std::free(resolved); // NOLINT(cppcoreguidelines-no-malloc): realpath allocates with malloc.
+            return out;
+        }
+        auto found = exists(*normalized);
+        if (!found) {
+            return std::unexpected(std::move(found.error()));
+        }
+        if (!*found) {
+            return fail(ErrorCode::NotFound, std::string("no such file or directory: ").append(*normalized));
+        }
+        return normalized;
+    }
+
 private:
+    // True when the absolute POSIX `path` has a ".." component.
+    static bool hasParentComponent(std::string_view path) noexcept {
+        for (std::size_t start = 0; start < path.size();) {
+            const std::size_t end = std::min(path.find('/', start), path.size());
+            if (path.substr(start, end - start) == "..") {
+                return true;
+            }
+            start = end + 1;
+        }
+        return false;
+    }
+
     // Creates one directory. Done if it was created or already is a directory;
     // ParentMissing if its parent does not exist; otherwise Failed with `error` set.
     static MkdirOutcome makeDirectory(std::string_view normalized, std::string_view original, Error& error) {

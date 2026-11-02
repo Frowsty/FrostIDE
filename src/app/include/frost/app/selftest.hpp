@@ -63,6 +63,15 @@ struct SelfTestReport {
 [[nodiscard]] std::vector<SelfTestCheck> runGuiChecks();
 
 /*
+ * --selftest=render (ADR 0043): an EditorView on the real Qt platform with editor.renderer's default
+ * ("auto"), shown for at most 10 s. "editor-renderer" passes when the rule's backend draws: raster
+ * where the rule picks raster (Linux, remote sessions), else the QRhi viewport initialises without a
+ * fallback and a grabbed frame shows text. The detail names the backend, the reason and the adapter.
+ * Precondition: a QApplication on the platform under test. GUI thread.
+ */
+[[nodiscard]] std::vector<SelfTestCheck> runRenderChecks();
+
+/*
  * Windows: the "late-load" check. Loads each DLL beside frost.exe that is not loaded yet by
  * its bare name, with the process default search order, as Qt loads libraries it needs
  * lazily, and frees it again; it must resolve through the launcher's \\?\ install directory

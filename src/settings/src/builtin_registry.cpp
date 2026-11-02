@@ -164,6 +164,27 @@ struct Entry {
          "Appearance & Behavior/Appearance", boolSchema(), Value(false), kApplicationOnly},
         {"ui.zoom", "IDE zoom", "Scales the whole IDE, in percent.", "Appearance & Behavior/Appearance",
          integerSchema(50, 300), integer(100), kApplicationOnly},
+        // The window layout the shell restores (W1, ADR 0044); written by the IDE, not the dialog.
+        {"ui.toolbar.visible", "Show main toolbar", "Shows the main toolbar under the menu bar.",
+         "Appearance & Behavior/Appearance", boolSchema(), Value(true), kApplicationOnly},
+        {"ui.statusBar.visible", "Show status bar", "Shows the status bar at the bottom of the window.",
+         "Appearance & Behavior/Appearance", boolSchema(), Value(true), kApplicationOnly},
+        {"ui.toolWindows", "Tool window layout",
+         "Which tool windows are open and their sizes, as the IDE last left them.", "Appearance & Behavior/Appearance",
+         recordListSchema({FieldSpec{.name = "id",
+                                     .type = FieldType::String,
+                                     .required = true,
+                                     .description = "The tool window id (\"project\", \"build\")."},
+                           FieldSpec{.name = "visible",
+                                     .type = FieldType::Bool,
+                                     .required = true,
+                                     .description = "Whether the tool window is open."},
+                           FieldSpec{.name = "size",
+                                     .type = FieldType::Integer,
+                                     .required = false,
+                                     .description = "Its width or height in pixels; 0 or absent uses the default."}},
+                          64),
+         Value(RecordList{}), kApplicationOnly, false, true},
 
         // Keymap.
         {"keymap.id", "Keymap", "The keyboard shortcut scheme.", "Keymap",
@@ -213,6 +234,10 @@ struct Entry {
          "Appearance & Behavior/System Settings", boolSchema(), Value(true), kApplicationOnly},
         {"general.confirmExit", "Confirm before exiting the IDE", "Asks before closing the last window.",
          "Appearance & Behavior/System Settings", boolSchema(), Value(false), kApplicationOnly},
+        {"general.recentProjects", "Recent projects",
+         "The solutions and folders opened most recently, newest first (File > Open Recent and the Welcome screen).",
+         "Appearance & Behavior/System Settings", stringListSchema(50, 4096, StringHint::Path), emptyList(),
+         kApplicationOnly, false, true},
 
         // Build.
         {"build.saveAllBeforeBuild", "Save all files before building",

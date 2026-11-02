@@ -29,6 +29,7 @@ enum class SelfTestKind {
     Checks, // --selftest, --selftest=onscreen: the process, plugin and GUI checks.
     Crash,  // --selftest=crash: start the crash handler, then crash on purpose (ADR 0022).
     Freeze, // --selftest=freeze: block the GUI thread for 300 ms and write a freeze report.
+    Render, // --selftest=render: draw an editor on the real platform with editor.renderer's default.
 };
 
 struct CommandLine {

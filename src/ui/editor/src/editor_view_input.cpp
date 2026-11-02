@@ -79,9 +79,12 @@ bool EditorView::event(QEvent* event) {
 
 bool EditorView::viewportEvent(QEvent* event) {
     if (event->type() == QEvent::ToolTip) {
-        // Gutter markers show their messages; the text area has no tooltips yet.
+        // Gutter markers and range decorations show their messages.
         const auto* help = static_cast<QHelpEvent*>(event);
-        const QString tip = lineMarkerToolTip(help->pos());
+        QString tip = lineMarkerToolTip(help->pos());
+        if (tip.isEmpty()) {
+            tip = decorationToolTip(help->pos());
+        }
         if (tip.isEmpty()) {
             QToolTip::hideText();
             event->ignore();
@@ -110,6 +113,27 @@ QString EditorView::lineMarkerToolTip(QPointF at) const {
         messages.push_back(QString::fromStdString(it->message));
     }
     return messages.join(QLatin1Char('\n'));
+}
+
+QString EditorView::decorationToolTip(QPointF at) const {
+    if (at.x() < gutterWidth() || m_decorations.empty()) {
+        return {};
+    }
+    const text::DisplayHit hit = hitAt(at);
+    const ByteOffset offset = hit.offset;
+    QStringList messages;
+    for (const RangeDecoration& decoration : m_decorations) {
+        if (decoration.range.begin > offset) {
+            break; // Sorted by start.
+        }
+        // An empty range covers the cell after it, as painted.
+        const ByteOffset end = decoration.range.empty() ? decoration.range.begin + 1 : decoration.range.end;
+        if (offset < end || (offset == end && hit.bias == text::Bias::Left)) {
+            messages.push_back(QString::fromStdString(decoration.message));
+        }
+    }
+    messages.removeDuplicates();
+    return messages.join(QStringLiteral("\n"));
 }
 
 bool EditorView::focusNextPrevChild(bool next) {
@@ -159,6 +183,8 @@ void EditorView::focusInEvent(QFocusEvent* event) {
     if (m_services.keys != nullptr) {
         m_services.keys->observe(*event);
         m_services.keys->host().setActive(this);
+    } else if (m_services.actionHost != nullptr) {
+        m_services.actionHost->setActive(this);
     }
     restartBlink();
     viewport()->update();
@@ -429,6 +455,10 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
         m_granularity = Granularity::Character;
         m_dragOrigin = text::ByteRange{hit.offset, hit.offset};
         select(text::Selection::caret(hit.offset), hit.bias);
+        if (modifiers == Qt::ControlModifier) {
+            m_dragging = false; // A navigation click, not the start of a selection.
+            emit ctrlClicked(hit.offset);
+        }
     }
     m_inputStart.reset();
     event->accept();

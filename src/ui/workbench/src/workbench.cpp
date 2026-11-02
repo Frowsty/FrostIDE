@@ -24,7 +24,6 @@
 #include "workbench_util.hpp"
 #include <QApplication>
 #include <QEvent>
-#include <QFileDialog>
 #include <QMouseEvent>
 #include <QTimer>
 #include <QVariantMap>
@@ -222,24 +221,19 @@ void Workbench::registerActions() {
     addAction(a::kSaveAll, "Save All", "File", [this] { saveAll(); }, {}, {"save"});
     addAction(a::kSaveDocument, "Save Document", "File", [this] { static_cast<void>(saveDocument()); }, hasEditor,
               {"save file"});
-    addAction(a::kReloadFromDisk, "Reload from Disk", "File",
-              [this] {
-                  if (IEditorView* editor = m_shell.tabs().currentEditor(); editor != nullptr) {
-                      reloadFromDisk(editor->path());
-                  }
-              },
-              hasEditor, {"refresh", "revert"});
-    addAction(a::kOpenProject, "Open Folder or Solution...", "File",
-              [this] {
-                  const QString chosen = QFileDialog::getExistingDirectory(&m_shell, text("Open Folder"));
-                  if (!chosen.isEmpty()) {
-                      if (auto opened = openProject(toUtf8(QDir::toNativeSeparators(chosen))); !opened) {
-                          notifyError(text("Cannot open %1").arg(QDir::toNativeSeparators(chosen)), opened.error());
-                      }
-                  }
-              },
-              {}, {"open project", "open folder"});
-    addAction(a::kCloseProject, "Close Project", "File", [this] { closeProject(); }, hasProject);
+    // Rider's Reload All from Disk (Ctrl+Alt+Y): every open file, not only the active one.
+    addAction(a::kReloadFromDisk, "Reload All from Disk", "File", [this] { reloadAllFromDisk(); }, {},
+              {"refresh", "revert", "synchronize"});
+    addAction(
+        a::kCloseProject, "Close Project", "File",
+        [this] {
+            if (m_services.closeProjectHook) {
+                m_services.closeProjectHook();
+            } else {
+                static_cast<void>(closeProject());
+            }
+        },
+        hasProject);
     addAction(a::kFileSystemWindow, "File System", "View",
               [this] { m_shell.toolWindows().show(kFileSystemToolWindow); }, {}, {"files", "folder", "tree"});
     // The settings files' stand-in actions, described by frost::settings (settingsActions()).
@@ -307,27 +301,29 @@ Result<void> Workbench::openProject(const std::string& path) {
     if (!status) {
         return std::unexpected(std::move(status.error()));
     }
-    std::string root;
-    std::vector<std::string> solutionFiles;
-    std::string solution;
     if (status->type == io::FileType::Directory) {
-        root = canonical;
-    } else {
-        const QString extension = lowerExtension(canonical);
-        if (extension != QStringLiteral(".sln") && extension != QStringLiteral(".slnx")) {
-            return fail(ErrorCode::InvalidArgument, "'" + canonical + "' is not a folder or a solution");
-        }
-        auto model = project::SolutionModel::load(m_services.fs, canonical);
-        if (!model) {
-            return std::unexpected(std::move(model.error()));
-        }
-        solutionFiles = nav::solutionFiles(*model);
-        root = std::string(nav::parentOf(canonical));
-        solution = canonical;
+        return openRoot(canonical, {}, {});
     }
-    if (!m_root.empty()) {
-        static_cast<void>(saveSession());
-        m_shell.tabs().closeAll();
+    const QString extension = lowerExtension(canonical);
+    if (extension != QStringLiteral(".sln") && extension != QStringLiteral(".slnx")) {
+        return fail(ErrorCode::InvalidArgument, "'" + canonical + "' is not a folder or a solution");
+    }
+    auto model = project::SolutionModel::load(m_services.fs, canonical);
+    if (!model) {
+        return std::unexpected(std::move(model.error()));
+    }
+    return openSolution(*model);
+}
+
+Result<void> Workbench::openSolution(const project::SolutionModel& solution) {
+    std::string path = m_services.documents.canonicalize(solution.path());
+    std::string root(nav::parentOf(path));
+    return openRoot(std::move(root), std::move(path), nav::solutionFiles(solution));
+}
+
+Result<void> Workbench::openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles) {
+    if (!m_root.empty() && !closeProject()) {
+        return fail(ErrorCode::Cancelled, "a tab of the open project could not be closed");
     }
     m_solution = std::move(solution);
     setRoot(std::move(root), std::move(solutionFiles));
@@ -359,9 +355,12 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     startWatching();
 }
 
-void Workbench::closeProject() {
+bool Workbench::closeProject() {
     static_cast<void>(saveSession());
     m_shell.tabs().closeAll();
+    if (m_shell.tabs().count() > 0) {
+        return false; // A tab whose save failed was kept by the user; so is the project.
+    }
     stopWatching();
     m_root.clear();
     m_solution.clear();
@@ -370,6 +369,7 @@ void Workbench::closeProject() {
         m_fileSystem->setFiles(m_files);
     }
     m_shell.setProject({});
+    return true;
 }
 
 void Workbench::refresh() {
@@ -473,7 +473,7 @@ Result<int> Workbench::openFile(const std::string& path, std::optional<LinePosit
         }
         const EditorStatus status = editor->status();
         const nav::Place to{editor->path(), status.line, status.column};
-        if (!from.path.empty() && !nav::near(from, to, nav::NavigationHistory::kNearLines)) {
+        if (!from.path.empty() && !nav::isNear(from, to, nav::NavigationHistory::kNearLines)) {
             m_history.recordJump(from);
             m_recentLocations.touch(from);
         }
@@ -908,7 +908,7 @@ bool Workbench::restoreLastProject() {
     if (auto exists = m_services.fs.exists(*last); !exists || !*exists) {
         return false;
     }
-    if (auto opened = openProject(*last); !opened) {
+    if (auto opened = m_services.openProjectHook ? m_services.openProjectHook(*last) : openProject(*last); !opened) {
         notifyError(text("Cannot reopen %1").arg(nativePath(*last)), opened.error());
         return false;
     }
@@ -1033,10 +1033,24 @@ void Workbench::handleExternalChange(const document::ExternalChange& change) {
     case document::ExternalChangeKind::MergePending: {
         Notification notification;
         notification.title = text("%1 changed on disk").arg(name);
-        notification.text = text("It has unsaved changes here. Compare the versions to merge them.");
+        notification.text = text("It has unsaved changes here and was changed by another program. Keep your "
+                                 "version, take the one on disk, or compare them to merge.");
         notification.kind = NotificationKind::Warning;
         notification.sticky = true;
+        // The document may be closed before the user answers: each action looks it up again.
         const QPointer<Workbench> self(this);
+        notification.actions.push_back(NotificationAction{text("Keep my version"), [self, path] {
+                                                              if (self != nullptr) {
+                                                                  self->resolveExternalChange(
+                                                                      path, document::MergeDecision::KeepBuffer);
+                                                              }
+                                                          }});
+        notification.actions.push_back(NotificationAction{text("Take disk version"), [self, path] {
+                                                              if (self != nullptr) {
+                                                                  self->resolveExternalChange(
+                                                                      path, document::MergeDecision::TakeDisk);
+                                                              }
+                                                          }});
         notification.actions.push_back(NotificationAction{text("Compare..."), [self, path] {
                                                               if (self != nullptr) {
                                                                   static_cast<void>(self->showMerge(path));
@@ -1104,6 +1118,47 @@ MergeView* Workbench::showMerge(const std::string& path) {
     view->show();
     return view;
 }
+
+void Workbench::resolveExternalChange(const std::string& path, document::MergeDecision decision) {
+    document::FileDocument* document = m_services.documents.find(path);
+    if (document == nullptr || document->pendingMerge() == nullptr) {
+        return; // Closed, or decided elsewhere (the merge view, another notification).
+    }
+    if (auto resolved = m_services.saveManager.resolveExternalChange(*document, decision); !resolved) {
+        notifyError(text("Cannot resolve the change of %1").arg(nativePath(path)), resolved.error());
+    }
+    if (const auto it = m_merges.find(document->path()); it != m_merges.end() && it->second != nullptr) {
+        it->second->close();
+    }
+    m_services.editors.refreshBanners(document->path());
+    m_services.documents.notifyChanged(document->path());
+}
+
+void Workbench::reloadAllFromDisk() {
+    // The paths first: the listeners of each change run before the next check.
+    std::vector<std::string> paths;
+    for (const auto& document : m_services.saveManager.documents()) {
+        if (!document->untitled()) {
+            paths.push_back(document->path());
+        }
+    }
+    for (const std::string& path : paths) {
+        if (document::FileDocument* document = m_services.saveManager.find(path); document != nullptr) {
+            handleExternalChange(m_services.saveManager.checkDisk(*document));
+        }
+    }
+}
+
+void Workbench::frameDeactivated() {
+    if (m_services.autosave == nullptr) {
+        return;
+    }
+    if (auto saved = m_services.autosave->frameDeactivated(); saved) {
+        reportSaveAll(*saved, true);
+    }
+}
+
+void Workbench::frameActivated() { reloadAllFromDisk(); }
 
 void Workbench::reloadFromDisk(const std::string& path) {
     document::FileDocument* document = m_services.documents.find(path);
@@ -1251,6 +1306,11 @@ void Workbench::pollAutosave() {
     if (result.autosave) {
         reportSaveAll(*result.autosave, true);
     }
+    if (result.journal) {
+        for (const Error& error : result.journal->errors) {
+            log::warn("ui", "hot-exit journal: {}", error.describe());
+        }
+    }
 }
 
 bool Workbench::eventFilter(QObject* watched, QEvent* event) {
@@ -1258,6 +1318,7 @@ bool Workbench::eventFilter(QObject* watched, QEvent* event) {
     case QEvent::KeyPress:
     case QEvent::MouseButtonPress:
     case QEvent::Wheel:
+    case QEvent::InputMethod:
         if (m_services.autosave != nullptr) {
             m_services.autosave->noteActivity();
         }
@@ -1277,10 +1338,11 @@ bool Workbench::eventFilter(QObject* watched, QEvent* event) {
             return true;
         }
     }
-    if (watched == &m_shell && event->type() == QEvent::WindowDeactivate && m_services.autosave != nullptr) {
-        if (auto saved = m_services.autosave->frameDeactivated(); saved) {
-            reportSaveAll(*saved, true);
-        }
+    // Rider's frame hooks: autosave when the IDE loses focus, the disk check when it gets it back.
+    if (watched == &m_shell && event->type() == QEvent::WindowDeactivate) {
+        frameDeactivated();
+    } else if (watched == &m_shell && event->type() == QEvent::WindowActivate) {
+        frameActivated();
     }
     return QObject::eventFilter(watched, event);
 }

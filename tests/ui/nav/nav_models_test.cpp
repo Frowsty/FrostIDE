@@ -140,6 +140,15 @@ TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     EXPECT_EQ(loaded->recentLocations[0].line, 12);
     EXPECT_EQ(store.lastProject().value_or(""), "/proj");
     EXPECT_EQ(frost::ui::nav::decodeSession("{not json").error().code(), ErrorCode::Corrupt);
+
+    // Closing the project forgets it as the last one (the next start shows the Welcome screen), but
+    // it stays a recent project and keeps its session.
+    ASSERT_TRUE(store.clearLastProject().has_value());
+    EXPECT_FALSE(store.lastProject().has_value());
+    EXPECT_EQ(store.recentProjects(), std::vector<std::string>{"/proj"});
+    EXPECT_TRUE(store.load("/proj").has_value());
+    ASSERT_TRUE(store.setLastProject("/proj").has_value());
+    EXPECT_EQ(store.lastProject().value_or(""), "/proj");
 }
 
 TEST_F(NavFsTest, RegistryOpensOneDocumentPerPathAndClosesCleanOnes) {

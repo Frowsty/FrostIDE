@@ -24,7 +24,8 @@ struct Place {
 };
 
 // True when `a` and `b` are in one file within `lines` lines of each other (one history entry).
-[[nodiscard]] bool near(const Place& a, const Place& b, int lines) noexcept;
+// Not "near": windows.h defines that as a macro.
+[[nodiscard]] bool isNear(const Place& a, const Place& b, int lines) noexcept;
 
 /*
  * Back/forward over places, as IntelliJ's Back and Forward (Ctrl+Alt+Left/Right). A jump records

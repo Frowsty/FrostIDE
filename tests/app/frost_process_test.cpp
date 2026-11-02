@@ -225,6 +225,27 @@ TEST(FrostProcess, SelfTestPasses) {
     EXPECT_NE(result.output.find("ok   plugin-paths"), std::string::npos) << result.output;
 }
 
+/*
+ * --selftest=render (ADR 0043): an editor drawn with editor.renderer's default on the real platform
+ * (Windows: the "windows" plugin on this test's private desktop, so QRhi on Direct3D 11 unless the
+ * session is remote or the adapter is software; Linux: offscreen, so raster). The backend must draw
+ * without falling back.
+ */
+TEST(FrostProcess, SelfTestRenderDrawsAnEditorWithTheDefaultRenderer) {
+#ifdef _WIN32
+    const Environment environment{{"QT_QPA_PLATFORM", std::nullopt}};
+#else
+    const Environment environment{{"QT_QPA_PLATFORM", "offscreen"}};
+#endif
+    const auto result = runFrost(frostExe(), {"--selftest=render"}, environment, frost::io::ImagePathForm::Auto, 60s);
+    ASSERT_EQ(result.exitCode, 0) << result.startError << result.output;
+    EXPECT_TRUE(result.output.contains("ok   editor-renderer: ")) << result.output;
+    EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
+#ifndef _WIN32
+    EXPECT_TRUE(result.output.contains("editor-renderer: raster")) << result.output;
+#endif
+}
+
 TEST(FrostProcess, SelfTestIgnoresQtOptionsAfterDoubleDash) {
     /*
      * Arguments after "--" are paths for frost, never options for Qt. Passed on to Qt,

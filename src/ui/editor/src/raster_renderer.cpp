@@ -7,10 +7,13 @@
 
 #include <QPaintDevice>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QTextLayout>
 #include <QTextLine>
 #include <QTextOption>
+
+#include <algorithm>
 
 namespace frost::ui {
 
@@ -63,6 +66,36 @@ void RasterEditorRenderer::drawText(QPainter& painter, const DisplayText& run) {
     }
 }
 
+namespace {
+
+// A diagnostic underline: a straight line, or a zigzag of half-period 2 * width and amplitude width
+// along `decoration.line` (left to right; horizontal lines only).
+void drawDecoration(QPainter& painter, const DisplayDecoration& decoration) {
+    painter.setPen(QPen(decoration.color, decoration.width));
+    if (decoration.style == UnderlineStyle::Straight) {
+        painter.drawLine(decoration.line);
+        return;
+    }
+    const double step = 2.0 * decoration.width;
+    const double amplitude = decoration.width;
+    const double y = decoration.line.y1();
+    const double x0 = std::min(decoration.line.x1(), decoration.line.x2());
+    const double x1 = std::max(decoration.line.x1(), decoration.line.x2());
+    QPainterPath path(QPointF(x0, y));
+    bool up = true;
+    for (double x = x0 + step; x < x1 + step; x += step) {
+        path.lineTo(QPointF(std::min(x, x1), up ? y - amplitude : y + amplitude));
+        up = !up;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(path);
+    painter.restore();
+}
+
+} // namespace
+
 void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& device) {
     QPainter painter(&device);
     painter.fillRect(list.viewport, list.background);
@@ -77,6 +110,9 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
     }
     for (const DisplayText& run : list.text) {
         drawText(painter, run);
+    }
+    for (const DisplayDecoration& decoration : list.decorations) {
+        drawDecoration(painter, decoration);
     }
     for (const DisplayLine& line : list.overlays) {
         painter.setPen(QPen(line.color, line.width));

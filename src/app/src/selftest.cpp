@@ -7,11 +7,16 @@
 
 #include "frost/app/main_window.hpp"
 #include "frost/app/startup.hpp"
+#include "frost/text/document.hpp"
+#include "frost/ui/editor/editor_view.hpp"
+#include "frost/ui/editor/rhi_renderer.hpp"
 
 #include <QApplication>
 #include <QDeadlineTimer>
 #include <QEventLoop>
 #include <QGuiApplication>
+#include <QImage>
+#include <QRhiWidget>
 #include <QWidget>
 #include <QWindow>
 
@@ -342,6 +347,68 @@ std::vector<SelfTestCheck> runGuiChecks() {
         detail = "main window exposed and closed";
     }
     checks.push_back({"main-window", exposed && contents && closed, true, std::move(detail)});
+    return checks;
+}
+
+std::vector<SelfTestCheck> runRenderChecks() {
+    std::vector<SelfTestCheck> checks;
+    const QString platform = QGuiApplication::platformName();
+    checks.push_back({"qt-platform", !platform.isEmpty(), true,
+                      std::format("Qt {} on platform plugin '{}'", qVersion(), platform.toStdString())});
+    Result<text::Document> document = text::Document::fromUtf8("int main() {\n    return 42; // frost\n}\n");
+    if (!document) {
+        checks.push_back({"editor-renderer", false, true, document.error().describe()});
+        return checks;
+    }
+    // editor.renderer's default, as a fresh install draws (the view picks raster first, ADR 0043).
+    const auto view = ui::createEditorView(*document, "selftest.cpp");
+    view->resize(640, 360);
+    view->show();
+    const bool exposed = waitForExposed(*view, std::chrono::seconds(5));
+    // The QRhi viewport is attached after the first raster frame and initialises on its first paint.
+    const QDeadlineTimer deadline(std::chrono::seconds(10));
+    const auto settled = [&] {
+        const ui::EditorRendererState& state = view->rendererState();
+        if (state.fallbacks > 0 || state.pending) {
+            return state.fallbacks > 0;
+        }
+        if (state.active == ui::EditorBackend::Raster) {
+            return true;
+        }
+        const auto* rhi = qobject_cast<const ui::RhiEditorViewport*>(view->viewport());
+        return rhi != nullptr && (rhi->hasFailed() || !rhi->adapterName().isEmpty());
+    };
+    while (exposed && !settled() && !deadline.hasExpired()) {
+        view->viewport()->update();
+        QApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    const ui::EditorRendererState& state = view->rendererState();
+    bool ok = exposed && !state.pending && state.fallbacks == 0;
+    std::string detail = std::format("{} ({})", ui::toString(state.active), state.reason);
+    if (!exposed) {
+        detail = "the editor was not exposed within 5 s";
+    } else if (state.pending) {
+        detail += ": the QRhi viewport was not attached within 10 s";
+    } else if (state.active == ui::EditorBackend::Rhi) {
+        auto* rhi = qobject_cast<ui::RhiEditorViewport*>(view->viewport());
+        // A frame read back from the GPU: text pixels differ from the background's.
+        const QImage frame = rhi != nullptr ? rhi->grabFramebuffer() : QImage();
+        bool text = false;
+        for (int y = 0; !text && y < frame.height(); ++y) {
+            for (int x = 0; x < frame.width(); ++x) {
+                if (frame.pixel(x, y) != frame.pixel(0, frame.height() - 1)) {
+                    text = true;
+                    break;
+                }
+            }
+        }
+        ok = ok && rhi != nullptr && !rhi->hasFailed() && !frame.isNull() && text && state.fallbacks == 0;
+        detail += std::format(" on '{}', frame {}x{}{}", rhi != nullptr ? rhi->adapterName().toStdString() : "",
+                              frame.width(), frame.height(), text ? "" : " without text");
+    }
+    view->close();
+    QApplication::processEvents();
+    checks.push_back({"editor-renderer", ok, true, std::move(detail)});
     return checks;
 }
 

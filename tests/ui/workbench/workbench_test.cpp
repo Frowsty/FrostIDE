@@ -454,12 +454,14 @@ TEST_F(WorkbenchTest, MergeViewAppliesPerChunkChoicesAndResolves) {
     const auto banners = app.editors->banners("/proj/merge.txt");
     ASSERT_EQ(banners.size(), 1U);
     EXPECT_EQ(banners[0]->kind(), BannerKind::MergePending);
-    // The notification's Compare... opens the merge view.
+    // The one external-change prompt: Keep my version, Take disk version, Compare... (the merge view).
     const Notification* changed = app.lastNotificationTitled(QStringLiteral("changed on disk"));
     ASSERT_NE(changed, nullptr);
-    ASSERT_FALSE(changed->actions.empty());
-    EXPECT_EQ(changed->actions[0].label, QStringLiteral("Compare..."));
-    changed->actions[0].run();
+    ASSERT_EQ(changed->actions.size(), 3U);
+    EXPECT_EQ(changed->actions[0].label, QStringLiteral("Keep my version"));
+    EXPECT_EQ(changed->actions[1].label, QStringLiteral("Take disk version"));
+    EXPECT_EQ(changed->actions[2].label, QStringLiteral("Compare..."));
+    changed->actions[2].run();
     MergeView* view = app.window->findChild<MergeView*>(QStringLiteral("mergeView"));
     ASSERT_NE(view, nullptr);
     // Three aligned panes: every pane has the same rows.

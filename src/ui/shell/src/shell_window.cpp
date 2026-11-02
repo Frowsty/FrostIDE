@@ -203,6 +203,9 @@ void ShellWindow::teardown() {
         return;
     }
     m_tornDown = true;
+    for (const std::function<void()>& hook : std::exchange(m_teardownHooks, {})) {
+        hook();
+    }
     if (m_dispatcher != nullptr) {
         qApp->removeEventFilter(m_dispatcher);
         delete m_dispatcher;
@@ -309,6 +312,10 @@ void ShellWindow::registerActions() {
     const auto hasAppearance = [this] { return m_env.appearance != nullptr && m_env.appearanceSettings != nullptr; };
 
     addShellAction(a::kOpenFile, "Open File...", "File", [this] {
+        if (m_openFileHandler) {
+            m_openFileHandler();
+            return;
+        }
         const QString chosen = QFileDialog::getOpenFileName(this, text("Open File"));
         if (!chosen.isEmpty()) {
             static_cast<void>(openFile(toUtf8(QDir::toNativeSeparators(chosen))));
@@ -468,7 +475,20 @@ void ShellWindow::refreshActions() {
 
 void ShellWindow::setProject(const QString& name) {
     m_projectOpen = !name.isEmpty();
+    m_projectName = name;
     m_toolbar->setProjectName(name);
+    updateTitle();
+}
+
+void ShellWindow::updateTitle() {
+    if (!m_projectName.isEmpty()) {
+        setWindowTitle(QStringLiteral("%1 - FrostIDE").arg(m_projectName));
+        return;
+    }
+    const IEditorView* editor = m_tabs != nullptr ? m_tabs->currentEditor() : nullptr;
+    setWindowTitle(editor == nullptr
+                       ? QStringLiteral("FrostIDE")
+                       : QStringLiteral("%1 - FrostIDE").arg(QFileInfo(fromUtf8(editor->path())).fileName()));
 }
 
 Result<int> ShellWindow::openFile(const std::string& path) {
@@ -599,11 +619,10 @@ void ShellWindow::hideEvent(QHideEvent* event) {
 }
 
 void ShellWindow::onCurrentEditorChanged(IEditorView* editor) {
+    updateTitle();
     if (editor == nullptr) {
-        setWindowTitle(QStringLiteral("FrostIDE"));
         m_status->showEditor(nullptr);
     } else {
-        setWindowTitle(QStringLiteral("%1 - FrostIDE").arg(QFileInfo(fromUtf8(editor->path())).fileName()));
         const EditorStatus status = editor->status();
         m_status->showEditor(&status);
     }

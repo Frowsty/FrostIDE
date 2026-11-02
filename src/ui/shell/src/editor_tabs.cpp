@@ -146,6 +146,20 @@ Result<int> EditorTabs::open(const std::string& requested, bool activateTab) {
     return index;
 }
 
+void EditorTabs::setEmptyStateWidget(QWidget* widget) {
+    if (widget != nullptr && m_stack->indexOf(widget) < 0) {
+        m_stack->addWidget(widget);
+    }
+    m_emptyWidget = widget;
+    if (m_tabs.empty()) {
+        m_stack->setCurrentWidget(emptyStateWidget());
+    }
+}
+
+QWidget* EditorTabs::emptyStateWidget() const noexcept {
+    return m_emptyWidget != nullptr ? m_emptyWidget : static_cast<QWidget*>(m_empty);
+}
+
 int EditorTabs::currentIndex() const { return m_tabs.empty() ? -1 : m_bar->currentIndex(); }
 
 int EditorTabs::indexOf(const std::string& path) const {
@@ -226,7 +240,7 @@ bool EditorTabs::close(int index) {
     if (next >= 0) {
         activate(next);
     } else {
-        m_stack->setCurrentWidget(m_empty);
+        m_stack->setCurrentWidget(emptyStateWidget());
         emit currentEditorChanged(nullptr);
     }
     emit tabCountChanged(count());
@@ -367,7 +381,7 @@ void EditorTabs::onBarCurrentChanged(int index) {
     }
     IEditorView* view = editor(index);
     if (view == nullptr) {
-        m_stack->setCurrentWidget(m_empty);
+        m_stack->setCurrentWidget(emptyStateWidget());
         emit currentEditorChanged(nullptr);
         return;
     }

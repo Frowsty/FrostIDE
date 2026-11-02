@@ -20,7 +20,6 @@
 #ifdef _WIN32
 #include <windows.h>
 
-#include <knownfolders.h>
 #include <shlobj.h>
 #endif
 
@@ -39,17 +38,14 @@ namespace {
 }
 
 [[nodiscard]] Result<std::string> programFilesX86() {
-    PWSTR folder = nullptr;
-    const HRESULT hr = SHGetKnownFolderPath(FOLDERID_ProgramFilesX86, 0, nullptr, &folder);
-    if (FAILED(hr) || folder == nullptr) {
-        if (folder != nullptr) {
-            CoTaskMemFree(folder);
-        }
+    // SHGetFolderPathW, not SHGetKnownFolderPath, whose result needs CoTaskMemFree (ole32.dll),
+    // an import frost_app.dll may not have (FrostProcess.AppDllImportsOnlyAllowedDlls).
+    wchar_t folder[MAX_PATH] = {};
+    const HRESULT hr = SHGetFolderPathW(nullptr, CSIDL_PROGRAM_FILESX86, nullptr, SHGFP_TYPE_CURRENT, folder);
+    if (FAILED(hr) || folder[0] == L'\0') {
         return fail(ErrorCode::NotFound, "the Program Files (x86) folder is unknown");
     }
-    auto path = io::fromWide(folder);
-    CoTaskMemFree(folder);
-    return path;
+    return io::fromWide(folder);
 }
 
 [[nodiscard]] std::optional<std::string> kitsRoot10() {

@@ -34,12 +34,16 @@ namespace a = frost::ui::actions;
 constexpr std::array kFileMenu{
     act("file.new"),
     act(a::kOpenFile),
+    act("file.openFolder"),
+    act("file.openRecent"),
+    act("file.closeProject"),
     sep(),
     act(a::kCloseTab),
     act(a::kCloseOtherTabs),
     act(a::kCloseAllTabs),
     act(a::kCloseAllButPinned),
     sep(),
+    act("file.saveDocument"),
     act("file.saveAll"),
     act("file.reloadFromDisk"),
     sep(),
@@ -153,8 +157,10 @@ constexpr std::array kCodeMenu{
     act("editor.foldCollapseAll"),
 };
 
+// The build tool windows' actions (frost/ui/toolwindows/build_actions.hpp, ADR 0039).
 constexpr std::array kBuildMenu{
-    act("build.project"), act("build.rebuild"), act("build.clean"), sep(), act("build.cancel"),
+    act("build.buildSolution"), act("build.rebuildSolution"), act("build.cleanSolution"), sep(),
+    act("build.cancelBuild"),
 };
 
 constexpr std::array kRunMenu{

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Offscreen tests for the main window (with its navigation workbench) and the in-process GUI
-// self-test checks. They run on Qt's offscreen platform (see tests/support/qt_test_main.cpp).
+// Offscreen tests for the main window (with its own composition root and navigation workbench) and
+// the in-process GUI self-test checks. They run on Qt's offscreen platform (see
+// tests/support/qt_test_main.cpp). The last project's session across two starts is tested with the
+// workbench (tests/app/workbench_test.cpp).
 
 #include "frost/app/main_window.hpp"
 #include "frost/app/selftest.hpp"
-#include "frost/io/file_system.hpp"
-#include "frost/io/path.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
-#include "support/scratch_dir.hpp"
 #include <QAction>
 #include <QApplication>
 #include <QDeadlineTimer>
@@ -58,38 +57,6 @@ TEST(MainWindow, HasTheNavigationWorkbench) {
     EXPECT_EQ(window.invoke(frost::ui::workbench_actions::kGoToFile), frost::input::InvokeResult::Ran);
     ASSERT_NE(window.activePopup(), nullptr);
     EXPECT_EQ(window.activePopup()->objectName(), QStringLiteral("goToFilePopup"));
-}
-
-/*
- * The program's persistent services (ADR 0042) on a scratch data directory: a project opened in one
- * run, with a file in a tab, comes back at the next start-up; the real file watcher, reactor and
- * thread pool start with the services and stop with them.
- */
-TEST(MainWindow, PersistentServicesRestoreTheLastProject) {
-    const frost::test::ScratchDir scratch("app-session");
-    const std::string project = scratch.join("proj");
-    const std::string file = frost::io::joinPath(project, "main.cpp").value();
-    frost::io::IFileSystem& fs = frost::io::realFileSystem();
-    ASSERT_TRUE(fs.createDirectories(project).has_value());
-    ASSERT_TRUE(fs.writeFileAtomic(file, "int main() {}\n").has_value());
-    const frost::app::AppServicesOptions options{.persistent = true, .dataDirectory = scratch.join("data")};
-    {
-        frost::app::AppServices services(options);
-        EXPECT_TRUE(services.startupWarnings().empty()) << services.startupWarnings().front();
-        frost::app::MainWindow window(services);
-        ASSERT_TRUE(window.workbench()->openProject(project).has_value());
-        ASSERT_TRUE(window.workbench()->openFile(file).has_value());
-        QApplication::processEvents();
-    }
-    frost::app::AppServices services(options);
-    frost::app::MainWindow window(services);
-    EXPECT_TRUE(window.workbench()->restoreLastProject());
-    ASSERT_EQ(window.tabs().count(), 1);
-    EXPECT_TRUE(window.tabs().editor(0)->path().ends_with("main.cpp")) << window.tabs().editor(0)->path();
-    // No journal was left behind by the first run's clean exit.
-    auto scan = services.scanRecoverableJournals();
-    ASSERT_TRUE(scan.has_value()) << scan.error().describe();
-    EXPECT_TRUE(scan->journals.empty());
 }
 
 TEST(SelfTest, GuiChecksPassOffscreen) {

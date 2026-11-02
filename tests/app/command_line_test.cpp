@@ -84,6 +84,8 @@ TEST(CommandLine, SelfTestCrashAndFreezeOptions) {
     EXPECT_EQ(freeze->selfTestKind, SelfTestKind::Freeze);
     EXPECT_EQ(parse({"--selftest"})->selfTestKind, SelfTestKind::Checks);
     EXPECT_EQ(parse({"--selftest=onscreen"})->selfTestKind, SelfTestKind::Checks);
+    EXPECT_EQ(parse({"--selftest=render"})->selfTestKind, SelfTestKind::Render);
+    EXPECT_EQ(parse({"--selftest=render"})->mode, Mode::SelfTest);
     // A deliberate fault is never combined with anything else, not even itself or a path.
     for (const std::vector<std::string_view>& args :
          {std::vector<std::string_view>{"--selftest=crash", "--selftest=crash"},
@@ -105,8 +107,8 @@ TEST(CommandLine, SelfTestCrashAndFreezeOptions) {
 
 TEST(CommandLine, UsageMentionsEveryOption) {
     const std::string_view usage = frost::app::usageText();
-    for (const std::string_view option :
-         {"--version", "--help", "--selftest", "--selftest=onscreen", "--selftest=crash", "--selftest=freeze"}) {
+    for (const std::string_view option : {"--version", "--help", "--selftest", "--selftest=onscreen",
+                                          "--selftest=crash", "--selftest=freeze", "--selftest=render"}) {
         EXPECT_NE(usage.find(option), std::string_view::npos) << option;
     }
 }

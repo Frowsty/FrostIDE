@@ -105,6 +105,14 @@ public:
     [[nodiscard]] bool isOverflowing() const;
     // The empty-state label shown while no tab is open.
     [[nodiscard]] QLabel* emptyState() const noexcept { return m_empty; }
+    /*
+     * Shows `widget` instead of the empty-state label while no tab is open (the application's
+     * Welcome screen while no project is open); nullptr restores the label. The tabs take ownership
+     * of a widget they have not seen before and keep it (hidden) when another one replaces it.
+     */
+    void setEmptyStateWidget(QWidget* widget);
+    // What shows while no tab is open: the widget set above, or the label.
+    [[nodiscard]] QWidget* emptyStateWidget() const noexcept;
 
 signals:
     // The active editor changed (nullptr: none left).
@@ -141,6 +149,7 @@ private:
     QToolButton* m_listButton;
     QStackedWidget* m_stack;
     QLabel* m_empty;
+    QWidget* m_emptyWidget = nullptr; // setEmptyStateWidget's; nullptr: m_empty.
     std::vector<Tab> m_tabs;
     std::uint64_t m_activationClock = 0;
     bool m_syncing = false;

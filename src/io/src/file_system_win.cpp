@@ -154,6 +154,60 @@ DWORD writeAll(HANDLE file, std::string_view data) noexcept {
     return ERROR_SUCCESS;
 }
 
+// ASCII-case-insensitive equality; the file system folds more than ASCII, but a final path that
+// differs beyond ASCII case is treated as another spelling.
+bool equalIgnoringAsciiCase(std::string_view a, std::string_view b) noexcept {
+    return std::ranges::equal(a, b, [](char x, char y) {
+        const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+        return lower(x) == lower(y);
+    });
+}
+
+/*
+ * The existing, normalised `normalized` with each component after the root in the name the
+ * directory lists it under (real case, long name), links and subst drives kept as spelled; the
+ * drive letter is upper-cased. One FindFirstFileExW per component. `path` names the call in errors.
+ */
+Result<std::string> realCaseOfComponents(const std::string& normalized, std::string_view path) {
+    std::vector<std::string_view> names;
+    std::string_view current = normalized;
+    for (std::string_view parent = parentPath(current, PathStyle::Windows); !parent.empty();
+         parent = parentPath(current, PathStyle::Windows)) {
+        names.push_back(fileName(current, PathStyle::Windows));
+        current = parent;
+    }
+    std::string out(current);
+    if (out.size() >= 2 && out[1] == ':' && out[0] >= 'a' && out[0] <= 'z') {
+        out[0] = static_cast<char>(out[0] - 'a' + 'A');
+    }
+    for (auto it = names.rbegin(); it != names.rend(); ++it) {
+        auto candidate = joinPath(out, *it, PathStyle::Windows);
+        if (!candidate) {
+            return candidate;
+        }
+        auto wide = toWin32Path(*candidate);
+        if (!wide) {
+            return std::unexpected(std::move(wide.error()));
+        }
+        WIN32_FIND_DATAW data{};
+        HANDLE find = FindFirstFileExW(wide->c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0);
+        if (find == INVALID_HANDLE_VALUE) {
+            return std::unexpected(lastWin32Error("canonicalPath", path));
+        }
+        FindClose(find);
+        auto name = fromWide(data.cFileName);
+        if (!name) {
+            return std::unexpected(std::move(name.error()));
+        }
+        auto joined = joinPath(out, *name, PathStyle::Windows);
+        if (!joined) {
+            return joined;
+        }
+        out = std::move(*joined);
+    }
+    return out;
+}
+
 // safeWrite's retries of a replace that another program's open handle blocks (antivirus scanners
 // and indexers hold files for milliseconds).
 constexpr int kBusyRetries = 3;
@@ -694,8 +748,19 @@ public:
         return {};
     }
 
+    /*
+     * One spelling per file (ADR 0042, ADR 0044): the real case of every component. The fast path
+     * is GetFinalPathNameByHandleW, used when its answer differs from the normalised input in ASCII
+     * case alone. Otherwise the path goes through a link, a junction, a subst drive or an 8.3 name,
+     * which the final path would resolve: each component then takes its own real (long) name from
+     * FindFirstFileExW, so the document stays where the user opened it.
+     */
     Result<std::string> canonicalPath(std::string_view path) override {
-        auto wide = toWin32Path(path);
+        auto normalized = normalizePath(path, PathStyle::Windows);
+        if (!normalized) {
+            return normalized;
+        }
+        auto wide = toWin32Path(*normalized);
         if (!wide) {
             return std::unexpected(std::move(wide.error()));
         }
@@ -706,7 +771,14 @@ public:
         if (!handle.valid()) {
             return std::unexpected(lastWin32Error("canonicalPath", path));
         }
-        return finalPathOfHandle(handle.get(), "canonicalPath", path);
+        auto final = finalPathOfHandle(handle.get(), "canonicalPath", path);
+        if (!final) {
+            return final;
+        }
+        if (final->size() == normalized->size() && equalIgnoringAsciiCase(*final, *normalized)) {
+            return final;
+        }
+        return realCaseOfComponents(*normalized, path);
     }
 
     Result<bool> exists(std::string_view path) override {
