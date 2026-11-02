@@ -1,0 +1,13 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "mine",
+      "inherits": "debug",
+      "displayName": "My debug",
+      "binaryDir": "${sourceDir}/build/mine",
+      "environment": {"HOME_DIR": "${sourceDirName}-home"},
+      "cacheVariables": {"MINE": "$env{HOME_DIR}"}
+    }
+  ]
+}

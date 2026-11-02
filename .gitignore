@@ -13,6 +13,8 @@
 /.claude/worktrees/
 /.claude/settings.local.json
 CMakeUserPresets.json
+# ...except the CMake presets fixture's user file, which the tests read (ADR 0046).
+!/tests/project/fixtures/cmake/presets/CMakeUserPresets.json
 compile_commands.json
 # Tool logs written into the working directory.
 *.log
