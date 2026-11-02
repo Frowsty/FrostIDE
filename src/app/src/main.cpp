@@ -42,9 +42,20 @@
 #include "frost/app/main_window.hpp"
 #include "frost/app/selftest.hpp"
 #include "frost/app/startup.hpp"
+#include "frost/app/workbench.hpp"
+#include "frost/build/build_service.hpp"
+#include "frost/core/assert.hpp"
 #include "frost/core/build_info.hpp"
+#include "frost/core/clock.hpp"
 #include "frost/core/log.hpp"
 #include "frost/diag/selftest_faults.hpp"
+#include "frost/io/file_system.hpp"
+#include "frost/io/path.hpp"
+#include "frost/io/process.hpp"
+#include "frost/project/trust_store.hpp"
+#include "frost/settings/project_layout.hpp"
+#include "frost/settings/registry.hpp"
+#include "frost/settings/store.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/tr.hpp"
@@ -288,6 +299,69 @@ int runFreezeSelfTest(int argc, char** argv) {
     return 0;
 }
 
+// The GUI's settings and trust stores. A store that cannot open on its file falls back to an
+// in-memory one (settings) or a file in the temporary directory (trust), with a warning.
+struct GuiStores {
+    std::unique_ptr<frost::settings::SettingsStore> settings;
+    std::unique_ptr<frost::project::TrustStore> trust;
+    std::string dataDirectory; // FrostIDE's per-user data directory (the trust store's); "" if unknown.
+    std::vector<std::string> warnings;
+};
+
+GuiStores openGuiStores() {
+    GuiStores stores;
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    const frost::settings::Registry& registry = frost::settings::builtinRegistry();
+    if (auto file = frost::settings::applicationSettingsFile(); file) {
+        if (auto opened = frost::settings::SettingsStore::open(registry, fs, {*file, std::nullopt}); opened) {
+            stores.settings = std::move(*opened);
+        } else {
+            stores.warnings.push_back(std::format("The settings file cannot be used: {}", opened.error().message()));
+        }
+    } else {
+        stores.warnings.push_back(std::format("No settings file: {}", file.error().message()));
+    }
+    if (!stores.settings) {
+        auto memory = frost::settings::SettingsStore::open(registry, fs, {});
+        FROST_ASSERT(memory.has_value()); // No file to read: open cannot fail.
+        stores.settings = std::move(*memory);
+    }
+    frost::Result<std::string> trustPath = frost::project::TrustStore::defaultStorePath();
+    if (trustPath) {
+        stores.dataDirectory = std::string(frost::io::parentPath(*trustPath));
+        if (auto opened = frost::project::TrustStore::open(fs, *trustPath); opened) {
+            stores.trust = std::move(*opened);
+            return stores;
+        }
+    }
+    stores.warnings.emplace_back("The trusted-projects list cannot be read; trust decisions last for this session.");
+    const QByteArray fallback =
+        QDir::toNativeSeparators(QDir::tempPath() + QStringLiteral("/FrostIDE-trusted-roots.txt")).toUtf8();
+    auto temporary = frost::project::TrustStore::open(fs, fallback.toStdString());
+    FROST_ASSERT(temporary.has_value()); // A missing file opens as an empty list.
+    stores.trust = std::move(*temporary);
+    return stores;
+}
+
+// Where the workbench keeps the hot-exit journal, local history, the build's active configurations
+// and the synthesized compile commands: FrostIDE's data directory.
+frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
+    frost::app::WorkbenchOptions options;
+    if (!stores.dataDirectory.empty()) {
+        const auto under = [&](std::string_view name) {
+            auto path = frost::io::joinPath(stores.dataDirectory, name);
+            return path ? std::move(*path) : std::string();
+        };
+        options.journalDirectory = under("hot-exit");
+        options.historyPath = under("local-history.db");
+        options.compileCommandsCache = under("compile-commands");
+    }
+    if (auto state = frost::build::BuildService::defaultStatePath(); state) {
+        options.buildStatePath = std::move(*state);
+    }
+    return options;
+}
+
 // The application, after the process is hardened (`hardening` says how far that got).
 // `restartedFrom` is the first launcher's image path (UTF-8) when the launcher restarted
 // frost through its short link, else "". `argv` must outlive the call: QApplication keeps it.
@@ -387,13 +461,19 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QApplication app(qtArgc, argv);
         QApplication::setApplicationName(QStringLiteral("FrostIDE"));
         QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
-        // The services outlive the window (declared first, destroyed last).
-        frost::app::AppServices services;
+        // The workbench and what it borrows outlive the window (declared first, destroyed last).
+        GuiStores stores = openGuiStores();
+        frost::app::DialogWorkbenchPrompts prompts;
+        frost::app::Workbench workbench(
+            frost::app::WorkbenchServices{frost::io::realFileSystem(), frost::io::realProcessLauncher(),
+                                          frost::systemClock(), *stores.settings, *stores.trust, prompts},
+            workbenchOptions(stores));
         // The appearance comes from the resources deployed next to frost (ADR 0015). Without them the
         // window still opens on Qt's own style and says why (ADR 0038), instead of not starting.
         const QByteArray resources = (QCoreApplication::applicationDirPath() + QStringLiteral("/resources")).toUtf8();
-        const auto appearance = services.installAppearance(app, resources.toStdString());
-        frost::app::MainWindow window(services.environment());
+        const auto appearance = workbench.installAppearance(app, resources.toStdString());
+        frost::app::MainWindow window(workbench.environment());
+        workbench.attach(window);
         if (!appearance) {
             window.notifications().notify({frost::ui::qtr("frost::app", "The theme could not be loaded"),
                                            QString::fromUtf8(appearance.error().message()),
@@ -403,7 +483,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         } else {
             window.reportStartupWarnings(appearance->warnings);
         }
-        if (frost::ui::AppearanceManager* manager = services.appearance(); manager != nullptr) {
+        if (frost::ui::AppearanceManager* manager = workbench.appearance(); manager != nullptr) {
             QObject::connect(manager, &frost::ui::AppearanceManager::appearanceApplyFailed, &window,
                              [&window](const QString& description) {
                                  window.notifications().notify(
@@ -414,16 +494,21 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                                       {}});
                              });
         }
-        // Files named on the command line open in tabs; folders and solutions wait for M2.
+        for (const std::string& warning : stores.warnings) {
+            window.notifications().notify({frost::ui::qtr("frost::app", "Settings"),
+                                           QString::fromStdString(warning),
+                                           frost::ui::NotificationKind::Warning,
+                                           std::nullopt,
+                                           {}});
+        }
+        // Paths named on the command line: solutions and folders open as the project, files in tabs.
         for (const std::string& path : parsed->paths) {
             const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
-            if (file.isFile()) {
-                const QByteArray absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8();
-                static_cast<void>(window.openFile(absolute.toStdString()));
-            }
+            const QByteArray absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8();
+            static_cast<void>(workbench.openPath(absolute.toStdString()));
         }
         window.show();
-        frost::app::afterFirstFrame(window, [&app, restartedFrom] {
+        frost::app::afterFirstFrame(window, [&app, &window, &workbench, restartedFrom] {
             // FrostProcess.GuiStartsTheCrashHandlerAfterTheFirstFrame orders this line before the
             // handler's "crash handler registered" line.
             frost::log::info("app", "first frame shown");
@@ -431,8 +516,13 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 frost::log::warn("diag", "no stall watchdog: {}", watchdog.error().describe());
             }
             frost::app::startProgramDiagnosticsThread(restartedFrom);
+            // Unsaved files of an earlier session: asked once the window is up (the scan may wait
+            // for other instances' journals, so never before the first frame).
+            QTimer::singleShot(0, &window, [&workbench] { static_cast<void>(workbench.offerRecovery()); });
         });
         status = QApplication::exec();
+        // Autosave and the hot-exit journal while the window's documents are still open.
+        workbench.shutdown();
         // The watchdog and its hooks go before the window and QApplication (declared after it).
         frost::app::stopProgramWatchdog();
     }

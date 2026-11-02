@@ -2,8 +2,9 @@
 #
 # Tests for the Windows PowerShell scripts in tools/ that can run without installing
 # anything: bootstrap.ps1's Python version check, taken from the script's syntax tree
-# so the bootstrap itself never runs, and env.ps1's cache redirection (D1: no tool
-# caches on the system drive), dot-sourced in a child PowerShell. Windows only: the
+# so the bootstrap itself never runs, env.ps1's cache redirection (D1: no tool
+# caches on the system drive), dot-sourced in a child PowerShell, and stage.ps1's
+# folder layout over a fake build tree and a fake windeployqt. Windows only: the
 # scripts target Windows PowerShell 5.1. tests/tools/CMakeLists.txt registers this
 # suite on Windows only.
 
@@ -129,6 +130,74 @@ class EnvCacheRedirectionTest(TempDirTestCase):
         self.assertEqual(values["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"], "0")
         self.assertEqual(values["DOTNET_GENERATE_ASPNET_CERTIFICATE"], "0")
 
+
+# A stand-in for windeployqt.exe: it writes a Qt core DLL and the Windows platform plugin into the
+# directory after --dir, as the real tool does for a debug frost_app.dll.
+_FAKE_WINDEPLOYQT = r"""@echo off
+:loop
+if "%~1"=="" goto done
+if "%~1"=="--dir" set "DEST=%~2"
+shift
+goto loop
+:done
+if not exist "%DEST%\platforms" mkdir "%DEST%\platforms"
+echo qt>"%DEST%\Qt6Cored.dll"
+echo plugin>"%DEST%\platforms\qwindowsd.dll"
+exit /b 0
+"""
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows PowerShell scripts")
+class StageScriptTest(TempDirTestCase):
+    def _fake_build(self) -> Path:
+        """A build tree with the files the Debug frost target leaves in src/app/Debug."""
+        build = self.tmp / "build"
+        bin_dir = build / "src" / "app" / "Debug"
+        (bin_dir / "platforms").mkdir(parents=True)
+        (bin_dir / "resources" / "themes").mkdir(parents=True)
+        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "frost.pdb"):
+            (bin_dir / name).write_bytes(b"MZ")
+        (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
+        (bin_dir / "resources" / "themes" / "dark.json").write_text("{}", encoding="utf-8")
+        return build
+
+    def _stage(self, build: Path, destination: Path, *extra: str) -> subprocess.CompletedProcess:
+        deploy = self.tmp / "windeployqt.cmd"
+        deploy.write_text(_FAKE_WINDEPLOYQT, encoding="ascii", newline="\r\n")
+        return run_powershell(TOOLS / "stage.ps1", "-Destination", str(destination), "-Config", "Debug",
+                              "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-SkipBuild", *extra)
+
+    def test_the_staged_folder_holds_frost_qt_and_the_platform_plugin(self) -> None:
+        build = self._fake_build()
+        destination = self.tmp / "out" / "preview"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stage: ok", result.stdout)
+        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "frost.pdb", "Qt6Cored.dll",
+                     "platforms/qwindowsd.dll", "platforms/qoffscreend.dll", "resources/themes/dark.json",
+                     "LICENSE", "NOTICE", "licenses/tree-sitter-LICENSE"):
+            self.assertTrue((destination / name).is_file(), name)
+
+    def test_a_non_empty_destination_needs_force(self) -> None:
+        build = self._fake_build()
+        destination = self.tmp / "out"
+        destination.mkdir()
+        (destination / "old.txt").write_text("old", encoding="utf-8")
+        refused = self._stage(build, destination)
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+        self.assertIn("is not empty", refused.stdout)
+        self.assertTrue((destination / "old.txt").exists())
+        replaced = self._stage(build, destination, "-Force")
+        self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
+        self.assertFalse((destination / "old.txt").exists())
+        self.assertTrue((destination / "frost.exe").is_file())
+
+    def test_a_missing_build_output_fails(self) -> None:
+        build = self._fake_build()
+        (build / "src" / "app" / "Debug" / "frost_app.dll").unlink()
+        result = self._stage(build, self.tmp / "out")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no frost_app.dll", result.stdout)
 
 if __name__ == "__main__":
     unittest.main()

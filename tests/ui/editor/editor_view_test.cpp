@@ -173,6 +173,35 @@ TEST(EditorView, GutterShowsLineNumbersAndMarkers) {
     EXPECT_EQ(list.markers.size(), 2U);
 }
 
+TEST(EditorView, RangeDecorationsUnderlineTheirTextWithATooltip) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("int missing;\nreturn x;\n");
+    EXPECT_TRUE(h.view->buildDisplayList().decorations.empty());
+    // A wavy error under "missing" (bytes 4..11) and a straight warning under "x" (bytes 20..21).
+    h.view->setRangeDecorations({RangeDecoration{text::ByteRange{ByteOffset{20}, ByteOffset{21}},
+                                                 MarkerSeverity::Warning, UnderlineStyle::Straight, "unused"},
+                                 RangeDecoration{text::ByteRange{ByteOffset{4}, ByteOffset{11}}, MarkerSeverity::Error,
+                                                 UnderlineStyle::Wavy, "use of undeclared identifier"}});
+    EditorDisplayList list = h.view->buildDisplayList();
+    ASSERT_EQ(list.decorations.size(), 2U);
+    const DisplayDecoration& error = list.decorations[0]; // Sorted by start.
+    EXPECT_EQ(error.style, UnderlineStyle::Wavy);
+    EXPECT_EQ(error.color, h.view->colors().errorMarker);
+    EXPECT_GE(error.line.x1(), list.textArea.left());
+    EXPECT_GT(error.line.x2(), error.line.x1());
+    EXPECT_LT(error.line.y1(), h.view->lineHeight()); // On the first row.
+    EXPECT_EQ(list.decorations[1].style, UnderlineStyle::Straight);
+    EXPECT_GT(list.decorations[1].line.y1(), h.view->lineHeight()); // On the second row.
+
+    // The tooltip names the message under the pointer, nothing elsewhere.
+    const QPointF over((error.line.x1() + error.line.x2()) / 2.0, 0.5 * h.view->lineHeight());
+    EXPECT_EQ(h.view->decorationToolTip(over), QStringLiteral("use of undeclared identifier"));
+    EXPECT_TRUE(h.view->decorationToolTip(QPointF(error.line.x2() + 40.0, 0.5 * h.view->lineHeight())).isEmpty());
+
+    h.view->setRangeDecorations({});
+    EXPECT_TRUE(h.view->buildDisplayList().decorations.empty());
+}
+
 TEST(EditorView, ImeCompositionAndCommit) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("ab");

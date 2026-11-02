@@ -71,10 +71,10 @@ struct LinePosition {
 [[nodiscard]] std::optional<LinePosition> parseGoToLine(const QString& text);
 
 /*
- * The window. Created hidden; GUI thread only. Its title is "FrostIDE", or "<file> - FrostIDE"
- * while an editor is active. Destruction: teardown() removes the dispatcher and closes every editor
- * and popup while the services still exist; ~ShellWindow calls it, and a subclass that owns
- * services must call it first in its own destructor.
+ * The window. Created hidden; GUI thread only. Its title is "<project> - FrostIDE" while a project is
+ * open (setProject), else "<file> - FrostIDE" while an editor is active, else "FrostIDE". Destruction: teardown()
+ * removes the dispatcher and closes every editor and popup while the services still exist; ~ShellWindow calls it, and a
+ * subclass that owns services must call it first in its own destructor.
  */
 class ShellWindow : public QMainWindow {
     Q_OBJECT
@@ -108,8 +108,15 @@ public:
 
     void setAvailabilityLevel(input::AvailabilityLevel level) noexcept { m_level = level; }
     void setProjectTrusted(bool trusted) noexcept { m_trusted = trusted; }
-    // Shows `name` in the toolbar's project widget; empty: no project (ProjectOpen off).
+    // Shows `name` in the toolbar's project widget and the title; empty: no project (ProjectOpen off).
     void setProject(const QString& name);
+    [[nodiscard]] const QString& projectName() const noexcept { return m_projectName; }
+    /*
+     * Replaces what File > Open... (actions::kOpenFile) does: the composition root shows its own
+     * dialog (solutions, folders and files) and opens the choice through its open-file path. Empty
+     * restores the built-in file dialog that opens the chosen file with openFile().
+     */
+    void setOpenFileHandler(std::function<void()> handler) { m_openFileHandler = std::move(handler); }
 
     // Opens `path` in a tab. A failure is shown as an error notification and returned.
     Result<int> openFile(const std::string& path);
@@ -139,6 +146,7 @@ private:
                         std::function<bool()> enabled = {}, std::optional<input::ContextRule> rule = std::nullopt,
                         bool searchable = true);
     void onCurrentEditorChanged(IEditorView* editor);
+    void updateTitle();
     void onEditorStatus(IEditorView* editor);
     void focusFirst(const std::vector<QWidget*>& widgets);
     void focusEditor();
@@ -160,6 +168,8 @@ private:
     QPointer<Popup> m_popup;
     QPointer<ListPopup> m_switcher;
     std::vector<std::string> m_registrationErrors;
+    std::function<void()> m_openFileHandler;
+    QString m_projectName;
     input::AvailabilityLevel m_level = input::AvailabilityLevel::L0;
     bool m_trusted = false;
     bool m_projectOpen = false;

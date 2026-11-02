@@ -53,6 +53,21 @@ struct DisplayLine {
     double width = 1.0;
 };
 
+// How a range decoration underlines its text (W1's diagnostics: wavy for clangd's live errors and
+// warnings, straight for hints a later slice adds).
+enum class UnderlineStyle : std::uint8_t { Wavy, Straight };
+
+// A diagnostic underline under one row's part of a decorated range, `line` running along the
+// underline's centre below the baseline. The raster renderer draws a wavy one as a zigzag of
+// amplitude `width`.
+struct DisplayDecoration {
+    QLineF line;
+    QColor color;
+    UnderlineStyle style = UnderlineStyle::Wavy;
+    MarkerSeverity severity = MarkerSeverity::Error;
+    double width = 1.0;
+};
+
 // A gutter marker on one buffer line.
 struct DisplayMarker {
     QRectF rect;
@@ -63,8 +78,9 @@ struct DisplayMarker {
 
 /*
  * One frame. Paint order: background, `fills`, `underlines` (right margin), `text` (clipped to
- * textArea), `overlays` (preedit underline), `carets`, then the gutter: gutterBackground over
- * `gutter`, `gutterText` and `markers`. Plain values; built and read on the GUI thread.
+ * textArea), `decorations` (diagnostic underlines), `overlays` (preedit underline), `carets`, then
+ * the gutter: gutterBackground over `gutter`, `gutterText` and `markers`. Plain values; built and
+ * read on the GUI thread.
  */
 struct EditorDisplayList {
     QRectF viewport;
@@ -76,6 +92,7 @@ struct EditorDisplayList {
     std::vector<DisplayFill> fills;
     std::vector<DisplayLine> underlines;
     std::vector<DisplayText> text;
+    std::vector<DisplayDecoration> decorations;
     std::vector<DisplayLine> overlays;
     std::vector<QRectF> carets;
     QColor caretColor;

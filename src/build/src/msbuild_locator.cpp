@@ -16,7 +16,6 @@
 
 #include <windows.h>
 
-#include <knownfolders.h>
 #include <shlobj.h>
 #endif
 
@@ -91,15 +90,16 @@ Result<std::string> msbuildPathFor(std::string_view installationPath) {
 
 Result<std::string> defaultVswherePath() {
 #ifdef _WIN32
-    PWSTR folder = nullptr;
-    const HRESULT hr = SHGetKnownFolderPath(FOLDERID_ProgramFilesX86, KF_FLAG_DEFAULT, nullptr, &folder);
-    if (FAILED(hr) || folder == nullptr) {
-        CoTaskMemFree(folder);
+    // SHGetFolderPathW fills a caller buffer; SHGetKnownFolderPath's result would need
+    // CoTaskMemFree, an ole32.dll import that frost_app.dll may not have
+    // (FrostProcess.AppDllImportsOnlyAllowedDlls). Both read the same known folder.
+    wchar_t folder[MAX_PATH] = {};
+    const HRESULT hr = SHGetFolderPathW(nullptr, CSIDL_PROGRAM_FILESX86, nullptr, SHGFP_TYPE_CURRENT, folder);
+    if (FAILED(hr) || folder[0] == L'\0') {
         return fail(ErrorCode::NotFound, std::format("the Program Files (x86) folder is unknown (HRESULT 0x{:08X})",
                                                      static_cast<unsigned long>(hr)));
     }
     auto utf8 = io::fromWide(folder);
-    CoTaskMemFree(folder);
     if (!utf8) {
         return std::unexpected(std::move(utf8.error()).withContext("Program Files (x86) folder"));
     }

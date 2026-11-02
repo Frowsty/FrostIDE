@@ -4,6 +4,7 @@
 // is built as an EditorDisplayList (rows from the DisplayMap, colours from the theme, highlight spans
 // from the syntax tree) and handed to the IEditorRenderer.
 
+#include "frost/text/editor/unicode.hpp"
 #include "frost/text/large_file.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
@@ -330,6 +331,36 @@ EditorDisplayList EditorView::buildDisplayList() {
         if (map.wrap().mode == text::WrapMode::Off && toPixels(x) > m_maxRowWidth) {
             m_maxRowWidth = toPixels(x);
             widened = true;
+        }
+
+        // Diagnostic underlines (range decorations): one segment per row a range covers; an empty
+        // range marks one cell, the next character's (the previous one's at a line end).
+        for (const RangeDecoration& decoration : m_decorations) {
+            if (decoration.range.begin > row.buffer.end) {
+                break; // Sorted by start.
+            }
+            text::ByteRange range = decoration.range;
+            if (range.end < row.buffer.begin || (range.end == row.buffer.begin && !range.empty())) {
+                continue;
+            }
+            double x0 = xOf(std::max(range.begin, row.buffer.begin));
+            double x1 = xOf(std::min(range.end, row.buffer.end));
+            if (range.empty()) {
+                if (range.begin < row.buffer.end) {
+                    x1 = xOf(std::min(text::nextGraphemeBoundary(snapshot, range.begin), row.buffer.end));
+                } else {
+                    x0 -= cell;
+                }
+                x1 = std::max(x1, x0 + cell);
+            }
+            if (x1 <= x0) {
+                continue;
+            }
+            const double y = baseline + std::max(2.0, 2.5 * zoom);
+            const QColor color =
+                decoration.severity == MarkerSeverity::Error ? m_colors.errorMarker : m_colors.warningMarker;
+            list.decorations.push_back(DisplayDecoration{QLineF(std::max(x0, gutter), y, x1, y), color,
+                                                         decoration.style, decoration.severity, std::max(1.0, zoom)});
         }
 
         // The IME preedit's underline.

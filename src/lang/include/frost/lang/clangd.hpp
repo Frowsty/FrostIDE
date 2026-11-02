@@ -54,6 +54,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -142,6 +143,20 @@ enum class ClangdState : std::uint8_t {
 
 [[nodiscard]] std::string_view toString(ClangdState state) noexcept;
 
+/*
+ * One LSP $/progress notification from the server (clangd reports its background index as a
+ * work-done progress "indexing"): the token as text, the kind ("begin", "report" or "end"), the
+ * begin's title, the latest message and the percentage when the server sent one.
+ */
+struct ClangdProgress {
+    enum class Kind : std::uint8_t { Begin, Report, End };
+    std::string token;
+    Kind kind = Kind::Report;
+    std::string title;
+    std::string message;
+    std::optional<int> percentage;
+};
+
 struct ClangdServiceOptions {
     std::string clangdPath;    // Absolute (findClangd).
     std::string workspaceRoot; // Absolute: the solution or CMake root (working directory and rootUri).
@@ -152,6 +167,9 @@ struct ClangdServiceOptions {
     IClock::Duration shutdownTimeout = std::chrono::seconds(5);
     Json initializationOptions;          // Passed through (clangd: fallbackFlags, clangdFileStatus).
     std::size_t historyPerDocument = 32; // Snapshots kept per document for mapping older publishes.
+    // Called for each $/progress notification, on a reactor or worker thread (marshal to the GUI
+    // yourself); null: ignored. Must stay callable until stop() finished.
+    std::function<void(const ClangdProgress&)> onProgress;
 };
 
 class ClangdService {

@@ -25,7 +25,6 @@ frost_add_library(build LAYER build
     SOURCES ${frost_build_sources}
     DEPS frost::project frost::io)
 if(WIN32)
-    # shell32: SHGetKnownFolderPath (the Program Files (x86) folder that holds vswhere.exe);
-    # ole32: CoTaskMemFree for its result.
-    target_link_libraries(frost_build PRIVATE shell32 ole32)
+    # shell32: SHGetFolderPathW (the Program Files (x86) folder that holds vswhere.exe).
+    target_link_libraries(frost_build PRIVATE shell32)
 endif()

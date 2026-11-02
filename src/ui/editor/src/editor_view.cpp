@@ -8,6 +8,7 @@
 #include "frost/ui/editor/editor_view.hpp"
 
 #include "frost/syntax/syntax_tree.hpp"
+#include "frost/text/anchor.hpp"
 #include "frost/text/editor/unicode.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/editor/find_bar.hpp"
@@ -352,6 +353,16 @@ void EditorView::afterChange(const text::EditorUpdate& update) {
             m_syntax->apply(*update.change, m_editor->text());
         }
         m_highlights.valid = false;
+        // Decorations ride along with their text: the start sticks right, the end left, so an
+        // insertion at either edge stays outside.
+        if (!update.change->edits.empty()) {
+            for (RangeDecoration& decoration : m_decorations) {
+                const ByteOffset begin =
+                    text::mapOffset(decoration.range.begin, text::Bias::Right, update.change->edits);
+                const ByteOffset end = text::mapOffset(decoration.range.end, text::Bias::Left, update.change->edits);
+                decoration.range = text::ByteRange{begin, std::max(begin, end)};
+            }
+        }
     }
     updateWrap(); // The gutter widens when the line count gains a digit.
     updateScrollBars();
@@ -360,6 +371,9 @@ void EditorView::afterChange(const text::EditorUpdate& update) {
     viewport()->update();
     emitStatus();
     armInputToPaint();
+    if (update.change && update.change->version != update.change->baseVersion) {
+        emit textChanged(*update.change);
+    }
 }
 
 void EditorView::armInputToPaint() {
@@ -765,6 +779,33 @@ void EditorView::setLineMarkers(std::vector<LineMarker> markers) {
     std::ranges::stable_sort(markers, {}, &LineMarker::line);
     m_markers = std::move(markers);
     viewport()->update();
+}
+
+void EditorView::setRangeDecorations(std::vector<RangeDecoration> decorations) {
+    const ByteOffset size = m_editor->text().size();
+    for (RangeDecoration& decoration : decorations) {
+        decoration.range.begin = std::min(decoration.range.begin, size);
+        decoration.range.end = std::clamp(decoration.range.end, decoration.range.begin, size);
+    }
+    std::ranges::stable_sort(decorations, {}, [](const RangeDecoration& d) { return d.range.begin; });
+    m_decorations = std::move(decorations);
+    viewport()->update();
+}
+
+void EditorView::reloadFromDocument() {
+    const ByteOffset caret = m_editor->state().primary().head;
+    text::EditorConfig config = m_editor->config();
+    config.wrap = m_editor->display().wrap();
+    m_editor = std::make_unique<text::Editor>(*m_document, *m_shaper, config);
+    const text::Snapshot& snapshot = m_editor->text();
+    m_editor->setState(text::EditorState::caretAt(snapshot.clip(std::min(caret, snapshot.size()))));
+    if (m_syntax) {
+        m_syntax->open(m_syntaxLanguage, snapshot);
+    }
+    m_highlights.valid = false;
+    m_maxRowWidth = 0.0;
+    setRangeDecorations(std::move(m_decorations));
+    afterChange(text::EditorUpdate{});
 }
 
 EditorViewStatus EditorView::status() const {

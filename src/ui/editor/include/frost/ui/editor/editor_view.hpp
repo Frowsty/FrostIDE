@@ -59,6 +59,21 @@ struct LineMarker {
 };
 
 /*
+ * A decorated byte range of the document (W1: clangd's live diagnostics): an underline in the theme's
+ * error or warning colour, with `message` as the hover tooltip. An empty range underlines the
+ * character after it (the one before it at a line end). The view maps the ranges through every
+ * change it makes or follows, so they stay on their text until the owner replaces them.
+ */
+struct RangeDecoration {
+    text::ByteRange range;
+    MarkerSeverity severity = MarkerSeverity::Error;
+    UnderlineStyle style = UnderlineStyle::Wavy;
+    std::string message;
+
+    friend bool operator==(const RangeDecoration&, const RangeDecoration&) = default;
+};
+
+/*
  * Facts about the file that the document itself does not hold, from whoever opened it (the save
  * manager's load service): the status bar's encoding token (text::formatStatus, "UTF-8 BOM"), the
  * line separator token ("LF", "CRLF", "CR"; empty: read from the text's first line break), whether
@@ -107,6 +122,8 @@ struct InputToPaintSample {
  *   languages + scheduler: tree-sitter highlighting and the outline (none without both);
  *   clock: the syntax session's and the InputToPaint marker's (null: systemClock());
  *   keys: key routing (null: the view types text from QKeyEvent::text() and runs no shortcuts);
+ *   actionHost: without `keys`, the host the view makes itself active in on focus-in, so the
+ *     shell's ShortcutDispatcher (the only key path in the workbench) runs editor actions on it;
  *   appearance: the theme and zoom, followed live, and the editor fonts (ensureEditorFonts()); when
  *     null the view follows FrostStyle::current(), or else paints with EditorColors::defaults();
  *   highlightBudget: the wall time one highlight query may take before it returns incomplete spans.
@@ -116,6 +133,7 @@ struct EditorServices {
     sched::IScheduler* scheduler = nullptr;
     const IClock* clock = nullptr;
     EditorKeyRouting* keys = nullptr;
+    EditorActionHost* actionHost = nullptr;
     AppearanceManager* appearance = nullptr;
     syntax::SyntaxOptions syntax{};
     IClock::Duration highlightBudget = std::chrono::milliseconds(4);
@@ -200,6 +218,22 @@ public:
     // line (the gutter tooltip); empty elsewhere.
     [[nodiscard]] QString lineMarkerToolTip(QPointF at) const;
 
+    // Range decorations (sorted by start on the way in; replaces the previous set). Ranges past
+    // the end of the text are clamped. O(n log n).
+    void setRangeDecorations(std::vector<RangeDecoration> decorations);
+    [[nodiscard]] const std::vector<RangeDecoration>& rangeDecorations() const noexcept { return m_decorations; }
+    // The messages of the decorations under viewport point `at` in the text area, one per line
+    // (the hover tooltip); empty elsewhere.
+    [[nodiscard]] QString decorationToolTip(QPointF at) const;
+
+    /*
+     * Follows a change made to the document outside any editor (a reload from disk, an
+     * external-change decision, a restored journal entry), which reports no ChangeSet: rebuilds the
+     * model at the document's version with the primary caret kept (clamped), reparses and repaints.
+     * Undo history is the document's and is unaffected. Emits no textChanged.
+     */
+    void reloadFromDocument();
+
     // Find / replace and Go to Line.
     void openFind(bool replace);
     void closeFind();
@@ -247,6 +281,9 @@ signals:
     void modifiedChanged(bool modified);
     // Any status() field changed.
     void statusChanged();
+    // The text changed through this view (a command, undo, redo, an IME step): the document's
+    // ChangeSet, for language servers (W1 feeds ClangdService::changeDocument).
+    void textChanged(const frost::text::ChangeSet& change);
 
 protected:
     bool event(QEvent* event) override;
@@ -362,6 +399,7 @@ private:
     GoToLinePopup* m_goToLine = nullptr;
 
     std::vector<LineMarker> m_markers;
+    std::vector<RangeDecoration> m_decorations;
 
     // Caret blink (Rider: 500 ms phases, solid while typing).
     QTimer m_blink;

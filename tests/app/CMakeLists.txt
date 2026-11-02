@@ -5,7 +5,9 @@
 #   app_startup_tests     start-up hardening, guards and plugin pinning (frost/app/startup.hpp);
 #   frost_process_tests   integration tests that run the built frost program (on Windows the
 #                         frost.exe launcher and frost_app.dll) through frost::io's
-#                         IProcessLauncher.
+#                         IProcessLauncher;
+#   app_workbench_*       the workbench composition (W1): offscreen functional tests, and the
+#                         real MSBuild and clangd suites (see the end of this file).
 #
 # Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): frost_process_tests (label
 # integration, so by default) and app_startup_tests (explicitly) hold RESOURCE_LOCK frost_desktop
@@ -76,3 +78,31 @@ target_compile_definitions(frost_process_tests PRIVATE
     FROST_CRASH_CHILD="$<TARGET_FILE:crash_child>"
     FROST_SELFTEST_ARTIFACTS="${CMAKE_BINARY_DIR}/selftest-artifacts/$<CONFIG>")
 add_dependencies(frost_process_tests crash_child)
+
+# The workbench (W1, ADR 0044) over copies of the build fixtures in a work directory under this
+# build tree (not %TEMP%, where MSBuild warns with MSB8029): app_workbench_tests runs offscreen with
+# no real tool (label unit); app_workbench_msbuild_tests (Windows) and app_workbench_clangd_tests run
+# the real MSBuild and clangd (label integration, so RESOURCE_LOCK frost_desktop, with the tags
+# msbuild and clangd; ADR 0027).
+set(_frost_workbench_definitions
+    FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
+    FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
+frost_add_test(app_workbench_tests QT
+    SOURCES workbench_test.cpp
+    DEPS frost::app frost::build frost::io)
+target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
+if(WIN32)
+    frost_add_test(app_workbench_msbuild_tests QT
+        SOURCES workbench_msbuild_test.cpp
+        DEPS frost::app frost::build frost::io
+        LABELS integration msbuild)
+    target_include_directories(app_workbench_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(app_workbench_msbuild_tests PRIVATE ${_frost_workbench_definitions})
+endif()
+frost_add_test(app_workbench_clangd_tests QT
+    SOURCES workbench_clangd_test.cpp
+    DEPS frost::app frost::lang frost::io
+    LABELS integration clangd)
+target_include_directories(app_workbench_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_clangd_tests PRIVATE ${_frost_workbench_definitions})

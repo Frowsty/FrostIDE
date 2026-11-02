@@ -111,5 +111,12 @@ private:
  * already has an editor action. Precondition: `host` outlives `registry`'s use of the handlers.
  */
 [[nodiscard]] Result<void> registerEditorActions(input::ActionRegistry& registry, EditorActionHost& host);
+/*
+ * As above, but rows whose id is in `skip` are left out: the composition root passes the ids
+ * another owner registers with its own handler (the shell's editor.gotoLine, which opens the Go to
+ * Line popup). Errors: as above.
+ */
+[[nodiscard]] Result<void> registerEditorActions(input::ActionRegistry& registry, EditorActionHost& host,
+                                                 std::span<const std::string_view> skip);
 
 } // namespace frost::ui
