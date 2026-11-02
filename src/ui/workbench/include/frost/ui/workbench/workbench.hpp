@@ -96,6 +96,8 @@ struct WorkbenchServices {
     // last root through openProjectHook (which may map it to the solution the user opened).
     std::function<void()> closeProjectHook{};
     std::function<Result<void>(const std::string& root)> openProjectHook{};
+    // Receives the same watcher batches as the document and project views, on the GUI thread.
+    std::function<void(const io::FileChangeBatch&)> filesChanged{};
 };
 
 /*

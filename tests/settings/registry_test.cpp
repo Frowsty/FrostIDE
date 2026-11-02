@@ -59,6 +59,8 @@ TEST(SettingsRegistry, BuiltinKeysAreValid) {
 
 TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::editorFontFamily);
+    expectTypedKey(key::terminalShell);
+    expectTypedKey(key::terminalScrollbackLines);
     expectTypedKey(key::editorFontSize);
     expectTypedKey(key::editorLineSpacing);
     expectTypedKey(key::editorFontLigatures);

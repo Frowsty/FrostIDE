@@ -36,6 +36,9 @@ frost_add_test_directory(document)
 frost_add_test_directory(build)
 frost_add_test_directory(lang)
 # frost::search: the fuzzy path matcher (ADR 0042) and Find and Replace in Files (ADR 0045).
+# frost::term (ADR 0051): the screen model, the keys, the shell rules and the pseudo terminals.
+frost_add_test_directory(term)
+# frost::search (ADR 0042): the fuzzy path matcher.
 frost_add_test_directory(search)
 frost_add_test_directory(sdk)
 if(NOT FROST_FUZZ)

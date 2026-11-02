@@ -57,5 +57,7 @@ inline constexpr std::string_view kCommit = "commit";
 inline constexpr std::string_view kRun = "run";
 inline constexpr std::string_view kProblems = "problems";
 inline constexpr std::string_view kNotifications = "notifications";
+// Docked by frost::ui_terminal (ADR 0051), not by the shell; the shell sets TerminalFocus for it.
+inline constexpr std::string_view kTerminal = "terminal";
 
 } // namespace frost::ui::tool_windows

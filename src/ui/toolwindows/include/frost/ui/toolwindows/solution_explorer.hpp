@@ -98,6 +98,8 @@ public:
     // Ends a running speed search (header comment); no-op otherwise.
     void endSpeedSearch();
 
+    // Installs the terminal handler; an empty function removes its context-menu action.
+    void setOpenTerminalHandler(std::function<void(const QString&)> handler) { m_terminalHandler = std::move(handler); }
     // Builds the context menu for `index`, an index of view()->model(); the caller owns the menu.
     // An invalid index gives an empty menu.
     [[nodiscard]] QMenu* createContextMenu(const QModelIndex& index, QWidget* parent = nullptr);
@@ -134,6 +136,7 @@ private:
     BuildController* m_controller = nullptr;
     io::IProcessLauncher* m_launcher = nullptr;
     std::function<void(project::ProjectId)> m_startupHandler;
+    std::function<void(const QString&)> m_terminalHandler;
     QMetaObject::Connection m_solutionConnection;
 
     bool m_searchActive = false;

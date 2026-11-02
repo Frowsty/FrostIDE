@@ -128,6 +128,14 @@ int x;
 ```
 )";
 
+constexpr std::string_view kLua = R"(--[[ long comment ]]
+local function greet(name)
+    if name then
+        return "héllo " .. name
+    end
+end
+)";
+
 } // namespace
 
 std::string_view sample(LanguageId language) noexcept {
@@ -139,6 +147,7 @@ std::string_view sample(LanguageId language) noexcept {
     case LanguageId::Xml: return kXml;
     case LanguageId::Json: return kJson;
     case LanguageId::Markdown: return kMarkdown;
+    case LanguageId::Lua: return kLua;
     case LanguageId::None: break;
     }
     return {};

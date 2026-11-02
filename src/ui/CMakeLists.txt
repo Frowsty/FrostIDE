@@ -13,6 +13,8 @@
 # Find and Replace in Files on the shell (ADR 0045). frost::ui_cmake (src/ui/cmake) is the CMake folder's
 # tree model, controller and tool window (ADR 0046). frost::ui_vcs
 # (src/ui/vcs, the git UI) is ADR 0048's.
+# their controller; it needs frost::lang, which fuzz trees leave out. frost::ui_terminal (ADR 0051) is
+# the Terminal tool window over frost::term.
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
@@ -56,3 +58,7 @@ add_subdirectory(find)
 add_subdirectory(cmake)
 # The git UI (ADR 0048): after the editor and the shell, which it builds on.
 add_subdirectory(vcs)
+# frost::ui_terminal (ADR 0051): the Terminal tool window over frost::term, which fuzz trees leave out.
+if(TARGET frost_term)
+    add_subdirectory(terminal)
+endif()

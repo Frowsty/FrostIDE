@@ -435,11 +435,15 @@ class AssetGateTest(TempDirTestCase):
         report = licensecheck.Report()
         licensecheck.check_assets(REPO, report, manifest_rel=licensecheck.VENDOR_MANIFEST)
         self.assertEqual([str(v) for v in report.violations], [])
-        self.assertEqual(len(report.packages), 8)
+        self.assertEqual(len(report.packages), 10)
         self.assertIn("tree-sitter", {p.name for p in report.packages})
+        self.assertIn("tree-sitter-lua", {p.name for p in report.packages})
+        self.assertIn("libvterm", {p.name for p in report.packages})
         for package in report.packages:
             self.assertEqual(package.declared, "MIT")
-            self.assertTrue(package.purl and package.purl.startswith("pkg:github/"), package.name)
+            # libvterm comes from its author's release tarball (no git host, ADR 0051); the rest from GitHub.
+            prefix = "pkg:generic/libvterm@0.3.3?" if package.name == "libvterm" else "pkg:github/"
+            self.assertTrue(package.purl and package.purl.startswith(prefix), package.name)
             self.assertTrue(package.spdx_id.startswith("SPDXRef-Vendored-"), package.spdx_id)
 
     def test_vendored_gate_reports_unlisted_files_and_licences(self) -> None:
@@ -477,6 +481,24 @@ class AssetGateTest(TempDirTestCase):
         self.assertIn("vendored demo: file is not listed in third_party/vendor.lock.json", unlisted[0])
         component["licence"] = "GPL-3.0-only"
         self.assertTrue(any("not on the allowlist" in m for m in messages(listed)))
+
+
+class ConPtySdkPinTest(TempDirTestCase):
+    def test_pin_enters_sbom_and_requires_allowed_licence_and_notice(self) -> None:
+        pin = {"version": "1", "url": "https://example.invalid/conpty", "sha256": "a" * 64,
+               "license": "MIT", "copyright": "Copyright Demo", "adr": "docs/adr.md"}
+        _write(self.tmp / "sdk/sdk.lock.json", json.dumps({"windows": {"conpty": pin}}))
+        _write(self.tmp / "docs/adr.md", "accepted")
+        _write(self.tmp / "NOTICE", "Copyright Demo. Permission is hereby granted, free of charge")
+        report = licensecheck.Report()
+        licensecheck.check_sdk_conpty(self.tmp, report)
+        self.assertEqual(report.violations, [])
+        self.assertEqual(report.packages[0].sha256, "a" * 64)
+        pin["license"] = "GPL-3.0-only"
+        _write(self.tmp / "sdk/sdk.lock.json", json.dumps({"windows": {"conpty": pin}}))
+        report = licensecheck.Report()
+        licensecheck.check_sdk_conpty(self.tmp, report)
+        self.assertTrue(report.violations)
 
 
 if __name__ == "__main__":

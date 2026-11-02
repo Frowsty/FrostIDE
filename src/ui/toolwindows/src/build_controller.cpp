@@ -87,30 +87,36 @@ BuildController::~BuildController() {
     m_relay->target = nullptr;
 }
 
-build::BuildServiceCallbacks BuildController::serviceCallbacks() const {
+build::BuildServiceCallbacks BuildController::serviceCallbacks(std::function<bool()> active) const {
     std::shared_ptr<Relay> relay = m_relay;
+    const auto post = [relay, active = std::move(active)](std::function<void(BuildController&)> task) {
+        relay->post([active, task = std::move(task)](BuildController& controller) {
+            if (!active || active())
+                task(controller);
+        });
+    };
     build::BuildServiceCallbacks callbacks;
-    callbacks.onStateChanged = [relay](build::BuildState state) {
-        relay->post([state](BuildController& c) { c.applyState(state); });
+    callbacks.onStateChanged = [post](build::BuildState state) {
+        post([state](BuildController& c) { c.applyState(state); });
     };
-    callbacks.onNeedsTrust = [relay](const std::vector<std::string>& roots) {
-        relay->post([roots](BuildController& c) { c.applyNeedsTrust(roots); });
+    callbacks.onNeedsTrust = [post](const std::vector<std::string>& roots) {
+        post([roots](BuildController& c) { c.applyNeedsTrust(roots); });
     };
-    callbacks.onOutput = [relay](build::BuildOutputKind kind, std::string_view line) {
-        relay->post([kind, text = std::string(line)](BuildController& c) { c.applyOutput(kind, text); });
+    callbacks.onOutput = [post](build::BuildOutputKind kind, std::string_view line) {
+        post([kind, text = std::string(line)](BuildController& c) { c.applyOutput(kind, text); });
     };
-    callbacks.onDiagnostic = [relay](const build::BuildDiagnostic& diagnostic) {
-        relay->post([diagnostic](BuildController& c) { c.applyDiagnostic(diagnostic); });
+    callbacks.onDiagnostic = [post](const build::BuildDiagnostic& diagnostic) {
+        post([diagnostic](BuildController& c) { c.applyDiagnostic(diagnostic); });
     };
-    callbacks.onDiagnosticsCleared = [relay] { relay->post([](BuildController& c) { c.applyDiagnosticsCleared(); }); };
-    callbacks.onProgress = [relay](const build::BuildProgress& progress) {
-        relay->post([progress](BuildController& c) { c.applyProgress(progress); });
+    callbacks.onDiagnosticsCleared = [post] { post([](BuildController& c) { c.applyDiagnosticsCleared(); }); };
+    callbacks.onProgress = [post](const build::BuildProgress& progress) {
+        post([progress](BuildController& c) { c.applyProgress(progress); });
     };
-    callbacks.onFinished = [relay](const build::BuildOutcome& outcome) {
-        relay->post([outcome](BuildController& c) { c.applyFinished(outcome); });
+    callbacks.onFinished = [post](const build::BuildOutcome& outcome) {
+        post([outcome](BuildController& c) { c.applyFinished(outcome); });
     };
-    callbacks.onActiveConfigurationChanged = [relay](const project::SolutionConfiguration& configuration) {
-        relay->post([configuration](BuildController& c) { c.applyActiveConfiguration(configuration); });
+    callbacks.onActiveConfigurationChanged = [post](const project::SolutionConfiguration& configuration) {
+        post([configuration](BuildController& c) { c.applyActiveConfiguration(configuration); });
     };
     return callbacks;
 }
@@ -126,6 +132,11 @@ void BuildController::setBackend(IBuildBackend* backend) {
         });
     }
     refreshFromBackend();
+    emit backendChanged();
+    emit diagnosticsCleared();
+    for (const build::BuildDiagnostic& diagnostic : m_diagnostics) {
+        emit diagnosticAdded(diagnostic);
+    }
     emit solutionChanged();
     emit activeConfigurationChanged(m_active ? static_cast<int>(*m_active) : -1);
     emit stateChanged(m_state);
@@ -137,6 +148,7 @@ void BuildController::refreshFromBackend() {
     m_lastOutcome.reset();
     if (m_backend == nullptr) {
         m_solution.reset();
+        m_hasProject = false;
         m_configurations.clear();
         m_active.reset();
         m_state = build::BuildState::Idle;
@@ -145,6 +157,7 @@ void BuildController::refreshFromBackend() {
         return;
     }
     m_solution = m_backend->solution();
+    m_hasProject = m_backend->hasProject();
     m_configurations = m_backend->configurations();
     m_active = m_backend->activeConfigurationIndex();
     m_state = m_backend->state();

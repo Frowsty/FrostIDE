@@ -1106,8 +1106,9 @@ class BuildTreeLabelsTest(unittest.TestCase):
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.", "WorkbenchMsBuild.")),
-                  "clangd": ("integration", ("ClangdE2E.", "MsBuildEvaluationE2E.", "WorkbenchClangd.")),
-                  "cmake": ("integration", ("CMakeRealBuild.",)),
+                  "clangd": ("integration", ("ClangdE2E.", "MsBuildEvaluationE2E.", "WorkbenchClangd.",
+                                              "WorkbenchCMake.")),
+                  "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.")),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.")),
                   "lldb": ("integration", ("LldbDapE2E.",)),

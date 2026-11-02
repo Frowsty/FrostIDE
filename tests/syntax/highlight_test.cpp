@@ -81,6 +81,38 @@ TEST(SyntaxHighlight, C) {
                                });
 }
 
+TEST(SyntaxHighlight, LuaLongStringsCommentsAndNestedBlocks) {
+    constexpr std::string_view source = "--[=[ long comment\nend ]=]\n"
+                                        "local function outer(x)\n  local message = [=[if then\n\xC3\xA5 end]=]\n"
+                                        "  if x then\n    return message\n  end\nend\n";
+    const SyntaxTree tree = parseNow(LanguageId::Lua, source);
+    ASSERT_FALSE(tree.empty());
+    EXPECT_FALSE(tree.hasError()) << tree.dumpForTesting(true);
+    EXPECT_EQ(kindAt(tree, "long comment"), "comment");
+    EXPECT_EQ(kindAt(tree, "if then"), "string");
+    EXPECT_EQ(kindAt(tree, "outer"), "function");
+    EXPECT_EQ(kindAt(tree, "return"), "keyword");
+    const auto folds = tree.foldRanges(frost::syntax::testing::unlimited());
+    ASSERT_TRUE(folds.complete);
+    EXPECT_GE(folds.ranges.size(), 4U);
+    const auto containsFold = [&](std::string_view needle) {
+        for (const auto& range : folds.ranges) {
+            if (source
+                    .substr(static_cast<std::size_t>(range.begin.value()),
+                            static_cast<std::size_t>(range.end.value() - range.begin.value()))
+                    .starts_with(needle)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    EXPECT_TRUE(containsFold("--[=[ long comment"));
+    EXPECT_TRUE(containsFold("[=[if then"));
+    EXPECT_TRUE(containsFold("local function outer"));
+    EXPECT_TRUE(containsFold("if x then"));
+    EXPECT_EQ(outlineText(tree), "function outer\n");
+}
+
 TEST(SyntaxHighlight, Cpp) {
     expectKinds(LanguageId::Cpp, {
                                      {"// Line comment", "comment"},

@@ -55,6 +55,92 @@ void sendKey(QWidget* target, int key, Qt::KeyboardModifiers modifiers = Qt::NoM
     QCoreApplication::sendEvent(target, &up);
 }
 
+TEST(EditorHighlight, LuaAndCppViewsUseTheirOwnSyntax) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions lua;
+    lua.path = "main.LUA";
+    lua.syntax = true;
+    EditorHarness script("local function greet()\n  return true\nend\n", lua);
+    EditorHarness source(kCppSample, cpp());
+    script.settle();
+    source.settle();
+    EXPECT_EQ(script.view->syntaxLanguage(), syntax::LanguageId::Lua);
+    EXPECT_EQ(source.view->syntaxLanguage(), syntax::LanguageId::Cpp);
+    const EditorDisplayList list = script.view->buildDisplayList();
+    const DisplayText* keyword = list.findText(QStringLiteral("return"));
+    ASSERT_NE(keyword, nullptr);
+    ASSERT_TRUE(keyword->kind.has_value());
+    EXPECT_EQ(*keyword->kind, syntax::HighlightKind::Keyword);
+}
+
+TEST(EditorHighlight, LuaIndentUsesCurrentTreeAfterLargePrefix) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions lua;
+    lua.path = "large.lua";
+    lua.syntax = true;
+    std::string initial;
+    for (int i = 0; i < 9000; ++i) {
+        initial += "-- padding\n";
+    }
+    initial += "if ready then";
+    EditorHarness script(initial, lua);
+    script.view->editor().setState(text::EditorState::caretAt(ByteOffset{initial.size()}));
+    script.press(Qt::Key_Return);
+    EXPECT_EQ(script.text(), initial + "\n    ");
+    script.settle();
+    ASSERT_NE(script.view->syntaxSession(), nullptr);
+    EXPECT_EQ(script.view->syntaxSession()->tree().version(), script.document.text().version());
+
+    std::string inComment = initial + "\n--[=[\nif hidden then";
+    EditorHarness commented(inComment, lua);
+    commented.view->editor().setState(text::EditorState::caretAt(ByteOffset{inComment.size()}));
+    commented.press(Qt::Key_Return);
+    EXPECT_EQ(commented.text(), inComment + "\n");
+}
+
+TEST(EditorHighlight, LuaIndentHandlesClosedAndIncompleteConstructsWithParseTree) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions lua;
+    lua.path = "indent.lua";
+    lua.syntax = true;
+    const auto check = [&](std::string_view input, std::string_view suffix) {
+        EditorHarness h(input, lua);
+        ASSERT_NE(h.view->syntaxSession(), nullptr);
+        ASSERT_FALSE(h.view->syntaxSession()->tree().empty());
+        ASSERT_FALSE(h.view->syntaxSession()->tree().stale());
+        h.view->editor().setState(text::EditorState::caretAt(ByteOffset{input.size()}));
+        h.press(Qt::Key_Return);
+        EXPECT_TRUE(h.text().ends_with(suffix)) << h.text();
+    };
+    check("function f()\n    if x then\n        work()\n    end", "    end\n    ");
+    check("function f()\n    if x then\n        work()\n        end", "        end\n    ");
+    check("-- start\n    local f = function() return 1 end; consume()", "consume()\n    ");
+    check("local s = \"\\z\nif ready then", "if ready then\n");
+    check("local s = \"x\\\r\nif ready then", "if ready then\r\n");
+}
+
+TEST(EditorHighlight, LuaIndentFallsBackWhenSyntaxTreeIsStale) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions lua;
+    lua.path = "stale.lua";
+    lua.syntax = true;
+    lua.syntaxOptions.syncParseBudget = IClock::Duration::zero();
+    const auto check = [&](const std::string& initial, const std::string& typed, const std::string& suffix) {
+        EditorHarness h(initial, lua);
+        ASSERT_NE(h.view->syntaxSession(), nullptr);
+        ASSERT_FALSE(h.view->syntaxSession()->tree().stale());
+        h.view->editor().setState(text::EditorState::caretAt(ByteOffset{initial.size()}));
+        h.type(typed);
+        ASSERT_TRUE(h.view->syntaxSession()->tree().stale());
+        h.press(Qt::Key_Return);
+        EXPECT_TRUE(h.text().ends_with(suffix)) << h.text();
+    };
+    check("local s = \"\\z\nif ready the", "n", "if ready then\n");
+    check("local s = \"x\\\r\nif ready the", "n", "if ready then\r\n");
+    check("function f()\n    if x then\n        work()\n        en", "d", "        end\n    ");
+    check("-- start\n    local f = function() return 1 end; consume(", ")", "consume()\n    ");
+}
+
 TEST(EditorHighlight, CppSpansUseTheThemeTokenColours) {
     FROST_REQUIRE_OFFSCREEN();
     AppearanceSettings appearance;

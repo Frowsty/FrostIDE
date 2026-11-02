@@ -103,6 +103,18 @@ struct EditorSettings {
     friend constexpr bool operator==(const EditorSettings&, const EditorSettings&) noexcept = default;
 };
 
+// Optional parsed lexical context for indentation. GUI thread; borrowed for one command.
+class IIndentContext {
+public:
+    virtual ~IIndentContext() = default;
+    // Comment or string containing byte `at`, or nullopt for code. O(tree depth).
+    [[nodiscard]] virtual std::optional<ByteRange> opaqueAt(ByteOffset at) const noexcept = 0;
+    // Earliest byte needed to recover lexical state around an incomplete construct.
+    [[nodiscard]] virtual ByteOffset scanStart(ByteOffset at) const noexcept = 0;
+    // Matched block opener for an end/until token, when the parse can identify it.
+    [[nodiscard]] virtual std::optional<ByteOffset> closerOpener(ByteOffset at) const noexcept = 0;
+};
+
 // Everything a command reads. `language` nullptr means plain text; `display`, when given, must
 // reflect `text` (display->version() == text.version()) and is used for vertical movement, which
 // otherwise moves by buffer lines. `pageRows` is the row count of PageUp and PageDown (>= 1).
@@ -113,6 +125,7 @@ struct CommandInput {
     const LanguageInfo* language = nullptr;
     const DisplayMap* display = nullptr;
     std::uint32_t pageRows = 20;
+    const IIndentContext* indentContext = nullptr;
 };
 
 // One replacement of a batch, owning its text.

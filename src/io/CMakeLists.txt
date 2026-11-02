@@ -28,10 +28,10 @@ set(frost_io_sources
     src/watch_queue.cpp)
 if(WIN32)
     list(APPEND frost_io_sources src/async_process_win.cpp src/file_system_win.cpp src/file_watcher_win.cpp
-                                 src/process_win.cpp)
+                                 src/process_win.cpp src/local_ipc_win.cpp)
 else()
     list(APPEND frost_io_sources src/async_process_posix.cpp src/child_reaper_posix.cpp src/file_system_posix.cpp
-                                 src/file_watcher_linux.cpp src/process_posix.cpp)
+                                 src/file_watcher_linux.cpp src/process_posix.cpp src/local_ipc_posix.cpp)
 endif()
 
 frost_add_library(io LAYER io
@@ -44,7 +44,7 @@ target_link_libraries(frost_io PRIVATE asio::asio)
 target_compile_definitions(frost_io PRIVATE ASIO_STANDALONE ASIO_NO_DEPRECATED ASIO_NO_DEFAULT_LINKED_LIBS)
 if(WIN32)
     # BCryptGenRandom: unpredictable pipe names (process_win.cpp).
-    target_link_libraries(frost_io PRIVATE bcrypt)
+    target_link_libraries(frost_io PRIVATE bcrypt advapi32)
     # asio's Windows backend references Winsock (ws2_32, mswsock); FrostIDE never uses sockets through
     # it, and reactor.cpp's Winsock guard keeps asio from calling WSAStartup. Delay-loading ws2_32 in
     # every binary that links frost_io keeps the DLL out of the process entirely (ADR 0020; the

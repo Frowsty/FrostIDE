@@ -83,6 +83,208 @@ std::string indentUnit(const EditorSettings& settings) {
     return settings.insertSpaces ? std::string(std::max<std::uint32_t>(settings.indentSize, 1), ' ') : "\t";
 }
 
+// Lex the prefix to distinguish Lua block keywords from quoted and long strings/comments.
+// A long delimiter has matching counts of '='; short strings and line comments end on newline.
+struct LuaLine {
+    std::string first;
+    std::string last;
+    int openFunctions = 0;
+    std::optional<std::string> closerIndent;
+    bool code = true;
+    char lastSymbol = 0;
+};
+LuaLine luaLineAt(const Snapshot& text, ByteOffset lineStart, ByteOffset at, const IIndentContext* context) {
+    ByteOffset start{0};
+    if (context != nullptr) {
+        start = context->scanStart(lineStart);
+        const auto region = context->opaqueAt(lineStart);
+        if (region && region->begin < lineStart) {
+            if (region->end >= at) {
+                LuaLine inside;
+                inside.code = false;
+                return inside;
+            }
+            start = region->end;
+        }
+    } else if (at.value() > 65536) {
+        // Without a current parse, do not guess whether an old long string or comment is open.
+        LuaLine unknown;
+        unknown.code = false;
+        return unknown;
+    }
+    if (at.value() - start.value() > 65536) {
+        LuaLine unknown;
+        unknown.code = false;
+        return unknown;
+    }
+    const std::string prefix = text.text(ByteRange{start, at});
+    LuaLine line;
+    char quote = 0;
+    bool lineComment = false;
+    int longEquals = -1;
+    struct Block {
+        std::string kind;
+        // Offsets into `prefix`: sharing one indentation across many blocks stays O(prefix).
+        std::size_t indentStart;
+        std::size_t indentSize;
+        std::size_t lineNumber;
+    };
+    std::vector<Block> blocks;
+    std::size_t indentStart = 0;
+    std::size_t indentSize = 0;
+    bool leading = true;
+    bool elseIf = false;
+    std::size_t lineNumber = 0;
+    const auto nextLine = [&] {
+        line = LuaLine{};
+        lineComment = false;
+        indentStart = 0;
+        indentSize = 0;
+        leading = true;
+        elseIf = false;
+        ++lineNumber;
+    };
+    for (std::size_t i = 0; i < prefix.size();) {
+        const char c = prefix[i];
+        if (c == '\n' || c == '\r') {
+            nextLine();
+            quote = 0;
+            ++i;
+            continue;
+        }
+        if (lineComment) {
+            ++i;
+            continue;
+        }
+        if (quote != 0) {
+            if (c == '\\' && i + 1 < prefix.size()) {
+                const char escaped = prefix[i + 1];
+                i += 2;
+                if (escaped == 'z') {
+                    // Lua 5.4 manual section 3.1: \z consumes all following ASCII whitespace.
+                    while (i < prefix.size() && (prefix[i] == ' ' || prefix[i] == '\t' || prefix[i] == '\n' ||
+                                                 prefix[i] == '\r' || prefix[i] == '\f' || prefix[i] == '\v')) {
+                        if (prefix[i] == '\n' || prefix[i] == '\r') {
+                            nextLine();
+                        }
+                        ++i;
+                    }
+                } else if (escaped == '\r' || escaped == '\n') {
+                    nextLine();
+                    if (i < prefix.size() &&
+                        ((escaped == '\r' && prefix[i] == '\n') || (escaped == '\n' && prefix[i] == '\r'))) {
+                        ++i;
+                    }
+                }
+                continue;
+            }
+            if (c == quote) {
+                quote = 0;
+            }
+            ++i;
+            continue;
+        }
+        if (longEquals >= 0) {
+            if (c == ']') {
+                std::size_t j = i + 1;
+                while (j < prefix.size() && prefix[j] == '=') {
+                    ++j;
+                }
+                if (j < prefix.size() && prefix[j] == ']' && j - i - 1 == static_cast<std::size_t>(longEquals)) {
+                    longEquals = -1;
+                    i = j + 1;
+                    continue;
+                }
+            }
+            ++i;
+            continue;
+        }
+        if (leading && (c == ' ' || c == '\t')) {
+            if (indentSize == 0) {
+                indentStart = i;
+            }
+            ++indentSize;
+            ++i;
+            continue;
+        }
+        leading = false;
+        if (c == '-' && i + 1 < prefix.size() && prefix[i + 1] == '-') {
+            i += 2;
+            if (i >= prefix.size() || prefix[i] != '[') {
+                lineComment = true;
+                continue;
+            }
+            std::size_t j = i + 1;
+            while (j < prefix.size() && prefix[j] == '=') {
+                ++j;
+            }
+            if (j >= prefix.size() || prefix[j] != '[') {
+                lineComment = true;
+                continue;
+            }
+            longEquals = static_cast<int>(j - i - 1);
+            i = j + 1;
+            continue;
+        }
+        if (c == '[') {
+            std::size_t j = i + 1;
+            while (j < prefix.size() && prefix[j] == '=') {
+                ++j;
+            }
+            if (j < prefix.size() && prefix[j] == '[') {
+                longEquals = static_cast<int>(j - i - 1);
+                i = j + 1;
+                continue;
+            }
+        }
+        if (c == '\'' || c == '"') {
+            quote = c;
+            ++i;
+            continue;
+        }
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+            const std::size_t tokenStart = i++;
+            while (i < prefix.size() &&
+                   ((prefix[i] >= 'a' && prefix[i] <= 'z') || (prefix[i] >= 'A' && prefix[i] <= 'Z') ||
+                    (prefix[i] >= '0' && prefix[i] <= '9') || prefix[i] == '_')) {
+                ++i;
+            }
+            line.last = prefix.substr(tokenStart, i - tokenStart);
+            if (line.first.empty()) {
+                line.first = line.last;
+            }
+            if (line.last == "elseif") {
+                elseIf = true;
+            }
+            if (line.last == "function" || line.last == "do" || line.last == "repeat" ||
+                (line.last == "then" && !elseIf)) {
+                blocks.push_back({line.last, indentStart, indentSize, lineNumber});
+                if (line.last == "function") {
+                    ++line.openFunctions;
+                }
+            } else if (line.last == "end" || line.last == "until") {
+                if (!blocks.empty()) {
+                    if (line.first == line.last) {
+                        line.closerIndent = prefix.substr(blocks.back().indentStart, blocks.back().indentSize);
+                    }
+                    if (blocks.back().lineNumber == lineNumber && blocks.back().kind == "function") {
+                        --line.openFunctions;
+                    }
+                    blocks.pop_back();
+                }
+            }
+            line.lastSymbol = 0;
+            continue;
+        }
+        if (c != ' ' && c != '\t') {
+            line.lastSymbol = c;
+        }
+        ++i;
+    }
+    line.code = quote == 0 && longEquals < 0;
+    return line;
+}
+
 // The whitespace to insert at `at` to reach the next indent stop.
 std::string indentAt(const Snapshot& text, ByteOffset at, const EditorSettings& settings) {
     if (!settings.insertSpaces) {
@@ -302,7 +504,7 @@ CommandResult newline(const CommandInput& in) noexcept {
         const std::string_view lineBreak =
             line.lineBreak != LineBreak::None ? detail::breakText(line.lineBreak) : fallbackBreak;
         const ByteOffset indentStop = std::min(detail::indentEnd(text, line), range.begin);
-        const std::string indent = text.text(ByteRange{line.content.begin, indentStop});
+        std::string indent = text.text(ByteRange{line.content.begin, indentStop});
         // The last non-space character before the selection on its line, and the one after it.
         std::optional<DecodedChar> before;
         {
@@ -320,9 +522,30 @@ CommandResult newline(const CommandInput& in) noexcept {
             }
         }
         const std::optional<DecodedChar> after = charAt(text, range.end);
-        const bool opensBlock = before && before->cp == U'{';
-        const bool betweenPair = before && after && closerOf(before->cp) != 0 && !isQuote(before->cp) &&
-                                 static_cast<char32_t>(closerOf(before->cp)) == after->cp;
+        const bool lua = in.language != nullptr && in.language->id == "lua";
+        const LuaLine luaLine = lua ? luaLineAt(text, line.content.begin, range.begin, in.indentContext) : LuaLine{};
+        const bool luaOpen =
+            lua && luaLine.code && luaLine.lastSymbol == 0 &&
+            (luaLine.last == "then" || luaLine.last == "do" || luaLine.last == "else" || luaLine.last == "repeat");
+        const bool luaFunction = lua && luaLine.code && luaLine.openFunctions > 0 && luaLine.lastSymbol == ')';
+        const bool opensBlock = (!lua || luaLine.code) && ((before && before->cp == U'{') || luaOpen || luaFunction);
+        if (lua && luaLine.code && (luaLine.first == "end" || luaLine.first == "until")) {
+            std::optional<std::string> openerIndent = luaLine.closerIndent;
+            if (in.indentContext != nullptr) {
+                if (const auto opener = in.indentContext->closerOpener(indentStop)) {
+                    const LineInfo openingLine = detail::lineOf(text, *opener);
+                    openerIndent =
+                        text.text(ByteRange{openingLine.content.begin, detail::indentEnd(text, openingLine)});
+                }
+            }
+            // A correctly aligned closer already has the opener's indentation. Only reduce
+            // excess whitespace; do not guess when neither the parse nor scanner found it.
+            if (openerIndent && indent.size() > openerIndent->size() && indent.starts_with(*openerIndent)) {
+                indent = *openerIndent;
+            }
+        }
+        const bool betweenPair = (!lua || luaLine.code) && before && after && closerOf(before->cp) != 0 &&
+                                 !isQuote(before->cp) && static_cast<char32_t>(closerOf(before->cp)) == after->cp;
         std::string inserted(lineBreak);
         inserted += indent;
         std::uint64_t caret = inserted.size();

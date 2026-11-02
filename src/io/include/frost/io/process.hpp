@@ -95,6 +95,28 @@ enum class ImagePathForm : unsigned char {
     Extended, // Always \\?\ (\\?\UNC\ for UNC paths).
 };
 
+/*
+ * The pseudo terminal a child starts on (ProcessSpec::pseudoTerminal), for frost::term's terminal
+ * sessions (ADR 0051). frost::term creates the terminal and owns it; this launch path only attaches
+ * the child, so the absolute-path rule, the environment and the containment are the same as for
+ * every other child.
+ */
+struct PseudoTerminal {
+    /*
+     * Windows: the HPCON that CreatePseudoConsole returned, passed to CreateProcessW as
+     * PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE. The child inherits no handle of this process and gets
+     * the pseudo console's input and output as its standard handles. The caller keeps the HPCON
+     * open while launch() runs and closes it (ClosePseudoConsole) itself. Must not be null.
+     */
+    void* windowsPseudoConsole = nullptr;
+    /*
+     * POSIX: the absolute path of the terminal device (ptsname of a master from posix_openpt).
+     * The child, leader of its new session, opens it read-write as stdin, which makes it the
+     * session's controlling terminal, and duplicates that descriptor to stdout and stderr.
+     */
+    std::string posixTerminalPath{};
+};
+
 struct ProcessSpec {
     std::string executable{};             // Absolute path (UTF-8).
     std::vector<std::string> arguments{}; // argv[1..]; argv[0] is always the executable path.
@@ -175,6 +197,14 @@ struct ProcessSpec {
      * differently there and frost::io passes none). For frost::diag's crash handler socket.
      */
     std::vector<int> posixInheritedFds{};
+
+    /*
+     * Starts the child on a pseudo terminal (see PseudoTerminal) instead of pipes or a console.
+     * stdinMode, stdoutMode and stderrMode must all be Stdio::Inherit (meaning the terminal),
+     * killOnClose must be set (a Job Object on Windows; the new session on POSIX is what lets the
+     * child take the terminal as its controlling terminal) and newConsole must not be.
+     */
+    std::optional<PseudoTerminal> pseudoTerminal{};
 };
 
 // The most descriptors ProcessSpec::posixInheritedFds may pass.
@@ -353,7 +383,9 @@ inline constexpr bool kWindowsProcessRules = false;
  * an absolute executable path that normalizePath accepts; a working directory
  * that is empty or likewise absolute and valid; NUL-free arguments; environment
  * names that are non-empty and free of '=' and NUL, values free of NUL;
- * MergeIntoStdout only for stderr. With `windowsRules` also: Windows path syntax;
+ * MergeIntoStdout only for stderr; a pseudoTerminal only with Inherit streams,
+ * killOnClose and no newConsole, and with its Windows handle or its absolute POSIX
+ * device path. With `windowsRules` also: Windows path syntax;
  * no .bat/.cmd executable (Unsupported), judged on both the given and the
  * normalised spelling, since "dir\t.bat\." starts dir\t.bat; no quote in the
  * executable; a command line under CreateProcessW's 32,767-unit limit; and

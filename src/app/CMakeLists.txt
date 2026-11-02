@@ -28,6 +28,11 @@ frost_add_library(app LAYER app
         include/frost/app/welcome_screen.hpp
         include/frost/app/workbench.hpp
         src/command_line.cpp
+        src/cmake_build_backend.hpp
+        src/cmake_integration.hpp
+        src/cmake_integration.cpp
+        src/project_open_broker.cpp
+        src/project_open_broker.hpp
         src/diagnostics_qt.cpp
         src/document_editor.cpp
         src/main_window.cpp
@@ -42,8 +47,9 @@ frost_add_library(app LAYER app
         src/workbench_language.cpp
         src/workbench_lua.cpp
         src/workbench_project.cpp
+        src/workbench_terminal.cpp
         ${frost_startup_core_sources}
-    DEPS frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
+    DEPS frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
          frost::ui_shell frost::ui frost::lang frost::build frost::document frost::project frost::settings
          frost::syntax frost::storage frost::text frost::input frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)
@@ -112,6 +118,7 @@ if(FROST_ASAN_RUNTIME_DLL)
 endif()
 # Building frost builds the DLL it loads.
 add_dependencies(frost frost_app_shared)
+frost_deploy_conpty(frost)
 # Platform plugins are loaded from <exe dir>/platforms: the native one and
 # the offscreen one used by --selftest.
 add_custom_command(TARGET frost POST_BUILD

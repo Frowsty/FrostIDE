@@ -87,6 +87,8 @@
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/storage/local_history.hpp"
 #include "frost/syntax/language.hpp"
+#include "frost/term/pty.hpp"
+#include "frost/term/shell.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/editor/editor_actions.hpp"
 #include "frost/ui/nav/document_registry.hpp"
@@ -121,10 +123,14 @@
 class QApplication;
 class QWidget;
 
+namespace frost::build {
+class CMakeService;
+}
 namespace frost::ui {
 class RunController;
 class TrustPrompter;
 class TrustDialog;
+class TerminalIntegration;
 } // namespace frost::ui
 
 namespace frost::ui::lang {
@@ -134,6 +140,7 @@ class LanguageController;
 namespace frost::app {
 
 class LanguageBridge;
+class CMakeIntegration;
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -214,6 +221,8 @@ struct WorkbenchOptions {
     std::string compileCommandsCache;
     // The build service's persisted active configurations (absolute); "" persists nothing.
     std::string buildStatePath;
+    // The CMake service's selected profiles (absolute); "" persists nothing.
+    std::string cmakeStatePath;
     // The run service's persisted startup projects (absolute); "" persists nothing.
     std::string runStatePath;
     // Console programs run in an external console window unless the solution chose the Run console.
@@ -226,6 +235,9 @@ struct WorkbenchOptions {
     bool clangd = true;
     // clangd's parallel jobs (0: its default).
     unsigned clangdJobs = 0;
+    // Optional terminal test seam; when absent the workbench owns a real PTY launcher.
+    term::IPtyLauncher* terminalLauncher = nullptr;
+    std::optional<term::ShellProbe> terminalProbe;
     // The keyboard layout of the keymap; nullopt reads the active one (en-US when it cannot).
     std::optional<input::LayoutTable> layout;
     // Re-read the OS keyboard layout when it changes (off in tests).
@@ -276,6 +288,9 @@ public:
     // Opens a solution, folder or file (see the header comment). Errors: the loader's, shown as
     // notifications too; Cancelled when the open project's tabs could not all be closed.
     Result<void> openPath(std::string_view path, FileLocation at = {});
+    // Opens a FrostEngine project file or root without auto-selecting a sibling solution.
+    // A directory with multiple .frostproj files is ambiguous and is refused.
+    [[nodiscard]] Result<void> openExternalProject(std::string_view path);
     /*
      * Closes the project: saves the session, saves and closes every tab, closes the solution, stops
      * clangd and forgets it as the last project (the next start shows the Welcome screen). Returns
@@ -286,6 +301,8 @@ public:
     // Shows the File > Open (or Open Folder) prompt and opens the choice.
     void showOpenDialog(IWorkbenchPrompts::OpenKind kind);
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
+    // Canonical directory of the current project, empty when none is open.
+    [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
     // The open solution, or nullptr (no project, or a folder project).
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const { return m_solution; }
 
@@ -311,6 +328,7 @@ public:
     [[nodiscard]] DocumentEditorFactory& editors() noexcept { return *m_editors; }
     [[nodiscard]] ui::BuildController& build() noexcept { return *m_build; }
     [[nodiscard]] build::BuildService& buildService() noexcept { return *m_buildService; }
+    [[nodiscard]] build::CMakeService* cmakeService() noexcept;
     [[nodiscard]] build::RunService* runService() noexcept { return m_runService.get(); }
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
@@ -356,6 +374,8 @@ private:
     void attachToolbar();
     void attachRun();
     void attachLanguage();
+    void attachTerminal();
+    void stopTerminal();
     void detach();
 
     // Projects.
@@ -432,6 +452,7 @@ private:
     std::unique_ptr<ui::BuildController> m_build;
     std::unique_ptr<build::BuildService> m_buildService;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
+    std::unique_ptr<CMakeIntegration> m_cmake;
     ui::BuildActions* m_buildActions = nullptr; // Child of this.
     std::unique_ptr<build::IRunBuilder> m_runBuilder;
     std::unique_ptr<ui::RunController> m_runController;
@@ -457,6 +478,8 @@ private:
 
     settings::Subscription m_settingsSubscription;
 
+    std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
+    std::unique_ptr<ui::TerminalIntegration> m_terminal;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;
     QPointer<ui::SolutionExplorer> m_explorer;

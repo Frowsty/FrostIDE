@@ -70,6 +70,17 @@
         "bin/lldb-argdumper.exe": "11ed626d1ea9212ebb4be54885d49c64531a5fbc3953e89eb93965af6bf7bd35",
         "bin/lldb-dap.exe": "e41f7377d09f14cfece6ed462df74881fd029b40d96dc52ae947f83b07d8a6cc"
       }
+    },
+    "conpty": {
+      "version": "1.25.260930003",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.25.260930003/microsoft.windows.console.conpty.1.25.260930003.nupkg",
+      "file": "microsoft.windows.console.conpty.1.25.260930003.nupkg",
+      "sha256": "02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee",
+      "bin": "runtimes/win-x64/native",
+      "license": "MIT",
+      "copyright": "Copyright (c) Microsoft Corporation. All rights reserved.",
+      "adr": "docs/adr/0051-terminal.md",
+      "note": "Microsoft Windows Terminal ConPTY and OpenConsole; MIT; ADR 0051."
     }
   },
   "linux": {

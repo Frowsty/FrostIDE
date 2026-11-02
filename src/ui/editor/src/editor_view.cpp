@@ -424,6 +424,30 @@ bool EditorView::perform(EditorAction action) {
         return false;
     }
     const int page = static_cast<int>(m_editor->config().pageRows);
+    class IndentContext final : public text::IIndentContext {
+    public:
+        explicit IndentContext(syntax::SyntaxTree tree) : m_tree(std::move(tree)) {}
+        std::optional<text::ByteRange> opaqueAt(ByteOffset at) const noexcept override {
+            return m_tree.luaOpaqueAt(at);
+        }
+        ByteOffset scanStart(ByteOffset at) const noexcept override { return m_tree.luaErrorStartAt(at); }
+        std::optional<ByteOffset> closerOpener(ByteOffset at) const noexcept override {
+            return m_tree.luaCloserOpener(at);
+        }
+
+    private:
+        syntax::SyntaxTree m_tree;
+    };
+    const auto newline = [&] {
+        const syntax::SyntaxTree indentTree = m_syntax ? m_syntax->tree() : syntax::SyntaxTree{};
+        const IndentContext indentContext(indentTree);
+        text::CommandInput input = commandInput();
+        if (!indentTree.empty() && !indentTree.stale() && indentTree.language() == syntax::LanguageId::Lua &&
+            indentTree.version() == input.text.version()) {
+            input.indentContext = &indentContext;
+        }
+        return apply(commands::newline(input));
+    };
     using A = EditorAction;
     switch (action) {
     case A::MoveLeft: return move(Movement::CharLeft, false);
@@ -456,8 +480,8 @@ bool EditorView::perform(EditorAction action) {
     case A::Delete: return apply(commands::deleteForward(commandInput()));
     case A::DeleteToWordStart: return apply(commands::deleteWordBackward(commandInput()));
     case A::DeleteToWordEnd: return apply(commands::deleteWordForward(commandInput()));
-    case A::Enter: return apply(commands::newline(commandInput()));
-    case A::StartNewLine: (void)move(Movement::LineEnd, false); return apply(commands::newline(commandInput()));
+    case A::Enter: return newline();
+    case A::StartNewLine: (void)move(Movement::LineEnd, false); return newline();
     case A::Tab: return apply(commands::tab(commandInput()));
     case A::Unindent: return apply(commands::outdent(commandInput()));
     case A::Escape: escape(); return true;

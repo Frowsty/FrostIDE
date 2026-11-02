@@ -93,6 +93,25 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
             return invalid("a child with a new console uses that console's streams: every Stdio mode must be Inherit");
         }
     }
+    if (spec.pseudoTerminal) {
+        if (spec.stdinMode != Stdio::Inherit || spec.stdoutMode != Stdio::Inherit ||
+            spec.stderrMode != Stdio::Inherit) {
+            return invalid(
+                "a child on a pseudo terminal uses the terminal's streams: every Stdio mode must be Inherit");
+        }
+        if (!spec.killOnClose || spec.newConsole) {
+            return invalid("a child on a pseudo terminal needs killOnClose and no newConsole");
+        }
+        if (windowsRules && spec.pseudoTerminal->windowsPseudoConsole == nullptr) {
+            return invalid("pseudoTerminal needs the pseudo console handle on Windows");
+        }
+        if (!windowsRules) {
+            const std::string& device = spec.pseudoTerminal->posixTerminalPath;
+            if (hasNul(device) || !isAbsolutePath(device, PathStyle::Posix)) {
+                return invalid(std::format("pseudoTerminal needs an absolute terminal device path, got '{}'", device));
+            }
+        }
+    }
     if (windowsRules) {
         // The command line must be buildable and fit CreateProcessW's limit.
         auto commandLine = detail::windowsCommandLineFor(*executable, spec);

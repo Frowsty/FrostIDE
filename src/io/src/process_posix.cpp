@@ -687,12 +687,30 @@ Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
     }
 
     SpawnActions actions;
-    int rc = addStreamAction(actions.actions, stdinMode, STDIN_FILENO, in.child);
-    if (rc == 0) {
-        rc = addStreamAction(actions.actions, stdoutMode, STDOUT_FILENO, out.child);
-    }
-    if (rc == 0) {
-        rc = addStreamAction(actions.actions, stderrMode, STDERR_FILENO, err.child);
+    int rc = 0;
+    if (spec.pseudoTerminal) {
+        /*
+         * The terminal (frost::term, ADR 0051). glibc's posix_spawn runs setsid (POSIX_SPAWN_SETSID,
+         * which killOnClose implies) before the file actions, so the child is a session leader without
+         * a controlling terminal when it opens the device without O_NOCTTY: Linux then makes the
+         * device the session's controlling terminal. stdout and stderr are the same descriptor.
+         */
+        rc = posix_spawn_file_actions_addopen(&actions.actions, STDIN_FILENO,
+                                              spec.pseudoTerminal->posixTerminalPath.c_str(), O_RDWR, 0);
+        if (rc == 0) {
+            rc = posix_spawn_file_actions_adddup2(&actions.actions, STDIN_FILENO, STDOUT_FILENO);
+        }
+        if (rc == 0) {
+            rc = posix_spawn_file_actions_adddup2(&actions.actions, STDIN_FILENO, STDERR_FILENO);
+        }
+    } else {
+        rc = addStreamAction(actions.actions, stdinMode, STDIN_FILENO, in.child);
+        if (rc == 0) {
+            rc = addStreamAction(actions.actions, stdoutMode, STDOUT_FILENO, out.child);
+        }
+        if (rc == 0) {
+            rc = addStreamAction(actions.actions, stderrMode, STDERR_FILENO, err.child);
+        }
     }
     for (std::size_t i = 0; rc == 0 && i < staged.size(); ++i) {
         rc = posix_spawn_file_actions_adddup2(&actions.actions, staged[i].get(), 3 + static_cast<int>(i));

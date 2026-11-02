@@ -110,6 +110,9 @@ public:
     void setAvailabilityLevel(input::AvailabilityLevel level) noexcept { m_level = level; }
     void setProjectTrusted(bool trusted) noexcept { m_trusted = trusted; }
     // Shows `name` in the toolbar's project widget and the title; empty: no project (ProjectOpen off).
+    // Whether the open project is trusted (the terminal's trust rule, ADR 0051, reads it).
+    [[nodiscard]] bool projectTrusted() const noexcept { return m_trusted; }
+    // Shows `name` in the toolbar's project widget; empty: no project (ProjectOpen off).
     void setProject(const QString& name);
     [[nodiscard]] const QString& projectName() const noexcept { return m_projectName; }
     /*

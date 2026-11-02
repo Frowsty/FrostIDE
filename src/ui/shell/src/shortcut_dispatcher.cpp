@@ -15,6 +15,7 @@
 #include "frost/input/keymap.hpp"
 #include "frost/input/layout.hpp"
 #include "frost/ui/key_translation.hpp"
+#include "frost/ui/shell/key_keeper.hpp"
 #include "frost/ui/shell/popup.hpp"
 
 #include "shell_util.hpp"
@@ -132,6 +133,14 @@ bool ShortcutDispatcher::eventFilter(QObject* watched, QEvent* event) {
     remember(watched, event);
 
     auto* key = static_cast<QKeyEvent*>(event);
+    // A widget that keeps this key (the terminal, ADR 0051) gets it before the keymap does.
+    if (const auto* keeper = dynamic_cast<const KeyKeeper*>(watched); keeper != nullptr && keeper->keepsKey(*key)) {
+        if (type == QEvent::ShortcutOverride) {
+            key->accept();
+            return true;
+        }
+        return false;
+    }
     const KeyTranslationContext translation{m_platform, m_keymap.layout(), m_ime, systemClock()};
     const input::KeyEvent translated = translateKeyEvent(*key, translation);
     const input::ActionContext context = m_context();

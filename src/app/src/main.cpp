@@ -52,6 +52,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/utf.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/settings/project_layout.hpp"
 #include "frost/settings/registry.hpp"
@@ -60,6 +61,7 @@
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "project_open_broker.hpp"
 #include <QAbstractEventDispatcher>
 #include <QApplication>
 #include <QDir>
@@ -184,6 +186,24 @@ void attachParentConsoleIfNeeded([[maybe_unused]] ConsoleCodePageRestorer& resto
 void print(FILE* stream, std::string_view text) {
     std::fwrite(text.data(), 1, text.size(), stream);
     std::fflush(stream);
+}
+
+// A detached engine launch may have no console. Report argument/forwarding errors to stderr
+// when inherited, or to the user when there is no standard stream on Windows.
+void reportExternalOpenFailure(ConsoleCodePageRestorer& restorer, std::string_view message) {
+    attachParentConsoleIfNeeded(restorer);
+#ifdef _WIN32
+    HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
+    const bool hasStream = error && error != INVALID_HANDLE_VALUE && GetFileType(error) != FILE_TYPE_UNKNOWN;
+#endif
+    print(stderr, std::format("frost: {}\n", message));
+#ifdef _WIN32
+    if (!hasStream) {
+        auto wide = frost::io::toWide(message);
+        if (wide)
+            MessageBoxW(nullptr, wide->c_str(), L"FrostIDE cannot open the script", MB_OK | MB_ICONERROR);
+    }
+#endif
 }
 
 // Reports why the GUI cannot start: on stderr when a console or redirection exists,
@@ -376,6 +396,7 @@ frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
         options.historyPath = under("local-history.db");
         options.compileCommandsCache = under("compile-commands");
         options.sessionDirectory = under("sessions");
+        options.cmakeStatePath = under("cmake-profiles.txt");
     }
     if (auto state = frost::build::BuildService::defaultStatePath(); state) {
         options.buildStatePath = std::move(*state);
@@ -492,6 +513,51 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QApplication app(qtArgc, argv);
         QApplication::setApplicationName(QStringLiteral("FrostIDE"));
         QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
+        // Reserve the explicit project's endpoint before opening any windows. A second launch
+        // waits for its first frame and forwards there rather than touching its dirty documents.
+        std::string externalRoot;
+        std::string externalFile;
+        std::unique_ptr<frost::io::LocalIpcOwner> reserved;
+        if (!parsed->project.empty()) {
+            if (parsed->paths.size() > 1) {
+                reportExternalOpenFailure(consoleCodePage, "--project accepts at most one file");
+                return 2;
+            }
+            auto root = frost::app::externalProjectRoot(parsed->project);
+            if (!root) {
+                reportExternalOpenFailure(consoleCodePage, root.error().message());
+                return 2;
+            }
+            externalRoot = std::move(*root);
+            if (!parsed->paths.empty()) {
+                const QFileInfo file(
+                    QString::fromUtf8(parsed->paths[0].data(), static_cast<qsizetype>(parsed->paths[0].size())));
+                const QString suffix = file.suffix().toLower();
+                if (!file.isFile() || suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("sln") ||
+                    suffix == QStringLiteral("slnx")) {
+                    reportExternalOpenFailure(consoleCodePage,
+                                              "external script does not exist or is not an editor document");
+                    return 2;
+                }
+                externalFile = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8().toStdString();
+            }
+            auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(externalRoot));
+            if (!owner) {
+                if (owner.error().code() == frost::ErrorCode::Busy) {
+                    auto sent =
+                        frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line, parsed->column);
+                    if (sent)
+                        return 0;
+                    reportExternalOpenFailure(consoleCodePage,
+                                              std::format("cannot contact project window: {}", sent.error().message()));
+                    return 2;
+                }
+                reportExternalOpenFailure(consoleCodePage,
+                                          std::format("cannot reserve project window: {}", owner.error().message()));
+                return 2;
+            }
+            reserved = std::move(*owner);
+        }
         // The workbench and what it borrows outlive the window (declared first, destroyed last).
         GuiStores stores = openGuiStores();
         frost::app::DialogWorkbenchPrompts prompts;
@@ -543,22 +609,49 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
             std::string absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8().toStdString();
             const QString suffix = file.suffix().toLower();
-            const bool project =
-                file.isDir() ||
-                (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx")));
+            const bool project = file.isDir() || (file.isFile() && (suffix == QStringLiteral("sln") ||
+                                                                    suffix == QStringLiteral("slnx") ||
+                                                                    suffix == QStringLiteral("frostproj")));
             (project ? projects : files).push_back(std::move(absolute));
         }
-        for (const std::string& path : projects) {
-            static_cast<void>(workbench.openPath(path));
-        }
-        if (projects.empty()) {
-            static_cast<void>(workbench.restoreLastProject());
+        if (!parsed->project.empty()) {
+            const QFileInfo project(
+                QString::fromUtf8(parsed->project.data(), static_cast<qsizetype>(parsed->project.size())));
+            const std::string absolute = QDir::toNativeSeparators(project.absoluteFilePath()).toUtf8().toStdString();
+            if (auto opened = workbench.openExternalProject(absolute); !opened) {
+                reportExternalOpenFailure(consoleCodePage,
+                                          std::format("cannot open project: {}", opened.error().message()));
+                return 2;
+            }
+        } else {
+            for (const std::string& path : projects) {
+                static_cast<void>(workbench.openPath(path));
+            }
+            if (projects.empty())
+                static_cast<void>(workbench.restoreLastProject());
         }
         for (const std::string& path : files) {
-            static_cast<void>(workbench.openPath(path));
+            auto opened = frost::app::openExternalFile(workbench, path, parsed->line, parsed->column);
+            if (!opened && !parsed->project.empty()) {
+                reportExternalOpenFailure(consoleCodePage,
+                                          std::format("cannot open file: {}", opened.error().message()));
+                return 2;
+            }
         }
+        auto brokerRoot = frost::app::externalProjectRoot(workbench.projectRoot());
+        if (!reserved && brokerRoot) {
+            auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*brokerRoot));
+            if (owner)
+                reserved = std::move(*owner);
+        }
+        frost::app::ProjectOpenBroker broker(workbench, window, brokerRoot ? *brokerRoot : std::string{},
+                                             std::move(reserved));
+        QObject::connect(&workbench, &frost::app::Workbench::projectChanged, &broker,
+                         [&broker](const QString&) { broker.projectChanged(); });
         window.show();
-        frost::app::afterFirstFrame(window, [&app, &window, &workbench, restartedFrom] {
+        frost::app::afterFirstFrame(window, [&app, &window, &workbench, &broker, restartedFrom] {
+            if (auto started = broker.start(); !started)
+                frost::log::warn("app", "cannot start project-open IPC: {}", started.error().message());
             // FrostProcess.GuiStartsTheCrashHandlerAfterTheFirstFrame orders this line before the
             // handler's "crash handler registered" line.
             frost::log::info("app", "first frame shown");

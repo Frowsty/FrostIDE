@@ -51,6 +51,11 @@
 #                                markers on an EditorView and the VCS shortcut defaults;
 #   ui_vcs_git_tests             frost::ui_vcs against real git on temporary repositories
 #                                (GitUiE2E.*), offscreen; label "integration" with the tag "git".
+#   ui_lang_tests                the language-feature widgets and LanguageController (ADR 0041)
+#                                offscreen, against tests/lang's scripted language server;
+#   ui_terminal_tests            frost::ui_terminal (ADR 0051) offscreen over frost::term's
+#                                FakePtyLauncher: the Terminal tool window's tabs and actions, typing,
+#                                IME, kept keys, selection copy, paste, scrollback and the trust rule.
 
 frost_add_test(ui_input_tests QT
     SOURCES key_translation_test.cpp ime_tracker_test.cpp adapter_integration_test.cpp
@@ -265,6 +270,14 @@ if(TARGET frost::ui_run)
         SOURCES run/run_console_test.cpp
         DEPS frost::ui_run frost::build frost::input frost::io)
     _frost_ui_test_wiring(ui_run_tests)
+endif()
+
+if(TARGET frost_ui_terminal)
+    frost_add_test(ui_terminal_tests QT
+        SOURCES terminal/terminal_view_test.cpp
+        DEPS frost::ui_terminal frost::ui_shell frost::term frost::input frost::io)
+    _frost_ui_test_wiring(ui_terminal_tests)
+    frost_deploy_conpty(ui_terminal_tests)
 endif()
 
 if(TARGET frost_ui_lang)

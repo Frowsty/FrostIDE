@@ -75,9 +75,10 @@ CLOSED_MILESTONES: frozenset[int] = frozenset({0})
 DATA_GLOBS = ("tests/**/fixtures/**", "tests/**/goldens/**", "tests/fuzz/corpus/**")
 
 # Vendored third-party sources, byte-identical to their pins in third_party/vendor.lock.json
-# (ADR 0023): our header and code rules do not apply to them, only REUSE coverage (REUSE.toml
-# names their upstream copyright and licence). Mirrors the `-text` entries in .gitattributes.
-VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**")
+# (ADR 0023; libvterm, ADR 0051): our header and code rules do not apply to them, only REUSE
+# coverage (REUSE.toml names their upstream copyright and licence). Mirrors the `-text` entries in
+# .gitattributes.
+VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**", "third_party/libvterm/**")
 
 # Directories exempt from the banned-C++26 rule only (every other rule still applies):
 #   src/compat/**                   the compat layer may wrap or probe C++26 library

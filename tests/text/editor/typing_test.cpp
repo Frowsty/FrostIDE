@@ -118,6 +118,49 @@ TEST(SmartKeys, EnterKeepsTheIndentation) {
     EXPECT_EQ(applied("x|y|", commands::newline), "x\n|y\n|");
 }
 
+TEST(SmartKeys, LuaEnterUnderstandsBlocksAndLongStrings) {
+    const auto* lua = frost::text::languageById("lua");
+    ASSERT_NE(lua, nullptr);
+    const auto check = [lua](std::string_view input, std::string_view expected) {
+        EditorFixture fixture(input, lua);
+        fixture.run(commands::newline);
+        EXPECT_EQ(fixture.show(), expected);
+    };
+    check("if active then|", "if active then\n    |");
+    check("for k,v in pairs(t) do|", "for k,v in pairs(t) do\n    |");
+    check("local function f(x)|", "local function f(x)\n    |");
+    check("repeat|", "repeat\n    |");
+    check("function f()\n    if x then\n        work()\n    end|",
+          "function f()\n    if x then\n        work()\n    end\n    |");
+    check("function f()\n    if x then\n        work()\n        end|",
+          "function f()\n    if x then\n        work()\n        end\n    |");
+    check("repeat\n    work()\n    until done|", "repeat\n    work()\n    until done\n|");
+    check("    local f = function() return 1 end; consume()|",
+          "    local f = function() return 1 end; consume()\n    |");
+    check("local s = \"\\z\nif ready then|", "local s = \"\\z\nif ready then\n|");
+    check("local s = \"x\\\r\nif ready then|", "local s = \"x\\\r\nif ready then\r\n|");
+    check("if active then -- comment|", "if active then -- comment\n    |");
+    check("local value = [=[\nif active then|", "local value = [=[\nif active then\n|");
+    check("--[=[\nfunction fake()|", "--[=[\nfunction fake()\n|");
+    check("print('if active then')|", "print('if active then')\n|");
+    EXPECT_EQ(applied("if active then|", commands::newline), "if active then\n|");
+}
+
+TEST(SmartKeys, LuaIndentHandlesManyBlocksSharingOneLongIndent) {
+    const auto* lua = frost::text::languageById("lua");
+    ASSERT_NE(lua, nullptr);
+    // All 10,000 block records refer to the same 32 KiB indentation in a 63 KiB prefix.
+    // Storing copies per block would allocate over 300 MiB for this small input.
+    std::string marked(32768, ' ');
+    for (int i = 0; i < 10000; ++i) {
+        marked += "do ";
+    }
+    marked += "\nend|";
+    EditorFixture fixture(marked, lua);
+    fixture.run(commands::newline);
+    EXPECT_TRUE(fixture.show().ends_with("\nend\n|"));
+}
+
 TEST(SmartKeys, EnterIsItsOwnUndoStep) {
     EditorFixture fixture("|");
     fixture.typeChars("ab");

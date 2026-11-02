@@ -24,6 +24,7 @@
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "cmake_integration.hpp"
 #include "language_bridge.hpp"
 #include <QFileInfo>
 
@@ -116,6 +117,38 @@ Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
     return {};
 }
 
+Result<void> Workbench::openExternalProject(std::string_view path) {
+    // Resolve the explicit project argument itself: on POSIX DocumentRegistry normally keeps
+    // symlink spellings, while project IPC and FrostEngine identify the target directory.
+    const QString resolved = QFileInfo(qs(path)).canonicalFilePath();
+    const std::string canonical =
+        resolved.isEmpty() ? m_documentRegistry->canonicalize(path) : resolved.toUtf8().toStdString();
+    auto status = m_services.fs.status(canonical);
+    if (!status)
+        return std::unexpected(std::move(status.error()));
+    if (status->type == io::FileType::Regular && extensionOf(canonical) == ".frostproj")
+        return openPath(canonical);
+    if (status->type != io::FileType::Directory)
+        return fail(ErrorCode::InvalidArgument, "--project requires a directory or .frostproj file");
+    auto entries = m_services.fs.listDirectory(canonical);
+    if (!entries)
+        return std::unexpected(std::move(entries.error()));
+    std::vector<std::string> projects;
+    for (const auto& entry : *entries) {
+        if (entry.type == io::FileType::Regular && extensionOf(entry.name) == ".frostproj")
+            projects.push_back(entry.name);
+    }
+    if (projects.size() > 1)
+        return fail(ErrorCode::InvalidArgument, "project directory has multiple .frostproj files");
+    if (!projects.empty()) {
+        auto file = io::joinPath(canonical, projects.front());
+        if (!file)
+            return std::unexpected(std::move(file.error()));
+        return openPath(*file);
+    }
+    return openFolder(canonical, false);
+}
+
 Result<void> Workbench::openSolution(const std::string& path) {
     if (m_solution && lang::documentKey(m_solution->path()) == lang::documentKey(path)) {
         return {}; // Already the project.
@@ -197,6 +230,21 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     if (!closeForOpen()) {
         return fail(ErrorCode::Cancelled, "the current project could not be closed");
     }
+    const auto lists = io::joinPath(path, "CMakeLists.txt");
+    if (m_window && lists && m_services.fs.exists(*lists).value_or(false)) {
+        m_cmake = std::make_unique<CMakeIntegration>(
+            m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_window,
+            *m_runConsole, m_options.cmakeStatePath, [this] { m_runController->alternateStateChanged(); },
+            [this](const std::string& file) { (void)openPath(file); },
+            [this] {
+                if (m_cmake && m_clangd)
+                    restartClangd();
+            });
+        if (auto opened = m_cmake->open(path); !opened) {
+            m_cmake.reset();
+            return std::unexpected(std::move(opened.error()));
+        }
+    }
     if (m_nav) {
         if (auto opened = m_nav->openProject(path); !opened) {
             log::warn(kLog, "navigation: {}", opened.error().describe());
@@ -207,7 +255,8 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     if (m_window) {
         // A folder has no solution to show: the File System view takes the Solution Explorer's place.
         m_window->toolWindows().hide(ui::tool_windows::kProject);
-        m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
+        if (!m_cmake)
+            m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
     }
     startClangd(path);
     startLua(path);
@@ -239,7 +288,8 @@ bool Workbench::closeForOpen() {
     }
     // Check the services themselves: the controller's queued state can lag a newly started build.
     // Keep the current project and its tabs intact until the user stops the build or run.
-    if (m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) {
+    if ((m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) ||
+        (m_cmake && (m_cmake->service().state() != build::BuildState::Idle || m_cmake->running()))) {
         notify(text("The project stays open"), text("Stop the build and running programs before closing the project."),
                ui::NotificationKind::Warning);
         return false;
@@ -257,6 +307,10 @@ bool Workbench::closeForOpen() {
     }
     stopLua();
     stopClangd();
+    if (m_cmake) {
+        m_build->setBackend(m_buildBackend.get());
+        m_cmake.reset();
+    }
     if (m_solution) {
         if (auto closed = m_build->closeSolution(); !closed) {
             log::warn(kLog, "closing the solution: {}", closed.error().describe());
@@ -353,7 +407,13 @@ void Workbench::startClangd(const std::string& root) {
             cache = std::move(*joined);
         }
     }
-    if (m_solution && cache) {
+    if (m_cmake) {
+        std::weak_ptr<build::CMakeService> service = m_cmake->sharedService();
+        m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(m_services.fs, [service] {
+            const auto current = service.lock();
+            return current ? current->activeBuildDirectory() : std::string();
+        });
+    } else if (m_solution && cache) {
         lang::MsBuildProviderOptions options;
         if (const std::optional<std::size_t> active = m_build->activeConfigurationIndex();
             active && *active < m_build->configurations().size()) {

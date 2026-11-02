@@ -39,6 +39,12 @@ struct QueryLimits {
     std::uint32_t maxDepth = 64;
 };
 
+// Fold ranges may nest; ordered by start, outer before inner.
+struct FoldResult {
+    std::vector<text::ByteRange> ranges;
+    bool complete = true;
+};
+
 /*
  * A parsed tree plus the snapshot whose coordinates it is in. While a reparse is pending the
  * session publishes the last parsed tree edited with every change since (stale() is true): its
@@ -85,6 +91,18 @@ public:
     // The outline of the whole document (Outline's invariants); empty with complete = false when
     // empty() or the queries are not prepared. O(c log c). Call from a UserVisible task for big files.
     [[nodiscard]] Outline outline(const QueryLimits& limits = {}) const noexcept;
+
+    // Multiline foldable ranges. Lua supplies a query; other languages return no ranges.
+    // Incomplete means no prepared tree or a query limit was reached. O(c log c).
+    [[nodiscard]] FoldResult foldRanges(const QueryLimits& limits = {}) const noexcept;
+
+    // Lua comment/string containing `at`, or nullopt. Call only on a current Lua tree;
+    // O(tree depth). The returned byte range belongs to text().
+    [[nodiscard]] std::optional<text::ByteRange> luaOpaqueAt(ByteOffset at) const noexcept;
+    // Earliest enclosing error's start, or `at` when outside an incomplete construct. O(depth).
+    [[nodiscard]] ByteOffset luaErrorStartAt(ByteOffset at) const noexcept;
+    // The matching block opener for a Lua end/until token, or nullopt. O(tree depth).
+    [[nodiscard]] std::optional<ByteOffset> luaCloserOpener(ByteOffset at) const noexcept;
 
     /*
      * The ranges of the named nodes that contain `selection`, smallest first, strictly growing and

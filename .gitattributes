@@ -16,6 +16,8 @@ resources/icons/lucide/** -text
 # Vendored tree-sitter sources stay byte-identical to their pins (third_party/vendor.lock.json, ADR 0023).
 third_party/tree-sitter/** -text
 third_party/grammars/** -text
+# Vendored libvterm sources, likewise (ADR 0051).
+third_party/libvterm/** -text
 # Binary assets.
 *.png binary
 *.ico binary

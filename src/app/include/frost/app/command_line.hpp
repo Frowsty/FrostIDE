@@ -36,6 +36,11 @@ struct CommandLine {
     Mode mode = Mode::Gui;
     // Paths given as positional arguments, in order, as UTF-8.
     std::vector<std::string> paths;
+    // Explicit project root or .frostproj, before document paths; empty means restore as usual.
+    std::string project;
+    // Optional 1-based location on the single positional file; zero leaves position unchanged.
+    int line = 0;
+    int column = 0;
     // Self-test only: show the window on the real platform instead of offscreen.
     bool selfTestOnScreen = false;
     // Self-test only: which one.

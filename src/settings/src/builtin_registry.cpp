@@ -320,6 +320,14 @@ struct Entry {
          "Build, Execution, Deployment/Toolchains", stringListSchema(32, 4096, StringHint::Executable), emptyList(),
          kApplicationOnly, true, true},
         toolPath("tools.debugger.path", "Debugger", "The debug adapter executable; empty uses the bundled one."),
+
+        // Terminal (ADR 0051).
+        {"terminal.shell", "Shell path",
+         "The shell the terminal starts, as an absolute path; empty uses PowerShell 7, Windows PowerShell or "
+         "cmd.exe on Windows and $SHELL or /bin/bash on Linux.",
+         "Tools/Terminal", stringSchema(4096, StringHint::Executable), text(""), kApplicationOnly, true},
+        {"terminal.scrollbackLines", "Scrollback buffer", "How many lines each terminal tab keeps above the screen.",
+         "Tools/Terminal", integerSchema(0, 1'000'000), integer(10000), kApplicationOnly},
     };
 }
 

@@ -27,7 +27,8 @@ std::string toUtf8(const QString& text) {
 } // namespace
 
 TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, QWidget* parent, TrustPurpose purpose)
-    : QDialog(parent), m_controller(controller), m_list(new QListWidget(this)), m_error(new QLabel(this)) {
+    : QDialog(parent), m_controller(controller), m_purpose(purpose), m_list(new QListWidget(this)),
+      m_error(new QLabel(this)) {
     setObjectName(QStringLiteral("trustDialog"));
     setWindowTitle(tr("Trust and Open Project?"));
 
@@ -46,7 +47,8 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
                  "extensions. "
                  "Trust it only if you know where it comes from. Trusting covers these folders and everything below "
                  "them:")
-            : tr("Building runs code from the project: MSBuild targets, build events and custom build steps. "
+            : tr("Configuring or building runs code from the project: CMake scripts, MSBuild targets, "
+                 "build events and custom build steps. "
                  "Trust it only if you know where it comes from. Trusting covers these folders and everything below "
                  "them:");
     auto* body = new QLabel(explanation, this);
@@ -119,8 +121,8 @@ void TrustDialog::trustAll() {
 }
 
 void TrustDialog::reject() {
-    // The user declined: the waiting build ends. A dialog the prompter dismisses goes through done().
-    if (!m_trusting && m_controller.state() == build::BuildState::NeedsTrust) {
+    // A build prompt owns the waiting build; a Lua prompt may coexist with it but does not.
+    if (m_purpose == TrustPurpose::Build && !m_trusting && m_controller.state() == build::BuildState::NeedsTrust) {
         m_controller.cancel();
     }
     QDialog::reject();

@@ -305,6 +305,99 @@ HighlightResult SyntaxTree::highlights(text::ByteRange range, const QueryLimits&
     return result;
 }
 
+std::optional<text::ByteRange> SyntaxTree::luaOpaqueAt(ByteOffset at) const noexcept {
+    if (!m_state || m_state->language->id != LanguageId::Lua || at.value() >= m_state->text.size().value()) {
+        return std::nullopt;
+    }
+    TSNode node = ts_node_named_descendant_for_byte_range(ts_tree_root_node(m_state->tree.get()),
+                                                          static_cast<std::uint32_t>(at.value()),
+                                                          static_cast<std::uint32_t>(at.value() + 1));
+    while (!ts_node_is_null(node)) {
+        const std::string_view kind(ts_node_type(node));
+        if (kind == "string" || kind == "comment") {
+            return text::ByteRange{ByteOffset{ts_node_start_byte(node)}, ByteOffset{ts_node_end_byte(node)}};
+        }
+        node = ts_node_parent(node);
+    }
+    return std::nullopt;
+}
+
+ByteOffset SyntaxTree::luaErrorStartAt(ByteOffset at) const noexcept {
+    if (!m_state || m_state->language->id != LanguageId::Lua || at.value() >= m_state->text.size().value()) {
+        return at;
+    }
+    TSNode node = ts_node_named_descendant_for_byte_range(ts_tree_root_node(m_state->tree.get()),
+                                                          static_cast<std::uint32_t>(at.value()),
+                                                          static_cast<std::uint32_t>(at.value() + 1));
+    ByteOffset result = at;
+    while (!ts_node_is_null(node)) {
+        if (ts_node_is_error(node)) {
+            result = ByteOffset{ts_node_start_byte(node)};
+        }
+        node = ts_node_parent(node);
+    }
+    return result;
+}
+
+std::optional<ByteOffset> SyntaxTree::luaCloserOpener(ByteOffset at) const noexcept {
+    if (!m_state || m_state->language->id != LanguageId::Lua || at.value() >= m_state->text.size().value()) {
+        return std::nullopt;
+    }
+    TSNode node = ts_node_descendant_for_byte_range(ts_tree_root_node(m_state->tree.get()),
+                                                    static_cast<std::uint32_t>(at.value()),
+                                                    static_cast<std::uint32_t>(at.value() + 1));
+    const std::string_view token(ts_node_type(node));
+    if (token != "end" && token != "until") {
+        return std::nullopt;
+    }
+    for (node = ts_node_parent(node); !ts_node_is_null(node); node = ts_node_parent(node)) {
+        const std::string_view kind(ts_node_type(node));
+        if (token == "until" && kind == "repeat_statement") {
+            return ByteOffset{ts_node_start_byte(node)};
+        }
+        if (token == "end" && ts_node_end_byte(node) == at.value() + 3 &&
+            (kind == "function_declaration" || kind == "function_definition" || kind == "if_statement" ||
+             kind == "for_statement" || kind == "while_statement" || kind == "do_statement")) {
+            return ByteOffset{ts_node_start_byte(node)};
+        }
+    }
+    return std::nullopt;
+}
+
+FoldResult SyntaxTree::foldRanges(const QueryLimits& limits) const noexcept {
+    FoldResult result;
+    if (!m_state || !m_state->language->queriesReady()) {
+        result.complete = false;
+        return result;
+    }
+    if (m_state->language->id != LanguageId::Lua) {
+        return result;
+    }
+    const auto& state = *m_state;
+    const auto& query = state.language->folds();
+    QueryRun run(state, query, limits, 0, state.text.size().value());
+    TSQueryMatch match{};
+    bool truncated = false;
+    while (!truncated && run.next(match)) {
+        for (std::uint16_t i = 0; i < match.capture_count; ++i) {
+            const TSNode node = match.captures[i].node;
+            if (ts_node_start_point(node).row == ts_node_end_point(node).row) {
+                continue;
+            }
+            if (result.ranges.size() >= limits.maxResults) {
+                truncated = true;
+                break;
+            }
+            result.ranges.push_back({ByteOffset{ts_node_start_byte(node)}, ByteOffset{ts_node_end_byte(node)}});
+        }
+    }
+    std::ranges::sort(result.ranges, [](const auto& a, const auto& b) {
+        return a.begin < b.begin || (a.begin == b.begin && a.end > b.end);
+    });
+    result.complete = !truncated && !run.limited();
+    return result;
+}
+
 Outline SyntaxTree::outline(const QueryLimits& limits) const noexcept {
     Outline result;
     if (!m_state || !m_state->language->queriesReady()) {

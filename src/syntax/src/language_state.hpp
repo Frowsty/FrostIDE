@@ -48,7 +48,7 @@ struct Predicate {
     std::vector<std::string> strings;
 };
 
-enum class QueryKind : std::uint8_t { Highlights, Outline };
+enum class QueryKind : std::uint8_t { Highlights, Outline, Folds };
 
 // What a capture of an outline query means: the declaration (kind set) or its name.
 struct OutlineRole {
@@ -104,6 +104,7 @@ public:
     // Precondition: queriesReady().
     [[nodiscard]] const detail::CompiledQuery& highlights() const noexcept { return m_highlights; }
     [[nodiscard]] const detail::CompiledQuery& outline() const noexcept { return m_outline; }
+    [[nodiscard]] const detail::CompiledQuery& folds() const noexcept { return m_folds; }
 
 private:
     friend class LanguageRegistry;
@@ -113,6 +114,7 @@ private:
     mutable std::optional<Error> m_error;
     mutable detail::CompiledQuery m_highlights;
     mutable detail::CompiledQuery m_outline;
+    mutable detail::CompiledQuery m_folds;
 };
 
 namespace detail {

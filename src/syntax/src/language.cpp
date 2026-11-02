@@ -36,19 +36,26 @@ struct Extension {
 
 // The table of language.hpp; ".cmake.in" is matched before ".in" would be (none is listed).
 constexpr Extension kExtensions[] = {
-    {".c", LanguageId::C},          {".cpp", LanguageId::Cpp},     {".cc", LanguageId::Cpp},
-    {".cxx", LanguageId::Cpp},      {".c++", LanguageId::Cpp},     {".hpp", LanguageId::Cpp},
-    {".hh", LanguageId::Cpp},       {".hxx", LanguageId::Cpp},     {".h++", LanguageId::Cpp},
-    {".h", LanguageId::Cpp},        {".inl", LanguageId::Cpp},     {".ipp", LanguageId::Cpp},
-    {".tpp", LanguageId::Cpp},      {".ixx", LanguageId::Cpp},     {".cppm", LanguageId::Cpp},
-    {".cs", LanguageId::CSharp},    {".csx", LanguageId::CSharp},  {".cmake", LanguageId::CMake},
-    {".xml", LanguageId::Xml},      {".xsd", LanguageId::Xml},     {".xaml", LanguageId::Xml},
-    {".props", LanguageId::Xml},    {".targets", LanguageId::Xml}, {".vcxproj", LanguageId::Xml},
-    {".filters", LanguageId::Xml},  {".csproj", LanguageId::Xml},  {".proj", LanguageId::Xml},
-    {".nuspec", LanguageId::Xml},   {".resx", LanguageId::Xml},    {".natvis", LanguageId::Xml},
-    {".manifest", LanguageId::Xml}, {".wxs", LanguageId::Xml},     {".slnx", LanguageId::Xml},
-    {".config", LanguageId::Xml},   {".svg", LanguageId::Xml},     {".json", LanguageId::Json},
-    {".jsonc", LanguageId::Json},   {".md", LanguageId::Markdown}, {".markdown", LanguageId::Markdown},
+    {".c", LanguageId::C},          {".cpp", LanguageId::Cpp},
+    {".cc", LanguageId::Cpp},       {".cxx", LanguageId::Cpp},
+    {".c++", LanguageId::Cpp},      {".hpp", LanguageId::Cpp},
+    {".hh", LanguageId::Cpp},       {".hxx", LanguageId::Cpp},
+    {".h++", LanguageId::Cpp},      {".h", LanguageId::Cpp},
+    {".inl", LanguageId::Cpp},      {".ipp", LanguageId::Cpp},
+    {".tpp", LanguageId::Cpp},      {".ixx", LanguageId::Cpp},
+    {".cppm", LanguageId::Cpp},     {".cs", LanguageId::CSharp},
+    {".csx", LanguageId::CSharp},   {".cmake", LanguageId::CMake},
+    {".xml", LanguageId::Xml},      {".xsd", LanguageId::Xml},
+    {".xaml", LanguageId::Xml},     {".props", LanguageId::Xml},
+    {".targets", LanguageId::Xml},  {".vcxproj", LanguageId::Xml},
+    {".filters", LanguageId::Xml},  {".csproj", LanguageId::Xml},
+    {".proj", LanguageId::Xml},     {".nuspec", LanguageId::Xml},
+    {".resx", LanguageId::Xml},     {".natvis", LanguageId::Xml},
+    {".manifest", LanguageId::Xml}, {".wxs", LanguageId::Xml},
+    {".slnx", LanguageId::Xml},     {".config", LanguageId::Xml},
+    {".svg", LanguageId::Xml},      {".json", LanguageId::Json},
+    {".lua", LanguageId::Lua},      {".jsonc", LanguageId::Json},
+    {".md", LanguageId::Markdown},  {".markdown", LanguageId::Markdown},
 };
 
 [[nodiscard]] const TSLanguage* grammarOf(LanguageId id) noexcept {
@@ -60,6 +67,7 @@ constexpr Extension kExtensions[] = {
     case LanguageId::Xml: return tree_sitter_xml();
     case LanguageId::Json: return tree_sitter_json();
     case LanguageId::Markdown: return tree_sitter_markdown();
+    case LanguageId::Lua: return tree_sitter_lua();
     case LanguageId::None: break;
     }
     return nullptr;
@@ -78,6 +86,7 @@ std::string_view toString(LanguageId id) noexcept {
     case LanguageId::Xml: return "xml";
     case LanguageId::Json: return "json";
     case LanguageId::Markdown: return "markdown";
+    case LanguageId::Lua: return "lua";
     case LanguageId::None: break;
     }
     return "none";
@@ -156,6 +165,16 @@ Result<void> LanguageRegistry::prepare(LanguageId id) const noexcept {
         if (!outline) {
             language.m_error.emplace(std::move(outline.error()));
             return;
+        }
+        if (language.id == LanguageId::Lua) {
+            Result<detail::CompiledQuery> folds =
+                detail::compileQuery(language.grammar, detail::querySource(language.id, detail::QueryKind::Folds),
+                                     detail::QueryKind::Folds, "folds.scm (lua)");
+            if (!folds) {
+                language.m_error.emplace(std::move(folds.error()));
+                return;
+            }
+            language.m_folds = std::move(*folds);
         }
         language.m_highlights = std::move(*highlights);
         language.m_outline = std::move(*outline);

@@ -281,8 +281,16 @@ TEST_F(CMakeServiceTest, BuildsCleansAndRebuildsTargets) {
                                "../src/core.c:1:30: error: use of undeclared identifier 'y'\n"
                                "ninja: build stopped: subcommand failed.\n";
     launcher.expect({.expectExecutable = cmake(), .exitCode = 1, .stdoutBytes = output});
-    ASSERT_TRUE(service->build(BuildAction::Build, core).has_value());
+    std::optional<CMakeBuildOutcome> completed;
+    ASSERT_TRUE(
+        service
+            ->build(BuildAction::Build, core, [&completed](const CMakeBuildOutcome& outcome) { completed = outcome; })
+            .has_value());
     waitIdle();
+    ASSERT_TRUE(completed.has_value());
+    EXPECT_FALSE(completed->succeeded());
+    ASSERT_NE(completed->model, nullptr);
+    EXPECT_NE(completed->model->findTarget("core"), nullptr);
     auto failed = service->lastOutcome();
     ASSERT_TRUE(failed.has_value());
     EXPECT_FALSE(failed->succeeded());

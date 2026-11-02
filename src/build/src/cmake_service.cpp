@@ -199,6 +199,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         CMakeTools tools{};
         project::CMakeEnvironment msvc{};
         BuildResult lastResult{};
+        CMakeBuildCompletion done{};
     };
 
     State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,
@@ -234,6 +235,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     BuildState state FROST_GUARDED_BY(mutex) = BuildState::Idle;
     std::optional<Job> job FROST_GUARDED_BY(mutex);
     std::uint64_t lastJobId FROST_GUARDED_BY(mutex) = 0;
+    std::uint64_t profileGeneration FROST_GUARDED_BY(mutex) = 0;
     DiagnosticIndex diagnostics FROST_GUARDED_BY(mutex);
     std::optional<CMakeConfigureOutcome> lastConfigure FROST_GUARDED_BY(mutex);
     std::optional<CMakeBuildOutcome> lastBuild FROST_GUARDED_BY(mutex);
@@ -477,8 +479,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
      * Starts a job for the active profile. An automatic job of an untrusted folder or an unusable
      * profile is dropped. Errors: InvalidArgument (no folder, unusable profile), Busy.
      */
-    Result<void> startJobLocked(JobKind kind, bool automatic, CMakeBuildRequest request, std::vector<CMakeStep> steps)
-        FROST_REQUIRES(mutex) {
+    Result<void> startJobLocked(JobKind kind, bool automatic, CMakeBuildRequest request, std::vector<CMakeStep> steps,
+                                CMakeBuildCompletion done = {}) FROST_REQUIRES(mutex) {
         if (sourceDir.empty()) {
             return fail(ErrorCode::InvalidArgument, "no CMake folder is open");
         }
@@ -512,7 +514,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                   .current = std::nullopt,
                   .tools = {},
                   .msvc = {},
-                  .lastResult = {}};
+                  .lastResult = {},
+                  .done = std::move(done)};
         if (!trusted) {
             job->untrusted = {sourceDir};
             setStateLocked(BuildState::NeedsTrust);
@@ -912,7 +915,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             CMakeBuildOutcome outcome{.request = current.request,
                                       .result = current.lastResult,
                                       .error = std::move(error),
-                                      .counts = diagnostics.counts()};
+                                      .counts = diagnostics.counts(),
+                                      .model = model};
             std::string line;
             const std::string_view action = toString(outcome.request.action);
             if (outcome.error) {
@@ -926,9 +930,12 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             }
             emitOutput(false, BuildOutputKind::Status, std::move(line));
             lastBuild = outcome;
-            emit([this, outcome = std::move(outcome)] {
+            emit([this, outcome = std::move(outcome), done = std::move(current.done)] {
                 if (callbacks.onFinished) {
                     callbacks.onFinished(outcome);
+                }
+                if (done) {
+                    done(outcome);
                 }
             });
         }
@@ -968,6 +975,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             return;
         }
         if (reloadPresets) {
+            ++profileGeneration;
             presets = std::move(loaded);
             presetsProblem = std::move(problem);
             const std::optional<std::string> keep =
@@ -1067,6 +1075,7 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
         return fail(ErrorCode::Busy, "a CMake job is in progress; cancel it before opening another folder");
     }
     s.sourceDir = std::move(*folder);
+    ++s.profileGeneration;
     s.presets = std::move(presets);
     s.presetsProblem = std::move(problem);
     s.profiles = std::move(profiles);
@@ -1099,6 +1108,7 @@ Result<void> CMakeService::closeFolder() {
         return {};
     }
     s.sourceDir.clear();
+    ++s.profileGeneration;
     s.presets.reset();
     s.presetsProblem.reset();
     s.profiles.clear();
@@ -1163,6 +1173,7 @@ Result<void> CMakeService::setActiveProfile(std::size_t index) {
             return fail(ErrorCode::Busy, "the folder changed while the profile was being switched");
         }
         s.active = index;
+        ++s.profileGeneration;
         s.model = model;
         s.stale = false;
         s.configuredOnce = false;
@@ -1198,6 +1209,11 @@ std::string CMakeService::activeBuildDirectory() const {
     return profile ? profile->buildDirectory : std::string();
 }
 
+std::uint64_t CMakeService::profileGeneration() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->profileGeneration;
+}
+
 Result<void> CMakeService::setProfileRecords(std::vector<project::CMakeProfileRecord> records,
                                              project::CMakeProfileSource source) {
     State& s = *m_state;
@@ -1207,6 +1223,7 @@ Result<void> CMakeService::setProfileRecords(std::vector<project::CMakeProfileRe
     }
     s.records = std::move(records);
     s.recordSource = source;
+    ++s.profileGeneration;
     if (s.sourceDir.empty()) {
         return {};
     }
@@ -1259,7 +1276,7 @@ void CMakeService::setSaveAllHook(SaveAllHook hook) {
     m_state->saveAll = std::move(hook);
 }
 
-Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target) {
+Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target, CMakeBuildCompletion done) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
     CMakeBuildRequest request{.action = action, .target = target, .targetName = {}, .profile = {}};
@@ -1279,7 +1296,7 @@ Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> 
     if (action == BuildAction::Build || action == BuildAction::Rebuild) {
         steps.push_back(CMakeStep::Build);
     }
-    return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps));
+    return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps), std::move(done));
 }
 
 void CMakeService::cancel() {

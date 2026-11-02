@@ -228,6 +228,38 @@ TEST(ProcessSpec, WindowsRejectsPosixInheritedFds) {
     EXPECT_EQ(validate(spec, true), ErrorCode::Unsupported);
 }
 
+TEST(ProcessSpec, PseudoTerminalNeedsInheritedStreamsAndADevice) {
+    // frost::term (ADR 0051): the child's streams are the terminal's.
+    const auto onTerminal = [](std::string executable) {
+        ProcessSpec spec = specFor(std::move(executable));
+        spec.stdinMode = Stdio::Inherit;
+        spec.stdoutMode = Stdio::Inherit;
+        spec.stderrMode = Stdio::Inherit;
+        spec.pseudoTerminal = frost::io::PseudoTerminal{};
+        return spec;
+    };
+    ProcessSpec posix = onTerminal("/bin/sh");
+    EXPECT_EQ(validate(posix, false), ErrorCode::InvalidArgument); // No device.
+    posix.pseudoTerminal->posixTerminalPath = "/dev/pts/3";
+    EXPECT_EQ(validate(posix, false), ErrorCode::Unknown);
+    posix.pseudoTerminal->posixTerminalPath = "pts/3";
+    EXPECT_EQ(validate(posix, false), ErrorCode::InvalidArgument);
+    posix.pseudoTerminal->posixTerminalPath = "/dev/pts/3";
+    posix.stdoutMode = Stdio::Pipe;
+    EXPECT_EQ(validate(posix, false), ErrorCode::InvalidArgument);
+    posix.stdoutMode = Stdio::Inherit;
+    posix.killOnClose = false;
+    EXPECT_EQ(validate(posix, false), ErrorCode::InvalidArgument);
+
+    ProcessSpec windows = onTerminal("C:\\Windows\\System32\\cmd.exe");
+    EXPECT_EQ(validate(windows, true), ErrorCode::InvalidArgument); // No pseudo console.
+    int console = 0;
+    windows.pseudoTerminal->windowsPseudoConsole = &console;
+    EXPECT_EQ(validate(windows, true), ErrorCode::Unknown);
+    windows.newConsole = true;
+    EXPECT_EQ(validate(windows, true), ErrorCode::InvalidArgument);
+}
+
 TEST(ProcessSpec, DesktopNameIsCheckedOnWindowsOnly) {
     // STARTUPINFOW::lpDesktop: a NUL would cut the name short, and it must convert to UTF-16.
     // POSIX ignores the field, so it refuses nothing there.

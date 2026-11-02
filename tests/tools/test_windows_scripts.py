@@ -153,9 +153,9 @@ class StageScriptTest(TempDirTestCase):
         """A build tree with the files the Debug frost target leaves in src/app/Debug."""
         build = self.tmp / "build"
         bin_dir = build / "src" / "app" / "Debug"
-        (bin_dir / "platforms").mkdir(parents=True)
-        (bin_dir / "resources" / "themes").mkdir(parents=True)
-        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "frost.pdb"):
+        (bin_dir / "platforms").mkdir(parents=True, exist_ok=True)
+        (bin_dir / "resources" / "themes").mkdir(parents=True, exist_ok=True)
+        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb"):
             (bin_dir / name).write_bytes(b"MZ")
         (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
         (bin_dir / "resources" / "themes" / "dark.json").write_text("{}", encoding="utf-8")
@@ -173,7 +173,7 @@ class StageScriptTest(TempDirTestCase):
         result = self._stage(build, destination)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("stage: ok", result.stdout)
-        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "frost.pdb", "Qt6Cored.dll",
+        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",
                      "platforms/qwindowsd.dll", "platforms/qoffscreend.dll", "resources/themes/dark.json",
                      "LICENSE", "NOTICE", "licenses/tree-sitter-LICENSE"):
             self.assertTrue((destination / name).is_file(), name)
@@ -191,6 +191,25 @@ class StageScriptTest(TempDirTestCase):
         self.assertEqual(replaced.returncode, 0, replaced.stdout + replaced.stderr)
         self.assertFalse((destination / "old.txt").exists())
         self.assertTrue((destination / "frost.exe").is_file())
+
+    def test_corrupted_staged_conpty_fails(self) -> None:
+        build = self._fake_build()
+        deploy = self.tmp / "tamper-deploy.cmd"
+        deploy.write_text(_FAKE_WINDEPLOYQT.replace("exit /b 0", 'echo changed>"%DEST%\\conpty.dll"\nexit /b 0'),
+                          encoding="ascii", newline="\r\n")
+        result = run_powershell(TOOLS / "stage.ps1", "-Destination", str(self.tmp / "corrupt-out"),
+                                "-Config", "Debug", "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-SkipBuild")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("staged conpty.dll differs", result.stdout)
+
+    def test_missing_conpty_pair_fails(self) -> None:
+        for missing in ("conpty.dll", "OpenConsole.exe"):
+            with self.subTest(missing=missing):
+                build = self._fake_build()
+                (build / "src" / "app" / "Debug" / missing).unlink()
+                result = self._stage(build, self.tmp / "missing-out")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("no " + missing, result.stdout)
 
     def test_a_missing_build_output_fails(self) -> None:
         build = self._fake_build()

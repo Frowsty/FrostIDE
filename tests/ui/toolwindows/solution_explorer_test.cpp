@@ -307,6 +307,8 @@ TEST(SolutionExplorer, ContextMenuOpensTheContainingFolderAndCopiesThePath) {
     SolutionExplorer explorer;
     explorer.setSolution(loadSdk());
     explorer.setProcessLauncher(&launcher);
+    QString terminalPath;
+    explorer.setOpenTerminalHandler([&](const QString& path) { terminalPath = path; });
     const std::string cpp = project::test::sdk("Libraries/Core/src/core.cpp");
     const QModelIndex index = explorer.filterModel()->mapFromSource(explorer.model()->indexOfPath(cpp));
     std::unique_ptr<QMenu> menu(explorer.createContextMenu(index));
@@ -321,6 +323,11 @@ TEST(SolutionExplorer, ContextMenuOpensTheContainingFolderAndCopiesThePath) {
     ASSERT_TRUE(expected.has_value());
     EXPECT_EQ(launches[0].spec.executable, expected->executable);
     EXPECT_EQ(launches[0].spec.arguments, expected->arguments);
+
+    QAction* terminal = findAction(*menu, "openInTerminal");
+    ASSERT_NE(terminal, nullptr);
+    terminal->trigger();
+    EXPECT_EQ(terminalPath.toStdString(), cpp);
 
     QAction* copy = findAction(*menu, "copyPath");
     ASSERT_NE(copy, nullptr);

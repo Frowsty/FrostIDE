@@ -3,6 +3,60 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-02: Verified terminal, CMake, Lua syntax and engine-opening checkpoint
+
+- Base: verified checkpoint `84ae6ba` below. Four individually Astra-reviewed slices are integrated on main.
+  Astra also approved the final combined tree. Mechanical unions retain Lua project/session behavior, terminal and
+  CMake lifecycle ownership, both native IPC and CMake application sources, and all dependency notices.
+- Terminal (ADR 0051): current project/trust context, bounded output retention, complete UTF-16 input,
+  queued-launch shutdown guards and pinned bundled ConPTY. Actual Windows console records verify
+  Shift+Enter and surrogate input; native Linux verifies kitty Shift+Enter. Claude prompt compatibility,
+  real IME input and the complete keyboard-layout matrix remain unverified.
+- CMake (ADR 0057): configure/profile/target UI, build diagnostics, compilation database and Run in the
+  current Workbench. Astra approved per-request completion callbacks, completion-time artifact/model
+  snapshots, profile generations and shutdown gating. Focused Windows tests passed 13/13; combined native
+  application tests also pass. One earlier interrupted wait remains unexplained; later passes are not a
+  diagnosis. Separate deterministic coverage for every shutdown phase remains outstanding.
+- Shared trust dialog: cancellation now respects its purpose, so Lua Cancel/close/Escape cannot cancel a
+  pending Build trust decision. Six focused tests passed and Astra approved. The staged ConPTY DLL also
+  required updating old loader-report expectations: both self-tests already passed, but lazy loading now
+  reports ConPTY before QtNetwork. Corrected tests retain extended-path and successful-self-test checks.
+- Lua syntax (ADR 0061): pinned MIT Lua grammar with original highlight/outline/fold queries and bounded
+  indentation. Astra required fixes for nested closing blocks, inline closed blocks, string continuation
+  and quadratic retained indentation storage. Corrected model/UI tests pass, including a 63 KiB adversarial
+  prefix. These are fold ranges; an interactive folding UI is still absent.
+- Engine opening (ADR 0060): project/location CLI and native per-user, per-project IPC with bounded frames,
+  peer identity checks, reservation before the first frame and listening afterward. Existing real-process
+  tests cover Unicode/spaces, dirty-tab reuse, wrong projects, owner death and symlink targets. Astra's
+  final combined review found an additional ordinary-open symlink identity case; Terra corrected root
+  ownership and existing dirty-editor lookup by physical identity. New Windows symlink regressions skip
+  without privilege; all six native Linux process tests pass, including both new ordinary-open regressions.
+  Astra approved the correction and the final integration.
+- Combined gates before that correction: Windows **2517/2527 (nine skipped, one disabled)** and native WSL
+  **2389/2407 (17 skipped)**, each with one failure: the vendor test expected nine packages after two separate
+  additions produced ten. Actual licence gates passed (Windows 42 / Linux 38 packages, zero violations),
+  as did Windows format, frost-lint (2257 files) and featurecheck. The merged expectation is now ten with
+  explicit Lua/libvterm presence checks; licence unit tests pass 36/36 on both platforms and Astra approved.
+- Final complete gates passed: Windows `verify.ps1 -Quick -WindowsOnly -Jobs 2 -TestJobs 4`, **2518/2529
+  (11 skipped, one disabled probe)**; native WSL `verify.sh --quick --no-checks` with two jobs, **2392/2409
+  (17 skipped)**. Windows format, frost-lint (2257 files), featurecheck and licence gates passed; Linux's
+  licence gate passed too. Both environments used real LuaLS 3.19.1 and the target engine's generated API.
+  Skips are reported, not counted as passed. Tidy, sanitizers and stress remain deferred.
+- Debug preview `E:\FrostBuilds\preview\codex-20261102-workbench-debug` passed startup and actual Direct3D11
+  rendering on RTX 4070 SUPER. A temporary probe verified that ConPTY DLL and OpenConsole loaded from this
+  stage and carried Shift+Enter/surrogates; the probe was removed afterward. This preview includes the final
+  symlink correction. LuaLS is not bundled; it remains a development preview, not a complete release.
+- Next work is isolated: `codex-debugger-workbench` ports the inherited debugger into the current app and
+  CMake lifecycle; `codex-engine-automation` is prepared for authenticated engine controls/logs/validation/tests
+  after the opening fix. Both inherit staged baseline tree `c99d689f4413d29934f465bcf2bce1689dfc075b`; transfer
+  only baseline-relative deltas. The original `m4-debugger` and other worktrees remain preserved.
+- PLAN B.1 now records public-reference coverage families and visible gaps. `codex-managed-language` inherits
+  staged baseline `59548a6120f8a0bf9663b40b05a4686f012233da`. The official Roslyn server's root MIT licence did
+  not establish permission for all bundled components; its downloaded packages remain inspection-only.
+  Terra is auditing an alternative open-source service before installation/integration. No C#, Unity,
+  remote, web/database or complete Rider-parity claim is made. Next: implement, review and verify the
+  debugger, authenticated FrostEngine automation and managed semantics. No user answer is blocking progress.
+
 ## 2026-11-02: Codex continuation, verified workbench/Lua checkpoint
 
 ### Scope and ownership
@@ -4826,3 +4880,25 @@ with a pointer.
 
 ### Questions for the user
 - None blocking. `gh auth login` would let the agent open PRs. Pushes already work through Git Credential Manager.
+
+### M4 terminal investigation in `m4/terminal` (unmerged, 2026-11-02)
+- Implemented DECSET 9001 negotiation and Windows key records, plus kitty keyboard flags 1 and 4 and
+  distinct Shift+Enter. The pinned Microsoft ConPTY package is installed under the SDK, deployed beside
+  the executable and loaded by absolute path, with a logged system fallback; NOTICE and the SBOM gate
+  record its MIT licence. Windows focused protocol, Qt and bundled-ConPTY tests pass. On Linux ext4,
+  protocol tests and the real PTY Shift+Enter test pass.
+- The isolated, no-prompt Claude startup stopped at its workspace trust screen; it requested kitty flags
+  5 and DECRQM 2026/1016 (ADR 0051). Actual prompt-state and modifier delivery to Claude, full kitty
+  enhancement/layout fidelity and real IME delivery are not established. No prompt or trust decision was
+  submitted. The branch remains unmerged pending independent review and full verification.
+- Astra review found that consumed PTY output could remain allocated indefinitely when the backlog
+  never emptied. The buffer now compacts that prefix; a 4 MiB nonempty-backlog test checks content and
+  allocated capacity on Windows and Linux. Win32 keyboard records now preserve every UTF-16 unit;
+  a Qt test covers multiple units and a real bundled-ConPTY child confirms a surrogate pair arrives.
+  The separate current-main snapshot now wires the Workbench, current project trust, shutdown and
+  Explorer action, and stages both ConPTY files. Windows targeted checks: app 21/21, workbench 23/23,
+  tool windows 32/32, terminal unit 46/46, terminal UI 14/14 and PTY 4/4; stage script tests 6 passed
+  and one skipped. The staged executable passed its offscreen private-desktop self-test, and a test
+  run from the staged directory observed its bundled DLL and OpenConsole process. Native Linux tests
+  cover the terminal protocol and PTY, but the latest application integration has not run on Linux.
+  The staged snapshot still needs independent review and the merged-tree verification gate.

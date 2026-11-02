@@ -34,6 +34,7 @@ inline const syntax::LanguageRegistry& languages() {
     static const syntax::LanguageRegistry* registry = [] {
         auto* created = new syntax::LanguageRegistry();
         EXPECT_TRUE(created->prepare(syntax::LanguageId::Cpp));
+        EXPECT_TRUE(created->prepare(syntax::LanguageId::Lua));
         return created;
     }();
     return *registry;
@@ -61,6 +62,7 @@ struct HarnessOptions {
     std::string path = "notes.txt";
     input::SimulatedLayoutId layout = input::SimulatedLayoutId::EnUs;
     bool syntax = false;
+    syntax::SyntaxOptions syntaxOptions{};
     AppearanceManager* appearance = nullptr;
     EditorViewSettings settings{};
     // The renderer rule's injected environment and fault hooks (ADR 0043).
@@ -91,6 +93,7 @@ struct EditorHarness {
         if (options.syntax) {
             services.languages = &languages();
             services.scheduler = &sim;
+            services.syntax = options.syntaxOptions;
         }
         view = createEditorView(document, options.path, services, options.settings);
         view->resize(800, 600);

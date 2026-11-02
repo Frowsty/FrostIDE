@@ -106,6 +106,10 @@ inline constexpr Key<std::string> toolsClangTidyPath{"tools.clangTidy.path"};
 inline constexpr Key<StringList> toolsClangTidyPlugins{"tools.clangTidy.plugins"};
 inline constexpr Key<std::string> toolsDebuggerPath{"tools.debugger.path"};
 
+// Terminal (frost::term, ADR 0051). terminal.shell is an Application-only `executes` key.
+inline constexpr Key<std::string> terminalShell{"terminal.shell"};
+inline constexpr Key<std::int64_t> terminalScrollbackLines{"terminal.scrollbackLines"};
+
 } // namespace key
 
 } // namespace frost::settings

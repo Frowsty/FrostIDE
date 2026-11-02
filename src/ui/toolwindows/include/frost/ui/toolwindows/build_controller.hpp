@@ -49,6 +49,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -64,6 +65,8 @@ public:
     [[nodiscard]] virtual Result<void> openSolution(std::shared_ptr<const project::SolutionModel> solution) = 0;
     [[nodiscard]] virtual Result<void> closeSolution() = 0;
     [[nodiscard]] virtual std::shared_ptr<const project::SolutionModel> solution() const = 0;
+    // A backend may represent a non-solution project, such as a CMake folder.
+    [[nodiscard]] virtual bool hasProject() const { return solution() != nullptr; }
     [[nodiscard]] virtual std::vector<project::SolutionConfiguration> configurations() const = 0;
     [[nodiscard]] virtual std::optional<std::size_t> activeConfigurationIndex() const = 0;
     [[nodiscard]] virtual Result<void> setActiveConfiguration(std::size_t index) = 0;
@@ -123,7 +126,8 @@ public:
 
     // The callbacks to create the service with (header comment). Copies may be called from any thread,
     // also after the controller is gone (they then do nothing).
-    [[nodiscard]] build::BuildServiceCallbacks serviceCallbacks() const;
+    // `active`, when supplied, is checked on the GUI thread before delivering each event.
+    [[nodiscard]] build::BuildServiceCallbacks serviceCallbacks(std::function<bool()> active = {}) const;
 
     /*
      * Binds `backend` (not owned; it must outlive the controller or be replaced first), installs the
@@ -168,7 +172,7 @@ public:
     // A build is anywhere between its request and Idle.
     [[nodiscard]] bool isBuilding() const noexcept { return m_state != build::BuildState::Idle; }
     // Build commands may start: a solution is open and no build runs.
-    [[nodiscard]] bool canBuild() const noexcept { return hasSolution() && !isBuilding(); }
+    [[nodiscard]] bool canBuild() const noexcept { return m_hasProject && !isBuilding(); }
     [[nodiscard]] const std::vector<std::string>& untrustedRoots() const noexcept { return m_untrusted; }
     [[nodiscard]] const std::vector<build::BuildDiagnostic>& diagnostics() const noexcept { return m_diagnostics; }
     [[nodiscard]] const std::deque<BuildOutputEntry>& currentOutput() const noexcept { return m_output; }
@@ -176,6 +180,7 @@ public:
     [[nodiscard]] const std::optional<build::BuildOutcome>& lastOutcome() const noexcept { return m_lastOutcome; }
 
 signals:
+    void backendChanged();
     void solutionChanged();
     void activeConfigurationChanged(int index);
     void stateChanged(frost::build::BuildState state);
@@ -209,6 +214,7 @@ private:
     IBuildBackend* m_backend = nullptr;
     ISaveAllHandler* m_saveAll = nullptr;
     std::shared_ptr<const project::SolutionModel> m_solution;
+    bool m_hasProject = false;
     std::vector<project::SolutionConfiguration> m_configurations;
     std::optional<std::size_t> m_active;
     build::BuildState m_state = build::BuildState::Idle;

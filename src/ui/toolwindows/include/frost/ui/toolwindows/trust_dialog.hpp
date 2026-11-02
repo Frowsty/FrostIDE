@@ -8,7 +8,8 @@
  * Trust calls BuildController::trust for each listed folder in order; once all are trusted the
  * build service continues the build on its own and the dialog closes (accepted). A folder that
  * cannot be trusted stops there: the error shows in the dialog, which stays open, and the folders
- * still untrusted can be tried again. Cancel (or closing the dialog) cancels the waiting build.
+ * still untrusted can be tried again. Cancel (or closing) cancels a waiting build only for a
+ * Build-purpose dialog; declining Lua language-server trust leaves an unrelated build alone.
  * TrustPrompter keeps at most one dialog: a repeated NeedsTrust updates the open one's list, and
  * the dialog closes by itself when the build leaves NeedsTrust some other way.
  *
@@ -56,6 +57,7 @@ private:
     void trustAll();
 
     BuildController& m_controller;
+    TrustPurpose m_purpose;
     QStringList m_roots;
     QListWidget* m_list = nullptr;
     QLabel* m_error = nullptr;

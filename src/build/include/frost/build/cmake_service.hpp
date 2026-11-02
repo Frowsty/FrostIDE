@@ -132,9 +132,14 @@ struct CMakeBuildOutcome {
     BuildResult result{};         // The last step that ran.
     std::optional<Error> error{}; // Why a step did not start (Save All failed, no cmake, a launch error).
     DiagnosticCounts counts{};    // Over the job's diagnostics.
+    // The model at completion, for resolving this build's target even after a profile switch.
+    std::shared_ptr<const project::CMakeProject> model{};
 
     [[nodiscard]] bool succeeded() const noexcept { return result.success && !error; }
 };
+
+// Called once for the accepted build on the service thread, after the shared onFinished callback.
+using CMakeBuildCompletion = std::function<void(const CMakeBuildOutcome&)>;
 
 // Every callback is optional and runs on the service's thread (header comment).
 struct CMakeServiceCallbacks {
@@ -217,6 +222,8 @@ public:
     [[nodiscard]] Result<void> setActiveProfile(std::string_view name); // NotFound for an unknown name.
     // The active profile's build directory (where compile_commands.json is written); "" without one.
     [[nodiscard]] std::string activeBuildDirectory() const;
+    // Changes when the folder or active profile is replaced, including a presets reload.
+    [[nodiscard]] std::uint64_t profileGeneration() const;
     // Replaces the settings profiles (the `cmake.profiles` setting changed) and recomputes the
     // profiles, keeping the active one by name. Errors: Busy.
     [[nodiscard]] Result<void> setProfileRecords(std::vector<project::CMakeProfileRecord> records,
@@ -242,10 +249,13 @@ public:
     void setSaveAllHook(SaveAllHook hook);
     /*
      * Starts `action` for target `target` (index into model()->targets) or for the profile's default
-     * targets. Errors: InvalidArgument (no folder, an unusable profile, `target` out of range or
+     * targets. On acceptance, `done` receives this job's outcome and completion-time model once on
+     * the service thread; no callback is made when the request is refused or the service is destroyed.
+     * Errors: InvalidArgument (no folder, an unusable profile, `target` out of range or
      * without a model), Busy.
      */
-    [[nodiscard]] Result<void> build(BuildAction action, std::optional<std::size_t> target = std::nullopt);
+    [[nodiscard]] Result<void> build(BuildAction action, std::optional<std::size_t> target = std::nullopt,
+                                     CMakeBuildCompletion done = {});
     // Cancels the job in progress (BuildService::cancel). Idempotent.
     void cancel();
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no

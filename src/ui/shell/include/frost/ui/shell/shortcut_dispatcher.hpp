@@ -32,7 +32,9 @@ namespace frost::ui {
  *     and Consumed are swallowed, PassThrough is delivered as usual;
  *   - QEvent::Shortcut, mouse presses, focus changes and window deactivation reset the matcher;
  *   - KeyboardLayoutChange re-reads the active layout when followActiveLayout is set;
- *   - while a Qt popup that is not a frost Popup is open (a menu, a combo box list) keys pass to it.
+ *   - while a Qt popup that is not a frost Popup is open (a menu, a combo box list) keys pass to it;
+ *   - a key the receiving widget keeps (frost/ui/shell/key_keeper.hpp) passes to it, its
+ *     ShortcutOverride accepted, without reaching the matcher.
  * The context comes from `context` at the moment of each event. The registry and the service must
  * outlive the dispatcher. GUI thread only. Budget: B5.
  */

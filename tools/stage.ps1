@@ -69,7 +69,7 @@ if (-not $SkipBuild) {
 }
 
 $binDir = Join-Path $BuildDir "src\app\$Config"
-foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe')) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 
@@ -84,7 +84,7 @@ if (Test-Path -LiteralPath $Destination) {
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
 # 3. FrostIDE's own files.
-foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe')) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
 }
 if ($Config -ne 'Release') {
@@ -129,8 +129,14 @@ foreach ($file in @(Get-ChildItem -LiteralPath $thirdParty -Recurse -File -Filte
 
 # 6. The checks.
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }
-foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'LICENSE', 'NOTICE', $plugin)) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
     if (-not (Test-Path -LiteralPath (Join-Path $Destination $name))) { Fail "the staged folder has no $name" }
+}
+# The staged ConPTY pair must be byte-identical to the pair the build deployed.
+foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {
+    $sourceHash = (Get-FileHash -LiteralPath (Join-Path $binDir $name) -Algorithm SHA256).Hash
+    $stagedHash = (Get-FileHash -LiteralPath (Join-Path $Destination $name) -Algorithm SHA256).Hash
+    if ($sourceHash -ne $stagedHash) { Fail "the staged $name differs from the build output" }
 }
 $qtCore = if ($Config -eq 'Debug') { 'Qt6Cored.dll' } else { 'Qt6Core.dll' }
 if (-not (Test-Path -LiteralPath (Join-Path $Destination $qtCore))) { Fail "the staged folder has no $qtCore" }

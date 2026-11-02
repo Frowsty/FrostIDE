@@ -187,6 +187,7 @@ void BuildOutputPane::setController(BuildController* controller) {
         appendSummary(*m_controller->lastOutcome());
     }
     m_connections.push_back(connect(m_controller, &BuildController::buildStarted, this, &BuildOutputPane::clear));
+    m_connections.push_back(connect(m_controller, &BuildController::backendChanged, this, &BuildOutputPane::clear));
     m_connections.push_back(connect(m_controller, &BuildController::outputLine, this, &BuildOutputPane::appendLine));
     m_connections.push_back(
         connect(m_controller, &BuildController::diagnosticAdded, this, &BuildOutputPane::addDiagnostic));

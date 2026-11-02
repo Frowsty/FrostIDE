@@ -42,6 +42,8 @@ TEST(SyntaxLanguage, FileNameTable) {
     EXPECT_EQ(languageForFileName("package.json"), LanguageId::Json);
     EXPECT_EQ(languageForFileName("settings.jsonc"), LanguageId::Json);
     EXPECT_EQ(languageForFileName("README.md"), LanguageId::Markdown);
+    EXPECT_EQ(languageForFileName("src/script.LUA"), LanguageId::Lua);
+    EXPECT_EQ(languageForFileName("src/script.lua.cpp"), LanguageId::Cpp);
     EXPECT_EQ(languageForFileName("notes.txt"), LanguageId::None);
     EXPECT_EQ(languageForFileName(".gitignore"), LanguageId::None);
     EXPECT_EQ(languageForFileName("Makefile"), LanguageId::None);

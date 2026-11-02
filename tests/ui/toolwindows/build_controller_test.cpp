@@ -133,6 +133,18 @@ TEST(BuildController, LateCallbacksAfterTheControllerIsGoneAreSafe) {
     EXPECT_EQ(code, std::optional(ErrorCode::Cancelled));
 }
 
+TEST(BuildController, DropsQueuedEventsFromAnInactiveBackend) {
+    BuildController controller;
+    bool active = true;
+    const auto callbacks = controller.serviceCallbacks([&active] { return active; });
+    callbacks.onStateChanged(BuildState::Running);
+    callbacks.onOutput(build::BuildOutputKind::Stdout, "old project");
+    active = false;
+    runPostedEvents();
+    EXPECT_EQ(controller.state(), BuildState::Idle);
+    EXPECT_TRUE(controller.currentOutput().empty());
+}
+
 TEST(BuildController, ReportsRefusedRequestsAndTracksTheSolution) {
     FakeBuildBackend backend;
     BuildController controller;

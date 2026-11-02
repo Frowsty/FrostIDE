@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # frost::syntax (PLAN.md section 2 "Syntax", section 3.2; ADR 0023): the tree-sitter host. The
-# vendored tree-sitter 0.27.1 runtime and seven grammars (third_party/, pinned in
+# vendored tree-sitter 0.27.1 runtime and eight grammars (third_party/, pinned in
 # third_party/vendor.lock.json), our own highlight and outline queries (queries/, embedded at
 # configure time), incremental parsing from frost::text snapshots with a 2 ms synchronous budget
 # and a frost::sched worker fallback, and the 50 MB cut-off. Qt-free; no tree-sitter header in the
@@ -46,6 +46,7 @@ _frost_tree_sitter_grammar(c_sharp "${_frost_grammars}/c-sharp/src" parser.c sca
 _frost_tree_sitter_grammar(cmake "${_frost_grammars}/cmake/src" parser.c scanner.c)
 _frost_tree_sitter_grammar(xml "${_frost_grammars}/xml/xml/src" parser.c scanner.c)
 _frost_tree_sitter_grammar(json "${_frost_grammars}/json/src" parser.c)
+_frost_tree_sitter_grammar(lua "${_frost_grammars}/lua/src" parser.c scanner.c)
 _frost_tree_sitter_grammar(markdown "${_frost_grammars}/markdown/tree-sitter-markdown/src" parser.c scanner.c)
 
 frost_add_library(syntax LAYER syntax
@@ -61,11 +62,12 @@ frost_add_library(syntax LAYER syntax
     THIRD_PARTY
         tree_sitter_runtime
         tree_sitter_c tree_sitter_cpp tree_sitter_c_sharp tree_sitter_cmake
-        tree_sitter_xml tree_sitter_json tree_sitter_markdown)
+        tree_sitter_xml tree_sitter_json tree_sitter_markdown tree_sitter_lua)
 target_include_directories(frost_syntax PRIVATE src)
 
 set(_frost_syntax_queries "")
-foreach(language IN ITEMS c cpp csharp cmake xml json markdown)
+foreach(language IN ITEMS c cpp csharp cmake xml json markdown lua)
     list(APPEND _frost_syntax_queries queries/${language}/highlights.scm queries/${language}/outline.scm)
 endforeach()
+list(APPEND _frost_syntax_queries queries/lua/folds.scm)
 frost_embed_files(frost_syntax FILES ${_frost_syntax_queries})

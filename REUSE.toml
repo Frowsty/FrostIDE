@@ -113,3 +113,16 @@ path = ["third_party/grammars/markdown/**"]
 precedence = "override"
 SPDX-FileCopyrightText = "2021 Matthias Deiml"
 SPDX-License-Identifier = "MIT"
+
+# Vendored libvterm 0.3.3 (third_party/vendor.lock.json, ADR 0051): upstream bytes under its MIT licence.
+[[annotations]]
+path = ["third_party/libvterm/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2008 Paul Evans <leonerd@leonerd.org.uk>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/grammars/lua/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2021 Munif Tanjim"
+SPDX-License-Identifier = "MIT"

@@ -25,6 +25,7 @@
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/terminal/terminal_tool_window.hpp"
 #include "frost/ui/toolwindows/build_actions.hpp"
 #include "frost/ui/toolwindows/build_output.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
@@ -32,6 +33,7 @@
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "cmake_integration.hpp"
 #include "language_bridge.hpp"
 #include <QAction>
 #include <QApplication>
@@ -281,7 +283,7 @@ void Workbench::createBuildService() {
     options.maxCpuCount = static_cast<unsigned>(std::max<std::int64_t>(0, snapshot->get(key::buildMsbuildMaxCpuCount)));
     options.startBuild = m_options.startBuild;
     m_buildService = build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
-                                                 m_build->serviceCallbacks());
+                                                 m_build->serviceCallbacks([this] { return !m_cmake; }));
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
@@ -297,6 +299,8 @@ void Workbench::createBuildService() {
     });
 }
 
+build::CMakeService* Workbench::cmakeService() noexcept { return m_cmake ? &m_cmake->service() : nullptr; }
+
 void Workbench::createRunService() {
     // The Run console exists before the window (the actions drive it); attachRun() docks it.
     auto* console = new ui::RunConsole();
@@ -305,6 +309,12 @@ void Workbench::createRunService() {
     ui::RunControllerHooks hooks;
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
+    hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
+    hooks.alternateRunning = [this] { return m_cmake && m_cmake->running(); };
+    hooks.alternateRun = [this] { return m_cmake->run(); };
+    hooks.alternateRerun = [this] { return m_cmake->rerun(); };
+    hooks.alternateStop = [this] { m_cmake->stop(); };
+    hooks.alternateInput = [this](const QString& line) { m_cmake->input(line); };
     m_runController = std::make_unique<ui::RunController>(console, std::move(hooks));
     m_runBuilder = build::makeRunBuilder(*m_buildService);
     const auto snapshot = m_services.settings.snapshot();
@@ -412,6 +422,10 @@ void Workbench::attach(ui::ShellWindow& window) {
     nav.applicationSettingsFile = m_options.applicationSettingsFile;
     nav.closeProjectHook = [this] { static_cast<void>(closeProject()); };
     nav.openProjectHook = [this](const std::string& root) { return reopenRoot(root); };
+    nav.filesChanged = [this](const io::FileChangeBatch& batch) {
+        if (m_cmake)
+            m_cmake->filesChanged(batch);
+    };
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
 
     attachToolWindows();
@@ -422,6 +436,7 @@ void Workbench::attach(ui::ShellWindow& window) {
         m_language->editorChanged();
         updateLanguageTarget();
     });
+    attachTerminal();
     m_trustPrompter = new ui::TrustPrompter(*m_build, &window, this);
 
     auto* welcome = new WelcomeScreen();
@@ -476,12 +491,19 @@ void Workbench::detach() {
         return;
     }
     QCoreApplication::instance()->removeEventFilter(this);
+    stopTerminal();
+    m_terminal.reset();
     // The navigation workbench saves the session and stops its watcher while the tabs exist.
     m_nav.reset();
     // Navigation saves tab state by directory; retain the exact project the user opened.
     if (m_sessions && !m_projectIdentity.empty()) {
         if (auto saved = m_sessions->setLastProject(m_projectIdentity); !saved)
             log::warn(kLog, "last project: {}", saved.error().describe());
+    }
+    if (m_cmake) {
+        stopClangd();
+        m_build->setBackend(m_buildBackend.get());
+        m_cmake.reset();
     }
     // The controller owns its panel; the tool window manager deletes what it still holds.
     if (m_language) {
@@ -665,6 +687,9 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    stopTerminal();
+    if (m_cmake)
+        m_cmake->shutdown();
     if (m_nav) {
         if (auto saved = m_nav->saveSession(); !saved) {
             log::warn(kLog, "session: {}", saved.error().describe());

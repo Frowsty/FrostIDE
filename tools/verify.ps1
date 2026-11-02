@@ -267,12 +267,13 @@ try {
 
     # clang-format: every tracked C/C++ file must already be formatted. Fixtures are
     # excluded: they are byte-exact inputs, and clang-format cannot parse the
-    # banned-construct probes. Vendored tree-sitter sources stay as pinned (ADR 0023).
+    # banned-construct probes. Vendored tree-sitter and libvterm sources stay as pinned (ADR 0023, 0051).
     Write-Host '=== format'
     $clangFormat = Join-Path $env:FROST_LLVM_ROOT 'bin\clang-format.exe'
     $sources = @(git ls-files '*.cpp' '*.hpp' '*.h' '*.c' '*.hpp.in' |
         Where-Object { $_ -notlike 'tests/toolchain_probe/banned/*' -and $_ -notlike 'tests/*/fixtures/*' -and
-            $_ -notlike 'third_party/tree-sitter/*' -and $_ -notlike 'third_party/grammars/*' })
+            $_ -notlike 'third_party/tree-sitter/*' -and $_ -notlike 'third_party/grammars/*' -and
+            $_ -notlike 'third_party/libvterm/*' })
     $unformatted = New-Object System.Collections.Generic.List[string]
     foreach ($source in $sources) {
         $null = & $clangFormat --dry-run --Werror $source 2>&1

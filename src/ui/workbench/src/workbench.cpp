@@ -1007,6 +1007,9 @@ void Workbench::discardRecovered() {
 // --- Disk changes, merging and saving ---
 
 void Workbench::applyFileChanges(const io::FileChangeBatch& batch) {
+    if (m_services.filesChanged) {
+        m_services.filesChanged(batch);
+    }
     // The listener (handleExternalChange) reports each change the manager finds.
     static_cast<void>(m_services.saveManager.applyChanges(batch));
     bool projectChanged = false;

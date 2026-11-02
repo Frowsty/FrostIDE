@@ -202,6 +202,9 @@ public:
         if (wb.buildStatePath.empty()) {
             wb.buildStatePath = dir.join("data/active-configurations.txt");
         }
+        if (wb.cmakeStatePath.empty()) {
+            wb.cmakeStatePath = dir.join("data/cmake-profiles.txt");
+        }
         if (wb.compileCommandsCache.empty()) {
             wb.compileCommandsCache = dir.join("data/compile-commands");
         }

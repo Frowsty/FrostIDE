@@ -65,6 +65,11 @@ if(WIN32)
     target_link_libraries(io_test_child PRIVATE shell32 advapi32 user32)
 endif()
 
+add_executable(local_ipc_test_child local_ipc_test_child.cpp)
+frost_apply_compile_options(local_ipc_test_child TEST)
+target_link_libraries(local_ipc_test_child PRIVATE frost::io)
+frost_copy_runtime_dlls(local_ipc_test_child)
+
 # RESOURCE_LOCK frost_desktop, the integration label's default (frost_add_test's policy; ADR 0027
 # decision 3): the process tests create private desktops and windows and start io_test_child on
 # them, as the tests/app process tests do, so the executables holding the lock never overlap.
@@ -75,6 +80,7 @@ frost_add_test(io_integration_tests
         file_system_test.cpp
         file_watcher_test.cpp
         ignore_rules_git_test.cpp
+        local_ipc_test.cpp
         polling_watcher_test.cpp
         process_test.cpp
         safe_write_test.cpp
@@ -83,7 +89,9 @@ frost_add_test(io_integration_tests
 # src/io/src: the tests name detail::kAtomicTempMarker, lower detail::maxWaitSliceMs() and use the
 # watcher test hooks (watcher_testing.hpp).
 target_include_directories(io_integration_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/io/src)
-target_compile_definitions(io_integration_tests PRIVATE FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
+target_compile_definitions(io_integration_tests PRIVATE FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>"
+    FROST_LOCAL_IPC_TEST_CHILD="$<TARGET_FILE:local_ipc_test_child>")
+add_dependencies(io_integration_tests local_ipc_test_child)
 add_dependencies(io_integration_tests io_test_child)
 if(WIN32)
     # advapi32: the pipe test's token and SID calls; user32: tests/support/private_desktop.hpp and

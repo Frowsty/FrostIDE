@@ -51,6 +51,10 @@ namespace {
 
 using detail::UniqueHandle;
 
+// PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, ProcThreadAttributeValue(22, FALSE, TRUE, FALSE) in the Windows SDK, which
+// declares it only for NTDDI_VERSION >= NTDDI_WIN10_RS5; FrostIDE builds with _WIN32_WINNT 0x0A00 alone.
+constexpr DWORD_PTR kProcThreadAttributePseudoConsole = 0x00020016;
+
 // Pipe buffer size in bytes, each direction; also the communicate() read chunk.
 constexpr DWORD kPipeBufferBytes = 64 * 1024;
 // How long communicate() waits for a terminated process to disappear before returning Timeout.
@@ -874,11 +878,13 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         environment = std::move(*block);
     }
 
-    // A child with a console of its own uses that console's buffers and inherits no handle (newConsole).
+    // A child with a console of its own (newConsole) or on a pseudo console (pseudoTerminal) uses that
+    // console's buffers and inherits no handle.
+    const bool ownConsole = spec.newConsole || spec.pseudoTerminal.has_value();
     Result<StreamSetup> in = StreamSetup{};
     Result<StreamSetup> out = StreamSetup{};
     StreamSetup err;
-    if (!spec.newConsole) {
+    if (!ownConsole) {
         in = setupStream(spec.stdinMode, STD_INPUT_HANDLE, /*parentReads=*/false);
         if (!in) {
             return std::unexpected(std::move(in.error()));
@@ -910,9 +916,10 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         }
     }
 
-    // Exactly these handles are inherited (each once; duplicates are an error for the API); none with newConsole.
+    // Exactly these handles are inherited (each once; duplicates are an error for the API); none with a
+    // console of the child's own.
     std::vector<HANDLE> inherited;
-    if (!spec.newConsole) {
+    if (!ownConsole) {
         inherited = {in->child.get(), out->child.get()};
         if (std::ranges::find(inherited, childErr) == inherited.end()) {
             inherited.push_back(childErr);
@@ -920,7 +927,7 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
     }
     // A handle list must not be empty, and an attribute list needs at least one attribute: with
     // neither handles nor a job there is no list at all.
-    const DWORD attributeCount = (inherited.empty() ? 0 : 1) + (job.valid() ? 1 : 0);
+    const DWORD attributeCount = (inherited.empty() ? 0 : 1) + (job.valid() ? 1 : 0) + (spec.pseudoTerminal ? 1 : 0);
     SIZE_T listSize = 0;
     std::vector<std::byte> listStorage;
     LPPROC_THREAD_ATTRIBUTE_LIST attributes = nullptr;
@@ -952,9 +959,28 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(JOB_LIST)"));
     }
 
+    // The pseudo console (frost::term, ADR 0051): the child attaches to it instead of a console of its own.
+    if (spec.pseudoTerminal && UpdateProcThreadAttribute(attributes, 0, kProcThreadAttributePseudoConsole,
+                                                         spec.pseudoTerminal->windowsPseudoConsole, sizeof(void*),
+                                                         nullptr, nullptr) == FALSE) {
+        return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(PSEUDOCONSOLE)"));
+    }
+
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
-    if (!spec.newConsole) {
+    if (spec.pseudoTerminal) {
+        /*
+         * Invalid standard handles with STARTF_USESTDHANDLES: without them a parent whose own standard
+         * handles are redirected (a test under ctest, frost started from a pipe) can pass those to the
+         * child, which then writes there instead of to the pseudo console. The console subsystem
+         * replaces invalid handles with the pseudo console's. The same construction as wezterm's
+         * portable-pty (MIT), an independent implementation of the idea.
+         */
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+        startup.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+        startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+    } else if (!spec.newConsole) {
         startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         startup.StartupInfo.hStdInput = in->child.get();
         startup.StartupInfo.hStdOutput = out->child.get();
@@ -965,6 +991,8 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
     DWORD flags = CREATE_UNICODE_ENVIRONMENT | (attributes != nullptr ? EXTENDED_STARTUPINFO_PRESENT : 0);
     if (spec.newConsole) {
         flags |= CREATE_NEW_CONSOLE;
+    } else if (spec.pseudoTerminal) {
+        // The pseudo console is headless: no window, whatever this process has.
     } else if (GetConsoleWindow() == nullptr) {
         // A GUI parent has no console; without this flag every console tool would open a window.
         // A console parent shares its console, so inherited console handles stay valid.

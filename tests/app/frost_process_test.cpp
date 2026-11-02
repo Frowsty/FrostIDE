@@ -75,6 +75,18 @@ using frost::test::ScratchDir;
 // The built executable's absolute path (CMake passes it with forward slashes).
 std::string frostExe() { return frost::io::normalizePath(FROST_EXE_PATH).value(); }
 
+#ifdef _WIN32
+// The late-load report is one line; checking inside it avoids depending on DLL enumeration order.
+std::string_view lateLoadLine(std::string_view output) {
+    constexpr std::string_view prefix = "selftest: ok   late-load: loaded by name: ";
+    const auto start = output.find(prefix);
+    if (start == std::string_view::npos)
+        return {};
+    const auto end = output.find('\n', start);
+    return output.substr(start, end == std::string_view::npos ? end : end - start);
+}
+#endif
+
 struct FrostRun {
     // The child's exit status; -1 if it could not be started, did not finish within
     // runFrost's timeout, or its output could not be read.
@@ -220,7 +232,9 @@ TEST(FrostProcess, SelfTestPasses) {
     EXPECT_NE(result.output.find("ok   dialog-guard"), std::string::npos) << result.output;
     EXPECT_NE(result.output.find("ok   plugin-paths: loaded Qt's platform plugin "), std::string::npos)
         << result.output;
-    EXPECT_NE(result.output.find("ok   late-load: all "), std::string::npos) << result.output;
+    const std::string_view lateLoad = lateLoadLine(result.output);
+    ASSERT_FALSE(lateLoad.empty()) << result.output;
+    EXPECT_TRUE(lateLoad.contains("conpty.dll (\\\\?\\ form)")) << result.output;
 #endif
     EXPECT_NE(result.output.find("ok   plugin-paths"), std::string::npos) << result.output;
 }
@@ -711,9 +725,11 @@ TEST(FrostProcess, LateLoadOfADllBesideTheExeWorksFromALongPlainPath) {
     const auto form = parentLongPathsEffective() ? ImagePathForm::Plain : ImagePathForm::Extended;
     const auto result = runFrost(exe, {"--selftest"}, ownPluginsOnly(), form, 30s);
     EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
-    EXPECT_TRUE(
-        result.output.contains(std::format("ok   late-load: loaded by name: {} (\\\\?\\ form)", qtDll("Qt6Network"))))
-        << result.output;
+    EXPECT_NE(result.output.find("selftest: PASSED"), std::string::npos) << result.output;
+    const std::string_view lateLoad = lateLoadLine(result.output);
+    ASSERT_FALSE(lateLoad.empty()) << result.output;
+    EXPECT_TRUE(lateLoad.contains("conpty.dll (\\\\?\\ form)")) << result.output;
+    EXPECT_TRUE(lateLoad.contains(std::format("{} (\\\\?\\ form)", qtDll("Qt6Network")))) << result.output;
 }
 
 TEST(FrostProcess, PreloadsOtherPluginsFromALongPath) {

@@ -578,6 +578,174 @@
           "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2"
         }
       ]
+    },
+    {
+      "id": "libvterm",
+      "name": "libvterm",
+      "version": "0.3.3",
+      "commit": "9d6d2112335080312ef8c36667fa717ded4f7daf",
+      "url": "https://www.leonerd.org.uk/code/libvterm/libvterm-0.3.3.tar.gz",
+      "archive": "libvterm-0.3.3.tar.gz",
+      "sha256": "09156f43dd2128bd347cbeebe50d9a571d32c64e0cf18d211197946aff7226e0",
+      "crossCheck": "The archive is upstream's release tarball (Paul Evans; the project itself lives in Launchpad bzr and has no git commit). commit is the v0.3.3 tag of the neovim/libvterm GitHub mirror: every file except the two generated src/encoding/*.inc tables equals raw.githubusercontent.com/neovim/libvterm/<commit>/<path> (checked 2026-11-02), and the two tables match the mirror's src/encoding/DECdrawing.tbl and uk.tbl entry for entry.",
+      "crossCheckBase": "https://raw.githubusercontent.com/neovim/libvterm/9d6d2112335080312ef8c36667fa717ded4f7daf/",
+      "purl": "pkg:generic/libvterm@0.3.3?download_url=https://www.leonerd.org.uk/code/libvterm/libvterm-0.3.3.tar.gz",
+      "licence": "MIT",
+      "copyright": [
+        "Copyright (c) 2008 Paul Evans <leonerd@leonerd.org.uk>"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://www.leonerd.org.uk/code/libvterm/",
+      "dest": "third_party/libvterm",
+      "licenceFile": "LICENSE",
+      "adr": "docs/adr/0051-terminal.md",
+      "files": [
+        {
+          "member": "libvterm-0.3.3/LICENSE",
+          "path": "LICENSE",
+          "sha256": "66c627cf44f0c59daf81ba442e62e9b3d3cd1091a41e116de5ea9058a57bbba7"
+        },
+        {
+          "member": "libvterm-0.3.3/include/vterm.h",
+          "path": "include/vterm.h",
+          "sha256": "07f78f27bc043e3791ede1fb61891400f06fd64c5c7cf38a92a02712fb18fe6b"
+        },
+        {
+          "member": "libvterm-0.3.3/include/vterm_keycodes.h",
+          "path": "include/vterm_keycodes.h",
+          "sha256": "2a8a667b8f820d9c824b79e7bc4add4acab79b9712fd5b162715f59e11e15fc6"
+        },
+        {
+          "member": "libvterm-0.3.3/src/encoding.c",
+          "path": "src/encoding.c",
+          "sha256": "f5a91b627ee06c3c3cd8ba0abef7258e889d0ed6a484728a0dc51c7e99a7cf99"
+        },
+        {
+          "member": "libvterm-0.3.3/src/encoding/DECdrawing.inc",
+          "path": "src/encoding/DECdrawing.inc",
+          "sha256": "d8c25047d5f4b6cea81904fb9efb640307298dbe945d1b71623fcb741a6449ee"
+        },
+        {
+          "member": "libvterm-0.3.3/src/encoding/uk.inc",
+          "path": "src/encoding/uk.inc",
+          "sha256": "9dad74b7ced668b4ed495791c59d3006d858593e4b5fe5e01cb5bfa7a5e24ebb"
+        },
+        {
+          "member": "libvterm-0.3.3/src/fullwidth.inc",
+          "path": "src/fullwidth.inc",
+          "sha256": "41c4b4a0722cd8d269e66225c04e922454039405903fefb2c8b07c9de0cf57f1"
+        },
+        {
+          "member": "libvterm-0.3.3/src/keyboard.c",
+          "path": "src/keyboard.c",
+          "sha256": "3d0f3ac0c46af4d9463dedf8fd28dfad07dd11a851f22f60cba5ea70a6133cde"
+        },
+        {
+          "member": "libvterm-0.3.3/src/mouse.c",
+          "path": "src/mouse.c",
+          "sha256": "2824a884d4ac64ee147febe8c4a470679351d0c040c0171d7ac8f4f4165b0f7e"
+        },
+        {
+          "member": "libvterm-0.3.3/src/parser.c",
+          "path": "src/parser.c",
+          "sha256": "237220e912ab95795f78c013d6734b88080b00595010dab87d11980c24d025af"
+        },
+        {
+          "member": "libvterm-0.3.3/src/pen.c",
+          "path": "src/pen.c",
+          "sha256": "f97dde69a6e7e7f9c3a6fdb7575e965ef9a17077bf196609759f9f181982ca2b"
+        },
+        {
+          "member": "libvterm-0.3.3/src/rect.h",
+          "path": "src/rect.h",
+          "sha256": "8ac51df5e5c7e092b5c3feedc930a5238327f204da50febd3ae635788ba1de06"
+        },
+        {
+          "member": "libvterm-0.3.3/src/screen.c",
+          "path": "src/screen.c",
+          "sha256": "d37cc2977595c9766dd85d20ce86e3a7838271a7df9c28f9ff1ac4a8ff1bb59a"
+        },
+        {
+          "member": "libvterm-0.3.3/src/state.c",
+          "path": "src/state.c",
+          "sha256": "8f6504f091a91194fa4e972a142d586fb96bd8e7a15b6d26747323f1fe48ff38"
+        },
+        {
+          "member": "libvterm-0.3.3/src/unicode.c",
+          "path": "src/unicode.c",
+          "sha256": "a3905a313d8825aa95b4e26a8cb72a06c5c88a80c665cdf093ebaa8b874d7026"
+        },
+        {
+          "member": "libvterm-0.3.3/src/utf8.h",
+          "path": "src/utf8.h",
+          "sha256": "2a1c6ffd176d2750e077debbd8bc43f9d7b8bd451eb37b7bbe7e7b60ed29a974"
+        },
+        {
+          "member": "libvterm-0.3.3/src/vterm.c",
+          "path": "src/vterm.c",
+          "sha256": "f8620e99da940d9c49c8d58dccd161aeaad45c5c6c3950f5289e6e4f77be85ac"
+        },
+        {
+          "member": "libvterm-0.3.3/src/vterm_internal.h",
+          "path": "src/vterm_internal.h",
+          "sha256": "d283425a4bc343d351f858dfd32840320f25701fbbca06eb44d0d2040bf6e7e9"
+        }
+      ]
+    },
+    {
+      "id": "lua",
+      "name": "tree-sitter-lua",
+      "version": "0.5.0",
+      "commit": "10fe0054734eec83049514ea2e718b2a56acd0c9",
+      "url": "https://codeload.github.com/tree-sitter-grammars/tree-sitter-lua/tar.gz/10fe0054734eec83049514ea2e718b2a56acd0c9",
+      "archive": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9.tar.gz",
+      "sha256": "82c3ca5808de02addd9c7fb5275d89260c6557019aa6e40ca52c0595bf1d33cd",
+      "crossCheck": "Pinned tag v0.5.0 resolved by git ls-remote.",
+      "crossCheckBase": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-lua/10fe0054734eec83049514ea2e718b2a56acd0c9/",
+      "purl": "pkg:github/tree-sitter-grammars/tree-sitter-lua@v0.5.0",
+      "licence": "MIT",
+      "copyright": [
+        "Copyright (c) 2021 Munif Tanjim"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/tree-sitter-grammars/tree-sitter-lua",
+      "dest": "third_party/grammars/lua",
+      "licenceFile": "LICENSE.md",
+      "adr": "docs/adr/0061-lua-syntax.md",
+      "files": [
+        {
+          "member": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9/LICENSE.md",
+          "path": "LICENSE.md",
+          "sha256": "9a32b02e4c917b1ce6b5e79d8ea81e25cefd7f27d89c7235f2afb262c06cf32e"
+        },
+        {
+          "member": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9/src/parser.c",
+          "path": "src/parser.c",
+          "sha256": "933206d96a78f7785c13b2600182f1527dcd755c200b1271bb5bc4d8da4b17b3"
+        },
+        {
+          "member": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9/src/scanner.c",
+          "path": "src/scanner.c",
+          "sha256": "35bbd630b5a7421d46d2e91185eeea09bf78565d44cb676b63ca20d0f1b54bbd"
+        },
+        {
+          "member": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9/src/tree_sitter/alloc.h",
+          "path": "src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea"
+        },
+        {
+          "member": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9/src/tree_sitter/array.h",
+          "path": "src/tree_sitter/array.h",
+          "sha256": "31e60a1bff6f715afacce03b5b70efe42b58371b4f9595dd4af52a577ff9608c"
+        },
+        {
+          "member": "tree-sitter-lua-10fe0054734eec83049514ea2e718b2a56acd0c9/src/tree_sitter/parser.h",
+          "path": "src/tree_sitter/parser.h",
+          "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2"
+        }
+      ]
     }
   ]
 }

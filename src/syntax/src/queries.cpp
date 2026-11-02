@@ -60,6 +60,16 @@ constexpr unsigned char kMarkdownOutline[] = {
 #include "queries_markdown_outline_scm.inc"
 };
 
+constexpr unsigned char kLuaHighlights[] = {
+#include "queries_lua_highlights_scm.inc"
+};
+constexpr unsigned char kLuaFolds[] = {
+#include "queries_lua_folds_scm.inc"
+};
+constexpr unsigned char kLuaOutline[] = {
+#include "queries_lua_outline_scm.inc"
+};
+
 template<std::size_t N>
 [[nodiscard]] std::string_view view(const unsigned char (&bytes)[N]) noexcept {
     return std::string_view(reinterpret_cast<const char*>(bytes), N);
@@ -259,6 +269,9 @@ template<std::size_t N>
 } // namespace
 
 std::string_view querySource(LanguageId language, QueryKind kind) noexcept {
+    if (kind == QueryKind::Folds) {
+        return language == LanguageId::Lua ? view(kLuaFolds) : std::string_view{};
+    }
     const bool highlights = kind == QueryKind::Highlights;
     switch (language) {
     case LanguageId::C: return highlights ? view(kCHighlights) : view(kCOutline);
@@ -268,6 +281,7 @@ std::string_view querySource(LanguageId language, QueryKind kind) noexcept {
     case LanguageId::Xml: return highlights ? view(kXmlHighlights) : view(kXmlOutline);
     case LanguageId::Json: return highlights ? view(kJsonHighlights) : view(kJsonOutline);
     case LanguageId::Markdown: return highlights ? view(kMarkdownHighlights) : view(kMarkdownOutline);
+    case LanguageId::Lua: return highlights ? view(kLuaHighlights) : view(kLuaOutline);
     case LanguageId::None: break;
     }
     return {};
@@ -298,6 +312,12 @@ Result<CompiledQuery> compileQuery(const TSLanguage* grammar, std::string_view s
                 return fail(ErrorCode::Corrupt, std::format("{}: unknown capture @{}", label, name));
             }
             compiled.highlightKinds.push_back(highlight);
+            continue;
+        }
+        if (kind == QueryKind::Folds) {
+            if (name != "fold") {
+                return fail(ErrorCode::Corrupt, std::format("{}: unknown capture @{}", label, name));
+            }
             continue;
         }
         OutlineRole role;

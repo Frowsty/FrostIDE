@@ -9,6 +9,7 @@
 #include "frost/app/selftest.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/popup.hpp"
+#include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include <QAction>
@@ -54,6 +55,7 @@ TEST(MainWindow, HasTheNavigationWorkbench) {
     frost::app::MainWindow window;
     ASSERT_NE(window.workbench(), nullptr);
     EXPECT_TRUE(window.toolWindows().contains(frost::ui::kFileSystemToolWindow));
+    EXPECT_TRUE(window.toolWindows().contains(frost::ui::tool_windows::kTerminal));
     EXPECT_EQ(window.invoke(frost::ui::workbench_actions::kGoToFile), frost::input::InvokeResult::Ran);
     ASSERT_NE(window.activePopup(), nullptr);
     EXPECT_EQ(window.activePopup()->objectName(), QStringLiteral("goToFilePopup"));

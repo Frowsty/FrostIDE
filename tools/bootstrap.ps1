@@ -22,8 +22,7 @@
 param(
     # Root directory for every installed component.
     [string]$SdkRoot = 'E:\sdk',
-    # Optional subset of components to install (llvm, cmake, ninja, gh, sccache, dotnet, python, qt, vcpkg,
-    # lldb).
+    # Optional subset (llvm, cmake, ninja, gh, sccache, dotnet, conpty, python, qt, vcpkg, lldb).
     [string[]]$Only = @()
 )
 
@@ -247,7 +246,7 @@ Assert-FreeSpace
 Assert-Msvc
 New-Item -ItemType Directory -Force -Path $Downloads | Out-Null
 
-foreach ($name in @('llvm', 'cmake', 'ninja', 'gh', 'sccache', 'dotnet')) {
+foreach ($name in @('llvm', 'cmake', 'ninja', 'gh', 'sccache', 'dotnet', 'conpty')) {
     if (Test-Wanted $name) { Install-Archive $name }
 }
 if (Test-Wanted 'python') { Install-PythonTools }

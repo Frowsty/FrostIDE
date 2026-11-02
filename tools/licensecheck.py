@@ -968,6 +968,36 @@ def write_sbom(repo: Path, report: Report, path: Path) -> None:
 # ---------------------------------------------------------------------------------------
 
 
+def check_sdk_conpty(repo: Path, report: Report) -> None:
+    """Check the optional bundled ConPTY pin and include it in the SBOM."""
+    path = repo / "sdk/sdk.lock.json"
+    if not path.is_file():
+        return
+    try:
+        pin = json.loads(path.read_text(encoding="utf-8")).get("windows", {}).get("conpty")
+        if pin is None:
+            return
+        licence = pin["license"]
+        version = pin["version"]
+        url = pin["url"]
+        digest = pin["sha256"]
+        if not expression_allowed(licence, ALLOWLIST):
+            raise ValueError("licence is not on the allowlist")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("archive SHA-256 is invalid")
+        if not (repo / pin["adr"]).is_file():
+            raise ValueError("ADR is missing")
+        notice = (repo / "NOTICE").read_text(encoding="utf-8")
+        if pin["copyright"] not in notice or "Permission is hereby granted, free of charge" not in notice:
+            raise ValueError("MIT copyright or permission notice is missing")
+        report.packages.append(Package(
+            _spdx_id("Microsoft-Windows-Console-ConPTY"), "Microsoft.Windows.Console.ConPTY", version,
+            licence, licence, url, "https://github.com/microsoft/terminal",
+            f"pkg:nuget/Microsoft.Windows.Console.ConPTY@{version}", "Bundled ConPTY", sha256=digest))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        report.violations.append(Violation("sdk/sdk.lock.json", 1, f"ConPTY pin: {error}"))
+
+
 def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Path | None) -> Report:
     """Runs every check and returns the violations and SBOM packages."""
     report = Report()
@@ -977,6 +1007,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     check_qt(repo, uses, qt_root, report)
     check_assets(repo, report, files)
     check_assets(repo, report, files, VENDOR_MANIFEST)
+    check_sdk_conpty(repo, report)
     report.violations = sorted(set(report.violations))
     return report
 

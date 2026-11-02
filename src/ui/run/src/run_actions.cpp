@@ -32,9 +32,7 @@ Result<void> registerRunActions(input::ActionRegistry& registry, RunController& 
         }
     };
     RunController* c = &controller;
-    const auto hasSolution = [c](const input::ActionContext&) {
-        return c->service() != nullptr && c->service()->solution() != nullptr;
-    };
+    const auto hasSolution = [c](const input::ActionContext&) { return c->canRun(); };
     const auto runAction = [c, report](const input::ActionContext&, const input::InvokeInfo&) {
         if (auto started = c->run(); !started && started.error().code() != ErrorCode::Cancelled) {
             report(started.error());

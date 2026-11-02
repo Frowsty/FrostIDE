@@ -19,6 +19,7 @@ const TSLanguage* tree_sitter_cmake(void);
 const TSLanguage* tree_sitter_xml(void);
 const TSLanguage* tree_sitter_json(void);
 const TSLanguage* tree_sitter_markdown(void);
+const TSLanguage* tree_sitter_lua(void);
 }
 
 namespace frost::syntax::detail {

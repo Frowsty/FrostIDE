@@ -93,6 +93,48 @@ TEST(TrustDialog, CancelCancelsTheWaitingBuild) {
     EXPECT_EQ(dialog.result(), QDialog::Rejected);
 }
 
+TEST(TrustDialog, DecliningLuaTrustDoesNotCancelAnUnrelatedWaitingBuild) {
+    Rig rig;
+    rig.needTrust({kApp});
+    const QStringList roots{QString::fromUtf8(kApp)};
+    {
+        TrustDialog lua(rig.controller, roots, nullptr, TrustPurpose::LuaLanguageServer);
+        lua.cancelButton()->click();
+        EXPECT_EQ(lua.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+        EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
+    }
+    {
+        TrustDialog lua(rig.controller, roots, nullptr, TrustPurpose::LuaLanguageServer);
+        lua.show();
+        lua.close();
+        EXPECT_EQ(lua.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+    }
+    {
+        TrustDialog lua(rig.controller, roots, nullptr, TrustPurpose::LuaLanguageServer);
+        lua.show();
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(&lua, &escape);
+        EXPECT_EQ(lua.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+    }
+    EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
+    TrustDialog build(rig.controller, roots, nullptr, TrustPurpose::Build);
+    build.cancelButton()->click();
+    EXPECT_EQ(rig.backend.cancels, 1);
+}
+
+TEST(TrustDialog, AcceptingLuaTrustStillTrustsTheProject) {
+    Rig rig;
+    rig.needTrust({kApp});
+    TrustDialog lua(rig.controller, {QString::fromUtf8(kApp)}, nullptr, TrustPurpose::LuaLanguageServer);
+    lua.trustButton()->click();
+    EXPECT_EQ(rig.backend.trusted, std::vector<std::string>{kApp});
+    EXPECT_EQ(lua.result(), QDialog::Accepted);
+    EXPECT_EQ(rig.backend.cancels, 0);
+}
+
 TEST(TrustPrompter, OpensOneDialogPerPromptAndClosesWhenTheBuildMovesOn) {
     Rig rig;
     QWidget window;

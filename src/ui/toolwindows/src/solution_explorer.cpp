@@ -426,6 +426,14 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         menu->addSeparator();
     }
 
+    if (m_terminalHandler && !path.isEmpty()) {
+        QAction* terminal = menu->addAction(tr("Open in Terminal"));
+        terminal->setObjectName(QStringLiteral("openInTerminal"));
+        connect(terminal, &QAction::triggered, this, [this, path] {
+            if (m_terminalHandler)
+                m_terminalHandler(path);
+        });
+    }
     QAction* reveal = menu->addAction(tr("Open Containing Folder"));
     reveal->setObjectName(QStringLiteral("openContainingFolder"));
     reveal->setEnabled(m_launcher != nullptr && !path.isEmpty());

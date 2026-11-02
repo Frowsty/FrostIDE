@@ -90,7 +90,7 @@ set(_frost_workbench_definitions
     FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
-    SOURCES workbench_test.cpp
+    SOURCES workbench_test.cpp workbench_terminal_test.cpp
     DEPS frost::app frost::build frost::io)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
@@ -115,3 +115,19 @@ frost_add_test(app_workbench_lua_tests QT
     LABELS integration)
 target_include_directories(app_workbench_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_lua_tests PRIVATE ${_frost_workbench_definitions})
+
+frost_add_test(app_workbench_cmake_tests QT
+    SOURCES workbench_cmake_test.cpp
+    DEPS frost::app frost::build frost::io
+    LABELS integration cmake clangd)
+target_include_directories(app_workbench_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}")
+
+frost_add_test(app_project_open_tests QT
+    SOURCES project_open_process_test.cpp
+    DEPS frost::app frost::lang frost::io
+    LABELS integration)
+target_include_directories(app_project_open_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_project_open_tests PRIVATE ${_frost_workbench_definitions} FROST_EXE_PATH="$<TARGET_FILE:frost>")
+add_dependencies(app_project_open_tests frost)

@@ -41,6 +41,13 @@ struct RunControllerHooks {
     std::function<bool(const QString& projectName)> confirmRerun{};
     // Shows a run that could not start or a setting that could not be saved; empty: ignored.
     std::function<void(const QString& message)> reportError{};
+    // An alternate project kind (such as CMake) supplies its own run lifecycle.
+    std::function<bool()> alternateAvailable{};
+    std::function<bool()> alternateRunning{};
+    std::function<Result<build::RunId>()> alternateRun{};
+    std::function<Result<build::RunId>()> alternateRerun{};
+    std::function<void()> alternateStop{};
+    std::function<void(const QString&)> alternateInput{};
 };
 
 class RunController final : public QObject {
@@ -81,7 +88,17 @@ public:
     // The run the console shows (0: none yet).
     [[nodiscard]] build::RunId currentRun() const noexcept { return m_current; }
     // Whether the console's run has not finished.
-    [[nodiscard]] bool running() const noexcept { return m_currentActive; }
+    [[nodiscard]] bool running() const {
+        if (m_hooks.alternateAvailable && m_hooks.alternateAvailable()) {
+            return m_hooks.alternateRunning && m_hooks.alternateRunning();
+        }
+        return m_currentActive;
+    }
+    [[nodiscard]] bool canRun() const {
+        return (m_hooks.alternateAvailable && m_hooks.alternateAvailable()) ||
+               (m_service != nullptr && m_service->solution() != nullptr);
+    }
+    void alternateStateChanged() { emit runStateChanged(); }
 
 signals:
     // A run started, changed state or finished (for the toolbar's Run and Stop buttons).

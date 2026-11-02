@@ -1059,15 +1059,15 @@ Existing platform, data-safety and trust rules apply throughout.
 | MANAGED-01 | Load and reevaluate managed projects; accurate C# completion, diagnostics, navigation, refactoring and build context, including Unity-generated projects and assembly definitions. No regex substitutes for semantic analysis. | New required track; engine/dependency selection outstanding |
 | MANAGED-02 | Debug, test and profile managed applications and supported framework projects, with explicit capability coverage against the parity inventory. | Depends on MANAGED-01 and debugger infrastructure; planned |
 | LUA-01 | Lua service lifecycle, document synchronization, completion, signatures, hover, diagnostics, symbols, references and rename; select the intended runtime and honor workspace configuration. Test edits, Unicode positions, server failure and restart. | Backend and application routing reviewed; real LuaLS editor workflow tested on Windows/Linux; remaining capability coverage tracked separately |
-| LUA-02 | Lua syntax, indentation, formatting, snippets, annotations/generics and module navigation; preserve unsaved edits and support mixed C++/Lua workspaces without sending Lua documents to clangd. | Depends on language routing and editor integration; planned |
+| LUA-02 | Lua syntax, indentation, formatting, snippets, annotations/generics and module navigation; preserve unsaved edits and support mixed C++/Lua workspaces without sending Lua documents to clangd. | Reviewed syntax/outline/fold ranges and bounded indentation pass Windows/Linux gates; formatting, snippets and complete semantic coverage remain |
 | LUA-03 | Lua debugging: breakpoints, stepping, stacks, locals, watches and evaluation in supported standalone and FrostEngine runtimes. A configured adapter alone is not acceptance. | Runtime/debug-protocol choice and engine support outstanding |
 | LUA-04 | Verify real LuaLS behavior on the target engine's generated definitions and a synthetic fixture: correct completions and signatures, no false undefined-engine-global diagnostics, genuine errors still reported. Measure interactive latency on the reference machine. | Real engine API completion/hover/navigation/rename and diagnostics tested on Windows/Linux; full coverage and latency measurements remain |
 | UNITY-01 | Recognize Unity projects and packages; open scripts at the requested location through a Unity external-editor bridge; refresh generated projects while preserving asset identities. | Managed-language foundation and independent bridge required; planned |
 | UNITY-02 | Connect the correct editor instance, control play/pause/step, navigate logs and run/debug Unity tests; handle disconnect and domain reload without stale state. | Depends on UNITY-01; planned |
 | UNITY-03 | Debug editor and player scripts with appropriate value inspection; identify runtime/backend support and execute real sessions before claiming it. | Depends on managed debugger and Unity transport; planned |
 | UNITY-04 | Navigate serialized scene/prefab references, understand Unity callbacks and assembly definitions, supply Unity-aware analysis and shader workflows. Track profiling and remaining documented Unity capabilities in PARITY-01. | Depends on project model, C# semantics and Unity context; planned |
-| FROST-01 | Open `.frostproj` roots and scripts at 1-based locations through the engine's custom-editor argument template. Read the engine-owned `.luarc.json` and `.frost/lua-api/frost.lua` without rewriting them. | Target `D:\Dev\FrostEngine-AI-Claude`; project identity/configuration tested, command-line and running-window integration in progress |
-| FROST-02 | Discover the matching project through the engine's versioned per-project discovery files, authenticate locally, verify project identity, and expose play, validation, tests and navigable log output without blocking the UI. | Use `Docs/ScriptEditor.md` v1/v1.1; planned |
+| FROST-01 | Open `.frostproj` roots and scripts at 1-based locations through the engine's custom-editor argument template. Read the engine-owned `.luarc.json` and `.frost/lua-api/frost.lua` without rewriting them. | Target `D:\Dev\FrostEngine-AI-Claude`; project identity, configuration, CLI and native window reuse reviewed/tested on Windows/Linux, including native symlink regressions; actual engine-driven acceptance remains |
+| FROST-02 | Discover the matching project through the engine's versioned per-project discovery files, authenticate locally, verify project identity, and expose play, validation, tests and navigable log output without blocking the UI. | Use `Docs/ScriptEditor.md` v1/v1.1; isolated implementation active, not integrated |
 | FROST-03 | Handle unavailable/stale engines, project switching, paths with spaces/Unicode, cancellation, token privacy and trust refusal; verify against the real target engine and an isolated test project. Preserve users' projects. | Depends on FROST-01/02; planned |
 | DELIVERY-01 | Complete and execute W1/U1 integrated scenarios; then execute the new Lua, Unity and FrostEngine scenarios. Packages include their required engines, plugins and notices. Separate component, application, platform and release evidence. | W1 integration under way; U1 and expansion scenarios outstanding |
 
@@ -1075,3 +1075,57 @@ Implementation agents use GPT-6.1 Terra; GPT-6 Astra reviews the changes and ver
 integration. The inherited feature-first policy still postpones expensive hardening, but not missing
 features, ordinary functional tests or review requested by the user. Scope is not reduced to whichever
 parts happen to pass tests first. Current work and remaining gaps are recorded in `docs/progress.md`.
+
+### B.1 Public-reference coverage ledger (2026-11-02)
+
+This family-level inventory makes omissions visible; it does not complete PARITY-01's individual action,
+setting and interaction inventory. The versioned documentation reference is Rider 2026.2. Only public
+behavioral documentation was consulted, not IDE implementation sources or proprietary artwork. Status
+below describes FrostIDE's current integrated application, not the existence of a standalone component.
+
+The general families follow the public [Rider feature overview](https://www.jetbrains.com/rider/features/).
+Acceptance scenarios are FrostIDE's own implementation targets.
+
+| Family | Acceptance scenario | Current gap / owning track |
+|---|---|---|
+| Managed languages | Open C#, F# and VB projects; edit with semantic completion and diagnostics. | C# service selection under investigation; F#/VB services absent. MANAGED-01. |
+| Frameworks | Build and launch representative desktop, service and web projects with correct references. | Native build support does not establish managed/framework support. MANAGED-01/02. |
+| Analysis | Detect project-wide errors and apply semantic fixes with preview and undo. | Language-specific coverage incomplete. MANAGED-01, M17. |
+| Navigation | Find symbols/usages and navigate inheritance across project references. | Shared LSP UI exists; managed semantics absent. MANAGED-01. |
+| Refactoring | Rename across files, extract methods and move types without breaking references. | Lua rename evidence covers only one part. MANAGED-01, LUA-01. |
+| Library sources | Navigate dependency symbols to source or readable decompiled code. | Managed dependency navigation/decompilation absent. MANAGED-01. |
+| Tests | Discover, run, debug and navigate NUnit, xUnit and MSTest results. | Integrated managed runner absent. MANAGED-02. |
+| Debugging | Launch/attach, inspect threads and values, evaluate expressions and manage breakpoints. | Native application integration active; managed runtimes absent. M4/M6, MANAGED-02. |
+| Version control | Review changes, resolve conflicts, commit and navigate history through the application. | Existing Git components need current-workbench acceptance. M5. |
+| Web | Edit, debug and test JavaScript/TypeScript and framework projects. | Dedicated semantic/runtime integration absent. PARITY-01. |
+| Databases | Connect, inspect schemas, edit data and execute SQL with diagnostics. | Database application workflow absent. PARITY-01. |
+| Extensions | Discover, configure and manage independently implemented extensions. | Extension API, compatibility scope and delivery remain unimplemented. PARITY-01. |
+
+Unity behavior is grounded in the versioned [Unity feature documentation](https://www.jetbrains.com/help/rider/Features_Unity.html).
+Every row below remains unimplemented in the integrated application; installing Unity locally is not evidence
+of IDE integration. The semantic service audit precedes an original Unity bridge.
+
+| Family | Acceptance scenario | Track |
+|---|---|---|
+| Project view | Show assets and resolved packages alongside generated script projects. | UNITY-01 |
+| Editor control | Connect the matching editor and operate play, pause and step. | UNITY-02 |
+| Console | Stream filtered logs and navigate their source locations. | UNITY-02 |
+| Serialized references | Find scene/prefab usages and navigate back to matching editor objects. | UNITY-04 |
+| Engine semantics | Recognize callbacks, serialized members and performance-sensitive code. | UNITY-04 |
+| Assembly definitions | Validate and navigate assembly references; safely rename definitions. | UNITY-01/04 |
+| Shaders | Analyze shader sources and exercise supported frame inspection/debugging workflows. | UNITY-04 |
+| Authoring helpers | Provide original callback, script, test and shader templates. | UNITY-04 |
+| Merge workflow | Invoke UnityYAMLMerge and report unresolved conflicts. | UNITY-04, M5 |
+
+Remote execution is a distinct product workflow in the [remote development documentation](https://www.jetbrains.com/help/rider/Remote_development_overview.html).
+FrostIDE's WSL verification mirror only tests the Linux build; it is not remote development support.
+
+| Family | Acceptance scenario | Current gap |
+|---|---|---|
+| Remote backend | Connect securely to a remote workspace; edit, analyze, build, run and debug there. | Backend/client protocol and reconnection absent. |
+| Containers | Open a development container with its own tools and project environment. | Container lifecycle and toolchain integration absent. |
+| WSL workspace | Operate a native Linux project from the Windows application. | Product-side WSL workspace integration absent. |
+
+The next inventory pass must expand individual menus, settings, keymaps, editor interactions, accessibility,
+profiling, deployment, remaining frameworks and other game-engine workflows. These are outstanding scope,
+not excluded features or deferred verification. No percentage of Rider parity is claimed from test counts.

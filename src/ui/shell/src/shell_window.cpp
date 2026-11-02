@@ -443,6 +443,7 @@ input::ActionContext ShellWindow::actionContext() const {
         keys.set(input::ContextKey::ToolWindowFocus);
         keys.set(input::ContextKey::ProjectViewFocus, window == tool_windows::kProject);
         keys.set(input::ContextKey::CommitViewFocus, window == tool_windows::kCommit);
+        keys.set(input::ContextKey::TerminalFocus, window == tool_windows::kTerminal);
     }
     if (isTextField(focus)) {
         keys.set(input::ContextKey::TextFieldFocus);

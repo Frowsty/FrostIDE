@@ -17,14 +17,14 @@ namespace frost::syntax {
 
 // The built-in languages. Grammars and queries are compiled in; nothing is loaded from disk,
 // projects or settings (ADR 0023 D6 g, restricted mode).
-enum class LanguageId : std::uint8_t { None, C, Cpp, CSharp, CMake, Xml, Json, Markdown };
+enum class LanguageId : std::uint8_t { None, C, Cpp, CSharp, CMake, Xml, Json, Markdown, Lua };
 
 // The number of LanguageId values, None included.
-inline constexpr std::size_t kLanguageIdCount = 8;
+inline constexpr std::size_t kLanguageIdCount = 9;
 // Every language with a grammar, in enumeration order.
-inline constexpr std::array<LanguageId, 7> kAllLanguages = {LanguageId::C,       LanguageId::Cpp, LanguageId::CSharp,
-                                                            LanguageId::CMake,   LanguageId::Xml, LanguageId::Json,
-                                                            LanguageId::Markdown};
+inline constexpr std::array<LanguageId, 8> kAllLanguages = {LanguageId::C,        LanguageId::Cpp, LanguageId::CSharp,
+                                                            LanguageId::CMake,    LanguageId::Xml, LanguageId::Json,
+                                                            LanguageId::Markdown, LanguageId::Lua};
 
 // "c", "cpp", "csharp", "cmake", "xml", "json", "markdown" or "none" (also for out-of-range values).
 [[nodiscard]] std::string_view toString(LanguageId id) noexcept;
@@ -40,6 +40,7 @@ inline constexpr std::array<LanguageId, 7> kAllLanguages = {LanguageId::C,      
  *             .manifest .wxs .slnx .config .svg
  *   Json      .json .jsonc
  *   Markdown  .md .markdown
+ *   Lua       .lua
  * Anything else is None.
  */
 [[nodiscard]] LanguageId languageForFileName(std::string_view utf8Name) noexcept;

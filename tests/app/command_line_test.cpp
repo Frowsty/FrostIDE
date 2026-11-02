@@ -40,6 +40,40 @@ TEST(CommandLine, CollectsPathsInOrder) {
     EXPECT_EQ(parsed->paths, (std::vector<std::string>{"a.sln", "dir/CMakeLists.txt"}));
 }
 
+TEST(CommandLine, FrostEngineProjectAndSourcePosition) {
+    auto parsed = parse({"--project", "C:\\Game \xC3\x85", "C:\\Game \xC3\x85\\Assets\\main.lua:42:7"});
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->project, "C:\\Game \xC3\x85");
+    EXPECT_EQ(parsed->paths[0], "C:\\Game \xC3\x85\\Assets\\main.lua");
+    EXPECT_EQ(parsed->line, 42);
+    EXPECT_EQ(parsed->column, 7);
+    parsed = parse({"--project", "/tmp/project.frostproj", "--line", "12", "--column", "3", "/tmp/my script.lua"});
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->line, 12);
+    EXPECT_EQ(parsed->column, 3);
+    EXPECT_EQ(parsed->paths[0], "/tmp/my script.lua");
+    parsed = parse({"--project", "/tmp/game", "/tmp/file.lua:0:0"});
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->line, 0);
+    EXPECT_EQ(parsed->column, 0);
+    EXPECT_EQ(parsed->paths[0], "/tmp/file.lua");
+}
+
+TEST(CommandLine, RejectsInvalidProjectLocationOptions) {
+    for (const std::vector<std::string_view>& args : {std::vector<std::string_view>{"--project"},
+                                                      {"--project", "--line", "file.lua"},
+                                                      {"--line", "-1", "file.lua"},
+                                                      {"--line", "oops", "file.lua"},
+                                                      {"--line", "1"},
+                                                      {"--column", "4", "a", "b"},
+                                                      {"--project", "a", "--project", "b"},
+                                                      {"--help", "--project", "a"},
+                                                      {"--line", "2147483648", "a"}}) {
+        auto parsed = parse(args);
+        EXPECT_FALSE(parsed.has_value());
+    }
+}
+
 TEST(CommandLine, DoubleDashEndsOptions) {
     const auto parsed = parse({"--", "--version", "x"});
     ASSERT_TRUE(parsed.has_value());

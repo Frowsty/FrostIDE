@@ -50,6 +50,11 @@ RunController::RunController(RunConsole* console, RunControllerHooks hooks, QObj
             }
         });
         connect(m_console, &RunConsole::inputSubmitted, this, [this](const QString& line) {
+            if (m_hooks.alternateRunning && m_hooks.alternateRunning()) {
+                if (m_hooks.alternateInput)
+                    m_hooks.alternateInput(line);
+                return;
+            }
             if (m_service == nullptr || m_current == 0) {
                 return;
             }
@@ -145,6 +150,9 @@ void RunController::refreshStartupCombo() {
 }
 
 Result<build::RunId> RunController::run(std::optional<project::ProjectId> project) {
+    if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRun) {
+        return m_hooks.alternateRun();
+    }
     if (m_service == nullptr) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
     }
@@ -166,6 +174,9 @@ Result<build::RunId> RunController::run(std::optional<project::ProjectId> projec
 }
 
 Result<build::RunId> RunController::rerun() {
+    if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRerun) {
+        return m_hooks.alternateRerun();
+    }
     if (m_service == nullptr) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
     }
@@ -173,6 +184,11 @@ Result<build::RunId> RunController::rerun() {
 }
 
 void RunController::stop() {
+    if (m_hooks.alternateRunning && m_hooks.alternateRunning()) {
+        if (m_hooks.alternateStop)
+            m_hooks.alternateStop();
+        return;
+    }
     if (m_service != nullptr && m_current != 0 && m_currentActive) {
         m_service->stop(m_current);
     }
