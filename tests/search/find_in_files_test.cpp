@@ -161,6 +161,7 @@ TEST(FileMask, ParsesInclusionsAndExclusions) {
 }
 
 // The tiny MSBuild fixture: Lib (lib.h, lib.cpp) and App (main.cpp), all mentioning tinyAnswer.
+// main.cpp calls it twice (its exit code and the "--print" line of w1/run-service's run tests).
 class TinySolution : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -191,7 +192,7 @@ protected:
 TEST_F(TinySolution, SolutionScopeSearchesEveryProjectFile) {
     FindRun run = runFind(loader, request(SearchScope{}));
     ASSERT_TRUE(run.summary) << run.summary.error().describe();
-    EXPECT_EQ(run.matchesIn("main.cpp"), 1U);
+    EXPECT_EQ(run.matchesIn("main.cpp"), 2U);
     EXPECT_EQ(run.matchesIn("lib.cpp"), 1U);
     EXPECT_EQ(run.matchesIn("lib.h"), 1U);
     EXPECT_EQ(run.summary->filesMatched, 3U);
@@ -205,7 +206,7 @@ TEST_F(TinySolution, ProjectScopeSearchesTheCurrentFilesProject) {
     FindRun run = runFind(loader, request(scope));
     ASSERT_TRUE(run.summary) << run.summary.error().describe();
     EXPECT_EQ(run.summary->filesMatched, 1U);
-    EXPECT_EQ(run.matchesIn("main.cpp"), 1U);
+    EXPECT_EQ(run.matchesIn("main.cpp"), 2U);
 
     scope.currentFile = *io::joinPath(directory, "Tiny.sln");
     auto outside = resolveScope(scope, &*model, {});
