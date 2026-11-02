@@ -5,8 +5,9 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-02: M1 in progress
 
-`main` has the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh and the sixth feature-first batches
-(ADR 0031), merged with `git merge --no-ff` in the main worktree under D23. The twelfth, in this order:
+`main` has the thirteenth, the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh and the sixth
+feature-first batches (ADR 0031), merged with `git merge --no-ff` in the main worktree under D23. The thirteenth:
+`m5/git-core` at f98193c (merge d67f420), then one follow-up of the merged tree (25d83a8). The twelfth, in this order:
 `m3/editor-insight` at eb033ab (merge a2626b4), one fix of the merged tree (63aefbc), `m2/cmake` at ce467e4 (merge
 bcc3f32) and one fix of the merged tree (96adc58). The eleventh: `m2/find-in-files` at 2ce9819 (merge aca0ea8), then
 two follow-ups of the merged tree (3b0025f, 4ecb9ab). The tenth: `m1/shell-nav` at 588ddfe (merge
@@ -22,10 +23,123 @@ at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then
 Each slice passed its own `-Quick`, and each batch's merged tree was verified once (the Verification sections below).
 The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in progress". Its
 "Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now the running one.
-This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the nineteen
+This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the twenty
 branches kept a record in this log).
 
 ### Done
+
+#### Merge of `m5/git-core` (d67f420, thirteenth batch)
+- **The merge** (d67f420) of `m5/git-core` (f98193c, on d34334c) into `main` at dc76d7e: the Qt-free frost::vcs
+  (layer vcs: git found from the setting, Git for Windows' install paths or PATH; GitRunner with an English,
+  prompt-free environment, time limits and cancellation of the process tree; repository discovery; the porcelain v2
+  status parser and the VcsStatusMap snapshot behind IVcsStatusProvider; file versions from HEAD and the index;
+  commit of selected files, rollback, branches, fetch, pull and push; restricted mode in untrusted folders; the
+  line-change markers and the side-by-side diff model on frost::diff's histogram diff; GitService on two serial
+  queues with the debounced refresh) and frost::ui_vcs (GitController, the VCS file colours, the Commit window, the
+  side-by-side DiffViewer with F7/Shift+F7, EditorChangeMarkers with their popup and Rollback Lines, the branch
+  widget and the Branches popup, the git console, and `registerGitActions` for the `vcs.*` actions with Show Diff's
+  Ctrl+D). In the editor, DisplayChangeStripe in the display list and `EditorView::setLineChanges`; the colour seams
+  `SolutionTreeModel::setFileColorProvider` and `EditorTabs::setTitleColorProvider`; ContextKeys `CommitViewFocus`
+  and `DiffViewFocus` (appended); 14 `Vcs.*`, change-marker and `Diff.*` colour keys in the four Glacier themes.
+  Nothing is wired into the workbench yet (Next). The slice record below says more.
+- **ADR 0048** (`docs/adr/0048-git-core.md`): the number is free on `main` (0047 is `m3/editor-insight`'s). Its
+  references are right: 0016 (input), 0019 (frost::diff, D6 and Q3), 0031 (feature-first), 0037 (editor view) and
+  0038 (shell). Its Deferred item on QRhi stripes now records that they were done at the merge (the follow-up below).
+- **The base** (the pre-state): d34334c, older than `main`, before the tenth to twelfth batches (`m1/shell-nav`,
+  `m2/find-in-files`, `m3/editor-insight`, `m2/cmake`), so fourteen files conflicted, each resolved so that both
+  sides' intent survives:
+  - The four Glacier theme files: `main`'s `Semantic` group, then the slice's `Vcs` and `Diff` groups (each file
+    still parses as JSON).
+  - `theme_registry.hpp`: `main`'s 28 insight and `Semantic.*` keys, then the slice's 14 `Vcs.*`,
+    `Editor.change*Color` and `Diff.*` keys, in the enum and in the table; both appended, so `main`'s order stands.
+  - `tests/ui/model/registry_test.cpp` and `theme_blob_test.cpp` (the pre-state): both pins recomputed from the
+    merged tree for the union of keys, as the tests' comments say. `kExpectedRegistryHash` is 0xe49cf7c3154b6a1e, the
+    value `Registry.TablesConsistent` printed on the merged tree (`main` had 0x31cfb245a8dcffe0, the slice
+    0x01f21b52f86152e7). The blob's body arrays are 772 bytes and the blob 844 (604 at the common base, plus 4 x 28
+    and 4 x 14). The checks are unchanged, only their values; `ui_model_tests` 46/46 after the update.
+  - `display_list.hpp`: `main`'s DisplayDecoration, DisplayStripeMark, DisplayShape, DisplayInspection and
+    DisplayBalloon beside the slice's ChangeStripeKind and DisplayChangeStripe; `changeStripes` after `markers`. The
+    paint-order note keeps `main`'s order and adds `changeStripes` to the gutter; the slice's "a future QRhi backend"
+    sentence became one that says what the QRhi backend draws (updated by the follow-up below).
+  - `editor_view.hpp`: both includes (`QPointer`; `QPoint`, `QRectF`), `main`'s insight API and the slice's
+    `setLineChanges`, `lineChanges`, `lineChangeAt` and `changeStripeColumn`; the signals keep `main`'s
+    `rendererChanged`, `insightChanged`, `documentEdited` and `problemsViewRequested` and add the slice's
+    `textChanged` and `lineChangeClicked`.
+  - `editor_view_input.cpp`: a press goes to `clickInsight` (the error stripe, the inspection widget) first, then to
+    a change stripe (`lineChangeClicked`), then to the text; the areas do not overlap.
+  - `src/CMakeLists.txt` and `src/ui/CMakeLists.txt`: `add_subdirectory(vcs)` after `main`'s `search` inside the
+    fuzz guard, and `ui/vcs` after `main`'s nav, workbench, find and cmake (fuzz trees build no UI); the ui_vcs
+    sentence joins `main`'s header note.
+  - `tests/ui/CMakeLists.txt`: `main`'s `ui_run_tests` and `ui_lang_tests`, then the slice's `ui_vcs_tests` and
+    `ui_vcs_git_tests`, with every header line (the slice's include one for `ui_toolwindows_tests`).
+  - `tests/tools/test_verify_support.py` (the slice's git tag rules): `main`'s msbuild, clangd, cmake and msvc
+    rules plus the slice's "git" rule (`GitE2E.`, `GitUiE2E.`, kind "integration" with the `frost_desktop` lock)
+    and its `seen["git"]` check; the note names all of them. Only the list grows.
+- **Auto-merged:** `action.hpp` (the two ContextKeys after `main`'s), `editor_colors`, `editor_view.cpp`,
+  `editor_view_paint.cpp` (the stripe rows beside the insight's decorations), `raster_renderer.cpp`,
+  `shell_window.cpp` (`CommitViewFocus` from the active tool window), `editor_tabs`, `solution_tree_model`,
+  `tests/CMakeLists.txt` and the editor, tab and Solution Explorer tests.
+- **The keymap goldens** (the pre-state): `input_tests` with `FROST_UPDATE_GOLDENS=1` on the hidden desktop rewrote
+  its six goldens byte for byte as committed (`git status` clean afterwards), so there was nothing to add. The
+  slice's Ctrl+D, F7 and Shift+F7 are ui_vcs module defaults, which `ui_vcs_tests` checks, and the IntelliJ keymap's
+  `vcs.*` bindings (`vcs.commit = Ctrl+K`, ...) were in the goldens already.
+- **The format check** (the pre-state): `clang-format --dry-run --Werror` (23.1.4) over the 64 C/C++ files the merge
+  adds or changes, right after the merge: clean.
+- **The fixture check** (the pre-state, after the twelfth batch lost an ignored fixture): `git status --ignored
+  --short` in the slice's worktree (read only) lists only `build/` and `tools/__pycache__/`, so every fixture its
+  tests read is committed (the six `tests/vcs/fixtures/diff` pairs; the git tests build their repositories in
+  temporary folders through `tests/vcs/git_fixture.hpp`). REUSE.toml's `tests/**/fixtures/**` covers them.
+- **The build of the merged tree:** `night.py build-gate` (33.9 GB commit free), `cmake --preset win-clangcl` and
+  `cmake --build --preset win-clangcl-debug -j 8`: exit 0, 272 steps (29 after the pin update). Then ctest
+  `-L "mod.(ui|vcs|input|tools|app|diff)"` on the hidden desktop: 837/837, with the slice's `GitE2E` and `GitUiE2E`
+  cases (tag "git", 20 tests) and `tools.verify_support` with the git rule.
+
+#### QRhi stripe follow-up (25d83a8, thirteenth batch)
+- **Why** (the pre-state): the slice drew `changeStripes` in the raster backend only, because its tree had no QRhi
+  backend (ADR 0048, Deferred); `main` has ADR 0043's, and the addition is small.
+- **The change** (25d83a8): RhiGlyphPainter adds each stripe as a solid quad in the gutter range, after the gutter
+  text and before the markers, where the raster backend fills it. The new
+  `RhiGlyphPainter.DrawsTheChangeStripesAsSolidQuads` checks one solid quad per stripe at its device pixels and in
+  its colour, at 100 % and 200 %. `display_list.hpp`'s note says what the QRhi backend draws (not yet the
+  decorations, the error stripe or the chrome layer), and ADR 0048's Deferred item records the change. No assertion
+  changes.
+- **Checked:** the Debug build (exit 0, 59 steps), ctest `-L "mod.(ui|app|vcs)"` on the hidden desktop (478/478) and
+  `RhiGlyphPainter.*` (4/4).
+
+#### Verification (thirteenth batch, merged tree 25d83a8)
+- Before the batch run: the format check right after the merge (clean), the Windows Debug build after the merge, the
+  pin update and the follow-up, and the touched suites through ctest or the test executables on the hidden desktop
+  (above).
+- **The run that counts**, and the only one: `tools\verify.ps1 -Quick -Jobs 8` on 25d83a8 (clean tree; this record
+  not yet written) through `run_hidden_nobox.py` (a hidden desktop; no window opened on it), after `night.py
+  build-gate` (37.0 GB commit free): 668.3 s, exit code 0. Windows ran its Debug leg (ctest `-j 8`) and the checks;
+  WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`): `Verified: win debug 2376/2382 (6
+  skipped), wsl debug 2261/2270 (9 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by
+  default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by
+  default)` (frost-lint 2130 files; licensecheck 39 packages on Windows, 35 on WSL; featurecheck 0 problems). The test
+  steps took 277.9 s (Windows, parallel at `-j 8`) and 266.8 s (WSL). The `git` suites (`GitE2E`, `GitUiE2E`), which
+  fail rather than skip without git, ran and passed on both OSes.
+- **The skips:** the twelfth batch's, unchanged. Windows: the four `WatcherPerf` tests,
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` and `SafeWrite.SymlinksStayLinks`. WSL: the four `WatcherPerf`
+  tests, `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale`,
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler`,
+  `MsBuildEvaluation.MapsEvaluatedMetadataToClangClFlags`,
+  `MsBuildProvider.FailedEvaluationFallsBackToTheStaticModel` and
+  `RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes`. The new
+  `RhiGlyphPainter.DrawsTheChangeStripesAsSolidQuads` needs no device and ran on both.
+- **No test was lost:** against the twelfth batch (win debug 2327, wsl debug 2215) the tree adds 55 tests on both
+  OSes, the `TEST` cases of the batch: `m5/git-core` 54 (`tests/vcs` 31: `git_e2e_test.cpp` 14, `status_test.cpp`
+  8, `line_changes_test.cpp` 5, `runner_test.cpp` 4; `tests/ui/vcs` 20: `vcs_ui_test.cpp` 9, `vcs_ui_git_test.cpp`
+  6, `change_markers_test.cpp` 5; one each in the editor view, editor tabs and Solution Explorer tests) and the
+  follow-up's one. No `TEST` line and no assertion line is removed; the two pins change value only, and the label
+  check only gains a tag.
+- **The pre-state's checks:** `main` was clean at dc76d7e and equal to `origin/main` at the start; no untracked
+  `Testing/` folder appeared in the repository root (the integrator's ctest runs used `--test-dir` on the build
+  tree), and the golden regeneration left the tree clean.
+- **Processes:** the runner ended every process tree it started; no night.py lock was taken (build-gate takes none)
+  and no background loop is left.
+- `-Quick` builds no ASan, TSan or fuzz tree. The slice's sanitizer, fuzz, stress and `-Full` runs are in "Deferred
+  to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `m3/editor-insight` (a2626b4, twelfth batch)
 - **The merge** (a2626b4) of `m3/editor-insight` (eb033ab) into `main` at ebd4b0d: in frost::lang LSP semantic tokens
@@ -1103,12 +1217,20 @@ branches kept a record in this log).
   binding: each edit goes to clangd (`changeDocument`) before the 300 ms token debounce fires. W1 can move its own
   marks (spelling, run-to-cursor, breakpoint tints) onto `setDecorations("<owner>", ...)`. `m1/editor-rhi`'s GPU
   backend has to draw the new display-list parts (decorations, the stripe, chrome and chromeText); until it does,
-  only the raster backend shows the insight.
+  only the raster backend shows the insight. (It draws `m5/git-core`'s change stripes since 25d83a8.)
 - **`m2/cmake`'s hand-off** (ADR 0046): W1 wires CMakeToolWindow and CMakeTreeModel into the Solution Explorer and the
   ToolWindowManager for a folder with a CMakeLists.txt, and adds a BuildController adapter for CMakeService (its
   BuildState, BuildOutputKind lines and diagnostics mirror BuildService's; profiles are the configurations and
   targets the projects), and puts BuildDirectoryCompileCommandsProvider (with
   `CMakeService::activeBuildDirectory`) into clangd's provider chain for CMake folders.
+- **`m5/git-core`'s hand-off** (ADR 0048): wire the git UI into the running workbench. One GitController over
+  GitService per project (with the shell's BackgroundTaskManager and NotificationCenter), the Commit window in the
+  Commit tool window (`tool_windows::kCommit`, whose focus already sets `CommitViewFocus`), the branch widget in the
+  status bar, the git console, `registerGitActions` with GitActionTargets, `vcsFileColorProvider` on the Solution
+  Explorer (`SolutionTreeModel::setFileColorProvider`), the editor tabs (`EditorTabs::setTitleColorProvider`) and
+  `m1/shell-nav`'s File System view (on `main` since the tenth batch; ADR 0048's "the view does not exist yet" was
+  true of the slice's base only), and one EditorChangeMarkers per EditorView. Then the M5 diff follow-ups, first an
+  editable right (working-copy) side in the diff viewer (orchestrator decision: it stays read-only until then).
 - **The SaveManager's consumers** (ADR 0028): one manager on the document thread; AutosaveController fed by input
   events, focus loss and a timer; the merge view driven by PendingMerge and `resolveExternalChange` (with the Q5
   labels above; changes on adjacent lines in both buffer and disk count as a conflict, the same rule as git); banners
@@ -1118,8 +1240,8 @@ branches kept a record in this log).
   rule uses `kLongLineCapBytes` since the eighth batch (its long-line follow-up above).
 - **The in-flight slices:** `w1/workbench` (the W1 wiring above), held for the unify slice that reconciles it with
   `m1/shell-nav`'s composition; the unify slice also takes up `m3/editor-insight`'s and `m2/cmake`'s wiring above.
-  `m3/editor-insight` and `m2/cmake` merged in the twelfth batch, `m2/find-in-files` in the eleventh, `m1/shell-nav`
-  in the tenth; `m1/editor-rhi`, `w1/run-service` and `w2/clangd-nav` in the ninth.
+  `m5/git-core` merged in the thirteenth batch, `m3/editor-insight` and `m2/cmake` in the twelfth, `m2/find-in-files`
+  in the eleventh, `m1/shell-nav` in the tenth; `m1/editor-rhi`, `w1/run-service` and `w2/clangd-nav` in the ninth.
 - **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` (on `main`) binds keys to `commands::*`, calls
   `Editor::run`, supplies the Qt ITextShaper, sets `pageRows` from the viewport height, paints the EditorUpdate rows
   and implements IOutlineProvider over the syntax outline (SyntaxOutlineProvider). An index slice may add a
@@ -1144,6 +1266,31 @@ branches kept a record in this log).
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
 `m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From the thirteenth batch's merge** (the integrator):
+  - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase): the theme
+    registry's key order and the two recomputed pins, `display_list.hpp`, `editor_view.hpp`'s API and signals, the
+    click order in `editor_view_input.cpp`, the CMake lists and the label check's "git" rule.
+  - A review of the follow-up 25d83a8 (the QRhi change stripes and their test).
+  - A pixel comparison of the change stripes between the raster and the QRhi backends
+    (`DrawsTheChangeStripesAsSolidQuads` checks the quads; `RendersTheDisplayListWhereTheRasterBackendDoes` has no
+    stripes in its list).
+- **From `m5/git-core`** (ADR 0048), as its hand-off lists them:
+  - ASan, TSan and UBSan builds of frost::vcs and frost::ui_vcs. GitRunner's pipe threads and GitService's two
+    serial queues and snapshot mutex are the TSan targets.
+  - Fuzzing the porcelain v2 parser, `checkoutBlockers` and `gitFailure`'s stderr classification.
+  - Stress and differential runs of the side-by-side diff against `git diff --histogram` beyond the six fixtures.
+    ADR 0019 Q3 (which git release defines the newer histogram dialect) stays open (orchestrator decision), and the
+    test's documented allowance (ADR 0019 D6) is unchanged.
+  - Perf and budget gates: the process-start cost per git call on Windows, the 300 ms marker debounce and the refresh
+    debounce (300 ms, at most 2 s late) are unmeasured.
+  - Screenshot goldens for the Commit window, the DiffViewer, the gutter stripes, the branch widget and the git
+    console; verify `-Full`; clang-tidy; the independent review the core rules call for.
+  - Feature follow-up (orchestrator decision): an editable right (working-copy) side in the diff viewer.
+  - Feature follow-ups recorded in ADR 0048: `frost-askpass` (credential prompts inside the IDE), commit signing, a
+    persistent `cat-file --batch`, partial (hunk) commits and changelists, stash and shelve, LFS UI, running the
+    change-marker diff off the GUI thread for very large files, and the File System view's colours (seam only). The
+    QRhi drawing of the stripes, also listed there, was done at the merge (25d83a8).
+  - Wiring the git widgets and actions into the running workbench (ADR 0048, Deferred; this entry's Next).
 - **From the twelfth batch's merges** (the integrator):
   - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase):
     `editor_view.hpp`'s note and signals and `src/ui/editor/CMakeLists.txt`'s sources (the insight beside the QRhi
@@ -1629,7 +1776,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 - **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
-- None. The hand-off notes of the twelfth batch (`m3/editor-insight`, `m2/cmake`), of the eleventh
+- None. The hand-off notes of the thirteenth batch (`m5/git-core`), of the twelfth (`m3/editor-insight`,
+  `m2/cmake`), of the eleventh
   (`m2/find-in-files`), of the tenth (`m1/shell-nav`), of the ninth (`w1/run-service`, `m1/editor-rhi`,
   `w2/clangd-nav`), of the eighth (`m1/editor-view`, `w1/tool-windows`), of the seventh
   (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`, `m1/save-manager`) and of the sixth
@@ -1645,10 +1793,10 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
   or with no solution open, the build action is disabled and Ctrl+Shift+B falls through to Go to Type Declaration
   (Visual Studio would report "build already in progress" instead; the slice record's known bug).
 
-Apart from that, no slice of the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh or the sixth batch
-asks one in its hand-off (`m3/editor-insight`, `m2/cmake`, `m2/find-in-files` and `m1/shell-nav` list no question);
-the orchestrator's decisions on their questions are in the merge sections above and, for `m2/find-in-files` and
-`m2/cmake`, in their slice records.
+Apart from that, no slice of the thirteenth, the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh or
+the sixth batch asks one in its hand-off (`m5/git-core`, `m3/editor-insight`, `m2/cmake`, `m2/find-in-files` and
+`m1/shell-nav` list no question); the orchestrator's decisions on their questions are in the merge sections above
+and, for `m5/git-core`, `m2/find-in-files` and `m2/cmake`, in their slice records.
 ADR 0019 Q5 (diff3-style markers and the save-manager prompt's labels), which the last integrator listed here, is
 decided: diff3 stays the default, and the labels are "Keep my version", "Take disk version" and "Compare..." (the merge
 section of `m1/save-manager` above).
@@ -1656,6 +1804,39 @@ section of `m1/save-manager` above).
 The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
 variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
 `m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `m5/git-core` (ADR 0048)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): f98193c on d34334c. Worktree `.claude\worktrees\m5-git-core`. (Merge note: merged
+into `main` as d67f420, with the follow-up 25d83a8; the 2026-11-02 entry above.)
+
+#### Done
+- **The slice (f98193c):** frost::vcs over the git CLI and frost::ui_vcs (the Commit window, the side-by-side diff
+  viewer, the editor's change markers, the branch widget, the git console and the `vcs.*` actions), the editor's
+  DisplayChangeStripe, the colour seams in the Solution Explorer and the editor tabs, ContextKeys `CommitViewFocus`
+  and `DiffViewFocus` with Ctrl+D, F7 and Shift+F7 under them, 14 theme keys, the label check's "git" rule, ADR
+  0048 (`docs/adr/0048-git-core.md`) and tests.
+- **The theme pins** changed on purpose on its older base: `kExpectedRegistryHash` 0x01f21b52f86152e7 and the theme
+  blob 660/732; recomputed at the merge for the union with `m3/editor-insight`'s keys (the merge section above).
+- **Verification at f98193c** (its own `-Quick`), on both legs: win debug 2169/2175 (6 skipped), wsl debug 2066/2072
+  (6 skipped); the WSL leg needed no code fixes. The last session's only edit was a comment correction in
+  `display_list.hpp`. Every process it started was ended; nothing points into the worktree any more, and no WSL
+  process uses its mirror (`~/frost-src-d145f9b7c9e6`). Not merged or pushed by the slice; `docs/progress.md` and
+  PLAN.md untouched.
+- **Orchestrator decisions on its questions:** ADR 0019 Q3 stays deferred; F7/Shift+F7 under `DiffViewFocus` are
+  accepted (as in IntelliJ); the diff viewer's right side stays read-only (a later M5 follow-up).
+
+#### Known bugs
+- None found. Every suite passes on both OSes. Diff fixtures run against the newer histogram dialect (Windows git
+  2.56) still rely on the ADR 0019 D6 allowance (git may report fewer changed lines, at most once). That is
+  documented, not a regression.
+
+#### Left
+- Its hand-off's Next (this entry's Next): wire the git UI into the workbench, then the M5 diff follow-ups (an
+  editable right side). The re-check of the keymap goldens and the theme pins on the merged tree that it asked for
+  was done at the merge.
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m5/git-core`'s.
 
 ### Slice record: `m2/cmake` (ADR 0046)
 
