@@ -154,12 +154,12 @@ struct ClangdServiceOptions {
     std::size_t historyPerDocument = 32; // Snapshots kept per document for mapping older publishes.
 };
 
-class ClangdService {
+class ClangdService final : public ILspRequester {
 public:
     // `launcher`, the context's reactor and scheduler must outlive the service and its stop().
     ClangdService(io::IProcessLauncher& launcher, io::AsyncContext context, ClangdServiceOptions options);
     // Requests the stop and kills clangd without waiting (see the header comment).
-    ~ClangdService();
+    ~ClangdService() override;
     ClangdService(const ClangdService&) = delete ("owns a supervised process");
     ClangdService& operator=(const ClangdService&) = delete ("owns a supervised process");
 
@@ -199,7 +199,12 @@ public:
 
     // A request to the running clangd (completion, definition, ... for the next slice). Errors:
     // Busy (not Running), and those of LspClient::request.
-    [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params, std::stop_token token = {});
+    [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params,
+                                                    std::stop_token token = {}) override;
+    // ILspRequester: the negotiated encoding while Running, UTF-16 otherwise.
+    [[nodiscard]] PositionEncoding encoding() const override;
+    // ILspRequester: capabilities().
+    [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override { return capabilities(); }
 
     // Kills the current clangd as a crash would (tests of the restart path). Errors: NotFound.
     [[nodiscard]] Result<void> killServerForTesting();

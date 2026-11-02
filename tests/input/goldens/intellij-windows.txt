@@ -110,6 +110,7 @@ navigate.highlightUsages = Ctrl+Shift+F7
 navigate.callHierarchy = Ctrl+Alt+H
 navigate.typeHierarchy = Ctrl+H
 navigate.quickDefinition = Ctrl+Shift+I
+navigate.relatedFiles = Ctrl+Alt+Home
 code.completion = Ctrl+Space
 code.smartCompletion = Ctrl+Shift+Space
 code.parameterInfo = Ctrl+P

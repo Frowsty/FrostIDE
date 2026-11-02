@@ -33,6 +33,7 @@
 
 #include "frost/core/error.hpp"
 #include "frost/lang/msvc_environment.hpp"
+#include "frost/project/solution_model.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -46,10 +47,6 @@
 namespace frost::io {
 class IFileSystem;
 } // namespace frost::io
-
-namespace frost::project {
-class SolutionModel;
-} // namespace frost::project
 
 namespace frost::lang {
 
@@ -74,6 +71,7 @@ enum class CompileCommandsSource : std::uint8_t {
     Existing,    // A compile_commands.json the user's build produced (CMake, Bear, ...).
     Synthesized, // Written by FrostIDE from a Visual Studio solution's static model.
     Generator,   // Written by FrostIDE from a command list the user's generator produced.
+    Evaluated,   // Written by FrostIDE from MSBuild's evaluation of the projects (ADR 0041).
 };
 
 [[nodiscard]] std::string_view toString(CompileCommandsSource source) noexcept;
@@ -130,6 +128,24 @@ struct SynthesisOptions {
 // NotFound (the named configuration does not exist), InvalidArgument (no configurations).
 [[nodiscard]] Result<std::vector<CompileCommand>> synthesizeCompileCommands(const project::SolutionModel& model,
                                                                             const SynthesisOptions& options);
+
+// The index of `configuration` ("Debug|x64"; empty selects the first). Errors: as
+// synthesizeCompileCommands.
+[[nodiscard]] Result<std::size_t> resolveConfigurationIndex(const project::SolutionModel& model,
+                                                            std::string_view configuration);
+
+// The synthesized commands of one project in configuration `configurationIndex` (empty when it
+// is not a loaded C++ project or does not take part). Pure. Precondition: both indices in range.
+[[nodiscard]] std::vector<CompileCommand> synthesizeProjectCompileCommands(const project::SolutionModel& model,
+                                                                           project::ProjectId project,
+                                                                           std::size_t configurationIndex,
+                                                                           const SynthesisOptions& options);
+
+// Writes `commands` to `cacheDirectory` (writeCompileCommands) and returns the location with
+// `source`; nullopt for an empty list. Errors: those of writeCompileCommands and the paths.
+[[nodiscard]] Result<std::optional<CompileCommandsLocation>>
+writeCompileCommandsLocation(io::IFileSystem& fs, std::string_view cacheDirectory,
+                             std::span<const CompileCommand> commands, CompileCommandsSource source);
 
 /*
  * Synthesizes the solution's commands and writes them to `cacheDirectory`. When

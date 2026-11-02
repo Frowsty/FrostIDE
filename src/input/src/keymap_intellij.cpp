@@ -143,6 +143,7 @@ navigate.highlightUsages = Ctrl+Shift+F7
 navigate.callHierarchy = Ctrl+Alt+H
 navigate.typeHierarchy = Ctrl+H
 navigate.quickDefinition = Ctrl+Shift+I
+navigate.relatedFiles = Ctrl+Alt+Home
 
 # Code.
 code.completion = Ctrl+Space
@@ -282,6 +283,7 @@ navigate.forward = Meta+BracketRight
 navigate.gotoClass = Meta+O
 navigate.gotoFile = Shift+Meta+O
 navigate.gotoSymbol = Alt+Meta+O
+navigate.relatedFiles = Ctrl+Meta+Up
 editor.extendSelection = Alt+Up
 editor.shrinkSelection = Alt+Down
 editor.wordLeft = Alt+Left

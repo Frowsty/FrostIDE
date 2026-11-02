@@ -11,6 +11,8 @@
 #include "frost/project/solution_model.hpp"
 #include "frost/project/vcxproj.hpp"
 
+#include "msvc_flags.hpp"
+
 #include <algorithm>
 #include <format>
 #include <string_view>
@@ -20,139 +22,7 @@ namespace {
 
 constexpr std::string_view kDatabaseName = "compile_commands.json";
 
-[[nodiscard]] char lowerAscii(char c) noexcept { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-[[nodiscard]] std::string lower(std::string_view text) {
-    std::string out(text);
-    std::ranges::transform(out, out.begin(), lowerAscii);
-    return out;
-}
-
-[[nodiscard]] bool iequals(std::string_view a, std::string_view b) noexcept {
-    return a.size() == b.size() &&
-           std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) { return lowerAscii(x) == lowerAscii(y); });
-}
-
-[[nodiscard]] std::string_view trim(std::string_view text) noexcept {
-    while (!text.empty() &&
-           (text.front() == ' ' || text.front() == '\t' || text.front() == '\r' || text.front() == '\n')) {
-        text.remove_prefix(1);
-    }
-    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r' || text.back() == '\n')) {
-        text.remove_suffix(1);
-    }
-    return text;
-}
-
-// ';'-separated entries, trimmed, without empty ones and without unresolved $(...) / %(...) references.
-[[nodiscard]] std::vector<std::string> resolvedEntries(std::string_view list) {
-    std::vector<std::string> out;
-    std::size_t start = 0;
-    while (start <= list.size()) {
-        const std::size_t end = std::min(list.find(';', start), list.size());
-        const std::string_view entry = trim(list.substr(start, end - start));
-        if (!entry.empty() && entry.find("$(") == std::string_view::npos &&
-            entry.find("%(") == std::string_view::npos && entry.find("@(") == std::string_view::npos) {
-            out.emplace_back(entry);
-        }
-        start = end + 1;
-    }
-    return out;
-}
-
-// `entry` (absolute, or relative to `directory`, with '\' or '/') as a normalised absolute path.
-[[nodiscard]] std::optional<std::string> resolvePath(std::string_view directory, std::string_view entry) {
-    std::string text(entry);
-    if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-        text = text.substr(1, text.size() - 2);
-    }
-    if constexpr (io::kNativePathStyle == io::PathStyle::Posix) {
-        std::ranges::replace(text, '\\', '/');
-    }
-    while (text.size() > 1 && (text.back() == '\\' || text.back() == '/')) {
-        text.pop_back();
-    }
-    if (text.empty()) {
-        return std::nullopt;
-    }
-    if (io::isAbsolutePath(text)) {
-        auto normalized = io::normalizePath(text);
-        return normalized ? std::optional<std::string>(std::move(*normalized)) : std::nullopt;
-    }
-    auto joined = io::joinPath(directory, text);
-    if (!joined) {
-        return std::nullopt;
-    }
-    auto normalized = io::normalizePath(*joined);
-    return normalized ? std::optional<std::string>(std::move(*normalized)) : std::nullopt;
-}
-
-[[nodiscard]] std::string metadataOf(const std::map<std::string, std::string, std::less<>>& metadata,
-                                     std::string_view name) {
-    auto it = metadata.find(name);
-    return it != metadata.end() ? std::string(trim(it->second)) : std::string();
-}
-
-[[nodiscard]] std::string_view targetFor(std::string_view platform) noexcept {
-    if (iequals(platform, "Win32") || iequals(platform, "x86")) {
-        return "--target=i686-pc-windows-msvc";
-    }
-    if (iequals(platform, "ARM64") || iequals(platform, "ARM64EC")) {
-        return "--target=aarch64-pc-windows-msvc";
-    }
-    if (iequals(platform, "ARM")) {
-        return "--target=thumbv7-pc-windows-msvc";
-    }
-    return "--target=x86_64-pc-windows-msvc";
-}
-
-[[nodiscard]] std::string cxxStandard(std::string_view value) {
-    const std::string v = lower(value);
-    if (v == "stdcpp17") {
-        return "/std:c++17";
-    }
-    if (v == "stdcpp20") {
-        return "/std:c++20";
-    }
-    if (v == "stdcpplatest" || v == "stdcpp23") {
-        return "/std:c++latest";
-    }
-    return "/std:c++14"; // stdcpp14 and MSVC's default.
-}
-
-[[nodiscard]] std::optional<std::string> cStandard(std::string_view value) {
-    const std::string v = lower(value);
-    if (v == "stdc11") {
-        return "/std:c11";
-    }
-    if (v == "stdc17" || v == "stdclatest") {
-        return "/std:c17";
-    }
-    return std::nullopt; // Default: clang's C default.
-}
-
-[[nodiscard]] std::string runtimeFlag(std::string_view value, std::string_view configuration) {
-    const std::string v = lower(value);
-    if (v == "multithreaded") {
-        return "/MT";
-    }
-    if (v == "multithreadeddebug") {
-        return "/MTd";
-    }
-    if (v == "multithreadeddll") {
-        return "/MD";
-    }
-    if (v == "multithreadeddebugdll") {
-        return "/MDd";
-    }
-    // Not in the project file (it usually comes from Microsoft.Cpp.props): guess by name.
-    return lower(configuration).find("debug") != std::string::npos ? "/MDd" : "/MD";
-}
-
-[[nodiscard]] bool isCSource(std::string_view path) noexcept {
-    const std::size_t dot = path.find_last_of('.');
-    return dot != std::string_view::npos && iequals(path.substr(dot), ".c");
-}
+using namespace detail; // msvc_flags.hpp
 
 [[nodiscard]] Result<std::optional<CompileCommandsLocation>> writeToCache(io::IFileSystem& fs,
                                                                           std::string_view cacheDirectory,
@@ -228,6 +98,7 @@ std::string_view toString(CompileCommandsSource source) noexcept {
     case CompileCommandsSource::Existing: return "existing";
     case CompileCommandsSource::Synthesized: return "synthesized";
     case CompileCommandsSource::Generator: return "generator";
+    case CompileCommandsSource::Evaluated: return "evaluated";
     }
     return "existing";
 }
@@ -284,93 +155,115 @@ Result<std::optional<CompileCommandsLocation>> ExistingCompileCommandsProvider::
     return findCompileCommands(m_fs, m_root);
 }
 
-Result<std::vector<CompileCommand>> synthesizeCompileCommands(const project::SolutionModel& model,
-                                                              const SynthesisOptions& options) {
+Result<std::size_t> resolveConfigurationIndex(const project::SolutionModel& model, std::string_view configuration) {
     if (model.configurations().empty()) {
         return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", model.path()));
     }
-    std::size_t configurationIndex = 0;
-    if (!options.configuration.empty()) {
-        const std::optional<std::size_t> found = model.findConfiguration(options.configuration);
-        if (!found) {
-            return fail(ErrorCode::NotFound,
-                        std::format("{} has no configuration '{}'", model.path(), options.configuration));
+    if (configuration.empty()) {
+        return std::size_t{0};
+    }
+    const std::optional<std::size_t> found = model.findConfiguration(configuration);
+    if (!found) {
+        return fail(ErrorCode::NotFound, std::format("{} has no configuration '{}'", model.path(), configuration));
+    }
+    return *found;
+}
+
+std::vector<CompileCommand> synthesizeProjectCompileCommands(const project::SolutionModel& model, project::ProjectId id,
+                                                             std::size_t configurationIndex,
+                                                             const SynthesisOptions& options) {
+    std::vector<CompileCommand> out;
+    const project::ProjectInfo& info = model.project(id);
+    if (!info.vcxproj) {
+        return out;
+    }
+    const std::optional<project::ProjectConfigurationMapping>& mapping =
+        model.projectConfiguration(id, configurationIndex);
+    if (!mapping) {
+        return out;
+    }
+    const project::VcxProject& vcx = *info.vcxproj;
+    const std::string configName = mapping->configuration + '|' + mapping->platform;
+    const auto metadata = project::clCompileMetadata(vcx, configName);
+    std::string characterSet;
+    for (const project::ProjectConfiguration& config : vcx.configurations) {
+        if (iequals(config.name(), configName)) {
+            characterSet = config.characterSet;
         }
-        configurationIndex = *found;
+    }
+
+    std::vector<std::string> common{options.compiler, "--driver-mode=cl", std::string(targetFor(mapping->platform)),
+                                    runtimeFlag(metadataOf(metadata, "runtimelibrary"), mapping->configuration)};
+    if (!iequals(metadataOf(metadata, "exceptionhandling"), "false")) {
+        common.emplace_back("/EHsc");
+    }
+    if (iequals(metadataOf(metadata, "conformancemode"), "true")) {
+        common.emplace_back("/permissive-");
+    }
+    if (iequals(characterSet, "Unicode")) {
+        common.emplace_back("/DUNICODE");
+        common.emplace_back("/D_UNICODE");
+    } else if (iequals(characterSet, "MultiByte")) {
+        common.emplace_back("/D_MBCS");
+    }
+    for (const std::string& define : resolvedEntries(metadataOf(metadata, "preprocessordefinitions"))) {
+        common.push_back("/D" + define);
+    }
+    for (const std::string& entry : resolvedEntries(metadataOf(metadata, "additionalincludedirectories"))) {
+        if (auto dir = resolvePath(vcx.directory, entry)) {
+            common.push_back("/I" + *dir);
+        }
+    }
+    for (const std::string& dir : options.systemIncludeDirectories) {
+        common.push_back("/imsvc" + dir);
+    }
+    for (const std::string& entry : resolvedEntries(metadataOf(metadata, "forcedincludefiles"))) {
+        if (auto file = resolvePath(vcx.directory, entry)) {
+            common.push_back("/FI" + *file);
+        }
+    }
+    const std::string cxxStd = cxxStandard(metadataOf(metadata, "languagestandard"));
+    const std::optional<std::string> cStd = cStandard(metadataOf(metadata, "languagestandard_c"));
+
+    for (const project::ProjectItem& item : vcx.items) {
+        if (item.type != project::ItemType::ClCompile) {
+            continue;
+        }
+        CompileCommand command{.directory = vcx.directory, .file = item.path, .arguments = common};
+        if (isCSource(item.path)) {
+            if (cStd) {
+                command.arguments.push_back(*cStd);
+            }
+        } else {
+            command.arguments.push_back(cxxStd);
+        }
+        command.arguments.emplace_back("/c");
+        command.arguments.push_back(item.path);
+        out.push_back(std::move(command));
+    }
+    return out;
+}
+
+Result<std::vector<CompileCommand>> synthesizeCompileCommands(const project::SolutionModel& model,
+                                                              const SynthesisOptions& options) {
+    auto configurationIndex = resolveConfigurationIndex(model, options.configuration);
+    if (!configurationIndex) {
+        return std::unexpected(std::move(configurationIndex.error()));
     }
     std::vector<CompileCommand> out;
     for (std::size_t p = 0; p < model.projects().size(); ++p) {
-        const project::ProjectId id{static_cast<std::uint32_t>(p)};
-        const project::ProjectInfo& info = model.project(id);
-        if (!info.vcxproj) {
-            continue;
-        }
-        const std::optional<project::ProjectConfigurationMapping>& mapping =
-            model.projectConfiguration(id, configurationIndex);
-        if (!mapping) {
-            continue;
-        }
-        const project::VcxProject& vcx = *info.vcxproj;
-        const std::string configName = mapping->configuration + '|' + mapping->platform;
-        const auto metadata = project::clCompileMetadata(vcx, configName);
-        std::string characterSet;
-        for (const project::ProjectConfiguration& config : vcx.configurations) {
-            if (iequals(config.name(), configName)) {
-                characterSet = config.characterSet;
-            }
-        }
-
-        std::vector<std::string> common{options.compiler, "--driver-mode=cl", std::string(targetFor(mapping->platform)),
-                                        runtimeFlag(metadataOf(metadata, "runtimelibrary"), mapping->configuration)};
-        if (!iequals(metadataOf(metadata, "exceptionhandling"), "false")) {
-            common.emplace_back("/EHsc");
-        }
-        if (iequals(metadataOf(metadata, "conformancemode"), "true")) {
-            common.emplace_back("/permissive-");
-        }
-        if (iequals(characterSet, "Unicode")) {
-            common.emplace_back("/DUNICODE");
-            common.emplace_back("/D_UNICODE");
-        } else if (iequals(characterSet, "MultiByte")) {
-            common.emplace_back("/D_MBCS");
-        }
-        for (const std::string& define : resolvedEntries(metadataOf(metadata, "preprocessordefinitions"))) {
-            common.push_back("/D" + define);
-        }
-        for (const std::string& entry : resolvedEntries(metadataOf(metadata, "additionalincludedirectories"))) {
-            if (auto dir = resolvePath(vcx.directory, entry)) {
-                common.push_back("/I" + *dir);
-            }
-        }
-        for (const std::string& dir : options.systemIncludeDirectories) {
-            common.push_back("/imsvc" + dir);
-        }
-        for (const std::string& entry : resolvedEntries(metadataOf(metadata, "forcedincludefiles"))) {
-            if (auto file = resolvePath(vcx.directory, entry)) {
-                common.push_back("/FI" + *file);
-            }
-        }
-        const std::string cxxStd = cxxStandard(metadataOf(metadata, "languagestandard"));
-        const std::optional<std::string> cStd = cStandard(metadataOf(metadata, "languagestandard_c"));
-
-        for (const project::ProjectItem& item : vcx.items) {
-            if (item.type != project::ItemType::ClCompile) {
-                continue;
-            }
-            CompileCommand command{.directory = vcx.directory, .file = item.path, .arguments = common};
-            if (isCSource(item.path)) {
-                if (cStd) {
-                    command.arguments.push_back(*cStd);
-                }
-            } else {
-                command.arguments.push_back(cxxStd);
-            }
-            command.arguments.emplace_back("/c");
-            command.arguments.push_back(item.path);
-            out.push_back(std::move(command));
-        }
+        std::vector<CompileCommand> project = synthesizeProjectCompileCommands(
+            model, project::ProjectId{static_cast<std::uint32_t>(p)}, *configurationIndex, options);
+        out.insert(out.end(), std::make_move_iterator(project.begin()), std::make_move_iterator(project.end()));
     }
     return out;
+}
+
+Result<std::optional<CompileCommandsLocation>> writeCompileCommandsLocation(io::IFileSystem& fs,
+                                                                            std::string_view cacheDirectory,
+                                                                            std::span<const CompileCommand> commands,
+                                                                            CompileCommandsSource source) {
+    return writeToCache(fs, cacheDirectory, commands, source);
 }
 
 SolutionCompileCommandsProvider::SolutionCompileCommandsProvider(io::IFileSystem& fs,
