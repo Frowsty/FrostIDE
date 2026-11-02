@@ -392,7 +392,7 @@ private:
 };
 
 /*
- * The editor factory the shell's IEditorFactory wraps (m1/shell-frame, ADR 0035): a view on
+ * The editor factory the shell's IEditorFactory wraps (m1/shell-frame, ADR 0038): a view on
  * `document` for the file at `path` (absolute UTF-8, or empty for an untitled document) with the
  * language picked from the file name and highlighting started. The document must outlive the view.
  */
