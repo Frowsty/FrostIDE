@@ -37,6 +37,7 @@ frost_add_test_directory(build)
 frost_add_test_directory(lang)
 # frost::search: the fuzzy path matcher (ADR 0042) and Find and Replace in Files (ADR 0045).
 frost_add_test_directory(search)
+frost_add_test_directory(sdk)
 if(NOT FROST_FUZZ)
     # frost::diag and frost::vcs are not built in fuzz trees (src/CMakeLists.txt); vcs after diff,
     # whose git lookup (FROST_GIT_EXECUTABLE) it reuses.

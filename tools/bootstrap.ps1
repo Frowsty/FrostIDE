@@ -4,8 +4,11 @@
 #
 # Everything goes under -SdkRoot (default E:\sdk) so the system drive stays
 # untouched: LLVM, CMake, Ninja, gh, sccache, the .NET SDK, vcpkg, a Python
-# venv for tooling and a subset of Qt. Versions, URLs and hashes come from
-# sdk/sdk.lock.json; an archive whose hash differs from the pin is rejected.
+# venv for tooling, a subset of Qt and the self-built lldb-dap. Versions, URLs and
+# hashes come from sdk/sdk.lock.json; an archive whose hash differs from the pin is
+# rejected. lldb-dap has no official Windows binary (spike S5), so it is built from
+# the pinned LLVM sources by tools/build-lldb.ps1 (about 15 minutes) when it is missing,
+# and its installed files are checked against their pinned hashes otherwise (ADR 0049).
 # The script is idempotent: a component whose marker file matches its pin is
 # skipped, so re-running after a partial failure only redoes what is missing.
 #
@@ -19,7 +22,8 @@
 param(
     # Root directory for every installed component.
     [string]$SdkRoot = 'E:\sdk',
-    # Optional subset of components to install (llvm, cmake, ninja, gh, sccache, dotnet, python, qt, vcpkg).
+    # Optional subset of components to install (llvm, cmake, ninja, gh, sccache, dotnet, python, qt, vcpkg,
+    # lldb).
     [string[]]$Only = @()
 )
 
@@ -222,6 +226,23 @@ function Assert-Msvc {
     Write-Host "[msvc] toolset $($Lock.msvc.vcToolsVersion) and Windows SDK $($Lock.msvc.windowsSdkVersion) present"
 }
 
+# Verifies the self-built lldb-dap in $SdkRoot\lldb-<version> against windows.lldb.files in the
+# lock file, or builds it from the pinned LLVM sources first when it is not installed. Runs last,
+# because the build needs LLVM, CMake, Ninja and the Python venv; tools\build-lldb.ps1 does both
+# (with -VerifyOnly for the check) and throws on a mismatch.
+function Install-Lldb {
+    $pin = $Lock.windows.lldb
+    $recipe = Join-Path $PSScriptRoot 'build-lldb.ps1'
+    $dest = Join-Path $SdkRoot "lldb-$($pin.version)"
+    if (Test-Path (Join-Path $dest '.frost-installed')) {
+        & $recipe -SdkRoot $SdkRoot -VerifyOnly
+        Write-Host "[lldb] $($pin.version) verified in $dest"
+        return
+    }
+    Write-Host "[lldb] $($pin.version) is not installed: building it from the pinned LLVM sources (about 15 minutes)"
+    & $recipe -SdkRoot $SdkRoot
+}
+
 Assert-FreeSpace
 Assert-Msvc
 New-Item -ItemType Directory -Force -Path $Downloads | Out-Null
@@ -232,5 +253,6 @@ foreach ($name in @('llvm', 'cmake', 'ninja', 'gh', 'sccache', 'dotnet')) {
 if (Test-Wanted 'python') { Install-PythonTools }
 if (Test-Wanted 'qt') { Install-Qt }
 if (Test-Wanted 'vcpkg') { Install-Vcpkg }
+if (Test-Wanted 'lldb') { Install-Lldb }
 
 Write-Host 'bootstrap complete; dot-source tools\env.ps1 to use the toolchain in this shell'

@@ -1100,7 +1100,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # exactly one kind label; the tagged suites are build_msbuild_tests (Windows only),
         # lang_clangd_tests, lang_msbuild_tests (Windows only; both tags), build_cmake_tests (tag
         # "cmake"), build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046), vcs_git_tests and
-        # ui_vcs_git_tests (tag "git"; ADR 0048), and ui_screenshot_tests (trees with the UI).
+        # ui_vcs_git_tests (tag "git"; ADR 0048), sdk_lldb_tests (tag "lldb"; ADR 0049), and
+        # ui_screenshot_tests (trees with the UI).
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.")),
@@ -1108,6 +1109,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
                   "cmake": ("integration", ("CMakeRealBuild.",)),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.")),
+                  "lldb": ("integration", ("LldbDapE2E.",)),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)
@@ -1128,6 +1130,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
         self.assertEqual(wrong, [])
         self.assertGreater(seen["clangd"], 0)  # frost::lang builds in every tree with tests.
         self.assertGreater(seen["git"], 0)  # So does frost::vcs.
+        self.assertGreater(seen["lldb"], 0)  # So does tests/sdk.
         if os.name == "nt":
             self.assertGreater(seen["msbuild"], 0)
 

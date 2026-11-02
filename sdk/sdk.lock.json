@@ -1,6 +1,22 @@
 {
   "schemaVersion": 1,
   "description": "Pinned toolchain artifacts for FrostIDE development. tools/bootstrap.ps1 (Windows) and tools/bootstrap-wsl.sh (Linux/WSL) install exactly these versions and refuse any archive whose hash differs. Bump a pin only through an ADR (PLAN.md section 2.3).",
+  "sources": {
+    "llvm": {
+      "version": "23.1.4",
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/llvm-project-23.1.4.src.tar.xz",
+      "file": "llvm-project-23.1.4.src.tar.xz",
+      "sha256": "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2",
+      "attestation": {
+        "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/llvm-project-23.1.4.src.tar.xz.jsonl",
+        "file": "llvm-project-23.1.4.src.tar.xz.jsonl",
+        "sha256": "29e57fc2ad5346518d8835cc0e869231867172f95cec455c50a1d8eb5949ad66",
+        "repository": "llvm/llvm-project",
+        "signer": "https://github.com/llvm/llvm-project/.github/workflows/release-sources.yml@refs/tags/llvmorg-23.1.4"
+      },
+      "note": "The pinned SHA-256 equals the digest GitHub publishes for the release asset, and gh attestation verify (gh 2.103.3, 2026-11-02) accepted the release's Sigstore bundle, signed by the release-sources.yml workflow at the tag. tools/build-lldb.ps1 and tools/build-lldb.sh build lldb-dap from it (ADR 0049)."
+    }
+  },
   "windows": {
     "llvm": {
       "version": "23.1.4",
@@ -44,6 +60,16 @@
       "file": "dotnet-sdk-10.0.403-win-x64.zip",
       "sha512": "7a114c318fa7f1d9822991b534b2814d0e78386ceda816b371f5141acefe741d87ccb606ede06cadac8f9ac5070e32b708a67bbd1619ff5e5a7858a27874ef48",
       "bin": "."
+    },
+    "lldb": {
+      "version": "23.1.4",
+      "recipe": "tools/build-lldb.ps1",
+      "files": {
+        "bin/liblldb.dll": "b094e5b190a4702efa8c0d811169e142f08dbe1862fb81ed8db325cb6a8a42b9",
+        "bin/lldb.exe": "7a1dd8a1950a1c974beaa364da19dc08180703920ed08ada50474dd457c94a8c",
+        "bin/lldb-argdumper.exe": "11ed626d1ea9212ebb4be54885d49c64531a5fbc3953e89eb93965af6bf7bd35",
+        "bin/lldb-dap.exe": "e41f7377d09f14cfece6ed462df74881fd029b40d96dc52ae947f83b07d8a6cc"
+      }
     }
   },
   "linux": {
@@ -68,6 +94,19 @@
       "file": "ninja-linux.zip",
       "sha256": "5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6",
       "bin": "."
+    },
+    "lldb": {
+      "version": "23.1.4",
+      "recipe": "tools/build-lldb.sh",
+      "files": {
+        "bin/lldb": "6c791cceef939443600b60b42e5f0491890f487e5a067599bc67024796ac8326",
+        "bin/lldb-argdumper": "879014f937938cf1c96b7dd45e572842f2d48ea5a5ff171445ef32fdcc4f96f2",
+        "bin/lldb-dap": "3aec74a8899520b9c920aaa5e78d5d5695591d513681dee34ac55b307f1466bf",
+        "bin/lldb-server": "7c8c42ca0d638f5a59bc3988d63ea5352750f9741d9184a6c8cad1893d5bdb76",
+        "lib/liblldb.so": "symlink:liblldb.so.23.1",
+        "lib/liblldb.so.23.1": "symlink:liblldb.so.23.1.4",
+        "lib/liblldb.so.23.1.4": "1b82c9fb48248cccb39a70c22389aa2294cd379b3ed616ed84aa2de4eb86dd7f"
+      }
     }
   },
   "qt": {
