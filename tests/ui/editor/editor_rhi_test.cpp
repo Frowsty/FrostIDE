@@ -185,7 +185,8 @@ EditorDisplayList sampleList(const QFont& font) {
     list.textArea = QRectF(40, 0, 280, 80);
     list.font = font;
     const auto run = [](QPointF origin, const char* text, QColor color) {
-        return DisplayText{origin, QString::fromLatin1(text), color, false, std::nullopt, text::ByteRange{}};
+        return DisplayText{origin,       QString::fromLatin1(text), color,        false,
+                           std::nullopt, text::ByteRange{},         std::nullopt, false};
     };
     list.text.push_back(run(QPointF(46, 16), "int main()", QColor(200, 200, 200)));
     list.text.push_back(run(QPointF(46, 36), "return 42;", QColor(110, 170, 220)));
