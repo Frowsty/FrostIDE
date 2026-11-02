@@ -293,5 +293,36 @@ TEST(VcxprojReader, ReportsMalformedProjects) {
     EXPECT_EQ(toString(ItemType::Other), "Other");
 }
 
+// The run service's fallback reader (ADR 0040): raw values for one configuration.
+TEST(ConfigurationProperties, ReadsTheGroupsThatApplyToOneConfiguration) {
+    const std::string_view project = R"x(<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals"><ProjectName>Game</ProjectName><OutDir>$(SolutionDir)bin\</OutDir></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LocalDebuggerCommandArguments>--level "one"</LocalDebuggerCommandArguments>
+    <OutDir>$(SolutionDir)debug\</OutDir>
+    <TargetName Condition="'$(Special)'=='1'">Special</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'release|X64' "><OutDir>rel\</OutDir></PropertyGroup>
+  <PropertyGroup Condition="'$(Special)'=='1'"><TargetExt>.bin</TargetExt></PropertyGroup>
+</Project>
+)x";
+    auto debug = parseConfigurationProperties(project, "C:\\s\\Game.vcxproj", "Debug", "x64");
+    ASSERT_TRUE(debug.has_value()) << debug.error().describe();
+    EXPECT_EQ(debug->at("projectname"), "Game");
+    EXPECT_EQ(debug->at("outdir"), "$(SolutionDir)debug\\") << "a later group wins; values stay unexpanded";
+    EXPECT_EQ(debug->at("localdebuggercommandarguments"), "--level \"one\"");
+    EXPECT_FALSE(debug->contains("targetname")) << "a property with its own condition is skipped";
+    EXPECT_FALSE(debug->contains("targetext")) << "other conditions are skipped";
+
+    auto release = parseConfigurationProperties(project, "C:\\s\\Game.vcxproj", "Release", "x64");
+    ASSERT_TRUE(release.has_value());
+    EXPECT_EQ(release->at("outdir"), "rel\\") << "the pair is compared ignoring case and spaces";
+    EXPECT_FALSE(release->contains("localdebuggercommandarguments"));
+
+    EXPECT_EQ(parseConfigurationProperties("<Project", "C:\\s\\Bad.vcxproj", "Debug", "x64").error().code(),
+              ErrorCode::Corrupt);
+}
+
 } // namespace
 } // namespace frost::project

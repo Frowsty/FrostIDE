@@ -224,6 +224,9 @@ run.debugContext = Ctrl+Shift+F9
 run.stop = Ctrl+F2
 run.selectConfiguration = Alt+Shift+F10
 run.selectDebugConfiguration = Alt+Shift+F9
+# Not on the IntelliJ card: Visual Studio's "Start Without Debugging", kept as an alias for
+# Visual Studio users (ADR 0040).
+run.runWithoutDebugging = Ctrl+F5
 tools.runAnything = DoubleCtrl
 build.project = Ctrl+F9
 debug.toggleBreakpoint = Ctrl+F8
@@ -345,6 +348,8 @@ editor.codeBlockEndWithSelection = Alt+Shift+Meta+BracketRight
 # Not on the card; the swap would collide with editor.deleteLine and navigate.gotoClass.
 editor.deleteToWordStart =
 code.overrideMethods =
+# The Visual Studio alias would swap to Meta+F5, macOS's VoiceOver toggle.
+run.runWithoutDebugging =
 )keymap";
 
 constexpr std::array<std::string_view, 1> kBuiltinIds = {"intellij"};

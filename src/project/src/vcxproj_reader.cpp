@@ -471,6 +471,36 @@ Result<VcxProject> parseVcxproj(io::IFileSystem& fs, std::string_view content, s
     return project;
 }
 
+Result<std::map<std::string, std::string, std::less<>>> parseConfigurationProperties(std::string_view content,
+                                                                                     std::string_view path,
+                                                                                     std::string_view configuration,
+                                                                                     std::string_view platform) {
+    pugi::xml_document doc;
+    if (auto parsed = detail::parseXml(doc, content, path, "Project"); !parsed) {
+        return std::unexpected(std::move(parsed.error()));
+    }
+    PropertyTable values;
+    for (pugi::xml_node group = doc.document_element().first_child(); group; group = group.next_sibling()) {
+        if (!isElement(group, "PropertyGroup")) {
+            continue;
+        }
+        const std::string_view condition = trim(attribute(group, "Condition"));
+        if (!condition.empty()) {
+            const auto pair = configurationCondition(condition);
+            if (!pair || !iequals(pair->first, configuration) || !iequals(pair->second, platform)) {
+                continue;
+            }
+        }
+        for (pugi::xml_node property = group.first_child(); property; property = property.next_sibling()) {
+            if (property.type() != pugi::node_element || !trim(attribute(property, "Condition")).empty()) {
+                continue;
+            }
+            values[detail::toLowerAscii(localName(property))] = std::string(elementText(property));
+        }
+    }
+    return values;
+}
+
 Result<VcxProject> readVcxproj(io::IFileSystem& fs, std::string_view projectPath, const VcxprojOptions& options) {
     auto content = fs.readFile(projectPath);
     if (!content) {

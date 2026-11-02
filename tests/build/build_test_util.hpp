@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Helpers for the frost::build unit tests: native absolute paths under a fixed root and a MemFs
-// tree to write small solutions into. Header-only; test code only.
+// Helpers for the frost::build unit tests: native absolute paths under a fixed root, a MemFs
+// tree to write small solutions into and a minimal PE image. Header-only; test code only.
 #pragma once
 
 #include "frost/core/clock.hpp"
@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -52,5 +53,17 @@ public:
     ManualClock clock;
     io::MemFs fs{clock};
 };
+
+// The headers of a PE image (MZ, e_lfanew = 0x40, "PE\0\0", a file header, an optional header)
+// declaring `subsystem` (3 console, 2 GUI): enough for build::peSubsystem.
+inline std::string peImage(std::uint16_t subsystem) {
+    std::string image(0x40 + 4 + 20 + 96, '\0');
+    image[0] = 'M';
+    image[1] = 'Z';
+    image[0x3C] = 0x40;
+    image.replace(0x40, 4, std::string("PE\0\0", 4));
+    image[0x40 + 4 + 20 + 68] = static_cast<char>(subsystem & 0xFF);
+    return image;
+}
 
 } // namespace frost::build::test

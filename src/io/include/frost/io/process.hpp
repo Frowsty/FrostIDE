@@ -98,6 +98,16 @@ enum class ImagePathForm : unsigned char {
 struct ProcessSpec {
     std::string executable{};             // Absolute path (UTF-8).
     std::vector<std::string> arguments{}; // argv[1..]; argv[0] is always the executable path.
+    /*
+     * Windows only: the command line after argv[0], passed to CreateProcessW verbatim instead of
+     * quoting `arguments` (which must then be empty). For programs that parse their command line
+     * with rules other than the CRT's, cmd.exe /c above all: the caller owns the quoting for that
+     * parser, which is exactly the hazard the batch-file refusal avoids, so only code that builds
+     * such a line on purpose (the run service's console wrapper) sets it. A space separates it
+     * from the quoted executable. validateProcessSpec rejects it on POSIX (Unsupported) and checks
+     * NUL, UTF-8 and the command-line limit on Windows.
+     */
+    std::optional<std::string> rawArguments{};
     // Absolute path, or empty to use the parent's current directory. Windows: a directory of MAX_PATH - 12
     // UTF-16 units or more that CreateProcessW refuses (LongPathsEnabled = 0) is retried with its 8.3 short
     // spelling when the volume has one, and the child then sees that spelling as its current directory.
@@ -127,6 +137,16 @@ struct ProcessSpec {
 
     // Windows: see ImagePathForm. Ignored on POSIX.
     ImagePathForm imagePathForm = ImagePathForm::Auto;
+    /*
+     * Windows only: start the child with a console window of its own (CREATE_NEW_CONSOLE), whose
+     * input and output buffers become its standard streams, for interactive console programs.
+     * stdinMode, stdoutMode and stderrMode must all be Stdio::Inherit (meaning that console; no
+     * handle of this process is inherited). The window opens on `desktop` (Windows 11 may hand it
+     * to Windows Terminal, which opens on the user's desktop), so tests never set this flag on a
+     * real launch. killOnClose still contains the tree. POSIX rejects it (Unsupported): opening a
+     * terminal emulator is TODO(M4) with the terminal.
+     */
+    bool newConsole = false;
     /*
      * Windows: STARTUPINFOW::lpDesktop, "<window station>\<desktop>" (UTF-8, no NUL). Empty
      * inherits the parent's desktop. Tests use a private desktop that is never shown, so a

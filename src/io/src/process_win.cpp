@@ -835,7 +835,7 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         return std::unexpected(std::move(notBatch.error()));
     }
     // validateProcessSpec has checked that the command line builds and fits the limit.
-    auto utf8CommandLine = buildWindowsCommandLine(*executable, spec.arguments);
+    auto utf8CommandLine = detail::windowsCommandLineFor(*executable, spec);
     if (!utf8CommandLine) {
         return std::unexpected(std::move(utf8CommandLine.error()));
     }
@@ -874,21 +874,26 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         environment = std::move(*block);
     }
 
-    auto in = setupStream(spec.stdinMode, STD_INPUT_HANDLE, /*parentReads=*/false);
-    if (!in) {
-        return std::unexpected(std::move(in.error()));
-    }
-    auto out = setupStream(spec.stdoutMode, STD_OUTPUT_HANDLE, /*parentReads=*/true);
-    if (!out) {
-        return std::unexpected(std::move(out.error()));
-    }
+    // A child with a console of its own uses that console's buffers and inherits no handle (newConsole).
+    Result<StreamSetup> in = StreamSetup{};
+    Result<StreamSetup> out = StreamSetup{};
     StreamSetup err;
-    if (spec.stderrMode != Stdio::MergeIntoStdout) {
-        auto setup = setupStream(spec.stderrMode, STD_ERROR_HANDLE, /*parentReads=*/true);
-        if (!setup) {
-            return std::unexpected(std::move(setup.error()));
+    if (!spec.newConsole) {
+        in = setupStream(spec.stdinMode, STD_INPUT_HANDLE, /*parentReads=*/false);
+        if (!in) {
+            return std::unexpected(std::move(in.error()));
         }
-        err = std::move(*setup);
+        out = setupStream(spec.stdoutMode, STD_OUTPUT_HANDLE, /*parentReads=*/true);
+        if (!out) {
+            return std::unexpected(std::move(out.error()));
+        }
+        if (spec.stderrMode != Stdio::MergeIntoStdout) {
+            auto setup = setupStream(spec.stderrMode, STD_ERROR_HANDLE, /*parentReads=*/true);
+            if (!setup) {
+                return std::unexpected(std::move(setup.error()));
+            }
+            err = std::move(*setup);
+        }
     }
     const HANDLE childErr = spec.stderrMode == Stdio::MergeIntoStdout ? out->child.get() : err.child.get();
 
@@ -905,24 +910,38 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         }
     }
 
-    // Exactly these handles are inherited (each once; duplicates are an error for the API).
-    std::vector<HANDLE> inherited{in->child.get(), out->child.get()};
-    if (std::ranges::find(inherited, childErr) == inherited.end()) {
-        inherited.push_back(childErr);
+    // Exactly these handles are inherited (each once; duplicates are an error for the API); none with newConsole.
+    std::vector<HANDLE> inherited;
+    if (!spec.newConsole) {
+        inherited = {in->child.get(), out->child.get()};
+        if (std::ranges::find(inherited, childErr) == inherited.end()) {
+            inherited.push_back(childErr);
+        }
     }
-    const DWORD attributeCount = job.valid() ? 2 : 1;
+    // A handle list must not be empty, and an attribute list needs at least one attribute: with
+    // neither handles nor a job there is no list at all.
+    const DWORD attributeCount = (inherited.empty() ? 0 : 1) + (job.valid() ? 1 : 0);
     SIZE_T listSize = 0;
-    InitializeProcThreadAttributeList(nullptr, attributeCount, 0, &listSize);
-    std::vector<std::byte> listStorage(listSize);
-    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(listStorage.data());
-    if (InitializeProcThreadAttributeList(attributes, attributeCount, 0, &listSize) == FALSE) {
-        return std::unexpected(lastWin32Error("InitializeProcThreadAttributeList"));
+    std::vector<std::byte> listStorage;
+    LPPROC_THREAD_ATTRIBUTE_LIST attributes = nullptr;
+    if (attributeCount > 0) {
+        InitializeProcThreadAttributeList(nullptr, attributeCount, 0, &listSize);
+        listStorage.resize(listSize);
+        attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(listStorage.data());
+        if (InitializeProcThreadAttributeList(attributes, attributeCount, 0, &listSize) == FALSE) {
+            return std::unexpected(lastWin32Error("InitializeProcThreadAttributeList"));
+        }
     }
     struct ListGuard {
         LPPROC_THREAD_ATTRIBUTE_LIST list;
-        ~ListGuard() { DeleteProcThreadAttributeList(list); }
+        ~ListGuard() {
+            if (list != nullptr) {
+                DeleteProcThreadAttributeList(list);
+            }
+        }
     } listGuard{attributes};
-    if (UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
+    if (!inherited.empty() &&
+        UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
                                   inherited.size() * sizeof(HANDLE), nullptr, nullptr) == FALSE) {
         return std::unexpected(lastWin32Error("UpdateProcThreadAttribute(HANDLE_LIST)"));
     }
@@ -935,24 +954,28 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
 
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = in->child.get();
-    startup.StartupInfo.hStdOutput = out->child.get();
-    startup.StartupInfo.hStdError = childErr;
+    if (!spec.newConsole) {
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = in->child.get();
+        startup.StartupInfo.hStdOutput = out->child.get();
+        startup.StartupInfo.hStdError = childErr;
+    }
     startup.StartupInfo.lpDesktop = desktop.empty() ? nullptr : desktop.data();
     startup.lpAttributeList = attributes;
-    DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
-    // A GUI parent has no console; without this flag every console tool would open a window.
-    // A console parent shares its console, so inherited console handles stay valid.
-    if (GetConsoleWindow() == nullptr) {
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | (attributes != nullptr ? EXTENDED_STARTUPINFO_PRESENT : 0);
+    if (spec.newConsole) {
+        flags |= CREATE_NEW_CONSOLE;
+    } else if (GetConsoleWindow() == nullptr) {
+        // A GUI parent has no console; without this flag every console tool would open a window.
+        // A console parent shares its console, so inherited console handles stay valid.
         flags |= CREATE_NO_WINDOW;
     }
     // TODO(M1): log applicationName, the working directory and the command line (PLAN.md 3.5) once
     // frost::core has logging (the crash and logging slice, PLAN.md I3; see process.hpp).
     PROCESS_INFORMATION info{};
     const auto create = [&](const std::wstring& directory) {
-        return CreateProcessW(applicationName->c_str(), commandLine->data(), nullptr, nullptr, TRUE, flags,
-                              customEnvironment ? environment.data() : nullptr,
+        return CreateProcessW(applicationName->c_str(), commandLine->data(), nullptr, nullptr,
+                              inherited.empty() ? FALSE : TRUE, flags, customEnvironment ? environment.data() : nullptr,
                               directory.empty() ? nullptr : directory.c_str(), &startup.StartupInfo, &info) != FALSE;
     };
     const auto directoryUnits = toWide(normalizedDirectory);

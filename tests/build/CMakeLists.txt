@@ -4,10 +4,14 @@
 #   build_unit_tests     the diagnostic parser, the line splitter, the JSON reader, vswhere parsing and
 #                        instance selection, the MSBuild command line, BuildSession against the
 #                        scripted launcher, diagnostic resolution and BuildService over a MemFs
-#                        solution, label "unit" (every platform);
+#                        solution, what Run starts (run_target) and RunService over a fake builder,
+#                        label "unit" (every platform);
+#   build_run_tests      RunSession with real processes (io_test_child): output, exit code, input, Stop
+#                        of the whole tree, and on Windows the external console's cmd wrapper (with
+#                        pipes, no window), label "integration" (every platform);
 #   build_msbuild_tests  real vswhere and MSBuild against the tiny fixture solution (fixtures/), directly
-#                        and through BuildService, label "integration;msbuild", Windows only. Filter
-#                        with ctest -L msbuild or -LE msbuild.
+#                        and through BuildService and RunService (-getProperty, a real run), label
+#                        "integration;msbuild", Windows only. Filter with ctest -L msbuild or -LE msbuild.
 #                        The builds run in a work directory under this build tree, not under %TEMP%, where
 #                        MSBuild warns about intermediate directories (MSB8029).
 
@@ -21,9 +25,20 @@ frost_add_test(build_unit_tests
         line_splitter_test.cpp
         msbuild_driver_test.cpp
         msbuild_locator_test.cpp
+        run_service_test.cpp
+        run_target_test.cpp
     DEPS frost::build)
 # src/build/src: json_test.cpp tests the private JSON reader.
 target_include_directories(build_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/build/src)
+
+frost_add_test(build_run_tests
+    SOURCES run_session_test.cpp
+    DEPS frost::build
+    LABELS integration)
+# tests/io/process_env.hpp: the io_test_child spec and ProcessWatch.
+target_include_directories(build_run_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(build_run_tests PRIVATE FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
+add_dependencies(build_run_tests io_test_child)
 
 if(WIN32)
     frost_add_test(build_msbuild_tests

@@ -4,12 +4,14 @@
 # finding MSBuild through vswhere, the MSBuild build driver (Build, Rebuild and Clean of a solution
 # or one project, streamed output, cancellation of the whole process tree), the parser that turns
 # MSBuild, cl, link, rc and clang-cl output into diagnostics, and the BuildService the UI binds to
-# (active configuration, trust gate, Save All, one build at a time, resolved diagnostics; ADR 0035).
+# (active configuration, trust gate, Save All, one build at a time, resolved diagnostics; ADR 0035),
+# and the RunService that builds and runs the startup project (MSBuild -getProperty, the Run
+# console and the external console; ADR 0040).
 # Qt-free; depends on project (the SolutionModel and the trust store) and io (and core through
 # them). The parser, the vswhere JSON reader, the command-line builder and the service are
 # portable; the discovery and the driver return Unsupported off Windows.
-# TODO(M4): FrostIDE.MSBuildLogger, the CMake and dotnet drivers, run configurations and localized
-# output decoding (I12).
+# TODO(M4): FrostIDE.MSBuildLogger, the CMake and dotnet drivers, full run configurations and
+# localized output decoding (I12).
 
 set(frost_build_sources
     src/build_diagnostics.cpp
@@ -19,6 +21,9 @@ set(frost_build_sources
     src/line_splitter.cpp
     src/msbuild_driver.cpp
     src/msbuild_locator.cpp
+    src/run_service.cpp
+    src/run_session.cpp
+    src/run_target.cpp
     src/session.cpp)
 
 frost_add_library(build LAYER build

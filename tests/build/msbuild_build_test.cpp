@@ -3,12 +3,16 @@
 // Real vswhere and MSBuild (Windows, label "msbuild"): discovery on this machine, and builds of the
 // tiny fixture solution (fixtures/tiny_sln: a static library and a program that links it) copied
 // into a work directory whose name has a space and a non-ASCII character, directly and through
-// BuildService (trust, diagnostics with absolute paths). Each build takes about a second. A machine
+// BuildService (trust, diagnostics with absolute paths), and the run service's part: MSBuild
+// -getProperty for the program and the debugger settings of App.vcxproj.user, then a build and a
+// run in the Run console (output, input, exit code). Each build takes about a second. A machine
 // without Visual Studio skips these tests.
 
 #include "frost/build/build_service.hpp"
 #include "frost/build/msbuild_driver.hpp"
 #include "frost/build/msbuild_locator.hpp"
+#include "frost/build/run_service.hpp"
+#include "frost/build/run_target.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
@@ -29,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -511,6 +516,125 @@ TEST(MsBuildBuild, BuildServiceBuildsAndResolvesTheDiagnostics) {
     ASSERT_FALSE(groups.empty());
     EXPECT_TRUE(sameFile(groups[0].file, mainPath)) << groups[0].file;
     service.reset();
+}
+
+// What MSBuild reports for the tiny program, with the settings of its App.vcxproj.user.
+TEST(MsBuildRun, GetPropertyReportsTheProgramAndTheUserFilesSettings) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir work("properties", "tiny_sln");
+    frost::build::RunPropertyRequest request{.msbuildPath = msbuild->msbuildPath,
+                                             .projectPath = work.join("App\\App.vcxproj"),
+                                             .solutionPath = work.join("Tiny.sln"),
+                                             .configuration = "Debug",
+                                             .platform = "x64"};
+    auto properties = frost::build::queryRunProperties(frost::io::realProcessLauncher(), request, kBuildTimeout);
+    ASSERT_TRUE(properties.has_value()) << properties.error().describe();
+    EXPECT_TRUE(properties->fromMsBuild);
+    EXPECT_TRUE(sameFile(properties->targetPath, work.join("x64\\Debug\\App.exe"))) << properties->targetPath;
+    EXPECT_TRUE(sameFile(properties->projectDir, work.join("App\\"))) << properties->projectDir;
+    EXPECT_EQ(properties->configurationType, "Application");
+    EXPECT_EQ(properties->commandArguments, "--print \"two words\" --echo --exit 3");
+    EXPECT_TRUE(sameFile(properties->workingDirectory, work.join("Lib"))) << "MSBuild expands $(SolutionDir)";
+    EXPECT_TRUE(properties->environment.contains("FROST_TINY_VALUE=hello from Debug")) << properties->environment;
+    EXPECT_TRUE(properties->mergeEnvironment);
+
+    const auto command = frost::build::resolveRunCommand(*properties, frost::build::runMacros(*properties, request));
+    ASSERT_TRUE(command.has_value()) << command.error().describe();
+    EXPECT_TRUE(sameFile(command->executable, properties->targetPath));
+    EXPECT_TRUE(sameFile(command->workingDirectory, work.join("Lib"))) << command->workingDirectory;
+    using Pairs = std::vector<std::pair<std::string, std::string>>;
+    EXPECT_EQ(command->environment, (Pairs{{"FROST_TINY_VALUE", "hello from Debug"}, {"FROST_TINY_OTHER", "1"}}));
+
+    // The static fallback finds the same program and arguments (it cannot expand imported macros).
+    const auto fallback = frost::build::staticRunProperties(frost::io::realFileSystem(), request);
+    ASSERT_TRUE(fallback.has_value()) << fallback.error().describe();
+    EXPECT_FALSE(fallback->fromMsBuild);
+    EXPECT_TRUE(sameFile(fallback->targetPath, properties->targetPath)) << fallback->targetPath;
+    EXPECT_EQ(fallback->commandArguments, properties->commandArguments);
+
+    // The user file sets Debug|x64 only.
+    request.configuration = "Release";
+    const auto release = frost::build::queryRunProperties(frost::io::realProcessLauncher(), request, kBuildTimeout);
+    ASSERT_TRUE(release.has_value()) << release.error().describe();
+    EXPECT_TRUE(sameFile(release->targetPath, work.join("x64\\Release\\App.exe"))) << release->targetPath;
+    EXPECT_TRUE(release->commandArguments.empty()) << release->commandArguments;
+}
+
+// Run through RunService over the real BuildService: build, then the program in the Run console
+// with the user file's arguments, working directory and environment, a line of input, exit code 3.
+TEST(MsBuildRun, RunServiceBuildsAndRunsTheStartupProject) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir work("run", "tiny_sln");
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    auto loaded = frost::project::SolutionModel::load(fs, work.join("Tiny.sln"));
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    auto solution = std::make_shared<const frost::project::SolutionModel>(std::move(*loaded));
+    auto store = frost::project::TrustStore::open(fs, work.join("data\\trusted-roots.txt"));
+    ASSERT_TRUE(store.has_value()) << store.error().describe();
+    ASSERT_TRUE((*store)->trust(solution->directory()).has_value());
+
+    auto buildService = frost::build::BuildService::create(
+        fs, frost::io::realProcessLauncher(), **store,
+        {.stateFilePath = work.join("data\\active-configurations.txt"), .msbuildPath = msbuild->msbuildPath});
+    ASSERT_TRUE(buildService->openSolution(solution).has_value());
+    const auto builder = frost::build::makeRunBuilder(*buildService);
+
+    frost::Mutex mutex;
+    std::string out;
+    std::string err;
+    std::string system;
+    auto service = frost::build::RunService::create(
+        fs, frost::io::realProcessLauncher(), **store, *builder,
+        {.stateFilePath = work.join("data\\run-settings.txt"),
+         .msbuildPath = msbuild->msbuildPath,
+         .externalConsoleByDefault = false},
+        {.onOutput = [&](frost::build::RunId, frost::build::RunOutputKind kind, std::string_view text) {
+            frost::LockGuard lock(mutex);
+            (kind == frost::build::RunOutputKind::Stdout   ? out
+             : kind == frost::build::RunOutputKind::Stderr ? err
+                                                           : system) += text;
+        }});
+    ASSERT_TRUE(service->openSolution(solution).has_value());
+    ASSERT_TRUE(service->startupProject().has_value());
+    EXPECT_EQ(solution->project(*service->startupProject()).name, "App") << "Lib is a library";
+
+    auto run = service->run();
+    ASSERT_TRUE(run.has_value()) << run.error().describe();
+    const auto deadline = std::chrono::steady_clock::now() + kBuildTimeout;
+    while (true) {
+        const auto info = service->runInfo(*run);
+        if (!info || info->state == frost::build::RunState::Running ||
+            info->state == frost::build::RunState::Finished || std::chrono::steady_clock::now() > deadline) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(service->sendInput(*run, "hi there\n").has_value());
+    ASSERT_TRUE(service->waitForIdle(kBuildTimeout)) << "the run did not finish in time";
+    const auto outcome = service->lastOutcome();
+    ASSERT_TRUE(outcome.has_value());
+    frost::LockGuard lock(mutex);
+    std::erase(out, '\r'); // The program's C runtime writes text-mode CRLF; the Run console shows lines.
+    ASSERT_TRUE(outcome->ran()) << (outcome->error ? outcome->error->describe() : "") << "\n" << system;
+    EXPECT_EQ(outcome->exitCode, 3) << out;
+    EXPECT_FALSE(outcome->stopped);
+    EXPECT_EQ(outcome->run.mode, frost::build::ConsoleMode::RunConsole);
+    EXPECT_GT(outcome->duration.count(), 0);
+    EXPECT_TRUE(out.contains("tiny answer 42\n")) << out;
+    EXPECT_TRUE(out.contains("arg 1: --print\narg 2: two words\narg 3: --echo\n")) << out;
+    EXPECT_TRUE(out.contains("FROST_TINY_VALUE=hello from Debug\n")) << out;
+    EXPECT_TRUE(out.contains("\\Lib\n")) << "the working directory is the user file's: " << out;
+    EXPECT_TRUE(out.contains("echo: hi there\n")) << out;
+    EXPECT_TRUE(err.contains("tiny stderr line")) << err;
+    EXPECT_TRUE(system.contains("App.exe")) << system;
+    service.reset();
+    EXPECT_TRUE(buildService->waitForIdle(kBuildTimeout));
 }
 
 } // namespace

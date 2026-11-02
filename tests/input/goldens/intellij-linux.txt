@@ -177,6 +177,7 @@ run.debugContext = Ctrl+Shift+F9
 run.stop = Ctrl+F2
 run.selectConfiguration = Alt+Shift+F10
 run.selectDebugConfiguration = Alt+Shift+F9
+run.runWithoutDebugging = Ctrl+F5
 tools.runAnything = DoubleCtrl
 build.project = Ctrl+F9
 debug.toggleBreakpoint = Ctrl+F8

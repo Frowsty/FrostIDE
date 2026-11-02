@@ -29,6 +29,10 @@
 #include <unistd.h>
 #endif
 
+namespace frost::io {
+struct ProcessSpec; // frost/io/process.hpp
+} // namespace frost::io
+
 namespace frost::io::detail {
 
 // A number that is unique within this process (a relaxed atomic counter; only uniqueness matters, not
@@ -59,6 +63,11 @@ inline constexpr std::string_view kAtomicTempMarker = ".frost-tmp-";
 
 // CreateProcessW's command-line limit in UTF-16 units, including the terminator.
 inline constexpr std::size_t kMaxWindowsCommandLineUnits = 32767;
+
+// The Windows command line for `spec` with `executable` (normalised) as argv[0]: the quoted
+// arguments, or spec.rawArguments verbatim after a space (process.hpp). Errors: those of
+// buildWindowsCommandLine; InvalidArgument for rawArguments together with arguments.
+[[nodiscard]] Result<std::string> windowsCommandLineFor(std::string_view executable, const ProcessSpec& spec);
 
 /*
  * What a POSIX access ACL (acl(5)) granted every non-owner, as permission triples

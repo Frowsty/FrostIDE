@@ -249,6 +249,7 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
         std::vector<std::string> untrusted{};    // While NeedsTrust.
         std::unique_ptr<BuildSession> session{}; // While Running and Cancelling.
         std::set<std::string> finished{};        // Lower-cased project files that reported their output.
+        BuildCompletion onDone{};                // build()'s own completion, after onFinished.
     };
 
     io::IFileSystem& fs;
@@ -419,9 +420,12 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
     // moved out by the caller.
     void finishLocked(BuildOutcome outcome) FROST_REQUIRES(mutex) {
         emitOutput(BuildOutputKind::Status, summaryLine(outcome));
-        post([this, outcome] {
+        post([this, outcome, onDone = std::move(run->onDone)] {
             if (callbacks.onFinished) {
                 callbacks.onFinished(outcome);
+            }
+            if (onDone) {
+                onDone(outcome);
             }
         });
         last = std::move(outcome);
@@ -824,7 +828,8 @@ void BuildService::setSaveAllHook(SaveAllHook hook) {
     m_state->saveAll = std::move(hook);
 }
 
-Result<void> BuildService::build(BuildAction action, std::optional<project::ProjectId> project) {
+Result<void> BuildService::build(BuildAction action, std::optional<project::ProjectId> project,
+                                 BuildCompletion onDone) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
     if (s.state != BuildState::Idle) {
@@ -870,7 +875,8 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
                        .solution = s.solution,
                        .untrusted = {},
                        .session = nullptr,
-                       .finished = {}};
+                       .finished = {},
+                       .onDone = std::move(onDone)};
     s.emitDiagnosticsCleared();
     s.emitProgress(s.progress);
     if (s.passTrustGateLocked()) {

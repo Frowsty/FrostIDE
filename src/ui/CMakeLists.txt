@@ -3,10 +3,15 @@
 # The UI layer (FrostLayers "ui", rank 9; PLAN.md section 3.2): Qt-based building blocks the shell
 # composes. frost::ui_input (ADR 0016) is the Qt adapter of frost::input; frost::ui_model (Qt-free),
 # frost::ui_theme_compiler (Qt Core) and frost::ui (Qt Widgets: FrostStyle, AppearanceManager, the icon
-# runtime, fonts, the OS appearance source and the island frames) are ADR 0015's.
+# runtime, fonts, the OS appearance source and the island frames) are ADR 0015's. frost::ui_run
+# (the Run console, its controller and the run actions) is ADR 0040's; it needs frost::build,
+# which fuzz trees do not build.
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
+if(TARGET frost::build)
+    add_subdirectory(run)
+endif()
 
 frost_add_library(ui LAYER ui
     SOURCES

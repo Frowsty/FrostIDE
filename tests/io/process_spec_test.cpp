@@ -105,6 +105,47 @@ TEST(ProcessSpec, WindowsNamesAreCheckedOnTheExecutableAndDirectory) {
     EXPECT_EQ(validate(spec, true), ErrorCode::Unknown);
 }
 
+// The run service's external console (ADR 0040): a verbatim command tail and a new console window.
+TEST(ProcessSpec, RawArgumentsAndNewConsoleAreWindowsOnly) {
+    ProcessSpec spec = specFor("C:\\Windows\\System32\\cmd.exe");
+    spec.rawArguments = "/d /s /c \"\"C:\\a b\\x.exe\" 1 & pause\"";
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unknown);
+    ProcessSpec posix = specFor("/bin/sh");
+    posix.rawArguments = "-c true";
+    EXPECT_EQ(validate(posix, false), ErrorCode::Unsupported);
+    spec.arguments = {"/c"};
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument) << "rawArguments replaces arguments";
+    spec.arguments.clear();
+    spec.rawArguments = std::string("a\0b", 3);
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+    spec.rawArguments = std::string("\xFF");
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+
+    // The tail counts towards CreateProcessW's limit (process_test.cpp checks what the child sees).
+    spec.rawArguments = std::string(32767, 'a');
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+    spec.rawArguments.reset();
+
+    // A new console takes the console's own streams: every Stdio must be Inherit.
+    spec.newConsole = true;
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument) << "the defaults pipe stdout and stderr";
+    spec.stdinMode = Stdio::Inherit;
+    spec.stdoutMode = Stdio::Inherit;
+    spec.stderrMode = Stdio::Inherit;
+    EXPECT_EQ(validate(spec, true), ErrorCode::Unknown);
+    posix.rawArguments.reset();
+    posix.newConsole = true;
+    posix.stdinMode = Stdio::Inherit;
+    posix.stdoutMode = Stdio::Inherit;
+    posix.stderrMode = Stdio::Inherit;
+    EXPECT_EQ(validate(posix, false), ErrorCode::Unsupported);
+    spec.stdoutMode = Stdio::Pipe;
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+    spec.stdoutMode = Stdio::Inherit;
+    spec.stdinMode = Stdio::Null;
+    EXPECT_EQ(validate(spec, true), ErrorCode::InvalidArgument);
+}
+
 TEST(ProcessSpec, WindowsCommandLineMustBeBuildable) {
     // argv[0] has no escape syntax, so a quote in the executable cannot be represented.
     EXPECT_EQ(validate(specFor("C:\\a\"b\\x.exe"), true), ErrorCode::InvalidArgument);
