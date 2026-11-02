@@ -39,6 +39,17 @@ add_test(NAME FrostCompilerCache.RechecksCachedSccache
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_compiler_cache.cmake)
 set_tests_properties(FrostCompilerCache.RechecksCachedSccache PROPERTIES LABELS unit TIMEOUT 120)
 
+# The pinned Windows cache must keep each /Z7 object's source-root identity, while allowing
+# same-tree hits and honoring the caller's changing cache-buster (isolated sccache server).
+if(WIN32 AND _frost_sccache_found AND DEFINED ENV{FROST_SDK} AND DEFINED ENV{FROST_LLVM_ROOT})
+    find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME FrostCompilerCache.PreservesDebugSourceIdentity
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/check_compiler_cache_identity.py
+            ${FROST_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(FrostCompilerCache.PreservesDebugSourceIdentity PROPERTIES LABELS unit TIMEOUT 120)
+endif()
+
+
 add_test(NAME FrostRuntimeDlls.CopiesOncePerDirectory
     COMMAND ${CMAKE_COMMAND}
         -DFROST_SOURCE_DIR=${FROST_SOURCE_DIR}

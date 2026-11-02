@@ -26,7 +26,7 @@ std::string toUtf8(const QString& text) {
 
 } // namespace
 
-TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, QWidget* parent)
+TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, QWidget* parent, TrustPurpose purpose)
     : QDialog(parent), m_controller(controller), m_list(new QListWidget(this)), m_error(new QLabel(this)) {
     setObjectName(QStringLiteral("trustDialog"));
     setWindowTitle(tr("Trust and Open Project?"));
@@ -40,10 +40,17 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
     QFont headingFont = heading->font();
     headingFont.setBold(true);
     heading->setFont(headingFont);
-    auto* body = new QLabel(tr("Building runs code from the project: MSBuild targets, build events and custom "
-                               "build steps. Trust it only if you know where it comes from. Trusting covers "
-                               "these folders and everything below them:"),
-                            this);
+    const QString explanation =
+        purpose == TrustPurpose::LuaLanguageServer
+            ? tr("The Lua language server reads project configuration and can load project-selected scripts and "
+                 "extensions. "
+                 "Trust it only if you know where it comes from. Trusting covers these folders and everything below "
+                 "them:")
+            : tr("Building runs code from the project: MSBuild targets, build events and custom build steps. "
+                 "Trust it only if you know where it comes from. Trusting covers these folders and everything below "
+                 "them:");
+    auto* body = new QLabel(explanation, this);
+    body->setObjectName(QStringLiteral("trustDescription"));
     body->setWordWrap(true);
 
     m_list->setObjectName(QStringLiteral("trustRoots"));

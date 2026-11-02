@@ -22,7 +22,10 @@
 #                                QRhi backend (ADR 0043) on a Direct3D 11 WARP device, or QRhi's Null
 #                                backend where Direct3D is missing, and the renderer switches; the
 #                                insight of ADR 0047 (semantic colours, squiggles, the error stripe,
-#                                the inspection widget, F2);
+#                                the inspection widget, F2); and QRhi/raster parity over a frame of
+#                                every display-list element kind (ADR 0043 "Parity"), whose
+#                                windows-platform case runs only on a private desktop (skipped in
+#                                ctest);
 #   ui_nav_tests                 frost::ui_nav (ADR 0042), a non-Qt executable: navigation history,
 #                                recents, sessions, the document registry, the project tree and the
 #                                merge panes, label "unit";
@@ -168,11 +171,16 @@ frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
         editor/editor_insight_test.cpp
+        editor/editor_rhi_parity_test.cpp
         editor/editor_rhi_test.cpp
         editor/editor_view_test.cpp
     DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
          frost::input frost::sched frost::io frost_ui_test_support)
 _frost_ui_test_wiring(ui_editor_tests)
+if(WIN32)
+    # GetThreadDesktop and GetUserObjectInformationW (the parity test's private-desktop check).
+    target_link_libraries(ui_editor_tests PRIVATE user32)
+endif()
 
 frost_add_test(ui_nav_tests
     SOURCES nav/nav_models_test.cpp

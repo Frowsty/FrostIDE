@@ -47,8 +47,15 @@ public:
     void setProjectName(const QString& name);
     // The run/build configuration slot; disabled while it has no items.
     [[nodiscard]] QComboBox* runConfigurations() const noexcept { return m_configurations; }
-    // The button bound to `actionId`, or nullptr.
+    // The button whose slot is `actionId` (one of the k* ids above) or that is bound to it now, or
+    // nullptr.
     [[nodiscard]] QToolButton* button(std::string_view actionId) const;
+    /*
+     * Binds the slot `slotId` (one of the k* ids) to `actionId` instead, for a slice whose action
+     * has another id (the build tool windows' build.buildSolution in the kBuild slot). Unknown slots
+     * are ignored. The next refresh() reads the new action.
+     */
+    void setSlotAction(std::string_view slotId, std::string_view actionId);
     // Every focusable control, left to right (keyboard navigation, Alt+Page Up).
     [[nodiscard]] std::vector<QWidget*> focusOrder() const;
 
@@ -56,7 +63,8 @@ public:
 
 private:
     struct Slot {
-        std::string actionId;
+        std::string slotId;   // The k* id the slot was created with.
+        std::string actionId; // The action it invokes now.
         QToolButton* button = nullptr;
     };
 

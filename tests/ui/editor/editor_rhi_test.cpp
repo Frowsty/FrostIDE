@@ -4,8 +4,8 @@
 // editor.renderer rule with injected RDP and WARP sessions, the glyph atlas (caching, growth, a
 // rebuild on a font-size or device-pixel-ratio change), the QRhi painter rendered into an offscreen
 // texture (Direct3D 11 on WARP, or QRhi's Null backend where Direct3D is missing) compared coarsely
-// with the raster backend's image, and the view's live switches and fallbacks, which must keep the
-// document, the caret and the selection.
+// with the raster backend's image (editor/rhi_compare.hpp), and the view's live switches and
+// fallbacks, which must keep the document, the caret and the selection.
 
 #include "frost/io/mem_fs.hpp"
 #include "frost/settings/keys.hpp"
@@ -16,10 +16,12 @@
 #include "frost/ui/editor/editor_renderer.hpp"
 #include "frost/ui/editor/editor_settings.hpp"
 #include "frost/ui/editor/glyph_atlas.hpp"
+#include "frost/ui/editor/qt_text_shaper.hpp"
 #include "frost/ui/editor/rhi_glyph_painter.hpp"
 #include "frost/ui/editor/rhi_renderer.hpp"
 
 #include "editor/editor_harness.hpp"
+#include "editor/rhi_compare.hpp"
 #include <QElapsedTimer>
 #include <QImage>
 #include <QRawFont>
@@ -37,7 +39,11 @@ namespace frost::ui {
 namespace {
 
 using test::EditorHarness;
+using test::expectSameInk;
 using test::HarnessOptions;
+using test::renderWithRaster;
+using test::renderWithRhi;
+using test::RhiFrame;
 
 // A Windows desktop session as the rule sees it (the offscreen test platform reports none).
 RendererEnvironment windowsDesktop() {
@@ -194,6 +200,18 @@ EditorDisplayList sampleList(const QFont& font) {
     return list;
 }
 
+TEST(RhiGlyphPainter, EditorFontPolicyKeepsCallerStrategyAndSize) {
+    QFont input = editorFont(13.0);
+    input.setStyleStrategy(QFont::PreferQuality);
+    const QtTextShaper shaper(input, 4);
+    RhiGlyphPainter painter(input);
+    for (const QFont* font : {&shaper.font(), &painter.font()}) {
+        EXPECT_TRUE(font->styleStrategy() & QFont::NoSubpixelAntialias);
+        EXPECT_TRUE(font->styleStrategy() & QFont::PreferQuality);
+        EXPECT_DOUBLE_EQ(font->pointSizeF(), input.pointSizeF());
+    }
+}
+
 TEST(RhiGlyphPainter, FontSizeAndPixelRatioChangesRebuildTheAtlas) {
     RhiGlyphPainter painter(editorFont(13.0));
     const EditorDisplayList list = sampleList(painter.font());
@@ -274,168 +292,7 @@ TEST(RhiGlyphPainter, TheRendererForwardsFontChangesToTheViewport) {
     EXPECT_DOUBLE_EQ(viewport.painter().font().pointSizeF(), 20.0);
 }
 
-// --- rendering against the raster backend ---
-
-// Per-row ink of an image: pixels that differ from the row's most common colour by more than 48 in
-// a channel, and the leftmost and rightmost of them.
-struct RowInk {
-    int count = 0;
-    int left = 0;
-    int right = 0;
-};
-
-std::vector<RowInk> inkRows(const QImage& source) {
-    const QImage image = source.convertToFormat(QImage::Format_ARGB32);
-    std::vector<RowInk> rows(static_cast<std::size_t>(image.height()));
-    for (int y = 0; y < image.height(); ++y) {
-        const auto* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
-        QHash<QRgb, int> counts;
-        for (int x = 0; x < image.width(); ++x) {
-            ++counts[line[x]];
-        }
-        QRgb mode = line[0];
-        for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
-            if (it.value() > counts.value(mode)) {
-                mode = it.key();
-            }
-        }
-        RowInk& row = rows[static_cast<std::size_t>(y)];
-        row.left = image.width();
-        row.right = -1;
-        for (int x = 0; x < image.width(); ++x) {
-            const QRgb p = line[x];
-            const int diff = std::max(
-                {std::abs(qRed(p) - qRed(mode)), std::abs(qGreen(p) - qGreen(mode)), std::abs(qBlue(p) - qBlue(mode))});
-            if (diff > 48) {
-                ++row.count;
-                row.left = std::min(row.left, x);
-                row.right = std::max(row.right, x);
-            }
-        }
-    }
-    return rows;
-}
-
-// Whether `rows` has ink within one row of `y`.
-bool inkNear(const std::vector<RowInk>& rows, std::size_t y) {
-    for (std::size_t r = y == 0 ? 0 : y - 1; r <= y + 1 && r < rows.size(); ++r) {
-        if (rows[r].count > 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// A QRhi for offscreen rendering: Direct3D 11 on the WARP software adapter where it exists, so
-// the test needs no GPU and gives the same pixels on every machine, else the Null backend.
-std::unique_ptr<QRhi> createTestRhi(bool& draws) {
-    draws = false;
-#ifdef _WIN32
-    QRhiD3D11InitParams d3d;
-    if (QRhi* rhi = QRhi::create(QRhi::D3D11, &d3d, QRhi::PreferSoftwareRenderer)) {
-        draws = true;
-        return std::unique_ptr<QRhi>(rhi);
-    }
-#endif
-    QRhiNullInitParams null;
-    return std::unique_ptr<QRhi>(QRhi::create(QRhi::Null, &null));
-}
-
-// What one offscreen QRhi frame gave: the image (empty on the Null backend) and the painter's stats.
-struct RhiFrame {
-    QImage image;
-    RhiFrameStats stats;
-    std::string backend;
-};
-
-// Renders `list` at `dpr` into a fresh offscreen texture of the list's size times `dpr` and reads
-// it back. Fails the test (and returns an empty frame) when the QRhi objects cannot be created.
-RhiFrame renderWithRhi(const EditorDisplayList& list, double dpr) {
-    RhiFrame frame;
-    bool draws = false;
-    std::unique_ptr<QRhi> rhi = createTestRhi(draws);
-    if (!rhi) {
-        ADD_FAILURE() << "neither Direct3D 11 (WARP) nor QRhi's Null backend could be created";
-        return frame;
-    }
-    frame.backend = rhi->backendName();
-    const QSize size = (list.viewport.size() * dpr).toSize();
-    std::unique_ptr<QRhiTexture> texture(
-        rhi->newTexture(QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
-    EXPECT_TRUE(texture->create());
-    std::unique_ptr<QRhiTextureRenderTarget> target(rhi->newTextureRenderTarget({texture.get()}));
-    std::unique_ptr<QRhiRenderPassDescriptor> pass(target->newCompatibleRenderPassDescriptor());
-    target->setRenderPassDescriptor(pass.get());
-    EXPECT_TRUE(target->create());
-
-    RhiGlyphPainter painter(list.font);
-    const Result<void> ready = painter.initialize(*rhi, *pass);
-    EXPECT_TRUE(ready.has_value()) << ready.error().describe();
-    QRhiCommandBuffer* cb = nullptr;
-    if (!ready || rhi->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) {
-        ADD_FAILURE() << "could not start an offscreen frame";
-        return frame;
-    }
-    painter.prepare(list, dpr);
-    painter.record(*cb, *target);
-    QRhiReadbackResult readback;
-    QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
-    batch->readBackTexture({texture.get()}, &readback);
-    cb->resourceUpdate(batch);
-    EXPECT_EQ(rhi->endOffscreenFrame(), QRhi::FrameOpSuccess);
-    painter.releaseResources(); // Before the QRhi goes.
-    frame.stats = painter.stats();
-    if (draws && readback.pixelSize == size) {
-        frame.image = QImage(reinterpret_cast<const uchar*>(readback.data.constData()), size.width(), size.height(),
-                             size.width() * 4, QImage::Format_RGBA8888_Premultiplied)
-                          .convertToFormat(QImage::Format_ARGB32);
-    }
-    return frame;
-}
-
-// The raster backend's image of `list` at `dpr` (the golden oracle).
-QImage renderWithRaster(const EditorDisplayList& list, double dpr) {
-    QImage image((list.viewport.size() * dpr).toSize(), QImage::Format_ARGB32_Premultiplied);
-    image.setDevicePixelRatio(dpr);
-    RasterEditorRenderer renderer(list.font);
-    renderer.render(list, image);
-    image.setDevicePixelRatio(1.0);
-    return image.convertToFormat(QImage::Format_ARGB32);
-}
-
-// Coarse agreement of two renderings of one list (not a golden): solid colours at a few points
-// match within 2 levels; every inked row of one image has ink within a row in the other; inked
-// spans start and end within 3 px; the total ink is within 30 %.
-void expectSameInk(const QImage& raster, const QImage& gpu, const std::vector<QPoint>& solidPoints) {
-    ASSERT_EQ(raster.size(), gpu.size());
-    for (const QPoint& at : solidPoints) {
-        const QRgb a = raster.pixel(at);
-        const QRgb b = gpu.pixel(at);
-        EXPECT_LE(
-            std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)), std::abs(qBlue(a) - qBlue(b))}), 2)
-            << "at " << at.x() << "," << at.y();
-    }
-    const std::vector<RowInk> want = inkRows(raster);
-    const std::vector<RowInk> got = inkRows(gpu);
-    int wantTotal = 0;
-    int gotTotal = 0;
-    for (std::size_t y = 0; y < want.size(); ++y) {
-        wantTotal += want[y].count;
-        gotTotal += got[y].count;
-        if (want[y].count > 0) {
-            EXPECT_TRUE(inkNear(got, y)) << "raster ink in row " << y << " missing from the QRhi image";
-        }
-        if (got[y].count > 0) {
-            EXPECT_TRUE(inkNear(want, y)) << "QRhi ink in row " << y << " where the raster image has none";
-        }
-        if (want[y].count > 0 && got[y].count > 0) {
-            EXPECT_LE(std::abs(want[y].left - got[y].left), 3) << "row " << y;
-            EXPECT_LE(std::abs(want[y].right - got[y].right), 3) << "row " << y;
-        }
-    }
-    EXPECT_GT(wantTotal, 200);
-    EXPECT_NEAR(gotTotal, wantTotal, wantTotal * 0.3);
-}
+// --- rendering against the raster backend (the harness is editor/rhi_compare.hpp) ---
 
 TEST(RhiGlyphPainter, RendersTheDisplayListWhereTheRasterBackendDoes) {
     FROST_REQUIRE_OFFSCREEN();

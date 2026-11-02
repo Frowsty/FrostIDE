@@ -71,6 +71,12 @@ well enough for U1; if it cannot, M4 stops for the user.
    `tools/s10_dap_spike.py` is the spike's driver (an MSVC `cl /Zi /Od` build on Windows, `clang++ -g` on
    Linux); `tests/tools/test_build_lldb.py` checks the recipes parse and their verify mode refuses a bad tree.
 
+   The debuggee fixture bypasses the compiler launcher because its breakpoints require debug records naming the
+   current checkout. On Windows a cached object from another worktree produced a PDB naming that worktree, so
+   LLDB could not bind the current source path. The test requires the adapter to verify each breakpoint. This
+   is not confined to the fixture: an application object was also observed with another worktree's source path.
+   Correct source identity for cached debug builds needs a separate toolchain follow-up.
+
 ## Measurements
 REF-W1 (Windows 11) and WSL (Ubuntu 24.04, 6 GB), 2026-11-02.
 

@@ -2,60 +2,47 @@
 //
 // The raster editor renderer (frost/ui/editor/editor_renderer.hpp): QPainter fills and lines, text
 // as QGlyphRuns shaped once by QTextLayout and cached per (text, italic), range decorations (wavy
-// and dotted squiggles, strike-outs, backgrounds), the error stripe and the chrome shapes.
+// and dotted squiggles, strike-outs, backgrounds), the error stripe and the chrome shapes; the
+// vector marks through display_strokes.hpp, which the QRhi backend rasterises too.
 
 #include "frost/ui/editor/editor_renderer.hpp"
 
+#include "display_strokes.hpp"
+#include "editor_font.hpp"
 #include <QPaintDevice>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPen>
 #include <QTextLayout>
 #include <QTextLine>
 #include <QTextOption>
 
 #include <algorithm>
+#include <cmath>
 
 namespace frost::ui {
 
 namespace {
 
-// A wave along the decorated box's underline: half-periods of 2 * width pixels, amplitude `width`.
-void drawWave(QPainter& painter, const DisplayDecoration& decoration) {
-    const double step = 2.0 * decoration.width;
-    const double amplitude = decoration.width;
-    const double y = decoration.baseline + 1.5 * decoration.width + amplitude;
-    QPainterPath path(QPointF(decoration.rect.left(), y));
-    bool up = true;
-    for (double x = decoration.rect.left(); x < decoration.rect.right(); x += step) {
-        const double next = std::min(x + step, decoration.rect.right());
-        path.lineTo(next, up ? y - amplitude : y + amplitude);
-        up = !up;
-    }
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(decoration.color, decoration.width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawPath(path);
-}
-
 void drawDecoration(QPainter& painter, const DisplayDecoration& decoration) {
     const QRectF& box = decoration.rect;
-    const double underline = decoration.baseline + 1.5 * decoration.width;
     switch (decoration.style) {
     case DecorationStyle::Background: painter.fillRect(box, decoration.color); break;
-    case DecorationStyle::WavyUnderline: drawWave(painter, decoration); break;
-    case DecorationStyle::DottedUnderline: {
-        QPen pen(decoration.color, decoration.width, Qt::DotLine, Qt::FlatCap);
-        painter.setPen(pen);
-        painter.drawLine(QLineF(box.left(), underline, box.right(), underline));
+    case DecorationStyle::WavyUnderline:
+        detail::strokeWave(painter, box.left(), box.right(), detail::waveCentreY(decoration), decoration.width,
+                           decoration.color);
+        break;
+    case DecorationStyle::DottedUnderline:
+        detail::strokeDots(painter, box.left(), box.right(), detail::underlineY(decoration), decoration.width,
+                           decoration.color);
+        break;
+    case DecorationStyle::Underline: {
+        const double y = detail::underlineY(decoration);
+        painter.setPen(QPen(decoration.color, decoration.width));
+        painter.drawLine(QLineF(box.left(), y, box.right(), y));
         break;
     }
-    case DecorationStyle::Underline:
-        painter.setPen(QPen(decoration.color, decoration.width));
-        painter.drawLine(QLineF(box.left(), underline, box.right(), underline));
-        break;
     case DecorationStyle::Strikeout: {
-        // Through the middle of the x-height (about a third of the ascent above the baseline).
-        const double y = decoration.baseline - (decoration.baseline - box.top()) * 0.33;
+        const double y = detail::strikeoutY(decoration);
         painter.setPen(QPen(decoration.color, decoration.width));
         painter.drawLine(QLineF(box.left(), y, box.right(), y));
         break;
@@ -64,25 +51,9 @@ void drawDecoration(QPainter& painter, const DisplayDecoration& decoration) {
 }
 
 void drawShape(QPainter& painter, const DisplayShape& shape) {
-    painter.setPen(shape.stroke.isValid()
-                       ? QPen(shape.stroke, shape.strokeWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)
-                       : QPen(Qt::NoPen));
+    painter.setPen(shape.stroke.isValid() ? detail::shapePen(shape.stroke, shape.strokeWidth) : QPen(Qt::NoPen));
     painter.setBrush(shape.fill.isValid() ? QBrush(shape.fill) : QBrush(Qt::NoBrush));
-    switch (shape.kind) {
-    case DisplayShape::Kind::Rect:
-        if (shape.radius > 0.0) {
-            painter.drawRoundedRect(shape.rect, shape.radius, shape.radius);
-        } else {
-            painter.drawRect(shape.rect);
-        }
-        break;
-    case DisplayShape::Kind::Ellipse: painter.drawEllipse(shape.rect); break;
-    case DisplayShape::Kind::Polygon: painter.drawPolygon(shape.points); break;
-    case DisplayShape::Kind::Polyline:
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPolyline(shape.points);
-        break;
-    }
+    detail::drawShapeGeometry(painter, shape);
 }
 
 } // namespace
@@ -90,8 +61,8 @@ void drawShape(QPainter& painter, const DisplayShape& shape) {
 RasterEditorRenderer::RasterEditorRenderer(const QFont& font) { setFont(font); }
 
 void RasterEditorRenderer::setFont(const QFont& font) {
-    m_font = font;
-    m_italic = font;
+    m_font = detail::editorFont(font);
+    m_italic = m_font;
     m_italic.setItalic(true);
     m_regularCache.clear();
     m_italicCache.clear();
@@ -128,16 +99,50 @@ const RasterEditorRenderer::Shaped& RasterEditorRenderer::shaped(const QString& 
 
 void RasterEditorRenderer::drawText(QPainter& painter, const DisplayText& run) {
     const Shaped& entry = shaped(run.text, run.italic);
-    painter.setPen(run.color);
-    // QTextLayout places the first line's top at y = 0, so its baseline is at y = ascent.
+    // Transparent targets force grayscale coverage in Qt's glyph-run rasterizer. Bound the
+    // scratch image to visible ink, with a margin for hinting and antialiasing. Its origin is on
+    // the device-pixel grid, so fractional DPR and subpixel glyph positioning are preserved.
     const QPointF topLeft(run.origin.x(), run.origin.y() - entry.ascent);
+    QRectF bounds;
     for (const QGlyphRun& glyphs : entry.runs) {
-        painter.drawGlyphRun(topLeft, glyphs);
+        bounds = bounds.united(glyphs.boundingRect().translated(topLeft));
     }
+    const double dpr = painter.device()->devicePixelRatioF();
+    QRectF visible = m_viewport;
+    if (painter.hasClipping()) {
+        visible = visible.intersected(painter.clipBoundingRect());
+    }
+    const QRectF ink = bounds.adjusted(-4.0, -4.0, 4.0, 4.0).intersected(visible);
+    if (ink.isEmpty()) {
+        return;
+    }
+    const int left = static_cast<int>(std::floor(ink.left() * dpr));
+    const int top = static_cast<int>(std::floor(ink.top() * dpr));
+    const int right = static_cast<int>(std::ceil(ink.right() * dpr));
+    const int bottom = static_cast<int>(std::ceil(ink.bottom() * dpr));
+    const QSize size(right - left, bottom - top);
+    if (size.isEmpty()) {
+        return;
+    }
+    if (m_textScratch.size() != size) {
+        m_textScratch = QImage(size, QImage::Format_ARGB32_Premultiplied);
+    }
+    m_textScratch.setDevicePixelRatio(dpr);
+    m_textScratch.fill(Qt::transparent);
+    const QPointF origin(left / dpr, top / dpr);
+    {
+        QPainter scratch(&m_textScratch);
+        scratch.setPen(run.color);
+        for (const QGlyphRun& glyphs : entry.runs) {
+            scratch.drawGlyphRun(topLeft - origin, glyphs);
+        }
+    }
+    painter.drawImage(origin, m_textScratch);
 }
 
 void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& device) {
     QPainter painter(&device);
+    m_viewport = list.viewport;
     painter.fillRect(list.viewport, list.background);
     for (const DisplayFill& fill : list.fills) {
         painter.fillRect(fill.rect, fill.color);

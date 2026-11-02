@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The QRhi editor backend's glyph atlas (ADR 0043): glyphs rasterised by Qt's own raster engine at
-// the device pixel ratio, packed on shelves into one CPU image that the backend uploads as a
-// texture. It holds coverage only (colour comes from each quad), so a theme change needs no
-// rebuild; a font, size, zoom or device-pixel-ratio change resets it. GPU-free, so tests can check
-// it without a QRhi.
+// The QRhi editor backend's glyph atlas (ADR 0043): glyphs, discs and vector coverage (squiggles,
+// chrome shapes) rasterised by Qt's own raster engine at the device pixel ratio, packed on shelves
+// into one CPU image that the backend uploads as a texture. It holds coverage only (colour comes
+// from each quad), so a theme change needs no rebuild; a font, size, zoom or device-pixel-ratio
+// change resets it. GPU-free, so tests can check it without a QRhi.
 #pragma once
 
+#include "frost/compat/function_ref.hpp"
+
+#include <QByteArray>
 #include <QHash>
 #include <QImage>
 #include <QPoint>
 #include <QRawFont>
 #include <QRect>
+#include <QSize>
 
 #include <cstdint>
 #include <vector>
+
+class QPainter;
 
 namespace frost::ui {
 
@@ -44,8 +50,11 @@ struct GlyphAtlasStats {
  * is the atlas's, at kSubpixelSteps horizontal offsets per pixel, so cells match what the raster
  * backend draws at the same position.
  *
- * Cells stay valid until reset(); a full atlas at maxSize returns nullptr from glyph() and disc(),
- * and the caller resets and rebuilds its frame. dirtyRect() is the area changed since the last
+ * coverage() holds any other antialiased drawing (the QRhi backend's squiggles and chrome shapes,
+ * drawn by the raster backend's own QPainter code), keyed by a byte string that describes it.
+ *
+ * Cells stay valid until reset(); a full atlas at maxSize returns nullptr from glyph(), disc() and
+ * coverage(), and the caller resets and rebuilds its frame. dirtyRect() is the area changed since the last
  * markUploaded(); generation() changes whenever the image is replaced (reset or growth).
  * GUI thread only (QPainter on QImage). Not copyable.
  */
@@ -69,6 +78,14 @@ public:
     [[nodiscard]] const AtlasEntry* glyph(int slot, quint32 glyph, int subpixel);
     // An antialiased filled disc `diameter` device pixels wide (gutter markers); nullptr when full.
     [[nodiscard]] const AtlasEntry* disc(int diameter);
+    /*
+     * The cell of what `paint` draws in white on a transparent `size` image (device pixels, the
+     * painter antialiased), keyed by `key`, which must determine the drawing exactly (callers
+     * serialise its geometry relative to the image). The entry's offset is the ink's top-left
+     * within that image. `paint` runs on the first use only. nullptr when the atlas is full or
+     * `size` is empty or wider or taller than maxSize. Amortised O(1) after the first use.
+     */
+    [[nodiscard]] const AtlasEntry* coverage(const QByteArray& key, QSize size, function_ref<void(QPainter&)> paint);
     // The texel solid quads sample (the middle of the opaque block).
     [[nodiscard]] static QPoint solidTexel() noexcept { return QPoint(kSolidSize / 2, kSolidSize / 2); }
 
@@ -80,8 +97,10 @@ public:
     [[nodiscard]] GlyphAtlasStats stats() const noexcept;
 
 private:
-    // Copies `cell` (coverage in alpha) into a free spot; nullptr when it does not fit at maxSize.
-    [[nodiscard]] const AtlasEntry* place(quint64 key, const QImage& cell, QRect ink, QPoint offset);
+    // Copies the `ink` part of `cell` (coverage in alpha) into a free spot and fills `entry`;
+    // false when it does not fit at maxSize.
+    [[nodiscard]] bool place(const QImage& cell, QRect ink, QPoint offset, AtlasEntry& entry);
+    [[nodiscard]] const AtlasEntry* placeKeyed(quint64 key, const QImage& cell, QRect ink, QPoint offset);
     [[nodiscard]] bool reserve(QSize size, QPoint& at);
     void grow();
     void clearImage(int size);
@@ -94,6 +113,7 @@ private:
     std::uint64_t m_generation = 0;
     std::vector<QRawFont> m_fonts;
     QHash<quint64, AtlasEntry> m_cells;
+    QHash<QByteArray, AtlasEntry> m_coverage;
     // The shelf being filled: its top, its height so far, and the next free x.
     int m_shelfTop = 0;
     int m_shelfHeight = 0;

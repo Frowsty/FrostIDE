@@ -86,6 +86,9 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::uiThemeSyncHighContrast);
     expectTypedKey(key::uiCompactMode);
     expectTypedKey(key::uiZoom);
+    expectTypedKey(key::uiToolbarVisible);
+    expectTypedKey(key::uiStatusBarVisible);
+    expectTypedKey(key::uiToolWindows);
     expectTypedKey(key::keymapId);
     expectTypedKey(key::keymapDoubleTapIntervalMs);
     expectTypedKey(key::keymapOverrides);
@@ -99,6 +102,7 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::localHistoryKeepNewestPerPath);
     expectTypedKey(key::generalReopenLastProject);
     expectTypedKey(key::generalConfirmExit);
+    expectTypedKey(key::generalRecentProjects);
     expectTypedKey(key::buildSaveAllBeforeBuild);
     expectTypedKey(key::buildMsbuildExtraArguments);
     expectTypedKey(key::buildMsbuildMaxCpuCount);
@@ -108,6 +112,8 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::toolsNinjaPath);
     expectTypedKey(key::toolsGitPath);
     expectTypedKey(key::toolsClangdPath);
+    expectTypedKey(key::toolsLuaLanguageServerPath);
+    expectTypedKey(key::luaRuntimeVersion);
     expectTypedKey(key::toolsClangFormatPath);
     expectTypedKey(key::toolsClangTidyPath);
     expectTypedKey(key::toolsClangTidyPlugins);

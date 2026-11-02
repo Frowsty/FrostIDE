@@ -247,11 +247,20 @@ std::vector<std::string> SessionStore::recentProjects() const {
 }
 
 std::optional<std::string> SessionStore::lastProject() const {
-    std::vector<std::string> recent = recentProjects();
-    if (recent.empty()) {
+    auto bytes = m_fs->readFile(joinIn(m_directory, "index.json"));
+    if (!bytes) {
         return std::nullopt;
     }
-    return std::move(recent.front());
+    const std::unique_ptr<yyjson_doc, DocDeleter> doc(
+        yyjson_read_opts(bytes->data(), bytes->size(), YYJSON_READ_NOFLAG, nullptr, nullptr));
+    if (doc == nullptr) {
+        return std::nullopt;
+    }
+    std::string last = stringOf(yyjson_obj_get(yyjson_doc_get_root(doc.get()), "lastProject"));
+    if (last.empty()) {
+        return std::nullopt;
+    }
+    return last;
 }
 
 Result<void> SessionStore::setLastProject(std::string_view root) {
@@ -261,10 +270,17 @@ Result<void> SessionStore::setLastProject(std::string_view root) {
     if (recent.size() > 20) {
         recent.resize(20);
     }
-    return writeIndex(recent);
+    return writeIndex(recent, recent.front());
 }
 
-Result<void> SessionStore::writeIndex(const std::vector<std::string>& recent) {
+Result<void> SessionStore::clearLastProject() {
+    if (!lastProject()) {
+        return {};
+    }
+    return writeIndex(recentProjects(), {});
+}
+
+Result<void> SessionStore::writeIndex(const std::vector<std::string>& recent, std::string_view last) {
     if (auto created = m_fs->createDirectories(m_directory); !created) {
         return created;
     }
@@ -272,7 +288,7 @@ Result<void> SessionStore::writeIndex(const std::vector<std::string>& recent) {
     yyjson_mut_val* root = yyjson_mut_obj(doc.get());
     yyjson_mut_doc_set_root(doc.get(), root);
     yyjson_mut_obj_add_int(doc.get(), root, "version", kSessionVersion);
-    addString(doc.get(), root, "lastProject", recent.empty() ? std::string_view() : std::string_view(recent.front()));
+    addString(doc.get(), root, "lastProject", last);
     yyjson_mut_val* projects = yyjson_mut_arr(doc.get());
     for (const std::string& path : recent) {
         yyjson_mut_arr_add_strncpy(doc.get(), projects, path.data(), path.size());

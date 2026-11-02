@@ -259,6 +259,12 @@ void EditorInsightBinding::attach(fl::ClangdService& clangd) {
 }
 
 void EditorInsightBinding::detach() {
+    m_debounce.stop();
+    m_tokensSlot.cancel(); // Cancel in-flight work even if no clangd was attached.
+    m_previous.reset();
+    m_haveInactiveRegions = false;
+    m_inactiveFromTokens = false;
+    m_liveSeen = false;
     if (m_clangd == nullptr) {
         return;
     }
@@ -272,7 +278,7 @@ void EditorInsightBinding::setLiveDiagnostics(const fl::FileDiagnostics& diagnos
         return;
     }
     m_liveSeen = true;
-    m_view->setDiagnostics(DiagnosticSource::Live, toEditorDiagnostics(diagnostics));
+    m_view->setDiagnostics(EditorDiagnosticSource::Live, toEditorDiagnostics(diagnostics));
     // Still analysing while the diagnostics describe an older text than the view's.
     const std::uint64_t current = m_view->editor().text().version();
     const bool behind = diagnostics.stale || (diagnostics.textVersion && *diagnostics.textVersion != current);
@@ -290,7 +296,7 @@ void EditorInsightBinding::setInactiveRegions(const fl::InactiveRegions& regions
 
 void EditorInsightBinding::setBuildDiagnostics(std::span<const build::BuildDiagnostic> diagnostics) {
     if (m_view) {
-        m_view->setDiagnostics(DiagnosticSource::Build, toEditorDiagnostics(diagnostics));
+        m_view->setDiagnostics(EditorDiagnosticSource::Build, toEditorDiagnostics(diagnostics));
     }
 }
 
@@ -326,6 +332,10 @@ void EditorInsightBinding::refreshSemanticTokens() {
     }
     const std::optional<fl::ServerCapabilities> capabilities = m_services.server.serverCapabilities();
     if (!capabilities) {
+        // clangd initializes asynchronously; retry until its capabilities are available.
+        if (m_clangd != nullptr) {
+            m_debounce.start();
+        }
         return;
     }
     const std::optional<fl::SemanticTokensSupport> support = fl::semanticTokensSupport(*capabilities);

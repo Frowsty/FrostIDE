@@ -10,7 +10,8 @@
 # status-bar problems indicator. Not in the fuzz trees (it needs Qt and vcpkg ports).
 #
 # The QRhi glyph-atlas backend (ADR 0043; ADR 0011 A1) is contained in editor_backend, glyph_atlas,
-# rhi_glyph_painter and rhi_renderer: only rhi_glyph_painter.cpp and rhi_renderer.cpp include Qt's
+# rhi_glyph_painter and rhi_renderer, and shares display_strokes (the squiggles' and chrome shapes'
+# QPainter code) with the raster backend for parity: only rhi_glyph_painter.cpp and rhi_renderer.cpp include Qt's
 # QRhi headers (rhi/qrhi.h), which Qt ships in its private Gui package under Gui's licence (LGPL;
 # tools/licensecheck.py maps GuiPrivate to Gui). Qt may change that API between minors, so the
 # package is pinned to FROST_QT_VERSION like the S1 spike's.
@@ -20,6 +21,7 @@ find_package(Qt6 ${FROST_QT_VERSION} EXACT REQUIRED COMPONENTS GuiPrivate)
 frost_add_library(ui_editor LAYER ui
     SOURCES
         src/display_list.cpp
+        src/display_strokes.cpp
         src/editor_actions.cpp
         src/editor_backend.cpp
         src/editor_colors.cpp
@@ -43,7 +45,7 @@ frost_add_library(ui_editor LAYER ui
     DEPS
         frost::ui frost::ui_input frost::ui_model
         frost::text_editor frost::text frost::syntax frost::settings frost::input frost::sched frost::io
-        frost::core
+        frost::core frost::compat
     THIRD_PARTY Qt6::Widgets Qt6::GuiPrivate)
 # The Q_OBJECT classes live in public headers; moc runs on them through AUTOMOC.
 target_sources(frost_ui_editor PRIVATE

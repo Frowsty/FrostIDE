@@ -115,6 +115,14 @@ std::uint32_t EditorView::firstVisibleRow() const noexcept {
     return static_cast<std::uint32_t>(std::max(0, verticalScrollBar()->value()));
 }
 
+ByteOffset EditorView::offsetAt(QPointF at) const { return hitAt(at).offset; }
+
+QRect EditorView::globalCaretRect(ByteOffset offset) const {
+    const ByteOffset clamped = m_editor->text().clip(offset);
+    const QRect local = caretRect(clamped, text::Bias::Right).toAlignedRect();
+    return QRect(viewport()->mapToGlobal(local.topLeft()), local.size());
+}
+
 std::uint32_t EditorView::visibleRowCount() const noexcept {
     return static_cast<std::uint32_t>(std::ceil(viewport()->height() / m_lineHeight)) + 1;
 }

@@ -236,12 +236,15 @@ public:
 
     /*
      * The spelling that identifies the existing file or directory at `path`, so that two spellings of
-     * one file compare equal as strings (the shell's document identity, ADR 0042). Windows (the real
-     * file system): the real-case absolute path from GetFinalPathNameByHandleW, without the \\?\
-     * prefix ("c:\src\FOO.cpp" becomes "C:\src\Foo.cpp", 8.3 names become long names); the last
-     * component is not followed if it is a link, directories in between are. POSIX and this default
-     * (test doubles): normalizePath in the native style, links kept. Errors: InvalidArgument (a
-     * relative path), NotFound, PermissionDenied, IoError. O(path length) plus one open.
+     * one file compare equal as strings (the one document identity of the shell and the workbench,
+     * ADR 0042, ADR 0044). Windows (the real file system): the real case of every component
+     * ("c:\src\FOO.cpp" becomes "C:\src\Foo.cpp", 8.3 names become long names) with links, junctions
+     * and subst drives kept as spelled: GetFinalPathNameByHandleW's answer when it differs from the
+     * normalised input in ASCII case only, else one directory lookup per component. POSIX (the real
+     * file system): normalizePath, or realpath's answer when the path has a ".." component. This
+     * default (test doubles): normalizePath in the native style, links kept. Errors: InvalidArgument
+     * (a relative path), NotFound, PermissionDenied, IoError. O(path length) plus one open, plus one
+     * lookup per component on the Windows slow path.
      */
     [[nodiscard]] virtual Result<std::string> canonicalPath(std::string_view path);
 

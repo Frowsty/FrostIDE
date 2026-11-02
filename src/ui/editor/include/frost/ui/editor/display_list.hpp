@@ -5,7 +5,9 @@
 // the DisplayMap, the selections, the highlights and the theme; an IEditorRenderer draws it. Tests
 // read it to check what would be painted without comparing pixels. ADR 0047 adds semantic and
 // inactive text runs, range decorations (squiggles, strike-outs, backgrounds), the error stripe and
-// the chrome layer (the inspection widget and the problem balloon, as plain shapes and text).
+// the chrome layer (the inspection widget and the problem balloon, as plain shapes and text). The
+// element kinds (DisplayElementKind) name every layer in paint order, so each backend can be held
+// to drawing all of them (the parity guard of ADR 0043).
 #pragma once
 
 #include "frost/syntax/highlight.hpp"
@@ -20,9 +22,11 @@
 #include <QRectF>
 #include <QString>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace frost::ui {
@@ -154,12 +158,10 @@ struct DisplayBalloon {
 /*
  * One frame. Paint order: background, `fills`, Background `decorations`, `underlines` (right
  * margin), `text`, the other `decorations`, `overlays` (preedit underline) and `carets`, all clipped
- * to textArea; then the gutter: gutterBackground over `gutter`, `gutterText`, `changeStripes` and
- * `markers`; then the error stripe: stripeBackground over `stripe`, `stripeMarks` and the summary
- * box; then `chrome` shapes and `chromeText`, unclipped. The raster backend draws all of them; the
- * QRhi backend (ADR 0043) draws the fills, lines, text, carets and the gutter with `changeStripes`
- * and `markers`, not yet the decorations, the error stripe or the chrome layer. Plain values; built
- * and read on the GUI thread.
+ * to textArea; then the gutter: gutterBackground over `gutter`, `gutterText`, `changeStripes` and `markers`; then the
+ * error stripe: stripeBackground over `stripe`, `stripeMarks` and the summary box; then `chrome`
+ * shapes and `chromeText`, unclipped (kDisplayPaintOrder lists these layers). The raster and the
+ * QRhi backend (ADR 0043) both draw every layer. Plain values; built and read on the GUI thread.
  */
 struct EditorDisplayList {
     QRectF viewport;
@@ -203,5 +205,60 @@ struct EditorDisplayList {
     // The decorations of one style, in paint order. O(decorations).
     [[nodiscard]] std::vector<const DisplayDecoration*> decorationsWithStyle(DecorationStyle style) const;
 };
+
+/*
+ * The layers of a frame, one per kind of element a backend draws (ADR 0043 "Parity"). Every
+ * backend draws every kind: the QRhi painter switches over them with no default, so -Wswitch fails
+ * the build when a kind is added without a QRhi path, and it names every member of
+ * EditorDisplayList and of the element structs in structured bindings, so a member added to them
+ * fails to compile there until it is drawn or marked as data only. Adding a kind: add it here, to
+ * kDisplayPaintOrder, toString and displayElementCount, then draw it in both backends and add it to
+ * the all-kinds frame of tests/ui/editor/editor_rhi_parity_test.cpp.
+ */
+enum class DisplayElementKind : std::uint8_t {
+    Fills,                 // `fills` (current line, search matches, selections).
+    BackgroundDecorations, // `decorations` with DecorationStyle::Background (usages, custom boxes).
+    Underlines,            // `underlines` (the right margin).
+    Text,                  // `text`.
+    Decorations,           // The other `decorations` (squiggles, dotted lines, underlines, strike-outs).
+    Overlays,              // `overlays` (the preedit underline).
+    Carets,                // `carets`.
+    GutterBackground,      // `gutter` filled with gutterBackground.
+    GutterText,            // `gutterText` (line numbers).
+    ChangeStripes,         // `changeStripes` (VCS gutter bars).
+    Markers,               // `markers` (gutter discs).
+    StripeBackground,      // `stripe` filled with stripeBackground.
+    StripeMarks,           // `stripeMarks`.
+    StripeSummary,         // `stripeSummary` in stripeSummaryColor.
+    Chrome,                // `chrome` shapes (the inspection widget's icons, the spinner, the balloon).
+    ChromeText,            // `chromeText` (the inspection counts, the balloon's message).
+    kCount
+};
+
+inline constexpr std::size_t kDisplayElementKindCount = static_cast<std::size_t>(DisplayElementKind::kCount);
+
+// Every kind, in the order the backends paint them.
+inline constexpr std::array<DisplayElementKind, kDisplayElementKindCount> kDisplayPaintOrder{
+    DisplayElementKind::Fills,       DisplayElementKind::BackgroundDecorations,
+    DisplayElementKind::Underlines,  DisplayElementKind::Text,
+    DisplayElementKind::Decorations, DisplayElementKind::Overlays,
+    DisplayElementKind::Carets,      DisplayElementKind::GutterBackground,
+    DisplayElementKind::GutterText,  DisplayElementKind::ChangeStripes,
+    DisplayElementKind::Markers,     DisplayElementKind::StripeBackground,
+    DisplayElementKind::StripeMarks, DisplayElementKind::StripeSummary,
+    DisplayElementKind::Chrome,      DisplayElementKind::ChromeText,
+};
+
+// Whether `kind` is clipped to the list's textArea (the others are drawn over the whole viewport).
+[[nodiscard]] bool clippedToTextArea(DisplayElementKind kind) noexcept;
+// "fills", "text", "chromeText", ... (the member names), for messages. O(1).
+[[nodiscard]] std::string_view toString(DisplayElementKind kind) noexcept;
+/*
+ * How many elements of `kind` `list` holds that a backend draws: the size of the kind's vector (the
+ * decorations split by style), and 1 or 0 for a box (the gutter, the stripe and the summary box,
+ * when their rectangles are non-empty). The gutter's text and markers count only with a gutter,
+ * as the backends draw them only then; likewise the stripe's marks and summary. O(decorations).
+ */
+[[nodiscard]] std::size_t displayElementCount(const EditorDisplayList& list, DisplayElementKind kind) noexcept;
 
 } // namespace frost::ui

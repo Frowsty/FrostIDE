@@ -1,7 +1,8 @@
 # FrostIDE agent manual
 
-FrostIDE is a cross-platform C/C++ IDE with Rider's UX, full MSVC solution support and CLion-grade CMake,
-written in C++23. `PLAN.md` is the source of truth for scope, architecture, budgets and milestones; read the
+FrostIDE is a cross-platform IDE written in C++23, targeting independently implemented Rider feature and
+workflow parity, full MSVC solution support, CMake, Lua, Unity and FrostEngine (ADR 0054). These are goals,
+not claims of completed support. `PLAN.md` is the source of truth for scope, architecture, budgets and milestones; read the
 relevant section before starting a slice. `docs/progress.md` is the hand-off log: read it first, update it last.
 
 ## Hard rules
@@ -49,6 +50,11 @@ relevant section before starting a slice. `docs/progress.md` is the hand-off log
 **Feature-first phase (ADR 0031, user decision 2026-11-01), until U1:** items 1-4 apply with simple functional
 tests only. Design critics, independent reviews, sanitizers, fuzzing, stress runs, perf gates, goldens and `-Full`
 are deferred to the hardening phase; each slice lists what it deferred. Kill every process tree you start.
+
+**Review update (user decision 2026-11-02, ADR 0054):** use GPT-6.1 Terra implementation agents and GPT-6 Astra
+verification. Independent review is required again for these changes; the remaining feature-first deferrals
+stand. Give agents exclusive files or separate worktrees, address review blockers, then verify the combined
+tree before merging. Missing functionality cannot be relabelled as deferred hardening.
 
 ## Working agreement (PLAN.md section 6.7)
 - Standing permission (D23): commit, push and merge feature branches after verification and independent review.

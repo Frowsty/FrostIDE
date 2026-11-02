@@ -160,6 +160,19 @@ std::optional<NodeId> SolutionExplorer::currentNode() const {
     return m_model->nodeOf(m_filter->mapToSource(m_view->currentIndex()));
 }
 
+std::optional<project::ProjectId> SolutionExplorer::currentProject() const {
+    const QModelIndex index = m_view->currentIndex();
+    if (!index.isValid() ||
+        static_cast<NodeKind>(index.data(SolutionTreeModel::KindRole).toInt()) != NodeKind::Project) {
+        return std::nullopt;
+    }
+    const int value = index.data(SolutionTreeModel::ProjectIdRole).toInt();
+    if (value < 0) {
+        return std::nullopt;
+    }
+    return project::ProjectId{static_cast<std::uint32_t>(value)};
+}
+
 QString SolutionExplorer::currentPath() const {
     return m_view->currentIndex().data(SolutionTreeModel::PathRole).toString();
 }
@@ -396,6 +409,17 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
             connect(action, &QAction::triggered, this, [this, kindAction = command.action, projectId] {
                 if (m_controller != nullptr) {
                     static_cast<void>(m_controller->build(kindAction, projectId)); // Failures: requestFailed().
+                }
+            });
+        }
+        if (!solutionNode && projectId && m_startupHandler) {
+            // Visual Studio's and Rider's Set as Startup Project (the run service decides what can run).
+            QAction* startup = menu->addAction(tr("Set as Startup Project"));
+            startup->setObjectName(QStringLiteral("setStartupProject"));
+            startup->setEnabled(kind == NodeKind::Project);
+            connect(startup, &QAction::triggered, this, [this, id = *projectId] {
+                if (m_startupHandler) {
+                    m_startupHandler(id);
                 }
             });
         }

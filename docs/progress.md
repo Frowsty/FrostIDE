@@ -3,6 +3,130 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-02: Codex continuation, verified workbench/Lua checkpoint
+
+### Scope and ownership
+- The user requested continuation toward independently implemented Rider feature/workflow parity with original
+  assets, plus CMake, first-class Lua, Unity and FrostEngine; GPT-6.1 Terra implements and GPT-6 Astra reviews.
+  ADR 0054, PLAN.md's scope update and Appendix B supersede the old Unity exclusion and C# scope ceiling.
+  The original milestone estimates and 191-row tracked matrix do not cover the expanded scope.
+- The user selected `D:\Dev\FrostEngine-AI-Claude` (actual directory spelling) as the engine. Its
+  `Docs/ScriptEditor.md` v1/v1.1 contract already provides `.frostproj`, `.luarc.json`, generated
+  `.frost/lua-api/frost.lua`, custom-editor arguments and authenticated per-project loopback automation.
+  The other local engine repositories are not integration targets. Unity 6000.6.4f1 is installed locally.
+- This checkpoint completes the inherited merge of `w1/unify` into `main` from 9e6b86b, with reviewed
+  renderer and Lua integration plus verification fixes. Existing worktrees are preserved. It is a development
+  checkpoint, not a completed Rider-equivalent product or a new product release.
+
+### Implemented and reviewed in this batch
+- W1: resolved all nine unmerged index paths; fixed the conflicting editor/build `DiagnosticSource` types;
+  attached editor insight and maintained semantic tokens/inactive regions through configuration restart;
+  reject project switching while a build/program is active. Astra caught a worker/request lifetime race:
+  the corrected StableLspRequester captures synchronized shared server ownership before lazy execution,
+  detached bindings cancel their work, and workspace-edit encoding changes occur on the GUI thread.
+  Astra approved the reviewed paths after deterministic delayed replacement/close/cancellation tests.
+- QRhi parity: preserved Git gutter stripes; implemented diagnostic decorations, error stripe and chrome;
+  bounded large shapes to viewport-clipped tiles; skip distant invisible stroke chunks without losing phase;
+  verify translucent tile seams at fractional DPR. Qt's opaque raster glyph-run path retained ClearType
+  despite the font flag, so raster text now uses bounded transparent scratch before composition. Astra's
+  independent probe reproduced the issue and verified the correction. Actual unchanged GPU comparison
+  passes on RTX 4070 SUPER with zero fallback; allocation churn remains a performance follow-up.
+- Lua backend: trusted absolute-path LuaLS discovery and supervision, document sync, diagnostics and shared
+  LSP requests; restart/replay and safe delayed-request ownership. Preserve the engine-owned configuration
+  and definitions. Astra approved after adding bounded completion-test requests and a silent-server test.
+  The application now routes Lua and C++ documents to their respective retained servers, cancels stale
+  editor requests, presents Lua diagnostics, and exposes executable/runtime settings. Real API completion,
+  hover, definition navigation and rename work through the editor. Astra caught lost `.frostproj` intent
+  in session/recents: exact project identity now survives reconstruction and reordered recents despite a
+  sibling solution, and the trust test operates the actual Lua-specific dialog. Astra approved the correction.
+  Lua syntax, deployment and debugging remain separate unfinished features.
+- SDK debugger tests: the first full Windows run exposed cached debuggee source paths from Claude's old
+  worktree, so breakpoints in this checkout never bound. Direct PDB/LLDB inspection confirmed the cause.
+  The tiny debuggee oracle now bypasses the compiler launcher and tests require `verified: true`.
+  Both real LLDB tests pass after rebuild; Astra approved. Application objects showed the same cache
+  source-identity problem. ADR 0056's approved launcher now separates canonical source/build roots while
+  preserving runtime cache busters, argument boundaries, explicit launchers and same-tree hits.
+- WSL verification: an older source timestamp could leave callers compiled against a prior class layout.
+  A debugger watchpoint proved the resulting stack overwrite. ADR 0059 changes mirroring to content
+  checksums and fresh timestamps for changed files, with an actual sync regression. Astra approved it;
+  a one-time clean rebuilt all native targets. No renderer assertions or skip rules were weakened.
+
+### Verification
+- Final integrated tree: Windows `verify.ps1 -Quick -WindowsOnly -Jobs 2 -TestJobs 4` passed,
+  **2428/2435 (seven skipped)**. WSL `verify.sh --quick --no-checks`, after the native clean, passed,
+  **2304/2321 (17 skipped)**. Windows ran the shared format, frost-lint (2180 files), featurecheck and
+  licence gates; Linux ran its licence gate too. All passed. Tidy, sanitizers and stress remain deferred.
+- Both native platforms ran the real LuaLS backend tests (3/3) and Lua workbench tests (2/2), including
+  FrostEngine-generated definitions, syntax diagnostics, editor completion/hover/navigation/rename, trust
+  and project identity. LuaLS 3.19.1 matches the target engine's Windows bundle. The native Linux official
+  release was hash-verified and isolated at `~/sdk/frost-luals-test-3.19.1`; its URL/hash are in `TEST-PIN.txt`.
+  PATH/API fixture changes were process-local; engine sources and user projects were not modified.
+- W1 Windows Debug build; initial focused 46/46, then final lifetime/binding/real-clangd/MSBuild cases 9/9.
+- Renderer worktree: full offscreen editor suite 55 passed, one manual hardware skip; hardware case separately
+  passed on the private desktop; WARP focused comparison 14 passed, one manual skip. No tolerances relaxed.
+- Lua worktree: language units 103/103; Lua integration 3/3 with the engine-packaged Windows LuaLS, including
+  real generated `AI.Wake` completion, invalid-member diagnostics, no false undefined `AI`, and a simulated
+  unanswered-request deadline. Test projects are scratch copies; engine/project sources were not modified.
+- SDK targeted hidden-desktop LLDB tests 2/2 after the cache bypass; source path confirmed in rebuilt object.
+- First whole-tree gate was interrupted to fix Astra's lifetime finding. The restarted baseline ended with
+  Windows 2405/2413 (six skipped, the two LLDB failures above) and one formatting failure;
+  WSL 2291/2300 (nine skipped), all executed Linux tests passed. Both licence checks, frost-lint and
+  featurecheck passed. The formatter and SDK fixes are applied. Renderer/Lua integration and the SDK fix
+  occurred after that WSL snapshot; the final verification above supersedes it.
+- The combined gate completed with Windows **2425/2432 (seven skipped, no failures)** and WSL
+  **2295/2317 (19 skipped, three failures)**. The Linux failures are SIGSEGVs in
+  `RhiGlyphPainter.FontSizeAndPixelRatioChangesRebuildTheAtlas`, `DrawsTheChangeStripesAsSolidQuads`
+  and `TheRendererForwardsFontChangesToTheViewport`. These were the stale caller-layout failures
+  explained and corrected by ADR 0059, not product renderer failures. The final clean verification passed.
+- The latest staged Debug preview at `E:\FrostBuilds\preview\codex-20261102-lua-workbench-debug`
+  passes startup and render self-tests. The integrated renderer's unchanged manual hardware parity test
+  separately passes on the RTX 4070 SUPER with zero fallbacks. LuaLS is not bundled with this preview.
+- `featurecheck` passes after the expanded-scope documentation; the old matrix is explicitly the original
+  C/C++ baseline. All imported patches pass the staged whitespace check; three parity-test enum references
+  were mechanically adapted to W1's `EditorDiagnosticSource` rename without changing assertions.
+
+### Next, blockers and deferred work
+- The general compiler-cache correction (ADR 0056) is implemented and Astra-approved: canonical source/build
+  identity plus the runtime user cache buster, argument boundaries preserved by numeric CMAKE_ARGV references.
+  Real two-tree `/Z7` paths, same-tree hits, changing user busters, explicit launchers and unusual argv are
+  tested. The initial list-based wrapper corrupted arguments; review caught it and the replacement passes the
+  unchanged probe and the final gates above. One CMake process per compile remains a B28 measurement item.
+- Connect CMake's existing service/tree/tool window, compilation database and build/run behavior to the app.
+  The existing BuildController and RunService are MSBuild-specific; do not fake CMake as a SolutionModel.
+  Terra implemented the initial integration in `codex/cmake-integration`, based at main
+  9e6b86b plus a staged snapshot of this batch. Its baseline index tree is
+  `10fe563b397a2fcf01d6e0de39550c0ed1333595`; transfer only its delta against that tree, not its inherited
+  staged work. That snapshot excludes ADR 0056 and its cache changes. Focused Windows tests pass, but
+  Astra found stale build completion, profile/artifact identity and shutdown-launch races. Terra is fixing
+  them with deterministic regressions. One earlier interrupted build-outcome wait remains unexplained.
+- Implement Lua syntax in `codex/lua-syntax` and FrostEngine command-line opening/current-window reuse
+  in `codex/engine-open`, both baseline tree `088c0b03a2cf4dfcda92475e3a8cfdd100cd91ed`; transfer only
+  their deltas. Native pipe/AF_UNIX transport follows the existing IPC plan, without Qt Network. These
+  source slices are unverified. Engine automation controls/logs/tests and managed/Unity work still follow.
+- Astra found unbounded retained output and dropped UTF-16 units in the terminal; targeted fixes now pass.
+  Its whole pending slice has been imported into separate `codex/terminal-workbench` on baseline tree
+  `938b5b18a828aa7689d94c838a6c9a4945fc8660`, preserving the original worktree. Astra approved the
+  final Workbench lifecycle/trust/actions and staged ConPTY deployment after Windows app, PTY and
+  package tests, including actual loaded DLL and host paths. The latest app slice still needs integration
+  and Linux verification. Patch: `E:\FrostBuilds\terminal-spike\terminal-workbench-final.patch`.
+  The real Claude startup probe reached only its workspace trust screen; prompt compatibility is unproven.
+- Debugger UI remains uncommitted in its inherited worktree; CMake/search/Git integration, W1/U1 end-to-end
+  scenarios and packaging remain unfinished. Windows abort-stop behavior and Notepad++ acceptance remain gaps.
+- No blocking question for the user. Extensive hardening remains deferred as before; missing product behavior
+  and requested Astra reviews are not deferred. The goal is active well beyond this batch.
+
+## 2026-11-02: Lua service backend (unmerged worktree)
+
+- Done: LuaLS discovery and trust-gated supervised lifecycle, Lua document synchronization and
+  diagnostics, `ILspRequester` adapter, configurable client defaults and FrostEngine API directory.
+  Engine-owned `.luarc.json` and generated definitions are not modified. ADR 0055 records the boundary.
+- Verification: targeted Windows `lang_unit_tests` 103/103 and LuaLS integration 3/3 with the
+  FrostEngine packaged server, including completion from generated API definitions, an invalid field
+  and no false undefined global, plus a simulated unanswered-request deadline; no WSL or full verification yet.
+- Next: application routing and settings, navigation integration, independent review and full
+  verification before merge.
+- Blockers/questions: no LuaLS bundled with FrostIDE; installation and distribution policy remains open.
+
 ## 2026-11-02: M1 in progress
 
 `main` has the thirteenth, the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh and the sixth

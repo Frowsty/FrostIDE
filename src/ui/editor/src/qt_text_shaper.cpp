@@ -5,6 +5,7 @@
 
 #include "frost/ui/editor/qt_text_shaper.hpp"
 
+#include "editor_font.hpp"
 #include <QString>
 
 #include <algorithm>
@@ -20,7 +21,7 @@ text::TextWidth toShaperUnits(double pixels) noexcept {
 }
 
 QtTextShaper::QtTextShaper(const QFont& font, std::uint32_t tabSize)
-    : m_font(font), m_metrics(font), m_tabSize(std::max<std::uint32_t>(tabSize, 1)) {
+    : m_font(detail::editorFont(font)), m_metrics(m_font), m_tabSize(std::max<std::uint32_t>(tabSize, 1)) {
     m_cell = std::max<text::TextWidth>(toShaperUnits(m_metrics.horizontalAdvance(QChar(u' '))), 1);
     for (char32_t cp = 0; cp < m_ascii.size(); ++cp) {
         m_ascii[cp] = (cp < 0x20 || cp == 0x7F) ? m_cell : measure(cp);

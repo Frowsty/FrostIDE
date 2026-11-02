@@ -74,19 +74,23 @@ public:
     // Saves `state` as the session of state.root and makes it the last project. Errors: the file
     // system's (createDirectories, writeFileAtomic).
     [[nodiscard]] Result<void> save(const SessionState& state);
-    // The last project saved or opened, if any (a missing or broken index gives nullopt).
+    // The last project saved or opened, if any (a missing or broken index, or one cleared by
+    // clearLastProject(), gives nullopt): the project the next start reopens.
     [[nodiscard]] std::optional<std::string> lastProject() const;
     // Recently opened project roots, most recent first.
     [[nodiscard]] std::vector<std::string> recentProjects() const;
     // Records `root` as the last (and most recent) project. Errors: as save().
     [[nodiscard]] Result<void> setLastProject(std::string_view root);
+    // Forgets the last project (the recent list stays), so the next start shows the Welcome screen:
+    // the user closed the project (ADR 0044). Errors: as save().
+    [[nodiscard]] Result<void> clearLastProject();
 
     [[nodiscard]] const std::string& directory() const noexcept { return m_directory; }
     // The session file of `root`.
     [[nodiscard]] std::string fileOf(std::string_view root) const;
 
 private:
-    [[nodiscard]] Result<void> writeIndex(const std::vector<std::string>& recent);
+    [[nodiscard]] Result<void> writeIndex(const std::vector<std::string>& recent, std::string_view last);
 
     io::IFileSystem* m_fs;
     std::string m_directory;

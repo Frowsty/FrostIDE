@@ -66,11 +66,19 @@ void MainToolbar::setProjectName(const QString& name) {
 
 QToolButton* MainToolbar::button(std::string_view actionId) const {
     for (const Slot& slot : m_slots) {
-        if (slot.actionId == actionId) {
+        if (slot.slotId == actionId || slot.actionId == actionId) {
             return slot.button;
         }
     }
     return nullptr;
+}
+
+void MainToolbar::setSlotAction(std::string_view slotId, std::string_view actionId) {
+    for (Slot& slot : m_slots) {
+        if (slot.slotId == slotId) {
+            slot.actionId = std::string(actionId);
+        }
+    }
 }
 
 std::vector<QWidget*> MainToolbar::focusOrder() const {
@@ -102,13 +110,16 @@ void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, st
     button->setToolTip(text(fallbackText));
     button->setEnabled(false);
     const std::string id(actionId);
+    // The slot's current action is looked up at click time (setSlotAction may rebind it).
     connect(button, &QToolButton::clicked, this, [this, id] {
-        if (m_invoke) {
-            m_invoke(id);
+        for (const Slot& slot : m_slots) {
+            if (slot.slotId == id && m_invoke) {
+                m_invoke(slot.actionId);
+            }
         }
     });
     addWidget(button);
-    m_slots.push_back(Slot{id, button});
+    m_slots.push_back(Slot{id, id, button});
 }
 
 void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService& keymap,

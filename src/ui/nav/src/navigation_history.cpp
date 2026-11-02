@@ -10,12 +10,12 @@
 
 namespace frost::ui::nav {
 
-bool near(const Place& a, const Place& b, int lines) noexcept {
+bool isNear(const Place& a, const Place& b, int lines) noexcept {
     return a.path == b.path && std::abs(a.line - b.line) < lines;
 }
 
 void NavigationHistory::push(std::vector<Place>& stack, Place place) {
-    if (!stack.empty() && near(stack.back(), place, kNearLines)) {
+    if (!stack.empty() && isNear(stack.back(), place, kNearLines)) {
         stack.back() = std::move(place);
         return;
     }
@@ -48,7 +48,7 @@ std::optional<Place> NavigationHistory::back(const Place& current) {
     Place target = std::move(m_back.back());
     m_back.pop_back();
     // Going back from a place that is the target itself (no move since) skips to the one before.
-    if (near(target, current, kNearLines) && !m_back.empty()) {
+    if (isNear(target, current, kNearLines) && !m_back.empty()) {
         target = std::move(m_back.back());
         m_back.pop_back();
     }
@@ -109,7 +109,8 @@ void RecentLocations::touch(Place place) {
     if (place.path.empty()) {
         return;
     }
-    std::erase_if(m_places, [&place](const Place& entry) { return near(entry, place, NavigationHistory::kNearLines); });
+    std::erase_if(m_places,
+                  [&place](const Place& entry) { return isNear(entry, place, NavigationHistory::kNearLines); });
     m_places.insert(m_places.begin(), std::move(place));
     if (m_places.size() > kMaxEntries) {
         m_places.resize(kMaxEntries);

@@ -1,5 +1,13 @@
 # FrostIDE: Plan to v1.0
 
+**Scope update (2026-11-02, user decision; ADR 0054).** The product goal now includes independently
+implemented Rider feature and workflow parity, CMake, first-class Lua, Unity integration and FrostEngine
+integration. The earlier C/C++-only positioning, Unity exclusion and deferred C# scope below are the
+historical baseline, superseded where they conflict with this decision. W1 and U1 remain delivery
+checkpoints, not the whole goal. Appendix B records the added acceptance tracks; the original milestone
+estimates and Appendix A counts do not estimate or cover that additional work. Original source, icons,
+themes and branding remain required. Implementation uses GPT-6.1 Terra agents with GPT-6 Astra review.
+
 ## Plan at a glance
 
 **Status (2026-10-31).** The user answered the before-M0 and before-M1 decisions (§9) and authorised development; M0 is in progress. No CI/CD of any kind is used (D24): every build and test runs locally on REF-W1 and in WSL on it. **2026-11-01, evening:** M0 is signed off and M1 is under way. The user chose a thin path to a first usable build (D29, ADR 0029): M1–M4 shrink to the cores that real C++ work needs, the first usable build U1 is the M4 exit (around month 10–12), and the deferred halves move to M15–M17, which run before Preview 0.1. The user answered ADR 0029's questions the same evening ("I agree with everything except 4 and 5. I don't care for those savings"), so ADR 0029 is accepted: U1 also has a minimal debugger, moved from M6 to M4, and U1 is not thinned further. The same evening the user put W1, a work-ready build for their MSVC solutions, first inside M1–M4 (ADR 0032), and started a feature-first phase that runs until U1, with a hardening phase after it (ADR 0031; §7, "W1 first" and "Feature-first phase").
@@ -69,9 +77,9 @@
 ### 1.2 Positioning, C#, v1.0 contents
 **Positioning.** Visual Studio is Windows-only; CLion has no MSBuild model; Rider opens C++ .sln only on Windows and C++ .slnx on all three operating systems (marked experimental). FrostIDE gives full .sln/.slnx/.vcxproj fidelity on Windows through the user's own MSBuild, a labelled approximate mode on Linux, CLion-level CMake and Rider-grade UX on both supported operating systems (macOS later, if a test leg is provided).
 
-**C#.**
+**C# (historical baseline, expanded by ADR 0054 and Appendix B).**
 - **v1.0, solution citizenship:** C# projects in the Solution view; build, run via launchSettings.json and navigation to build errors (all M16, ADR 0029); tree-sitter highlighting (M1).
-- **v1.1, `frost-dotnet` (6–9 months):** roslyn-language-server, netcoredbg, ICSharpCode.Decompiler, MTP. Non-goals: ReSharper-grade C#, Razor, XAML, MAUI, Unity.
+- **Original v1.1 proposal, no longer a scope limit:** roslyn-language-server, netcoredbg, ICSharpCode.Decompiler, MTP. The former exclusions of ReSharper-grade C#, Razor, XAML, MAUI and Unity do not limit the expanded Rider-parity goal. Engine and dependency choices require their own compatibility and licence decisions before implementation; this list is not evidence of delivered C# support.
 
 **v1.0 contents.** Editor and shell; all project models; C++ intelligence; analysis tiers T0–T4; at least 8 multi-file refactorings; formatter; build and run; debugger; a test runner for GoogleTest, Catch2, doctest, Boost.Test and CTest; Git; terminal; local history; Claude C1–C3; settings import; updater; accessibility gate; signed installers.
 
@@ -1034,3 +1042,36 @@ Every P0 and P1 row of `tests/features/matrix.json` is listed under the mileston
 - **M5:** I14 `IHttpClient` (+M6 for Linux); I15 portable packages, symbol archival, Collect Logs.
 - **M6:** I16 unsigned installers (MSI, AppImage); I17 updater and ComponentDownloader.
 - **P1:** I18 Power Save Mode (M7); I19 settings importers, export/import (M11); I20 signed installers (M14).
+
+## Appendix B: Expanded product acceptance tracks (2026-11-02)
+
+ADR 0054 records the user's expanded scope. These additional tracks are required product work, not
+optional suggestions or completed features. Appendix A remains the original C/C++ milestone inventory;
+its generated `tests/features/matrix.json` does not yet represent these additions. The table below is an
+initial acceptance breakdown, not a claim that every Rider feature has been inventoried. The parity
+inventory must cover the public Rider 2026.2 feature set and record each unsupported workflow explicitly.
+Existing platform, data-safety and trust rules apply throughout.
+
+| Track | Required behavior and acceptance evidence | Dependency / initial status |
+|---|---|---|
+| PARITY-01 | Inventory Rider's documented features, menus, settings, keyboard and mouse interactions; map each to a FrostIDE scenario and evidence, including managed/web/framework workflows absent from Appendix A. Record reference version and later deltas. | Required; inventory incomplete |
+| PARITY-02 | Reproduce the intended layout, navigation, focus behavior, editor interactions and tool-window workflows with original artwork, theme values and branding. Exercise common tasks through real input on supported Windows/Linux displays and keyboard layouts. | Existing shell is partial; application and GPU integration under way |
+| MANAGED-01 | Load and reevaluate managed projects; accurate C# completion, diagnostics, navigation, refactoring and build context, including Unity-generated projects and assembly definitions. No regex substitutes for semantic analysis. | New required track; engine/dependency selection outstanding |
+| MANAGED-02 | Debug, test and profile managed applications and supported framework projects, with explicit capability coverage against the parity inventory. | Depends on MANAGED-01 and debugger infrastructure; planned |
+| LUA-01 | Lua service lifecycle, document synchronization, completion, signatures, hover, diagnostics, symbols, references and rename; select the intended runtime and honor workspace configuration. Test edits, Unicode positions, server failure and restart. | Backend and application routing reviewed; real LuaLS editor workflow tested on Windows/Linux; remaining capability coverage tracked separately |
+| LUA-02 | Lua syntax, indentation, formatting, snippets, annotations/generics and module navigation; preserve unsaved edits and support mixed C++/Lua workspaces without sending Lua documents to clangd. | Depends on language routing and editor integration; planned |
+| LUA-03 | Lua debugging: breakpoints, stepping, stacks, locals, watches and evaluation in supported standalone and FrostEngine runtimes. A configured adapter alone is not acceptance. | Runtime/debug-protocol choice and engine support outstanding |
+| LUA-04 | Verify real LuaLS behavior on the target engine's generated definitions and a synthetic fixture: correct completions and signatures, no false undefined-engine-global diagnostics, genuine errors still reported. Measure interactive latency on the reference machine. | Real engine API completion/hover/navigation/rename and diagnostics tested on Windows/Linux; full coverage and latency measurements remain |
+| UNITY-01 | Recognize Unity projects and packages; open scripts at the requested location through a Unity external-editor bridge; refresh generated projects while preserving asset identities. | Managed-language foundation and independent bridge required; planned |
+| UNITY-02 | Connect the correct editor instance, control play/pause/step, navigate logs and run/debug Unity tests; handle disconnect and domain reload without stale state. | Depends on UNITY-01; planned |
+| UNITY-03 | Debug editor and player scripts with appropriate value inspection; identify runtime/backend support and execute real sessions before claiming it. | Depends on managed debugger and Unity transport; planned |
+| UNITY-04 | Navigate serialized scene/prefab references, understand Unity callbacks and assembly definitions, supply Unity-aware analysis and shader workflows. Track profiling and remaining documented Unity capabilities in PARITY-01. | Depends on project model, C# semantics and Unity context; planned |
+| FROST-01 | Open `.frostproj` roots and scripts at 1-based locations through the engine's custom-editor argument template. Read the engine-owned `.luarc.json` and `.frost/lua-api/frost.lua` without rewriting them. | Target `D:\Dev\FrostEngine-AI-Claude`; project identity/configuration tested, command-line and running-window integration in progress |
+| FROST-02 | Discover the matching project through the engine's versioned per-project discovery files, authenticate locally, verify project identity, and expose play, validation, tests and navigable log output without blocking the UI. | Use `Docs/ScriptEditor.md` v1/v1.1; planned |
+| FROST-03 | Handle unavailable/stale engines, project switching, paths with spaces/Unicode, cancellation, token privacy and trust refusal; verify against the real target engine and an isolated test project. Preserve users' projects. | Depends on FROST-01/02; planned |
+| DELIVERY-01 | Complete and execute W1/U1 integrated scenarios; then execute the new Lua, Unity and FrostEngine scenarios. Packages include their required engines, plugins and notices. Separate component, application, platform and release evidence. | W1 integration under way; U1 and expansion scenarios outstanding |
+
+Implementation agents use GPT-6.1 Terra; GPT-6 Astra reviews the changes and verification evidence before
+integration. The inherited feature-first policy still postpones expensive hardening, but not missing
+features, ordinary functional tests or review requested by the user. Scope is not reduced to whichever
+parts happen to pass tests first. Current work and remaining gaps are recorded in `docs/progress.md`.

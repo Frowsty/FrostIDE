@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The QRhi editor backend's frame painter (ADR 0007 decision 1, ADR 0043): turns an
-// EditorDisplayList into instanced quads (glyphs from the EditorGlyphAtlas, solid quads for fills,
-// lines, carets and the gutter) and records them on any QRhi render target. It does not depend on
-// QRhiWidget, so tests render it into an offscreen QRhiTextureRenderTarget and compare it with the
-// raster backend. The only code besides rhi_renderer.cpp that includes Qt's QRhi headers.
+// EditorDisplayList into instanced quads (glyphs and vector coverage from the EditorGlyphAtlas,
+// solid and antialiased quads for fills, lines, carets, the gutter and the error stripe) and records
+// them on any QRhi render target. It draws every DisplayElementKind the raster backend draws (ADR
+// 0043 "Parity"). It does not depend on QRhiWidget, so tests render it into an offscreen
+// QRhiTextureRenderTarget and compare it with the raster backend. The only code besides
+// rhi_renderer.cpp that includes Qt's QRhi headers.
 #pragma once
 
 #include "frost/core/error.hpp"
@@ -56,23 +58,37 @@ struct GlyphQuad {
 struct RhiFrameStats {
     std::uint64_t quads = 0;
     std::uint64_t glyphQuads = 0;
-    std::uint64_t droppedGlyphs = 0; // Glyphs that found no room even in a fresh atlas.
+    std::uint64_t droppedGlyphs = 0; // Glyphs and coverage cells that found no room even in a fresh atlas.
     std::uint64_t draws = 0;
     std::uint64_t textureUploads = 0; // Atlas uploads (whole or dirty part) since construction.
     std::uint64_t frames = 0;         // record() calls since construction.
+    // The quads each element kind gave in the last prepare(), indexed by DisplayElementKind.
+    std::array<std::uint64_t, kDisplayElementKindCount> kindQuads{};
+
+    [[nodiscard]] std::uint64_t quadsOf(DisplayElementKind kind) const noexcept {
+        return kindQuads[static_cast<std::size_t>(kind)];
+    }
 };
 
 /*
  * One editor surface's QRhi painter. A frame is prepare() (CPU: shaping through a QTextLayout
  * glyph-run cache like the raster backend's, atlas fills, quads in device pixels) followed by
  * record() (GPU: atlas and instance uploads, one render pass cleared to the list's background and
- * up to three instanced draws, scissored as the raster backend clips: fills, then the text area's
- * lines, text, preedit and carets, then the gutter).
+ * one instanced draw per run of kinds with the same clip, as the raster backend clips: fills, then
+ * the text area's kinds, then the gutter, the error stripe and the chrome; three draws in all).
+ *
+ * Every DisplayElementKind is drawn in kDisplayPaintOrder, each the way the raster backend draws it:
+ * aliased fills and lines as solid quads snapped to whole device pixels; antialiased straight
+ * underlines, strike-outs and plain rectangles as exact-coverage quads (up to nine per rectangle);
+ * squiggles, dotted underlines and the chrome's shapes as atlas coverage cells drawn by the raster
+ * backend's own QPainter code (display_strokes.hpp), long squiggles in chunks of whole periods so
+ * repeated chunks share a cell; glyphs (regular and italic) and discs from the atlas.
  *
  * Coordinates: the list is in logical pixels; prepare() multiplies by `devicePixelRatio` and snaps
  * fills and lines to whole device pixels, glyph origins to whole pixels vertically and quarter
- * pixels horizontally (the atlas's subpixel steps). A new ratio resets the atlas (DPI change,
- * monitor move); setFont() (family, size, zoom, ligatures) resets it and the shaping cache.
+ * pixels horizontally (the atlas's subpixel steps), coverage cells to whole pixels with their
+ * geometry quantised to a sixteenth of a pixel. A new ratio resets the atlas (DPI change, monitor
+ * move); setFont() (family, size, zoom, ligatures) resets it and the shaping cache.
  *
  * GPU resources belong to the QRhi passed to initialize(); calling it again with another QRhi or an
  * incompatible render pass recreates them, and releaseResources() drops them (the owner calls it
@@ -131,12 +147,20 @@ private:
     [[nodiscard]] const Shaped& shaped(const QString& text, bool italic);
     // Builds the quads; false when the atlas filled up (the caller resets it and builds again).
     [[nodiscard]] bool buildQuads(const EditorDisplayList& list, bool dropWhenFull);
+    // The quads of one element kind (the parity switch); false as buildQuads.
+    [[nodiscard]] bool addKind(const EditorDisplayList& list, DisplayElementKind kind, bool dropWhenFull);
     void addSolid(QRectF logical, const QColor& color);
+    // An antialiased axis-aligned rectangle in device pixels: exact area coverage per pixel.
+    void addCoverageRect(QRectF device, const QColor& color);
     void addLine(const DisplayLine& line);
     [[nodiscard]] bool addText(const DisplayText& run, bool dropWhenFull);
     [[nodiscard]] bool addMarker(const DisplayMarker& marker, bool dropWhenFull);
-    void beginRange(std::size_t index, QRectF logicalScissor);
-    void endRange(std::size_t index);
+    [[nodiscard]] bool addDecoration(const DisplayDecoration& decoration, bool dropWhenFull);
+    [[nodiscard]] bool addStrokeStrip(const DisplayDecoration& decoration, bool dropWhenFull);
+    [[nodiscard]] bool addShape(const DisplayShape& shape, bool dropWhenFull);
+    // A quad of atlas cell `cell` whose image's top-left lies at device pixel `origin`; a null cell
+    // is a full atlas (false unless dropWhenFull, which counts it as dropped).
+    [[nodiscard]] bool addCell(const AtlasEntry* cell, QPoint origin, const QColor& color, bool dropWhenFull);
     [[nodiscard]] bool ensureInstanceCapacity(std::size_t count);
 
     QFont m_font;
@@ -148,7 +172,7 @@ private:
     QSize m_pixelSize;
     QColor m_background;
     std::vector<GlyphQuad> m_quads;
-    std::array<Range, 3> m_ranges{};
+    std::vector<Range> m_ranges;
     RhiFrameStats m_stats;
 
     // GPU state.

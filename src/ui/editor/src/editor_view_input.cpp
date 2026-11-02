@@ -159,6 +159,8 @@ void EditorView::focusInEvent(QFocusEvent* event) {
     if (m_services.keys != nullptr) {
         m_services.keys->observe(*event);
         m_services.keys->host().setActive(this);
+    } else if (m_services.actionHost != nullptr) {
+        m_services.actionHost->setActive(this);
     }
     restartBlink();
     viewport()->update();
@@ -443,6 +445,10 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
         m_granularity = Granularity::Character;
         m_dragOrigin = text::ByteRange{hit.offset, hit.offset};
         select(text::Selection::caret(hit.offset), hit.bias);
+        if (modifiers == Qt::ControlModifier) {
+            m_dragging = false; // A navigation click, not the start of a selection.
+            emit ctrlClicked(hit.offset);
+        }
     }
     m_inputStart.reset();
     event->accept();

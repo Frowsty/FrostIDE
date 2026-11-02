@@ -34,6 +34,7 @@ frost_add_test(lang_unit_tests
         json_test.cpp
         jsonrpc_test.cpp
         lsp_client_test.cpp
+        lua_service_test.cpp
         msbuild_provider_test.cpp
         semantic_tokens_test.cpp
         uri_test.cpp
@@ -59,3 +60,9 @@ if(WIN32)
     target_include_directories(lang_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
     target_compile_definitions(lang_msbuild_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 endif()
+
+frost_add_test(lang_lua_tests
+    SOURCES lua_e2e_test.cpp
+    DEPS frost::lang frost::project frost::text frost::io frost::sched
+    LABELS integration)
+target_include_directories(lang_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

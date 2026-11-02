@@ -59,6 +59,9 @@ inline constexpr Key<std::string> uiThemeSyncDark{"ui.theme.syncDark"};
 inline constexpr Key<std::string> uiThemeSyncHighContrast{"ui.theme.syncHighContrast"};
 inline constexpr Key<bool> uiCompactMode{"ui.compactMode"};
 inline constexpr Key<std::int64_t> uiZoom{"ui.zoom"};
+inline constexpr Key<bool> uiToolbarVisible{"ui.toolbar.visible"};
+inline constexpr Key<bool> uiStatusBarVisible{"ui.statusBar.visible"};
+inline constexpr Key<RecordList> uiToolWindows{"ui.toolWindows"};
 
 // Keymap (frost::input's IKeymapSettings adapter reads these).
 inline constexpr Key<std::string> keymapId{"keymap.id"};
@@ -80,6 +83,7 @@ inline constexpr Key<bool> localHistoryKeepNewestPerPath{"localHistory.keepNewes
 // General behaviour.
 inline constexpr Key<bool> generalReopenLastProject{"general.reopenLastProject"};
 inline constexpr Key<bool> generalConfirmExit{"general.confirmExit"};
+inline constexpr Key<StringList> generalRecentProjects{"general.recentProjects"};
 
 // Build.
 inline constexpr Key<bool> buildSaveAllBeforeBuild{"build.saveAllBeforeBuild"};
@@ -94,6 +98,8 @@ inline constexpr Key<std::string> toolsMsbuildPath{"tools.msbuild.path"};
 inline constexpr Key<std::string> toolsCmakePath{"tools.cmake.path"};
 inline constexpr Key<std::string> toolsNinjaPath{"tools.ninja.path"};
 inline constexpr Key<std::string> toolsGitPath{"tools.git.path"};
+inline constexpr Key<std::string> luaRuntimeVersion{"lua.runtimeVersion"};
+inline constexpr Key<std::string> toolsLuaLanguageServerPath{"tools.luaLanguageServer.path"};
 inline constexpr Key<std::string> toolsClangdPath{"tools.clangd.path"};
 inline constexpr Key<std::string> toolsClangFormatPath{"tools.clangFormat.path"};
 inline constexpr Key<std::string> toolsClangTidyPath{"tools.clangTidy.path"};

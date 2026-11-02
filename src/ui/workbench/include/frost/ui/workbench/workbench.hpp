@@ -5,7 +5,9 @@
 // files), the File System tool window, Find Action, Go to File, Search Everywhere, Recent Files and
 // Recent Locations, back/forward over the navigation history, per-project session restore, the
 // hot-exit restore prompt, external-change banners and the merge view, the large-file guard's
-// notifications, Save All / Save Document and the autosave hooks.
+// notifications, Save All / Save Document and the autosave hooks. Since the W1 unification (ADR 0044,
+// "Unified with shell-nav") it is the IDE's one owner of these: the composition root
+// (frost::app::Workbench) creates it in attach() and routes the project commands through its hooks.
 #pragma once
 
 #include "frost/core/clock.hpp"
@@ -15,6 +17,7 @@
 #include "frost/input/find_action.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/file_watcher.hpp"
+#include "frost/project/solution_model.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/ui/nav/document_registry.hpp"
@@ -57,7 +60,6 @@ inline constexpr std::string_view kForward = "navigate.forward";
 inline constexpr std::string_view kSaveAll = "file.saveAll";
 inline constexpr std::string_view kSaveDocument = "file.saveDocument";
 inline constexpr std::string_view kReloadFromDisk = "file.reloadFromDisk";
-inline constexpr std::string_view kOpenProject = "file.openProject";
 inline constexpr std::string_view kCloseProject = "file.closeProject";
 inline constexpr std::string_view kFileSystemWindow = "fileSystem.show";
 inline constexpr std::string_view kOpenApplicationSettings = "settings.openApplicationFile";
@@ -89,6 +91,11 @@ struct WorkbenchServices {
     document::AutosaveController* autosave = nullptr;
     // settings.openApplicationFile's target; empty: the action is disabled.
     std::string applicationSettingsFile{};
+    // The composition root's project commands (ADR 0044); empty: the workbench's own. file.closeProject
+    // runs closeProjectHook, which closes through closeProject() itself; restoreLastProject() opens the
+    // last root through openProjectHook (which may map it to the solution the user opened).
+    std::function<void()> closeProjectHook{};
+    std::function<Result<void>(const std::string& root)> openProjectHook{};
 };
 
 /*
@@ -113,12 +120,20 @@ public:
 
     /*
      * Opens a folder, or a .sln/.slnx (its folder is the root, its files join Go to File). Saves the
-     * current project's session first, then restores the new one's (when a store is set). Errors:
-     * NotFound, InvalidArgument (not a folder or solution), the solution parser's.
+     * current project's session and closes its tabs first, then restores the new one's (when a store
+     * is set). Errors: NotFound, InvalidArgument (not a folder or solution), the solution parser's,
+     * Cancelled (a tab of the current project refused to close: its save failed and the user kept it;
+     * the current project stays open).
      */
     [[nodiscard]] Result<void> openProject(const std::string& path);
-    // Saves the session and closes every tab; no project afterwards.
-    void closeProject();
+    // As openProject() for a solution the caller has loaded already (the composition root's).
+    [[nodiscard]] Result<void> openSolution(const project::SolutionModel& solution);
+    /*
+     * Saves the session and closes every tab; no project afterwards. Returns false, keeping the
+     * project and the tabs that refused, when a tab refused to close (a dirty tab whose save failed
+     * and the user cancelled), as Rider keeps the project open then.
+     */
+    bool closeProject();
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_root; }
     [[nodiscard]] const nav::ProjectFiles& projectFiles() const noexcept { return m_files; }
     // Rescans the project folder (on the scheduler when set, else now).
@@ -154,7 +169,8 @@ public:
     void applySession(const nav::SessionState& state);
     // Saves the current project's session (no store or no project: nothing). Errors: the store's.
     [[nodiscard]] Result<void> saveSession();
-    // Opens the store's last project, if there is one and it still exists. Returns whether it did.
+    // Opens the store's last project (through openProjectHook when set), if there is one and it still
+    // exists. Returns whether it did.
     bool restoreLastProject();
 
     // --- Hot exit ---
@@ -162,7 +178,8 @@ public:
     /*
      * Offers the scan's unsaved buffers: a sticky notification "FrostIDE closed unexpectedly.
      * Restore N unsaved files?" with Restore (restoreRecovered()) and Discard. Returns N (0: nothing
-     * to offer, no notification; the scan's empty journals are discarded).
+     * to offer, no notification; the scan's empty journals are discarded). The IDE's one restore
+     * prompt: the composition root scans once per start and calls this.
      */
     std::size_t offerRestore(storage::RecoveryScan scan);
     // Runs SaveManager::restore on the offered scan and opens the restored documents in tabs.
@@ -176,8 +193,19 @@ public:
     // SaveManager::applyChanges for a watcher batch, then the banners, notifications and (for
     // changes under the project folder) a rescan.
     void applyFileChanges(const io::FileChangeBatch& batch);
-    // Shows what one external change means (banners; a notification with Compare... for a merge).
+    /*
+     * Shows what one external change means: banners and registry listeners for every change (a
+     * clean buffer was reloaded silently); for a dirty buffer (MergePending) a sticky notification
+     * with "Keep my version", "Take disk version" and "Compare..." (the merge view), as Rider asks.
+     */
     void handleExternalChange(const document::ExternalChange& change);
+    // Resolves `path`'s pending merge with `decision` (the notification's first two actions).
+    void resolveExternalChange(const std::string& path, document::MergeDecision decision);
+    // Reload All from Disk (file.reloadFromDisk, Ctrl+Alt+Y): checkDisk for every open file document.
+    void reloadAllFromDisk();
+    // The IDE frame lost focus (autosave on frame deactivation) or got it back (the disk check).
+    void frameDeactivated();
+    void frameActivated();
     // The merge view for `path`'s pending merge (one per document), or nullptr with a notification.
     MergeView* showMerge(const std::string& path);
     // The OutOfDate banner's actions: check the disk again / save over it.
@@ -202,6 +230,7 @@ private:
     void addAction(std::string_view id, std::string_view name, std::string_view group, std::function<void()> run,
                    std::function<bool()> enabled = {}, std::vector<std::string> synonyms = {});
     void addToolWindow();
+    [[nodiscard]] Result<void> openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles);
     void setRoot(std::string root, std::vector<std::string> solutionFiles);
     void applyScan(Result<io::TreeScan> scan);
     void pollScan();

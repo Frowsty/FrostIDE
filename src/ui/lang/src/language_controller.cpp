@@ -158,6 +158,23 @@ LanguageController::~LanguageController() {
     }
 }
 
+void LanguageController::editorChanged() {
+    for (sched::LatestWins* slot :
+         {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
+          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot}) {
+        slot->cancel();
+    }
+    m_highlightTimer.stop();
+    m_symbolQueryTimer.stop();
+    closeLookup();
+    m_parameterInfo->hide();
+    m_quickDoc->hide();
+    m_rename->hide();
+    m_choice->hide();
+    m_tabStops.clear();
+    m_renamePath.clear();
+}
+
 Result<void> LanguageController::registerActions(input::ActionRegistry& registry) {
     struct Entry {
         std::string_view id;

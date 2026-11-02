@@ -102,6 +102,8 @@ public:
     void reformat();
 
     // --- Editor hooks ---
+    // Cancel requests and dismiss document-specific UI when the active editor changes.
+    void editorChanged();
     // A key press in the editor; true when the language features consumed it (lookup
     // navigation, commit, Esc, snippet Tab). Call before the editor handles the key.
     bool keyPress(int key, Qt::KeyboardModifiers modifiers);

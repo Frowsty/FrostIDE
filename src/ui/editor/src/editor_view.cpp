@@ -360,7 +360,6 @@ bool EditorView::apply(const text::CommandResult& result) {
 }
 
 void EditorView::afterChange(const text::EditorUpdate& update) {
-    const bool textChangedNow = update.change.has_value();
     if (update.change) {
         if (m_syntax) {
             m_syntax->apply(*update.change, m_editor->text());
@@ -378,8 +377,8 @@ void EditorView::afterChange(const text::EditorUpdate& update) {
     viewport()->update();
     emitStatus();
     armInputToPaint();
-    if (textChangedNow) {
-        emit textChanged();
+    if (update.change && update.change->version != update.change->baseVersion) {
+        emit textChanged(*update.change);
     }
 }
 
@@ -806,6 +805,48 @@ void EditorView::setLineChanges(std::vector<LineChangeMarker> changes) {
     std::ranges::stable_sort(changes, {}, &LineChangeMarker::firstLine);
     m_lineChanges = std::move(changes);
     viewport()->update();
+}
+
+void EditorView::reloadFromDocument() {
+    const ByteOffset caret = m_editor->state().primary().head;
+    text::EditorConfig config = m_editor->config();
+    config.wrap = m_editor->display().wrap();
+    m_editor = std::make_unique<text::Editor>(*m_document, *m_shaper, config);
+    const text::Snapshot& snapshot = m_editor->text();
+    m_editor->setState(text::EditorState::caretAt(snapshot.clip(std::min(caret, snapshot.size()))));
+    if (m_syntax) {
+        m_syntax->open(m_syntaxLanguage, snapshot);
+    }
+    m_highlights.valid = false;
+    m_maxRowWidth = 0.0;
+    // The reload is no ChangeSet the insight ranges could follow: they stay, clamped to the new
+    // text, until their owners replace them.
+    const ByteOffset size = snapshot.size();
+    const auto clampRange = [size](text::ByteRange& range) {
+        range.begin = std::min(range.begin, size);
+        range.end = std::clamp(range.end, range.begin, size);
+    };
+    for (SemanticSpan& span : m_semantic) {
+        clampRange(span.range);
+    }
+    for (text::ByteRange& range : m_inactive) {
+        clampRange(range);
+    }
+    for (std::vector<ActiveDiagnostic>& set : m_diagnostics) {
+        for (ActiveDiagnostic& diagnostic : set) {
+            clampRange(diagnostic.range);
+        }
+    }
+    for (auto& [owner, set] : m_decorations) {
+        for (EditorDecoration& decoration : set) {
+            clampRange(decoration.range);
+        }
+    }
+    for (UsageHighlight& usage : m_usages) {
+        clampRange(usage.range);
+    }
+    m_balloon.reset();
+    afterChange(text::EditorUpdate{});
 }
 
 EditorViewStatus EditorView::status() const {

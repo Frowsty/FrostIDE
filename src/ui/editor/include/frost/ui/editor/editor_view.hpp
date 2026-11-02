@@ -34,6 +34,7 @@
 #include <QPoint>
 #include <QPointF>
 #include <QPointer>
+#include <QRect>
 #include <QRectF>
 #include <QString>
 #include <QTimer>
@@ -132,6 +133,8 @@ struct InputToPaintSample {
  *   languages + scheduler: tree-sitter highlighting and the outline (none without both);
  *   clock: the syntax session's and the InputToPaint marker's (null: systemClock());
  *   keys: key routing (null: the view types text from QKeyEvent::text() and runs no shortcuts);
+ *   actionHost: without `keys`, the host the view makes itself active in on focus-in, so the
+ *     shell's ShortcutDispatcher (the only key path in the workbench) runs editor actions on it;
  *   appearance: the theme and zoom, followed live, and the editor fonts (ensureEditorFonts()); when
  *     null the view follows FrostStyle::current(), or else paints with EditorColors::defaults();
  *   highlightBudget: the wall time one highlight query may take before it returns incomplete spans;
@@ -142,6 +145,7 @@ struct EditorServices {
     sched::IScheduler* scheduler = nullptr;
     const IClock* clock = nullptr;
     EditorKeyRouting* keys = nullptr;
+    EditorActionHost* actionHost = nullptr;
     AppearanceManager* appearance = nullptr;
     syntax::SyntaxOptions syntax{};
     IClock::Duration highlightBudget = std::chrono::milliseconds(4);
@@ -274,7 +278,7 @@ public:
     bool setInactiveRanges(std::uint64_t textVersion, std::vector<text::ByteRange> ranges);
     [[nodiscard]] const std::vector<text::ByteRange>& inactiveRanges() const noexcept { return m_inactive; }
     // Replaces the diagnostics of `source` (EditorDiagnostic says how their ranges are resolved).
-    void setDiagnostics(DiagnosticSource source, std::vector<EditorDiagnostic> diagnostics);
+    void setDiagnostics(EditorDiagnosticSource source, std::vector<EditorDiagnostic> diagnostics);
     // Both sources' diagnostics in the current text, sorted by start, then severity. A build
     // diagnostic on the same line with the same message as a live one is listed once (the live one).
     [[nodiscard]] std::vector<ActiveDiagnostic> diagnostics() const;
@@ -322,6 +326,17 @@ public:
     // The stripe column: x and width in viewport pixels (y spans the viewport).
     [[nodiscard]] QRectF changeStripeColumn() const noexcept;
 
+    /*
+     * Follows a change made to the document outside any editor (a reload from disk, an
+     * external-change decision, a restored journal entry), which reports no ChangeSet: rebuilds the
+     * model at the document's version with the primary caret kept (clamped), reparses and repaints.
+     * The insight ranges (semantic tokens, inactive regions, diagnostics, decorations, usages) stay,
+     * clamped to the new text, until their owners replace them; an older version's ranges are no
+     * longer mapped (editsSince sees the gap). Undo history is the document's and is unaffected.
+     * Emits no textChanged.
+     */
+    void reloadFromDocument();
+
     // Find / replace and Go to Line.
     void openFind(bool replace);
     void closeFind();
@@ -355,6 +370,10 @@ public:
     void fallBackToRaster(std::string reason);
     // Whether the blinking caret is in its visible phase.
     [[nodiscard]] bool caretVisible() const noexcept { return m_caretOn; }
+    // Geometry for overlays (the language features' popups, Ctrl+click): the text offset under the
+    // viewport point `at`, and the caret box at `offset` (clamped to the text) in global coordinates.
+    [[nodiscard]] ByteOffset offsetAt(QPointF at) const;
+    [[nodiscard]] QRect globalCaretRect(ByteOffset offset) const;
 
     // The InputToPaint marker's sink (none by default): called after every paint that follows a
     // handled input event. TODO(M1): the hardening phase feeds the ETW provider and B5 from it.
@@ -382,10 +401,16 @@ signals:
     void documentEdited(quint64 version);
     // The inspection widget's counts were clicked (the workbench shows the Problems tool window).
     void problemsViewRequested();
-    // The document's text changed through this view (typing, commands, undo and redo, the IME).
-    void textChanged();
+    /*
+     * The document's text changed through this view (typing, commands, undo and redo, the IME):
+     * the document's ChangeSet, for language servers (W1 feeds ClangdService::changeDocument).
+     * Receivers that need no ChangeSet connect a slot without arguments (the VCS markers).
+     */
+    void textChanged(const frost::text::ChangeSet& change);
     // A click on a VCS change stripe: the index into lineChanges() and the click's global position.
     void lineChangeClicked(int index, QPoint globalPos);
+    // A Ctrl+click (Cmd+click on macOS) put the caret at `offset`: Rider's go to declaration.
+    void ctrlClicked(frost::ByteOffset offset);
 
 protected:
     bool event(QEvent* event) override;
@@ -580,7 +605,7 @@ private:
     // Insight (ADR 0047): every range is in the current text.
     std::vector<SemanticSpan> m_semantic;
     std::vector<text::ByteRange> m_inactive;
-    std::array<std::vector<ActiveDiagnostic>, 2> m_diagnostics; // By DiagnosticSource.
+    std::array<std::vector<ActiveDiagnostic>, 2> m_diagnostics; // By EditorDiagnosticSource.
     std::map<std::string, std::vector<EditorDecoration>, std::less<>> m_decorations;
     std::vector<UsageHighlight> m_usages;
     std::deque<EditRecord> m_editHistory;

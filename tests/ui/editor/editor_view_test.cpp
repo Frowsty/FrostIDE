@@ -220,6 +220,39 @@ TEST(EditorView, GutterShowsVcsChangeStripesAndReportsTheirClicks) {
     EXPECT_TRUE(h.view->buildDisplayList().changeStripes.empty());
 }
 
+TEST(EditorView, RangeDecorationsUnderlineTheirTextWithATooltip) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("int missing;\nreturn x;\n");
+    EXPECT_TRUE(h.view->buildDisplayList().decorations.empty());
+    // A wavy error under "missing" (bytes 4..11) and a straight warning under "x" (bytes 20..21),
+    // through editor-insight's per-owner decorations (the W1 workbench's range decorations before
+    // the merge; given unsorted on purpose).
+    h.view->setDecorations(
+        "w1", {EditorDecoration{text::ByteRange{ByteOffset{20}, ByteOffset{21}}, DecorationStyle::Underline,
+                                InsightSeverity::Warning, QColor(), "unused"},
+               EditorDecoration{text::ByteRange{ByteOffset{4}, ByteOffset{11}}, DecorationStyle::WavyUnderline,
+                                InsightSeverity::Error, QColor(), "use of undeclared identifier"}});
+    EditorDisplayList list = h.view->buildDisplayList();
+    ASSERT_EQ(list.decorations.size(), 2U);
+    const DisplayDecoration& error = list.decorations[0]; // Row by row.
+    EXPECT_EQ(error.style, DecorationStyle::WavyUnderline);
+    EXPECT_EQ(error.color, h.view->colors().errorMarker);
+    EXPECT_GE(error.rect.left(), list.textArea.left());
+    EXPECT_GT(error.rect.right(), error.rect.left());
+    EXPECT_LT(error.baseline, h.view->lineHeight()); // On the first row.
+    EXPECT_EQ(list.decorations[1].style, DecorationStyle::Underline);
+    EXPECT_EQ(list.decorations[1].color, h.view->colors().warningMarker);
+    EXPECT_GT(list.decorations[1].baseline, h.view->lineHeight()); // On the second row.
+
+    // The tooltip names the message under the pointer, nothing elsewhere.
+    const QPointF over(error.rect.center().x(), 0.5 * h.view->lineHeight());
+    EXPECT_EQ(h.view->toolTipAt(over), QStringLiteral("use of undeclared identifier"));
+    EXPECT_TRUE(h.view->toolTipAt(QPointF(error.rect.right() + 40.0, 0.5 * h.view->lineHeight())).isEmpty());
+
+    h.view->setDecorations("w1", {});
+    EXPECT_TRUE(h.view->buildDisplayList().decorations.empty());
+}
+
 TEST(EditorView, ImeCompositionAndCommit) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("ab");

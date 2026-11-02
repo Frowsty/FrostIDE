@@ -30,11 +30,15 @@ namespace frost::ui {
 
 class BuildController;
 
+// The operation whose project-controlled content needs trust.
+enum class TrustPurpose { Build, LuaLanguageServer };
+
 class TrustDialog final : public QDialog {
     Q_OBJECT
 
 public:
-    TrustDialog(BuildController& controller, const QStringList& roots, QWidget* parent = nullptr);
+    TrustDialog(BuildController& controller, const QStringList& roots, QWidget* parent = nullptr,
+                TrustPurpose purpose = TrustPurpose::Build);
     ~TrustDialog() override;
 
     // Replaces the listed folders (a repeated NeedsTrust).

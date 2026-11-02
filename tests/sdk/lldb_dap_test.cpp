@@ -291,7 +291,7 @@ protected:
         return dap.send("launch", std::move(launch));
     }
 
-    // setBreakpoints with one line in `source`; true when lldb-dap accepted it.
+    // setBreakpoints with one line in `source`; true when lldb-dap bound it.
     static bool setBreakpoint(DapSession& dap, const std::string& source, int line) {
         Json sourceArg = Json::object();
         sourceArg.set("path", source);
@@ -305,8 +305,13 @@ protected:
             return false;
         }
         const Json* breakpoints = body->find("breakpoints");
-        EXPECT_TRUE(breakpoints != nullptr && breakpoints->size() == 1) << body->dump();
-        return breakpoints != nullptr && breakpoints->size() == 1;
+        if (breakpoints == nullptr || breakpoints->size() != 1) {
+            ADD_FAILURE() << "unexpected breakpoints: " << body->dump();
+            return false;
+        }
+        const bool verified = breakpoints->items().front().boolAt("verified") == true;
+        EXPECT_TRUE(verified) << "breakpoint did not bind: " << body->dump();
+        return verified;
     }
 
     // The top frame of `threadId`'s stack, or nullopt.

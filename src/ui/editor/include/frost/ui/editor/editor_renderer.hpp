@@ -11,6 +11,7 @@
 #include <QFont>
 #include <QGlyphRun>
 #include <QHash>
+#include <QImage>
 #include <QList>
 #include <QString>
 
@@ -81,6 +82,8 @@ private:
 
     QFont m_font;
     QFont m_italic;
+    QImage m_textScratch;
+    QRectF m_viewport;
     QHash<QString, Shaped> m_regularCache;
     QHash<QString, Shaped> m_italicCache;
     std::uint64_t m_hits = 0;

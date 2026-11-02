@@ -34,6 +34,8 @@ frost_add_library(lang LAYER lang
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp
+        src/lua_config.cpp
+        src/lua_service.cpp
         src/lsp_types.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp
@@ -48,7 +50,6 @@ frost_add_library(lang LAYER lang
 target_link_libraries(frost_lang PRIVATE yyjson::yyjson)
 target_compile_definitions(frost_lang PRIVATE FROST_PINNED_LLVM_VERSION="${_frost_llvm_version}")
 if(WIN32)
-    # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetKnownFolderPath (vswhere's
-    # folder); ole32: CoTaskMemFree for its result.
-    target_link_libraries(frost_lang PRIVATE advapi32 shell32 ole32)
+    # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).
+    target_link_libraries(frost_lang PRIVATE advapi32 shell32)
 endif()

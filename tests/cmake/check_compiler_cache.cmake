@@ -118,7 +118,7 @@ install_fake("${MAKE_PROGRAM}" "${sdk}/sccache-${old}")
 configure(1)
 expect_absent(1 "CMake Warning")
 expect_output(1 "FrostIDE compiler cache: sccache ${old} (${sdk}/sccache-${old}/sccache${exe},")
-expect_output(1 "fixture: launcher '${sdk}/sccache-${old}/sccache${exe}'")
+expect_output(1 ";${sdk}/sccache-${old}/sccache${exe}'")
 expect_cached(1 "${sdk}/sccache-${old}/sccache${exe}")
 
 # 2. The lock moves to a new version and the bootstrap installs it next to the old one.
@@ -128,7 +128,7 @@ install_fake("${CMAKE_COMMAND}" "${sdk}/sccache-${new}")
 configure(2)
 expect_absent(2 "CMake Warning")
 expect_output(2 "FrostIDE compiler cache: sccache ${new} (${sdk}/sccache-${new}/sccache${exe},")
-expect_output(2 "fixture: launcher '${sdk}/sccache-${new}/sccache${exe}'")
+expect_output(2 ";${sdk}/sccache-${new}/sccache${exe}'")
 expect_cached(2 "${sdk}/sccache-${new}/sccache${exe}")
 
 # 3. The cached executable disappears; the same version is still on PATH.

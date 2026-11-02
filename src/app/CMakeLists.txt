@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # frost::app (the application library: command line, start-up hardening and checks,
-# diagnostics wiring, the composition root's services and the main window over
-# frost::ui_shell (ADR 0038) with the navigation workbench (ADR 0042), self-test) and the FrostIDE
+# diagnostics wiring, the one composition root (frost::app::Workbench, ADR 0044) and the main window
+# over frost::ui_shell (ADR 0038) with the navigation workbench (ADR 0042), self-test) and the FrostIDE
 # program built from it. The library exists so tests can exercise the same code the program runs.
 #
 # On Windows the program is two images (ADR 0012):
@@ -22,16 +22,30 @@ set(frost_startup_core_sources include/frost/app/startup_core.hpp src/startup_co
 frost_add_library(app LAYER app
     SOURCES
         include/frost/app/diagnostics_qt.hpp
+        include/frost/app/document_editor.hpp
         include/frost/app/main_window.hpp
-        src/app_services.cpp
+        include/frost/app/settings_adapters.hpp
+        include/frost/app/welcome_screen.hpp
+        include/frost/app/workbench.hpp
         src/command_line.cpp
         src/diagnostics_qt.cpp
+        src/document_editor.cpp
         src/main_window.cpp
         src/selftest.cpp
+        src/settings_adapters.cpp
         src/startup.cpp
+        src/welcome_screen.cpp
+        src/workbench.cpp
+        src/language_bridge.hpp
+        src/stable_lsp_requester.hpp
+        src/workbench_documents.cpp
+        src/workbench_language.cpp
+        src/workbench_lua.cpp
+        src/workbench_project.cpp
         ${frost_startup_core_sources}
-    DEPS frost::ui_workbench frost::ui_nav frost::ui_shell frost::ui frost::document frost::storage frost::project
-         frost::settings frost::input frost::io frost::sched frost::diag frost::core
+    DEPS frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
+         frost::ui_shell frost::ui frost::lang frost::build frost::document frost::project frost::settings
+         frost::syntax frost::storage frost::text frost::input frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
@@ -52,9 +66,14 @@ endif()
 # frost_app.dll. Its import library gets its own name, because frost_app.lib is frost::app's
 # static library in the same directory.
 frost_add_library(app_shared LAYER app SHARED
-    SOURCES src/main.cpp
+    SOURCES src/main.cpp src/absl_symbolize_windows.cpp
     DEPS frost::app frost::ui_shell frost::ui frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)
+# src/absl_symbolize_windows.cpp replaces abseil's dbghelp.dll symbolizer (re2's fatal-error stack
+# dump) with one that names nothing, so frost_app.dll imports no dbghelp.dll; it needs only
+# abseil's headers (absl_symbolize.lib is on the link line through re2 already).
+target_include_directories(frost_app_shared SYSTEM PRIVATE
+    $<TARGET_PROPERTY:absl::symbolize,INTERFACE_INCLUDE_DIRECTORIES>)
 # The crash handler frost_app.dll starts lives beside it (frost/app/diagnostics_qt.hpp).
 frost_deploy_crashpad_handler(frost_app_shared)
 set_target_properties(frost_app_shared PROPERTIES OUTPUT_NAME frost_app ARCHIVE_OUTPUT_NAME frost_app_shared)

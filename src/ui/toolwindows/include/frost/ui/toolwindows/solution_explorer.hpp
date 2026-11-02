@@ -20,7 +20,8 @@
  *
  * Commands. The context menu offers Open (files); Build, Rebuild and Clean for the solution or a
  * project, through the BuildController (disabled without one, during a build, and for projects
- * that are not loaded); Open Containing Folder (revealInFileManager through the IProcessLauncher;
+ * that are not loaded); Set as Startup Project for a loaded project, when a handler is set (the
+ * run service's, ADR 0040); Open Containing Folder (revealInFileManager through the IProcessLauncher;
  * disabled without one); Copy Path (the native path to the clipboard). A failed command emits
  * commandFailed().
  *
@@ -39,6 +40,7 @@
 #include <QWidget>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -71,6 +73,10 @@ public:
     void setController(BuildController* controller);
     // The launcher for Open Containing Folder (nullptr disables the command).
     void setProcessLauncher(io::IProcessLauncher* launcher) noexcept { m_launcher = launcher; }
+    // What Set as Startup Project does with the project; empty: the command is not offered.
+    void setStartupProjectHandler(std::function<void(project::ProjectId)> handler) {
+        m_startupHandler = std::move(handler);
+    }
 
     // Shows `solution` (nullptr: nothing); see the header comment for reloads.
     void setSolution(std::shared_ptr<const project::SolutionModel> solution);
@@ -81,6 +87,8 @@ public:
     bool selectPath(std::string_view path);
     // The selected node and its path ("" for folders, filters and no selection).
     [[nodiscard]] std::optional<project::NodeId> currentNode() const;
+    // The project of the selected project node, if a project node is selected.
+    [[nodiscard]] std::optional<project::ProjectId> currentProject() const;
     [[nodiscard]] QString currentPath() const;
 
     [[nodiscard]] bool isSpeedSearchActive() const noexcept { return m_searchActive; }
@@ -125,6 +133,7 @@ private:
     SolutionFilterModel* m_filter = nullptr;
     BuildController* m_controller = nullptr;
     io::IProcessLauncher* m_launcher = nullptr;
+    std::function<void(project::ProjectId)> m_startupHandler;
     QMetaObject::Connection m_solutionConnection;
 
     bool m_searchActive = false;

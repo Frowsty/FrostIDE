@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class QTimer;
@@ -71,10 +72,10 @@ struct LinePosition {
 [[nodiscard]] std::optional<LinePosition> parseGoToLine(const QString& text);
 
 /*
- * The window. Created hidden; GUI thread only. Its title is "FrostIDE", or "<file> - FrostIDE"
- * while an editor is active. Destruction: teardown() removes the dispatcher and closes every editor
- * and popup while the services still exist; ~ShellWindow calls it, and a subclass that owns
- * services must call it first in its own destructor.
+ * The window. Created hidden; GUI thread only. Its title is "<project> - FrostIDE" while a project is
+ * open (setProject), else "<file> - FrostIDE" while an editor is active, else "FrostIDE". Destruction: teardown()
+ * removes the dispatcher and closes every editor and popup while the services still exist; ~ShellWindow calls it, and a
+ * subclass that owns services must call it first in its own destructor.
  */
 class ShellWindow : public QMainWindow {
     Q_OBJECT
@@ -108,8 +109,15 @@ public:
 
     void setAvailabilityLevel(input::AvailabilityLevel level) noexcept { m_level = level; }
     void setProjectTrusted(bool trusted) noexcept { m_trusted = trusted; }
-    // Shows `name` in the toolbar's project widget; empty: no project (ProjectOpen off).
+    // Shows `name` in the toolbar's project widget and the title; empty: no project (ProjectOpen off).
     void setProject(const QString& name);
+    [[nodiscard]] const QString& projectName() const noexcept { return m_projectName; }
+    /*
+     * Replaces what File > Open... (actions::kOpenFile) does: the composition root shows its own
+     * dialog (solutions, folders and files) and opens the choice through its open-file path. Empty
+     * restores the built-in file dialog that opens the chosen file with openFile().
+     */
+    void setOpenFileHandler(std::function<void()> handler) { m_openFileHandler = std::move(handler); }
 
     // Opens `path` in a tab. A failure is shown as an error notification and returned; a file the
     // large-file guard refuses (OutOfRange) is titled "<file> is too large to open".
@@ -131,6 +139,11 @@ public:
     // Posts start-up warnings (AppearanceManager::InstallReport::warnings) as one notification.
     void reportStartupWarnings(const std::vector<std::string>& warnings);
 
+    // Runs `hook` at the start of teardown(), while the tabs, tool windows and dispatcher are whole
+    // (hooks run in the order added, once): the composition root removes what it attached to the
+    // window there (ADR 0044).
+    void addTeardownHook(std::function<void()> hook) { m_teardownHooks.push_back(std::move(hook)); }
+
 protected:
     // Idempotent; see the class comment.
     void teardown();
@@ -145,6 +158,7 @@ private:
                         std::function<bool()> enabled = {}, std::optional<input::ContextRule> rule = std::nullopt,
                         bool searchable = true);
     void onCurrentEditorChanged(IEditorView* editor);
+    void updateTitle();
     void onEditorStatus(IEditorView* editor);
     void focusFirst(const std::vector<QWidget*>& widgets);
     void storeChromeVisibility();
@@ -164,6 +178,9 @@ private:
     QPointer<Popup> m_popup;
     QPointer<ListPopup> m_switcher;
     std::vector<std::string> m_registrationErrors;
+    std::function<void()> m_openFileHandler;
+    std::vector<std::function<void()>> m_teardownHooks;
+    QString m_projectName;
     input::AvailabilityLevel m_level = input::AvailabilityLevel::L0;
     bool m_trusted = false;
     bool m_projectOpen = false;

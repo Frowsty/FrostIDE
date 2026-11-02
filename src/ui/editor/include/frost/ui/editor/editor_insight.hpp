@@ -75,7 +75,7 @@ inline constexpr std::size_t kInsightSeverityCount = 4;
 [[nodiscard]] std::string_view toString(InsightSeverity severity) noexcept;
 
 // Where a diagnostic came from; each source replaces only its own set.
-enum class DiagnosticSource : std::uint8_t { Build, Live };
+enum class EditorDiagnosticSource : std::uint8_t { Build, Live };
 
 /*
  * A problem to show in the editor (squiggle, stripe mark, gutter marker, inspection count, F2).
@@ -99,7 +99,7 @@ struct EditorDiagnostic {
 struct ActiveDiagnostic {
     text::ByteRange range;
     InsightSeverity severity = InsightSeverity::Error;
-    DiagnosticSource source = DiagnosticSource::Live;
+    EditorDiagnosticSource source = EditorDiagnosticSource::Live;
     std::string message;
     std::string code;
     friend bool operator==(const ActiveDiagnostic&, const ActiveDiagnostic&) = default;

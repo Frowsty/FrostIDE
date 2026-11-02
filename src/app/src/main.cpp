@@ -36,15 +36,26 @@
 // log at once, and the stall watchdog and the crash handler only after the first frame, on the
 // GUI thread and the "frost-diag" thread, so neither delays B1.
 
-#include "frost/app/app_services.hpp"
 #include "frost/app/command_line.hpp"
 #include "frost/app/diagnostics_qt.hpp"
 #include "frost/app/main_window.hpp"
 #include "frost/app/selftest.hpp"
 #include "frost/app/startup.hpp"
+#include "frost/app/workbench.hpp"
+#include "frost/build/build_service.hpp"
+#include "frost/build/run_service.hpp"
+#include "frost/core/assert.hpp"
 #include "frost/core/build_info.hpp"
+#include "frost/core/clock.hpp"
 #include "frost/core/log.hpp"
 #include "frost/diag/selftest_faults.hpp"
+#include "frost/io/file_system.hpp"
+#include "frost/io/path.hpp"
+#include "frost/io/process.hpp"
+#include "frost/project/trust_store.hpp"
+#include "frost/settings/project_layout.hpp"
+#include "frost/settings/registry.hpp"
+#include "frost/settings/store.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/tr.hpp"
@@ -288,6 +299,97 @@ int runFreezeSelfTest(int argc, char** argv) {
     return 0;
 }
 
+/*
+ * --selftest=render (ADR 0043): the real platform (QT_QPA_PLATFORM as the environment sets it, so
+ * on Windows the "windows" plugin and the GPU driver), one EditorView drawn with editor.renderer's
+ * default, then the checks' report (frost/app/selftest.hpp runRenderChecks).
+ */
+int runRenderSelfTest(int argc, char** argv) {
+    frost::app::SelfTestReport report;
+    if (auto plugin = frost::app::preparePlatformPlugin(); !plugin) {
+        report.checks.push_back({"plugin-paths", false, true, plugin.error().message()});
+        print(stdout, report.format());
+        return 1;
+    }
+    int qtArgc = argc > 0 ? 1 : 0;
+    QApplication app(qtArgc, argv);
+    report.checks = frost::app::runRenderChecks();
+    print(stdout, report.format());
+    return report.passed() ? 0 : 1;
+}
+
+// The GUI's settings and trust stores. A store that cannot open on its file falls back to an
+// in-memory one (settings) or a file in the temporary directory (trust), with a warning.
+struct GuiStores {
+    std::unique_ptr<frost::settings::SettingsStore> settings;
+    std::unique_ptr<frost::project::TrustStore> trust;
+    std::string dataDirectory; // FrostIDE's per-user data directory (the trust store's); "" if unknown.
+    std::vector<std::string> warnings;
+};
+
+GuiStores openGuiStores() {
+    GuiStores stores;
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    const frost::settings::Registry& registry = frost::settings::builtinRegistry();
+    if (auto file = frost::settings::applicationSettingsFile(); file) {
+        if (auto opened = frost::settings::SettingsStore::open(registry, fs, {*file, std::nullopt}); opened) {
+            stores.settings = std::move(*opened);
+        } else {
+            stores.warnings.push_back(std::format("The settings file cannot be used: {}", opened.error().message()));
+        }
+    } else {
+        stores.warnings.push_back(std::format("No settings file: {}", file.error().message()));
+    }
+    if (!stores.settings) {
+        auto memory = frost::settings::SettingsStore::open(registry, fs, {});
+        FROST_ASSERT(memory.has_value()); // No file to read: open cannot fail.
+        stores.settings = std::move(*memory);
+    }
+    frost::Result<std::string> trustPath = frost::project::TrustStore::defaultStorePath();
+    if (trustPath) {
+        stores.dataDirectory = std::string(frost::io::parentPath(*trustPath));
+        if (auto opened = frost::project::TrustStore::open(fs, *trustPath); opened) {
+            stores.trust = std::move(*opened);
+            return stores;
+        }
+    }
+    stores.warnings.emplace_back("The trusted-projects list cannot be read; trust decisions last for this session.");
+    const QByteArray fallback =
+        QDir::toNativeSeparators(QDir::tempPath() + QStringLiteral("/FrostIDE-trusted-roots.txt")).toUtf8();
+    auto temporary = frost::project::TrustStore::open(fs, fallback.toStdString());
+    FROST_ASSERT(temporary.has_value()); // A missing file opens as an empty list.
+    stores.trust = std::move(*temporary);
+    return stores;
+}
+
+// Where the workbench keeps the hot-exit journal, local history, the sessions, the build's and the
+// runs' state and the synthesized compile commands: FrostIDE's data directory. The file watcher
+// runs (external changes, ADR 0042).
+frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
+    frost::app::WorkbenchOptions options;
+    if (!stores.dataDirectory.empty()) {
+        const auto under = [&](std::string_view name) {
+            auto path = frost::io::joinPath(stores.dataDirectory, name);
+            return path ? std::move(*path) : std::string();
+        };
+        options.journalDirectory = under("hot-exit");
+        options.historyPath = under("local-history.db");
+        options.compileCommandsCache = under("compile-commands");
+        options.sessionDirectory = under("sessions");
+    }
+    if (auto state = frost::build::BuildService::defaultStatePath(); state) {
+        options.buildStatePath = std::move(*state);
+    }
+    if (auto state = frost::build::RunService::defaultStatePath(); state) {
+        options.runStatePath = std::move(*state);
+    }
+    if (auto file = frost::settings::applicationSettingsFile(); file) {
+        options.applicationSettingsFile = std::move(*file);
+    }
+    options.watchFiles = true;
+    return options;
+}
+
 // The application, after the process is hardened (`hardening` says how far that got).
 // `restartedFrom` is the first launcher's image path (UTF-8) when the launcher restarted
 // frost through its short link, else "". `argv` must outlive the call: QApplication keeps it.
@@ -329,6 +431,9 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         }
         if (parsed->selfTestKind == frost::app::SelfTestKind::Freeze) {
             return runFreezeSelfTest(argc, argv);
+        }
+        if (parsed->selfTestKind == frost::app::SelfTestKind::Render) {
+            return runRenderSelfTest(argc, argv);
         }
         // Offscreen by default so the self-test runs headless (packaging smoke tests, WSL).
         if (!parsed->selfTestOnScreen && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
@@ -387,14 +492,19 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QApplication app(qtArgc, argv);
         QApplication::setApplicationName(QStringLiteral("FrostIDE"));
         QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
-        // The services outlive the window (declared first, destroyed last). Persistent: the hot-exit
-        // journal, sessions, the thread pool and the file watcher (ADR 0042).
-        frost::app::AppServices services(frost::app::AppServicesOptions{.persistent = true});
-        // The appearance comes from the resources deployed next to frost (ADR 0015). Without them
-        // the window still opens on Qt's own style and says why (ADR 0038), instead of not starting.
+        // The workbench and what it borrows outlive the window (declared first, destroyed last).
+        GuiStores stores = openGuiStores();
+        frost::app::DialogWorkbenchPrompts prompts;
+        frost::app::Workbench workbench(
+            frost::app::WorkbenchServices{frost::io::realFileSystem(), frost::io::realProcessLauncher(),
+                                          frost::systemClock(), *stores.settings, *stores.trust, prompts},
+            workbenchOptions(stores));
+        // The appearance comes from the resources deployed next to frost (ADR 0015). Without them the
+        // window still opens on Qt's own style and says why (ADR 0038), instead of not starting.
         const QByteArray resources = (QCoreApplication::applicationDirPath() + QStringLiteral("/resources")).toUtf8();
-        const auto appearance = services.installAppearance(app, resources.toStdString());
-        frost::app::MainWindow window(services);
+        const auto appearance = workbench.installAppearance(app, resources.toStdString());
+        frost::app::MainWindow window(workbench.environment());
+        workbench.attach(window);
         if (!appearance) {
             window.notifications().notify({frost::ui::qtr("frost::app", "The theme could not be loaded"),
                                            QString::fromUtf8(appearance.error().message()),
@@ -404,7 +514,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         } else {
             window.reportStartupWarnings(appearance->warnings);
         }
-        if (frost::ui::AppearanceManager* manager = services.appearance(); manager != nullptr) {
+        if (frost::ui::AppearanceManager* manager = workbench.appearance(); manager != nullptr) {
             QObject::connect(manager, &frost::ui::AppearanceManager::appearanceApplyFailed, &window,
                              [&window](const QString& description) {
                                  window.notifications().notify(
@@ -415,45 +525,40 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                                       {}});
                              });
         }
-        for (const std::string& warning : services.startupWarnings()) {
-            frost::log::warn("app", "{}", warning);
+        for (const std::string& warning : stores.warnings) {
+            window.notifications().notify({frost::ui::qtr("frost::app", "Settings"),
+                                           QString::fromStdString(warning),
+                                           frost::ui::NotificationKind::Warning,
+                                           std::nullopt,
+                                           {}});
         }
         /*
-         * A folder or solution named on the command line opens as the project, files open in tabs
-         * (ADR 0042); without a project argument the last project and its session come back.
+         * A folder or solution named on the command line opens as the project, then files open in
+         * tabs (ADR 0042). Without a project argument the last project and its tabs come back
+         * (general.reopenLastProject), else the Welcome screen shows.
          */
-        frost::ui::Workbench& workbench = *window.workbench();
-        bool projectNamed = false;
+        std::vector<std::string> projects;
+        std::vector<std::string> files;
         for (const std::string& path : parsed->paths) {
             const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
-            const std::string absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8().toStdString();
+            std::string absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8().toStdString();
             const QString suffix = file.suffix().toLower();
-            if (file.isDir() ||
-                (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx")))) {
-                projectNamed = true;
-                if (auto opened = workbench.openProject(absolute); !opened) {
-                    window.notifications().notify(
-                        {frost::ui::qtr("frost::app", "Cannot open %1").arg(QString::fromStdString(absolute)),
-                         QString::fromUtf8(opened.error().message()),
-                         frost::ui::NotificationKind::Error,
-                         std::nullopt,
-                         {}});
-                }
-            }
+            const bool project =
+                file.isDir() ||
+                (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx")));
+            (project ? projects : files).push_back(std::move(absolute));
         }
-        if (!projectNamed) {
+        for (const std::string& path : projects) {
+            static_cast<void>(workbench.openPath(path));
+        }
+        if (projects.empty()) {
             static_cast<void>(workbench.restoreLastProject());
         }
-        for (const std::string& path : parsed->paths) {
-            const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
-            const QString suffix = file.suffix().toLower();
-            if (file.isFile() && suffix != QStringLiteral("sln") && suffix != QStringLiteral("slnx")) {
-                const QByteArray absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8();
-                static_cast<void>(workbench.openFile(absolute.toStdString()));
-            }
+        for (const std::string& path : files) {
+            static_cast<void>(workbench.openPath(path));
         }
         window.show();
-        frost::app::afterFirstFrame(window, [&app, &services, &workbench, restartedFrom] {
+        frost::app::afterFirstFrame(window, [&app, &window, &workbench, restartedFrom] {
             // FrostProcess.GuiStartsTheCrashHandlerAfterTheFirstFrame orders this line before the
             // handler's "crash handler registered" line.
             frost::log::info("app", "first frame shown");
@@ -461,15 +566,13 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 frost::log::warn("diag", "no stall watchdog: {}", watchdog.error().describe());
             }
             frost::app::startProgramDiagnosticsThread(restartedFrom);
-            // The hot-exit restore prompt (ADR 0042): the scan may wait on journals that live
-            // instances hold, so it runs after the first frame (Budget: B1) and the diagnostics.
-            if (auto scan = services.scanRecoverableJournals(); scan) {
-                static_cast<void>(workbench.offerRestore(std::move(*scan)));
-            } else if (scan.error().code() != frost::ErrorCode::NotFound) {
-                frost::log::warn("app", "hot-exit recovery: {}", scan.error().describe());
-            }
+            // Unsaved files of an earlier session: asked once the window is up (the scan may wait
+            // for other instances' journals, so never before the first frame).
+            QTimer::singleShot(0, &window, [&workbench] { static_cast<void>(workbench.offerRecovery()); });
         });
         status = QApplication::exec();
+        // Autosave and the hot-exit journal while the window's documents are still open.
+        workbench.shutdown();
         // The watchdog and its hooks go before the window and QApplication (declared after it).
         frost::app::stopProgramWatchdog();
     }

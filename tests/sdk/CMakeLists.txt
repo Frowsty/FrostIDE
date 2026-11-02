@@ -25,6 +25,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 
 set(_frost_debuggee_dir ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/lldb_debuggee)
 add_executable(sdk_lldb_debuggee ${_frost_debuggee_dir}/main.cpp ${_frost_debuggee_dir}/worker.cpp)
+# This debug-info oracle checks breakpoints by the current source's absolute path. A cached
+# object from another worktree can retain that worktree's path in its debug records.
+set_target_properties(sdk_lldb_debuggee PROPERTIES CXX_COMPILER_LAUNCHER "")
 target_compile_features(sdk_lldb_debuggee PRIVATE cxx_std_17)
 if(MSVC)
     # /Z7 here and /DEBUG:FULL below: lld-link writes the PDB that lldb-dap reads with its native reader.

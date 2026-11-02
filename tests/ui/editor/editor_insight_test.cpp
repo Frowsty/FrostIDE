@@ -174,7 +174,7 @@ TEST(EditorInsight, DiagnosticsDrawSquigglesWithTooltips) {
     const text::ByteRange missing = find(text, "missing");
     const text::ByteRange unused = find(text, "unused");
     const text::ByteRange weak = find(text, "b");
-    h.view->setDiagnostics(DiagnosticSource::Live,
+    h.view->setDiagnostics(EditorDiagnosticSource::Live,
                            {problem(InsightSeverity::Error, missing, "use of undeclared identifier 'missing'"),
                             problem(InsightSeverity::Warning, unused, "unused variable 'unused'"),
                             problem(InsightSeverity::WeakWarning, weak, "could be const")});
@@ -189,11 +189,11 @@ TEST(EditorInsight, DiagnosticsDrawSquigglesWithTooltips) {
     duplicate.message = "use of undeclared identifier 'missing'";
     duplicate.line = 1;
     duplicate.column = 9;
-    h.view->setDiagnostics(DiagnosticSource::Build, {build, duplicate});
+    h.view->setDiagnostics(EditorDiagnosticSource::Build, {build, duplicate});
     const std::vector<ActiveDiagnostic> all = h.view->diagnostics();
     ASSERT_EQ(all.size(), 4U);
     EXPECT_EQ(all.back().range, find(text, "bar"));
-    EXPECT_EQ(all.back().source, DiagnosticSource::Build);
+    EXPECT_EQ(all.back().source, EditorDiagnosticSource::Build);
 
     const EditorDisplayList list = h.view->buildDisplayList();
     const auto wavy = list.decorationsWithStyle(DecorationStyle::WavyUnderline);
@@ -233,8 +233,9 @@ TEST(EditorInsight, StripeMarksSitAtRelativePositionsAndClickJumps) {
     EditorHarness h(text);
     const text::ByteRange error = find(text, "line 49");
     const text::ByteRange warning = find(text, "line 149");
-    h.view->setDiagnostics(DiagnosticSource::Live, {problem(InsightSeverity::Error, error, "an error at 50"),
-                                                    problem(InsightSeverity::Warning, warning, "a warning at 150")});
+    h.view->setDiagnostics(EditorDiagnosticSource::Live,
+                           {problem(InsightSeverity::Error, error, "an error at 50"),
+                            problem(InsightSeverity::Warning, warning, "a warning at 150")});
     h.view->setUsageHighlights({UsageHighlight{find(text, "line 99"), true}});
     const EditorDisplayList list = h.view->buildDisplayList();
     ASSERT_FALSE(list.stripe.isEmpty());
@@ -298,9 +299,10 @@ TEST(EditorInsight, InspectionWidgetCountsArrowsAndStates) {
     EXPECT_EQ(std::ranges::count(list.chrome, DisplayShape::Kind::Ellipse, &DisplayShape::kind), 8); // The spinner.
     h.view->setAnalyzing(false);
 
-    h.view->setDiagnostics(DiagnosticSource::Live, {problem(InsightSeverity::Error, find(text, "x"), "x?"),
-                                                    problem(InsightSeverity::Error, find(text, "y"), "y?"),
-                                                    problem(InsightSeverity::Warning, find(text, "c"), "unused c")});
+    h.view->setDiagnostics(EditorDiagnosticSource::Live,
+                           {problem(InsightSeverity::Error, find(text, "x"), "x?"),
+                            problem(InsightSeverity::Error, find(text, "y"), "y?"),
+                            problem(InsightSeverity::Warning, find(text, "c"), "unused c")});
     const InsightSummary summary = h.view->insightSummary();
     EXPECT_EQ(summary.count(InsightSeverity::Error), 2);
     EXPECT_EQ(summary.count(InsightSeverity::Warning), 1);
@@ -339,7 +341,7 @@ TEST(EditorInsight, InspectionWidgetCountsArrowsAndStates) {
     QObject::connect(&indicator, &InsightStatusIndicator::problemsRequested, [&requested] { ++requested; });
     indicator.click();
     EXPECT_EQ(requested, 1);
-    h.view->setDiagnostics(DiagnosticSource::Live, {});
+    h.view->setDiagnostics(EditorDiagnosticSource::Live, {});
     EXPECT_EQ(indicator.text(), QStringLiteral("No problems"));
     EXPECT_EQ(h.view->buildDisplayList().inspection.state, InspectionState::Clean);
     EXPECT_GE(changed, 3);
@@ -350,7 +352,7 @@ TEST(EditorInsight, F2GoesToTheNextErrorWithABalloon) {
     constexpr std::string_view text = "int w = 0;\nint a = x;\nint b = y;\n";
     EditorHarness h(text);
     EXPECT_FALSE(h.view->gotoNextProblem(true)); // No problems: nothing moves.
-    h.view->setDiagnostics(DiagnosticSource::Live,
+    h.view->setDiagnostics(EditorDiagnosticSource::Live,
                            {problem(InsightSeverity::Warning, find(text, "w"), "unused w"),
                             problem(InsightSeverity::Error, find(text, "x"), "use of undeclared identifier 'x'"),
                             problem(InsightSeverity::Error, find(text, "y"), "use of undeclared identifier 'y'")});
@@ -374,7 +376,8 @@ TEST(EditorInsight, F2GoesToTheNextErrorWithABalloon) {
     EXPECT_TRUE(h.view->problemBalloonText().isEmpty());
 
     // Only warnings left: F2 visits them.
-    h.view->setDiagnostics(DiagnosticSource::Live, {problem(InsightSeverity::Warning, find(text, "w"), "unused w")});
+    h.view->setDiagnostics(EditorDiagnosticSource::Live,
+                           {problem(InsightSeverity::Warning, find(text, "w"), "unused w")});
     h.press(Qt::Key_F2);
     EXPECT_EQ(h.caret(), find(text, "w").begin.value());
     EXPECT_EQ(h.view->problemBalloonText(), QStringLiteral("unused w"));

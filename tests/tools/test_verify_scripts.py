@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -222,6 +223,32 @@ class VerifyShTest(TempDirTestCase):
         result = subprocess.run([_bash() or "/bin/bash", "-n", str(TOOLS / "verify.sh")], capture_output=True,
                                 text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mirror_replaces_older_and_same_time_changes_without_touching_identical_files(self):
+        source, mirror = self.tmp / "source", self.tmp / "mirror"
+        source.mkdir()
+        mirror.mkdir()
+        past = int(time.time()) - 180
+        for name in ("older.hpp", "same_time.hpp", "unchanged.hpp"):
+            (source / name).write_text("new\n", encoding="utf-8")
+            (mirror / name).write_text("new\n" if name == "unchanged.hpp" else "old\n", encoding="utf-8")
+            os.utime(source / name, (past, past))
+            os.utime(mirror / name, (past + 60, past + 60))
+        os.utime(mirror / "same_time.hpp", (past, past))
+        unchanged_time = (mirror / "unchanged.hpp").stat().st_mtime_ns
+        (mirror / "deleted.txt").write_text("gone", encoding="utf-8")
+        (mirror / "build").mkdir()
+        (mirror / "build" / "object.o").write_text("keep", encoding="utf-8")
+        script = _bash_function("mirror_source") + 'mirror_source "$1" "$2"\n'
+        result = self._bash(script, str(source), str(mirror))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("older.hpp", "same_time.hpp"):
+            self.assertEqual((mirror / name).read_text(encoding="utf-8"), "new\n")
+            # A target built after the original snapshots must see the replacement as newer.
+            self.assertGreater((mirror / name).stat().st_mtime, past + 120)
+        self.assertEqual((mirror / "unchanged.hpp").stat().st_mtime_ns, unchanged_time)
+        self.assertFalse((mirror / "deleted.txt").exists())
+        self.assertTrue((mirror / "build" / "object.o").exists())
 
     def test_ctest_counts_matches_the_fixture_table(self):
         table = _table("ctest_counts.json")

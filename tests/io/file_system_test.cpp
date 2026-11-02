@@ -245,6 +245,18 @@ TEST(RealFileSystem, UnreadableFileMapsToPermissionDenied) {
     EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
     EXPECT_NE(result.error().message().find("errno"), std::string::npos);
 }
+
+TEST(RealFileSystem, CanonicalPathResolvesParentComponents) {
+    // "Lib/../a.cpp" and "a.cpp" are one document (ADR 0044); a plain path stays as spelled.
+    const ScratchDir dir("fs-canonical-posix");
+    ASSERT_TRUE(fs().createDirectories(dir.join("Lib")).has_value());
+    const std::string file = dir.join("a.cpp");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "x").has_value());
+    const auto plain = fs().canonicalPath(file);
+    ASSERT_TRUE(plain.has_value()) << plain.error().describe();
+    EXPECT_EQ(fs().canonicalPath(dir.path() + "/Lib/../a.cpp").value(), *plain);
+    EXPECT_EQ(fs().canonicalPath(dir.path() + "/Missing/../a.cpp").error().code(), ErrorCode::NotFound);
+}
 #endif
 
 TEST(RealFileSystem, StatusReportsTypeSizeAndTime) {

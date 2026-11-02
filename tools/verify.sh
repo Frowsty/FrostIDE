@@ -176,9 +176,13 @@ elif [[ $need_list -eq 1 ]]; then
     echo "verify.sh: no changed-file list: $changed_reason"
 fi
 
-# Mirror the tree. build/, .git/ and .claude/ (agent worktrees) stay out: the
-# mirror keeps its own build trees (protected from --delete because they are excluded).
-rsync -a --delete --exclude '/build/' --exclude '/.git/' --exclude '/.claude/' "$SOURCE/" "$MIRROR/"
+# Copy changed content with a fresh mtime so Ninja sees it even when the source came from an older
+# snapshot. Checksum comparison avoids touching identical files merely because their times differ.
+# The mirror keeps its own build trees (protected from --delete because they are excluded).
+mirror_source() {
+    rsync -a --checksum --no-times --delete --exclude '/build/' --exclude '/.git/' --exclude '/.claude/' "$1/" "$2/"
+}
+mirror_source "$SOURCE" "$MIRROR"
 cd "$MIRROR"
 echo "verify.sh: source $SOURCE, mirror $MIRROR, jobs $JOBS"
 

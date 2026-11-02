@@ -25,6 +25,10 @@
 # otherwise. Builds must run from an environment with the same SCCACHE_DIR, as
 # tools/verify.ps1 does, because the first compile may be the one that starts the server.
 #
+# Each launcher invocation mixes a canonical source/build-root identity with the caller's
+# current SCCACHE_C_CUSTOM_CACHE_BUSTER. This prevents reuse of /Z7 objects whose debug
+# records name another worktree, while retaining same-tree hits and user cache separation.
+#
 # A CMAKE_C_COMPILER_LAUNCHER or CMAKE_CXX_COMPILER_LAUNCHER given by the user wins
 # and is left as it is. Configure prints one "FrostIDE compiler cache:" status line
 # saying whether sccache is used and, if not, why.
@@ -148,8 +152,37 @@ elseif(WIN32 AND NOT DEFINED ENV{SCCACHE_DIR})
                     "profile on the system drive (D1); building without it. Dot-source tools/env.ps1 first.")
     message(STATUS "FrostIDE compiler cache: off (SCCACHE_DIR not set)")
 else()
-    set(CMAKE_C_COMPILER_LAUNCHER "${FROST_SCCACHE_EXECUTABLE}")
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${FROST_SCCACHE_EXECUTABLE}")
+    file(REAL_PATH "${CMAKE_SOURCE_DIR}" _frost_cache_source)
+    file(REAL_PATH "${CMAKE_BINARY_DIR}" _frost_cache_build)
+    # The launcher must combine the user buster at build time, not configure time. A small
+    # CMake script does that portably and preserves arbitrary argument boundaries, including
+    # semicolons, before passing them to sccache. The buster is local to the launched process.
+    string(LENGTH "${_frost_cache_source}" _frost_cache_source_len)
+    string(LENGTH "${_frost_cache_build}" _frost_cache_build_len)
+    string(SHA256 _frost_cache_salt
+           "frost-source-v1:${_frost_cache_source_len}:${_frost_cache_source}:${_frost_cache_build_len}:${_frost_cache_build}")
+    set(_frost_cache_script "${CMAKE_BINARY_DIR}/frost-sccache-launcher.cmake")
+    file(CONFIGURE OUTPUT "${_frost_cache_script}" @ONLY CONTENT [=[
+set(_user "$ENV{SCCACHE_C_CUSTOM_CACHE_BUSTER}")
+string(LENGTH "${_user}" _user_len)
+string(SHA256 _buster "@_frost_cache_salt@:${_user_len}:${_user}")
+set(ENV{SCCACHE_C_CUSTOM_CACHE_BUSTER} "${_buster}")
+# Expand each numbered argument as a quoted argument, without ever forming a CMake list.
+# A list would merge or lose empty arguments and can reinterpret brackets and backslashes.
+set(_invoke "execute_process(COMMAND")
+math(EXPR _last "${CMAKE_ARGC} - 1")
+foreach(_index RANGE 4 ${_last})
+    string(APPEND _invoke " \"\${CMAKE_ARGV${_index}}\"")
+endforeach()
+string(APPEND _invoke " RESULT_VARIABLE _status)")
+cmake_language(EVAL CODE "${_invoke}")
+if(NOT _status STREQUAL "0")
+    message(FATAL_ERROR "sccache compiler invocation failed: ${_status}")
+endif()
+]=])
+    set(_frost_cache_launcher "${CMAKE_COMMAND}" -P "${_frost_cache_script}" -- "${FROST_SCCACHE_EXECUTABLE}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${_frost_cache_launcher}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${_frost_cache_launcher}")
     if(DEFINED ENV{SCCACHE_DIR})
         set(_frost_sccache_dir "$ENV{SCCACHE_DIR}")
     else()

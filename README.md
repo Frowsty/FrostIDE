@@ -1,9 +1,11 @@
 # FrostIDE
 
-A fast C/C++ IDE for Windows and Linux: Rider-style UX, full Visual Studio solution support
-(.sln, .slnx, .vcxproj), CLion-grade CMake, Clang-based analysis and a built-in Claude Code integration.
+A Windows and Linux IDE under development toward independently implemented Rider feature and workflow
+parity, with C/C++, CMake, Lua, Unity, FrostEngine and Claude Code integration. These are product goals;
+the application does not yet deliver the complete feature set.
 
-Status: milestone M0 (bootstrap). See `PLAN.md` for the roadmap and `docs/progress.md` for current state.
+Status: M0 is complete; the W1 application integration and subsequent feature slices are in progress.
+See `PLAN.md` and ADR 0054 for scope, and `docs/progress.md` for implementation and verification evidence.
 
 ## Building
 Windows (PowerShell):

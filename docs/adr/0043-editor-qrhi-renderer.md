@@ -16,7 +16,12 @@ Linux keeps raster. ADR 0037 left the `IEditorRenderer` seam and the backend-neu
 1. **Backend.** `RhiGlyphPainter` turns a display list into instanced quads: glyphs from `EditorGlyphAtlas`, solid
    quads (atlas texel block) for fills, selections, current line, carets, lines and the gutter, discs for markers.
    Runs are shaped with the raster backend's QTextLayout settings; glyphs are rasterised by QPainter at the device
-   pixel ratio with four horizontal subpixel steps, so cells match raster's pixels. One render pass, three scissored
+   pixel ratio with four horizontal subpixel steps. Editor shaping and both renderers request grayscale
+   antialiasing (`QFont::NoSubpixelAntialias`), retaining the caller's other font strategy bits; this
+   requests the same policy in both paths. Qt 6.12 still uses ClearType on opaque raster targets,
+   so raster glyph runs are first drawn into a viewport-clipped transparent scratch image, then
+   composited at their original paint-order position. Its device-aligned origin preserves fractional
+   pixel positioning and makes both backends use grayscale coverage. One render pass, three scissored
    draws (fills; text area; gutter), whole frame each paint (no dirty regions: S1 measured under 1 ms per frame).
    HLSL is compiled at pipeline creation by the D3D11 backend (S1's approach, no qsb). `RhiEditorViewport`
    (QRhiWidget, Direct3D 11) replaces the scroll area's viewport; `RhiEditorRenderer` feeds it each frame's list.
@@ -43,12 +48,13 @@ Linux keeps raster. ADR 0037 left the `IEditorRenderer` seam and the backend-neu
 - Tests (`ui_editor_tests`): the painter renders into an offscreen texture on a D3D11 WARP device at 100 % and
   150 % and is compared per row with the raster image; QRhi's Null backend (Linux) checks the recorded frame and
   skips the pixels. The rule, the atlas, the live setting switch and forced, offscreen and WARP fallbacks are tested.
-- The first QRhi viewport in a shown raster window makes Qt switch that window to RHI composition, which is untested
-  on screen here (no on-screen runs in this slice) and may flicker once.
+- The shown QRhi viewport matches the raster oracle in the private-desktop hardware parity test; a switch in a
+  user-visible window may still flicker once.
 - Deferred to the hardening phase: B5/B6/B1/B2/B15 measurements on screen (PresentMon present mode, quiet-desktop
   control, swap-chain frame latency), screenshot goldens of the QRhi backend, sanitizers, an atlas-eviction policy
   (today a full 4096-texel atlas is cleared and refilled), precompiled shaders, re-evaluating `auto` on session
-  changes (RDP connect while running), and a Linux QRhi leg (ADR 0007 decision 8).
+  changes (RDP connect while running), raster scratch allocation and compositing costs, and a Linux QRhi leg
+  (ADR 0007 decision 8).
 
 ## Alternatives considered
 - **QRhi for the whole window from start-up**: puts about 210 ms on B1 (ADR 0007 decision 3).

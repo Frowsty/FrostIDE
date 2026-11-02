@@ -236,7 +236,7 @@ text::ByteRange EditorView::resolvePosition(int line, int column) const {
     return text::ByteRange{begin, snapshot.clip(begin + length)};
 }
 
-void EditorView::setDiagnostics(DiagnosticSource source, std::vector<EditorDiagnostic> diagnostics) {
+void EditorView::setDiagnostics(EditorDiagnosticSource source, std::vector<EditorDiagnostic> diagnostics) {
     const text::Snapshot& snapshot = m_editor->text();
     const std::uint64_t current = snapshot.version();
     std::vector<ActiveDiagnostic> resolved;
@@ -273,9 +273,9 @@ void EditorView::setDiagnostics(DiagnosticSource source, std::vector<EditorDiagn
 
 std::vector<ActiveDiagnostic> EditorView::diagnostics() const {
     const text::Snapshot& snapshot = m_editor->text();
-    const std::vector<ActiveDiagnostic>& live = m_diagnostics[static_cast<std::size_t>(DiagnosticSource::Live)];
+    const std::vector<ActiveDiagnostic>& live = m_diagnostics[static_cast<std::size_t>(EditorDiagnosticSource::Live)];
     std::vector<ActiveDiagnostic> out = live;
-    for (const ActiveDiagnostic& build : m_diagnostics[static_cast<std::size_t>(DiagnosticSource::Build)]) {
+    for (const ActiveDiagnostic& build : m_diagnostics[static_cast<std::size_t>(EditorDiagnosticSource::Build)]) {
         const LineIndex line = snapshot.lineAt(build.range.begin);
         const bool duplicate = std::ranges::any_of(live, [&](const ActiveDiagnostic& d) {
             return d.message == build.message && snapshot.lineAt(d.range.begin) == line;

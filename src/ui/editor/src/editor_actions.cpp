@@ -7,6 +7,7 @@
 
 #include "frost/ui/editor/editor_view.hpp"
 
+#include <algorithm>
 #include <array>
 #include <string>
 
@@ -101,7 +102,15 @@ EditorView* EditorActionHost::active() const noexcept { return m_active.data(); 
 void EditorActionHost::setActive(EditorView* view) noexcept { m_active = view; }
 
 Result<void> registerEditorActions(input::ActionRegistry& registry, EditorActionHost& host) {
+    return registerEditorActions(registry, host, {});
+}
+
+Result<void> registerEditorActions(input::ActionRegistry& registry, EditorActionHost& host,
+                                   std::span<const std::string_view> skip) {
     for (const EditorActionInfo& row : kActions) {
+        if (std::ranges::find(skip, row.id) != skip.end()) {
+            continue;
+        }
         input::ActionSpec spec;
         spec.id = std::string(row.id);
         spec.name = std::string(row.name);

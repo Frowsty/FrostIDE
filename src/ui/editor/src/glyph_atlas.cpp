@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The QRhi editor backend's glyph atlas (frost/ui/editor/glyph_atlas.hpp): shelf packing into one
-// coverage image, glyphs rasterised by QPainter at the atlas's device pixel ratio.
+// coverage image, glyphs rasterised by QPainter at the atlas's device pixel ratio, discs and keyed
+// vector coverage drawn by QPainter in device pixels.
 
 #include "frost/ui/editor/glyph_atlas.hpp"
 
@@ -26,6 +27,26 @@ constexpr quint64 kDiscKey = quint64{1} << 62;
 // One texel of padding right of and below each cell, so nearest sampling never reads a neighbour.
 constexpr int kPadding = 1;
 
+// The bounding box of the pixels of `cell` with any coverage (empty when there is none).
+[[nodiscard]] QRect inkBounds(const QImage& cell) {
+    int minX = cell.width();
+    int minY = cell.height();
+    int maxX = -1;
+    int maxY = -1;
+    for (int y = 0; y < cell.height(); ++y) {
+        const auto* row = reinterpret_cast<const quint32*>(cell.constScanLine(y));
+        for (int x = 0; x < cell.width(); ++x) {
+            if ((row[x] >> 24) != 0) {
+                minX = std::min(minX, x);
+                maxX = std::max(maxX, x);
+                minY = std::min(minY, y);
+                maxY = std::max(maxY, y);
+            }
+        }
+    }
+    return maxX < 0 ? QRect() : QRect(QPoint(minX, minY), QPoint(maxX, maxY));
+}
+
 } // namespace
 
 EditorGlyphAtlas::EditorGlyphAtlas(int initialSize, int maxSize)
@@ -49,6 +70,7 @@ void EditorGlyphAtlas::reset(double devicePixelRatio) {
     m_dpr = devicePixelRatio > 0.0 ? devicePixelRatio : 1.0;
     m_fonts.clear();
     m_cells.clear();
+    m_coverage.clear();
     clearImage(m_initialSize);
     // The solid block takes the first shelf's left end.
     m_shelfTop = 0;
@@ -58,7 +80,8 @@ void EditorGlyphAtlas::reset(double devicePixelRatio) {
 }
 
 GlyphAtlasStats EditorGlyphAtlas::stats() const noexcept {
-    return GlyphAtlasStats{static_cast<std::uint64_t>(m_cells.size()), m_rebuilds, m_rasterised, m_image.width()};
+    return GlyphAtlasStats{static_cast<std::uint64_t>(m_cells.size() + m_coverage.size()), m_rebuilds, m_rasterised,
+                           m_image.width()};
 }
 
 int EditorGlyphAtlas::fontSlot(const QRawFont& font) {
@@ -115,13 +138,12 @@ bool EditorGlyphAtlas::reserve(QSize size, QPoint& at) {
     }
 }
 
-const AtlasEntry* EditorGlyphAtlas::place(quint64 key, const QImage& cell, QRect ink, QPoint offset) {
-    AtlasEntry entry;
-    entry.offset = offset;
+bool EditorGlyphAtlas::place(const QImage& cell, QRect ink, QPoint offset, AtlasEntry& entry) {
+    entry = AtlasEntry{QRect(), offset};
     if (!ink.isEmpty()) {
         QPoint at;
         if (!reserve(ink.size(), at)) {
-            return nullptr;
+            return false;
         }
         for (int y = 0; y < ink.height(); ++y) {
             const auto* source = reinterpret_cast<const quint32*>(cell.constScanLine(ink.top() + y)) + ink.left();
@@ -136,6 +158,14 @@ const AtlasEntry* EditorGlyphAtlas::place(quint64 key, const QImage& cell, QRect
         m_dirty = m_dirty.united(entry.rect);
     }
     ++m_rasterised;
+    return true;
+}
+
+const AtlasEntry* EditorGlyphAtlas::placeKeyed(quint64 key, const QImage& cell, QRect ink, QPoint offset) {
+    AtlasEntry entry;
+    if (!place(cell, ink, offset, entry)) {
+        return nullptr;
+    }
     return &*m_cells.insert(key, entry);
 }
 
@@ -174,24 +204,8 @@ const AtlasEntry* EditorGlyphAtlas::glyph(int slot, quint32 glyph, int subpixel)
         painter.drawGlyphRun(QPointF((-left + step) / m_dpr, -top / m_dpr), run);
     }
 
-    // The ink's bounding box.
-    int minX = cellSize.width();
-    int minY = cellSize.height();
-    int maxX = -1;
-    int maxY = -1;
-    for (int y = 0; y < cellSize.height(); ++y) {
-        const auto* row = reinterpret_cast<const quint32*>(cell.constScanLine(y));
-        for (int x = 0; x < cellSize.width(); ++x) {
-            if ((row[x] >> 24) != 0) {
-                minX = std::min(minX, x);
-                maxX = std::max(maxX, x);
-                minY = std::min(minY, y);
-                maxY = std::max(maxY, y);
-            }
-        }
-    }
-    const QRect ink = maxX < 0 ? QRect() : QRect(QPoint(minX, minY), QPoint(maxX, maxY));
-    return place(key, cell, ink, QPoint(ink.left() + left, ink.top() + top));
+    const QRect ink = inkBounds(cell);
+    return placeKeyed(key, cell, ink, QPoint(ink.left() + left, ink.top() + top));
 }
 
 const AtlasEntry* EditorGlyphAtlas::disc(int diameter) {
@@ -209,7 +223,29 @@ const AtlasEntry* EditorGlyphAtlas::disc(int diameter) {
         painter.setBrush(Qt::white);
         painter.drawEllipse(QRectF(0.0, 0.0, diameter, diameter));
     }
-    return place(key, cell, cell.rect(), QPoint(0, 0));
+    return placeKeyed(key, cell, cell.rect(), QPoint(0, 0));
+}
+
+const AtlasEntry* EditorGlyphAtlas::coverage(const QByteArray& key, QSize size, function_ref<void(QPainter&)> paint) {
+    if (const auto it = m_coverage.constFind(key); it != m_coverage.constEnd()) {
+        return &*it;
+    }
+    if (size.isEmpty() || size.width() > m_maxSize || size.height() > m_maxSize) {
+        return nullptr;
+    }
+    QImage cell(size, QImage::Format_ARGB32_Premultiplied);
+    cell.fill(Qt::transparent);
+    {
+        QPainter painter(&cell);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        paint(painter);
+    }
+    const QRect ink = inkBounds(cell);
+    AtlasEntry entry;
+    if (!place(cell, ink, ink.isEmpty() ? QPoint(0, 0) : ink.topLeft(), entry)) {
+        return nullptr;
+    }
+    return &*m_coverage.insert(key, entry);
 }
 
 } // namespace frost::ui
