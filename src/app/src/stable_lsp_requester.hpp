@@ -22,10 +22,15 @@ public:
         LockGuard lock(m_mutex);
         m_lua = std::move(server);
     }
+    void setManagedServer(std::shared_ptr<lang::ILspRequester> server) {
+        LockGuard lock(m_mutex);
+        m_managed = std::move(server);
+    }
     void setActivePath(std::string_view path) {
         LockGuard lock(m_mutex);
         m_activeLua = isLua(path);
-        m_hasActive = m_activeLua || isCpp(path);
+        m_activeManaged = isCSharp(path);
+        m_hasActive = m_activeLua || m_activeManaged || isCpp(path);
     }
 
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
@@ -52,6 +57,12 @@ private:
         return ext[0] == '.' && (ext[1] == 'l' || ext[1] == 'L') && (ext[2] == 'u' || ext[2] == 'U') &&
                (ext[3] == 'a' || ext[3] == 'A');
     }
+    static bool isCSharp(std::string_view path) {
+        if (path.size() < 4)
+            return false;
+        auto ext = path.substr(path.size() - 3);
+        return ext[0] == '.' && (ext[1] == 'c' || ext[1] == 'C') && (ext[2] == 's' || ext[2] == 'S');
+    }
     static bool isCpp(std::string_view path) {
         const auto dot = path.find_last_of('.');
         const auto slash = path.find_last_of("/\\");
@@ -69,7 +80,7 @@ private:
     }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> server() const {
         LockGuard lock(m_mutex);
-        return m_hasActive ? (m_activeLua ? m_lua : m_server) : nullptr;
+        return m_hasActive ? (m_activeLua ? m_lua : m_activeManaged ? m_managed : m_server) : nullptr;
     }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> serverFor(const lang::Json& params) const {
         const auto* doc = params.find("textDocument");
@@ -79,7 +90,7 @@ private:
             if (!path)
                 return nullptr;
             LockGuard lock(m_mutex);
-            return isLua(*path) ? m_lua : isCpp(*path) ? m_server : nullptr;
+            return isLua(*path) ? m_lua : isCSharp(*path) ? m_managed : isCpp(*path) ? m_server : nullptr;
         }
         return server();
     }
@@ -97,6 +108,8 @@ private:
     mutable Mutex m_mutex;
     std::shared_ptr<lang::ILspRequester> m_server FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_lua FROST_GUARDED_BY(m_mutex);
+    std::shared_ptr<lang::ILspRequester> m_managed FROST_GUARDED_BY(m_mutex);
+    bool m_activeManaged FROST_GUARDED_BY(m_mutex) = false;
     bool m_activeLua FROST_GUARDED_BY(m_mutex) = false;
     bool m_hasActive FROST_GUARDED_BY(m_mutex) = true;
 };

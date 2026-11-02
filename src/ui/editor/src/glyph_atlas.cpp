@@ -9,6 +9,7 @@
 #include <QGlyphRun>
 #include <QList>
 #include <QPainter>
+#include <QPen>
 
 #include <algorithm>
 #include <cmath>
@@ -17,8 +18,11 @@ namespace frost::ui {
 
 namespace {
 
-// Key layout: bit 62 marks a disc; glyphs pack the font slot, the subpixel step and the index.
+// Key layout: bit 62 marks a disc, bit 61 a ring, bit 60 an arrow; glyphs pack the font slot, the
+// subpixel step and the index (bits 0-55).
 constexpr quint64 kDiscKey = quint64{1} << 62;
+constexpr quint64 kRingKey = quint64{1} << 61;
+constexpr quint64 kArrowKey = quint64{1} << 60;
 
 [[nodiscard]] quint64 glyphKey(int slot, int subpixel, quint32 glyph) noexcept {
     return (static_cast<quint64>(slot & 0xFFFF) << 40) | (static_cast<quint64>(subpixel & 0xFF) << 32) | glyph;
@@ -246,6 +250,46 @@ const AtlasEntry* EditorGlyphAtlas::coverage(const QByteArray& key, QSize size, 
         return nullptr;
     }
     return &*m_coverage.insert(key, entry);
+}
+
+const AtlasEntry* EditorGlyphAtlas::ring(int diameter) {
+    diameter = std::clamp(diameter, 1, 256);
+    const quint64 key = kRingKey | static_cast<quint64>(diameter);
+    if (const auto it = m_cells.constFind(key); it != m_cells.constEnd()) {
+        return &*it;
+    }
+    QImage cell(diameter, diameter, QImage::Format_ARGB32_Premultiplied);
+    cell.fill(Qt::transparent);
+    {
+        // The raster renderer's ring: a pen of diameter / 7, inset by half of it.
+        const double width = std::max(1.0, diameter / 7.0);
+        QPainter painter(&cell);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(Qt::white, width));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(QRectF(width / 2.0, width / 2.0, diameter - width, diameter - width));
+    }
+    return placeKeyed(key, cell, cell.rect(), QPoint(0, 0));
+}
+
+const AtlasEntry* EditorGlyphAtlas::arrow(int width, int height) {
+    width = std::clamp(width, 1, 256);
+    height = std::clamp(height, 1, 256);
+    const quint64 key = kArrowKey | (static_cast<quint64>(width) << 16) | static_cast<quint64>(height);
+    if (const auto it = m_cells.constFind(key); it != m_cells.constEnd()) {
+        return &*it;
+    }
+    QImage cell(width, height, QImage::Format_ARGB32_Premultiplied);
+    cell.fill(Qt::transparent);
+    {
+        QPainter painter(&cell);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::white);
+        const QPointF points[] = {QPointF(0.0, 0.0), QPointF(width, height / 2.0), QPointF(0.0, height)};
+        painter.drawPolygon(points, 3);
+    }
+    return placeKeyed(key, cell, cell.rect(), QPoint(0, 0));
 }
 
 } // namespace frost::ui

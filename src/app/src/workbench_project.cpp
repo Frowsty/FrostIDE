@@ -25,6 +25,7 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_integration.hpp"
 #include "language_bridge.hpp"
 #include <QFileInfo>
 
@@ -187,6 +188,7 @@ Result<void> Workbench::openSolution(const std::string& path) {
     }
     startClangd(model->directory());
     startLua(model->directory());
+    startManaged(model->directory());
     refreshAllMarkers();
     return {};
 }
@@ -260,11 +262,19 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     }
     startClangd(path);
     startLua(path);
+    startManaged(path);
     return {};
 }
 
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
+    cancelFind();
+    if (m_debug)
+        m_debug->cancelRerun();
     m_projectRoot = std::move(root);
+    if (m_debug) {
+        if (auto loaded = m_debug->setWorkspaceRoot(m_projectRoot); !loaded)
+            log::warn(kLog, "debug breakpoints: {}", loaded.error().describe());
+    }
     m_projectIdentity = recentPath;
     if (m_sessions) {
         if (auto saved = m_sessions->setLastProject(m_projectIdentity); !saved)
@@ -283,17 +293,26 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
+    if (m_engine)
+        m_engine->cancel();
     if (!hasProject()) {
         return true;
     }
     // Check the services themselves: the controller's queued state can lag a newly started build.
     // Keep the current project and its tabs intact until the user stops the build or run.
-    if ((m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) ||
+    if ((m_debug && m_debug->debugging()) ||
+        (m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) ||
         (m_cmake && (m_cmake->service().state() != build::BuildState::Idle || m_cmake->running()))) {
         notify(text("The project stays open"), text("Stop the build and running programs before closing the project."),
                ui::NotificationKind::Warning);
         return false;
     }
+    // A save-failure prompt can run a nested event loop, so cancel a queued rerun before
+    // closing any tab. A cancelled close also leaves that rerun cancelled.
+    if (m_debug)
+        m_debug->cancelRerun();
+    // Stop searches before closing documents; a refused close can start a new search.
+    cancelFind();
     // The session is saved and every tab saved and closed; a refusal keeps everything open.
     if (m_nav) {
         if (!m_nav->closeProject()) {
@@ -306,6 +325,7 @@ bool Workbench::closeForOpen() {
         }
     }
     stopLua();
+    stopManaged();
     stopClangd();
     if (m_cmake) {
         m_build->setBackend(m_buildBackend.get());
@@ -325,6 +345,8 @@ bool Workbench::closeForOpen() {
         }
     }
     m_solution.reset();
+    if (m_debug)
+        (void)m_debug->setWorkspaceRoot({});
     m_projectRoot.clear();
     m_projectIdentity.clear();
     if (m_window) {

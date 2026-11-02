@@ -29,13 +29,15 @@ frost_add_library(lang LAYER lang
         src/completion.cpp
         src/diagnostics.cpp
         src/document_sync.cpp
+        src/engine_automation.cpp
+        src/engine_discovery_process.cpp
         src/fuzzy.cpp
-        src/json.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp
         src/lua_config.cpp
         src/lua_service.cpp
+        src/managed_service.cpp
         src/lsp_types.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp
@@ -46,8 +48,7 @@ frost_add_library(lang LAYER lang
         src/symbols.cpp
         src/uri.cpp
         src/workspace_edit.cpp
-    DEPS frost::project frost::settings frost::text frost::io frost::sched frost::core)
-target_link_libraries(frost_lang PRIVATE yyjson::yyjson)
+    DEPS frost::project frost::settings frost::text frost::rpc frost::io frost::sched frost::core)
 target_compile_definitions(frost_lang PRIVATE FROST_PINNED_LLVM_VERSION="${_frost_llvm_version}")
 if(WIN32)
     # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).

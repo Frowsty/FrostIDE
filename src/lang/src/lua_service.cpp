@@ -27,7 +27,7 @@
 namespace frost::lang {
 namespace {
 
-constexpr std::string_view kLogCategory = "LuaLS";
+constexpr std::string_view kLogCategory = "LanguageServer";
 constexpr std::size_t kStderrLines = 64;
 
 [[nodiscard]] std::int64_t currentProcessId() noexcept {
@@ -224,6 +224,8 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
     [[nodiscard]] io::ProcessSpec processSpec() const {
         io::ProcessSpec spec;
         spec.executable = options.serverPath;
+        spec.arguments = options.arguments;
+        spec.environment = options.environment;
         spec.workingDirectory = options.workspaceRoot;
         spec.stdinMode = io::Stdio::Pipe;
         spec.stdoutMode = io::Stdio::Pipe;
@@ -240,7 +242,8 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
             self->setState(LuaState::Starting);
             auto launched = self->launcher.launchAsync(self->processSpec(), self->context);
             if (!launched) {
-                self->recordError(std::move(launched.error().withContext("starting LuaLS")), LuaState::Failed);
+                self->recordError(std::move(launched.error().withContext("starting " + self->options.displayName)),
+                                  LuaState::Failed);
                 co_return;
             }
             std::shared_ptr<io::IAsyncProcess> process(std::move(*launched));
@@ -266,7 +269,8 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
                 detail::Deadline deadline(scheduler, self->options.initializeTimeout, stop);
                 auto initialized = co_await client->initialize(deadline.token());
                 if (!initialized && deadline.expired()) {
-                    roundError = Error(ErrorCode::Timeout, "LuaLS did not answer initialize in time");
+                    roundError =
+                        Error(ErrorCode::Timeout, self->options.displayName + " did not answer initialize in time");
                 } else if (!initialized) {
                     roundError = std::move(initialized.error());
                 } else {
@@ -284,8 +288,8 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
                 if (!exited) {
                     co_return; // Stopped (or the reactor shut down): stop() takes over.
                 }
-                roundError = Error(ErrorCode::IoError,
-                                   std::format("LuaLS exited unexpectedly (exit code {})", exited->exitCode));
+                roundError = Error(ErrorCode::IoError, std::format("{} exited unexpectedly (exit code {})",
+                                                                   self->options.displayName, exited->exitCode));
             } else {
                 static_cast<void>(process->terminate());
                 detail::Deadline reap(scheduler, std::chrono::seconds(5), stop);
@@ -307,8 +311,9 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
             }
             ++consecutive;
             if (consecutive > self->options.restart.maxConsecutiveCrashes) {
-                self->recordError(std::move(roundError->withContext("LuaLS crashed too often; giving up")),
-                                  LuaState::Failed);
+                self->recordError(
+                    std::move(roundError->withContext(self->options.displayName + " crashed too often; giving up")),
+                    LuaState::Failed);
                 co_return;
             }
             const IClock::Duration delay = restartDelay(self->options.restart, consecutive);
@@ -348,15 +353,19 @@ LuaService::~LuaService() {
 Result<void> LuaService::start() {
     const LuaServiceOptions& options = m_shared->options;
     if (!options.trusted) {
-        return fail(ErrorCode::Untrusted, "LuaLS requires a trusted workspace");
+        return fail(ErrorCode::Untrusted, options.displayName + " requires a trusted workspace");
     }
     if (!io::isAbsolutePath(options.serverPath) || !io::isAbsolutePath(options.workspaceRoot)) {
-        return fail(ErrorCode::InvalidArgument, "LuaLS and the workspace root need absolute paths");
+        return fail(ErrorCode::InvalidArgument, options.displayName + " and the workspace root need absolute paths");
+    }
+    if (options.firstArgumentIsAbsolutePath &&
+        (options.arguments.empty() || !io::isAbsolutePath(options.arguments.front()))) {
+        return fail(ErrorCode::InvalidArgument, options.displayName + " assembly path must be absolute");
     }
     {
         LockGuard lock(m_shared->mutex);
         if (m_shared->started) {
-            return fail(ErrorCode::Busy, "LuaLS is already started");
+            return fail(ErrorCode::Busy, options.displayName + " is already started");
         }
         m_shared->started = true;
         m_shared->state = LuaState::Starting;
@@ -399,12 +408,12 @@ sched::Task<void> LuaService::stop() {
         detail::Deadline deadline(scheduler, left);
         auto exited = co_await process->exited(deadline.token());
         if (!exited) {
-            log::warn(kLogCategory, "LuaLS did not exit in time; killing it");
+            log::warn(kLogCategory, "{} did not exit in time; killing it", self->options.displayName);
             static_cast<void>(process->terminate());
             detail::Deadline reap(scheduler, std::chrono::seconds(5));
             static_cast<void>(co_await process->exited(reap.token()));
         } else {
-            log::info(kLogCategory, "LuaLS exited with {}", exited->exitCode);
+            log::info(kLogCategory, "{} exited with {}", self->options.displayName, exited->exitCode);
         }
     }
 }
@@ -462,7 +471,7 @@ Result<void> LuaService::openDocument(std::string_view path, text::Snapshot snap
         return fail(ErrorCode::AlreadyExists, std::format("{} is already open", *normalized));
     }
     OpenDocument document;
-    document.languageId = "lua";
+    document.languageId = m_shared->options.languageId;
     document.path = std::move(*normalized);
     document.uri = std::move(*uri);
     document.latest = std::move(snapshot);
@@ -553,7 +562,7 @@ namespace {
 sched::Task<Result<Json>> requestOnClient(std::shared_ptr<LspClient> client, std::string method, Json params,
                                           std::stop_token token) {
     if (!client) {
-        co_return fail(ErrorCode::Busy, method + ": LuaLS is not running");
+        co_return fail(ErrorCode::Busy, method + ": language server is not running");
     }
     co_return co_await client->request(std::move(method), std::move(params), std::move(token));
 }
@@ -580,7 +589,7 @@ Result<void> LuaService::killServerForTesting() {
         process = m_shared->process;
     }
     if (!process) {
-        return fail(ErrorCode::NotFound, "LuaLS is not running");
+        return fail(ErrorCode::NotFound, "language server is not running");
     }
     return process->terminate();
 }

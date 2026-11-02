@@ -140,6 +140,8 @@ public:
     [[nodiscard]] bool confirmDiscard(QWidget*, const QString&, const QString& error) override {
         ++discardCalls;
         lastDiscardError = error;
+        if (onDiscard)
+            onDiscard();
         return discard;
     }
     [[nodiscard]] bool confirmRerun(QWidget*, const QString&) override {
@@ -151,6 +153,7 @@ public:
     OpenKind lastOpenKind = OpenKind::SolutionOrFile;
     int openCalls = 0;
     bool discard = false;
+    std::function<void()> onDiscard;
     int discardCalls = 0;
     QString lastDiscardError;
     bool rerun = true;
@@ -166,6 +169,7 @@ struct RigOptions {
     }();
     // Autosave on frame deactivation and on idle; off by default so the tests decide when saves run.
     bool autosave = false;
+    io::IProcessLauncher* launcher = nullptr;
 };
 
 /*
@@ -220,8 +224,9 @@ public:
         wb.runExternalConsole = false;
         wb.layout = input::simulatedLayout(input::SimulatedLayoutId::EnUs);
         wb.followActiveLayout = false;
+        auto& launcher = options.launcher ? *options.launcher : io::realProcessLauncher();
         workbench = std::make_unique<Workbench>(
-            WorkbenchServices{fs, io::realProcessLauncher(), systemClock(), *settings, *trust, prompts}, std::move(wb));
+            WorkbenchServices{fs, launcher, systemClock(), *settings, *trust, prompts}, std::move(wb));
         window = std::make_unique<MainWindow>(workbench->environment());
         workbench->attach(*window);
     }

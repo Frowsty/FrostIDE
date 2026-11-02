@@ -501,5 +501,38 @@ class ConPtySdkPinTest(TempDirTestCase):
         self.assertTrue(report.violations)
 
 
+class ManagedSdkPinTest(TempDirTestCase):
+    def test_transitive_licences_and_notices_are_checked(self) -> None:
+        for relative in ("sdk/sdk.lock.json", "sdk/managed-dependencies.json", "NOTICE", "docs/adr/0064-managed-language.md"):
+            source = REPO / relative
+            _write(self.tmp / relative, source.read_bytes())
+        shutil.copytree(REPO / "third_party/managed-notices", self.tmp / "third_party/managed-notices")
+        report = licensecheck.Report()
+        licensecheck.check_sdk_managed(self.tmp, report)
+        self.assertEqual(report.violations, [])
+        self.assertEqual(len(report.packages), 61)
+        manifest_path = self.tmp / "sdk/managed-dependencies.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["packages"][0]["license"] = "GPL-3.0-only"
+        data = (json.dumps(manifest) + "\n").encode()
+        manifest_path.write_bytes(data)
+        lock_path = self.tmp / "sdk/sdk.lock.json"
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock["managedServer"]["manifestSha256"] = hashlib.sha256(data).hexdigest()
+        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        report = licensecheck.Report()
+        licensecheck.check_sdk_managed(self.tmp, report)
+        self.assertTrue(any("not on allowlist" in str(v) for v in report.violations))
+
+    def test_changed_notice_fails_even_when_manifest_is_pinned(self) -> None:
+        for relative in ("sdk/sdk.lock.json", "sdk/managed-dependencies.json", "NOTICE", "docs/adr/0064-managed-language.md"):
+            _write(self.tmp / relative, (REPO / relative).read_bytes())
+        shutil.copytree(REPO / "third_party/managed-notices", self.tmp / "third_party/managed-notices")
+        (self.tmp / "third_party/managed-notices/ionide-license.txt").write_text("changed", encoding="utf-8")
+        report = licensecheck.Report()
+        licensecheck.check_sdk_managed(self.tmp, report)
+        self.assertTrue(any("notice hash mismatch" in str(v) for v in report.violations))
+
+
 if __name__ == "__main__":
     unittest.main()

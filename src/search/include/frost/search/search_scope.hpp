@@ -9,9 +9,9 @@
  * Solution and Project come from project::SolutionModel's file nodes (project items and solution
  * items), sorted by path with duplicates removed (a file shared by two projects is searched once).
  * Paths compare with ASCII case ignored on Windows, as the model's lookups do.
- * Directory skips the directories named in SearchScope::excludes at any depth (ASCII case
- * ignored); kDefaultDirectoryExcludes is the default set. TODO(M2): switch the walk to m1/shell-nav's
- * gitignore-aware project scan once it lands, so ignored files are skipped as in Rider.
+ * Directory initially excludes the names in SearchScope::excludes at any depth (ASCII case
+ * ignored); .gitignore and .ignore rules can re-include them. Directory walks skip version-control
+ * directories, like the project tree.
  * Thread safety: resolveScope only reads its arguments (a loaded model is immutable); any thread.
  */
 #pragma once
@@ -53,6 +53,8 @@ struct SearchScope {
     std::vector<std::string> excludes{kDefaultDirectoryExcludes.begin(), kDefaultDirectoryExcludes.end()};
     // Project: the file whose project is searched (the active editor's).
     std::string currentFile;
+    // Optional enclosing project root: apply ancestor ignore files to a nested directory.
+    std::string ignoreRoot;
 };
 
 // What a search walks: either `files` in this order, or the tree below `directory`.
@@ -60,6 +62,7 @@ struct ScopeTarget {
     std::vector<std::string> files;
     std::optional<std::string> directory;
     std::vector<std::string> excludes; // With `directory`.
+    std::string ignoreRoot;
 };
 
 /*

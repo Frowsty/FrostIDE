@@ -22,11 +22,13 @@ add_subdirectory(syntax)
 # and Find in Files, which links document, project and RE2, ADR 0045) are left out of them.
 if(NOT FROST_FUZZ)
     add_subdirectory(storage)
+    add_subdirectory(rpc)
     add_subdirectory(settings)
     add_subdirectory(project)
     add_subdirectory(document)
     add_subdirectory(build)
     add_subdirectory(lang)
+    add_subdirectory(debug)
     add_subdirectory(search)
     # frost::vcs (ADR 0048) links settings, which fuzz trees leave out.
     add_subdirectory(vcs)

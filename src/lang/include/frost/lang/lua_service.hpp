@@ -27,7 +27,13 @@ enum class LuaState : std::uint8_t { Stopped, Starting, Running, Restarting, Fai
 struct LuaServiceOptions {
     std::string serverPath;    // Absolute executable, discovered by findLuaLanguageServer.
     std::string workspaceRoot; // Absolute.
-    bool trusted = false;      // Must be true before any process is launched.
+    // Defaults preserve LuaLS; another supervised LSP may supply its own argv and language id.
+    std::vector<std::string> arguments;
+    std::vector<std::pair<std::string, std::optional<std::string>>> environment;
+    std::string languageId = "lua";
+    std::string displayName = "LuaLS";
+    bool firstArgumentIsAbsolutePath = false;
+    bool trusted = false; // Must be true before any process is launched.
     Json configuration = luaDefaults();
     RestartPolicy restart;
     IClock::Duration initializeTimeout = std::chrono::seconds(60);

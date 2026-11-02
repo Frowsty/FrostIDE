@@ -125,6 +125,38 @@ TEST(TrustDialog, DecliningLuaTrustDoesNotCancelAnUnrelatedWaitingBuild) {
     EXPECT_EQ(rig.backend.cancels, 1);
 }
 
+TEST(TrustDialog, DecliningManagedTrustDoesNotCancelAnUnrelatedWaitingBuild) {
+    Rig rig;
+    rig.needTrust({kApp});
+    const QStringList roots{QString::fromUtf8(kApp)};
+    {
+        TrustDialog managed(rig.controller, roots, nullptr, TrustPurpose::ManagedLanguageServer);
+        managed.cancelButton()->click();
+        EXPECT_EQ(managed.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+        EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
+    }
+    {
+        TrustDialog managed(rig.controller, roots, nullptr, TrustPurpose::ManagedLanguageServer);
+        managed.show();
+        managed.close();
+        EXPECT_EQ(managed.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+    }
+    {
+        TrustDialog managed(rig.controller, roots, nullptr, TrustPurpose::ManagedLanguageServer);
+        managed.show();
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(&managed, &escape);
+        EXPECT_EQ(managed.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+    }
+    EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
+    TrustDialog build(rig.controller, roots, nullptr, TrustPurpose::Build);
+    build.cancelButton()->click();
+    EXPECT_EQ(rig.backend.cancels, 1);
+}
+
 TEST(TrustDialog, AcceptingLuaTrustStillTrustsTheProject) {
     Rig rig;
     rig.needTrust({kApp});

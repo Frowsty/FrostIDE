@@ -25,6 +25,7 @@
 #include <QToolButton>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <format>
@@ -344,6 +345,42 @@ TEST_F(RunControllerTest, TheRunActionsDriveTheController) {
     ASSERT_TRUE(spinUntil([&] { return !controller->running(); }));
     EXPECT_TRUE(console.text().contains(QStringLiteral("(stopped)"))) << console.text().toStdString();
     EXPECT_TRUE(reported.empty());
+}
+
+// Rider's one Stop (Ctrl+F2) also ends a debug session (RunActionHooks::debugging, stopDebugging).
+TEST_F(RunControllerTest, StopAlsoEndsADebugSession) {
+    input::ActionRegistry registry;
+    bool debugging = false;
+    int debugStops = 0;
+    ASSERT_TRUE(registerRunActions(registry, *controller,
+                                   {.debugging = [&] { return debugging; }, .stopDebugging = [&] { ++debugStops; }})
+                    .has_value());
+    const input::ActionContext context{};
+    EXPECT_FALSE(registry.isEnabled(*registry.find(kStopActionId), context));
+    debugging = true;
+    EXPECT_TRUE(registry.isEnabled(*registry.find(kStopActionId), context)) << "a debug session can be stopped";
+    EXPECT_EQ(registry.tryInvoke(*registry.find(kStopActionId), context), input::InvokeResult::Ran);
+    EXPECT_EQ(debugStops, 1);
+}
+
+// A Debug run (RunService::debug) belongs to the Debug tool window: the Run console stays as it was.
+TEST_F(RunControllerTest, ADebugRunIsLeftToTheDebugger) {
+    std::optional<build::DebugLaunch> handed; // Written before `finished` is set (the service's thread).
+    std::atomic<bool> finished = false;
+    auto started = service->debug(
+        std::nullopt,
+        {.onOutput = {}, .onFinished = [&](const build::RunOutcome&, const std::optional<build::DebugLaunch>& launch) {
+             handed = launch;
+             finished = true;
+         }});
+    ASSERT_TRUE(started.has_value()) << started.error().describe();
+    ASSERT_TRUE(builder.finish());
+    ASSERT_TRUE(spinUntil([&] { return finished.load(); }));
+    ASSERT_TRUE(handed.has_value());
+    EXPECT_EQ(handed->command.executable, programPath("App"));
+    EXPECT_FALSE(controller->running());
+    EXPECT_TRUE(console.text().isEmpty()) << console.text().toStdString();
+    EXPECT_TRUE(launcher.launches().empty());
 }
 
 } // namespace

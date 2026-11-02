@@ -3,6 +3,99 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-02: Verified debugger, engine controls, managed services and Find checkpoint
+
+- Base: verified checkpoint `281a258`. Debugger, FrostEngine automation, managed-language and Find deltas are
+  integrated on main and passed the final full functional gates below. GPT-6.1 Terra implemented the slices;
+  GPT-6 Astra approved each correction and the combined lifecycle wiring. Merge conflicts in Workbench teardown
+  retained every controller's cleanup. Canonical project/window identity fixes and original worktrees are preserved.
+- Debugger: Terra connected DAP, breakpoints, editor markers, Debug UI, MSBuild and CMake build-before-debug,
+  stepping, inspection and stopping. Shared JSON/framing now lives in `frost::rpc` with `frost::lang` aliases.
+  Astra required fixes for queued launches after Stop, startup callback reentrancy, stale variable/frame replies,
+  model reset during a context menu, Run/Debug console ownership, rejected step handling, pending rerun across
+  project changes/modal save prompts, and editor teardown. All corrections passed focused platform tests and
+  Astra approved the final source. A native backtrace identified the null editor access; no assertion was weakened.
+- Actual pinned R2a Notepad++ debugger acceptance passed through the Workbench in private profile
+  `E:\FrostBuilds\debugger-r2a-acceptance\run-20261102-210426`: verified `wWinMain` breakpoint, CRT stack,
+  arguments in Locals, step into/out/over, watch, Evaluate, visible window, Pause and Stop. Both owned processes
+  exited and temporary corpus settings were removed. This is the debugger acceptance step, not all of U1.
+  An earlier Globals expansion took over 60 seconds; fast Locals inspection does not establish formatter parity.
+- Engine automation: Astra approved the contained helper that performs discovery, authentication, live identity
+  checks, commands and physical navigation-path validation. Retained task handles, reactor/pool shutdown order,
+  permanent shutdown gating, alias record discovery, result clearing and bounded retention address review findings.
+  The 4 MiB budget measures retained UTF-8 display text, not widget/metadata overhead. Cancellation does not undo
+  an engine action; the engine's separate identity-check/action requests cannot atomically bind project identity.
+- Actual packaged FrostEditor acceptance uses scratch projects/configuration and isolated IDE profiles: engine
+  script opening reuses the staged IDE window at line 3/column 5; IDE controls exercise Edit/Play/Edit, validate
+  unsaved invalid Lua without writing it, refuse mismatched projects, run a real failing Lua test and navigate
+  real failure/log locations. Stalled-helper/socket shutdown and in-flight trust revocation also passed. Native
+  focused tests include the two-record symlink alias case. No target engine checkout or normal preferences changed.
+- Managed services passed Astra's final review and are integrated from `codex-managed-language`. Real csharp-ls/.NET service
+  and editor tests pass on Windows/Linux, including two-project unsaved UTF-16 navigation/rename, diagnostics,
+  completion, restart, trust and shutdown. Astra caught an installer path escape, omitted build-host dependencies,
+  late startup after shutdown and environment-isolation assumptions. Archive/host provenance corrections were
+  independently verified; preserving Unix NuGet configuration and guarding Windows test migration are the latest
+  corrections. The development stage does not bundle the SDK/server. No Unity semantic/build/debug claim is made.
+- Git components remain separate from the current Workbench. Its next integration must handle live trust,
+  cancellation of reads, enclosing/linked worktrees and dirty-document safety across direct widget actions.
+  Component test counts are not application acceptance.
+- First combined gates: Windows **2604/2625 (18 skipped, one disabled)**; native WSL **2476/2501 (22 skipped)**.
+  Each reported two engine application test failures and a managed application teardown assertion. The engine
+  tests counted unrelated language-server process launches; the teardown failure was diagnosed as described below.
+  Windows format, licence checks (103 packages) and featurecheck passed; frost-lint found ten engine-file
+  purpose-header violations. Native licence checks passed (99 packages). These are failed gates, not acceptance.
+  Terra corrected engine assertions to select helper requests by JSON method/path and added the missing purpose
+  comments: formerly failing Windows tests pass 2/2; native engine suite passes six with five external-fixture
+  skips; frost-lint reports zero violations across 2341 files. Astra approved those corrections and an additional
+  trust-switch assertion fix that filters engine requests after trust while retaining the no-child-before-trust check.
+  The teardown assertion reproduced when LuaLS was on PATH, as in the full gates: the trust timer restarted Lua
+  after shutdown while C# already guarded against it. Terra stopped/gated the timer and guarded startLua, preserving
+  the reactor assertion and removing temporary ownership probes. Windows focused checks pass for both real
+  services, a deterministic queued-shutdown regression and the registered managed installer suite. Native checks
+  also pass the same four tests, and Astra approved the correction. Earlier retries without LuaLS had not
+  reproduced the actual environment. The reactor assertion and I/O/LSP implementation are unchanged.
+- Combined main also passed the opt-in real Notepad++ R2a debugger acceptance, independently of the above
+  suites, in `E:\FrostBuilds\debugger-r2a-acceptance\main-20261102-reviewed` (one test, 7.3 seconds).
+  The test verified the actual debuggee and adapter exited. The earlier feature-worktree evidence remains above.
+  The combined main application's actual FrostEditor acceptance also passes 3/3 using scratch configuration,
+  profiles and projects: unsaved Lua validation/live state, mismatched-project refusal, and real failing test/log
+  navigation. The harness checks the saved script remains unchanged and terminates its engine process.
+- Find/Replace is integrated; its merge conflict was shutdown, resolved by retaining both the Lua timer stop and
+  Find cleanup. Astra approved the mechanical join at source tree `58385999e6c3004b0a330674771177e239877de6`.
+  Find focused checks pass on both Windows/native Linux: 11 workbench cases, 26 search cases, six Find UI cases
+  and one real clangd diagnostic-clearance case. Astra approved staged tree
+  `c585a574ab7c1606f9f0f450b36aa862ca66d38d` against baseline `6da69bb4bfb5b92a44d2b300c1b3a7c146bd03b5`.
+  Review corrections destroy the Find feature on shutdown, use replacement text entered after results arrive,
+  and immediately reject stale-result replacement during query/scope debounce.
+- Final full gates on frozen tree `6e48fa0ea4f1cc18c75586327c654d87b2dd7af9`: Windows **2625/2643
+  (18 skipped, one disabled)**; native WSL **2497/2519 (22 skipped)**. Windows format, frost-lint (2344 files),
+  licence checks (103 packages) and featurecheck pass; native licence checks pass (99 packages). Both legs used
+  actual LuaLS 3.19.1 with the target engine API and the reviewed csharp-ls/.NET runtime. Skips are not passes.
+  Tidy, sanitizers and stress remain deferred; full U1 and complete product parity are not established.
+- Debug preview `E:\FrostBuilds\preview\codex-20261102-debug-engine-managed-find` contains 62 files (258.9 MB).
+  Its app DLL matches the tested build. Explicitly waited startup and actual Direct3D11 RTX 4070 SUPER render
+  checks pass; the staged ConPTY DLL/host and Shift+Enter/surrogate input check passes. Initial PowerShell GUI
+  invocation produced empty reports, so the recorded evidence comes from the subsequent waited Python subprocess
+  checks (`startup-waited.log` and `render-waited.log` in the adjacent `-smoke` directory). LuaLS and the managed
+  SDK/server are external tools in this development stage, not bundled delivery acceptance.
+  With Find included, actual R2a debugger acceptance passes again (9.0 seconds) in
+  `E:\FrostBuilds\debugger-r2a-acceptance\main-20261102-find-reviewed`; corpus settings are cleaned and both
+  owned processes exit. Actual FrostEditor opens/reuses this new staged IDE at line 3/column 5, and all three
+  engine-control/navigation tests pass again against the final main build with scratch projects/configuration.
+- Next: Git, the original Unity bridge and advanced Lua editing are active in separate Terra worktrees.
+  Git (`codex-git-workbench`) and Lua (`codex-lua-editing`) use staged baseline
+  `6e48fa0ea4f1cc18c75586327c654d87b2dd7af9`. Unity (`codex-unity-bridge`) uses staged source
+  baseline `a54162283eab2111c4d94a46fba00f45b1b7e2a3` (transfer only its later delta). Installed editor
+  `C:\Program Files\Unity\Hub\Editor\6000.6.4f1` is available for scratch-project acceptance.
+  The original editor package compiles and a real scratch-editor probe verifies generated asmdef/source/Unity
+  reference context. Actual C# semantics and open-window reuse are not yet established; Unity preferences changed
+  during scratch launches were individually restored from prelaunch values and compared. Public API references are Unity's
+  [IExternalCodeEditor](https://docs.unity.com/en-us/engine/6000.6/script-reference/unity/codeeditor/iexternalcodeeditor)
+  and [CompilationPipeline.GetAssemblies](https://docs.unity.com/en-us/engine/6000.6/script-reference/unityeditor/compilation/compilationpipeline/getassemblies).
+  No Unity integration from that worktree is accepted or integrated yet.
+  Debugger/automation worktree baseline is `c99d689f4413d29934f465bcf2bce1689dfc075b`; managed baseline is
+  `59548a6120f8a0bf9663b40b05a4686f012233da`. Transfer only baseline-relative feature deltas. No user answer blocks work.
+
 ## 2026-11-02: Verified terminal, CMake, Lua syntax and engine-opening checkpoint
 
 - Base: verified checkpoint `84ae6ba` below. Four individually Astra-reviewed slices are integrated on main.

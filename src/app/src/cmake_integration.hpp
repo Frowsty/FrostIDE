@@ -6,6 +6,7 @@
 #include "frost/build/run_service.hpp"
 #include "frost/build/run_session.hpp"
 #include "frost/core/error.hpp"
+#include "frost/debug/lldb_dap.hpp"
 #include "frost/ui/cmake/cmake_controller.hpp"
 
 #include <QObject>
@@ -40,6 +41,7 @@ public:
     [[nodiscard]] std::shared_ptr<build::CMakeService> sharedService() const { return m_service; }
     void filesChanged(const io::FileChangeBatch& batch) { m_service->filesChanged(batch); }
     [[nodiscard]] Result<build::RunId> run();
+    [[nodiscard]] Result<void> debug(std::function<void(Result<debug::DebugTarget>)> done);
     [[nodiscard]] Result<build::RunId> rerun();
     [[nodiscard]] bool running() const { return m_pending || m_running; }
     void stop();
@@ -63,6 +65,7 @@ private:
     std::shared_ptr<RunRelay> m_runRelay;
     std::unique_ptr<build::RunSession> m_session;
     std::string m_runTarget;
+    std::function<void(Result<debug::DebugTarget>)> m_debugDone;
     bool m_pending = false;
     bool m_running = false;
     bool m_rerun = false;

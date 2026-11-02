@@ -2,6 +2,8 @@
 // The application composition over a real trusted CMake project.
 
 #include "frost/build/cmake_service.hpp"
+#include "frost/debug/lldb_dap.hpp"
+#include "frost/ui/debug_tool_window.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -16,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
 #include <string>
 
 namespace {
@@ -146,6 +149,164 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     auto refused = rig.workbench->runController()->run();
     ASSERT_FALSE(refused.has_value());
     EXPECT_EQ(refused.error().code(), frost::ErrorCode::Cancelled);
+}
+
+TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
+    auto& fs = frost::io::realFileSystem();
+    const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
+    if (!lldb)
+        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    WorkDir dir("cmake-debug-app");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nset(CMAKE_BUILD_TYPE Debug CACHE STRING \"\" FORCE)\n"
+                  "project(DebugApp C)\nadd_executable(debuggee main.c)\n");
+    dir.write("main.c", "int main(void) {\n  int value = 41;\n  value += 1;\n  return value == 42 ? 0 : 1;\n}\n");
+    int adaptersStarted = 0;
+    auto factory = frost::debug::lldbDapAdapterFactory(frost::io::realProcessLauncher(), *lldb);
+    RigOptions options;
+    options.workbench.debugAdapterFactory = [&](frost::debug::DapHandlers handlers) {
+        ++adaptersStarted;
+        return factory(std::move(handlers));
+    };
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    auto* debug = rig.workbench->debugController();
+    ASSERT_NE(debug, nullptr);
+    // Before the Debug tool window exists, the Run console reruns only a normal process.
+    emit rig.workbench->runConsole()->rerunRequested();
+    ASSERT_TRUE(rig.workbench->runController()->running());
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->runController()->running(); }, 240s));
+    EXPECT_FALSE(debug->debugging());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.c")).has_value());
+    ASSERT_TRUE(rig.view()->editor().typeText("// saved before debug\n"));
+    debug->toggleBreakpoint(dir.join("main.c"), 3);
+    ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return debug->paused() && debug->selectedFrame().has_value(); }, 240s));
+    ASSERT_EQ(debug->selectedFrame()->line, 4);
+    EXPECT_TRUE(dir.read("main.c").starts_with("// saved before debug\n"));
+    ASSERT_TRUE(rig.view());
+    EXPECT_EQ(rig.view()->path(), dir.join("main.c"));
+    auto value = std::make_shared<std::optional<frost::Result<frost::debug::dap::Variable>>>();
+    debug->evaluate(QStringLiteral("value"), QStringLiteral("watch"),
+                    [value](auto result) { *value = std::move(result); });
+    ASSERT_TRUE(waitFor([&] { return value->has_value(); }, 60s));
+    ASSERT_TRUE(value->value().has_value());
+    EXPECT_EQ(value->value()->value, "41");
+    ASSERT_TRUE(debug->stepOver());
+    ASSERT_TRUE(
+        waitFor([&] { return debug->paused() && debug->selectedFrame() && debug->selectedFrame()->line == 5; }, 60s));
+    EXPECT_FALSE(rig.workbench->closeProject());
+    ASSERT_TRUE(rig.view()->editor().typeText("// unsaved change\n"));
+    ASSERT_TRUE(fs.removeFile(dir.join("main.c")).has_value());
+    ASSERT_TRUE(fs.createDirectories(dir.join("main.c/blocked")).has_value());
+    bool launchedDuringPrompt = false;
+    bool pendingDuringPrompt = true;
+    rig.prompts.discard = true;
+    rig.prompts.onDiscard = [&] {
+        QDeadlineTimer timer(250); // The rerun timer is 50 ms; exercise a nested prompt loop.
+        while (!timer.hasExpired()) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            launchedDuringPrompt = launchedDuringPrompt || debug->debugging() || adaptersStarted != 1;
+        }
+        pendingDuringPrompt = debug->rerunPending();
+    };
+    WorkDir other("cmake-debug-switch");
+    bool switched = false;
+    bool wasPending = false;
+    bool pendingAfterSwitch = true;
+    QObject::connect(debug, &frost::ui::DebugController::sessionEnded, [&] {
+        wasPending = debug->rerunPending();
+        switched = rig.workbench->closeProject() && rig.workbench->openPath(other.path()).has_value();
+        pendingAfterSwitch = debug->rerunPending();
+    });
+    auto* debugWindow = rig.window->findChild<frost::ui::DebugToolWindow*>();
+    ASSERT_NE(debugWindow, nullptr);
+    emit debugWindow->console()->rerunRequested();
+    ASSERT_TRUE(waitFor([&] { return switched; }, 60s));
+    EXPECT_TRUE(wasPending);
+    EXPECT_EQ(rig.prompts.discardCalls, 1);
+    EXPECT_FALSE(launchedDuringPrompt);
+    EXPECT_FALSE(pendingDuringPrompt);
+    EXPECT_EQ(adaptersStarted, 1);
+    EXPECT_FALSE(pendingAfterSwitch);
+    QDeadlineTimer timer(250);
+    while (!timer.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    EXPECT_FALSE(debug->debugging());
+    EXPECT_FALSE(debug->rerunPending());
+}
+
+TEST(WorkbenchCMake, DebugRejectsCompletionAfterProfileSwitch) {
+    WorkDir dir("cmake-debug-profile");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nproject(Profile C)\nadd_executable(debuggee main.c)\n");
+    dir.write("main.c", "int main(void) { return 0; }\n");
+    dir.write("CMakePresets.json", R"({"version":3,"configurePresets":[
+        {"name":"Debug","generator":"Ninja","binaryDir":"${sourceDir}/build-one"},
+        {"name":"Release","generator":"Ninja","binaryDir":"${sourceDir}/build-two"}]})");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    service->setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
+    auto* debug = rig.workbench->debugController();
+    ASSERT_TRUE(debug->debug().has_value());
+    ASSERT_TRUE(service->waitForIdle(120s)); // Keep the completion queued on the GUI thread.
+    ASSERT_TRUE(service->setActiveProfile(1).has_value());
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, 60s));
+    EXPECT_EQ(debug->session(), nullptr);
+}
+
+TEST(WorkbenchCMake, ShutdownWhileDebugBuildWaitsForSaveDoesNotLaunch) {
+    WorkDir dir("cmake-debug-shutdown");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nproject(Shutdown C)\nadd_executable(debuggee main.c)\n");
+    dir.write("main.c", "int main(void) { return 0; }\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    std::mutex mutex;
+    frost::build::SaveAllCompletion held;
+    service->setSaveAllHook([&](frost::build::SaveAllCompletion done) {
+        std::lock_guard guard(mutex);
+        held = std::move(done);
+    });
+    auto* debug = rig.workbench->debugController();
+    ASSERT_TRUE(debug->debug().has_value());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            std::lock_guard guard(mutex);
+            return static_cast<bool>(held);
+        },
+        30s));
+    EXPECT_FALSE(rig.workbench->closeProject());
+    rig.workbench->shutdown();
+    {
+        std::lock_guard guard(mutex);
+        held({});
+    }
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(debug->debugging());
+    EXPECT_EQ(debug->session(), nullptr);
+    EXPECT_EQ(debug->debug().error().code(), frost::ErrorCode::Cancelled);
 }
 
 TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {

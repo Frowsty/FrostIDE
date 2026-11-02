@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Unit tests for frost::rpc: the Content-Length codec (encodeFrame, FrameDecoder on split, joined,
+// malformed and oversized input) and the Json value (parse, dump, lookups), plus decoders used on
+// several threads at once, which the WSL quick leg runs under TSan.
+
+#include "frost/rpc/framing.hpp"
+#include "frost/rpc/json.hpp"
+
+#include <gtest/gtest.h>
+
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace {
+
+using frost::rpc::encodeFrame;
+using frost::rpc::FrameDecoder;
+using frost::rpc::Json;
+using frost::rpc::parseJson;
+
+// Every payload the decoder has ready, in order; a decode error fails the test.
+std::vector<std::string> drain(FrameDecoder& decoder) {
+    std::vector<std::string> out;
+    while (auto next = decoder.next()) {
+        EXPECT_TRUE(next->has_value()) << next->error().message();
+        if (next->has_value()) {
+            out.push_back(**next);
+        }
+    }
+    return out;
+}
+
+TEST(RpcFraming, EncodesTheByteLength) {
+    EXPECT_EQ(encodeFrame("{}"), "Content-Length: 2\r\n\r\n{}");
+    // The length counts UTF-8 bytes, not characters ("\xc3\xa9" is one character).
+    EXPECT_EQ(encodeFrame("\"\xc3\xa9\""), "Content-Length: 4\r\n\r\n\"\xc3\xa9\"");
+}
+
+TEST(RpcFraming, DecodesSplitAndJoinedFrames) {
+    const std::string stream = encodeFrame(R"({"a":1})") + encodeFrame(R"({"b":2})");
+    // One byte at a time.
+    FrameDecoder split;
+    std::vector<std::string> got;
+    for (const char c : stream) {
+        split.feed(std::string_view(&c, 1));
+        for (auto& payload : drain(split)) {
+            got.push_back(std::move(payload));
+        }
+    }
+    EXPECT_EQ(got, (std::vector<std::string>{R"({"a":1})", R"({"b":2})"}));
+    EXPECT_EQ(split.buffered(), 0U);
+    // Both frames in one read, with a Content-Type header the decoder ignores.
+    FrameDecoder joined;
+    joined.feed("Content-Type: application/vscode-jsonrpc; charset=utf-8\r\ncontent-length: 2\r\n\r\n{}" + stream);
+    EXPECT_EQ(drain(joined), (std::vector<std::string>{"{}", R"({"a":1})", R"({"b":2})"}));
+}
+
+TEST(RpcFraming, AMalformedHeaderIsOneErrorAndTheNextFrameStillDecodes) {
+    FrameDecoder decoder;
+    decoder.feed("X-Nothing: 1\r\n\r\n" + encodeFrame("[1]"));
+    auto first = decoder.next();
+    ASSERT_TRUE(first.has_value());
+    EXPECT_FALSE(first->has_value());
+    auto second = decoder.next();
+    ASSERT_TRUE(second.has_value());
+    ASSERT_TRUE(second->has_value());
+    EXPECT_EQ(**second, "[1]");
+    EXPECT_FALSE(decoder.next().has_value());
+}
+
+TEST(RpcFraming, AnOversizedFrameIsSkippedAndReported) {
+    FrameDecoder decoder(8);
+    decoder.feed(encodeFrame(R"({"too":"large"})") + encodeFrame("{}"));
+    auto first = decoder.next();
+    ASSERT_TRUE(first.has_value());
+    EXPECT_FALSE(first->has_value());
+    EXPECT_EQ(drain(decoder), (std::vector<std::string>{"{}"}));
+}
+
+TEST(RpcJson, ParsesDumpsAndLooksUpMembers) {
+    auto parsed = parseJson(R"({"seq":3,"type":"event","body":{"ok":true,"items":[1,2.5,null,"x"]}})");
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().message();
+    const Json& value = *parsed;
+    EXPECT_TRUE(value.isObject());
+    EXPECT_EQ(value.integerAt("seq"), 3);
+    EXPECT_EQ(value.stringAt("type"), "event");
+    const Json* body = value.find("body");
+    ASSERT_NE(body, nullptr);
+    EXPECT_EQ(body->boolAt("ok"), true);
+    const Json* items = body->find("items");
+    ASSERT_NE(items, nullptr);
+    ASSERT_EQ(items->size(), 4U);
+    EXPECT_EQ(items->items()[1].asDouble(), 2.5);
+    EXPECT_TRUE(items->items()[2].isNull());
+    // dump() is compact and keeps the document order, so a parse of it is equal.
+    EXPECT_EQ(value.dump(), R"({"seq":3,"type":"event","body":{"ok":true,"items":[1,2.5,null,"x"]}})");
+    auto again = parseJson(value.dump());
+    ASSERT_TRUE(again.has_value());
+    EXPECT_EQ(*again, value);
+}
+
+TEST(RpcJson, BuildsValuesAndRejectsBadInput) {
+    Json request = Json::object();
+    request.set("command", "threads").set("seq", 1).set("arguments", Json::array({Json(true), Json(nullptr)}));
+    request.set("seq", 2); // Replaces in place.
+    EXPECT_EQ(request.dump(), R"({"command":"threads","seq":2,"arguments":[true,null]})");
+    EXPECT_FALSE(parseJson(R"({"a":)").has_value());
+    EXPECT_FALSE(parseJson("").has_value());
+}
+
+TEST(RpcFraming, DecodersOnSeveralThreadsAreIndependent) {
+    // One decoder per thread (the reader-thread pattern of both clients); TSan checks the codec
+    // shares no hidden state.
+    constexpr int kThreads = 4;
+    constexpr int kFrames = 200;
+    std::vector<int> decoded(kThreads, 0);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([t, &decoded] {
+            FrameDecoder decoder;
+            for (int i = 0; i < kFrames; ++i) {
+                Json message = Json::object();
+                message.set("thread", t).set("seq", i);
+                decoder.feed(encodeFrame(message.dump()));
+                while (auto next = decoder.next()) {
+                    if (next->has_value() && parseJson(**next).has_value()) {
+                        ++decoded[static_cast<std::size_t>(t)];
+                    }
+                }
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    EXPECT_EQ(decoded, std::vector<int>(kThreads, kFrames));
+}
+
+} // namespace

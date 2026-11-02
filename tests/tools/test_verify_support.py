@@ -288,9 +288,9 @@ class TsanSelectionTest(unittest.TestCase):
             "src/text/src/piece_tree.cpp": ["text"],
             "tests/text/support/text_ops.cpp": ["text"],
             "src/rpc/src/channel.cpp": ["rpc"],
-            "src/core/src/error.cpp": ["io", "sched", "text"],
-            "tests/core/error_test.cpp": ["io", "sched", "text"],
-            "src/compat/include/frost/compat/function_ref.hpp": ["io", "sched", "text"],
+            "src/core/src/error.cpp": ["io", "rpc", "sched", "text"],
+            "tests/core/error_test.cpp": ["io", "rpc", "sched", "text"],
+            "src/compat/include/frost/compat/function_ref.hpp": ["io", "rpc", "sched", "text"],
             "tests/support/test_env.hpp": _ALL,
             "cmake/FrostLayers.cmake": _ALL,
             "cmake/toolchains/linux-clang.cmake": _ALL,
@@ -367,7 +367,7 @@ class TsanSelectionTest(unittest.TestCase):
         with self._list(["src/core/src/error.cpp", "docs/x.md"]) as path:
             result = run_tool("verify_support.py", "tsan", "--changed", str(path))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["io sched text", r"^mod\.(io|sched|text)$"])
+        self.assertEqual(result.stdout.splitlines(), ["io rpc sched text", r"^mod\.(io|rpc|sched|text)$"])
         with self._list(["docs/x.md"]) as path:
             result = run_tool("verify_support.py", "tsan", "--changed", str(path))
         self.assertEqual((result.returncode, result.stdout), (0, ""))
@@ -1105,13 +1105,13 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # ui_screenshot_tests.
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
-                                              "MsBuildEvaluationE2E.", "WorkbenchMsBuild.")),
+                                              "MsBuildEvaluationE2E.", "WorkbenchMsBuild.", "WorkbenchR2a.")),
                   "clangd": ("integration", ("ClangdE2E.", "MsBuildEvaluationE2E.", "WorkbenchClangd.",
                                               "WorkbenchCMake.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.")),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.")),
-                  "lldb": ("integration", ("LldbDapE2E.",)),
+                  "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)

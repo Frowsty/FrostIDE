@@ -109,7 +109,10 @@ std::size_t displayElementCount(const EditorDisplayList& list, DisplayElementKin
     case DisplayElementKind::GutterBackground: return gutter ? 1 : 0;
     case DisplayElementKind::GutterText: return gutter ? list.gutterText.size() : 0;
     case DisplayElementKind::ChangeStripes: return gutter ? list.changeStripes.size() : 0;
-    case DisplayElementKind::Markers: return gutter ? list.markers.size() : 0;
+    case DisplayElementKind::Markers:
+        return gutter ? list.markers.size() + list.breakpoints.size() +
+                            static_cast<std::size_t>(list.executionPoint.has_value())
+                      : 0;
     case DisplayElementKind::StripeBackground: return stripe ? 1 : 0;
     case DisplayElementKind::StripeMarks: return stripe ? list.stripeMarks.size() : 0;
     case DisplayElementKind::StripeSummary: return stripe && !list.stripeSummary.isEmpty() ? 1 : 0;

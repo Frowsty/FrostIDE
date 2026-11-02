@@ -311,6 +311,8 @@ struct Entry {
         toolPath("tools.cmake.path", "CMake", "The cmake executable; empty uses the detected one."),
         toolPath("tools.ninja.path", "Ninja", "The ninja executable; empty uses the detected one."),
         toolPath("tools.git.path", "Git", "The git executable; empty uses the detected one."),
+        toolPath("tools.managed.dotnetPath", "Managed .NET SDK", "Absolute dotnet executable for C# language service."),
+        toolPath("tools.managed.serverAssembly", "C# language server", "Absolute csharp-ls server assembly path."),
         toolPath("tools.luaLanguageServer.path", "Lua language server",
                  "Absolute LuaLS executable path; empty searches PATH."),
         toolPath("tools.clangd.path", "clangd", "The clangd executable; empty uses the bundled one."),
@@ -320,6 +322,7 @@ struct Entry {
          "Build, Execution, Deployment/Toolchains", stringListSchema(32, 4096, StringHint::Executable), emptyList(),
          kApplicationOnly, true, true},
         toolPath("tools.debugger.path", "Debugger", "The debug adapter executable; empty uses the bundled one."),
+        toolPath("tools.lldbDap.path", "lldb-dap", "The lldb-dap executable; empty uses the SDK-pinned one."),
 
         // Terminal (ADR 0051).
         {"terminal.shell", "Shell path",

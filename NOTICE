@@ -62,3 +62,16 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+The optional csharp-ls 0.28.0 language server and its managed dependencies are
+listed with version, licence, copyright, source metadata, archive hash and
+third-party notice mapping in sdk/managed-dependencies.json. Original server,
+Ionide and AsyncSeq licences and the upstream package notices are preserved
+byte-for-byte under third_party/managed-notices. The server itself is Copyright
+2020-2021 Saulius Menkevi?ius (see its original licence).
+The Ionide LanguageServerProtocol sources are Copyright 2021 Krzysztof Cieslak
+and Ionide Contributors (MIT). The MIT permission text above applies to the
+MIT components listed in the manifest, with their recorded copyright notices.
+Castle.Core and FSharp.Control.AsyncSeq are Apache-2.0; their original licence
+texts are included alongside the other notices.

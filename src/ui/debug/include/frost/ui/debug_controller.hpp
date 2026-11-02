@@ -1,0 +1,255 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// DebugController: the GUI-thread side of U1's debugger (PLAN.md M4, ADR 0050). It turns a Debug run
+// (RunService::debug: Save All, build, resolve) into a frost::debug::DebugSession under lldb-dap,
+// relays the session's events to the GUI thread for the Debug tool window, keeps the editors'
+// breakpoint gutters and execution point in step with the BreakpointManager, and persists the
+// breakpoints in the root's .frost/workspace.json.
+/*
+ * Debug. debug() asks RunService for a Debug run of the startup project. When it is resolved the
+ * controller builds a DebugTarget (the program, its arguments split with the CRT's rules, the
+ * working directory, the environment and the solution's trust roots) and starts the session with
+ * startTarget(); the Debug tool window shows it and the console gets the program's output. One
+ * session at a time: debug() while one is live fails with Busy. Stop (stop(), also run.stop through
+ * RunActionHooks) ends the debuggee and lldb-dap politely and kills the adapter's process tree when
+ * it has not ended after kStopTimeout.
+ *
+ * Stops. On a stop the frames of the stopped thread load, the selected frame's source opens at its
+ * line through hooks.openSource (the workbench's open path) and gets the execution point: a yellow
+ * gutter arrow and a highlighted line. A crash or an unhandled exception selects the faulting frame
+ * (the first one with a source) and is reported in the tool window and as a notification
+ * (hooks.notify).
+ *
+ * Breakpoints. attachEditor() connects an EditorView: gutter clicks toggle breakpoints, edits move
+ * them (DocumentBreakpointTracker), and the gutter shows them verified (filled red) or not (hollow
+ * grey, the adapter's reason as tooltip). Changes reach a live session per source at once and are
+ * saved to workspace.json (setWorkspaceRoot) after each change.
+ *
+ * GUI thread only. Callbacks of a session that has ended are dropped.
+ */
+#pragma once
+
+#include "frost/build/run_service.hpp"
+#include "frost/core/error.hpp"
+#include "frost/debug/breakpoints.hpp"
+#include "frost/debug/debug_session.hpp"
+#include "frost/debug/lldb_dap.hpp"
+
+#include <QObject>
+#include <QPointer>
+#include <QString>
+#include <QTimer>
+
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace frost::io {
+class IFileSystem;
+class IProcessLauncher;
+} // namespace frost::io
+
+namespace frost::project {
+class TrustStore;
+}
+
+namespace frost::ui {
+
+class EditorView;
+class RunConsole;
+
+struct DebugControllerHooks {
+    // Opens `path` (absolute) at 1-based `line` and returns its editor (the workbench's open path);
+    // empty or null: the execution point shows only in editors attached already.
+    std::function<EditorView*(const QString& path, int line)> openSource{};
+    // The editor Toggle Breakpoint, Run to Cursor and Evaluate act on; empty: none.
+    std::function<EditorView*()> currentEditor{};
+    // A notification (a crash stop, a session that could not start); empty: logged.
+    std::function<void(const QString& title, const QString& text, bool error)> notify{};
+    // Shows the Debug tool window (a session started); empty: nothing.
+    std::function<void()> showToolWindow{};
+    std::function<bool()> alternateAvailable{};
+    std::function<bool()> mayStart{};
+    std::function<Result<void>(std::function<void(Result<debug::DebugTarget>)>)> startAlternate{};
+    std::function<void()> stopAlternate{};
+};
+
+// Where the controller gets its adapter and services; every pointer must outlive the controller.
+struct DebugControllerOptions {
+    const project::TrustStore* trust = nullptr;    // Required: no session starts without it.
+    io::IFileSystem* fs = nullptr;                 // For lldb-dap discovery and workspace.json.
+    io::IProcessLauncher* launcher = nullptr;      // Starts lldb-dap.
+    std::function<std::string()> lldbDapSetting{}; // tools.lldbDap.path; empty: "".
+    // Overrides lldb-dap (tests: the fake-dap double). Empty: lldb-dap through `launcher`.
+    debug::AdapterFactory adapterFactory{};
+};
+
+// The DebugTarget a Debug run's hand-off describes (header comment, "Debug"). Pure.
+[[nodiscard]] debug::DebugTarget debugTargetFor(const build::RunOutcome& outcome, const build::DebugLaunch& launch);
+
+class DebugController final : public QObject {
+    Q_OBJECT
+
+public:
+    // How long stop() waits for lldb-dap to end the session before it kills the tree.
+    static constexpr std::chrono::milliseconds kStopTimeout{3000};
+
+    // `breakpoints` must outlive the controller.
+    DebugController(debug::BreakpointManager& breakpoints, DebugControllerOptions options,
+                    DebugControllerHooks hooks = {}, QObject* parent = nullptr);
+    ~DebugController() override;
+    DebugController(const DebugController&) = delete ("a QObject");
+    DebugController& operator=(const DebugController&) = delete ("a QObject");
+
+    // The run service Debug builds through (null detaches).
+    void setRunService(build::RunService* service) noexcept { m_service = service; }
+    [[nodiscard]] build::RunService* runService() const noexcept { return m_service; }
+    // The console the program's output goes to (optional; it must outlive the controller or be
+    // destroyed with it).
+    void setConsole(RunConsole* console);
+    // Loads the breakpoints of `root` (absolute) and saves there from now on; "" stops saving.
+    [[nodiscard]] Result<void> setWorkspaceRoot(std::string root);
+
+    // Debug: a Debug run of `project` (default: the startup project). Errors: Busy (a session is
+    // live), InvalidArgument (no run service), and RunService::debug's.
+    [[nodiscard]] Result<void> debug(std::optional<project::ProjectId> project = std::nullopt);
+    // Starts a session on `target` (debug() ends here; tests call it directly). Errors: Busy,
+    // InvalidArgument (no trust store), NotFound (lldb-dap is missing), Untrusted (no adapter
+    // started), the adapter factory's.
+    [[nodiscard]] Result<void> startTarget(const debug::DebugTarget& target);
+
+    // Whether a session is live (Starting, Running or Stopped).
+    [[nodiscard]] bool debugging() const noexcept {
+        return m_session != nullptr || m_pendingRun.has_value() || m_alternatePending;
+    }
+    [[nodiscard]] bool canDebug() const {
+        return !m_shutdown && (!m_hooks.mayStart || m_hooks.mayStart()) &&
+               (m_service != nullptr || (m_hooks.alternateAvailable && m_hooks.alternateAvailable()));
+    }
+    void shutdown();
+    void rerun();
+    void cancelRerun();
+    [[nodiscard]] bool rerunPending() const noexcept { return m_rerunPending; }
+    [[nodiscard]] debug::DebugState state() const noexcept { return m_state; }
+    [[nodiscard]] bool paused() const noexcept { return m_state == debug::DebugState::Stopped; }
+    [[nodiscard]] const std::optional<debug::StopInfo>& stopInfo() const noexcept { return m_stop; }
+    // "Paused on breakpoint", "Exception: ..." while paused; "Running"; "" without a session.
+    [[nodiscard]] QString statusText() const;
+    [[nodiscard]] const std::vector<debug::DebugThread>& threads() const noexcept { return m_threads; }
+    [[nodiscard]] std::optional<std::int64_t> selectedThread() const noexcept { return m_thread; }
+    [[nodiscard]] const debug::FrameList& frames() const noexcept { return m_frames; }
+    [[nodiscard]] const std::optional<debug::DebugFrame>& selectedFrame() const noexcept { return m_frame; }
+    [[nodiscard]] debug::DebugSession* session() const noexcept { return m_session.get(); }
+    [[nodiscard]] debug::BreakpointManager& breakpoints() noexcept { return m_breakpoints; }
+    // The session's title ("App [Debug|x64]").
+    [[nodiscard]] const QString& title() const noexcept { return m_title; }
+
+    // Stepping; each reports a failure through hooks.notify and returns false.
+    bool resume();
+    bool pause();
+    bool stepOver();
+    bool stepInto();
+    bool stepOut();
+    // Runs to the current editor's caret line (hooks.currentEditor).
+    bool runToCursor();
+    // Ends the session (header comment). Idempotent.
+    void stop();
+
+    // The Frames list and the thread combo.
+    void selectThread(std::int64_t threadId);
+    void selectFrame(std::int64_t frameId);
+    void loadMoreFrames();
+
+    // Breakpoints. Toggles one at 0-based `line` of `path`.
+    void toggleBreakpoint(const std::string& path, int line);
+    // Toggles one on the current editor's caret line.
+    bool toggleBreakpointAtCaret();
+    // Asks for Evaluate Expression (evaluateRequested) with the current editor's selection.
+    void requestEvaluate();
+    // Connects `view` (header comment); it detaches itself when destroyed.
+    void attachEditor(EditorView* view);
+    void detachEditor(EditorView* view);
+
+    // Data for the tool window's models; results arrive on the GUI thread (dropped after the session
+    // ends). `done` gets Cancelled when the session ended first.
+    using VariablesDone = std::function<void(Result<debug::VariableList>)>;
+    using ScopesDone = std::function<void(Result<debug::ScopeList>)>;
+    using EvaluateDone = std::function<void(Result<debug::dap::Variable>)>;
+    void scopes(std::int64_t frameId, ScopesDone done);
+    void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
+    // Evaluates in the selected frame.
+    void evaluate(const QString& expression, const QString& context, EvaluateDone done);
+
+signals:
+    // Started, paused, resumed or ended (the toolbar's enabled states).
+    void stateChanged();
+    // A stop: its summary, and whether it is a crash or an unhandled exception.
+    void stopped(const QString& summary, bool crash);
+    void threadsChanged();
+    void framesChanged();
+    // The selected frame changed (the Variables view reloads; watches are evaluated again).
+    void frameSelected();
+    // The session ended: why, in one line ("Process finished with exit code 0").
+    void sessionEnded(const QString& summary);
+    // Evaluate Expression (Alt+F8) was asked for, with the editor's selection as the expression.
+    void evaluateRequested(const QString& expression);
+
+private:
+    struct Relay;
+    struct Attached;
+
+    // GUI thread: the session's events.
+    void onState(debug::DebugState state);
+    void onStopped(const debug::StopInfo& stop);
+    void onThreads(std::vector<debug::DebugThread> threads);
+    void onFrames(std::int64_t threadId, debug::FrameList frames);
+    void onFrameSelected(std::int64_t threadId, const debug::DebugFrame& frame);
+    void onOutput(const std::string& category, const std::string& text);
+    void onBreakpoints(const std::vector<debug::BreakpointResult>& results);
+    void onEnded(const debug::DebugOutcome& outcome);
+    void onRunFinished(const build::RunOutcome& outcome, const std::optional<build::DebugLaunch>& launch);
+
+    // Breakpoints.
+    void onBreakpointsChanged(std::string_view path, debug::BreakpointManager::Change change);
+    void refreshMarkers(EditorView& view);
+    void showExecutionPoint();
+    void save();
+
+    [[nodiscard]] Result<debug::AdapterFactory> adapterFactory();
+    bool report(Result<void> result, const QString& what);
+    void endSession();
+
+    debug::BreakpointManager& m_breakpoints;
+    DebugControllerOptions m_options;
+    DebugControllerHooks m_hooks;
+    build::RunService* m_service = nullptr;
+    QPointer<RunConsole> m_console;
+    std::string m_root;
+    std::uint64_t m_listener = 0;
+
+    std::shared_ptr<Relay> m_relay;
+    std::unique_ptr<debug::DebugSession> m_session;
+    bool m_alternatePending = false;
+    bool m_shutdown = false;
+    bool m_rerunPending = false;
+    QTimer m_rerunTimer;
+    std::uint64_t m_generation = 0; // Bumped per session; stale events are dropped.
+    std::optional<build::RunId> m_pendingRun;
+    QString m_title;
+    debug::DebugState m_state = debug::DebugState::Ended;
+    std::optional<debug::StopInfo> m_stop;
+    std::vector<debug::DebugThread> m_threads;
+    std::optional<std::int64_t> m_thread;
+    debug::FrameList m_frames;
+    std::optional<debug::DebugFrame> m_frame;
+    QTimer m_killTimer;
+
+    std::map<EditorView*, std::unique_ptr<Attached>> m_editors;
+};
+
+} // namespace frost::ui

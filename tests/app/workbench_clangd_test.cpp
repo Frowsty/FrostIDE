@@ -7,12 +7,15 @@
 // controller: Ctrl+B and Ctrl+click open a declaration, Alt+F7 shows Find Usages.
 
 #include "frost/lang/compile_commands.hpp"
+#include "frost/ui/find/find_feature.hpp"
+#include "frost/ui/find/find_popup.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
+#include <QLineEdit>
 
 #include <algorithm>
 #include <chrono>
@@ -88,6 +91,33 @@ TEST(WorkbenchClangd, LiveDiagnosticsAppearAndClearAfterTheFix) {
     ASSERT_TRUE(
         waitFor([&] { return liveErrors(*rig.workbench).empty() && view->editor().diagnostics().empty(); }, kPatience));
     EXPECT_TRUE(view->editor().lineMarkers().empty());
+}
+
+TEST(WorkbenchClangd, FindReplaceUpdatesLiveDiagnostics) {
+    frost::test::disableCrashDialogs();
+    WorkDir dir("clangd-find");
+    dir.write("main.cpp", "int main() { return missing_find_value; }\n");
+    RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return !liveErrors(*rig.workbench).empty(); }, kPatience));
+    auto* find = rig.window->findChild<frost::ui::FindFeature*>();
+    ASSERT_NE(find, nullptr);
+    auto* popup = find->showPopup(true);
+    popup->queryField()->setText(QStringLiteral("missing_find_value"));
+    popup->replacementField()->setText(QStringLiteral("0"));
+    popup->searchNow();
+    popup->session()->wait();
+    ASSERT_EQ(popup->session()->matchCount(), 1U);
+    auto result = find->replace(*popup, true);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->replacements, 1U);
+    ASSERT_TRUE(waitFor([&] { return liveErrors(*rig.workbench).empty(); }, kPatience));
+    EXPECT_TRUE(rig.view()->document().dirty());
 }
 
 TEST(WorkbenchClangd, ConfigurationSwitchRestartsInsightForOpenEditors) {

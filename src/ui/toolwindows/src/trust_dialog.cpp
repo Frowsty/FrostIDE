@@ -47,6 +47,9 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
                  "extensions. "
                  "Trust it only if you know where it comes from. Trusting covers these folders and everything below "
                  "them:")
+        : purpose == TrustPurpose::ManagedLanguageServer
+            ? tr("The C# language server evaluates project files and may run project-selected code. Trust it only "
+                 "if you know where it comes from. Trusting covers these folders and everything below them:")
             : tr("Configuring or building runs code from the project: CMake scripts, MSBuild targets, "
                  "build events and custom build steps. "
                  "Trust it only if you know where it comes from. Trusting covers these folders and everything below "

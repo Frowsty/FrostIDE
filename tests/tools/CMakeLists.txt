@@ -17,7 +17,7 @@ endif()
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
 set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch asset_fetch budgets symbolize
-    verify_support frost_perf verify_scripts build_lldb)
+    verify_support frost_perf verify_scripts build_lldb managed_server)
 if(WIN32)
     # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.
     list(APPEND _frost_tool_suites windows_scripts)

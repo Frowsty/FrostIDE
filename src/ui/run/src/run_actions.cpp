@@ -32,7 +32,9 @@ Result<void> registerRunActions(input::ActionRegistry& registry, RunController& 
         }
     };
     RunController* c = &controller;
-    const auto hasSolution = [c](const input::ActionContext&) { return c->canRun(); };
+    const auto hasSolution = [c, shared](const input::ActionContext&) {
+        return c->canRun() && (!shared->debugging || !shared->debugging());
+    };
     const auto runAction = [c, report](const input::ActionContext&, const input::InvokeInfo&) {
         if (auto started = c->run(); !started && started.error().code() != ErrorCode::Cancelled) {
             report(started.error());
@@ -62,8 +64,19 @@ Result<void> registerRunActions(input::ActionRegistry& registry, RunController& 
                      .group = "Run",
                      .synonyms = {"Kill", "Terminate"},
                      .context = {},
-                     .enabled = [c](const input::ActionContext&) { return c->running(); },
-                     .handler = [c](const input::ActionContext&, const input::InvokeInfo&) { c->stop(); }});
+                     .enabled =
+                         [c, shared](const input::ActionContext&) {
+                             return c->running() || (shared->debugging && shared->debugging());
+                         },
+                     .handler =
+                         [c, shared](const input::ActionContext&, const input::InvokeInfo&) {
+                             if (shared->debugging && shared->debugging() && shared->stopDebugging) {
+                                 shared->stopDebugging();
+                             }
+                             if (c->running()) {
+                                 c->stop();
+                             }
+                         }});
     specs.push_back({.id = std::string(kRerunActionId),
                      .name = "Rerun",
                      .description = "Stop the program if it runs, then build and run it again",

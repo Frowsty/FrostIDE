@@ -239,6 +239,7 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
         bool stopRequested = false;
         bool rerunPending = false;
         std::unique_ptr<RunSession> session{}; // While Running and Stopping.
+        std::optional<DebugLaunch> launch{};   // A Debug run's resolved program.
     };
 
     struct CacheEntry {
@@ -266,6 +267,17 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
     bool closing FROST_GUARDED_BY(mutex) = false;
     // runs.size() for waitForIdle, which must not take `mutex` (it holds queueMutex).
     std::atomic<std::size_t> activeCount{0};
+
+    // The handlers of unfinished Debug runs. Taken after `mutex` when both are held (emitOutput
+    // runs with and without it).
+    mutable Mutex debugMutex;
+    std::map<RunId, std::shared_ptr<const DebugRunHandlers>> debugHandlers FROST_GUARDED_BY(debugMutex);
+
+    std::shared_ptr<const DebugRunHandlers> debugHandlersFor(RunId id) const {
+        LockGuard lock(debugMutex);
+        const auto it = debugHandlers.find(id);
+        return it == debugHandlers.end() ? nullptr : it->second;
+    }
 
     // Serializes the state file's read-modify-write cycles.
     Mutex persistMutex;
@@ -333,9 +345,12 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
     }
 
     void emitOutput(RunId id, RunOutputKind kind, std::string text) {
-        post([this, id, kind, text = std::move(text)] {
+        post([this, id, kind, text = std::move(text), debug = debugHandlersFor(id)] {
             if (callbacks.onOutput) {
                 callbacks.onOutput(id, kind, text);
+            }
+            if (debug && debug->onOutput) {
+                debug->onOutput(kind, text);
             }
         });
     }
@@ -381,9 +396,20 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
         if (run->rerunPending && !closing) {
             again = run->info.project;
         }
-        post([this, outcome] {
+        std::shared_ptr<const DebugRunHandlers> debug;
+        {
+            LockGuard debugLock(debugMutex);
+            if (const auto it = debugHandlers.find(id); it != debugHandlers.end()) {
+                debug = std::move(it->second);
+                debugHandlers.erase(it);
+            }
+        }
+        post([this, outcome, debug, launch = std::move(run->launch)] {
             if (callbacks.onRunFinished) {
                 callbacks.onRunFinished(outcome);
+            }
+            if (debug && debug->onFinished) {
+                debug->onFinished(outcome, launch);
             }
         });
         last = std::move(outcome);
@@ -614,6 +640,9 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
         const Subsystem subsystem = peSubsystem(*image).value_or(Subsystem::Unknown);
         image->clear();
         image->shrink_to_fit();
+        if (handOverToDebugger(id, *command, subsystem, *model)) {
+            return;
+        }
         const ConsoleMode mode = subsystem == Subsystem::Gui ? ConsoleMode::NoConsole
                                  : externalConsole && options.msbuildRunSupported && io::kWindowsProcessRules
                                      ? ConsoleMode::ExternalConsole
@@ -692,6 +721,35 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
             stale->stop();
             stale.reset();
         }
+    }
+
+    // A Debug run ends here with its resolved program (run_service.hpp, "A run"); false for a Run.
+    bool handOverToDebugger(RunId id, const RunCommand& command, Subsystem subsystem,
+                            const project::SolutionModel& model) {
+        std::optional<project::ProjectId> again;
+        {
+            LockGuard lock(mutex);
+            Run* run = findLocked(id);
+            if (run == nullptr) {
+                return true;
+            }
+            if (!run->info.debug) {
+                return false;
+            }
+            if (run->stopRequested || closing) {
+                again = stoppedLocked(id);
+            } else {
+                emitSystem(id, "Debugging " + command.displayCommandLine());
+                run->info.commandLine = command.displayCommandLine();
+                run->launch = DebugLaunch{
+                    .command = command, .subsystem = subsystem, .trustRoots = project::buildTrustRoots(model)};
+                RunOutcome outcome;
+                outcome.debugged = true;
+                again = finishLocked(id, std::move(outcome));
+            }
+        }
+        startAgain(id, again);
+        return true;
     }
 
     // Ends run `id` before its program started, outside the lock.
@@ -785,11 +843,13 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
         return std::nullopt;
     }
 
-    // The checks of run() and the new run itself.
-    Result<RunId> startRun(std::optional<project::ProjectId> project);
+    // The checks of run() and the new run itself; with `debug`, a Debug run (debug()).
+    Result<RunId> startRun(std::optional<project::ProjectId> project,
+                           std::shared_ptr<const DebugRunHandlers> debug = nullptr);
 };
 
-Result<RunId> RunService::State::startRun(std::optional<project::ProjectId> project) {
+Result<RunId> RunService::State::startRun(std::optional<project::ProjectId> project,
+                                          std::shared_ptr<const DebugRunHandlers> debug) {
     LockGuard lock(mutex);
     if (!solution) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
@@ -829,7 +889,12 @@ Result<RunId> RunService::State::startRun(std::optional<project::ProjectId> proj
     run.info.state = RunState::Building;
     run.info.configuration = solution->configurations()[*configuration];
     run.configurationIndex = *configuration;
+    run.info.debug = debug != nullptr;
     const RunId newId = run.info.id;
+    if (debug) {
+        LockGuard debugLock(debugMutex);
+        debugHandlers.emplace(newId, std::move(debug));
+    }
     emitStarted(run.info);
     runs.emplace(newId, std::move(run));
     activeCount.store(runs.size());
@@ -1022,6 +1087,10 @@ Result<void> RunService::setUseExternalConsole(bool external) {
 }
 
 Result<RunId> RunService::run(std::optional<project::ProjectId> project) { return m_state->startRun(project); }
+
+Result<RunId> RunService::debug(std::optional<project::ProjectId> project, DebugRunHandlers handlers) {
+    return m_state->startRun(project, std::make_shared<const DebugRunHandlers>(std::move(handlers)));
+}
 
 Result<RunId> RunService::rerun(std::optional<project::ProjectId> project) {
     std::optional<RunId> active;

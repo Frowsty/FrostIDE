@@ -84,6 +84,16 @@ struct LineChangeMarker {
     friend bool operator==(const LineChangeMarker&, const LineChangeMarker&) = default;
 };
 
+// A line breakpoint on buffer line `line` (frost::ui::DebugController fills these from the
+// BreakpointManager; ADR 0050).
+struct BreakpointMarker {
+    LineIndex line;
+    BreakpointKind kind = BreakpointKind::Verified;
+    std::string message; // The tooltip: why it is unverified; "" when verified.
+
+    friend bool operator==(const BreakpointMarker&, const BreakpointMarker&) = default;
+};
+
 /*
  * Facts about the file that the document itself does not hold, from whoever opened it (the save
  * manager's load service): the status bar's encoding token (text::formatStatus, "UTF-8 BOM"), the
@@ -175,8 +185,9 @@ struct EditorRendererState {
  * Keys: with services.keys, KeyPress and ShortcutOverride go through EditorKeyRouting (the IntelliJ
  * keymap); Tab and Shift+Tab reach the editor rather than moving focus. Mouse: click places the
  * caret, drag selects, double click selects a word, triple click a line, Shift+click extends, a
- * click in the gutter selects the line, the wheel scrolls. IME: QInputMethodEvent preedit goes into
- * the document as a composition (Document::updateComposition) and the commit becomes one Typing step.
+ * click in the gutter selects the line (with setBreakpointGutterEnabled, a click left of the line
+ * numbers asks for a breakpoint instead: breakpointToggleRequested), the wheel scrolls. IME: QInputMethodEvent preedit
+ * goes into the document as a composition (Document::updateComposition) and the commit becomes one Typing step.
  *
  * Painting: paintEvent builds an EditorDisplayList for the visible rows (buildDisplayList) and hands
  * it to the renderer. Highlight spans are queried for the visible rows only and cached until the tree
@@ -230,6 +241,9 @@ public:
     bool typeText(std::string_view utf8);
     // Applies a command result like perform does (repaint, highlight, scroll to the caret, status).
     bool apply(const text::CommandResult& result);
+    // Follows an externally applied change to this document, updating display, caret and listeners.
+    // The change must start at this editor's current version. GUI thread; errors are from Editor::follow.
+    [[nodiscard]] Result<void> followExternalChange(const text::ChangeSet& change);
     // Moves the primary caret to 1-based `line` and `column` (clamped) as one caret.
     void goToLine(int line, int column);
     // Replaces the selections (a click elsewhere, a navigation target) and scrolls to the caret.
@@ -264,6 +278,20 @@ public:
     // The messages of the markers on the line at viewport point `at` when it is in the gutter, one per
     // line (the gutter tooltip); empty elsewhere.
     [[nodiscard]] QString lineMarkerToolTip(QPointF at) const;
+
+    // Line breakpoints (sorted by line on the way in; replaces the previous set). A line with a
+    // breakpoint or the execution point shows it in place of its number (IntelliJ's new UI).
+    void setBreakpointMarkers(std::vector<BreakpointMarker> markers);
+    [[nodiscard]] const std::vector<BreakpointMarker>& breakpointMarkers() const noexcept { return m_breakpoints; }
+    // The debugger's execution point (the stopped frame's line), or nullopt.
+    void setExecutionPoint(std::optional<LineIndex> line);
+    [[nodiscard]] std::optional<LineIndex> executionPoint() const noexcept { return m_executionPoint; }
+    // Whether a click in the gutter's breakpoint area emits breakpointToggleRequested (off: it
+    // selects the line, as before). The breakpoint area is the gutter left of the marker column.
+    void setBreakpointGutterEnabled(bool enabled) noexcept { m_breakpointGutter = enabled; }
+    [[nodiscard]] bool breakpointGutterEnabled() const noexcept { return m_breakpointGutter; }
+    // The buffer line under viewport point `at` when it lies in the breakpoint area, else nullopt.
+    [[nodiscard]] std::optional<LineIndex> breakpointLineAt(QPointF at) const;
 
     // --- Insight (M3, ADR 0047; see the class comment) ---
     /*
@@ -395,6 +423,7 @@ signals:
     void statusChanged();
     // The renderer backend changed (rendererState().active); viewport() is a new widget.
     void rendererChanged();
+    void breakpointToggleRequested(int line);
     // insightSummary() or insightEnabled() changed (the status-bar indicator follows it).
     void insightChanged();
     // The text changed to `version` (the language bridge schedules its requests from this).
@@ -600,6 +629,9 @@ private:
     GoToLinePopup* m_goToLine = nullptr;
 
     std::vector<LineMarker> m_markers;
+    std::vector<BreakpointMarker> m_breakpoints;
+    std::optional<LineIndex> m_executionPoint;
+    bool m_breakpointGutter = false;
     std::vector<LineChangeMarker> m_lineChanges;
 
     // Insight (ADR 0047): every range is in the current text.

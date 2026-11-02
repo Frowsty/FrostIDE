@@ -31,6 +31,10 @@ frost_add_library(app LAYER app
         src/cmake_build_backend.hpp
         src/cmake_integration.hpp
         src/cmake_integration.cpp
+        src/engine_integration.cpp
+        src/engine_integration.hpp
+        src/engine_request_helper.cpp
+        src/engine_request_helper.hpp
         src/project_open_broker.cpp
         src/project_open_broker.hpp
         src/diagnostics_qt.cpp
@@ -46,10 +50,12 @@ frost_add_library(app LAYER app
         src/workbench_documents.cpp
         src/workbench_language.cpp
         src/workbench_lua.cpp
+        src/workbench_managed.cpp
         src/workbench_project.cpp
         src/workbench_terminal.cpp
+        src/workbench_find.cpp
         ${frost_startup_core_sources}
-    DEPS frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
+    DEPS frost::ui_find frost::ui_debug frost::debug frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
          frost::ui_shell frost::ui frost::lang frost::build frost::document frost::project frost::settings
          frost::syntax frost::storage frost::text frost::input frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)

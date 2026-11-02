@@ -118,6 +118,13 @@
         "lib/liblldb.so.23.1": "symlink:liblldb.so.23.1.4",
         "lib/liblldb.so.23.1.4": "1b82c9fb48248cccb39a70c22389aa2294cd379b3ed616ed84aa2de4eb86dd7f"
       }
+    },
+    "dotnet": {
+      "version": "10.0.403",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-linux-x64.tar.gz",
+      "file": "dotnet-sdk-10.0.403-linux-x64.tar.gz",
+      "sha512": "b7b3d8461cf98b07d2552ce9199702fa3ad010ac2671a5f8cd5136f7534e50f6855ba7bbb02b11494563f1d04156276a31cda1103b900e5eecd0d9473dc7b9c5",
+      "bin": "."
     }
   },
   "qt": {
@@ -125,7 +132,11 @@
     "windows": {
       "repository": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64",
       "package": "qt.qt6.6120.win64_msvc2022_64",
-      "archives": ["qtbase", "qtsvg", "qttools"],
+      "archives": [
+        "qtbase",
+        "qtsvg",
+        "qttools"
+      ],
       "updatesSha256": "ba09f355a6e42e1373b939d26d7742df7348f298a465420083b3cfd28ed2914b",
       "archiveSha256": {
         "qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z": "219d1b86def3be418e31d704572bc4acc91b2ec373c65595c9fb12b42bf098dc",
@@ -136,7 +147,12 @@
     "linux": {
       "repository": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6120/qt6_6120",
       "package": "qt.qt6.6120.linux_gcc_64",
-      "archives": ["qtbase", "qtsvg", "qttools", "icu"],
+      "archives": [
+        "qtbase",
+        "qtsvg",
+        "qttools",
+        "icu"
+      ],
       "updatesSha256": "615f617ad82e9c9b50e339ce19eb340901919ea29386a93843be236cb77ca5a7",
       "archiveSha256": {
         "qtbase-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z": "943023b929d0c08eafe7341700b5ed7601284410b7afd6093f950be291d1d7cd",
@@ -153,5 +169,17 @@
   "msvc": {
     "vcToolsVersion": "14.44.35207",
     "windowsSdkVersion": "10.0.26100.0"
+  },
+  "managedServer": {
+    "name": "csharp-ls",
+    "version": "0.28.0",
+    "commit": "72671fc7fa810c158864e72485db68e8b9b25c3d",
+    "url": "https://api.nuget.org/v3-flatcontainer/csharp-ls/0.28.0/csharp-ls.0.28.0.nupkg",
+    "sha256": "8f815e4f22674106a8244beba07e4b4b062e31528e404aa8489312effb8c0e0c",
+    "license": "MIT",
+    "runtime": "net10.0",
+    "entry": "tools/net10.0/any/CSharpLanguageServer.dll",
+    "adr": "docs/adr/0064-managed-language.md",
+    "manifestSha256": "a9c63fb123b61140ab57fd821bf05270fe0647390f68d9ec648625b3cdc4a335"
   }
 }

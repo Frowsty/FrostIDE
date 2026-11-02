@@ -227,6 +227,13 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
             scheduleSearch();
         }
     });
+    connect(m_directory, &QLineEdit::textEdited, this, [this] { m_base.directoryExplicit = true; });
+    for (std::size_t i = 0; i < m_scopes.size(); ++i) {
+        connect(m_scopes[i], &QToolButton::clicked, this, [this, i] {
+            m_base.scopeExplicit = true;
+            m_base.preferredScope = kScopeOrder[i];
+        });
+    }
     // A changed replacement keeps the matches; only the plan differs.
     connect(m_replacement, &QLineEdit::textChanged, this, &FindPopup::updateButtons);
     connect(m_results, &QListWidget::currentRowChanged, this, [this] {
@@ -274,7 +281,10 @@ FindSettings FindPopup::settings() const {
 
 void FindPopup::scheduleSearch() {
     if (!m_filling) {
+        m_searchPending = true;
         m_debounce->start();
+        updateButtons();
+        updatePreview();
     }
 }
 
@@ -284,6 +294,7 @@ void FindPopup::searchNow() {
         return;
     }
     m_searchedOnce = true;
+    m_searchPending = false;
     m_session->start(settings());
 }
 
@@ -302,7 +313,7 @@ FindSession* FindPopup::takeSession() {
 
 std::optional<std::pair<std::size_t, std::size_t>> FindPopup::currentMatch() const {
     const QListWidgetItem* item = m_results->currentItem();
-    if (item == nullptr || m_session == nullptr) {
+    if (item == nullptr || m_session == nullptr || m_searchPending) {
         return std::nullopt;
     }
     return std::pair{static_cast<std::size_t>(item->data(find_detail::kFileIndexRole).toInt()),
@@ -470,7 +481,7 @@ void FindPopup::updatePreview() {
 }
 
 void FindPopup::updateButtons() {
-    const bool hasResults = m_session != nullptr && !m_session->files().empty();
+    const bool hasResults = m_session != nullptr && !m_searchPending && !m_session->files().empty();
     m_openInWindow->setEnabled(hasResults);
     const bool idle = m_session != nullptr && !m_session->running();
     m_replaceOne->setEnabled(m_replaceMode && idle && currentMatch().has_value());

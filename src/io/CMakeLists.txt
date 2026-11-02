@@ -14,6 +14,7 @@ set(frost_io_sources
     src/file_system.cpp
     src/ignore_rules.cpp
     src/internal.cpp
+    src/loopback_stream.cpp
     src/mem_fs.cpp
     src/mem_fs_watcher.cpp
     src/os_error.cpp

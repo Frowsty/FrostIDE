@@ -54,6 +54,7 @@ DocumentEditorView::~DocumentEditorView() {
     if (m_factory != nullptr) {
         m_factory->forget(*this);
     }
+    m_listener.editorClosing(*this);
     // The widget goes first: the listener may close the document it shows.
     m_editor.reset();
     m_listener.editorClosed(*this);

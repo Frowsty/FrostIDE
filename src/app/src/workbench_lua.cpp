@@ -63,6 +63,8 @@ void Workbench::offerLuaTrust() {
     dialog->open();
 }
 void Workbench::startLua(const std::string& root) {
+    if (m_shutDown)
+        return;
     stopLua();
     m_luaObservedTrust = m_services.trust.isTrusted(root);
     m_luaConfiguredPath = m_services.settings.snapshot()->get(settings::key::toolsLuaLanguageServerPath);

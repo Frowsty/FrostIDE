@@ -100,11 +100,17 @@ bool EditorView::viewportEvent(QEvent* event) {
 }
 
 QString EditorView::lineMarkerToolTip(QPointF at) const {
-    if (at.x() >= gutterWidth() || m_markers.empty()) {
+    if (at.x() >= gutterWidth() || (m_markers.empty() && m_breakpoints.empty())) {
         return {};
     }
     const LineIndex line = m_editor->text().lineAt(hitAt(at).offset);
     QStringList messages;
+    for (auto it = std::ranges::lower_bound(m_breakpoints, line, {}, &BreakpointMarker::line);
+         it != m_breakpoints.end() && it->line == line; ++it) {
+        if (!it->message.empty()) {
+            messages.push_back(QString::fromStdString(it->message));
+        }
+    }
     for (auto it = std::ranges::lower_bound(m_markers, line, {}, &LineMarker::line);
          it != m_markers.end() && it->line == line; ++it) {
         messages.push_back(QString::fromStdString(it->message));
@@ -395,6 +401,14 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
         QAbstractScrollArea::mousePressEvent(event);
         return;
     }
+    if (m_breakpointGutter) {
+        if (const std::optional<LineIndex> line = breakpointLineAt(event->position())) {
+            // The breakpoint area toggles a breakpoint and leaves the selection alone (IntelliJ).
+            emit breakpointToggleRequested(static_cast<int>(line->value()));
+            event->accept();
+            return;
+        }
+    }
     beginInput();
     if (m_composing) {
         if (const std::optional<text::ByteRange> range = m_document->compositionRange()) {
@@ -460,6 +474,10 @@ void EditorView::mouseDoubleClickEvent(QMouseEvent* event) {
         return;
     }
     const QPointF pos = event->position();
+    if (m_breakpointGutter && breakpointLineAt(pos)) {
+        event->accept();
+        return;
+    }
     if (pos.x() < gutterWidth() || insightContains(pos)) {
         mousePressEvent(event);
         return;

@@ -85,6 +85,49 @@ TEST_F(EncodingsTree, PlainSearchFindsEveryEncodingAndSkipsBinaryFiles) {
     EXPECT_TRUE(std::ranges::is_sorted(paths)) << paths.front();
 }
 
+TEST_F(EncodingsTree, DirectoryHonorsNestedGitignoreAndIgnoreFiles) {
+    tree.write(".gitignore", "ignored.txt\nsub/hidden.cpp\n");
+    tree.write("ignored.txt", "needle ignored\n");
+    tree.write("sub/hidden.cpp", "needle hidden\n");
+    tree.write("sub/.ignore", "extra.cpp\n");
+    tree.write("sub/extra.cpp", "needle ignored too\n");
+    tree.write("sub/visible.cpp", "needle visible\n");
+    FindRun run = runFind(loader, directoryRequest(tree.root(), "needle"));
+    ASSERT_TRUE(run.summary);
+    EXPECT_EQ(run.matchesIn("ignored.txt"), 0U);
+    EXPECT_EQ(run.matchesIn("hidden.cpp"), 0U);
+    EXPECT_EQ(run.matchesIn("extra.cpp"), 0U);
+    EXPECT_EQ(run.matchesIn("visible.cpp"), 1U);
+}
+
+TEST_F(EncodingsTree, GitignoreCanReincludeDefaultExcludedDirectory) {
+    tree.write(".gitignore", "!bin/\n");
+    FindRun run = runFind(loader, directoryRequest(tree.root(), "needle"));
+    ASSERT_TRUE(run.summary);
+    EXPECT_EQ(run.matchesIn("skipped.cpp"), 1U);
+}
+
+TEST_F(EncodingsTree, NestedDirectoryAppliesProjectAncestorIgnoreRules) {
+    tree.write(".gitignore", "sub/ignored.cpp\n");
+    tree.write("sub/ignored.cpp", "needle\n");
+    tree.write("sub/visible.cpp", "needle\n");
+    tree.write("other/outside.cpp", "needle\n");
+    FindRequest request = directoryRequest(io::joinPath(tree.root(), "sub").value(), "needle");
+    request.target.ignoreRoot = tree.root();
+    FindRun run = runFind(loader, std::move(request));
+    ASSERT_TRUE(run.summary);
+    EXPECT_EQ(run.matchesIn("ignored.cpp"), 0U);
+    EXPECT_EQ(run.matchesIn("visible.cpp"), 1U);
+    EXPECT_EQ(run.matchesIn("outside.cpp"), 0U);
+}
+
+TEST_F(EncodingsTree, MissingNestedDirectoryIsAnErrorWithProjectIgnoreRoot) {
+    FindRequest request = directoryRequest(io::joinPath(tree.root(), "missing").value(), "needle");
+    request.target.ignoreRoot = tree.root();
+    FindRun run = runFind(loader, std::move(request));
+    EXPECT_FALSE(run.summary);
+}
+
 TEST_F(EncodingsTree, CaseWordAndRegexOptions) {
     text::SearchOptions caseSensitive;
     caseSensitive.caseSensitive = true;

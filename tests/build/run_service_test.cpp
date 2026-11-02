@@ -588,6 +588,67 @@ TEST_F(RunServiceTest, AMissingProgramIsReportedNotStarted) {
     EXPECT_NE(recorder.systemLines().find("App was not started"), std::string::npos) << recorder.systemLines();
 }
 
+// Debug (ADR 0050): builds and resolves like Run, then hands the program to the debugger instead
+// of starting it.
+TEST_F(RunServiceTest, ADebugRunHandsTheResolvedProgramToTheDebugger) {
+    createService();
+    writeProgram("App");
+    Mutex mutex;
+    std::vector<std::pair<RunOutcome, std::optional<DebugLaunch>>> finished;
+    std::string system;
+    const auto handlers = [&] {
+        return DebugRunHandlers{.onOutput =
+                                    [&](RunOutputKind kind, std::string_view text) {
+                                        if (kind == RunOutputKind::System) {
+                                            LockGuard lock(mutex);
+                                            system += text;
+                                        }
+                                    },
+                                .onFinished =
+                                    [&](const RunOutcome& outcome, const std::optional<DebugLaunch>& launch) {
+                                        LockGuard lock(mutex);
+                                        finished.emplace_back(outcome, launch);
+                                    }};
+    };
+    const auto finishedCount = [&] {
+        LockGuard lock(mutex);
+        return finished.size();
+    };
+
+    auto first = service->debug(std::nullopt, handlers());
+    ASSERT_TRUE(first.has_value()) << first.error().describe();
+    builder.finish(false);
+    ASSERT_TRUE(waitUntil([&] { return finishedCount() == 1; }));
+    {
+        LockGuard lock(mutex);
+        EXPECT_TRUE(finished[0].first.buildFailed);
+        EXPECT_FALSE(finished[0].first.debugged);
+        EXPECT_FALSE(finished[0].second.has_value()) << "nothing to debug after a failed build";
+    }
+
+    auto second = service->debug(std::nullopt, handlers());
+    ASSERT_TRUE(second.has_value()) << second.error().describe();
+    EXPECT_TRUE(service->runInfo(*second)->debug);
+    builder.finish(true);
+    ASSERT_TRUE(waitUntil([&] { return finishedCount() == 2; }));
+    LockGuard lock(mutex);
+    const auto& [outcome, launch] = finished[1];
+    EXPECT_TRUE(outcome.debugged);
+    EXPECT_FALSE(outcome.ran()) << "the run service does not start the program";
+    EXPECT_FALSE(outcome.error.has_value());
+    EXPECT_TRUE(outcome.run.debug);
+    ASSERT_TRUE(launch.has_value());
+    EXPECT_EQ(launch->command.executable, programPath("App"));
+    EXPECT_EQ(launch->command.arguments, "--flag \"two words\"");
+    EXPECT_EQ(launch->command.workingDirectory, MemTree::path("Run/App"));
+    ASSERT_FALSE(launch->command.environment.empty());
+    EXPECT_EQ(launch->command.environment.back(), (std::pair<std::string, std::string>{"FROST_RUN_TEST", "1"}));
+    EXPECT_EQ(launch->subsystem, Subsystem::Console);
+    EXPECT_FALSE(launch->trustRoots.empty());
+    EXPECT_TRUE(launcher.launches().empty()) << "lldb-dap starts the program, not the run service";
+    EXPECT_NE(system.find(programPath("App")), std::string::npos) << system;
+}
+
 TEST_F(RunServiceTest, PropertiesAreCachedUntilTheProjectOrUserFileChanges) {
     createService();
     writeProgram("App");

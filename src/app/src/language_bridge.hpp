@@ -54,6 +54,7 @@ public:
     void setServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setServer(std::move(server)); }
 
     void setLuaServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setLuaServer(std::move(server)); }
+    void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
     void setActivePath(std::string_view path) { m_server.setActivePath(path); }
 
     // ILspRequester: the server for the document.

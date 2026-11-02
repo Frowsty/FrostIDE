@@ -158,6 +158,18 @@ CMakeIntegration::~CMakeIntegration() {
     m_controller->setBackend(nullptr);
 }
 
+Result<void> CMakeIntegration::debug(std::function<void(Result<debug::DebugTarget>)> done) {
+    if (running() || m_debugDone)
+        return fail(ErrorCode::Busy, "a CMake target is already running");
+    m_debugDone = std::move(done);
+    auto started = run();
+    if (!started) {
+        m_debugDone = {};
+        return std::unexpected(started.error());
+    }
+    return {};
+}
+
 Result<build::RunId> CMakeIntegration::run() {
     if (m_shutdown)
         return fail(ErrorCode::Cancelled, "the workbench is shutting down");
@@ -216,7 +228,15 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         return;
     m_pending = false;
     build::RunOutcome failed;
+    const auto failDebug = [this](const Error& error) {
+        if (m_debugDone) {
+            auto done = std::move(m_debugDone);
+            m_debugDone = {};
+            done(std::unexpected(error));
+        }
+    };
     if (m_stopRequested) {
+        failDebug(Error(ErrorCode::Cancelled, "debug build cancelled"));
         failed.stopped = true;
         m_console.finish(failed);
         m_runStateChanged();
@@ -226,6 +246,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     if (!outcome.succeeded()) {
         failed.error = outcome.error;
         failed.buildFailed = true;
+        failDebug(outcome.error.value_or(Error(ErrorCode::IoError, "CMake build failed")));
         m_console.finish(failed);
         m_runStateChanged();
         maybeRerun();
@@ -233,6 +254,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     }
     if (m_service->profileGeneration() != m_profileGeneration) {
         failed.error = Error(ErrorCode::Cancelled, "the CMake profile changed while building the target");
+        failDebug(*failed.error);
         m_console.finish(failed);
         m_runStateChanged();
         return;
@@ -246,6 +268,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     }
     if (!target || target->artifacts.empty() || !m_trust.isTrusted(m_service->sourceDirectory())) {
         failed.error = Error(ErrorCode::NotFound, "the built target has no executable artifact or trust was revoked");
+        failDebug(*failed.error);
         m_console.finish(failed);
         m_runStateChanged();
         return;
@@ -268,6 +291,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         }
         if (executable == target->artifacts.end()) {
             failed.error = Error(ErrorCode::NotFound, "the CMake target has no executable artifact");
+            failDebug(*failed.error);
             m_console.finish(failed);
             m_runStateChanged();
             return;
@@ -277,6 +301,18 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         spec.executable = target->artifacts.front();
     }
     spec.workingDirectory = m_service->sourceDirectory();
+    if (m_debugDone) {
+        debug::DebugTarget debugTarget;
+        debugTarget.name = target->name;
+        debugTarget.program = spec.executable;
+        debugTarget.workingDirectory = spec.workingDirectory;
+        debugTarget.trustRoots = {m_service->sourceDirectory()};
+        auto done = std::move(m_debugDone);
+        m_debugDone = {};
+        m_runStateChanged();
+        done(std::move(debugTarget));
+        return;
+    }
     spec.stdinMode = io::Stdio::Pipe;
     auto relay = m_runRelay;
     build::RunSessionCallbacks callbacks;
@@ -327,6 +363,7 @@ void CMakeIntegration::shutdown() {
     if (m_shutdown)
         return;
     m_shutdown = true;
+    m_debugDone = {};
     m_rerun = false;
     m_pending = false;
     ++m_runGeneration;

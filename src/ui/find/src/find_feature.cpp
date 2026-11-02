@@ -60,7 +60,20 @@ FindFeature::FindFeature(ShellWindow& window, FindFeatureServices services)
     FROST_PRE(m_services.scheduler != nullptr && m_services.documents != nullptr);
 }
 
-FindFeature::~FindFeature() = default;
+FindFeature::~FindFeature() { cancelSearches(); }
+
+FindPopup* FindFeature::popup() const noexcept { return m_popup.data(); }
+FindToolWindow* FindFeature::toolWindow() const noexcept { return m_toolWindow.data(); }
+
+void FindFeature::cancelSearches() {
+    if (m_popup) {
+        m_last = m_popup->settings();
+        m_popup->closePopup(Popup::CloseReason::Cancelled);
+        delete m_popup.data();
+    }
+    if (m_toolWindow)
+        m_toolWindow->setSession(nullptr);
+}
 
 FindSessionServices FindFeature::sessionServices() const {
     return FindSessionServices{m_services.scheduler, m_services.documents, m_services.solution, m_services.limits};
@@ -149,10 +162,14 @@ FindSettings FindFeature::initialSettings(bool replace) const {
     settings.replaceMode = replace;
     settings.scope.currentFile = m_services.currentFile ? m_services.currentFile() : std::string();
     const bool solutionOpen = m_services.solution && m_services.solution() != nullptr;
-    if (settings.scope.directory.empty() && m_services.defaultDirectory) {
-        settings.scope.directory = m_services.defaultDirectory();
+    settings.scope.ignoreRoot = m_services.defaultDirectory ? m_services.defaultDirectory() : std::string();
+    if (!settings.directoryExplicit) {
+        settings.scope.directory = settings.scope.ignoreRoot;
     }
-    if (!m_last) {
+    if (settings.scopeExplicit && settings.preferredScope) {
+        settings.scope.kind = *settings.preferredScope;
+    }
+    if (!settings.scopeExplicit) {
         // Solution by default with a solution; otherwise the folder, or the open files.
         settings.scope.kind = solutionOpen                        ? search::ScopeKind::Solution
                               : !settings.scope.directory.empty() ? search::ScopeKind::Directory
@@ -172,6 +189,8 @@ FindSettings FindFeature::initialSettings(bool replace) const {
 FindPopup* FindFeature::showPopup(bool replace) {
     if (m_popup != nullptr) {
         m_popup->closePopup(Popup::CloseReason::Cancelled);
+        // A closed popup is only scheduled for deletion; join its session before replacing it.
+        delete m_popup.data();
     }
     const bool solutionOpen = m_services.solution && m_services.solution() != nullptr;
     auto* popup = new FindPopup(&m_window, sessionServices(), initialSettings(replace), solutionOpen);
@@ -187,6 +206,8 @@ FindPopup* FindFeature::showPopup(bool replace) {
 
 FindToolWindow* FindFeature::openInFindWindow(FindPopup& popup) {
     m_last = popup.settings();
+    if (!popup.resultsCurrent())
+        popup.searchNow();
     FindSession* session = popup.takeSession();
     popup.closePopup(Popup::CloseReason::Accepted);
     m_window.toolWindows().show(find_actions::kFindToolWindow, true);
@@ -201,6 +222,9 @@ FindToolWindow* FindFeature::openInFindWindow(FindPopup& popup) {
 
 Result<search::ReplaceSummary> FindFeature::replace(FindPopup& popup, bool all) {
     FindSession* session = popup.session();
+    if (!popup.resultsCurrent()) {
+        return fail(ErrorCode::Busy, "search criteria changed; wait for the new results");
+    }
     if (session == nullptr) {
         return fail(ErrorCode::InvalidArgument, "the popup has no results to replace");
     }
@@ -212,7 +236,8 @@ Result<search::ReplaceSummary> FindFeature::replace(FindPopup& popup, bool all) 
         }
     }
     session->wait();
-    const search::ReplaceRequest request = session->replaceRequest(only);
+    search::ReplaceRequest request = session->replaceRequest(only);
+    request.replacement = popup.settings().replacement;
     // TODO(M2): run large replaces on a background lane with progress (closed files only; open
     // documents stay on the GUI thread).
     Result<search::ReplaceSummary> summary =

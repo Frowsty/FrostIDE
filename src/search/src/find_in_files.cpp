@@ -52,11 +52,32 @@ struct FileOutcome {
     return io::fileName(path, style);
 }
 
-[[nodiscard]] bool equalsIgnoringAsciiCase(std::string_view a, std::string_view b) noexcept {
-    return a.size() == b.size() && std::ranges::equal(a, b, [](char x, char y) {
-               const auto fold = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-               return fold(x) == fold(y);
-           });
+// Default excludes have lower precedence than project ignore files, so !build/ can re-include.
+[[nodiscard]] io::IgnoreRules directoryExcludes(const std::vector<std::string>& names) {
+    std::string patterns;
+    for (const std::string& name : names) {
+        for (const char c : name) {
+            if (std::string_view("\\!*?[]# ").find(c) != std::string_view::npos)
+                patterns += '\\';
+            patterns += c;
+        }
+        patterns += "/\n";
+    }
+    return io::IgnoreRules::parse(patterns, {}, "Find directory exclusions", io::IgnoreOptions{true});
+}
+
+// True for a path equal to or below a directory, respecting path component boundaries.
+[[nodiscard]] bool withinDirectory(std::string_view path, std::string_view directory) {
+    const std::string child = pathKey(path);
+    std::string parent = pathKey(directory);
+    if (child == parent)
+        return true;
+    if (parent.empty())
+        return false;
+    if (parent.back() != '/' && parent.back() != '\\') {
+        parent += io::isAbsolutePath(directory, io::PathStyle::Windows) ? '\\' : '/';
+    }
+    return child.starts_with(parent);
 }
 
 FileOutcome skippedOutcome(std::string path, SkipKind kind, Error error) {
@@ -233,18 +254,29 @@ sched::Task<Result<FindSummary>> findInFiles(sched::IScheduler& scheduler, const
     std::vector<std::string> files = std::move(request.target.files);
     if (request.target.directory) {
         io::ScanOptions scan;
-        scan.readGitignore = false;
-        scan.skipNames.clear();
+        scan.readGitignore = true;
+        scan.extraIgnoreFiles = {".ignore"};
+        scan.skipNames = io::defaultProjectSkipNames();
+        scan.ignore = scan.ignore.pushed(directoryExcludes(request.target.excludes));
         scan.lane = limits.lane;
         scan.parallelism = limits.parallelism;
-        // TODO(M2): m1/shell-nav's gitignore-aware project scan replaces this walk (search_scope.hpp).
-        scan.descend = [excludes = request.target.excludes](std::string_view directory) {
-            const std::string_view name = baseName(directory);
-            return std::ranges::none_of(
-                excludes, [name](const std::string& skip) { return equalsIgnoringAsciiCase(name, skip); });
+        const std::string selected = *request.target.directory;
+        const std::string root =
+            !request.target.ignoreRoot.empty() && withinDirectory(selected, request.target.ignoreRoot)
+                ? request.target.ignoreRoot
+                : selected;
+        // Walking an ancestor must not turn a missing or non-directory selection into zero matches.
+        if (root != selected) {
+            const auto status = loader.fileSystem().status(selected);
+            if (!status)
+                co_return std::unexpected(status.error());
+            if (status->type != io::FileType::Directory)
+                co_return fail(ErrorCode::InvalidArgument, std::format("'{}' is not a directory", selected));
+        }
+        scan.descend = [selected](std::string_view directory) {
+            return withinDirectory(directory, selected) || withinDirectory(selected, directory);
         };
-        auto tree =
-            co_await io::scanTree(loader.fileSystem(), scheduler, *request.target.directory, std::move(scan), token);
+        auto tree = co_await io::scanTree(loader.fileSystem(), scheduler, root, std::move(scan), token);
         if (!tree) {
             if (tree.error().code() == ErrorCode::Cancelled) {
                 summary.cancelled = true;
@@ -253,7 +285,7 @@ sched::Task<Result<FindSummary>> findInFiles(sched::IScheduler& scheduler, const
             co_return std::unexpected(std::move(tree.error()));
         }
         for (io::ScanEntry& entry : tree->entries) {
-            if (entry.type == io::FileType::Regular) {
+            if (entry.type == io::FileType::Regular && withinDirectory(entry.path, selected)) {
                 files.push_back(std::move(entry.path));
             }
         }

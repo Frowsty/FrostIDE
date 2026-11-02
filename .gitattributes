@@ -24,3 +24,7 @@ third_party/libvterm/** -text
 *.ttf binary
 *.otf binary
 *.7z binary
+
+# Original licence and third-party notice bytes for the pinned managed server.
+third_party/managed-notices/*.txt binary
+third_party/managed-notices/*.rtf binary

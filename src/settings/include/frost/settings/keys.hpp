@@ -99,12 +99,15 @@ inline constexpr Key<std::string> toolsCmakePath{"tools.cmake.path"};
 inline constexpr Key<std::string> toolsNinjaPath{"tools.ninja.path"};
 inline constexpr Key<std::string> toolsGitPath{"tools.git.path"};
 inline constexpr Key<std::string> luaRuntimeVersion{"lua.runtimeVersion"};
+inline constexpr Key<std::string> toolsManagedDotnetPath{"tools.managed.dotnetPath"};
+inline constexpr Key<std::string> toolsManagedServerPath{"tools.managed.serverAssembly"};
 inline constexpr Key<std::string> toolsLuaLanguageServerPath{"tools.luaLanguageServer.path"};
 inline constexpr Key<std::string> toolsClangdPath{"tools.clangd.path"};
 inline constexpr Key<std::string> toolsClangFormatPath{"tools.clangFormat.path"};
 inline constexpr Key<std::string> toolsClangTidyPath{"tools.clangTidy.path"};
 inline constexpr Key<StringList> toolsClangTidyPlugins{"tools.clangTidy.plugins"};
 inline constexpr Key<std::string> toolsDebuggerPath{"tools.debugger.path"};
+inline constexpr Key<std::string> toolsLldbDapPath{"tools.lldbDap.path"};
 
 // Terminal (frost::term, ADR 0051). terminal.shell is an Application-only `executes` key.
 inline constexpr Key<std::string> terminalShell{"terminal.shell"};

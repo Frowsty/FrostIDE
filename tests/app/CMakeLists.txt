@@ -90,13 +90,15 @@ set(_frost_workbench_definitions
     FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
-    SOURCES workbench_test.cpp workbench_terminal_test.cpp
-    DEPS frost::app frost::build frost::io)
+    SOURCES workbench_test.cpp workbench_terminal_test.cpp workbench_engine_test.cpp workbench_find_test.cpp
+    DEPS frost::app frost::build frost::io frost::ui_find)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
+target_compile_definitions(app_workbench_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
+add_dependencies(app_workbench_tests engine_discovery_stall_child)
 if(WIN32)
     frost_add_test(app_workbench_msbuild_tests QT
-        SOURCES workbench_msbuild_test.cpp
+        SOURCES workbench_msbuild_test.cpp workbench_r2a_debug_test.cpp
         DEPS frost::app frost::build frost::io
         LABELS integration msbuild)
     target_include_directories(app_workbench_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
@@ -131,3 +133,14 @@ frost_add_test(app_project_open_tests QT
 target_include_directories(app_project_open_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_project_open_tests PRIVATE ${_frost_workbench_definitions} FROST_EXE_PATH="$<TARGET_FILE:frost>")
 add_dependencies(app_project_open_tests frost)
+
+frost_add_test(app_workbench_managed_tests QT
+    SOURCES workbench_managed_test.cpp
+    DEPS frost::app frost::lang frost::io
+    LABELS integration)
+target_include_directories(app_workbench_managed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_managed_tests PRIVATE ${_frost_workbench_definitions})
+
+if(WIN32)
+    target_link_libraries(app_workbench_managed_tests PRIVATE shell32 ole32 uuid)
+endif()

@@ -190,6 +190,26 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
             painter.setBrush(marker.color);
             painter.drawEllipse(marker.rect);
         }
+        for (const DisplayBreakpoint& breakpoint : list.breakpoints) {
+            if (breakpoint.kind == BreakpointKind::Verified) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(breakpoint.color);
+                painter.drawEllipse(breakpoint.rect);
+            } else {
+                // A hollow ring: the pen is centred on the path, so inset it by half its width.
+                const double width = std::max(1.0, breakpoint.rect.width() / 7.0);
+                painter.setPen(QPen(breakpoint.color, width));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(breakpoint.rect.adjusted(width / 2.0, width / 2.0, -width / 2.0, -width / 2.0));
+            }
+        }
+        if (list.executionPoint) {
+            const QRectF& r = list.executionPoint->rect;
+            const QPointF arrow[] = {r.topLeft(), QPointF(r.right(), r.center().y()), r.bottomLeft()};
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(list.executionPoint->color);
+            painter.drawPolygon(arrow, 3);
+        }
         painter.setRenderHint(QPainter::Antialiasing, false);
     }
     if (!list.stripe.isEmpty()) {

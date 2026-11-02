@@ -150,6 +150,8 @@ void RunController::refreshStartupCombo() {
 }
 
 Result<build::RunId> RunController::run(std::optional<project::ProjectId> project) {
+    if (m_hooks.mayRun && !m_hooks.mayRun())
+        return fail(ErrorCode::Busy, "stop debugging first");
     if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRun) {
         return m_hooks.alternateRun();
     }
@@ -174,6 +176,8 @@ Result<build::RunId> RunController::run(std::optional<project::ProjectId> projec
 }
 
 Result<build::RunId> RunController::rerun() {
+    if (m_hooks.mayRun && !m_hooks.mayRun())
+        return fail(ErrorCode::Busy, "stop debugging first");
     if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRerun) {
         return m_hooks.alternateRerun();
     }
@@ -202,6 +206,9 @@ Result<void> RunController::setStartupProject(project::ProjectId project) {
 }
 
 void RunController::onStarted(const build::RunInfo& info) {
+    if (info.debug) {
+        return; // The Debug tool window shows Debug runs (frost/ui/debug_controller.hpp).
+    }
     m_current = info.id;
     m_currentProject = info.project;
     m_currentActive = true;

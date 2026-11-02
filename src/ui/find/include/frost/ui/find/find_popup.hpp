@@ -55,6 +55,8 @@ public:
     [[nodiscard]] bool replaceMode() const noexcept { return m_replaceMode; }
     // Searches now with settings() (skipping the pause).
     void searchNow();
+    // False immediately after search criteria change, until a search for them starts.
+    [[nodiscard]] bool resultsCurrent() const noexcept { return !m_searchPending; }
     // The session; nullptr after takeSession().
     [[nodiscard]] FindSession* session() const noexcept { return m_session; }
     // Gives the session (and its results) to the caller, which becomes its parent's owner; the
@@ -115,6 +117,7 @@ private:
     FindSession* m_session = nullptr;
     bool m_replaceMode = false;
     bool m_searchedOnce = false;
+    bool m_searchPending = true;
     bool m_filling = false;
     QTimer* m_debounce = nullptr;
     QLabel* m_title = nullptr;

@@ -42,6 +42,7 @@ struct RunControllerHooks {
     // Shows a run that could not start or a setting that could not be saved; empty: ignored.
     std::function<void(const QString& message)> reportError{};
     // An alternate project kind (such as CMake) supplies its own run lifecycle.
+    std::function<bool()> mayRun{};
     std::function<bool()> alternateAvailable{};
     std::function<bool()> alternateRunning{};
     std::function<Result<build::RunId>()> alternateRun{};

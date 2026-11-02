@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// frost::lang::Json (json.hpp): the value type, the compact writer and the parser over yyjson.
+// frost::rpc::Json (json.hpp): the value type, the compact writer and the parser over yyjson.
+// Moved here from frost::lang (ADR 0050) so the DAP client shares it with the LSP client.
 
-#include "frost/lang/json.hpp"
+#include "frost/rpc/json.hpp"
 
 #include "frost/core/assert.hpp"
 
@@ -14,7 +15,7 @@
 
 #include <yyjson.h>
 
-namespace frost::lang {
+namespace frost::rpc {
 namespace {
 
 constexpr int kMaxDepth = 256;
@@ -281,4 +282,4 @@ Result<Json> parseJson(std::string_view text) {
     return out;
 }
 
-} // namespace frost::lang
+} // namespace frost::rpc

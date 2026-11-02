@@ -352,6 +352,14 @@ bool EditorView::applyUpdate(Result<text::EditorUpdate> update) {
     return true;
 }
 
+Result<void> EditorView::followExternalChange(const text::ChangeSet& change) {
+    auto update = m_editor->follow(change);
+    if (!update)
+        return std::unexpected(std::move(update.error()));
+    afterChange(*update);
+    return {};
+}
+
 bool EditorView::apply(const text::CommandResult& result) {
     if (result.changesText() && isReadOnly()) {
         return false;
@@ -871,6 +879,23 @@ void EditorView::reloadFromDocument() {
     }
     m_balloon.reset();
     afterChange(text::EditorUpdate{});
+}
+
+void EditorView::setBreakpointMarkers(std::vector<BreakpointMarker> markers) {
+    std::ranges::stable_sort(markers, {}, &BreakpointMarker::line);
+    if (markers == m_breakpoints) {
+        return;
+    }
+    m_breakpoints = std::move(markers);
+    viewport()->update();
+}
+
+void EditorView::setExecutionPoint(std::optional<LineIndex> line) {
+    if (line == m_executionPoint) {
+        return;
+    }
+    m_executionPoint = line;
+    viewport()->update();
 }
 
 EditorViewStatus EditorView::status() const {

@@ -60,6 +60,20 @@ void appendCodePoint(QString& out, char32_t cp) {
 
 // --- geometry ---
 
+std::optional<LineIndex> EditorView::breakpointLineAt(QPointF at) const {
+    const double gutter = gutterWidth();
+    const double right = m_settings.lineNumbers ? gutter - kMarkerColumn * zoomFactor() : gutter;
+    if (at.x() < 0.0 || at.x() >= right || at.y() < 0.0) {
+        return std::nullopt;
+    }
+    // Below the last row is no line.
+    const auto row = static_cast<std::uint64_t>(at.y() / m_lineHeight) + firstVisibleRow();
+    if (row >= m_editor->display().rowCount()) {
+        return std::nullopt;
+    }
+    return m_editor->text().lineAt(hitAt(at).offset);
+}
+
 double EditorView::gutterWidth() const noexcept {
     const double zoom = zoomFactor();
     double width = kMarkerColumn * zoom;
@@ -323,6 +337,10 @@ EditorDisplayList EditorView::buildDisplayList() {
             list.fills.push_back(
                 DisplayFill{QRectF(gutter, top, list.textArea.width(), m_lineHeight), m_colors.currentLine});
         }
+        if (m_executionPoint && *m_executionPoint == row.line) {
+            list.fills.push_back(
+                DisplayFill{QRectF(gutter, top, list.textArea.width(), m_lineHeight), m_colors.executionLine});
+        }
 
         // Search matches on this row (sorted and non-overlapping, so also sorted by end).
         auto match = std::ranges::upper_bound(matches, row.buffer.begin, {}, &text::ByteRange::end);
@@ -485,7 +503,29 @@ EditorDisplayList EditorView::buildDisplayList() {
         if (!row.startsLine) {
             continue;
         }
-        if (m_settings.lineNumbers) {
+        const auto breakpoint = std::ranges::lower_bound(m_breakpoints, row.line, {}, &BreakpointMarker::line);
+        const bool hasBreakpoint = breakpoint != m_breakpoints.end() && breakpoint->line == row.line;
+        const bool isExecution = m_executionPoint && *m_executionPoint == row.line;
+        if (hasBreakpoint || isExecution) {
+            // In place of the number (IntelliJ's new UI), or in the marker column without numbers.
+            const double areaRight = m_settings.lineNumbers ? gutter - kMarkerColumn * zoom : gutter;
+            const double areaLeft = m_settings.lineNumbers ? 0.0 : gutter - kMarkerColumn * zoom;
+            const double size = std::min(m_lineHeight, kMarkerColumn * zoom) * 0.75;
+            const double cx = (areaLeft + areaRight) / 2.0;
+            const double cy = top + m_lineHeight / 2.0;
+            if (hasBreakpoint) {
+                const QColor color =
+                    breakpoint->kind == BreakpointKind::Verified ? m_colors.breakpoint : m_colors.breakpointUnverified;
+                list.breakpoints.push_back(DisplayBreakpoint{QRectF(cx - size / 2.0, cy - size / 2.0, size, size),
+                                                             color, breakpoint->kind, row.line});
+            }
+            if (isExecution) {
+                const double height = size * 0.8;
+                list.executionPoint = DisplayExecutionPoint{QRectF(cx - size / 2.0, cy - height / 2.0, size, height),
+                                                            m_colors.executionPoint, row.line};
+            }
+        }
+        if (m_settings.lineNumbers && !hasBreakpoint && !isExecution) {
             const QString number = QString::number(line + 1);
             const double width = static_cast<double>(number.size()) * cell;
             const QColor color = numberLines.contains(line) ? m_colors.lineNumberCurrent : m_colors.lineNumber;

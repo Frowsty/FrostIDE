@@ -29,6 +29,8 @@ frost_add_test(lang_unit_tests
         clangd_locator_test.cpp
         diagnostics_test.cpp
         document_sync_test.cpp
+        engine_automation_test.cpp
+        engine_discovery_process_test.cpp
         features_test.cpp
         fuzzy_snippet_test.cpp
         json_test.cpp
@@ -42,6 +44,10 @@ frost_add_test(lang_unit_tests
     DEPS frost::lang frost::project frost::text frost::io frost::sched)
 target_include_directories(lang_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(lang_unit_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_executable(engine_discovery_stall_child engine_discovery_stall_child.cpp)
+frost_apply_compile_options(engine_discovery_stall_child TEST)
+target_compile_definitions(lang_unit_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
+add_dependencies(lang_unit_tests engine_discovery_stall_child)
 
 frost_add_test(lang_clangd_tests
     SOURCES
@@ -66,3 +72,14 @@ frost_add_test(lang_lua_tests
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration)
 target_include_directories(lang_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+# Real pinned Roslyn-backed managed server, enabled by explicit test tool paths.
+frost_add_test(lang_managed_tests
+    SOURCES managed_e2e_test.cpp
+    DEPS frost::lang frost::project frost::text frost::io frost::sched
+    LABELS integration)
+target_include_directories(lang_managed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+if(WIN32)
+    target_link_libraries(lang_managed_tests PRIVATE shell32 ole32 uuid)
+endif()

@@ -2,9 +2,9 @@
 //
 // JSON-RPC 2.0 over a byte stream with LSP's base protocol framing (LSP 3.17, "Base Protocol":
 // "Content-Length: N\r\n\r\n" + N bytes of UTF-8 JSON), written from the specification: the frame
-// codec, the byte-stream seam (IByteStream; a child's stdio through processByteStream) and
-// JsonRpcConnection, which matches responses to requests, cancels with $/cancelRequest, delivers
-// notifications and answers the server's own requests.
+// codec (frost::rpc's, re-exported here), the byte-stream seam (IByteStream; a child's stdio through processByteStream)
+// and JsonRpcConnection, which matches responses to requests, cancels with $/cancelRequest, delivers notifications and
+// answers the server's own requests.
 /*
  * Threads (PLAN.md section 3.3). A connection runs one reader coroutine and at most one writer
  * coroutine on the IScheduler it is given (a ThreadPool in production; the reactor resumes them
@@ -31,6 +31,7 @@
 
 #include "frost/core/error.hpp"
 #include "frost/lang/json.hpp"
+#include "frost/rpc/framing.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/task.hpp"
 
@@ -53,43 +54,9 @@ namespace frost::lang {
 
 // --- Framing ------------------------------------------------------------------------------------
 
-// "Content-Length: <size>\r\n\r\n" followed by `payload`. O(size).
-[[nodiscard]] std::string encodeFrame(std::string_view payload);
-
-/*
- * Splits a byte stream into frame payloads. Headers are "Name: value" lines ending in "\r\n"
- * (names compared ASCII-case-insensitively), closed by an empty line; Content-Length is required,
- * Content-Type is ignored. Not thread-safe (one reader owns it). Memory is bounded by the largest
- * frame plus 64 KiB of header slack.
- */
-class FrameDecoder {
-public:
-    // Frames larger than `maxPayloadBytes` are skipped and reported.
-    explicit FrameDecoder(std::size_t maxPayloadBytes = std::size_t{256} << 20) noexcept
-        : m_maxPayload(maxPayloadBytes) {}
-
-    // Appends bytes read from the stream. Amortised O(size).
-    void feed(std::string_view bytes);
-
-    /*
-     * The next complete payload; nullopt when more bytes are needed. A malformed header (no
-     * Content-Length, a non-numeric or oversized length, a header block over 64 KiB) yields one
-     * Corrupt error, after which the decoder skips to the next "Content-Length:" it sees.
-     */
-    [[nodiscard]] std::optional<Result<std::string>> next();
-
-    // Bytes held but not yet returned (tests and diagnostics).
-    [[nodiscard]] std::size_t buffered() const noexcept { return m_buffer.size() - m_start; }
-
-private:
-    void resync();
-    void compact();
-
-    std::string m_buffer;
-    std::size_t m_start = 0;
-    std::size_t m_skip = 0; // Bytes of an oversized frame still to discard.
-    std::size_t m_maxPayload;
-};
+// The Content-Length framing is shared with the DAP client and lives in frost::rpc (ADR 0050).
+using rpc::encodeFrame;
+using rpc::FrameDecoder;
 
 // --- Byte streams -------------------------------------------------------------------------------
 

@@ -78,6 +78,8 @@ public:
     [[nodiscard]] const AtlasEntry* glyph(int slot, quint32 glyph, int subpixel);
     // An antialiased filled disc `diameter` device pixels wide (gutter markers); nullptr when full.
     [[nodiscard]] const AtlasEntry* disc(int diameter);
+    [[nodiscard]] const AtlasEntry* ring(int diameter);
+    [[nodiscard]] const AtlasEntry* arrow(int width, int height);
     /*
      * The cell of what `paint` draws in white on a transparent `size` image (device pixels, the
      * painter antialiased), keyed by `key`, which must determine the drawing exactly (callers

@@ -55,6 +55,10 @@ struct EditorColors {
     QColor rightMargin;
     QColor errorMarker;
     QColor warningMarker;
+    QColor breakpoint;
+    QColor breakpointUnverified;
+    QColor executionPoint;
+    QColor executionLine;
     // The VCS change markers' gutter stripes (Editor.change*Color; M5, ADR 0048).
     QColor changeAdded;
     QColor changeModified;

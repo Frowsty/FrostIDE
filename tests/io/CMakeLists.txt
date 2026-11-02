@@ -81,6 +81,7 @@ frost_add_test(io_integration_tests
         file_watcher_test.cpp
         ignore_rules_git_test.cpp
         local_ipc_test.cpp
+        loopback_stream_test.cpp
         polling_watcher_test.cpp
         process_test.cpp
         safe_write_test.cpp

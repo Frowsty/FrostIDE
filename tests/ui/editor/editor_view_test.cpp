@@ -12,6 +12,8 @@
 #include <QInputMethodEvent>
 #include <QMouseEvent>
 
+#include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace frost::ui {
@@ -251,6 +253,72 @@ TEST(EditorView, RangeDecorationsUnderlineTheirTextWithATooltip) {
 
     h.view->setDecorations("w1", {});
     EXPECT_TRUE(h.view->buildDisplayList().decorations.empty());
+}
+
+// The debugger's gutter (ADR 0050): breakpoint discs in place of the line number, the hollow grey
+// one with its reason as the tooltip, the execution arrow with the stopped line highlighted, and a
+// click in the breakpoint area asking for a toggle without moving the caret.
+TEST(EditorView, BreakpointsAndTheExecutionPointInTheGutter) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\ntwo\nthree\n");
+    const EditorColors& colors = h.view->colors();
+    const auto lineFills = [&](const EditorDisplayList& list) {
+        return std::ranges::count_if(list.fills,
+                                     [&](const DisplayFill& fill) { return fill.color == colors.executionLine; });
+    };
+    EditorDisplayList list = h.view->buildDisplayList();
+    EXPECT_TRUE(list.breakpoints.empty());
+    EXPECT_FALSE(list.executionPoint.has_value());
+    EXPECT_FALSE(h.view->breakpointGutterEnabled());
+    std::vector<int> toggles;
+    QObject::connect(h.view.get(), &EditorView::breakpointToggleRequested, [&](int line) { toggles.push_back(line); });
+    click(*h.view, QPointF(2.0, 1.5 * h.view->lineHeight()));
+    EXPECT_TRUE(toggles.empty()) << "no breakpoint area until the debugger enables it";
+
+    h.view->setBreakpointGutterEnabled(true);
+    h.view->setBreakpointMarkers(
+        {BreakpointMarker{LineIndex{0}, BreakpointKind::Verified, ""},
+         BreakpointMarker{LineIndex{2}, BreakpointKind::Unverified, "No code is generated for this line"}});
+    h.view->setExecutionPoint(LineIndex{1});
+    EXPECT_EQ(h.view->executionPoint(), std::optional<LineIndex>(LineIndex{1}));
+    EXPECT_EQ(h.view->breakpointMarkers().size(), 2U);
+    list = h.view->buildDisplayList();
+    ASSERT_EQ(list.breakpoints.size(), 2U);
+    EXPECT_EQ(list.breakpoints[0].line, LineIndex{0});
+    EXPECT_EQ(list.breakpoints[0].kind, BreakpointKind::Verified);
+    EXPECT_EQ(list.breakpoints[0].color, colors.breakpoint);
+    EXPECT_EQ(list.breakpoints[1].kind, BreakpointKind::Unverified);
+    EXPECT_EQ(list.breakpoints[1].color, colors.breakpointUnverified);
+    EXPECT_NE(colors.breakpoint, colors.breakpointUnverified);
+    EXPECT_TRUE(list.gutter.contains(list.breakpoints[0].rect));
+    EXPECT_EQ(list.findLineNumber(1), nullptr) << "the disc replaces the line number";
+    EXPECT_EQ(list.findLineNumber(2), nullptr) << "so does the execution arrow";
+    EXPECT_NE(list.findLineNumber(4), nullptr);
+    ASSERT_TRUE(list.executionPoint.has_value());
+    EXPECT_EQ(list.executionPoint->line, LineIndex{1});
+    EXPECT_EQ(list.executionPoint->color, colors.executionPoint);
+    EXPECT_TRUE(list.gutter.contains(list.executionPoint->rect));
+    EXPECT_EQ(lineFills(list), 1) << "the stopped line is highlighted";
+    EXPECT_EQ(h.view->lineMarkerToolTip(QPointF(2.0, 2.5 * h.view->lineHeight())),
+              QStringLiteral("No code is generated for this line"));
+
+    // A click on a line's number area asks for a toggle (0-based line) and keeps the caret.
+    const std::uint64_t caret = h.caret();
+    EXPECT_EQ(h.view->breakpointLineAt(list.breakpoints[1].rect.center()), std::optional<LineIndex>(LineIndex{2}));
+    click(*h.view, list.breakpoints[1].rect.center());
+    click(*h.view, QPointF(2.0, 1.5 * h.view->lineHeight()));
+    EXPECT_EQ(toggles, (std::vector<int>{2, 1}));
+    EXPECT_EQ(h.caret(), caret);
+    EXPECT_FALSE(h.view->breakpointLineAt(QPointF(list.textArea.left() + 5.0, 5.0)).has_value())
+        << "the text area is not the breakpoint area";
+
+    h.view->setExecutionPoint(std::nullopt);
+    h.view->setBreakpointMarkers({});
+    list = h.view->buildDisplayList();
+    EXPECT_TRUE(list.breakpoints.empty());
+    EXPECT_FALSE(list.executionPoint.has_value());
+    EXPECT_EQ(lineFills(list), 0);
+    EXPECT_NE(list.findLineNumber(1), nullptr);
 }
 
 TEST(EditorView, ImeCompositionAndCommit) {

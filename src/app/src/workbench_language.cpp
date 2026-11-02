@@ -90,6 +90,8 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
+    if (isManagedSource(path))
+        return m_workbench.m_managed ? m_workbench.m_managed->documentVersion(path).value_or(0) : 0;
     if (isLuaSource(path))
         return m_workbench.m_lua ? m_workbench.m_lua->documentVersion(path).value_or(0) : 0;
     if (clangd == nullptr || path.empty()) {
@@ -208,7 +210,9 @@ std::optional<lang::OpenDocumentState> LanguageBridge::find(std::string_view pat
     }
     lang::OpenDocumentState state;
     state.snapshot = view->editor().editor().text();
-    if (isLuaSource(path) && m_workbench.m_lua)
+    if (isManagedSource(path) && m_workbench.m_managed)
+        state.lspVersion = m_workbench.m_managed->documentVersion(path);
+    else if (isLuaSource(path) && m_workbench.m_lua)
         state.lspVersion = m_workbench.m_lua->documentVersion(path);
     else if (isCFamilySource(path) && m_workbench.m_clangd)
         state.lspVersion = m_workbench.m_clangd->documentVersion(path);

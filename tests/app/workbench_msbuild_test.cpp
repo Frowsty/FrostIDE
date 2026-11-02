@@ -9,6 +9,8 @@
 // machine without Visual Studio skips the tests.
 
 #include "frost/build/msbuild_locator.hpp"
+#include "frost/debug/lldb_dap.hpp"
+#include "frost/ui/debug_tool_window.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
@@ -125,6 +127,124 @@ TEST(WorkbenchMsBuild, BuildErrorsReachProblemsAndJumpToTheLine) {
     EXPECT_TRUE(std::ranges::any_of(markers, [](const frost::ui::LineMarker& m) {
         return m.line == frost::LineIndex{5} && m.severity == frost::ui::MarkerSeverity::Warning;
     }));
+}
+
+TEST(WorkbenchMsBuild, DebugBuildsStopsInspectsStepsAndStops) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    auto& fs = frost::io::realFileSystem();
+    const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
+    if (!lldb)
+        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    WorkDir dir("msbuild-debug", "tiny_sln");
+    dir.write("App/main.cpp", "int main() {\n  int value = 41;\n  value += 1;\n  return value == 42 ? 0 : 1;\n}\n");
+    RigOptions options;
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    auto* debug = rig.workbench->debugController();
+    ASSERT_NE(debug, nullptr);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")).has_value());
+    ASSERT_TRUE(rig.view()->editor().typeText("// saved before debug\n"));
+    debug->toggleBreakpoint(dir.join("App/main.cpp"), 3);
+    ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(
+        waitFor([&] { return debug->paused() && debug->selectedFrame().has_value(); }, std::chrono::seconds(240)))
+        << rig.workbench->runConsole()->text().toStdString();
+    ASSERT_EQ(debug->selectedFrame()->line, 4);
+    EXPECT_TRUE(dir.read("App/main.cpp").starts_with("// saved before debug\n"));
+    auto value = std::make_shared<std::optional<frost::Result<frost::debug::dap::Variable>>>();
+    debug->evaluate(QStringLiteral("value"), QStringLiteral("watch"),
+                    [value](auto result) { *value = std::move(result); });
+    ASSERT_TRUE(waitFor([&] { return value->has_value(); }, std::chrono::seconds(60)));
+    ASSERT_TRUE(value->value().has_value());
+    EXPECT_EQ(value->value()->value, "41");
+    ASSERT_TRUE(debug->stepOver());
+    ASSERT_TRUE(waitFor([&] { return debug->paused() && debug->selectedFrame() && debug->selectedFrame()->line == 5; },
+                        std::chrono::seconds(60)));
+    EXPECT_FALSE(rig.workbench->closeProject());
+    emit rig.workbench->runConsole()->rerunRequested();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(debug->paused());
+    EXPECT_TRUE(rig.workbench->runService()->activeRuns().empty());
+    auto* debugWindow = rig.window->findChild<frost::ui::DebugToolWindow*>();
+    ASSERT_NE(debugWindow, nullptr);
+    int stops = 0;
+    QObject::connect(debug, &frost::ui::DebugController::stopped, [&] { ++stops; });
+    emit debugWindow->console()->rerunRequested();
+    ASSERT_TRUE(waitFor([&] { return stops >= 1 && debug->paused() && debug->selectedFrame().has_value(); },
+                        std::chrono::seconds(240)));
+    EXPECT_EQ(debug->selectedFrame()->line, 4);
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, std::chrono::seconds(60)));
+    EXPECT_TRUE(rig.workbench->closeProject());
+}
+
+TEST(WorkbenchMsBuild, StopDropsTheQueuedDebugHandoff) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    WorkDir dir("msbuild-debug-pending-stop", "tiny_sln");
+    dir.write("App/main.cpp", "int main() { return 0; }\n");
+    RigOptions options;
+    int adaptersStarted = 0;
+    options.workbench.debugAdapterFactory =
+        [&](frost::debug::DapHandlers) -> frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>> {
+        ++adaptersStarted;
+        return frost::fail(frost::ErrorCode::IoError, "unexpected adapter launch");
+    };
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    rig.workbench->buildService().setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
+    auto* debug = rig.workbench->debugController();
+    ASSERT_TRUE(debug->debug().has_value());
+    ASSERT_TRUE(rig.workbench->runService()->waitForIdle(std::chrono::seconds(240)));
+    ASSERT_TRUE(rig.workbench->runService()->lastOutcome());
+    ASSERT_TRUE(rig.workbench->runService()->lastOutcome()->debugged);
+    auto* debugWindow = rig.window->findChild<frost::ui::DebugToolWindow*>();
+    ASSERT_NE(debugWindow, nullptr);
+    debug->stop();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(adaptersStarted, 0);
+    EXPECT_FALSE(debug->debugging());
+    EXPECT_EQ(debug->session(), nullptr);
+    EXPECT_FALSE(debugWindow->console()->text().contains(QStringLiteral("with lldb-dap")));
+}
+
+TEST(WorkbenchMsBuild, AbortStopsAtTheUserCallSite) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    auto& fs = frost::io::realFileSystem();
+    const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
+    if (!lldb)
+        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    WorkDir dir("msbuild-debug-abort", "tiny_sln");
+    dir.write("App/main.cpp", "#include <cstdlib>\n#include <windows.h>\nint main() {\n"
+                              "  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);\n"
+                              "  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);\n"
+                              "  std::abort();\n}\n");
+    RigOptions options;
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    auto* debug = rig.workbench->debugController();
+    ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(
+        waitFor([&] { return debug->paused() && debug->selectedFrame().has_value(); }, std::chrono::seconds(240)))
+        << rig.workbench->runConsole()->text().toStdString();
+    ASSERT_TRUE(debug->stopInfo().has_value());
+    EXPECT_TRUE(debug->stopInfo()->isCrash());
+    EXPECT_EQ(debug->stopInfo()->reason, "abort");
+    EXPECT_EQ(debug->selectedFrame()->path, dir.join("App/main.cpp"));
+    EXPECT_EQ(debug->selectedFrame()->line, 6);
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, std::chrono::seconds(60)));
 }
 
 TEST(WorkbenchMsBuild, RunSavesBuildsAndShowsTheProgramInTheRunToolWindow) {

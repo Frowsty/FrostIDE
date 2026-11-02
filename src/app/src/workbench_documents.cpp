@@ -49,9 +49,14 @@ DocumentEditorView* Workbench::currentView() const {
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
+    if (m_debug)
+        m_debug->attachEditor(&view.editor());
     refreshMarkers(view);
     syncClangdDocument(view);
     syncLuaDocument(view);
+    syncManagedDocument(view);
+    if (isManagedSource(view.path()) && !m_managed)
+        offerManagedTrust();
     if (isLuaSource(view.path()) && !m_lua)
         offerLuaTrust();
     if (m_clangd && isCFamilySource(view.path()) && currentView() == &view) {
@@ -73,10 +78,17 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     });
 }
 
+void Workbench::editorClosing(DocumentEditorView& view) {
+    if (m_debug)
+        m_debug->detachEditor(&view.editor());
+}
+
 void Workbench::editorClosed(DocumentEditorView& view) {
     const std::string path = view.path();
     if (m_clangd && isCFamilySource(path))
         (void)m_clangd->closeDocument(path);
+    if (m_managed && isManagedSource(path))
+        (void)m_managed->closeDocument(path);
     if (m_lua && isLuaSource(path))
         (void)m_lua->closeDocument(path);
     m_language->editorChanged();
@@ -99,6 +111,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
     if (m_clangd && m_clangd->state() != lang::ClangdState::Stopped && isCFamilySource(view.path())) {
         (void)m_clangd->changeDocument(view.path(), change, view.document().document().text());
     }
+    if (m_managed && isManagedSource(view.path()))
+        (void)m_managed->changeDocument(view.path(), change, view.document().document().text());
     if (m_lua && isLuaSource(view.path()))
         (void)m_lua->changeDocument(view.path(), change, view.document().document().text());
     // What the user typed, now in the document and with clangd: completion and parameter info.
@@ -136,11 +150,14 @@ void Workbench::documentChanged(const std::string& path) {
         // The editor keeps its live diagnostics and usages (clamped) until clangd's next answer.
         syncClangdDocument(*view);
         syncLuaDocument(*view);
+        syncManagedDocument(*view);
         if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>()) {
             binding->refreshSemanticTokens();
         }
         break;
     case DocumentEditorView::Followed::Saved:
+        if (m_managed && isManagedSource(view->path()))
+            (void)m_managed->saveDocument(view->path());
         if (m_lua && isLuaSource(view->path()))
             (void)m_lua->saveDocument(view->path());
         if (m_clangd && isCFamilySource(view->path())) {

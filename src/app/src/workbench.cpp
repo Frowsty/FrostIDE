@@ -15,6 +15,8 @@
 #include "frost/io/path.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/debug_actions.hpp"
+#include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_actions.hpp"
@@ -34,6 +36,7 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_integration.hpp"
 #include "language_bridge.hpp"
 #include <QAction>
 #include <QApplication>
@@ -197,7 +200,9 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
                                        std::optional<lang::FileDiagnostics> set;
-                                       if (isLuaSource(path) && m_lua)
+                                       if (isManagedSource(path) && m_managed)
+                                           set = m_managed->diagnostics().forFile(path);
+                                       else if (isLuaSource(path) && m_lua)
                                            set = m_lua->diagnostics().forFile(path);
                                        else if (isCFamilySource(path) && m_clangd)
                                            set = m_clangd->diagnostics().forFile(path);
@@ -209,15 +214,18 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
 
     m_luaTrustWatch.setInterval(1000);
     connect(&m_luaTrustWatch, &QTimer::timeout, this, [this] {
-        if (m_projectRoot.empty())
+        if (m_shutDown || m_projectRoot.empty())
             return;
         const bool trusted = m_services.trust.isTrusted(m_projectRoot);
         if (trusted != m_luaObservedTrust) {
             m_luaObservedTrust = trusted;
-            if (trusted)
+            if (trusted) {
                 startLua(m_projectRoot);
-            else
+                startManaged(m_projectRoot);
+            } else {
                 stopLua();
+                stopManaged();
+            }
         }
     });
     m_luaTrustWatch.start();
@@ -241,6 +249,7 @@ Workbench::~Workbench() {
     if (m_runController) {
         m_runController->setService(nullptr);
     }
+    m_debug.reset();
     m_runService.reset(); // Stops every run and joins its thread before the builder goes.
     m_runBuilder.reset();
     if (m_runConsole != nullptr && m_runConsole->parent() == nullptr) {
@@ -261,6 +270,10 @@ Workbench::~Workbench() {
         if (stopped.valid())
             stopped.join();
     m_retiredLua.clear();
+    for (auto& stopped : m_retiredManaged)
+        if (stopped.valid())
+            stopped.join();
+    m_retiredManaged.clear();
     // frost/io/reactor.hpp's exit order: shut the reactor down, drop the watcher, shut the pool
     // down, then destroy the reactor.
     if (m_reactor) {
@@ -309,6 +322,7 @@ void Workbench::createRunService() {
     ui::RunControllerHooks hooks;
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
+    hooks.mayRun = [this] { return !m_debug || (!m_debug->debugging() && !m_debug->rerunPending()); };
     hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
     hooks.alternateRunning = [this] { return m_cmake && m_cmake->running(); };
     hooks.alternateRun = [this] { return m_cmake->run(); };
@@ -325,7 +339,47 @@ void Workbench::createRunService() {
     m_runService = build::RunService::create(m_services.fs, m_services.launcher, m_services.trust, *m_runBuilder,
                                              std::move(options), m_runController->callbacks());
     m_runController->setService(m_runService.get());
+    ui::DebugControllerOptions debugOptions;
+    debugOptions.trust = &m_services.trust;
+    debugOptions.fs = &m_services.fs;
+    debugOptions.launcher = &m_services.launcher;
+    debugOptions.adapterFactory = m_options.debugAdapterFactory;
+    debugOptions.lldbDapSetting = [this] { return m_services.settings.snapshot()->get(key::toolsLldbDapPath); };
+    ui::DebugControllerHooks debugHooks;
+    debugHooks.currentEditor = [this]() -> ui::EditorView* {
+        auto* view = currentView();
+        return view ? &view->editor() : nullptr;
+    };
+    debugHooks.openSource = [this](const QString& path, int line) -> ui::EditorView* {
+        if (!openPath(path.toStdString(), FileLocation{line, 1}))
+            return nullptr;
+        auto* view = m_editors->find(path.toStdString());
+        return view ? &view->editor() : nullptr;
+    };
+    debugHooks.notify = [this](const QString& title, const QString& message, bool error) {
+        notify(title, message, error ? ui::NotificationKind::Error : ui::NotificationKind::Warning);
+    };
+    debugHooks.showToolWindow = [this] {
+        if (m_window)
+            m_window->toolWindows().show(ui::kDebugToolWindowId, false);
+    };
+    debugHooks.alternateAvailable = [this] { return m_cmake != nullptr; };
+    debugHooks.mayStart = [this] { return !m_runController->running() && m_runService->activeRuns().empty(); };
+    debugHooks.startAlternate = [this](auto done) { return m_cmake->debug(std::move(done)); };
+    debugHooks.stopAlternate = [this] {
+        if (m_cmake)
+            m_cmake->stop();
+    };
+    m_debug = std::make_unique<ui::DebugController>(m_breakpoints, std::move(debugOptions), std::move(debugHooks));
+    m_debug->setRunService(m_runService.get());
+    if (auto registered = ui::registerDebugActions(m_registry, *m_debug); !registered)
+        log::warn(kLog, "debug actions: {}", registered.error().describe());
     ui::RunActionHooks actionHooks;
+    actionHooks.debugging = [this] { return m_debug && (m_debug->debugging() || m_debug->rerunPending()); };
+    actionHooks.stopDebugging = [this] {
+        if (m_debug)
+            m_debug->stop();
+    };
     actionHooks.selectedProject = [this]() -> std::optional<project::ProjectId> {
         return m_explorer ? m_explorer->currentProject() : std::nullopt;
     };
@@ -429,14 +483,18 @@ void Workbench::attach(ui::ShellWindow& window) {
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
 
     attachToolWindows();
+    m_engine = std::make_unique<EngineIntegration>(*this);
     attachToolbar();
     attachRun();
+    if (auto registered = ui::registerDebugToolWindow(m_window->toolWindows(), m_registry, *m_debug); !registered)
+        log::warn(kLog, "debug tool window: {}", registered.error().describe());
     attachLanguage();
     connect(&window.tabs(), &ui::EditorTabs::currentEditorChanged, this, [this](ui::IEditorView*) {
         m_language->editorChanged();
         updateLanguageTarget();
     });
     attachTerminal();
+    attachFind();
     m_trustPrompter = new ui::TrustPrompter(*m_build, &window, this);
 
     auto* welcome = new WelcomeScreen();
@@ -491,6 +549,14 @@ void Workbench::detach() {
         return;
     }
     QCoreApplication::instance()->removeEventFilter(this);
+    cancelFind();
+    m_find.reset();
+    if (m_debug) {
+        m_debug->shutdown();
+        m_window->toolWindows().hide(ui::kDebugToolWindowId);
+        m_window->toolWindows().setContent(ui::kDebugToolWindowId, new QWidget());
+    }
+    m_engine.reset();
     stopTerminal();
     m_terminal.reset();
     // The navigation workbench saves the session and stops its watcher while the tabs exist.
@@ -567,6 +633,7 @@ void Workbench::attachToolWindows() {
 void Workbench::attachToolbar() {
     ui::MainToolbar& toolbar = m_window->mainToolbar();
     toolbar.setSlotAction(ui::MainToolbar::kBuild, ui::build_actions::kBuildSolution);
+    toolbar.setSlotAction(ui::MainToolbar::kDebug, "run.debug");
     auto* combo = new ui::ConfigurationCombo(*m_build, &toolbar);
     combo->setObjectName(QStringLiteral("solutionConfigurations"));
     QAction* before = nullptr;
@@ -625,6 +692,9 @@ void Workbench::onSettingsChanged() {
     const auto luaRuntime = snapshot->get(settings::key::luaRuntimeVersion);
     if (!m_projectRoot.empty() && (luaPath != m_luaConfiguredPath || luaRuntime != m_luaRuntimeVersion))
         startLua(m_projectRoot);
+    if (!m_projectRoot.empty() && (snapshot->get(settings::key::toolsManagedDotnetPath) != m_managedDotnetPath ||
+                                   snapshot->get(settings::key::toolsManagedServerPath) != m_managedServerPath))
+        startManaged(m_projectRoot);
     m_appearanceSettings.storeChanged();
     refreshRecent();
 }
@@ -687,6 +757,14 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    m_luaTrustWatch.stop();
+    cancelFind();
+    // Registered shell callbacks hold QPointers: destroying the feature makes queued actions inert.
+    m_find.reset();
+    if (m_debug)
+        m_debug->shutdown();
+    if (m_engine)
+        m_engine->shutdown();
     stopTerminal();
     if (m_cmake)
         m_cmake->shutdown();
@@ -713,6 +791,7 @@ void Workbench::shutdown() {
         log::warn(kLog, "hot-exit journal: {}", closed.error().describe());
     }
     stopLua();
+    stopManaged();
     stopClangd();
 }
 

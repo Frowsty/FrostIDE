@@ -1,0 +1,926 @@
+{
+  "server": "csharp-ls/0.28.0",
+  "packages": [
+    {
+      "name": "Argu",
+      "version": "6.2.5",
+      "license": "MIT",
+      "authors": "Eirik Tsarpalis",
+      "copyright": "2019",
+      "projectUrl": "https://fsprojects.github.io/Argu/",
+      "nuspecSha256": "b6205f15c700d22eef663c2de6af3b7c555457d598536b6bf87c70d5857c1a43",
+      "archiveSha256": "e4771972f728e1ef3e8602e1ce5c64ed998554bb592fd2d5afb2db997b0b98d5",
+      "notices": []
+    },
+    {
+      "name": "Castle.Core",
+      "version": "5.2.1",
+      "license": "Apache-2.0",
+      "authors": "Castle Project Contributors",
+      "copyright": "Copyright (c) 2004-2025 Castle Project - http://www.castleproject.org/",
+      "projectUrl": "http://www.castleproject.org/",
+      "nuspecSha256": "a4f50701db368c4d7dd70438ed9843e4b4436138640f2d67ea1720100f729378",
+      "archiveSha256": "b8d7bffcf0a76062e1c714292c3c9342ea081f9bbb7460e5ca3736c2a010e03e",
+      "notices": [
+        "castle-apache.txt",
+        "castle-license.txt"
+      ]
+    },
+    {
+      "name": "FSharp.Control.AsyncSeq",
+      "version": "3.2.1",
+      "license": "Apache-2.0",
+      "authors": "Tomas Petricek,Don Syme,Lev Gorodinski",
+      "copyright": "Copyright 2017",
+      "projectUrl": "https://fsprojects.github.io/FSharp.Control.AsyncSeq/",
+      "nuspecSha256": "9ccb3924e02fecd244413e6cc442713c939ff289f899f1318cbb32ed9e5ab57a",
+      "archiveSha256": "7b3499ac632a4d064ab74a230912945ae0c6c75255532359ce499466356a8809",
+      "notices": []
+    },
+    {
+      "name": "FSharp.Core",
+      "version": "10.0.101",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/fsharp",
+      "nuspecSha256": "8a2543fb23ab74722903520ac801b3bb8e4285ee30fedda4162a4f327d416c06",
+      "archiveSha256": "8bb72b744d3fbbefe61420f5acd15cfe24f94c5afc0da7bd74da554666e949b6",
+      "notices": []
+    },
+    {
+      "name": "Humanizer.Core",
+      "version": "2.14.1",
+      "license": "MIT",
+      "authors": "Mehdi Khalili, Claire Novotny",
+      "copyright": "Copyright (c) .NET Foundation and Contributors",
+      "projectUrl": "https://github.com/Humanizr/Humanizer",
+      "nuspecSha256": "9233ebeabcf74461613f4d3a71d503d0bfa8a7754e62fab83ace72110daf77e7",
+      "archiveSha256": "117be88dd74fbbef492a0386f4d4908144df5aad51a4e630eda7710cf28327aa",
+      "notices": []
+    },
+    {
+      "name": "ICSharpCode.Decompiler",
+      "version": "9.1.0.7988",
+      "license": "MIT",
+      "authors": "ILSpy Contributors",
+      "copyright": "Copyright 2011-2025 AlphaSierraPapa",
+      "projectUrl": "https://github.com/icsharpcode/ILSpy/",
+      "nuspecSha256": "02f428ab69d1fef6cd866588c0240d914c982c073700ab34830749c0358fc89c",
+      "archiveSha256": "ccf2e02cd3b8702aed37d051f71e97f96d0c36443bd67003228a4e0b55418404",
+      "notices": []
+    },
+    {
+      "name": "Microsoft.Bcl.AsyncInterfaces",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "dfa1684a17a7af7d8a195d07c2882684ad1b8ffaa611f5da17116989b4efcde0",
+      "archiveSha256": "687a2c9511a6028b7fcf51820aa4b38c0c53fe196dc4e388675fe8b62e166c66",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Build.Framework",
+      "version": "18.7.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "http://go.microsoft.com/fwlink/?LinkId=624683",
+      "nuspecSha256": "171ed1181a1c70c8ed1b04ffefbb96acc5d3146ee14f16674fd1faa5b82991cf",
+      "archiveSha256": "ade8937e786462c81f30195cc86a43202cd5b6625a02dd223a38aaf6f83da308",
+      "notices": [
+        "msbuild-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Build.Locator",
+      "version": "1.10.12",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/microsoft/MSBuildLocator",
+      "nuspecSha256": "e21934f4d7e9c38308dce580bae756ab591ba2e7b31b29cfb4dbfb17c8ef6991",
+      "archiveSha256": "6c16965dced70f5d7196bd9b639d00ed01d8f8d569417c92953851eec7234030",
+      "notices": []
+    },
+    {
+      "name": "Microsoft.CodeAnalysis",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "c9fc25c65d1f2c0bafae918087d19c43bfbac0695670a8ee05284d3c18165c81",
+      "archiveSha256": "66599a97e71b9263b1a8e2166768b30c61cb9aff8d2c1424df693d5b67a29146",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.Common",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "eebeb51bc61715d495498efafff6f7077cbe53d4c7deed2988d9ed0cc902d2b3",
+      "archiveSha256": "77efd4715c24c8cd6b36f9b92980a2f5a86e4a7b53648d4f1ca3b79a3933a429",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.CSharp",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "cdb47f1a6d4dc3a22615deecc1f920c1fcb6dfb4ed27313ab1e3b1ccdf9405de",
+      "archiveSha256": "7602c3dbaa122268f3b26c6cc0dd02eb9224dea9442ed27af5c3fe56d643993f",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.CSharp.Features",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "54346bdcdef32f98885bf7be4b2e9fd796ab68477a582c02c277b3375580c62e",
+      "archiveSha256": "c3c2e02f1bf535eff05e7db82b9ae1413815aa0eb9e7850da3d4d683506cfab6",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.CSharp.Workspaces",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "594644634e8d4c1e7b1ef99b3d423c3d9201e729d42197d1832f7f0a604a10a8",
+      "archiveSha256": "f568b37cdd24377194ff20e517968dae87f9adc0308f5924a63bc59a2fc86daf",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.Elfie",
+      "version": "1.0.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/microsoft/elfie-arriba",
+      "nuspecSha256": "150e85e586fc472b46f0d2e40385602febba39a7ae93871e87c7986912edf061",
+      "archiveSha256": "13ff8f95e82f599e7d7b94e2dd3bca2412dadea0a70ca9a2efe0dc9cea35b9f8",
+      "notices": []
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.Features",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "4353fa6cc517000b576b87ee93cdf3b39089c01719cd09604f832e1a4c846fcb",
+      "archiveSha256": "d6ad3d7a3eb0c31c1f9eb642cae59c5a69fc460bd5f071354d199a71c6ccce2f",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.Scripting.Common",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "03ed5bc053d8d89d4324406c469d99af59679c7ba2be8c0fd06c41fe36eeb8a3",
+      "archiveSha256": "058777a379e2bd6b004eb8bc8d81aaeb25f09443d80979f2ba46794f434b5345",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.VisualBasic",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "318cd86e00feccb0f6d2211f1918540d4673613c03dccc97bf0e45bbc8017d4e",
+      "archiveSha256": "99d250903d2ee9dd27c18ebafc67aabefb3adf875f72ca8327d5ca2f885f27a0",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.VisualBasic.Workspaces",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "26cd386921062fd3ce3066c9a5fb65f96dbd669a3759b7156433be01885cd52b",
+      "archiveSha256": "faf74373a85bd34ccbb55ffef1e04262aee84f247617b503bfb49cb8f8ad6d40",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.Workspaces.Common",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "9449cb990b32c7be90f226e49402a19186ea7fe07ad4456b3d0e138e3e36a445",
+      "archiveSha256": "f87f124f57d177b34ca3168e12bf1781050048cfde84ea0e9e3207dfc1d5921e",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
+      "version": "5.9.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/roslyn",
+      "nuspecSha256": "8ae64465ac038dcb3680d22a3fcb35ea1a2920176a9c618c61a1749de55d4120",
+      "archiveSha256": "2f8cb42826f48e33dc0e18c1aea4ccd7ef0c9a20844bfdda3665a762c449ef11",
+      "notices": [
+        "roslyn-third-party.rtf"
+      ]
+    },
+    {
+      "name": "Microsoft.DiaSymReader",
+      "version": "2.0.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/symreader",
+      "nuspecSha256": "37dcb9019867dac0b8f6aaf7c07108327cec0945a135d7009abbb9905e3f2db5",
+      "archiveSha256": "f21a2d66687c45be90ea80fd31e6fbe12bc075b0e8dfd63fd66f21e371c78e3c",
+      "notices": []
+    },
+    {
+      "name": "Microsoft.Extensions.Caching.Abstractions",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "c2ab145a1477750fc9b550b3d3bfa620671aac116bfb3b82dbcec9f32574baf6",
+      "archiveSha256": "bd4c6109921780860f8cd2d64502413537cf1a7e4ae087e815fa0e72ad61a145",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Caching.Memory",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "6c37daafd5b09650d46a49f4763f0402f4cd67cd1e69112daa3dfa4bbb4e061b",
+      "archiveSha256": "0ad94be375ac6e5c545f8258e7b0d138f969f2d91b1b9d27a5ca1d19540bf61a",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Configuration",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "4af0d54c015e5d642860317e8f1e574f55811a03464cd1bfd1f6d42a096a6bfd",
+      "archiveSha256": "e1df2be95cae9ded506f4930ab37c63c0ec12b69ef6a239e9d388979dceaeac5",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Configuration.Abstractions",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "267329f56111c88bc6442e5aef5c14dcfa77eb5b4486bd590db71a9e2a4479cf",
+      "archiveSha256": "a6589a92c10041dc723d4454552957a5f1772f3241f77cc769e103b1a1794091",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Configuration.Binder",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "eeaed46d43452fd0c8d555e35c4e868269e8f2b4d795bcd61e0099c3a35c004e",
+      "archiveSha256": "a2e25afbce07fdb7cc8baeefdb98631168532320476964c902812f02bc1bac60",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.DependencyInjection",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "ebae2a5eb5c6f5704f974bed026c1a96c93e4e4dc6aabdd2398f381c35d3734c",
+      "archiveSha256": "608aa00e49f04eae3c5fcf0899dadf6afded990ead67020e62c2ede9d4f8d0cf",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.DependencyInjection.Abstractions",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "83e449cc179b02de9953997b21240306020028090e02fe37100450832faf43ef",
+      "archiveSha256": "633429180b2b8cb535f2cd35e8b98cec33092a69743332a5d5b3cf609fdeac49",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Logging",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "0b69281062eb91ff67e179062986e7e52eff05c04d490464ba42c221c43784bb",
+      "archiveSha256": "eb8e316313c1f8fb701944c028957dc01c971d61644793a5d29d3cc05430326e",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Logging.Abstractions",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "d4d2218a656fc99770df9bc39c81dc2026e9e219cfa12a36aeff7219c5485a75",
+      "archiveSha256": "b2edaafce66e1bb9c1df09d44d57229b2de81d275eb458788619a32377ffca6f",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Logging.Configuration",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "1ce2b0c5802a493932ec68250c23813ced8bc58fb1c0fe3e3b0c4a21945980da",
+      "archiveSha256": "7c3b4a6b7e97141cdd8f07f483dfa62f8cb6c44e8371ef984cee9d41a018619f",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Logging.Console",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "38b269ae1411f290972fd078b90c3f6bc12a4b6f44c1996fa634047cfa9d1289",
+      "archiveSha256": "8ba0b7ce4facfeec7eb423a7c7b803a688f6845cc1cfad61aa1d337db66f1c7a",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Options",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "9819601157497e07471e19596d2dce6f4f5a5050a9d25798e4abb20b9595991a",
+      "archiveSha256": "fdf735835483248f359ce6514bb5b82d92000b4b2c99ab2a69686024afbdad1b",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Options.ConfigurationExtensions",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "f228d999c0f1530bd98416a6826f31e66e8310a4990fe3f042965e72944f596f",
+      "archiveSha256": "5d5289acd8cfa348688d8e55e31a0bc5e769be4aadaf8189aa409484b2924dc4",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Extensions.Primitives",
+      "version": "10.0.9",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "4bd609c657a4bdfa3782d095a0e447680970916c293294a429ee56abfa42ac88",
+      "archiveSha256": "5843ed9a511ec66e904854782139411ee503e7f6ea31f79c3b115ee6191b00f5",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.NET.StringTools",
+      "version": "18.7.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "http://go.microsoft.com/fwlink/?LinkId=624683",
+      "nuspecSha256": "4dfe5a414e0cfc3297e3552b0e66c83a1782335cdd74f1098113306627c73a83",
+      "archiveSha256": "b13124fa77a2aff41bae7f77fd3d42dea525db927492f0ff31fea88e8060cd07",
+      "notices": [
+        "msbuild-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.VisualStudio.SolutionPersistence",
+      "version": "1.0.52",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/microsoft/vs-solutionpersistence",
+      "nuspecSha256": "73f6cb7c9907e3566f3b31cc6dd3dd233be767e0ed1b396a068d2fd962e6310d",
+      "archiveSha256": "29918fb4e5dee87bfc46b91cb20a0b29347268249c2294046b6361341de2397c",
+      "notices": [
+        "solution-persistence-notice.txt"
+      ]
+    },
+    {
+      "name": "System.Composition",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "d8f33cba7c0a12376143e2191c7334719140275fd17a45323733014f49117ce2",
+      "archiveSha256": "b7a87385d8c997c5c1200af2f5ab8e644cbc8e42b2d6a0d19ab6713be22c9974",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Composition.AttributedModel",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "d5d88da09682cbdb17cf456604992f357af817737b08e7426887ed7ddbe598c1",
+      "archiveSha256": "ee3c020b3ec08e6a63dba24f94cc54ed86f0831b881ee3ef861c1617637285dc",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Composition.Convention",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "03c1e4d646c85818f7c4cc6f90c36a0436c94be09809b98584223ebd511fad68",
+      "archiveSha256": "796ad9d05bce9e185acb14f5f77aa3532d9fd1cc217f4d6325ace981f55bdc59",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Composition.Hosting",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "90769fdbd48fc289662ff59633da7c0d45f85c5fd768598368dab5683355d52f",
+      "archiveSha256": "a651dd8c34bbbc261a3fb51ab27c7527d6ab3fd7730c5525f443de9588f47f44",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Composition.Runtime",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "e00aade0de67f6193babc4aae817f671ae0634ee1b3c6849cf37877680e1803a",
+      "archiveSha256": "98e41dc2e491f4092b6ef82ad148ebfae0cdfaf16335b3a2d6e70e52ca6f1215",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Composition.TypedParts",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "b3b41edda77333062278fa6a5e1a3b07c2370814b6ca067925d78b567efd57a9",
+      "archiveSha256": "e6305cff9da6d8c431479f8091ab931068736b8b0d5ebf409f520f40d92f7df0",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Configuration.ConfigurationManager",
+      "version": "10.0.4",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "ef57292d9424a627ea3edabcce2b7f5f1640bcfa66f19ea1f01b12e6035c70a6",
+      "archiveSha256": "20e82d9cdea11cd7686430efac8068333569f83d52589d4bc09f93214b84dd6f",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Diagnostics.EventLog",
+      "version": "10.0.4",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "b09287bbffa033342cb13d17df6eda8f5af6f4ac1f4c67932c46a155b01c2428",
+      "archiveSha256": "8056ddbda9e2ef8a1ef262d9edba78233e657cfd1d25b73e49a500ca4a3cd8f6",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Security.Cryptography.ProtectedData",
+      "version": "10.0.4",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "46b762c945059fb147af3dd20019c0ca1f580785c83ac21d1376907477ce3886",
+      "archiveSha256": "6826d05cc250ac310e1870b06d8dfa08e4a418706b65f4a73f24ebcfa3f6025e",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "Microsoft.Build.Locator",
+      "version": "1.10.2",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/microsoft/MSBuildLocator",
+      "nuspecSha256": "751eaafd3f5a4b0a82736c18c5608fdd9fdce7dac080cd8c3a7812e5f5e5ba9a",
+      "archiveSha256": "7ff1b209c8de4a04f4703fe2713b4c0c2972c9340e243e405cd5844480433df0",
+      "notices": []
+    },
+    {
+      "name": "Microsoft.IO.Redist",
+      "version": "6.1.0",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/maintenance-packages",
+      "nuspecSha256": "f47e3ec8f4777529ffc30c3d67993a93565620c3cc300c4238ebdf022eea8940",
+      "archiveSha256": "74f2a8b9698622178a6b8314fe0a01a65c202c96d2d44876fa35d9435d3db1a9",
+      "notices": []
+    },
+    {
+      "name": "System.Buffers",
+      "version": "4.6.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/maintenance-packages",
+      "nuspecSha256": "be89a209f57ae6cd84ca406ee73762d7eb3fe686198a3e6032e6c77e90e9cb8d",
+      "archiveSha256": "b00451e91d016fbec091ad1e361f3a7015e1d91d4047f7e48a74455b2a673d79",
+      "notices": []
+    },
+    {
+      "name": "System.IO.Pipelines",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "4a19987f7d1c2449b2cf981006ce2bc5b84ab60d70f00ac9f02f1e2064e1ab80",
+      "archiveSha256": "dcd1d08ef3b59923e8f07abdbcc33941e289792f7fcb7529ce789d7807f9a490",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Memory",
+      "version": "4.6.3",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/maintenance-packages",
+      "nuspecSha256": "98fc2db30bed06f405323c9899ae51486acf2e284ab775eb62afe41d6dd1f82d",
+      "archiveSha256": "26078aeb758c9ae985e8bf851f973026061da6a5eb4837204d0c2d2204c72955",
+      "notices": []
+    },
+    {
+      "name": "System.Numerics.Vectors",
+      "version": "4.6.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/maintenance-packages",
+      "nuspecSha256": "15440dd053506902802cdfaab77d05688a18e120bff464bf03c61636fbab1014",
+      "archiveSha256": "2bc500a86dcb02f2032d6d877f9e2d6e9e4a79080e57239b4198679d4031f2c7",
+      "notices": []
+    },
+    {
+      "name": "System.Runtime.CompilerServices.Unsafe",
+      "version": "6.1.2",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/maintenance-packages",
+      "nuspecSha256": "79f5f27fd1038d84896f0dc80cca839d66b8d4df8024f805961534b174d01909",
+      "archiveSha256": "5f6a7f53af3465f92beb6da873ebe0e496206c313313b98badee4355a6b25937",
+      "notices": []
+    },
+    {
+      "name": "System.Text.Encodings.Web",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "029ba73c9acecaa7df526ef9181587e592d2e43ca22437eb71fd98d88b104c3a",
+      "archiveSha256": "74137d4697be27517cfdc773c0dc4b1d88aabf38125f5afdd76f185f26f60ca3",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Text.Json",
+      "version": "10.0.1",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://dot.net/",
+      "nuspecSha256": "7ac6b79e73cc809838d447be1503e42c06ca69760fb0e042223ca44a47bc7048",
+      "archiveSha256": "59f4a03a944be0329f22bcbf1fe787c491c7ae3e84359dfe3fa436a25dd1d973",
+      "notices": [
+        "dotnet-runtime-third-party.txt"
+      ]
+    },
+    {
+      "name": "System.Threading.Tasks.Extensions",
+      "version": "4.6.3",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "projectUrl": "https://github.com/dotnet/maintenance-packages",
+      "nuspecSha256": "64cd22321f9ce0f46349f2c24e5759d4117f6a15bc6015eb711efb991561bf6d",
+      "archiveSha256": "1abc92c7517a021ead7e79d0b7f3c70be75bce0fac7cfe3b38e157d32245ff1a",
+      "notices": []
+    }
+  ],
+  "notices": {
+    "asyncseq-license.txt": "9c6d1ff3caa7d1376bfec9ad7a6eca64fea12edf6b83cf8cf252f3cb97ac8082",
+    "castle-apache.txt": "ab1fd16ef97a3cd6c19dc263c0b9900b01932996b671d2ac0452c38183f9274d",
+    "castle-license.txt": "1bf6d24645729f179f69f7f624572635986123b09e6241849ccbb945208649e1",
+    "csharp-ls-license.txt": "2077a187c02688a6e2e816ea81f846667c50d09c2ee5c7f0f82594b452e63118",
+    "dotnet-runtime-third-party.txt": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21",
+    "ionide-license.txt": "6c094c35c69417604fcb2462dd9b3552cfa6e957add248dec3aa2142e2dfb501",
+    "msbuild-third-party.txt": "99eaeac937f29d42307e11376f9a3d2a1713ccf7df1b9003d7b225484b58a474",
+    "roslyn-third-party.rtf": "ef4678850e7e3aaf9297f07e5c4060d477854e545ccf8e2ef8452d65a7b2efaf",
+    "solution-persistence-notice.txt": "2d56342544395b1cc4bb98192a439031362265125a68b8062942383b8df4309a",
+    "FROST-NOTICE.md": "f807f14162f60e8489428c3a96fc78d562dbcfd88001b1e1993ff299357bd681"
+  },
+  "graphs": {
+    "CSharpLanguageServer.deps.json": {
+      "packages": [
+        "Argu/6.2.5",
+        "Castle.Core/5.2.1",
+        "FSharp.Control.AsyncSeq/3.2.1",
+        "FSharp.Core/10.0.101",
+        "Humanizer.Core/2.14.1",
+        "ICSharpCode.Decompiler/9.1.0.7988",
+        "Microsoft.Bcl.AsyncInterfaces/10.0.1",
+        "Microsoft.Build.Framework/18.7.1",
+        "Microsoft.Build.Locator/1.10.12",
+        "Microsoft.CodeAnalysis.CSharp.Features/5.9.0",
+        "Microsoft.CodeAnalysis.CSharp.Workspaces/5.9.0",
+        "Microsoft.CodeAnalysis.CSharp/5.9.0",
+        "Microsoft.CodeAnalysis.Common/5.9.0",
+        "Microsoft.CodeAnalysis.Elfie/1.0.0",
+        "Microsoft.CodeAnalysis.Features/5.9.0",
+        "Microsoft.CodeAnalysis.Scripting.Common/5.9.0",
+        "Microsoft.CodeAnalysis.VisualBasic.Workspaces/5.9.0",
+        "Microsoft.CodeAnalysis.VisualBasic/5.9.0",
+        "Microsoft.CodeAnalysis.Workspaces.Common/5.9.0",
+        "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+        "Microsoft.CodeAnalysis/5.9.0",
+        "Microsoft.DiaSymReader/2.0.0",
+        "Microsoft.Extensions.Caching.Abstractions/10.0.9",
+        "Microsoft.Extensions.Caching.Memory/10.0.9",
+        "Microsoft.Extensions.Configuration.Abstractions/10.0.9",
+        "Microsoft.Extensions.Configuration.Binder/10.0.9",
+        "Microsoft.Extensions.Configuration/10.0.9",
+        "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.9",
+        "Microsoft.Extensions.DependencyInjection/10.0.9",
+        "Microsoft.Extensions.Logging.Abstractions/10.0.9",
+        "Microsoft.Extensions.Logging.Configuration/10.0.9",
+        "Microsoft.Extensions.Logging.Console/10.0.9",
+        "Microsoft.Extensions.Logging/10.0.9",
+        "Microsoft.Extensions.Options.ConfigurationExtensions/10.0.9",
+        "Microsoft.Extensions.Options/10.0.9",
+        "Microsoft.Extensions.Primitives/10.0.9",
+        "Microsoft.NET.StringTools/18.7.1",
+        "Microsoft.VisualStudio.SolutionPersistence/1.0.52",
+        "System.Composition.AttributedModel/10.0.1",
+        "System.Composition.Convention/10.0.1",
+        "System.Composition.Hosting/10.0.1",
+        "System.Composition.Runtime/10.0.1",
+        "System.Composition.TypedParts/10.0.1",
+        "System.Composition/10.0.1",
+        "System.Configuration.ConfigurationManager/10.0.4",
+        "System.Diagnostics.EventLog/10.0.4",
+        "System.Security.Cryptography.ProtectedData/10.0.4"
+      ],
+      "projects": [
+        "CSharpLanguageServer/0.28.0",
+        "Ionide.LanguageServerProtocol/1.0.0"
+      ]
+    },
+    "BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.deps.json": {
+      "packages": [
+        "Microsoft.Build.Locator/1.10.2"
+      ],
+      "projects": [
+        "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost/5.9.0-1.26357.3",
+        "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts/5.9.0-1.26357.3"
+      ]
+    }
+  },
+  "hostAssets": {
+    "BuildHost-net472/Microsoft.Bcl.AsyncInterfaces.dll": {
+      "sha256": "b0e3846b989ce190d3472567054187669b648b962dab20472f54a3bfda1fb207",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.Bcl.AsyncInterfaces.dll",
+      "assetPackage": "Microsoft.Bcl.AsyncInterfaces/10.0.1",
+      "assetMember": "lib/net462/Microsoft.Bcl.AsyncInterfaces.dll"
+    },
+    "BuildHost-net472/Microsoft.Build.Locator.dll": {
+      "sha256": "286db396b2b8500aad8bc188e41a11cbbbcb3bffc5598b464c683c1c04c9bf60",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.Build.Locator.dll",
+      "assetPackage": "Microsoft.Build.Locator/1.10.2",
+      "assetMember": "lib/net46/Microsoft.Build.Locator.dll"
+    },
+    "BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.exe": {
+      "sha256": "1944447b4a10ef1850d584f7220cc7861788a369f646028cf975f3b9d8d10a60",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.exe"
+    },
+    "BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.exe.config": {
+      "sha256": "4e965107a20e90506f235a71f36ba983113dc22594a2f21ff56a202ed834e05d",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.exe.config"
+    },
+    "BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.dll": {
+      "sha256": "c16b673aae409875a20ccbd605df27d922ee087c816635e4d785dfd83044e62c",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.dll"
+    },
+    "BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.pdb": {
+      "sha256": "642adb43364e4f17a893aac6951fef63111044a5b3370402eb14cdb31ddb8ffb",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.pdb"
+    },
+    "BuildHost-net472/Microsoft.IO.Redist.dll": {
+      "sha256": "2abba74a23e680ba613baad9d510428edd913e09f90509d248b85665a03f5014",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/Microsoft.IO.Redist.dll",
+      "assetPackage": "Microsoft.IO.Redist/6.1.0",
+      "assetMember": "lib/net472/Microsoft.IO.Redist.dll"
+    },
+    "BuildHost-net472/System.Buffers.dll": {
+      "sha256": "2d78d770c9cb997199154ae8c018b9f1d1efbc86729f7264dde6dbad2a12cac3",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Buffers.dll",
+      "assetPackage": "System.Buffers/4.6.1",
+      "assetMember": "lib/net462/System.Buffers.dll"
+    },
+    "BuildHost-net472/System.IO.Pipelines.dll": {
+      "sha256": "22acb89394f4a557ee5b462e6581e752748f62b783bf6bcb118d33ded2eba3cc",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.IO.Pipelines.dll",
+      "assetPackage": "System.IO.Pipelines/10.0.1",
+      "assetMember": "lib/net462/System.IO.Pipelines.dll"
+    },
+    "BuildHost-net472/System.Memory.dll": {
+      "sha256": "d5e8e4866f9cfa66f7765660f84b210198893e55335487afe5ebda342c0e913d",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Memory.dll",
+      "assetPackage": "System.Memory/4.6.3",
+      "assetMember": "lib/net462/System.Memory.dll"
+    },
+    "BuildHost-net472/System.Numerics.Vectors.dll": {
+      "sha256": "20c2fa81b8c70d651099d762954f285fd4f942e63b2d7217c145dab8d4b2f4c9",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Numerics.Vectors.dll",
+      "assetPackage": "System.Numerics.Vectors/4.6.1",
+      "assetMember": "lib/net462/System.Numerics.Vectors.dll"
+    },
+    "BuildHost-net472/System.Runtime.CompilerServices.Unsafe.dll": {
+      "sha256": "08cbd7278b66f1e68425a82d4b97181a4130d93e3dd91831407aba7212ccdacf",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Runtime.CompilerServices.Unsafe.dll",
+      "assetPackage": "System.Runtime.CompilerServices.Unsafe/6.1.2",
+      "assetMember": "lib/net462/System.Runtime.CompilerServices.Unsafe.dll"
+    },
+    "BuildHost-net472/System.Text.Encodings.Web.dll": {
+      "sha256": "c82de7b478ff911eaeb4748a06003b8782e6f007bdc03d48073c24edda9a7a09",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Text.Encodings.Web.dll",
+      "assetPackage": "System.Text.Encodings.Web/10.0.1",
+      "assetMember": "lib/net462/System.Text.Encodings.Web.dll"
+    },
+    "BuildHost-net472/System.Text.Json.dll": {
+      "sha256": "cbec3d4f0ee7c8d488f402c676ec076a8e50859194d100b6eba85215586b4a68",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Text.Json.dll",
+      "assetPackage": "System.Text.Json/10.0.1",
+      "assetMember": "lib/net462/System.Text.Json.dll"
+    },
+    "BuildHost-net472/System.Threading.Tasks.Extensions.dll": {
+      "sha256": "af4e13ef418fd89b432de20cd1dfb7fa10a7179c8dd049c9856316e50c5949ca",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-net472/System.Threading.Tasks.Extensions.dll",
+      "assetPackage": "System.Threading.Tasks.Extensions/4.6.3",
+      "assetMember": "lib/net462/System.Threading.Tasks.Extensions.dll"
+    },
+    "BuildHost-netcore/Microsoft.Build.Locator.dll": {
+      "sha256": "fcc85336217be226f90a5ddfa55151dc84fcb2a76fe242f5274535c6b878aa30",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-netcore/Microsoft.Build.Locator.dll",
+      "assetPackage": "Microsoft.Build.Locator/1.10.2",
+      "assetMember": "lib/net8.0/Microsoft.Build.Locator.dll"
+    },
+    "BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.deps.json": {
+      "sha256": "ccfae7c6c7a5e154a52624096e436ab59534b2f76c6dda78ecc77d74c1086b20",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.deps.json"
+    },
+    "BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll": {
+      "sha256": "c0b3250cda498f1533fde4d46a9e01169ce7d35e4060ad598e4488a8e84803c2",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll"
+    },
+    "BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.runtimeconfig.json": {
+      "sha256": "7f19d83a3f514eebe09a06ec35e45613715b2430b1eb3c35f904740a9c6086b3",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.runtimeconfig.json"
+    },
+    "BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.dll": {
+      "sha256": "aab9f64e81c15885c7d9e8872a632e246b5581aeb6874684f23fb8d1a5a26229",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.dll"
+    },
+    "BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.pdb": {
+      "sha256": "c92eaa9d6795819d1f94cc6cea2f48f99472b8903f1b965295fd42d2a9e3eaa7",
+      "sourcePackage": "Microsoft.CodeAnalysis.Workspaces.MSBuild/5.9.0",
+      "sourceMember": "contentFiles/any/any/BuildHost-netcore/Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts.pdb"
+    }
+  }
+}

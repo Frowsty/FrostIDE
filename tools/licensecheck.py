@@ -998,6 +998,84 @@ def check_sdk_conpty(repo: Path, report: Report) -> None:
         report.violations.append(Violation("sdk/sdk.lock.json", 1, f"ConPTY pin: {error}"))
 
 
+def check_sdk_managed(repo: Path, report: Report) -> None:
+    """Check the pinned managed server, transitive licence manifest and original notices."""
+    lock = repo / "sdk/sdk.lock.json"
+    if not lock.is_file():
+        return
+    try:
+        pin = json.loads(lock.read_text(encoding="utf-8")).get("managedServer")
+        if pin is None:
+            return
+        manifest_path = repo / "sdk/managed-dependencies.json"
+        data = manifest_path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != pin["manifestSha256"]:
+            raise ValueError("dependency manifest SHA-256 mismatch")
+        manifest = json.loads(data)
+        if manifest["server"] != f"{pin['name']}/{pin['version']}":
+            raise ValueError("server identity mismatch")
+        if not re.fullmatch(r"[0-9a-f]{64}", pin["sha256"]):
+            raise ValueError("server archive SHA-256 is invalid")
+        if not expression_allowed(pin["license"], ALLOWLIST) or not (repo / pin["adr"]).is_file():
+            raise ValueError("server licence or ADR is invalid")
+        notices = manifest["notices"]
+        if not notices or not manifest["packages"]:
+            raise ValueError("dependency or notice list is empty")
+        for name, digest in notices.items():
+            if (Path(name).name != name or "\\" in name or ":" in name or
+                    hashlib.sha256((repo / "third_party/managed-notices" / name).read_bytes()).hexdigest() != digest):
+                raise ValueError(f"notice hash mismatch: {name}")
+        notice_text = (repo / "NOTICE").read_text(encoding="utf-8")
+        if "managed-dependencies.json" not in notice_text or "Permission is hereby granted, free of charge" not in notice_text:
+            raise ValueError("managed copyright list or MIT permission notice is missing")
+        report.packages.append(Package(_spdx_id("managed-" + pin["name"]), pin["name"], pin["version"],
+                                       pin["license"], pin["license"], pin["url"],
+                                       purl=f"pkg:nuget/{pin['name']}@{pin['version']}", sha256=pin["sha256"]))
+        seen = set()
+        for package in manifest["packages"]:
+            name, version, licence = package["name"], package["version"], package["license"]
+            identity = (name.casefold(), version)
+            if identity in seen:
+                raise ValueError(f"duplicate dependency: {name}/{version}")
+            seen.add(identity)
+            if not expression_allowed(licence, ALLOWLIST):
+                raise ValueError(f"dependency licence not on allowlist: {name}/{version}: {licence}")
+            if not package["copyright"] or not package["authors"]:
+                raise ValueError(f"dependency attribution missing: {name}/{version}")
+            if not all(re.fullmatch(r"[0-9a-f]{64}", package[key]) for key in ("nuspecSha256", "archiveSha256")):
+                raise ValueError(f"dependency digest invalid: {name}/{version}")
+            if not all(notice in notices for notice in package["notices"]):
+                raise ValueError(f"dependency notice missing: {name}/{version}")
+            url = f"https://api.nuget.org/v3-flatcontainer/{name.lower()}/{version.lower()}/{name.lower()}.{version.lower()}.nupkg"
+            report.packages.append(Package(_spdx_id("managed-" + name + "-" + version), name, version, licence, licence, url,
+                                           package["projectUrl"] or None, f"pkg:nuget/{name}@{version}",
+                                           sha256=package["archiveSha256"]))
+        report.packages.append(Package(_spdx_id("managed-Ionide.LanguageServerProtocol"),
+                                       "Ionide.LanguageServerProtocol", "1.0.0", "MIT", "MIT",
+                                       "https://github.com/razzmatazz/csharp-language-server",
+                                       "https://github.com/ionide/LanguageServerProtocol"))
+        package_ids = {f"{package['name']}/{package['version']}" for package in manifest["packages"]}
+        discovered = set()
+        projects = set()
+        for graph in manifest["graphs"].values():
+            discovered.update(graph["packages"])
+            projects.update(graph["projects"])
+        for path, asset in manifest["hostAssets"].items():
+            if not re.fullmatch(r"[0-9a-f]{64}", asset["sha256"]) or asset["sourcePackage"] not in package_ids:
+                raise ValueError(f"invalid managed host asset provenance: {path}")
+            if "assetPackage" in asset:
+                discovered.add(asset["assetPackage"])
+        if discovered != package_ids:
+            raise ValueError("managed dependency graphs or host assets do not match package list")
+        for project in sorted(projects - {"CSharpLanguageServer/0.28.0", "Ionide.LanguageServerProtocol/1.0.0"}):
+            name, version = project.rsplit("/", 1)
+            report.packages.append(Package(_spdx_id("managed-" + name + "-" + version), name, version,
+                                           "MIT", "MIT", "https://github.com/dotnet/roslyn",
+                                           comment="Build-host project shipped by Microsoft.CodeAnalysis.Workspaces.MSBuild"))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        report.violations.append(Violation("sdk/managed-dependencies.json", 1, f"managed server pin: {error}"))
+
+
 def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Path | None) -> Report:
     """Runs every check and returns the violations and SBOM packages."""
     report = Report()
@@ -1008,6 +1086,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     check_assets(repo, report, files)
     check_assets(repo, report, files, VENDOR_MANIFEST)
     check_sdk_conpty(repo, report)
+    check_sdk_managed(repo, report)
     report.violations = sorted(set(report.violations))
     return report
 

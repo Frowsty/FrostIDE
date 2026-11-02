@@ -48,6 +48,10 @@ struct FindSettings {
     search::SearchScope scope;
     bool fileMaskEnabled = false;
     bool replaceMode = false;
+    // Auto-selected scope/directory follow project changes; user edits remain explicit.
+    bool scopeExplicit = false;
+    std::optional<search::ScopeKind> preferredScope;
+    bool directoryExplicit = false;
     std::string replacement;
 };
 

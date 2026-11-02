@@ -77,6 +77,9 @@ public:
     FindFeature(const FindFeature&) = delete ("QObject instances have identity and cannot be copied");
     FindFeature& operator=(const FindFeature&) = delete ("QObject instances have identity and cannot be copied");
 
+    // Cancels popup and tool-window sessions before a project switch or owner teardown.
+    // GUI thread; waits for running searches to finish their cancellation.
+    void cancelSearches();
     // Registers the actions and the tool window (once). Errors: the registry's or the tool window
     // manager's (AlreadyExists when another slice registered one of the ids); what registered
     // before the error stays registered.
@@ -85,9 +88,9 @@ public:
     // Opens the Find (or with `replace`, the Replace) in Files popup, closing an open one.
     FindPopup* showPopup(bool replace);
     // The open popup, or nullptr.
-    [[nodiscard]] FindPopup* popup() const noexcept { return m_popup.data(); }
+    [[nodiscard]] FindPopup* popup() const noexcept;
     // The Find tool window's content, or nullptr before the window was first shown.
-    [[nodiscard]] FindToolWindow* toolWindow() const noexcept { return m_toolWindow.data(); }
+    [[nodiscard]] FindToolWindow* toolWindow() const noexcept;
 
     // Moves `popup`'s search (running or done) to the Find tool window, shows it and closes the
     // popup.

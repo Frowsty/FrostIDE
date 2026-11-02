@@ -54,7 +54,7 @@ public:
     // Appends a chunk of output of `kind` (header comment).
     void appendOutput(build::RunOutputKind kind, std::string_view text);
     // Ends the run: input and Stop off, Rerun on, the closing line (runFinishedLine) appended.
-    void finish(const build::RunOutcome& outcome);
+    void finish(const build::RunOutcome& outcome, const QString& summary = {});
 
     // The output as plain text (tests and copy).
     [[nodiscard]] QString text() const;

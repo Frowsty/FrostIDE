@@ -82,6 +82,26 @@ enum class ChangeStripeKind : std::uint8_t { Added, Modified, Deleted };
  * (one rectangle per display row), or a short horizontal mark on the top edge of the line that
  * follows deleted lines. `change` is the index into EditorView::lineChanges(), for the click.
  */
+// A line breakpoint's look: Verified is a filled disc, Unverified (not bound yet, or the adapter
+// refused it) a hollow ring (ADR 0050).
+enum class BreakpointKind : std::uint8_t { Verified, Unverified };
+
+// A line breakpoint in the gutter (frost::debug::BreakpointManager fills them through EditorView).
+struct DisplayBreakpoint {
+    QRectF rect; // The disc's bounding square.
+    QColor color;
+    BreakpointKind kind = BreakpointKind::Verified;
+    LineIndex line;
+};
+
+// The debugger's execution point: a right-pointing arrow in the gutter on the stopped line (the
+// line itself gets a DisplayFill in the executionLine colour).
+struct DisplayExecutionPoint {
+    QRectF rect; // The arrow's bounding box; it points right.
+    QColor color;
+    LineIndex line;
+};
+
 struct DisplayChangeStripe {
     QRectF rect;
     QColor color;
@@ -179,6 +199,8 @@ struct EditorDisplayList {
     QColor caretColor;
     std::vector<DisplayText> gutterText;
     std::vector<DisplayMarker> markers;
+    std::vector<DisplayBreakpoint> breakpoints;
+    std::optional<DisplayExecutionPoint> executionPoint;
     std::vector<DisplayChangeStripe> changeStripes;
     // The error stripe (empty rect when hidden) and its summary box (the worst severity's colour,
     // or the clean colour).

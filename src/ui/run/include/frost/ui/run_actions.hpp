@@ -5,7 +5,8 @@
 // Studio's "Start Without Debugging"; with no debugger yet it is the same as Run), run.stop
 // (Ctrl+F2), run.rerun, run.setStartupProject (the Solution Explorer's context menu, "Set as
 // Startup Project") and run.toggleExternalConsole. The shell's own ids (window.*, view.*,
-// file.*, help.*) and run.debug (M4) are not registered here.
+// file.*, help.*) and run.debug (registerDebugActions, frost/ui/debug_actions.hpp) are not
+// registered here.
 //
 /*
  * Trust. None is marked executesProjectCode: a run builds first, and the build service asks
@@ -39,6 +40,10 @@ struct RunActionHooks {
     std::function<std::optional<project::ProjectId>()> selectedProject{};
     // Shows why an action failed (the run could not start); empty: ignored.
     std::function<void(const Error& error)> reportError{};
+    // Stop also ends a debug session (Rider's one Stop, Ctrl+F2): whether one is live, and ending
+    // it (frost::ui::DebugController). Empty: Stop ends runs only.
+    std::function<bool()> debugging{};
+    std::function<void()> stopDebugging{};
 };
 
 /*

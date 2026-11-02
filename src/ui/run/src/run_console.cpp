@@ -150,11 +150,11 @@ void RunConsole::appendOutput(build::RunOutputKind kind, std::string_view text) 
     appendText(kind, chunk);
 }
 
-void RunConsole::finish(const build::RunOutcome& outcome) {
+void RunConsole::finish(const build::RunOutcome& outcome, const QString& summary) {
     m_stop->setEnabled(false);
     m_input->setEnabled(false);
     m_rerun->setEnabled(true);
-    QString line = runFinishedLine(outcome);
+    QString line = summary.isEmpty() ? runFinishedLine(outcome) : summary;
     appendText(build::RunOutputKind::System,
                (m_openLine ? QStringLiteral("\n\n") : QStringLiteral("\n")) + line + QLatin1Char('\n'));
 }

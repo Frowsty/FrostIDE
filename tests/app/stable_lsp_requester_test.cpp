@@ -89,4 +89,33 @@ TEST(StableLspRequester, RoutesByDocumentAcrossTabSwitchAndClose) {
     EXPECT_FALSE(frost::sched::syncWait(requester.request("textDocument/hover", params(lua))).has_value());
 }
 
+TEST(StableLspRequester, ManagedRequestsKeepTheirOwnServerAcrossTabSwitchAndReplacement) {
+    frost::app::StableLspRequester requester;
+    requester.setServer(std::make_shared<TestServer>(1));
+    requester.setLuaServer(std::make_shared<TestServer>(2));
+    auto managed = std::make_shared<TestServer>(3);
+    std::weak_ptr<TestServer> old = managed;
+    requester.setManagedServer(managed);
+#ifdef _WIN32
+    const std::string path = "C:\\project\\file.CS";
+#else
+    const std::string path = "/project/file.CS";
+#endif
+    auto params = frost::lang::Json::object().set(
+        "textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(path).value()));
+    requester.setActivePath(path);
+    auto delayed = requester.request("textDocument/hover", params);
+    managed.reset();
+    requester.setManagedServer(std::make_shared<TestServer>(4));
+    requester.setActivePath("plain.txt");
+    ASSERT_FALSE(old.expired());
+    auto answer = frost::sched::syncWait(std::move(delayed));
+    ASSERT_TRUE(answer.has_value());
+    EXPECT_EQ(answer->asInteger(), 3);
+    EXPECT_TRUE(old.expired());
+    answer = frost::sched::syncWait(requester.request("textDocument/hover", params));
+    ASSERT_TRUE(answer.has_value());
+    EXPECT_EQ(answer->asInteger(), 4);
+}
+
 } // namespace

@@ -51,6 +51,8 @@ class IDocumentEditorListener {
 public:
     // A view was created for `view.document()` (also when the document was already open).
     virtual void editorOpened(DocumentEditorView& view) = 0;
+    // The widget and document are both still alive.
+    virtual void editorClosing(DocumentEditorView&) {}
     // The view is being destroyed; its document is still open.
     virtual void editorClosed(DocumentEditorView& view) = 0;
     // The text changed through the view (EditorView::textChanged).

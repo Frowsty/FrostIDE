@@ -316,3 +316,12 @@ frost_add_test(ui_vcs_git_tests QT
     LABELS integration git)
 _frost_ui_test_wiring(ui_vcs_git_tests)
 target_compile_definitions(ui_vcs_git_tests PRIVATE FROST_VCS_GIT="${_frost_ui_vcs_git}")
+
+if(TARGET frost_ui_debug)
+    frost_add_test(ui_debug_tests QT
+        SOURCES debug/debug_ui_test.cpp
+        DEPS frost::ui_debug frost::ui_editor frost::ui_shell frost::ui_run frost::debug frost::build frost::project
+             frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::input frost::sched frost::io
+             frost_ui_test_support)
+    _frost_ui_test_wiring(ui_debug_tests)
+endif()

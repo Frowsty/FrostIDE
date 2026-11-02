@@ -204,8 +204,9 @@ TSAN_MODULES = ("io", "rpc", "sched", "text")
 # and tests/<m>/CMakeLists.txt): src/text links frost::io, text_perf_tests links frost::sched, and src/io
 # links frost::sched (its reactor and watchers, ADR 0020).
 _TSAN_CLOSURE = {"io": ("io", "text"), "rpc": ("rpc",), "sched": ("io", "sched", "text"), "text": ("text",)}
-# Every TSan module depends on these, so a change in them affects all three that exist.
-_FOUNDATION_MODULES = {"core": ("io", "sched", "text"), "compat": ("io", "sched", "text")}
+# Every TSan module depends on these, so a change in them affects all four (rpc links frost::core
+# since ADR 0050 made it a module with its own tests).
+_FOUNDATION_MODULES = {"core": TSAN_MODULES, "compat": TSAN_MODULES}
 # Build inputs and shared test code: a change here can alter every module's tests.
 _ALL_MODULE_FILES = frozenset({"CMakeLists.txt", "src/CMakeLists.txt", "tests/CMakeLists.txt", "CMakePresets.json",
                                "vcpkg.json", "sdk/sdk.lock.json"})

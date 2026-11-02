@@ -5,6 +5,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/lua_service.hpp"
+#include "frost/lang/managed_service.hpp"
 #include "frost/sched/sim_executor.hpp"
 #include "frost/text/document.hpp"
 
@@ -34,6 +35,56 @@ TEST(LuaService, DiscoveryRejectsRelativeAndMissingExplicitPaths) {
     search.configuredPath.clear();
     EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).value(), tool);
 }
+TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
+    auto reactor = frost::io::Reactor::create();
+    ASSERT_TRUE(reactor.has_value());
+    frost::sched::SimExecutor sim;
+    frost::io::ScriptedProcessLauncher launcher;
+    auto options = frost::lang::managedServiceOptions(tool, root + "/CSharpLanguageServer.dll", root, false);
+    EXPECT_EQ(options.languageId, "csharp");
+    ASSERT_EQ(options.arguments.size(), 3U);
+    EXPECT_EQ(options.arguments[0], root + "/CSharpLanguageServer.dll");
+    frost::lang::ManagedService server(launcher, {**reactor, sim}, options);
+    EXPECT_EQ(server.start().error().code(), frost::ErrorCode::Untrusted);
+    EXPECT_TRUE(launcher.launches().empty());
+    options.trusted = true;
+    launcher.expect(frost::io::ScriptedProcess{
+        .stdoutBytes = frame(R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":2}}})"),
+        .neverExits = true,
+        .chunkBytes = 1024,
+        .chunkInterval = 1ms});
+    frost::lang::ManagedService trusted(launcher, {**reactor, sim}, options);
+    auto document = frost::text::Document::fromUtf8("class Sample {}\n");
+    ASSERT_TRUE(document.has_value());
+    ASSERT_TRUE(trusted.openDocument(frost::io::joinPath(root, "main.cs").value(), document->text()).has_value());
+    ASSERT_TRUE(trusted.start().has_value());
+    sim.runFor(5ms);
+    ASSERT_EQ(trusted.state(), frost::lang::LuaState::Running);
+    auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    EXPECT_EQ(launches.front().spec.arguments, options.arguments);
+    EXPECT_EQ(launches.front().spec.environment, options.environment);
+    EXPECT_NE(launches.front().stdinBytes.find("\"languageId\":\"csharp\""), std::string::npos);
+    launcher.expect(frost::io::ScriptedProcess{
+        .stdoutBytes = frame(R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":2}}})"),
+        .neverExits = true,
+        .chunkBytes = 1024,
+        .chunkInterval = 1ms});
+    auto pending = trusted.request("textDocument/hover", frost::lang::Json::object());
+    ASSERT_TRUE(trusted.killServerForTesting().has_value());
+    sim.runFor(1s);
+    ASSERT_EQ(trusted.state(), frost::lang::LuaState::Running);
+    EXPECT_EQ(trusted.restarts(), 1U);
+    EXPECT_FALSE(sim.spawn(frost::sched::Lane::UserVisible, std::move(pending)).join().has_value());
+    launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 2U);
+    EXPECT_EQ(launches[1].spec.arguments, options.arguments);
+    EXPECT_EQ(launches[1].spec.environment, options.environment);
+    EXPECT_NE(launches[1].stdinBytes.find("\"languageId\":\"csharp\""), std::string::npos);
+    sim.spawn(frost::sched::Lane::UserVisible, trusted.stop()).join();
+    EXPECT_EQ(trusted.state(), frost::lang::LuaState::Stopped);
+}
+
 TEST(LuaService, ConfigurationMatchesEngineAndSupportsSections) {
     auto config = frost::lang::luaDefaults("Lua 5.4", true);
     EXPECT_EQ(frost::lang::luaConfigurationSection(config, "Lua.runtime.version").asString()->compare("Lua 5.4"), 0);

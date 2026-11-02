@@ -282,6 +282,37 @@ TEST(RhiGlyphPainter, DrawsTheChangeStripesAsSolidQuads) {
     }
 }
 
+// The debugger's gutter kinds (ADR 0050) are atlas cells too: a filled disc for a verified
+// breakpoint, a ring for an unverified one and the execution arrow, one quad each.
+TEST(RhiGlyphPainter, DrawsBreakpointsAndTheExecutionPoint) {
+    RhiGlyphPainter painter(editorFont(13.0));
+    EditorDisplayList list = sampleList(painter.font());
+    painter.prepare(list, 1.0);
+    const std::size_t plain = painter.quads().size();
+    list.breakpoints.push_back(
+        DisplayBreakpoint{QRectF(10, 4, 10, 10), QColor(0xE0, 0x6C, 0x75), BreakpointKind::Verified, LineIndex{0}});
+    list.breakpoints.push_back(
+        DisplayBreakpoint{QRectF(10, 24, 10, 10), QColor(0x80, 0x80, 0x80), BreakpointKind::Unverified, LineIndex{1}});
+    list.executionPoint = DisplayExecutionPoint{QRectF(10, 25, 10, 8), QColor(0xE0, 0xC0, 0x60), LineIndex{1}};
+    painter.prepare(list, 1.0);
+    ASSERT_EQ(painter.quads().size(), plain + 3);
+    const GlyphQuad& disc = painter.quads()[plain];
+    const GlyphQuad& ring = painter.quads()[plain + 1];
+    const GlyphQuad& arrow = painter.quads()[plain + 2];
+    EXPECT_FLOAT_EQ(disc.x, 10.0F);
+    EXPECT_FLOAT_EQ(disc.y, 4.0F);
+    EXPECT_FLOAT_EQ(disc.w, 10.0F);
+    EXPECT_TRUE(disc.u0 != ring.u0 || disc.v0 != ring.v0) << "the ring is its own atlas cell";
+    EXPECT_FLOAT_EQ(arrow.w, 10.0F);
+    EXPECT_FLOAT_EQ(arrow.h, 8.0F);
+    EXPECT_NE(disc.rgba, ring.rgba);
+
+    // At 150 % the cells are rasterised at the device size.
+    painter.prepare(list, 1.5);
+    ASSERT_EQ(painter.quads().size(), plain + 3);
+    EXPECT_FLOAT_EQ(painter.quads()[plain].w, 15.0F);
+}
+
 TEST(RhiGlyphPainter, TheRendererForwardsFontChangesToTheViewport) {
     RhiEditorViewport viewport(editorFont(13.0)); // Never shown: no QRhi is created.
     RhiEditorRenderer renderer(viewport);

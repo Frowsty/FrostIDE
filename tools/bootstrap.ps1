@@ -22,7 +22,7 @@
 param(
     # Root directory for every installed component.
     [string]$SdkRoot = 'E:\sdk',
-    # Optional subset (llvm, cmake, ninja, gh, sccache, dotnet, conpty, python, qt, vcpkg, lldb).
+    # Optional subset (llvm, cmake, ninja, gh, sccache, dotnet, conpty, python, managed, qt, vcpkg, lldb).
     [string[]]$Only = @()
 )
 
@@ -225,6 +225,27 @@ function Assert-Msvc {
     Write-Host "[msvc] toolset $($Lock.msvc.vcToolsVersion) and Windows SDK $($Lock.msvc.windowsSdkVersion) present"
 }
 
+# Installs or verifies the pinned managed server without replacing existing files.
+function Install-ManagedServer {
+    $pin = $Lock.managedServer
+    $archive = Join-Path $Downloads "csharp-ls.$($pin.version).nupkg"
+    $dest = Join-Path $SdkRoot 'managed'
+    Get-Download $pin.url $archive
+    Assert-Hash $archive $pin
+    $python = Join-Path $SdkRoot 'py\Scripts\python.exe'
+    if (-not (Test-Path $python)) {
+        throw 'The managed server installer needs the pinned Python tools; bootstrap python first.'
+    }
+    $installer = Join-Path $PSScriptRoot 'managed_server.py'
+    if (Test-Path $dest) {
+        & $python $installer --archive $archive --dest $dest --verify-only
+    } else {
+        & $python $installer --archive $archive --dest $dest
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Managed server install or verification failed' }
+    Write-Host "[managed] $($pin.version) verified in $dest"
+}
+
 # Verifies the self-built lldb-dap in $SdkRoot\lldb-<version> against windows.lldb.files in the
 # lock file, or builds it from the pinned LLVM sources first when it is not installed. Runs last,
 # because the build needs LLVM, CMake, Ninja and the Python venv; tools\build-lldb.ps1 does both
@@ -250,6 +271,7 @@ foreach ($name in @('llvm', 'cmake', 'ninja', 'gh', 'sccache', 'dotnet', 'conpty
     if (Test-Wanted $name) { Install-Archive $name }
 }
 if (Test-Wanted 'python') { Install-PythonTools }
+if (Test-Wanted 'managed') { Install-ManagedServer }
 if (Test-Wanted 'qt') { Install-Qt }
 if (Test-Wanted 'vcpkg') { Install-Vcpkg }
 if (Test-Wanted 'lldb') { Install-Lldb }

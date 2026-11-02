@@ -3,8 +3,9 @@
 // RunService: the Qt-free W1 run service (ADR 0040) that Run, Stop, Rerun, the toolbar's startup
 // project combo and the Run console bind to. It keeps the solution's startup project, builds it
 // through the build service, asks MSBuild what to start (run_target.hpp) and runs the program in
-// FrostIDE's Run console or an external console window, one run at a time per project. No
-// debugger: that is M4.
+// FrostIDE's Run console or an external console window, one run at a time per project. A Debug
+// run (debug()) builds and resolves the same way and then hands the program to the debugger
+// (frost::debug, ADR 0050) instead of starting it.
 //
 /*
  * Startup project. When a solution opens, the startup project is the one persisted for that
@@ -35,6 +36,8 @@
  *     console. This step blocks the service's thread for the query (about a second).
  *   - Running: output, input and Stop (the whole process tree ends). Then Finished, with the exit
  *     code and the run time.
+ *   - A Debug run (debug()) skips Running: once resolved it is Finished with outcome.debugged and
+ *     its DebugRunHandlers get the DebugLaunch, which the debugger starts under lldb-dap.
  * One run per project: run() for a project that is already running fails with Busy, which the UI
  * turns into "stop and rerun?" (rerun() does that). Different projects may run side by side.
  * run() also fails with Busy while the build service builds. Off Windows, MSBuild solutions are
@@ -125,6 +128,7 @@ struct RunInfo {
     std::string commandLine{};                      // Known from Running on.
     io::ProcessId processId = 0;                    // Known from Running on.
     bool acceptsInput = false;                      // The Run console's input line is live.
+    bool debug = false;                             // A Debug run (debug()): the Run console ignores it.
 };
 
 // How a run ended.
@@ -135,6 +139,7 @@ struct RunOutcome {
     bool stopped = false;          // stop() ended the program (or the run before it started).
     std::optional<int> exitCode{}; // When the program ran.
     IClock::Duration duration{};   // The program's run time.
+    bool debugged = false;         // A Debug run handed its program to the debugger.
 
     [[nodiscard]] bool ran() const noexcept { return exitCode.has_value(); }
 };
@@ -149,6 +154,21 @@ struct RunServiceCallbacks {
     std::function<void(const RunOutcome& outcome)> onRunFinished{};
     std::function<void(std::optional<project::ProjectId> project)> onStartupProjectChanged{};
     std::function<void(bool external)> onExternalConsoleChanged{};
+};
+
+// What a Debug run hands to the debugger: the resolved program and the folders it runs project code from.
+struct DebugLaunch {
+    RunCommand command{};
+    Subsystem subsystem = Subsystem::Unknown;
+    std::vector<std::string> trustRoots{}; // project::buildTrustRoots of the solution.
+};
+
+// The callbacks of one Debug run; both optional, on the service's thread, after the service's own
+// callbacks for the same event.
+struct DebugRunHandlers {
+    std::function<void(RunOutputKind kind, std::string_view text)> onOutput{};
+    // The run ended: `launch` is set when the program is ready to debug, else outcome says why not.
+    std::function<void(const RunOutcome& outcome, const std::optional<DebugLaunch>& launch)> onFinished{};
 };
 
 // Asks what a project configuration runs; the default asks MSBuild, with the static fallback.
@@ -213,6 +233,10 @@ public:
      * Busy (the project is running already, or a build is in progress).
      */
     [[nodiscard]] Result<RunId> run(std::optional<project::ProjectId> project = std::nullopt);
+
+    // Builds and resolves `project` like run() and hands it to `handlers` instead of starting it
+    // (header comment). Errors: as run().
+    [[nodiscard]] Result<RunId> debug(std::optional<project::ProjectId> project, DebugRunHandlers handlers);
 
     // Stops the project's run, if any, and runs it again once it has ended (onRunStarted reports
     // the new run). Returns the id of the run being stopped, or of the new run when nothing ran.

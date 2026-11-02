@@ -62,3 +62,7 @@ add_subdirectory(vcs)
 if(TARGET frost_term)
     add_subdirectory(terminal)
 endif()
+
+if(TARGET frost_ui_run AND TARGET frost_debug)
+    add_subdirectory(debug)
+endif()

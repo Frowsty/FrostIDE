@@ -245,9 +245,9 @@ bool RhiGlyphPainter::addKind(const EditorDisplayList& list, DisplayElementKind 
      */
     const auto& [viewport [[maybe_unused]], background [[maybe_unused]], textArea [[maybe_unused]], gutter,
                  gutterBackground, font [[maybe_unused]], fills, underlines, runs, decorations, overlays, carets,
-                 caretColor, gutterRuns, markers, changeStripes, stripe, stripeBackground, stripeMarks, stripeSummary,
-                 stripeSummaryColor, inspection [[maybe_unused]], balloon [[maybe_unused]], chrome, chromeRuns,
-                 firstRow [[maybe_unused]], rowCount [[maybe_unused]]] = list;
+                 caretColor, gutterRuns, markers, breakpoints, executionPoint, changeStripes, stripe, stripeBackground,
+                 stripeMarks, stripeSummary, stripeSummaryColor, inspection [[maybe_unused]], balloon [[maybe_unused]],
+                 chrome, chromeRuns, firstRow [[maybe_unused]], rowCount [[maybe_unused]]] = list;
     // viewport, background and textArea are the target, the clear colour and the scissors (prepare,
     // buildQuads); the font is the painter's own (setFont); the inspection and balloon records are
     // drawn through `chrome` and `chromeRuns`; the rows are bookkeeping.
@@ -318,6 +318,24 @@ bool RhiGlyphPainter::addKind(const EditorDisplayList& list, DisplayElementKind 
                 if (!addMarker(marker, dropWhenFull)) {
                     return false;
                 }
+            }
+            for (const DisplayBreakpoint& breakpoint : breakpoints) {
+                const int diameter = std::max(1, static_cast<int>(std::lround(breakpoint.rect.width() * m_dpr)));
+                const AtlasEntry* cell =
+                    breakpoint.kind == BreakpointKind::Verified ? m_atlas.disc(diameter) : m_atlas.ring(diameter);
+                const QPoint origin(static_cast<int>(std::lround(breakpoint.rect.x() * m_dpr)),
+                                    static_cast<int>(std::lround(breakpoint.rect.y() * m_dpr)));
+                if (!addCell(cell, origin, breakpoint.color, dropWhenFull))
+                    return false;
+            }
+            if (executionPoint) {
+                const QRectF& rect = executionPoint->rect;
+                const int width = std::max(1, static_cast<int>(std::lround(rect.width() * m_dpr)));
+                const int height = std::max(1, static_cast<int>(std::lround(rect.height() * m_dpr)));
+                const QPoint origin(static_cast<int>(std::lround(rect.x() * m_dpr)),
+                                    static_cast<int>(std::lround(rect.y() * m_dpr)));
+                if (!addCell(m_atlas.arrow(width, height), origin, executionPoint->color, dropWhenFull))
+                    return false;
             }
         }
         return true;

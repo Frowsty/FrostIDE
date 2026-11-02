@@ -53,6 +53,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
+#include "frost/lang/engine_automation.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/settings/project_layout.hpp"
 #include "frost/settings/registry.hpp"
@@ -61,6 +62,7 @@
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "engine_request_helper.hpp"
 #include "project_open_broker.hpp"
 #include <QAbstractEventDispatcher>
 #include <QApplication>
@@ -69,6 +71,7 @@
 #include <QFileInfo>
 #include <QTimer>
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <format>
@@ -418,6 +421,32 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
     ConsoleCodePageRestorer consoleCodePage;
     FatalHandlerCodePage fatalHandler;
     const std::vector<std::string> args = utf8Arguments(argc, argv);
+    if (args.size() == 1 && args[0] == "--internal-engine-request") {
+        std::string input;
+        std::array<char, 4096> bytes{};
+        while (const auto n = std::fread(bytes.data(), 1, bytes.size(), stdin)) {
+            input.append(bytes.data(), n);
+            if (input.size() > 16 * 1024 * 1024)
+                return 1;
+        }
+        auto parsed = frost::lang::parseJson(input);
+        if (!parsed || !parsed->isObject())
+            return 1;
+        auto result = frost::app::executeEngineHelper(*parsed);
+        auto output = frost::lang::Json::object();
+        if (result)
+            output.set("ok", true).set("value", std::move(*result));
+        else
+            output.set("ok", false)
+                .set("code", static_cast<int>(result.error().code()))
+                .set("message", result.error().message());
+        const std::string payload = output.dump();
+        if (payload.size() > 16 * 1024 * 1024)
+            return 1;
+        attachParentConsoleIfNeeded(consoleCodePage);
+        print(stdout, payload);
+        return 0;
+    }
     const std::vector<std::string_view> views(args.begin(), args.end());
     auto parsed = frost::app::parseCommandLine(views);
     // Command-line modes run unattended (tests, scripts, packaging smoke tests), so they never

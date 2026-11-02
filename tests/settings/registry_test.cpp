@@ -120,6 +120,7 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::toolsClangTidyPath);
     expectTypedKey(key::toolsClangTidyPlugins);
     expectTypedKey(key::toolsDebuggerPath);
+    expectTypedKey(key::toolsLldbDapPath);
 }
 
 TEST(SettingsRegistry, DefaultsAreRiderLike) {

@@ -67,6 +67,7 @@
 #include "frost/build/run_service.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
+#include "frost/debug/breakpoints.hpp"
 #include "frost/document/autosave.hpp"
 #include "frost/document/save_manager.hpp"
 #include "frost/input/action.hpp"
@@ -79,6 +80,7 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/lua_service.hpp"
+#include "frost/lang/managed_service.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
@@ -90,6 +92,7 @@
 #include "frost/term/pty.hpp"
 #include "frost/term/shell.hpp"
 #include "frost/ui/appearance_manager.hpp"
+#include "frost/ui/debug_controller.hpp"
 #include "frost/ui/editor/editor_actions.hpp"
 #include "frost/ui/nav/document_registry.hpp"
 #include "frost/ui/nav/session.hpp"
@@ -129,6 +132,7 @@ class CMakeService;
 namespace frost::ui {
 class RunController;
 class TrustPrompter;
+class FindFeature;
 class TrustDialog;
 class TerminalIntegration;
 } // namespace frost::ui
@@ -141,6 +145,7 @@ namespace frost::app {
 
 class LanguageBridge;
 class CMakeIntegration;
+class EngineIntegration;
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -162,6 +167,7 @@ struct FileLocation {
 };
 
 [[nodiscard]] bool isLuaSource(std::string_view path) noexcept;
+[[nodiscard]] bool isManagedSource(std::string_view path) noexcept;
 
 // Whether clangd handles `path`: a C, C++, Objective-C or CUDA source or header by extension (ASCII
 // case ignored). O(path length).
@@ -225,10 +231,14 @@ struct WorkbenchOptions {
     std::string cmakeStatePath;
     // The run service's persisted startup projects (absolute); "" persists nothing.
     std::string runStatePath;
+    // Test seam: the FrostIDE executable that provides the isolated discovery helper.
+    // Empty uses this application's own executable.
+    std::string engineDiscoveryHelperPath;
     // Console programs run in an external console window unless the solution chose the Run console.
     bool runExternalConsole = true;
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
     std::string msbuildPath;
+    debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
     // Replaces MSBuild (tests); empty runs MSBuild.
     build::BuildStarter startBuild;
     // Starts clangd for an opened project when it is found (tools.clangd.path, then the SDK, PATH).
@@ -330,8 +340,10 @@ public:
     [[nodiscard]] build::BuildService& buildService() noexcept { return *m_buildService; }
     [[nodiscard]] build::CMakeService* cmakeService() noexcept;
     [[nodiscard]] build::RunService* runService() noexcept { return m_runService.get(); }
+    [[nodiscard]] ui::DebugController* debugController() noexcept { return m_debug.get(); }
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
+    [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     [[nodiscard]] ui::nav::SessionStore* sessions() noexcept { return m_sessions.get(); }
     // The window's parts (null before attach()).
@@ -357,9 +369,11 @@ protected:
 
 private:
     friend class LanguageBridge;
+    friend class EngineIntegration;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
+    void editorClosing(DocumentEditorView& view) override;
     void editorClosed(DocumentEditorView& view) override;
     void editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) override;
     [[nodiscard]] bool editorCloseRequested(DocumentEditorView& view) override;
@@ -375,6 +389,8 @@ private:
     void attachRun();
     void attachLanguage();
     void attachTerminal();
+    void attachFind();
+    void cancelFind();
     void stopTerminal();
     void detach();
 
@@ -389,6 +405,11 @@ private:
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
 
     // LuaLS, only in trusted workspaces.
+    void startManaged(const std::string& root);
+    void stopManaged();
+    void syncManagedDocument(DocumentEditorView& view);
+    void onManagedDiagnostics(const std::string& file);
+    void offerManagedTrust();
     void startLua(const std::string& root);
     void stopLua();
     void syncLuaDocument(DocumentEditorView& view);
@@ -451,14 +472,23 @@ private:
 
     std::unique_ptr<ui::BuildController> m_build;
     std::unique_ptr<build::BuildService> m_buildService;
+    std::unique_ptr<EngineIntegration> m_engine;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     std::unique_ptr<CMakeIntegration> m_cmake;
     ui::BuildActions* m_buildActions = nullptr; // Child of this.
     std::unique_ptr<build::IRunBuilder> m_runBuilder;
     std::unique_ptr<ui::RunController> m_runController;
     std::unique_ptr<build::RunService> m_runService;
+    debug::BreakpointManager m_breakpoints;
+    std::unique_ptr<ui::DebugController> m_debug;
 
     std::shared_ptr<lang::ICompileCommandsProvider> m_compileCommands;
+    std::shared_ptr<lang::ManagedService> m_managed;
+    std::uint64_t m_managedListener = 0;
+    std::vector<sched::JoinHandle<void>> m_retiredManaged;
+    QPointer<ui::TrustDialog> m_managedTrustDialog;
+    std::string m_managedDotnetPath;
+    std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;
     std::uint64_t m_luaListener = 0;
     std::vector<sched::JoinHandle<void>> m_retiredLua;
@@ -480,6 +510,7 @@ private:
 
     std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
     std::unique_ptr<ui::TerminalIntegration> m_terminal;
+    std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;
     QPointer<ui::SolutionExplorer> m_explorer;

@@ -2,6 +2,7 @@
 // Workbench Lua routing, trust and real LuaLS with engine-generated API definitions.
 #include "frost/app/welcome_screen.hpp"
 #include "frost/io/file_system.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
@@ -57,6 +58,30 @@ TEST(WorkbenchLua, FrostProjectIdentitySurvivesRecentAndSessionReopen) {
         ASSERT_TRUE(second.workbench->openPath(dir.path()));
         EXPECT_NE(second.workbench->solution(), nullptr);
     }
+}
+
+TEST(WorkbenchLua, QueuedTrustAndSettingsCannotRestartAfterShutdown) {
+    WorkDir dir("lua-shutdown");
+    dir.write("main.lua", "print('hello')\n");
+#ifdef _WIN32
+    const std::string server = dir.join("lua-language-server.exe");
+    dir.write("lua-language-server.exe", "fake server");
+#else
+    const std::string server = dir.join("lua-language-server");
+    dir.write("lua-language-server", "fake server");
+#endif
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  server));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.workbench->shutdown();
+    EXPECT_FALSE(waitFor([&] { return rig.workbench->lua() != nullptr; }, 1500ms));
+    EXPECT_TRUE(launcher.launches().empty());
 }
 
 TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
