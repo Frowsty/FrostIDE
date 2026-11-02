@@ -515,7 +515,7 @@ TEST_F(WorkbenchTest, BannersShowLongLinesAndOutOfDateFiles) {
     file("/proj/long.txt", std::string(50, 'x') + "\n");
     file("/proj/grow.txt", "small\n");
     document::SaveManagerOptions options;
-    options.load.maxEditableLineChars = 10;
+    options.load.maxEditableLineBytes = 10;
     Ide& app = ide(nullptr, options);
     openProject(app);
     ASSERT_TRUE(app.workbench->openFile("/proj/long.txt").has_value());
