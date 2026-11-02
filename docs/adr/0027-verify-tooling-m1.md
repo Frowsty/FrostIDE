@@ -2,7 +2,8 @@
 
 # ADR 0027: Verify tooling for M1 (parallel ctest, the WSL PATH, perf.ps1; tidy and TSan behind switches)
 
-- Status: accepted
+- Status: accepted; decision 5 amended on 2026-11-02 (tags after the kind label, at the seventh feature-first
+  batch)
 - Date: 2026-11-02
 - Plan reference: PLAN.md section 4 (B28), 6.3, 6.4; ADR 0010 follow-ups; ADR 0011 F2; ADR 0031 (feature-first)
 
@@ -20,26 +21,29 @@ that loop faster; tidy and TSan are built but switched off.
 2. **The changed-file list** is the files that differ between `merge-base(HEAD, -Base)` and the working tree,
    untracked files included, computed on a copy of the index so the repository's index is never written. It is
    only made when tidy or the TSan quick leg needs it.
-3. **Parallel ctest on Windows.** verify.ps1 runs ctest with `-j -TestJobs` (default `-Jobs`). Isolation is
-   declared in `frost_add_test` (`cmake/FrostLayers.cmake`), defaulted by the one kind label so that suites
-   merged later are covered without wiring: `integration` takes `RESOURCE_LOCK frost_desktop` (process tests
-   start frost.exe or helpers on private desktops, create windows, use per-user state), `perf` takes
-   `RUN_SERIAL`; `RESOURCE_LOCK`, `RUN_SERIAL` and `PROCESSORS` keywords add to or replace that. Explicit rows:
+3. **Parallel ctest on Windows.** verify.ps1 runs ctest with `-j -TestJobs` (default `-Jobs`). Isolation is declared
+   in `frost_add_test` (`cmake/FrostLayers.cmake`), defaulted by the kind label (the first `LABELS` value) so that
+   suites merged later are covered without wiring: `integration` takes `RESOURCE_LOCK frost_desktop` (process tests
+   start frost.exe or helpers on private desktops, create windows, use per-user state), `perf` takes `RUN_SERIAL`;
+   `RESOURCE_LOCK`, `RUN_SERIAL` and `PROCESSORS` keywords add to or replace that. Explicit rows:
    `app_startup_tests` (unit, private desktop and MessageBoxW) holds `frost_desktop`; `frost_process_tests`
    `PROCESSORS 2`; `sched_tests` and `text_tests` `PROCESSORS 2`; the stress suites `PROCESSORS 4`;
-   `FrostRuntimeDlls.CopiesOncePerDirectory` `PROCESSORS 4` (a nested ninja build); `ToolchainProbe.Rejects.*`
-   keep `frost_build_tree`. Every Windows ctest call passes `--interactive-debug-mode 0`: in ctest's default
-   interactive mode each test starts with error mode 0, so a test that fails to start or crashes raises a box on
-   the user's desktop whatever desktop it runs on; in mode 0 it inherits `SEM_FAILCRITICALERRORS |
-   SEM_NOGPFAULTERRORBOX` and just fails with its status. The WSL leg stays serial.
+   `FrostRuntimeDlls.CopiesOncePerDirectory` `PROCESSORS 4` (a nested ninja build); `ToolchainProbe.Rejects.*` keep
+   `frost_build_tree`. Every Windows ctest call passes `--interactive-debug-mode 0`: in ctest's default interactive
+   mode each test starts with error mode 0, so a test that fails to start or crashes raises a box on the user's
+   desktop whatever desktop it runs on; in mode 0 it inherits `SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX` and
+   just fails with its status. The WSL leg stays serial.
 4. **The WSL PATH filter.** verify.sh drops the `/mnt/<drive>` entries from PATH right after sourcing env.sh
    (entries under the SDK root stay; `verify_support.py strip-path`) and then checks that its tools resolve. No
    apt package (GLU headers would add a dependency) and no machine-wide `/etc/wsl.conf` change.
 5. **Module labels.** Every test carries `mod.<directory>` through `frost_add_test_directory`
-   (`CMAKE_DIRECTORY_LABELS`); configure fails for a test directory added otherwise, for a test outside its
-   build directory (ctest drops the label there) and for a `frost_add_test` with more than one `LABELS` value
-   (gtest_discover_tests would misread it). The TSan quick leg (`--tsan-quick`) selects by these labels: the
-   modules of the changed files among io, rpc, sched and text plus their dependents. Off by default (decision 9).
+   (`CMAKE_DIRECTORY_LABELS`); configure fails for a test directory added otherwise, for a test outside its build
+   directory (ctest drops the label there) and for a `frost_add_test` whose first `LABELS` value is not a kind or
+   whose later values, free-form tags such as `msbuild`, `screenshot` and `clangd`, are not lower-case names other
+   than a kind. Tags never change the kind's defaults. The labels reach gtest_discover_tests as one quoted argument:
+   spread into its property list, each element would become a property of its own. The TSan quick leg
+   (`--tsan-quick`) selects by these labels: the modules of the changed files among io, rpc, sched and text plus
+   their dependents. Off by default (decision 9).
 6. **`tools/perf.ps1` and `tools/frost_perf.py`** take over ADR 0010's B28 harness: variants rebuild, noop,
    verify and wsl-leg; write-once results under `E:\FrostBuilds\perf\<milestone>\b28\`; a probe journal so a
    killed run is restored with `perf.ps1 -Restore`.
@@ -71,8 +75,9 @@ exhaustion is a candidate (the System log shows chrome.exe failing with 0xC00001
 ## Consequences
 - The Windows test leg is about 2.5 times faster; WSL configures no longer pay the FindOpenGL searches.
 - Merged later: new `tests/<x>` directories must use `frost_add_test_directory` (configure enforces it); a
-  `frost_add_test` with two labels (main's `ui_screenshot_tests` has `LABELS unit screenshot`, whose second label
-  CMake already drops with a warning) must keep one; tests registered with `add_test` or `gtest_discover_tests`
+  `frost_add_test` names its kind first and may add tags after it (`ui_screenshot_tests` has `LABELS unit
+  screenshot`, `build_msbuild_tests` `LABELS integration msbuild`, `lang_clangd_tests` `LABELS integration clangd`;
+  tools.verify_support checks them in the build tree); tests registered with `add_test` or `gtest_discover_tests`
   directly (main's `ui_native_tests`) set the lock themselves when they need it.
 - The `frost_desktop` lock serialises every integration suite; narrowing it is a measured follow-up.
 

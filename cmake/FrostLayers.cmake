@@ -482,12 +482,16 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_add_runtime_dll
 # QT marks tests that need Qt at runtime. They link tests/support/qt_test_main.cpp
 # instead of gtest_main: it selects the offscreen platform and Qt's plugin
 # directory before creating the QApplication, so ctest needs no environment setup.
-# LABELS is the test kind, exactly one of unit, integration, stress or perf (default unit).
-# The module label (mod.<directory>) comes from the test directory: tests/CMakeLists.txt adds
-# each directory through frost_add_test_directory, which sets CMAKE_DIRECTORY_LABELS. A second
-# label here cannot work: gtest_discover_tests writes every PROPERTIES list element as its own
-# bracket argument (CMake 4.4.5's GoogleTestAddTests.cmake), so "unit;x" would become a property
-# named x, which is why more than one label is a configure error.
+# LABELS starts with the test kind, exactly one of unit, integration, stress or perf (default
+# unit). Any labels after it are free-form tags (msbuild, screenshot, clangd) that ctest -L and -LE
+# select by; a tag is a lower-case name ([a-z][a-z0-9_-]*) that is not a kind, and it never changes
+# the kind's scheduling defaults below. The module label (mod.<directory>) comes from the test
+# directory: tests/CMakeLists.txt adds each directory through frost_add_test_directory, which sets
+# CMAKE_DIRECTORY_LABELS. gtest_discover_tests writes every PROPERTIES list element as its own
+# bracket argument (CMake 4.4.5's GoogleTestAddTests.cmake), so spread into the property list
+# "unit;x" would become a property named x; the labels are therefore passed as one quoted argument,
+# which reaches ctest as one LABELS value. tools.verify_support's BuildTreeLabelsTest checks the
+# result in the build tree.
 # On Windows the test embeds the FrostIDE manifest (test_manifest.rc) and the linker's own
 # manifest is disabled. Tests are built with TEST options and, like the executables of
 # frost_add_executable, get their runtime DLLs through frost_copy_runtime_dlls.
@@ -508,14 +512,23 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_add_runtime_dll
 # sets these properties itself.
 function(frost_add_test name)
     cmake_parse_arguments(ARG "QT;RUN_SERIAL" "RESOURCE_LOCK;PROCESSORS" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
-    list(LENGTH ARG_LABELS label_count)
-    if(label_count GREATER 1)
-        message(FATAL_ERROR "frost_add_test(${name}): LABELS takes one kind label (got '${ARG_LABELS}'); "
-                            "the module label comes from frost_add_test_directory (tests/CMakeLists.txt)")
+    if(NOT ARG_LABELS)
+        set(ARG_LABELS unit)
     endif()
-    if(ARG_LABELS AND NOT ARG_LABELS MATCHES "^(unit|integration|stress|perf)$")
-        message(FATAL_ERROR "frost_add_test(${name}): LABELS is unit, integration, stress or perf (got '${ARG_LABELS}')")
+    list(GET ARG_LABELS 0 kind)
+    if(NOT kind MATCHES "^(unit|integration|stress|perf)$")
+        message(FATAL_ERROR "frost_add_test(${name}): the first label is the kind, unit, integration, stress or "
+                            "perf (got '${ARG_LABELS}')")
     endif()
+    set(tags ${ARG_LABELS})
+    list(POP_FRONT tags)
+    foreach(tag IN LISTS tags)
+        if(tag MATCHES "^(unit|integration|stress|perf)$" OR NOT tag MATCHES "^[a-z][a-z0-9_-]*$")
+            message(FATAL_ERROR "frost_add_test(${name}): '${tag}' after the kind label must be a tag, a lower-case "
+                                "name that is not a kind (got '${ARG_LABELS}'); the module label comes from "
+                                "frost_add_test_directory (tests/CMakeLists.txt)")
+        endif()
+    endforeach()
     if(DEFINED ARG_PROCESSORS AND NOT ARG_PROCESSORS MATCHES "^[1-9][0-9]*$")
         message(FATAL_ERROR "frost_add_test(${name}): PROCESSORS needs a positive integer (got '${ARG_PROCESSORS}')")
     endif()
@@ -535,16 +548,13 @@ function(frost_add_test name)
         set_source_files_properties(${FROST_TEST_MANIFEST_RC} PROPERTIES OBJECT_DEPENDS ${FROST_MANIFEST_PATH})
         target_link_options(${name} PRIVATE /MANIFEST:NO)
     endif()
-    if(NOT ARG_LABELS)
-        set(ARG_LABELS unit)
-    endif()
-    # The kind's scheduling default (see above).
-    if(ARG_LABELS STREQUAL "integration" AND NOT ARG_RESOURCE_LOCK)
+    # The kind's scheduling default (see above); tags do not change it.
+    if(kind STREQUAL "integration" AND NOT ARG_RESOURCE_LOCK)
         set(ARG_RESOURCE_LOCK frost_desktop)
-    elseif(ARG_LABELS STREQUAL "perf")
+    elseif(kind STREQUAL "perf")
         set(ARG_RUN_SERIAL TRUE)
     endif()
-    set(properties LABELS ${ARG_LABELS})
+    set(properties "")
     if(ARG_RUN_SERIAL)
         list(APPEND properties RUN_SERIAL TRUE)
     endif()
@@ -557,5 +567,5 @@ function(frost_add_test name)
     gtest_discover_tests(${name}
         DISCOVERY_MODE PRE_TEST
         DISCOVERY_TIMEOUT 60
-        PROPERTIES ${properties})
+        PROPERTIES LABELS "${ARG_LABELS}" ${properties})
 endfunction()

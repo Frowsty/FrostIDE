@@ -8,9 +8,8 @@
 #   lang_clangd_tests  the real clangd (the pinned LLVM's) end to end on tiny fixtures: a CMake-style
 #                      compile_commands.json, the synthesized one for a .vcxproj, and a restart after a
 #                      killed clangd; label "integration" (it starts real clangd processes, so
-#                      RESOURCE_LOCK frost_desktop; ADR 0027). Each test takes a second or two. Its
-#                      tag "clangd" waits for several labels in frost_add_test, which takes one kind
-#                      label today; filter with ctest -R "^ClangdE2E\." meanwhile.
+#                      RESOURCE_LOCK frost_desktop; ADR 0027) with the tag "clangd" (ctest -L clangd).
+#                      Each test takes a second or two.
 # The fixtures under fixtures/ are byte-exact inputs (REUSE.toml covers them).
 
 frost_add_test(lang_unit_tests
@@ -31,6 +30,6 @@ frost_add_test(lang_clangd_tests
     SOURCES
         clangd_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
-    LABELS integration)
+    LABELS integration clangd)
 target_include_directories(lang_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(lang_clangd_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

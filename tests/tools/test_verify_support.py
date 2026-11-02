@@ -1094,6 +1094,36 @@ class BuildTreeLabelsTest(unittest.TestCase):
         if any(test["name"].startswith("FrostProcess.") for test in self.tests):  # Trees with the UI.
             self.assertTrue(any(name.startswith("FrostProcess.") for name in desktop), desktop[:5])
 
+    def test_one_kind_label_and_tags_after_it(self):
+        # frost_add_test (cmake/FrostLayers.cmake): LABELS starts with the kind, and the labels after it
+        # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
+        # exactly one kind label; the tagged suites are build_msbuild_tests (Windows only),
+        # lang_clangd_tests and ui_screenshot_tests (trees with the UI).
+        kinds = {"unit", "integration", "stress", "perf"}
+        tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.")),
+                  "clangd": ("integration", ("ClangdE2E.",)),
+                  "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
+                                          "GoldenComparator."))}
+        wrong, seen = [], dict.fromkeys(tagged, 0)
+        for test in self.tests:
+            properties = self._properties(test)
+            labels = properties.get("LABELS", [])
+            if len([label for label in labels if label in kinds]) != 1:
+                wrong.append(f"{test['name']}: {labels}")
+            for tag, (kind, prefixes) in tagged.items():
+                in_suite = test["name"].startswith(prefixes)
+                if (tag in labels) != in_suite:
+                    wrong.append(f"{test['name']}: {labels} (tag {tag})")
+                elif in_suite:
+                    seen[tag] += 1
+                    locked = "frost_desktop" in properties.get("RESOURCE_LOCK", [])
+                    if kind not in labels or (kind == "integration" and not locked):
+                        wrong.append(f"{test['name']}: {labels}, lock {properties.get('RESOURCE_LOCK')}")
+        self.assertEqual(wrong, [])
+        self.assertGreater(seen["clangd"], 0)  # frost::lang builds in every tree with tests.
+        if os.name == "nt":
+            self.assertGreater(seen["msbuild"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,9 +15,8 @@
 #   ui_shell_tests               frost::ui_shell (ADR 0038): the main-window shell, editor tabs,
 #                                tool windows, popups, notifications and background tasks over fake
 #                                editors and a simulated keyboard layout (offscreen);
-#   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" (its second
-#                                label, "screenshot", waits for several labels in frost_add_test, which
-#                                takes one kind label today; ADR 0027);
+#   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" with the
+#                                tag "screenshot" (ctest -L screenshot);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
 #   ui_appearance_perf_tests     in-process start-up probes, label "perf";
 #   ui_native_tests              the windows platform plugin's palette and fonts (Windows), with
@@ -135,7 +134,7 @@ _frost_ui_test_wiring(ui_shell_tests)
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp
     DEPS frost::ui frost::io frost_ui_test_support
-    LABELS unit)
+    LABELS unit screenshot)
 _frost_ui_test_wiring(ui_screenshot_tests)
 
 # Registered twice: in a dpr-1 process, and with Qt's real scaling at 150% (*.qtscale150).
