@@ -332,6 +332,16 @@ public:
     }
 
     Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return writeFileAtomicImpl(path, data, std::nullopt);
+    }
+
+    Result<void> writeFileAtomicWithMtime(std::string_view path, std::string_view data,
+                                          std::filesystem::file_time_type mtime) override {
+        return writeFileAtomicImpl(path, data, mtime);
+    }
+
+    Result<void> writeFileAtomicImpl(std::string_view path, std::string_view data,
+                                     std::optional<std::filesystem::file_time_type> mtime) {
         auto target = normalizePath(path, PathStyle::Posix);
         if (!target) {
             return std::unexpected(std::move(target.error()));
@@ -386,6 +396,13 @@ public:
             if (const int error = copyOwnershipAndMode(fd.get(), existing, acl); error != 0) {
                 return abandon(errnoError(error, "writeFileAtomic: copy owner and permissions for", path));
             }
+        }
+        if (mtime) {
+            std::error_code error;
+            std::filesystem::last_write_time(std::filesystem::path(tempPath), *mtime, error);
+            if (error)
+                return abandon(Error(ErrorCode::IoError,
+                                     std::format("writeFileAtomic: set temporary file time: {}", error.message())));
         }
         if (::fsync(fd.get()) != 0) {
             return abandon(errnoError(errno, "writeFileAtomic: flush temp file for", path));

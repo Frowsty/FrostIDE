@@ -20,9 +20,11 @@ class MainWindow;
 // SHA-256 of the canonical document key; no raw user path is exposed in IPC names.
 [[nodiscard]] std::string externalProjectKey(std::string_view canonicalRoot);
 // Opens an absolute file in the running project; zero line/column keeps the existing coordinate.
-[[nodiscard]] Result<void> openExternalFile(Workbench& workbench, std::string_view path, int line, int column);
+[[nodiscard]] Result<void> openExternalFile(Workbench& workbench, std::string_view path, int line, int column,
+                                            bool columnUtf16 = false);
 // Secondary process: sends one bounded request and waits for the owning window's acknowledgement.
-[[nodiscard]] Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column);
+[[nodiscard]] Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column,
+                                               bool columnUtf16 = false);
 
 // GUI thread owns this adapter. The handler runs on the IPC worker, posts to this object, and
 // waits at most two seconds for the UI; destruction cancels the server and joins its worker.

@@ -159,6 +159,10 @@ Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::strin
     const auto context = [&](Error error) {
         return std::unexpected(std::move(error).withContext("while saving " + path));
     };
+    if (m_writeGuard) {
+        if (auto allowed = m_writeGuard(path); !allowed)
+            return context(std::move(allowed.error()));
+    }
     SaveOutcome outcome;
     if (!saveAs && !options.overwriteExternalChanges) {
         if (document.m_diskState == DiskState::Changed) {

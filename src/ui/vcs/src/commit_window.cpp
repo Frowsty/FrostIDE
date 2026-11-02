@@ -220,7 +220,7 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
       m_message(new QPlainTextEdit(this)), m_historyButton(new QToolButton(this)),
       m_amend(new QCheckBox(tr("Amend"), this)), m_commit(new QPushButton(tr("Commit"), this)),
       m_commitAndPush(new QPushButton(tr("Commit and Push..."), this)),
-      m_rollback(new QPushButton(tr("Rollback"), this)), m_result(new QLabel(this)) {
+      m_rollback(new QPushButton(tr("Rollback"), this)), m_result(new QLabel(this)), m_statusInfo(new QLabel(this)) {
     setObjectName(QStringLiteral("commitToolWindow"));
     m_tree->setModel(m_model);
     m_tree->setHeaderHidden(true);
@@ -232,6 +232,9 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     m_message->setMaximumHeight(140);
     m_historyButton->setText(tr("History"));
     m_historyButton->setToolTip(tr("Recent commit messages"));
+    m_statusInfo->setObjectName(QStringLiteral("gitRestrictedStatusInfo"));
+    m_statusInfo->setWordWrap(true);
+    m_statusInfo->hide();
     m_result->setWordWrap(true);
     m_result->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_commit->setDefault(true);
@@ -247,6 +250,7 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     buttons->addWidget(m_rollback);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+    layout->addWidget(m_statusInfo);
     layout->addWidget(m_tree, 1);
     layout->addLayout(messageRow);
     layout->addWidget(m_message);
@@ -293,7 +297,7 @@ bool CommitToolWindow::commit() { return startCommit(false); }
 bool CommitToolWindow::commitAndPush() { return startCommit(true); }
 
 bool CommitToolWindow::startCommit(bool push) {
-    if (!m_controller || m_committing) {
+    if (!m_controller || m_committing || m_controller->busy()) {
         return false;
     }
     const std::vector<std::string> paths = m_model->checkedPaths();
@@ -314,7 +318,7 @@ bool CommitToolWindow::startCommit(bool push) {
 }
 
 bool CommitToolWindow::rollbackSelected() {
-    if (!m_controller || m_committing) {
+    if (!m_controller || m_committing || m_controller->busy()) {
         return false;
     }
     const std::vector<std::string> paths = m_model->checkedPaths();
@@ -326,13 +330,15 @@ bool CommitToolWindow::rollbackSelected() {
         paths.size() == 1
             ? tr("Roll back the changes to %1? They will be lost.").arg(QString::fromStdString(paths.front()))
             : tr("Roll back the changes to %1 files? They will be lost.").arg(paths.size());
-    const bool go = m_confirm ? m_confirm(tr("Rollback Changes"), question)
-                              : QMessageBox::question(this, tr("Rollback Changes"), question) == QMessageBox::Yes;
-    if (!go) {
+    const QPointer<CommitToolWindow> self(this);
+    const QPointer<GitController> controller(m_controller);
+    const ConfirmHandler confirm = m_confirm;
+    const bool go = confirm ? confirm(tr("Rollback Changes"), question)
+                            : QMessageBox::question(this, tr("Rollback Changes"), question) == QMessageBox::Yes;
+    if (!go || !self || !controller || self->m_controller != controller)
         return false;
-    }
-    m_result->setText(tr("Rolling back..."));
-    m_controller->rollback(paths);
+    self->m_result->setText(tr("Rolling back..."));
+    controller->rollback(paths);
     return true;
 }
 
@@ -359,13 +365,34 @@ void CommitToolWindow::keyPressEvent(QKeyEvent* event) {
     QWidget::keyPressEvent(event);
 }
 
+void CommitToolWindow::setUnsavedPaths(std::vector<std::string> paths) {
+    if (m_unsavedPaths == paths)
+        return;
+    m_unsavedPaths = std::move(paths);
+    refreshFromController();
+}
+
 void CommitToolWindow::refreshFromController() {
     if (!m_controller || !m_controller->snapshot()) {
         updateButtons();
         return;
     }
     const std::string current = currentPath();
-    m_model->setStatus(m_controller->info().workTree, m_controller->snapshot()->status);
+    vcs::GitStatus status = m_controller->snapshot()->status;
+    m_statusInfo->setVisible(status.restrictedRawComparison);
+    if (status.restrictedRawComparison)
+        m_statusInfo->setText(
+            tr("Restricted status compares raw bytes without Git filters; some files may appear changed."));
+    for (const std::string& path : m_unsavedPaths) {
+        auto relative = vcs::relativeGitPath(m_controller->info().workTree, path);
+        if (!relative || status.find(*relative))
+            continue;
+        vcs::GitStatusEntry entry;
+        entry.path = std::move(*relative);
+        entry.worktree = 'M';
+        status.entries.push_back(std::move(entry));
+    }
+    m_model->setStatus(m_controller->info().workTree, status);
     m_tree->expandAll();
     m_tree->resizeColumnToContents(0);
     if (QStandardItem* item = current.empty() ? nullptr : m_model->itemFor(current)) {
@@ -425,7 +452,11 @@ void CommitToolWindow::onOperationFinished(int kind, bool succeeded, const QStri
                                   : tr("Committed."));
         } else {
             // The selection and the message stay; the hook's output is in the message.
-            m_result->setText(tr("Commit failed: %1").arg(message));
+            if (message.startsWith(QStringLiteral("Commit ")) &&
+                (message.contains(QStringLiteral(" was created")) || message.contains(QStringLiteral(" exists"))))
+                m_result->setText(message);
+            else
+                m_result->setText(tr("Commit failed: %1").arg(message));
         }
     } else if (operation == vcs::GitOperationKind::Push || operation == vcs::GitOperationKind::Rollback) {
         if (!succeeded) {

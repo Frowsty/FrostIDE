@@ -18,6 +18,7 @@ std::string_view usageText() noexcept {
            "  --project <path>     Open a project folder or .frostproj first.\n"
            "  --line <number>      Open the file at a 1-based line (0 keeps its position).\n"
            "  --column <number>    Open the file at a 1-based column (0 keeps its position).\n"
+           "  --column-utf16       Interpret --column as UTF-16 code units.\n"
            "  --version            Print version information and exit.\n"
            "  --help               Print this help and exit.\n"
            "  --selftest           Run the built-in self-test offscreen and exit with its status.\n"
@@ -83,6 +84,10 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
                     result.column = *value;
                 }
             }
+        } else if (arg == "--column-utf16") {
+            if (result.columnUtf16)
+                return fail(ErrorCode::InvalidArgument, "--column-utf16 may only be specified once");
+            result.columnUtf16 = true;
         } else if (arg == "--version") {
             status = setMode(Mode::Version, arg);
         } else if (arg == "--help") {
@@ -109,7 +114,9 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
             return std::unexpected(std::move(status.error()));
         }
     }
-    if (result.mode != Mode::Gui && (!result.project.empty() || explicitLine || explicitColumn))
+    if (result.columnUtf16 && (!explicitColumn || result.column == 0))
+        return fail(ErrorCode::InvalidArgument, "--column-utf16 requires a positive --column");
+    if (result.mode != Mode::Gui && (!result.project.empty() || explicitLine || explicitColumn || result.columnUtf16))
         return fail(ErrorCode::InvalidArgument, "project and location options require GUI mode");
     if ((explicitLine || explicitColumn) && result.paths.size() != 1)
         return fail(ErrorCode::InvalidArgument, "--line and --column require exactly one file path");

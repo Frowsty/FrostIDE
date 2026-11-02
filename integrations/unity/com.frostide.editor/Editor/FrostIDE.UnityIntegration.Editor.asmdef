@@ -1,0 +1,4 @@
+{
+  "name": "FrostIDE.UnityIntegration.Editor",
+  "includePlatforms": ["Editor"]
+}

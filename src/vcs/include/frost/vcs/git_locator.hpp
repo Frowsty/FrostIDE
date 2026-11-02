@@ -47,6 +47,8 @@ struct GitSearch {
     std::string configuredPath;
     std::vector<std::string> installDirectories;
     std::string pathVariable;
+    // Automatic candidates within these project roots are never executable tools.
+    std::vector<std::string> excludedDirectories;
 };
 
 // The tools.git.path value of `settings` ("" when unset).

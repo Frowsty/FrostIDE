@@ -36,7 +36,7 @@ public:
      * max(that, `due`): later calls push it back (debounce) but never past `latest`.
      */
     void schedule(Clock::time_point due, Clock::time_point latest, Job job);
-    // Stops the token of the job that is running now (not the pending ones).
+    // Stops the running job, or the next posted job if it has not started yet.
     void cancelRunning();
     // True while a job runs, is posted, or the delayed slot is armed.
     [[nodiscard]] bool busy() const;
@@ -54,6 +54,7 @@ private:
     Clock::time_point m_latest FROST_GUARDED_BY(m_mutex){};
     std::optional<std::stop_source> m_running FROST_GUARDED_BY(m_mutex);
     bool m_stopping FROST_GUARDED_BY(m_mutex) = false;
+    bool m_cancelNext FROST_GUARDED_BY(m_mutex) = false;
     std::jthread m_thread; // Last: starts after the members above exist.
 };
 

@@ -1,0 +1,8 @@
+{
+  "name": "com.frostide.editor",
+  "version": "0.1.0",
+  "displayName": "FrostIDE Editor Integration",
+  "description": "Open Unity scripts in FrostIDE.",
+  "unity": "6000.0",
+  "license": "Apache-2.0"
+}

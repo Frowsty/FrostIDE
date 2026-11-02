@@ -15,6 +15,7 @@
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include <QDir>
 #include <QFileInfo>
@@ -49,6 +50,8 @@ DocumentEditorView* Workbench::currentView() const {
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
+    if (m_git)
+        m_git->attachEditor(view);
     if (m_debug)
         m_debug->attachEditor(&view.editor());
     refreshMarkers(view);
@@ -108,6 +111,8 @@ void Workbench::editorClosed(DocumentEditorView& view) {
 }
 
 void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) {
+    if (m_git)
+        m_git->editorChanged();
     if (m_clangd && m_clangd->state() != lang::ClangdState::Stopped && isCFamilySource(view.path())) {
         (void)m_clangd->changeDocument(view.path(), change, view.document().document().text());
     }
@@ -141,6 +146,8 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 }
 
 void Workbench::documentChanged(const std::string& path) {
+    if (m_git)
+        m_git->documentChanged();
     DocumentEditorView* view = m_editors->find(path);
     if (view == nullptr) {
         return;

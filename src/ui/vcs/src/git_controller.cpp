@@ -91,28 +91,69 @@ QString GitController::currentBranch() const { return m_snapshot ? qs(m_snapshot
 
 bool GitController::detached() const { return m_snapshot && m_snapshot->status.branch.detached(); }
 
-bool GitController::busy() const { return m_service->operationBusy(); }
+bool GitController::busy() const { return m_pendingOperation.has_value(); }
+
+bool GitController::allow(vcs::GitOperationKind kind, const std::vector<std::string>& paths) {
+    // Remain busy until the GUI receives completion, not only until the worker becomes idle.
+    if (busy()) {
+        if (m_notifications)
+            m_notifications->notify(Notification{
+                tr("Git is busy"), tr("Wait for the current operation."), NotificationKind::Warning, false, {}});
+        return false;
+    }
+    auto allowed = m_operationGate ? m_operationGate(kind, paths) : Result<void>{};
+    if (allowed) {
+        m_pendingOperation = kind;
+        return true;
+    }
+    vcs::GitOperationResult result;
+    result.kind = kind;
+    result.error = std::move(allowed.error());
+    m_lastResult = result;
+    emit operationFinished(static_cast<int>(kind), false, qs(result.error->message()));
+    return false;
+}
 
 void GitController::commit(std::vector<std::string> paths, const QString& message, bool amend, bool pushAfter) {
+    if (!allow(vcs::GitOperationKind::Commit, paths))
+        return;
     m_pendingMessage = message.trimmed();
     vcs::CommitRequest request;
     request.paths = std::move(paths);
     request.message = message.toStdString();
     request.amend = amend;
-    m_service->commit(std::move(request), pushAfter);
+    m_pushAfterCommit = pushAfter;
+    m_service->commit(std::move(request), false);
 }
 
-void GitController::rollback(std::vector<std::string> paths) { m_service->rollback(std::move(paths)); }
+void GitController::rollback(std::vector<std::string> paths) {
+    if (allow(vcs::GitOperationKind::Rollback, paths))
+        m_service->rollback(std::move(paths));
+}
 
-void GitController::checkout(const QString& branch) { m_service->checkout(branch.toStdString()); }
+void GitController::checkout(const QString& branch) {
+    if (allow(vcs::GitOperationKind::Checkout))
+        m_service->checkout(branch.toStdString());
+}
 
-void GitController::createBranch(const QString& name) { m_service->createBranch(name.trimmed().toStdString()); }
+void GitController::createBranch(const QString& name) {
+    if (allow(vcs::GitOperationKind::CreateBranch))
+        m_service->createBranch(name.trimmed().toStdString());
+}
 
-void GitController::fetch() { m_service->fetch(); }
+void GitController::fetch() {
+    if (allow(vcs::GitOperationKind::Fetch))
+        m_service->fetch();
+}
 
-void GitController::pull(vcs::PullStrategy strategy) { m_service->pull(strategy); }
+void GitController::pull(vcs::PullStrategy strategy) {
+    if (allow(vcs::GitOperationKind::Pull))
+        m_service->pull(strategy);
+}
 
 void GitController::push(bool forceWithLease, bool confirmed) {
+    if (!allow(vcs::GitOperationKind::Push))
+        return;
     m_service->push(vcs::PushOptions{.forceWithLease = forceWithLease, .confirmed = confirmed});
 }
 
@@ -186,6 +227,7 @@ void GitController::onStarted(vcs::GitOperationKind kind) {
 }
 
 void GitController::onFinished(const vcs::GitOperationResult& result) {
+    m_pendingOperation.reset();
     using K = vcs::GitOperationKind;
     if (!m_running.empty()) {
         m_running.front()->finish();
@@ -195,6 +237,9 @@ void GitController::onFinished(const vcs::GitOperationResult& result) {
     if (result.kind == K::Commit && result.succeeded()) {
         remember(m_pendingMessage);
     }
+    const bool pushAfter = result.kind == K::Commit && result.succeeded() && m_pushAfterCommit;
+    if (result.kind == K::Commit)
+        m_pushAfterCommit = false;
     if (result.kind == K::Checkout || result.kind == K::CreateBranch || result.kind == K::Fetch ||
         result.kind == K::Pull || result.kind == K::Push) {
         readBranches();
@@ -210,6 +255,8 @@ void GitController::onFinished(const vcs::GitOperationResult& result) {
             m_notifications->notify(Notification{tr("%1 finished").arg(title), {}, NotificationKind::Info, false, {}});
         }
     }
+    if (pushAfter)
+        push(); // Recheck live trust after the commit and its hooks finish.
     emit operationFinished(static_cast<int>(result.kind), result.succeeded(), message);
 }
 

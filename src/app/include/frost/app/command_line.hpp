@@ -41,6 +41,8 @@ struct CommandLine {
     // Optional 1-based location on the single positional file; zero leaves position unchanged.
     int line = 0;
     int column = 0;
+    // Interpret an explicitly supplied column as UTF-16 code units, for Unity's script locations.
+    bool columnUtf16 = false;
     // Self-test only: show the window on the real platform instead of offscreen.
     bool selfTestOnScreen = false;
     // Self-test only: which one.

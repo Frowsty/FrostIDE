@@ -218,6 +218,9 @@ public:
     SaveManager(const SaveManager&) = delete ("documents refer to their manager's services");
     SaveManager& operator=(const SaveManager&) = delete ("documents refer to their manager's services");
 
+    // Owner-thread guard for temporary external operations; empty removes it.
+    void setWriteGuard(std::function<Result<void>(std::string_view)> guard) { m_writeGuard = std::move(guard); }
+
     // --- Documents ---
 
     /*
@@ -360,6 +363,7 @@ private:
     LoadService m_loader;
     std::vector<std::unique_ptr<FileDocument>> m_documents;
     std::function<void(const ExternalChange&)> m_listener;
+    std::function<Result<void>(std::string_view)> m_writeGuard;
     std::set<std::string, std::less<>> m_sweptDirectories;
     std::int64_t m_nextGeneration = 0;
     std::uint64_t m_nextUntitled = 0;

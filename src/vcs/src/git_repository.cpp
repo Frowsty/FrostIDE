@@ -9,7 +9,10 @@
 #include "frost/vcs/vcs_status.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <filesystem>
 #include <format>
+#include <map>
 #include <set>
 
 namespace frost::vcs {
@@ -110,7 +113,8 @@ std::vector<std::string> checkoutBlockers(std::string_view stderrText) {
     return files;
 }
 
-Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner, std::string_view path) {
+Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner, std::string_view path,
+                                                         std::stop_token stop) {
     auto normalized = io::normalizePath(path);
     if (!normalized) {
         return std::unexpected(std::move(normalized.error()));
@@ -120,6 +124,7 @@ Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner
         directory = std::string(io::parentPath(directory));
     }
     GitInvocation invocation;
+    invocation.stop = stop;
     invocation.arguments = {"rev-parse", "--show-toplevel", "--absolute-git-dir"};
     invocation.workingDirectory = directory;
     invocation.background = true;
@@ -145,6 +150,7 @@ Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner
     }
     RepositoryInfo info{std::move(*workTree), std::move(*gitDir), {}};
     GitInvocation modules;
+    modules.stop = stop;
     modules.arguments = {"config", "--file", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$"};
     modules.workingDirectory = info.workTree;
     modules.background = true;
@@ -179,7 +185,8 @@ std::string GitRepository::absolutePath(std::string_view relativePath) const {
 }
 
 Result<GitOutput> GitRepository::git(std::vector<std::string> arguments, const RunControl& control,
-                                     IClock::Duration timeout, bool background) const {
+                                     IClock::Duration timeout, bool background, bool requiresTrust,
+                                     std::string_view indexFile) const {
     if (control.onLine) {
         control.onLine(GitStream::Command, joinArguments(arguments));
     }
@@ -189,7 +196,10 @@ Result<GitOutput> GitRepository::git(std::vector<std::string> arguments, const R
     invocation.timeout = timeout;
     invocation.stop = control.stop;
     invocation.background = background;
+    invocation.requiresTrust = !background || requiresTrust;
     invocation.onLine = control.onLine;
+    if (!indexFile.empty())
+        invocation.environment.emplace_back("GIT_INDEX_FILE", std::string(indexFile));
     return m_runner->run(invocation);
 }
 
@@ -202,7 +212,10 @@ Result<void> GitRepository::requireTrust(std::string_view what) const {
 }
 
 Result<GitStatus> GitRepository::status(std::stop_token stop) const {
-    auto output = git(statusArguments(), RunControl{stop, {}}, kLocalTimeout, true);
+    if (!m_runner->trusted())
+        return restrictedStatus(stop);
+    // Normal porcelain status may run configured clean/process filters; recheck trust at launch.
+    auto output = git(statusArguments(), RunControl{stop, {}}, kLocalTimeout, true, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -212,16 +225,173 @@ Result<GitStatus> GitRepository::status(std::stop_token stop) const {
     return parsePorcelainV2(output->stdoutBytes);
 }
 
-Result<std::optional<std::string>> GitRepository::fileContent(std::string_view absolutePath,
-                                                              std::string_view rev) const {
+// Restricted status does not call git status: it may run repository clean/process filters. Only
+// built-in index/tree enumeration and hash-object --no-filters run. Raw-byte comparison is
+// conservative for filtered, symlinked and submodule files; the UI identifies this mode.
+Result<GitStatus> GitRepository::restrictedStatus(std::stop_token stop) const {
+    struct Entry {
+        std::string headMode, headHash, indexMode, indexHash;
+        bool conflict = false;
+    };
+    std::map<std::string, Entry> entries;
+    GitStatus result;
+    result.restrictedRawComparison = true;
+    const auto run = [&](std::vector<std::string> args) -> Result<GitOutput> {
+        auto output = git(std::move(args), RunControl{stop, {}}, kLocalTimeout, true);
+        if (!output)
+            return std::unexpected(std::move(output.error()));
+        if (!output->succeeded())
+            return std::unexpected(gitFailure("restricted git read", *output));
+        return output;
+    };
+    auto branch = git({"symbolic-ref", "--quiet", "--short", "HEAD"}, RunControl{stop, {}}, kLocalTimeout, true);
+    if (!branch)
+        return std::unexpected(std::move(branch.error()));
+    if (branch->succeeded())
+        result.branch.head = std::string(trimGitText(branch->stdoutBytes));
+    auto head = git({"rev-parse", "--verify", "HEAD"}, RunControl{stop, {}}, kLocalTimeout, true);
+    if (!head)
+        return std::unexpected(std::move(head.error()));
+    if (head->succeeded()) {
+        result.branch.oid = std::string(trimGitText(head->stdoutBytes));
+        auto tree = run({"ls-tree", "-r", "-z", "HEAD"});
+        if (!tree)
+            return std::unexpected(std::move(tree.error()));
+        for (auto record : splitNul(tree->stdoutBytes)) {
+            if (record.empty())
+                continue;
+            const auto tab = record.find('\t');
+            const auto a = record.find(' ');
+            const auto b = a == std::string_view::npos ? a : record.find(' ', a + 1);
+            if (tab == std::string_view::npos || a == std::string_view::npos || b == std::string_view::npos || b >= tab)
+                return fail(ErrorCode::Corrupt, "Malformed Git tree entry");
+            auto& item = entries[std::string(record.substr(tab + 1))];
+            item.headMode = record.substr(0, a);
+            item.headHash = record.substr(b + 1, tab - b - 1);
+        }
+    }
+    auto index = run({"ls-files", "--stage", "-z"});
+    if (!index)
+        return std::unexpected(std::move(index.error()));
+    for (auto record : splitNul(index->stdoutBytes)) {
+        if (record.empty())
+            continue;
+        const auto tab = record.find('\t');
+        const auto a = record.find(' ');
+        const auto b = a == std::string_view::npos ? a : record.find(' ', a + 1);
+        if (tab == std::string_view::npos || a == std::string_view::npos || b == std::string_view::npos || b >= tab)
+            return fail(ErrorCode::Corrupt, "Malformed Git index entry");
+        auto& item = entries[std::string(record.substr(tab + 1))];
+        if (record.substr(b + 1, tab - b - 1) != "0")
+            item.conflict = true;
+        else {
+            item.indexMode = record.substr(0, a);
+            item.indexHash = record.substr(a + 1, b - a - 1);
+        }
+    }
+    // Resolve local tracking refs without fetching or executing repository filters.
+    auto upstream = git({"rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"}, RunControl{stop, {}},
+                        kLocalTimeout, true);
+    if (!upstream)
+        return std::unexpected(std::move(upstream.error()));
+    if (upstream->succeeded()) {
+        result.branch.upstream = std::string(trimGitText(upstream->stdoutBytes));
+        auto counts = git({"rev-list", "--left-right", "--count", "HEAD...@{upstream}"}, RunControl{stop, {}},
+                          kLocalTimeout, true);
+        if (!counts)
+            return std::unexpected(std::move(counts.error()));
+        if (counts->succeeded()) {
+            auto line = trimGitText(counts->stdoutBytes);
+            auto separator = line.find('\t');
+            if (separator != std::string_view::npos) {
+                std::from_chars(line.data(), line.data() + separator, result.branch.ahead);
+                std::from_chars(line.data() + separator + 1, line.data() + line.size(), result.branch.behind);
+            }
+        }
+    }
+    std::vector<std::string> hashPaths;
+    std::map<std::string, char> worktree;
+    for (const auto& [path, item] : entries) {
+        if (item.indexHash.empty() || item.conflict)
+            continue;
+        if (stop.stop_requested())
+            return fail(ErrorCode::Cancelled, "Git status cancelled");
+        const auto file = m_fs->status(absolutePath(path));
+        if (!file) {
+            worktree[path] = file.error().code() == ErrorCode::NotFound ? 'D' : 'M';
+            continue;
+        }
+        // Git hashes link targets and submodule commits differently from regular file bytes.
+        if (item.indexMode == "120000" || item.indexMode == "160000" || file->type != io::FileType::Regular) {
+            worktree[path] = 'M';
+            continue;
+        }
+        hashPaths.push_back(path);
+    }
+    for (std::size_t first = 0; first < hashPaths.size();) {
+        std::vector<std::string> args{"hash-object", "--no-filters", "--"};
+        std::size_t last = first, bytes = 0;
+        while (last < hashPaths.size() && last - first < 64 &&
+               (last == first || bytes + hashPaths[last].size() < 6000)) {
+            bytes += hashPaths[last].size();
+            args.push_back(hashPaths[last++]);
+        }
+        auto hashes = git(std::move(args), RunControl{stop, {}}, kLocalTimeout, true);
+        if (!hashes)
+            return std::unexpected(std::move(hashes.error()));
+        const auto lines = splitLines(hashes->stdoutBytes);
+        for (std::size_t n = first; n < last; ++n) {
+            const auto line = n - first;
+            worktree[hashPaths[n]] =
+                hashes->succeeded() && line < lines.size() && lines[line] == entries[hashPaths[n]].indexHash ? '.'
+                                                                                                             : 'M';
+        }
+        first = last;
+    }
+    for (const auto& [path, item] : entries) {
+        GitStatusEntry entry;
+        entry.path = path;
+        if (item.conflict)
+            entry.kind = GitEntryKind::Unmerged;
+        else {
+            if (item.headHash.empty() && !item.indexHash.empty())
+                entry.index = 'A';
+            else if (!item.headHash.empty() && item.indexHash.empty())
+                entry.index = 'D';
+            else if (item.headHash != item.indexHash || item.headMode != item.indexMode)
+                entry.index = 'M';
+            if (auto found = worktree.find(path); found != worktree.end())
+                entry.worktree = found->second;
+            entry.submodule = item.indexMode == "160000";
+        }
+        if (entry.kind == GitEntryKind::Unmerged || entry.index != '.' || entry.worktree != '.')
+            result.entries.push_back(std::move(entry));
+    }
+    auto untracked = run({"ls-files", "--others", "--exclude-standard", "-z"});
+    if (!untracked)
+        return std::unexpected(std::move(untracked.error()));
+    for (auto path : splitNul(untracked->stdoutBytes)) {
+        if (path.empty())
+            continue;
+        GitStatusEntry entry;
+        entry.kind = GitEntryKind::Untracked;
+        entry.path = path;
+        result.entries.push_back(std::move(entry));
+    }
+    return result;
+}
+
+Result<std::optional<std::string>> GitRepository::fileContent(std::string_view absolutePath, std::string_view rev,
+                                                              std::stop_token stop) const {
     auto relative = relativePath(absolutePath);
     if (!relative) {
         return std::unexpected(std::move(relative.error()));
     }
     const std::string object = std::format("{}:{}", rev, *relative);
-    std::vector<std::string> arguments = m_runner->trusted() ? std::vector<std::string>{"cat-file", "--filters", object}
-                                                             : std::vector<std::string>{"cat-file", "blob", object};
-    auto output = git(std::move(arguments), {}, kLocalTimeout, true);
+    const bool filtered = m_runner->trusted();
+    std::vector<std::string> arguments = filtered ? std::vector<std::string>{"cat-file", "--filters", object}
+                                                  : std::vector<std::string>{"cat-file", "blob", object};
+    auto output = git(std::move(arguments), RunControl{stop, {}}, kLocalTimeout, true, filtered);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -229,30 +399,34 @@ Result<std::optional<std::string>> GitRepository::fileContent(std::string_view a
         return std::optional<std::string>(std::move(output->stdoutBytes));
     }
     // A missing file (or no commit yet) is not an error: tell it apart from a real failure.
-    auto exists = git({"rev-parse", "-q", "--verify", object}, {}, kLocalTimeout, true);
-    if (exists && !exists->succeeded()) {
+    auto exists = git({"rev-parse", "-q", "--verify", object}, RunControl{stop, {}}, kLocalTimeout, true);
+    if (!exists)
+        return std::unexpected(std::move(exists.error()));
+    if (!exists->succeeded()) {
         return std::optional<std::string>();
     }
     return std::unexpected(gitFailure("git cat-file", *output));
 }
 
-Result<std::optional<std::string>> GitRepository::headContent(std::string_view absolutePath) const {
-    return fileContent(absolutePath, "HEAD");
+Result<std::optional<std::string>> GitRepository::headContent(std::string_view absolutePath,
+                                                              std::stop_token stop) const {
+    return fileContent(absolutePath, "HEAD", stop);
 }
 
-Result<std::optional<std::string>> GitRepository::indexContent(std::string_view absolutePath) const {
-    return fileContent(absolutePath, "");
+Result<std::optional<std::string>> GitRepository::indexContent(std::string_view absolutePath,
+                                                               std::stop_token stop) const {
+    return fileContent(absolutePath, "", stop);
 }
 
-Result<std::string> GitRepository::lastCommitMessage() const {
-    auto head = git({"rev-parse", "-q", "--verify", "HEAD"}, {}, kLocalTimeout, true);
+Result<std::string> GitRepository::lastCommitMessage(std::stop_token stop) const {
+    auto head = git({"rev-parse", "-q", "--verify", "HEAD"}, RunControl{stop, {}}, kLocalTimeout, true);
     if (!head) {
         return std::unexpected(std::move(head.error()));
     }
     if (!head->succeeded()) {
         return std::string();
     }
-    auto output = git({"log", "-1", "--format=%B"}, {}, kLocalTimeout, true);
+    auto output = git({"log", "-1", "--format=%B"}, RunControl{stop, {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -262,16 +436,17 @@ Result<std::string> GitRepository::lastCommitMessage() const {
     return std::string(trimGitText(output->stdoutBytes));
 }
 
-Result<std::vector<std::string>> GitRepository::recentCommitMessages(std::size_t count) const {
+Result<std::vector<std::string>> GitRepository::recentCommitMessages(std::size_t count, std::stop_token stop) const {
     std::vector<std::string> messages;
-    auto head = git({"rev-parse", "-q", "--verify", "HEAD"}, {}, kLocalTimeout, true);
+    auto head = git({"rev-parse", "-q", "--verify", "HEAD"}, RunControl{stop, {}}, kLocalTimeout, true);
     if (!head) {
         return std::unexpected(std::move(head.error()));
     }
     if (!head->succeeded() || count == 0) {
         return messages;
     }
-    auto output = git({"log", std::format("-n{}", count), "--format=%B%x00"}, {}, kLocalTimeout, true);
+    auto output =
+        git({"log", std::format("-n{}", count), "--format=%B%x00"}, RunControl{stop, {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -297,6 +472,81 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
     if (request.paths.empty() && !request.amend) {
         return fail(ErrorCode::InvalidArgument, "no files are selected for the commit");
     }
+    // Reserve the real Git index lock for the complete operation. A private index inside this
+    // directory means a killed hook cannot leave a real index lock or partially stage files.
+    const auto index = io::joinPath(m_info.gitDir, "index");
+    const auto lock = io::joinPath(m_info.gitDir, "index.lock");
+    if (!index || !lock)
+        return fail(ErrorCode::InvalidArgument, "Invalid Git index path");
+#ifdef _WIN32
+    auto wideLock = io::toWin32Path(*lock);
+    if (!wideLock)
+        return std::unexpected(std::move(wideLock.error()));
+    const auto nativeLock = std::filesystem::path(*wideLock);
+#else
+    const auto nativeLock = std::filesystem::path(*lock);
+#endif
+    std::error_code lockError;
+    if (!std::filesystem::create_directory(nativeLock, lockError))
+        return fail(ErrorCode::Busy, std::format("Cannot reserve Git index lock {}: {}", *lock,
+                                                 lockError ? lockError.message() : "another Git operation is active"));
+    const auto privateIndex = io::joinPath(*lock, "frost-index");
+    if (!privateIndex) {
+        std::filesystem::remove(nativeLock, lockError);
+        return fail(ErrorCode::InvalidArgument, "Invalid private Git index path");
+    }
+    struct IndexReservation {
+        io::IFileSystem* fs;
+        std::string index;
+        std::filesystem::path lock;
+        bool preserve = false;
+        ~IndexReservation() {
+            if (preserve)
+                return;
+            static_cast<void>(fs->removeFile(index));
+            static_cast<void>(fs->removeFile(index + ".lock"));
+            std::error_code ignored;
+            std::filesystem::remove(lock, ignored); // Never recursively remove another process's files.
+        }
+    } reservation{m_fs, *privateIndex, nativeLock};
+    const auto nativeIndex = io::toStdPath(*index);
+    const auto nativePrivateIndex = io::toStdPath(*privateIndex);
+    if (!nativeIndex || !nativePrivateIndex)
+        return fail(ErrorCode::InvalidArgument, "Invalid Git index path");
+    const auto earlier = [](std::filesystem::file_time_type timestamp) {
+        const auto margin =
+            std::chrono::duration_cast<std::filesystem::file_time_type::duration>(std::chrono::seconds(2));
+        return timestamp < std::filesystem::file_time_type::min() + margin ? timestamp : timestamp - margin;
+    };
+    std::optional<std::filesystem::file_time_type> conservativeTime;
+    const auto makeRacy = [&](const std::filesystem::path& path) -> Result<void> {
+        if (!conservativeTime)
+            return {};
+        std::error_code error;
+        std::filesystem::last_write_time(path, *conservativeTime, error);
+        if (error)
+            return fail(ErrorCode::IoError, std::format("Cannot preserve Git index timestamp: {}", error.message()));
+        return {};
+    };
+    auto existing = m_fs->readFile(*index);
+    if (!existing && existing.error().code() != ErrorCode::NotFound)
+        return std::unexpected(std::move(existing.error()).withContext("reading the Git index"));
+    if (existing) {
+        std::error_code error;
+        const auto timestamp = std::filesystem::last_write_time(*nativeIndex, error);
+        if (error)
+            return fail(ErrorCode::IoError, std::format("Cannot read Git index timestamp: {}", error.message()));
+        conservativeTime = earlier(timestamp);
+        if (auto copied = m_fs->writeFileAtomic(*privateIndex, *existing); !copied)
+            return std::unexpected(std::move(copied.error()).withContext("copying the Git index"));
+        // Copying an index advances its mtime and can make Git trust stale same-size stat entries.
+        if (auto aged = makeRacy(*nativePrivateIndex); !aged)
+            return std::unexpected(std::move(aged.error()));
+    }
+    auto originalHead = git({"rev-parse", "--verify", "HEAD"}, control, kLocalTimeout, true);
+    if (!originalHead)
+        return std::unexpected(std::move(originalHead.error()));
+    const std::string oldHead = originalHead->succeeded() ? std::string(trimGitText(originalHead->stdoutBytes)) : "";
     auto current = status(control.stop);
     if (!current) {
         return std::unexpected(std::move(current.error()));
@@ -328,56 +578,104 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
     if (!untracked.empty()) {
         std::vector<std::string> add = {"add", "--"};
         add.insert(add.end(), untracked.begin(), untracked.end());
-        auto added = git(std::move(add), control, kLocalTimeout);
-        if (!added) {
+        auto added = git(std::move(add), control, kLocalTimeout, false, true, *privateIndex);
+        if (!added)
             return std::unexpected(std::move(added.error()));
-        }
-        if (!added->succeeded()) {
+        if (!added->succeeded())
             return std::unexpected(gitFailure("git add", *added));
-        }
+        // git add may rewrite the private index and advance its timestamp again.
+        if (auto aged = makeRacy(*nativePrivateIndex); !aged)
+            return std::unexpected(std::move(aged.error()));
     }
-    const auto undoAdds = [&] {
-        if (!untracked.empty()) {
-            std::vector<std::string> rm = {"rm", "--cached", "-q", "--ignore-unmatch", "--"};
-            rm.insert(rm.end(), untracked.begin(), untracked.end());
-            static_cast<void>(git(std::move(rm), RunControl{}, kLocalTimeout));
-        }
-    };
-    auto messageFile = io::joinPath(m_info.gitDir, "FROST_COMMIT_MSG");
-    if (!messageFile) {
-        undoAdds();
-        return std::unexpected(std::move(messageFile.error()));
-    }
+    auto messageFile = io::joinPath(*lock, "commit-message");
+    if (!messageFile)
+        return fail(ErrorCode::InvalidArgument, "Invalid commit message path");
     std::string message(trimGitText(request.message));
     message += '\n';
-    if (auto written = m_fs->writeFileAtomic(*messageFile, message); !written) {
-        undoAdds();
+    if (auto written = m_fs->writeFileAtomic(*messageFile, message); !written)
         return std::unexpected(std::move(written.error()).withContext("writing the commit message"));
-    }
     std::vector<std::string> arguments = {"commit", "-F", *messageFile};
-    if (request.amend) {
+    if (request.amend)
         arguments.emplace_back("--amend");
-    }
     arguments.emplace_back("--only");
     if (!paths.empty()) {
         arguments.emplace_back("--");
         arguments.insert(arguments.end(), paths.begin(), paths.end());
     }
-    auto committed = git(std::move(arguments), control, kHookTimeout);
+    auto committed = git(std::move(arguments), control, kHookTimeout, false, true, *privateIndex);
     static_cast<void>(m_fs->removeFile(*messageFile));
-    if (!committed) {
-        undoAdds();
-        return std::unexpected(std::move(committed.error()));
+    // A post-commit hook may be cancelled after Git moved HEAD. Inspect it with a fresh bounded
+    // read while our index reservation is still held; never discard the only resulting index.
+    auto head = git({"rev-parse", "--verify", "HEAD"}, RunControl{}, std::chrono::seconds(2), true);
+    if (!head || (!head->succeeded() && !oldHead.empty())) {
+        reservation.preserve = true;
+        return fail(ErrorCode::IoError,
+                    std::format("Could not determine whether the commit completed. Recovery index retained at {}",
+                                *privateIndex));
     }
-    if (!committed->succeeded()) {
-        undoAdds();
+    const std::string newHead = head->succeeded() ? std::string(trimGitText(head->stdoutBytes)) : "";
+    const bool headChanged = newHead != oldHead;
+    if (!committed && !headChanged)
+        return std::unexpected(std::move(committed.error()));
+    if (committed && !committed->succeeded() && !headChanged)
         return std::unexpected(gitFailure("git commit", *committed));
+    if (headChanged && (!committed || !committed->succeeded())) {
+        // An independent update-ref can move HEAD while this Git process is in a hook. A failed
+        // or interrupted command does not identify which process moved it; never publish the
+        // private index or claim that this operation created the observed commit.
+        reservation.preserve = true;
+        return fail(ErrorCode::IoError,
+                    std::format("HEAD changed while Git was interrupted or failed; commit provenance and index "
+                                "recovery are uncertain. The real index was not changed. Recovery files are "
+                                "retained under {} (private index {}, pending index {}.lock if present)",
+                                *lock, *privateIndex, *privateIndex));
+    }
+    // Git can move HEAD and then block in the reference-transaction committed hook before
+    // renaming its private index lock. In that state the old index is not a valid result.
+    const std::string pendingIndex = *privateIndex + ".lock";
+    auto pending = m_fs->status(pendingIndex);
+    if (pending) {
+        reservation.preserve = true;
+        return fail(ErrorCode::IoError,
+                    std::format("Commit {} exists, but its index recovery is incomplete. Both index files are "
+                                "retained at {} and {}; inspect them before recovering the index",
+                                newHead, *privateIndex, pendingIndex));
+    }
+    if (pending.error().code() != ErrorCode::NotFound) {
+        reservation.preserve = true;
+        return fail(pending.error().code(),
+                    std::format("Commit {} exists, but index recovery is incomplete: cannot inspect {}. "
+                                "Recovery files are retained under {}: {}",
+                                newHead, pendingIndex, *lock, pending.error().message()));
+    }
+    auto updated = m_fs->readFile(*privateIndex);
+    if (!updated) {
+        reservation.preserve = true;
+        return fail(updated.error().code(),
+                    std::format("Commit {} exists, but reading its recovery index failed; retained at {}: {}", newHead,
+                                *privateIndex, updated.error().message()));
+    }
+    if (!conservativeTime) {
+        std::error_code error;
+        const auto timestamp = std::filesystem::last_write_time(*nativePrivateIndex, error);
+        if (error) {
+            reservation.preserve = true;
+            return fail(
+                ErrorCode::IoError,
+                std::format("Commit {} exists, but its index timestamp cannot be read; recovery retained at {}: {}",
+                            newHead, *privateIndex, error.message()));
+        }
+        conservativeTime = earlier(timestamp);
+    }
+    if (auto written = m_fs->writeFileAtomicWithMtime(*index, *updated, *conservativeTime); !written) {
+        reservation.preserve = true;
+        return fail(written.error().code(),
+                    std::format("Commit {} exists, but updating the index failed; recovery index retained at {}: {}",
+                                newHead, *privateIndex, written.error().message()));
     }
     CommitResult result;
     result.output = committed->stdoutBytes + committed->stderrBytes;
-    if (auto head = git({"rev-parse", "HEAD"}, {}, kLocalTimeout, true); head && head->succeeded()) {
-        result.commit = std::string(trimGitText(head->stdoutBytes));
-    }
+    result.commit = newHead;
     return result;
 }
 
@@ -439,11 +737,11 @@ Result<void> GitRepository::rollback(std::span<const std::string> absolutePaths,
     return runOn({"restore", "--source=HEAD", "--staged", "--worktree"}, restore, "git restore");
 }
 
-Result<std::vector<GitBranch>> GitRepository::branches() const {
+Result<std::vector<GitBranch>> GitRepository::branches(std::stop_token stop) const {
     auto output = git({"for-each-ref",
                        "--format=%(HEAD)%00%(refname)%00%(refname:short)%00%(upstream:short)%00%(objectname:short)",
                        "refs/heads", "refs/remotes"},
-                      {}, kLocalTimeout, true);
+                      RunControl{stop, {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }

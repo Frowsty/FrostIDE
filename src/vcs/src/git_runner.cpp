@@ -140,7 +140,7 @@ io::ProcessSpec GitRunner::processSpec(const GitInvocation& invocation) const {
     io::ProcessSpec spec;
     spec.executable = m_gitPath;
     spec.arguments = {"--no-pager", "-c", "core.quotepath=false", "-c", "color.ui=false"};
-    if (!m_options.trusted) {
+    if (!trusted()) {
         spec.arguments.insert(spec.arguments.end(),
                               {"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + m_options.noHooksDirectory});
     }
@@ -154,7 +154,17 @@ io::ProcessSpec GitRunner::processSpec(const GitInvocation& invocation) const {
         {"GIT_EDITOR", ":"},
         {"GIT_SEQUENCE_EDITOR", ":"},
         {"GIT_MERGE_AUTOEDIT", "no"},
+        // An inherited shell override must not redirect a UI action into another repository.
+        {"GIT_DIR", std::nullopt},
+        {"GIT_WORK_TREE", std::nullopt},
+        {"GIT_COMMON_DIR", std::nullopt},
+        {"GIT_INDEX_FILE", std::nullopt},
+        {"GIT_OBJECT_DIRECTORY", std::nullopt},
+        {"GIT_ALTERNATE_OBJECT_DIRECTORIES", std::nullopt},
+        {"GIT_NAMESPACE", std::nullopt},
     };
+    if (!trusted())
+        spec.environment.emplace_back("GIT_NO_LAZY_FETCH", "1");
     if (invocation.background) {
         spec.environment.emplace_back("GIT_OPTIONAL_LOCKS", "0");
     }
@@ -168,7 +178,16 @@ io::ProcessSpec GitRunner::processSpec(const GitInvocation& invocation) const {
 }
 
 Result<GitOutput> GitRunner::run(const GitInvocation& invocation) const {
-    auto launched = m_launcher->launch(processSpec(invocation));
+    if (invocation.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "Git operation cancelled");
+    if (invocation.requiresTrust && !trusted())
+        return fail(ErrorCode::Untrusted, "Trust the repository before running Git operations");
+    auto spec = processSpec(invocation);
+    if (invocation.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "Git operation cancelled");
+    if (invocation.requiresTrust && !trusted())
+        return fail(ErrorCode::Untrusted, "Trust the repository before running Git operations");
+    auto launched = m_launcher->launch(spec);
     if (!launched) {
         return std::unexpected(std::move(launched.error()).withContext(std::format("starting {}", m_gitPath)));
     }

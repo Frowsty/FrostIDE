@@ -95,6 +95,59 @@ TEST(RealFileSystem, WriteAndReadAreByteExact) {
     EXPECT_EQ(fs().readFile(file).value(), "");
 }
 
+TEST(RealFileSystem, TimestampedReplaceFailureReportsAndKeepsBothRecoveryFiles) {
+    const ScratchDir dir("fs-atomic-recovery");
+    const std::string target = dir.join("index");
+    const std::string temp = dir.join("replacement");
+    const std::string backup = dir.join("backup");
+    ASSERT_TRUE(fs().writeFileAtomic(target, "original").has_value());
+    ASSERT_TRUE(fs().writeFileAtomic(temp, "replacement").has_value());
+    ASSERT_TRUE(fs().writeFileAtomic(backup, "displaced original").has_value());
+    const auto first = frost::io::detail::timestampedReplaceRecovery(1176, target, temp, backup);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_NE(first->message().find(target), std::string::npos);
+    EXPECT_NE(first->message().find(temp), std::string::npos);
+    const auto second = frost::io::detail::timestampedReplaceRecovery(1177, target, temp, backup);
+    ASSERT_TRUE(second.has_value());
+    EXPECT_NE(second->message().find(backup), std::string::npos);
+    EXPECT_NE(second->message().find(temp), std::string::npos);
+    EXPECT_EQ(fs().readFile(target).value(), "original");
+    EXPECT_EQ(fs().readFile(temp).value(), "replacement");
+    EXPECT_EQ(fs().readFile(backup).value(), "displaced original");
+    EXPECT_FALSE(frost::io::detail::timestampedReplaceRecovery(5, target, temp, backup).has_value());
+}
+
+TEST(RealFileSystem, TimestampedAtomicWritePublishesBytesAndTimeAndKeepsTargetOnFailure) {
+    const ScratchDir dir("fs-atomic-mtime");
+    const std::string file = dir.join("index");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old").has_value());
+    const auto native = frost::io::toStdPath(file).value();
+#ifndef _WIN32
+    ASSERT_EQ(::chmod(native.c_str(), 0640), 0);
+    struct stat before{};
+    ASSERT_EQ(::stat(native.c_str(), &before), 0);
+#endif
+    const auto wanted = std::filesystem::file_time_type::clock::now() - std::chrono::hours(2);
+    auto written = fs().writeFileAtomicWithMtime(file, "new bytes", wanted);
+    ASSERT_TRUE(written.has_value()) << written.error().describe();
+    EXPECT_EQ(fs().readFile(file).value(), "new bytes");
+    const auto actual = std::filesystem::last_write_time(native);
+    EXPECT_LE(actual > wanted ? actual - wanted : wanted - actual, std::chrono::seconds(1));
+#ifndef _WIN32
+    struct stat metadata{};
+    ASSERT_EQ(::stat(native.c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_mode & 0777, 0640);
+    EXPECT_EQ(metadata.st_uid, before.st_uid);
+    EXPECT_EQ(metadata.st_gid, before.st_gid);
+#endif
+    const auto blocked = dir.join("directory-target");
+    ASSERT_TRUE(fs().createDirectories(blocked).has_value());
+    auto failed = fs().writeFileAtomicWithMtime(blocked, "must fail", wanted);
+    EXPECT_FALSE(failed.has_value());
+    EXPECT_EQ(fs().readFile(file).value(), "new bytes");
+    EXPECT_TRUE(noTempFiles(dir.path()));
+}
+
 TEST(RealFileSystem, AtomicWriteReplacesAndLeavesNoTempFiles) {
     const ScratchDir dir("fs-atomic");
     const std::string file = dir.join("settings.json");

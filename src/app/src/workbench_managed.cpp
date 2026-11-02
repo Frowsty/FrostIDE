@@ -13,16 +13,168 @@
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "language_bridge.hpp"
+#include "unity_context.hpp"
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QMetaObject>
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <optional>
+#include <string_view>
+#include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/stat.h>
+
+#include <cerrno>
+
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace frost::app {
 namespace {
 sched::Task<void> stopOwnedManaged(std::shared_ptr<lang::ManagedService> server) { co_await server->stop(); }
+// Opens only regular files and never follows a final link. On POSIX every directory
+// component is opened relative to its parent with O_NOFOLLOW; O_NONBLOCK prevents a
+// FIFO swapped in between lookup and open from stalling the GUI thread.
+std::optional<std::string> readUnityControl(const QString& physicalRoot, const std::vector<std::string_view>& parts,
+                                            bool readContents) {
+    if (parts.empty())
+        return std::nullopt;
+#ifdef _WIN32
+    // Keep every ancestor open without write or delete sharing until the final handle is
+    // checked. This prevents a checked directory from being renamed or replaced
+    // by a junction between the checks and the final open.
+    struct Handles {
+        std::vector<HANDLE> values;
+        ~Handles() {
+            for (HANDLE value : values)
+                CloseHandle(value);
+        }
+    } handles;
+    QString path = physicalRoot;
+    auto openChecked = [&](const QString& current, bool directory) -> HANDLE {
+        auto wide = io::toWin32Path(current.toUtf8().toStdString());
+        if (!wide)
+            return INVALID_HANDLE_VALUE;
+        HANDLE value = CreateFileW(
+            wide->c_str(), GENERIC_READ, directory ? FILE_SHARE_READ : (FILE_SHARE_READ | FILE_SHARE_WRITE), nullptr,
+            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0), nullptr);
+        if (value == INVALID_HANDLE_VALUE)
+            return value;
+        handles.values.push_back(value);
+        BY_HANDLE_FILE_INFORMATION entry{};
+        if (GetFileType(value) != FILE_TYPE_DISK || !GetFileInformationByHandle(value, &entry) ||
+            (entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+            ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != directory)
+            return INVALID_HANDLE_VALUE;
+        return value;
+    };
+    if (openChecked(path, true) == INVALID_HANDLE_VALUE)
+        return std::nullopt;
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const auto part = parts[i];
+        path = QDir(path).filePath(QString::fromUtf8(part.data(), static_cast<qsizetype>(part.size())));
+        handle = openChecked(path, i + 1 != parts.size());
+        if (handle == INVALID_HANDLE_VALUE)
+            return std::nullopt;
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    std::array<wchar_t, 32768> finalPath{};
+    const DWORD finalLength =
+        GetFinalPathNameByHandleW(handle, finalPath.data(), static_cast<DWORD>(finalPath.size()), FILE_NAME_NORMALIZED);
+    QString finalName = finalLength && finalLength < finalPath.size()
+                            ? QDir::fromNativeSeparators(QString::fromWCharArray(finalPath.data(), finalLength))
+                            : QString{};
+    if (finalName.startsWith(QStringLiteral("//?/UNC/"), Qt::CaseInsensitive))
+        finalName = QStringLiteral("//") + finalName.sliced(8);
+    else if (finalName.startsWith(QStringLiteral("//?/")))
+        finalName = finalName.sliced(4);
+    const bool insideRoot = !finalName.isEmpty() &&
+                            finalName.startsWith(QDir::cleanPath(physicalRoot) + QLatin1Char('/'), Qt::CaseInsensitive);
+    const bool regular = insideRoot && GetFileType(handle) == FILE_TYPE_DISK &&
+                         GetFileInformationByHandle(handle, &info) &&
+                         (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
+    std::array<char, 69> buffer{};
+    DWORD count = 0;
+    const bool ok = regular && (!readContents ||
+                                ReadFile(handle, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr));
+    if (!ok || count > 68)
+        return std::nullopt;
+    return readContents ? std::optional<std::string>(std::string(buffer.data(), count)) : std::string{};
+#else
+    const QByteArray root = physicalRoot.toUtf8();
+    int fd = ::open(root.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0)
+        return std::nullopt;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const std::string name(parts[i]);
+        const bool last = i + 1 == parts.size();
+        const int flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK | (last ? O_NOCTTY : O_DIRECTORY);
+        const int next = ::openat(fd, name.c_str(), flags);
+        ::close(fd);
+        if (next < 0)
+            return std::nullopt;
+        fd = next;
+    }
+    struct stat info{};
+    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        (readContents && (info.st_size < 0 || info.st_size > 68))) {
+        ::close(fd);
+        return std::nullopt;
+    }
+    std::array<char, 69> buffer{};
+    ssize_t count = 0;
+    if (readContents) {
+        do {
+            count = ::read(fd, buffer.data(), buffer.size());
+        } while (count < 0 && errno == EINTR);
+    }
+    ::close(fd);
+    if (count < 0 || count > 68)
+        return std::nullopt;
+    return readContents ? std::optional<std::string>(std::string(buffer.data(), static_cast<std::size_t>(count)))
+                        : std::string{};
+#endif
+}
+} // namespace
+std::string trustedUnityRevision(const std::string& root) {
+    const QDir project(QString::fromUtf8(root.data(), static_cast<qsizetype>(root.size())));
+    if (!QFileInfo(project.filePath(QStringLiteral("Assets"))).isDir() ||
+        !QFileInfo(project.filePath(QStringLiteral("Packages"))).isDir() ||
+        !QFileInfo(project.filePath(QStringLiteral("ProjectSettings"))).isDir())
+        return {};
+    const QString physicalRoot = project.canonicalPath();
+    if (physicalRoot.isEmpty())
+        return {};
+    auto owner = readUnityControl(physicalRoot, {".frost", "unity", "owner"}, true);
+    if (!owner || *owner != "FrostIDE Unity project context v1")
+        return {};
+    auto revision = readUnityControl(physicalRoot, {".frost", "unity", "revision"}, true);
+    if (!revision || revision->size() != 67 || !revision->starts_with("1:") || (*revision)[34] != ':' ||
+        !std::ranges::all_of(std::string_view(*revision).substr(2, 32),
+                             [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }) ||
+        !std::ranges::all_of(std::string_view(*revision).substr(35),
+                             [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
+        return {};
+    const std::string generation = revision->substr(2, 32);
+    if (!readUnityControl(physicalRoot, {".frost", "unity", "generations", generation, "FrostUnity.sln"}, false))
+        return {};
+    return generation;
+}
+namespace {
+QString unitySolution(const std::string& root, const std::string& revision) {
+    const QDir project(QString::fromUtf8(root.data(), static_cast<qsizetype>(root.size())));
+    return project.filePath(QStringLiteral(".frost/unity/generations/") +
+                            QString::fromLatin1(revision.data(), static_cast<qsizetype>(revision.size())) +
+                            QStringLiteral("/FrostUnity.sln"));
+}
 } // namespace
 bool isManagedSource(std::string_view path) noexcept {
     if (path.size() < 4)
@@ -46,9 +198,19 @@ void Workbench::offerManagedTrust() {
     });
     dialog->open();
 }
+void Workbench::checkUnityProjectContext() {
+    if (m_shutDown || m_projectRoot.empty() || m_projectRoot != m_unityRevisionRoot ||
+        !m_services.trust.isTrusted(m_projectRoot))
+        return;
+    const std::string revision = trustedUnityRevision(m_projectRoot);
+    if (revision != m_unityRevision)
+        startManaged(m_projectRoot);
+}
 void Workbench::startManaged(const std::string& root) {
     if (m_shutDown)
         return;
+    m_unityRevisionRoot = root;
+    m_unityRevision.clear();
     stopManaged();
     const auto snapshot = m_services.settings.snapshot();
     m_managedDotnetPath = snapshot->get(settings::key::toolsManagedDotnetPath);
@@ -62,6 +224,7 @@ void Workbench::startManaged(const std::string& root) {
         }
         return;
     }
+    m_unityRevision = trustedUnityRevision(root);
     std::string dotnetPath = m_managedDotnetPath;
     std::string serverPath = m_managedServerPath;
     if (dotnetPath.empty()) {
@@ -106,6 +269,13 @@ void Workbench::startManaged(const std::string& root) {
         return;
     }
     auto options = lang::managedServiceOptions(dotnetPath, serverPath, root, true);
+    // Keep the Unity root as the LSP workspace: source documents live outside the
+    // generated directory. Tell csharp-ls which solution to load explicitly.
+    if (!m_unityRevision.empty()) {
+        const QString solution = unitySolution(root, m_unityRevision);
+        options.arguments.emplace_back("--solution");
+        options.arguments.push_back(solution.toUtf8().toStdString());
+    }
     if (!cliHome.isEmpty())
         options.environment.emplace_back("DOTNET_CLI_HOME", cliHome.toUtf8().toStdString());
     m_managed = std::make_shared<lang::ManagedService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},

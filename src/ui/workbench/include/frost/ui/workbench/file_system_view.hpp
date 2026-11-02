@@ -8,10 +8,14 @@
 
 #include "frost/ui/nav/project_files.hpp"
 
+#include <QColor>
 #include <QString>
 #include <QWidget>
 
+#include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
 
 class QLabel;
 class QLineEdit;
@@ -50,6 +54,10 @@ public:
     // The visible rows' names in tree order (expanded folders' children included), for tests.
     [[nodiscard]] QStringList visibleNames() const;
 
+    using FileColorProvider = std::function<std::optional<QColor>(std::string_view)>;
+    void setFileColorProvider(FileColorProvider provider);
+    void refreshFileColors();
+
     [[nodiscard]] QTreeView* tree() const noexcept { return m_tree; }
     [[nodiscard]] QLineEdit* searchField() const noexcept { return m_search; }
 
@@ -65,6 +73,7 @@ private:
     // Applies the speed search to `parent`'s subtree; returns whether any row in it matches.
     bool filter(QStandardItem* parent, const std::string& query, int& matches, QModelIndex& first);
 
+    FileColorProvider m_fileColors;
     QTreeView* m_tree;
     QStandardItemModel* m_model;
     QLineEdit* m_search;

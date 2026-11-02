@@ -9,9 +9,10 @@
  * Seams. The actions run through GitActionTargets, a struct of callbacks the workbench fills (open
  * the Commit window, show the Branches popup, present a diff, the active diff viewer, the confirm
  * prompt); an empty callback disables its action. The controller is held through a QPointer: once
- * it is gone every action is disabled. Every action is marked executesProjectCode (hooks, merges and
- * credential helpers run), so the registry disables it in an untrusted folder, except Compare with
- * HEAD, Show Diff and Next / Previous Change, which only read (git runs in restricted mode there).
+ * it is gone every action is disabled. Mutating actions are marked executesProjectCode (hooks,
+ * merges and credential helpers run). Opening Commit, Branches and the trust dialog is read-only;
+ * their mutating controls use the controller's live operation gate. Compare with HEAD, Show Diff
+ * and Next / Previous Change also only read (git runs in restricted mode there).
  *
  * Shortcuts the keymap does not name come from kGitShortcutDefaults through
  * KeymapService::setModuleDefaults(gitShortcutBindings()); a keymap line or a user override wins.
@@ -43,12 +44,14 @@ class GitController;
 
 namespace git_actions {
 inline constexpr std::string_view kCommit = "vcs.commit";
+inline constexpr std::string_view kTrustRepository = "vcs.trustRepository";
 inline constexpr std::string_view kPush = "vcs.push";
 inline constexpr std::string_view kForcePush = "vcs.forcePush";
 inline constexpr std::string_view kUpdateProject = "vcs.update";
 inline constexpr std::string_view kRollback = "vcs.rollback";
 inline constexpr std::string_view kShowDiff = "vcs.showDiff";
 inline constexpr std::string_view kCompareWithHead = "vcs.compareWithHead";
+inline constexpr std::string_view kCompareWithIndex = "vcs.compareWithIndex";
 inline constexpr std::string_view kFetch = "vcs.fetch";
 inline constexpr std::string_view kPull = "vcs.pull";
 inline constexpr std::string_view kPullRebase = "vcs.pullRebase";
@@ -83,13 +86,15 @@ inline constexpr std::array<GitShortcutDefault, 9> kGitShortcutDefaults{{
 
 // What the actions do beyond the controller (header comment). Every member is optional.
 struct GitActionTargets {
+    std::function<void()> requestTrust;           // Explicitly request repository trust.
     std::function<void()> openCommitWindow;       // Commit: show and focus the Commit window.
     std::function<void()> showDiffInCommitWindow; // Show Diff: the Commit window's current file.
     std::function<std::string()> currentFile;     // Compare with HEAD and Rollback: the active file ("" none).
-    std::function<void(const std::string& path)> compareWithHead; // Opens a diff of the file against HEAD.
-    std::function<void()> showBranches;                           // Branches: the popup.
-    std::function<DiffViewer*()> activeDiffViewer;                // Next / Previous Change.
-    std::function<vcs::PullStrategy()> pullStrategy;              // Update Project's (unset: merge).
+    std::function<void(const std::string& path)> compareWithHead;
+    std::function<void(const std::string& path)> compareWithIndex; // Opens a diff of the file against HEAD.
+    std::function<void()> showBranches;                            // Branches: the popup.
+    std::function<DiffViewer*()> activeDiffViewer;                 // Next / Previous Change.
+    std::function<vcs::PullStrategy()> pullStrategy;               // Update Project's (unset: merge).
     // Rollback's and the force push's confirmation; empty answers no.
     std::function<bool(const QString& title, const QString& question)> confirm;
 };
@@ -99,6 +104,10 @@ struct GitActionTargets {
  * ActionRegistry::add (AlreadyExists when called twice for one registry).
  */
 [[nodiscard]] Result<void> registerGitActions(input::ActionRegistry& registry, GitController& controller,
+                                              GitActionTargets targets);
+// Resolves the current project controller at invocation time; resolver must be safe after teardown.
+[[nodiscard]] Result<void> registerGitActions(input::ActionRegistry& registry,
+                                              std::function<GitController*()> currentController,
                                               GitActionTargets targets);
 
 } // namespace frost::ui

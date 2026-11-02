@@ -113,6 +113,8 @@ public:
     // Puts history entry `index` into the editor.
     void useHistoryMessage(int index);
 
+    // Open dirty documents supplement the disk status so unsaved-only edits can be selected.
+    void setUnsavedPaths(std::vector<std::string> paths);
     void setConfirmHandler(ConfirmHandler handler) { m_confirm = std::move(handler); }
 
     // The actions behind the buttons; each returns false when it could not start.
@@ -150,7 +152,9 @@ private:
     QPushButton* m_commitAndPush;
     QPushButton* m_rollback;
     QLabel* m_result;
+    QLabel* m_statusInfo;
     ConfirmHandler m_confirm;
+    std::vector<std::string> m_unsavedPaths;
     bool m_committing = false;
     QString m_typedBeforeAmend;
     QString m_amendMessage; // What Amend loaded, to tell it from the user's own text.

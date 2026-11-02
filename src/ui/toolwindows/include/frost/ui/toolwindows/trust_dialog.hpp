@@ -32,7 +32,7 @@ namespace frost::ui {
 class BuildController;
 
 // The operation whose project-controlled content needs trust.
-enum class TrustPurpose { Build, LuaLanguageServer, ManagedLanguageServer };
+enum class TrustPurpose { Build, LuaLanguageServer, ManagedLanguageServer, GitRepository };
 
 class TrustDialog final : public QDialog {
     Q_OBJECT

@@ -171,6 +171,8 @@ class StageScriptTest(TempDirTestCase):
         build = self._fake_build()
         destination = self.tmp / "out" / "preview"
         result = self._stage(build, destination)
+        self.assertTrue((destination / "unity" / "com.frostide.editor" / "package.json").is_file())
+        self.assertTrue((destination / "unity" / "com.frostide.editor" / "Editor" / "FrostEditor.cs").is_file())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("stage: ok", result.stdout)
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",

@@ -8,14 +8,18 @@
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/vcs/git_locator.hpp"
 #include "frost/vcs/git_runner.hpp"
+#include "frost/vcs/git_service.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -43,7 +47,8 @@ TEST(FindGit, PrefersTheSettingThenTheInstallDirectoriesThenPath) {
     place(fs, "path2");
     GitSearch search{.configuredPath = exeIn("setting"),
                      .installDirectories = {dir("missing"), dir("install")},
-                     .pathVariable = std::string("relative") + kSep + dir("path1") + kSep + dir("path2")};
+                     .pathVariable = std::string("relative") + kSep + dir("path1") + kSep + dir("path2"),
+                     .excludedDirectories = {}};
     auto found = findGit(fs, search);
     ASSERT_TRUE(found.has_value()) << found.error().describe();
     EXPECT_EQ(found->path, exeIn("setting"));
@@ -63,9 +68,54 @@ TEST(FindGit, PrefersTheSettingThenTheInstallDirectoriesThenPath) {
     EXPECT_EQ(toString(found->origin), "PATH");
 }
 
+TEST(FindGit, RejectsProjectPathCandidatesIncludingExplicitSetting) {
+    MemFs fs(frost::systemClock());
+    place(fs, "project");
+    place(fs, "safe");
+    GitSearch search;
+    search.pathVariable = dir("project") + kSep + dir("safe");
+    search.excludedDirectories = {dir("project")};
+    auto found = findGit(fs, search);
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(found->path, exeIn("safe"));
+    search.configuredPath = exeIn("project");
+    found = findGit(fs, search);
+    ASSERT_FALSE(found.has_value());
+    EXPECT_EQ(found.error().code(), ErrorCode::PermissionDenied);
+}
+
+TEST(GitRunnerSpec, PreCancelledInvocationDoesNotLaunch) {
+    frost::io::ScriptedProcessLauncher launcher;
+    GitRunner runner(launcher, exeIn("git"));
+    std::stop_source stop;
+    stop.request_stop();
+    GitInvocation invocation;
+    invocation.arguments = {"status"};
+    invocation.stop = stop.get_token();
+    auto result = runner.run(invocation);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+TEST(GitRunnerSpec, RevokedTrustRejectsMutationBeforeLaunch) {
+    bool trusted = true;
+    GitRunnerOptions options;
+    options.stillTrusted = [&trusted] { return trusted; };
+    GitRunner runner(frost::io::realProcessLauncher(), exeIn("git"), options);
+    GitInvocation invocation;
+    invocation.requiresTrust = true;
+    invocation.workingDirectory = dir("repo");
+    trusted = false;
+    auto result = runner.run(invocation);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::Untrusted);
+}
+
 TEST(FindGit, ExplainsWhatWasTried) {
     MemFs fs(frost::systemClock());
-    GitSearch search{.configuredPath = "relative/git", .installDirectories = {}, .pathVariable = ""};
+    GitSearch search{
+        .configuredPath = "relative/git", .installDirectories = {}, .pathVariable = "", .excludedDirectories = {}};
     EXPECT_EQ(findGit(fs, search).error().code(), ErrorCode::InvalidArgument);
     search.configuredPath = exeIn("nowhere");
     EXPECT_EQ(findGit(fs, search).error().code(), ErrorCode::NotFound);
@@ -88,6 +138,25 @@ std::optional<std::optional<std::string>> environmentValue(const frost::io::Proc
     return value;
 }
 
+TEST(GitServiceLifetime, CancelsRunningHeadReadBeforeJoining) {
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect(frost::io::ScriptedProcess{}); // Initial status.
+    launcher.expect(frost::io::ScriptedProcess{.neverExits = true, .outputHeld = true});
+    MemFs fs(frost::systemClock());
+    auto service =
+        GitService::create(GitRunner(launcher, exeIn("git")), fs, RepositoryInfo{dir("repo"), dir("repo/.git"), {}});
+    ASSERT_TRUE(service->waitForIdle(std::chrono::seconds(3)));
+    service->readHeadContent(frost::io::joinPath(dir("repo"), "file.txt").value(), [](auto) {});
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (launcher.launches().size() < 2 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_GE(launcher.launches().size(), 2U);
+    const auto start = std::chrono::steady_clock::now();
+    service.reset();
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(2));
+    EXPECT_TRUE(launcher.launches().at(1).terminated);
+}
+
 TEST(GitRunnerSpec, EnglishOutputNoPromptsAndOptionalLocksForBackgroundWork) {
     GitRunner runner(frost::io::realProcessLauncher(), exeIn("git"));
     GitInvocation invocation;
@@ -104,6 +173,9 @@ TEST(GitRunnerSpec, EnglishOutputNoPromptsAndOptionalLocksForBackgroundWork) {
     EXPECT_EQ(environmentValue(spec, "GIT_TERMINAL_PROMPT"), std::optional<std::optional<std::string>>("0"));
     EXPECT_EQ(environmentValue(spec, "GIT_EDITOR"), std::optional<std::optional<std::string>>(":"));
     EXPECT_EQ(environmentValue(spec, "LANGUAGE"), std::make_optional(std::optional<std::string>())); // Removed.
+    EXPECT_EQ(environmentValue(spec, "GIT_DIR"), std::make_optional(std::optional<std::string>()));
+    EXPECT_EQ(environmentValue(spec, "GIT_WORK_TREE"), std::make_optional(std::optional<std::string>()));
+    EXPECT_EQ(environmentValue(spec, "GIT_INDEX_FILE"), std::make_optional(std::optional<std::string>()));
     EXPECT_FALSE(environmentValue(spec, "GIT_OPTIONAL_LOCKS").has_value());
     EXPECT_EQ(spec.stdinMode, frost::io::Stdio::Null);
 

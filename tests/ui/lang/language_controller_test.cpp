@@ -17,14 +17,17 @@
 #include <QApplication>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QScopeGuard>
 #include <QThread>
 #include <QWidget>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <future>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -173,6 +176,38 @@ Json completionItem(std::string label, int kind, std::string sort, std::string i
         .set("kind", kind)
         .set("insertTextFormat", snippet ? 2 : 1)
         .set("insertText", insert.empty() ? label : insert);
+}
+
+TEST(LanguageControllerCompletion, RestartDropsDelayedPreviousGenerationResponse) {
+    FeatureServer server;
+    std::atomic<int> calls{0};
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    server.on("textDocument/completion", [&](const Json&) {
+        const int call = calls.fetch_add(1);
+        if (call == 0) {
+            entered.store(true);
+            while (!release.load())
+                std::this_thread::yield();
+        }
+        return Json::object()
+            .set("isIncomplete", false)
+            .set("items", Json::array({completionItem(call == 0 ? "valueOld" : "valueNew", 6, "1")}));
+    });
+    FakeHost host("return va");
+    host.caretAfter("return va");
+    Rig rig(server, host);
+    const auto unblock = qScopeGuard([&] { release.store(true); });
+    rig.controller.completeCode();
+    ASSERT_TRUE(pumpUntil([&] { return entered.load(); }));
+    // Workbench calls editorChanged when retiring the previous managed generation.
+    rig.controller.editorChanged();
+    rig.controller.completeCode();
+    release.store(true);
+    ASSERT_TRUE(pumpUntil([&] { return calls.load() >= 2 && rig.controller.completionPopup().isVisible(); }));
+    ASSERT_EQ(rig.controller.completionPopup().rowCount(), 1);
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Return, Qt::NoModifier));
+    EXPECT_EQ(host.text(), "return valueNew");
 }
 
 TEST(LanguageControllerCompletion, CtrlSpaceShowsTheLookupAndEnterCommits) {

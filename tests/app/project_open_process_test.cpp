@@ -299,4 +299,119 @@ TEST(ProjectOpenProcess, OrdinaryAliasStartupClaimsRealProjectEndpoint) {
     ASSERT_TRUE((*primary)->terminate());
     ASSERT_TRUE((*primary)->wait(5s));
 }
+
+TEST(ProjectOpenProcess, Utf16ColumnsUseDirtyBufferAndClampSurrogates) {
+    WorkDir dir("utf16-external");
+    dir.write("project/Assets/Example.cs", "\xC3\xA9"
+                                           "\xF0\x9F\x98\x80"
+                                           "target\n");
+    const std::string root = dir.join("project");
+    const std::string path = dir.join("project/Assets/Example.cs");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openExternalProject(root));
+    ASSERT_TRUE(rig.workbench->openPath(path));
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    view->editor().goToLine(1, 1);
+    ASSERT_TRUE(view->editor().typeText("x"));
+    const auto byteColumn = [&] {
+        const auto& editor = view->editor().editor();
+        return editor.text().pointAt(editor.state().primary().head).column.value();
+    };
+    ASSERT_TRUE(frost::app::openExternalFile(*rig.workbench, path, 1, 5, true));
+    EXPECT_EQ(byteColumn(), 7u); // x + ? + the complete astral character.
+    ASSERT_TRUE(frost::app::openExternalFile(*rig.workbench, path, 1, 4, true));
+    EXPECT_EQ(byteColumn(), 3u); // An interior UTF-16 surrogate floors to the character start.
+    ASSERT_TRUE(frost::app::openExternalFile(*rig.workbench, path, 1, 999, true));
+    EXPECT_EQ(byteColumn(), 13u); // Beyond the line clamps to its end.
+    EXPECT_TRUE(view->document().dirty());
+}
+
+TEST(ProjectOpenProcess, Utf16RequestIsRejectedByLegacyOwner) {
+    WorkDir dir("utf16-old-owner");
+    auto root = frost::app::externalProjectRoot(dir.path());
+    ASSERT_TRUE(root);
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
+    ASSERT_TRUE(owner);
+    std::atomic<int> requests{0};
+    ASSERT_TRUE((*owner)->start([&](std::string request) -> frost::Result<std::string> {
+        ++requests;
+        auto payload = frost::lang::parseJson(request);
+        if (!payload || payload->integerAt("line").value_or(-1) < 0)
+            return frost::fail(frost::ErrorCode::InvalidArgument, "legacy line rejected");
+        return std::string("unexpected legacy open");
+    }));
+    EXPECT_FALSE(frost::app::forwardExternalOpen(*root, dir.join("Example.cs"), 3, 40, true));
+    EXPECT_EQ(requests.load(), 1);
+}
+
+TEST(ProjectOpenProcess, UnityEditorBridgeReusesDirtyScriptAtLocation) {
+    const std::string unity = qgetenv("FROST_TEST_UNITY_EDITOR").toStdString();
+    const std::string root = qgetenv("FROST_TEST_UNITY_PROJECT").toStdString();
+    const std::string profile = qgetenv("FROST_TEST_UNITY_PROFILE").toStdString();
+    if (unity.empty() || root.empty() || profile.empty())
+        GTEST_SKIP() << "set isolated Unity scratch project and editor paths";
+    WorkDir dir("unity-real-bridge");
+    const std::string script = frost::io::joinPath(root, "Assets/Probe/FrostUnityProbe.cs").value_or("");
+    auto original = frost::io::realFileSystem().readFile(script);
+    ASSERT_TRUE(original);
+    WorkbenchRig rig(dir);
+    auto canonical = frost::app::externalProjectRoot(root);
+    ASSERT_TRUE(canonical);
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*canonical));
+    ASSERT_TRUE(owner);
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *canonical, std::move(*owner));
+    ASSERT_TRUE(broker.start());
+    ASSERT_TRUE(rig.workbench->openExternalProject(root));
+    ASSERT_TRUE(rig.workbench->openPath(script));
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    view->editor().goToLine(3, 1);
+    ASSERT_TRUE(view->editor().typeText("/*\xC3\xA9*/"));
+    ASSERT_TRUE(view->document().dirty());
+    const std::string sentinel = dir.join("unity-open-sentinel.txt");
+    frost::io::ProcessSpec spec;
+    spec.executable = unity;
+    spec.arguments = {"-batchmode",
+                      "-nographics",
+                      "-quit",
+                      "-job-worker-count",
+                      "2",
+                      "-projectPath",
+                      root,
+                      "-executeMethod",
+                      "FrostBridgeScratchProbe.OpenIDE",
+                      "-logFile",
+                      dir.join("unity.log")};
+    spec.environment = {{"APPDATA", profile},
+                        {"LOCALAPPDATA", profile},
+                        {"FROST_UNITY_CAPTURE_EXE", frost::io::normalizePath(FROST_EXE_PATH).value()},
+                        {"FROST_UNITY_OPEN_SENTINEL", sentinel},
+                        {"QT_QPA_PLATFORM", "offscreen"}};
+    std::atomic<bool> done{false};
+    frost::Result<frost::io::ProcessResult> result = frost::fail(frost::ErrorCode::Unknown, "not launched");
+    std::jthread client([&] {
+        result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 90s);
+        done.store(true, std::memory_order_release);
+    });
+    const bool finished = waitFor([&] { return done.load(std::memory_order_acquire); }, 100s);
+    client.join();
+    ASSERT_TRUE(finished);
+    ASSERT_TRUE(result) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
+    ASSERT_TRUE(frost::io::realFileSystem().exists(sentinel).value_or(false));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto& editor = view->editor().editor();
+            const auto point = editor.text().pointAt(editor.state().primary().head);
+            return point.line.value() == 2 && point.column.value() == 42;
+        },
+        10s));
+    EXPECT_EQ(rig.workbench->currentView(), view);
+    EXPECT_EQ(rig.window->tabs().count(), 1);
+    EXPECT_TRUE(view->document().dirty());
+    auto after = frost::io::realFileSystem().readFile(script);
+    ASSERT_TRUE(after);
+    EXPECT_EQ(*after, *original);
+}
 } // namespace

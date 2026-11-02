@@ -146,6 +146,7 @@ namespace frost::app {
 class LanguageBridge;
 class CMakeIntegration;
 class EngineIntegration;
+class GitIntegration;
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -243,6 +244,8 @@ struct WorkbenchOptions {
     build::BuildStarter startBuild;
     // Starts clangd for an opened project when it is found (tools.clangd.path, then the SDK, PATH).
     bool clangd = true;
+    // Test seam: disable Git discovery when a fixture must not start child processes.
+    bool git = true;
     // clangd's parallel jobs (0: its default).
     unsigned clangdJobs = 0;
     // Optional terminal test seam; when absent the workbench owns a real PTY launcher.
@@ -370,6 +373,7 @@ protected:
 private:
     friend class LanguageBridge;
     friend class EngineIntegration;
+    friend class GitIntegration;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
@@ -406,6 +410,7 @@ private:
 
     // LuaLS, only in trusted workspaces.
     void startManaged(const std::string& root);
+    void checkUnityProjectContext();
     void stopManaged();
     void syncManagedDocument(DocumentEditorView& view);
     void onManagedDiagnostics(const std::string& file);
@@ -473,6 +478,7 @@ private:
     std::unique_ptr<ui::BuildController> m_build;
     std::unique_ptr<build::BuildService> m_buildService;
     std::unique_ptr<EngineIntegration> m_engine;
+    std::unique_ptr<GitIntegration> m_git;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     std::unique_ptr<CMakeIntegration> m_cmake;
     ui::BuildActions* m_buildActions = nullptr; // Child of this.
@@ -487,6 +493,8 @@ private:
     std::uint64_t m_managedListener = 0;
     std::vector<sched::JoinHandle<void>> m_retiredManaged;
     QPointer<ui::TrustDialog> m_managedTrustDialog;
+    std::string m_unityRevisionRoot;
+    std::string m_unityRevision;
     std::string m_managedDotnetPath;
     std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;

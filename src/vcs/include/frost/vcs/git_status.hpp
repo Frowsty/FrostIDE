@@ -77,6 +77,8 @@ struct GitBranchStatus {
 };
 
 struct GitStatus {
+    // Restricted mode compares raw bytes without project-configured filters; see ADR 0067.
+    bool restrictedRawComparison = false;
     GitBranchStatus branch;
     std::vector<GitStatusEntry> entries; // In git's order.
 

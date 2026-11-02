@@ -96,6 +96,15 @@ target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
 target_compile_definitions(app_workbench_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
 add_dependencies(app_workbench_tests engine_discovery_stall_child)
+# Real isolated scratch Git repositories, never the user's project or remotes.
+file(TO_CMAKE_PATH "${FROST_GIT_EXECUTABLE}" _frost_app_git)
+frost_add_test(app_workbench_git_tests QT
+    SOURCES workbench_git_test.cpp
+    DEPS frost::app frost::ui_vcs frost::vcs frost::io
+    LABELS integration git)
+target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_definitions} FROST_VCS_GIT="${_frost_app_git}")
+
 if(WIN32)
     frost_add_test(app_workbench_msbuild_tests QT
         SOURCES workbench_msbuild_test.cpp workbench_r2a_debug_test.cpp

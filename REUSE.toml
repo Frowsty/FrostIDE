@@ -126,3 +126,9 @@ path = ["third_party/grammars/lua/**"]
 precedence = "override"
 SPDX-FileCopyrightText = "2021 Munif Tanjim"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["integrations/unity/com.frostide.editor/package.json", "integrations/unity/com.frostide.editor/LICENSE", "integrations/unity/com.frostide.editor/Editor/*.asmdef", "integrations/unity/com.frostide.editor/**/*.meta", "integrations/unity/com.frostide.editor/*.meta"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 FrostIDE contributors"
+SPDX-License-Identifier = "Apache-2.0"

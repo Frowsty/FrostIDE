@@ -62,7 +62,8 @@ struct RepositoryInfo {
  * as a .sln). nullopt when it is in no work tree. Errors: those of GitRunner::run, IoError when git
  * fails for another reason.
  */
-[[nodiscard]] Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner, std::string_view path);
+[[nodiscard]] Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner, std::string_view path,
+                                                                       std::stop_token stop = {});
 
 // A local or remote-tracking branch (for-each-ref refs/heads and refs/remotes; */HEAD is skipped).
 struct GitBranch {
@@ -122,13 +123,16 @@ public:
 
     // The file's bytes in HEAD (the index), filtered as a checkout writes them; nullopt when HEAD (the
     // index) has no such file or there is no commit yet. Errors: InvalidArgument (outside), run()'s, IoError.
-    [[nodiscard]] Result<std::optional<std::string>> headContent(std::string_view absolutePath) const;
-    [[nodiscard]] Result<std::optional<std::string>> indexContent(std::string_view absolutePath) const;
+    [[nodiscard]] Result<std::optional<std::string>> headContent(std::string_view absolutePath,
+                                                                 std::stop_token stop = {}) const;
+    [[nodiscard]] Result<std::optional<std::string>> indexContent(std::string_view absolutePath,
+                                                                  std::stop_token stop = {}) const;
 
     // HEAD's full commit message; "" without commits. Errors: run()'s, IoError.
-    [[nodiscard]] Result<std::string> lastCommitMessage() const;
+    [[nodiscard]] Result<std::string> lastCommitMessage(std::stop_token stop = {}) const;
     // The messages of the last `count` commits of HEAD, newest first. Errors: run()'s, IoError.
-    [[nodiscard]] Result<std::vector<std::string>> recentCommitMessages(std::size_t count) const;
+    [[nodiscard]] Result<std::vector<std::string>> recentCommitMessages(std::size_t count,
+                                                                        std::stop_token stop = {}) const;
 
     /*
      * Commits the selected files (header comment). Errors: Untrusted; InvalidArgument (an empty
@@ -142,7 +146,7 @@ public:
                                         const RunControl& control = {}) const;
 
     // Local branches first (by name), then remote ones. Errors: run()'s, IoError.
-    [[nodiscard]] Result<std::vector<GitBranch>> branches() const;
+    [[nodiscard]] Result<std::vector<GitBranch>> branches(std::stop_token stop = {}) const;
 
     /*
      * Checks a branch out: a local one with `git switch`, a remote one ("origin/x") as a new local
@@ -167,10 +171,12 @@ public:
 
 private:
     [[nodiscard]] Result<GitOutput> git(std::vector<std::string> arguments, const RunControl& control,
-                                        IClock::Duration timeout, bool background = false) const;
+                                        IClock::Duration timeout, bool background = false, bool requiresTrust = false,
+                                        std::string_view indexFile = {}) const;
     [[nodiscard]] Result<void> requireTrust(std::string_view what) const;
-    [[nodiscard]] Result<std::optional<std::string>> fileContent(std::string_view absolutePath,
-                                                                 std::string_view rev) const;
+    [[nodiscard]] Result<GitStatus> restrictedStatus(std::stop_token stop) const;
+    [[nodiscard]] Result<std::optional<std::string>> fileContent(std::string_view absolutePath, std::string_view rev,
+                                                                 std::stop_token stop) const;
 
     const GitRunner* m_runner;
     io::IFileSystem* m_fs;

@@ -65,6 +65,7 @@ void EditorChangeMarkers::refreshBase() {
         return;
     }
     const std::uint64_t request = ++m_request;
+    m_basePending = true;
     const QPointer<EditorChangeMarkers> self(this);
     m_provider(m_view->path(), [self, request](Result<std::optional<std::string>> base) {
         if (self) {
@@ -77,6 +78,7 @@ void EditorChangeMarkers::onBase(Result<std::optional<std::string>> base, std::u
     if (request != m_request) {
         return; // A newer read is on its way.
     }
+    m_basePending = false;
     m_base.reset();
     if (base && base->has_value()) {
         if (auto sequence = diff::LineSequence::fromBytes(std::move(**base), diff::LineSplit::Lsp)) {
@@ -87,6 +89,7 @@ void EditorChangeMarkers::onBase(Result<std::optional<std::string>> base, std::u
 }
 
 void EditorChangeMarkers::recompute() {
+    ++m_diffGeneration;
     m_debounce.stop();
     m_changes.clear();
     if (m_view && m_base) {
@@ -119,8 +122,8 @@ bool EditorChangeMarkers::rollback(std::size_t index) {
     if (!m_view || !m_base || m_view->isReadOnly()) {
         return false;
     }
-    if (m_debounce.isActive()) {
-        recompute(); // The changes must describe the text the edit applies to.
+    if (m_basePending || m_debounce.isActive()) {
+        return false; // A stale index may name a different change after recomputing.
     }
     if (index >= m_changes.size()) {
         return false;
@@ -178,13 +181,17 @@ void EditorChangeMarkers::showChangePopup(std::size_t index, QPoint globalPos) {
     }
     auto* row = new QHBoxLayout;
     auto* rollbackButton = new QPushButton(tr("Rollback Lines"), popup);
-    rollbackButton->setEnabled(!m_view->isReadOnly());
+    rollbackButton->setEnabled(!m_view->isReadOnly() && !m_basePending && !m_debounce.isActive());
     row->addStretch(1);
     row->addWidget(rollbackButton);
     layout->addLayout(row);
     const QPointer<EditorChangeMarkers> self(this);
-    connect(rollbackButton, &QPushButton::clicked, popup, [self, popup, index] {
-        if (self) {
+    const auto version = m_view->document().version();
+    const auto request = m_request;
+    const auto generation = m_diffGeneration;
+    connect(rollbackButton, &QPushButton::clicked, popup, [self, popup, index, version, request, generation] {
+        if (self && self->m_view && self->m_view->document().version() == version && self->m_request == request &&
+            self->m_diffGeneration == generation) {
             self->rollback(index);
         }
         popup->closePopup(Popup::CloseReason::Accepted);

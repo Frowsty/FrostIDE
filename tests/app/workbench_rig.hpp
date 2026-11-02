@@ -165,6 +165,7 @@ struct RigOptions {
     WorkbenchOptions workbench = [] {
         WorkbenchOptions defaults;
         defaults.clangd = false;
+        defaults.git = false;
         return defaults;
     }();
     // Autosave on frame deactivation and on idle; off by default so the tests decide when saves run.

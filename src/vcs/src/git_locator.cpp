@@ -10,6 +10,7 @@
 #include "frost/io/utf.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/settings/store.hpp"
+#include "frost/vcs/vcs_status.hpp"
 
 #include "environment.hpp"
 
@@ -48,6 +49,26 @@ constexpr char kPathListSeparator = ':';
     }
     auto joined = io::joinPath(*normalized, kGitName);
     return joined ? std::optional<std::string>(std::move(*joined)) : std::nullopt;
+}
+
+// Compare canonical paths to reject PATH entries planted in a project, including symlinks.
+[[nodiscard]] bool excluded(io::IFileSystem& fs, std::string_view candidate, const GitSearch& search) {
+    const std::string path = vcsPathKey(fs.canonicalPath(candidate).value_or(std::string(candidate)));
+    for (const std::string& directory : search.excludedDirectories) {
+        std::string root = vcsPathKey(fs.canonicalPath(directory).value_or(directory));
+        if (path == root)
+            return true;
+        if (!root.empty() && root.back() != '/' && root.back() != '\\') {
+#ifdef _WIN32
+            root += '\\';
+#else
+            root += '/';
+#endif
+        }
+        if (!root.empty() && path.starts_with(root))
+            return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -101,12 +122,15 @@ Result<GitLocation> findGit(io::IFileSystem& fs, const GitSearch& search) {
         if (!normalized || !isRegularFile(fs, *normalized)) {
             return fail(ErrorCode::NotFound, std::format("tools.git.path '{}' does not exist", search.configuredPath));
         }
+        if (excluded(fs, *normalized, search))
+            return fail(ErrorCode::PermissionDenied,
+                        "The Git executable cannot be inside the open project or repository");
         return GitLocation{.path = std::move(*normalized), .origin = GitOrigin::Setting};
     }
     std::vector<std::string> tried;
     for (const std::string& directory : search.installDirectories) {
         if (auto candidate = candidateIn(directory)) {
-            if (isRegularFile(fs, *candidate)) {
+            if (isRegularFile(fs, *candidate) && !excluded(fs, *candidate, search)) {
                 return GitLocation{.path = std::move(*candidate), .origin = GitOrigin::InstallDirectory};
             }
             tried.push_back(std::move(*candidate));
@@ -118,7 +142,7 @@ Result<GitLocation> findGit(io::IFileSystem& fs, const GitSearch& search) {
         const std::string_view entry = rest.substr(0, end);
         rest = end < rest.size() ? rest.substr(end + 1) : std::string_view();
         if (auto candidate = candidateIn(entry)) {
-            if (isRegularFile(fs, *candidate)) {
+            if (isRegularFile(fs, *candidate) && !excluded(fs, *candidate, search)) {
                 return GitLocation{.path = std::move(*candidate), .origin = GitOrigin::Path};
             }
         }

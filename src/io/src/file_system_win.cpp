@@ -426,6 +426,16 @@ public:
     }
 
     Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return writeFileAtomicImpl(path, data, std::nullopt);
+    }
+
+    Result<void> writeFileAtomicWithMtime(std::string_view path, std::string_view data,
+                                          std::filesystem::file_time_type mtime) override {
+        return writeFileAtomicImpl(path, data, mtime);
+    }
+
+    Result<void> writeFileAtomicImpl(std::string_view path, std::string_view data,
+                                     std::optional<std::filesystem::file_time_type> mtime) {
         auto target = normalizePath(path, PathStyle::Windows);
         if (!target) {
             return std::unexpected(std::move(target.error()));
@@ -462,15 +472,45 @@ public:
         if (CloseHandle(file.release()) == FALSE) {
             return abandon(lastWin32Error("writeFileAtomic: close temp file for", path));
         }
-        // One rename on the same volume: NTFS and ReFS make it atomic for every reader.
-        if (MoveFileExW(wideTemp.c_str(), wideTarget->c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==
-            FALSE) {
+        if (mtime) {
+            std::error_code error;
+            std::filesystem::last_write_time(std::filesystem::path(wideTemp), *mtime, error);
+            if (error)
+                return abandon(Error(ErrorCode::IoError,
+                                     std::format("writeFileAtomic: set temporary file time: {}", error.message())));
+            file.reset(CreateFileW(wideTemp.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                   nullptr));
+            if (!file.valid())
+                return abandon(lastWin32Error("writeFileAtomic: reopen timestamped temporary file for", path));
+            if (FlushFileBuffers(file.get()) == FALSE)
+                return abandon(lastWin32Error("writeFileAtomic: flush timestamped temporary file for", path));
+            file.reset();
+        }
+        // Naming a backup makes both exceptional ReplaceFileW recovery locations explicit.
+        const DWORD targetAttributes = mtime ? GetFileAttributesW(wideTarget->c_str()) : INVALID_FILE_ATTRIBUTES;
+        const bool useBackup = mtime && targetAttributes != INVALID_FILE_ATTRIBUTES;
+        const std::string backupPath = temp->path + ".backup";
+        auto wideBackup = toWin32Path(backupPath);
+        if (!wideBackup)
+            return abandon(std::move(wideBackup.error()));
+        const BOOL replaced =
+            useBackup ? ReplaceFileW(wideTarget->c_str(), wideTemp.c_str(), wideBackup->c_str(), 0, nullptr, nullptr)
+                      : MoveFileExW(wideTemp.c_str(), wideTarget->c_str(),
+                                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        if (replaced == FALSE) {
             const DWORD error = GetLastError();
-            if (error == ERROR_ACCESS_DENIED && isDirectory(*wideTarget)) {
-                return abandon(detail::isADirectoryError("writeFileAtomic", path));
+            if (useBackup) {
+                if (auto recovery = detail::timestampedReplaceRecovery(error, *target, temp->path, backupPath))
+                    return std::unexpected(std::move(*recovery)); // Keep both recovery files.
             }
+            if (error == ERROR_ACCESS_DENIED && isDirectory(*wideTarget))
+                return abandon(detail::isADirectoryError("writeFileAtomic", path));
             return abandon(win32Error(error, "writeFileAtomic: replace", path));
         }
+        if (useBackup && DeleteFileW(wideBackup->c_str()) == FALSE)
+            return fail(ErrorCode::IoError,
+                        std::format("Atomic replacement succeeded, but its original backup remains at '{}': {}",
+                                    backupPath, GetLastError()));
         return {};
     }
 

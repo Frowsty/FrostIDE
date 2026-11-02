@@ -63,9 +63,10 @@ struct GitInvocation {
     std::string workingDirectory;       // Absolute; the repository's work tree, usually.
     std::string stdinData;              // Written to git's stdin, which is then closed; "" gives the null device.
     IClock::Duration timeout = kLocalTimeout;
-    std::stop_token stop;    // A stop ends the process tree; run() fails with Cancelled.
-    bool background = false; // GIT_OPTIONAL_LOCKS=0 (header comment).
-    GitLineSink onLine;      // Optional streaming of both streams.
+    std::stop_token stop;       // A stop ends the process tree; run() fails with Cancelled.
+    bool background = false;    // GIT_OPTIONAL_LOCKS=0 (header comment).
+    bool requiresTrust = false; // Recheck trust immediately before launching a mutating command.
+    GitLineSink onLine;         // Optional streaming of both streams.
     // Extra environment changes, applied after the runner's own (a value sets, nullopt removes).
     std::vector<std::pair<std::string, std::optional<std::string>>> environment;
 };
@@ -82,6 +83,8 @@ struct GitOutput {
 struct GitRunnerOptions {
     // false: restricted mode (header comment).
     bool trusted = true;
+    // Optional live trust check, safe to call from the Git workers.
+    std::function<bool()> stillTrusted;
     // core.hooksPath in restricted mode: an absolute directory FrostIDE controls that holds no hooks
     // (it need not exist). "" uses a fixed path below the system's temporary directory.
     std::string noHooksDirectory;
@@ -96,7 +99,9 @@ public:
     GitRunner(io::IProcessLauncher& launcher, std::string gitPath, GitRunnerOptions options = {});
 
     [[nodiscard]] const std::string& gitPath() const noexcept { return m_gitPath; }
-    [[nodiscard]] bool trusted() const noexcept { return m_options.trusted; }
+    [[nodiscard]] bool trusted() const {
+        return m_options.trusted && (!m_options.stillTrusted || m_options.stillTrusted());
+    }
     [[nodiscard]] io::IProcessLauncher& launcher() const noexcept { return *m_launcher; }
 
     // The process spec of `invocation` (header comment). Pure; no I/O.

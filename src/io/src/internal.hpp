@@ -53,6 +53,22 @@ namespace frost::io::detail {
 // The marker every temp name contains; the file-system tests use it to prove none are left over.
 inline constexpr std::string_view kAtomicTempMarker = ".frost-tmp-";
 
+// ReplaceFileW's two documented failures that require keeping the replacement file. The caller
+// supplies a backup name, so even the displaced original has a known recovery path.
+[[nodiscard]] inline std::optional<Error> timestampedReplaceRecovery(std::uint32_t error, std::string_view target,
+                                                                     std::string_view replacement,
+                                                                     std::string_view backup) {
+    constexpr std::uint32_t kUnableToMoveReplacement = 1176;
+    constexpr std::uint32_t kUnableToMoveReplacement2 = 1177;
+    if (error == kUnableToMoveReplacement)
+        return Error(ErrorCode::IoError, "Atomic replacement failed; original remains at '" + std::string(target) +
+                                             "' and replacement remains at '" + std::string(replacement) + "'");
+    if (error == kUnableToMoveReplacement2)
+        return Error(ErrorCode::IoError, "Atomic replacement failed; original remains at '" + std::string(backup) +
+                                             "' and replacement remains at '" + std::string(replacement) + "'");
+    return std::nullopt;
+}
+
 // Errors with the operation-specific refinements documented in file_system.hpp.
 [[nodiscard]] Error isADirectoryError(std::string_view operation, std::string_view path);
 [[nodiscard]] Error notADirectoryError(std::string_view operation, std::string_view path);

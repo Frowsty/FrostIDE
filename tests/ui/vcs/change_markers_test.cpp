@@ -127,6 +127,61 @@ TEST(EditorChangeMarkers, AStripeClickShowsTheOldTextAndRollsTheLinesBack) {
     EXPECT_EQ(h.text(), "one\nTWO\nTHREE\nfour\n");
 }
 
+TEST(EditorChangeMarkers, PopupCannotRollbackAfterTheDocumentChanges) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\nTWO\nthree\nfour\n");
+    FakeBase base{std::string(kBase)};
+    EditorChangeMarkers markers(*h.view, base.provider());
+    ASSERT_EQ(markers.changes().size(), 1U);
+    markers.showChangePopup(0, QPoint(0, 0));
+    ASSERT_NE(markers.popupRollbackButton(), nullptr);
+    h.type("late ");
+    const std::string before = h.text();
+    markers.popupRollbackButton()->click();
+    EXPECT_EQ(h.text(), before);
+}
+
+TEST(EditorChangeMarkers, PopupCannotRollbackAfterPendingBaseCompletes) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\nTWO\nthree\nfour\n");
+    std::function<void(Result<std::optional<std::string>>)> pending;
+    int calls = 0;
+    EditorChangeMarkers markers(*h.view, [&](const std::string&, auto done) {
+        if (++calls == 1)
+            done(std::optional<std::string>(kBase));
+        else
+            pending = std::move(done);
+    });
+    ASSERT_EQ(markers.changes().size(), 1U);
+    markers.refreshBase();
+    ASSERT_TRUE(pending);
+    markers.showChangePopup(0, QPoint(0, 0));
+    ASSERT_NE(markers.popupRollbackButton(), nullptr);
+    pending(std::optional<std::string>("different\nTWO\nthree\nfour\n"));
+    const std::string before = h.text();
+    markers.popupRollbackButton()->setEnabled(true); // Model an already queued activation.
+    markers.popupRollbackButton()->click();
+    EXPECT_EQ(h.text(), before);
+}
+
+TEST(EditorChangeMarkers, PopupCannotRollbackAfterPendingDebounceRecomputes) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\nTWO\nthree\nfour\n");
+    FakeBase base{std::string(kBase)};
+    EditorChangeMarkers markers(*h.view, base.provider());
+    markers.setDebounce(std::chrono::milliseconds(10));
+    h.type("late ");
+    markers.showChangePopup(0, QPoint(0, 0));
+    ASSERT_NE(markers.popupRollbackButton(), nullptr);
+    int updates = 0;
+    QObject::connect(&markers, &EditorChangeMarkers::changesUpdated, [&updates] { ++updates; });
+    ASSERT_TRUE(waitFor([&] { return updates > 0; }));
+    const std::string before = h.text();
+    markers.popupRollbackButton()->setEnabled(true); // Model an already queued activation.
+    markers.popupRollbackButton()->click();
+    EXPECT_EQ(h.text(), before);
+}
+
 TEST(EditorChangeMarkers, RollsBackAddedAndDeletedLines) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("one\nnew\ntwo\nfour\n");

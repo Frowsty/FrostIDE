@@ -27,6 +27,10 @@ Result<RewriteOutcome> SaveManager::rewriteClosedFile(std::string_view path, Rew
     const auto context = [&](Error error) {
         return std::unexpected(std::move(error).withContext("while rewriting " + file));
     };
+    if (m_writeGuard) {
+        if (auto allowed = m_writeGuard(file); !allowed)
+            return context(std::move(allowed.error()));
+    }
     if (find(file) != nullptr) {
         return context(
             Error(ErrorCode::Busy, std::format("'{}' is open in an editor; edit its document instead", file)));

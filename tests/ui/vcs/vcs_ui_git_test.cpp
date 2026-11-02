@@ -30,6 +30,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace frost::ui {
@@ -50,6 +51,52 @@ std::unique_ptr<GitController> controllerFor(const TempRepo& repo) {
     EXPECT_TRUE(controller->waitForIdle(kWait));
     EXPECT_NE(controller->snapshot(), nullptr);
     return controller;
+}
+
+TEST(GitUiE2E, RejectsSecondCommitUntilFirstCompletionIsDelivered) {
+    FROST_REQUIRE_OFFSCREEN();
+    TempRepo repo("ui-held-completion");
+    repo.init();
+    repo.write("a.txt", "a\n");
+    repo.write("b.txt", "b\n");
+    repo.commitAll("initial");
+    repo.write("a.txt", "changed a\n");
+    repo.write("b.txt", "changed b\n");
+    auto controller = controllerFor(repo);
+    controller->commit({repo.path("a.txt")}, QStringLiteral("first"), false, false);
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (controller->service().operationBusy() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms); // Deliberately hold GUI completion.
+    ASSERT_FALSE(controller->service().operationBusy());
+    ASSERT_TRUE(controller->busy());
+    controller->commit({repo.path("b.txt")}, QStringLiteral("second"), false, true);
+    ASSERT_TRUE(controller->waitForIdle(kWait));
+    ASSERT_TRUE(controller->lastResult().has_value());
+    EXPECT_TRUE(controller->lastResult()->succeeded());
+    EXPECT_EQ(controller->messageHistory().front(), QStringLiteral("first"));
+    EXPECT_EQ(trimmed(repo.git({"log", "-1", "--format=%s"})), "first");
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:b.txt"})), "b");
+    EXPECT_EQ(trimmed(repo.git({"rev-list", "--count", "HEAD"})), "2");
+}
+
+TEST(GitUiE2E, CommitAndPushRunsAfterTheCommitCompletion) {
+    FROST_REQUIRE_OFFSCREEN();
+    TempRepo repo("ui-commit-push");
+    const std::string bare = TempRepo::join(repo.root(), "origin.git");
+    repo.git({"init", "-q", "--bare", bare}, 0, repo.root());
+    repo.init();
+    repo.git({"remote", "add", "origin", bare});
+    repo.write("a.txt", "base\n");
+    repo.commitAll("initial");
+    repo.write("a.txt", "changed\n");
+    auto controller = controllerFor(repo);
+    controller->commit({repo.path("a.txt")}, QStringLiteral("commit then push"), false, true);
+    ASSERT_TRUE(controller->waitForIdle(kWait));
+    ASSERT_TRUE(controller->waitForIdle(kWait));
+    ASSERT_TRUE(controller->lastResult().has_value());
+    EXPECT_EQ(controller->lastResult()->kind, vcs::GitOperationKind::Push);
+    EXPECT_TRUE(controller->lastResult()->succeeded());
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "main"}, 0, bare)), trimmed(repo.git({"rev-parse", "HEAD"})));
 }
 
 TEST(GitUiE2E, TheCommitWindowCommitsTheCheckedFilesAndKeepsItsSelectionWhenAHookFails) {
@@ -372,6 +419,7 @@ TEST(GitUiE2E, TheActionsPushThroughTheControllerAndTheConsoleShowsTheCommands) 
 
     // Update Project pulls (nothing new) and Fetch fetches; both land in the console.
     EXPECT_EQ(registry.tryInvoke(*registry.find(git_actions::kUpdateProject), trusted), input::InvokeResult::Ran);
+    ASSERT_TRUE(controller->waitForIdle(kWait));
     EXPECT_EQ(registry.tryInvoke(*registry.find(git_actions::kFetch), trusted), input::InvokeResult::Ran);
     ASSERT_TRUE(controller->waitForIdle(kWait));
     ASSERT_EQ(finished.size(), 3U);

@@ -34,9 +34,11 @@
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/tr.hpp"
+#include "frost/ui/vcs/git_actions.hpp"
 
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
+#include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include <QAction>
 #include <QApplication>
@@ -133,6 +135,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     FROST_ASSERT(keymap.has_value());
     m_keymap.emplace(std::move(*keymap));
     if (auto bindings = ui::buildShortcutBindings(); bindings) {
+        if (auto gitBindings = ui::gitShortcutBindings(); gitBindings)
+            bindings->insert(bindings->end(), gitBindings->begin(), gitBindings->end());
         m_keymap->setModuleDefaults(std::move(*bindings));
     }
 
@@ -226,6 +230,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                 stopLua();
                 stopManaged();
             }
+        } else if (trusted) {
+            checkUnityProjectContext();
         }
     });
     m_luaTrustWatch.start();
@@ -479,6 +485,8 @@ void Workbench::attach(ui::ShellWindow& window) {
     nav.filesChanged = [this](const io::FileChangeBatch& batch) {
         if (m_cmake)
             m_cmake->filesChanged(batch);
+        if (m_git)
+            m_git->filesChanged(batch);
     };
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
 
@@ -495,6 +503,8 @@ void Workbench::attach(ui::ShellWindow& window) {
     });
     attachTerminal();
     attachFind();
+    if (m_options.git)
+        m_git = std::make_unique<GitIntegration>(*this);
     m_trustPrompter = new ui::TrustPrompter(*m_build, &window, this);
 
     auto* welcome = new WelcomeScreen();
@@ -551,6 +561,7 @@ void Workbench::detach() {
     QCoreApplication::instance()->removeEventFilter(this);
     cancelFind();
     m_find.reset();
+    m_git.reset();
     if (m_debug) {
         m_debug->shutdown();
         m_window->toolWindows().hide(ui::kDebugToolWindowId);
@@ -761,6 +772,7 @@ void Workbench::shutdown() {
     cancelFind();
     // Registered shell callbacks hold QPointers: destroying the feature makes queued actions inert.
     m_find.reset();
+    m_git.reset();
     if (m_debug)
         m_debug->shutdown();
     if (m_engine)

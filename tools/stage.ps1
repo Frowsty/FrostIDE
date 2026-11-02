@@ -96,6 +96,11 @@ if ($Config -ne 'Release') {
 $resources = Join-Path $binDir 'resources'
 if (-not (Test-Path -LiteralPath $resources)) { Fail "the build tree has no resources in $binDir" }
 Copy-Item -LiteralPath $resources -Destination $Destination -Recurse
+# Distribute the original Unity package for explicit installation in a Unity project.
+$unityPackage = Join-Path $repoRoot 'integrations\unity\com.frostide.editor'
+$unityDestination = Join-Path $Destination 'unity'
+New-Item -ItemType Directory -Force -Path $unityDestination | Out-Null
+Copy-Item -LiteralPath $unityPackage -Destination $unityDestination -Recurse
 
 # 4. The Qt runtime for frost_app.dll, then the build's platform plugins (offscreen for --selftest).
 $mode = if ($Config -eq 'Debug') { '--debug' } else { '--release' }

@@ -128,6 +128,7 @@ void FileSystemView::setFiles(const nav::ProjectFiles& files) {
     rootItem->setData(true, kDirectoryRole);
     m_model->appendRow(rootItem);
     addChildren(rootItem, files, 0);
+    refreshFileColors();
     m_tree->expand(rootItem->index());
     expandMatching(*m_tree, *m_model, QModelIndex(), expanded);
     if (!selected.empty()) {
@@ -136,6 +137,23 @@ void FileSystemView::setFiles(const nav::ProjectFiles& files) {
     if (!m_search->text().isEmpty()) {
         setSpeedSearch(m_search->text());
     }
+}
+
+void FileSystemView::setFileColorProvider(FileColorProvider provider) {
+    m_fileColors = std::move(provider);
+    refreshFileColors();
+}
+
+void FileSystemView::refreshFileColors() {
+    const auto visit = [this](auto&& self, QStandardItem* parent) -> void {
+        for (int row = 0; row < parent->rowCount(); ++row) {
+            QStandardItem* item = parent->child(row);
+            const auto color = m_fileColors ? m_fileColors(toUtf8(item->data(kPathRole).toString())) : std::nullopt;
+            item->setData(color ? QVariant(*color) : QVariant(), Qt::ForegroundRole);
+            self(self, item);
+        }
+    };
+    visit(visit, m_model->invisibleRootItem());
 }
 
 void FileSystemView::addChildren(QStandardItem* parent, const nav::ProjectFiles& files, std::size_t node) {

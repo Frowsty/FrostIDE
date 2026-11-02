@@ -85,6 +85,8 @@ private:
     diff::LineSequence m_current; // The buffer text the changes were computed against.
     std::vector<vcs::LineChange> m_changes;
     std::uint64_t m_request = 0;
+    std::uint64_t m_diffGeneration = 0;
+    bool m_basePending = false;
     QPointer<Popup> m_popup;
     QPointer<QPushButton> m_popupRollback;
 };

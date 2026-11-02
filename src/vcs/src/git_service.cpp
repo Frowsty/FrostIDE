@@ -333,35 +333,36 @@ bool GitService::operationBusy() const { return m_state->operations.busy(); }
 void GitService::readHeadContent(std::string absolutePath,
                                  std::function<void(Result<std::optional<std::string>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](std::stop_token) {
-        done(state->repository.headContent(path));
+    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](std::stop_token stop) {
+        done(state->repository.headContent(path, stop));
     });
 }
 
 void GitService::readIndexContent(std::string absolutePath,
                                   std::function<void(Result<std::optional<std::string>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](std::stop_token) {
-        done(state->repository.indexContent(path));
+    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](std::stop_token stop) {
+        done(state->repository.indexContent(path, stop));
     });
 }
 
 void GitService::readBranches(std::function<void(Result<std::vector<GitBranch>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, done = std::move(done)](std::stop_token) { done(state->repository.branches()); });
+    state->reads.post(
+        [state, done = std::move(done)](std::stop_token stop) { done(state->repository.branches(stop)); });
 }
 
 void GitService::readLastCommitMessage(std::function<void(Result<std::string>)> done) {
     State* state = m_state.get();
     state->reads.post(
-        [state, done = std::move(done)](std::stop_token) { done(state->repository.lastCommitMessage()); });
+        [state, done = std::move(done)](std::stop_token stop) { done(state->repository.lastCommitMessage(stop)); });
 }
 
 void GitService::readRecentCommitMessages(std::size_t count,
                                           std::function<void(Result<std::vector<std::string>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, count, done = std::move(done)](std::stop_token) {
-        done(state->repository.recentCommitMessages(count));
+    state->reads.post([state, count, done = std::move(done)](std::stop_token stop) {
+        done(state->repository.recentCommitMessages(count, stop));
     });
 }
 

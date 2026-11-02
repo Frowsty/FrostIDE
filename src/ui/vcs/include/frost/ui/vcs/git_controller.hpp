@@ -90,6 +90,9 @@ public:
     void push(bool forceWithLease = false, bool confirmed = false);
     void cancelOperation();
     void refreshStatus();
+    // Owner-thread gate applied to every mutating operation, including direct widget calls.
+    using OperationGate = std::function<Result<void>(vcs::GitOperationKind, const std::vector<std::string>&)>;
+    void setOperationGate(OperationGate gate) { m_operationGate = std::move(gate); }
 
     // --- Reads with GUI-thread completions (dropped when the controller is gone first). ---
     using ContentCallback = std::function<void(Result<std::optional<std::string>>)>;
@@ -114,17 +117,21 @@ signals:
     void historyChanged();
 
 private:
+    [[nodiscard]] bool allow(vcs::GitOperationKind kind, const std::vector<std::string>& paths = {});
     void onStatus(std::shared_ptr<const vcs::GitStatusSnapshot> snapshot);
     void onStarted(vcs::GitOperationKind kind);
     void onFinished(const vcs::GitOperationResult& result);
     void remember(const QString& message);
 
+    OperationGate m_operationGate;
     std::unique_ptr<vcs::GitService> m_service;
     std::shared_ptr<const vcs::GitStatusSnapshot> m_snapshot;
     std::vector<vcs::GitBranch> m_branches;
     QStringList m_history;
     std::optional<vcs::GitOperationResult> m_lastResult;
     QString m_pendingMessage; // The message of the commit in flight, for the history.
+    bool m_pushAfterCommit = false;
+    std::optional<vcs::GitOperationKind> m_pendingOperation;
     BackgroundTaskManager* m_tasks = nullptr;
     NotificationCenter* m_notifications = nullptr;
     std::vector<std::shared_ptr<BackgroundTask>> m_running; // Oldest first.

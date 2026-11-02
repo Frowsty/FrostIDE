@@ -40,6 +40,45 @@ using namespace std::chrono_literals;
 
 std::string trimmed(const GitOutput& output) { return std::string(trimGitText(output.stdoutBytes)); }
 
+// Delegates real scratch-repository I/O except the one index publication under test.
+class FailIndexPublication final : public frost::io::IFileSystem {
+public:
+    FailIndexPublication(frost::io::IFileSystem& inner, std::string index, bool failRead = false)
+        : m_inner(inner), m_index(std::move(index)), m_failRead(failRead) {}
+    frost::Result<std::string> readFile(std::string_view path) override {
+        if (m_failRead && path.ends_with("frost-index"))
+            return frost::fail(ErrorCode::IoError, "injected recovery index read failure");
+        return m_inner.readFile(path);
+    }
+    frost::Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        if (!m_failRead && path == m_index)
+            return frost::fail(ErrorCode::IoError, "injected index publication failure");
+        return m_inner.writeFileAtomic(path, data);
+    }
+    frost::Result<void> writeFileAtomicWithMtime(std::string_view path, std::string_view data,
+                                                 std::filesystem::file_time_type mtime) override {
+        if (!m_failRead && path == m_index)
+            return frost::fail(ErrorCode::IoError, "injected index publication failure");
+        return m_inner.writeFileAtomicWithMtime(path, data, mtime);
+    }
+    frost::Result<frost::io::FileStatus> status(std::string_view path) override { return m_inner.status(path); }
+    frost::Result<std::vector<frost::io::DirEntry>> listDirectory(std::string_view path) override {
+        return m_inner.listDirectory(path);
+    }
+    frost::Result<frost::io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        return m_inner.listDirectoryWithDiagnostics(path);
+    }
+    frost::Result<void> createDirectories(std::string_view path) override { return m_inner.createDirectories(path); }
+    frost::Result<void> removeFile(std::string_view path) override { return m_inner.removeFile(path); }
+    frost::Result<void> removeDirectory(std::string_view path) override { return m_inner.removeDirectory(path); }
+    frost::Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
+
+private:
+    frost::io::IFileSystem& m_inner;
+    std::string m_index;
+    bool m_failRead;
+};
+
 // tests/vcs/fixtures/<relative>, normalised.
 std::string fixturePath(std::string_view relative) {
     return frost::io::normalizePath(std::string(FROST_VCS_FIXTURE_DIR) + "/" + std::string(relative)).value();
@@ -286,6 +325,33 @@ TEST(GitE2E, CommitsTheSelectedFilesOnly) {
               ErrorCode::InvalidArgument);
 }
 
+TEST(GitE2E, CommitSupportsUnbornAndSplitIndexesAndRespectsExistingLock) {
+    TempRepo repo("vcs-private-index");
+    repo.init();
+    repo.write("new.txt", "first\n");
+    auto first =
+        repo.repository().commit(CommitRequest{.paths = {repo.path("new.txt")}, .message = "initial", .amend = false});
+    ASSERT_TRUE(first.has_value()) << first.error().describe();
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:new.txt"})), "first");
+    EXPECT_EQ(trimmed(repo.git({"status", "--porcelain"})), "");
+    repo.git({"update-index", "--split-index"});
+    repo.write("new.txt", "second\n");
+    auto second =
+        repo.repository().commit(CommitRequest{.paths = {repo.path("new.txt")}, .message = "second", .amend = false});
+    ASSERT_TRUE(second.has_value()) << second.error().describe();
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:new.txt"})), "second");
+    EXPECT_EQ(trimmed(repo.git({"status", "--porcelain"})), "");
+    const auto lock = TempRepo::join(repo.info().gitDir, "index.lock");
+    ASSERT_TRUE(repo.fs().writeFileAtomic(lock, "external lock").has_value());
+    repo.write("new.txt", "third\n");
+    auto blocked =
+        repo.repository().commit(CommitRequest{.paths = {repo.path("new.txt")}, .message = "blocked", .amend = false});
+    ASSERT_FALSE(blocked.has_value());
+    EXPECT_EQ(blocked.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(repo.fs().readFile(lock).value(), "external lock");
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:new.txt"})), "second");
+}
+
 TEST(GitE2E, AmendRewordsAndExtendsTheLastCommit) {
     TempRepo repo("vcs-amend");
     repo.init();
@@ -345,7 +411,7 @@ TEST(GitE2E, CancellingACommitEndsTheHookProcessTree) {
     repo.init();
     repo.write("a.txt", "one\n");
     repo.commitAll("base");
-    repo.hook("pre-commit", "sleep 60\nexit 0");
+    repo.hook("pre-commit", "echo reached > hook-started\nsleep 60\nexit 0");
     repo.write("a.txt", "two\n");
     std::stop_source stop;
     std::atomic<bool> done{false};
@@ -357,10 +423,14 @@ TEST(GitE2E, CancellingACommitEndsTheHookProcessTree) {
                                      RunControl{stop.get_token(), {}});
         done = true;
     });
-    std::this_thread::sleep_for(500ms);
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!repo.exists("hook-started") && !done && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms);
+    const bool reached = repo.exists("hook-started");
     stop.request_stop();
     worker.join();
     ASSERT_TRUE(done.load());
+    ASSERT_TRUE(reached) << (result ? "unexpected success" : result.error().describe());
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
     EXPECT_LT(std::chrono::steady_clock::now() - started, 30s);
@@ -372,6 +442,327 @@ TEST(GitE2E, CancellingACommitEndsTheHookProcessTree) {
     auto again =
         repo.repository().commit(CommitRequest{.paths = {repo.path("a.txt")}, .message = "fast", .amend = false});
     EXPECT_TRUE(again.has_value()) << again.error().describe();
+}
+
+TEST(GitE2E, SameSizeRacyEditSurvivesPrivateIndexAndCancelledCommit) {
+    TempRepo repo("vcs-racy-private-index");
+    repo.init();
+    repo.git({"config", "core.trustctime", "false"});
+    repo.write("a.txt", "one\n");
+    repo.commitAll("base");
+    const auto file = frost::io::toStdPath(repo.path("a.txt")).value();
+    const auto index = frost::io::toStdPath(TempRepo::join(repo.info().gitDir, "index")).value();
+    const auto oldTime = std::filesystem::last_write_time(file);
+    repo.write("a.txt", "two\n"); // Same byte count and mtime as the cached blob.
+    std::filesystem::last_write_time(file, oldTime);
+    std::filesystem::last_write_time(index, oldTime);
+    std::this_thread::sleep_for(1200ms); // A newly copied index must have a later timestamp.
+    ASSERT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "one");
+    ASSERT_EQ(repo.read("a.txt"), "two\n");
+    GitInvocation status;
+    status.workingDirectory = repo.work();
+    status.arguments = {"status", "--porcelain"};
+    status.background = true;
+    auto realStatus = repo.runner().run(status);
+    ASSERT_TRUE(realStatus.has_value());
+    ASSERT_NE(realStatus->stdoutBytes.find("a.txt"), std::string::npos);
+    repo.hook("pre-commit", "echo reached > hook-started\nsleep 60");
+    std::stop_source stop;
+    frost::Result<CommitResult> result = frost::fail(ErrorCode::Internal, "not run");
+    std::atomic<bool> done{false};
+    std::jthread worker([&] {
+        result =
+            repo.repository().commit(CommitRequest{.paths = {repo.path("a.txt")}, .message = "cancel", .amend = false},
+                                     RunControl{stop.get_token(), {}});
+        done = true;
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!repo.exists("hook-started") && !done && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms);
+    const bool reached = repo.exists("hook-started");
+    stop.request_stop();
+    worker.join();
+    ASSERT_TRUE(reached) << (result ? "unexpected success" : result.error().describe());
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "one");
+    EXPECT_EQ(trimmed(repo.git({"show", ":a.txt"})), "one");
+    EXPECT_EQ(repo.read("a.txt"), "two\n");
+    ASSERT_TRUE(
+        repo.fs().removeFile(TempRepo::join(TempRepo::join(repo.info().gitDir, "hooks"), "pre-commit")).has_value());
+    auto retried =
+        repo.repository().commit(CommitRequest{.paths = {repo.path("a.txt")}, .message = "retry", .amend = false});
+    ASSERT_TRUE(retried.has_value()) << retried.error().describe();
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "two");
+    EXPECT_EQ(trimmed(repo.git({"show", ":a.txt"})), "two");
+}
+
+TEST(GitE2E, PublishingIndexKeepsUnselectedRacyEditsVisibleWithSplitIndex) {
+    for (const bool split : {false, true}) {
+        SCOPED_TRACE(split);
+        TempRepo repo(split ? "vcs-racy-publish-split" : "vcs-racy-publish");
+        repo.init();
+        repo.git({"config", "core.trustctime", "false"});
+        repo.write("selected.txt", "old\n");
+        repo.write("other.txt", "one\n");
+        repo.write("staged.txt", "original\n");
+        repo.commitAll("base");
+        repo.write("staged.txt", "staged\n");
+        repo.git({"add", "staged.txt"});
+        if (split)
+            repo.git({"update-index", "--split-index"});
+        const auto file = frost::io::toStdPath(repo.path("other.txt")).value();
+        const auto index = frost::io::toStdPath(TempRepo::join(repo.info().gitDir, "index")).value();
+        const auto oldTime = std::filesystem::last_write_time(file);
+        repo.write("other.txt", "two\n");
+        std::filesystem::last_write_time(file, oldTime);
+        std::filesystem::last_write_time(index, oldTime);
+        repo.write("selected.txt", "changed\n");
+        repo.write("new.txt", "new\n"); // Exercises the intermediate private-index rewrite.
+        std::this_thread::sleep_for(1200ms);
+        auto result = repo.repository().commit(CommitRequest{
+            .paths = {repo.path("selected.txt"), repo.path("new.txt")}, .message = "selected", .amend = false});
+        ASSERT_TRUE(result.has_value()) << result.error().describe();
+        EXPECT_EQ(trimmed(repo.git({"show", "HEAD:other.txt"})), "one");
+        EXPECT_EQ(trimmed(repo.git({"show", ":other.txt"})), "one");
+        EXPECT_EQ(trimmed(repo.git({"show", ":staged.txt"})), "staged");
+        EXPECT_EQ(repo.read("other.txt"), "two\n");
+        GitInvocation status;
+        status.workingDirectory = repo.work();
+        status.arguments = {"status", "--porcelain"};
+        status.background = true;
+        auto checked = repo.runner().run(status);
+        ASSERT_TRUE(checked.has_value());
+        EXPECT_NE(checked->stdoutBytes.find("other.txt"), std::string::npos) << checked->stdoutBytes;
+        EXPECT_NE(checked->stdoutBytes.find("staged.txt"), std::string::npos) << checked->stdoutBytes;
+    }
+}
+
+TEST(GitE2E, CancelledUntrackedCommitRestoresIndexWithoutRunningCleanupHook) {
+    TempRepo repo("vcs-cancel-untracked");
+    repo.init();
+    repo.write("tracked.txt", "base\n");
+    repo.commitAll("base");
+    repo.write("tracked.txt", "staged\n");
+    repo.git({"add", "tracked.txt"});
+    repo.write("new.txt", "new\n");
+    repo.hook("pre-commit", "echo started > hook-started\nsleep 60");
+    std::stop_source stop;
+    frost::Result<CommitResult> result = frost::fail(ErrorCode::Internal, "not run");
+    std::jthread worker([&] {
+        result = repo.repository().commit(
+            CommitRequest{.paths = {repo.path("new.txt")}, .message = "cancel", .amend = false},
+            RunControl{stop.get_token(), {}});
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!repo.exists("hook-started") && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms);
+    ASSERT_TRUE(repo.exists("hook-started"));
+    EXPECT_EQ(repo.git({"add", "new.txt"}, 128).exitCode, 128); // A concurrent Git writer cannot take the index.
+    repo.hook("post-index-change", "echo ran > cleanup-hook-ran\nsleep 60");
+    const auto started = std::chrono::steady_clock::now();
+    stop.request_stop();
+    worker.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 5s);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::Cancelled) << result.error().describe();
+    EXPECT_FALSE(repo.exists("cleanup-hook-ran"));
+    EXPECT_EQ(result.error().describe().find("Could not restore"), std::string::npos) << result.error().describe();
+    EXPECT_EQ(trimmed(repo.git({"diff", "--cached", "--name-only"})), "tracked.txt");
+    EXPECT_EQ(repo.read("new.txt"), "new\n");
+}
+
+TEST(GitE2E, CancellingPostCommitRetainsIndexForAmbiguousRecovery) {
+    TempRepo repo("vcs-post-commit-cancel");
+    repo.init();
+    repo.write("a.txt", "old\n");
+    repo.write("other.txt", "old other\n");
+    repo.commitAll("base");
+    repo.write("a.txt", "new\n");
+    repo.write("other.txt", "staged other\n");
+    repo.git({"add", "other.txt"});
+    repo.hook("post-commit", "echo started > post-commit-started\nsleep 60");
+    std::stop_source stop;
+    frost::Result<CommitResult> result = frost::fail(ErrorCode::Internal, "not run");
+    std::jthread worker([&] {
+        result = repo.repository().commit(
+            CommitRequest{.paths = {repo.path("a.txt")}, .message = "committed", .amend = false},
+            RunControl{stop.get_token(), {}});
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!repo.exists("post-commit-started") && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms);
+    const bool reached = repo.exists("post-commit-started");
+    stop.request_stop();
+    worker.join();
+    ASSERT_TRUE(reached);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("provenance and index recovery are uncertain"), std::string::npos)
+        << result.error().message();
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "new");
+    EXPECT_EQ(trimmed(repo.git({"show", ":a.txt"})), "old");
+    EXPECT_EQ(trimmed(repo.git({"show", ":other.txt"})), "staged other");
+    const auto recovery = TempRepo::join(TempRepo::join(repo.info().gitDir, "index.lock"), "frost-index");
+    ASSERT_TRUE(repo.fs().exists(recovery).value());
+    GitInvocation inspect;
+    inspect.workingDirectory = repo.work();
+    inspect.arguments = {"show", ":a.txt"};
+    inspect.environment = {{"GIT_INDEX_FILE", recovery}};
+    auto saved = repo.runner().run(inspect);
+    ASSERT_TRUE(saved.has_value());
+    EXPECT_TRUE(saved->succeeded());
+    EXPECT_EQ(trimmed(*saved), "new");
+    inspect.arguments = {"show", ":other.txt"};
+    saved = repo.runner().run(inspect);
+    ASSERT_TRUE(saved.has_value());
+    EXPECT_TRUE(saved->succeeded());
+    EXPECT_EQ(trimmed(*saved), "staged other");
+}
+
+TEST(GitE2E, CancellingCommittedReferenceTransactionRetainsBothPrivateIndexes) {
+    TempRepo repo("vcs-ref-transaction-cancel");
+    repo.init();
+    repo.write("a.txt", "old\n");
+    repo.write("other.txt", "old other\n");
+    repo.commitAll("base");
+    repo.write("a.txt", "new\n");
+    repo.write("other.txt", "staged other\n");
+    repo.git({"add", "other.txt"});
+    repo.hook("reference-transaction", "if test \"$1\" = committed; then\n"
+                                       "  echo reached > ref-committed\n"
+                                       "  sleep 60\n"
+                                       "fi");
+    std::stop_source stop;
+    frost::Result<CommitResult> result = frost::fail(ErrorCode::Internal, "not run");
+    std::jthread worker([&] {
+        result = repo.repository().commit(
+            CommitRequest{.paths = {repo.path("a.txt")}, .message = "committed", .amend = false},
+            RunControl{stop.get_token(), {}});
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!repo.exists("ref-committed") && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms);
+    const bool reached = repo.exists("ref-committed");
+    stop.request_stop();
+    worker.join();
+    ASSERT_TRUE(reached);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("provenance and index recovery are uncertain"), std::string::npos)
+        << result.error().message();
+    EXPECT_NE(result.error().message().find("frost-index.lock"), std::string::npos);
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "new");
+    EXPECT_EQ(trimmed(repo.git({"show", ":a.txt"})), "old"); // No incorrect index was published.
+    const auto recovery = TempRepo::join(TempRepo::join(repo.info().gitDir, "index.lock"), "frost-index");
+    ASSERT_TRUE(repo.fs().exists(recovery).value());
+    ASSERT_TRUE(repo.fs().exists(recovery + ".lock").value());
+    GitInvocation inspect;
+    inspect.workingDirectory = repo.work();
+    inspect.arguments = {"show", ":a.txt"};
+    inspect.environment = {{"GIT_INDEX_FILE", recovery + ".lock"}};
+    auto pending = repo.runner().run(inspect);
+    ASSERT_TRUE(pending.has_value()) << pending.error().describe();
+    ASSERT_TRUE(pending->succeeded()) << pending->stderrBytes;
+    EXPECT_EQ(trimmed(*pending), "new");
+    inspect.arguments = {"show", ":other.txt"};
+    pending = repo.runner().run(inspect);
+    ASSERT_TRUE(pending.has_value()) << pending.error().describe();
+    ASSERT_TRUE(pending->succeeded()) << pending->stderrBytes;
+    EXPECT_EQ(trimmed(*pending), "staged other");
+}
+
+TEST(GitE2E, ExternalRefChangeDuringFailedCommitDoesNotPublishPrivateIndex) {
+    TempRepo repo("vcs-external-ref");
+    repo.init();
+    repo.write("tracked.txt", "base\n");
+    repo.write("other.txt", "old\n");
+    repo.commitAll("base");
+    repo.write("other.txt", "staged\n");
+    repo.git({"add", "other.txt"});
+    repo.write("new.txt", "untracked\n");
+    const auto oldHead = trimmed(repo.git({"rev-parse", "HEAD"}));
+    const auto tree = trimmed(repo.git({"rev-parse", "HEAD^{tree}"}));
+    const auto external = trimmed(repo.git({"commit-tree", tree, "-p", oldHead, "-m", "external"}));
+    repo.hook("pre-commit", "echo reached > hook-started\nwhile test ! -f release-hook; do sleep 0.1; done\nexit 1");
+    frost::Result<CommitResult> result = frost::fail(ErrorCode::Internal, "not run");
+    std::atomic<bool> done{false};
+    std::jthread worker([&] {
+        result = repo.repository().commit(
+            CommitRequest{.paths = {repo.path("new.txt")}, .message = "must fail", .amend = false});
+        done = true;
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!repo.exists("hook-started") && !done && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(20ms);
+    const bool reached = repo.exists("hook-started");
+    if (reached)
+        repo.git({"update-ref", "HEAD", external, oldHead});
+    repo.write("release-hook", "release\n");
+    worker.join();
+    ASSERT_TRUE(reached);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("provenance and index recovery are uncertain"), std::string::npos)
+        << result.error().message();
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), external);
+    EXPECT_EQ(trimmed(repo.git({"show", ":other.txt"})), "staged");
+    EXPECT_EQ(repo.git({"ls-files", "--error-unmatch", "new.txt"}, 1).exitCode, 1);
+    const auto recovery = TempRepo::join(TempRepo::join(repo.info().gitDir, "index.lock"), "frost-index");
+    ASSERT_TRUE(repo.fs().exists(recovery).value());
+    GitInvocation inspect;
+    inspect.workingDirectory = repo.work();
+    inspect.arguments = {"show", ":new.txt"};
+    inspect.environment = {{"GIT_INDEX_FILE", recovery}};
+    auto saved = repo.runner().run(inspect);
+    ASSERT_TRUE(saved.has_value());
+    ASSERT_TRUE(saved->succeeded()) << saved->stderrBytes;
+    EXPECT_EQ(trimmed(*saved), "untracked");
+}
+
+TEST(GitE2E, CommitRetainsRecoveryIndexWhenPublicationFails) {
+    TempRepo repo("vcs-index-publish-failure");
+    repo.init();
+    repo.write("a.txt", "old\n");
+    repo.write("other.txt", "old other\n");
+    repo.commitAll("base");
+    repo.write("a.txt", "new\n");
+    repo.write("other.txt", "staged other\n");
+    repo.git({"add", "other.txt"});
+    const auto index = TempRepo::join(repo.info().gitDir, "index");
+    const auto recovery = TempRepo::join(TempRepo::join(repo.info().gitDir, "index.lock"), "frost-index");
+    FailIndexPublication failFs(repo.fs(), index);
+    GitRepository repository(repo.runner(), failFs, repo.info());
+    auto result =
+        repository.commit(CommitRequest{.paths = {repo.path("a.txt")}, .message = "committed", .amend = false});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("recovery index retained"), std::string::npos) << result.error().describe();
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "new");
+    ASSERT_TRUE(repo.fs().exists(recovery).value());
+    // Copying the retained file back under the reservation restores exactly the selected and
+    // unrelated staged entries; this simulates explicit recovery after the reported failure.
+    ASSERT_TRUE(repo.fs().writeFileAtomic(index, repo.fs().readFile(recovery).value()).has_value());
+    EXPECT_EQ(trimmed(repo.git({"show", ":a.txt"})), "new");
+    EXPECT_EQ(trimmed(repo.git({"show", ":other.txt"})), "staged other");
+    EXPECT_EQ(trimmed(repo.git({"diff", "--cached", "--name-only"})), "other.txt");
+}
+
+TEST(GitE2E, CommitRetainsRecoveryIndexWhenReadingItFails) {
+    TempRepo repo("vcs-index-read-failure");
+    repo.init();
+    repo.write("a.txt", "old\n");
+    repo.commitAll("base");
+    repo.write("a.txt", "new\n");
+    const auto index = TempRepo::join(repo.info().gitDir, "index");
+    const auto recovery = TempRepo::join(TempRepo::join(repo.info().gitDir, "index.lock"), "frost-index");
+    FailIndexPublication failFs(repo.fs(), index, true);
+    GitRepository repository(repo.runner(), failFs, repo.info());
+    auto result =
+        repository.commit(CommitRequest{.paths = {repo.path("a.txt")}, .message = "committed", .amend = false});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("reading its recovery index failed"), std::string::npos)
+        << result.error().describe();
+    EXPECT_EQ(trimmed(repo.git({"show", "HEAD:a.txt"})), "new");
+    ASSERT_TRUE(repo.fs().exists(recovery).value());
+    ASSERT_TRUE(repo.fs().writeFileAtomic(index, repo.fs().readFile(recovery).value()).has_value());
+    EXPECT_EQ(trimmed(repo.git({"show", ":a.txt"})), "new");
 }
 
 TEST(GitE2E, RollbackRestoresModifiedAddedAndRenamedFiles) {
@@ -540,6 +931,69 @@ TEST(GitE2E, RestrictedModeReadsButRefusesToRunHooks) {
         repository.commit(CommitRequest{.paths = {setup.path("a.txt")}, .message = "x", .amend = false}).error().code(),
         ErrorCode::Untrusted);
     EXPECT_EQ(repository.fetch({}).error().code(), ErrorCode::Untrusted);
+}
+
+TEST(GitE2E, RestrictedStatusNeverRunsCleanOrProcessFiltersInNestedPaths) {
+    TempRepo setup("vcs-restricted-filters", true);
+    setup.init();
+    setup.write("nested/.gitattributes", "*.txt filter=review\n");
+    setup.write("nested/file.txt", "one\n");
+    setup.commitAll("base");
+    setup.write("nested/file.txt", "two\n"); // Same-size change triggers the ordinary status filter.
+    setup.git({"config", "filter.review.clean", "echo clean > clean-ran; cat"});
+    setup.git({"config", "filter.review.process", "echo process > process-ran; exit 1"});
+    GitRunnerOptions options;
+    options.trusted = false;
+    options.environment = {{"GIT_CONFIG_NOSYSTEM", "1"},
+                           {"GIT_CONFIG_GLOBAL", TempRepo::join(setup.root(), "gitconfig")}};
+    const GitRunner restricted(setup.runner().launcher(), setup.runner().gitPath(), options);
+    const GitRepository repository(restricted, setup.fs(), setup.info());
+    auto status = repository.status();
+    ASSERT_TRUE(status.has_value()) << status.error().describe();
+    EXPECT_TRUE(status->restrictedRawComparison);
+    ASSERT_NE(status->find("nested/file.txt"), nullptr);
+    EXPECT_EQ(status->find("nested/file.txt")->fileStatus(), VcsFileStatus::Modified);
+    EXPECT_FALSE(setup.exists("process-ran"));
+    EXPECT_FALSE(setup.exists("clean-ran"));
+    setup.git({"config", "--unset", "filter.review.process"});
+    status = repository.status();
+    ASSERT_TRUE(status.has_value()) << status.error().describe();
+    EXPECT_FALSE(setup.exists("clean-ran"));
+    setup.git({"status", "--porcelain"}); // Positive control: ordinary status invokes the configured filter.
+    EXPECT_TRUE(setup.exists("clean-ran"));
+}
+
+TEST(GitE2E, RestrictedStatusDoesNotRunFiltersInAnEnclosedRepository) {
+    TempRepo setup("vcs-restricted-nested-repo", true);
+    setup.init();
+    setup.git({"init", "-q", "nested"});
+    setup.git({"-C", "nested", "config", "user.name", "Frost Test"});
+    setup.git({"-C", "nested", "config", "user.email", "frost@example.invalid"});
+    setup.write("nested/.gitattributes", "*.txt filter=review\n");
+    setup.write("nested/file.txt", "one\n");
+    setup.git({"-C", "nested", "add", "."});
+    setup.git({"-C", "nested", "commit", "-qm", "initial"});
+    setup.write("nested/file.txt", "two\n");
+    setup.git({"-C", "nested", "config", "filter.review.clean", "echo clean > clean-ran; cat"});
+    setup.git({"-C", "nested", "config", "filter.review.process", "echo process > process-ran; exit 1"});
+    GitRunnerOptions options;
+    options.trusted = false;
+    options.environment = {{"GIT_CONFIG_NOSYSTEM", "1"},
+                           {"GIT_CONFIG_GLOBAL", TempRepo::join(setup.root(), "gitconfig")}};
+    const GitRunner restricted(setup.runner().launcher(), setup.runner().gitPath(), options);
+    auto info = discoverRepository(restricted, setup.path("nested/file.txt"));
+    ASSERT_TRUE(info.has_value()) << info.error().describe();
+    ASSERT_TRUE(info->has_value());
+    GitRepository nested(restricted, setup.fs(), **info);
+    auto status = nested.status();
+    ASSERT_TRUE(status.has_value()) << status.error().describe();
+    ASSERT_NE(status->find("file.txt"), nullptr);
+    EXPECT_EQ(status->find("file.txt")->fileStatus(), VcsFileStatus::Modified);
+    EXPECT_FALSE(setup.exists("nested/clean-ran"));
+    EXPECT_FALSE(setup.exists("nested/process-ran"));
+    setup.git({"-C", "nested", "config", "--unset", "filter.review.process"});
+    setup.git({"-C", "nested", "status", "--porcelain"});
+    EXPECT_TRUE(setup.exists("nested/clean-ran"));
 }
 
 // `git diff --no-index --histogram -U0 a b`'s hunk headers as Hunks.

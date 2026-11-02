@@ -26,6 +26,7 @@
 
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
+#include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include <QFileInfo>
 
@@ -271,6 +272,8 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
     if (m_debug)
         m_debug->cancelRerun();
     m_projectRoot = std::move(root);
+    if (m_git)
+        m_git->openProject(m_projectRoot);
     if (m_debug) {
         if (auto loaded = m_debug->setWorkspaceRoot(m_projectRoot); !loaded)
             log::warn(kLog, "debug breakpoints: {}", loaded.error().describe());
@@ -311,16 +314,22 @@ bool Workbench::closeForOpen() {
     // closing any tab. A cancelled close also leaves that rerun cancelled.
     if (m_debug)
         m_debug->cancelRerun();
-    // Stop searches before closing documents; a refused close can start a new search.
+    // Stop background operations before closing project documents.
     cancelFind();
+    if (m_git)
+        m_git->closeProject();
     // The session is saved and every tab saved and closed; a refusal keeps everything open.
     if (m_nav) {
         if (!m_nav->closeProject()) {
+            if (m_git)
+                m_git->openProject(m_projectRoot);
             return false;
         }
     } else if (m_window) {
         m_window->tabs().closeAll();
         if (m_window->tabs().count() > 0) {
+            if (m_git)
+                m_git->openProject(m_projectRoot);
             return false;
         }
     }

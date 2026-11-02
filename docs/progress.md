@@ -3,6 +3,101 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Verified Git workbench and Unity bridge checkpoint
+
+- Git worker tree `8d2097b8d6403e3ab3972e97914cbbdea9bc0c7a`, its exact test-label inventory
+  correction `2996b4ca40e82b6202e7c80c6030e7165d1e3707`, and Unity worker tree
+  `f9122c32ba44ea52f1c3d2318935fe69d81ddbbf` received Astra review. Astra approved the combined
+  join at `50ee225d221b6eb6b654b22c99541d4977d89b98`. A final clang-format-only correction produced
+  source tree `e295c5a0497a2a6e1db194bfe305749b812c83cb`; Astra independently verified this narrow
+  delta and the evidence boundary. Subsequent changes are documentation only.
+- Combined native ext4 Linux verification passed 2551/2574 (23 skipped), including real LuaLS and C#
+  integration. The first combined Windows run passed functional tests but found one formatting violation.
+  After correction and rebuild, the full Windows gate passed 2677/2696 (19 skipped, 1 disabled), format,
+  frost-lint (2371 files), licence checks (103 Windows / 99 Linux packages) and feature-matrix consistency.
+  The formatting correction is entirely in the Windows conditional branch; Linux behavior is unchanged.
+  Logs: `build/verify-main-integration-20261103-003948.log`,
+  `build/verify-git-unity-windows-20261103-final-tests.log` and
+  `build/verify-git-unity-native-20261103-tests.log`. Skipped real-engine/debugger scenarios retain their
+  earlier separate evidence; neither skips nor matrix consistency are counted as completed features.
+- Development stage `E:\FrostBuilds\preview\codex-20261103-git-unity` passes waited startup,
+  actual Windows QRhi/D3D11 rendering and the staged ConPTY Shift+Enter test. Its application DLL matches
+  the tested build: SHA-256 `AE7FAD1148F7453AC521EBB65A802A59583C85528982AE7E752A96EC7269A824`.
+  All 13 staged Unity package files match main source. Logs/profile are in the sibling `-smoke` directory.
+- An actual Unity 6000.6.4f1 request through the unchanged main client and Workbench test rig passed 1/1:
+  dirty-tab reuse, the exact UTF-16 location with astral and unsaved non-ASCII text, and source/meta preservation.
+  Six EditorPrefs values changed and were restored, leaving zero whole-key differences. The built executable
+  and DLL match the stage. This does not establish a staged receiving application window. Evidence lives in
+  `E:\FrostBuilds\unity-stage-acceptance-20261103`. The first new harness profile hid Unity's existing
+  entitlement (exit 198); inheriting the existing HOME/USERPROFILE while isolating application data resolved
+  it without activation or sign-in. Existing package meta files were preserved; Unity's trailing YAML spaces
+  are ignored only when checking their equivalence in the scratch harness.
+- Git now connects discovery, trust, status/markers, dirty-buffer diff, selected commits and branch/push
+  controls. Broader M5 operations remain. Unity now supplies an original external-editor package and exact
+  generation-based managed context; full compiler options, project/package UI, Linux Unity Editor acceptance,
+  controls, logs, tests, debugging and wider Unity workflows remain. Language tools remain external to the stage.
+- Continue the entire agreed project. Folding's functional draft is under Astra architectural review because
+  its strict incremental update bound is still unmet. Lua debugging remains under development in isolated IDE
+  and engine worktrees; the first engine test build is not yet linked. Unity controls have started in
+  `codex-unity-controls`, with inherited staged baseline `e295c5a0497a2a6e1db194bfe305749b812c83cb`.
+  No budget was weakened and no milestone checkpoint is full-project completion. No user answer blocks work.
+
+## 2026-11-03: Reviewed Git and Unity candidates integrated for final gates
+
+- Last verified commit remains `3e5df23`. Git tree `8d2097b8d6403e3ab3972e97914cbbdea9bc0c7a` and
+  Unity tree `f9122c32ba44ea52f1c3d2318935fe69d81ddbbf` have Astra approval for their respective slices.
+  Both source deltas are now staged together. Three merge conflicts retained all existing Find/Git shutdown
+  cleanup and advanced Lua tests while adding Unity tests and the context-revision check.
+- The first Git-only combined run built successfully on both platforms and failed only the test-label inventory:
+  Windows 2670/2689 (18 skipped, 1 disabled, 1 failed), native 2542/2565 (22 skipped, 1 failed).
+  Product tests passed. Terra added the exact `WorkbenchGit.` prefix to the expected Git suites without weakening
+  kind/tag/lock assertions; Astra approved the one-file correction in tree
+  `2996b4ca40e82b6202e7c80c6030e7165d1e3707`. It is now included before final combined gates.
+- Unity publisher reads use bounded verified regular-file handles; validation precedes the unchanged-content
+  return. POSIX publication uses anchored directory descriptors. Windows pins ancestors with GENERIC_READ and
+  read-only sharing: a real FSCTL test proved attribute-only handles insufficient, while the stronger pin rejected
+  junction conversion. Actual Unity Mono synchronization, live-junction rejection, failed-generation preservation,
+  fresh player/editor semantics and Windows dirty-generation replay pass. Linux portable publisher tests cover
+  FIFOs, live links, aliases and ancestor swaps. EditorPrefs changes were restored and compared after each run.
+- Apparent source-path and Unicode-definition failures were probe interpretation errors: real compiler execution
+  preserves distinct percent/space source files, and decoded URI identity preserves the original Unicode path.
+  MSBuild DLL-reference escaping does require the reviewed design-time reference handling. A final-file swap at
+  File.Replace was not directly reproduced; Astra found no confirmed defect and recorded this validation limit.
+  Actual Linux Unity Editor, unsupported compiler arguments/response files/analyzers and wider Unity tracks remain.
+- Folding continues in its isolated worktree with Astra's indexed-projection/nested-range design. Functional
+  milestones are passing, but the complete incremental contract and final application/platform acceptance remain.
+- Lua debugging now has a Terra implementation agent and Astra design assistance. IDE worktree `codex-lua-debug`
+  has staged baseline `bda856487baf348ebfbf3d6ef74400c7c092b67a`; isolated engine worktree
+  `D:\dev\frostide-lua-debug-engine` branches from `8237e1ecfeb9456c231ea30e41c23c75cd426a2d`.
+  Transport, cooperative hooks, watchdog preservation and source identity are under development; no Lua debugger
+  is accepted yet. The canonical engine checkout remains untouched. The whole agreed project goal remains active.
+
+## 2026-11-02: Reviewed Git candidate staged; Unity and folding continue
+
+- Last verified commit is `3e5df23` (advanced Lua editing). Astra approved final Git worker tree
+  `8d2097b8d6403e3ab3972e97914cbbdea9bc0c7a` against baseline
+  `6e48fa0ea4f1cc18c75586327c654d87b2dd7af9`. Its source/ADR delta applied cleanly to main, without
+  replacing the progress log. Combined-tree gates have not yet run; this is not an accepted new checkpoint.
+- The integrated candidate connects repository discovery, trust, Commit/diff/branch controls, local status
+  refresh, editor/tree colours and dirty-buffer workflows. Review corrections prevent pre-trust filter execution,
+  stale queued operations and hunk rollback, lost recovery indexes and same-size edits hidden by changed index
+  timestamps. Timestamped atomic writes preserve the conservative timestamp before publication.
+- A failed/interrupted commit with changed HEAD leaves the real index untouched and retains private recovery
+  files: an independent ref update means provenance cannot safely be inferred. Windows exceptional replacement
+  failures retain original and replacement at explicit reported paths. Final linked Windows/Linux binaries each
+  pass seven real-Git recovery/provenance cases and two filesystem cases; Astra independently reran the external
+  ref regression and filesystem tests. Exceptional Windows OS errors were source-reviewed and their decisions
+  simulated, not induced in the OS. Ambiguous recovery remains manual.
+- Unity's real fresh generation and player language-server checks preserve distinct literal-percent and space
+  DLLs. Actual compiler execution proved the apparent source-path problem was MSBuild display unescaping;
+  original Compile item generation is retained. Fresh editor-profile and extended-path checks/re-review remain.
+- Folding has a functional draft and native mapping/input evidence, but its vector-based per-edit rebuild
+  violates the incremental complexity contract. Astra design assistance will precede replacement with indexed
+  projection/anchor structures; latest Windows verification and complete workflow acceptance remain.
+- Next: complete Unity review, combined Windows/Linux gates and staged smoke checks; continue the entire PLAN.
+  Another engine checkout's CPU-heavy tests have slowed builds. No unrelated process was changed, and no user
+  answer blocks progress.
+
 ## 2026-11-02: Verified advanced Lua editing checkpoint; Git, Unity and folding continue
 
 - Advanced Lua editing is integrated and independently approved (Astra reviewed worker tree

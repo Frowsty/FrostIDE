@@ -58,6 +58,8 @@ void SerialQueue::cancelRunning() {
     LockGuard lock(m_mutex);
     if (m_running) {
         m_running->request_stop();
+    } else if (!m_jobs.empty()) {
+        m_cancelNext = true;
     }
 }
 
@@ -100,6 +102,10 @@ void SerialQueue::run(std::stop_token stop) {
                 }
             }
             m_running.emplace();
+            if (m_cancelNext) {
+                m_running->request_stop();
+                m_cancelNext = false;
+            }
             token = m_running->get_token();
         }
         job(token);

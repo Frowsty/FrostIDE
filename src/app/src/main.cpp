@@ -573,8 +573,8 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(externalRoot));
             if (!owner) {
                 if (owner.error().code() == frost::ErrorCode::Busy) {
-                    auto sent =
-                        frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line, parsed->column);
+                    auto sent = frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line,
+                                                                parsed->column, parsed->columnUtf16);
                     if (sent)
                         return 0;
                     reportExternalOpenFailure(consoleCodePage,
@@ -660,7 +660,8 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 static_cast<void>(workbench.restoreLastProject());
         }
         for (const std::string& path : files) {
-            auto opened = frost::app::openExternalFile(workbench, path, parsed->line, parsed->column);
+            auto opened =
+                frost::app::openExternalFile(workbench, path, parsed->line, parsed->column, parsed->columnUtf16);
             if (!opened && !parsed->project.empty()) {
                 reportExternalOpenFailure(consoleCodePage,
                                           std::format("cannot open file: {}", opened.error().message()));

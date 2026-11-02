@@ -42,7 +42,10 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
     headingFont.setBold(true);
     heading->setFont(headingFont);
     const QString explanation =
-        purpose == TrustPurpose::LuaLanguageServer
+        purpose == TrustPurpose::GitRepository
+            ? tr("Git operations can run repository hooks, filters and configured helpers. Trust these folders only "
+                 "if you know where they come from:")
+        : purpose == TrustPurpose::LuaLanguageServer
             ? tr("The Lua language server reads project configuration and can load project-selected scripts and "
                  "extensions. "
                  "Trust it only if you know where it comes from. Trusting covers these folders and everything below "

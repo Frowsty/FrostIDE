@@ -59,6 +59,16 @@ TEST(CommandLine, FrostEngineProjectAndSourcePosition) {
     EXPECT_EQ(parsed->paths[0], "/tmp/file.lua");
 }
 
+TEST(CommandLine, ExplicitUtf16ColumnRequiresPositiveColumn) {
+    auto parsed = parse({"--project", "/tmp/project", "--line", "3", "--column", "35", "--column-utf16", "file.cs"});
+    ASSERT_TRUE(parsed);
+    EXPECT_TRUE(parsed->columnUtf16);
+    EXPECT_EQ(parsed->column, 35);
+    EXPECT_FALSE(parse({"--column-utf16", "file.cs"}));
+    EXPECT_FALSE(parse({"--column", "0", "--column-utf16", "file.cs"}));
+    EXPECT_FALSE(parse({"--column", "1", "--column-utf16", "--column-utf16", "file.cs"}));
+}
+
 TEST(CommandLine, RejectsInvalidProjectLocationOptions) {
     for (const std::vector<std::string_view>& args : {std::vector<std::string_view>{"--project"},
                                                       {"--project", "--line", "file.lua"},

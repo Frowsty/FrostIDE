@@ -175,6 +175,16 @@ constexpr std::array kRunMenu{
     act("run.selectDebugConfiguration"),
 };
 
+constexpr std::array kGitMenu{
+    act("vcs.commit"),          act("vcs.branches"),
+    act("vcs.trustRepository"), sep(),
+    act("vcs.compareWithHead"), act("vcs.compareWithIndex"),
+    act("vcs.rollback"),        sep(),
+    act("vcs.fetch"),           act("vcs.pull"),
+    act("vcs.pullRebase"),      act("vcs.push"),
+    act("vcs.forcePush"),
+};
+
 constexpr std::array kWindowMenu{
     act(a::kNextTab),        act(a::kPreviousTab),      act(a::kPinTab),      sep(), act(a::kHideActiveWindow),
     act(a::kHideAllWindows), act(a::kJumpToLastWindow), act(a::kFocusEditor), sep(), act(a::kFocusToolbar),
@@ -188,11 +198,11 @@ constexpr std::array kHelpMenu{
 };
 
 constexpr std::array kDefaultMenus{
-    MenuDefinition{"&File", kFileMenu}, MenuDefinition{"&Edit", kEditMenu},
-    MenuDefinition{"&View", kViewMenu}, MenuDefinition{"&Navigate", kNavigateMenu},
-    MenuDefinition{"&Code", kCodeMenu}, MenuDefinition{"&Build", kBuildMenu},
-    MenuDefinition{"&Run", kRunMenu},   MenuDefinition{"&Window", kWindowMenu},
-    MenuDefinition{"&Help", kHelpMenu},
+    MenuDefinition{"&File", kFileMenu},     MenuDefinition{"&Edit", kEditMenu},
+    MenuDefinition{"&View", kViewMenu},     MenuDefinition{"&Navigate", kNavigateMenu},
+    MenuDefinition{"&Code", kCodeMenu},     MenuDefinition{"&Build", kBuildMenu},
+    MenuDefinition{"&Run", kRunMenu},       MenuDefinition{"&Git", kGitMenu},
+    MenuDefinition{"&Window", kWindowMenu}, MenuDefinition{"&Help", kHelpMenu},
 };
 
 // True when `menu` shows any item that is not a separator.

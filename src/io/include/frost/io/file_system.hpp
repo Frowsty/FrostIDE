@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -166,6 +167,12 @@ public:
      * symlink or junction, even a dangling one), IoError (disk full, ...).
      */
     [[nodiscard]] virtual Result<void> writeFileAtomic(std::string_view path, std::string_view data) = 0;
+
+    // Atomically publishes complete bytes with the supplied modification time already set on the
+    // temporary file. A failed write or timestamp update leaves the target unchanged. On Windows,
+    // documented ReplaceFileW failures 1176 and 1177 retain both files and report their paths.
+    [[nodiscard]] virtual Result<void> writeFileAtomicWithMtime(std::string_view path, std::string_view data,
+                                                                std::filesystem::file_time_type mtime);
 
     /*
      * The editor's save primitive (SaveManager, ADR 0028): writes `data` as the new content of the

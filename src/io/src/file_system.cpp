@@ -37,6 +37,11 @@ std::optional<T> parseDecimal(std::string_view digits) noexcept {
 
 } // namespace
 
+Result<void> IFileSystem::writeFileAtomicWithMtime(std::string_view, std::string_view,
+                                                   std::filesystem::file_time_type) {
+    return fail(ErrorCode::Unsupported, "Atomic timestamped writes are not supported by this file system");
+}
+
 Result<std::string> IFileSystem::canonicalPath(std::string_view path) {
     auto normalized = normalizePath(path);
     if (!normalized) {

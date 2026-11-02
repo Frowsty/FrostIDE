@@ -64,7 +64,7 @@ std::string externalProjectKey(std::string_view root) {
         .toHex()
         .toStdString();
 }
-Result<void> openExternalFile(Workbench& workbench, std::string_view path, int line, int column) {
+Result<void> openExternalFile(Workbench& workbench, std::string_view path, int line, int column, bool columnUtf16) {
     if (path.empty())
         return {};
     if (!io::isAbsolutePath(path) || path.find('\0') != std::string_view::npos || line < 0 || column < 0)
@@ -96,16 +96,35 @@ Result<void> openExternalFile(Workbench& workbench, std::string_view path, int l
         if (!view)
             return fail(ErrorCode::NotFound, "opened file has no editor");
         const auto status = view->status();
-        view->goToLine(line > 0 ? line : status.line, column > 0 ? column : status.column);
+        int targetLine = line > 0 ? line : status.line;
+        int targetColumn = column > 0 ? column : status.column;
+        if (columnUtf16 && column > 0) {
+            // The target may be dirty: convert using the live snapshot, not the file on disk.
+            const auto& snapshot = view->document().document().text();
+            const auto lineIndex = std::min(static_cast<std::uint32_t>(targetLine - 1), snapshot.lineCount() - 1);
+            auto offset = snapshot.offsetAt(
+                text::Utf16Point{LineIndex{lineIndex}, Utf16Column{static_cast<std::uint32_t>(column - 1)}});
+            if (!offset)
+                return std::unexpected(std::move(offset.error()));
+            targetLine = static_cast<int>(lineIndex + 1);
+            targetColumn = static_cast<int>(std::min<std::uint64_t>(
+                static_cast<std::uint64_t>(snapshot.pointAt(*offset).column.value()) + 1, INT_MAX));
+        }
+        view->goToLine(targetLine, targetColumn);
     }
     return {};
 }
-Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column) {
-    auto payload = lang::Json::object()
-                       .set("root", std::string(root))
-                       .set("file", std::string(file))
-                       .set("line", line)
-                       .set("column", column);
+Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column, bool columnUtf16) {
+    auto payload = lang::Json::object().set("root", std::string(root)).set("file", std::string(file));
+    if (columnUtf16) {
+        // A legacy owner requires top-level line and column, so it rejects this versioned
+        // position instead of silently treating UTF-16 units as bytes.
+        payload.set(
+            "position",
+            lang::Json::object().set("version", 1).set("encoding", "utf-16").set("line", line).set("column", column));
+    } else {
+        payload.set("line", line).set("column", column);
+    }
     auto reply = io::requestLocalIpc(externalProjectKey(root), payload.dump(), 5s);
     if (!reply)
         return std::unexpected(std::move(reply.error()));
@@ -163,13 +182,26 @@ Result<std::string> ProjectOpenBroker::accept(std::string request) {
     const std::string file(json->stringAt("file"));
     auto line = json->integerAt("line");
     auto column = json->integerAt("column");
+    bool columnUtf16 = false;
+    if (const auto* position = json->find("position")) {
+        if (!position->isObject() || json->find("line") || json->find("column") ||
+            position->integerAt("version") != 1 || position->stringAt("encoding") != "utf-16")
+            return fail(ErrorCode::InvalidArgument, "invalid versioned position");
+        line = position->integerAt("line");
+        column = position->integerAt("column");
+        if (!column || *column <= 0 || file.empty())
+            return fail(ErrorCode::InvalidArgument, "UTF-16 column requires a file and positive column");
+        columnUtf16 = true;
+    }
     auto requestedRoot = externalProjectRoot(root);
     auto currentRoot = externalProjectRoot(m_workbench.projectRoot());
     if (!line || !column || *line < 0 || *column < 0 || *line > INT_MAX || *column > INT_MAX || !requestedRoot ||
         !currentRoot || lang::documentKey(*requestedRoot) != lang::documentKey(m_root) ||
         lang::documentKey(*currentRoot) != lang::documentKey(m_root))
         return fail(ErrorCode::InvalidArgument, "request does not match this window's project");
-    if (auto opened = openExternalFile(m_workbench, file, static_cast<int>(*line), static_cast<int>(*column)); !opened)
+    if (auto opened =
+            openExternalFile(m_workbench, file, static_cast<int>(*line), static_cast<int>(*column), columnUtf16);
+        !opened)
         return std::unexpected(std::move(opened.error()));
     m_window.show();
     m_window.raise();

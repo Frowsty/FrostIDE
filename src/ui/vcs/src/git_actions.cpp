@@ -54,7 +54,12 @@ Result<std::vector<input::Binding>> gitShortcutBindings() {
 }
 
 Result<void> registerGitActions(input::ActionRegistry& registry, GitController& controller, GitActionTargets targets) {
-    const QPointer<GitController> git(&controller);
+    const QPointer<GitController> fixed(&controller);
+    return registerGitActions(registry, [fixed] { return fixed.data(); }, std::move(targets));
+}
+
+Result<void> registerGitActions(input::ActionRegistry& registry, std::function<GitController*()> git,
+                                GitActionTargets targets) {
     const auto shared = std::make_shared<const GitActionTargets>(std::move(targets));
     const auto confirm = [shared](const QString& title, const QString& question) {
         return shared->confirm && shared->confirm(title, question);
@@ -65,12 +70,20 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
     };
 
     std::vector<GitActionSpec> specs;
+    specs.push_back({git_actions::kTrustRepository,
+                     "Trust Git Repository...",
+                     "Review trust for this repository",
+                     {"trust git"},
+                     kAnywhere,
+                     false,
+                     [shared] { return static_cast<bool>(shared->requestTrust); },
+                     [shared] { shared->requestTrust(); }});
     specs.push_back({git_actions::kCommit,
                      "Commit...",
                      "Open the Commit window to commit the changes",
                      {"checkin", "commit changes"},
                      kAnywhere,
-                     true,
+                     false,
                      [shared] { return static_cast<bool>(shared->openCommitWindow); },
                      [shared] { shared->openCommitWindow(); }});
     specs.push_back({git_actions::kPush,
@@ -80,7 +93,7 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
                      kAnywhere,
                      true,
                      {},
-                     [git] { git->push(); }});
+                     [git] { git()->push(); }});
     specs.push_back({git_actions::kForcePush,
                      "Force Push",
                      "Force-push the current branch with lease, after asking",
@@ -89,11 +102,14 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
                      true,
                      {},
                      [git, confirm] {
-                         if (confirm(trText("Force Push"),
+                         const QPointer<GitController> original(git());
+                         if (original &&
+                             confirm(trText("Force Push"),
                                      trText("Force-push the current branch? Commits on the remote that are not here "
                                             "will be lost (the push is refused if the remote moved since the last "
                                             "fetch)."))) {
-                             git->push(true, true);
+                             if (original && git() == original.data())
+                                 original->push(true, true);
                          }
                      }});
     specs.push_back(
@@ -104,7 +120,7 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
          kAnywhere,
          true,
          {},
-         [git, shared] { git->pull(shared->pullStrategy ? shared->pullStrategy() : vcs::PullStrategy::Merge); }});
+         [git, shared] { git()->pull(shared->pullStrategy ? shared->pullStrategy() : vcs::PullStrategy::Merge); }});
     specs.push_back({git_actions::kPull,
                      "Pull",
                      "Fetch and merge the upstream into the current branch",
@@ -112,7 +128,7 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
                      kAnywhere,
                      true,
                      {},
-                     [git] { git->pull(vcs::PullStrategy::Merge); }});
+                     [git] { git()->pull(vcs::PullStrategy::Merge); }});
     specs.push_back({git_actions::kPullRebase,
                      "Pull with Rebase",
                      "Fetch and rebase the current branch onto its upstream",
@@ -120,9 +136,9 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
                      kAnywhere,
                      true,
                      {},
-                     [git] { git->pull(vcs::PullStrategy::Rebase); }});
+                     [git] { git()->pull(vcs::PullStrategy::Rebase); }});
     specs.push_back({git_actions::kFetch, "Fetch", "Fetch every remote", {"git fetch"}, kAnywhere, true, {}, [git] {
-                         git->fetch();
+                         git()->fetch();
                      }});
     specs.push_back(
         {git_actions::kRollback,
@@ -133,11 +149,13 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
          true,
          [file] { return !file().empty(); },
          [git, file, confirm] {
+             const QPointer<GitController> original(git());
              const std::string path = file();
-             if (!path.empty() &&
+             if (original && !path.empty() &&
                  confirm(trText("Rollback Changes"),
                          trText("Roll back the changes to %1? They will be lost.").arg(QString::fromStdString(path)))) {
-                 git->rollback({path});
+                 if (original && git() == original.data() && file() == path)
+                     original->rollback({path});
              }
          }});
     specs.push_back({git_actions::kShowDiff,
@@ -156,12 +174,20 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
                      false,
                      [shared, file] { return static_cast<bool>(shared->compareWithHead) && !file().empty(); },
                      [shared, file] { shared->compareWithHead(file()); }});
+    specs.push_back({git_actions::kCompareWithIndex,
+                     "Compare with Index",
+                     "Compare the current file with the Git index",
+                     {"staged diff"},
+                     kAnywhere,
+                     false,
+                     [shared, file] { return static_cast<bool>(shared->compareWithIndex) && !file().empty(); },
+                     [shared, file] { shared->compareWithIndex(file()); }});
     specs.push_back({git_actions::kBranches,
                      "Branches...",
                      "Show the local and remote branches",
                      {"checkout", "git branches", "new branch"},
                      kAnywhere,
-                     true,
+                     false,
                      [shared] { return static_cast<bool>(shared->showBranches); },
                      [shared] { shared->showBranches(); }});
     specs.push_back({git_actions::kNextChange,
@@ -194,10 +220,10 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
         // Hooks, merges and credential helpers run project code: the registry's trust gate (Untrusted).
         spec.executesProjectCode = entry.needsTrust;
         spec.enabled = [git, enabled = entry.enabled](const input::ActionContext&) {
-            return git && (!enabled || enabled());
+            return git && git() && (!enabled || enabled());
         };
         spec.handler = [git, run = entry.run](const input::ActionContext&, const input::InvokeInfo&) {
-            if (git) {
+            if (git && git()) {
                 run();
             }
         };
