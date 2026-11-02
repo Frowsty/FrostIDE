@@ -24,6 +24,10 @@
  * alone and marks the document DiskState::OutOfDate. The disk's new content is recorded in local
  * history (RevisionKind::ExternalChange) first.
  *
+ * Closed files. rewriteClosedFile() applies edits to a file no editor has open (Replace in Files,
+ * ADR 0045) with the same guarantees as a save: the file's own encoding, BOM and line breaks, a
+ * lossy load refused, a local-history snapshot first, and safeWrite.
+ *
  * Hot exit. journalDirty() writes every dirty (or out-of-date) buffer whose state changed since its
  * last entry, with a fresh generation from one process-wide counter, and clears the entry of a
  * buffer that became clean (undo back to the saved state). closeJournal() journals and marks a clean
@@ -39,6 +43,7 @@
  */
 #pragma once
 
+#include "frost/compat/function_ref.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
 #include "frost/document/file_document.hpp"
@@ -138,6 +143,27 @@ struct SaveAllResult {
     std::vector<FailedSave> failed;
 };
 
+// One replacement of a closed-file rewrite (rewriteClosedFile): bytes `range` of the decoded UTF-8
+// text become `text`.
+struct RewriteEdit {
+    text::ByteRange range;
+    std::string text;
+};
+
+// Computes a rewrite's edits from the file's decoded text: ascending, non-overlapping, on char
+// boundaries (TextBuffer::applyEdits' rules). An error cancels the rewrite; no edits writes nothing.
+using RewriteFunction = frost::function_ref<Result<std::vector<RewriteEdit>>(const text::Snapshot& text)>;
+
+// What rewriteClosedFile() did.
+struct RewriteOutcome {
+    bool written = false; // false: the function returned no edits, so nothing was written.
+    std::string target;   // The file written (a symlink's target).
+    std::uint64_t bytes = 0;
+    std::size_t edits = 0;
+    // Problems after the file was safely written (local history of the new bytes, the temp sweep).
+    std::vector<Error> warnings;
+};
+
 // What checkDisk() found.
 enum class ExternalChangeKind : std::uint8_t {
     None,         // Nothing changed (or the change is already pending).
@@ -229,6 +255,27 @@ public:
     [[nodiscard]] std::optional<SkipReason> skipReason(const FileDocument& document, SaveReason reason) const noexcept;
     // Whether any document is dirty. O(documents).
     [[nodiscard]] bool anyDirty() const noexcept;
+
+    /*
+     * Rewrites a file that is not open here (Replace in Files, ADR 0045) so that only the edited
+     * bytes change:
+     *   1. reads it through the load service (the large-file guard) and decodes it with detection;
+     *   2. refuses a file that is open here (Busy: edit its document instead), a load that is not
+     *      lossless (Corrupt: saving would not restore the other bytes) and a binary-looking file
+     *      (InvalidArgument);
+     *   3. asks `edit` for the edits on the decoded text; none: nothing is written;
+     *   4. applies them, encodes with the file's own format (encoding and BOM; every line break stays
+     *      as it is, D9) and checks that the bytes decode back to the edited text (Internal);
+     *   5. records the old bytes in local history (RevisionKind::Labelled, "Before <label>") unless
+     *      history is off; a failure there refuses the rewrite;
+     *   6. checks that the file did not change since step 1 (Busy), then writes it with safeWrite: a
+     *      read-only target fails with PermissionDenied, one in use with Busy.
+     * Every error leaves the file as it was and has the context "while rewriting <path>". After the
+     * write the new bytes are recorded in local history (RevisionKind::Save, `label`). Owner thread;
+     * blocking. O(size).
+     */
+    [[nodiscard]] Result<RewriteOutcome> rewriteClosedFile(std::string_view path, RewriteFunction edit,
+                                                           std::string_view label = "Replace in Files");
 
     // --- Policies ---
 
