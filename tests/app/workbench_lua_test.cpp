@@ -84,6 +84,119 @@ TEST(WorkbenchLua, QueuedTrustAndSettingsCannotRestartAfterShutdown) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
+TEST(WorkbenchLua, FormatsSelectionAndDocumentWithEditorConfigAndUndo) {
+    auto server = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
+    if (!server)
+        GTEST_SKIP() << "LuaLS is not available";
+    WorkDir dir("lua-formatting");
+    const std::string original = "local function add(a,b) -- caf\xc3\xa9 \xf0\x9f\x98\x80\nreturn a+b\nend\n\n"
+                                 "local function sub(a,b)\nreturn a-b\nend\n";
+    const std::string selectionFormatted =
+        "local function add(a, b) -- caf\xc3\xa9 \xf0\x9f\x98\x80\n  return a + b\nend\n\n"
+        "local function sub(a,b)\nreturn a-b\nend\n";
+    const std::string allFormatted = "local function add(a, b) -- caf\xc3\xa9 \xf0\x9f\x98\x80\n  return a + b\nend\n\n"
+                                     "local function sub(a, b)\n  return a - b\nend\n";
+    dir.write(".editorconfig", "root = true\n[*.lua]\nindent_style = space\nindent_size = 2\ntab_width = 8\n"
+                               "[tabs.lua]\nindent_style = tab\nindent_size = tab\ntab_width = 8\n");
+    dir.write(".luarc.json", R"({"format.defaultConfig":{"indent_style":"space","indent_size":"4"}})");
+    dir.write("main.lua", original);
+    dir.write("tabs.lua", original);
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  *server));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->lua() && rig.workbench->lua()->state() == frost::lang::LuaState::Running; }, 20s));
+    auto& editor = rig.workbench->currentView()->editor();
+    EXPECT_EQ(editor.settings().tabSize, 8U);
+    EXPECT_EQ(editor.settings().indentSize, 2U);
+    EXPECT_TRUE(editor.settings().insertSpaces);
+    const auto end = original.find("end\n") + 3;
+    const std::vector<frost::text::Selection> selected{{frost::ByteOffset{0}, frost::ByteOffset{end}}};
+    editor.setState(frost::text::EditorState::from(frost::text::SelectionSet::fromSelections(selected, 0)));
+    rig.workbench->language()->reformat();
+    ASSERT_TRUE(waitFor([&] { return editor.document().text().text() == selectionFormatted; }, 20s));
+    EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
+    ASSERT_TRUE(editor.perform(frost::ui::EditorAction::Undo));
+    EXPECT_EQ(editor.document().text().text(), original);
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{0}));
+    rig.workbench->language()->reformat();
+    ASSERT_TRUE(waitFor([&] { return editor.document().text().text() == allFormatted; }, 20s));
+    ASSERT_TRUE(editor.perform(frost::ui::EditorAction::Undo));
+    EXPECT_EQ(editor.document().text().text(), original);
+    ASSERT_TRUE(editor.perform(frost::ui::EditorAction::Redo));
+    EXPECT_EQ(editor.document().text().text(), allFormatted);
+    EXPECT_EQ(dir.read("main.lua"), original);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("tabs.lua")));
+    auto& tabsEditor = rig.workbench->currentView()->editor();
+    EXPECT_EQ(tabsEditor.settings().tabSize, 8U);
+    EXPECT_FALSE(tabsEditor.settings().insertSpaces);
+    const std::string tabsFormatted =
+        "local function add(a, b) -- caf\xc3\xa9 \xf0\x9f\x98\x80\n\treturn a + b\nend\n\n"
+        "local function sub(a, b)\n\treturn a - b\nend\n";
+    rig.workbench->language()->reformat();
+    ASSERT_TRUE(waitFor([&] { return tabsEditor.document().text().text() == tabsFormatted; }, 20s));
+    EXPECT_EQ(dir.read("tabs.lua"), original);
+}
+
+TEST(WorkbenchLua, GenericAnnotationsAndRequireNavigateAcrossFiles) {
+    auto server = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
+    if (!server)
+        GTEST_SKIP() << "LuaLS is not available";
+    WorkDir dir("lua-generic-module");
+    const std::string main =
+        "local M = require(\"module\")\nlocal s = \"\xf0\x9f\x98\x80\"; local x = M.identity(\"h\xc3\xa9\")\n";
+    dir.write(".luarc.json", R"({"runtime.version":"Lua 5.4"})");
+    dir.write("module.lua", "---@generic T\n---@param value T\n---@return T\n"
+                            "local function identity(value) return value end\nreturn { identity = identity }\n");
+    dir.write("main.lua", main);
+    dir.write("main.cpp", "int main() { return 0; }\n");
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  *server));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->lua() && rig.workbench->lua()->state() == frost::lang::LuaState::Running; }, 20s));
+    auto& editor = rig.workbench->currentView()->editor();
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{main.find("identity") + 3}));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            rig.workbench->language()->showQuickDocumentation();
+            return waitFor(
+                [&] {
+                    const auto& popup = rig.workbench->language()->quickDocPopup();
+                    return popup.isVisible() && popup.plainText().contains(QStringLiteral("identity"));
+                },
+                2s);
+        },
+        20s));
+    const QString help = rig.workbench->language()->quickDocPopup().plainText();
+    EXPECT_TRUE(help.contains(QStringLiteral("identity"))) << help.toStdString();
+    EXPECT_TRUE(help.contains(QStringLiteral("<T>"))) << help.toStdString();
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{main.find("module") + 2}));
+    rig.workbench->language()->gotoDeclaration();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* view = rig.workbench->currentView();
+            return view && view->path() == dir.join("module.lua");
+        },
+        20s));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    EXPECT_FALSE(rig.workbench->lua()->documentVersion(dir.join("main.cpp")).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    EXPECT_TRUE(rig.workbench->lua()->documentVersion(dir.join("main.lua")).has_value());
+}
+
 TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
     auto luals = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
     QByteArray apiPath = qgetenv("FROST_TEST_LUA_API");
@@ -97,8 +210,9 @@ TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
     dir.write(".frost/lua-api/frost.lua", *api);
     dir.write(
         ".luarc.json",
-        R"({"runtime":{"version":"Lua 5.4"},"workspace":{"library":[".frost/lua-api"],"checkThirdParty":false}})");
-    dir.write("main.lua", "local x = AI.Wa\nAI.DoesNotExist()\nAI.Wake(nil)\nlocal score = 1\nprint(score)\n");
+        R"({"runtime":{"version":"Lua 5.4"},"workspace":{"library":[".frost/lua-api"],"checkThirdParty":false},"completion":{"callSnippet":"Both"}})");
+    dir.write("main.lua", "local s = \"\xf0\x9f\x98\x80\"; local x = AI.Wa\nAI.DoesNotExist()\nAI.Wake(nil)\nlocal "
+                          "score = 1\nprint(score)\nlocal t = \"\xf0\x9f\x98\x80\"; AI.Wake");
     dir.write("main.cpp", "int main() { return 0; }\n");
     frost::app::test::RigOptions options;
     options.workbench.clangd = true;
@@ -109,6 +223,12 @@ TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Game.frostproj")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua"), {1, 16}));
+    auto& initialEditor = rig.workbench->currentView()->editor();
+    const auto initialText = initialEditor.document().text().text();
+    ASSERT_NE(initialText.find("\xf0\x9f\x98\x80"), std::string::npos);
+    ASSERT_NE(initialText.find("AI.Wa"), std::string::npos);
+    const auto completionEnd = initialText.find("AI.Wa") + 5;
+    initialEditor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{completionEnd}));
     EXPECT_EQ(rig.workbench->lua(), nullptr); // No process before trust.
     if (auto* clangd = rig.workbench->clangd())
         EXPECT_FALSE(clangd->documentVersion(dir.join("main.lua")).has_value());
@@ -145,13 +265,45 @@ TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
             return waitFor(
                 [&] {
                     const auto items = rig.workbench->language()->completionPopup().model().items();
-                    return std::ranges::any_of(
-                        items, [](const auto& item) { return item.label.find("Wake") != std::string::npos; });
+                    return std::ranges::any_of(items, [](const auto& item) {
+                        return item.snippet && item.label.find("Wake") != std::string::npos;
+                    });
                 },
                 2s);
         },
         20s);
-    EXPECT_TRUE(complete);
+    ASSERT_TRUE(complete);
+    auto& liveEditor = rig.workbench->currentView()->editor();
+    auto& completion = rig.workbench->language()->completionPopup();
+    std::optional<std::size_t> snippetRow;
+    for (std::size_t row = 0; row < completion.model().entries().size(); ++row) {
+        const auto& item = completion.model().items()[completion.model().entries()[row].item];
+        if (item.snippet && item.label.find("Wake") != std::string::npos) {
+            snippetRow = row;
+            break;
+        }
+    }
+    ASSERT_TRUE(snippetRow.has_value());
+    for (std::size_t step = 0;
+         step < completion.model().entries().size() && completion.model().selected() != snippetRow; ++step)
+        frost::app::test::sendKey(&liveEditor, Qt::Key_Down, Qt::NoModifier);
+    ASSERT_EQ(completion.model().selected(), snippetRow);
+    frost::app::test::sendKey(&liveEditor, Qt::Key_Return, Qt::NoModifier);
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->language()->parameterInfoPopup().isVisible(); }, 15s));
+    EXPECT_TRUE(rig.workbench->language()->parameterInfoPopup().html().contains(QStringLiteral("entity")));
+    const auto placeholder = liveEditor.editor().state().primary().range();
+    EXPECT_EQ(liveEditor.document().text().text(placeholder), "entity");
+    for (const QChar character : QStringLiteral("guard"))
+        frost::app::test::sendKey(&liveEditor, character.toUpper().unicode(), Qt::NoModifier, QString(character));
+    EXPECT_NE(liveEditor.document().text().text().find("AI.Wake(guard)"), std::string::npos);
+    frost::app::test::sendKey(&liveEditor, Qt::Key_Escape, Qt::NoModifier);
+    EXPECT_FALSE(rig.workbench->language()->parameterInfoPopup().isVisible());
+    const auto callOffset = liveEditor.document().text().text().rfind("AI.Wake") + 7;
+    liveEditor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{callOffset}));
+    frost::app::test::sendKey(&liveEditor, Qt::Key_ParenLeft, Qt::ShiftModifier, QStringLiteral("("));
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->language()->parameterInfoPopup().isVisible(); }, 15s))
+        << liveEditor.document().text().text();
+    EXPECT_TRUE(rig.workbench->language()->parameterInfoPopup().html().contains(QStringLiteral("entity")));
     rig.workbench->currentView()->editor().goToLine(3, 5);
     rig.workbench->language()->showQuickDocumentation();
     EXPECT_TRUE(waitFor([&] { return rig.workbench->language()->quickDocPopup().isVisible(); }, 10s));

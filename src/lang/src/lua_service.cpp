@@ -177,6 +177,9 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
         InitializeOptions init;
         init.rootPath = options.workspaceRoot;
         init.processId = currentProcessId();
+        // LuaLS 3.19.1 corrupts incremental line positions when its legacy UTF-8
+        // offsetEncoding is offered. Keep the standard UTF-16 wire encoding.
+        init.utf16Only = options.languageId == "lua";
         init.configuration = [configuration = options.configuration](std::string_view section) {
             return luaConfigurationSection(configuration, section);
         };

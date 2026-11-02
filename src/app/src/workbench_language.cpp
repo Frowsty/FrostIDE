@@ -113,6 +113,14 @@ std::optional<text::ByteRange> LanguageBridge::selection() const {
     return editor->editor().state().primary().range();
 }
 
+ui::lang::FormattingSettings LanguageBridge::formattingOptions() const {
+    const ui::EditorView* editor = activeEditor();
+    if (!editor)
+        return {};
+    const auto& settings = editor->settings();
+    return {.tabSize = settings.tabSize, .indentSize = settings.indentSize, .insertSpaces = settings.insertSpaces};
+}
+
 QRect LanguageBridge::caretScreenRect() const {
     const ui::EditorView* editor = activeEditor();
     return editor != nullptr ? editor->globalCaretRect(editor->editor().state().primary().head) : QRect();

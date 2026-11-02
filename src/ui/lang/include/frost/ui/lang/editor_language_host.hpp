@@ -8,6 +8,7 @@
 #include "frost/core/error.hpp"
 #include "frost/lang/document_sync.hpp"
 #include "frost/lang/navigation.hpp"
+#include "frost/lang/refactoring.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/text/positions.hpp"
 #include "frost/text/snapshot.hpp"
@@ -25,6 +26,13 @@
 class QWidget;
 
 namespace frost::ui::lang {
+
+struct FormattingSettings {
+    std::uint32_t tabSize = 4;
+    std::uint32_t indentSize = 4;
+    bool insertSpaces = true;
+    bool operator==(const FormattingSettings&) const = default;
+};
 
 /*
  * The active editor, as the language features see it. Every call is made on the UI thread.
@@ -45,6 +53,8 @@ public:
     [[nodiscard]] virtual ByteOffset caretOffset() const = 0;
     // The selection, when one is non-empty.
     [[nodiscard]] virtual std::optional<text::ByteRange> selection() const = 0;
+    // Effective tab width and indentation style for the active file, including EditorConfig.
+    [[nodiscard]] virtual FormattingSettings formattingOptions() const = 0;
     // The caret's line box in global (screen) coordinates; popups open below or above it.
     [[nodiscard]] virtual QRect caretScreenRect() const = 0;
     // The caret's box for a byte offset of the active document, in global coordinates.

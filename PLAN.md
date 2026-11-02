@@ -1059,7 +1059,7 @@ Existing platform, data-safety and trust rules apply throughout.
 | MANAGED-01 | Load and reevaluate managed projects; accurate C# completion, diagnostics, navigation, refactoring and build context, including Unity-generated projects and assembly definitions. No regex substitutes for semantic analysis. | Reviewed csharp-ls/Roslyn service and installer integrated; real C# editor semantics and corrected mixed-language shutdown pass combined Windows/Linux gates; project model/build/Unity context incomplete |
 | MANAGED-02 | Debug, test and profile managed applications and supported framework projects, with explicit capability coverage against the parity inventory. | Depends on MANAGED-01 and debugger infrastructure; planned |
 | LUA-01 | Lua service lifecycle, document synchronization, completion, signatures, hover, diagnostics, symbols, references and rename; select the intended runtime and honor workspace configuration. Test edits, Unicode positions, server failure and restart. | Backend and application routing reviewed; real LuaLS editor workflow tested on Windows/Linux; remaining capability coverage tracked separately |
-| LUA-02 | Lua syntax, indentation, formatting, snippets, annotations/generics and module navigation; preserve unsaved edits and support mixed C++/Lua workspaces without sending Lua documents to clangd. | Reviewed syntax/outline/fold ranges and bounded indentation pass Windows/Linux gates; formatting, snippets and complete semantic coverage remain |
+| LUA-02 | Lua syntax, indentation, formatting, snippets, annotations/generics and module navigation; preserve unsaved edits and support mixed C++/Lua workspaces without sending Lua documents to clangd. | Reviewed syntax, effective-settings formatting, snippets/parameter hints, generics and module navigation pass real LuaLS and combined Windows/Linux checks. Broader snippet transforms and complete semantic coverage remain |
 | LUA-03 | Lua debugging: breakpoints, stepping, stacks, locals, watches and evaluation in supported standalone and FrostEngine runtimes. A configured adapter alone is not acceptance. | Runtime/debug-protocol choice and engine support outstanding |
 | LUA-04 | Verify real LuaLS behavior on the target engine's generated definitions and a synthetic fixture: correct completions and signatures, no false undefined-engine-global diagnostics, genuine errors still reported. Measure interactive latency on the reference machine. | Real engine API completion/hover/navigation/rename and diagnostics tested on Windows/Linux; full coverage and latency measurements remain |
 | UNITY-01 | Recognize Unity projects and packages; open scripts at the requested location through a Unity external-editor bridge; refresh generated projects while preserving asset identities. | Managed-language foundation integrated; original bridge under development in an isolated worktree, not accepted or integrated |
@@ -1129,3 +1129,37 @@ FrostIDE's WSL verification mirror only tests the Linux build; it is not remote 
 The next inventory pass must expand individual menus, settings, keymaps, editor interactions, accessibility,
 profiling, deployment, remaining frameworks and other game-engine workflows. These are outstanding scope,
 not excluded features or deferred verification. No percentage of Rider parity is claimed from test counts.
+
+### B.2 Editor and navigation acceptance inventory (2026-11-02)
+
+These scenarios expand PARITY-01/02; they do not replace the wider product tracks. The behavioral references
+are Rider 2026.2's [search](https://www.jetbrains.com/help/rider/Searching_Everywhere.html),
+[recent navigation](https://www.jetbrains.com/help/rider/Navigation_and_Search__Navigating_to_Recent_Locations.html),
+[editing](https://www.jetbrains.com/help/rider/Creating_and_Editing_Code.html),
+[multiple carets](https://www.jetbrains.com/help/rider/Multicursor.html),
+[folding](https://www.jetbrains.com/help/rider/Code_Folding.html),
+[tool windows](https://www.jetbrains.com/help/rider/Tool_Windows.html) and
+[accessibility](https://www.jetbrains.com/help/rider/Accessibility.html) documentation.
+Only public behavior is used; FrostIDE keeps original implementation, assets and branding.
+
+The source audit began at checkpoint `12fb20f`; later evidence is identified in the rows. A component or registered action alone is not
+proof of the full scenario. Add real Windows/Linux input and application evidence before closing a row.
+
+| ID | Required application scenario | Evidence and remaining gap |
+|---|---|---|
+| NAV-01 | One search surface finds files, types, symbols, text, settings/actions, run configurations and Git objects, with category filtering and useful empty-query history. | `ui/workbench` currently combines up to eight files and eight actions. Other categories, filtering and cross-language aggregation remain. |
+| NAV-02 | Search types and symbols across the appropriate projects, including referenced code; cancel obsolete searches and navigate exact locations without overwriting dirty tabs. | `LanguageController` has a separate server-backed symbol popup. Type-specific filtering, complete backend coverage and mixed-language aggregation need application acceptance. |
+| NAV-03 | Persist navigation and edit history per project; filter viewed versus edited locations, inspect useful context and remove entries consistently. | Recent files, session and back/forward models exist. Full changed-location/context/removal behavior is not established by those models. |
+| EDIT-01 | Multiple carets and rectangular selection support typing, clipboard operations, completion and snippets, including virtual columns and predictable primary-caret behavior. | Editor selection models and Alt+Shift click exist. The full input/clipboard/snippet matrix and column-mode UI remain unverified. |
+| EDIT-02 | Fold/unfold nested code and selections through gutter and keyboard; persist state, preview hidden code and keep navigation/editing correct across collapsed regions. | Lua syntax fold ranges exist, but the text display-fold layer is an identity placeholder. Interactive mapping, C++ ranges and editor integration are under development in an isolated worktree; no folding workflow is accepted yet. |
+| EDIT-03 | Show inlay hints without corrupting caret movement, selection, wrapping, hit testing, diagnostics or either renderer. | Existing text/display infrastructure does not prove an interactive inlay layer; M15/M17 still own implementation and acceptance. |
+| EDIT-04 | Reformat documents/selections using resolved file settings; accept snippets and parameter hints without losing edits or applying stale replies. | Advanced Lua formatting/settings, real LuaLS responses, parameter hints, Unicode positions and engine-API editing pass independent review and combined Windows/Linux gates. Broader snippet transforms and other language coverage remain. |
+| EDIT-05 | Edit and navigate within split/detached editors while preserving document identity, undo, focus and recovery across project windows. | Tab reordering/pinning and project-specific process routing exist. They do not establish split/detached-editor behavior. |
+| SHELL-01 | Dock, float, resize, hide, restore and keyboard-focus tool windows, preserving layout and returning focus to the correct editor. | Tool-window manager and application contents exist. A complete interaction/layout acceptance matrix remains, including both native displays. |
+| SHELL-02 | Navigate and act through a persistent structure view, breadcrumbs, bookmarks and sticky context without stale locations after edits. | File-structure popup exists; it is not evidence for the remaining persistent navigation surfaces. M15/M11 own the gaps. |
+| INPUT-01 | Exercise supported keymaps/layouts, IME composition and keyboard-only workflows without shortcut collisions or text corruption. | IntelliJ bindings and editor input tests exist. Additional keymaps and the complete real-layout/IME matrix remain. |
+| ACCESS-01 | Screen readers expose editable text, selections, diagnostics and terminal content; keyboard navigation and high-contrast modes work through actual Windows/Linux accessibility interfaces. | Themes and ordinary Qt widgets alone do not establish custom-editor/terminal accessibility. Full application evidence and explicit accessible-text integration remain. |
+
+The existing `tests/features/matrix.json` still tracks the original Appendix A, and many acceptance fields
+are unfilled. Its successful consistency check is not a completion check for these scenarios or for the
+expanded product scope. Coverage must be reconciled with actual behavior, rather than inferred from total tests.

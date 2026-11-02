@@ -118,4 +118,34 @@ TEST(StableLspRequester, ManagedRequestsKeepTheirOwnServerAcrossTabSwitchAndRepl
     EXPECT_EQ(answer->asInteger(), 4);
 }
 
+TEST(StableLspRequester, FormattingRoutesAcrossMixedLanguageTabs) {
+    frost::app::StableLspRequester requester;
+    requester.setServer(std::make_shared<TestServer>(1));
+    requester.setLuaServer(std::make_shared<TestServer>(2));
+    requester.setManagedServer(std::make_shared<TestServer>(3));
+#ifdef _WIN32
+    const std::string root = "C:\\project\\";
+#else
+    const std::string root = "/project/";
+#endif
+    auto params = [](const std::string& path) {
+        return frost::lang::Json::object().set(
+            "textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(path).value()));
+    };
+    requester.setActivePath(root + "file.lua");
+    auto lua = requester.request("textDocument/rangeFormatting", params(root + "file.lua"));
+    requester.setActivePath(root + "file.cpp");
+    auto cpp = requester.request("textDocument/formatting", params(root + "file.cpp"));
+    requester.setActivePath(root + "file.cs");
+    auto managed = requester.request("textDocument/formatting", params(root + "file.cs"));
+    requester.setActivePath(root + "notes.txt");
+    auto first = frost::sched::syncWait(std::move(lua));
+    auto second = frost::sched::syncWait(std::move(cpp));
+    auto third = frost::sched::syncWait(std::move(managed));
+    ASSERT_TRUE(first && second && third);
+    EXPECT_EQ(first->asInteger(), 2);
+    EXPECT_EQ(second->asInteger(), 1);
+    EXPECT_EQ(third->asInteger(), 3);
+}
+
 } // namespace

@@ -235,7 +235,13 @@ Result<Json> initializeParams(const InitializeOptions& options) {
     params.set("locale", "en");
     params.set("rootPath", options.rootPath);
     params.set("rootUri", *rootUri);
-    params.set("capabilities", clientCapabilities());
+    Json capabilities = clientCapabilities();
+    if (options.utf16Only) {
+        const Json encodings = Json::array({Json("utf-16")});
+        capabilities.set("general", Json::object().set("positionEncodings", encodings));
+        capabilities.set("offsetEncoding", encodings);
+    }
+    params.set("capabilities", std::move(capabilities));
     if (!options.initializationOptions.isNull()) {
         params.set("initializationOptions", options.initializationOptions);
     }
@@ -340,6 +346,26 @@ sched::Task<Result<ServerCapabilities>> LspClient::initialize(std::stop_token to
     }
     if (!result->isObject()) {
         co_return fail(ErrorCode::Corrupt, "initialize: the result is not an object");
+    }
+    // A server must select an advertised encoding. In particular, never silently
+    // interpret LuaLS UTF-8 positions as UTF-16 after restricting its offer.
+    const Json* serverCapabilities = result->find("capabilities");
+    std::optional<PositionEncoding> selected;
+    const auto acceptEncoding = [&](std::string_view name) {
+        if (name.empty())
+            return true;
+        const auto encoding = parsePositionEncoding(name);
+        if (!encoding || (m_shared->options.utf16Only && *encoding != PositionEncoding::Utf16) ||
+            (selected && *selected != *encoding))
+            return false;
+        selected = *encoding;
+        return true;
+    };
+    if (!acceptEncoding(serverCapabilities ? serverCapabilities->stringAt("positionEncoding") : "") ||
+        !acceptEncoding(result->stringAt("offsetEncoding")) ||
+        !acceptEncoding(serverCapabilities ? serverCapabilities->stringAt("offsetEncoding") : "")) {
+        co_return fail(ErrorCode::Corrupt,
+                       "initialize: server selected an unadvertised or conflicting position encoding");
     }
     m_shared->capabilities = parseInitializeResult(*result);
     if (auto sent = m_connection->notify("initialized", Json::object()); !sent) {

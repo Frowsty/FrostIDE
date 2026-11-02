@@ -360,6 +360,10 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         report(applied.error(), "Completion");
         return;
     }
+    // LuaLS and other servers use this editor-local command to request signature help after
+    // inserting a call snippet. Do not execute arbitrary commands supplied by a server.
+    const fl::Json* command = item.raw.find("command");
+    const bool triggerParameterHints = command && command->stringAt("command") == "editor.action.triggerParameterHints";
     m_tabStops = std::move(commit->tabStops);
     if (!m_tabStops.empty()) {
         const std::optional<text::Snapshot> after = m_services.host.snapshot();
@@ -367,10 +371,12 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         // Only an empty final stop: the caret is already there.
         if (m_tabStops.size() == 1 && m_tabStops.front().empty()) {
             m_tabStops.clear();
-            return;
+        } else {
+            static_cast<void>(nextTabStop());
         }
-        static_cast<void>(nextTabStop());
     }
+    if (triggerParameterHints)
+        requestSignatureHelp(std::nullopt);
 }
 
 bool LanguageController::nextTabStop() {
@@ -847,20 +853,24 @@ void LanguageController::reformat() {
     if (const auto selection = m_services.host.selection()) {
         range = fl::LspRange{positionAt(selection->begin), positionAt(selection->end)};
     }
+    const FormattingSettings settings = m_services.host.formattingOptions();
+    const fl::FormattingOptions options{.tabSize = settings.insertSpaces ? settings.indentSize : settings.tabSize,
+                                        .insertSpaces = settings.insertSpaces};
     start<std::vector<fl::TextEdit>>(
         m_formatSlot,
-        [&server = m_services.server, path, range](std::stop_token token) {
-            return fl::requestFormatting(server, path, range, fl::FormattingOptions{}, std::move(token));
+        [&server = m_services.server, path, range, options](std::stop_token token) {
+            return fl::requestFormatting(server, path, range, options, std::move(token));
         },
-        [this, path](Result<std::vector<fl::TextEdit>> edits) {
+        [this, path, settings](Result<std::vector<fl::TextEdit>> edits) {
             if (!edits) {
                 report(edits.error(), "Reformat code");
                 return;
             }
             const std::optional<text::Snapshot> snapshot = m_services.host.snapshot();
+            const auto currentSettings = m_services.host.formattingOptions();
             if (!snapshot || m_services.host.documentPath() != path ||
-                m_services.host.documentVersion() != m_formatVersion) {
-                emit statusMessage(QStringLiteral("The file changed while it was being formatted; try again"));
+                m_services.host.documentVersion() != m_formatVersion || currentSettings != settings) {
+                emit statusMessage(QStringLiteral("The file or formatting settings changed; try again"));
                 return;
             }
             auto bytes = fl::toByteEdits(*snapshot, *edits, m_services.server.encoding());

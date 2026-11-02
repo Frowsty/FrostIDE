@@ -69,6 +69,7 @@ public:
     [[nodiscard]] std::int64_t documentVersion() const override;
     [[nodiscard]] ByteOffset caretOffset() const override;
     [[nodiscard]] std::optional<text::ByteRange> selection() const override;
+    [[nodiscard]] ui::lang::FormattingSettings formattingOptions() const override;
     [[nodiscard]] QRect caretScreenRect() const override;
     [[nodiscard]] QRect screenRectAt(ByteOffset offset) const override;
     [[nodiscard]] Result<void> applyEdits(std::span<const lang::ByteEdit> edits, std::string_view label,

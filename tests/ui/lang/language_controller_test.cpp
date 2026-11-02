@@ -23,6 +23,7 @@
 
 #include <chrono>
 #include <functional>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -80,7 +81,8 @@ public:
     std::optional<frost::text::Snapshot> snapshot() const override { return m_buffer.current(); }
     std::int64_t documentVersion() const override { return m_version; }
     ByteOffset caretOffset() const override { return m_caret; }
-    std::optional<frost::text::ByteRange> selection() const override { return std::nullopt; }
+    std::optional<frost::text::ByteRange> selection() const override { return selectionRange; }
+    frost::ui::lang::FormattingSettings formattingOptions() const override { return formatOptions; }
     QRect caretScreenRect() const override { return QRect(200, 200, 2, 16); }
     QRect screenRectAt(ByteOffset) const override { return QRect(190, 200, 2, 16); }
     frost::Result<void> applyEdits(std::span<const fl::ByteEdit> edits, std::string_view label,
@@ -117,6 +119,8 @@ public:
     std::vector<std::pair<std::string, fl::LspPosition>> opened;
     std::vector<fl::DocumentHighlight> highlights;
     std::optional<frost::text::ByteRange> selected;
+    std::optional<frost::text::ByteRange> selectionRange;
+    frost::ui::lang::FormattingSettings formatOptions;
     int undoSteps = 0;
     std::string lastLabel;
 
@@ -210,6 +214,31 @@ TEST(LanguageControllerCompletion, CtrlSpaceShowsTheLookupAndEnterCommits) {
     EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
     EXPECT_EQ(host.text().substr(host.selected->begin.value(), 2), "\n}");
     EXPECT_FALSE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+}
+
+TEST(LanguageControllerCompletion, CallSnippetRequestsParameterHintsAfterSelectingArgument) {
+    FeatureServer server;
+    server.on("textDocument/completion", [](const Json&) {
+        auto item = completionItem("Wake(entity)", 15, "1", "Wake(${1:entity})", true);
+        item.set("command", Json::object().set("command", "editor.action.triggerParameterHints"));
+        return Json::array({std::move(item)});
+    });
+    server.on("textDocument/signatureHelp", [](const Json&) {
+        return Json::object().set("signatures", Json::array({Json::object().set("label", "Wake(entity)")}));
+    });
+    FakeHost host("AI.Wa");
+    host.caretAfter("Wa");
+    Rig rig(server, host);
+    rig.controller.completeCode();
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.completionPopup().isVisible(); }));
+    ASSERT_TRUE(rig.controller.keyPress(Qt::Key_Return, Qt::NoModifier));
+    EXPECT_EQ(host.text(), "AI.Wake(entity)");
+    ASSERT_TRUE(host.selected.has_value());
+    EXPECT_EQ(host.text().substr(host.selected->begin.value(), host.selected->size()), "entity");
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.parameterInfoPopup().isVisible(); }));
+    const auto requests = server.paramsOf("textDocument/signatureHelp");
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().find("position")->integerAt("character"), 14);
 }
 
 TEST(LanguageControllerCompletion, DotTriggersAndEscCancels) {
@@ -403,11 +432,102 @@ TEST(LanguageControllerRefactoring, ReformatAppliesTheServerEditsAsOneStep) {
         return Json::array({Json::object().set("range", rangeJson(0, 3, 6)).set("newText", " ")});
     });
     FakeHost host("int   x = 1;\n");
+    host.formatOptions = {.tabSize = 8, .indentSize = 2, .insertSpaces = true};
     Rig rig(server, host);
     rig.controller.reformat();
     ASSERT_TRUE(pumpUntil([&] { return host.undoSteps == 1; }));
     EXPECT_EQ(host.text(), "int x = 1;\n");
     EXPECT_EQ(host.lastLabel, "Reformat Code");
+    const auto sent = server.paramsOf("textDocument/formatting");
+    ASSERT_EQ(sent.size(), 1U);
+    EXPECT_EQ(sent[0].find("options")->integerAt("tabSize"), 2);
+    EXPECT_EQ(sent[0].find("options")->boolAt("insertSpaces"), true);
+}
+
+TEST(LanguageControllerRefactoring, RangeFormattingUsesEffectiveFileOptions) {
+    FeatureServer server;
+    server.on("textDocument/rangeFormatting", [](const Json&) {
+        return Json::array({Json::object().set("range", rangeJson(0, 3, 6)).set("newText", " ")});
+    });
+    FakeHost host("int   x = 1;\n");
+    host.selectionRange = frost::text::ByteRange{ByteOffset{0}, ByteOffset{9}};
+    host.formatOptions = {.tabSize = 8, .indentSize = 2, .insertSpaces = false};
+    Rig rig(server, host);
+    rig.controller.reformat();
+    ASSERT_TRUE(pumpUntil([&] { return host.undoSteps == 1; }));
+    const auto sent = server.paramsOf("textDocument/rangeFormatting");
+    ASSERT_EQ(sent.size(), 1U);
+    ASSERT_NE(sent[0].find("options"), nullptr);
+    EXPECT_EQ(sent[0].find("options")->integerAt("tabSize"), 8);
+    EXPECT_EQ(sent[0].find("options")->boolAt("insertSpaces"), false);
+    ASSERT_NE(sent[0].find("range"), nullptr);
+    EXPECT_EQ(sent[0].find("range")->find("start")->integerAt("character"), 0);
+    EXPECT_EQ(sent[0].find("range")->find("end")->integerAt("character"), 9);
+    EXPECT_EQ(host.text(), "int x = 1;\n");
+}
+
+TEST(LanguageControllerRefactoring, FormattingResponseDoesNotOverwriteNewTyping) {
+    FeatureServer server;
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    server.on("textDocument/formatting", [gate](const Json&) {
+        gate.wait_for(std::chrono::seconds(5));
+        return Json::array({Json::object().set("range", rangeJson(0, 3, 6)).set("newText", " ")});
+    });
+    FakeHost host("int   x = 1;\n");
+    host.caretAfter("x");
+    Rig rig(server, host);
+    rig.controller.reformat();
+    ASSERT_TRUE(pumpUntil([&] { return !server.paramsOf("textDocument/formatting").empty(); }));
+    host.type("y");
+    release.set_value();
+    bool finished = false;
+    QObject::connect(&rig.controller, &frost::ui::lang::LanguageController::requestFinished, [&] { finished = true; });
+    ASSERT_TRUE(pumpUntil([&] { return finished; }));
+    EXPECT_EQ(host.text(), "int   xy = 1;\n");
+    EXPECT_EQ(host.undoSteps, 0);
+}
+
+TEST(LanguageControllerRefactoring, FormattingResponseDoesNotApplyAfterIndentSettingsChange) {
+    FeatureServer server;
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    server.on("textDocument/formatting", [gate](const Json&) {
+        gate.wait_for(std::chrono::seconds(5));
+        return Json::array({Json::object().set("range", rangeJson(0, 3, 6)).set("newText", " ")});
+    });
+    FakeHost host("int   x = 1;\n");
+    Rig rig(server, host);
+    rig.controller.reformat();
+    ASSERT_TRUE(pumpUntil([&] { return !server.paramsOf("textDocument/formatting").empty(); }));
+    host.formatOptions.insertSpaces = false;
+    release.set_value();
+    bool finished = false;
+    QObject::connect(&rig.controller, &frost::ui::lang::LanguageController::requestFinished, [&] { finished = true; });
+    ASSERT_TRUE(pumpUntil([&] { return finished; }));
+    EXPECT_EQ(host.text(), "int   x = 1;\n");
+    EXPECT_EQ(host.undoSteps, 0);
+}
+
+TEST(LanguageControllerRefactoring, FormattingResponseDoesNotApplyAfterIndentWidthOnlyChange) {
+    FeatureServer server;
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    server.on("textDocument/formatting", [gate](const Json&) {
+        gate.wait_for(std::chrono::seconds(5));
+        return Json::array({Json::object().set("range", rangeJson(0, 3, 6)).set("newText", " ")});
+    });
+    FakeHost host("int   x = 1;\n");
+    Rig rig(server, host);
+    rig.controller.reformat();
+    ASSERT_TRUE(pumpUntil([&] { return !server.paramsOf("textDocument/formatting").empty(); }));
+    host.formatOptions.indentSize = 2;
+    release.set_value();
+    bool finished = false;
+    QObject::connect(&rig.controller, &frost::ui::lang::LanguageController::requestFinished, [&] { finished = true; });
+    ASSERT_TRUE(pumpUntil([&] { return finished; }));
+    EXPECT_EQ(host.text(), "int   x = 1;\n");
+    EXPECT_EQ(host.undoSteps, 0);
 }
 
 TEST(LanguageControllerActions, RegistersTheIntelliJIdsAndRunsThem) {

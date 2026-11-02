@@ -114,6 +114,7 @@ struct InitializeOptions {
     std::optional<std::int64_t> processId; // This process's id, so the server can exit if we die.
     std::string clientName = "FrostIDE";
     std::string clientVersion;
+    bool utf16Only = false;     // Work around servers that mishandle UTF-8 incremental positions.
     Json initializationOptions; // Server-specific (clangd: fallbackFlags, clangdFileStatus).
     // Answers workspace/configuration items by section; may be empty (every answer is null).
     std::function<Json(std::string_view section)> configuration;

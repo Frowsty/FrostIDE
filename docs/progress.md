@@ -3,6 +3,77 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-02: Verified advanced Lua editing checkpoint; Git, Unity and folding continue
+
+- Advanced Lua editing is integrated and independently approved (Astra reviewed worker tree
+  `0cadc6a33cc9d324a3de8437ec6f60fcbd47eac1`). The combined source snapshot
+  `a671d05418f450da59cccb86830409d47db42c07` passed Windows 2636/2654 (18 skipped, 1 disabled) and
+  native ext4 Linux 2508/2530 (22 skipped), with real LuaLS 3.19.1, generated FrostEngine API and the reviewed
+  C# server enabled. Format, frost-lint (2345 files), licence checks (103 Windows / 99 Linux packages) and
+  feature-matrix consistency pass. Only documentation was updated after these gates.
+- Effective formatting distinguishes indentation width from tab width and rejects stale settings/document
+  responses; real document/range formatting, undo/redo, snippets and keyboard parameter hints pass.
+  Lua-specific UTF-16 negotiation addresses the independently reproduced LuaLS legacy UTF-8 failure.
+  Non-BMP characters before actual edit/signature positions are tested; C++/C# encoding offers are unchanged.
+- Development stage: `E:\FrostBuilds\preview\codex-20261102-lua-editing`. Its application DLL hash matches
+  the tested build. Waited startup and real Windows QRhi/D3D11 render selftests report PASSED; the staged
+  ConPTY Shift+Enter/input test passes 1/1. Logs/profile are in the sibling `-smoke` directory. Language
+  tools remain external; this is not a bundled release or full-project completion.
+- Git remains isolated. Astra approved the pending-index recovery and hunk-generation fixes, but a broader
+  real-Git run then exposed a production racy-index defect: copying the index advances its timestamp and can
+  hide same-size edits. Deterministic reproductions confirm it; conservative timestamp handling and atomic
+  publication are being corrected and require fresh review/platform evidence before integration.
+- Unity remains isolated. Actual Unity and managed-semantic evidence exists, but MSBuild reference resolution
+  decodes literal percent escapes again after item evaluation. End-to-end metacharacter handling and the
+  trust-gated, no-follow/nonblocking metadata reader are still being completed and reviewed.
+- Interactive folding is assigned to Terra in `codex-editor-folding`, baseline
+  `a671d05418f450da59cccb86830409d47db42c07`. The source audit clarified that the fold display layer was
+  an identity placeholder and only Lua supplied syntax ranges. Initial C++ ranges and mapping tests are
+  development evidence only; mapping, editor UI, persistence and review remain required.
+- Continue the whole agreed product scope. Broader Lua semantics/debugging, remaining Git/Unity workflows,
+  editor/navigation parity and the wider PLAN tracks are unfinished. No user answer blocks current work.
+
+## 2026-11-02: Git, Unity and advanced Lua editing in progress
+
+- Last verified commit is `12fb20f`; the approved advanced Lua delta is now staged on main for combined gates.
+  The user reiterated that work continues until the whole agreed project is complete; checkpoints do not replace
+  the full scope or completion audit.
+  Three Terra agents implement isolated slices, followed by Astra review and combined Windows/Linux gates.
+- Git (`codex-git-workbench`, baseline `6e48fa0ea4f1cc18c75586327c654d87b2dd7af9`): initial real application
+  checks cover dirty-buffer/HEAD/index diff, selected commit, hook failure, project switching, explicit trust,
+  branches and local bare-remote push. Further cancellation/concurrent-edit cases and native verification are
+  passed on both platforms. Astra exposed clean-filter execution before trust, stale queued preflight, cancellation
+  cleanup and request-metadata defects. Corrections use restricted no-filter plumbing and a private commit index;
+  re-review found post-commit cancellation/publication recovery and displayed-hunk identity defects still requiring
+  correction. No Git delta is accepted for integration yet.
+- Unity (`codex-unity-bridge`, baseline `a54162283eab2111c4d94a46fba00f45b1b7e2a3`): the original editor package
+  compiles in installed Unity 6000.6.4f1. Real scratch probes check asmdef/source/Unity reference generation,
+  explicit resync after source/assembly additions, unchanged source metadata, exact Unicode/spaces file and
+  caret arguments, and failed-publication preservation of the prior generated context. A fresh generation
+  loads in the reviewed csharp-ls and supplies Unity Vector3 completion without manual restore. This is direct
+  component evidence. Windows/Linux synthetic Workbench reload and late-response tests now pass, as does actual
+  Windows Unity-to-FrostIDE reuse of a dirty tab with an astral/unsaved prefix. New explicit UTF-16 CLI/IPC locations
+  convert against the live buffer and are rejected by legacy owners. Actual compiler comparisons verify full
+  non-project reference paths (301 player / 307 editor); real editor-to-player navigation and invalid-API diagnostics
+  pass. Generated context uses Unity's own API profiles, root workspace plus explicit solution and versioned
+  publication. Astra requires MSBuild literal escaping and safe, trust-gated regular-file metadata reads before
+  approval. Scratch runs restore each changed Unity registry preference and compare values.
+  Managed debugging, Unity control/test integration and broader Unity semantics remain required later work.
+- Lua (`codex-lua-editing`, baseline `6e48fa0ea4f1cc18c75586327c654d87b2dd7af9`): Astra approved corrected tree
+  `0cadc6a33cc9d324a3de8437ec6f60fcbd47eac1`. Effective formatting retains independent indentation/tab widths
+  and rejects stale responses after either changes. Completion handles only the local parameter-hint command.
+  An independently replayed LuaLS 3.19.1 legacy UTF-8 negotiation failure required Lua-specific UTF-16 offers;
+  C++/C# offers remain unchanged, conflicting/unoffered selections are rejected. Astra caught a width mismatch
+  and accidental ASCII question marks in intended Unicode fixtures; final regressions use explicit non-BMP UTF-8
+  before actual edit/signature positions. Windows focused checks plus shutdown and final native 29/29 pass,
+  with no skipped native cases. Source applied cleanly to main; full combined verification remains.
+- PLAN Appendix B.2 now records a source-grounded editor/navigation acceptance inventory against `12fb20f`,
+  using public Rider behavior references. The original generated feature matrix is consistent but has incomplete
+  acceptance fields; its green consistency check is not a full-project completion claim. Inventory review remains.
+- Next: finish each slice's real application and platform evidence, Astra review/corrections, then integrate
+  only baseline-relative deltas and rerun combined gates. Preserve inherited worktree indexes. No user answer
+  blocks current work; the broad goal remains active.
+
 ## 2026-11-02: Verified debugger, engine controls, managed services and Find checkpoint
 
 - Base: verified checkpoint `281a258`. Debugger, FrostEngine automation, managed-language and Find deltas are

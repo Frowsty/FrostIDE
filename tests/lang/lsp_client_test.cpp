@@ -106,6 +106,47 @@ TEST(LspClientTest, InitializeNegotiatesUtf8AndSendsInitialized) {
     EXPECT_EQ(received[1].find("id"), nullptr);
 }
 
+TEST(LspClientTest, Utf16OnlyIsAdvertisedInBothEncodingCapabilities) {
+    auto init = options();
+    init.utf16Only = true;
+    const auto params = frost::lang::initializeParams(init);
+    ASSERT_TRUE(params.has_value());
+    const auto* capabilities = params->find("capabilities");
+    ASSERT_NE(capabilities, nullptr);
+    const auto* general = capabilities->find("general");
+    ASSERT_NE(general, nullptr);
+    const auto* standard = general->find("positionEncodings");
+    const auto* legacy = capabilities->find("offsetEncoding");
+    ASSERT_NE(standard, nullptr);
+    ASSERT_NE(legacy, nullptr);
+    EXPECT_EQ(*standard, Json::array({Json("utf-16")}));
+    EXPECT_EQ(*legacy, *standard);
+}
+
+TEST(LspClientTest, RejectsServerEncodingOutsideTheOffer) {
+    LangEnv env;
+    MemoryPipe pipe(env.pool());
+    FakeServer server(pipe, answering(capabilitiesWith(Json::object().set("positionEncoding", "utf-8"))));
+    auto init = options();
+    init.utf16Only = true;
+    LspClient client(pipe.clientStream(), env.pool(), init, {});
+    const auto result = env.run(client.initialize());
+    EXPECT_FALSE(result.has_value());
+    EXPECT_FALSE(client.ready());
+}
+
+TEST(LspClientTest, RejectsConflictingStandardAndLegacyEncodings) {
+    LangEnv env;
+    MemoryPipe pipe(env.pool());
+    auto reply = capabilitiesWith(Json::object().set("positionEncoding", "utf-16"));
+    reply.set("offsetEncoding", "utf-8");
+    FakeServer server(pipe, answering(std::move(reply)));
+    LspClient client(pipe.clientStream(), env.pool(), options(), {});
+    const auto result = env.run(client.initialize());
+    EXPECT_FALSE(result.has_value());
+    EXPECT_FALSE(client.ready());
+}
+
 TEST(LspClientTest, OffsetEncodingIsTheFallbackAndUtf16TheDefault) {
     const auto parse = [](const char* text) {
         return frost::lang::parseInitializeResult(frost::lang::parseJson(text).value()).positionEncoding;
