@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # frost::app (the application library: command line, start-up hardening and checks,
-# diagnostics wiring, the composition root's services and the main window over frost::ui_shell
-# (ADR 0038), self-test) and the FrostIDE program built from it. The library exists so tests can
-# exercise the same code the program runs.
+# diagnostics wiring, the composition root's services and the main window over
+# frost::ui_shell (ADR 0038) with the navigation workbench (ADR 0042), self-test) and the FrostIDE
+# program built from it. The library exists so tests can exercise the same code the program runs.
 #
 # On Windows the program is two images (ADR 0012):
 #   frost.exe       the launcher (src/launcher.cpp): static CRT in every configuration, no
@@ -30,7 +30,8 @@ frost_add_library(app LAYER app
         src/selftest.cpp
         src/startup.cpp
         ${frost_startup_core_sources}
-    DEPS frost::ui_shell frost::ui frost::input frost::io frost::diag frost::core
+    DEPS frost::ui_workbench frost::ui_nav frost::ui_shell frost::ui frost::document frost::storage frost::project
+         frost::settings frost::input frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets)
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)

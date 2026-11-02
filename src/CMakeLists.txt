@@ -27,6 +27,8 @@ if(NOT FROST_FUZZ)
     add_subdirectory(build)
     add_subdirectory(lang)
 endif()
+# search (ADR 0042): the fuzzy path matcher of Go to File; Qt-free, core only.
+add_subdirectory(search)
 if(NOT FROST_FUZZ)
     # Crash reports and logging need crashpad, cpptrace and spdlog, which fuzz trees do not install.
     add_subdirectory(diag)

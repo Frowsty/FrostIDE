@@ -71,19 +71,33 @@ struct ListPopupItem {
     QString detail;
     QIcon icon;
     QVariant data;
+    // A disabled row is shown greyed and cannot be accepted (Find Action's disabled actions).
+    bool enabled = true;
+    // A section header ("Files", "Actions"): shown in bold, never selected or accepted.
+    bool header = false;
 };
 
 /*
  * A list with an optional filter field. Typing filters rows by a case-insensitive substring of
- * the text; Up, Down, Page Up and Page Down move the selection (wrapping at the ends); Enter
- * accepts the selected row. With acceptOnRelease(key) set (the switcher's Ctrl), releasing that
- * key accepts too. itemAccepted() carries the index into the items given to setItems().
+ * the text (FilterMode::Substring), or leaves the rows to the owner, who listens to
+ * filterTextChanged() and calls setItems() with its own ranking (FilterMode::External: Find
+ * Action, Go to File, ADR 0042). Up, Down, Page Up and Page Down move the selection (wrapping at the
+ * ends, skipping headers); Enter accepts the selected row unless it is disabled. With
+ * acceptOnRelease(key) set (the switcher's Ctrl), releasing that key accepts too. itemAccepted()
+ * carries the index into the items given to setItems().
  */
 class ListPopup final : public Popup {
     Q_OBJECT
 
 public:
+    enum class FilterMode : std::uint8_t { Substring, External };
+
     ListPopup(QWidget* owner, const QString& title, bool filterable);
+
+    void setFilterMode(FilterMode mode);
+    [[nodiscard]] FilterMode filterMode() const noexcept { return m_mode; }
+    // The title label (Search Everywhere shows the scope there).
+    void setTitle(const QString& title);
 
     void setItems(std::vector<ListPopupItem> items);
     [[nodiscard]] const std::vector<ListPopupItem>& items() const noexcept { return m_items; }
@@ -105,6 +119,8 @@ public:
 
 signals:
     void itemAccepted(int index, const QVariant& data);
+    // The filter text changed (both modes; in External mode the owner re-ranks).
+    void filterTextChanged(const QString& text);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -112,12 +128,14 @@ protected:
 private:
     void applyFilter();
     [[nodiscard]] bool handleKey(QKeyEvent& event);
+    [[nodiscard]] bool selectable(int row) const;
 
     QLabel* m_title;
     QLineEdit* m_filter;
     QListWidget* m_list;
     std::vector<ListPopupItem> m_items;
     std::optional<int> m_acceptOnRelease;
+    FilterMode m_mode = FilterMode::Substring;
 };
 
 /*

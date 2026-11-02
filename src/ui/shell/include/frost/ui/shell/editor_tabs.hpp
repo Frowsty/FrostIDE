@@ -59,13 +59,13 @@ public:
     explicit EditorTabs(IEditorFactory& factory, QWidget* parent = nullptr);
     ~EditorTabs() override;
 
-    // Opens `path` (UTF-8) in a new tab, or activates its tab; returns the tab index. Errors:
-    // the factory's.
+    // Opens `path` (UTF-8) in a new tab, or activates its tab; returns the tab index. The tab is
+    // keyed by IEditorFactory::canonicalPath(path) (ADR 0042). Errors: the factory's.
     [[nodiscard]] Result<int> open(const std::string& path, bool activate = true);
 
     [[nodiscard]] int count() const noexcept { return static_cast<int>(m_tabs.size()); }
     [[nodiscard]] int currentIndex() const;
-    // -1 when `path` is not open.
+    // -1 when `path` is not open (compared as given, then after IEditorFactory::canonicalPath).
     [[nodiscard]] int indexOf(const std::string& path) const;
     // nullptr for an index out of range.
     [[nodiscard]] IEditorView* editor(int index) const;

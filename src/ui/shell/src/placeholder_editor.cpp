@@ -11,6 +11,7 @@
 #include <QFontDatabase>
 #include <QPlainTextEdit>
 #include <QPointer>
+#include <QScrollBar>
 #include <QTextBlock>
 #include <QTextCursor>
 
@@ -75,6 +76,16 @@ public:
         cursor.setPosition(block.position() + std::clamp(column, 1, length + 1) - 1);
         m_view->setTextCursor(cursor);
         m_view->centerCursor();
+    }
+
+    [[nodiscard]] EditorViewState viewState() const override {
+        // Without wrapping, QPlainTextEdit scrolls by blocks: the value is the first visible line.
+        return EditorViewState{m_status.line, m_status.column, m_view->verticalScrollBar()->value()};
+    }
+
+    void restoreViewState(const EditorViewState& state) override {
+        goToLine(state.line, state.column);
+        m_view->verticalScrollBar()->setValue(state.topLine);
     }
 
     [[nodiscard]] input::ContextKeys contextKeys() const override {

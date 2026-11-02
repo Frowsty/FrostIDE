@@ -123,7 +123,8 @@ EditorTabs::~EditorTabs() {
     }
 }
 
-Result<int> EditorTabs::open(const std::string& path, bool activateTab) {
+Result<int> EditorTabs::open(const std::string& requested, bool activateTab) {
+    const std::string path = m_factory.canonicalPath(requested);
     if (const int existing = indexOf(path); existing >= 0) {
         if (activateTab) {
             activate(existing);
@@ -151,6 +152,14 @@ int EditorTabs::indexOf(const std::string& path) const {
     for (int i = 0; i < count(); ++i) {
         if (m_tabs[static_cast<std::size_t>(i)].editor->path() == path) {
             return i;
+        }
+    }
+    // Another spelling of an open document ("foo.cpp" for "Foo.cpp" on Windows).
+    if (const std::string canonical = m_factory.canonicalPath(path); canonical != path) {
+        for (int i = 0; i < count(); ++i) {
+            if (m_tabs[static_cast<std::size_t>(i)].editor->path() == canonical) {
+                return i;
+            }
         }
     }
     return -1;

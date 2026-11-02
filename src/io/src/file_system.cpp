@@ -37,6 +37,21 @@ std::optional<T> parseDecimal(std::string_view digits) noexcept {
 
 } // namespace
 
+Result<std::string> IFileSystem::canonicalPath(std::string_view path) {
+    auto normalized = normalizePath(path);
+    if (!normalized) {
+        return normalized;
+    }
+    auto found = exists(*normalized);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!*found) {
+        return fail(ErrorCode::NotFound, std::string("no such file or directory: ").append(*normalized));
+    }
+    return normalized;
+}
+
 Result<SafeWriteResult> IFileSystem::safeWrite(std::string_view path, std::string_view data,
                                                const SafeWriteOptions& /*options*/) {
     auto existed = exists(path);

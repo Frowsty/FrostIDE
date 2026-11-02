@@ -7,6 +7,7 @@
 #include "frost/ui/frost_style.hpp"
 
 #include "shell_util.hpp"
+#include <QFont>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -116,9 +117,22 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     setFocusProxy(filterable ? static_cast<QWidget*>(m_filter) : m_list);
     m_filter->installEventFilter(this);
     m_list->installEventFilter(this);
-    connect(m_filter, &QLineEdit::textChanged, this, [this] { applyFilter(); });
+    connect(m_filter, &QLineEdit::textChanged, this, [this](const QString& value) {
+        applyFilter();
+        emit filterTextChanged(value);
+    });
     connect(m_list, &QListWidget::itemActivated, this, [this] { acceptCurrent(); });
     resize(480, 320);
+}
+
+void ListPopup::setFilterMode(FilterMode mode) {
+    m_mode = mode;
+    applyFilter();
+}
+
+void ListPopup::setTitle(const QString& title) {
+    m_title->setText(title);
+    m_title->setVisible(!title.isEmpty());
 }
 
 void ListPopup::setItems(std::vector<ListPopupItem> items) {
@@ -132,14 +146,30 @@ void ListPopup::setItems(std::vector<ListPopupItem> items) {
         }
         auto* row = new QListWidgetItem(item.icon, label, m_list);
         row->setData(Qt::UserRole, static_cast<int>(i));
+        if (item.header) {
+            row->setFlags(Qt::NoItemFlags);
+            QFont font = row->font();
+            font.setBold(true);
+            row->setFont(font);
+        } else if (!item.enabled) {
+            row->setForeground(m_list->palette().brush(QPalette::Disabled, QPalette::Text));
+        }
     }
     applyFilter();
+}
+
+bool ListPopup::selectable(int row) const {
+    const QListWidgetItem* item = m_list->item(row);
+    if (item == nullptr || item->isHidden()) {
+        return false;
+    }
+    return !m_items[static_cast<std::size_t>(item->data(Qt::UserRole).toInt())].header;
 }
 
 void ListPopup::setCurrentItem(int index) {
     for (int row = 0; row < m_list->count(); ++row) {
         QListWidgetItem* item = m_list->item(row);
-        if (item->data(Qt::UserRole).toInt() == index && !item->isHidden()) {
+        if (item->data(Qt::UserRole).toInt() == index && selectable(row)) {
             m_list->setCurrentRow(row);
             return;
         }
@@ -147,14 +177,14 @@ void ListPopup::setCurrentItem(int index) {
 }
 
 int ListPopup::currentItem() const {
-    const QListWidgetItem* item = m_list->currentItem();
-    return item != nullptr && !item->isHidden() ? item->data(Qt::UserRole).toInt() : -1;
+    const int row = m_list->currentRow();
+    return row >= 0 && selectable(row) ? m_list->item(row)->data(Qt::UserRole).toInt() : -1;
 }
 
 int ListPopup::visibleCount() const {
     int visible = 0;
     for (int row = 0; row < m_list->count(); ++row) {
-        visible += m_list->item(row)->isHidden() ? 0 : 1;
+        visible += selectable(row) ? 1 : 0;
     }
     return visible;
 }
@@ -162,7 +192,7 @@ int ListPopup::visibleCount() const {
 void ListPopup::moveSelection(int delta) {
     std::vector<int> rows;
     for (int row = 0; row < m_list->count(); ++row) {
-        if (!m_list->item(row)->isHidden()) {
+        if (selectable(row)) {
             rows.push_back(row);
         }
     }
@@ -180,7 +210,7 @@ void ListPopup::setFilterText(const QString& text) { m_filter->setText(text); }
 
 void ListPopup::acceptCurrent() {
     const int index = currentItem();
-    if (index < 0) {
+    if (index < 0 || !m_items[static_cast<std::size_t>(index)].enabled) {
         return;
     }
     const QVariant data = m_items[static_cast<std::size_t>(index)].data;
@@ -217,19 +247,19 @@ bool ListPopup::handleKey(QKeyEvent& event) {
 }
 
 void ListPopup::applyFilter() {
-    const QString needle = m_filter->text().trimmed();
+    const QString needle = m_mode == FilterMode::Substring ? m_filter->text().trimmed() : QString();
     int firstVisible = -1;
     for (int row = 0; row < m_list->count(); ++row) {
         QListWidgetItem* item = m_list->item(row);
         const ListPopupItem& source = m_items[static_cast<std::size_t>(item->data(Qt::UserRole).toInt())];
         const bool visible = needle.isEmpty() || source.text.contains(needle, Qt::CaseInsensitive);
         item->setHidden(!visible);
-        if (visible && firstVisible < 0) {
+        if (visible && !source.header && firstVisible < 0) {
             firstVisible = row;
         }
     }
-    const QListWidgetItem* current = m_list->currentItem();
-    if (current == nullptr || current->isHidden()) {
+    const int current = m_list->currentRow();
+    if (current < 0 || !selectable(current)) {
         m_list->setCurrentRow(firstVisible);
     }
 }

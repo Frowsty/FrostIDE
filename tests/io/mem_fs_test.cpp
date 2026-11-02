@@ -113,6 +113,13 @@ TEST_F(MemFsTest, RemoveFileAndDirectory) {
     EXPECT_TRUE(fs.allPaths().empty());
 }
 
+TEST_F(MemFsTest, CanonicalPathNormalisesExistingPaths) {
+    ASSERT_TRUE(iface.writeFileAtomic("/proj/src/a.cpp", "1").has_value());
+    EXPECT_EQ(iface.canonicalPath("/proj//src/./a.cpp").value(), "/proj/src/a.cpp");
+    EXPECT_EQ(iface.canonicalPath("/proj/src/b.cpp").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(iface.canonicalPath("relative").error().code(), ErrorCode::InvalidArgument);
+}
+
 TEST_F(MemFsTest, CreateDirectoriesIsIdempotent) {
     ASSERT_TRUE(iface.createDirectories("/proj/src").has_value());
     ASSERT_TRUE(iface.createDirectories("/a//b/./c/").has_value());

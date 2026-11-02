@@ -600,6 +600,22 @@ Result<bool> MemFs::exists(std::string_view path) {
     return isDirectory(*key) || find(*key) != nullptr;
 }
 
+Result<std::string> MemFs::canonicalPath(std::string_view path) {
+    // MemFs is case-sensitive, so the normalised key is the identity (in this MemFs's style).
+    auto normalized = normalize(path);
+    if (!normalized) {
+        return normalized;
+    }
+    auto found = exists(*normalized);
+    if (!found) {
+        return std::unexpected(std::move(found.error()));
+    }
+    if (!*found) {
+        return fail(ErrorCode::NotFound, std::string("no such file or directory: ").append(*normalized));
+    }
+    return normalized;
+}
+
 void MemFs::injectFault(FsOp op, std::string_view path, ErrorCode code, std::uint32_t count) {
     FROST_PRE(path.empty() || isAbsolutePath(path, m_style));
     FROST_PRE(count > 0);

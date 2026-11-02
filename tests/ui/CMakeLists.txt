@@ -19,6 +19,12 @@
 #                                IME, find/replace, Go to Line, highlighting and live settings; the
 #                                QRhi backend (ADR 0043) on a Direct3D 11 WARP device, or QRhi's Null
 #                                backend where Direct3D is missing, and the renderer switches;
+#   ui_nav_tests                 frost::ui_nav (ADR 0042), a non-Qt executable: navigation history,
+#                                recents, sessions, the document registry, the project tree and the
+#                                merge panes, label "unit";
+#   ui_workbench_tests           frost::ui_workbench (ADR 0042): File System view, Find Action, Go to
+#                                File, Search Everywhere, recents, back/forward, sessions, the restore
+#                                prompt, the merge view, the large-file guard and banners (offscreen);
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" with the
 #                                tag "screenshot" (ctest -L screenshot);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
@@ -147,6 +153,16 @@ frost_add_test(ui_editor_tests QT
     DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
          frost::input frost::sched frost::io frost_ui_test_support)
 _frost_ui_test_wiring(ui_editor_tests)
+
+frost_add_test(ui_nav_tests
+    SOURCES nav/nav_models_test.cpp
+    DEPS frost::ui_nav frost::document frost::diff frost::text frost::io frost::sched)
+
+frost_add_test(ui_workbench_tests QT
+    SOURCES workbench/workbench_test.cpp
+    DEPS frost::ui_workbench frost::ui_nav frost::ui_shell frost::ui frost::document frost::storage frost::input
+         frost::io)
+_frost_ui_test_wiring(ui_workbench_tests)
 
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp

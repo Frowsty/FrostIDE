@@ -124,6 +124,32 @@ TEST_F(TreeScanTest, RepositoryWideRulesSitBelowTheGitignoreFiles) {
     EXPECT_EQ(relatives(*result), (std::vector<std::string>{".gitignore", "a.cache", "sub/", "sub/c.cache"}));
 }
 
+// The project scan (ADR 0042): .ignore files above .gitignore, the default excludes below both, and the
+// default skip names.
+TEST_F(TreeScanTest, ProjectScanReadsIgnoreFilesAndTheDefaultExcludes) {
+    file("/repo/.gitignore", "*.log\n!keep.log\n");
+    file("/repo/.ignore", "secret/\n!build/\n");
+    file("/repo/keep.log");
+    file("/repo/drop.log");
+    file("/repo/main.cpp");
+    file("/repo/secret/key.txt");
+    file("/repo/build/kept.txt"); // Re-included by .ignore over the default "build/".
+    file("/repo/out/a.obj");
+    file("/repo/cmake-build-debug/x.txt");
+    file("/repo/src/Debug/b.obj");
+    file("/repo/.git/HEAD");
+    file("/repo/.vs/state.json");
+    ScanOptions options;
+    options.ignore = IgnoreStack().pushed(frost::io::defaultProjectExcludes());
+    options.extraIgnoreFiles = {".ignore"};
+    options.skipNames = frost::io::defaultProjectSkipNames();
+    const auto result = scan(options);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(relatives(*result), (std::vector<std::string>{".gitignore", ".ignore", "build/", "build/kept.txt",
+                                                            "keep.log", "main.cpp", "src/"}));
+    EXPECT_TRUE(result->issues.empty());
+}
+
 TEST_F(TreeScanTest, ProblemsBecomeIssuesAndTheWalkGoesOn) {
     file("/repo/.gitignore", "[broken\nok.tmp\n");
     file("/repo/ok.tmp");

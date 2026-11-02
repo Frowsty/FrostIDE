@@ -5,6 +5,7 @@
 # frost::ui_theme_compiler (Qt Core) and frost::ui (Qt Widgets: FrostStyle, AppearanceManager, the icon
 # runtime, fonts, the OS appearance source and the island frames) are ADR 0015's; frost::ui also holds
 # qtr, the Qt wrapper of frost::i18n. frost::ui_shell (src/ui/shell) is the main-window shell (ADR 0038);
+# frost::ui_nav and frost::ui_workbench add navigation, sessions and the merge view to it (ADR 0042).
 # frost::ui_editor (src/ui/editor, the editor widget) is ADR 0037's and builds on frost::ui. frost::ui_run
 # (the Run console, its controller and the run actions) is ADR 0040's; it needs frost::build,
 # which fuzz trees do not build. frost::ui_lang (ADR 0041) holds the language-feature widgets and
@@ -43,3 +44,6 @@ add_subdirectory(toolwindows)
 if(TARGET frost_lang)
     add_subdirectory(lang)
 endif()
+# frost::ui_nav (Qt-free) and frost::ui_workbench (Qt Widgets): the navigation slice (ADR 0042).
+add_subdirectory(nav)
+add_subdirectory(workbench)
