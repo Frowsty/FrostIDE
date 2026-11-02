@@ -120,6 +120,9 @@ EditorColors EditorColors::fromTheme(const Theme& theme) {
     colors.rightMargin = c(ColorKey::EditorRightMarginColor);
     colors.errorMarker = c(ColorKey::EditorErrorMarkerColor);
     colors.warningMarker = c(ColorKey::EditorWarningMarkerColor);
+    colors.changeAdded = c(ColorKey::EditorChangeAddedColor);
+    colors.changeModified = c(ColorKey::EditorChangeModifiedColor);
+    colors.changeDeleted = c(ColorKey::EditorChangeDeletedColor);
     for (std::size_t i = 0; i < syntax::kHighlightKindCount; ++i) {
         const auto kind = static_cast<syntax::HighlightKind>(i);
         colors.tokens[i] = TokenFormat{c(colorKeyFor(kind)), isItalic(kind)};
@@ -156,6 +159,9 @@ EditorColors EditorColors::defaults() {
     colors.rightMargin = QColor(0x34, 0x37, 0x3D);
     colors.errorMarker = QColor(0xF2, 0x71, 0x6F);
     colors.warningMarker = QColor(0xE8, 0xB0, 0x4B);
+    colors.changeAdded = QColor(0x6F, 0xBF, 0x73);
+    colors.changeModified = QColor(0x6D, 0x9F, 0xE6);
+    colors.changeDeleted = QColor(0x8E, 0x94, 0x9C);
     for (std::size_t i = 0; i < syntax::kHighlightKindCount; ++i) {
         colors.tokens[i] = TokenFormat{colors.foreground, isItalic(static_cast<syntax::HighlightKind>(i))};
     }

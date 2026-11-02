@@ -9,11 +9,14 @@
 #include "frost/core/error.hpp"
 #include "frost/ui/shell/editor_host.hpp"
 
+#include <QColor>
 #include <QTabBar>
 #include <QWidget>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,6 +109,15 @@ public:
     // The empty-state label shown while no tab is open.
     [[nodiscard]] QLabel* emptyState() const noexcept { return m_empty; }
 
+    // The colour of a tab's title by its editor's path (the VCS status colours, M5, ADR 0048;
+    // nullopt: the bar's default). Setting it recolours every tab.
+    using TitleColorProvider = std::function<std::optional<QColor>(const std::string& path)>;
+    void setTitleColorProvider(TitleColorProvider provider);
+    // Recolours every tab title from the provider (after the colours moved). O(tabs).
+    void refreshTitleColors();
+    // The title colour tab `index` shows (invalid: the default).
+    [[nodiscard]] QColor titleColor(int index) const;
+
 signals:
     // The active editor changed (nullptr: none left).
     void currentEditorChanged(frost::ui::IEditorView* editor);
@@ -144,6 +156,7 @@ private:
     std::vector<Tab> m_tabs;
     std::uint64_t m_activationClock = 0;
     bool m_syncing = false;
+    TitleColorProvider m_titleColors;
 };
 
 } // namespace frost::ui

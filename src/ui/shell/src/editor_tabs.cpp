@@ -359,6 +359,26 @@ void EditorTabs::updateTabText(int index) {
         return;
     }
     m_bar->setTabText(index, escapeMnemonics(tabText(index)));
+    std::optional<QColor> color;
+    if (m_titleColors) {
+        color = m_titleColors(m_tabs[static_cast<std::size_t>(index)].editor->path());
+    }
+    m_bar->setTabTextColor(index, color.value_or(QColor()));
+}
+
+void EditorTabs::setTitleColorProvider(TitleColorProvider provider) {
+    m_titleColors = std::move(provider);
+    refreshTitleColors();
+}
+
+void EditorTabs::refreshTitleColors() {
+    for (int i = 0; i < m_bar->count(); ++i) {
+        updateTabText(i);
+    }
+}
+
+QColor EditorTabs::titleColor(int index) const {
+    return index >= 0 && index < m_bar->count() ? m_bar->tabTextColor(index) : QColor();
 }
 
 void EditorTabs::onBarCurrentChanged(int index) {

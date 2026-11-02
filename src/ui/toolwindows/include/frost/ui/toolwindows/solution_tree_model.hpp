@@ -18,6 +18,10 @@
  * "status.warning", unavailable ones "status.failed", C and C++ sources and headers
  * "nodes.file-code" and other files "nodes.file".
  *
+ * Colours: with a file colour provider set (the VCS status colours, M5, ADR 0048), a file node's
+ * Qt::ForegroundRole is the provider's colour for its path; refreshFileColors() tells the views when
+ * the colours moved.
+ *
  * Index layout: internalId() is the NodeId, so an index stays meaningful for the model's solution;
  * setSolution() resets the model. GUI thread only. O(1) per data() call; setSolution is O(nodes).
  */
@@ -26,10 +30,12 @@
 #include "frost/project/solution_model.hpp"
 
 #include <QAbstractItemModel>
+#include <QColor>
 #include <QSortFilterProxyModel>
 #include <QString>
 #include <QStyledItemDelegate>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -77,6 +83,13 @@ public:
     // Every node in display order (depth first, the solution first), for speed search.
     [[nodiscard]] std::vector<project::NodeId> displayOrder() const;
 
+    // The colour of a file's name (nullopt: the default text colour), queried in data().
+    using FileColorProvider = std::function<std::optional<QColor>(std::string_view absolutePath)>;
+    // Sets (or clears, with an empty function) the file colours and repaints. O(nodes).
+    void setFileColorProvider(FileColorProvider provider);
+    // Tells the views that every file colour may have changed (dataChanged for Qt::ForegroundRole). O(nodes).
+    void refreshFileColors();
+
     [[nodiscard]] QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
     [[nodiscard]] QModelIndex parent(const QModelIndex& child) const override;
     [[nodiscard]] int rowCount(const QModelIndex& parent = {}) const override;
@@ -88,6 +101,7 @@ private:
     std::shared_ptr<const project::SolutionModel> m_solution;
     std::vector<int> m_rowInParent; // By NodeId: the node's row among its parent's children.
     std::unique_ptr<detail::IconCache> m_icons;
+    FileColorProvider m_fileColors;
 };
 
 /*

@@ -360,6 +360,7 @@ bool EditorView::apply(const text::CommandResult& result) {
 }
 
 void EditorView::afterChange(const text::EditorUpdate& update) {
+    const bool textChangedNow = update.change.has_value();
     if (update.change) {
         if (m_syntax) {
             m_syntax->apply(*update.change, m_editor->text());
@@ -377,6 +378,9 @@ void EditorView::afterChange(const text::EditorUpdate& update) {
     viewport()->update();
     emitStatus();
     armInputToPaint();
+    if (textChangedNow) {
+        emit textChanged();
+    }
 }
 
 void EditorView::armInputToPaint() {
@@ -788,6 +792,19 @@ void EditorView::markSaved() {
 void EditorView::setLineMarkers(std::vector<LineMarker> markers) {
     std::ranges::stable_sort(markers, {}, &LineMarker::line);
     m_markers = std::move(markers);
+    viewport()->update();
+}
+
+void EditorView::setLineChanges(std::vector<LineChangeMarker> changes) {
+    const std::uint32_t lastLine = m_editor->text().lineCount() - 1;
+    for (LineChangeMarker& change : changes) {
+        if (change.kind == ChangeStripeKind::Deleted) {
+            change.lineCount = 0;
+            change.firstLine = LineIndex{std::min(change.firstLine.value(), lastLine)};
+        }
+    }
+    std::ranges::stable_sort(changes, {}, &LineChangeMarker::firstLine);
+    m_lineChanges = std::move(changes);
     viewport()->update();
 }
 

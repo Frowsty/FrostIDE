@@ -7,11 +7,13 @@
 #include "frost/ui/shell/editor_tabs.hpp"
 
 #include "shell/shell_rig.hpp"
+#include <QColor>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QToolButton>
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,6 +74,34 @@ TEST(EditorTabs, DirtyMarkerFollowsTheEditor) {
     EXPECT_EQ(tabs.tabBar()->tabText(0), QStringLiteral("*main.cpp"));
     editor->setDirty(false);
     EXPECT_EQ(tabs.tabText(0), QStringLiteral("main.cpp"));
+}
+
+TEST(EditorTabs, TitleColoursFollowTheProvider) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/src/a.cpp").has_value());
+    EXPECT_FALSE(tabs.titleColor(0).isValid());
+
+    // The VCS colours (M5): a modified a.cpp, an unversioned b.cpp opened later.
+    std::string modified = "/src/a.cpp";
+    tabs.setTitleColorProvider([&modified](const std::string& path) -> std::optional<QColor> {
+        if (path == modified) {
+            return QColor(0x6D, 0x9F, 0xE6);
+        }
+        if (path == "/src/b.cpp") {
+            return QColor(0xD0, 0x7A, 0x5A);
+        }
+        return std::nullopt;
+    });
+    EXPECT_EQ(tabs.titleColor(0), QColor(0x6D, 0x9F, 0xE6));
+    ASSERT_TRUE(tabs.open("/src/b.cpp").has_value());
+    EXPECT_EQ(tabs.titleColor(1), QColor(0xD0, 0x7A, 0x5A));
+
+    // After a commit a.cpp is clean again: a refresh restores the default colour.
+    modified.clear();
+    tabs.refreshTitleColors();
+    EXPECT_FALSE(tabs.titleColor(0).isValid());
+    EXPECT_FALSE(tabs.titleColor(7).isValid());
 }
 
 TEST(EditorTabs, ClosesTabsAndRespectsTheEditor) {

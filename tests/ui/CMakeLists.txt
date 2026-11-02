@@ -41,7 +41,13 @@
 #                                MemFs with the scripted launcher, and the run actions (offscreen);
 #   ui_lang_tests                the language-feature widgets, LanguageController (ADR 0041) and
 #                                EditorInsightBinding (ADR 0047) offscreen, against tests/lang's
-#                                scripted language server.
+#                                scripted language server;
+#   ui_toolwindows_tests         the build tool windows (see below);
+#   ui_vcs_tests                 frost::ui_vcs without git (ADR 0048), offscreen: the Commit window's
+#                                model, the diff viewer, the VCS colours of every theme, the change
+#                                markers on an EditorView and the VCS shortcut defaults;
+#   ui_vcs_git_tests             frost::ui_vcs against real git on temporary repositories
+#                                (GitUiE2E.*), offscreen; label "integration" with the tag "git".
 
 frost_add_test(ui_input_tests QT
     SOURCES key_translation_test.cpp ime_tracker_test.cpp adapter_integration_test.cpp
@@ -263,3 +269,29 @@ if(TARGET frost_ui_lang)
              frost_ui_test_support)
     _frost_ui_test_wiring(ui_lang_tests)
 endif()
+
+# The git UI (ADR 0048). ui_vcs_tests runs no process; ui_vcs_git_tests runs the git CMake found for
+# tests/diff (FROST_GIT_EXECUTABLE; FROST_GIT overrides it at run time) on temporary repositories
+# through tests/vcs/git_fixture.hpp.
+frost_add_test(ui_vcs_tests QT
+    SOURCES
+        vcs/change_markers_test.cpp
+        vcs/vcs_ui_test.cpp
+    DEPS frost::ui_vcs frost::ui_editor frost::ui_shell frost::ui frost::ui_input frost::vcs frost::diff
+         frost::text_editor frost::text frost::syntax frost::settings frost::input frost::sched frost::io
+         frost_ui_test_support)
+_frost_ui_test_wiring(ui_vcs_tests)
+
+if(FROST_GIT_EXECUTABLE)
+    file(TO_CMAKE_PATH "${FROST_GIT_EXECUTABLE}" _frost_ui_vcs_git)
+else()
+    set(_frost_ui_vcs_git "")
+endif()
+frost_add_test(ui_vcs_git_tests QT
+    SOURCES vcs/vcs_ui_git_test.cpp
+    DEPS frost::ui_vcs frost::ui_editor frost::ui_shell frost::ui frost::ui_input frost::vcs frost::diff
+         frost::text_editor frost::text frost::syntax frost::settings frost::input frost::sched frost::io
+         frost_ui_test_support
+    LABELS integration git)
+_frost_ui_test_wiring(ui_vcs_git_tests)
+target_compile_definitions(ui_vcs_git_tests PRIVATE FROST_VCS_GIT="${_frost_ui_vcs_git}")

@@ -209,6 +209,13 @@ QVariant SolutionTreeModel::data(const QModelIndex& index, int role) const {
         default: return QString();
         }
     case KeyRole: return qs(node.key);
+    case Qt::ForegroundRole:
+        if (m_fileColors && node.kind == NodeKind::File && !node.path.empty()) {
+            if (const std::optional<QColor> color = m_fileColors(node.path)) {
+                return *color;
+            }
+        }
+        return {};
     default: return {};
     }
 }
@@ -246,6 +253,27 @@ bool SolutionFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex& sou
     }
     const QModelIndex index = sourceModel()->index(sourceRow, 0, sourceParent);
     return speedSearchMatches(index.data(Qt::DisplayRole).toString(), m_query);
+}
+
+void SolutionTreeModel::setFileColorProvider(FileColorProvider provider) {
+    m_fileColors = std::move(provider);
+    refreshFileColors();
+}
+
+void SolutionTreeModel::refreshFileColors() {
+    std::vector<QModelIndex> parents{QModelIndex()};
+    while (!parents.empty()) {
+        const QModelIndex parent = parents.back();
+        parents.pop_back();
+        const int rows = rowCount(parent);
+        if (rows == 0) {
+            continue;
+        }
+        emit dataChanged(index(0, 0, parent), index(rows - 1, 0, parent), {Qt::ForegroundRole});
+        for (int row = 0; row < rows; ++row) {
+            parents.push_back(index(row, 0, parent));
+        }
+    }
 }
 
 // ---- SolutionItemDelegate.

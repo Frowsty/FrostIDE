@@ -60,6 +60,10 @@ enum class ContextKey : std::uint8_t {
     LookupActive,
     ProjectOpen,
     Debugging,
+    // The Commit tool window has focus (M5, ADR 0048: Show Diff's Ctrl+D).
+    CommitViewFocus,
+    // A diff viewer has focus (M5, ADR 0048: F7 and Shift+F7 move between changes).
+    DiffViewFocus,
 };
 
 // A set of ContextKeys (64-bit). O(1) operations.

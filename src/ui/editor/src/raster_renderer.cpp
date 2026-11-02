@@ -176,6 +176,9 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
         for (const DisplayText& run : list.gutterText) {
             drawText(painter, run);
         }
+        for (const DisplayChangeStripe& stripe : list.changeStripes) {
+            painter.fillRect(stripe.rect, stripe.color);
+        }
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(Qt::NoPen);
         for (const DisplayMarker& marker : list.markers) {

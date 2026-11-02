@@ -184,6 +184,22 @@ enum class ColorKey : std::uint16_t {
     SemanticTemplateParameter,
     SemanticConcept,
     SemanticTypeAlias,
+    // --- vcs: file status colours and the editor's change markers (M5, ADR 0048) ---
+    VcsAdded,
+    VcsModified,
+    VcsDeleted,
+    VcsRenamed,
+    VcsUntracked,
+    VcsConflicted,
+    VcsIgnored,
+    EditorChangeAddedColor,
+    EditorChangeModifiedColor,
+    EditorChangeDeletedColor,
+    // --- vcs: the diff viewer's line and word highlights ---
+    DiffInsertedBackground,
+    DiffDeletedBackground,
+    DiffModifiedBackground,
+    DiffInnerChangeBackground,
     kCount
 };
 
@@ -406,6 +422,22 @@ inline constexpr std::array<ColorKeyInfo, kColorKeyCount> kColorKeys{{
     {ColorKey::SemanticTemplateParameter, "Semantic.templateParameter", ColorKey::SemanticClass, false},
     {ColorKey::SemanticConcept, "Semantic.concept", ColorKey::SemanticClass, false},
     {ColorKey::SemanticTypeAlias, "Semantic.typeAlias", ColorKey::SemanticClass, false},
+    // --- vcs: file status colours and change markers (every theme sets the Vcs.* values) ---
+    {ColorKey::VcsAdded, "Vcs.added", detail::kNoColor, false},
+    {ColorKey::VcsModified, "Vcs.modified", detail::kNoColor, false},
+    {ColorKey::VcsDeleted, "Vcs.deleted", detail::kNoColor, false},
+    {ColorKey::VcsRenamed, "Vcs.renamed", ColorKey::VcsModified, false},
+    {ColorKey::VcsUntracked, "Vcs.untracked", detail::kNoColor, false},
+    {ColorKey::VcsConflicted, "Vcs.conflicted", detail::kNoColor, false},
+    {ColorKey::VcsIgnored, "Vcs.ignored", detail::kNoColor, false},
+    {ColorKey::EditorChangeAddedColor, "Editor.changeAddedColor", ColorKey::VcsAdded, false},
+    {ColorKey::EditorChangeModifiedColor, "Editor.changeModifiedColor", ColorKey::VcsModified, false},
+    {ColorKey::EditorChangeDeletedColor, "Editor.changeDeletedColor", ColorKey::VcsDeleted, false},
+    // --- vcs: the diff viewer ---
+    {ColorKey::DiffInsertedBackground, "Diff.insertedBackground", detail::kNoColor, false},
+    {ColorKey::DiffDeletedBackground, "Diff.deletedBackground", detail::kNoColor, false},
+    {ColorKey::DiffModifiedBackground, "Diff.modifiedBackground", detail::kNoColor, false},
+    {ColorKey::DiffInnerChangeBackground, "Diff.innerChangeBackground", detail::kNoColor, false},
 }};
 
 inline constexpr std::array<MetricKeyInfo, kMetricKeyCount> kMetricKeys{{

@@ -143,6 +143,20 @@
       "templateParameter": "#72CCA7",
       "concept": "#72CCA7",
       "typeAlias": "#69BFD2"
+    },
+    "Vcs": {
+      "added": "#72BC76",
+      "modified": "#70A0E2",
+      "deleted": "#8C9299",
+      "untracked": "#D48B70",
+      "conflicted": "#E4625C",
+      "ignored": "#9A9864"
+    },
+    "Diff": {
+      "insertedBackground": "#2D3E32",
+      "deletedBackground": "#413134",
+      "modifiedBackground": "#2C3A51",
+      "innerChangeBackground": "#415B88"
     }
   },
   "compact": {

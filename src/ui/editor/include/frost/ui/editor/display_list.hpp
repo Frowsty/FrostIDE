@@ -20,6 +20,7 @@
 #include <QRectF>
 #include <QString>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -66,6 +67,23 @@ struct DisplayMarker {
     QColor color;
     MarkerSeverity severity = MarkerSeverity::Error;
     LineIndex line;
+};
+
+// What a VCS change stripe marks (M5, ADR 0048): lines added or modified against the file's HEAD
+// version, or the place where lines were deleted.
+enum class ChangeStripeKind : std::uint8_t { Added, Modified, Deleted };
+
+/*
+ * A VCS change marker in the gutter: a narrow bar beside the lines of an added or modified block
+ * (one rectangle per display row), or a short horizontal mark on the top edge of the line that
+ * follows deleted lines. `change` is the index into EditorView::lineChanges(), for the click.
+ */
+struct DisplayChangeStripe {
+    QRectF rect;
+    QColor color;
+    ChangeStripeKind kind = ChangeStripeKind::Modified;
+    LineIndex line;
+    std::size_t change = 0;
 };
 
 /*
@@ -136,9 +154,11 @@ struct DisplayBalloon {
 /*
  * One frame. Paint order: background, `fills`, Background `decorations`, `underlines` (right
  * margin), `text`, the other `decorations`, `overlays` (preedit underline) and `carets`, all clipped
- * to textArea; then the gutter: gutterBackground over `gutter`, `gutterText` and `markers`; then the
- * error stripe: stripeBackground over `stripe`, `stripeMarks` and the summary box; then `chrome`
- * shapes and `chromeText`, unclipped. Plain values; built and read on the GUI thread.
+ * to textArea; then the gutter: gutterBackground over `gutter`, `gutterText`, `changeStripes` and
+ * `markers`; then the error stripe: stripeBackground over `stripe`, `stripeMarks` and the summary
+ * box; then `chrome` shapes and `chromeText`, unclipped. The raster backend draws all of them; the
+ * QRhi backend (ADR 0043) not yet the decorations, the error stripe, the chrome layer or
+ * `changeStripes`. Plain values; built and read on the GUI thread.
  */
 struct EditorDisplayList {
     QRectF viewport;
@@ -156,6 +176,7 @@ struct EditorDisplayList {
     QColor caretColor;
     std::vector<DisplayText> gutterText;
     std::vector<DisplayMarker> markers;
+    std::vector<DisplayChangeStripe> changeStripes;
     // The error stripe (empty rect when hidden) and its summary box (the worst severity's colour,
     // or the clean colour).
     QRectF stripe;

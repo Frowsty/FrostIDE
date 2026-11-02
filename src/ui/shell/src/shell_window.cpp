@@ -435,6 +435,7 @@ input::ActionContext ShellWindow::actionContext() const {
         !window.empty()) {
         keys.set(input::ContextKey::ToolWindowFocus);
         keys.set(input::ContextKey::ProjectViewFocus, window == tool_windows::kProject);
+        keys.set(input::ContextKey::CommitViewFocus, window == tool_windows::kCommit);
     }
     if (isTextField(focus)) {
         keys.set(input::ContextKey::TextFieldFocus);

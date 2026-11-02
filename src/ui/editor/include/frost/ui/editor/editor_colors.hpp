@@ -55,6 +55,10 @@ struct EditorColors {
     QColor rightMargin;
     QColor errorMarker;
     QColor warningMarker;
+    // The VCS change markers' gutter stripes (Editor.change*Color; M5, ADR 0048).
+    QColor changeAdded;
+    QColor changeModified;
+    QColor changeDeleted;
     std::array<TokenFormat, syntax::kHighlightKindCount> tokens{};
     // Insight (ADR 0047).
     QColor weakWarningMarker;

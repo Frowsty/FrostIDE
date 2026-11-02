@@ -1099,14 +1099,15 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
         # exactly one kind label; the tagged suites are build_msbuild_tests (Windows only),
         # lang_clangd_tests, lang_msbuild_tests (Windows only; both tags), build_cmake_tests (tag
-        # "cmake"), build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046) and ui_screenshot_tests
-        # (trees with the UI).
+        # "cmake"), build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046), vcs_git_tests and
+        # ui_vcs_git_tests (tag "git"; ADR 0048), and ui_screenshot_tests (trees with the UI).
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.")),
                   "clangd": ("integration", ("ClangdE2E.", "MsBuildEvaluationE2E.")),
                   "cmake": ("integration", ("CMakeRealBuild.",)),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
+                  "git": ("integration", ("GitE2E.", "GitUiE2E.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)
@@ -1126,6 +1127,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
                         wrong.append(f"{test['name']}: {labels}, lock {properties.get('RESOURCE_LOCK')}")
         self.assertEqual(wrong, [])
         self.assertGreater(seen["clangd"], 0)  # frost::lang builds in every tree with tests.
+        self.assertGreater(seen["git"], 0)  # So does frost::vcs.
         if os.name == "nt":
             self.assertGreater(seen["msbuild"], 0)
 
