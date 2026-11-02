@@ -3,6 +3,663 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-02: M1 in progress
+
+`main` has the sixth feature-first batch (ADR 0031), merged with `git merge --no-ff` in the main worktree under D23,
+in this order: `m1/verify-tooling` at 2e286e0 (merge 08b92fd), `m1/syntax` at 681c749 (merge b706290),
+`m1/editor-model` at 0b4aac1 (merge b2a6b49), `m1/diff-merge` at 7851f95 (merge 88d75ac), `m1/settings` at 481fc26
+(merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then one fix of the merged tree (358ffd3).
+`m1/verify-tooling` went first, so the batch's `-Quick` already ran the Windows tests in parallel. Each slice passed
+its own `-Quick`, and the merged tree was verified once for the whole batch, re-run after the fix (Verification,
+below). The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in
+progress". Its "Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now
+the running one. This entry's slice records follow its sections, newest first, written from the hand-off notes (none
+of the six branches kept a record in this log).
+
+### Done
+
+#### Merge of `m1/verify-tooling` (08b92fd)
+- **The merge** (08b92fd) of `m1/verify-tooling` (2e286e0) into `main` at 2e298a8: parallel Windows ctest, no error
+  boxes from tests, isolation defaults by kind label, `mod.*` module labels, the WSL PATH filter, `tools/perf.ps1` and
+  the B28 harness, and clang-tidy and the TSan quick leg behind off-by-default switches; the slice record below says
+  what they hold. ADR 0027; the number is unchanged and no other branch uses it. The slice ran on 5f377e7, the
+  piece-tree merge, 43 commits behind `main`.
+- **Seven conflicts**, each resolved so that both sides' intent survives:
+  - `tests/CMakeLists.txt`: every test directory comes in through `frost_add_test_directory`, `main`'s `input`,
+    `storage`, `project`, `build`, `diag` (under `NOT FROST_FUZZ`) and `ui` included, so the slice's configure guard
+    passes and every test gets its `mod.<directory>` label (the slice's merge hazard 1).
+  - `tests/tools/CMakeLists.txt`: `main`'s `asset_fetch` and `symbolize` suites and the slice's `verify_support`,
+    `frost_perf` and `verify_scripts` suites are all registered. They now run as scripts in the build directory, as
+    the slice's working-directory guard requires; both of `main`'s suites find their files from `__file__`.
+  - `tests/cmake/CMakeLists.txt`: `main`'s `io_no_static_init` test and the slice's `PROCESSORS 4` for
+    `FrostRuntimeDlls.CopiesOncePerDirectory`.
+  - `tests/text/CMakeLists.txt`: `main`'s suite descriptions (anchors and undo, the display map, the encodings) and
+    the slice's parallel-ctest note and `PROCESSORS` settings.
+  - `tests/io/process_test.cpp`: `main` had moved `ProcessWatch` into `process_env.hpp` (ADR 0020); the slice's
+    member-initializer constructors (a clang-tidy fix) are applied there.
+  - `tools/verify.ps1` and `tools/verify.sh`: the slice's restructured steps (the changed-file list, ctest `-j`, tidy,
+    the TSan quick leg, `-LE '^stress$'`) with `main`'s `-Full`-only symbolize step (ADR 0022) after the Windows
+    configurations and after the Linux Debug run.
+- **The slice's other merge hazards**, applied in the merge:
+  - Hazards 2 and 4: `ui_screenshot_tests` takes `LABELS unit` and `build_msbuild_tests` `LABELS integration`, since
+    `frost_add_test` now refuses more than one label. A correction to the hand-off: on `main` both second labels
+    (`screenshot` and `msbuild`) were real ctest labels (the old `PROPERTIES LABELS "${ARG_LABELS}"` passed the list
+    as one argument; the generated test files had `[[LABELS]] [[integration;msbuild]]`), so they were not dropped
+    before. No script or preset selects by either label, so no test is lost, but `ctest -L msbuild` now selects
+    nothing; the two CMake comments say so and name a `-R` filter. Several labels per test are deferred (below).
+  - Hazard 3: `ui_native_tests`, which calls `gtest_discover_tests` itself, holds `RESOURCE_LOCK frost_desktop`.
+  - Hazard 4: `build_msbuild_tests` (MSBuild, cmd and ping), `diag_integration_tests` (crash_child, the crashpad
+    handler, llvm-symbolizer and llvm-readobj) and `frost_process_tests` (frost.exe and its self-tests) are
+    integration suites, so they hold `frost_desktop` through the default. `diag_tests` starts no process (its crash
+    reporter tests run on ScriptedProcessLauncher), and no suite needed `RUN_SERIAL`.
+  - Hazard 5: the F2 TODO about the FindOpenGL searches (entry "M0 decisions") is replaced by a done note.
+- **Orchestrator decisions on its questions:** B28's `-Base HEAD` method stays recorded in ADR 0027 only;
+  `budgets.json` is not changed in this phase (a budget-text change goes to the user at hardening); `-Tidy` and
+  `-TsanQuick` go back to on-by-default when the hardening phase starts (PLAN.md 6.4; ADR 0031 defers, never removes).
+- **The build after the merge commit:** `night.py build-gate` (no lock, 40.7 GB commit free) and `cmake --build
+  --preset win-clangcl-debug -j 8` (CMake re-ran on its own): exit 0, 186 steps, no compiler warning (only Qt's own
+  "No qtpaths executable found" configure notice, as after every merge below).
+
+#### Merge of `m1/syntax` (b706290)
+- **The merge** (b706290) of `m1/syntax` (681c749) into `main` at 08b92fd: frost::syntax (tree-sitter 0.27.1, seven
+  MIT grammars, our own queries, SyntaxSession and SyntaxTree) and the vendor-lock tooling; the slice record below
+  says what they hold. ADR 0023; the number is unchanged and no other branch uses it.
+- **Four conflicts**, each resolved so that both sides' intent survives:
+  - `src/CMakeLists.txt`: `syntax` follows `input`, outside the `NOT FROST_FUZZ` blocks (it needs no vcpkg port;
+    tree-sitter is vendored), and `main`'s storage, project, build and diag blocks are unchanged. The `syntax` rank
+    (5) was already in `cmake/FrostLayers.cmake`.
+  - `tests/CMakeLists.txt`: `tests/syntax` comes in through `frost_add_test_directory`, after `input`.
+  - `tools/verify.ps1` and `tools/verify.sh`: the slice's format exclusion of `third_party/tree-sitter` and
+    `third_party/grammars` is applied to `m1/verify-tooling`'s restructured format step.
+  - Merged without conflict: `REUSE.toml`, `NOTICE`, `.gitattributes`, `cmake/FrostCompilerOptions.cmake`,
+    `cmake/FrostEmbed.cmake`, `tools/asset_fetch.py`, `tools/frost_lint.py`, `tools/licensecheck.py` and their tests.
+- **One interaction is left for the hardening phase:** `m1/verify-tooling`'s clang-tidy step (`-Tidy`, off) excludes
+  only the banned probes, fixtures and `build/` (`_EXCLUDED` in `tools/verify_support.py`), so once tidy is on it
+  would analyse the vendored tree-sitter C sources. Excluding `third_party/` there, as the format step does, is in
+  the deferred list.
+- **The build after the merge commit:** `night.py build-gate` (40.4 GB commit free) and the Debug build: exit 0, 56
+  steps, no compiler warning.
+
+#### Merge of `m1/editor-model` (b2a6b49)
+- **The merge** (b2a6b49) of `m1/editor-model` (0b4aac1) into `main` at b706290: frost::text_editor, the Qt-free
+  editor commands and frost::text::Editor, with RE2 (and Abseil) and utf8proc from vcpkg; the slice record below says
+  what they hold. ADR 0025; the number is unchanged and no other branch uses it.
+- **Two conflicts**, each resolved so that both sides' intent survives:
+  - `vcpkg.json`: asio, cpptrace, crashpad, curl (Linux only, no default features), gtest, pugixml, re2, spdlog,
+    sqlite3, utf8proc and xxhash, in name order.
+  - `tests/CMakeLists.txt`: `main`'s directory list is kept, and `tests/text/editor` is added from
+    `tests/text/CMakeLists.txt` (`add_subdirectory(editor)`), so its tests carry `mod.text`.
+    `frost_add_test_directory(text/editor)` would label them `mod.text/editor`, which `tools.verify_support`'s label
+    test rejects (a module label names a top-level test directory) and the TSan selection never names. Fuzz trees add
+    only `tests/fuzz`, so the tests need no `NOT FROST_FUZZ` guard; `src/text/editor` keeps its own.
+  - Merged without conflict: the root `CMakeLists.txt` (`find_package` of re2 and utf8proc under `NOT FROST_FUZZ`),
+    `src/CMakeLists.txt` (`text/editor` under the same guard) and `Snapshot::reversedChunks` in frost::text.
+- **Orchestrator decisions on its questions:** Up on the first row and Down on the last row keep the caret where it is
+  (Rider behaviour). deleteLines with several carets should merge carets that land on the same line; that fix is being
+  made in `m1/editor-view` (in flight).
+- **The build after the merge commit:** `night.py build-gate` (37.6 GB commit free) and the Debug build: exit 0, 114
+  steps (vcpkg installed abseil, re2 and utf8proc), no compiler warning.
+
+#### Merge of `m1/diff-merge` (88d75ac)
+- **The merge** (88d75ac) of `m1/diff-merge` (7851f95) into `main` at b2a6b49: frost::diff, the histogram line diff
+  and the three-way merge cores; the slice record below says what they hold. ADR 0019; the number is unchanged and no
+  other branch uses it. The slice ran on 6fb6826, `m1/piece-tree`'s head.
+- **Four conflicts**, each resolved so that both sides' intent survives:
+  - `src/CMakeLists.txt`: `diff` follows `text`, outside the `NOT FROST_FUZZ` blocks (it needs only core and text, and
+    the new fuzz target links it).
+  - `tests/CMakeLists.txt`: `tests/diff` comes in through `frost_add_test_directory`, after `text` and before `fuzz`,
+    which reuses its support library.
+  - `tests/fuzz/CMakeLists.txt`: `main`'s `io_ignore_rules` and `text_decode` targets and the slice's `diff_merge`
+    target are all registered.
+  - `NOTICE`: `main`'s asset and tree-sitter paragraphs, then the slice's JGit attribution as a paragraph of its own.
+- **PLAN.md section 3.2** (ADR 0019 D1 and Q6, left to the integrator): the layout gains `src/diff/` (histogram line
+  diff, refinement, three-way merge cores, ADR 0019), and `src/vcs/`'s entry reads "git (on src/diff's diff and
+  merge)".
+- **For `m1/save-manager`** (ADR 0019 D1): FrostLayers forbids edges between different layers of equal rank, so a
+  target that links frost::storage (layer storage, rank 4) and frost::diff (layer text, rank 4) needs rank 5 or more.
+- **Orchestrator decisions on its questions:** its LongPathsEnabled blocker is not a blocker. The two FrostProcess
+  long-path tests failed only on its old base 6fb6826; `main` at 023f354 runs and passes them, and so does this
+  batch's run (Verification). Q4: keep the 2^22 cap everywhere (option (a)). Q2: the rewritten histogram, which cites
+  JGit's algorithm only, is accepted; no code-level port. Q1 and Q3 (a pinned classic-dialect git oracle; which git
+  defines M5's criterion) are deferred to M5 and the hardening phase. Q5 is under Questions for the user.
+- **The build after the merge commit:** `night.py build-gate` (36.8 GB commit free) and the Debug build: exit 0, 73
+  steps, no compiler warning.
+
+#### Merge of `m1/settings` (8a5768e)
+- **The merge** (8a5768e) of `m1/settings` (481fc26) into `main` at 88d75ac: frost::settings, the typed settings
+  registry on yyjson 0.13.0 (MIT, vcpkg, PRIVATE); the slice record below says what it holds. ADR 0021; the number is
+  unchanged and no other branch uses it.
+- **Five conflicts**, each resolved so that both sides' intent survives:
+  - The root `CMakeLists.txt`: `main`'s pugixml and the slice's yyjson `find_package` calls under `NOT FROST_FUZZ`.
+  - `src/CMakeLists.txt`: `settings` joins `storage` and `project` in the `NOT FROST_FUZZ` block (fuzz trees install
+    no vcpkg ports). The `settings` rank (5) was already in `cmake/FrostLayers.cmake`.
+  - `tests/CMakeLists.txt`: `tests/settings` comes in through `frost_add_test_directory`, after `storage`.
+  - `vcpkg.json`: utf8proc, xxhash and yyjson, in name order, after `main`'s entries.
+  - `tests/features/matrix.json`: row 59 (EditorConfig) takes the slice's `in-progress` with its acceptance test; row
+    60 keeps `main`'s `in-progress` with `EncodingRoundTrip.FixturesByteExact`; row I1 merged on its own (the slice's
+    `in-progress`).
+- **The build after the merge commit:** `night.py build-gate` (34.7 GB commit free) and the Debug build: exit 0, 42
+  steps (vcpkg installed yyjson 0.13.0), no compiler warning.
+
+#### Merge of `plan/thin-path` (414155a)
+- **The merge** (414155a) of `plan/thin-path` (6315d86) into `main` at 8a5768e: ADR 0029, accepted with the user's
+  answers, the thin path to a first usable build (a minimal debugger in U1's M4; the deferred halves of M1-M4 in the
+  new M15, M16 and M17), W1 and the feature-first phase in PLAN.md section 7, gates moved with their features in
+  `budgets.json` (targets unchanged), featurecheck and frost-lint for M0..M17 with M0 closed, and the retagged to-do
+  markers; the slice record below says more. The number is unchanged and no other branch uses it (`main`'s ADRs
+  after 0010 are now 0011 to 0023, 0025 to 0027 and 0029 to 0034; 0024 and 0028 are not on `main`). The branch had
+  merged `main` at dcfd9ae; `main` was 21 commits further.
+- **Two conflicts**, each resolved so that both sides' intent survives:
+  - `src/app/src/main.cpp`: `main`'s note from `m1/crash-diag` (crash reports record `restartedFrom`; logs and dumps
+    live under the cache root) is kept, its `TODO(M1)` keeps only restarting frost, and the branch's `TODO(M16)` takes
+    registering frost and the AppUserModelID.
+  - `tests/features/matrix.json`: row 59 (EditorConfig) takes `main`'s status and acceptance test (`m1/settings`) and
+    the plan's owner, M15. `featurecheck.py generate` then left the file unchanged, and `featurecheck.py check`
+    reports no problem.
+- **The to-do markers:** frost-lint on the merged tree (1697 files) finds no violation, so every marker the batch's
+  slices added names an open milestone of M0..M17. From now on, slices tag debugger work M4 and work that ADR 0029
+  moved M15, M16 or M17 (the branch's note).
+- **Orchestrator decision on its question:** the debugger contents in ADR 0029 decision 12 follow Q4's own wording
+  (line breakpoints, stepping, call stack, threads, variables, watches, Evaluate, stop on crash, MSVC programs
+  through PDBs, Windows and Linux); settled, not asked again.
+- **The build after the merge commit:** `night.py build-gate` (35.0 GB commit free) and the Debug build: exit 0, 256
+  steps (the comment edits in shared headers rebuilt most targets), no compiler warning.
+
+#### Verification (batch, merged tree 358ffd3)
+- Before the batch run: the Windows Debug build after each of the six merges (above).
+- **The first run** of `tools\verify.ps1 -Quick -Jobs 8`, on 414155a (with this record uncommitted) through
+  `run_hidden_nobox.py` (a hidden desktop; no window opened on it), after `night.py build-gate` (no lock, 35.0 GB
+  commit free), 472.9 s, exit 1: `win debug 1884/1890 (5 skipped)`, `wsl debug 1782/1789 (6 skipped)`, with one
+  failure on each OS, `tools.verify_support`, and `format FAILED (1 files)`; frost_lint, licensecheck and
+  featurecheck passed. Both came from the `m1/verify-tooling` merge:
+  - `TsanSelectionTest.test_selection_matches_the_cmake_deps_oracle` (module `sched`): `['sched', 'text'] != ['io',
+    'sched', 'text']`. The oracle derives the selection from the real CMake graph, and on `main` `src/io` links
+    frost::sched (the reactor and watchers, ADR 0020), which the slice's base did not, so a sched change must also
+    run io's TSan tests.
+  - clang-format wanted the `ProcessWatch` constructor that the merge rewrote in `tests/io/process_env.hpp` (the
+    slice's member initializer) on one line: `io::ProcessId` there is shorter than `frost::io::ProcessId` was in
+    the slice's `process_test.cpp`.
+- **The fix** (358ffd3), forward and without weakening: `_TSAN_CLOSURE["sched"]` in `tools/verify_support.py` now
+  includes io, and the hand-written table test's two sched rows expect it (the selection only grows; the oracle
+  test is unchanged); `process_env.hpp` is formatted with the pinned clang-format. `tools.verify_support` then passed
+  on Windows (hidden desktop).
+- **The second run**, on 358ffd3 (with this record uncommitted), after `night.py build-gate` (no lock, 34.3 GB commit
+  free), 412.4 s, exit 0. Windows ran its Debug leg (ctest `-j 8`) and the checks; WSL ran `tools/verify.sh` in the
+  ext4 mirror (`~/frost-src-e235f3842261`):
+  `Verified: win debug 1885/1890 (5 skipped), wsl debug 1783/1789 (6 skipped), wsl tsan-quick not-run (off by
+  default), wsl tidy not-run (off by default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok,
+  featurecheck ok, tidy not-run (off by default)` (frost-lint 1697 files; licensecheck 39 packages on Windows, 35 on
+  WSL). No test failed. The test steps took 139.1 s (Windows, parallel at `-j 8`; 265.5 s and 255.1 s serially in the
+  last two batches with fewer tests) and 228.2 s (WSL, serial). Other agents' `-Quick` runs (`m1/save-manager` and
+  `w2/clangd-diagnostics`, in their own worktrees) ran at the same time.
+- **The skips are the last batch's:** on Windows the four `WatcherPerf` tests (outside optimised, unsanitised builds)
+  and `PollingWatcher.DirectorySymlinksAreNotFollowed` (creating a directory symlink fails for this account); on WSL
+  the four `WatcherPerf` tests, `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale` (no translated locale) and
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler` (Windows-only). The FrostProcess long-path tests
+  (`RunsFromPathLongerThanMaxPath`, `PlatformPluginPathBoundary`), which failed on `m1/diff-merge`'s old base, ran
+  and passed, and so did the six MSBuild integration tests, now under the `frost_desktop` lock.
+- **No test was lost in the six merges.** Against the fifth batch (win debug 1671, wsl debug 1570) the tree adds 219
+  tests on each OS, which is what the slices added over their bases: `m1/syntax` 42 (1176 and 1090 at 681c749,
+  against 1134 and 1048 at e9c3214), `m1/editor-model` 48 (904 and 817 at 0b4aac1, against 856 and 769 at 877893b),
+  `m1/diff-merge` 93 (the 92 `mod.diff` tests and the `diff_merge` corpus replay), `m1/settings` 33 and
+  `m1/verify-tooling` 3 (the `verify_support`, `frost_perf` and `verify_scripts` suites); `plan/thin-path` adds none.
+- `-Quick` builds no ASan, TSan or fuzz tree. The fuzz trees now build frost::diff and frost::syntax as well, and
+  register the `diff_merge` target; neither fuzz tree was built. The slices' sanitizer, fuzz, stress and `-Full` runs
+  are in "Deferred to the hardening phase (ADR 0031)", with `-Full` of `main`.
+
+### Next
+- **W1, the work-ready build** (ADR 0032), unchanged from the 2026-11-01 entry: `w1/build-service` (running), the
+  Solution Explorer view, opening a `.sln`/`.slnx` from the command line, File > Open and the recent list, then clangd
+  live diagnostics, navigation and completion, then the rest of U1 in ADR 0029's order.
+- **The in-flight slices:** `m1/editor-view` (with the multi-caret deleteLines fix) and `w1/build-service`, merged in
+  batches as each passes its own `-Quick`.
+- **`m1/save-manager`** was waiting on `m1/diff-merge`, which is on `main` now; a target that links frost::storage and
+  frost::diff needs FrostLayers rank 5 or more (ADR 0019 D1).
+- **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` binds keys to `commands::*`, calls `Editor::run`,
+  supplies the Qt ITextShaper, sets `pageRows` from the viewport height and paints the EditorUpdate rows. A syntax or
+  index slice implements IOutlineProvider for next and previous member.
+- **The frost::syntax consumers** (ADR 0023): the editor applies each ChangeSet to SyntaxSession, calls `poll()` from
+  the parse-ready hook, takes highlights for the visible range, and uses `outline()` for next and previous member and
+  `enclosingRanges` for extend selection.
+- **The frost::settings consumers** (ADR 0021): `m1/shell-nav` registers `settingsActions()` and opens the path that
+  `prepareForEditing()` returns; the composition root binds the keymap, appearance and SaveManager readers to
+  SettingsStore snapshots, feeds TrustStore decisions into `setProjectTrusted`, and starts `follow()` on watches of
+  `watchDirectories()` or forwards the project root watch's batches to `applyChanges()`.
+- **ADR 0029's moves:** large-file mode and B15's F1 gate move to M15 (until then M1's large-file guard refuses files
+  of 128 MB or more; `budgets.json`), and EditorConfig (row 59) is M15's; the rest of the 2026-11-01 entry's Next
+  stands with that re-tagging.
+
+### Deferred to the hardening phase (ADR 0031)
+Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
+`m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From this batch's merges** (the integrator):
+  - Exclude `third_party/` (the vendored tree-sitter and grammar sources) from the clang-tidy step, as the format step
+    does (`_EXCLUDED` in `tools/verify_support.py`), before `-Tidy` goes back on.
+  - Several labels per test in `frost_add_test` (also `m1/verify-tooling`'s item below), then give back
+    `ui_screenshot_tests` its `screenshot` label and `build_msbuild_tests` its `msbuild` label. Passing the list as
+    one quoted argument (`PROPERTIES LABELS "${ARG_LABELS}" ...`), as `main` did before, kept both labels; the kind
+    defaults would then look for the kind among the labels.
+  - A review of the merge resolutions: the merged `tools/verify.ps1` and `tools/verify.sh` (the symbolize step inside
+    the restructured flow), the `ProcessWatch` constructors in `tests/io/process_env.hpp`, and the label cuts.
+- **From `plan/thin-path`** (ADR 0029), as its hand-off lists them:
+  - No independent review of the plan changes, and no `verify -Full` run.
+  - The U1 scenario's debug steps were checked against the corpus source files on disk (`not.cpp`, `winmain.cpp`)
+    but never run; spike S10 in M4 checks lldb-dap on cl.exe-built Notepad++.
+  - Other ADRs from `main` still use the old slice name `m1/large-file` in ordinary text (ADR 0018's section headings,
+    the `encoding_detection.hpp` and `text_file.hpp` comments); only the to-do markers were retagged.
+- **From `m1/settings`** (ADR 0021), as its hand-off lists them:
+  - Fuzzing `SettingsDocument::parse` and the span scanner, and the EditorConfig parser and glob matcher.
+  - Sanitizer runs (ASan, UBSan, TSan) of `settings_unit_tests`.
+  - A stress test for concurrent reloads and writes: two reloads of one file can publish out of order, and two
+    concurrent `set()` calls on one file can lose an update (`editFile` reads, edits and writes without a per-file
+    lock).
+  - A bound on backtracking in the EditorConfig glob matcher (nested `*` and `**` can be slow on adversarial patterns;
+    only the recursion depth is capped, at 64).
+  - Case-insensitive path comparison on Windows in `scopeOf()` and the watcher path rules (paths are compared after
+    `normalizePath` only).
+  - An integration test against the real native file watcher (only MemFsWatcher is covered).
+  - Removing the only member of an object drops any comments inside it.
+  - Performance or budget checks for snapshot rebuilds (republishing is O(keys x 3) per change).
+  - The Settings dialog UI (M15) and wiring the three actions into the shell (`m1/shell-nav`).
+  - Composition-root adapters that feed `keymap.*`, `ui.*` and `save.*`/`localHistory.*` into frost::input, the ui
+    model and SaveManager (settings may not depend on them).
+  - Importers from VS Code, Rider and Visual Studio settings (the `TODO(M11)` in `src/settings/CMakeLists.txt`).
+- **From `m1/diff-merge`** (ADR 0019), as its hand-off lists them:
+  - Recheck issue 2: exact new-dialect git pins (pin the measured git-fewer cases instead of bounding at twice the
+    measured rate). The half-done WIP pins were reverted to b4e652f's state and `tests/diff/git_new_dialect_pins.hpp`
+    removed.
+  - Perf re-measurement after the partner path and histogram reuse: `DiffPerf.WorkCapSweep`, `WorkUnitCost`,
+    `Pathological` (P1-P7), `CapScale` at full scale, the EvenlySpaced timings and `PeakMemory` (the run cache adds
+    12 B per B line and exact counts 3 B per id). Not re-timed in the feature-first phase; ADR 0019 says so.
+  - Sanitizer (ASan, UBSan, TSan) runs, fuzz runs beyond the corpus replay, `diff_stress_tests`, long git
+    differentials, mutation checks and `verify -Full`.
+  - Tail-drop narrowing for regions that are a prefix of the indexed one (the reverse-peel pattern still rebuilds the
+    index).
+  - The O(D^2) walk that remains for very dense evenly spaced edits (every other line still degrades).
+  - Finer degradation when the cap strikes while interning (currently one whole-file hunk or conflict).
+  - Release-build timing of the `DefaultCap.*` inputs against B21's 50 ms (work units are build-independent; times
+    were not taken).
+  - Q1 and Q3 of ADR 0019 (a pinned classic-dialect git oracle in `E:\sdk`; which git defines M5's "matches git diff
+    --histogram"), deferred to M5 and the hardening phase by the orchestrator.
+- **From `m1/editor-model`** (ADR 0025), as its hand-off lists them:
+  - Sanitizer (ASan, UBSan, TSan) runs, fuzz targets and stress or differential tests for the commands and
+    SearchPattern.
+  - A QTextBoundaryFinder cross-check of the grapheme boundaries and Unicode's GraphemeBreakTest.txt conformance run
+    (the `TODO(M1)` in `unicode.hpp`).
+  - B5 timing and perf gates for the commands, search and replace all on large files; no `-Full` run, goldens or
+    clang-tidy.
+  - Regex search on long lines and multi-line patterns without copying: Lines mode copies each line, Whole mode
+    copies the whole text on every call.
+  - Home and End by display row under soft wrap (they go by buffer line now).
+  - Multi-caret and column-mode creation commands (M15, out of the slice's scope).
+  - Smart keys beyond the basic table: language-aware auto-indent, outdenting a closing brace while typing, and
+    remembering which closers were auto-inserted, for typing over them.
+  - Feature-matrix rows 39, 44, 45, 85, 94 and I6 still have no acceptance test or status update from this slice.
+- **From `m1/syntax`** (ADR 0023), as its hand-off lists them:
+  - Sanitizer builds (ASan, UBSan, TSan), fuzzing of the TSInput and edit mapping and of the queries, stress and
+    differential runs, perf and budget gates (B5: the 2 ms incremental target is not measured), goldens and `-Full`.
+  - A counting allocator with a syntax memory cap (`ts_set_allocator`) and a `syntaxMemory` stat.
+  - Releasing old trees off the owner thread (the `TODO(M1)` in `tree_state.hpp`).
+  - Narrowing the `-Weverything` suppression around the tree-sitter runtime to the warnings it actually emits.
+  - Compile-time and binary-size measurements of the grammars in ADR 0023.
+  - Fetching and pinning `.tar.gz` vendor archives in `asset_fetch.py` (vendor locks are `--verify` only; its
+    `TODO(M1)`).
+  - Fold ranges and the Structure-view model (M15, ADR 0029).
+  - The Markdown inline grammar and language injection for fenced code (the `TODO(M4)` in `markdown/highlights.scm`).
+  - Rows for the feature matrix, if syntax needs its own.
+- **From `m1/verify-tooling`** (ADR 0027), as its hand-off lists them:
+  - clang-tidy in verify on by default (`-Tidy` is fully wired but off); after the merge, a `tidy --all` run on both
+    OSes. The TSan quick leg on by default (`-TsanQuick` / `--tsan-quick` is wired but off); its first run in a fresh
+    mirror builds the whole TSan tree. Both go back on when the hardening phase starts (orchestrator decision).
+  - The root cause of the 0xc0000142 start failures: not reproduced. The hidden desktop's heap is the normal 20480 KB;
+    running out of system commit memory is a candidate (chrome.exe failed with 0xC000012D and 0xC0000142 on
+    2026-10-31). Failures can no longer raise boxes, but a recurrence would still fail tests.
+  - A soak of parallel ctest at high `-j` (8 and 24) on the merged `main`; only `-j 4` (a probe) and `-j 6` were run
+    in the slice. (This batch's `-Quick` ran `-j 8` once; Verification.)
+  - Parallel ctest in `verify.sh` (the WSL leg stays serial).
+  - Narrowing or lifting the `frost_desktop` lock: the 124 tests behind it were the critical path at `-j 6` (22.6 s to
+    52.9 s).
+  - Schedule tuning: FrostRuntimeDlls takes `PROCESSORS 4` of 6 slots for about 20 s, which delays the start of the
+    locked chain; the perf suites also run alone in Debug, where nothing is asserted.
+  - Speeding up or splitting `tools.frost_perf` (21-40 s, the slowest single test) and `tools.verify_support`
+    (12-25 s); they add about 35-60 s of serial time to the WSL leg.
+  - B28's "after" measurement with `perf.ps1` inside a `night.py` measure lock, and the `budgets.json` B28 method text
+    for `-Base HEAD` (needs the user's approval; not changed in this phase).
+  - Proper support for several labels in `frost_add_test` (today more than one is a configure error; see this batch's
+    item above).
+  - Sanitizer builds, fuzz runs, stress runs and `verify -Full` were not run.
+- **From `m1/crash-diag`** (ADR 0022), as its hand-off lists them:
+  - `verify -Full` with its Release, ASan and fuzz configurations and the new symbolize step, which has never run
+    in a gate.
+  - Sanitizer builds of frost::diag.
+  - `diag_stress_tests` (the sampler under heap and loader churn, the watchdog's park and wake rounds).
+  - Fuzz targets for the freeze-report writer, the minidump reader and `tools/symbolize.py`'s parsers.
+  - Property tests of `planPrune` at scale.
+  - ADR 0022's measurements: the handler start p50, B1 before and after (with `night.py measure`), the self-tests'
+    wall times in Release, and B19 memory.
+  - An independent review of the security-relevant code: the pipe DACL patch, the pruner's link safety, fatal-path
+    re-entrancy and `ProcessSpec::posixInheritedFds`. With it, a review of the integrator's two fixes at the merge:
+    4d42a50 (`LinkingFs`) and 79512d6 (`frost_app.dll` may delay-load ws2_32.dll and nothing else).
+  - Adopt `m1/storage`'s cache-root resolver in `frost/diag/paths.hpp` (its `TODO(M1)`); `m1/storage` is on
+    `main`.
+  - Resolve the io `TODO(M1)`s that log the child's executable, working directory and arguments, now that
+    frost::log exists.
+  - Add the crash handler's pipe to the M2 listener-enumeration test (row I9) and to PLAN.md 5.2.
+  - WER module registration or `WerAddExcludedApplication` for `__fastfail` crashes (permanent HKCU writes; not
+    done).
+- **From `w1/build-msbuild`** (ADR 0034), as its hand-off lists them:
+  - Sanitizer runs of `build_unit_tests` (BuildSession's threads and cancel races).
+  - Fuzzing `parseDiagnosticLine` and the JSON reader.
+  - Large-output and stress tests: hundreds of MB of output, many builds, start and cancel loops.
+  - Measure the per-build PDB server cost and the ending of stragglers on large solutions (ADR 0034's
+    `TODO(M4)`), and confirm that `_MSPDBSRV_ENDPOINT_` isolates a build from a concurrent Visual Studio build.
+  - GNU-format diagnostics for a future CMake driver; localized category words (I12, M4).
+  - A test that no process (mspdbsrv included) outlives a normal, uncancelled build.
+  - Discovery through the VS Setup COM API with caching; an x86 and arm64 MSBuild fallback.
+  - A real end-to-end build with the ClangCL toolset.
+  - Async pipes on the frost::io reactor instead of two blocking reader threads per build (the `TODO(M1)` in
+    `build_session.hpp`).
+- **From `w1/project-sln`** (ADR 0033), as its hand-off lists them:
+  - Fuzz targets for the `.sln`, `.slnx`, `.vcxproj` and `.filters` readers (they need a fuzz tree that installs
+    vcpkg ports, as ADR 0014 notes for storage).
+  - Sanitizer runs of `project_unit_tests`.
+  - Perf of `SolutionModel::load` against B23 on large solutions (R2a/R2b), and of wildcard walks.
+  - Stress: deep or huge wildcard trees (`globMatch` is exponential in the number of `**`) and very large `.sln`
+    files.
+  - A size cap on project and solution files before parsing.
+  - Non-ASCII case folding on Windows for path keys, lookups and trust.
+  - The trust store: resolve symlinks and junctions before comparing; multi-instance safety; move it into M2's
+    application settings.
+  - The MSBuild semantics the static reader skips: Remove/Update, environment-variable properties, property
+    functions, conditions, imported `.props`/`.targets` (M2 path (c)).
+  - Windows-absolute paths in project files read on Linux; non-UTF-8 ANSI `.sln` files.
+  - An independent review of the trust code (a security area).
+- **From `m1/display-map`** (ADR 0026), as its hand-off lists them:
+  - The display-map property test against a brute-force oracle (an M1 exit criterion) and long differential runs.
+  - Fuzzing and sanitizer runs over DisplayMap.
+  - B5 with soft wrap on, and memory per wrapped row (no measurements yet).
+  - Background or lazy wrapping of very large files and long lines.
+  - UAX #14 line breaking and UAX #29 grapheme clusters; UCD-generated width tables (the `TODO(M1)` in
+    `text_shaper.hpp`).
+  - An O(1)-per-row DisplayRowCursor.
+  - A hanging-indent option for continuation rows.
+  - Mutation and stress tests of the block splice.
+- **From `m1/keymap-de`** (ADR 0030), as its hand-off lists them:
+  - The xkb layout oracle (test-only, approved in ADR 0030; the `TODO(M1)` in its tests).
+  - The Linux active-layout reader through libxkbcommon (it needs a named system-library entry in
+    `tools/licensecheck.py`).
+  - Rule 3.6 on real de-CH, es and Nordic layout tables (M11).
+  - Sanitizer, fuzz and stress runs (`input_stress_tests` with the new rule), Release and `-Full` runs.
+  - An independent review of the layout-rule change.
+  - The real native key path on the real desktop (`m1/automation-bench`).
+- **From `m1/encodings`** (ADR 0018), as its hand-off lists them:
+  - Mutation checks of `decodeBlocks` (review issue 1, test strength).
+  - Measure the transient load peak (review issue 2: the payload-sized reservation that the shrink hides, which no
+    unit test observes) and add a B15/B26 gate for it.
+  - Sanitizer runs: Windows ASan, WSL ASan+UBSan and WSL TSan (`EncodingConcurrency`, and the gconv mutex
+    workaround in `codec_posix.cpp`).
+  - Fuzz runs: 60 s `text_decode` smokes on both OSes with check (d), and a corpus merge. Only its corpus replay
+    (`fuzz_replay.text_decode`) ran; no fuzz tree was built for this merge.
+  - The stress label (`text_encoding_stress_tests`: the full-BMP differential, `LosslessProperty` at 2000 and 20000
+    seeds).
+  - The Release perf gates (`text_encoding_perf_tests`: D15's 1.5x UTF-8 load ratio, the detection bounds,
+    throughput) and `verify -Full`.
+  - Re-measure the committed memory of loaded 32 MiB UTF-16LE and windows-1252 documents against ADR 0018's figures.
+  - A re-review of ADR 0018's "Review follow-up" section and its comment wording.
+  - Decide whether to file an upstream TSan report about gconv module loads (LLVM 23.1.4, glibc 2.39).
+- **From `m1/io-reactor-watch`** (ADR 0020), as its hand-off lists them:
+  - Sanitizer runs (ASan+UBSan, TSan) of the io unit, integration and stress tests. TSan matters most for the
+    reactor's shutdown, the WatchQueue awaiters, the inotify wd tree and async pipe cancellation.
+  - The `io_stress_tests` label (50k-file watcher stress, rename storms, overflow loops, 64 MiB to 1 GiB pipe
+    streams, 200k coalescer seeds) is written but has not run in WSL.
+  - The `io_perf_tests` reports (change-to-batch latency, shutdown with 10 watches, inotify set-up per 10k
+    directories, polling per 10k files) and the start-up cost of asio's static initialisers; ADR 0020's WSL
+    measurement column.
+  - A fuzz run of `io_ignore_rules` (only its corpus replay ran). No fuzz tree was built for this merge.
+  - An independent review of the reactor, the watch queue and the async pipes, and of the comment-only
+    `scheduler.hpp` edit with its ADR 0002 amendment.
+  - Windows cross-directory moves arrive as Removed plus Created (FileId pairing and the USN journal are M13).
+  - Windows polling calls `status()` per file; switch the snapshot to listings with attributes.
+  - Who owns ThreadPool's timers on the reactor and Windows high-resolution waits (the `TODO(M1)` in
+    `thread_pool.hpp`, ADR 0002; sched needs a timer seam).
+  - Who owns helper-process priorities (BELOW_NORMAL plus EcoQoS, SCHED_IDLE) in the io launcher.
+- **From `m1/storage`** (ADR 0014, low): `openStore` and `Database::open` do not yet re-check the path after
+  locking, as `HotExitJournal::create` does, so the residual POSIX removal race stays open (`store.hpp` and ADR 0014
+  decision 8 state it, 39837c1).
+- **From `m1/storage`'s verification:** perf-smoke and coverage were not run; `tools/perf.ps1 -Smoke` and a coverage
+  leg do not exist yet (ADR 0014, Context, "Tooling gaps"). The journal fuzz target waits for fuzz trees that
+  install vcpkg ports (ADR 0014 question 4, under Questions for the user).
+- **`-Full` of `main`** (Release, ASan, TSan and the fuzz legs). The M1 merges since the `m0` sign-off ran
+  `-Quick` only; each slice's own sanitizer results stand (the slice records).
+- **The theme and icon-atlas fuzz targets** (moved from Next; ADR 0015, Consequences: the `TODO(M1)` "after
+  m1/piece-tree", which is on `main` now): libFuzzer adapters for `tests/ui/fuzz/theme_blob_harness.cpp` and
+  `icon_atlas_harness.cpp`, registered with `frost_add_fuzz_target` over `tests/fuzz/corpus/theme_blob` and
+  `icon_atlas`. `frost::ui_model` is Qt-free but lives under `src/ui`, which fuzz trees skip (`FROST_FUZZ` needs
+  `FROST_BUILD_UI=OFF`), so the registration has to build ui_model there; the `theme_json` harness needs Qt Core
+  until the theme compiler moves to m1/settings' JSON library. It needs a fuzz-tree build and smoke on both OSes,
+  which `-Quick` does not cover. Until then `ui_model_tests`' `fuzz_replay_test.cpp` replays the corpora in every
+  normal tree, as on the branch.
+- **The `input_keymap` fuzz target** (moved from Next; ADR 0016, Consequences; the `TODO(M1)`s named above):
+  register it with `frost_add_fuzz_target` over `runKeymapFuzzInput` and `tests/fuzz/corpus/input_keymap`, build
+  and smoke it in `win-clangcl-fuzz` and `linux-clang-fuzz`, and only then delete `KeymapFuzzReplay`. That test
+  also runs seeded mutations of the corpus, so its removal must not lose them (keep them as a unit test, or show
+  the fuzz legs cover them); nothing is weakened.
+- **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
+
+### Blockers
+- None. The hand-off notes of `m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings` and `plan/thin-path`
+  name none; `m1/diff-merge`'s LongPathsEnabled item is not a blocker (its merge section above).
+- B1 warm (about 195 ms on screen against p50 150 ms) stays M1 work (ADR 0011, A3; entry "M0 complete").
+
+### Questions for the user
+No slice of this batch asks one in its hand-off; the orchestrator's decisions on their questions are in the merge
+sections above. One question in an ADR of the batch is still open:
+- **From `m1/diff-merge` (ADR 0019 Q5, product, low; the default stands meanwhile):** conflict markers default to
+  diff3 style (with the base section) rather than git's "merge" style. Confirm, and choose the save-manager prompt's
+  labels (for example "editor" / "last saved" / "disk").
+
+The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
+variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
+`m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `plan/thin-path` (ADR 0029)
+
+The branch kept no record in this log; this is its hand-off note, recorded at the merge. Three commits above 4d18dd5:
+c680d56 (the user's answers applied and ADR 0029 accepted; the WIP commit is squashed in), 7add9d2 (a merge of `main`
+at dcfd9ae, with the retags) and 6315d86 (W1 and the feature-first phase in section 7). Worktree
+`.claude\worktrees\plan-thin-path`. (Merge note: merged into `main` as 414155a; the 2026-11-02 entry above.)
+
+#### Done
+- **ADR 0029 accepted:** the thin path to a first usable build, with a minimal debugger in U1 (decision 12: line
+  breakpoints, stepping, call stack, threads, variables, watches, Evaluate, stop on crash, MSVC programs through
+  PDBs, Windows and Linux) and the deferred halves of M1-M4 in M15, M16 and M17.
+- **PLAN.md** section 7 with W1 and the feature-first phase; `budgets.json` gates moved with their features (targets
+  unchanged); featurecheck and frost-lint for M0..M17, M0 closed; to-do markers retagged.
+- **Verification at 6315d86** (its own `-Quick`): win debug 1520/1525 (5 skipped), wsl debug 1431/1436 (5 skipped),
+  the checks ok.
+
+#### Known bugs
+- Other ADRs from `main` still use the old slice name `m1/large-file` in ordinary text (ADR 0018's section headings,
+  the `encoding_detection.hpp` and `text_file.hpp` comments). Only the to-do markers were retagged.
+- ADR 0029's "Done in this change" paragraph summarises the work across all the branch's commits, not one commit.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `plan/thin-path`'s.
+- Slices merging after this tag debugger work M4 and work that ADR 0029 moved M15, M16 or M17.
+
+### Slice record: `m1/settings` (ADR 0021)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): one commit, 481fc26, on 767312b. Worktree `.claude\worktrees\m1-settings`. (Merge
+note: merged into `main` as 8a5768e; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::settings** (`src/settings`, layer settings at rank 5, Qt-free, depends only on frost::io): about 51 keys
+  with schemas, defaults and descriptions.
+- **Scopes** default < application < `.frost/settings.json` < `.frost/workspace.json` (gitignored) < EditorConfig, and
+  the executes/trust rule.
+- **Byte-exact JSON editing** on yyjson 0.13.0 (MIT, vcpkg, linked PRIVATE; ADR 0021), migrations with goldens, live
+  reload from FileChangeBatch and IDirectoryWatch, validation on save with notifications, and three Settings-dialog
+  stand-in actions as data.
+- **EditorConfig** resolution and mapping (charset and end_of_line onto `files.encoding`, `files.utf8Bom` and
+  `files.lineSeparator`).
+- **Matrix rows** I1 and 59 `in-progress`.
+- **Verification at 481fc26** (its own `-Quick`): win debug 1332/1337, wsl debug 1244/1249 (the 5 skips per leg are
+  the earlier watcher-perf, symlink and locale tests), the checks ok.
+
+#### Known bugs
+- If two `set()` calls race on the same scope file, one update can be lost (no per-file lock around
+  read-modify-write).
+- If the only member of a settings object is removed, comments inside the braces are dropped (the object becomes `{}`
+  or `{\n}`).
+- On Windows, `scopeOf()` and the watcher path matching are case-sensitive, so a save or change event reported with
+  different letter case is not recognised as a settings file.
+- EditorConfig: a pathological glob with many `*` and `**` can take exponential time; it is only depth-limited.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/settings`'s.
+- The consumers in this entry's Next (`m1/shell-nav` and the composition root).
+
+### Slice record: `m1/diff-merge` (ADR 0019)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): one squashed commit, 7851f95, on 6fb6826; the JGit-like early draft is not in its
+history. Worktree `.claude\worktrees\m1-diff-merge`. (Merge note: merged into `main` as 88d75ac; the 2026-11-02
+entry above.)
+
+#### Done
+- **frost::diff** (`src/diff`, layer text at rank 4, Qt-free): the histogram line diff (JGit's algorithm, rewritten,
+  run the way git runs it) with a Myers fallback under the 2^22 work cap, git's classic slider compaction,
+  intra-line refinement, a unified-diff renderer, and the three-way merge cores (diff3 chunking, the resolution
+  model, conflict markers).
+- **The cap regression is fixed exactly, without raising the cap:** the interner's partner path and histogram reuse
+  across regions. `DefaultCap.*`, `Histogram.Reuse*` and `Interner.PartnerPathIsExact` are added, and the perf
+  `CapScale` assertions are invariants now. ADR 0019 is updated.
+- **Tests:** `diff_tests` (unit), `diff_git_tests` (the differential against `git diff --histogram --no-index`,
+  integration), `diff_stress_tests`, `diff_perf_tests`, and the `diff_merge` fuzz target with its corpus replay.
+- **Verification at 7851f95** (its own `-Quick`, on 6fb6826): wsl debug 497/497; win debug 528/531 with the two
+  FrostProcess long-path failures of that old base (not this slice's code; `main` passes them).
+
+#### Known bugs
+- Very dense evenly spaced edits (for example every other line of a 10k-line file) and lightly edited files above
+  roughly 300k lines per side (diff) or 250k (merge) still degrade under the default cap. This is by design (Q4,
+  option (a)); results stay valid and merges stay sound.
+- (Merge note: its other known bug, the two FrostProcess long-path failures, belonged to its base 6fb6826; `main`
+  passes those tests, the Verification above.)
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/diff-merge`'s.
+- `m1/save-manager` builds on it (rank 5 or more for a target that links frost::storage and frost::diff).
+
+### Slice record: `m1/editor-model` (ADR 0025)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): one commit, 0b4aac1, on 877893b (`m1/display-map`). Worktree
+`.claude\worktrees\m1-editor-model`. (Merge note: merged into `main` as b2a6b49; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::text_editor** (`src/text/editor`, layer text, Qt-free; ADR 0025): the pure editor commands and
+  frost::text::Editor, the driver that applies them to a Document and its DisplayMap. It depends on frost::text plus
+  RE2 (with Abseil) and utf8proc from vcpkg; the library and its `find_package` calls are guarded by `if(NOT
+  FROST_FUZZ)`. frost::text itself only gained `Snapshot::reversedChunks`.
+- **Commands:** grapheme cluster and word navigation (emoji, flags, ZWJ, combining marks, CRLF), typing and smart
+  keys with their undo grouping, line operations and comments, movement and selection (vertical through the
+  DisplayMap, Go to Line, members through IOutlineProvider), find and replace (plain, case, whole word, regex,
+  replace all as one undo step).
+- **Tests:** `text_editor_tests` (unit), in `tests/text/editor`.
+- **Verification at 0b4aac1** (its own `-Quick`): win debug 904/904, wsl debug 817/817, the checks ok.
+- **A tooling note for agents:** the tool-call layer turns backslash-u and double-backslash sequences in tool input
+  into literal characters, so a backslash-u escape written into a C++ file became a raw non-ASCII character, and
+  Python heredocs given a double backslash received a single one. Use `char32_t{0x...}` or hex escapes in sources,
+  and the Edit tool for exact replacements.
+
+#### Known bugs
+- `previousGraphemeBoundary` scans forward from the line start, or from at most 4 KiB back on longer lines. Inside a
+  long run of regional indicators or a very long ZWJ or combining sequence that starts more than 4 KiB back, the
+  boundary can be off by one cluster.
+- Typing over a closer uses a stateless rule (the line's opener and closer or quote count). It can step over a closer
+  the user did not auto-insert, or type a second one after manual edits.
+- In a plain case-sensitive search, a pattern holding a bare LF can match the LF inside a CRLF, so the match starts
+  between CR and LF.
+- Case-insensitive plain search and whole word rely on RE2's simple case folding; full case folding (German sharp s,
+  Turkish dotless i) is not done.
+- A regex that can match a line break (Whole mode) copies the whole text into a `std::string` on every find, which is
+  slow on very large files.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/editor-model`'s.
+- `m1/editor-view` (in flight) binds it to the view; the orchestrator's decisions on its questions are in the merge
+  section above.
+
+### Slice record: `m1/syntax` (ADR 0023)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): one squashed commit, 681c749, on e9c3214. Worktree `.claude\worktrees\m1-syntax`.
+(Merge note: merged into `main` as b706290; the 2026-11-02 entry above.)
+
+#### Done
+- **Vendored tree-sitter 0.27.1** plus seven MIT grammars (C, C++, C#, CMake, JSON, Markdown, XML) under
+  `third_party/`, pinned in `third_party/vendor.lock.json`, with our own highlight and outline queries.
+- **frost::syntax** (`src/syntax`, layer syntax, Qt-free): SyntaxSession and SyntaxTree (incremental parsing on a
+  worker, highlight spans, the member outline, enclosing ranges), the vendor-lock tooling (`asset_fetch.py`,
+  licensecheck, frost-lint), ADR 0023, `REUSE.toml` and `NOTICE`.
+- **Two bugs found in its verification, fixed:** tree-sitter keeps a pointer to the TSQueryCursorOptions it is given,
+  and that struct lived on the stack of the query run's constructor (an access violation in the C++ outline); the
+  options now live in the QueryRun, which cannot be copied or moved. On Linux, tree-sitter-xml's `common/scanner.h`
+  could not find `tree_sitter/parser.h` (clang-cl had resolved it the MSVC way, through the including file's
+  directory); each grammar's `src` directory is now on its include path.
+- **Verification at 681c749** (its own `-Quick -Jobs 6`): win debug 1176/1176, wsl debug 1090/1090, format,
+  frost_lint, licensecheck and featurecheck ok.
+- **A tooling note for agents:** in this environment Python's `write_text` on Windows writes CRLF and the Git Bash
+  heredoc collapses backslashes; edit files with `newline='\n'` and with scripts written to files, or tracked files
+  can end up CRLF (`verify.sh` would then break in WSL).
+
+#### Known bugs
+- The outline name of a JSON key that contains an escape (for example `"a\nb"`) may be only one fragment: the
+  pattern captures `string_content`, which the escape splits into several children. A key `""` has no outline item.
+- The CMake outline recognises `add_library`, `add_executable` and `add_custom_target` only in lower or upper case,
+  not mixed case: CMake command names are case-insensitive and `#any-of?` is exact.
+- C++: a member function with no return type that is named by a plain identifier is classed as a constructor;
+  conversion operators and other special cases are not distinguished further. Free functions declared with pointer
+  or reference declarators deeper than one level do not appear in the outline.
+- Markdown highlights cover block structure only (headings, lists, quotes, code blocks, link definitions); emphasis,
+  inline code and links inside paragraphs need the inline grammar.
+- Highlights and the outline report `complete=false` until the language's queries finish compiling on the worker;
+  the owner sees them after the next `poll()`.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/syntax`'s.
+- The consumers in this entry's Next (the editor's SyntaxSession wiring).
+
+### Slice record: `m1/verify-tooling` (ADR 0027)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 2e286e0, on top of 072dd89 (`tools/perf.ps1`), d6e14db and 59cf9c0, on 5f377e7; the
+WIP commit bfd769a is squashed into 2e286e0. Worktree `.claude\worktrees\m1-verify-tooling`. (Merge note: merged into
+`main` as 08b92fd; the 2026-11-02 entry above.)
+
+#### Done
+- **Parallel Windows ctest** (`-j`, `-TestJobs`) with no error boxes from tests (`--interactive-debug-mode 0`).
+- **Isolation defaults by kind label** in `frost_add_test` (integration: `RESOURCE_LOCK frost_desktop`; perf:
+  `RUN_SERIAL`; `RUN_SERIAL`, `RESOURCE_LOCK` and `PROCESSORS` keywords) and `mod.<directory>` module labels through
+  `frost_add_test_directory`, with configure guards for both.
+- **The WSL PATH filter** that removes the FindOpenGL configure cost (the F2 item of the entry "M0 decisions").
+- **clang-tidy and the TSan quick leg** behind off-by-default switches (`-Tidy`, `-TsanQuick`), `tools/perf.ps1`
+  and the B28 harness, and ADR 0027.
+- **Measured:** the Windows Debug ctest from 135.3 s serial to 52.9 s at `-j 6`; the Linux re-configure from 30.45 s
+  to 1.35 s.
+- **Verification at 2e286e0** (its own `-Quick`, on 5f377e7): win debug 488/488, wsl debug 408/408, the checks ok.
+
+#### Known bugs
+- The cause of the 0xc0000142 start failures is unknown and they may recur. They now show up as failed tests in the
+  log instead of boxes on the desktop.
+- Its merge hazards (several labels, `add_subdirectory` of the newer test directories, `ui_native_tests` without a
+  lock) are resolved in the merge (the merge section above).
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/verify-tooling`'s.
+- The orchestrator's decisions on its questions are in the merge section above; it asks the user nothing.
+
 ## 2026-11-01: M1 in progress
 
 `main` has M1's first ten slices, the switch to the feature-first phase, the W1 plan and W1's first two slices, each
@@ -597,124 +1254,7 @@ branch wrote them. Merge notes in them mark what has changed since.
 - The M1 work from ADR 0011's Consequences and ADR 0012's `TODO(M1)`s (entry "M0 complete").
 
 ### Deferred to the hardening phase (ADR 0031)
-Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first.
-- **From `m1/crash-diag`** (ADR 0022), as its hand-off lists them:
-  - `verify -Full` with its Release, ASan and fuzz configurations and the new symbolize step, which has never run
-    in a gate.
-  - Sanitizer builds of frost::diag.
-  - `diag_stress_tests` (the sampler under heap and loader churn, the watchdog's park and wake rounds).
-  - Fuzz targets for the freeze-report writer, the minidump reader and `tools/symbolize.py`'s parsers.
-  - Property tests of `planPrune` at scale.
-  - ADR 0022's measurements: the handler start p50, B1 before and after (with `night.py measure`), the self-tests'
-    wall times in Release, and B19 memory.
-  - An independent review of the security-relevant code: the pipe DACL patch, the pruner's link safety, fatal-path
-    re-entrancy and `ProcessSpec::posixInheritedFds`. With it, a review of the integrator's two fixes at the merge:
-    4d42a50 (`LinkingFs`) and 79512d6 (`frost_app.dll` may delay-load ws2_32.dll and nothing else).
-  - Adopt `m1/storage`'s cache-root resolver in `frost/diag/paths.hpp` (its `TODO(M1)`); `m1/storage` is on
-    `main`.
-  - Resolve the io `TODO(M1)`s that log the child's executable, working directory and arguments, now that
-    frost::log exists.
-  - Add the crash handler's pipe to the M2 listener-enumeration test (row I9) and to PLAN.md 5.2.
-  - WER module registration or `WerAddExcludedApplication` for `__fastfail` crashes (permanent HKCU writes; not
-    done).
-- **From `w1/build-msbuild`** (ADR 0034), as its hand-off lists them:
-  - Sanitizer runs of `build_unit_tests` (BuildSession's threads and cancel races).
-  - Fuzzing `parseDiagnosticLine` and the JSON reader.
-  - Large-output and stress tests: hundreds of MB of output, many builds, start and cancel loops.
-  - Measure the per-build PDB server cost and the ending of stragglers on large solutions (ADR 0034's
-    `TODO(M4)`), and confirm that `_MSPDBSRV_ENDPOINT_` isolates a build from a concurrent Visual Studio build.
-  - GNU-format diagnostics for a future CMake driver; localized category words (I12, M4).
-  - A test that no process (mspdbsrv included) outlives a normal, uncancelled build.
-  - Discovery through the VS Setup COM API with caching; an x86 and arm64 MSBuild fallback.
-  - A real end-to-end build with the ClangCL toolset.
-  - Async pipes on the frost::io reactor instead of two blocking reader threads per build (the `TODO(M1)` in
-    `build_session.hpp`).
-- **From `w1/project-sln`** (ADR 0033), as its hand-off lists them:
-  - Fuzz targets for the `.sln`, `.slnx`, `.vcxproj` and `.filters` readers (they need a fuzz tree that installs
-    vcpkg ports, as ADR 0014 notes for storage).
-  - Sanitizer runs of `project_unit_tests`.
-  - Perf of `SolutionModel::load` against B23 on large solutions (R2a/R2b), and of wildcard walks.
-  - Stress: deep or huge wildcard trees (`globMatch` is exponential in the number of `**`) and very large `.sln`
-    files.
-  - A size cap on project and solution files before parsing.
-  - Non-ASCII case folding on Windows for path keys, lookups and trust.
-  - The trust store: resolve symlinks and junctions before comparing; multi-instance safety; move it into M2's
-    application settings.
-  - The MSBuild semantics the static reader skips: Remove/Update, environment-variable properties, property
-    functions, conditions, imported `.props`/`.targets` (M2 path (c)).
-  - Windows-absolute paths in project files read on Linux; non-UTF-8 ANSI `.sln` files.
-  - An independent review of the trust code (a security area).
-- **From `m1/display-map`** (ADR 0026), as its hand-off lists them:
-  - The display-map property test against a brute-force oracle (an M1 exit criterion) and long differential runs.
-  - Fuzzing and sanitizer runs over DisplayMap.
-  - B5 with soft wrap on, and memory per wrapped row (no measurements yet).
-  - Background or lazy wrapping of very large files and long lines.
-  - UAX #14 line breaking and UAX #29 grapheme clusters; UCD-generated width tables (the `TODO(M1)` in
-    `text_shaper.hpp`).
-  - An O(1)-per-row DisplayRowCursor.
-  - A hanging-indent option for continuation rows.
-  - Mutation and stress tests of the block splice.
-- **From `m1/keymap-de`** (ADR 0030), as its hand-off lists them:
-  - The xkb layout oracle (test-only, approved in ADR 0030; the `TODO(M1)` in its tests).
-  - The Linux active-layout reader through libxkbcommon (it needs a named system-library entry in
-    `tools/licensecheck.py`).
-  - Rule 3.6 on real de-CH, es and Nordic layout tables (M11).
-  - Sanitizer, fuzz and stress runs (`input_stress_tests` with the new rule), Release and `-Full` runs.
-  - An independent review of the layout-rule change.
-  - The real native key path on the real desktop (`m1/automation-bench`).
-- **From `m1/encodings`** (ADR 0018), as its hand-off lists them:
-  - Mutation checks of `decodeBlocks` (review issue 1, test strength).
-  - Measure the transient load peak (review issue 2: the payload-sized reservation that the shrink hides, which no
-    unit test observes) and add a B15/B26 gate for it.
-  - Sanitizer runs: Windows ASan, WSL ASan+UBSan and WSL TSan (`EncodingConcurrency`, and the gconv mutex
-    workaround in `codec_posix.cpp`).
-  - Fuzz runs: 60 s `text_decode` smokes on both OSes with check (d), and a corpus merge. Only its corpus replay
-    (`fuzz_replay.text_decode`) ran; no fuzz tree was built for this merge.
-  - The stress label (`text_encoding_stress_tests`: the full-BMP differential, `LosslessProperty` at 2000 and 20000
-    seeds).
-  - The Release perf gates (`text_encoding_perf_tests`: D15's 1.5x UTF-8 load ratio, the detection bounds,
-    throughput) and `verify -Full`.
-  - Re-measure the committed memory of loaded 32 MiB UTF-16LE and windows-1252 documents against ADR 0018's figures.
-  - A re-review of ADR 0018's "Review follow-up" section and its comment wording.
-  - Decide whether to file an upstream TSan report about gconv module loads (LLVM 23.1.4, glibc 2.39).
-- **From `m1/io-reactor-watch`** (ADR 0020), as its hand-off lists them:
-  - Sanitizer runs (ASan+UBSan, TSan) of the io unit, integration and stress tests. TSan matters most for the
-    reactor's shutdown, the WatchQueue awaiters, the inotify wd tree and async pipe cancellation.
-  - The `io_stress_tests` label (50k-file watcher stress, rename storms, overflow loops, 64 MiB to 1 GiB pipe
-    streams, 200k coalescer seeds) is written but has not run in WSL.
-  - The `io_perf_tests` reports (change-to-batch latency, shutdown with 10 watches, inotify set-up per 10k
-    directories, polling per 10k files) and the start-up cost of asio's static initialisers; ADR 0020's WSL
-    measurement column.
-  - A fuzz run of `io_ignore_rules` (only its corpus replay ran). No fuzz tree was built for this merge.
-  - An independent review of the reactor, the watch queue and the async pipes, and of the comment-only
-    `scheduler.hpp` edit with its ADR 0002 amendment.
-  - Windows cross-directory moves arrive as Removed plus Created (FileId pairing and the USN journal are M13).
-  - Windows polling calls `status()` per file; switch the snapshot to listings with attributes.
-  - Who owns ThreadPool's timers on the reactor and Windows high-resolution waits (the `TODO(M1)` in
-    `thread_pool.hpp`, ADR 0002; sched needs a timer seam).
-  - Who owns helper-process priorities (BELOW_NORMAL plus EcoQoS, SCHED_IDLE) in the io launcher.
-- **From `m1/storage`** (ADR 0014, low): `openStore` and `Database::open` do not yet re-check the path after
-  locking, as `HotExitJournal::create` does, so the residual POSIX removal race stays open (`store.hpp` and ADR 0014
-  decision 8 state it, 39837c1).
-- **From `m1/storage`'s verification:** perf-smoke and coverage were not run; `tools/perf.ps1 -Smoke` and a coverage
-  leg do not exist yet (ADR 0014, Context, "Tooling gaps"). The journal fuzz target waits for fuzz trees that
-  install vcpkg ports (ADR 0014 question 4, under Questions for the user).
-- **`-Full` of `main`** (Release, ASan, TSan and the fuzz legs). The M1 merges since the `m0` sign-off ran
-  `-Quick` only; each slice's own sanitizer results stand (the slice records).
-- **The theme and icon-atlas fuzz targets** (moved from Next; ADR 0015, Consequences: the `TODO(M1)` "after
-  m1/piece-tree", which is on `main` now): libFuzzer adapters for `tests/ui/fuzz/theme_blob_harness.cpp` and
-  `icon_atlas_harness.cpp`, registered with `frost_add_fuzz_target` over `tests/fuzz/corpus/theme_blob` and
-  `icon_atlas`. `frost::ui_model` is Qt-free but lives under `src/ui`, which fuzz trees skip (`FROST_FUZZ` needs
-  `FROST_BUILD_UI=OFF`), so the registration has to build ui_model there; the `theme_json` harness needs Qt Core
-  until the theme compiler moves to m1/settings' JSON library. It needs a fuzz-tree build and smoke on both OSes,
-  which `-Quick` does not cover. Until then `ui_model_tests`' `fuzz_replay_test.cpp` replays the corpora in every
-  normal tree, as on the branch.
-- **The `input_keymap` fuzz target** (moved from Next; ADR 0016, Consequences; the `TODO(M1)`s named above):
-  register it with `frost_add_fuzz_target` over `runKeymapFuzzInput` and `tests/fuzz/corpus/input_keymap`, build
-  and smoke it in `win-clangcl-fuzz` and `linux-clang-fuzz`, and only then delete `KeymapFuzzReplay`. That test
-  also runs seeded mutations of the corpus, so its removal must not lose them (keep them as a unit test, or show
-  the fuzz legs cover them); nothing is weakened.
-- **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
+Carried forward on 2026-11-02 into the entry "2026-11-02: M1 in progress", whose list is the running one.
 
 ### Blockers
 - None. The piece-tree slice's only listed blocker, `m0/longpath`, is on `main`; the hand-off notes of
@@ -1565,7 +2105,7 @@ it is not merged and not pushed.
     - **Done** (afternoon; ADR 0011, E5's outcome): I7 is `green` with six acceptance tests. See the entry "M0
       complete".
 - **F, machine and tooling.** No action on G HUB (F1). No Linux sccache; M1 caches or avoids the FindOpenGL
-  searches instead (F2, TODO below). B28 reads the full default build, and its method fixes the probe files and
+  searches instead (F2, below; done on 2026-11-02). B28 reads the full default build, and its method fixes the probe files and
   the job counts (F3; ADR 0010 decision 2 accepted).
 - **G, sign-off.** M0 is signed off once `verify -Full` is green on both platforms at `m0/foundation`'s final
   head and every item is recorded. Then that commit is tagged `m0` (annotated, with the `-Full` footer), `main` is
@@ -1683,10 +2223,10 @@ The user runs it from an elevated prompt when M2 evaluates TerminalAppLib:
 - TerminalAppLib sets `ApplicationType=Windows Store` (ADR 0005). Whether these two are enough for it is checked
   in M2; re-read the IDs from the catalog then, because the installer may have moved on.
 
-#### F2: TODO(M1)
-- TODO(M1): cache or avoid the Linux configure's two FindOpenGL `find_path` searches for `GL/glu.h` and
-  `GL/xmesa.h` (about 15 s of each configure; ADR 0010's follow-up). First test whether the 38 `/mnt` PATH entries
-  make them slow.
+#### F2
+- Done (2026-11-02, `m1/verify-tooling`, ADR 0027): the Linux configure's two FindOpenGL `find_path` searches for
+  `GL/glu.h` and `GL/xmesa.h` were slow because of the `/mnt` PATH entries; `verify.sh`'s WSL PATH filter removes
+  their cost (a Linux re-configure from 30.45 s to 1.35 s).
 
 #### Verification
 - Checks in the worktree: frost-lint ok (280 files), featurecheck ok, `git diff --check` clean (staged tree), the
