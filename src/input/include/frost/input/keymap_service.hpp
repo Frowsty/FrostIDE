@@ -130,6 +130,17 @@ public:
     // On a load error the current preferences stay and the error is recorded. Never stores.
     void reloadPreferences();
 
+    /*
+     * Default shortcuts that modules contribute for actions the keymap does not name (the build
+     * commands' table, ADR 0039): a binding here applies only when the resolved keymap has no
+     * line for its action (an explicit unbinding counts as a line), and a user override of the
+     * action still replaces it. Never stored: the preferences keep only the user's overrides.
+     * Replaces the previous defaults, rebuilds the index and increments bindingsGeneration().
+     * O(B log B).
+     */
+    void setModuleDefaults(std::vector<Binding> defaults);
+    [[nodiscard]] std::span<const Binding> moduleDefaults() const noexcept { return m_moduleDefaults; }
+
     // The binding queries rebuild the index first if the registry grew since it was built
     // (as handle() does, incrementing bindingsGeneration()), so a menu or Find Action never
     // reads bindings that miss newly registered actions.
@@ -160,6 +171,7 @@ private:
     IClock::Duration m_platformInterval;
     Keymap m_keymap;
     KeymapPreferences m_preferences;
+    std::vector<Binding> m_moduleDefaults;
     BindingIndex m_index;
     ShortcutMatcher m_matcher;
     std::uint64_t m_indexRegistryGeneration = 0;
