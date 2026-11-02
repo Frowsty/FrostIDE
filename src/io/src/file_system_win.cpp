@@ -103,6 +103,214 @@ bool isLink(const std::wstring& widePath) noexcept {
            (info.ReparseTag == IO_REPARSE_TAG_SYMLINK || info.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
 }
 
+// A temp file created beside its target: its UTF-8 and Win32 spellings and the open handle.
+struct TempFile {
+    std::string path;
+    std::wstring widePath;
+    UniqueHandle handle;
+};
+
+/*
+ * Creates writeFileAtomic's temp file for `name` in `directory` exclusively, for writing; a name
+ * collision (a stale file from a killed process that reused our pid) moves on to the next id.
+ * `operation` names the caller in the error ("writeFileAtomic: create temp file for").
+ */
+Result<TempFile> createTempFile(std::string_view directory, std::string_view name, std::string_view operation,
+                                std::string_view path) {
+    TempFile temp;
+    for (int attempt = 0; !temp.handle.valid(); ++attempt) {
+        auto tempPath = joinPath(directory, detail::atomicTempName(name, detail::nextUniqueId()), PathStyle::Windows);
+        if (!tempPath) {
+            return std::unexpected(std::move(tempPath.error()));
+        }
+        auto wide = toWin32Path(*tempPath);
+        if (!wide) {
+            return std::unexpected(std::move(wide.error()));
+        }
+        temp.path = std::move(*tempPath);
+        temp.widePath = std::move(*wide);
+        temp.handle.reset(
+            CreateFileW(temp.widePath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+        if (!temp.handle.valid()) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_FILE_EXISTS || attempt >= 16) {
+                return std::unexpected(win32Error(error, operation, path));
+            }
+        }
+    }
+    return temp;
+}
+
+// Writes all of `data` at the file's current position. Returns ERROR_SUCCESS or the Win32 error.
+DWORD writeAll(HANDLE file, std::string_view data) noexcept {
+    for (std::size_t written = 0; written < data.size();) {
+        const DWORD want = static_cast<DWORD>(std::min(data.size() - written, kMaxIoChunk));
+        DWORD done = 0;
+        if (WriteFile(file, data.data() + written, want, &done, nullptr) == FALSE) {
+            return GetLastError();
+        }
+        written += done;
+    }
+    return ERROR_SUCCESS;
+}
+
+// safeWrite's retries of a replace that another program's open handle blocks (antivirus scanners
+// and indexers hold files for milliseconds).
+constexpr int kBusyRetries = 3;
+constexpr DWORD kBusyRetryMs = 30;
+
+// The attributes SetFileAttributesW accepts, for putting a read-only file's attributes back.
+constexpr DWORD kSettableAttributes = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM |
+                                      FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED |
+                                      FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_TEMPORARY;
+
+/*
+ * The normalised UTF-8 path of the file `widePath` finally names, all links followed
+ * (GetFinalPathNameByHandleW), with the \\?\ and \\?\UNC\ prefixes turned back into "C:\..." and
+ * "\\server\share\...". NotFound when the link dangles.
+ */
+Result<std::string> finalPathOf(const std::wstring& widePath, std::string_view path) {
+    const UniqueHandle handle(CreateFileW(widePath.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                          FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!handle.valid()) {
+        const DWORD error = GetLastError();
+        if (errorCodeFromWin32(error) == ErrorCode::NotFound) {
+            return fail(ErrorCode::NotFound,
+                        std::format("safeWrite '{}': the symbolic link points at a file that does not exist", path));
+        }
+        return std::unexpected(win32Error(error, "safeWrite: resolve the link", path));
+    }
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD length = GetFinalPathNameByHandleW(handle.get(), buffer.data(), static_cast<DWORD>(buffer.size()),
+                                                       FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (length == 0) {
+            return std::unexpected(lastWin32Error("safeWrite: resolve the link", path));
+        }
+        if (length < buffer.size()) {
+            buffer.resize(length);
+            break;
+        }
+        buffer.resize(length); // Too small: `length` includes the terminator.
+    }
+    std::wstring plain;
+    if (std::wstring_view(buffer).starts_with(L"\\\\?\\UNC\\")) {
+        plain = L"\\\\" + buffer.substr(8);
+    } else if (std::wstring_view(buffer).starts_with(L"\\\\?\\")) {
+        plain = buffer.substr(4);
+    } else {
+        plain = std::move(buffer);
+    }
+    auto utf8 = fromWide(plain);
+    if (!utf8) {
+        return std::unexpected(std::move(utf8.error()));
+    }
+    return normalizePath(*utf8, PathStyle::Windows);
+}
+
+/*
+ * safeWrite for a file with one link: a flushed temp file beside it, swapped in with ReplaceFileW,
+ * which carries the target's attributes, ACL, alternate streams, object id and creation time over
+ * to it. Every failure leaves the target as it was and removes the temp file, except when
+ * ReplaceFileW reports that it removed the target but could not rename the temp file
+ * (ERROR_UNABLE_TO_MOVE_REPLACEMENT): then the temp file is moved into place, and kept if that
+ * fails too, because it then holds the only copy.
+ */
+Result<void> replaceWithTemp(const std::string& target, const std::wstring& wideTarget, std::string_view data,
+                             std::string_view path) {
+    auto temp = createTempFile(parentPath(target, PathStyle::Windows), fileName(target, PathStyle::Windows),
+                               "safeWrite: create temp file for", path);
+    if (!temp) {
+        return std::unexpected(std::move(temp.error()));
+    }
+    const auto abandon = [&](Error error) -> Result<void> {
+        temp->handle.reset();
+        DeleteFileW(temp->widePath.c_str());
+        return std::unexpected(std::move(error));
+    };
+    if (const DWORD error = writeAll(temp->handle.get(), data); error != ERROR_SUCCESS) {
+        return abandon(win32Error(error, "safeWrite: write temp file for", path));
+    }
+    if (FlushFileBuffers(temp->handle.get()) == FALSE) {
+        return abandon(lastWin32Error("safeWrite: flush temp file for", path));
+    }
+    if (CloseHandle(temp->handle.release()) == FALSE) {
+        return abandon(lastWin32Error("safeWrite: close temp file for", path));
+    }
+    constexpr DWORD kMove = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+    for (int attempt = 0;; ++attempt) {
+        if (ReplaceFileW(wideTarget.c_str(), temp->widePath.c_str(), nullptr, 0, nullptr, nullptr) != FALSE) {
+            return {};
+        }
+        const DWORD error = GetLastError();
+        switch (error) {
+        case ERROR_UNABLE_TO_MOVE_REPLACEMENT:
+            if (MoveFileExW(temp->widePath.c_str(), wideTarget.c_str(), kMove) != FALSE) {
+                return {};
+            }
+            return fail(ErrorCode::IoError,
+                        std::format("safeWrite '{}': the old file was removed but the new content could not be "
+                                    "moved into place; it is kept in '{}'",
+                                    path, temp->path));
+        case ERROR_INVALID_FUNCTION:
+        case ERROR_NOT_SUPPORTED:
+        case ERROR_CALL_NOT_IMPLEMENTED:
+            // A file system without ReplaceFile support (some network redirectors): a plain rename.
+            if (MoveFileExW(temp->widePath.c_str(), wideTarget.c_str(), kMove) != FALSE) {
+                return {};
+            }
+            return abandon(lastWin32Error("safeWrite: replace", path));
+        case ERROR_UNABLE_TO_REMOVE_REPLACED:
+        case ERROR_SHARING_VIOLATION:
+        case ERROR_LOCK_VIOLATION:
+        case ERROR_USER_MAPPED_FILE:
+            if (attempt < kBusyRetries) {
+                Sleep(kBusyRetryMs);
+                continue;
+            }
+            return abandon(
+                Error(ErrorCode::Busy, std::format("safeWrite '{}': the file is in use by another program and was left "
+                                                   "unchanged (Win32 error {})",
+                                                   path, error)));
+        default: return abandon(win32Error(error, "safeWrite: replace", path));
+        }
+    }
+}
+
+/*
+ * safeWrite for a file with several hard links: rewritten in place through one handle that denies
+ * other writers. A larger content first extends the file (the space is allocated then, so a full
+ * disk fails before any byte changes); then the bytes are written from the start, the end is set
+ * and the file flushed.
+ */
+Result<void> rewriteInPlace(const std::wstring& wideTarget, std::string_view data, std::string_view path) {
+    const UniqueHandle file(CreateFileW(wideTarget.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file.valid()) {
+        return std::unexpected(lastWin32Error("safeWrite: open the hard-linked file", path));
+    }
+    LARGE_INTEGER size{};
+    if (GetFileSizeEx(file.get(), &size) == FALSE) {
+        return std::unexpected(lastWin32Error("safeWrite: size of", path));
+    }
+    FILE_END_OF_FILE_INFO end{};
+    end.EndOfFile.QuadPart = static_cast<LONGLONG>(data.size());
+    if (static_cast<std::uint64_t>(size.QuadPart) < data.size() &&
+        SetFileInformationByHandle(file.get(), FileEndOfFileInfo, &end, sizeof(end)) == FALSE) {
+        return std::unexpected(lastWin32Error("safeWrite: reserve space for", path));
+    }
+    if (const DWORD error = writeAll(file.get(), data); error != ERROR_SUCCESS) {
+        return std::unexpected(win32Error(error, "safeWrite: rewrite (the file may be incomplete)", path));
+    }
+    if (SetFileInformationByHandle(file.get(), FileEndOfFileInfo, &end, sizeof(end)) == FALSE) {
+        return std::unexpected(lastWin32Error("safeWrite: set the end of", path));
+    }
+    if (FlushFileBuffers(file.get()) == FALSE) {
+        return std::unexpected(lastWin32Error("safeWrite: flush", path));
+    }
+    return {};
+}
+
 // Outcome of creating one directory, for createDirectories' walk.
 enum class MkdirOutcome : unsigned char { Done, ParentMissing, Failed };
 
@@ -170,30 +378,12 @@ public:
             return std::unexpected(std::move(wideTarget.error()));
         }
 
-        // Create the temp file exclusively; a name collision (a stale file from a killed
-        // process that reused our pid) just moves on to the next id.
-        std::wstring wideTemp;
-        UniqueHandle file;
-        for (int attempt = 0; !file.valid(); ++attempt) {
-            auto tempPath =
-                joinPath(directory, detail::atomicTempName(name, detail::nextUniqueId()), PathStyle::Windows);
-            if (!tempPath) {
-                return std::unexpected(std::move(tempPath.error()));
-            }
-            auto wide = toWin32Path(*tempPath);
-            if (!wide) {
-                return std::unexpected(std::move(wide.error()));
-            }
-            wideTemp = std::move(*wide);
-            file.reset(
-                CreateFileW(wideTemp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
-            if (!file.valid()) {
-                const DWORD error = GetLastError();
-                if (error != ERROR_FILE_EXISTS || attempt >= 16) {
-                    return std::unexpected(win32Error(error, "writeFileAtomic: create temp file for", path));
-                }
-            }
+        auto temp = createTempFile(directory, name, "writeFileAtomic: create temp file for", path);
+        if (!temp) {
+            return std::unexpected(std::move(temp.error()));
         }
+        const std::wstring& wideTemp = temp->widePath;
+        UniqueHandle& file = temp->handle;
 
         // From here on every failure removes the temp file.
         const auto abandon = [&](Error error) -> Result<void> {
@@ -201,13 +391,8 @@ public:
             DeleteFileW(wideTemp.c_str());
             return std::unexpected(std::move(error));
         };
-        for (std::size_t written = 0; written < data.size();) {
-            const DWORD want = static_cast<DWORD>(std::min(data.size() - written, kMaxIoChunk));
-            DWORD done = 0;
-            if (WriteFile(file.get(), data.data() + written, want, &done, nullptr) == FALSE) {
-                return abandon(lastWin32Error("writeFileAtomic: write temp file for", path));
-            }
-            written += done;
+        if (const DWORD error = writeAll(file.get(), data); error != ERROR_SUCCESS) {
+            return abandon(win32Error(error, "writeFileAtomic: write temp file for", path));
         }
         if (FlushFileBuffers(file.get()) == FALSE) {
             return abandon(lastWin32Error("writeFileAtomic: flush temp file for", path));
@@ -225,6 +410,78 @@ public:
             return abandon(win32Error(error, "writeFileAtomic: replace", path));
         }
         return {};
+    }
+
+    Result<SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                      const SafeWriteOptions& options) override {
+        auto normalized = normalizePath(path, PathStyle::Windows);
+        if (!normalized) {
+            return std::unexpected(std::move(normalized.error()));
+        }
+        auto wide = toWin32Path(*normalized);
+        if (!wide) {
+            return std::unexpected(std::move(wide.error()));
+        }
+        SafeWriteResult result{std::move(*normalized), SafeWriteMethod::Replaced};
+        std::wstring wideTarget = std::move(*wide);
+        // A symlink stays a link: the file it names is written, in its own directory.
+        if (isLink(wideTarget)) {
+            auto resolved = finalPathOf(wideTarget, path);
+            if (!resolved) {
+                return std::unexpected(std::move(resolved.error()));
+            }
+            auto wideResolved = toWin32Path(*resolved);
+            if (!wideResolved) {
+                return std::unexpected(std::move(wideResolved.error()));
+            }
+            result.target = std::move(*resolved);
+            wideTarget = std::move(*wideResolved);
+        }
+        UniqueHandle probe(CreateFileW(wideTarget.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                       FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        if (!probe.valid()) {
+            const DWORD error = GetLastError();
+            if (errorCodeFromWin32(error) != ErrorCode::NotFound) {
+                return std::unexpected(win32Error(error, "safeWrite", path));
+            }
+            // A new file (a missing parent directory fails in writeFileAtomic with NotFound).
+            if (auto written = writeFileAtomic(result.target, data); !written) {
+                return std::unexpected(std::move(written.error()));
+            }
+            result.method = SafeWriteMethod::Created;
+            return result;
+        }
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (GetFileInformationByHandle(probe.get(), &info) == FALSE) {
+            return std::unexpected(lastWin32Error("safeWrite", path));
+        }
+        probe.reset();
+        if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            return std::unexpected(detail::isADirectoryError("safeWrite", path));
+        }
+        const DWORD attributes = info.dwFileAttributes & kSettableAttributes;
+        const bool readOnly = (attributes & FILE_ATTRIBUTE_READONLY) != 0;
+        if (readOnly) {
+            if (!options.overwriteReadOnly) {
+                return fail(ErrorCode::PermissionDenied,
+                            std::format("safeWrite '{}': the file is read-only and was left unchanged", path));
+            }
+            const DWORD writable = attributes & ~DWORD{FILE_ATTRIBUTE_READONLY};
+            if (SetFileAttributesW(wideTarget.c_str(), writable != 0 ? writable : FILE_ATTRIBUTE_NORMAL) == FALSE) {
+                return std::unexpected(lastWin32Error("safeWrite: clear the read-only attribute of", path));
+            }
+        }
+        const bool linked = info.nNumberOfLinks > 1;
+        auto written =
+            linked ? rewriteInPlace(wideTarget, data, path) : replaceWithTemp(result.target, wideTarget, data, path);
+        if (!written) {
+            if (readOnly) {
+                SetFileAttributesW(wideTarget.c_str(), attributes); // Best effort: as it was.
+            }
+            return std::unexpected(std::move(written.error()));
+        }
+        result.method = linked ? SafeWriteMethod::InPlace : SafeWriteMethod::Replaced;
+        return result;
     }
 
     Result<FileStatus> status(std::string_view path) override {

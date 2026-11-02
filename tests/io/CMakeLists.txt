@@ -28,6 +28,7 @@ frost_add_test(io_unit_tests
         replacement_mode_test.cpp
         scripted_async_process_test.cpp
         scripted_process_test.cpp
+        temp_files_test.cpp
         tree_scan_test.cpp
         utf_test.cpp
         watch_queue_test.cpp
@@ -76,6 +77,7 @@ frost_add_test(io_integration_tests
         ignore_rules_git_test.cpp
         polling_watcher_test.cpp
         process_test.cpp
+        safe_write_test.cpp
     DEPS frost::io frost::sched
     LABELS integration)
 # src/io/src: the tests name detail::kAtomicTempMarker, lower detail::maxWaitSliceMs() and use the

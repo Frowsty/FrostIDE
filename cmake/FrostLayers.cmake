@@ -48,6 +48,10 @@ set(FROST_LAYER_RANK_syntax 5)
 set(FROST_LAYER_RANK_settings 5)
 set(FROST_LAYER_RANK_protocols 5)
 set(FROST_LAYER_RANK_project 6)
+# document (src/document, frost::document): the SaveManager and the document load service. Not in
+# PLAN.md section 3.2 (which lists SaveManager under src/text); it links text, diff, storage and
+# settings, so it sits above settings (rank 5). ADR 0028 decision 1 records it.
+set(FROST_LAYER_RANK_document 6)
 set(FROST_LAYER_RANK_lang 7)
 set(FROST_LAYER_RANK_build 7)
 set(FROST_LAYER_RANK_debug 7)
