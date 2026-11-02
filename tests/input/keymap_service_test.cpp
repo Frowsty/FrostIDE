@@ -543,6 +543,31 @@ TEST(KeymapService, ServiceIsMovable) {
     EXPECT_EQ(rig.fire(second, test::keyPress(Code::KeyS, Modifier::Ctrl)), "file.saveAll");
 }
 
+// Module defaults (ADR 0039): they bind actions the keymap does not name, never replace a keymap
+// line, and yield to the user's overrides; they are not stored with the preferences.
+TEST(KeymapService, ModuleDefaultsBindActionsTheKeymapDoesNotName) {
+    ServiceRig rig;
+    const ActionId build = add(rig.registry, "build.buildSolution");
+    KeymapService service = rig.create();
+    EXPECT_TRUE(service.shortcutsFor(build).empty());
+
+    const std::uint64_t before = service.bindingsGeneration();
+    service.setModuleDefaults(
+        {Binding{"build.buildSolution", {seq("Ctrl+Shift+F13")}}, Binding{"editor.copy", {seq("Ctrl+Alt+F13")}}});
+    EXPECT_EQ(service.bindingsGeneration(), before + 1);
+    EXPECT_EQ(service.moduleDefaults().size(), 2U);
+    EXPECT_EQ(formatted(service.shortcutsFor(build)), std::vector<std::string>{"Ctrl+Shift+F13"});
+    EXPECT_EQ(rig.fire(service, test::keyPress(Code::F13, Modifier::Ctrl | Modifier::Shift)), "build.buildSolution");
+    const ActionId copy = *rig.registry.find("editor.copy");
+    EXPECT_EQ(formatted(service.shortcutsFor(copy)), (std::vector<std::string>{"Ctrl+C", "Ctrl+Insert"}))
+        << "the keymap's own line wins over a module default";
+
+    ASSERT_TRUE(service.setPreferences(KeymapPreferences{.overrides = {{"build.buildSolution", {seq("Alt+F13")}}}})
+                    .has_value());
+    EXPECT_EQ(formatted(service.shortcutsFor(build)), std::vector<std::string>{"Alt+F13"}) << "a user override wins";
+    EXPECT_EQ(rig.settings.current().overrides.size(), 1U) << "module defaults are never stored";
+}
+
 TEST(KeymapPreferencesValidation, Bounds) {
     EXPECT_TRUE(validate(KeymapPreferences{}).has_value());
     EXPECT_TRUE(validate(KeymapPreferences{.doubleTapInterval = 2s, .overrides = {}}).has_value());

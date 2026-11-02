@@ -26,3 +26,6 @@ target_sources(frost_ui PRIVATE
     include/frost/ui/island_frame.hpp
     include/frost/ui/qt_os_appearance.hpp)
 set_target_properties(frost_ui PROPERTIES AUTOMOC ON)
+
+# The build-side tool windows (ADR 0039); after frost_ui, which they build on.
+add_subdirectory(toolwindows)

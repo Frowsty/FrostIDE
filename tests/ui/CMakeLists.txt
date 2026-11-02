@@ -161,3 +161,19 @@ if(WIN32)
         DISCOVERY_TIMEOUT 60
         PROPERTIES LABELS unit ENVIRONMENT "QT_QPA_PLATFORM=windows")
 endif()
+
+# ui_toolwindows_tests: the build tool windows (ADR 0039) offscreen against a fake build backend,
+# the project fixtures and a scripted process launcher. Dialogs open on the offscreen platform only.
+frost_add_test(ui_toolwindows_tests QT
+    SOURCES
+        toolwindows/build_actions_test.cpp
+        toolwindows/build_controller_test.cpp
+        toolwindows/build_output_test.cpp
+        toolwindows/problems_test.cpp
+        toolwindows/solution_explorer_test.cpp
+        toolwindows/trust_dialog_test.cpp
+    DEPS frost::ui_toolwindows frost::ui frost::build frost::project frost::input frost::io)
+_frost_ui_test_wiring(ui_toolwindows_tests)
+target_compile_definitions(ui_toolwindows_tests PRIVATE
+    FROST_PROJECT_FIXTURE_DIR="${FROST_SOURCE_DIR}/tests/project/fixtures"
+    FROST_BUILD_FIXTURE_DIR="${FROST_SOURCE_DIR}/tests/build/fixtures")
