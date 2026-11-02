@@ -35,7 +35,7 @@ frost_add_test_directory(project)
 frost_add_test_directory(document)
 frost_add_test_directory(build)
 frost_add_test_directory(lang)
-# frost::search (ADR 0042): the fuzzy path matcher.
+# frost::search: the fuzzy path matcher (ADR 0042) and Find and Replace in Files (ADR 0045).
 frost_add_test_directory(search)
 if(NOT FROST_FUZZ)
     # frost::diag is not built in fuzz trees (src/CMakeLists.txt).

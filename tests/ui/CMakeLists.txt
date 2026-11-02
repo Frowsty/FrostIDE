@@ -25,6 +25,8 @@
 #   ui_workbench_tests           frost::ui_workbench (ADR 0042): File System view, Find Action, Go to
 #                                File, Search Everywhere, recents, back/forward, sessions, the restore
 #                                prompt, the merge view, the large-file guard and banners (offscreen);
+#   ui_find_tests                frost::ui_find (ADR 0045): the Find/Replace in Files popup, the Find
+#                                tool window and the find actions over a scratch tree (offscreen);
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" with the
 #                                tag "screenshot" (ctest -L screenshot);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
@@ -163,6 +165,11 @@ frost_add_test(ui_workbench_tests QT
     DEPS frost::ui_workbench frost::ui_nav frost::ui_shell frost::ui frost::document frost::storage frost::input
          frost::io)
 _frost_ui_test_wiring(ui_workbench_tests)
+
+frost_add_test(ui_find_tests QT
+    SOURCES find/find_ui_test.cpp
+    DEPS frost::ui_find frost::ui_shell frost::ui frost::search frost::document frost::sched frost::input frost::io)
+_frost_ui_test_wiring(ui_find_tests)
 
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp

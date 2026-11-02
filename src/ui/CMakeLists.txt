@@ -9,7 +9,8 @@
 # frost::ui_editor (src/ui/editor, the editor widget) is ADR 0037's and builds on frost::ui. frost::ui_run
 # (the Run console, its controller and the run actions) is ADR 0040's; it needs frost::build,
 # which fuzz trees do not build. frost::ui_lang (ADR 0041) holds the language-feature widgets and
-# their controller; it needs frost::lang, which fuzz trees leave out.
+# their controller; it needs frost::lang, which fuzz trees leave out. frost::ui_find (src/ui/find) is
+# Find and Replace in Files on the shell (ADR 0045).
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
@@ -47,3 +48,5 @@ endif()
 # frost::ui_nav (Qt-free) and frost::ui_workbench (Qt Widgets): the navigation slice (ADR 0042).
 add_subdirectory(nav)
 add_subdirectory(workbench)
+# frost::ui_find: Find and Replace in Files (ADR 0045).
+add_subdirectory(find)
