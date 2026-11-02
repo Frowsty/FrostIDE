@@ -137,6 +137,8 @@ struct BuildOutcome {
 
 enum class BuildOutputKind : std::uint8_t { Stdout, Stderr, Status };
 
+// Called once when one build() ends, right after onFinished, on the service's thread.
+using BuildCompletion = std::function<void(const BuildOutcome& outcome)>;
 // Called once by the Save-All hook when saving is done; a failure aborts the build.
 using SaveAllCompletion = std::function<void(Result<void> saved)>;
 // The UI's Save All (see the header comment for the thread it is called on).
@@ -218,12 +220,16 @@ public:
 
     /*
      * Starts `action` for the whole solution (no project) or for one project of it, with the
-     * active configuration; returns once the request is accepted (the build runs on). Errors:
-     * InvalidArgument (no solution open, no configuration, or `project` is out of range, has no
-     * file or is unavailable), Unsupported (the project is not built in the active configuration),
-     * Busy (another build is in progress).
+     * active configuration; returns once the request is accepted (the build runs on). `onDone`
+     * (optional) is called once with this build's outcome, right after onFinished, also when it is
+     * cancelled before MSBuild starts; it is dropped if the service is destroyed first. The run
+     * service uses it to start the program after the build (ADR 0040). Errors: InvalidArgument (no
+     * solution open, no configuration, or `project` is out of range, has no file or is
+     * unavailable), Unsupported (the project is not built in the active configuration), Busy
+     * (another build is in progress).
      */
-    [[nodiscard]] Result<void> build(BuildAction action, std::optional<project::ProjectId> project = std::nullopt);
+    [[nodiscard]] Result<void> build(BuildAction action, std::optional<project::ProjectId> project = std::nullopt,
+                                     BuildCompletion onDone = {});
 
     // Cancels the build in progress, if any: before MSBuild starts it ends at once (cancelled);
     // while MSBuild runs, its process tree is ended. Idempotent.

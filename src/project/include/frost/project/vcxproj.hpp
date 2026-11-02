@@ -188,6 +188,19 @@ struct FiltersFile {
 [[nodiscard]] Result<VcxProject> readVcxproj(io::IFileSystem& fs, std::string_view projectPath,
                                              const VcxprojOptions& options = {});
 
+/*
+ * The raw (unexpanded) values of the properties an MSBuild project file (a .vcxproj or its
+ * .vcxproj.user) sets for `configuration`|`platform`: those of PropertyGroups without a Condition
+ * or with the standard '$(Configuration)|$(Platform)'=='Debug|x64' form naming that pair (ASCII
+ * case ignored), in document order, a later value replacing an earlier one; properties with a
+ * Condition of their own, other conditions and <Choose> are skipped. Keys are lower-case. For the
+ * run service's fallback when MSBuild cannot report properties (frost/build/run_target.hpp).
+ * Errors: Corrupt (malformed XML, root not <Project>). O(file size).
+ */
+[[nodiscard]] Result<std::map<std::string, std::string, std::less<>>>
+parseConfigurationProperties(std::string_view content, std::string_view path, std::string_view configuration,
+                             std::string_view platform);
+
 // Parses the .vcxproj.filters XML that belongs to `project`; Include paths resolve against the
 // project's directory with its property table, then options.environment. Errors: Corrupt
 // (malformed XML, root not <Project>).

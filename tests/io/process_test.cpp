@@ -201,6 +201,21 @@ TEST(RealProcessLauncher, ArgumentsRoundTripExactly) {
 #endif
 }
 
+#ifdef _WIN32
+// ProcessSpec::rawArguments (ADR 0040): the tail reaches the child verbatim, so the C runtime's
+// own rules split it (the run service passes the user's argument string this way to cmd.exe).
+TEST(RealProcessLauncher, RawArgumentsReachTheChildVerbatim) {
+    ProcessSpec spec = childSpec({});
+    spec.rawArguments = "argv  \"two  words\" a\\\\\\\"b \"\" last";
+    const auto result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
+    EXPECT_EQ(reportedArguments(result->stdoutBytes, "crt"),
+              (std::vector<std::string>{"two  words", "a\\\"b", "", "last"}))
+        << result->stdoutBytes;
+}
+#endif
+
 /*
  * Lets a copy of io_test_child, started from another directory, find the DLLs that
  * the build deploys next to the original (the ASan runtime in ASan builds): the

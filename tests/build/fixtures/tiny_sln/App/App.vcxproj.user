@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- The per-user debugger settings of the tiny fixture's program, as Visual Studio writes them; the run
+     tests (tests/build/run_msbuild_test.cpp) read them through MSBuild -getProperty. -->
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LocalDebuggerCommandArguments>--print "two words" --echo --exit 3</LocalDebuggerCommandArguments>
+    <LocalDebuggerWorkingDirectory>$(SolutionDir)Lib</LocalDebuggerWorkingDirectory>
+    <LocalDebuggerEnvironment>FROST_TINY_VALUE=hello from $(Configuration)
+FROST_TINY_OTHER=1</LocalDebuggerEnvironment>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+</Project>

@@ -73,9 +73,29 @@ Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
             return invalid("argument contains a NUL character");
         }
     }
+    if (spec.rawArguments) {
+        if (!windowsRules) {
+            return fail(ErrorCode::Unsupported, "rawArguments is Windows-only; POSIX children get an argv");
+        }
+        if (!spec.arguments.empty()) {
+            return invalid("rawArguments replaces arguments; give one or the other");
+        }
+        if (hasNul(*spec.rawArguments) || !isValidUtf8(*spec.rawArguments)) {
+            return invalid("rawArguments contains a NUL character or is not valid UTF-8");
+        }
+    }
+    if (spec.newConsole) {
+        if (!windowsRules) {
+            return fail(ErrorCode::Unsupported, "newConsole is Windows-only (TODO(M4): a terminal emulator on POSIX)");
+        }
+        if (spec.stdinMode != Stdio::Inherit || spec.stdoutMode != Stdio::Inherit ||
+            spec.stderrMode != Stdio::Inherit) {
+            return invalid("a child with a new console uses that console's streams: every Stdio mode must be Inherit");
+        }
+    }
     if (windowsRules) {
         // The command line must be buildable and fit CreateProcessW's limit.
-        auto commandLine = buildWindowsCommandLine(*executable, spec.arguments);
+        auto commandLine = detail::windowsCommandLineFor(*executable, spec);
         if (!commandLine) {
             return std::unexpected(std::move(commandLine.error()));
         }
@@ -170,6 +190,24 @@ Result<std::string> buildWindowsCommandLine(std::string_view executable, const s
     for (const std::string& argument : arguments) {
         commandLine += ' ';
         appendWindowsArgument(commandLine, argument);
+    }
+    return commandLine;
+}
+
+Result<std::string> detail::windowsCommandLineFor(std::string_view executable, const ProcessSpec& spec) {
+    if (!spec.rawArguments) {
+        return buildWindowsCommandLine(executable, spec.arguments);
+    }
+    if (!spec.arguments.empty()) {
+        return fail(ErrorCode::InvalidArgument, "rawArguments replaces arguments; give one or the other");
+    }
+    auto commandLine = buildWindowsCommandLine(executable, {});
+    if (!commandLine) {
+        return std::unexpected(std::move(commandLine.error()));
+    }
+    if (!spec.rawArguments->empty()) {
+        *commandLine += ' ';
+        *commandLine += *spec.rawArguments;
     }
     return commandLine;
 }
