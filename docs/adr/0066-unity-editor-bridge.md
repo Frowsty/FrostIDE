@@ -59,6 +59,13 @@ Workbench test switched generations, replayed dirty text and observed the change
 touched EditorPrefs values were restored and compared to their snapshots. Native Linux does not yet have
 an installed Unity Editor acceptance run; user packages and full compiler-option coverage remain open.
 
+The later staged-window probe launched the actual staged application on a private Windows desktop, with
+only the scratch Unity project trusted in an isolated IDE profile. After its first-frame broker registered,
+Unity reused the existing clean tab at UTF-16 line 3, column 40. Normal application shutdown persisted one
+tab at display column 39, which accounts for the fixture's astral character. Source/meta bytes remained
+unchanged and all six touched EditorPrefs values were restored. This is clean-buffer application evidence;
+dirty-buffer evidence remains the separate Workbench-rig test. See the progress log for retained artifacts.
+
 UNITY-01 remains in progress. Live editor controls, tests, debug sessions, serialized references,
 Unity-specific analysis and shader workflows are separate tracks. No Unity source, proprietary plugin or
 new third-party dependency was added. This decision uses only Unity's public API documentation:

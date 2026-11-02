@@ -3,6 +3,36 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Staged Unity receiving-window acceptance and follow-up findings
+
+- Verified Git/Unity checkpoint `c7231b7` was committed and pushed to `origin/main`. The whole project goal
+  remains active; development continues in three isolated Terra worktrees with Astra review.
+- A subsequent real Unity request reused the actual staged FrostIDE application and existing clean tab on a
+  private Windows desktop. The app exited normally and persisted one tab at line 3, display column 39,
+  matching Unity's UTF-16 column 40 after the fixture's astral character. Source/meta bytes stayed unchanged;
+  six EditorPrefs values were restored with zero whole-key differences. The stage and source are unchanged.
+  Evidence: `E:\FrostBuilds\unity-stage-window-20261103\final-output.log` and
+  `trusted-final/result.json`, with application/Unity logs and isolated profile alongside them.
+- Probe corrections are explicit: the initial fresh untrusted profile stopped at a trust dialog, before broker
+  registration. The successful probe trusts only its owned scratch root and waits for the recorded first frame.
+  A second oracle incorrectly expected a byte column in the session JSON, whose column is the display/grapheme
+  count; the corrected fixture-specific oracle checks that coordinate. Python's private-desktop wrapper needed
+  explicit UTF-8 mode to retain Unicode diagnostics. No product change or trust decision in the user's profile
+  was made. Dirty-buffer handoff continues to have separate Workbench-rig evidence.
+- Source inspection found a likely existing restoration/navigation mismatch: `DocumentEditorView::viewState`
+  saves a display column, but `restoreViewState` calls the byte-column `goToLine` API. Navigation history has
+  the same pattern. Terra's editor agent is testing and correcting this as functional session work.
+- The actual GUI probe also retained a 2678 ms main-thread stall during project scanning on the loaded Debug
+  host. Symbolized FrostIDE frames lead through `ui::Workbench::pollScan` and navigation-path indexing; this
+  is a diagnostic observation, not a controlled B5 measurement. Retained trace:
+  `build/unity-stage-ui-freeze-symbolized.log`, with the source freeze JSON under the probe's `trusted-run`
+  profile. Incremental/background scan publication needs follow-up before full product completion.
+- Astra corrected an earlier folding-review premise: new ADR 0069 introduced the eager O(log f + k) metadata
+  formula; it was not a baseline B5 requirement. The baseline requires logarithmic coordinate mapping, local
+  display patches, unchanged-line reuse and the unchanged numerical latency targets. The agent now addresses
+  real local-update fallbacks and repeated endpoint-group reconstruction, documenting actual metadata cost.
+  No user budget was weakened. Folding, Lua debugging and Unity controls remain unaccepted work in progress.
+
 ## 2026-11-03: Verified Git workbench and Unity bridge checkpoint
 
 - Git worker tree `8d2097b8d6403e3ab3972e97914cbbdea9bc0c7a`, its exact test-label inventory
