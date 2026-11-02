@@ -11,7 +11,11 @@
 #   user phase:            wsl -d Ubuntu-24.04 -- bash tools/bootstrap-wsl.sh
 #       LLVM, CMake and Ninja from sdk/sdk.lock.json into ~/sdk (ext4, not
 #       /mnt/e, because builds on the 9P mount are several times slower), Qt
-#       through tools/qt-fetch.py, vcpkg at the pinned tag, and ~/sdk/env.sh.
+#       through tools/qt-fetch.py, vcpkg at the pinned tag, ~/sdk/env.sh, and the
+#       self-built lldb-dap: the official package's links a libpython Ubuntu 24.04
+#       lacks (spike S5), so tools/build-lldb.sh builds it from the pinned LLVM
+#       sources when it is missing (a long build) and checks its pinned hashes
+#       otherwise (ADR 0049). FROST_SKIP_LLDB=1 skips that last step.
 #
 # Archives are taken from the Windows download cache (/mnt/e/sdk/_downloads)
 # when present, otherwise downloaded. Every archive, Qt's included, is checked
@@ -20,6 +24,7 @@
 # Environment:
 #   FROST_SDK            install root (default ~/sdk)
 #   FROST_WIN_DOWNLOADS  Windows download cache to copy archives from (default /mnt/e/sdk/_downloads)
+#   FROST_SKIP_LLDB      1 skips building or verifying lldb-dap
 
 set -euo pipefail
 
@@ -158,6 +163,22 @@ install_vcpkg() {
     echo "[vcpkg] ready at $root ($tag)"
 }
 
+# Verifies the self-built lldb-dap in $SDK/lldb-<version> against linux.lldb.files in the lock
+# file, or builds it from the pinned LLVM sources first when it is not installed; both through
+# tools/build-lldb.sh, which fails on a mismatch. Needs LLVM, CMake and Ninja, so it runs last.
+install_lldb() {
+    local version dest
+    version="$(lock_get linux.lldb.version)"
+    dest="$SDK/lldb-$version"
+    if [[ -f "$dest/.frost-installed" ]]; then
+        bash "$REPO_ROOT/tools/build-lldb.sh" --verify-only
+        echo "[lldb] $version verified in $dest"
+        return
+    fi
+    echo "[lldb] $version is not installed: building it from the pinned LLVM sources (a long build)"
+    bash "$REPO_ROOT/tools/build-lldb.sh"
+}
+
 # Writes ~/sdk/env.sh, which puts the toolchain on PATH when sourced.
 write_env() {
     local llvm cmake ninja qt
@@ -189,4 +210,5 @@ for component in llvm cmake ninja; do install_archive "$component"; done
 install_qt
 install_vcpkg
 write_env
+if [[ "${FROST_SKIP_LLDB:-0}" != "1" ]]; then install_lldb; fi
 echo "user phase complete; source $SDK/env.sh"

@@ -35,6 +35,7 @@ frost_add_test_directory(project)
 frost_add_test_directory(document)
 frost_add_test_directory(build)
 frost_add_test_directory(lang)
+frost_add_test_directory(sdk)
 if(NOT FROST_FUZZ)
     # frost::diag is not built in fuzz trees (src/CMakeLists.txt).
     frost_add_test_directory(diag)
