@@ -41,6 +41,15 @@ struct EditorStatus {
     friend bool operator==(const EditorStatus&, const EditorStatus&) = default;
 };
 
+// Where an editor's caret and scroll position are, for session restore and navigation history
+// (ADR 0042). 1-based line and column (as EditorStatus), 0-based first visible line.
+struct EditorViewState {
+    int line = 1;
+    int column = 1;
+    int topLine = 0;
+    friend bool operator==(const EditorViewState&, const EditorViewState&) = default;
+};
+
 class IEditorView;
 
 /*
@@ -83,6 +92,15 @@ public:
     [[nodiscard]] virtual input::ContextKeys contextKeys() const { return {}; }
     // Asked before the tab closes; false keeps it open (the editor may save or ask first).
     [[nodiscard]] virtual bool requestClose() { return true; }
+    // The caret and scroll position (session restore, ADR 0042). The default reads status() and
+    // reports the top of the document.
+    [[nodiscard]] virtual EditorViewState viewState() const {
+        const EditorStatus current = status();
+        return EditorViewState{current.line, current.column, 0};
+    }
+    // Restores a position from viewState(), clamped to the document. The default moves the caret
+    // with goToLine and ignores the scroll position.
+    virtual void restoreViewState(const EditorViewState& state) { goToLine(state.line, state.column); }
 };
 
 /*
@@ -92,6 +110,9 @@ public:
 class IEditorFactory {
 public:
     [[nodiscard]] virtual Result<std::unique_ptr<IEditorView>> open(const std::string& path, IEditorHost& host) = 0;
+    // The spelling EditorTabs keys a tab by and passes to open(): one per document, so "Foo.cpp"
+    // and "foo.cpp" share a tab on Windows (ADR 0042). The default returns `path` unchanged.
+    [[nodiscard]] virtual std::string canonicalPath(const std::string& path) const { return path; }
 
 protected:
     IEditorFactory() = default;

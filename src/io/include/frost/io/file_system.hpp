@@ -234,6 +234,17 @@ public:
     // (e.g. PermissionDenied on a parent) are returned as errors.
     [[nodiscard]] virtual Result<bool> exists(std::string_view path) = 0;
 
+    /*
+     * The spelling that identifies the existing file or directory at `path`, so that two spellings of
+     * one file compare equal as strings (the shell's document identity, ADR 0042). Windows (the real
+     * file system): the real-case absolute path from GetFinalPathNameByHandleW, without the \\?\
+     * prefix ("c:\src\FOO.cpp" becomes "C:\src\Foo.cpp", 8.3 names become long names); the last
+     * component is not followed if it is a link, directories in between are. POSIX and this default
+     * (test doubles): normalizePath in the native style, links kept. Errors: InvalidArgument (a
+     * relative path), NotFound, PermissionDenied, IoError. O(path length) plus one open.
+     */
+    [[nodiscard]] virtual Result<std::string> canonicalPath(std::string_view path);
+
 protected:
     constexpr IFileSystem() noexcept = default;
     constexpr IFileSystem(const IFileSystem&) noexcept = default;

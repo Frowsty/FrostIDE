@@ -176,6 +176,24 @@ TEST(RealFileSystem, SharingViolationMapsToBusy) {
     EXPECT_NE(result.error().message().find("win32 error 32"), std::string::npos) << result.error().message();
 }
 
+// canonicalPath (ADR 0042): one spelling per file. On Windows it is the real case of every component, so
+// "foo.CPP" and "Foo.cpp" name one document; elsewhere it is the lexical normal form.
+TEST(RealFileSystem, CanonicalPathGivesOneSpellingPerFile) {
+    const ScratchDir dir("fs-canonical");
+    const std::string file = dir.join("Foo.cpp");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "x").has_value());
+    const auto canonical = fs().canonicalPath(file);
+    ASSERT_TRUE(canonical.has_value()) << canonical.error().describe();
+    EXPECT_TRUE(canonical->ends_with("Foo.cpp")) << *canonical;
+    std::string dotted = dir.path() + "/./sub/../Foo.cpp";
+    EXPECT_EQ(fs().canonicalPath(dotted).value(), *canonical);
+#ifdef _WIN32
+    EXPECT_EQ(fs().canonicalPath(dir.join("foo.CPP")).value(), *canonical);
+    EXPECT_EQ(canonical->find('/'), std::string::npos) << *canonical;
+#endif
+    EXPECT_EQ(fs().canonicalPath(dir.join("missing.cpp")).error().code(), ErrorCode::NotFound);
+}
+
 TEST(RealFileSystem, ForwardSlashesAndDotSegmentsAreNormalised) {
     const ScratchDir dir("fs-slashes");
     std::string mixed = dir.path();

@@ -1739,7 +1739,8 @@ std::string imagePathOf(DWORD pid) {
 /*
  * frost's cache for one test: LOCALAPPDATA (Windows) or XDG_CACHE_HOME (Linux) redirected into
  * the scratch directory `base`, so no report reaches the user's own cache, and the directories
- * frost writes below it (frost/diag/paths.hpp).
+ * frost writes below it (frost/diag/paths.hpp). On Linux XDG_DATA_HOME goes below `base` too, so
+ * the GUI's hot-exit journal and sessions (ADR 0042) stay out of the user's data directory.
  */
 struct TestCache {
     Environment environment;
@@ -1761,7 +1762,7 @@ TestCache testCacheIn(const std::string& base) {
     cache.environment = {{"LOCALAPPDATA", base}};
     const std::string root = join(base, {"FrostIDE", "caches"});
 #else
-    cache.environment = {{"XDG_CACHE_HOME", base}};
+    cache.environment = {{"XDG_CACHE_HOME", base}, {"XDG_DATA_HOME", join(base, {"data"})}};
     const std::string root = join(base, {"FrostIDE"});
 #endif
     cache.crashpad = join(root, {"crashes", "crashpad"});

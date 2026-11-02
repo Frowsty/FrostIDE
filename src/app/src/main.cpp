@@ -387,14 +387,14 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QApplication app(qtArgc, argv);
         QApplication::setApplicationName(QStringLiteral("FrostIDE"));
         QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
-        // The services outlive the window (declared first, destroyed last).
-        frost::app::AppServices services;
+        // The services outlive the window (declared first, destroyed last). Persistent: the hot-exit
+        // journal, sessions, the thread pool and the file watcher (ADR 0042).
+        frost::app::AppServices services(frost::app::AppServicesOptions{.persistent = true});
         // The appearance comes from the resources deployed next to frost (ADR 0015). Without them
         // the window still opens on Qt's own style and says why (ADR 0038), instead of not starting.
-        const QByteArray resources =
-            (QCoreApplication::applicationDirPath() + QStringLiteral("/resources")).toUtf8();
+        const QByteArray resources = (QCoreApplication::applicationDirPath() + QStringLiteral("/resources")).toUtf8();
         const auto appearance = services.installAppearance(app, resources.toStdString());
-        frost::app::MainWindow window(services.environment());
+        frost::app::MainWindow window(services);
         if (!appearance) {
             window.notifications().notify({frost::ui::qtr("frost::app", "The theme could not be loaded"),
                                            QString::fromUtf8(appearance.error().message()),
@@ -415,16 +415,45 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                                       {}});
                              });
         }
-        // Files named on the command line open in tabs; folders and solutions wait for M2.
+        for (const std::string& warning : services.startupWarnings()) {
+            frost::log::warn("app", "{}", warning);
+        }
+        /*
+         * A folder or solution named on the command line opens as the project, files open in tabs
+         * (ADR 0042); without a project argument the last project and its session come back.
+         */
+        frost::ui::Workbench& workbench = *window.workbench();
+        bool projectNamed = false;
         for (const std::string& path : parsed->paths) {
             const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
-            if (file.isFile()) {
+            const std::string absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8().toStdString();
+            const QString suffix = file.suffix().toLower();
+            if (file.isDir() ||
+                (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx")))) {
+                projectNamed = true;
+                if (auto opened = workbench.openProject(absolute); !opened) {
+                    window.notifications().notify(
+                        {frost::ui::qtr("frost::app", "Cannot open %1").arg(QString::fromStdString(absolute)),
+                         QString::fromUtf8(opened.error().message()),
+                         frost::ui::NotificationKind::Error,
+                         std::nullopt,
+                         {}});
+                }
+            }
+        }
+        if (!projectNamed) {
+            static_cast<void>(workbench.restoreLastProject());
+        }
+        for (const std::string& path : parsed->paths) {
+            const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
+            const QString suffix = file.suffix().toLower();
+            if (file.isFile() && suffix != QStringLiteral("sln") && suffix != QStringLiteral("slnx")) {
                 const QByteArray absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8();
-                static_cast<void>(window.openFile(absolute.toStdString()));
+                static_cast<void>(workbench.openFile(absolute.toStdString()));
             }
         }
         window.show();
-        frost::app::afterFirstFrame(window, [&app, restartedFrom] {
+        frost::app::afterFirstFrame(window, [&app, &services, &workbench, restartedFrom] {
             // FrostProcess.GuiStartsTheCrashHandlerAfterTheFirstFrame orders this line before the
             // handler's "crash handler registered" line.
             frost::log::info("app", "first frame shown");
@@ -432,6 +461,13 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 frost::log::warn("diag", "no stall watchdog: {}", watchdog.error().describe());
             }
             frost::app::startProgramDiagnosticsThread(restartedFrom);
+            // The hot-exit restore prompt (ADR 0042): the scan may wait on journals that live
+            // instances hold, so it runs after the first frame (Budget: B1) and the diagnostics.
+            if (auto scan = services.scanRecoverableJournals(); scan) {
+                static_cast<void>(workbench.offerRestore(std::move(*scan)));
+            } else if (scan.error().code() != frost::ErrorCode::NotFound) {
+                frost::log::warn("app", "hot-exit recovery: {}", scan.error().describe());
+            }
         });
         status = QApplication::exec();
         // The watchdog and its hooks go before the window and QApplication (declared after it).

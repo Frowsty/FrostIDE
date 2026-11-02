@@ -474,11 +474,11 @@ void ShellWindow::setProject(const QString& name) {
 Result<int> ShellWindow::openFile(const std::string& path) {
     Result<int> opened = m_tabs->open(path);
     if (!opened) {
-        m_notifications->notify({text("Cannot open %1").arg(QDir::toNativeSeparators(fromUtf8(path))),
-                                 fromUtf8(opened.error().message()),
-                                 NotificationKind::Error,
-                                 std::nullopt,
-                                 {}});
+        // OutOfRange is the large-file guard (ADR 0028): the file is refused before it is read.
+        const QString name = QDir::toNativeSeparators(fromUtf8(path));
+        const QString title = opened.error().code() == ErrorCode::OutOfRange ? text("%1 is too large to open").arg(name)
+                                                                             : text("Cannot open %1").arg(name);
+        m_notifications->notify({title, fromUtf8(opened.error().message()), NotificationKind::Error, std::nullopt, {}});
     } else if (IEditorView* editor = m_tabs->currentEditor(); editor != nullptr && isVisible()) {
         editor->widget()->setFocus(Qt::OtherFocusReason);
     }

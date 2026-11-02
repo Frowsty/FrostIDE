@@ -165,27 +165,17 @@ constexpr DWORD kSettableAttributes = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_H
                                       FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_TEMPORARY;
 
 /*
- * The normalised UTF-8 path of the file `widePath` finally names, all links followed
- * (GetFinalPathNameByHandleW), with the \\?\ and \\?\UNC\ prefixes turned back into "C:\..." and
- * "\\server\share\...". NotFound when the link dangles.
+ * The normalised UTF-8 path GetFinalPathNameByHandleW reports for `handle`, with the \\?\ and
+ * \\?\UNC\ prefixes turned back into "C:\..." and "\\server\share\...". `what` and `path` name the
+ * operation in errors.
  */
-Result<std::string> finalPathOf(const std::wstring& widePath, std::string_view path) {
-    const UniqueHandle handle(CreateFileW(widePath.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
-                                          FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-    if (!handle.valid()) {
-        const DWORD error = GetLastError();
-        if (errorCodeFromWin32(error) == ErrorCode::NotFound) {
-            return fail(ErrorCode::NotFound,
-                        std::format("safeWrite '{}': the symbolic link points at a file that does not exist", path));
-        }
-        return std::unexpected(win32Error(error, "safeWrite: resolve the link", path));
-    }
+Result<std::string> finalPathOfHandle(HANDLE handle, std::string_view what, std::string_view path) {
     std::wstring buffer(MAX_PATH, L'\0');
     for (;;) {
-        const DWORD length = GetFinalPathNameByHandleW(handle.get(), buffer.data(), static_cast<DWORD>(buffer.size()),
+        const DWORD length = GetFinalPathNameByHandleW(handle, buffer.data(), static_cast<DWORD>(buffer.size()),
                                                        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
         if (length == 0) {
-            return std::unexpected(lastWin32Error("safeWrite: resolve the link", path));
+            return std::unexpected(lastWin32Error(what, path));
         }
         if (length < buffer.size()) {
             buffer.resize(length);
@@ -206,6 +196,24 @@ Result<std::string> finalPathOf(const std::wstring& widePath, std::string_view p
         return std::unexpected(std::move(utf8.error()));
     }
     return normalizePath(*utf8, PathStyle::Windows);
+}
+
+/*
+ * The normalised UTF-8 path of the file `widePath` finally names, all links followed
+ * (GetFinalPathNameByHandleW). NotFound when the link dangles.
+ */
+Result<std::string> finalPathOf(const std::wstring& widePath, std::string_view path) {
+    const UniqueHandle handle(CreateFileW(widePath.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                          FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!handle.valid()) {
+        const DWORD error = GetLastError();
+        if (errorCodeFromWin32(error) == ErrorCode::NotFound) {
+            return fail(ErrorCode::NotFound,
+                        std::format("safeWrite '{}': the symbolic link points at a file that does not exist", path));
+        }
+        return std::unexpected(win32Error(error, "safeWrite: resolve the link", path));
+    }
+    return finalPathOfHandle(handle.get(), "safeWrite: resolve the link", path);
 }
 
 /*
@@ -684,6 +692,21 @@ public:
             return std::unexpected(win32Error(error, "removeDirectory", path));
         }
         return {};
+    }
+
+    Result<std::string> canonicalPath(std::string_view path) override {
+        auto wide = toWin32Path(path);
+        if (!wide) {
+            return std::unexpected(std::move(wide.error()));
+        }
+        // The name needs no access rights; FILE_FLAG_OPEN_REPARSE_POINT keeps a link as the link
+        // (its own real-case name), FILE_FLAG_BACKUP_SEMANTICS opens directories.
+        const UniqueHandle handle(CreateFileW(wide->c_str(), 0, kShareAll, nullptr, OPEN_EXISTING,
+                                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        if (!handle.valid()) {
+            return std::unexpected(lastWin32Error("canonicalPath", path));
+        }
+        return finalPathOfHandle(handle.get(), "canonicalPath", path);
     }
 
     Result<bool> exists(std::string_view path) override {

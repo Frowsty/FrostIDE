@@ -64,25 +64,32 @@ Result<DirOutcome> listOne(IFileSystem& fs, const ScanOptions& options, const Di
         outcome.issues.push_back(ScanIssue{ScanIssueKind::NameSkipped, job.path, std::move(issue.error)});
     }
     IgnoreStack stack = job.stack;
-    if (options.readGitignore) {
-        const auto found = std::ranges::find(listing->entries, std::string_view(".gitignore"), &DirEntry::name);
-        // Only a regular file: git does not follow a symlinked .gitignore either.
-        if (found != listing->entries.end() && found->type == FileType::Regular) {
-            const std::string path = childPath(job.path, ".gitignore", separator);
-            auto text = fs.readFile(path);
-            if (!text) {
-                outcome.issues.push_back(ScanIssue{ScanIssueKind::IgnoreFileFailed, path, std::move(text.error())});
-            } else {
-                IgnoreRules rules = IgnoreRules::parse(*text, job.relative, path, options.ignoreOptions);
-                for (const IgnoreDiagnostic& diagnostic : rules.diagnostics()) {
-                    outcome.issues.push_back(
-                        ScanIssue{ScanIssueKind::IgnoreRule, path,
-                                  Error(ErrorCode::InvalidArgument,
-                                        std::format("line {}: {}", diagnostic.line, diagnostic.message))});
-                }
-                stack = stack.pushed(std::move(rules));
-            }
+    // Reads one ignore file of this directory (a regular file only: git does not follow a symlinked
+    // .gitignore either) and pushes it on top of `stack`.
+    const auto readIgnoreFile = [&](std::string_view name) {
+        const auto found = std::ranges::find(listing->entries, name, &DirEntry::name);
+        if (found == listing->entries.end() || found->type != FileType::Regular) {
+            return;
         }
+        const std::string path = childPath(job.path, name, separator);
+        auto text = fs.readFile(path);
+        if (!text) {
+            outcome.issues.push_back(ScanIssue{ScanIssueKind::IgnoreFileFailed, path, std::move(text.error())});
+            return;
+        }
+        IgnoreRules rules = IgnoreRules::parse(*text, job.relative, path, options.ignoreOptions);
+        for (const IgnoreDiagnostic& diagnostic : rules.diagnostics()) {
+            outcome.issues.push_back(ScanIssue{
+                ScanIssueKind::IgnoreRule, path,
+                Error(ErrorCode::InvalidArgument, std::format("line {}: {}", diagnostic.line, diagnostic.message))});
+        }
+        stack = stack.pushed(std::move(rules));
+    };
+    if (options.readGitignore) {
+        readIgnoreFile(".gitignore");
+    }
+    for (const std::string& name : options.extraIgnoreFiles) {
+        readIgnoreFile(name);
     }
     for (const DirEntry& entry : listing->entries) {
         if (std::ranges::find(options.skipNames, entry.name) != options.skipNames.end() ||
@@ -120,6 +127,26 @@ sched::Task<Result<DirOutcome>> listTask(IFileSystem& fs, const ScanOptions& opt
 }
 
 } // namespace
+
+const IgnoreRules& defaultProjectExcludes() {
+    // Directory-only patterns without a '/' inside, so they match at any depth (ignore_rules.hpp).
+    // Built on first use and never destroyed (no exit-time destructor; startup hygiene, PLAN.md 2.1).
+    static const IgnoreRules* const kRules = new IgnoreRules(IgnoreRules::parse("build/\n"
+                                                                                "out/\n"
+                                                                                "bin/\n"
+                                                                                "obj/\n"
+                                                                                "ipch/\n"
+                                                                                "cmake-build-*/\n"
+                                                                                "[Dd]ebug/\n"
+                                                                                "[Rr]elease/\n"
+                                                                                "x64/\n"
+                                                                                "x86/\n"
+                                                                                "ARM64/\n",
+                                                                                {}, "<FrostIDE default excludes>"));
+    return *kRules;
+}
+
+std::vector<std::string> defaultProjectSkipNames() { return {".git", ".vs", ".svn", ".hg"}; }
 
 sched::Task<Result<TreeScan>> scanTree(IFileSystem& fs, sched::IScheduler& scheduler, std::string root,
                                        ScanOptions options, std::stop_token token) {

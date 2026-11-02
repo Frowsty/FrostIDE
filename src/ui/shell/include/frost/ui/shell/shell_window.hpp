@@ -111,7 +111,8 @@ public:
     // Shows `name` in the toolbar's project widget; empty: no project (ProjectOpen off).
     void setProject(const QString& name);
 
-    // Opens `path` in a tab. A failure is shown as an error notification and returned.
+    // Opens `path` in a tab. A failure is shown as an error notification and returned; a file the
+    // large-file guard refuses (OutOfRange) is titled "<file> is too large to open".
     Result<int> openFile(const std::string& path);
 
     // The shell's popups; each returns the open popup (owned by the window, deleted on close) or
@@ -121,6 +122,11 @@ public:
     ListPopup* showQuickSwitchTheme();
     // The open shell popup, or nullptr.
     [[nodiscard]] Popup* activePopup() const;
+    // Shows `popup` (owned by the window, deleted on close) centred near the top, closing the one
+    // open before; the popups of other components (Find Action, Go to File; ADR 0042) use it too.
+    void openPopup(Popup* popup);
+    // Moves the keyboard focus to the active editor, if any.
+    void focusEditor();
 
     // Posts start-up warnings (AppearanceManager::InstallReport::warnings) as one notification.
     void reportStartupWarnings(const std::vector<std::string>& warnings);
@@ -141,8 +147,6 @@ private:
     void onCurrentEditorChanged(IEditorView* editor);
     void onEditorStatus(IEditorView* editor);
     void focusFirst(const std::vector<QWidget*>& widgets);
-    void focusEditor();
-    void openPopup(Popup* popup);
     void storeChromeVisibility();
     void storeAppearance(const std::function<void(AppearanceSettings&)>& change);
     [[nodiscard]] QString shortcutText(std::string_view actionId);

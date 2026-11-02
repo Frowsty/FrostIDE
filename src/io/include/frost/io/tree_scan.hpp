@@ -45,7 +45,11 @@ struct ScanOptions {
     // Rules below the root's own .gitignore in precedence (info/exclude, core.excludesFile), with paths
     // relative to the root. Empty by default.
     IgnoreStack ignore{};
-    bool readGitignore = true;     // Read and apply each directory's ".gitignore".
+    bool readGitignore = true; // Read and apply each directory's ".gitignore".
+    // More ignore files read in each directory after ".gitignore", in order, each taking precedence over
+    // the ones before it (ripgrep's ".ignore" over ".gitignore"; the File System view passes {".ignore"}).
+    // Read whatever readGitignore says; the same rules as for ".gitignore" (a symlinked one is not read).
+    std::vector<std::string> extraIgnoreFiles{};
     IgnoreOptions ignoreOptions{}; // For the .gitignore files read (case folding).
     // Keep ignored entries (ScanEntry::ignored) instead of dropping them; they are still not descended.
     bool reportIgnored = false;
@@ -95,6 +99,19 @@ struct TreeScan {
     std::vector<ScanIssue> issues;
     std::size_t directoriesListed = 0; // The root included.
 };
+
+/*
+ * FrostIDE's default project excludes (ADR 0042): build output directories that a project tree
+ * hides unless an ignore file re-includes them ("!build/"). Meant for the bottom of
+ * ScanOptions::ignore (below every .gitignore), with paths relative to the walk root. Directory-only
+ * patterns at any depth: build/, out/, bin/, obj/, ipch/, cmake-build-*, [Dd]ebug/, [Rr]elease/,
+ * x64/, x86/, ARM64/ (the Visual Studio and CMake output layouts). O(1) after the first call.
+ */
+[[nodiscard]] const IgnoreRules& defaultProjectExcludes();
+
+// The names a project tree never shows nor descends at any depth (ScanOptions::skipNames for the File
+// System view): version-control and IDE state directories, ".git", ".vs", ".svn" and ".hg".
+[[nodiscard]] std::vector<std::string> defaultProjectSkipNames();
 
 /*
  * Walks the tree below `root` (absolute) as described in the header comment. Errors: InvalidArgument (a
