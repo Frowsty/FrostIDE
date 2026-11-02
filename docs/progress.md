@@ -5,9 +5,11 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-02: M1 in progress
 
-`main` has the eleventh, the tenth, the ninth, the eighth, the seventh and the sixth feature-first batches (ADR 0031),
-merged with `git merge --no-ff` in the main worktree under D23. The eleventh: `m2/find-in-files` at 2ce9819 (merge
-aca0ea8), then two follow-ups of the merged tree (3b0025f, 4ecb9ab). The tenth: `m1/shell-nav` at 588ddfe (merge
+`main` has the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh and the sixth feature-first batches
+(ADR 0031), merged with `git merge --no-ff` in the main worktree under D23. The twelfth, in this order:
+`m3/editor-insight` at eb033ab (merge a2626b4), one fix of the merged tree (63aefbc), `m2/cmake` at ce467e4 (merge
+bcc3f32) and one fix of the merged tree (96adc58). The eleventh: `m2/find-in-files` at 2ce9819 (merge aca0ea8), then
+two follow-ups of the merged tree (3b0025f, 4ecb9ab). The tenth: `m1/shell-nav` at 588ddfe (merge
 9d00def), then one fix of the merged tree (cfbd46e). The ninth, in this order: `w1/run-service` at 82c6c56 (merge
 fcc0a46), `m1/editor-rhi` at 9438b85 (merge 97e490e) and `w2/clangd-nav` at 660a1e9 (merge 29869f9, with the
 regenerated keymap golden). The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
@@ -20,10 +22,170 @@ at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then
 Each slice passed its own `-Quick`, and each batch's merged tree was verified once (the Verification sections below).
 The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in progress". Its
 "Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now the running one.
-This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the seventeen
+This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the nineteen
 branches kept a record in this log).
 
 ### Done
+
+#### Merge of `m3/editor-insight` (a2626b4, twelfth batch)
+- **The merge** (a2626b4) of `m3/editor-insight` (eb033ab) into `main` at ebd4b0d: in frost::lang LSP semantic tokens
+  (`semantic_tokens.hpp`: the legend read once at initialize, the relative stream decoded into byte ranges, full and
+  delta requests with a full fallback) and clangd's `textDocument/inactiveRegions`, kept per open file by
+  ClangdService with listeners; in frost::ui_editor an LSP-free insight vocabulary (`editor_insight.hpp`) and
+  EditorView's seams `setDecorations(owner, ...)`, `setSemanticTokens`, `setInactiveRanges`, `setDiagnostics` (build
+  and live), `setUsageHighlights` and `setAnalyzing`, with squiggles and tooltips, the error stripe, the inspection
+  widget, InsightStatusIndicator for the status bar and F2/Shift+F2 (`navigate.nextError`/`previousError`) with the
+  balloon, all in the display list; EditorInsightBinding in frost::ui_lang; and 28 `Semantic.*` and marker colour
+  keys in the four Glacier themes. Feature rows 36 (semantic highlighting), 37 (inactive regions) and 58 (error
+  stripe, inspection widget) are `in-progress` with acceptance tests, and row 94 adds the F2 test. Nothing is wired
+  into `src/app` (the W1 unify slice does that; the pre-state, Next). The slice record below says more.
+- **ADR 0047** (`docs/adr/0047-editor-insight.md`): the number is free on `main` (0046 is `m2/cmake`'s, merged after
+  it in this batch). Its references are right: 0031 (feature-first), 0036 (ClangdService and the diagnostics store),
+  0037 (EditorView and the display list) and 0041 (the language features); the code's 0027 (labels and locks) too.
+- **The branch's own merges** (the pre-state): 7d2fab1 of `m1/editor-view` 3acd71c and d969d15 of `w2/clangd-nav`
+  660a1e9 are on `main`, and a1fd262 is byte for byte the same diff as `main`'s label-check fix 76d5e7f, so it
+  resolves to `main`'s. git found two merge bases (660a1e9 and 3acd71c) and conflicted against its virtual base, so
+  the result was built as `main` plus the slice's own commit: the merge changes exactly the 43 files that eb033ab
+  changes against a1fd262, and every one of them outside the three hand-resolved files below equals the three-way
+  merge of `main`, a1fd262 and eb033ab.
+- **The theme pins** (the pre-state): `kExpectedRegistryHash` 0x31cfb245a8dcffe0 and the theme blob's 716/788 stand
+  as the slice set them. `main`'s `theme_registry.hpp`, the four theme files and the two `tests/ui/model` tests were
+  unchanged from the slice's base (a1fd262), and `m2/cmake` adds no theme key, so nothing had to be recomputed; no
+  check is loosened. `ui_model_tests` passed on the merged tree and in the batch run.
+- **Seven conflicts**, each resolved so that both sides' intent survives:
+  - `src/ui/editor/CMakeLists.txt`: both header notes (the slice's insight sentence, then `main`'s QRhi backend note,
+    ADR 0043, and its pinned GuiPrivate package); the slice's `editor_insight.cpp`, `editor_view_insight.cpp` and
+    `insight_status.cpp` beside `main`'s `editor_backend.cpp`, `editor_view_renderer.cpp`, `glyph_atlas.cpp` and the
+    rhi sources; `insight_status.hpp` beside `main`'s `rhi_renderer.hpp` under AUTOMOC.
+  - `src/ui/editor/include/frost/ui/editor/editor_view.hpp`: the class note keeps `main`'s Renderers paragraph
+    (ADR 0043) and adds the slice's Insight paragraph (ADR 0047); the signals keep `main`'s `rendererChanged()` and
+    add `insightChanged()`, `documentEdited(version)` and `problemsViewRequested()`.
+  - `tests/ui/CMakeLists.txt`: `ui_editor_tests` builds `editor/editor_insight_test.cpp` beside `main`'s
+    `editor/editor_rhi_test.cpp`; the header list keeps `main`'s QRhi, `ui_nav`, `ui_workbench`, `ui_find` and
+    `ui_run` lines and adds the slice's insight and EditorInsightBinding text. `ui_lang_tests` took the slice's
+    extra dependencies and `_frost_ui_test_wiring` without a conflict.
+  - `src/CMakeLists.txt`, `src/ui/CMakeLists.txt`, `tests/features/matrix.json` and `tests/lang/CMakeLists.txt`
+    conflicted only against the virtual base: the first two are `main`'s text (the slice does not change them), the
+    other two `main`'s text plus the slice's rows 36, 37, 58 and 94 and its `semantic_tokens_test.cpp` and notes.
+- **Auto-merged:** the slice's changes to `editor_view.cpp`, `editor_view_input.cpp` and `editor_view_paint.cpp`
+  beside `m1/editor-rhi`'s renderer switch. `m1/editor-rhi`'s QRhi backend does not draw the new display-list parts
+  (decorations, the stripe, chrome and chromeText) yet; the raster backend does (the slice's Next).
+- **The format check** (the pre-state): `clang-format --dry-run --Werror` (23.1.4) over the 31 C/C++ files the merge
+  adds or changes, right after the merge: clean.
+- **The label check:** the slice adds no tagged suite (its real-clangd case is
+  `ClangdE2E.SemanticTokensAndInactiveRegionsOnAFixture` in `lang_clangd_tests`, which the check already tags
+  "clangd" by the `ClangdE2E.` prefix), so `tests/tools/test_verify_support.py` needed no change.
+- **The build of the merged tree** (a2626b4): `night.py build-gate` (34.1 GB commit free), `cmake --preset
+  win-clangcl` and `cmake --build --preset win-clangcl-debug -j 8`: exit 1, one compile error in
+  `tests/ui/editor/editor_rhi_test.cpp` (the follow-up below).
+
+#### QRhi test follow-up (63aefbc, twelfth batch)
+- **The failure:** the slice adds two fields to DisplayText, `semantic` and `inactive`, and was based before
+  `m1/editor-rhi` (ninth batch), so its own run never compiled `editor_rhi_test.cpp`. On the merged tree that test's
+  sample-run lambda brace-initialised DisplayText without them, which `-Wmissing-field-initializers` under `/WX`
+  rejects.
+- **The fix** (63aefbc): the lambda passes `std::nullopt, false`, the values every DisplayText in the slice's own
+  code gets for text without a semantic kind that is not inactive, so the sample display list (and what
+  `RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes` compares) is unchanged; clang-format laid the
+  initializer out over two lines. No assertion moves. A fix forward, not a revert: the cause was clear and the
+  change one initializer.
+- **Checked:** the Debug build (exit 0, 51 steps) and ctest `-L "mod.(ui|lang)"` on the hidden desktop: 428/428
+  (the slice's `EditorInsight`, `EditorInsightBinding`, semantic-token and `ClangdE2E` cases, and `main`'s
+  `RhiGlyphPainter` and `ui_model_tests` among them).
+
+#### Merge of `m2/cmake` (bcc3f32, twelfth batch)
+- **The merge** (bcc3f32) of `m2/cmake` (ce467e4, on 52eb3d6) into `main` at 63aefbc: Qt-free CMake support in
+  frost::project (CMakePresets.json and CMakeUserPresets.json with includes, inherits, conditions and macros;
+  profiles from the presets, the `cmake.profiles` setting or one Debug default; the File API reply model and the view
+  model) and frost::build (cmake and ninja discovery, the vcvarsall.bat environment capture and its cache,
+  CMakeService with the trust gate, background configure, reconfigure on change and `cmake --build`, the GNU/Clang
+  and CMake output parsers, and `BuildSessionOptions::parser`, a parser factory that keeps MSBuild's parser as the
+  default); the `cmake.profiles` (an `executes` record list) and `tools.ninja.path` settings;
+  BuildDirectoryCompileCommandsProvider in frost::lang, which follows the active profile's build directory for
+  clangd; and the new frost::ui_cmake (`src/ui/cmake`: CMakeTreeModel, CMakeController behind ICMakeBackend, and
+  CMakeToolWindow), which the workbench does not host yet (Next). The slice record below says more.
+- **ADR 0046** (`docs/adr/0046-cmake-projects.md`): the number is free on `main` (0047 is `m3/editor-insight`'s).
+  Its references are right: 0011 (process launching, E2), 0020 (the watcher), 0021 (settings, yyjson), 0029 (M16),
+  0031 (feature-first), 0033 (pugixml), 0035 (build service) and 0036 (compile commands).
+- **Five conflicts**, each resolved so that both sides' intent survives:
+  - `src/build/CMakeLists.txt`: `main`'s RunService note (ADR 0040) and the slice's CMake note; the TODO(M4) keeps
+    `main`'s "full run configurations" and drops "the CMake driver", which this slice adds; `output_parsers.cpp`
+    beside `main`'s `run_service.cpp`, `run_session.cpp` and `run_target.cpp`; the slice's DEPS (settings and
+    sched added to project and io).
+  - `src/lang/src/compile_commands.cpp`: `BuildDirectoryCompileCommandsProvider::locate()` after
+    `ExistingCompileCommandsProvider::locate()` and before `w2/clangd-nav`'s `resolveConfigurationIndex`; neither
+    side's code changes.
+  - `src/ui/CMakeLists.txt`: `main`'s header note plus the ui_cmake sentence; `add_subdirectory(cmake)` after
+    `main`'s editor, toolwindows, the guarded lang, nav, workbench and find (fuzz trees build no UI).
+  - `tests/build/CMakeLists.txt`: `build_unit_tests` has the slice's `cmake_service_test.cpp`,
+    `cmake_toolchain_test.cpp` and `output_parsers_test.cpp` beside `main`'s `run_service_test.cpp` and
+    `run_target_test.cpp`; `build_cmake_tests` and the Windows-only `build_msvc_env_tests` merged after `main`'s
+    suites.
+  - `tests/ui/CMakeLists.txt`: `ui_cmake_tests` after `ui_shell_tests`, where the slice put it, with its header line,
+    beside `main`'s suites.
+- **Auto-merged:** `src/settings` `keys.hpp` and `builtin_registry.cpp` (the slice's two keys beside `main`'s
+  `editor.renderer`), `tests/settings/registry_test.cpp` (both typed-key checks), `build_session.hpp`, `session.cpp`
+  and `compile_commands.hpp`. The slice's extension of `StoreTest.ExecutesKeysOfUntrustedProjectsAreIgnored` (a
+  planted `cmake.profiles` record with a toolchain file) is a strengthening (the orchestrator's note).
+- **The label check** (orchestrator decision; the slice left it out to avoid a conflict with `main`'s 76d5e7f): in
+  the merge, `tests/tools/test_verify_support.py`'s tagged-suite list gains "cmake" for `build_cmake_tests`
+  (`CMakeRealBuild.`) and "msvc" for `build_msvc_env_tests` (`MsvcEnvironmentCapture.`, Windows only), both of kind
+  "integration" with the `frost_desktop` lock, and its note names them. Only the list grows; the prefixes do not catch
+  the unit suites `CMakeTools.`, `MsvcEnvironment.` or `CMakeServiceTest.`.
+- **The format check** (the pre-state): `clang-format --dry-run --Werror` over the 43 C/C++ files the merge adds or
+  changes (the tiny CMake project's three C fixtures excluded, as `verify.ps1` excludes fixtures): clean.
+- **The build of the merged tree** (bcc3f32): `night.py build-gate` (34.5 GB commit free) and the Debug build: exit
+  0, 214 steps. Then ctest `-L "mod.(build|project|settings|lang|ui|tools)"` on the hidden desktop: 648/650, the two
+  failures of the follow-up below (`CMakeRealBuild` and `MsvcEnvironmentCapture` passed, and `tools.verify_support`
+  with the new tag rules).
+
+#### Presets fixture follow-up (96adc58, twelfth batch)
+- **The failure:** `CMakePresets.ReadsTheFixtureFolder` (2 presets files instead of 3) and
+  `CMakeProfiles.FromTheFixturePresets` (no "mine" profile). Both read `tests/project/fixtures/cmake/presets`, whose
+  third file, `CMakeUserPresets.json`, the repository's `.gitignore` ignores everywhere; the slice's commit left it
+  out, and it existed only untracked in the slice's worktree, where its own `-Quick` passed.
+- **The fix** (96adc58): the fixture is added byte for byte as the slice wrote it (a "mine" configure preset that
+  inherits "debug", with an environment macro and a cache variable), and `.gitignore` gains one exception for that
+  path only; the rule for users' own `CMakeUserPresets.json` stays. No test changes. A fix forward, not a revert.
+- **Checked:** `project_unit_tests` 53/53 and `build_unit_tests` 105/105 on the hidden desktop.
+
+#### Verification (twelfth batch, merged tree 96adc58)
+- Before the batch run: the format check right after each merge (both clean), the Windows Debug build after each
+  merge and follow-up, and the touched suites through ctest or the test executables on the hidden desktop (above).
+  The format check is a standing step of the integrator from this batch on (the pre-state, after the eleventh batch's
+  slice had committed unformatted files): `clang-format --dry-run --Werror` over each slice's added or changed C/C++
+  files right after its merge, fixed forward before the batch run, so the format check does not cost a second run.
+- **The run that counts**, and the only one: `tools\verify.ps1 -Quick -Jobs 8` on 96adc58 (clean tree; this record
+  not yet written) through `run_hidden_nobox.py` (a hidden desktop; no window opened on it), after `night.py
+  build-gate` (38.7 GB commit free): 560.4 s, exit code 0. Windows ran its Debug leg (ctest `-j 8`) and the checks;
+  WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`): `Verified: win debug 2321/2327 (6
+  skipped), wsl debug 2206/2215 (9 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by
+  default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by
+  default)` (frost-lint 2070 files; licensecheck 39 packages on Windows, 35 on WSL; featurecheck 0 problems). The test
+  steps took 167.6 s (Windows, parallel at `-j 8`) and 257.8 s (WSL). On Windows the 11 `msbuild`, 17 `screenshot`
+  and 1 `msvc` tests (`MsvcEnvironmentCapture.RunsVcvarsallAndCaches`) ran and passed; the `cmake` test
+  `CMakeRealBuild.ConfigureBuildCleanReconfigure` ran and passed on both OSes (clang-cl through the captured MSVC
+  environment on Windows, clang on WSL). The format check passed at the first attempt, so it cost no second run.
+- **The skips:** the eleventh batch's, unchanged. Windows: the four `WatcherPerf` tests,
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` and `SafeWrite.SymlinksStayLinks`. WSL: the four `WatcherPerf`
+  tests, `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale`,
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler`,
+  `MsBuildEvaluation.MapsEvaluatedMetadataToClangClFlags`,
+  `MsBuildProvider.FailedEvaluationFallsBackToTheStaticModel` and
+  `RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes`.
+- **No test was lost:** against the eleventh batch (win debug 2275, wsl debug 2164) the tree adds 52 tests on Windows
+  and 51 on WSL, the `TEST` cases the slices add: `m3/editor-insight` 16 (`semantic_tokens_test.cpp` 6,
+  `editor_insight_test.cpp` 7, `editor_insight_binding_test.cpp` 2 and one `ClangdE2E` case) and `m2/cmake` 36
+  (`tests/build` 19, `tests/project` 13, `ui_cmake_tests` 3 and one compile-commands case), of which
+  `MsvcEnvironmentCapture.RunsVcvarsallAndCaches` builds only on Windows. The follow-ups add two initializer values
+  and one fixture file; no `TEST` line and no assertion line is removed, and the label check only gains two tags.
+- **The pre-state's checks:** `main` was clean at ebd4b0d and equal to `origin/main` at the start; no untracked
+  `Testing/` folder appeared in the repository root during this batch (the integrator's ctest runs used
+  `--test-dir` on the build tree).
+- **Processes:** the runner ended every process tree it started; no night.py lock was taken (build-gate takes none)
+  and no background loop is left.
+- `-Quick` builds no ASan, TSan or fuzz tree. The slices' sanitizer, fuzz, stress and `-Full` runs are in "Deferred
+  to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `m2/find-in-files` (aca0ea8, eleventh batch)
 - **The merge** (aca0ea8) of `m2/find-in-files` (2ce9819, on 52eb3d6) into `main` at b04a621: the Qt-free Find in
@@ -932,6 +1094,21 @@ branches kept a record in this log).
   `.gitignore`, `.ignore` and the default excludes, ADR 0042). Later: Replace from the Find tool window, tabs for
   several searches, the last query, mask and scope persisted through m1/settings with history drop-downs, and Alt
   mnemonics for the toggles.
+- **`m3/editor-insight`'s hand-off** (ADR 0047): the workbench (the W1 unify slice) creates one EditorInsightBinding
+  per editor and calls `attach(clangdService)` after `openDocument`; it sends build results through
+  `setBuildDiagnostics(buildService.diagnosticsForDocument(path))` from BuildService's `onDiagnostic` and
+  `onDiagnosticsCleared`, puts InsightStatusIndicator in the status bar with `setView(activeEditor)`, connects
+  `problemsViewRequested` to the Problems tool window, and routes the LanguageController host's `setUsageHighlights`
+  through `toUsageHighlights` into `EditorView::setUsageHighlights`. The binding's first known bug makes the order
+  binding: each edit goes to clangd (`changeDocument`) before the 300 ms token debounce fires. W1 can move its own
+  marks (spelling, run-to-cursor, breakpoint tints) onto `setDecorations("<owner>", ...)`. `m1/editor-rhi`'s GPU
+  backend has to draw the new display-list parts (decorations, the stripe, chrome and chromeText); until it does,
+  only the raster backend shows the insight.
+- **`m2/cmake`'s hand-off** (ADR 0046): W1 wires CMakeToolWindow and CMakeTreeModel into the Solution Explorer and the
+  ToolWindowManager for a folder with a CMakeLists.txt, and adds a BuildController adapter for CMakeService (its
+  BuildState, BuildOutputKind lines and diagnostics mirror BuildService's; profiles are the configurations and
+  targets the projects), and puts BuildDirectoryCompileCommandsProvider (with
+  `CMakeService::activeBuildDirectory`) into clangd's provider chain for CMake folders.
 - **The SaveManager's consumers** (ADR 0028): one manager on the document thread; AutosaveController fed by input
   events, focus loss and a timer; the merge view driven by PendingMerge and `resolveExternalChange` (with the Q5
   labels above; changes on adjacent lines in both buffer and disk count as a conflict, the same rule as git); banners
@@ -940,8 +1117,9 @@ branches kept a record in this log).
   host feeding the view's `setFileInfo`/`markSaved` is still `w1/workbench`'s (or the unify slice's). The long-line
   rule uses `kLongLineCapBytes` since the eighth batch (its long-line follow-up above).
 - **The in-flight slices:** `w1/workbench` (the W1 wiring above), held for the unify slice that reconciles it with
-  `m1/shell-nav`'s composition. `m2/find-in-files` merged in the eleventh batch, `m1/shell-nav` in the tenth;
-  `m1/editor-rhi`, `w1/run-service` and `w2/clangd-nav` in the ninth.
+  `m1/shell-nav`'s composition; the unify slice also takes up `m3/editor-insight`'s and `m2/cmake`'s wiring above.
+  `m3/editor-insight` and `m2/cmake` merged in the twelfth batch, `m2/find-in-files` in the eleventh, `m1/shell-nav`
+  in the tenth; `m1/editor-rhi`, `w1/run-service` and `w2/clangd-nav` in the ninth.
 - **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` (on `main`) binds keys to `commands::*`, calls
   `Editor::run`, supplies the Qt ITextShaper, sets `pageRows` from the viewport height, paints the EditorUpdate rows
   and implements IOutlineProvider over the syntax outline (SyntaxOutlineProvider). An index slice may add a
@@ -966,6 +1144,51 @@ branches kept a record in this log).
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
 `m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From the twelfth batch's merges** (the integrator):
+  - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase):
+    `editor_view.hpp`'s note and signals and `src/ui/editor/CMakeLists.txt`'s sources (the insight beside the QRhi
+    backend); `src/build/CMakeLists.txt`'s sources, DEPS and TODO(M4), and the placement of
+    `BuildDirectoryCompileCommandsProvider::locate()` in `compile_commands.cpp`; the `tests/ui` and `tests/build`
+    CMake lists.
+  - A review of the follow-ups 63aefbc (the two DisplayText fields in `editor_rhi_test.cpp`) and 96adc58 (the presets
+    fixture's `CMakeUserPresets.json` and its `.gitignore` exception), and of the label check's new "cmake" and
+    "msvc" rules (bcc3f32).
+  - A pixel comparison of the insight parts between the raster and the QRhi backends once the QRhi backend draws them
+    (`RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes` covers text runs and the gutter only).
+- **From `m2/cmake`** (ADR 0046), as its hand-off lists them:
+  - Sanitizer builds (ASan, TSan, UBSan) for the new project, build and ui_cmake code.
+  - Fuzz targets for the presets reader, the File API reader and the GNU/CMake output parsers.
+  - Stress, long differential and perf/budget runs (for example large File API replies, many reconfigures, watcher
+    churn).
+  - Screenshot goldens for CMakeToolWindow and the CMake tree; `-Full`.
+  - Malicious-repository and trust-abuse tests (planted toolchain files, symlinked or junctioned build folders that
+    leave the project, very large or deeply nested presets).
+  - Real end-to-end runs with a Visual Studio generator and with cl.exe (only Ninja with clang-cl or clang is tested
+    for real).
+  - Icons in the CMake tree and polish of the tool window.
+  - Wiring CMakeToolWindow, CMakeTreeModel and the CMake service into the W1 workbench (Solution Explorer,
+    ToolWindowManager, Build menu and a BuildController adapter) on `main` (Next).
+  - The cmake/msvc tag rules in the label check, which the slice left out to avoid a merge conflict: added in the
+    merge bcc3f32 (the orchestrator's decision), so nothing of it is left.
+  - Independent review of the build and project code (moved to the hardening phase by ADR 0031).
+- **From `m3/editor-insight`** (ADR 0047), as its hand-off lists them:
+  - Sanitizer builds (ASan, TSan, UBSan) for the new lang, editor and ui_lang code.
+  - Fuzz targets for `decodeSemanticTokens`, `applySemanticTokensEdits`, `parseSemanticTokensResult` and
+    `decodeInactiveRegions`.
+  - Perf work and budgets: range mapping costs O(ranges) per edit plus O(ranges x edits) when tokens from an older
+    version arrive; `diagnostics()` and `insightSummary()` are recomputed several times per paint (including the
+    build/live duplicate check).
+  - Screenshot goldens of squiggles, the error stripe, the inspection widget, the spinner and the balloon (checked
+    only through the display list).
+  - Contrast thresholds for the `Semantic.*` colours and the new marker and stripe colours (token colours are not
+    policed yet, as with `Syntax.*`).
+  - Handling `workspace/semanticTokens/refresh` (refreshSupport is announced as false).
+  - A finer analysing state from clangd's fileStatus (today it is based on the diagnostics' text version).
+  - Sharing tokens between two views of the same document (each view has its own binding).
+  - An end-to-end test of `EditorInsightBinding::attach()` against a real ClangdService (covered separately by the
+    lang e2e test and the scripted-server binding test).
+  - Translation (`tr()`) of the new English strings: the balloon, tooltips and status text.
+  - Independent review of the lang and editor changes (moved to the hardening phase by ADR 0031).
 - **From the eleventh batch's merges** (the integrator):
   - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase): the folded
     frost::search (`src/search/CMakeLists.txt`'s sources, DEPS and rank 7; one `search_tests` in
@@ -1406,8 +1629,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 - **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
-- None. The hand-off notes of the eleventh batch (`m2/find-in-files`), of the tenth batch (`m1/shell-nav`), of the
-  ninth (`w1/run-service`, `m1/editor-rhi`,
+- None. The hand-off notes of the twelfth batch (`m3/editor-insight`, `m2/cmake`), of the eleventh
+  (`m2/find-in-files`), of the tenth (`m1/shell-nav`), of the ninth (`w1/run-service`, `m1/editor-rhi`,
   `w2/clangd-nav`), of the eighth (`m1/editor-view`, `w1/tool-windows`), of the seventh
   (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`, `m1/save-manager`) and of the sixth
   (`m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings`, `plan/thin-path`) name none; `m1/diff-merge`'s
@@ -1422,9 +1645,10 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
   or with no solution open, the build action is disabled and Ctrl+Shift+B falls through to Go to Type Declaration
   (Visual Studio would report "build already in progress" instead; the slice record's known bug).
 
-Apart from that, no slice of the eleventh, the tenth, the ninth, the eighth, the seventh or the sixth batch asks one in
-its hand-off (`m2/find-in-files` and `m1/shell-nav` list no question); the orchestrator's decisions on their questions
-are in the merge sections above and, for `m2/find-in-files`, in its slice record.
+Apart from that, no slice of the twelfth, the eleventh, the tenth, the ninth, the eighth, the seventh or the sixth batch
+asks one in its hand-off (`m3/editor-insight`, `m2/cmake`, `m2/find-in-files` and `m1/shell-nav` list no question);
+the orchestrator's decisions on their questions are in the merge sections above and, for `m2/find-in-files` and
+`m2/cmake`, in their slice records.
 ADR 0019 Q5 (diff3-style markers and the save-manager prompt's labels), which the last integrator listed here, is
 decided: diff3 stays the default, and the labels are "Keep my version", "Take disk version" and "Compare..." (the merge
 section of `m1/save-manager` above).
@@ -1432,6 +1656,78 @@ section of `m1/save-manager` above).
 The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
 variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
 `m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `m2/cmake` (ADR 0046)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): ce467e4 on 52eb3d6. Worktree `.claude\worktrees\m2-cmake`. (Merge note: merged into
+`main` as bcc3f32, with the follow-up 96adc58; the 2026-11-02 entry above.)
+
+#### Done
+- **Qt-free CMake support** in frost::project (presets, profiles, the File API model and the view model) and
+  frost::build (tool discovery, the vcvarsall capture and its cache, CMakeService, the GNU and CMake output parsers,
+  and a parser factory in BuildSession).
+- **The settings** `cmake.profiles` and `tools.ninja.path`; the clangd provider that follows the active build
+  directory (BuildDirectoryCompileCommandsProvider).
+- **frost::ui_cmake** (the tree model, the controller and the tool window).
+- **ADR 0046** (`docs/adr/0046-cmake-projects.md`).
+- **Verification at ce467e4** (its own `-Quick`), on both OSes: win 2093/2099, wsl 1989/1995. Not merged or pushed by
+  the slice; `docs/progress.md` and PLAN.md untouched.
+
+#### Known bugs
+- CMakeService prepares the tools and the MSVC environment once per service and reuses them. If a cmake or ninja
+  binary is replaced while the service runs, that is only noticed when the version check or the launch fails.
+- The ui_cmake widgets are not hosted by the workbench yet (the slice's tree had no `src/ui/toolwindows`), so the tool
+  window is reachable only from tests until W1 wires it in.
+- Found at the merge (fixed by 96adc58): the presets fixture's `CMakeUserPresets.json` was not committed, because the
+  repository's `.gitignore` ignores that name; it lived untracked in the slice's worktree.
+
+#### Left
+- Its hand-off's Next (this entry's Next): wire CMakeToolWindow and CMakeTreeModel into the W1 Solution Explorer and
+  ToolWindowManager, and add a BuildController adapter for CMakeService. The cmake/msvc tag rules of the label check
+  were added at this merge (the orchestrator's decision).
+- The merge conflicts it expected (`src/ui` and `tests/ui` CMake lists, the settings registry and keys, maybe
+  `build_session.hpp`): the CMake lists and `compile_commands.cpp` conflicted, the settings files and
+  `build_session.hpp` auto-merged (the merge section above).
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m2/cmake`'s.
+
+### Slice record: `m3/editor-insight` (ADR 0047)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): eb033ab on 52eb3d6 with its merges 7d2fab1 of `m1/editor-view` 3acd71c and d969d15 of
+`w2/clangd-nav` 660a1e9, and a1fd262, a copy of `main`'s label-check fix 76d5e7f. Worktree
+`.claude\worktrees\m3-editor-insight`. (Merge note: merged into `main` as a2626b4, with the follow-up 63aefbc; the
+2026-11-02 entry above.)
+
+#### Done
+- **The slice (eb033ab):** semantic tokens with full and delta requests, clangd's inactiveRegions, EditorView's
+  insight seams, squiggles, the error stripe, the inspection widget, the status-bar indicator, F2/Shift+F2 with the
+  balloon, EditorInsightBinding, 28 theme colours, ADR 0047 (`docs/adr/0047-editor-insight.md`) and tests.
+- **The theme pins** change on purpose: `kExpectedRegistryHash` 0x31cfb245a8dcffe0 and the theme blob 716/788 for the
+  28 new `Semantic.*` and marker keys.
+- **Verification at eb033ab** (its own `-Quick`), on both legs: win 2148/2154 (6 skipped), wsl 2041/2049 (8 skipped).
+  Not merged or pushed by the slice; `docs/progress.md` and PLAN.md untouched.
+
+#### Known bugs
+- The binding's token requests and the analysing state assume the workbench sends each edit to clangd
+  (`changeDocument`) before the 300 ms debounce fires. If it doesn't, tokens can describe older text and analysing
+  never clears.
+- Inactive regions are mapped against the snapshot of the last published diagnostics. This assumes clangd sends
+  diagnostics before inactiveRegions for each build (its usual order); if the order were reversed after an edit, the
+  regions would be one version behind until the next build.
+- The F2 balloon and the inspection widget size their text as character count times the monospace cell width.
+  Proportional or wide (CJK) text in a message can overflow the balloon.
+- The inspection widget sits on top of the text in the top-right corner (as in Rider) and can cover the end of a long
+  first line. The stripe always takes 11 px of width, even when no language server is attached.
+- Build diagnostics are placed when they are set; after later edits they follow the text, but a rebuild is needed to
+  fix their positions.
+
+#### Left
+- Its hand-off's Next (this entry's Next): the workbench creates one EditorInsightBinding per editor and wires it to
+  ClangdService, BuildService, the status bar and the LanguageController host; W1 can move its own marks onto
+  `setDecorations`; `m1/editor-rhi`'s GPU backend has to draw the new display-list parts (decorations, the stripe,
+  chrome and chromeText).
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m3/editor-insight`'s.
 
 ### Slice record: `m2/find-in-files` (ADR 0045)
 
