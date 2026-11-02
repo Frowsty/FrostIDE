@@ -67,21 +67,29 @@ struct BuildSession::State {
     // reader saw `done` under it, so the mutex orders every access; it never changes afterwards.
     BuildResult result;
 
-    void handleLine(OutputStream stream, std::string_view line) {
+    // Adds a parsed diagnostic unless it is a duplicate. Called with outputMutex held.
+    void addDiagnostic(Diagnostic diagnostic) FROST_REQUIRES(outputMutex) {
+        if (diagnostics.add(std::move(diagnostic)) && callbacks.onDiagnostic) {
+            callbacks.onDiagnostic(diagnostics.diagnostics().back());
+        }
+    }
+
+    void handleLine(OutputStream stream, std::string_view line, IOutputParser& parser) {
         LockGuard lock(outputMutex);
         if (callbacks.onLine) {
             callbacks.onLine(stream, line);
         }
-        if (auto diagnostic = parseDiagnosticLine(line)) {
-            if (diagnostics.add(std::move(*diagnostic)) && callbacks.onDiagnostic) {
-                callbacks.onDiagnostic(diagnostics.diagnostics().back());
-            }
-        }
+        parser.feed(line, [this](Diagnostic diagnostic) FROST_NO_THREAD_SAFETY_ANALYSIS {
+            addDiagnostic(std::move(diagnostic)); // feed() runs under outputMutex (above).
+        });
     }
 
     void readStream(OutputStream stream) {
         LineSplitter splitter;
-        const LineSplitter::Sink sink = [this, stream](std::string_view line) { handleLine(stream, line); };
+        const std::unique_ptr<IOutputParser> parser = options.parser ? options.parser() : makeMsBuildOutputParser();
+        const LineSplitter::Sink sink = [this, stream, &parser](std::string_view line) {
+            handleLine(stream, line, *parser);
+        };
         std::vector<char> buffer(kReadChunk);
         while (true) {
             auto read = stream == OutputStream::Stdout ? process->readStdout(buffer) : process->readStderr(buffer);
@@ -91,6 +99,12 @@ struct BuildSession::State {
             splitter.feed(std::string_view(buffer.data(), *read), sink);
         }
         splitter.finish(sink);
+        {
+            LockGuard lock(outputMutex);
+            parser->finish([this](Diagnostic diagnostic) FROST_NO_THREAD_SAFETY_ANALYSIS {
+                addDiagnostic(std::move(diagnostic)); // Under outputMutex (above).
+            });
+        }
         {
             LockGuard lock(stateMutex);
             ++readersDone;

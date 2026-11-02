@@ -155,6 +155,27 @@ Result<std::optional<CompileCommandsLocation>> ExistingCompileCommandsProvider::
     return findCompileCommands(m_fs, m_root);
 }
 
+Result<std::optional<CompileCommandsLocation>> BuildDirectoryCompileCommandsProvider::locate() {
+    const std::string directory = m_buildDirectory ? m_buildDirectory() : std::string();
+    if (directory.empty()) {
+        return std::optional<CompileCommandsLocation>();
+    }
+    auto base = io::normalizePath(directory);
+    if (!base) {
+        return std::unexpected(std::move(base.error()));
+    }
+    auto file = io::joinPath(*base, kDatabaseName);
+    if (!file) {
+        return std::unexpected(std::move(file.error()));
+    }
+    auto status = m_fs.status(*file);
+    if (!status || status->type != io::FileType::Regular) {
+        return std::optional<CompileCommandsLocation>();
+    }
+    return std::optional<CompileCommandsLocation>(CompileCommandsLocation{
+        .directory = *base, .file = std::move(*file), .source = CompileCommandsSource::Existing});
+}
+
 Result<std::size_t> resolveConfigurationIndex(const project::SolutionModel& model, std::string_view configuration) {
     if (model.configurations().empty()) {
         return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", model.path()));

@@ -1098,12 +1098,15 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # frost_add_test (cmake/FrostLayers.cmake): LABELS starts with the kind, and the labels after it
         # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
         # exactly one kind label; the tagged suites are build_msbuild_tests (Windows only),
-        # lang_clangd_tests, lang_msbuild_tests (Windows only; both tags) and ui_screenshot_tests
+        # lang_clangd_tests, lang_msbuild_tests (Windows only; both tags), build_cmake_tests (tag
+        # "cmake"), build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046) and ui_screenshot_tests
         # (trees with the UI).
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.")),
                   "clangd": ("integration", ("ClangdE2E.", "MsBuildEvaluationE2E.")),
+                  "cmake": ("integration", ("CMakeRealBuild.",)),
+                  "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)

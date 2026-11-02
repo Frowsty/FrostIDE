@@ -1,0 +1,54 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 21, "patch": 0},
+  "include": ["presets/common.json"],
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug (Ninja)",
+      "inherits": "base",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "TINY_FEATURE": true}
+    },
+    {
+      "name": "release",
+      "inherits": ["base", "warnings"],
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TINY_FLAGS": {"type": "STRING", "value": "$env{TINY_OPT} -DX"},
+        "REMOVED": null
+      },
+      "environment": {"TINY_OPT": "-O2", "TINY_PATH": "$penv{TINY_HOME}/bin"}
+    },
+    {
+      "name": "windows-only",
+      "inherits": "base",
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows"}
+    },
+    {
+      "name": "any",
+      "inherits": "base",
+      "condition": {
+        "type": "anyOf",
+        "conditions": [
+          {"type": "const", "value": false},
+          {"type": "inList", "string": "${hostSystemName}", "list": ["Darwin", "Linux"]}
+        ]
+      }
+    },
+    {
+      "name": "match",
+      "inherits": "base",
+      "condition": {"type": "not", "condition": {"type": "matches", "string": "$env{TINY_HOME}", "regex": "^/nowhere"}}
+    }
+  ],
+  "buildPresets": [
+    {"name": "debug-build", "configurePreset": "debug", "targets": ["app"], "jobs": 4},
+    {
+      "name": "release-build",
+      "configurePreset": "release",
+      "configuration": "Release",
+      "environment": {"TINY_BUILD": "1"}
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${fileDir}/../install",
+      "cacheVariables": {"BASE_ONLY": "base", "TINY_FEATURE": false, "REMOVED": "x"},
+      "environment": {"TINY_ROOT": "${sourceDirName}"}
+    },
+    {
+      "name": "warnings",
+      "hidden": true,
+      "cacheVariables": {"TINY_WARNINGS": "ON"}
+    }
+  ]
+}

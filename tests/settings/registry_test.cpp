@@ -102,8 +102,10 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::buildSaveAllBeforeBuild);
     expectTypedKey(key::buildMsbuildExtraArguments);
     expectTypedKey(key::buildMsbuildMaxCpuCount);
+    expectTypedKey(key::cmakeProfiles);
     expectTypedKey(key::toolsMsbuildPath);
     expectTypedKey(key::toolsCmakePath);
+    expectTypedKey(key::toolsNinjaPath);
     expectTypedKey(key::toolsGitPath);
     expectTypedKey(key::toolsClangdPath);
     expectTypedKey(key::toolsClangFormatPath);

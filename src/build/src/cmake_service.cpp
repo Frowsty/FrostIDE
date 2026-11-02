@@ -1,0 +1,1433 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// CMakeService (see frost/build/cmake_service.hpp): the folder state, the job pipeline (trust,
+// Save All, tools and environment, configure, clean, build), the File API model, the debounced
+// reconfigure and the persisted active profiles.
+
+#include "frost/build/cmake_service.hpp"
+
+#include "frost/core/mutex.hpp"
+#include "frost/io/file_system.hpp"
+#include "frost/io/path.hpp"
+#include "frost/project/trust_store.hpp"
+#include "frost/settings/value.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <charconv>
+#include <condition_variable>
+#include <deque>
+#include <format>
+#include <thread>
+#include <utility>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+namespace frost::build {
+
+namespace {
+
+constexpr bool kWindows = io::kNativePathStyle == io::PathStyle::Windows;
+constexpr std::string_view kStateHeader = "# FrostIDE CMake profiles v1";
+constexpr std::string_view kStateFileName = "cmake-profiles.txt";
+constexpr char kSeparator = kWindows ? '\\' : '/';
+
+#ifdef _WIN32
+// Numbers the private mspdbsrv endpoints (_MSPDBSRV_ENDPOINT_) of cl.exe children.
+std::atomic<std::uint64_t> g_pdbEndpointCounter{0}; // Constant-initialised: no global constructor.
+#endif
+
+std::string seconds(IClock::Duration duration) {
+    return std::format("{:.1f} s", std::chrono::duration<double>(duration).count());
+}
+
+std::string plural(std::size_t count, std::string_view word) {
+    return std::format("{} {}{}", count, word, count == 1 ? "" : "s");
+}
+
+// A command line for the status line: arguments with spaces are quoted.
+std::string commandLine(std::string_view executable, const std::vector<std::string>& arguments) {
+    std::string text = std::string(io::fileName(executable));
+    for (const std::string& argument : arguments) {
+        text += ' ';
+        text += argument.find(' ') != std::string::npos ? std::format("\"{}\"", argument) : argument;
+    }
+    return text;
+}
+
+// The persisted choices: "<source dir>\t<profile name>" lines under the header.
+std::vector<std::pair<std::string, std::string>> readStateFile(io::IFileSystem& fs, const std::string& path) {
+    std::vector<std::pair<std::string, std::string>> entries;
+    auto content = fs.readFile(path);
+    if (!content) {
+        return entries;
+    }
+    std::string_view text = *content;
+    bool first = true;
+    while (!text.empty()) {
+        const std::size_t end = text.find('\n');
+        std::string_view line = text.substr(0, end);
+        text = end == std::string_view::npos ? std::string_view() : text.substr(end + 1);
+        if (line.ends_with('\r')) {
+            line.remove_suffix(1);
+        }
+        if (first) {
+            first = false;
+            if (line != kStateHeader) {
+                return {};
+            }
+            continue;
+        }
+        const std::size_t tab = line.rfind('\t');
+        if (tab != std::string_view::npos && tab > 0 && tab + 1 < line.size()) {
+            entries.emplace_back(std::string(line.substr(0, tab)), std::string(line.substr(tab + 1)));
+        }
+    }
+    return entries;
+}
+
+std::string fieldString(const settings::Record& record, std::string_view name) {
+    const settings::FieldValue* value = settings::findField(record, name);
+    return value != nullptr && std::holds_alternative<std::string>(*value) ? std::get<std::string>(*value)
+                                                                           : std::string();
+}
+
+std::vector<std::string> fieldList(const settings::Record& record, std::string_view name) {
+    const settings::FieldValue* value = settings::findField(record, name);
+    return value != nullptr && std::holds_alternative<settings::StringList>(*value)
+               ? std::get<settings::StringList>(*value)
+               : std::vector<std::string>{};
+}
+
+// Whether `change` concerns a file whose documentKey is in `watched` (file_watcher.hpp's rules for
+// a consumer of single paths).
+bool touches(const io::FileChange& change, const std::vector<std::string>& watched) {
+    const std::string key = documentKey(change.path);
+    const std::string oldKey = change.oldPath.empty() ? std::string() : documentKey(change.oldPath);
+    const bool subtree = change.kind == io::FileChangeKind::Created || change.kind == io::FileChangeKind::Removed ||
+                         change.kind == io::FileChangeKind::Rescan || change.kind == io::FileChangeKind::Renamed;
+    for (const std::string& file : watched) {
+        if (file == key || (!oldKey.empty() && file == oldKey)) {
+            return true;
+        }
+        if (subtree && !key.empty() && file.size() > key.size() && file.starts_with(key) &&
+            file[key.size()] == kSeparator) {
+            return true;
+        }
+        if (subtree && !oldKey.empty() && file.size() > oldKey.size() && file.starts_with(oldKey) &&
+            file[oldKey.size()] == kSeparator) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * A relative origin with a directory part ("../src/a.c", "sub/CMakeLists.txt") made absolute
+ * against `base` and collapsed as CMake does (project::collapseCMakePath), so it names the file on
+ * POSIX too, where io::normalizePath keeps "..". Bare names stay for the resolver (tool origins).
+ */
+Diagnostic withCMakePath(Diagnostic diagnostic, const std::string& base) {
+    const std::string_view origin = diagnostic.file;
+    if (origin.empty() || io::isAbsolutePath(origin) || origin.find_first_of("/\\") == std::string_view::npos) {
+        return diagnostic;
+    }
+    if (auto joined = io::joinPath(base, origin)) {
+        if (std::string collapsed = project::collapseCMakePath(*joined); !collapsed.empty()) {
+            diagnostic.file = std::move(collapsed);
+        }
+    }
+    return diagnostic;
+}
+
+bool isPresetsFileName(std::string_view path) {
+    const std::string_view name = io::fileName(path);
+    return name == project::kCMakePresetsFile || name == project::kCMakeUserPresetsFile;
+}
+
+} // namespace
+
+std::string_view toString(CMakeStep step) noexcept {
+    switch (step) {
+    case CMakeStep::Configure: return "Configure";
+    case CMakeStep::Clean: return "Clean";
+    case CMakeStep::Build: return "Build";
+    }
+    return "Configure";
+}
+
+std::vector<project::CMakeProfileRecord> cmakeProfileRecords(const settings::RecordList& records) {
+    std::vector<project::CMakeProfileRecord> out;
+    for (const settings::Record& record : records) {
+        project::CMakeProfileRecord profile;
+        profile.name = fieldString(record, "name");
+        if (profile.name.empty()) {
+            continue;
+        }
+        profile.buildType = fieldString(record, "buildType");
+        profile.generator = fieldString(record, "generator");
+        profile.buildDirectory = fieldString(record, "buildDirectory");
+        profile.cacheVariables = fieldList(record, "cacheVariables");
+        profile.environment = fieldList(record, "environment");
+        profile.buildOptions = fieldList(record, "buildOptions");
+        profile.root = fieldString(record, "root");
+        if (const settings::FieldValue* jobs = settings::findField(record, "jobs");
+            jobs != nullptr && std::holds_alternative<std::int64_t>(*jobs)) {
+            profile.jobs = static_cast<int>(std::clamp<std::int64_t>(std::get<std::int64_t>(*jobs), 0, 1024));
+        }
+        out.push_back(std::move(profile));
+    }
+    return out;
+}
+
+struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
+    enum class JobKind : std::uint8_t { Configure, Build };
+
+    struct Job {
+        std::uint64_t id = 0;
+        JobKind kind = JobKind::Configure;
+        bool automatic = false; // A reconfigure nobody asked for: never prompts for trust.
+        CMakeBuildRequest request{};
+        project::CMakeProfile profile{};
+        std::string sourceDir{};
+        std::vector<CMakeStep> steps{}; // The steps still to run; front() is the current one once running.
+        std::vector<std::string> untrusted{};
+        std::unique_ptr<BuildSession> session{};
+        std::optional<CMakeStep> current{};
+        CMakeTools tools{};
+        project::CMakeEnvironment msvc{};
+        BuildResult lastResult{};
+    };
+
+    State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,
+          CMakeServiceOptions serviceOptions, CMakeServiceCallbacks serviceCallbacks)
+        : fs(fileSystem), launcher(processLauncher), trustStore(store), options(std::move(serviceOptions)),
+          callbacks(std::move(serviceCallbacks)), msvcCache(fileSystem, processLauncher, options.msvcCacheDirectory) {
+        records = options.profileRecords;
+        recordSource = options.profileRecordSource;
+    }
+
+    io::IFileSystem& fs;
+    io::IProcessLauncher& launcher;
+    project::TrustStore& trustStore;
+    const CMakeServiceOptions options;
+    const CMakeServiceCallbacks callbacks;
+    MsvcEnvironmentCache msvcCache;
+
+    mutable Mutex mutex;
+    std::string sourceDir FROST_GUARDED_BY(mutex);
+    std::optional<project::CMakePresets> presets FROST_GUARDED_BY(mutex);
+    std::optional<std::string> presetsProblem FROST_GUARDED_BY(mutex);
+    std::vector<project::CMakeProfileRecord> records FROST_GUARDED_BY(mutex);
+    project::CMakeProfileSource recordSource FROST_GUARDED_BY(mutex) = project::CMakeProfileSource::ApplicationSettings;
+    std::vector<project::CMakeProfile> profiles FROST_GUARDED_BY(mutex);
+    std::optional<std::size_t> active FROST_GUARDED_BY(mutex);
+    std::shared_ptr<const project::CMakeProject> model FROST_GUARDED_BY(mutex);
+    bool stale FROST_GUARDED_BY(mutex) = false;
+    bool configuredOnce FROST_GUARDED_BY(mutex) = false; // A configure of the active profile ran since it was chosen.
+    bool presetsTouched FROST_GUARDED_BY(mutex) = false;
+    bool reloadPending FROST_GUARDED_BY(mutex) = false;       // Reconfigure once the running job ends.
+    std::vector<std::string> watched FROST_GUARDED_BY(mutex); // documentKeys.
+    std::vector<std::string> watchedPaths FROST_GUARDED_BY(mutex);
+    BuildState state FROST_GUARDED_BY(mutex) = BuildState::Idle;
+    std::optional<Job> job FROST_GUARDED_BY(mutex);
+    std::uint64_t lastJobId FROST_GUARDED_BY(mutex) = 0;
+    DiagnosticIndex diagnostics FROST_GUARDED_BY(mutex);
+    std::optional<CMakeConfigureOutcome> lastConfigure FROST_GUARDED_BY(mutex);
+    std::optional<CMakeBuildOutcome> lastBuild FROST_GUARDED_BY(mutex);
+    std::optional<CMakeTools> tools FROST_GUARDED_BY(mutex);
+    std::optional<std::vector<VsInstance>> instances FROST_GUARDED_BY(mutex);
+    std::string announcedEnvironment FROST_GUARDED_BY(mutex); // The MSVC environment last named in the output.
+    SaveAllHook saveAll FROST_GUARDED_BY(mutex);
+    std::atomic<BuildState> publishedState{BuildState::Idle};
+
+    Mutex persistMutex;
+
+    // The service thread with its task queue and the debounced reconfigure's deadline.
+    mutable Mutex queueMutex;
+    mutable std::condition_variable queueChanged;
+    std::deque<std::function<void()>> tasks FROST_GUARDED_BY(queueMutex);
+    bool taskRunning FROST_GUARDED_BY(queueMutex) = false;
+    bool stopping FROST_GUARDED_BY(queueMutex) = false;
+    std::optional<std::chrono::steady_clock::time_point> reloadAt FROST_GUARDED_BY(queueMutex);
+    std::thread worker;
+
+    void post(std::function<void()> task) {
+        {
+            LockGuard lock(queueMutex);
+            if (stopping) {
+                return;
+            }
+            tasks.push_back(std::move(task));
+        }
+        queueChanged.notify_all();
+    }
+
+    void workerLoop() {
+        for (;;) {
+            std::function<void()> task;
+            {
+                UniqueLock lock(queueMutex);
+                for (;;) {
+                    if (stopping) {
+                        return;
+                    }
+                    if (!tasks.empty()) {
+                        task = std::move(tasks.front());
+                        tasks.pop_front();
+                        break;
+                    }
+                    if (reloadAt && std::chrono::steady_clock::now() >= *reloadAt) {
+                        reloadAt.reset();
+                        task = [this] { fireReload(); };
+                        break;
+                    }
+                    if (reloadAt) {
+                        queueChanged.wait_until(lock.native(), *reloadAt);
+                    } else {
+                        queueChanged.wait(lock.native());
+                    }
+                }
+                taskRunning = true;
+            }
+            task();
+            task = nullptr;
+            {
+                LockGuard lock(queueMutex);
+                taskRunning = false;
+            }
+            queueChanged.notify_all();
+        }
+    }
+
+    // ---- Events (each a task, so callbacks run in order on the service thread).
+
+    template<class F>
+    void emit(F&& call) {
+        post(std::forward<F>(call));
+    }
+
+    void emitState(BuildState value) {
+        emit([this, value] {
+            if (callbacks.onStateChanged) {
+                callbacks.onStateChanged(value);
+            }
+        });
+    }
+
+    void emitOutput(bool configure, BuildOutputKind kind, std::string line) {
+        emit([this, configure, kind, line = std::move(line)] {
+            const auto& callback = configure ? callbacks.onConfigureOutput : callbacks.onOutput;
+            if (callback) {
+                callback(kind, line);
+            }
+        });
+    }
+
+    void emitModel(std::shared_ptr<const project::CMakeProject> value) {
+        emit([this, value = std::move(value)] {
+            if (callbacks.onModelChanged) {
+                callbacks.onModelChanged(value);
+            }
+        });
+    }
+
+    void emitProfilesLocked() FROST_REQUIRES(mutex) {
+        emit([this, list = profiles, index = active] {
+            if (callbacks.onProfilesChanged) {
+                callbacks.onProfilesChanged(list, index);
+            }
+        });
+    }
+
+    void emitDiagnosticsCleared() {
+        emit([this] {
+            if (callbacks.onDiagnosticsCleared) {
+                callbacks.onDiagnosticsCleared();
+            }
+        });
+    }
+
+    void setStateLocked(BuildState value) FROST_REQUIRES(mutex) {
+        state = value;
+        publishedState.store(value);
+        emitState(value);
+    }
+
+    // ---- Folder state.
+
+    bool isCurrentLocked(std::uint64_t id) const FROST_REQUIRES(mutex) { return job && job->id == id; }
+
+    std::optional<project::CMakeProfile> activeProfileLocked() const FROST_REQUIRES(mutex) {
+        if (!active || *active >= profiles.size()) {
+            return std::nullopt;
+        }
+        return profiles[*active];
+    }
+
+    void recomputeWatchedLocked() FROST_REQUIRES(mutex) {
+        watched.clear();
+        watchedPaths.clear();
+        const auto add = [this](const std::string& path) FROST_NO_THREAD_SAFETY_ANALYSIS {
+            std::string key = documentKey(path);
+            if (!key.empty() && std::ranges::find(watched, key) == watched.end()) {
+                watched.push_back(std::move(key));
+                watchedPaths.push_back(path);
+            }
+        };
+        if (sourceDir.empty()) {
+            return;
+        }
+        for (std::string_view name :
+             {std::string_view("CMakeLists.txt"), project::kCMakePresetsFile, project::kCMakeUserPresetsFile}) {
+            if (auto path = io::joinPath(sourceDir, name)) {
+                add(*path);
+            }
+        }
+        if (presets) {
+            for (const std::string& file : presets->files) {
+                add(file);
+            }
+        }
+        if (model) {
+            for (const std::string& input : model->projectInputs()) {
+                add(input);
+            }
+        }
+    }
+
+    // The configuration a reply is read in for `profile`.
+    static std::string replyConfiguration(const project::CMakeProfile& profile) {
+        return project::isMultiConfigGenerator(profile.generator) ? profile.effectiveConfiguration() : std::string();
+    }
+
+    // Reads `profile`'s existing reply (blocking); nullptr when there is none or it does not parse.
+    std::shared_ptr<const project::CMakeProject> readReply(const project::CMakeProfile& profile) {
+        auto reply = project::readCMakeFileApiReply(fs, profile.buildDirectory, replyConfiguration(profile));
+        if (!reply && reply.error().code() == ErrorCode::NotFound) {
+            reply = project::readCMakeFileApiReply(fs, profile.buildDirectory);
+        }
+        if (!reply || !*reply) {
+            return nullptr;
+        }
+        return std::make_shared<const project::CMakeProject>(std::move(**reply));
+    }
+
+    std::optional<std::string> persistedProfile(const std::string& folder) {
+        if (options.stateFilePath.empty()) {
+            return std::nullopt;
+        }
+        LockGuard lock(persistMutex);
+        const std::string key = documentKey(folder);
+        for (const auto& [path, name] : readStateFile(fs, options.stateFilePath)) {
+            if (documentKey(path) == key) {
+                return name;
+            }
+        }
+        return std::nullopt;
+    }
+
+    Result<void> persist(const std::string& folder, const std::string& name) {
+        if (options.stateFilePath.empty()) {
+            return {};
+        }
+        LockGuard lock(persistMutex);
+        auto entries = readStateFile(fs, options.stateFilePath);
+        const std::string key = documentKey(folder);
+        std::erase_if(entries, [&](const auto& entry) { return documentKey(entry.first) == key; });
+        entries.emplace_back(folder, name);
+        std::string text = std::format("{}\n", kStateHeader);
+        for (const auto& [path, profile] : entries) {
+            text += std::format("{}\t{}\n", path, profile);
+        }
+        if (auto created = fs.createDirectories(io::parentPath(options.stateFilePath)); !created) {
+            return created;
+        }
+        return fs.writeFileAtomic(options.stateFilePath, text);
+    }
+
+    // The index of the profile named `name`, else the first usable profile, else 0.
+    static std::optional<std::size_t> chooseProfile(const std::vector<project::CMakeProfile>& list,
+                                                    const std::optional<std::string>& name) {
+        if (list.empty()) {
+            return std::nullopt;
+        }
+        if (name) {
+            for (std::size_t i = 0; i < list.size(); ++i) {
+                if (list[i].name == *name) {
+                    return i;
+                }
+            }
+        }
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            if (list[i].usable()) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    // ---- Jobs.
+
+    bool folderTrustedLocked() const FROST_REQUIRES(mutex) { return trustStore.isTrusted(sourceDir); }
+
+    /*
+     * Starts a job for the active profile. An automatic job of an untrusted folder or an unusable
+     * profile is dropped. Errors: InvalidArgument (no folder, unusable profile), Busy.
+     */
+    Result<void> startJobLocked(JobKind kind, bool automatic, CMakeBuildRequest request, std::vector<CMakeStep> steps)
+        FROST_REQUIRES(mutex) {
+        if (sourceDir.empty()) {
+            return fail(ErrorCode::InvalidArgument, "no CMake folder is open");
+        }
+        if (state != BuildState::Idle) {
+            return fail(ErrorCode::Busy, std::format("a CMake job is already in progress ({})", toString(state)));
+        }
+        auto profile = activeProfileLocked();
+        if (!profile) {
+            return fail(ErrorCode::InvalidArgument, "the folder has no CMake profile");
+        }
+        if (!profile->usable()) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("profile {} cannot be used: {}", profile->name, profile->problem));
+        }
+        const bool trusted = folderTrustedLocked();
+        if (automatic && !trusted) {
+            return {}; // Nothing runs before trust, and nothing asks for it unprompted.
+        }
+        request.profile = profile->name;
+        diagnostics.clear();
+        emitDiagnosticsCleared();
+        job = Job{.id = ++lastJobId,
+                  .kind = kind,
+                  .automatic = automatic,
+                  .request = std::move(request),
+                  .profile = std::move(*profile),
+                  .sourceDir = sourceDir,
+                  .steps = std::move(steps),
+                  .untrusted = {},
+                  .session = nullptr,
+                  .current = std::nullopt,
+                  .tools = {},
+                  .msvc = {},
+                  .lastResult = {}};
+        if (!trusted) {
+            job->untrusted = {sourceDir};
+            setStateLocked(BuildState::NeedsTrust);
+            emit([this, roots = job->untrusted] {
+                if (callbacks.onNeedsTrust) {
+                    callbacks.onNeedsTrust(roots);
+                }
+            });
+            return {};
+        }
+        afterTrustLocked();
+        return {};
+    }
+
+    void afterTrustLocked() FROST_REQUIRES(mutex) {
+        job->untrusted.clear();
+        const std::uint64_t id = job->id;
+        if (job->kind == JobKind::Build) {
+            setStateLocked(BuildState::SavingDocuments);
+            post([this, id] { saveDocuments(id); });
+        } else {
+            setStateLocked(BuildState::Starting);
+            post([this, id] { prepare(id); });
+        }
+    }
+
+    void saveDocuments(std::uint64_t id) {
+        SaveAllHook hook;
+        {
+            LockGuard lock(mutex);
+            if (!isCurrentLocked(id) || state != BuildState::SavingDocuments) {
+                return;
+            }
+            hook = saveAll;
+            if (!hook) {
+                setStateLocked(BuildState::Starting);
+                post([this, id] { prepare(id); });
+                return;
+            }
+        }
+        auto called = std::make_shared<std::atomic<bool>>(false);
+        hook([weak = weak_from_this(), id, called](Result<void> saved) {
+            if (called->exchange(true)) {
+                return;
+            }
+            const auto self = weak.lock();
+            if (!self) {
+                return;
+            }
+            State* raw = self.get();
+            raw->post([raw, id, saved = std::move(saved)]() mutable {
+                LockGuard lock(raw->mutex);
+                if (!raw->isCurrentLocked(id) || raw->state != BuildState::SavingDocuments) {
+                    return;
+                }
+                if (!saved) {
+                    raw->finishJobLocked(
+                        std::move(saved.error()).withContext("while saving the documents before the build"));
+                    return;
+                }
+                raw->setStateLocked(BuildState::Starting);
+                raw->post([raw, id] { raw->prepare(id); });
+            });
+        });
+    }
+
+    // Service thread, state Starting: tools, the MSVC environment, then the first step.
+    void prepare(std::uint64_t id) {
+        project::CMakeProfile profile;
+        std::optional<CMakeTools> cachedTools;
+        std::optional<std::vector<VsInstance>> cachedInstances;
+        std::string announced;
+        {
+            LockGuard lock(mutex);
+            if (!isCurrentLocked(id)) {
+                return;
+            }
+            profile = job->profile;
+            cachedTools = tools;
+            cachedInstances = instances;
+            announced = announcedEnvironment;
+        }
+        // Blocking work runs without the lock; cancel() may end the job meanwhile.
+        if (!cachedInstances) {
+            std::vector<VsInstance> found;
+            if (kWindows && options.useVisualStudio) {
+                auto listed = options.listInstances ? options.listInstances() : listVsInstances(launcher, fs);
+                if (listed) {
+                    found = std::move(*listed);
+                }
+            }
+            cachedInstances = std::move(found);
+        }
+        std::vector<std::string> notes;
+        if (!cachedTools) {
+            CMakeToolOptions toolOptions{.cmakePath = options.cmakePath,
+                                         .ninjaPath = options.ninjaPath,
+                                         .vsInstances = *cachedInstances,
+                                         .pathVariable = options.pathVariable.empty() ? processPathVariable()
+                                                                                      : options.pathVariable};
+            auto found = findCMakeTools(fs, toolOptions);
+            if (!found) {
+                LockGuard lock(mutex);
+                if (isCurrentLocked(id)) {
+                    finishJobLocked(std::move(found.error()).withContext("while looking for cmake"));
+                }
+                return;
+            }
+            auto version = cmakeVersion(launcher, found->cmake);
+            if (!version) {
+                LockGuard lock(mutex);
+                if (isCurrentLocked(id)) {
+                    finishJobLocked(std::move(version.error()).withContext("while asking cmake for its version"));
+                }
+                return;
+            }
+            if (!versionAtLeast(*version, 3, 21)) {
+                LockGuard lock(mutex);
+                if (isCurrentLocked(id)) {
+                    finishJobLocked(
+                        Error(ErrorCode::Unsupported, std::format("{} is CMake {}; FrostIDE needs CMake 3.21 or later",
+                                                                  found->cmake, *version)));
+                }
+                return;
+            }
+            notes.push_back(
+                std::format("Using CMake {} ({}, from {})", *version, found->cmake, toString(found->cmakeOrigin)));
+            if (!found->ninja.empty()) {
+                notes.push_back(std::format("Using Ninja {} (from {})", found->ninja, toString(found->ninjaOrigin)));
+            }
+            cachedTools = std::move(*found);
+        }
+        if (project::isNinjaGenerator(profile.generator) && cachedTools->ninja.empty() &&
+            std::ranges::none_of(profile.cacheVariables,
+                                 [](const project::CMakeCacheVariable& v) { return v.name == "CMAKE_MAKE_PROGRAM"; })) {
+            LockGuard lock(mutex);
+            if (isCurrentLocked(id)) {
+                finishJobLocked(Error(ErrorCode::NotFound, "the profile uses Ninja, but no ninja was found: set "
+                                                           "tools.ninja.path or put ninja on PATH"));
+            }
+            return;
+        }
+        project::CMakeEnvironment msvc;
+        if (kWindows && options.captureMsvcEnvironment && !project::isVisualStudioGenerator(profile.generator)) {
+            const VsInstance* chosen = nullptr;
+            for (const VsInstance& instance : *cachedInstances) {
+                const bool wanted = options.vsInstanceId.empty() || instance.instanceId == options.vsInstanceId;
+                auto vcvarsall = vcvarsallPath(instance.installationPath);
+                if (wanted && vcvarsall && fs.exists(*vcvarsall).value_or(false)) {
+                    chosen = &instance;
+                    break;
+                }
+            }
+            if (chosen == nullptr) {
+                notes.emplace_back("No Visual Studio C++ tools were found; the compilers come from PATH");
+            } else {
+                const std::string architecture = profile.architectureExternal && !profile.architecture.empty()
+                                                     ? profile.architecture
+                                                     : options.msvcArchitecture;
+                auto environment = msvcCache.get(*chosen, architecture);
+                if (!environment) {
+                    LockGuard lock(mutex);
+                    if (isCurrentLocked(id)) {
+                        finishJobLocked(
+                            std::move(environment.error()).withContext("while setting up the MSVC environment"));
+                    }
+                    return;
+                }
+                msvc = std::move(environment->changes);
+                std::string note = std::format("Using the MSVC environment of {} {} ({})", chosen->displayName,
+                                               chosen->installationVersion, architecture);
+                if (note != announced) { // Once, and again when it changes.
+                    announced = note;
+                    notes.push_back(std::move(note));
+                }
+            }
+        }
+        LockGuard lock(mutex);
+        tools = cachedTools;
+        instances = cachedInstances;
+        announcedEnvironment = announced;
+        if (!isCurrentLocked(id)) {
+            return;
+        }
+        job->tools = *cachedTools;
+        job->msvc = std::move(msvc);
+        const bool configureFirst = job->kind == JobKind::Configure || job->steps.front() == CMakeStep::Configure;
+        for (std::string& note : notes) {
+            emitOutput(configureFirst, BuildOutputKind::Status, std::move(note));
+        }
+        runNextStepLocked();
+    }
+
+    project::CMakeEnvironment environmentFor(const Job& current, bool configure) const {
+        project::CMakeEnvironment environment = current.msvc;
+        const project::CMakeEnvironment& own = configure || !current.profile.buildEnvironment
+                                                   ? current.profile.environment
+                                                   : *current.profile.buildEnvironment;
+        environment.insert(environment.end(), own.begin(), own.end());
+        if (kWindows) {
+            environment.emplace_back("VSLANG", std::string("1033"));
+            environment.emplace_back("NoDefaultCurrentDirectoryInExePath", std::nullopt);
+#ifdef _WIN32
+            environment.emplace_back("_MSPDBSRV_ENDPOINT_",
+                                     std::format("FrostIDE-CMake-{}-{}", GetCurrentProcessId(),
+                                                 g_pdbEndpointCounter.fetch_add(1, std::memory_order_relaxed)));
+#endif
+        }
+        return environment;
+    }
+
+    void runNextStepLocked() FROST_REQUIRES(mutex) {
+        if (job->steps.empty()) {
+            finishJobLocked(std::nullopt);
+            return;
+        }
+        const CMakeStep step = job->steps.front();
+        job->current = step;
+        const bool configure = step == CMakeStep::Configure;
+        io::ProcessSpec spec;
+        spec.executable = job->tools.cmake;
+        spec.stdinMode = io::Stdio::Null;
+        spec.killOnClose = true;
+        spec.environment = environmentFor(*job, configure);
+        if (configure) {
+            if (auto created = fs.createDirectories(job->profile.buildDirectory); !created) {
+                finishJobLocked(std::move(created.error()).withContext("while creating the build directory"));
+                return;
+            }
+            if (auto query = project::writeCMakeFileApiQuery(fs, job->profile.buildDirectory); !query) {
+                finishJobLocked(std::move(query.error()).withContext("while writing the CMake File API query"));
+                return;
+            }
+            auto arguments = project::cmakeConfigureArguments(job->profile, job->sourceDir, job->tools.ninja);
+            if (!arguments) {
+                finishJobLocked(std::move(arguments.error()));
+                return;
+            }
+            spec.arguments = std::move(*arguments);
+            spec.workingDirectory = job->sourceDir;
+            emit([this, profile = job->profile.name] {
+                if (callbacks.onConfigureStarted) {
+                    callbacks.onConfigureStarted(profile);
+                }
+            });
+            emitOutput(true, BuildOutputKind::Status,
+                       std::format("Configure started: profile {}, build directory {}", job->profile.name,
+                                   job->profile.buildDirectory));
+        } else {
+            std::vector<std::string> targets;
+            if (!job->request.targetName.empty()) {
+                targets.push_back(job->request.targetName);
+            }
+            spec.arguments = project::cmakeBuildArguments(job->profile, targets, step == CMakeStep::Clean,
+                                                          static_cast<int>(options.buildJobs));
+            spec.workingDirectory = job->profile.buildDirectory;
+            const std::string what = job->request.targetName.empty()
+                                         ? std::string("all targets")
+                                         : std::format("target {}", job->request.targetName);
+            emitOutput(false, BuildOutputKind::Status,
+                       std::format("{} started: {}, profile {}", toString(step), what, job->profile.name));
+        }
+        emitOutput(configure, BuildOutputKind::Status, commandLine(spec.executable, spec.arguments));
+
+        const std::uint64_t id = job->id;
+        const std::string base = configure ? job->sourceDir : job->profile.buildDirectory;
+        auto resolver = std::make_shared<DiagnosticResolver>(fs, base);
+        BuildCallbacks sessionCallbacks{
+            .onLine =
+                [this, id, configure](OutputStream stream, std::string_view line) {
+                    LockGuard lock(mutex);
+                    if (isCurrentLocked(id)) {
+                        emitOutput(configure,
+                                   stream == OutputStream::Stdout ? BuildOutputKind::Stdout : BuildOutputKind::Stderr,
+                                   std::string(line));
+                    }
+                },
+            .onDiagnostic =
+                [this, id, resolver, base](const Diagnostic& diagnostic) {
+                    BuildDiagnostic resolved = resolver->resolve(withCMakePath(diagnostic, base));
+                    LockGuard lock(mutex);
+                    if (!isCurrentLocked(id)) {
+                        return;
+                    }
+                    diagnostics.add(resolved);
+                    emit([this, resolved = std::move(resolved)] {
+                        if (callbacks.onDiagnostic) {
+                            callbacks.onDiagnostic(resolved);
+                        }
+                    });
+                },
+            .onFinished = [this,
+                           id](const BuildResult& result) { post([this, id, result] { finishStep(id, result); }); },
+        };
+        BuildSessionOptions sessionOptions;
+        sessionOptions.parser =
+            configure ? OutputParserFactory(&makeCMakeOutputParser) : OutputParserFactory(&makeCompilerOutputParser);
+        auto session = BuildSession::start(launcher, spec, true, std::move(sessionCallbacks), systemClock(),
+                                           std::move(sessionOptions));
+        if (!session) {
+            finishJobLocked(std::move(session.error()));
+            return;
+        }
+        job->session = std::move(*session);
+        setStateLocked(BuildState::Running);
+    }
+
+    // Service thread: the session of the current step published its result.
+    void finishStep(std::uint64_t id, const BuildResult& result) {
+        std::unique_ptr<BuildSession> session;
+        std::optional<project::CMakeProfile> configured;
+        {
+            LockGuard lock(mutex);
+            if (!isCurrentLocked(id)) {
+                return;
+            }
+            session = std::move(job->session);
+            job->lastResult = result;
+            if (job->current == CMakeStep::Configure && result.success) {
+                configured = job->profile;
+            }
+        }
+        session.reset(); // Joins the session's waiter, which has just returned from onFinished.
+        std::shared_ptr<const project::CMakeProject> reply;
+        std::optional<Error> replyError;
+        if (configured) {
+            reply = readReply(*configured);
+            if (!reply) {
+                replyError = Error(ErrorCode::NotFound,
+                                   std::format("cmake wrote no File API reply into {}", configured->buildDirectory));
+            }
+        }
+        LockGuard lock(mutex);
+        if (!isCurrentLocked(id)) {
+            return;
+        }
+        if (job->current == CMakeStep::Configure) {
+            CMakeConfigureOutcome outcome{.profile = job->profile.name,
+                                          .result = result,
+                                          .error = replyError,
+                                          .counts = diagnostics.counts(),
+                                          .modelLoaded = reply != nullptr};
+            if (reply) {
+                model = reply;
+                stale = false;
+                configuredOnce = true;
+                recomputeWatchedLocked();
+                emitModel(reply);
+            }
+            publishConfigureLocked(std::move(outcome));
+        }
+        if (!result.success || replyError) {
+            finishJobLocked(replyError);
+            return;
+        }
+        job->steps.erase(job->steps.begin());
+        runNextStepLocked();
+    }
+
+    void publishConfigureLocked(CMakeConfigureOutcome outcome) FROST_REQUIRES(mutex) {
+        std::string line;
+        if (outcome.error && !outcome.result.success && outcome.result.duration == IClock::Duration{}) {
+            line = std::format("Configure not started: {}", outcome.error->message());
+        } else if (outcome.result.cancelled) {
+            line = std::format("Configure cancelled ({})", seconds(outcome.result.duration));
+        } else if (outcome.error) {
+            line = std::format("Configure failed: {}", outcome.error->message());
+        } else {
+            line = std::format("Configure {}: {}, {} ({})", outcome.result.success ? "finished" : "failed",
+                               plural(outcome.counts.errors, "error"), plural(outcome.counts.warnings, "warning"),
+                               seconds(outcome.result.duration));
+        }
+        emitOutput(true, BuildOutputKind::Status, std::move(line));
+        lastConfigure = outcome;
+        emit([this, outcome = std::move(outcome)] {
+            if (callbacks.onConfigureFinished) {
+                callbacks.onConfigureFinished(outcome);
+            }
+        });
+    }
+
+    // Ends the job: `error` says why a step did not start (or the reply could not be read).
+    void finishJobLocked(std::optional<Error> error) FROST_REQUIRES(mutex) {
+        Job& current = *job;
+        const bool configureNotRun = current.kind == JobKind::Configure && !current.current;
+        if (configureNotRun || (current.current == CMakeStep::Configure && error && !current.lastResult.success &&
+                                current.lastResult.duration == IClock::Duration{})) {
+            // A configure that never started still reports how it ended.
+            CMakeConfigureOutcome outcome{.profile = current.profile.name,
+                                          .result = current.lastResult,
+                                          .error = error,
+                                          .counts = diagnostics.counts(),
+                                          .modelLoaded = false};
+            publishConfigureLocked(std::move(outcome));
+        }
+        if (current.kind == JobKind::Build) {
+            CMakeBuildOutcome outcome{.request = current.request,
+                                      .result = current.lastResult,
+                                      .error = std::move(error),
+                                      .counts = diagnostics.counts()};
+            std::string line;
+            const std::string_view action = toString(outcome.request.action);
+            if (outcome.error) {
+                line = std::format("{} failed: {}", action, outcome.error->message());
+            } else if (outcome.result.cancelled) {
+                line = std::format("{} cancelled ({})", action, seconds(outcome.result.duration));
+            } else {
+                line = std::format("{} {}: {}, {} ({})", action, outcome.result.success ? "succeeded" : "failed",
+                                   plural(outcome.counts.errors, "error"), plural(outcome.counts.warnings, "warning"),
+                                   seconds(outcome.result.duration));
+            }
+            emitOutput(false, BuildOutputKind::Status, std::move(line));
+            lastBuild = outcome;
+            emit([this, outcome = std::move(outcome)] {
+                if (callbacks.onFinished) {
+                    callbacks.onFinished(outcome);
+                }
+            });
+        }
+        job.reset();
+        setStateLocked(BuildState::Idle);
+        if (reloadPending) {
+            reloadPending = false;
+            static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
+        }
+    }
+
+    // Service thread: the debounce of a watched change ran out.
+    void fireReload() {
+        std::string folder;
+        bool reloadPresets = false;
+        {
+            LockGuard lock(mutex);
+            folder = sourceDir;
+            reloadPresets = presetsTouched;
+            presetsTouched = false;
+        }
+        if (folder.empty()) {
+            return;
+        }
+        std::optional<project::CMakePresets> loaded;
+        std::optional<std::string> problem;
+        if (reloadPresets) {
+            auto read = project::loadCMakePresets(fs, folder, options.presetsContext);
+            if (read) {
+                loaded = std::move(*read);
+            } else {
+                problem = read.error().describe();
+            }
+        }
+        LockGuard lock(mutex);
+        if (sourceDir != folder) {
+            return;
+        }
+        if (reloadPresets) {
+            presets = std::move(loaded);
+            presetsProblem = std::move(problem);
+            const std::optional<std::string> keep =
+                active && *active < profiles.size() ? std::optional<std::string>(profiles[*active].name) : std::nullopt;
+            profiles = project::cmakeProfilesFor(sourceDir, presets, records, recordSource);
+            active = chooseProfile(profiles, keep);
+            recomputeWatchedLocked();
+            emitProfilesLocked();
+        }
+        if (state != BuildState::Idle) {
+            reloadPending = true;
+            return;
+        }
+        static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
+    }
+};
+
+std::unique_ptr<CMakeService> CMakeService::create(io::IFileSystem& fs, io::IProcessLauncher& launcher,
+                                                   project::TrustStore& trustStore, CMakeServiceOptions options,
+                                                   CMakeServiceCallbacks callbacks) {
+    auto state = std::make_shared<State>(fs, launcher, trustStore, std::move(options), std::move(callbacks));
+    State* raw = state.get();
+    state->worker = std::thread([raw] { raw->workerLoop(); });
+    return std::unique_ptr<CMakeService>(new CMakeService(std::move(state)));
+}
+
+Result<std::string> CMakeService::defaultStatePath() {
+    auto trustPath = project::TrustStore::defaultStorePath();
+    if (!trustPath) {
+        return std::unexpected(std::move(trustPath.error()));
+    }
+    return io::joinPath(io::parentPath(*trustPath), kStateFileName);
+}
+
+CMakeService::CMakeService(std::shared_ptr<State> state) noexcept : m_state(std::move(state)) {}
+
+CMakeService::~CMakeService() {
+    std::unique_ptr<BuildSession> session;
+    {
+        LockGuard lock(m_state->mutex);
+        if (m_state->job) {
+            session = std::move(m_state->job->session);
+            m_state->job.reset();
+        }
+        m_state->state = BuildState::Idle;
+        m_state->publishedState.store(BuildState::Idle);
+    }
+    if (session) {
+        session->cancel();
+        session.reset();
+    }
+    {
+        LockGuard lock(m_state->queueMutex);
+        m_state->stopping = true;
+    }
+    m_state->queueChanged.notify_all();
+    if (m_state->worker.joinable()) {
+        m_state->worker.join();
+    }
+    LockGuard lock(m_state->queueMutex);
+    m_state->tasks.clear();
+}
+
+Result<void> CMakeService::openFolder(std::string_view sourceDir) {
+    State& s = *m_state;
+    auto folder = io::normalizePath(sourceDir);
+    if (!folder) {
+        return std::unexpected(std::move(folder.error()));
+    }
+    auto lists = io::joinPath(*folder, "CMakeLists.txt");
+    if (!lists || !s.fs.exists(*lists).value_or(false)) {
+        return fail(ErrorCode::NotFound, std::format("{} has no CMakeLists.txt", *folder));
+    }
+    std::optional<project::CMakePresets> presets;
+    std::optional<std::string> problem;
+    if (auto read = project::loadCMakePresets(s.fs, *folder, s.options.presetsContext)) {
+        presets = std::move(*read);
+    } else {
+        problem = read.error().describe();
+    }
+    std::vector<project::CMakeProfileRecord> records;
+    project::CMakeProfileSource recordSource{};
+    {
+        LockGuard lock(s.mutex);
+        records = s.records;
+        recordSource = s.recordSource;
+    }
+    std::vector<project::CMakeProfile> profiles = project::cmakeProfilesFor(*folder, presets, records, recordSource);
+    const std::optional<std::size_t> active = State::chooseProfile(profiles, s.persistedProfile(*folder));
+    std::shared_ptr<const project::CMakeProject> model;
+    if (active) {
+        model = s.readReply(profiles[*active]);
+    }
+
+    LockGuard lock(s.mutex);
+    if (s.state != BuildState::Idle) {
+        return fail(ErrorCode::Busy, "a CMake job is in progress; cancel it before opening another folder");
+    }
+    s.sourceDir = std::move(*folder);
+    s.presets = std::move(presets);
+    s.presetsProblem = std::move(problem);
+    s.profiles = std::move(profiles);
+    s.active = active;
+    s.model = model;
+    s.stale = false;
+    s.configuredOnce = false;
+    s.presetsTouched = false;
+    s.reloadPending = false;
+    s.diagnostics.clear();
+    s.lastConfigure.reset();
+    s.lastBuild.reset();
+    s.recomputeWatchedLocked();
+    s.emitDiagnosticsCleared();
+    s.emitProfilesLocked();
+    s.emitModel(model);
+    if (s.options.configureOnOpen) {
+        static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
+    }
+    return {};
+}
+
+Result<void> CMakeService::closeFolder() {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (s.state != BuildState::Idle) {
+        return fail(ErrorCode::Busy, "a CMake job is in progress; cancel it before closing the folder");
+    }
+    if (s.sourceDir.empty()) {
+        return {};
+    }
+    s.sourceDir.clear();
+    s.presets.reset();
+    s.presetsProblem.reset();
+    s.profiles.clear();
+    s.active.reset();
+    s.model.reset();
+    s.diagnostics.clear();
+    s.lastConfigure.reset();
+    s.lastBuild.reset();
+    s.recomputeWatchedLocked();
+    s.emitDiagnosticsCleared();
+    s.emitProfilesLocked();
+    s.emitModel(nullptr);
+    return {};
+}
+
+std::string CMakeService::sourceDirectory() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->sourceDir;
+}
+
+std::vector<project::CMakeProfile> CMakeService::profiles() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->profiles;
+}
+
+std::optional<std::size_t> CMakeService::activeProfileIndex() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->active;
+}
+
+std::optional<project::CMakeProfile> CMakeService::activeProfile() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->activeProfileLocked();
+}
+
+Result<void> CMakeService::setActiveProfile(std::size_t index) {
+    State& s = *m_state;
+    project::CMakeProfile profile;
+    std::string folder;
+    {
+        LockGuard lock(s.mutex);
+        if (s.sourceDir.empty()) {
+            return fail(ErrorCode::InvalidArgument, "no CMake folder is open");
+        }
+        if (s.state != BuildState::Idle) {
+            return fail(ErrorCode::Busy, "the profile cannot change while a CMake job is in progress");
+        }
+        if (index >= s.profiles.size()) {
+            return fail(ErrorCode::OutOfRange,
+                        std::format("profile {} of {} does not exist", index, s.profiles.size()));
+        }
+        if (s.active == index) {
+            return {};
+        }
+        profile = s.profiles[index];
+        folder = s.sourceDir;
+    }
+    auto model = s.readReply(profile);
+    {
+        LockGuard lock(s.mutex);
+        if (s.sourceDir != folder || index >= s.profiles.size() || s.state != BuildState::Idle) {
+            return fail(ErrorCode::Busy, "the folder changed while the profile was being switched");
+        }
+        s.active = index;
+        s.model = model;
+        s.stale = false;
+        s.configuredOnce = false;
+        s.recomputeWatchedLocked();
+        s.emitProfilesLocked();
+        s.emitModel(model);
+        if (s.options.configureOnOpen && !model) {
+            static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
+        }
+    }
+    return s.persist(folder, profile.name);
+}
+
+Result<void> CMakeService::setActiveProfile(std::string_view name) {
+    std::optional<std::size_t> index;
+    {
+        LockGuard lock(m_state->mutex);
+        for (std::size_t i = 0; i < m_state->profiles.size(); ++i) {
+            if (m_state->profiles[i].name == name) {
+                index = i;
+            }
+        }
+    }
+    if (!index) {
+        return fail(ErrorCode::NotFound, std::format("the folder has no CMake profile '{}'", name));
+    }
+    return setActiveProfile(*index);
+}
+
+std::string CMakeService::activeBuildDirectory() const {
+    LockGuard lock(m_state->mutex);
+    auto profile = m_state->activeProfileLocked();
+    return profile ? profile->buildDirectory : std::string();
+}
+
+Result<void> CMakeService::setProfileRecords(std::vector<project::CMakeProfileRecord> records,
+                                             project::CMakeProfileSource source) {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (s.state != BuildState::Idle) {
+        return fail(ErrorCode::Busy, "the profiles cannot change while a CMake job is in progress");
+    }
+    s.records = std::move(records);
+    s.recordSource = source;
+    if (s.sourceDir.empty()) {
+        return {};
+    }
+    const std::optional<std::string> keep = s.active && *s.active < s.profiles.size()
+                                                ? std::optional<std::string>(s.profiles[*s.active].name)
+                                                : std::nullopt;
+    s.profiles = project::cmakeProfilesFor(s.sourceDir, s.presets, s.records, s.recordSource);
+    s.active = State::chooseProfile(s.profiles, keep);
+    s.emitProfilesLocked();
+    return {};
+}
+
+std::optional<std::string> CMakeService::presetsError() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->presetsProblem;
+}
+
+std::vector<std::string> CMakeService::presetFiles() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->presets ? m_state->presets->files : std::vector<std::string>{};
+}
+
+std::shared_ptr<const project::CMakeProject> CMakeService::model() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->model;
+}
+
+std::vector<std::string> CMakeService::watchedFiles() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->watchedPaths;
+}
+
+bool CMakeService::modelStale() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->stale;
+}
+
+Result<void> CMakeService::configure() {
+    LockGuard lock(m_state->mutex);
+    return m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
+}
+
+std::optional<CMakeConfigureOutcome> CMakeService::lastConfigure() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->lastConfigure;
+}
+
+void CMakeService::setSaveAllHook(SaveAllHook hook) {
+    LockGuard lock(m_state->mutex);
+    m_state->saveAll = std::move(hook);
+}
+
+Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target) {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    CMakeBuildRequest request{.action = action, .target = target, .targetName = {}, .profile = {}};
+    if (target) {
+        if (!s.model || *target >= s.model->targets.size()) {
+            return fail(ErrorCode::InvalidArgument, std::format("target {} does not exist", *target));
+        }
+        request.targetName = s.model->targets[*target].name;
+    }
+    std::vector<CMakeStep> steps;
+    if (!s.model || s.stale) {
+        steps.push_back(CMakeStep::Configure);
+    }
+    if (action == BuildAction::Clean || action == BuildAction::Rebuild) {
+        steps.push_back(CMakeStep::Clean);
+    }
+    if (action == BuildAction::Build || action == BuildAction::Rebuild) {
+        steps.push_back(CMakeStep::Build);
+    }
+    return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps));
+}
+
+void CMakeService::cancel() {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    s.reloadPending = false;
+    switch (s.state) {
+    case BuildState::Idle:
+    case BuildState::Cancelling: return;
+    case BuildState::Running:
+        if (s.job && s.job->session) {
+            s.setStateLocked(BuildState::Cancelling);
+            s.job->session->cancel(); // Its result arrives through finishStep.
+        }
+        return;
+    case BuildState::NeedsTrust:
+    case BuildState::SavingDocuments:
+    case BuildState::Starting:
+        if (s.job) {
+            s.job->lastResult.cancelled = true;
+            s.finishJobLocked(std::nullopt);
+        }
+        return;
+    }
+}
+
+Result<void> CMakeService::trust(std::string_view root) {
+    State& s = *m_state;
+    if (auto trusted = s.trustStore.trust(root); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    LockGuard lock(s.mutex);
+    if (s.state == BuildState::NeedsTrust && s.job) {
+        if (s.folderTrustedLocked()) {
+            s.afterTrustLocked();
+        }
+        return {};
+    }
+    if (s.state == BuildState::Idle && !s.sourceDir.empty() && s.options.configureOnOpen && !s.configuredOnce &&
+        s.folderTrustedLocked()) {
+        static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
+    }
+    return {};
+}
+
+BuildState CMakeService::state() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->state;
+}
+
+std::optional<CMakeStep> CMakeService::currentStep() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->job ? m_state->job->current : std::nullopt;
+}
+
+std::vector<std::string> CMakeService::untrustedRoots() const {
+    LockGuard lock(m_state->mutex);
+    if (m_state->state != BuildState::NeedsTrust || !m_state->job) {
+        return {};
+    }
+    return m_state->job->untrusted;
+}
+
+std::optional<CMakeBuildOutcome> CMakeService::lastOutcome() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->lastBuild;
+}
+
+std::vector<BuildDiagnostic> CMakeService::diagnostics() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->diagnostics.all();
+}
+
+std::vector<DiagnosticFileGroup> CMakeService::diagnosticsByFile() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->diagnostics.byFile();
+}
+
+DiagnosticCounts CMakeService::diagnosticCounts() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->diagnostics.counts();
+}
+
+std::vector<BuildDiagnostic> CMakeService::diagnosticsForDocument(std::string_view path) const {
+    LockGuard lock(m_state->mutex);
+    return m_state->diagnostics.forDocument(path);
+}
+
+void CMakeService::filesChanged(const io::FileChangeBatch& batch) {
+    State& s = *m_state;
+    bool touched = false;
+    {
+        LockGuard lock(s.mutex);
+        if (s.sourceDir.empty()) {
+            return;
+        }
+        std::vector<std::string> presetKeys;
+        if (s.presets) {
+            for (const std::string& file : s.presets->files) {
+                presetKeys.push_back(documentKey(file));
+            }
+        }
+        for (const io::FileChange& change : batch.changes) {
+            if (!touches(change, s.watched)) {
+                continue;
+            }
+            touched = true;
+            const std::string key = documentKey(change.path);
+            if (isPresetsFileName(change.path) || (!change.oldPath.empty() && isPresetsFileName(change.oldPath)) ||
+                std::ranges::find(presetKeys, key) != presetKeys.end() || change.kind == io::FileChangeKind::Rescan) {
+                s.presetsTouched = true;
+            }
+        }
+        if (touched) {
+            s.stale = true;
+        }
+    }
+    if (touched) {
+        {
+            LockGuard lock(s.queueMutex);
+            s.reloadAt = std::chrono::steady_clock::now() + s.options.reloadDebounce;
+        }
+        s.queueChanged.notify_all();
+    }
+}
+
+sched::Task<Result<void>> CMakeService::follow(io::IDirectoryWatch& watch, std::stop_token token) {
+    for (;;) {
+        auto batch = co_await watch.next(token);
+        if (!batch) {
+            co_return std::unexpected(batch.error());
+        }
+        filesChanged(*batch);
+    }
+}
+
+bool CMakeService::waitForIdle(IClock::Duration timeout) const {
+    const State& s = *m_state;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    UniqueLock lock(s.queueMutex);
+    for (;;) {
+        if (s.tasks.empty() && !s.taskRunning && !s.reloadAt && s.publishedState.load() == BuildState::Idle) {
+            return true;
+        }
+        if (s.queueChanged.wait_until(lock.native(), deadline) == std::cv_status::timeout) {
+            return s.tasks.empty() && !s.taskRunning && !s.reloadAt && s.publishedState.load() == BuildState::Idle;
+        }
+    }
+}
+
+} // namespace frost::build

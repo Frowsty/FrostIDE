@@ -3,8 +3,8 @@
 // Where clangd gets its compile commands from (W2, ADR 0036): the CompileCommandsProvider seam
 // and its implementations: an existing compile_commands.json in the usual build directories, a
 // compile_commands.json synthesized for a Visual Studio solution from the static project readers,
-// a hook for a command list from the user's own generator, and a chain that takes the first
-// provider with an answer.
+// a hook for a command list from the user's own generator, the active CMake profile's build
+// directory (ADR 0046), and a chain that takes the first provider with an answer.
 /*
  * The result is always a directory holding compile_commands.json, which ClangdService passes as
  * --compile-commands-dir. Synthesized databases are written to a cache directory the caller owns
@@ -113,6 +113,25 @@ public:
 private:
     io::IFileSystem& m_fs;
     std::string m_root;
+};
+
+/*
+ * The compile_commands.json of a CMake folder's active profile (ADR 0046): `buildDirectory` returns
+ * the active profile's build directory (CMakeService::activeBuildDirectory; "" without one), which
+ * CMake fills because every configure sets CMAKE_EXPORT_COMPILE_COMMANDS=ON. nullopt until the
+ * first configure wrote it, so a chain falls through to the next provider. `fs` must outlive it;
+ * `buildDirectory` is called on locate()'s thread. Errors: none beyond a non-absolute directory
+ * (InvalidArgument).
+ */
+class BuildDirectoryCompileCommandsProvider final : public ICompileCommandsProvider {
+public:
+    BuildDirectoryCompileCommandsProvider(io::IFileSystem& fs, std::function<std::string()> buildDirectory)
+        : m_fs(fs), m_buildDirectory(std::move(buildDirectory)) {}
+    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate() override;
+
+private:
+    io::IFileSystem& m_fs;
+    std::function<std::string()> m_buildDirectory;
 };
 
 struct SynthesisOptions {

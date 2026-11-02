@@ -1,0 +1,5 @@
+{
+  "cmake": {"generator": {"multiConfig": false, "name": "Ninja"}, "version": {"string": "4.4.4"}},
+  "objects": [{"jsonFile": "codemodel-v2-stale.json", "kind": "codemodel", "version": {"major": 2, "minor": 8}}],
+  "reply": {}
+}

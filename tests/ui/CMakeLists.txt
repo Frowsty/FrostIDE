@@ -15,6 +15,8 @@
 #   ui_shell_tests               frost::ui_shell (ADR 0038): the main-window shell, editor tabs,
 #                                tool windows, popups, notifications and background tasks over fake
 #                                editors and a simulated keyboard layout (offscreen);
+#   ui_cmake_tests               frost::ui_cmake (ADR 0046): the CMake tree model, controller and tool
+#                                window over a fake backend and the real CMakeService (offscreen);
 #   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
 #                                IME, find/replace, Go to Line, highlighting and live settings; the
 #                                QRhi backend (ADR 0043) on a Direct3D 11 WARP device, or QRhi's Null
@@ -149,6 +151,12 @@ frost_add_test(ui_shell_tests QT
         shell/shell_window_test.cpp
     DEPS frost::ui_shell frost::ui frost::input frost::io)
 _frost_ui_test_wiring(ui_shell_tests)
+
+# frost::ui_cmake (ADR 0046): the CMake tree model, controller and tool window, offscreen.
+frost_add_test(ui_cmake_tests QT
+    SOURCES cmake/cmake_ui_test.cpp
+    DEPS frost::ui_cmake frost::build frost::project frost::io)
+_frost_ui_test_wiring(ui_cmake_tests)
 
 frost_add_test(ui_editor_tests QT
     SOURCES

@@ -1,0 +1,8 @@
+{
+  "id": "ZERO_CHECK::@6890427a1f51a3e7e1df",
+  "isGeneratorProvided": true,
+  "name": "ZERO_CHECK",
+  "paths": {"build": ".", "source": "."},
+  "sources": [],
+  "type": "UTILITY"
+}

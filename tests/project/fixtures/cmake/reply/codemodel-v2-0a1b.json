@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "directories": [
+        {"build": ".", "childIndexes": [1], "jsonFile": "directory-.-Debug-11aa.json", "projectIndex": 0,
+         "source": ".", "targetIndexes": [1, 2, 3]},
+        {"build": "app", "jsonFile": "directory-app-Debug-22bb.json", "parentIndex": 0, "projectIndex": 0,
+         "source": "app", "targetIndexes": [0]}
+      ],
+      "name": "Debug",
+      "projects": [{"directoryIndexes": [0, 1], "name": "Tiny", "targetIndexes": [0, 1, 2, 3]}],
+      "targets": [
+        {"directoryIndex": 1, "id": "app::@6890427a1f51a3e7e1df", "jsonFile": "target-app-Debug-33cc.json",
+         "name": "app", "projectIndex": 0},
+        {"directoryIndex": 0, "id": "core::@6890427a1f51a3e7e1df", "jsonFile": "target-core-Debug-44dd.json",
+         "name": "core", "projectIndex": 0},
+        {"directoryIndex": 0, "id": "docs::@6890427a1f51a3e7e1df", "jsonFile": "target-docs-Debug-55ee.json",
+         "name": "docs", "projectIndex": 0},
+        {"directoryIndex": 0, "id": "ZERO_CHECK::@6890427a1f51a3e7e1df", "jsonFile": "target-ZERO_CHECK-Debug-66ff.json",
+         "name": "ZERO_CHECK", "projectIndex": 0}
+      ]
+    }
+  ],
+  "kind": "codemodel",
+  "paths": {"build": "@BUILD@", "source": "@SOURCE@"},
+  "version": {"major": 2, "minor": 8}
+}

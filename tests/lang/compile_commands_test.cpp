@@ -3,7 +3,8 @@
 // Unit tests for compile commands (compile_commands.hpp): finding an existing
 // compile_commands.json (root, build/, out/build/*/, cmake-build-*/), the JSON written and its
 // write-only-on-change rule, the vcxproj ClCompile metadata fold, synthesis for the tiny fixture
-// solution in both configurations, and the provider chain with the generator hook.
+// solution in both configurations, the provider chain with the generator hook, and the active CMake
+// profile's build directory provider.
 
 #include "frost/core/clock.hpp"
 #include "frost/io/file_system.hpp"
@@ -88,6 +89,25 @@ TEST(FindCompileCommands, SearchesTheKnownPlacesInOrder) {
     EXPECT_EQ(top.value()->file, under("compile_commands.json"));
 
     EXPECT_FALSE(findCompileCommands(fs, "relative").has_value());
+}
+
+TEST(CompileCommandsProviders, ActiveBuildDirectoryFollowsTheProfile) {
+    MemFs fs(frost::systemClock());
+    std::string active;
+    frost::lang::BuildDirectoryCompileCommandsProvider provider(fs, [&] { return active; });
+    EXPECT_FALSE(provider.locate().value().has_value()); // No profile yet.
+    active = under("cmake-build-debug");
+    EXPECT_FALSE(provider.locate().value().has_value()); // Not configured yet.
+    touch(fs, under("cmake-build-debug/compile_commands.json"));
+    touch(fs, under("cmake-build-release/compile_commands.json"));
+    auto debug = provider.locate();
+    ASSERT_TRUE(debug.has_value() && debug->has_value());
+    EXPECT_EQ((*debug)->directory, under("cmake-build-debug"));
+    EXPECT_EQ((*debug)->file, under("cmake-build-debug/compile_commands.json"));
+    active = under("cmake-build-release"); // The user switched profiles.
+    EXPECT_EQ(provider.locate().value()->directory, under("cmake-build-release"));
+    active = "relative";
+    EXPECT_FALSE(provider.locate().has_value());
 }
 
 TEST(CompileCommandsJson, WritesArgumentsFormOnlyWhenChanged) {

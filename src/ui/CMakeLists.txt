@@ -10,7 +10,8 @@
 # (the Run console, its controller and the run actions) is ADR 0040's; it needs frost::build,
 # which fuzz trees do not build. frost::ui_lang (ADR 0041) holds the language-feature widgets and
 # their controller; it needs frost::lang, which fuzz trees leave out. frost::ui_find (src/ui/find) is
-# Find and Replace in Files on the shell (ADR 0045).
+# Find and Replace in Files on the shell (ADR 0045). frost::ui_cmake (src/ui/cmake) is the CMake folder's
+# tree model, controller and tool window (ADR 0046).
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
@@ -50,3 +51,5 @@ add_subdirectory(nav)
 add_subdirectory(workbench)
 # frost::ui_find: Find and Replace in Files (ADR 0045).
 add_subdirectory(find)
+# frost::ui_cmake: the CMake folder's tree, controller and tool window (ADR 0046).
+add_subdirectory(cmake)
