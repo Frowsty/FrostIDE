@@ -281,9 +281,14 @@ CommandResult deleteLines(const CommandInput& in) noexcept {
         }
     }
     batch.finish();
+    // The carets after the deletion, one per line they land on (`landed` holds each one's line
+    // of the input text; nullopt when every line was deleted).
     std::vector<Selection> after;
-    for (const Selection& selection : selections) {
-        const Point head = text.pointAt(selection.head);
+    std::vector<std::optional<std::uint32_t>> landed;
+    const std::size_t inputPrimary = detail::primaryOf(in.state);
+    std::size_t primary = 0;
+    for (std::size_t i = 0; i < selections.size(); ++i) {
+        const Point head = text.pointAt(selections[i].head);
         const LineSpan* span = spanOf(spans, head.line.value());
         FROST_ASSERT(span != nullptr);
         std::optional<std::uint32_t> target;
@@ -297,9 +302,28 @@ CommandResult deleteLines(const CommandInput& in) noexcept {
             const LineInfo line = detail::lineAt(text, *target);
             at = text.clip(line.content.begin + std::min<std::uint64_t>(head.column.value(), line.content.size()));
         }
-        after.push_back(Selection::caret(batch.map(at, Bias::Right)));
+        const Selection caret = Selection::caret(batch.map(at, Bias::Right));
+        const auto same = std::find(landed.begin(), landed.end(), target);
+        if (same != landed.end()) {
+            // A caret already landed on this line: merge, keeping the primary's column.
+            const auto index = static_cast<std::size_t>(same - landed.begin());
+            if (i == inputPrimary) {
+                after[index] = caret;
+                primary = index;
+            }
+            continue;
+        }
+        if (i == inputPrimary) {
+            primary = after.size();
+        }
+        landed.push_back(target);
+        after.push_back(caret);
     }
-    return finishWith(in, batch, after);
+    CommandResult result;
+    result.state = detail::makeState(after, {}, primary);
+    result.kind = EditKind::Other;
+    result.edits = batch.take();
+    return result;
 }
 
 CommandResult moveLinesUp(const CommandInput& in) noexcept { return moveLines(in, true); }

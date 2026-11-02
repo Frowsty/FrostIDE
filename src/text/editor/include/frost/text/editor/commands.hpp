@@ -174,6 +174,13 @@ namespace commands {
 // Inserts `utf8` at every selection as one Paste step: no smart keys, never coalesced.
 [[nodiscard]] CommandResult paste(const CommandInput& in, std::string_view utf8) noexcept;
 /*
+ * Pastes whole lines (text copied or cut with no selection, which ends with a line break): `utf8`
+ * is inserted at the start of the line of every selection's start, once per line, and the
+ * selections keep their text, moving down with it. IntelliJ's paste of a line copy. Kind Paste,
+ * never coalesced.
+ */
+[[nodiscard]] CommandResult pasteLines(const CommandInput& in, std::string_view utf8) noexcept;
+/*
  * Enter: a line break (the current line's, else the text's first, else settings.defaultLineBreak)
  * plus the current line's indentation (only up to the caret when it is inside the indentation).
  * After '{' one more indent level; between a bracket pair ("{|}", "(|)", "[|]") the closer moves to
@@ -222,7 +229,8 @@ namespace commands {
 // copied below it and the caret moves to the copy.
 [[nodiscard]] CommandResult duplicate(const CommandInput& in) noexcept;
 // Ctrl+Y: deletes every line the selections touch (with its line break); the carets keep their
-// column on the line that takes the deleted lines' place.
+// column on the line that takes the deleted lines' place, and carets that land on the same line
+// merge into one (the primary's column wins, else the first's).
 [[nodiscard]] CommandResult deleteLines(const CommandInput& in) noexcept;
 // Alt+Shift+Up / Down: swaps the lines the selections touch with the line above (below); the
 // selections move with them. Blocks already at the first (last) line stay.
