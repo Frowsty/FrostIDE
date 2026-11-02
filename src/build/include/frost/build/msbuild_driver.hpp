@@ -24,16 +24,24 @@
  *   - The working directory is the directory of the solution (or project) file.
  *
  * The environment (the parent's, changed as follows):
- *   - DOTNET_CLI_UI_LANGUAGE: the request's uiLanguage, or the user's Windows UI language. MSBuild
+ *   - DOTNET_CLI_UI_LANGUAGE: the request's uiLanguage, by default en-US whatever the Windows UI
+ *     language is, so the diagnostic parser always sees English category words (ADR 0035). MSBuild
  *     writes UTF-8 only when this override is set (otherwise it uses the console's OEM code page,
  *     measured with MSBuild 17.14 on 2026-11-01: "é" arrived as CP437's 0x82).
+ *   - VSLANG=1033 (English) for the tools MSBuild runs (cl, link), unless the request names another
+ *     uiLanguage; they then follow the Windows UI language.
  *   - MSBUILDTERMINALLOGGER=off, so a user's opt-in to the terminal logger cannot change the format.
  *   - MSBUILDDISABLENODEREUSE=1 (see above).
  *   - NoDefaultCurrentDirectoryInExePath removed: builds run the user's own scripts (Exec tasks,
  *     build events), which get Visual Studio's cmd.exe behaviour (ADR 0011, E2).
  *   - _MSPDBSRV_ENDPOINT_: a name unique to the build, so the compiler's PDB server is the build's
- *     own. The session ends it with the rest of the tree when MSBuild exits, which must not break a
- *     concurrent Visual Studio build that would otherwise share it. (Set by startMsBuild only.)
+ *     own. The session ends it when MSBuild exits, which must not break a concurrent Visual Studio
+ *     build that would otherwise share it. (Set by startMsBuild only.)
+ *
+ * After MSBuild exits, startMsBuild's session ends only the build infrastructure still in the job
+ * (msbuildInfrastructureImages: worker nodes, the PDB server, the compiler server) and lets
+ * anything else a build step started keep running, as Visual Studio does (ADR 0035). Cancelling
+ * still ends the whole tree.
  *
  * Trust: the request's `trusted` flag must be set (the trust store and prompt are other slices'),
  * or nothing starts and the error is Untrusted. Off Windows startMsBuild fails with Unsupported;
@@ -83,7 +91,7 @@ struct MsBuildRequest {
     MsBuildVerbosity verbosity = MsBuildVerbosity::Minimal;
     // Extra global properties, passed as -p:Name=Value with Value escaped for MSBuild.
     std::vector<std::pair<std::string, std::string>> properties{};
-    // DOTNET_CLI_UI_LANGUAGE ("en-US"); empty uses the user's Windows UI language (header comment).
+    // DOTNET_CLI_UI_LANGUAGE; empty means "en-US" (header comment). Only en-US also sets VSLANG=1033.
     std::string uiLanguage{};
 };
 
@@ -96,12 +104,15 @@ struct MsBuildRequest {
 
 /*
  * The process spec for `request` (header comment), without _MSPDBSRV_ENDPOINT_. Pure and portable:
- * paths follow Windows rules on every platform. With an empty uiLanguage it uses "en-US" off
- * Windows and the user's UI language on Windows. Errors: InvalidArgument (no solution or project,
+ * paths follow Windows rules on every platform. Errors: InvalidArgument (no solution or project,
  * both projectName and projectPath, a path that is not absolute, an empty configuration or
  * platform, a property name MSBuild would refuse).
  */
 [[nodiscard]] Result<io::ProcessSpec> msbuildProcessSpec(const MsBuildRequest& request);
+
+// The image names startMsBuild's session ends after MSBuild exits: MSBuild.exe (worker nodes),
+// MSBuildTaskHost.exe, mspdbsrv.exe and VBCSCompiler.exe.
+[[nodiscard]] std::vector<std::string> msbuildInfrastructureImages();
 
 /*
  * Starts the build: msbuildProcessSpec plus a unique _MSPDBSRV_ENDPOINT_, run as a BuildSession.

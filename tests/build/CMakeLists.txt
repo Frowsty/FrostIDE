@@ -2,17 +2,21 @@
 #
 # Tests for frost::build:
 #   build_unit_tests     the diagnostic parser, the line splitter, the JSON reader, vswhere parsing and
-#                        instance selection, the MSBuild command line and BuildSession against the
-#                        scripted launcher, label "unit" (every platform);
-#   build_msbuild_tests  real vswhere and MSBuild against the tiny fixture solution (fixtures/), label
-#                        "integration" (so RESOURCE_LOCK frost_desktop; ADR 0027), Windows only. Filter
-#                        with ctest -R "^MsBuild(Discovery|Build)\." or -E; the second label "msbuild"
-#                        waits for several labels in frost_add_test, which takes one kind label today.
+#                        instance selection, the MSBuild command line, BuildSession against the
+#                        scripted launcher, diagnostic resolution and BuildService over a MemFs
+#                        solution, label "unit" (every platform);
+#   build_msbuild_tests  real vswhere and MSBuild against the tiny fixture solution (fixtures/), directly
+#                        and through BuildService, label "integration" (so RESOURCE_LOCK frost_desktop;
+#                        ADR 0027), Windows only. Filter with ctest -R "^MsBuild(Discovery|Build)\." or -E;
+#                        the second label "msbuild" waits for several labels in frost_add_test, which
+#                        takes one kind label today.
 #                        The builds run in a work directory under this build tree, not under %TEMP%, where
 #                        MSBuild warns about intermediate directories (MSB8029).
 
 frost_add_test(build_unit_tests
     SOURCES
+        build_diagnostics_test.cpp
+        build_service_test.cpp
         build_session_test.cpp
         diagnostic_test.cpp
         json_test.cpp

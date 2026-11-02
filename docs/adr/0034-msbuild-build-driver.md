@@ -2,7 +2,8 @@
 
 # ADR 0034: The W1 MSBuild build driver
 
-- Status: accepted (feature-first phase, ADR 0031)
+- Status: accepted (feature-first phase, ADR 0031); decisions 3 (language) and 4 (what ends after MSBuild
+  exits) superseded by ADR 0035
 - Date: 2026-11-01
 - Plan reference: PLAN.md section 3.2 (src/build), section 3.5 (trust, launching); ADR 0032 (W1); ADR 0011 (E2)
 
