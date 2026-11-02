@@ -1,18 +1,91 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The raster editor renderer (frost/ui/editor/editor_renderer.hpp): QPainter fills and lines, text
-// as QGlyphRuns shaped once by QTextLayout and cached per (text, italic).
+// as QGlyphRuns shaped once by QTextLayout and cached per (text, italic), range decorations (wavy
+// and dotted squiggles, strike-outs, backgrounds), the error stripe and the chrome shapes.
 
 #include "frost/ui/editor/editor_renderer.hpp"
 
 #include <QPaintDevice>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QTextLayout>
 #include <QTextLine>
 #include <QTextOption>
 
+#include <algorithm>
+
 namespace frost::ui {
+
+namespace {
+
+// A wave along the decorated box's underline: half-periods of 2 * width pixels, amplitude `width`.
+void drawWave(QPainter& painter, const DisplayDecoration& decoration) {
+    const double step = 2.0 * decoration.width;
+    const double amplitude = decoration.width;
+    const double y = decoration.baseline + 1.5 * decoration.width + amplitude;
+    QPainterPath path(QPointF(decoration.rect.left(), y));
+    bool up = true;
+    for (double x = decoration.rect.left(); x < decoration.rect.right(); x += step) {
+        const double next = std::min(x + step, decoration.rect.right());
+        path.lineTo(next, up ? y - amplitude : y + amplitude);
+        up = !up;
+    }
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(decoration.color, decoration.width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.drawPath(path);
+}
+
+void drawDecoration(QPainter& painter, const DisplayDecoration& decoration) {
+    const QRectF& box = decoration.rect;
+    const double underline = decoration.baseline + 1.5 * decoration.width;
+    switch (decoration.style) {
+    case DecorationStyle::Background: painter.fillRect(box, decoration.color); break;
+    case DecorationStyle::WavyUnderline: drawWave(painter, decoration); break;
+    case DecorationStyle::DottedUnderline: {
+        QPen pen(decoration.color, decoration.width, Qt::DotLine, Qt::FlatCap);
+        painter.setPen(pen);
+        painter.drawLine(QLineF(box.left(), underline, box.right(), underline));
+        break;
+    }
+    case DecorationStyle::Underline:
+        painter.setPen(QPen(decoration.color, decoration.width));
+        painter.drawLine(QLineF(box.left(), underline, box.right(), underline));
+        break;
+    case DecorationStyle::Strikeout: {
+        // Through the middle of the x-height (about a third of the ascent above the baseline).
+        const double y = decoration.baseline - (decoration.baseline - box.top()) * 0.33;
+        painter.setPen(QPen(decoration.color, decoration.width));
+        painter.drawLine(QLineF(box.left(), y, box.right(), y));
+        break;
+    }
+    }
+}
+
+void drawShape(QPainter& painter, const DisplayShape& shape) {
+    painter.setPen(shape.stroke.isValid()
+                       ? QPen(shape.stroke, shape.strokeWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)
+                       : QPen(Qt::NoPen));
+    painter.setBrush(shape.fill.isValid() ? QBrush(shape.fill) : QBrush(Qt::NoBrush));
+    switch (shape.kind) {
+    case DisplayShape::Kind::Rect:
+        if (shape.radius > 0.0) {
+            painter.drawRoundedRect(shape.rect, shape.radius, shape.radius);
+        } else {
+            painter.drawRect(shape.rect);
+        }
+        break;
+    case DisplayShape::Kind::Ellipse: painter.drawEllipse(shape.rect); break;
+    case DisplayShape::Kind::Polygon: painter.drawPolygon(shape.points); break;
+    case DisplayShape::Kind::Polyline:
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPolyline(shape.points);
+        break;
+    }
+}
+
+} // namespace
 
 RasterEditorRenderer::RasterEditorRenderer(const QFont& font) { setFont(font); }
 
@@ -71,6 +144,11 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
     }
     painter.save();
     painter.setClipRect(list.textArea);
+    for (const DisplayDecoration& decoration : list.decorations) {
+        if (decoration.style == DecorationStyle::Background) {
+            drawDecoration(painter, decoration);
+        }
+    }
     for (const DisplayLine& line : list.underlines) {
         painter.setPen(QPen(line.color, line.width));
         painter.drawLine(line.line);
@@ -78,6 +156,13 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
     for (const DisplayText& run : list.text) {
         drawText(painter, run);
     }
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    for (const DisplayDecoration& decoration : list.decorations) {
+        if (decoration.style != DecorationStyle::Background) {
+            drawDecoration(painter, decoration);
+        }
+    }
+    painter.setRenderHint(QPainter::Antialiasing, false);
     for (const DisplayLine& line : list.overlays) {
         painter.setPen(QPen(line.color, line.width));
         painter.drawLine(line.line);
@@ -97,6 +182,23 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
             painter.setBrush(marker.color);
             painter.drawEllipse(marker.rect);
         }
+        painter.setRenderHint(QPainter::Antialiasing, false);
+    }
+    if (!list.stripe.isEmpty()) {
+        painter.fillRect(list.stripe, list.stripeBackground);
+        for (const DisplayStripeMark& mark : list.stripeMarks) {
+            painter.fillRect(mark.rect, mark.color);
+        }
+        if (!list.stripeSummary.isEmpty()) {
+            painter.fillRect(list.stripeSummary, list.stripeSummaryColor);
+        }
+    }
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    for (const DisplayShape& shape : list.chrome) {
+        drawShape(painter, shape);
+    }
+    for (const DisplayText& run : list.chromeText) {
+        drawText(painter, run);
     }
 }
 

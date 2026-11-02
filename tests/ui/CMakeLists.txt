@@ -18,7 +18,9 @@
 #   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
 #                                IME, find/replace, Go to Line, highlighting and live settings; the
 #                                QRhi backend (ADR 0043) on a Direct3D 11 WARP device, or QRhi's Null
-#                                backend where Direct3D is missing, and the renderer switches;
+#                                backend where Direct3D is missing, and the renderer switches; the
+#                                insight of ADR 0047 (semantic colours, squiggles, the error stripe,
+#                                the inspection widget, F2);
 #   ui_nav_tests                 frost::ui_nav (ADR 0042), a non-Qt executable: navigation history,
 #                                recents, sessions, the document registry, the project tree and the
 #                                merge panes, label "unit";
@@ -35,8 +37,9 @@
 #                                RESOURCE_LOCK frost_desktop (see below);
 #   ui_run_tests                 frost::ui_run: the Run console, its controller over a RunService on a
 #                                MemFs with the scripted launcher, and the run actions (offscreen);
-#   ui_lang_tests                the language-feature widgets and LanguageController (ADR 0041)
-#                                offscreen, against tests/lang's scripted language server.
+#   ui_lang_tests                the language-feature widgets, LanguageController (ADR 0041) and
+#                                EditorInsightBinding (ADR 0047) offscreen, against tests/lang's
+#                                scripted language server.
 
 frost_add_test(ui_input_tests QT
     SOURCES key_translation_test.cpp ime_tracker_test.cpp adapter_integration_test.cpp
@@ -150,6 +153,7 @@ _frost_ui_test_wiring(ui_shell_tests)
 frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
+        editor/editor_insight_test.cpp
         editor/editor_rhi_test.cpp
         editor/editor_view_test.cpp
     DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
@@ -244,8 +248,10 @@ endif()
 if(TARGET frost_ui_lang)
     frost_add_test(ui_lang_tests QT
         SOURCES
+            lang/editor_insight_binding_test.cpp
             lang/lang_widgets_test.cpp
             lang/language_controller_test.cpp
-        DEPS frost::ui_lang frost::lang frost::input frost::text frost::sched frost::io)
-    target_include_directories(ui_lang_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+        DEPS frost::ui_lang frost::ui_editor frost::lang frost::build frost::input frost::text frost::sched frost::io
+             frost_ui_test_support)
+    _frost_ui_test_wiring(ui_lang_tests)
 endif()

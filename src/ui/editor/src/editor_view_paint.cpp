@@ -2,7 +2,8 @@
 //
 // EditorView (frost/ui/editor/editor_view.hpp), part 2: geometry, scrolling and painting. The frame
 // is built as an EditorDisplayList (rows from the DisplayMap, colours from the theme, highlight spans
-// from the syntax tree) and handed to the IEditorRenderer.
+// from the syntax tree, semantic tokens and inactive regions over them, range decorations, and the
+// stripe and chrome of editor_view_insight.cpp) and handed to the IEditorRenderer.
 
 #include "frost/text/large_file.hpp"
 #include "frost/ui/editor/editor_view.hpp"
@@ -107,7 +108,7 @@ void EditorView::updateScrollBars() {
         return;
     }
     const double cell = toPixels(m_shaper->cellWidth());
-    const double textWidth = viewport()->width() - gutterWidth() - kTextPadding * zoomFactor();
+    const double textWidth = viewport()->width() - gutterWidth() - stripeWidth() - kTextPadding * zoomFactor();
     const double content = m_maxRowWidth + 4.0 * cell;
     horizontalScrollBar()->setRange(0, std::max(0, static_cast<int>(std::ceil(content - textWidth))));
     horizontalScrollBar()->setPageStep(std::max(1, static_cast<int>(textWidth)));
@@ -138,7 +139,7 @@ void EditorView::ensureCaretVisible() {
         m_maxRowWidth = x;
         updateScrollBars();
     }
-    const double textWidth = viewport()->width() - gutterWidth() - 2.0 * kTextPadding * zoomFactor();
+    const double textWidth = viewport()->width() - gutterWidth() - stripeWidth() - 2.0 * kTextPadding * zoomFactor();
     const double scroll = horizontalScrollBar()->value();
     if (x < scroll) {
         horizontalScrollBar()->setValue(static_cast<int>(std::max(0.0, x - 4.0 * cell)));
@@ -169,7 +170,7 @@ EditorDisplayList EditorView::buildDisplayList() {
     list.background = m_colors.background;
     list.gutter = QRectF(0.0, 0.0, gutter, area.height());
     list.gutterBackground = m_colors.gutterBackground;
-    list.textArea = QRectF(gutter, 0.0, std::max(0.0, area.width() - gutter), area.height());
+    list.textArea = QRectF(gutter, 0.0, std::max(0.0, area.width() - gutter - stripeWidth()), area.height());
     list.font = m_shaper->font();
     list.caretColor = m_colors.caret;
 
@@ -213,6 +214,28 @@ EditorDisplayList EditorView::buildDisplayList() {
         }
         return std::nullopt;
     };
+    // Semantic tokens and inactive regions, walked the same way (both sorted; rows ascend).
+    constexpr std::size_t kNoSemantic = ~std::size_t{0};
+    std::size_t semanticIndex = static_cast<std::size_t>(
+        std::ranges::upper_bound(m_semantic, visibleBegin, {}, [](const SemanticSpan& s) { return s.range.end; }) -
+        m_semantic.begin());
+    const auto semanticAt = [&](ByteOffset at) -> std::size_t {
+        while (semanticIndex < m_semantic.size() && m_semantic[semanticIndex].range.end <= at) {
+            ++semanticIndex;
+        }
+        if (semanticIndex < m_semantic.size() && m_semantic[semanticIndex].range.begin <= at) {
+            return semanticIndex;
+        }
+        return kNoSemantic;
+    };
+    std::size_t inactiveIndex = 0;
+    const auto inactiveAt = [&](ByteOffset at) {
+        while (inactiveIndex < m_inactive.size() && m_inactive[inactiveIndex].end <= at) {
+            ++inactiveIndex;
+        }
+        return inactiveIndex < m_inactive.size() && m_inactive[inactiveIndex].begin <= at;
+    };
+    const std::vector<FrameDecoration> decorations = frameDecorations(text::ByteRange{visibleBegin, visibleEnd});
 
     // Lines holding an empty caret get the current-line background (IntelliJ shows none while the
     // caret's selection is non-empty); every caret line gets the brighter line number.
@@ -292,14 +315,26 @@ EditorDisplayList EditorView::buildDisplayList() {
         double runX = 0.0;
         ByteOffset runBegin = shown.begin;
         std::optional<syntax::HighlightKind> runKind;
+        std::size_t runSemantic = kNoSemantic;
+        bool runInactive = false;
         bool runAscii = true;
         const auto flush = [&](ByteOffset end) {
             if (run.isEmpty()) {
                 return;
             }
-            const TokenFormat& format = runKind ? m_colors.format(*runKind) : plain;
+            // Inactive code is dimmed over everything; a semantic token wins over tree-sitter.
+            TokenFormat format = runKind ? m_colors.format(*runKind) : plain;
+            std::optional<SemanticKind> semantic;
+            if (runSemantic != kNoSemantic) {
+                const SemanticSpan& span = m_semantic[runSemantic];
+                semantic = span.kind;
+                format = m_colors.semanticFormat(span.kind, span.modifiers);
+            }
+            if (runInactive) {
+                format = TokenFormat{m_colors.inactiveCode, false};
+            }
             list.text.push_back(DisplayText{QPointF(origin + runX, baseline), run, format.color, format.italic, runKind,
-                                            text::ByteRange{runBegin, end}});
+                                            text::ByteRange{runBegin, end}, semantic, runInactive});
             run.clear();
         };
         while (at < view.size()) {
@@ -312,13 +347,18 @@ EditorDisplayList EditorView::buildDisplayList() {
                 appendCodePoint(run, ch.cp); // A combining mark or joiner stays with its cluster.
             } else {
                 const std::optional<syntax::HighlightKind> kind = kindAt(offset);
-                if (!run.isEmpty() && (kind != runKind || !ascii || !runAscii)) {
+                const std::size_t semantic = semanticAt(offset);
+                const bool inactive = inactiveAt(offset);
+                if (!run.isEmpty() &&
+                    (kind != runKind || semantic != runSemantic || inactive != runInactive || !ascii || !runAscii)) {
                     flush(offset);
                 }
                 if (run.isEmpty()) {
                     runX = toPixels(x);
                     runBegin = offset;
                     runKind = kind;
+                    runSemantic = semantic;
+                    runInactive = inactive;
                     runAscii = ascii;
                 }
                 appendCodePoint(run, ch.cp);
@@ -330,6 +370,34 @@ EditorDisplayList EditorView::buildDisplayList() {
         if (map.wrap().mode == text::WrapMode::Off && toPixels(x) > m_maxRowWidth) {
             m_maxRowWidth = toPixels(x);
             widened = true;
+        }
+
+        // Range decorations on this row: squiggles, strike-outs, usage boxes. An empty range (a
+        // diagnostic at a point) or one ending at the line break marks one cell.
+        for (const FrameDecoration& decoration : decorations) {
+            const text::ByteRange range = decoration.range;
+            double x0 = 0.0;
+            double x1 = 0.0;
+            if (range.empty()) {
+                if (range.begin < row.buffer.begin || range.begin > row.buffer.end ||
+                    (range.begin == row.buffer.end && !row.endsLine)) {
+                    continue;
+                }
+                x0 = xOf(range.begin);
+                x1 = x0 + cell;
+            } else {
+                if (range.end <= row.buffer.begin || range.begin >= row.buffer.end) {
+                    continue;
+                }
+                x0 = xOf(std::max(range.begin, row.buffer.begin));
+                x1 = xOf(std::min(range.end, row.buffer.end));
+                if (x1 <= x0) {
+                    x1 = x0 + cell;
+                }
+            }
+            list.decorations.push_back(DisplayDecoration{QRectF(x0, top, x1 - x0, m_lineHeight), baseline,
+                                                         decoration.style, decoration.color, std::max(1.0, zoom), range,
+                                                         decoration.severity, decoration.tooltip});
         }
 
         // The IME preedit's underline.
@@ -350,8 +418,8 @@ EditorDisplayList EditorView::buildDisplayList() {
             const QString number = QString::number(line + 1);
             const double width = static_cast<double>(number.size()) * cell;
             const QColor color = numberLines.contains(line) ? m_colors.lineNumberCurrent : m_colors.lineNumber;
-            list.gutterText.push_back(
-                DisplayText{QPointF(numbersRight - width, baseline), number, color, false, std::nullopt, row.buffer});
+            list.gutterText.push_back(DisplayText{QPointF(numbersRight - width, baseline), number, color, false,
+                                                  std::nullopt, row.buffer, std::nullopt, false});
         }
         // The most severe marker of the line (Error sorts before Warning).
         const auto marker = std::ranges::lower_bound(m_markers, row.line, {}, &LineMarker::line);
@@ -385,6 +453,8 @@ EditorDisplayList EditorView::buildDisplayList() {
             }
         }
     }
+
+    addInsightChrome(list);
 
     if (widened) {
         // The horizontal range follows the widest row seen; not changed while painting.

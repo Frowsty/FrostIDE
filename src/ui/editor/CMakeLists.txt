@@ -5,7 +5,9 @@
 # backend-neutral display list behind IEditorRenderer (the raster QPainter backend), the Qt
 # ITextShaper, tree-sitter highlighting through frost::syntax and the theme's token colours, the
 # gutter, the find/replace bar, Go to Line, IME, the editor actions in frost::input's registry and
-# the settings adapter over frost::settings. Not in the fuzz trees (it needs Qt and vcpkg ports).
+# the settings adapter over frost::settings; and (ADR 0047) semantic highlighting, inactive regions,
+# diagnostics with squiggles, the error stripe, the inspection widget, F2 navigation and the
+# status-bar problems indicator. Not in the fuzz trees (it needs Qt and vcpkg ports).
 #
 # The QRhi glyph-atlas backend (ADR 0043; ADR 0011 A1) is contained in editor_backend, glyph_atlas,
 # rhi_glyph_painter and rhi_renderer: only rhi_glyph_painter.cpp and rhi_renderer.cpp include Qt's
@@ -21,15 +23,18 @@ frost_add_library(ui_editor LAYER ui
         src/editor_actions.cpp
         src/editor_backend.cpp
         src/editor_colors.cpp
+        src/editor_insight.cpp
         src/editor_key_routing.cpp
         src/editor_settings.cpp
         src/editor_view.cpp
         src/editor_view_input.cpp
+        src/editor_view_insight.cpp
         src/editor_view_paint.cpp
         src/editor_view_renderer.cpp
         src/find_bar.cpp
         src/glyph_atlas.cpp
         src/go_to_line.cpp
+        src/insight_status.cpp
         src/qt_text_shaper.cpp
         src/raster_renderer.cpp
         src/rhi_glyph_painter.cpp
@@ -46,6 +51,7 @@ target_sources(frost_ui_editor PRIVATE
     include/frost/ui/editor/editor_view.hpp
     include/frost/ui/editor/find_bar.hpp
     include/frost/ui/editor/go_to_line.hpp
+    include/frost/ui/editor/insight_status.hpp
     include/frost/ui/editor/rhi_renderer.hpp)
 set_target_properties(frost_ui_editor PROPERTIES AUTOMOC ON)
 if(WIN32)

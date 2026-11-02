@@ -75,6 +75,8 @@ enum class EditorAction : std::uint8_t {
     GoToLine,
     NextMember,
     PreviousMember,
+    NextError,     // F2 (ADR 0047).
+    PreviousError, // Shift+F2.
 };
 
 // One row of the action table.

@@ -79,9 +79,9 @@ bool EditorView::event(QEvent* event) {
 
 bool EditorView::viewportEvent(QEvent* event) {
     if (event->type() == QEvent::ToolTip) {
-        // Gutter markers show their messages; the text area has no tooltips yet.
+        // Gutter markers, stripe marks, the inspection widget and squiggles show their messages.
         const auto* help = static_cast<QHelpEvent*>(event);
-        const QString tip = lineMarkerToolTip(help->pos());
+        const QString tip = toolTipAt(help->pos());
         if (tip.isEmpty()) {
             QToolTip::hideText();
             event->ignore();
@@ -401,6 +401,12 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
     }
     setFocus(Qt::MouseFocusReason);
     const QPointF pos = event->position();
+    if (clickInsight(pos)) {
+        // The error stripe or the inspection widget took the click.
+        m_inputStart.reset();
+        event->accept();
+        return;
+    }
     const text::DisplayHit hit = hitAt(pos);
     const auto now = std::chrono::steady_clock::now();
     const auto interval = std::chrono::milliseconds(QGuiApplication::styleHints()->mouseDoubleClickInterval());
@@ -440,7 +446,7 @@ void EditorView::mouseDoubleClickEvent(QMouseEvent* event) {
         return;
     }
     const QPointF pos = event->position();
-    if (pos.x() < gutterWidth()) {
+    if (pos.x() < gutterWidth() || insightContains(pos)) {
         mousePressEvent(event);
         return;
     }

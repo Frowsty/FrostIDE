@@ -7,6 +7,7 @@
 
 #include "frost/core/assert.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/semantic_tokens.hpp"
 #include "frost/lang/uri.hpp"
 
 #include "timeout.hpp"
@@ -197,7 +198,10 @@ Json clientCapabilities() {
             .set("codeAction", std::move(codeAction))
             .set("formatting", Json::object().set("dynamicRegistration", false))
             .set("rangeFormatting", Json::object().set("dynamicRegistration", false))
-            .set("rename", Json::object().set("dynamicRegistration", false).set("prepareSupport", true));
+            .set("rename", Json::object().set("dynamicRegistration", false).set("prepareSupport", true))
+            // Semantic highlighting and clangd's inactive regions (M3, ADR 0047).
+            .set("semanticTokens", semanticTokensClientCapabilities())
+            .set("inactiveRegionsCapabilities", inactiveRegionsClientCapabilities());
     Json workspace =
         Json::object()
             .set("configuration", true)
@@ -205,6 +209,7 @@ Json clientCapabilities() {
             .set("applyEdit", false)
             .set("symbol", Json::object().set("dynamicRegistration", false).set("symbolKind", symbolKinds()))
             .set("workspaceEdit", Json::object().set("documentChanges", true))
+            .set("semanticTokens", Json::object().set("refreshSupport", false))
             .set("didChangeConfiguration", Json::object().set("dynamicRegistration", false));
     return Json::object()
         .set("general", Json::object().set("positionEncodings", encodings))

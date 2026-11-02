@@ -73,6 +73,8 @@ constexpr std::array kActions{
     EditorActionInfo{"editor.gotoLine", "Go to Line:Column", A::GoToLine, false},
     EditorActionInfo{"navigate.nextMember", "Next Member", A::NextMember, false},
     EditorActionInfo{"navigate.previousMember", "Previous Member", A::PreviousMember, false},
+    EditorActionInfo{"navigate.nextError", "Next Highlighted Error", A::NextError, false},
+    EditorActionInfo{"navigate.previousError", "Previous Highlighted Error", A::PreviousError, false},
 };
 // clang-format on
 
