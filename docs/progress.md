@@ -5,8 +5,9 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-02: M1 in progress
 
-`main` has the ninth, the eighth, the seventh and the sixth feature-first batches (ADR 0031), merged with `git merge
---no-ff` in the main worktree under D23. The ninth, in this order: `w1/run-service` at 82c6c56 (merge fcc0a46),
+`main` has the tenth, the ninth, the eighth, the seventh and the sixth feature-first batches (ADR 0031), merged with
+`git merge --no-ff` in the main worktree under D23. The tenth: `m1/shell-nav` at 588ddfe (merge 9d00def), then one fix
+of the merged tree (cfbd46e). The ninth, in this order: `w1/run-service` at 82c6c56 (merge fcc0a46),
 `m1/editor-rhi` at 9438b85 (merge 97e490e) and `w2/clangd-nav` at 660a1e9 (merge 29869f9, with the regenerated keymap
 golden). The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
 follow-up (4a9954b), `w1/tool-windows` at c81008c (merge e574965) and an ADR-reference fix (791fa63). The seventh, in
@@ -18,10 +19,121 @@ at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then
 Each slice passed its own `-Quick`, and each batch's merged tree was verified once (the Verification sections below).
 The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in progress". Its
 "Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now the running one.
-This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the fifteen
+This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the sixteen
 branches kept a record in this log).
 
 ### Done
+
+#### Merge of `m1/shell-nav` (9d00def, tenth batch)
+- **The merge** (9d00def) of `m1/shell-nav` (588ddfe) into `main` at ac253cd: in io `IFileSystem::canonicalPath`
+  (Windows: the real case of every component through GetFinalPathNameByHandleW; MemFs and Linux: the lexical form)
+  and the tree scan's `.ignore` files, default build-output excludes and skipped `.git/.vs/.svn/.hg`; the new
+  frost::search (`src/search`: the fuzzy path matcher and `file:line[:col]`/`file(line)` parsing), frost::ui_nav
+  (`src/ui/nav`, Qt-free: navigation history, recent files and locations, the session JSON with its yyjson store,
+  DocumentRegistry, ProjectFiles and MergePanes) and frost::ui_workbench (`src/ui/workbench`: the Workbench with the
+  File System view, Find Action, Go to File, Search Everywhere, Recent Files and Locations, Back/Forward, session
+  restore, the hot-exit restore prompt, the editor banners, the merge view, Save All and autosave); in frost::ui_shell
+  ListPopup's filter mode, disabled rows and section headers, EditorViewState with `viewState`/`restoreViewState`,
+  `IEditorFactory::canonicalPath` and tabs keyed by it; and in frost::app persistent AppServices (the document stack,
+  the hot-exit journal, sessions, a thread pool and the file watcher), MainWindow owning a Workbench, and main()
+  opening folders and solutions as projects (else the last project) and offering recoverable journals after the first
+  frame. Feature rows 28, 29, 76, 77, 78, 91 and 92 are `in-progress` with acceptance tests. The slice record below
+  says more.
+- **ADR 0042** (`docs/adr/0042-shell-navigation.md`): the number is unchanged and no other ADR on `main` uses it (0043
+  is `m1/editor-rhi`'s). Its references are right: 0015 (appearance), 0021 (yyjson), 0026 (display map), 0028 (save
+  manager), 0031 (feature-first) and 0038 (shell frame). No line the slice adds cites the shell as ADR 0035.
+- **The branch's own merges** of `m1/shell-frame` 9576c24 (33dfc14) and `m1/save-manager` e2b2362 (0756a45) were
+  already on `main` (three merge bases: e2b2362, 9576c24 and 2e298a8), so those parts were no-ops. The pre-state's
+  check: the slice tree still had the shell's ADR as `docs/adr/0035-shell-frame.md`, and it did not come back; git
+  kept `main`'s rename to `0038-shell-frame.md` (b1d05bc), so `docs/adr` has 0035 (the build service), 0038 (the
+  shell frame) and 0042 (this slice), each once.
+- **Nine conflicts**, each resolved so that both sides' intent survives:
+  - `src/CMakeLists.txt`: `main`'s text plus the slice's `add_subdirectory(search)` after the fuzz-guarded block
+    (frost::search needs only core, so fuzz trees build it too). The slice's second, unguarded
+    `add_subdirectory(build)` is dropped: `main` builds build inside the guard since the seventh batch.
+  - `tests/CMakeLists.txt`: `main`'s `frost_add_test_directory` list and guards, with `search` after `lang`, so
+    `search_tests` has `mod.search`.
+  - `src/ui/CMakeLists.txt`: both header notes; `nav` and `workbench` after `main`'s `shell`, `editor`, `toolwindows`
+    and the guarded `lang`. Fuzz trees build no UI (`FROST_FUZZ` needs `FROST_BUILD_UI=OFF`), so nav's and
+    workbench's frost::document dependency needs no guard.
+  - `tests/ui/CMakeLists.txt`: `ui_nav_tests` and `ui_workbench_tests` after `ui_editor_tests`, with their lines in
+    the header list; `ui_screenshot_tests`' line keeps `main`'s form (the kind "unit" with the tag "screenshot").
+  - `src/app/CMakeLists.txt`: frost::app links the slice's ui_workbench, ui_nav, document, storage, project, settings
+    and sched beside `main`'s ui_shell, ui, input, io, diag and core; one header note.
+  - `src/app/include/frost/app/app_services.hpp` and `main_window.hpp`: the slice's header notes (ADR 0038 and 0042).
+  - `src/app/src/main.cpp`: the slice's two hunks, the persistent AppServices passed to MainWindow, and the command
+    line opening folders and solutions as projects (or restoring the last project) before files open in tabs.
+    `main`'s diagnostics flow around them is unchanged.
+  - `tests/features/matrix.json`: rows 28, 29, 76, 77 and 78 take the slice's acceptance tests and status (91 and 92
+    merged without a conflict); their other fields and rows 26, 27, 30, 70 and 226 stay `main`'s (ADR 0029's
+    milestones and completions, which the slice's base did not have).
+- **The composition** (the pre-state): `src/app` on `main` had not changed since the seventh batch's b1d05bc, and
+  neither `m1/editor-view` nor `w1/tool-windows` wired anything into it, so the `src/app` conflicts were the two
+  resolutions of the shell-frame merge (`main`'s b1d05bc and the slice's 33dfc14) plus the slice's composition. No
+  composition piece was defined twice; shell-nav's structure stands, and `main`'s TODO(M16) note in `main.cpp`, the
+  `.clang-tidy` files of `src/app` and `tests/app`, and `tests/app`'s `frost_desktop` lock and `PROCESSORS 2` stay.
+  The new IEditorView and IEditorFactory members have defaults, and nothing on `main` but the shell's placeholder, the
+  shell tests' fakes and the slice's DocumentEditorFactory implements them. `main`'s app tests passed in the batch run
+  (Verification below). `w1/workbench` was not merged (the pre-state; Next).
+- **Goldens and the label check** (the pre-state): the slice changes nothing under `tests/input` and adds no tagged
+  suite (`search_tests`, `ui_nav_tests` and `ui_workbench_tests` are "unit"), so neither the keymap goldens nor
+  `tests/tools/test_verify_support.py` needed an update; `KeymapReachability.Golden` and `tools.verify_support`
+  passed in the batch run.
+- **The build of the resolved tree** (before the merge commit, which records the same tree): `night.py build-gate`
+  (35.2 GB commit free) and `cmake --build --preset win-clangcl-debug -j 8`: exit 1 at step 273 of 350, one compile
+  error in `ui_workbench_tests` (the follow-up below).
+
+#### Long-line option follow-up (cfbd46e, tenth batch)
+- **The failure:** `WorkbenchTest.BannersShowLongLinesAndOutOfDateFiles` set
+  `LoadServiceOptions::maxEditableLineChars`, which the eighth batch's long-line follow-up (4a9954b) renamed to
+  `maxEditableLineBytes` when the rule moved to `kLongLineCapBytes`. The slice was based before it, so its own run
+  never saw the rename.
+- **The fix** (cfbd46e): the test sets `maxEditableLineBytes = 10`. Its long line is 50 ASCII `x`, 50 bytes as well as
+  50 characters, so the case still opens a line over the cap read-only with the long-line banner; nothing else in the
+  test changes and nothing is weakened. The slice's source never named the option. A fix forward, not a revert: the
+  cause was clear and the change one identifier.
+- **Checked:** `night.py build-gate` (37.8 GB commit free) and the Debug build: exit 0, 96 steps; then the slice's
+  suites through ctest on the hidden desktop: 71/71 (WorkbenchTest, the ui_nav models, FuzzyPath and the app's
+  MainWindow cases among them).
+
+#### Verification (tenth batch, merged tree cfbd46e)
+- Before the batch run: the Windows Debug build after the merge and after the follow-up (above), and the slice's
+  suites after the follow-up.
+- **The first run** of `tools\verify.ps1 -Quick -Jobs 8`, on cfbd46e, through `run_hidden_nobox.py` (a hidden desktop;
+  no window opened on it), after `night.py build-gate` (37.5 GB commit free): 596.5 s, exit code 1. Every test passed
+  on both OSes (win debug 2246/2252, 6 skipped; wsl debug 2132/2141, 9 skipped) and every other check was ok, but
+  frost-lint failed on one file that is not in the tree: `Testing/Temporary/CTestCostData.txt`, under an untracked
+  `Testing/` folder in the repository root (an empty ctest run's `CTestCostData.txt` and `LastTest.log`, written at
+  02:43:56, after this session's first `git status` had shown the tree clean; frost-lint checks untracked files too).
+  This session ran no ctest from that directory; the folder was moved, not deleted, to the integrator's scratchpad,
+  and no slice was reverted.
+- **The run that counts**, the same command on cfbd46e (clean tree; this record not yet written), after `night.py
+  build-gate` (33.9 GB commit free): 475.7 s, exit code 0. Windows ran its Debug leg (ctest `-j 8`) and the checks;
+  WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`): `Verified: win debug 2246/2252 (6
+  skipped), wsl debug 2132/2141 (9 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by
+  default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by
+  default)` (frost-lint 1975 files; licensecheck 39 packages on Windows, 35 on WSL). The test steps took 155.9 s
+  (Windows, parallel at `-j 8`) and 266.7 s (WSL). The 11 `msbuild` and 17 `screenshot` tests ran and passed on
+  Windows; `mod.search` has its 5 tests on both OSes.
+- **The skips:** the ninth batch's, unchanged. Windows: the four `WatcherPerf` tests,
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` and `SafeWrite.SymlinksStayLinks` (no symlink right for this
+  account). WSL: the four `WatcherPerf` tests, `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale`,
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler`,
+  `MsBuildEvaluation.MapsEvaluatedMetadataToClangClFlags`,
+  `MsBuildProvider.FailedEvaluationFallsBackToTheStaticModel` and
+  `RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes`.
+- **No test was lost:** no `TEST` line and no assertion line is removed between ac253cd and cfbd46e; the follow-up
+  renames one option in a test's set-up. Against the ninth batch (win debug 2220, wsl debug 2111) the tree adds 32
+  tests on Windows and 30 on WSL, the 32 `TEST` cases the slice adds: `tests/ui` 22 (`ui_workbench_tests` 14,
+  `ui_nav_tests` 8), `tests/search` 5, `tests/io` 3 and `tests/app` 2. Two of them build only on Windows:
+  `RealFileSystem.CanonicalPathGivesOneSpellingPerFile` and `WorkbenchWindows.CaseVariantsOpenOneDocument`.
+  `frost_process_tests`' Linux cache now also redirects `XDG_DATA_HOME` (the GUI's journal and sessions), an
+  addition.
+- **Processes:** the runner ended every process tree it started; no night.py lock was taken (build-gate takes none)
+  and no background loop is left. The ctest, test and `verify.sh` processes still running at the end belong to other
+  agents' worktrees (`m3-editor-insight`, `m2-cmake`, `w1-workbench`) and were left alone.
+- `-Quick` builds no ASan, TSan or fuzz tree. The slice's sanitizer, fuzz, stress and `-Full` runs are in "Deferred
+  to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `w1/run-service` (fcc0a46, ninth batch)
 - **The merge** (fcc0a46) of `w1/run-service` (82c6c56) into `main` at d34334c: RunService, RunSession and
@@ -649,8 +761,12 @@ branches kept a record in this log).
 ### Next
 - **W1, the work-ready build** (ADR 0032): BuildService (ADR 0035), the shell (ADR 0038), the editor view (ADR 0037),
   the build tool windows (ADR 0039) and, since the ninth batch, RunService with frost::ui_run (ADR 0040) are on `main`,
-  none of them wired into the app yet. Next, `w1/workbench` (in
-  flight, on 8ee7a1d with its own merges 591ad72 and 43908a5 of the two slices) wires them in. From `w1/tool-windows`'
+  none of them wired into the app yet. Since the tenth batch `main` also has `m1/shell-nav`'s composition (ADR 0042:
+  AppServices owns the document stack, the hot-exit journal, sessions, the thread pool and the watcher; MainWindow
+  owns a Workbench). `w1/workbench` (in flight, on 8ee7a1d with its own merges 591ad72 and 43908a5 of the two slices)
+  wires the W1 pieces in, but duplicates part of that composition (open project, the document service, the save
+  actions, the hot-exit prompt, the external-change notification); a dedicated unify slice reconciles the two after
+  the tenth batch, and `w1/workbench` is not merged as it stands. From `w1/tool-windows`'
   hand-off: one BuildController and one BuildServiceBackend per main window; `registerActions`;
   `setModuleDefaults(buildShortcutBindings())`; a TrustPrompter on the main window; ISaveAllHandler from the editor
   host; `openFile`/`openLocation` to the editor; ConfigurationCombo and the BuildActions QActions on the toolbar;
@@ -676,20 +792,27 @@ branches kept a record in this log).
   that starts the program directly with the exact command line, waits, prints "Press any key to continue" and keeps
   the exit code, replacing the external console's `cmd /c` wrapper, so cmd.exe no longer interprets `^ & | < >` and
   `%VAR%` in the user's arguments.
-- **The shell's consumers** (ADR 0038): the editor view is on `main`; `w1/workbench` wraps `createEditorView` in the
-  shell's IEditorFactory (replacing PlaceholderEditorFactory in AppServices), maps EditorViewStatus to EditorStatus
-  and connects the status signals; adapters bind IShellSettings and IKeymapSettings to the m1/settings
-  registry (in-memory defaults until then); `m1/shell-nav` builds Find Action on ListPopup. The shell's action ids are
+- **The shell's consumers** (ADR 0038): the editor view is on `main`; `w1/workbench` (or the unify slice) wraps
+  `createEditorView` in the shell's IEditorFactory, maps EditorViewStatus to EditorStatus and connects the status
+  signals; adapters bind IShellSettings and IKeymapSettings to the m1/settings registry (in-memory defaults until
+  then). Find Action on ListPopup is on `main` since the tenth batch (`m1/shell-nav`). The shell's action ids are
   reserved (its merge section above).
+- **`m1/shell-nav`'s hand-off** (ADR 0042): swap PlaceholderEditorFactory for the real editor factory under
+  DocumentEditorFactory in AppServices; that factory, over `m1/editor-view`'s EditorView, implements the seam's
+  `viewState`/`restoreViewState` and `IEditorFactory::canonicalPath`; `w1/tool-windows`' document bindings go through
+  the DocumentRegistry; and the settings-file actions bind to `SettingsStore::prepareForEditing` once AppServices
+  holds a SettingsStore (frost::settings itself is on `main` since the sixth batch; the hand-off's "when m1/settings
+  lands" means that binding).
 - **The SaveManager's consumers** (ADR 0028): one manager on the document thread; AutosaveController fed by input
-  events, focus loss and a timer; the merge view driven by PendingMerge and `resolveExternalChange` (`m1/shell-nav`,
-  with the Q5 labels above; changes on adjacent lines in both buffer and disk count as a conflict, the same rule as
-  git); banners for `DiskState::OutOfDate` and `ReadOnlyReason::LongLine`; `restore()` after `findRecoverableJournals`
-  on startup; the editor host feeds the view's `setFileInfo`/`markSaved` (`w1/workbench`). The long-line rule uses
-  `kLongLineCapBytes` since this batch (the long-line follow-up above).
-- **The in-flight slices:** `w1/workbench` (the W1 wiring above) and `m1/shell-nav` (Find Action, the merge view,
-  canonical real-case document paths), merged in batches as each passes its own `-Quick`. `m1/editor-rhi`,
-  `w1/run-service` and `w2/clangd-nav` merged in the ninth batch.
+  events, focus loss and a timer; the merge view driven by PendingMerge and `resolveExternalChange` (with the Q5
+  labels above; changes on adjacent lines in both buffer and disk count as a conflict, the same rule as git); banners
+  for `DiskState::OutOfDate` and `ReadOnlyReason::LongLine`; `restore()` after `findRecoverableJournals` on startup.
+  `m1/shell-nav` brought the merge view, the banners, autosave and the restore prompt in the tenth batch; the editor
+  host feeding the view's `setFileInfo`/`markSaved` is still `w1/workbench`'s (or the unify slice's). The long-line
+  rule uses `kLongLineCapBytes` since the eighth batch (its long-line follow-up above).
+- **The in-flight slices:** `w1/workbench` (the W1 wiring above), held for the unify slice that reconciles it with
+  `m1/shell-nav`'s composition. `m1/shell-nav` merged in the tenth batch; `m1/editor-rhi`, `w1/run-service` and
+  `w2/clangd-nav` in the ninth.
 - **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` (on `main`) binds keys to `commands::*`, calls
   `Editor::run`, supplies the Qt ITextShaper, sets `pageRows` from the viewport height, paints the EditorUpdate rows
   and implements IOutlineProvider over the syntax outline (SyntaxOutlineProvider). An index slice may add a
@@ -702,8 +825,9 @@ branches kept a record in this log).
   validation of its viewport when on-screen runs are allowed, after the hidden-desktop self-test above. Editor-only
   zoom (Ctrl+wheel), and in the hardening phase the B5 measurement, B5/B6 and B1/B2/B15 with QRhi on the user's
   5120x1392 work area, and the token-contrast thresholds.
-- **The frost::settings consumers** (ADR 0021): `m1/shell-nav` registers `settingsActions()` and opens the path that
-  `prepareForEditing()` returns; the composition root binds the keymap, appearance and SaveManager readers to
+- **The frost::settings consumers** (ADR 0021): `m1/shell-nav` (on `main`) has the settings-file actions; they open
+  the path that `prepareForEditing()` returns once AppServices holds a SettingsStore (until then a missing file is
+  created as `{}`); the composition root binds the keymap, appearance and SaveManager readers to
   SettingsStore snapshots, feeds TrustStore decisions into `setProjectTrusted`, and starts `follow()` on watches of
   `watchDirectories()` or forwards the project root watch's batches to `applyChanges()`.
 - **ADR 0029's moves:** large-file mode and B15's F1 gate move to M15 (until then M1's large-file guard refuses files
@@ -713,6 +837,31 @@ branches kept a record in this log).
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
 `m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From the tenth batch's merges** (the integrator):
+  - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase):
+    `src/app/src/main.cpp` (the persistent services and the command line's project handling inside `main`'s
+    diagnostics flow), `src/app/CMakeLists.txt`'s DEPS, `add_subdirectory(search)` outside the fuzz guard, and the
+    matrix rows that keep `main`'s milestones.
+  - A review of the long-line option follow-up (cfbd46e; one identifier in `tests/ui/workbench/workbench_test.cpp`).
+- **From `m1/shell-nav`** (ADR 0042), as its hand-off lists them:
+  - Feature-first (ADR 0031) hardening: independent review (this touches the core-adjacent io `canonicalPath` and
+    `tree_scan`), sanitizers, fuzzing of `parseLocationQuery` and the session JSON reader, stress and mutation runs,
+    `verify -Full`.
+  - Perf and budget gates: Go to File and Find Action ranking latency on R2/R3-sized trees, the File System view
+    model's rebuild cost on large trees, and the hot-exit scan's start-up cost after the first frame (B1).
+  - Screenshot goldens for the popups, banners, merge view and File System view.
+  - On-screen (non-offscreen) runs of mouse back/forward, focus-loss autosave and real window deactivation.
+  - A real-disk end-to-end of watcher-driven external changes reaching the merge view (the tests use MemFs batches;
+    the real watcher is only checked for start and stop).
+  - Linux `canonicalPath` is lexical only (no symlink or case resolution); a realpath-based version and its test.
+  - Watcher exclusions for `.git/` and build folders (they are watched now; batches under `.git/` are ignored for
+    rescans).
+  - Session writes on a timer or after changes (sessions are saved on project close and window teardown only, so a
+    crash loses the session changes since then).
+  - Untitled-buffer tabs after a hot-exit restore (only documents with paths are reopened).
+  - Settings-file creation through `SettingsStore::prepareForEditing` (AppServices has no SettingsStore yet; a
+    missing file is created as `{}` and migrated on load).
+  - Translation catalogues for the new strings (they go through `qtr`/`tr` already).
 - **From the ninth batch's merges** (the integrator):
   - A review of the merge resolutions: the CMake header notes and the guarded `add_subdirectory` calls in
     `src/ui/CMakeLists.txt` (ui_run on `TARGET frost::build`, ui_lang on `TARGET frost_lang`), and the two new
@@ -1100,8 +1249,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 - **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
-- None. The hand-off notes of the ninth batch (`w1/run-service`, `m1/editor-rhi`, `w2/clangd-nav`), of the eighth
-  (`m1/editor-view`, `w1/tool-windows`), of the seventh
+- None. The hand-off notes of the tenth batch (`m1/shell-nav`), of the ninth (`w1/run-service`, `m1/editor-rhi`,
+  `w2/clangd-nav`), of the eighth (`m1/editor-view`, `w1/tool-windows`), of the seventh
   (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`, `m1/save-manager`) and of the sixth
   (`m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings`, `plan/thin-path`) name none; `m1/diff-merge`'s
   LongPathsEnabled item is not a blocker (its merge section above).
@@ -1115,14 +1264,52 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
   or with no solution open, the build action is disabled and Ctrl+Shift+B falls through to Go to Type Declaration
   (Visual Studio would report "build already in progress" instead; the slice record's known bug).
 
-Apart from that, no slice of the ninth, the eighth, the seventh or the sixth batch asks one in its hand-off; the
-orchestrator's decisions on their questions are in the merge sections above. ADR 0019 Q5 (diff3-style markers and the
-save-manager prompt's labels), which the last integrator listed here, is decided: diff3 stays the default, and the
-labels are "Keep my version", "Take disk version" and "Compare..." (the merge section of `m1/save-manager` above).
+Apart from that, no slice of the tenth, the ninth, the eighth, the seventh or the sixth batch asks one in its hand-off
+(`m1/shell-nav` lists no question); the orchestrator's decisions on their questions are in the merge sections above.
+ADR 0019 Q5 (diff3-style markers and the save-manager prompt's labels), which the last integrator listed here, is
+decided: diff3 stays the default, and the labels are "Keep my version", "Take disk version" and "Compare..." (the merge
+section of `m1/save-manager` above).
 
 The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
 variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
 `m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `m1/shell-nav` (ADR 0042)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 588ddfe on 2e298a8 plus its merges 33dfc14 of `m1/shell-frame` 9576c24 and 0756a45
+of `m1/save-manager` e2b2362. Worktree `.claude\worktrees\m1-shell-nav`. (Merge note: merged into `main` as 9d00def,
+with the follow-up cfbd46e; the 2026-11-02 entry above.)
+
+#### Done
+- **New libraries:** frost::search, frost::ui_nav and frost::ui_workbench; in io `canonicalPath` and the tree scan's
+  ignore files and default excludes.
+- **frost::app is wired:** persistent AppServices, MainWindow owns the Workbench, main() opens a project or restores
+  the last one, and the hot-exit prompt runs after the first frame.
+- **ADR 0042** (`docs/adr/0042-shell-navigation.md`). `tests/features/matrix.json`: rows 28, 29, 76, 77, 78, 91 and
+  92 moved to `in-progress` with acceptance tests.
+- **Verification at 588ddfe** (its own `-Quick`): win debug 1906/1912 (6 skipped), wsl debug 1802/1808 (6 skipped),
+  the checks ok (tidy not-run). Not merged or pushed by the slice; it left `docs/progress.md` and PLAN.md untouched,
+  as instructed.
+
+#### Known bugs
+- The File System view rebuilds its whole QStandardItemModel on every rescan (expansion and selection are kept). This
+  is slow on very large trees, and a watcher batch under the root triggers a full rescan.
+- The merge view's panes are QPlainTextEdits fed from display rows, not the real editor view, so there is no syntax
+  colouring and no editing inside the panes. Choices are made per chunk only.
+- Search Everywhere has only Files and Actions sections (Classes and Symbols wait for M3/clangd).
+- Recent Locations stores places (path, line, column) without a code snippet preview.
+- Command-line files whose suffix is `.sln`/`.slnx` always open as projects. Opening such a file as text needs
+  File > Open File.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/shell-nav`'s.
+- Its hand-off's Next (this entry's Next): swap PlaceholderEditorFactory for the real editor factory under
+  DocumentEditorFactory in AppServices, implementing the seam's `viewState`/`restoreViewState` and
+  `IEditorFactory::canonicalPath` over `m1/editor-view`'s EditorView; `w1/tool-windows`' document bindings through the
+  DocumentRegistry; the settings actions bound to `SettingsStore::prepareForEditing`. The expected conflicts with
+  `m1/editor-view` and `w1/tool-windows` did not come up in `src/app`, since neither had wired anything there (the
+  merge section above).
 
 ### Slice record: `w2/clangd-nav` (ADR 0041)
 
