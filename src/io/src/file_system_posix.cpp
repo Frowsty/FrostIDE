@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <format>
 #include <optional>
 #include <string_view>
@@ -217,6 +218,64 @@ int writeAll(int fd, std::string_view data) noexcept {
     return 0;
 }
 
+// Writes all of `data` at `offset` with pwrite, retrying on EINTR and short writes. Returns 0 or an errno value.
+int writeAllAt(int fd, std::string_view data, off_t offset) noexcept {
+    while (!data.empty()) {
+        const ssize_t done = ::pwrite(fd, data.data(), data.size(), offset);
+        if (done < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return errno;
+        }
+        data.remove_prefix(static_cast<std::size_t>(done));
+        offset += done;
+    }
+    return 0;
+}
+
+/*
+ * safeWrite for a file with several hard links: rewritten in place, so every link keeps seeing it.
+ * A larger content first reserves its blocks (posix_fallocate), so a full disk fails before any
+ * byte changes (the size is put back if the reservation fails); then the bytes are written from
+ * the start, the file is truncated to the new size and flushed.
+ */
+Result<void> rewriteInPlace(const std::string& target, std::string_view data, const struct stat& info,
+                            std::string_view path) {
+    const UniqueFd fd(::open(target.c_str(), O_WRONLY | O_CLOEXEC | O_NOCTTY));
+    if (!fd.valid()) {
+        return std::unexpected(errnoError(errno, "safeWrite: open the hard-linked file", path));
+    }
+    const auto newSize = static_cast<off_t>(data.size());
+    if (newSize > info.st_size) {
+        const int error = ::posix_fallocate(fd.get(), 0, newSize);
+        // EOPNOTSUPP and EINVAL: the file system cannot reserve space; the write below allocates.
+        if (error != 0 && error != EOPNOTSUPP && error != EINVAL) {
+            static_cast<void>(::ftruncate(fd.get(), info.st_size));
+            return std::unexpected(errnoError(error, "safeWrite: reserve space for", path));
+        }
+    }
+    if (const int error = writeAllAt(fd.get(), data, 0); error != 0) {
+        return std::unexpected(errnoError(error, "safeWrite: rewrite (the file may be incomplete)", path));
+    }
+    if (::ftruncate(fd.get(), newSize) != 0) {
+        return std::unexpected(errnoError(errno, "safeWrite: set the end of", path));
+    }
+    if (::fsync(fd.get()) != 0) {
+        return std::unexpected(errnoError(errno, "safeWrite: flush", path));
+    }
+    return {};
+}
+
+// Whether this process may not write the regular file `target` (`info` is its stat): no write
+// bit at all (so root, which access() lets through, is refused too), or access(W_OK) fails.
+bool isReadOnly(const std::string& target, const struct stat& info) noexcept {
+    if ((info.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH)) == 0) {
+        return true;
+    }
+    return ::faccessat(AT_FDCWD, target.c_str(), W_OK, AT_EACCESS) != 0;
+}
+
 enum class MkdirOutcome : unsigned char { Done, ParentMissing, Failed };
 
 class PosixFileSystem final : public IFileSystem {
@@ -347,6 +406,75 @@ public:
             static_cast<void>(::fsync(dirFd.get()));
         }
         return {};
+    }
+
+    Result<SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                      const SafeWriteOptions& options) override {
+        auto normalized = normalizePath(path, PathStyle::Posix);
+        if (!normalized) {
+            return std::unexpected(std::move(normalized.error()));
+        }
+        SafeWriteResult result{std::move(*normalized), SafeWriteMethod::Replaced};
+        // A symlink stays a link: the file it names is written, in its own directory.
+        struct stat linkInfo{};
+        if (::lstat(result.target.c_str(), &linkInfo) == 0 && S_ISLNK(linkInfo.st_mode)) {
+            char* resolved = ::realpath(result.target.c_str(), nullptr);
+            if (resolved == nullptr) {
+                if (errno == ENOENT) {
+                    return fail(
+                        ErrorCode::NotFound,
+                        std::format("safeWrite '{}': the symbolic link points at a file that does not exist", path));
+                }
+                return std::unexpected(errnoError(errno, "safeWrite: resolve the link", path));
+            }
+            result.target = resolved;
+            std::free(resolved); // NOLINT(cppcoreguidelines-no-malloc): realpath allocates with malloc.
+        }
+        struct stat info{};
+        if (::stat(result.target.c_str(), &info) != 0) {
+            if (errno != ENOENT) {
+                return std::unexpected(errnoError(errno, "safeWrite", path));
+            }
+            // A new file (a missing parent directory fails in writeFileAtomic with NotFound).
+            if (auto written = writeFileAtomic(result.target, data); !written) {
+                return std::unexpected(std::move(written.error()));
+            }
+            result.method = SafeWriteMethod::Created;
+            return result;
+        }
+        if (S_ISDIR(info.st_mode)) {
+            return std::unexpected(detail::isADirectoryError("safeWrite", path));
+        }
+        if (!S_ISREG(info.st_mode)) {
+            return fail(ErrorCode::InvalidArgument, std::format("safeWrite '{}': not a regular file", path));
+        }
+        const mode_t mode = info.st_mode & 07777;
+        bool madeWritable = false;
+        if (isReadOnly(result.target, info)) {
+            if (!options.overwriteReadOnly) {
+                return fail(ErrorCode::PermissionDenied,
+                            std::format("safeWrite '{}': the file is read-only and was left unchanged", path));
+            }
+            // The owner may add its write bit; anyone else relies on the directory (rename) below.
+            madeWritable = info.st_uid == ::geteuid() && ::chmod(result.target.c_str(), mode | S_IWUSR) == 0;
+        }
+        const bool linked = info.st_nlink > 1;
+        auto written = linked ? rewriteInPlace(result.target, data, info, path) : writeFileAtomic(result.target, data);
+        if (!written) {
+            if (madeWritable) {
+                static_cast<void>(::chmod(result.target.c_str(), mode)); // Best effort: as it was.
+            }
+            return std::unexpected(std::move(written.error()));
+        }
+        if (options.overwriteReadOnly) {
+            // The saved file stays writable for its (possibly new) owner, this process.
+            struct stat now{};
+            if (::stat(result.target.c_str(), &now) == 0 && now.st_uid == ::geteuid() && (now.st_mode & S_IWUSR) == 0) {
+                static_cast<void>(::chmod(result.target.c_str(), (now.st_mode & 07777) | S_IWUSR));
+            }
+        }
+        result.method = linked ? SafeWriteMethod::InPlace : SafeWriteMethod::Replaced;
+        return result;
     }
 
     Result<FileStatus> status(std::string_view path) override {
