@@ -28,6 +28,7 @@ frost_add_test(input_tests
     SOURCES
         ${frost_input_test_support}
         action_registry_test.cpp
+        display_text_i18n_test.cpp
         double_tap_test.cpp
         find_action_test.cpp
         intellij_keymap_test.cpp
