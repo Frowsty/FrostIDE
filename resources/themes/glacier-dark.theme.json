@@ -98,7 +98,18 @@
       "searchMatchBackground": "#5A4A1C",
       "rightMarginColor": "#34373D",
       "errorMarkerColor": "#F2716F",
-      "warningMarkerColor": "#E8B04B"
+      "warningMarkerColor": "#E8B04B",
+      "inactiveCodeForeground": "#5C6168",
+      "weakWarningMarkerColor": "#A49F86",
+      "infoMarkerColor": "#6CA2FF",
+      "cleanMarkerColor": "#5FB878",
+      "errorStripeBackground": "#23252A",
+      "searchMatchStripeColor": "#C9A33E",
+      "usageHighlightBackground": "#363B47",
+      "writeUsageHighlightBackground": "#47383F",
+      "usageStripeColor": "#8E9BB3",
+      "inspectionWidgetBackground": "#2A2D33",
+      "inspectionWidgetForeground": "#9DA3AD"
     },
     "Syntax": {
       "keyword": "#6FA8FF",
@@ -116,6 +127,25 @@
       "tag": "#6FA8FF",
       "heading": "#6FA8FF",
       "link": "#6CA2FF"
+    },
+    "Semantic": {
+      "localVariable": "#D3D7DE",
+      "parameter": "#DDA97C",
+      "field": "#B9A7EB",
+      "staticField": "#B9A7EB",
+      "globalVariable": "#C79BDE",
+      "constant": "#D49BE6",
+      "function": "#E5C97E",
+      "method": "#E5C97E",
+      "staticMethod": "#E5C97E",
+      "class": "#5FCFC4",
+      "enum": "#5FCFC4",
+      "enumerator": "#D49BE6",
+      "namespace": "#A5C4E8",
+      "macro": "#C7A2F2",
+      "templateParameter": "#6FD0A8",
+      "concept": "#6FD0A8",
+      "typeAlias": "#66C2D6"
     }
   },
   "compact": {

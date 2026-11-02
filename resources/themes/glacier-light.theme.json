@@ -71,7 +71,18 @@
       "searchMatchBackground": "#F7E3A1",
       "rightMarginColor": "#E1E5EA",
       "errorMarkerColor": "#C9302C",
-      "warningMarkerColor": "#B7791F"
+      "warningMarkerColor": "#B7791F",
+      "inactiveCodeForeground": "#A3A9B2",
+      "weakWarningMarkerColor": "#8F8A6E",
+      "infoMarkerColor": "#2F6AD9",
+      "cleanMarkerColor": "#2E8B4A",
+      "errorStripeBackground": "#FFFFFF",
+      "searchMatchStripeColor": "#C99A1E",
+      "usageHighlightBackground": "#E4E9F2",
+      "writeUsageHighlightBackground": "#F4E1E6",
+      "usageStripeColor": "#7D8BA5",
+      "inspectionWidgetBackground": "#F2F5F9",
+      "inspectionWidgetForeground": "#5B626C"
     },
     "Syntax": {
       "keyword": "#1F5BC4",
@@ -89,6 +100,25 @@
       "tag": "#1F5BC4",
       "heading": "#1F5BC4",
       "link": "#2F6AD9"
+    },
+    "Semantic": {
+      "localVariable": "#1F2328",
+      "parameter": "#9A4E10",
+      "field": "#6A4BB0",
+      "staticField": "#6A4BB0",
+      "globalVariable": "#8A3FA8",
+      "constant": "#8A3FA8",
+      "function": "#7A5300",
+      "method": "#7A5300",
+      "staticMethod": "#7A5300",
+      "class": "#0F7C74",
+      "enum": "#0F7C74",
+      "enumerator": "#8A3FA8",
+      "namespace": "#35588A",
+      "macro": "#7046B8",
+      "templateParameter": "#1E7A50",
+      "concept": "#1E7A50",
+      "typeAlias": "#11708A"
     }
   },
   "compact": {

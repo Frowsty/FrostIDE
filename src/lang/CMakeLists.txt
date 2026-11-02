@@ -5,7 +5,8 @@
 # commands (an existing compile_commands.json, or one synthesized for a Visual Studio solution),
 # document synchronisation from frost::text ChangeSets and the live diagnostics model; and (ADR 0041)
 # compile commands from MSBuild's evaluation, completion, signature help, hover, navigation, usages,
-# symbols, rename, code actions, formatting and workspace edits as Qt-free models. Qt-free;
+# symbols, rename, code actions, formatting and workspace edits as Qt-free models; and (ADR 0047)
+# semantic tokens (full and delta) and clangd's inactive regions. Qt-free;
 # depends on project, settings and text (and io, sched and core through them). yyjson (MIT, ADR
 # 0021) is linked PRIVATE, so no layer above lang sees yyjson.h.
 # TODO(M3): the inspection registry, SARIF, clang-tidy tiers and the CMake language service join here.
@@ -38,6 +39,7 @@ frost_add_library(lang LAYER lang
         src/msvc_environment.cpp
         src/navigation.cpp
         src/refactoring.cpp
+        src/semantic_tokens.cpp
         src/snippet.cpp
         src/symbols.cpp
         src/uri.cpp

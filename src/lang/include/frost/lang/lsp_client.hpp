@@ -121,7 +121,8 @@ struct InitializeOptions {
 
 // The capabilities FrostIDE announces: synchronization with didSave, publishDiagnostics with
 // versionSupport, relatedInformation and codeDescription, general.positionEncodings ["utf-8",
-// "utf-16"] (and clangd's offsetEncoding), workDoneProgress, workspace configuration and folders.
+// "utf-16"] (and clangd's offsetEncoding), workDoneProgress, workspace configuration and folders,
+// and semanticTokens (full and delta) with clangd's inactiveRegionsCapabilities (ADR 0047).
 [[nodiscard]] Json clientCapabilities();
 
 // The initialize params for `options`. Errors: InvalidArgument (rootPath not absolute).

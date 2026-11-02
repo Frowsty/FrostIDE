@@ -3,7 +3,9 @@
 // EditorView (PLAN.md section 2 "Editor rendering"; ADR 0037): FrostIDE's text editor widget, a
 // QAbstractScrollArea over a frost::text::Editor (selections, commands, undo) and its DisplayMap,
 // painted through the backend-neutral display list and IEditorRenderer, with tree-sitter
-// highlighting, the gutter, find/replace, Go to Line, IME, mouse selection and the editor actions.
+// highlighting, the gutter, find/replace, Go to Line, IME, mouse selection and the editor actions;
+// and (ADR 0047) semantic highlighting, inactive regions, diagnostics with squiggles, the error
+// stripe, the inspection widget and F2 / Shift+F2 problem navigation.
 #pragma once
 
 #include "frost/core/clock.hpp"
@@ -20,6 +22,7 @@
 #include "frost/ui/editor/display_list.hpp"
 #include "frost/ui/editor/editor_actions.hpp"
 #include "frost/ui/editor/editor_colors.hpp"
+#include "frost/ui/editor/editor_insight.hpp"
 #include "frost/ui/editor/editor_renderer.hpp"
 #include "frost/ui/editor/editor_settings.hpp"
 #include "frost/ui/editor/qt_text_shaper.hpp"
@@ -31,9 +34,12 @@
 #include <QString>
 #include <QTimer>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -138,6 +144,19 @@ struct EditorServices {
  * or the rows change; while the worker reparses, the session's stale tree (edited to the current
  * text) keeps colouring. Budget: B5.
  *
+ * Insight (ADR 0047). The workbench feeds the language server's and the build's results through
+ * small seams: setSemanticTokens and setInactiveRanges (ranges of a given text version, mapped
+ * through the edits made since), setDiagnostics per source (build, live), setDecorations per
+ * owner, setUsageHighlights and setAnalyzing. Between an edit and fresh results every range
+ * follows the text (Bias::Right at a range's start, Left at its end), so colours and squiggles stay
+ * on the stale ranges until new ones arrive. Semantic colours win over tree-sitter's; inactive
+ * regions are dimmed over both. Diagnostics draw squiggles (wavy for errors and warnings, dotted
+ * for weak warnings and infos) with message tooltips, marks in the error stripe at the right edge
+ * of the viewport (scaled to the document's rows; hover for the messages, click to jump; the
+ * summary box at the top takes the worst severity's colour), and the counts of the inspection
+ * widget in the top-right corner (a check when clean, a spinner while analysing, up/down arrows).
+ * Everything is part of the display list, so every renderer draws it.
+ *
  * GUI thread only. Not copyable.
  */
 class EditorView final : public QAbstractScrollArea {
@@ -200,6 +219,57 @@ public:
     // line (the gutter tooltip); empty elsewhere.
     [[nodiscard]] QString lineMarkerToolTip(QPointF at) const;
 
+    // --- Insight (M3, ADR 0047; see the class comment) ---
+    /*
+     * Replaces the semantic tokens with `spans` (sorted on the way in), computed for the text of
+     * `textVersion`. Spans of an older version are mapped through the edits made since; returns
+     * false and keeps the current tokens when that version is unknown (older than the last
+     * kEditHistory edits or newer than the text). O(spans × edits since).
+     */
+    bool setSemanticTokens(std::uint64_t textVersion, std::vector<SemanticSpan> spans);
+    [[nodiscard]] const std::vector<SemanticSpan>& semanticTokens() const noexcept { return m_semantic; }
+    // Replaces the inactive preprocessor regions (dimmed text), with setSemanticTokens' rules.
+    bool setInactiveRanges(std::uint64_t textVersion, std::vector<text::ByteRange> ranges);
+    [[nodiscard]] const std::vector<text::ByteRange>& inactiveRanges() const noexcept { return m_inactive; }
+    // Replaces the diagnostics of `source` (EditorDiagnostic says how their ranges are resolved).
+    void setDiagnostics(DiagnosticSource source, std::vector<EditorDiagnostic> diagnostics);
+    // Both sources' diagnostics in the current text, sorted by start, then severity. A build
+    // diagnostic on the same line with the same message as a live one is listed once (the live one).
+    [[nodiscard]] std::vector<ActiveDiagnostic> diagnostics() const;
+    // Replaces the decorations of `owner` (any key), given in current-text offsets.
+    void setDecorations(std::string owner, std::vector<EditorDecoration> decorations);
+    // Every owner's decorations, by owner then in the order given.
+    [[nodiscard]] std::vector<EditorDecoration> decorations() const;
+    // Replaces the highlighted usages (background boxes and stripe marks), in current-text offsets.
+    void setUsageHighlights(std::vector<UsageHighlight> usages);
+    [[nodiscard]] const std::vector<UsageHighlight>& usageHighlights() const noexcept { return m_usages; }
+    // Whether the analysis of the current text still runs (the inspection widget's spinner).
+    void setAnalyzing(bool analyzing);
+    // Shows the inspection widget without any diagnostics yet (any insight setter also does).
+    void setInsightEnabled(bool enabled);
+    [[nodiscard]] bool insightEnabled() const noexcept { return m_insightEnabled; }
+    [[nodiscard]] InsightSummary insightSummary() const;
+    /*
+     * F2 / Shift+F2 (navigate.nextError, navigate.previousError): moves the caret to the start of
+     * the next (previous) problem after (before) it, wrapping at the ends, among the most serious
+     * severity present (IntelliJ visits errors before warnings), scrolls it into view and shows its
+     * message in a balloon at the caret. False (and nothing moves) when there is no problem.
+     */
+    bool gotoNextProblem(bool forward = true);
+    // The balloon's text, empty when none shows (it hides on an edit, a caret move or Esc).
+    [[nodiscard]] QString problemBalloonText() const;
+    // The tooltip at viewport point `at`: the gutter markers' messages, the stripe marks' under it,
+    // the inspection widget's summary, or the messages of the diagnostics and decorations there.
+    [[nodiscard]] QString toolTipAt(QPointF at) const;
+    // A left click at viewport point `at` on the stripe (jump to the mark under it, else scroll
+    // there; the summary box goes to the next problem) or the inspection widget (the arrows go to
+    // the previous / next problem, the counts emit problemsViewRequested). False elsewhere.
+    bool clickInsight(QPointF at);
+    // The error stripe's width in pixels at the current zoom.
+    [[nodiscard]] double stripeWidth() const noexcept;
+    // The edit batches kept for mapping older versions' ranges.
+    static constexpr std::size_t kEditHistory = 256;
+
     // Find / replace and Go to Line.
     void openFind(bool replace);
     void closeFind();
@@ -247,6 +317,12 @@ signals:
     void modifiedChanged(bool modified);
     // Any status() field changed.
     void statusChanged();
+    // insightSummary() or insightEnabled() changed (the status-bar indicator follows it).
+    void insightChanged();
+    // The text changed to `version` (the language bridge schedules its requests from this).
+    void documentEdited(quint64 version);
+    // The inspection widget's counts were clicked (the workbench shows the Problems tool window).
+    void problemsViewRequested();
 
 protected:
     bool event(QEvent* event) override;
@@ -319,6 +395,66 @@ private:
     // Marks the start of an input event for the InputToPaint marker.
     void beginInput();
 
+    // Insight (editor_view_insight.cpp).
+    struct EditRecord {
+        std::uint64_t baseVersion = 0;
+        std::uint64_t version = 0;
+        std::vector<text::RawEdit> edits;
+    };
+    // The batches that take the text of `version` to the current one, oldest first; nullopt when
+    // `version` is unknown.
+    [[nodiscard]] std::optional<std::vector<const EditRecord*>> editsSince(std::uint64_t version) const;
+    // Records `change` and moves every insight range through it.
+    void followInsight(const text::ChangeSet& change);
+    // A build diagnostic's 1-based line and column resolved in the current text.
+    [[nodiscard]] text::ByteRange resolvePosition(int line, int column) const;
+    void insightUpdated();
+    struct StripeEntry {
+        StripeMarkKind kind = StripeMarkKind::Error;
+        text::ByteRange range;
+        std::uint32_t row = 0;
+        QString message;
+    };
+    struct StripeGeometry {
+        QRectF stripe;
+        QRectF summary;
+        double top = 0.0;
+        double scale = 1.0;
+        double markHeight = 2.0;
+    };
+    [[nodiscard]] StripeGeometry stripeGeometry() const;
+    [[nodiscard]] std::vector<StripeEntry> stripeEntries() const;
+    // The stripe entries whose marks lie within a few pixels of y, most serious first.
+    [[nodiscard]] std::vector<StripeEntry> stripeEntriesAt(double y) const;
+    struct InspectionItem {
+        InsightSeverity severity = InsightSeverity::Error;
+        QRectF icon;
+        QPointF textOrigin;
+        QString count;
+    };
+    struct InspectionLayout {
+        InspectionState state = InspectionState::Hidden;
+        QRectF rect;
+        QRectF badge; // The check or the spinner.
+        std::vector<InspectionItem> items;
+        QRectF previous;
+        QRectF next;
+    };
+    [[nodiscard]] InspectionLayout inspectionLayout() const;
+    // Whether viewport point `at` is on the error stripe or the inspection widget.
+    [[nodiscard]] bool insightContains(QPointF at) const;
+    // Adds the stripe, the inspection widget and the balloon to `list`.
+    void addInsightChrome(EditorDisplayList& list) const;
+    // The text-area decorations of one frame (diagnostics, deprecated tokens, usages, owners').
+    struct FrameDecoration {
+        text::ByteRange range;
+        DecorationStyle style = DecorationStyle::WavyUnderline;
+        QColor color;
+        std::optional<InsightSeverity> severity;
+        QString tooltip;
+    };
+    [[nodiscard]] std::vector<FrameDecoration> frameDecorations(text::ByteRange visible) const;
+
     text::Document* m_document;
     std::string m_path;
     EditorServices m_services;
@@ -362,6 +498,27 @@ private:
     GoToLinePopup* m_goToLine = nullptr;
 
     std::vector<LineMarker> m_markers;
+
+    // Insight (ADR 0047): every range is in the current text.
+    std::vector<SemanticSpan> m_semantic;
+    std::vector<text::ByteRange> m_inactive;
+    std::array<std::vector<ActiveDiagnostic>, 2> m_diagnostics; // By DiagnosticSource.
+    std::map<std::string, std::vector<EditorDecoration>, std::less<>> m_decorations;
+    std::vector<UsageHighlight> m_usages;
+    std::deque<EditRecord> m_editHistory;
+    bool m_analyzing = false;
+    bool m_insightEnabled = false;
+    InsightSummary m_lastSummary;
+    bool m_lastInsightEnabled = false;
+    struct Balloon {
+        text::ByteRange range;
+        InsightSeverity severity = InsightSeverity::Error;
+        QString text;
+        ByteOffset caret;
+    };
+    std::optional<Balloon> m_balloon;
+    QTimer m_spinner;
+    int m_spinnerPhase = 0;
 
     // Caret blink (Rider: 500 ms phases, solid while typing).
     QTimer m_blink;

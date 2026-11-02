@@ -16,15 +16,18 @@
 #                                tool windows, popups, notifications and background tasks over fake
 #                                editors and a simulated keyboard layout (offscreen);
 #   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
-#                                IME, find/replace, Go to Line, highlighting and live settings;
+#                                IME, find/replace, Go to Line, highlighting and live settings, and
+#                                the insight of ADR 0047 (semantic colours, squiggles, the error
+#                                stripe, the inspection widget, F2);
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" with the
 #                                tag "screenshot" (ctest -L screenshot);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
 #   ui_appearance_perf_tests     in-process start-up probes, label "perf";
 #   ui_native_tests              the windows platform plugin's palette and fonts (Windows), with
 #                                RESOURCE_LOCK frost_desktop (see below);
-#   ui_lang_tests                the language-feature widgets and LanguageController (ADR 0041)
-#                                offscreen, against tests/lang's scripted language server.
+#   ui_lang_tests                the language-feature widgets, LanguageController (ADR 0041) and
+#                                EditorInsightBinding (ADR 0047) offscreen, against tests/lang's
+#                                scripted language server.
 
 frost_add_test(ui_input_tests QT
     SOURCES key_translation_test.cpp ime_tracker_test.cpp adapter_integration_test.cpp
@@ -138,6 +141,7 @@ _frost_ui_test_wiring(ui_shell_tests)
 frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
+        editor/editor_insight_test.cpp
         editor/editor_view_test.cpp
     DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
          frost::input frost::sched frost::io frost_ui_test_support)
@@ -193,8 +197,10 @@ endif()
 if(TARGET frost_ui_lang)
     frost_add_test(ui_lang_tests QT
         SOURCES
+            lang/editor_insight_binding_test.cpp
             lang/lang_widgets_test.cpp
             lang/language_controller_test.cpp
-        DEPS frost::ui_lang frost::lang frost::input frost::text frost::sched frost::io)
-    target_include_directories(ui_lang_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+        DEPS frost::ui_lang frost::ui_editor frost::lang frost::build frost::input frost::text frost::sched frost::io
+             frost_ui_test_support)
+    _frost_ui_test_wiring(ui_lang_tests)
 endif()

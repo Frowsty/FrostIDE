@@ -59,6 +59,8 @@ struct OpenDocument {
     text::Snapshot latest;
     // (LSP version, snapshot) for the recent versions, oldest first; the back is `latest`.
     std::deque<std::pair<std::int64_t, text::Snapshot>> history;
+    // The LSP version of the last diagnostics publish (the inactive regions map to it).
+    std::optional<std::int64_t> diagnosedVersion;
 };
 
 } // namespace
@@ -84,7 +86,10 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     std::optional<CompileCommandsLocation> compileCommands FROST_GUARDED_BY(mutex);
     std::optional<Error> lastError FROST_GUARDED_BY(mutex);
     std::deque<std::string> stderrLines FROST_GUARDED_BY(mutex);
-    std::map<std::string, OpenDocument> documents FROST_GUARDED_BY(mutex); // documentKey -> document.
+    std::map<std::string, OpenDocument> documents FROST_GUARDED_BY(mutex);   // documentKey -> document.
+    std::map<std::string, InactiveRegions> inactive FROST_GUARDED_BY(mutex); // documentKey -> regions.
+    std::map<std::uint64_t, ClangdService::InactiveRegionsListener> inactiveListeners FROST_GUARDED_BY(mutex);
+    std::uint64_t nextInactiveListener FROST_GUARDED_BY(mutex) = 1;
 
     void setState(ClangdState next) {
         LockGuard lock(mutex);
@@ -139,7 +144,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             const PositionEncoding encoding = capabilities ? capabilities->positionEncoding : PositionEncoding::Utf16;
             auto it = documents.find(documentKey(decoded->file));
             if (it != documents.end()) {
-                const OpenDocument& document = it->second;
+                OpenDocument& document = it->second;
+                document.diagnosedVersion = decoded->lspVersion;
                 const text::Snapshot* seen = &document.latest;
                 if (decoded->lspVersion) {
                     for (const auto& [version, snapshot] : document.history) {
@@ -153,6 +159,53 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             }
         }
         diagnostics.publish(std::move(*decoded));
+    }
+
+    // Calls the inactive-regions listeners with `regions`, outside the lock.
+    void notifyInactive(const InactiveRegions& regions) {
+        std::vector<ClangdService::InactiveRegionsListener> listeners;
+        {
+            LockGuard lock(mutex);
+            for (const auto& [id, listener] : inactiveListeners) {
+                listeners.push_back(listener);
+            }
+        }
+        for (const ClangdService::InactiveRegionsListener& listener : listeners) {
+            listener(regions);
+        }
+    }
+
+    void onInactiveRegions(std::uint64_t fromRound, const Json& params) {
+        auto decoded = decodeInactiveRegions(params);
+        if (!decoded) {
+            log::warn(kLogCategory, "dropped an inactiveRegions: {}", decoded.error().describe());
+            return;
+        }
+        {
+            LockGuard lock(mutex);
+            if (fromRound != round) {
+                return;
+            }
+            const std::string key = documentKey(decoded->file);
+            auto it = documents.find(key);
+            if (it == documents.end()) {
+                return; // Closed meanwhile.
+            }
+            const OpenDocument& document = it->second;
+            const text::Snapshot* seen = &document.latest;
+            if (document.diagnosedVersion) {
+                for (const auto& [version, snapshot] : document.history) {
+                    if (version == *document.diagnosedVersion) {
+                        seen = &snapshot;
+                    }
+                }
+            }
+            const PositionEncoding encoding = capabilities ? capabilities->positionEncoding : PositionEncoding::Utf16;
+            decoded->file = document.path;
+            mapInactiveRegions(*decoded, *seen, encoding);
+            inactive.insert_or_assign(key, *decoded);
+        }
+        notifyInactive(*decoded);
     }
 
     // Re-opens every document on a freshly initialized client. Caller holds the lock.
@@ -181,6 +234,14 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         out.onDiagnostics = [weak, forRound](const Json& params) {
             if (auto self = weak.lock()) {
                 self->onDiagnostics(forRound, params);
+            }
+        };
+        out.onNotification = [weak, forRound](std::string_view method, const Json& params) {
+            if (method != kInactiveRegionsMethod) {
+                return;
+            }
+            if (auto self = weak.lock()) {
+                self->onInactiveRegions(forRound, params);
             }
         };
         out.onMessage = [](int type, std::string_view message) {
@@ -530,6 +591,7 @@ Result<void> ClangdService::saveDocument(std::string_view path) {
 
 Result<void> ClangdService::closeDocument(std::string_view path) {
     FileDiagnostics cleared;
+    bool hadRegions = false;
     {
         LockGuard lock(m_shared->mutex);
         auto it = m_shared->documents.find(documentKey(path));
@@ -544,9 +606,34 @@ Result<void> ClangdService::closeDocument(std::string_view path) {
         cleared.file = it->second.path;
         cleared.uri = it->second.uri;
         m_shared->documents.erase(it);
+        hadRegions = m_shared->inactive.erase(documentKey(cleared.file)) > 0;
+    }
+    if (hadRegions) {
+        InactiveRegions none;
+        none.file = cleared.file;
+        none.uri = cleared.uri;
+        m_shared->notifyInactive(none);
     }
     m_shared->diagnostics.publish(std::move(cleared));
     return {};
+}
+
+std::optional<InactiveRegions> ClangdService::inactiveRegions(std::string_view path) const {
+    LockGuard lock(m_shared->mutex);
+    auto it = m_shared->inactive.find(documentKey(path));
+    return it != m_shared->inactive.end() ? std::optional<InactiveRegions>(it->second) : std::nullopt;
+}
+
+std::uint64_t ClangdService::addInactiveRegionsListener(InactiveRegionsListener listener) {
+    LockGuard lock(m_shared->mutex);
+    const std::uint64_t id = m_shared->nextInactiveListener++;
+    m_shared->inactiveListeners.emplace(id, std::move(listener));
+    return id;
+}
+
+void ClangdService::removeInactiveRegionsListener(std::uint64_t id) {
+    LockGuard lock(m_shared->mutex);
+    m_shared->inactiveListeners.erase(id);
 }
 
 sched::Task<Result<Json>> ClangdService::request(std::string method, Json params, std::stop_token token) {

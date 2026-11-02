@@ -103,11 +103,11 @@ TEST(ThemeBlob, AccessorsAndSize) {
     data.compactMetrics[ti] = 20.0F;
     data.iconColors[static_cast<std::size_t>(IconRole::Error)] = Rgba{0xfff2716fU};
     const std::vector<std::byte> blob = encodeThemeBlob(data);
-    // The header, the body arrays (604 bytes), the id and the name: 676 bytes here.
+    // The header, the body arrays (716 bytes), the id and the name: 788 bytes here.
     EXPECT_EQ(blob.size(), kThemeBlobHeaderSize + 4 * kColorKeyCount + 8 * kMetricKeyCount + 4 * kIconRoleCount +
                                data.id.size() + data.name.size());
-    EXPECT_EQ(4 * kColorKeyCount + 8 * kMetricKeyCount + 4 * kIconRoleCount, 604U);
-    EXPECT_EQ(blob.size(), 676U);
+    EXPECT_EQ(4 * kColorKeyCount + 8 * kMetricKeyCount + 4 * kIconRoleCount, 716U);
+    EXPECT_EQ(blob.size(), 788U);
     const Theme theme = *decodeThemeBlob(blob);
     EXPECT_EQ(theme.id(), "glacier-dark");
     EXPECT_EQ(theme.name(), "Glacier Dark");

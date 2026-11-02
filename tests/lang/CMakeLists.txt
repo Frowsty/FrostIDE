@@ -8,11 +8,12 @@
 #                      completion models (ADR 0041: completion, fuzzy matching, snippets, signature
 #                      help, hover, go to, usages, symbols, rename, quick fixes, formatting) against the
 #                      fake server, workspace edits, and the MSBuild provider with a scripted launcher;
-#                      label "unit";
+#                      semantic tokens and inactive regions (ADR 0047); label "unit";
 #   lang_clangd_tests  the real clangd (the pinned LLVM's) end to end on tiny fixtures: a CMake-style
-#                      compile_commands.json, the synthesized one for a .vcxproj, and a restart after a
-#                      killed clangd; label "integration" (it starts real clangd processes, so
-#                      RESOURCE_LOCK frost_desktop; ADR 0027) with the tag "clangd" (ctest -L clangd).
+#                      compile_commands.json, the synthesized one for a .vcxproj, a restart after a
+#                      killed clangd, and semantic tokens and an inactive region (ADR 0047); label
+#                      "integration" (it starts real clangd processes, so RESOURCE_LOCK frost_desktop;
+#                      ADR 0027) with the tag "clangd" (ctest -L clangd).
 #                      Each test takes a second or two;
 #   lang_msbuild_tests the MSBuild-evaluated provider with the real MSBuild on fixtures/msbuild_props
 #                      (include directory and define only from a .props sheet and an environment
@@ -33,6 +34,7 @@ frost_add_test(lang_unit_tests
         jsonrpc_test.cpp
         lsp_client_test.cpp
         msbuild_provider_test.cpp
+        semantic_tokens_test.cpp
         uri_test.cpp
         workspace_edit_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched)

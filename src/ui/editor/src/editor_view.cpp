@@ -185,6 +185,15 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
         m_caretOn = !m_caretOn;
         viewport()->update();
     });
+    // The inspection widget's spinner turns while the analysis runs (only its box repaints).
+    m_spinner.setInterval(100);
+    connect(&m_spinner, &QTimer::timeout, this, [this] {
+        m_spinnerPhase = (m_spinnerPhase + 1) % 8;
+        const InspectionLayout layout = inspectionLayout();
+        if (!layout.rect.isEmpty()) {
+            viewport()->update(layout.rect.toAlignedRect().adjusted(-1, -1, 1, 1));
+        }
+    });
     m_savedStateId = m_document->undoState().stateId;
     updateWrap();
     updateScrollBars();
@@ -287,7 +296,7 @@ void EditorView::applySettings(const EditorViewSettings& settings) {
 void EditorView::updateWrap() {
     text::WrapSettings wrap;
     if (m_settings.softWrap && !m_fileInfo.largeFile) {
-        const double width = viewport()->width() - gutterWidth() - 2.0 * 6.0 * zoomFactor();
+        const double width = viewport()->width() - gutterWidth() - stripeWidth() - 2.0 * 6.0 * zoomFactor();
         wrap.mode = text::WrapMode::Width;
         wrap.width = std::max(toShaperUnits(width), m_shaper->cellWidth());
     }
@@ -352,6 +361,10 @@ void EditorView::afterChange(const text::EditorUpdate& update) {
             m_syntax->apply(*update.change, m_editor->text());
         }
         m_highlights.valid = false;
+        followInsight(*update.change);
+    }
+    if (m_balloon && m_editor->state().primary().head != m_balloon->caret) {
+        m_balloon.reset(); // The F2 balloon goes with the caret.
     }
     updateWrap(); // The gutter widens when the line count gains a digit.
     updateScrollBars();
@@ -462,6 +475,8 @@ bool EditorView::perform(EditorAction action) {
     case A::NextMember: return m_outline != nullptr && apply(commands::nextMember(commandInput(), *m_outline, false));
     case A::PreviousMember:
         return m_outline != nullptr && apply(commands::previousMember(commandInput(), *m_outline, false));
+    case A::NextError: return gotoNextProblem(true);
+    case A::PreviousError: return gotoNextProblem(false);
     }
     return false;
 }
@@ -473,6 +488,11 @@ void EditorView::escape() {
     }
     if (m_goToLine->isVisible()) {
         m_goToLine->hide();
+        return;
+    }
+    if (m_balloon) {
+        m_balloon.reset();
+        viewport()->update();
         return;
     }
     // IntelliJ's Escape: drop the secondary carets and the selection, keep the primary caret.

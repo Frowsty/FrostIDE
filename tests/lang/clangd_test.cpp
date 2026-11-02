@@ -4,8 +4,9 @@
 // a CMake-style compile_commands.json, where an undeclared identifier is reported at the right
 // line and clears after the fix; the compile commands synthesized for a tiny .vcxproj (include
 // directory and defines from its ItemDefinitionGroup), where only the planted error remains; and
-// a restart after clangd is killed, after which the open document is diagnosed again. Each test
-// starts one clangd (two for the restart) and stops it before returning.
+// a restart after clangd is killed, after which the open document is diagnosed again; and (ADR
+// 0047) semantic tokens for a local, a parameter, a field and a macro plus the inactive region of
+// an #ifdef block. Each test starts one clangd (two for the restart) and stops it before returning.
 
 #include "frost/core/log.hpp"
 #include "frost/io/file_system.hpp"
@@ -15,6 +16,7 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
+#include "frost/lang/semantic_tokens.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/thread_pool.hpp"
@@ -290,6 +292,74 @@ TEST(ClangdE2E, RestartsAfterAKillAndDiagnosesAgain) {
     ASSERT_TRUE(service->lastError().has_value());
     ASSERT_TRUE(waitFor([&] { return !errorsIn(*service, path).empty(); })) << describe(*service);
     EXPECT_EQ(errorsIn(*service, path).front().line, 5);
+    stopAndCheck(env, *service);
+}
+
+TEST(ClangdE2E, SemanticTokensAndInactiveRegionsOnAFixture) {
+    namespace fl = frost::lang;
+    frost::test::ScratchDir scratch("lang-clangd-semantic");
+    const std::string source = fixture("semantic/semantic.cpp");
+    const std::vector<fl::CompileCommand> commands = {fl::CompileCommand{
+        .directory = scratch.path(), .file = source, .arguments = {"clang++", "-std=c++20", "-c", source}}};
+    ASSERT_TRUE(fl::writeCompileCommands(frost::io::realFileSystem(), scratch.join("build"), commands).has_value());
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto provider = std::make_shared<fl::ExistingCompileCommandsProvider>(frost::io::realFileSystem(), scratch.path());
+    auto service = startService(env, scratch.path(), provider);
+    ASSERT_TRUE(waitFor([&] { return running(*service) || service->state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(*service)) << describe(*service);
+    const std::optional<fl::SemanticTokensSupport> support = fl::semanticTokensSupport(*service->capabilities());
+    ASSERT_TRUE(support.has_value());
+    EXPECT_TRUE(support->full);
+
+    frost::text::Document document = load(source);
+    const frost::text::Snapshot& snapshot = document.text();
+    ASSERT_TRUE(service->openDocument(source, snapshot).has_value());
+
+    // The first AST build sends the inactive regions (the extension this client announces).
+    ASSERT_TRUE(waitFor([&] {
+        const auto regions = service->inactiveRegions(source);
+        return regions && !regions->ranges.empty();
+    })) << describe(*service);
+    const fl::InactiveRegions regions = *service->inactiveRegions(source);
+    EXPECT_EQ(regions.textVersion, snapshot.version());
+    EXPECT_TRUE(std::ranges::any_of(regions.ranges, [&](const frost::text::ByteRange& range) {
+        return snapshot.text(range).find("disabledCode") != std::string::npos;
+    }));
+
+    frost::Result<fl::SemanticTokensData> data;
+    env.run([&]() -> frost::sched::Task<void> {
+        data = co_await fl::requestSemanticTokens(*service, source, std::nullopt, support->delta);
+    }());
+    ASSERT_TRUE(data.has_value()) << data.error().describe();
+    const auto tokens = fl::decodeSemanticTokens(data->data, support->legend, snapshot, service->encoding());
+    ASSERT_TRUE(tokens.has_value()) << tokens.error().describe();
+    const auto has = [&](std::string_view name, fl::SemanticTokenType type,
+                         std::optional<fl::SemanticModifier> modifier = std::nullopt) {
+        return std::ranges::any_of(*tokens, [&](const fl::SemanticToken& token) {
+            return snapshot.text(token.range) == name && token.type == type &&
+                   (!modifier || fl::hasModifier(token.modifiers, *modifier));
+        });
+    };
+    EXPECT_TRUE(has("local", fl::SemanticTokenType::Variable, fl::SemanticModifier::FunctionScope));
+    EXPECT_TRUE(has("factor", fl::SemanticTokenType::Parameter));
+    EXPECT_TRUE(has("x", fl::SemanticTokenType::Property));
+    EXPECT_TRUE(has("SCALE", fl::SemanticTokenType::Macro));
+    EXPECT_TRUE(has("Point", fl::SemanticTokenType::Class) || has("Point", fl::SemanticTokenType::Struct));
+    EXPECT_FALSE(std::ranges::any_of(*tokens, [&](const fl::SemanticToken& token) {
+        return snapshot.text(token.range) == "disabledCode" && token.type != fl::SemanticTokenType::Comment;
+    }));
+
+    // A delta against the unchanged text gives the same tokens.
+    if (support->delta && !data->resultId.empty()) {
+        frost::Result<fl::SemanticTokensData> again;
+        env.run([&]() -> frost::sched::Task<void> {
+            again = co_await fl::requestSemanticTokens(*service, source, *data, true);
+        }());
+        ASSERT_TRUE(again.has_value()) << again.error().describe();
+        EXPECT_EQ(again->data, data->data);
+    }
+    ASSERT_TRUE(service->closeDocument(source).has_value());
     stopAndCheck(env, *service);
 }
 

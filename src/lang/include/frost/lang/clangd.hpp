@@ -33,6 +33,11 @@
  * across restarts. Each document keeps the snapshots of its last historyPerDocument versions, so
  * a publish for an older version maps to the text clangd saw (and is marked stale).
  *
+ * Inactive regions (ADR 0047). clangd's textDocument/inactiveRegions notifications are mapped to
+ * the snapshot of the version clangd last published diagnostics for (both come from the same AST
+ * build; the notification names no version), kept per open document and passed to the inactive
+ * regions listeners, on the reader thread like the diagnostics. Closing a document clears them.
+ *
  * Threads. Every member is thread-safe. Diagnostics are published from the connection's reader
  * (a scheduler worker). Lifetime: call stop() and wait for it before shutting down the reactor
  * and the scheduler; the destructor only requests the stop and kills the process (never blocks).
@@ -47,6 +52,7 @@
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/semantic_tokens.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/task.hpp"
 #include "frost/text/document.hpp"
@@ -54,6 +60,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -185,6 +192,15 @@ public:
     [[nodiscard]] std::vector<std::string> recentStderr() const;
 
     [[nodiscard]] DiagnosticsStore& diagnostics() noexcept;
+
+    // The last inactive regions clangd sent for `path` (an open document), if any.
+    [[nodiscard]] std::optional<InactiveRegions> inactiveRegions(std::string_view path) const;
+    // Called with each new set (an empty one when the document closes), on the publishing thread
+    // (a scheduler worker), outside the service's lock; must be quick. Returns an id for
+    // removeInactiveRegionsListener. Listeners are called in id order.
+    using InactiveRegionsListener = std::function<void(const InactiveRegions&)>;
+    std::uint64_t addInactiveRegionsListener(InactiveRegionsListener listener);
+    void removeInactiveRegionsListener(std::uint64_t id);
 
     // Opens `path` (absolute) with its current text. Errors: InvalidArgument (path), AlreadyExists.
     [[nodiscard]] Result<void> openDocument(std::string_view path, text::Snapshot snapshot);
