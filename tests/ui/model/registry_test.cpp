@@ -21,7 +21,7 @@ namespace {
 // The registry hash of the current tables [consistency]. A deliberate registry change (a new
 // key, a renamed key, a changed range or opacity) updates this constant, and with it every
 // compiled theme blob (rebuilt by the build).
-constexpr std::uint64_t kExpectedRegistryHash = 0x3a4b4dee34a16308ULL;
+constexpr std::uint64_t kExpectedRegistryHash = 0x229dd62c1484c1a3ULL;
 
 TEST(Registry, TablesConsistent) {
     std::set<std::string_view> names;

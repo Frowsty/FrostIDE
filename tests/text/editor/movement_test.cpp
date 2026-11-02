@@ -127,6 +127,25 @@ TEST(Movement, VerticalThroughSoftWrappedRows) {
     EXPECT_EQ(fixture.show(), "a|bcdefghij\nxy");
 }
 
+// Rider keeps the caret where it is on Up at the first row and Down at the last row (ADR 0037),
+// with and without soft wrap.
+TEST(Movement, UpOnTheFirstRowAndDownOnTheLastRowStay) {
+    EXPECT_EQ(moved("ab|c\nde", Movement::LineUp), "ab|c\nde");
+    EXPECT_EQ(moved("abc\nd|e", Movement::LineDown), "abc\nd|e");
+    EXPECT_EQ(moved("ab|c", Movement::LineUp), "ab|c");
+    EXPECT_EQ(moved("ab|c", Movement::LineDown), "ab|c");
+    EditorConfig config;
+    config.wrap.mode = WrapMode::Column;
+    config.wrap.columns = 4;
+    EditorFixture first("ab|cdefghij", frost::text::languageById("cpp"), config);
+    ASSERT_GT(first.editor().display().rowCount(), 2u);
+    first.run(commands::move, Movement::LineUp, false);
+    EXPECT_EQ(first.show(), "ab|cdefghij");
+    EditorFixture last("abcdefgh|ij", frost::text::languageById("cpp"), config);
+    last.run(commands::move, Movement::LineDown, false);
+    EXPECT_EQ(last.show(), "abcdefgh|ij");
+}
+
 TEST(Movement, Pages) {
     EditorConfig config;
     config.pageRows = 2;

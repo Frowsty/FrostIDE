@@ -12,6 +12,7 @@
 #include "command_support.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -254,6 +255,36 @@ CommandResult paste(const CommandInput& in, std::string_view utf8) noexcept {
         return CommandResult{{}, in.state, EditKind::Paste, false};
     }
     CommandResult result = insertEverywhere(in, utf8, EditKind::Paste);
+    result.breakCoalescing = true;
+    return result;
+}
+
+CommandResult pasteLines(const CommandInput& in, std::string_view utf8) noexcept {
+    if (utf8.empty()) {
+        return CommandResult{{}, in.state, EditKind::Paste, false};
+    }
+    const Snapshot& text = in.text;
+    const std::vector<Selection> selections = detail::selectionsOf(in.state);
+    // One insertion per line: the selections are sorted, so those sharing a line are adjacent.
+    BatchBuilder batch;
+    std::optional<ByteOffset> previous;
+    for (const Selection& selection : selections) {
+        const ByteOffset start = detail::lineOf(text, selection.range().begin).content.begin;
+        if (previous != start) {
+            batch.add(ByteRange{start, start}, std::string(utf8));
+            previous = start;
+        }
+    }
+    batch.finish();
+    // Right bias: an endpoint at its line start stays with its line, below the pasted text.
+    std::vector<Selection> after;
+    for (const Selection& selection : selections) {
+        after.push_back(Selection{batch.map(selection.anchor, Bias::Right), batch.map(selection.head, Bias::Right)});
+    }
+    CommandResult result;
+    result.state = detail::makeState(after, {}, detail::primaryOf(in.state));
+    result.edits = batch.take();
+    result.kind = EditKind::Paste;
     result.breakCoalescing = true;
     return result;
 }
