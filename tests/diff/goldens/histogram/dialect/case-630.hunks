@@ -1,0 +1,7 @@
+11101
+110101
+# hist.gen Random(1) case 630: git 2.43 (classic) and git 2.56 (new) differ
+classic:
+2 3 2 4
+new:
+2 2 2 3

@@ -31,8 +31,11 @@
 
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
+#include "frost/io/path.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,6 +82,26 @@ struct DirListing {
     std::vector<DirListingIssue> issues;
 };
 
+// How IFileSystem::safeWrite put the bytes in place.
+enum class SafeWriteMethod : unsigned char {
+    Created,  // No file existed; a temp file was renamed into place.
+    Replaced, // A temp file replaced the file (ReplaceFileW on Windows, rename on POSIX).
+    InPlace,  // The file has several hard links and was rewritten in place.
+};
+
+// Options of IFileSystem::safeWrite.
+struct SafeWriteOptions {
+    // Replace a read-only target after making it writable (the explicit "overwrite read-only file"
+    // action); otherwise such a target fails with PermissionDenied.
+    bool overwriteReadOnly = false;
+};
+
+// What IFileSystem::safeWrite did.
+struct SafeWriteResult {
+    std::string target{}; // The file written: `path` normalised, or the file a symlink at `path` resolves to.
+    SafeWriteMethod method = SafeWriteMethod::Replaced;
+};
+
 class IFileSystem {
 public:
     /*
@@ -120,10 +143,11 @@ public:
      *
      * Read-only targets: Windows refuses to replace them (PermissionDenied). POSIX
      * replaces them, because rename needs write access to the directory only, and
-     * the new file keeps the read-only mode. TODO(M1): the SaveManager slice (PLAN.md
-     * I2) refuses a non-writable target with PermissionDenied on POSIX too, matching
-     * Windows, with a test, and offers an explicit "overwrite read-only file" action
-     * (ADR 0011, E3); ADR 0020 moved this there, as it changes save semantics.
+     * the new file keeps the read-only mode. That stays so for this primitive (the
+     * settings and storage writers rely on it); safeWrite, the editor's save
+     * primitive, refuses a non-writable target with PermissionDenied on both
+     * platforms unless SafeWriteOptions::overwriteReadOnly asks for the explicit
+     * "overwrite read-only file" action (ADR 0011, E3; ADR 0028).
      *
      * Not preserved from an existing target: extended attributes other than the
      * POSIX access ACL; Windows attributes, ACLs and alternate streams; hard-link
@@ -132,16 +156,41 @@ public:
      * to; on Windows a file symlink at `path` is replaced too, even one that points
      * at a directory, while a directory symlink or junction, even a dangling one,
      * makes the call fail with InvalidArgument ("is a directory") and is left in place.
-     * SaveManager (M1) adds metadata and symlink preservation on top of this
-     * primitive. TODO(M1): the SaveManager slice sweeps stale .frost-tmp-* files left
-     * by killed processes (moved there by ADR 0020; scanTree and the watchers already
-     * hide them by default).
+     * safeWrite adds attribute, ACL, hard-link and symlink preservation on top of
+     * this protocol. Temp files left by killed processes are removed by
+     * removeStaleTempFiles (below), which the SaveManager runs for every directory it
+     * opens or saves files in (ADR 0028; scanTree and the watchers hide them meanwhile).
      *
      * Errors: NotFound (parent directory missing), PermissionDenied, Busy,
      * InvalidArgument (the target is a directory, or on Windows a directory
      * symlink or junction, even a dangling one), IoError (disk full, ...).
      */
     [[nodiscard]] virtual Result<void> writeFileAtomic(std::string_view path, std::string_view data) = 0;
+
+    /*
+     * The editor's save primitive (SaveManager, ADR 0028): writes `data` as the new content of the
+     * file at `path` so that a crash, a full disk or a refused replace never leaves a partial or
+     * mixed file, and keeps what identifies the file:
+     *   - a symlink at `path` stays a link: the file it resolves to is written (result.target);
+     *   - a file with one link gets a temp file beside it (writeFileAtomic's name and flush), swapped
+     *     in with ReplaceFileW on Windows, which keeps its attributes, ACL, alternate streams and
+     *     creation time, or with rename on POSIX after the owner, mode and access ACL were copied as
+     *     writeFileAtomic does;
+     *   - a file with several hard links is rewritten in place, so every link keeps seeing it: the
+     *     space is reserved first, so a full disk fails before any byte changes (a crash during the
+     *     rewrite itself can still leave a mixture; the SaveManager's journal keeps the buffer);
+     *   - a missing file is created through writeFileAtomic (a dangling symlink is NotFound).
+     * A read-only target (Windows: FILE_ATTRIBUTE_READONLY; POSIX: no write bit, or this process
+     * may not write it) fails with PermissionDenied unless options.overwriteReadOnly, which makes it
+     * writable first (the saved file stays writable; on failure the attribute or mode is put back).
+     * A file another program holds open without sharing fails with Busy after three short retries,
+     * and is left as it was. Thread safety as the other members; blocking. O(size).
+     * Errors: as writeFileAtomic, plus PermissionDenied (read-only), Busy (in use), NotFound (a
+     * dangling symlink). The default implementation, for test doubles, is exists() then
+     * writeFileAtomic() with result.target = `path`.
+     */
+    [[nodiscard]] virtual Result<SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                                            const SafeWriteOptions& options);
 
     // Type, size and modification time, following symlinks. Errors: NotFound
     // (including dangling links), PermissionDenied, IoError.
@@ -195,5 +244,29 @@ protected:
 // The process-wide real file system (wide Win32 APIs on Windows, POSIX on Linux).
 // Stateless and thread-safe.
 [[nodiscard]] IFileSystem& realFileSystem() noexcept;
+
+// The parts of a writeFileAtomic / safeWrite temp-file name ".<name>.frost-tmp-<pid>-<n>".
+struct AtomicTempName {
+    std::uint32_t processId = 0;
+    std::uint64_t id = 0;
+
+    friend bool operator==(const AtomicTempName&, const AtomicTempName&) = default;
+};
+
+// Parses a directory entry name as a temp-file name (a leading '.', a non-empty stem, the marker,
+// then decimal <pid>-<n>); nullopt for every other name. Pure. O(name).
+[[nodiscard]] std::optional<AtomicTempName> parseAtomicTempName(std::string_view name) noexcept;
+
+/*
+ * Removes the temp files that killed processes left in `directory` (one level, no recursion):
+ * regular files whose name parseAtomicTempName accepts, whose process id is not this process's
+ * (its own saves may be in flight) and whose modification time is before `olderThan` (a live
+ * writer in another process finishes long before that). Entries that vanish or cannot be removed
+ * are skipped. Returns the number removed. Errors: only those of listing `directory`.
+ * O(entries). Blocking; `style` is the path style of `fs` (MemFs may use the other one).
+ */
+[[nodiscard]] Result<std::size_t> removeStaleTempFiles(IFileSystem& fs, std::string_view directory,
+                                                       IClock::SystemTime olderThan,
+                                                       PathStyle style = kNativePathStyle);
 
 } // namespace frost::io

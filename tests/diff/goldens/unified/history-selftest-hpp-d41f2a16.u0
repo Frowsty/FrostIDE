@@ -1,0 +1,19 @@
+@@ -4 +4,2 @@
+-// real executable, the properties that unit tests cannot see: the embedded
++// real executable, the properties that unit tests cannot see: the start-up
++// hardening and the linker's DependentLoadFlags (both required), the embedded
+@@ -8 +9,3 @@
+-// policy), and that the Qt GUI stack can create, expose and close the main window.
++// policy), that Qt can load the platform plugin it will use (frost/app/startup.hpp's
++// checkPluginPaths(), run by main() before QApplication exists), and that the Qt GUI
++// stack can create, expose and close the main window.
+@@ -11,0 +15,2 @@
++#include "frost/app/startup.hpp"
++
+@@ -33,2 +38,4 @@
+-// Checks that need no QApplication (code page, manifest contents, long paths).
+-[[nodiscard]] std::vector<SelfTestCheck> runProcessChecks();
++// Checks that need no QApplication: the start-up hardening `hardening` reports (from
++// hardenProcess()), the executable's DependentLoadFlags, the code page, the manifest
++// contents and long paths.
++[[nodiscard]] std::vector<SelfTestCheck> runProcessChecks(const ProcessHardening& hardening);

@@ -1,0 +1,15 @@
+@@ -4 +4,2 @@
+-// Qt is initialised so that --version and --selftest never pay for GUI start-up.
++// Qt is initialised so that --version and --help never pay for GUI start-up, and
++// --selftest runs its process and plugin checks before QApplication exists.
+@@ -18 +19,3 @@
+-    Gui,      // Normal start: open the main window (and any paths given).
++    // Normal start: open the main window. Positional paths are parsed but not opened yet.
++    // TODO(M2): open them (`frost <path>`, PLAN.md 2.2 shell integration, M2 exit).
++    Gui,
+@@ -35 +38,4 @@
+-// reported instead of being opened as paths.
++// reported instead of being opened as paths. Two different mode options (e.g.
++// --version --selftest) are also an InvalidArgument error; repeating one, or combining
++// --selftest with --selftest=onscreen, is allowed. Pure and thread-safe; O(total length
++// of the arguments).

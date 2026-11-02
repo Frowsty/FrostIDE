@@ -1,0 +1,26 @@
+@@ -86,7 +86,7 @@
+-     * (".<name>.frost-tmp-<pid>-<n>", with <name> cut to its first 64 bytes, created
+-     * exclusively), flush it to stable storage, then rename it over the
+-     * target in one step (MoveFileExW with MOVEFILE_REPLACE_EXISTING |
+-     * MOVEFILE_WRITE_THROUGH on Windows; rename() then an fsync of the directory
+-     * on POSIX). On any failure the temporary file is removed and the target is
+-     * left as it was. A process killed mid-write can leave a temporary file
+-     * behind but never a damaged target.
++     * (".<name>.frost-tmp-<pid>-<n>", with <name> cut to at most 64 bytes at a
++     * UTF-8 character boundary, created exclusively), flush it to stable storage,
++     * then rename it over the target in one step (MoveFileExW with
++     * MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH on Windows; rename() then
++     * an fsync of the directory on POSIX). On any failure the temporary file is
++     * removed and the target is left as it was. A process killed mid-write can
++     * leave a temporary file behind but never a damaged target.
+@@ -116,2 +116,3 @@
+-     * to; on Windows a directory symlink or junction at `path` makes the call fail
+-     * with InvalidArgument ("is a directory") and is left in place.
++     * to; on Windows a file symlink at `path` is replaced too, even one that points
++     * at a directory, while a directory symlink or junction, even a dangling one,
++     * makes the call fail with InvalidArgument ("is a directory") and is left in place.
+@@ -122,2 +123,2 @@
+-     * InvalidArgument (the target is a directory, or on Windows a link to one),
+-     * IoError (disk full, ...).
++     * InvalidArgument (the target is a directory, or on Windows a directory
++     * symlink or junction, even a dangling one), IoError (disk full, ...).

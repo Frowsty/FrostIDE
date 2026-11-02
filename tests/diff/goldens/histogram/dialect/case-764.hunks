@@ -1,0 +1,10 @@
+42321521515155
+442321545115155
+# hist.gen Random(1) case 764: git 2.43 (classic) and git 2.56 (new) differ
+classic:
+1 1 1 2
+6 9 7 10
+new:
+1 1 1 2
+6 8 7 8
+10 10 10 11

@@ -1,0 +1,7 @@
+@@ -32,2 +32,4 @@
+-// Parses UTF-8 arguments (argv[1..], without the program name). Unknown options
+-// are an InvalidArgument error so typos are reported instead of ignored.
++// Parses UTF-8 arguments (argv[1..], without the program name). Every argument
++// starting with '-' before "--" is an option; unknown options (including
++// single-dash typos such as -version) are an InvalidArgument error, so they are
++// reported instead of being opened as paths.

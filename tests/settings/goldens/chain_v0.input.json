@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 0,
+  "editor.tabWidth": 3,
+  "editor.wordWrap": "on",
+  "layout": {"panels": ["project", "build"]}
+}

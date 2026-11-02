@@ -1,0 +1,19 @@
+@@ -57,10 +57,14 @@
+  * ChunkRange and LineCursor) or TextBuffer sharing this storage is alive.
+  *
+  * Thread safety: every const member is lock-free and safe concurrently from any number of threads.
+- * Queries take no references; they walk the tree through the Snapshot they are called on, so
+- * readers of one snapshot do not contend on its counters. Hand snapshots across threads through
+- * any happens-before mechanism (a sched task, a mutex, release/acquire). Assigning a Snapshot
+- * object while another thread reads that same object is a data race.
++ * The queries take no references; they walk the tree through the Snapshot they are called on, so
++ * readers that only query one snapshot do not contend on its counters. The exceptions are
++ * chunks() and linesFrom(): their ChunkRange and LineCursor hold a Snapshot copy, so each call
++ * makes two relaxed increments and, when its result is destroyed, two acq_rel decrements on the
++ * root node's and the storage's shared counters, on which readers of one snapshot do contend
++ * (once per call, not per chunk or line). Hand snapshots across threads through any
++ * happens-before mechanism (a sched task, a mutex, release/acquire). Assigning a Snapshot object
++ * while another thread reads that same object is a data race.
+  *
+  * Byte-offset queries take offsets derived from this snapshot; an offset beyond the stated range
+  * is a bug and fails a FROST_PRE check. External positions (Point, Utf16Point, Utf16Offset, line

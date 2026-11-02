@@ -17,3 +17,5 @@ Bundled assets (resources/, pinned in resources/assets.lock.json, ADR 0015):
   (resources/icons/lucide/LICENSE).
 The fonts are bundled unmodified. The software bill of materials lists each
 asset with its version, source and SHA-256.
+
+The histogram diff in src/diff follows the algorithm of JGit's HistogramDiff and HistogramDiffIndex (Copyright (C) 2010, Google Inc. and others; EDL-1.0, SPDX BSD-3-Clause). No JGit code is included.

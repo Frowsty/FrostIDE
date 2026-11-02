@@ -1,0 +1,40 @@
+@@ -89,19 +89,27 @@
+      *
+      * POSIX metadata. A new file is created like any open(O_CREAT, 0666), so the
+      * umask or the directory's default ACL decides its mode. When a file is
+-     * replaced, the temporary file is created 0600 and receives the target's
+-     * owner, group and permission bits (set-id bits included) only once its
+-     * content is complete, as far as this process may set them: the owner needs
+-     * CAP_CHOWN and the group needs membership. Whatever cannot be kept fails safe
+-     * rather than widening access: a different group loses the group bits and
+-     * S_ISGID, a different owner loses S_ISUID.
++     * replaced, the temporary file is created 0600 and, only once its content is
++     * complete, receives the target's owner, group, permission bits (set-id bits
++     * included) and POSIX access ACL, as far as this process may set them: the
++     * owner needs CAP_CHOWN, the group needs membership, and the ACL is copied
++     * only when both are kept (one the temporary file inherited from the
++     * directory's default ACL is removed). Whatever cannot be kept fails safe, so
++     * no one gets more access than the target gave them: a different group drops
++     * S_ISGID and leaves the group and other classes only what both had (0664
++     * becomes 0644, 0640 becomes 0600); a different owner drops S_ISUID and limits
++     * both classes to the owner's bits; an ACL that is not copied leaves both
++     * classes only what every non-owner entry granted (named entries may deny).
+      *
+-     * Not preserved from an existing target: POSIX ACLs and extended attributes;
+-     * Windows attributes, ACLs and alternate streams; hard-link identity and
+-     * symlinks (a symlink at `path` is replaced by a regular file). Read-only
+-     * targets fail with PermissionDenied. SaveManager (M1) adds metadata and
+-     * symlink preservation on top of this primitive.
+-     * TODO(M1): sweep stale .frost-tmp-* files left by killed processes.
++     * Read-only targets: Windows refuses to replace them (PermissionDenied). POSIX
++     * replaces them, because rename needs write access to the directory only, and
++     * the new file keeps the read-only mode.
++     *
++     * Not preserved from an existing target: extended attributes other than the
++     * POSIX access ACL; Windows attributes, ACLs and alternate streams; hard-link
++     * identity and symlinks (a symlink at `path` is replaced by a regular file).
++     * SaveManager (M1) adds metadata and symlink preservation on top of this
++     * primitive. TODO(M1): sweep stale .frost-tmp-* files left by killed processes.
+      *
+      * Errors: NotFound (parent directory missing), PermissionDenied, Busy,
+      * InvalidArgument (the target is a directory), IoError (disk full, ...).
