@@ -5,11 +5,12 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-02: M1 in progress
 
-`main` has the tenth, the ninth, the eighth, the seventh and the sixth feature-first batches (ADR 0031), merged with
-`git merge --no-ff` in the main worktree under D23. The tenth: `m1/shell-nav` at 588ddfe (merge 9d00def), then one fix
-of the merged tree (cfbd46e). The ninth, in this order: `w1/run-service` at 82c6c56 (merge fcc0a46),
-`m1/editor-rhi` at 9438b85 (merge 97e490e) and `w2/clangd-nav` at 660a1e9 (merge 29869f9, with the regenerated keymap
-golden). The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
+`main` has the eleventh, the tenth, the ninth, the eighth, the seventh and the sixth feature-first batches (ADR 0031),
+merged with `git merge --no-ff` in the main worktree under D23. The eleventh: `m2/find-in-files` at 2ce9819 (merge
+aca0ea8), then two follow-ups of the merged tree (3b0025f, 4ecb9ab). The tenth: `m1/shell-nav` at 588ddfe (merge
+9d00def), then one fix of the merged tree (cfbd46e). The ninth, in this order: `w1/run-service` at 82c6c56 (merge
+fcc0a46), `m1/editor-rhi` at 9438b85 (merge 97e490e) and `w2/clangd-nav` at 660a1e9 (merge 29869f9, with the
+regenerated keymap golden). The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
 follow-up (4a9954b), `w1/tool-windows` at c81008c (merge e574965) and an ADR-reference fix (791fa63). The seventh, in
 this order: `w1/build-service` at 8d77400 (merge eb82b95), `m1/shell-frame` at 9576c24 (merge b1d05bc),
 `w2/clangd-diagnostics` at e7d9ccc (merge db9d24e) and `m1/save-manager` at e2b2362 (merge 5fbd262), then the label
@@ -19,10 +20,129 @@ at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then
 Each slice passed its own `-Quick`, and each batch's merged tree was verified once (the Verification sections below).
 The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in progress". Its
 "Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now the running one.
-This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the sixteen
+This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the seventeen
 branches kept a record in this log).
 
 ### Done
+
+#### Merge of `m2/find-in-files` (aca0ea8, eleventh batch)
+- **The merge** (aca0ea8) of `m2/find-in-files` (2ce9819, on 52eb3d6) into `main` at b04a621: the Qt-free Find in
+  Files engine in frost::search (file masks with `!` excludes; the Solution, Project, Directory and Open files scopes;
+  every encoding the editor opens, through the load service and its large-file guard; open documents searched in their
+  committed text; cancelling; the 10,000-match limit), Replace in Files with frost::document's new
+  `SaveManager::rewriteClosedFile` (`src/document/src/rewrite.cpp`), and the new frost::ui_find (`src/ui/find`:
+  FindSession, the Find/Replace popup, the Find tool window and FindFeature's actions), with `search.nextOccurrence`
+  (Ctrl+Alt+Down) and `search.previousOccurrence` (Ctrl+Alt+Up) in the IntelliJ keymap and the Edit menu, and
+  `window.find` under View > Tool Windows. FindFeature is not installed in MainWindow yet: the W1 unify slice does
+  that (the pre-state; Next). The slice record below says more.
+- **ADR 0045** (`docs/adr/0045-find-in-files.md`): the number is free on `main` (no 0044 on `main`; 0043 is
+  `m1/editor-rhi`'s). Its references are right: 0018 (encodings), 0031 (feature-first) and 0038 (shell); the code's
+  0019 (diff, D1), 0025 (the editor model's SearchPattern) and 0028 (save manager) are right too.
+- **The module name clash** (the pre-state): `m1/shell-nav` (on `main`) and this slice both created frost::search in
+  `src/search`, both in layer "search" at rank 7, which `cmake/FrostLayers.cmake` already had (neither side changed
+  it). They are one library now:
+  - `src/search/CMakeLists.txt`: one `frost_add_library(search LAYER search)` with both sets of sources
+    (`fuzzy_path.cpp` beside `file_mask.cpp`, `find_in_files.cpp`, `replace_in_files.cpp` and `search_scope.cpp`) and
+    the union of the dependencies (the slice's document, project, text_editor, text, storage, io and sched, and
+    shell-nav's core). Rank 7 satisfies both sides: the slice links document and project (rank 6), shell-nav links
+    core (rank 1), and the one consumer on `main`, frost::ui_workbench, is in layer ui (rank 9). The configure's layer
+    check passed. Both public APIs (`fuzzy_path.hpp`; `file_mask.hpp`, `find_in_files.hpp`, `replace_in_files.hpp`
+    and `search_scope.hpp`) are unchanged and share no name. The header note's TODO(M13) now names only the trigram
+    index, since the fuzzy matcher has joined.
+  - `tests/search/CMakeLists.txt`: one `search_tests` with `fuzzy_path_test.cpp`, `find_in_files_test.cpp` and
+    `replace_in_files_test.cpp`, the slice's include path and `FROST_TINY_SLN_DIR`; label "unit" (`mod.search`). No
+    test is dropped: 5 FuzzyPath and 17 Find/Replace in Files cases, 22 in all.
+  - `src/CMakeLists.txt`: search is added once, inside the fuzz guard, since it now links document, project and RE2,
+    which fuzz trees do not build; `main`'s unguarded `add_subdirectory(search)` (the tenth batch's resolution) is
+    gone. Fuzz trees build no UI and no tests (`CMakePresets.json`), and no fuzz harness uses frost::search.
+- **Three other conflicts**, each resolved so that both sides' intent survives:
+  - `tests/CMakeLists.txt`: `main`'s list; one note for `search` naming ADR 0042 and ADR 0045.
+  - `src/ui/CMakeLists.txt`: both header notes; `find` after `main`'s `shell`, `editor`, `toolwindows`, the guarded
+    `lang`, `nav` and `workbench`.
+  - `tests/ui/CMakeLists.txt`: `ui_find_tests` after `main`'s `ui_editor_tests`, `ui_nav_tests` and
+    `ui_workbench_tests`, with its line in the header list.
+- **Auto-merged:** `src/input/src/keymap_intellij.cpp` and `src/ui/shell/src/shell_menus.cpp` (the slice's lines
+  beside `main`'s) and the three `intellij-*.txt` goldens (two added lines each). `keymap-reachability.txt` merged to
+  `main`'s 213 actions; the follow-up below regenerates it.
+- **The Directory scope's TODO(M2)** (the pre-state) stays: the engine's `io::scanTree` call sets
+  `readGitignore = false`, clears `skipNames` and walks with the scope's own excludes on purpose, so switching to
+  shell-nav's gitignore-aware scan changes the scope's behaviour and tests. It is not a one-line switch (Next).
+- **The label check:** the slice adds no tagged suite (`search_tests` and `ui_find_tests` are "unit"), so
+  `tests/tools/test_verify_support.py` needed no change.
+- **The build of the merged tree** (aca0ea8): `night.py build-gate` (39.0 GB commit free), `cmake --preset
+  win-clangcl` and `cmake --build --preset win-clangcl-debug -j 8`: exit 0, 119 steps. Then ctest
+  `-L "mod.(input|search|ui)"` on the hidden desktop: 589/591, the two failures of the follow-up below
+  (`ui_find_tests`' 6 cases passed).
+
+#### Fixture and golden follow-up (3b0025f, eleventh batch)
+- **The failure:** `TinySolution.SolutionScopeSearchesEveryProjectFile` and
+  `TinySolution.ProjectScopeSearchesTheCurrentFilesProject` expected one `tinyAnswer` match in the tiny MSBuild
+  fixture's `App/main.cpp` and found 2. `w1/run-service` (82c6c56, ninth batch) made that program print
+  "tiny answer N" for its run tests, so it calls `tinyAnswer()` twice (lines 17 and 30); the slice was based before
+  that.
+- **The fix** (3b0025f): both tests expect 2 matches in `main.cpp`. `lib.cpp`, `lib.h` and the matched-file counts (3
+  for the solution, 1 for App's project) are unchanged, and the fixture note says why `main.cpp` has two. The
+  expectation follows the fixture; no assertion is removed or loosened. A fix forward, not a revert.
+- **The keymap goldens** (the pre-state), regenerated from the merged tree with `FROST_UPDATE_GOLDENS=1` (input_tests
+  on the hidden desktop; in that mode every golden test reports "golden updated"). Only `keymap-reachability.txt`
+  changed: 213 actions and 225 sequences become 215 and 227 in all eight layout lines (the slice's two entries on top
+  of `main`'s), still 0 gaps with the same dead-key strokes. The `intellij-windows/linux/macos` goldens were already
+  right after the merge, and every other input golden is byte-identical, so only additions appear.
+- **Checked:** the Debug build (exit 0) and ctest `-L "mod.(input|search)"` on the hidden desktop: 276/276 (254
+  input, 22 search).
+
+#### Format follow-up (4ecb9ab, eleventh batch)
+- **The failure:** the first batch run (Verification below) passed every test on both OSes, but its format check
+  failed on ten files the slice added: `src/document/src/rewrite.cpp`, `src/search/src/find_in_files.cpp` and
+  `replace_in_files.cpp`, `src/ui/find/src/find_feature.cpp`, `find_popup.cpp`, `find_session.cpp` and
+  `find_tool_window.cpp`, and `tests/search/find_in_files_test.cpp`, `replace_in_files_test.cpp` and
+  `tests/ui/find/find_ui_test.cpp`. `.clang-format` has not changed since the slice's base (52eb3d6), so the slice's
+  sources were committed unformatted (its hand-off names lint, licence and feature checks, not format).
+- **The fix** (4ecb9ab): clang-format 23.1.4 `-i` on the ten files (line breaks at the 120-column limit, one
+  regrouped include block in `rewrite.cpp`, one nested conditional aligned), plus one hand edit: FileMask's `?` case
+  wrote `"a\xC3\xA9" "c.txt"` as two adjacent literals (a hex escape would swallow the `c`), which clang-format split
+  over two lines; it is now `"a\303\251c.txt"`, the same bytes (U+00E9 in UTF-8) in octal escapes. No token of code
+  or test changes otherwise. A fix forward, not a revert: the cause was clear and the change mechanical.
+- **Checked:** `clang-format --dry-run --Werror` clean for every C/C++ file of `src/search`, `src/ui/find`,
+  `src/document`, `tests/search` and `tests/ui/find`; the Debug build (exit 0, 50 steps); ctest
+  `-L "mod.(search|document|ui)"` on the hidden desktop: 374/374.
+
+#### Verification (eleventh batch, merged tree 4ecb9ab)
+- Before the batch run: the Windows Debug build after the merge and after each follow-up, and the touched suites
+  through ctest on the hidden desktop (above).
+- **The first run** of `tools\verify.ps1 -Quick -Jobs 8`, on 3b0025f, through `run_hidden_nobox.py` (a hidden desktop;
+  no window opened on it), after `night.py build-gate` (32.8 GB commit free): 487.6 s, exit code 1. Every test passed
+  on both OSes (win debug 2269/2275, 6 skipped; wsl debug 2155/2164, 9 skipped), and frost-lint, licensecheck (both
+  OSes) and featurecheck were ok, but the format check failed on the slice's ten files (the format follow-up above).
+  No slice was reverted.
+- **The run that counts**, the same command on 4ecb9ab (clean tree; this record not yet written), after `night.py
+  build-gate` (39.2 GB commit free): 533.4 s, exit code 0. Windows ran its Debug leg (ctest `-j 8`) and the checks;
+  WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`): `Verified: win debug 2269/2275 (6
+  skipped), wsl debug 2155/2164 (9 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by
+  default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by
+  default)` (frost-lint 2001 files; licensecheck 39 packages on Windows, 35 on WSL). The test steps took 145.3 s
+  (Windows, parallel at `-j 8`) and 309.3 s (WSL). The 11 `msbuild` and 17 `screenshot` tests ran and passed on
+  Windows; `mod.search` has its 22 tests on both OSes. `FileWatcher.NewDirectoryAndItsFilesAreSeen`, the slice's WSL
+  flake, passed in both runs.
+- **The skips:** the tenth batch's, unchanged. Windows: the four `WatcherPerf` tests,
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` and `SafeWrite.SymlinksStayLinks`. WSL: the four `WatcherPerf`
+  tests, `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale`,
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler`,
+  `MsBuildEvaluation.MapsEvaluatedMetadataToClangClFlags`,
+  `MsBuildProvider.FailedEvaluationFallsBackToTheStaticModel` and
+  `RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes`.
+- **No test was lost:** against the tenth batch (win debug 2246, wsl debug 2132) the tree adds 23 tests on each OS,
+  the 23 `TEST` cases the slice adds: `search_tests` 17 (beside shell-nav's 5 FuzzyPath cases, 22 in all) and
+  `ui_find_tests` 6. The follow-ups change two expected counts (1 to 2, the fixture's two calls), the reachability
+  golden's counts and formatting; no `TEST` line and no assertion line is removed.
+- **The pre-state's checks:** `main` was clean at b04a621 and equal to `origin/main` at the start; no untracked
+  `Testing/` folder appeared in the repository root during this batch (the integrator's ctest runs used
+  `--test-dir` on the build tree), so nothing had to be moved aside.
+- **Processes:** the runner ended every process tree it started; no night.py lock was taken (build-gate takes none)
+  and no background loop is left. The cmake, ninja, ctest and test processes still running at the end belong to other
+  agents' worktrees (`m5-git-core` among them) and were left alone.
+- `-Quick` builds no ASan, TSan or fuzz tree. The slice's sanitizer, fuzz, stress and `-Full` runs are in "Deferred
+  to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `m1/shell-nav` (9d00def, tenth batch)
 - **The merge** (9d00def) of `m1/shell-nav` (588ddfe) into `main` at ac253cd: in io `IFileSystem::canonicalPath`
@@ -803,6 +923,15 @@ branches kept a record in this log).
   the DocumentRegistry; and the settings-file actions bind to `SettingsStore::prepareForEditing` once AppServices
   holds a SettingsStore (frost::settings itself is on `main` since the sixth batch; the hand-off's "when m1/settings
   lands" means that binding).
+- **`m2/find-in-files`' hand-off** (ADR 0045): W1 (the unify slice) installs FindFeature in MainWindow and connects
+  `openLocation` (to the editor), `selectedText` (from the editor view) and `documentEdited` (to `main`'s
+  `Editor::follow`, so an open editor redraws after a replace). `openLocation` has to map the engine's UTF-8 byte
+  columns to the editor's columns (the slice record's known bug). Then its TODO(M2)s: Replace in Files for closed
+  files on a background lane with progress (it runs on the GUI thread now, accepted for the moment by the
+  orchestrator), and the Directory scope through `m1/shell-nav`'s gitignore-aware scan (io `scanTree` with
+  `.gitignore`, `.ignore` and the default excludes, ADR 0042). Later: Replace from the Find tool window, tabs for
+  several searches, the last query, mask and scope persisted through m1/settings with history drop-downs, and Alt
+  mnemonics for the toggles.
 - **The SaveManager's consumers** (ADR 0028): one manager on the document thread; AutosaveController fed by input
   events, focus loss and a timer; the merge view driven by PendingMerge and `resolveExternalChange` (with the Q5
   labels above; changes on adjacent lines in both buffer and disk count as a conflict, the same rule as git); banners
@@ -811,8 +940,8 @@ branches kept a record in this log).
   host feeding the view's `setFileInfo`/`markSaved` is still `w1/workbench`'s (or the unify slice's). The long-line
   rule uses `kLongLineCapBytes` since the eighth batch (its long-line follow-up above).
 - **The in-flight slices:** `w1/workbench` (the W1 wiring above), held for the unify slice that reconciles it with
-  `m1/shell-nav`'s composition. `m1/shell-nav` merged in the tenth batch; `m1/editor-rhi`, `w1/run-service` and
-  `w2/clangd-nav` in the ninth.
+  `m1/shell-nav`'s composition. `m2/find-in-files` merged in the eleventh batch, `m1/shell-nav` in the tenth;
+  `m1/editor-rhi`, `w1/run-service` and `w2/clangd-nav` in the ninth.
 - **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` (on `main`) binds keys to `commands::*`, calls
   `Editor::run`, supplies the Qt ITextShaper, sets `pageRows` from the viewport height, paints the EditorUpdate rows
   and implements IOutlineProvider over the syntax outline (SyntaxOutlineProvider). An index slice may add a
@@ -837,11 +966,39 @@ branches kept a record in this log).
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
 `m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From the eleventh batch's merges** (the integrator):
+  - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase): the folded
+    frost::search (`src/search/CMakeLists.txt`'s sources, DEPS and rank 7; one `search_tests` in
+    `tests/search/CMakeLists.txt`), `add_subdirectory(search)` moved inside the fuzz guard, and the CMake header notes.
+  - A review of the follow-ups 3b0025f (the TinySolution counts after `w1/run-service`'s fixture change, and the
+    eight count lines of `keymap-reachability.txt`) and 4ecb9ab (clang-format of the slice's ten files and the octal
+    form of one test literal).
+  - `FileWatcher.NewDirectoryAndItsFilesAreSeen` (io) is timing-sensitive under load in WSL (orchestrator decision on
+    `m2/find-in-files`' first run, where it failed once; it passed alone three times and the full rerun was green):
+    stress runs of it under load, then a wait that does not depend on timing.
+- **From `m2/find-in-files`** (ADR 0045), as its hand-off lists them:
+  - Sanitizers (ASan/TSan) and the `-Full` legs (ADR 0031).
+  - Fuzzing `FileMask::parse` and `globMatch`.
+  - Stress tests: editing documents while a search runs, rapid search restarts and cancels, many large files.
+  - A perf gate for search throughput on the R2a/R2b corpora; budget numbers for search latency.
+  - Screenshot goldens for the Find popup and the Find tool window.
+  - Independent review of `SaveManager::rewriteClosedFile` and `replaceInFiles` (data safety), moved to the hardening
+    phase.
+  - TODO(M2): run Replace in Files for closed files on a background lane with progress (it runs on the GUI thread
+    now).
+  - TODO(M2): use `m1/shell-nav`'s gitignore-aware scan for the Directory scope.
+  - W1 wiring: install FindFeature in MainWindow and connect `openLocation` (to the editor), `selectedText` (from the
+    editor view) and `documentEdited` (to `main`'s `Editor::follow`).
+  - Replace from the Find tool window, and tabs for several searches in it.
+  - Persisting the last query, mask and scope through m1/settings; query and mask history drop-downs; Alt mnemonics
+    for the Cc/W/.* toggles.
+  - Plural forms in status and summary texts (they read "1 files").
+  - A trigram index or fuzzy matching (TODO(M13)).
 - **From the tenth batch's merges** (the integrator):
   - A review of the merge resolutions (the independent review that ADR 0031 moves to the hardening phase):
     `src/app/src/main.cpp` (the persistent services and the command line's project handling inside `main`'s
-    diagnostics flow), `src/app/CMakeLists.txt`'s DEPS, `add_subdirectory(search)` outside the fuzz guard, and the
-    matrix rows that keep `main`'s milestones.
+    diagnostics flow), `src/app/CMakeLists.txt`'s DEPS, `add_subdirectory(search)` outside the fuzz guard (inside it
+    since the eleventh batch, whose review item covers that), and the matrix rows that keep `main`'s milestones.
   - A review of the long-line option follow-up (cfbd46e; one identifier in `tests/ui/workbench/workbench_test.cpp`).
 - **From `m1/shell-nav`** (ADR 0042), as its hand-off lists them:
   - Feature-first (ADR 0031) hardening: independent review (this touches the core-adjacent io `canonicalPath` and
@@ -1249,7 +1406,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 - **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
-- None. The hand-off notes of the tenth batch (`m1/shell-nav`), of the ninth (`w1/run-service`, `m1/editor-rhi`,
+- None. The hand-off notes of the eleventh batch (`m2/find-in-files`), of the tenth batch (`m1/shell-nav`), of the
+  ninth (`w1/run-service`, `m1/editor-rhi`,
   `w2/clangd-nav`), of the eighth (`m1/editor-view`, `w1/tool-windows`), of the seventh
   (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`, `m1/save-manager`) and of the sixth
   (`m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings`, `plan/thin-path`) name none; `m1/diff-merge`'s
@@ -1264,8 +1422,9 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
   or with no solution open, the build action is disabled and Ctrl+Shift+B falls through to Go to Type Declaration
   (Visual Studio would report "build already in progress" instead; the slice record's known bug).
 
-Apart from that, no slice of the tenth, the ninth, the eighth, the seventh or the sixth batch asks one in its hand-off
-(`m1/shell-nav` lists no question); the orchestrator's decisions on their questions are in the merge sections above.
+Apart from that, no slice of the eleventh, the tenth, the ninth, the eighth, the seventh or the sixth batch asks one in
+its hand-off (`m2/find-in-files` and `m1/shell-nav` list no question); the orchestrator's decisions on their questions
+are in the merge sections above and, for `m2/find-in-files`, in its slice record.
 ADR 0019 Q5 (diff3-style markers and the save-manager prompt's labels), which the last integrator listed here, is
 decided: diff3 stays the default, and the labels are "Keep my version", "Take disk version" and "Compare..." (the merge
 section of `m1/save-manager` above).
@@ -1273,6 +1432,47 @@ section of `m1/save-manager` above).
 The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
 variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
 `m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `m2/find-in-files` (ADR 0045)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 2ce9819 on 52eb3d6. Worktree `.claude\worktrees\m2-find-in-files`. (Merge note:
+merged into `main` as aca0ea8, with the follow-ups 3b0025f and 4ecb9ab; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::search's Find in Files engine:** masks, scopes, encodings, open documents, cancelling and the 10,000-match
+  limit; Replace in Files with `SaveManager::rewriteClosedFile`.
+- **frost::ui_find:** the popup, the Find tool window and the actions; the two new keymap entries with regenerated
+  goldens.
+- **ADR 0045**; `search_tests` (17) and `ui_find_tests` (6).
+- **Verification at 2ce9819** (its own `tools\verify.ps1 -Quick -Jobs 6`), green on both legs: win debug 2080/2086 (6
+  skipped), wsl debug 1977/1983 (6 skipped); lint, licence and feature checks ok. The first run hit a flaky WSL
+  FileWatcher test that the slice does not touch; it passed alone three times and the full rerun was green. No
+  processes or locks were left running. Not merged or pushed by the slice.
+
+#### Known bugs
+- Each new search cancels the previous one and then waits for it on the GUI thread. If very large files are being
+  searched, typing can stall for a moment.
+- Match columns are UTF-8 byte offsets. The tab fallback passes them to `IEditorView::goToLine`, which counts
+  characters, so the caret lands on the wrong column on non-ASCII lines until W1's callback maps them.
+- Replace in an open document edits its FileDocument, but an open editor widget only redraws once W1 connects
+  `documentEdited` to `Editor::follow`.
+- Status texts are not plural-aware ("2 replacements in 1 files").
+- The first verification run failed one WSL test, `FileWatcher.NewDirectoryAndItsFilesAreSeen` (io, not touched by
+  this slice). It passed three times when rerun alone, and the full rerun was green. It looks timing-sensitive under
+  load.
+
+#### Left
+- Its hand-off's Next (this entry's Next): W1 installs FindFeature in MainWindow and connects `openLocation`,
+  `selectedText` and `documentEdited` (`main`'s EditorView and `Editor::follow`); then the TODO(M2) items, Replace on
+  a background lane and the gitignore-aware Directory scope through shell-nav.
+- Its merge-order note: the branch touches `shell_menus.cpp` (3 added lines) and `keymap_intellij.cpp` with its
+  goldens, so after another branch's keymap change the goldens are regenerated (`FROST_UPDATE_GOLDENS=1`) and the diff
+  reviewed. That was done at this merge (the follow-up 3b0025f).
+- The orchestrator's decisions on its points: the `FileWatcher.NewDirectoryAndItsFilesAreSeen` flake is not its code
+  (io) and is in the deferred list as a timing-sensitive test; Replace in Files running on the GUI thread for closed
+  files is accepted for now (TODO(M2), deferred).
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m2/find-in-files`'.
 
 ### Slice record: `m1/shell-nav` (ADR 0042)
 
