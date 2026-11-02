@@ -12,8 +12,10 @@
  *
  * Properties. ProjectGuid, RootNamespace, ConfigurationType and PlatformToolset keep the first
  * value in document order. A PropertyGroup whose Condition is the standard
- * '$(Configuration)|$(Platform)'=='Debug|x64' form also sets ConfigurationType and
- * PlatformToolset of that ProjectConfiguration. Properties defined without any Condition (on the
+ * '$(Configuration)|$(Platform)'=='Debug|x64' form also sets ConfigurationType,
+ * PlatformToolset and CharacterSet of that ProjectConfiguration. <ItemDefinitionGroup> elements
+ * contribute their <ClCompile> metadata (ClCompileDefinition, for W2's compile commands).
+ * Properties defined without any Condition (on the
  * group or the property) form the static property table used for $(Name) expansion, together
  * with MSBuild's reserved ones (MSBuildProjectDirectory, MSBuildThisFileDirectory,
  * MSBuildProjectName, MSBuildProjectFile, MSBuildProjectFullPath, ProjectDir, ProjectName,
@@ -88,9 +90,26 @@ struct ProjectConfiguration {
     std::string platform;          // "x64", "Win32"
     std::string configurationType; // From a PropertyGroup conditioned on this pair; "" if none.
     std::string platformToolset;   // Likewise.
+    std::string characterSet;      // Likewise ("Unicode", "MultiByte"); W2's compile commands read it.
 
     // "Debug|x64".
     [[nodiscard]] std::string name() const { return configuration + '|' + platform; }
+};
+
+/*
+ * The <ClCompile> metadata of one <ItemDefinitionGroup> (W2: the synthesized compile commands,
+ * ADR 0036), in document order. Values have the static $(Name) properties expanded; unknown
+ * $(Name) references and %(Name) metadata references are kept as written, so a consumer can
+ * fold %(Name) (the value inherited from earlier groups) and drop entries it cannot resolve.
+ */
+struct ClCompileDefinition {
+    // "Debug|x64" when the group (or its <ClCompile>) carries the standard configuration
+    // condition; "" when unconditioned.
+    std::string configuration;
+    // A condition of another form: it cannot be evaluated statically, so consumers skip the group.
+    bool otherCondition = false;
+    // Lower-case metadata names ("additionalincludedirectories") to values.
+    std::map<std::string, std::string, std::less<>> metadata;
 };
 
 struct VcxProject {
@@ -100,9 +119,10 @@ struct VcxProject {
     std::string rootNamespace;     // "" when absent.
     std::string configurationType; // First value: "Application", "StaticLibrary", "DynamicLibrary", ...
     std::string platformToolset;   // First value: "v143", "ClangCL", ...
-    std::vector<ProjectConfiguration> configurations; // Document order, without duplicates.
-    std::vector<ProjectItem> items;                   // Document order, each path once.
-    std::vector<ProjectReference> references;         // Document order, each path once.
+    std::vector<ProjectConfiguration> configurations;      // Document order, without duplicates.
+    std::vector<ProjectItem> items;                        // Document order, each path once.
+    std::vector<ProjectReference> references;              // Document order, each path once.
+    std::vector<ClCompileDefinition> clCompileDefinitions; // Document order (see ClCompileDefinition).
     // The static property table: lower-case names to expanded values (see above).
     std::map<std::string, std::string, std::less<>> properties;
     std::vector<std::string> unresolvedIncludes; // Include entries skipped for unknown references.
@@ -137,6 +157,16 @@ struct FiltersFile {
 // Includes. Errors: InvalidArgument (projectPath), Corrupt (malformed XML, root not <Project>).
 [[nodiscard]] Result<VcxProject> parseVcxproj(io::IFileSystem& fs, std::string_view content,
                                               std::string_view projectPath, const VcxprojOptions& options = {});
+
+/*
+ * The effective ClCompile metadata of `configuration` ("Debug|x64", ASCII case ignored): the
+ * unconditioned groups and those of that configuration, folded in document order, where a later
+ * value replaces an earlier one and "%(Name)" inside it stands for the earlier value of the same
+ * name (MSBuild's item-definition inheritance). Groups with otherCondition are skipped. A
+ * "%(Name)" with no earlier value becomes "". Pure; O(total metadata size).
+ */
+[[nodiscard]] std::map<std::string, std::string, std::less<>> clCompileMetadata(const VcxProject& project,
+                                                                                std::string_view configuration);
 
 // Reads and parses `projectPath`. Errors: those of IFileSystem::readFile and parseVcxproj.
 [[nodiscard]] Result<VcxProject> readVcxproj(io::IFileSystem& fs, std::string_view projectPath,

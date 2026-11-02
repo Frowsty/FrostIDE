@@ -20,6 +20,8 @@ if(NOT FROST_FUZZ)
     # frost::diag is not built in fuzz trees (src/CMakeLists.txt).
     add_subdirectory(diag)
 endif()
+add_subdirectory(settings)
+add_subdirectory(lang)
 add_subdirectory(fuzz)
 add_subdirectory(perf)
 add_subdirectory(toolchain_probe)

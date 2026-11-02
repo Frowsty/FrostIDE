@@ -1,0 +1,6 @@
+{
+    // Hand-written before schemaVersion existed.
+    "schemaVersion": 1,
+    "editor.tabSize": 2,
+    "unknown.plugin": {"keep": [1, 2, 3]}
+}

@@ -1,0 +1,335 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// LspClient (lsp_client.hpp): capabilities, the lifecycle, server requests and the text-document
+// notifications.
+
+#include "frost/lang/lsp_client.hpp"
+
+#include "frost/core/assert.hpp"
+#include "frost/io/path.hpp"
+#include "frost/lang/uri.hpp"
+
+#include "timeout.hpp"
+
+#include <algorithm>
+#include <format>
+
+namespace frost::lang {
+namespace {
+
+[[nodiscard]] bool hasProvider(const Json& capabilities, std::string_view name) {
+    const Json* value = capabilities.find(name);
+    if (value == nullptr || value->isNull()) {
+        return false;
+    }
+    if (const std::optional<bool> flag = value->asBool()) {
+        return *flag;
+    }
+    return value->isObject(); // An options object means "supported".
+}
+
+[[nodiscard]] std::string_view lastPathComponent(std::string_view path) noexcept {
+    while (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
+        path.remove_suffix(1);
+    }
+    const std::size_t separator = path.find_last_of("/\\");
+    return separator == std::string_view::npos ? path : path.substr(separator + 1);
+}
+
+} // namespace
+
+ServerCapabilities parseInitializeResult(const Json& result) {
+    ServerCapabilities out;
+    const Json* capabilities = result.find("capabilities");
+    if (capabilities == nullptr || !capabilities->isObject()) {
+        return out;
+    }
+    out.raw = *capabilities;
+    // positionEncoding (LSP 3.17); clangd before 3.17 support answers offsetEncoding at the top level.
+    std::string_view encoding = capabilities->stringAt("positionEncoding");
+    if (encoding.empty()) {
+        encoding = result.stringAt("offsetEncoding");
+    }
+    if (encoding.empty()) {
+        encoding = capabilities->stringAt("offsetEncoding");
+    }
+    out.positionEncoding = parsePositionEncoding(encoding).value_or(PositionEncoding::Utf16);
+
+    if (const Json* sync = capabilities->find("textDocumentSync"); sync != nullptr) {
+        if (const std::optional<std::int64_t> kind = sync->asInteger()) {
+            out.sync = static_cast<TextDocumentSyncKind>(std::clamp<std::int64_t>(*kind, 0, 2));
+            out.openClose = out.sync != TextDocumentSyncKind::None;
+        } else if (sync->isObject()) {
+            out.openClose = sync->boolAt("openClose").value_or(false);
+            out.sync = static_cast<TextDocumentSyncKind>(
+                std::clamp<std::int64_t>(sync->integerAt("change").value_or(0), 0, 2));
+            if (const Json* save = sync->find("save"); save != nullptr) {
+                out.save = save->asBool().value_or(save->isObject());
+                out.saveIncludeText = save->isObject() && save->boolAt("includeText").value_or(false);
+            }
+        }
+    }
+    out.completion = hasProvider(*capabilities, "completionProvider");
+    out.definition = hasProvider(*capabilities, "definitionProvider");
+    out.declaration = hasProvider(*capabilities, "declarationProvider");
+    out.hover = hasProvider(*capabilities, "hoverProvider");
+    out.references = hasProvider(*capabilities, "referencesProvider");
+    out.documentSymbol = hasProvider(*capabilities, "documentSymbolProvider");
+    out.signatureHelp = hasProvider(*capabilities, "signatureHelpProvider");
+    if (const Json* info = result.find("serverInfo"); info != nullptr) {
+        out.serverName = std::string(info->stringAt("name"));
+        out.serverVersion = std::string(info->stringAt("version"));
+    }
+    return out;
+}
+
+Json clientCapabilities() {
+    Json encodings = Json::array({Json("utf-8"), Json("utf-16")});
+    Json synchronization = Json::object()
+                               .set("dynamicRegistration", false)
+                               .set("willSave", false)
+                               .set("willSaveWaitUntil", false)
+                               .set("didSave", true);
+    Json publishDiagnostics = Json::object()
+                                  .set("relatedInformation", true)
+                                  .set("versionSupport", true)
+                                  .set("codeDescriptionSupport", true)
+                                  .set("dataSupport", false)
+                                  .set("tagSupport", Json::object().set("valueSet", Json::array({Json(1), Json(2)})));
+    Json textDocument = Json::object()
+                            .set("synchronization", std::move(synchronization))
+                            .set("publishDiagnostics", std::move(publishDiagnostics));
+    Json workspace = Json::object()
+                         .set("configuration", true)
+                         .set("workspaceFolders", true)
+                         .set("applyEdit", false)
+                         .set("didChangeConfiguration", Json::object().set("dynamicRegistration", false));
+    return Json::object()
+        .set("general", Json::object().set("positionEncodings", encodings))
+        .set("textDocument", std::move(textDocument))
+        .set("workspace", std::move(workspace))
+        .set("window", Json::object().set("workDoneProgress", true))
+        // clangd's pre-3.17 extension (clangd.llvm.org/extensions#utf-8-offsets).
+        .set("offsetEncoding", encodings);
+}
+
+Result<Json> initializeParams(const InitializeOptions& options) {
+    auto rootUri = pathToUri(options.rootPath);
+    if (!rootUri) {
+        return std::unexpected(std::move(rootUri.error().withContext("the workspace root")));
+    }
+    Json params = Json::object();
+    params.set("processId", options.processId ? Json(*options.processId) : Json());
+    Json clientInfo = Json::object().set("name", options.clientName);
+    if (!options.clientVersion.empty()) {
+        clientInfo.set("version", options.clientVersion);
+    }
+    params.set("clientInfo", std::move(clientInfo));
+    params.set("locale", "en");
+    params.set("rootPath", options.rootPath);
+    params.set("rootUri", *rootUri);
+    params.set("capabilities", clientCapabilities());
+    if (!options.initializationOptions.isNull()) {
+        params.set("initializationOptions", options.initializationOptions);
+    }
+    params.set("trace", "off");
+    params.set("workspaceFolders",
+               Json::array({Json::object().set("uri", *rootUri).set("name", lastPathComponent(options.rootPath))}));
+    return params;
+}
+
+struct LspClient::Shared {
+    InitializeOptions options;
+    Handlers handlers;
+    sched::IScheduler* scheduler = nullptr;
+
+    mutable Mutex mutex;
+    bool ready FROST_GUARDED_BY(mutex) = false;
+    bool everReady FROST_GUARDED_BY(mutex) = false;
+    ServerCapabilities capabilities; // Written once before `ready` is set, read-only afterwards.
+
+    std::expected<Json, ResponseError> answer(std::string_view method, const Json& params) const {
+        if (method == "workspace/configuration") {
+            Json results = Json::array();
+            if (const Json* items = params.find("items"); items != nullptr && items->isArray()) {
+                for (const Json& item : items->items()) {
+                    results.push(options.configuration ? options.configuration(item.stringAt("section")) : Json());
+                }
+            }
+            return results;
+        }
+        if (method == "window/workDoneProgress/create" || method == "client/registerCapability" ||
+            method == "client/unregisterCapability" || method == "window/showMessageRequest" ||
+            (method.starts_with("workspace/") && method.ends_with("/refresh"))) {
+            return Json();
+        }
+        if (method == "workspace/applyEdit") {
+            return Json::object().set("applied", false).set("failureReason", "FrostIDE does not apply edits yet");
+        }
+        return std::unexpected(ResponseError{
+            .code = rpc_error::kMethodNotFound, .message = std::format("unhandled method {}", method), .data = {}});
+    }
+
+    void notification(std::string_view method, const Json& params) const {
+        if (method == "textDocument/publishDiagnostics") {
+            if (handlers.onDiagnostics) {
+                handlers.onDiagnostics(params);
+            }
+        } else if (method == "window/logMessage" || method == "window/showMessage") {
+            if (handlers.onMessage) {
+                handlers.onMessage(static_cast<int>(params.integerAt("type").value_or(4)), params.stringAt("message"));
+            }
+        } else if (handlers.onNotification) {
+            handlers.onNotification(method, params);
+        }
+    }
+
+    [[nodiscard]] bool isReady() const {
+        LockGuard lock(mutex);
+        return ready;
+    }
+};
+
+LspClient::LspClient(std::unique_ptr<IByteStream> stream, sched::IScheduler& scheduler, InitializeOptions options,
+                     Handlers handlers)
+    : m_shared(std::make_shared<Shared>()) {
+    m_shared->options = std::move(options);
+    m_shared->handlers = std::move(handlers);
+    m_shared->scheduler = &scheduler;
+    ConnectionHandlers connection;
+    connection.onRequest = [shared = m_shared](std::string_view method, const Json& params) {
+        return shared->answer(method, params);
+    };
+    connection.onNotification = [shared = m_shared](std::string_view method, const Json& params) {
+        shared->notification(method, params);
+    };
+    connection.onProtocolError = [shared = m_shared](const Error& problem) {
+        if (shared->handlers.onProtocolError) {
+            shared->handlers.onProtocolError(problem);
+        }
+    };
+    connection.onClosed = [shared = m_shared](const Error& why) {
+        {
+            LockGuard lock(shared->mutex);
+            shared->ready = false;
+        }
+        if (shared->handlers.onClosed) {
+            shared->handlers.onClosed(why);
+        }
+    };
+    m_connection = std::make_unique<JsonRpcConnection>(std::move(stream), scheduler, std::move(connection));
+}
+
+LspClient::~LspClient() { close(); }
+
+sched::Task<Result<ServerCapabilities>> LspClient::initialize(std::stop_token token) {
+    auto params = initializeParams(m_shared->options);
+    if (!params) {
+        co_return std::unexpected(std::move(params.error()));
+    }
+    auto result = co_await m_connection->request("initialize", std::move(*params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    if (!result->isObject()) {
+        co_return fail(ErrorCode::Corrupt, "initialize: the result is not an object");
+    }
+    m_shared->capabilities = parseInitializeResult(*result);
+    if (auto sent = m_connection->notify("initialized", Json::object()); !sent) {
+        co_return std::unexpected(std::move(sent.error()));
+    }
+    {
+        LockGuard lock(m_shared->mutex);
+        m_shared->ready = true;
+        m_shared->everReady = true;
+    }
+    co_return m_shared->capabilities;
+}
+
+bool LspClient::ready() const noexcept { return m_shared->isReady(); }
+
+const ServerCapabilities& LspClient::capabilities() const noexcept {
+    {
+        LockGuard lock(m_shared->mutex);
+        FROST_PRE(m_shared->everReady);
+    }
+    return m_shared->capabilities;
+}
+
+PositionEncoding LspClient::positionEncoding() const noexcept { return capabilities().positionEncoding; }
+
+sched::Task<Result<void>> LspClient::shutdown(IClock::Duration timeout) {
+    detail::Deadline deadline(*m_shared->scheduler, timeout);
+    auto answered = co_await m_connection->request("shutdown", Json(), deadline.token());
+    const bool timedOut = deadline.expired();
+    deadline.disarm();
+    {
+        LockGuard lock(m_shared->mutex);
+        m_shared->ready = false;
+    }
+    static_cast<void>(m_connection->notify("exit", Json()));
+    m_connection->close();
+    if (!answered) {
+        if (timedOut) {
+            co_return fail(ErrorCode::Timeout, "shutdown: no answer in time");
+        }
+        co_return std::unexpected(std::move(answered.error()));
+    }
+    co_return Result<void>{};
+}
+
+sched::Task<Result<Json>> LspClient::request(std::string method, Json params, std::stop_token token) {
+    if (!m_shared->isReady()) {
+        co_return fail(ErrorCode::Busy, method + ": the server is not initialized");
+    }
+    co_return co_await m_connection->request(std::move(method), std::move(params), std::move(token));
+}
+
+Result<void> LspClient::notify(std::string method, Json params) {
+    if (!m_shared->isReady()) {
+        return fail(ErrorCode::Busy, method + ": the server is not initialized");
+    }
+    return m_connection->notify(std::move(method), std::move(params));
+}
+
+Result<void> LspClient::didOpen(std::string_view uri, std::string_view languageId, std::int64_t version,
+                                std::string_view text) {
+    return notify(
+        "textDocument/didOpen",
+        Json::object().set(
+            "textDocument",
+            Json::object().set("uri", uri).set("languageId", languageId).set("version", version).set("text", text)));
+}
+
+Result<void> LspClient::didChange(std::string_view uri, std::int64_t version, std::span<const ContentChange> changes) {
+    Json list = Json::array();
+    for (const ContentChange& change : changes) {
+        list.push(toJson(change));
+    }
+    return notify("textDocument/didChange",
+                  Json::object()
+                      .set("textDocument", Json::object().set("uri", uri).set("version", version))
+                      .set("contentChanges", std::move(list)));
+}
+
+Result<void> LspClient::didSave(std::string_view uri, std::optional<std::string_view> text) {
+    Json params = Json::object().set("textDocument", Json::object().set("uri", uri));
+    if (text && m_shared->capabilities.saveIncludeText) {
+        params.set("text", *text);
+    }
+    return notify("textDocument/didSave", std::move(params));
+}
+
+Result<void> LspClient::didClose(std::string_view uri) {
+    return notify("textDocument/didClose", Json::object().set("textDocument", Json::object().set("uri", uri)));
+}
+
+void LspClient::close() noexcept {
+    {
+        LockGuard lock(m_shared->mutex);
+        m_shared->ready = false;
+    }
+    m_connection->close();
+}
+
+} // namespace frost::lang
