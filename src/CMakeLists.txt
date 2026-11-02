@@ -26,6 +26,8 @@ if(NOT FROST_FUZZ)
     add_subdirectory(document)
     add_subdirectory(build)
     add_subdirectory(lang)
+    # frost::vcs (ADR 0048) links settings, which fuzz trees leave out.
+    add_subdirectory(vcs)
 endif()
 if(NOT FROST_FUZZ)
     # Crash reports and logging need crashpad, cpptrace and spdlog, which fuzz trees do not install.

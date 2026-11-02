@@ -89,6 +89,20 @@
       "tag": "#1F5BC4",
       "heading": "#1F5BC4",
       "link": "#2F6AD9"
+    },
+    "Vcs": {
+      "added": "#2E8B3A",
+      "modified": "#2D63C9",
+      "deleted": "#6E747C",
+      "untracked": "#B5532F",
+      "conflicted": "#C62D2D",
+      "ignored": "#8A8538"
+    },
+    "Diff": {
+      "insertedBackground": "#DDF2E0",
+      "deletedBackground": "#F8E0E0",
+      "modifiedBackground": "#DDE8FA",
+      "innerChangeBackground": "#B9CFF5"
     }
   },
   "compact": {

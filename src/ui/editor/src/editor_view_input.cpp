@@ -389,6 +389,14 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
     }
     setFocus(Qt::MouseFocusReason);
     const QPointF pos = event->position();
+    if (const std::optional<std::size_t> change = lineChangeAt(pos)) {
+        // A click on a VCS change stripe opens its popup (the VCS layer listens) instead of selecting.
+        m_dragging = false;
+        m_inputStart.reset();
+        emit lineChangeClicked(static_cast<int>(*change), viewport()->mapToGlobal(pos.toPoint()));
+        event->accept();
+        return;
+    }
     const text::DisplayHit hit = hitAt(pos);
     const auto now = std::chrono::steady_clock::now();
     const auto interval = std::chrono::milliseconds(QGuiApplication::styleHints()->mouseDoubleClickInterval());

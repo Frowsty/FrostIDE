@@ -27,7 +27,9 @@
 #include "frost/ui/model/theme.hpp"
 
 #include <QAbstractScrollArea>
+#include <QPoint>
 #include <QPointF>
+#include <QRectF>
 #include <QString>
 #include <QTimer>
 
@@ -56,6 +58,20 @@ struct LineMarker {
     std::string message; // The tooltip.
 
     friend bool operator==(const LineMarker&, const LineMarker&) = default;
+};
+
+/*
+ * A VCS change marker (M5, ADR 0048): `lineCount` buffer lines from `firstLine` were added or
+ * modified against the file's HEAD version; a Deleted marker has lineCount 0 and marks the line the
+ * deleted lines stood before (the line count itself at the end of the text is clamped to the last
+ * line). The VCS layer computes them (frost::vcs::computeLineChanges) and sets them again after edits.
+ */
+struct LineChangeMarker {
+    LineIndex firstLine;
+    std::uint32_t lineCount = 0;
+    ChangeStripeKind kind = ChangeStripeKind::Modified;
+
+    friend bool operator==(const LineChangeMarker&, const LineChangeMarker&) = default;
 };
 
 /*
@@ -200,6 +216,16 @@ public:
     // line (the gutter tooltip); empty elsewhere.
     [[nodiscard]] QString lineMarkerToolTip(QPointF at) const;
 
+    // VCS change markers (sorted by firstLine on the way in; replaces the previous set). A click on
+    // a stripe emits lineChangeClicked instead of selecting the line.
+    void setLineChanges(std::vector<LineChangeMarker> changes);
+    [[nodiscard]] const std::vector<LineChangeMarker>& lineChanges() const noexcept { return m_lineChanges; }
+    // The index into lineChanges() of the marker whose stripe is under viewport point `at` (the
+    // stripe column, a few pixels of slack, on one of the marker's lines), or nullopt. O(log n).
+    [[nodiscard]] std::optional<std::size_t> lineChangeAt(QPointF at) const;
+    // The stripe column: x and width in viewport pixels (y spans the viewport).
+    [[nodiscard]] QRectF changeStripeColumn() const noexcept;
+
     // Find / replace and Go to Line.
     void openFind(bool replace);
     void closeFind();
@@ -247,6 +273,10 @@ signals:
     void modifiedChanged(bool modified);
     // Any status() field changed.
     void statusChanged();
+    // The document's text changed through this view (typing, commands, undo and redo, the IME).
+    void textChanged();
+    // A click on a VCS change stripe: the index into lineChanges() and the click's global position.
+    void lineChangeClicked(int index, QPoint globalPos);
 
 protected:
     bool event(QEvent* event) override;
@@ -301,6 +331,8 @@ private:
     void refreshMatchLabel();
 
     // Geometry.
+    // The index of the change marker on buffer line `line` (a Deleted one only on its own line).
+    [[nodiscard]] std::optional<std::size_t> lineChangeOnLine(LineIndex line) const noexcept;
     [[nodiscard]] double textOriginX() const noexcept;
     [[nodiscard]] double gutterWidth() const noexcept;
     [[nodiscard]] text::DisplayHit hitAt(QPointF point) const;
@@ -362,6 +394,7 @@ private:
     GoToLinePopup* m_goToLine = nullptr;
 
     std::vector<LineMarker> m_markers;
+    std::vector<LineChangeMarker> m_lineChanges;
 
     // Caret blink (Rider: 500 ms phases, solid while typing).
     QTimer m_blink;

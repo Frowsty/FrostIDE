@@ -126,6 +126,20 @@
       "tag": "#8CC4FF",
       "heading": "#8CC4FF",
       "link": "#8CC4FF"
+    },
+    "Vcs": {
+      "added": "#7CFC8A",
+      "modified": "#8CC4FF",
+      "deleted": "#C8C8C8",
+      "untracked": "#FFB080",
+      "conflicted": "#FF6B6B",
+      "ignored": "#D8D07A"
+    },
+    "Diff": {
+      "insertedBackground": "#12401C",
+      "deletedBackground": "#4A1414",
+      "modifiedBackground": "#14305A",
+      "innerChangeBackground": "#2858A8"
     }
   },
   "compact": {

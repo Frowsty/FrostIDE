@@ -173,6 +173,53 @@ TEST(EditorView, GutterShowsLineNumbersAndMarkers) {
     EXPECT_EQ(list.markers.size(), 2U);
 }
 
+TEST(EditorView, GutterShowsVcsChangeStripesAndReportsTheirClicks) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\ntwo\nthree\nfour\n");
+    EXPECT_TRUE(h.view->buildDisplayList().changeStripes.empty());
+
+    // Line 1 added, lines 2-3 changed, a deletion before line 4 (unsorted on purpose).
+    h.view->setLineChanges({LineChangeMarker{LineIndex{4}, 0, ChangeStripeKind::Deleted},
+                            LineChangeMarker{LineIndex{0}, 1, ChangeStripeKind::Added},
+                            LineChangeMarker{LineIndex{1}, 2, ChangeStripeKind::Modified}});
+    ASSERT_EQ(h.view->lineChanges().size(), 3U);
+    EXPECT_EQ(h.view->lineChanges()[0].kind, ChangeStripeKind::Added);
+    const EditorDisplayList list = h.view->buildDisplayList();
+    // One stripe per row of an added or changed line, and one mark for the deletion.
+    ASSERT_EQ(list.changeStripes.size(), 4U);
+    EXPECT_EQ(list.changeStripes[0].kind, ChangeStripeKind::Added);
+    EXPECT_EQ(list.changeStripes[0].color, h.view->colors().changeAdded);
+    EXPECT_EQ(list.changeStripes[1].kind, ChangeStripeKind::Modified);
+    EXPECT_EQ(list.changeStripes[1].color, h.view->colors().changeModified);
+    EXPECT_EQ(list.changeStripes[2].line, LineIndex{2});
+    EXPECT_EQ(list.changeStripes[3].kind, ChangeStripeKind::Deleted);
+    EXPECT_EQ(list.changeStripes[3].change, 2U);
+    for (const DisplayChangeStripe& stripe : list.changeStripes) {
+        EXPECT_TRUE(list.gutter.contains(stripe.rect));
+    }
+
+    // A click on a stripe reports the change and leaves the caret alone; elsewhere it does not.
+    std::vector<int> clicked;
+    QObject::connect(h.view.get(), &EditorView::lineChangeClicked,
+                     [&clicked](int index, QPoint) { clicked.push_back(index); });
+    const std::uint64_t caret = h.caret();
+    click(*h.view, list.changeStripes[1].rect.center());
+    EXPECT_EQ(clicked, std::vector<int>{1});
+    EXPECT_EQ(h.caret(), caret);
+    EXPECT_EQ(h.view->lineChangeAt(list.changeStripes[0].rect.center()), std::optional<std::size_t>(0));
+    EXPECT_EQ(h.view->lineChangeAt(QPointF(list.textArea.left() + 20.0, list.changeStripes[0].rect.center().y())),
+              std::nullopt);
+
+    // Typing emits textChanged (the markers' debounce follows it).
+    int changed = 0;
+    QObject::connect(h.view.get(), &EditorView::textChanged, [&changed] { ++changed; });
+    h.type("x");
+    EXPECT_EQ(changed, 1);
+
+    h.view->setLineChanges({});
+    EXPECT_TRUE(h.view->buildDisplayList().changeStripes.empty());
+}
+
 TEST(EditorView, ImeCompositionAndCommit) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("ab");

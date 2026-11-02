@@ -5,7 +5,8 @@
 # frost::ui_theme_compiler (Qt Core) and frost::ui (Qt Widgets: FrostStyle, AppearanceManager, the icon
 # runtime, fonts, the OS appearance source and the island frames) are ADR 0015's; frost::ui also holds
 # qtr, the Qt wrapper of frost::i18n. frost::ui_shell (src/ui/shell) is the main-window shell (ADR 0038);
-# frost::ui_editor (src/ui/editor, the editor widget) is ADR 0037's and builds on frost::ui.
+# frost::ui_editor (src/ui/editor, the editor widget) is ADR 0037's and builds on frost::ui; frost::ui_vcs
+# (src/ui/vcs, the git UI) is ADR 0048's.
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
@@ -34,3 +35,5 @@ add_subdirectory(shell)
 add_subdirectory(editor)
 # The build-side tool windows (ADR 0039); after frost_ui, which they build on.
 add_subdirectory(toolwindows)
+# The git UI (ADR 0048): after the editor and the shell, which it builds on.
+add_subdirectory(vcs)

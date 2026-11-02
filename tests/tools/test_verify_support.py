@@ -1098,10 +1098,12 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # frost_add_test (cmake/FrostLayers.cmake): LABELS starts with the kind, and the labels after it
         # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
         # exactly one kind label; the tagged suites are build_msbuild_tests (Windows only),
-        # lang_clangd_tests and ui_screenshot_tests (trees with the UI).
+        # lang_clangd_tests, vcs_git_tests and ui_vcs_git_tests, and ui_screenshot_tests (trees with
+        # the UI).
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.")),
                   "clangd": ("integration", ("ClangdE2E.",)),
+                  "git": ("integration", ("GitE2E.", "GitUiE2E.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)
@@ -1121,6 +1123,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
                         wrong.append(f"{test['name']}: {labels}, lock {properties.get('RESOURCE_LOCK')}")
         self.assertEqual(wrong, [])
         self.assertGreater(seen["clangd"], 0)  # frost::lang builds in every tree with tests.
+        self.assertGreater(seen["git"], 0)  # So does frost::vcs.
         if os.name == "nt":
             self.assertGreater(seen["msbuild"], 0)
 

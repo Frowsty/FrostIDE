@@ -16,6 +16,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QColor>
 #include <QLineEdit>
 #include <QMenu>
 #include <QTreeView>
@@ -95,6 +96,37 @@ TEST(SolutionTreeModel, ShowsTheTinySolutionFromSlnAndSlnxSorted) {
         EXPECT_EQ(header.parent(), lib);
         EXPECT_EQ(model.indexOfPath(tiny("Lib/lib.h")), header);
     }
+}
+
+TEST(SolutionTreeModel, ColoursFileNamesFromTheProvider) {
+    SolutionTreeModel model;
+    model.setSolution(loadTiny("Tiny.sln"));
+    const QModelIndex header = model.indexOfPath(tiny("Lib/lib.h"));
+    const QModelIndex source = model.indexOfPath(tiny("Lib/lib.cpp"));
+    ASSERT_TRUE(header.isValid());
+    ASSERT_TRUE(source.isValid());
+    EXPECT_FALSE(header.data(Qt::ForegroundRole).isValid()); // No provider: the default colour.
+
+    // The VCS colours (M5): one colour for lib.h, none for the rest; projects are never coloured.
+    int changed = 0;
+    QObject::connect(&model, &QAbstractItemModel::dataChanged,
+                     [&changed](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
+                         changed += roles.contains(Qt::ForegroundRole) ? 1 : 0;
+                     });
+    const std::string headerPath = tiny("Lib/lib.h");
+    model.setFileColorProvider([headerPath](std::string_view path) -> std::optional<QColor> {
+        return path == headerPath ? std::optional<QColor>(QColor(0x6F, 0xBF, 0x73)) : std::nullopt;
+    });
+    EXPECT_GT(changed, 0);
+    EXPECT_EQ(header.data(Qt::ForegroundRole).value<QColor>(), QColor(0x6F, 0xBF, 0x73));
+    EXPECT_FALSE(source.data(Qt::ForegroundRole).isValid());
+    EXPECT_FALSE(header.parent().data(Qt::ForegroundRole).isValid());
+
+    changed = 0;
+    model.refreshFileColors();
+    EXPECT_GT(changed, 0);
+    model.setFileColorProvider({});
+    EXPECT_FALSE(header.data(Qt::ForegroundRole).isValid());
 }
 
 TEST(SolutionTreeModel, ShowsFoldersFiltersAndLoadErrorsOfTheSdkSolution) {

@@ -27,6 +27,12 @@ constexpr double kTextPadding = 6.0;
 constexpr double kNumberPadding = 8.0;
 constexpr double kMarkerColumn = 14.0;
 constexpr double kCaretWidth = 2.0;
+// The VCS change stripe (ADR 0048): its width, its inset into the numbers' right padding, the
+// deletion mark's height, and the click slack around it.
+constexpr double kChangeStripeWidth = 3.0;
+constexpr double kChangeStripeInset = 3.0;
+constexpr double kDeletedMarkHeight = 3.0;
+constexpr double kChangeStripeSlack = 3.0;
 
 [[nodiscard]] std::uint32_t digitCount(std::uint32_t value) noexcept {
     std::uint32_t digits = 1;
@@ -61,6 +67,43 @@ double EditorView::gutterWidth() const noexcept {
         width += static_cast<double>(digits) * toPixels(m_shaper->cellWidth()) + 2.0 * kNumberPadding * zoom;
     }
     return std::ceil(width);
+}
+
+QRectF EditorView::changeStripeColumn() const noexcept {
+    const double zoom = zoomFactor();
+    // In the padding between the line numbers and the marker column, or at the gutter's left edge
+    // without line numbers.
+    const double x = m_settings.lineNumbers
+                         ? gutterWidth() - kMarkerColumn * zoom - kNumberPadding * zoom + kChangeStripeInset * zoom
+                         : zoom;
+    return QRectF(x, 0.0, kChangeStripeWidth * zoom, static_cast<double>(viewport()->height()));
+}
+
+std::optional<std::size_t> EditorView::lineChangeOnLine(LineIndex line) const noexcept {
+    const auto it = std::ranges::upper_bound(m_lineChanges, line, {}, &LineChangeMarker::firstLine);
+    if (it == m_lineChanges.begin()) {
+        return std::nullopt;
+    }
+    const LineChangeMarker& change = *(it - 1);
+    const bool covers = change.kind == ChangeStripeKind::Deleted
+                            ? change.firstLine == line
+                            : line.value() < change.firstLine.value() + change.lineCount;
+    if (!covers) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(it - 1 - m_lineChanges.begin());
+}
+
+std::optional<std::size_t> EditorView::lineChangeAt(QPointF at) const {
+    if (m_lineChanges.empty() || at.x() >= gutterWidth() || at.y() < 0.0) {
+        return std::nullopt;
+    }
+    const QRectF column = changeStripeColumn();
+    const double slack = kChangeStripeSlack * zoomFactor();
+    if (at.x() < column.left() - slack || at.x() > column.right() + 2.0 * slack) {
+        return std::nullopt;
+    }
+    return lineChangeOnLine(m_editor->text().lineAt(hitAt(at).offset));
 }
 
 double EditorView::textOriginX() const noexcept {
@@ -340,6 +383,26 @@ EditorDisplayList EditorView::buildDisplayList() {
             const double y = baseline + std::max(1.0, 2.0 * zoom);
             if (x1 > x0) {
                 list.overlays.push_back(DisplayLine{QLineF(x0, y, x1, y), m_colors.foreground, std::max(1.0, zoom)});
+            }
+        }
+
+        // The VCS change stripe on every row of an added or modified line; a deletion mark on the
+        // top edge of the first row of the line that follows deleted lines.
+        if (const std::optional<std::size_t> index = lineChangeOnLine(row.line)) {
+            const LineChangeMarker& change = m_lineChanges[*index];
+            const QRectF column = changeStripeColumn();
+            if (change.kind == ChangeStripeKind::Deleted) {
+                if (row.startsLine) {
+                    const double height = std::max(2.0, kDeletedMarkHeight * zoom);
+                    list.changeStripes.push_back(
+                        DisplayChangeStripe{QRectF(column.left(), top - height / 2.0, column.width() * 2.5, height),
+                                            m_colors.changeDeleted, change.kind, row.line, *index});
+                }
+            } else {
+                const QColor color =
+                    change.kind == ChangeStripeKind::Added ? m_colors.changeAdded : m_colors.changeModified;
+                list.changeStripes.push_back(DisplayChangeStripe{
+                    QRectF(column.left(), top, column.width(), m_lineHeight), color, change.kind, row.line, *index});
             }
         }
 

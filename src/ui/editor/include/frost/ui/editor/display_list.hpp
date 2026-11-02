@@ -16,6 +16,7 @@
 #include <QRectF>
 #include <QString>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -61,10 +62,29 @@ struct DisplayMarker {
     LineIndex line;
 };
 
+// What a VCS change stripe marks (M5, ADR 0048): lines added or modified against the file's HEAD
+// version, or the place where lines were deleted.
+enum class ChangeStripeKind : std::uint8_t { Added, Modified, Deleted };
+
+/*
+ * A VCS change marker in the gutter: a narrow bar beside the lines of an added or modified block
+ * (one rectangle per display row), or a short horizontal mark on the top edge of the line that
+ * follows deleted lines. `change` is the index into EditorView::lineChanges(), for the click.
+ */
+struct DisplayChangeStripe {
+    QRectF rect;
+    QColor color;
+    ChangeStripeKind kind = ChangeStripeKind::Modified;
+    LineIndex line;
+    std::size_t change = 0;
+};
+
 /*
  * One frame. Paint order: background, `fills`, `underlines` (right margin), `text` (clipped to
  * textArea), `overlays` (preedit underline), `carets`, then the gutter: gutterBackground over
- * `gutter`, `gutterText` and `markers`. Plain values; built and read on the GUI thread.
+ * `gutter`, `gutterText`, `changeStripes` and `markers`. Every backend draws all of them (today
+ * the raster one; a future QRhi backend fills the change stripes the same way). Plain values;
+ * built and read on the GUI thread.
  */
 struct EditorDisplayList {
     QRectF viewport;
@@ -81,6 +101,7 @@ struct EditorDisplayList {
     QColor caretColor;
     std::vector<DisplayText> gutterText;
     std::vector<DisplayMarker> markers;
+    std::vector<DisplayChangeStripe> changeStripes;
     // The display rows shown, from firstRow.
     std::uint32_t firstRow = 0;
     std::uint32_t rowCount = 0;

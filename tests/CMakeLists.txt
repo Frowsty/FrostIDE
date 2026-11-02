@@ -36,8 +36,10 @@ frost_add_test_directory(document)
 frost_add_test_directory(build)
 frost_add_test_directory(lang)
 if(NOT FROST_FUZZ)
-    # frost::diag is not built in fuzz trees (src/CMakeLists.txt).
+    # frost::diag and frost::vcs are not built in fuzz trees (src/CMakeLists.txt); vcs after diff,
+    # whose git lookup (FROST_GIT_EXECUTABLE) it reuses.
     frost_add_test_directory(diag)
+    frost_add_test_directory(vcs)
 endif()
 frost_add_test_directory(fuzz)
 frost_add_test_directory(perf)
