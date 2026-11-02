@@ -5,8 +5,10 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-02: M1 in progress
 
-`main` has the eighth, the seventh and the sixth feature-first batches (ADR 0031), merged with `git merge --no-ff` in
-the main worktree under D23. The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
+`main` has the ninth, the eighth, the seventh and the sixth feature-first batches (ADR 0031), merged with `git merge
+--no-ff` in the main worktree under D23. The ninth, in this order: `w1/run-service` at 82c6c56 (merge fcc0a46),
+`m1/editor-rhi` at 9438b85 (merge 97e490e) and `w2/clangd-nav` at 660a1e9 (merge 29869f9, with the regenerated keymap
+golden). The eighth, in this order: `m1/editor-view` at 3acd71c (merge bde77a5), the long-line
 follow-up (4a9954b), `w1/tool-windows` at c81008c (merge e574965) and an ADR-reference fix (791fa63). The seventh, in
 this order: `w1/build-service` at 8d77400 (merge eb82b95), `m1/shell-frame` at 9576c24 (merge b1d05bc),
 `w2/clangd-diagnostics` at e7d9ccc (merge db9d24e) and `m1/save-manager` at e2b2362 (merge 5fbd262), then the label
@@ -16,10 +18,156 @@ at 481fc26 (merge 8a5768e) and `plan/thin-path` at 6315d86 (merge 414155a), then
 Each slice passed its own `-Quick`, and each batch's merged tree was verified once (the Verification sections below).
 The earlier batches, their slice records and the open questions are in the entry "2026-11-01: M1 in progress". Its
 "Deferred to the hardening phase (ADR 0031)" list is carried forward into this entry's, which is now the running one.
-This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the twelve
+This entry's slice records follow its sections, newest first, written from the hand-off notes (none of the fifteen
 branches kept a record in this log).
 
 ### Done
+
+#### Merge of `w1/run-service` (fcc0a46, ninth batch)
+- **The merge** (fcc0a46) of `w1/run-service` (82c6c56) into `main` at d34334c: RunService, RunSession and
+  `run_target` in frost::build, the `onDone` callback on `BuildService::build`, ProcessSpec `rawArguments` and
+  `newConsole` in io, `parseConfigurationProperties` in project, the new frost::ui_run (`src/ui/run`: RunConsole,
+  RunController and the run actions), Ctrl+F5 (`run.runWithoutDebugging`) as a Visual Studio alias in the IntelliJ
+  keymap (unbound on macOS, where the swap would give VoiceOver's Meta+F5), and a synthetic `App.vcxproj.user` and a
+  richer `main.cpp` in the `tiny_sln` fixture; the slice record below says more. ADR 0040
+  (`docs/adr/0040-run-service.md`); the number is unchanged and no other ADR on `main` uses it, and its "ADR 0035" is
+  the build service, as on `main`. The branch's own merge (8ea53fb) of `w1/build-service` 8d77400 was already on
+  `main`, so that part was a no-op.
+- **Six conflicts**, each resolved so that both sides' intent survives:
+  - `src/CMakeLists.txt` and `tests/CMakeLists.txt`: `main`'s text. The slice commit changes neither file; the branch
+    only lacked `main`'s later additions (diff, syntax, settings, document and lang; `frost_add_test_directory` and its
+    guards), so `tests/build` keeps `mod.build`.
+  - `src/ui/CMakeLists.txt`: both header notes; the slice's `if(TARGET frost::build)` around `add_subdirectory(run)`
+    stays.
+  - `tests/build/CMakeLists.txt`: `build_msbuild_tests`' note keeps `main`'s form (8ee7a1d: the kind "integration"
+    with the tag "msbuild") and gains the slice's RunService runs; the new `build_run_tests` is "integration".
+  - `tests/ui/CMakeLists.txt`: `ui_run_tests` after `ui_toolwindows_tests`, with its line in the header list.
+  - `src/project/src/vcxproj_reader.cpp`: both new functions side by side, `main`'s `clCompileMetadata`
+    (`w2/clangd-diagnostics`) and the slice's `parseConfigurationProperties`.
+- **The keymap goldens** (the pre-state): the slice's regenerated input goldens (one `run.runWithoutDebugging` line in
+  each `intellij-*.txt`; 211 to 212 actions and 223 to 224 sequences in `keymap-reachability.txt`) merged without a
+  conflict, since `main` had not touched them since the slice's base. `w2/clangd-nav`'s merge regenerated them once
+  more (its merge section below).
+- **Not wired yet:** nothing in `src/app` uses frost::ui_run; the W1 workbench follow-up does that (Next).
+- **The orchestrator's decision on its first known bug:** cmd.exe interpreting `^ & | < >` and `%VAR%` in the external
+  console's arguments is queued as a follow-up: a tiny own console helper exe (`frost-console-host`) that starts the
+  program directly with the exact command line, waits, prints "Press any key to continue" and keeps the exit code,
+  replacing the `cmd /c` wrapper (Next).
+- **The build after the merge commit:** `night.py build-gate` (39.2 GB commit free) and `cmake --build --preset
+  win-clangcl-debug -j 8`: exit 0, 209 steps.
+
+#### Merge of `m1/editor-rhi` (97e490e, ninth batch)
+- **The merge** (97e490e) of `m1/editor-rhi` (9438b85) into `main` at fcc0a46: the QRhi glyph-atlas editor renderer
+  behind IEditorRenderer (EditorGlyphAtlas, RhiGlyphPainter, RhiEditorRenderer with RhiEditorViewport, and the
+  backend choice in `editor_backend`), the `editor.renderer` setting (auto, raster or rhi; auto picks raster in a
+  remote session, on a WARP adapter and on Linux), the lazy QRhi attach after the first raster frame, a run-time
+  fallback that keeps the editor state, and atlas rebuilds on font, zoom and DPI changes; the slice record below says
+  more. ADR 0043 (`docs/adr/0043-editor-qrhi-renderer.md`); the number is unchanged and no other ADR on `main` uses
+  it, and its references (ADR 0007 decisions 1, 3, 5 and 8, ADR 0011 A1, ADR 0037) are right. The branch's own merge
+  (dd43253) of `m1/editor-view` 3acd71c was already on `main`, so that part was a no-op (the pre-state).
+- **Two conflicts**, each resolved so that both sides' intent survives: `src/CMakeLists.txt` takes `main`'s text (the
+  branch only lacked document, lang and build's move into the fuzz guard), and `tests/ui/CMakeLists.txt` takes
+  `main`'s header list with the slice's QRhi note on `ui_editor_tests` (`editor/editor_rhi_test.cpp` joined its
+  sources without a conflict).
+- **The pins** (the pre-state): the slice changes no theme and no theme or registry pin. Nothing under
+  `resources/themes`, `src/ui/model`, `src/ui/theme_compiler` or `tests/ui/model` changes, so `kExpectedRegistryHash`
+  and the theme blob size stay the eighth batch's. The settings registry gains one entry, `editor.renderer` (an enum,
+  default `auto`, application scope, under Editor/General/Appearance), with its typed key `key::editorRenderer`, which
+  `SettingsRegistry.TypedKeysMatchTheRegistry` checks; the registry has no pinned count or golden (its size test is a
+  lower bound), so nothing else needed an update.
+- **The orchestrator's decisions:** the view-level QRhi path is unverified on screen (a QRhiWidget never initializes
+  under the offscreen QPA); the W1 workbench follow-up adds a hidden-desktop render self-test, and the preview defaults
+  to raster if that test fails (Next). A theme change that does not rebuild the atlas is a recorded deviation (the
+  atlas holds coverage only; ADR 0043).
+- **The build after the merge commit:** `night.py build-gate` (40.6 GB commit free) and the Debug build: exit 0, 81
+  steps.
+
+#### Merge of `w2/clangd-nav` (29869f9, ninth batch)
+- **The merge** (29869f9) of `w2/clangd-nav` (660a1e9) into `main` at 97e490e: in frost::lang the MSBuild-evaluated
+  compile-commands provider and the provider chain (existing, then MSBuild, then static), the ILspRequester seam,
+  models for completion, signature help, hover, navigation, usages, highlights, symbols, rename, code actions and
+  formatting, and WorkspaceEdit parsing with its applier; the new frost::ui_lang (`src/ui/lang`: the widgets and
+  LanguageController, with the IntelliJ actions registered); and `navigate.relatedFiles` = Ctrl+Alt+Home (macOS
+  Ctrl+Meta+Up) in the keymap; the slice record below says more. ADR 0041
+  (`docs/adr/0041-clangd-navigation-completion-msbuild-commands.md`); the number is unchanged and no other ADR on
+  `main` uses it, and its references (0016, 0031, 0032, 0034 and 0036) are right. The branch's own merge (49f5bb0) of
+  `w2/clangd-diagnostics` e7d9ccc was already on `main`, so that part was a no-op.
+- **Four conflicts**, each resolved so that both sides' intent survives:
+  - `tests/CMakeLists.txt`: `main`'s text; settings and lang already come in through `frost_add_test_directory`.
+  - `src/ui/CMakeLists.txt`: both header notes (shell, editor, ui_run, then ui_lang), and the slice's
+    `if(TARGET frost_lang)` around `add_subdirectory(lang)` after `main`'s shell, editor and toolwindows.
+  - `tests/lang/CMakeLists.txt`: `lang_clangd_tests`' note keeps `main`'s form (the kind "integration" with the tag
+    "clangd"). `lang_msbuild_tests` (Windows only) already had the tags-after-kind form on the branch (`LABELS
+    integration msbuild clangd`), as the orchestrator asked, and its note now names the kind and tags the same way.
+  - `tests/ui/CMakeLists.txt`: `ui_lang_tests`' line after `ui_run_tests`' in the header list; its target merged
+    without a conflict after `ui_run_tests`.
+- **The keymap goldens, regenerated** (the pre-state): both slices took `keymap-reachability.txt` from 211 to 212
+  actions and from 223 to 224 sequences on every layout row, so git merged the identical change once and
+  `KeymapReachability.Golden` failed on the merged tree (213 actions, 225 sequences). Before the merge commit, the
+  goldens were regenerated from the merged Windows Debug tree with `FROST_UPDATE_GOLDENS=1` and `input_tests`
+  (hidden), as `tests/input/support/golden.hpp` says. The update run rewrites every input golden; only
+  `keymap-reachability.txt` changed: its eight count lines (213 actions, 225 sequences, 0 gaps on each layout and
+  platform), with the dead-key lines unchanged. Against d34334c the three `intellij-*.txt` goldens gain exactly two
+  lines each (`run.runWithoutDebugging` and `navigate.relatedFiles`) and lose none. `input_tests` then passed 234/234.
+  The reachability test's hard asserts (de-DE and en-US complete on both platforms, pl-PL and fr-FR against their
+  in-code list of expected gaps) are unchanged, so the regeneration cannot hide a gap.
+- **Not wired yet:** nothing implements IEditorLanguageHost over the real editor, so none of the features work in the
+  running app (Next). The orchestrator's note: the MSBuild evaluation cache ignores environment-variable changes unless
+  an imported file changes (deferred, and the slice record's known bug).
+- **The build after the resolution** (before the merge commit, since the goldens needed the merged tree): `night.py
+  build-gate` (39.7 GB commit free) and the Debug build: exit 0, 82 steps.
+
+#### Label-check follow-up (76d5e7f, ninth batch)
+- **The failure:** the first batch run (on 29869f9) failed one test on Windows, `tools.verify_support`
+  (`BuildTreeLabelsTest.test_one_kind_label_and_tags_after_it`). That test, from the seventh batch's label follow-up
+  (8ee7a1d), pins which suites carry the "msbuild" and "clangd" tags, and `w1/run-service` and `w2/clangd-nav` were
+  based before it, so their own runs never saw it. Six tests had a tag outside the pinned suites: `MsBuildRun.*` (2,
+  `build_msbuild_tests`, "msbuild") and `MsBuildEvaluationE2E.*` (2, `lang_msbuild_tests`, "msbuild" and "clangd").
+  Every one of them had the right kind ("integration") and the `frost_desktop` lock.
+- **The fix** (76d5e7f, `tests/tools/test_verify_support.py`): the pinned prefixes gain `MsBuildRun.` (msbuild) and
+  `MsBuildEvaluationE2E.` (msbuild and clangd), and the note names `lang_msbuild_tests`. The other rules (one kind
+  label, a tag only on its suites, the kind and the lock for the integration suites) are unchanged, so nothing is
+  weakened; the unit-labelled `MsBuildEvaluation.*` and `MsBuildProvider.*` in `lang_unit_tests` still must not carry
+  a tag. A slice fix forward, not a revert: the cause was clear and the change small.
+- **Checked:** `tools.verify_support` passed in the Windows Debug tree (hidden ctest, 11.0 s); then the batch run
+  again (the Verification below).
+
+#### Verification (ninth batch, merged tree 76d5e7f)
+- Before the batch run: the Windows Debug build after each of the three merges (above), and `input_tests` after the
+  golden regeneration.
+- **The first run** of `tools\verify.ps1 -Quick -Jobs 8`, on 29869f9 (clean tree), through `run_hidden_nobox.py` (a
+  hidden desktop; no window opened on it), after `night.py build-gate` (40.5 GB commit free): 471.9 s, exit code 1.
+  Windows failed one test, `tools.verify_support`, and was otherwise 2213/2220 (6 skipped); WSL passed (2102/2111, 9
+  skipped) and every check was ok. The cause and the fix forward are the label-check follow-up above; no slice was
+  reverted.
+- **The run that counts**, the same command on 76d5e7f (clean tree; this record not yet written), after `night.py
+  build-gate` (40.7 GB commit free): 400.2 s, exit code 0. Windows ran its Debug leg (ctest `-j 8`) and the checks;
+  WSL ran `tools/verify.sh` in the ext4 mirror (`~/frost-src-e235f3842261`): `Verified: win debug 2214/2220 (6
+  skipped), wsl debug 2102/2111 (9 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by
+  default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by
+  default)` (frost-lint 1944 files; licensecheck 39 packages on Windows, 35 on WSL). The test steps took 125.7 s
+  (Windows, parallel at `-j 8`) and 233.9 s (WSL). The 11 `msbuild` tests (the seven before, `MsBuildRun`'s two and
+  `MsBuildEvaluationE2E`'s two) and the 17 `screenshot` tests ran and passed on Windows.
+- **The skips:** Windows, the same six as in the eighth batch: the four `WatcherPerf` tests,
+  `PollingWatcher.DirectorySymlinksAreNotFollowed` and `SafeWrite.SymlinksStayLinks` (no symlink right for this
+  account). WSL, the eighth batch's six (the four `WatcherPerf` tests,
+  `OsError.ErrnoTextStaysEnglishUnderATranslatedLocale` and
+  `CrashpadReporter.PipeThatNeverAppearsTimesOutAndStopsTheHandler`) and three new ones, each skipped on purpose off
+  Windows: `MsBuildEvaluation.MapsEvaluatedMetadataToClangClFlags` (its canned evaluation uses Windows paths),
+  `MsBuildProvider.FailedEvaluationFallsBackToTheStaticModel` (MSBuild evaluation runs on Windows only) and
+  `RhiGlyphPainter.RendersTheDisplayListWhereTheRasterBackendDoes` (QRhi's Null backend on Linux; ADR 0043).
+- **No test was lost:** no `TEST` line and no assertion line is removed between d34334c and 76d5e7f. The lines that
+  change on purpose: the eight count lines of `keymap-reachability.txt` (the regeneration above), the label check's
+  two pinned prefix lists (the follow-up above) and the editor harness, whose `show()` is now an option that defaults
+  to on. Against the eighth batch (win debug 2121, wsl debug 2018) the tree adds 99 tests on Windows and 93 on WSL,
+  the 99 `TEST` cases the slices add: `w1/run-service` 37 (`tests/build` 29, `tests/ui` 5, `tests/io` 2,
+  `tests/project` 1), `m1/editor-rhi` 13 (`tests/ui`) and `w2/clangd-nav` 49 (`tests/lang` 36, `tests/ui` 13). Six of
+  them build only on Windows: `MsBuildRun`'s two, `MsBuildEvaluationE2E`'s two,
+  `RealProcessLauncher.RawArgumentsReachTheChildVerbatim` and `RunSession.TheExternalConsoleWrapperKeepsTheExitCode`.
+- **Processes:** the runner ended every process tree it started; no night.py lock was taken (build-gate takes none)
+  and no background loop is left.
+- `-Quick` builds no ASan, TSan or fuzz tree. The slices' sanitizer, fuzz, stress and `-Full` runs are in "Deferred to
+  the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 #### Merge of `m1/editor-view` (bde77a5, eighth batch)
 - **The merge** (bde77a5) of `m1/editor-view` (3acd71c) into `main` at 52eb3d6: frost::ui_editor (`src/ui/editor`)
@@ -499,14 +647,20 @@ branches kept a record in this log).
   are in "Deferred to the hardening phase (ADR 0031)", with `-Full` of `main`.
 
 ### Next
-- **W1, the work-ready build** (ADR 0032): BuildService (ADR 0035), the shell (ADR 0038), the editor view (ADR 0037)
-  and the build tool windows (ADR 0039) are on `main`, none of them wired into the app yet. Next, `w1/workbench` (in
+- **W1, the work-ready build** (ADR 0032): BuildService (ADR 0035), the shell (ADR 0038), the editor view (ADR 0037),
+  the build tool windows (ADR 0039) and, since the ninth batch, RunService with frost::ui_run (ADR 0040) are on `main`,
+  none of them wired into the app yet. Next, `w1/workbench` (in
   flight, on 8ee7a1d with its own merges 591ad72 and 43908a5 of the two slices) wires them in. From `w1/tool-windows`'
   hand-off: one BuildController and one BuildServiceBackend per main window; `registerActions`;
   `setModuleDefaults(buildShortcutBindings())`; a TrustPrompter on the main window; ISaveAllHandler from the editor
   host; `openFile`/`openLocation` to the editor; ConfigurationCombo and the BuildActions QActions on the toolbar;
-  `requestFailed` to notifications. From `m1/editor-view`'s: the error list feeds `setLineMarkers`, and the views of
-  one document share one SyntaxSession. W1 docks the Solution Explorer with
+  `requestFailed` to notifications. From `w1/run-service`'s: RunConsole into the Run tool window,
+  `RunController::bindStartupCombo(MainToolbar::runConfigurations())`, `registerRunActions` with the Solution
+  Explorer's selection for `run.setStartupProject`, RunService created with `RunController::callbacks()` and
+  `makeRunBuilder(buildService)`, and `RunService::defaultStatePath()`. From `m1/editor-rhi`'s (orchestrator
+  decision): a render self-test of the QRhi viewport on a hidden desktop, with the preview defaulting to raster if it
+  fails, since the view-level QRhi path is unverified on screen. From `m1/editor-view`'s: the error list feeds
+  `setLineMarkers`, and the views of one document share one SyntaxSession. W1 docks the Solution Explorer with
   `toolWindows().setContent("project", ...)` and the build output and problems windows with
   `setContent("run"/"problems", ...)`, registers `build.*` and `run.*` actions (which light up the toolbar slots and
   the Build/Run menus) and fills `mainToolbar().runConfigurations()`. Then opening a `.sln`/`.slnx` from the command
@@ -514,7 +668,14 @@ branches kept a record in this log).
 - **W2, clangd** (ADR 0036): the UI slice wires ClangdService into the app (start on project open with the Existing
   then the Solution providers; open, change, save and close from the editor's Document ChangeSets), squiggles from
   DiagnosticsStore, and a Problems window that merges build and live diagnostics; then completion and go-to-definition
-  through `ClangdService::request()`. `w2/clangd-nav` (in flight) adds the MSBuild-evaluated compile-command provider.
+  through `ClangdService::request()`. `w2/clangd-nav` (ADR 0041, on `main` since the ninth batch) has the models,
+  frost::ui_lang and the MSBuild-evaluated compile-command provider; the wiring implements IEditorLanguageHost over
+  EditorView and IWorkspaceDocuments over the open documents, docks the usages panel, and feeds
+  `solutionCompileCommandsChain` with `frost::build::findMsBuild` and the live trust state.
+- **`frost-console-host`** (orchestrator decision on `w1/run-service`'s first known bug): a tiny own console helper exe
+  that starts the program directly with the exact command line, waits, prints "Press any key to continue" and keeps
+  the exit code, replacing the external console's `cmd /c` wrapper, so cmd.exe no longer interprets `^ & | < >` and
+  `%VAR%` in the user's arguments.
 - **The shell's consumers** (ADR 0038): the editor view is on `main`; `w1/workbench` wraps `createEditorView` in the
   shell's IEditorFactory (replacing PlaceholderEditorFactory in AppServices), maps EditorViewStatus to EditorStatus
   and connects the status signals; adapters bind IShellSettings and IKeymapSettings to the m1/settings
@@ -526,9 +687,9 @@ branches kept a record in this log).
   git); banners for `DiskState::OutOfDate` and `ReadOnlyReason::LongLine`; `restore()` after `findRecoverableJournals`
   on startup; the editor host feeds the view's `setFileInfo`/`markSaved` (`w1/workbench`). The long-line rule uses
   `kLongLineCapBytes` since this batch (the long-line follow-up above).
-- **The in-flight slices:** `w1/workbench` (the W1 wiring above), `m1/editor-rhi` (the QRhi glyph-atlas renderer
-  behind IEditorRenderer, on 3acd71c), `m1/shell-nav` (Find Action, the merge view, canonical real-case document
-  paths) and `w2/clangd-nav`, merged in batches as each passes its own `-Quick`.
+- **The in-flight slices:** `w1/workbench` (the W1 wiring above) and `m1/shell-nav` (Find Action, the merge view,
+  canonical real-case document paths), merged in batches as each passes its own `-Quick`. `m1/editor-rhi`,
+  `w1/run-service` and `w2/clangd-nav` merged in the ninth batch.
 - **The frost::text_editor consumers** (ADR 0025): `m1/editor-view` (on `main`) binds keys to `commands::*`, calls
   `Editor::run`, supplies the Qt ITextShaper, sets `pageRows` from the viewport height, paints the EditorUpdate rows
   and implements IOutlineProvider over the syntax outline (SyntaxOutlineProvider). An index slice may add a
@@ -537,8 +698,10 @@ branches kept a record in this log).
   calls `poll()` from the parse-ready hook, takes highlights for the visible range and uses `outline()` for next and
   previous member; `enclosingRanges` for extend selection is still unused. Sharing one SyntaxSession among the views
   of a document is W1's.
-- **The editor view, later** (ADR 0037): the QRhi backend (`m1/editor-rhi`, in flight), Editor-only zoom
-  (Ctrl+wheel), and in the hardening phase the B5 measurement and the token-contrast thresholds.
+- **The editor view, later** (ADR 0037): the QRhi backend is on `main` (ADR 0043, the ninth batch); an on-screen
+  validation of its viewport when on-screen runs are allowed, after the hidden-desktop self-test above. Editor-only
+  zoom (Ctrl+wheel), and in the hardening phase the B5 measurement, B5/B6 and B1/B2/B15 with QRhi on the user's
+  5120x1392 work area, and the token-contrast thresholds.
 - **The frost::settings consumers** (ADR 0021): `m1/shell-nav` registers `settingsActions()` and opens the path that
   `prepareForEditing()` returns; the composition root binds the keymap, appearance and SaveManager readers to
   SettingsStore snapshots, feeds TrustStore decisions into `setProjectTrusted`, and starts `follow()` on watches of
@@ -550,6 +713,63 @@ branches kept a record in this log).
 ### Deferred to the hardening phase (ADR 0031)
 Kept here until U1; the hardening phase works through it (ADR 0031, Consequences). Newest first; the items from
 `m1/crash-diag` down are carried forward from the 2026-11-01 entry.
+- **From the ninth batch's merges** (the integrator):
+  - A review of the merge resolutions: the CMake header notes and the guarded `add_subdirectory` calls in
+    `src/ui/CMakeLists.txt` (ui_run on `TARGET frost::build`, ui_lang on `TARGET frost_lang`), and the two new
+    functions side by side in `src/project/src/vcxproj_reader.cpp` (the independent review that ADR 0031 moves to the
+    hardening phase).
+  - A review of the keymap-golden regeneration in 29869f9 (the eight count lines of `keymap-reachability.txt`; its
+    merge section above).
+- **From `w2/clangd-nav`** (ADR 0041), as its hand-off lists them:
+  - Sanitizers (ASan/TSan/UBSan), fuzzing (the snippet parser, the MSBuild evaluation JSON, the `-pp` import parser),
+    stress, mutation and perf/budget gates, screenshot goldens and `verify -Full` for the new code.
+  - Independent review of the frost::lang changes (moved to the hardening phase by ADR 0031).
+  - Workbench wiring: IEditorLanguageHost over EditorView, IWorkspaceDocuments over the open documents, docking the
+    find-usages panel, and passing `frost::build::findMsBuild` plus the live trust state into
+    `solutionCompileCommandsChain` (`TODO(M2)`).
+  - MSBuild evaluation of several projects in parallel (today one at a time).
+  - Environment variables in the evaluation cache key (only the imported files' size and mtime are compared), and
+    `Directory.Build.props` files created after the first evaluation.
+  - clangd tweaks that need `workspace/executeCommand` and server-initiated `applyEdit` (only code actions that carry
+    their own edit are offered).
+  - Dedicated atlas icons for symbol and completion kinds (letter badges are used for now).
+  - Highlighting the matched characters in the lookup rows; Rider's persistent toggle for highlight usages.
+  - Full snippet template mode: tab stops are followed by shifting them with the document size change, which assumes
+    edits happen inside the current placeholder.
+- **From `m1/editor-rhi`** (ADR 0043), as its hand-off lists them:
+  - Sanitizers, fuzzing, stress runs and independent review (ADR 0031 hardening phase).
+  - B5/B6 measurements on screen, a PresentMon present-mode check, swap-chain frame latency, a quiet-desktop control.
+  - B1/B2/B15 measurement of the lazy QRhi attach (which cost of the window-level RHI switch lands on B2/B15), and
+    warming D3D11 on a worker thread.
+  - On-screen validation of the QRhi viewport in a real shown window (the first QRhi viewport switches the top-level
+    window to RHI composition; a possible one-time flicker is untested), and multi-monitor and mixed-DPI moves on real
+    hardware.
+  - Screenshot goldens for the QRhi backend.
+  - An atlas eviction policy (a full 4096-texel atlas is cleared and refilled); glyph gamma and LCD subpixel AA.
+  - Precompiled shaders (qsb); today the D3D11 backend compiles the HLSL at pipeline creation.
+  - Re-evaluating auto when the session changes at run time (an RDP connect or disconnect while running), and adapter
+    changes on multi-GPU systems.
+  - A Linux QRhi leg (Vulkan/GL shaders; ADR 0007 decision 8); Linux uses raster and the pixel test skips on the Null
+    backend.
+  - A real device-lost recovery test on a GPU (only the detection path exists; the tests use the forced failure hook).
+- **From `w1/run-service`** (ADR 0040), as its hand-off lists them:
+  - Sanitizer builds (ASan, TSan, UBSan) of RunService, RunSession and RunController threading.
+  - Fuzz targets for the `-getProperty` JSON parsing, `splitWindowsArguments`, macro expansion and
+    `parseConfigurationProperties`.
+  - Stress or long runs: many reruns or Stops in a row, Stop racing the program's exit, large or fast output into the
+    Run console.
+  - Perf or budget gates: the MSBuild evaluation (about 1 s) on the first run, RunConsole appending large output,
+    reading the whole exe to find its PE subsystem.
+  - Screenshot goldens of the RunConsole; `verify -Full`; the independent review of the io (`process_win`
+    `newConsole`/`rawArguments`) and build changes.
+  - A real launch with `newConsole=true` is never tested, on purpose, so no window opens; only its ProcessSpec and the
+    cmd tail (with pipes) are tested.
+  - Wiring into the app: the Run tool window, `MainToolbar::runConfigurations` and the Solution Explorer context menu
+    are not wired into `src/app`, because `m1/shell-frame` and `w1/tool-windows` were not in the slice's base (both are
+    on `main` now). `RunController::bindStartupCombo(QComboBox*)` and `registerRunActions` are ready for that merge.
+  - One console tab per run (`TODO(M4)`); a PTY, colours and carriage-return overwriting in the Run console (the
+    terminal is M5).
+  - Run configurations beyond the startup project, CMake targets (M2/M3), the debugger (M4).
 - **From the eighth batch's merges** (the integrator):
   - A review of the long-line follow-up (4a9954b), document code: the byte rule's character bounds and its line walk;
     and a measurement of that walk at load on a text near 128 MiB whose longest line has between a quarter of the cap
@@ -579,7 +799,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
   - Editor screenshot goldens and pixel checks (tests read the display list only).
   - Contrast thresholds for the `Syntax.*` token colours (only `Editor.foreground` on `Editor.background` is in the
     contrast policy; `TODO(M1)` in `theme_registry.hpp`).
-  - The QRhi glyph-atlas renderer behind IEditorRenderer (raster only today; `m1/editor-rhi` is in flight).
+  - The QRhi glyph-atlas renderer behind IEditorRenderer (raster only at the time; `m1/editor-rhi` brought it in the
+    ninth batch, and its own deferred items are under `m1/editor-rhi` above).
   - EditorSettingsBinding: reading `.editorconfig` off the GUI thread, and the race where a settings listener on
     another thread runs while the binding is being destroyed.
   - IME with several carets (only the primary caret composes), and the IME replacementStart/Length attributes.
@@ -879,7 +1100,8 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
 - **Re-measure B28** with ADR 0010's harness (moved from Next; the slice record "M1 first slice", "B28 effect").
 
 ### Blockers
-- None. The hand-off notes of the eighth batch (`m1/editor-view`, `w1/tool-windows`), of the seventh
+- None. The hand-off notes of the ninth batch (`w1/run-service`, `m1/editor-rhi`, `w2/clangd-nav`), of the eighth
+  (`m1/editor-view`, `w1/tool-windows`), of the seventh
   (`w1/build-service`, `m1/shell-frame`, `w2/clangd-diagnostics`, `m1/save-manager`) and of the sixth
   (`m1/verify-tooling`, `m1/syntax`, `m1/editor-model`, `m1/settings`, `plan/thin-path`) name none; `m1/diff-merge`'s
   LongPathsEnabled item is not a blocker (its merge section above).
@@ -893,14 +1115,111 @@ Kept here until U1; the hardening phase works through it (ADR 0031, Consequences
   or with no solution open, the build action is disabled and Ctrl+Shift+B falls through to Go to Type Declaration
   (Visual Studio would report "build already in progress" instead; the slice record's known bug).
 
-Apart from that, no slice of the eighth, the seventh or the sixth batch asks one in its hand-off; the orchestrator's
-decisions on their questions are in the merge sections above. ADR 0019 Q5 (diff3-style markers and the save-manager
-prompt's labels), which the last integrator listed here, is decided: diff3 stays the default, and the labels are "Keep
-my version", "Take disk version" and "Compare..." (the merge section of `m1/save-manager` above).
+Apart from that, no slice of the ninth, the eighth, the seventh or the sixth batch asks one in its hand-off; the
+orchestrator's decisions on their questions are in the merge sections above. ADR 0019 Q5 (diff3-style markers and the
+save-manager prompt's labels), which the last integrator listed here, is decided: diff3 stays the default, and the
+labels are "Keep my version", "Take disk version" and "Compare..." (the merge section of `m1/save-manager` above).
 
 The open questions in the 2026-11-01 entry's Questions for the user still stand: `w1/project-sln`'s (environment
 variables and imported `.props` in the SDK's projects), `m1/keymap-de`'s two, `plan/w1`'s command-list file,
 `m1/storage`'s six, `m1/theme-icons`' nine and `m1/undo-anchors`' four.
+
+### Slice record: `w2/clangd-nav` (ADR 0041)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 660a1e9 on top of its merge 49f5bb0 of `w2/clangd-diagnostics` e7d9ccc. Worktree
+`.claude\worktrees\w2-clangd-nav`. (Merge note: merged into `main` as 29869f9; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::lang:** the MSBuild-evaluated compile-commands provider and the provider chain (existing, then MSBuild, then
+  static); the ILspRequester seam; models for completion, signature help, hover, navigation, usages, highlights,
+  symbols, rename, code actions and formatting; WorkspaceEdit parsing and the applier.
+- **frost::ui_lang** (`src/ui/lang`, new): the widgets and LanguageController, with the IntelliJ actions registered.
+- **Keymap:** `navigate.relatedFiles` = Ctrl+Alt+Home (macOS Ctrl+Meta+Up), and the four input goldens updated.
+- **ADR 0041** (`docs/adr/0041-clangd-navigation-completion-msbuild-commands.md`), `lang_unit_tests`' new cases,
+  `lang_msbuild_tests` (Windows only) and `ui_lang_tests`.
+- **Verification at 660a1e9** (its own `-Quick`): win debug 1809/1814 (5 skipped), wsl debug 1703/1711 (8 skipped),
+  the checks ok (tidy not-run). Not merged or pushed by the slice.
+
+#### Known bugs
+- Snippet tab stops are shifted by the overall document size change, so an edit typed outside the current placeholder
+  can put later stops in the wrong place.
+- The MSBuild cache does not notice a changed environment variable (such as an SDK root) unless one of the imported
+  files also changes.
+- None of these features work in the running app yet: nothing implements IEditorLanguageHost over the real editor.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `w2/clangd-nav`'s.
+- Its hand-off's Next (W2 in this entry's Next): implement IEditorLanguageHost over EditorView and IWorkspaceDocuments
+  over the open documents, dock the usages panel, and feed `solutionCompileCommandsChain` with
+  `frost::build::findMsBuild` and the live trust state; then the deferred hardening items.
+
+### Slice record: `m1/editor-rhi` (ADR 0043)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 9438b85 on top of its merge dd43253 of `m1/editor-view` 3acd71c. Worktree
+`.claude\worktrees\m1-editor-rhi`. (Merge note: merged into `main` as 97e490e; the 2026-11-02 entry above.)
+
+#### Done
+- **The QRhi glyph-atlas editor renderer** behind IEditorRenderer (`src/ui/editor`).
+- **The `editor.renderer` setting** and its auto rule (a remote session, WARP or Linux picks raster), the lazy QRhi
+  attach after the first raster frame, a run-time fallback that keeps the editor state, and atlas rebuilds on font,
+  zoom and DPI changes.
+- **ADR 0043** (`docs/adr/0043-editor-qrhi-renderer.md`) and `ui_editor_tests`' `editor_rhi_test.cpp`.
+- **Verification at 9438b85** (its own `-Quick`): win debug 1924/1929 (5 skipped), wsl debug 1821/1828 (7 skipped),
+  the checks ok. Not merged or pushed by the slice. Its process hygiene: every process it started had exited; no
+  night.py lock or background loop was left.
+
+#### Known bugs
+- Under the offscreen QPA a QRhiWidget never initializes and emits `renderFailed`, so the view-level QRhi path (attach,
+  then fallback) is tested only up to the failure, and actual on-screen QRhi rendering inside EditorView is unverified.
+  The painter itself is pixel-tested offscreen on WARP.
+- A theme change does not rebuild the atlas (by design: the atlas holds coverage only). The slice text listed theme
+  changes with atlas rebuilds; ADR 0043 records this deviation.
+- After a run-time fallback, QRhi is not retried until `editor.renderer` changes; a transient device loss leaves raster
+  on for the rest of the session.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `m1/editor-rhi`'s.
+- Its hand-off's Next: an on-screen validation of the QRhi viewport when on-screen runs are allowed (the W1 workbench
+  follow-up adds a hidden-desktop render self-test first; this entry's Next), and in the hardening phase B5/B6 and
+  B1/B2/B15 with QRhi on the user's 5120x1392 work area.
+
+### Slice record: `w1/run-service` (ADR 0040)
+
+The slice kept no record in this log; this is its hand-off note, recorded at the merge. A lean slice of the
+feature-first phase (ADR 0031): 82c6c56 on 2e298a8 plus its merge 8ea53fb of `w1/build-service` 8d77400. Worktree
+`.claude\worktrees\w1-run-service`. (Merge note: merged into `main` as fcc0a46; the 2026-11-02 entry above.)
+
+#### Done
+- **frost::build:** RunService, RunSession and `run_target`, and the `onDone` callback on `BuildService::build`.
+- **io and project:** ProcessSpec `rawArguments` and `newConsole`; `parseConfigurationProperties`.
+- **frost::ui_run** (`src/ui/run`, new): RunConsole, RunController and the run actions.
+- **Keymap:** Ctrl+F5 as a Visual Studio alias (`run.runWithoutDebugging`) in the IntelliJ keymap.
+- **Fixture:** a synthetic `App.vcxproj.user` and a richer `main.cpp` in `tests/build/fixtures/tiny_sln`.
+- **ADR 0040** (`docs/adr/0040-run-service.md`), `build_unit_tests`' run cases, `build_run_tests`,
+  `build_msbuild_tests`' runs and `ui_run_tests`.
+- **Verification at 82c6c56** (its own `-Quick`): win debug 1732/1737 (5 skipped), wsl debug 1625/1631 (6 skipped),
+  the checks ok. Not merged or pushed by the slice.
+
+#### Known bugs
+- In the external console, cmd.exe interprets `^ & | < >` and `%VAR%` in the user's argument string, and `%` in the
+  program path, because the program is started through `cmd /c`. Visual Studio starts the program directly. The Run
+  console passes arguments exactly as written. (Queued: `frost-console-host`; this entry's Next.)
+- In the Run console, output from programs that do not flush stdout shows up late, because the C runtime fully buffers
+  a pipe (documented; the external console is the default for that reason). Text the program prints through ANSI APIs
+  (for example a path containing U+00E9 from `_getcwd`) shows as U+FFFD, since output is decoded as UTF-8.
+- The fallback warning ("MSBuild could not report the properties ... imports were not read") is shown again on every
+  run while the cached fallback properties are in use.
+- The console shows only the latest run. Output from an older run of another project that is still going is dropped
+  from view, though it is still delivered to RunService callbacks.
+
+#### Left
+- The items in this entry's "Deferred to the hardening phase (ADR 0031)", marked as `w1/run-service`'s.
+- Its hand-off's Next, the shell integration (this entry's Next, W1): RunConsole in the Run tool window,
+  `RunController::bindStartupCombo(MainToolbar::runConfigurations())`, `registerRunActions` with the Solution
+  Explorer's selection for `run.setStartupProject`, RunService created with `RunController::callbacks()` and
+  `makeRunBuilder(buildService)`, and `RunService::defaultStatePath()`.
 
 ### Slice record: `w1/tool-windows` (ADR 0039)
 
