@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Rename (Shift+F6), quick fixes (Alt+Enter) and reformat (Ctrl+Alt+L) for W2 (ADR 0041):
+// textDocument/prepareRename and rename, textDocument/codeAction with the diagnostics under the
+// caret (clangd answers with its fix-its), and textDocument/formatting / rangeFormatting (clangd
+// runs clang-format with the project's .clang-format). The resulting edits are applied by the
+// caller through IWorkspaceEditApplier (workspace_edit.hpp) on the thread that owns the documents.
+/*
+ * Quick fixes. Code actions that carry an edit are offered; command-only actions (clangd's
+ * tweaks, which answer with a server-to-client workspace/applyEdit) are dropped for now.
+ * TODO(M3): run tweaks through workspace/executeCommand once the client applies server edits.
+ * The list is sorted preferred fixes first, then quick fixes, then the rest, each in the
+ * server's order.
+ * Threads: the requests are coroutines; the rest is pure.
+ */
+#pragma once
+
+#include "frost/core/error.hpp"
+#include "frost/lang/diagnostics.hpp"
+#include "frost/lang/json.hpp"
+#include "frost/lang/lsp_client.hpp"
+#include "frost/lang/lsp_types.hpp"
+#include "frost/lang/workspace_edit.hpp"
+#include "frost/sched/task.hpp"
+
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <stop_token>
+#include <string>
+#include <vector>
+
+namespace frost::lang {
+
+struct PrepareRenameResult {
+    LspRange range;               // The name being renamed.
+    std::string placeholder;      // The current name ("" when the server left it to the client).
+    bool defaultBehavior = false; // {defaultBehavior: true}: the client picks the word at the caret.
+};
+
+/*
+ * textDocument/prepareRename: nullopt when the symbol cannot be renamed (null). Servers without
+ * prepare support are not asked: the result is defaultBehavior. Errors: request's (clangd
+ * answers a non-renamable symbol with an error whose message says why).
+ */
+[[nodiscard]] sched::Task<Result<std::optional<PrepareRenameResult>>>
+requestPrepareRename(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
+
+// textDocument/rename to `newName`. Errors: request's, parseWorkspaceEdit's, InvalidArgument
+// (an empty name).
+[[nodiscard]] sched::Task<Result<WorkspaceEdit>> requestRename(ILspRequester& server, std::string path,
+                                                               LspPosition position, std::string newName,
+                                                               std::stop_token token = {});
+
+struct CodeActionItem {
+    std::string title;
+    std::string kind; // "quickfix", "refactor.rewrite", ... or "".
+    bool preferred = false;
+    WorkspaceEdit edit;
+};
+
+// A diagnostic as LSP sends it (range, severity, code, source, message), for codeAction's context.
+[[nodiscard]] Json diagnosticToJson(const LiveDiagnostic& diagnostic);
+
+// The code actions of an answer (see the header comment for which are kept and their order).
+[[nodiscard]] std::vector<CodeActionItem> parseCodeActions(const Json& json);
+
+// textDocument/codeAction for `range` with `diagnostics` (those overlapping the range).
+// Errors: request's.
+[[nodiscard]] sched::Task<Result<std::vector<CodeActionItem>>>
+requestCodeActions(ILspRequester& server, std::string path, LspRange range, std::vector<LiveDiagnostic> diagnostics,
+                   std::stop_token token = {});
+
+// The diagnostics of `all` whose LSP range overlaps or touches `range`.
+[[nodiscard]] std::vector<LiveDiagnostic> diagnosticsAt(std::span<const LiveDiagnostic> all, LspRange range);
+
+struct FormattingOptions {
+    std::uint32_t tabSize = 4;
+    bool insertSpaces = true;
+};
+
+// textDocument/formatting (no range) or textDocument/rangeFormatting. Errors: request's.
+[[nodiscard]] sched::Task<Result<std::vector<TextEdit>>> requestFormatting(ILspRequester& server, std::string path,
+                                                                           std::optional<LspRange> range,
+                                                                           FormattingOptions options,
+                                                                           std::stop_token token = {});
+
+} // namespace frost::lang

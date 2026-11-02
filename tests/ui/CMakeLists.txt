@@ -15,7 +15,9 @@
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, labels "unit;screenshot";
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
 #   ui_appearance_perf_tests     in-process start-up probes, label "perf";
-#   ui_native_tests              the windows platform plugin's palette and fonts (Windows).
+#   ui_native_tests              the windows platform plugin's palette and fonts (Windows);
+#   ui_lang_tests                the language-feature widgets and LanguageController (ADR 0041)
+#                                offscreen, against tests/lang's scripted language server.
 
 frost_add_test(ui_input_tests QT
     SOURCES key_translation_test.cpp ime_tracker_test.cpp adapter_integration_test.cpp
@@ -160,4 +162,13 @@ if(WIN32)
         DISCOVERY_MODE PRE_TEST
         DISCOVERY_TIMEOUT 60
         PROPERTIES LABELS unit ENVIRONMENT "QT_QPA_PLATFORM=windows")
+endif()
+
+if(TARGET frost_ui_lang)
+    frost_add_test(ui_lang_tests QT
+        SOURCES
+            lang/lang_widgets_test.cpp
+            lang/language_controller_test.cpp
+        DEPS frost::ui_lang frost::lang frost::input frost::text frost::sched frost::io)
+    target_include_directories(ui_lang_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 endif()

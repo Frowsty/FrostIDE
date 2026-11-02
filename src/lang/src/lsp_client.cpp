@@ -28,6 +28,30 @@ namespace {
     return value->isObject(); // An options object means "supported".
 }
 
+// The strings of a JSON array (other items and kinds are skipped).
+[[nodiscard]] std::vector<std::string> stringList(const Json* list) {
+    std::vector<std::string> out;
+    if (list != nullptr) {
+        for (const Json& item : list->items()) {
+            if (const std::string* text = item.asString()) {
+                out.push_back(*text);
+            }
+        }
+    }
+    return out;
+}
+
+// The SymbolKind value set 1..26 (LSP 3.17), announced so servers send every kind.
+[[nodiscard]] Json symbolKinds() {
+    Json kinds = Json::array();
+    for (int kind = 1; kind <= 26; ++kind) {
+        kinds.push(kind);
+    }
+    return Json::object().set("valueSet", std::move(kinds));
+}
+
+[[nodiscard]] Json markupFormats() { return Json::array({Json("markdown"), Json("plaintext")}); }
+
 [[nodiscard]] std::string_view lastPathComponent(std::string_view path) noexcept {
     while (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
         path.remove_suffix(1);
@@ -76,6 +100,24 @@ ServerCapabilities parseInitializeResult(const Json& result) {
     out.references = hasProvider(*capabilities, "referencesProvider");
     out.documentSymbol = hasProvider(*capabilities, "documentSymbolProvider");
     out.signatureHelp = hasProvider(*capabilities, "signatureHelpProvider");
+    if (const Json* completion = capabilities->find("completionProvider"); completion && completion->isObject()) {
+        out.completionResolve = completion->boolAt("resolveProvider").value_or(false);
+        out.completionTriggerCharacters = stringList(completion->find("triggerCharacters"));
+    }
+    if (const Json* signature = capabilities->find("signatureHelpProvider"); signature && signature->isObject()) {
+        out.signatureHelpTriggerCharacters = stringList(signature->find("triggerCharacters"));
+    }
+    out.implementation = hasProvider(*capabilities, "implementationProvider");
+    out.typeDefinition = hasProvider(*capabilities, "typeDefinitionProvider");
+    out.documentHighlight = hasProvider(*capabilities, "documentHighlightProvider");
+    out.workspaceSymbol = hasProvider(*capabilities, "workspaceSymbolProvider");
+    out.rename = hasProvider(*capabilities, "renameProvider");
+    if (const Json* rename = capabilities->find("renameProvider"); rename && rename->isObject()) {
+        out.prepareRename = rename->boolAt("prepareProvider").value_or(false);
+    }
+    out.codeAction = hasProvider(*capabilities, "codeActionProvider");
+    out.formatting = hasProvider(*capabilities, "documentFormattingProvider");
+    out.rangeFormatting = hasProvider(*capabilities, "documentRangeFormattingProvider");
     if (const Json* info = result.find("serverInfo"); info != nullptr) {
         out.serverName = std::string(info->stringAt("name"));
         out.serverVersion = std::string(info->stringAt("version"));
@@ -96,14 +138,74 @@ Json clientCapabilities() {
                                   .set("codeDescriptionSupport", true)
                                   .set("dataSupport", false)
                                   .set("tagSupport", Json::object().set("valueSet", Json::array({Json(1), Json(2)})));
-    Json textDocument = Json::object()
-                            .set("synchronization", std::move(synchronization))
-                            .set("publishDiagnostics", std::move(publishDiagnostics));
-    Json workspace = Json::object()
-                         .set("configuration", true)
-                         .set("workspaceFolders", true)
-                         .set("applyEdit", false)
-                         .set("didChangeConfiguration", Json::object().set("dynamicRegistration", false));
+    // The navigation and completion features (W2, ADR 0041).
+    Json completionKinds = Json::array();
+    for (int kind = 1; kind <= 25; ++kind) {
+        completionKinds.push(kind);
+    }
+    Json completion =
+        Json::object()
+            .set("dynamicRegistration", false)
+            .set("contextSupport", true)
+            .set("completionItem",
+                 Json::object()
+                     .set("snippetSupport", true)
+                     .set("commitCharactersSupport", true)
+                     .set("documentationFormat", markupFormats())
+                     .set("deprecatedSupport", true)
+                     .set("preselectSupport", true)
+                     .set("insertReplaceSupport", false)
+                     .set("labelDetailsSupport", true)
+                     .set("resolveSupport",
+                          Json::object().set("properties", Json::array({Json("documentation"), Json("detail"),
+                                                                        Json("additionalTextEdits")}))))
+            .set("completionItemKind", Json::object().set("valueSet", std::move(completionKinds)));
+    Json signatureHelp = Json::object()
+                             .set("dynamicRegistration", false)
+                             .set("contextSupport", true)
+                             .set("signatureInformation",
+                                  Json::object()
+                                      .set("documentationFormat", markupFormats())
+                                      .set("activeParameterSupport", true)
+                                      .set("parameterInformation", Json::object().set("labelOffsetSupport", false)));
+    Json links = Json::object().set("dynamicRegistration", false).set("linkSupport", true);
+    Json codeAction =
+        Json::object()
+            .set("dynamicRegistration", false)
+            .set("isPreferredSupport", true)
+            .set("codeActionLiteralSupport",
+                 Json::object().set("codeActionKind",
+                                    Json::object().set("valueSet", Json::array({Json(""), Json("quickfix"),
+                                                                                Json("refactor"), Json("source")}))));
+    Json textDocument =
+        Json::object()
+            .set("synchronization", std::move(synchronization))
+            .set("publishDiagnostics", std::move(publishDiagnostics))
+            .set("completion", std::move(completion))
+            .set("hover", Json::object().set("dynamicRegistration", false).set("contentFormat", markupFormats()))
+            .set("signatureHelp", std::move(signatureHelp))
+            .set("declaration", links)
+            .set("definition", links)
+            .set("typeDefinition", links)
+            .set("implementation", links)
+            .set("references", Json::object().set("dynamicRegistration", false))
+            .set("documentHighlight", Json::object().set("dynamicRegistration", false))
+            .set("documentSymbol", Json::object()
+                                       .set("dynamicRegistration", false)
+                                       .set("hierarchicalDocumentSymbolSupport", true)
+                                       .set("symbolKind", symbolKinds()))
+            .set("codeAction", std::move(codeAction))
+            .set("formatting", Json::object().set("dynamicRegistration", false))
+            .set("rangeFormatting", Json::object().set("dynamicRegistration", false))
+            .set("rename", Json::object().set("dynamicRegistration", false).set("prepareSupport", true));
+    Json workspace =
+        Json::object()
+            .set("configuration", true)
+            .set("workspaceFolders", true)
+            .set("applyEdit", false)
+            .set("symbol", Json::object().set("dynamicRegistration", false).set("symbolKind", symbolKinds()))
+            .set("workspaceEdit", Json::object().set("documentChanges", true))
+            .set("didChangeConfiguration", Json::object().set("dynamicRegistration", false));
     return Json::object()
         .set("general", Json::object().set("positionEncodings", encodings))
         .set("textDocument", std::move(textDocument))
@@ -257,6 +359,14 @@ const ServerCapabilities& LspClient::capabilities() const noexcept {
 }
 
 PositionEncoding LspClient::positionEncoding() const noexcept { return capabilities().positionEncoding; }
+
+PositionEncoding LspClient::encoding() const {
+    return ready() ? m_shared->capabilities.positionEncoding : PositionEncoding::Utf16;
+}
+
+std::optional<ServerCapabilities> LspClient::serverCapabilities() const {
+    return ready() ? std::optional<ServerCapabilities>(m_shared->capabilities) : std::nullopt;
+}
 
 sched::Task<Result<void>> LspClient::shutdown(IClock::Duration timeout) {
     detail::Deadline deadline(*m_shared->scheduler, timeout);

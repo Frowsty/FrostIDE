@@ -42,6 +42,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace frost::lang {
 
@@ -62,9 +63,46 @@ struct ServerCapabilities {
     bool references = false;
     bool documentSymbol = false;
     bool signatureHelp = false;
+    // The navigation and completion features (W2, ADR 0041).
+    bool completionResolve = false; // completionProvider.resolveProvider.
+    std::vector<std::string> completionTriggerCharacters;
+    std::vector<std::string> signatureHelpTriggerCharacters;
+    bool implementation = false;
+    bool typeDefinition = false;
+    bool documentHighlight = false;
+    bool workspaceSymbol = false;
+    bool rename = false;
+    bool prepareRename = false; // renameProvider.prepareProvider.
+    bool codeAction = false;
+    bool formatting = false;
+    bool rangeFormatting = false;
     std::string serverName;    // serverInfo.name, e.g. "clangd".
     std::string serverVersion; // serverInfo.version.
     Json raw;
+};
+
+/*
+ * The request seam of the navigation and completion models (W2, ADR 0041): a request to the
+ * language server, the negotiated position encoding and capabilities. ClangdService (the
+ * running clangd) and LspClient (one connection, used by the tests' scripted server) implement
+ * it. Implementations are thread-safe.
+ */
+class ILspRequester {
+public:
+    virtual ~ILspRequester() = default;
+    // Sends `method` with `params`; stopping `token` cancels it ($/cancelRequest). Errors: Busy
+    // (no initialized server) and those of JsonRpcConnection::request.
+    [[nodiscard]] virtual sched::Task<Result<Json>> request(std::string method, Json params,
+                                                            std::stop_token token = {}) = 0;
+    // The encoding of every LSP position the server sends and expects (UTF-16 until initialized).
+    [[nodiscard]] virtual PositionEncoding encoding() const = 0;
+    // The server's capabilities while initialized, else nullopt.
+    [[nodiscard]] virtual std::optional<ServerCapabilities> serverCapabilities() const = 0;
+
+protected:
+    ILspRequester() = default;
+    ILspRequester(const ILspRequester&) = default;
+    ILspRequester& operator=(const ILspRequester&) = default;
 };
 
 // Reads an InitializeResult. A server that answers with clangd's `offsetEncoding` instead of
@@ -89,7 +127,7 @@ struct InitializeOptions {
 // The initialize params for `options`. Errors: InvalidArgument (rootPath not absolute).
 [[nodiscard]] Result<Json> initializeParams(const InitializeOptions& options);
 
-class LspClient {
+class LspClient final : public ILspRequester {
 public:
     struct Handlers {
         // A server notification other than the ones below (method, params).
@@ -131,7 +169,12 @@ public:
 
     // A request for features beyond W2 (completion, definition, ...). Errors as
     // JsonRpcConnection::request, plus Busy before initialize() finished.
-    [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params, std::stop_token token = {});
+    [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params,
+                                                    std::stop_token token = {}) override;
+    // ILspRequester: positionEncoding() once ready, UTF-16 before.
+    [[nodiscard]] PositionEncoding encoding() const override;
+    // ILspRequester: capabilities() while ready().
+    [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override;
     // A notification. Errors: Busy (not initialized), IoError (closed).
     [[nodiscard]] Result<void> notify(std::string method, Json params);
 
