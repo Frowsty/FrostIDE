@@ -284,6 +284,27 @@ Result<std::optional<CompileCommandsLocation>> ExistingCompileCommandsProvider::
     return findCompileCommands(m_fs, m_root);
 }
 
+Result<std::optional<CompileCommandsLocation>> BuildDirectoryCompileCommandsProvider::locate() {
+    const std::string directory = m_buildDirectory ? m_buildDirectory() : std::string();
+    if (directory.empty()) {
+        return std::optional<CompileCommandsLocation>();
+    }
+    auto base = io::normalizePath(directory);
+    if (!base) {
+        return std::unexpected(std::move(base.error()));
+    }
+    auto file = io::joinPath(*base, kDatabaseName);
+    if (!file) {
+        return std::unexpected(std::move(file.error()));
+    }
+    auto status = m_fs.status(*file);
+    if (!status || status->type != io::FileType::Regular) {
+        return std::optional<CompileCommandsLocation>();
+    }
+    return std::optional<CompileCommandsLocation>(CompileCommandsLocation{
+        .directory = *base, .file = std::move(*file), .source = CompileCommandsSource::Existing});
+}
+
 Result<std::vector<CompileCommand>> synthesizeCompileCommands(const project::SolutionModel& model,
                                                               const SynthesisOptions& options) {
     if (model.configurations().empty()) {

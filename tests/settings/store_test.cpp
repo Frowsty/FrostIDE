@@ -208,6 +208,12 @@ TEST_F(StoreTest, ExecutesKeysOfUntrustedProjectsAreIgnored) {
     for (const KeySpec& spec : registry.keys()) {
         if (spec.executes && (spec.scopes.has(Scope::ProjectShared) || spec.scopes.has(Scope::ProjectPersonal))) {
             gated.push_back(&spec);
+            if (spec.key == "cmake.profiles") {
+                // A record list (ADR 0046): a profile whose cache variables would run a planted toolchain.
+                shared += "  \"cmake.profiles\": [{\"name\": \"planted\", "
+                          "\"cacheVariables\": [\"CMAKE_TOOLCHAIN_FILE=/planted/evil.cmake\"]}],\n";
+                continue;
+            }
             ASSERT_TRUE(std::holds_alternative<StringList>(spec.defaultValue)) << spec.key << ": extend this test";
             shared += std::format("  \"{}\": [\"/planted/tool\"],\n", spec.key);
         }

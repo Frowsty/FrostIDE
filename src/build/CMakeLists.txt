@@ -8,22 +8,29 @@
 # Qt-free; depends on project (the SolutionModel and the trust store) and io (and core through
 # them). The parser, the vswhere JSON reader, the command-line builder and the service are
 # portable; the discovery and the driver return Unsupported off Windows.
-# TODO(M4): FrostIDE.MSBuildLogger, the CMake and dotnet drivers, run configurations and localized
-# output decoding (I12).
+# The M2 CMake part (ADR 0046): cmake and ninja discovery, the vcvarsall.bat environment capture,
+# the GNU/Clang and CMake message parsers, and the CMakeService (profiles, background configure,
+# File API model, reconfigure on change, cmake --build). It also depends on settings (the
+# cmake.profiles records).
+# TODO(M4): FrostIDE.MSBuildLogger, the dotnet driver, run configurations and localized output
+# decoding (I12).
 
 set(frost_build_sources
     src/build_diagnostics.cpp
     src/build_service.cpp
+    src/cmake_service.cpp
+    src/cmake_toolchain.cpp
     src/diagnostic.cpp
     src/json.cpp
     src/line_splitter.cpp
     src/msbuild_driver.cpp
     src/msbuild_locator.cpp
+    src/output_parsers.cpp
     src/session.cpp)
 
 frost_add_library(build LAYER build
     SOURCES ${frost_build_sources}
-    DEPS frost::project frost::io)
+    DEPS frost::project frost::settings frost::io frost::sched)
 if(WIN32)
     # shell32: SHGetKnownFolderPath (the Program Files (x86) folder that holds vswhere.exe);
     # ole32: CoTaskMemFree for its result.

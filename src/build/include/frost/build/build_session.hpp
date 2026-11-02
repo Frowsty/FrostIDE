@@ -2,7 +2,8 @@
 //
 // BuildSession: one running build tool process, with its output streamed line by line, its
 // diagnostics parsed as they arrive, cancellation of its whole process tree and a final result.
-// The MSBuild driver (frost/build/msbuild_driver.hpp) starts one; later drivers (CMake) reuse it.
+// The MSBuild driver (frost/build/msbuild_driver.hpp) and the CMake service (frost/build/cmake_service.hpp)
+// start them; BuildSessionOptions::parser picks the output format.
 //
 /*
  * Threads. start() launches the process on the calling thread (so launch errors come back at
@@ -33,6 +34,7 @@
 #pragma once
 
 #include "frost/build/diagnostic.hpp"
+#include "frost/build/output_parsers.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
 #include "frost/io/process.hpp"
@@ -78,6 +80,9 @@ struct BuildSessionOptions {
     // How long the output may stay open after the tool exited while survivors run, before the
     // session abandons it (IProcess::abandonOutput) and finishes.
     std::chrono::milliseconds outputGrace{1000};
+    // Makes the parser of each output stream (one per stream; output_parsers.hpp). Empty uses
+    // makeMsBuildOutputParser, MSBuild's canonical format.
+    OutputParserFactory parser{};
 };
 
 class BuildSession {

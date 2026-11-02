@@ -5,6 +5,7 @@
 # frost::ui_theme_compiler (Qt Core) and frost::ui (Qt Widgets: FrostStyle, AppearanceManager, the icon
 # runtime, fonts, the OS appearance source and the island frames) are ADR 0015's; frost::ui also holds
 # qtr, the Qt wrapper of frost::i18n. frost::ui_shell (src/ui/shell) is the main-window shell (ADR 0038).
+# frost::ui_cmake (src/ui/cmake) is the CMake folder's tree model, controller and tool window (ADR 0046).
 add_subdirectory(input)
 add_subdirectory(model)
 add_subdirectory(theme_compiler)
@@ -30,3 +31,4 @@ target_sources(frost_ui PRIVATE
 set_target_properties(frost_ui PROPERTIES AUTOMOC ON)
 
 add_subdirectory(shell)
+add_subdirectory(cmake)

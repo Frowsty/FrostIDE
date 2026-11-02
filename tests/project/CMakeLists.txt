@@ -4,9 +4,14 @@
 # SolutionModel, the trust store and the private path helpers (src/project/src, white-box), label
 # "unit". The fixtures under fixtures/ are hand-written, byte-exact (.gitattributes -text keeps the
 # BOMs and CRLF line ends) and shaped like a small SDK-generated solution of linked projects.
+# The CMake part (ADR 0046): presets on fixtures/cmake/presets, profiles, the File API reply in
+# fixtures/cmake/reply (synthetic, shaped like CMake 4.4's, with path placeholders) and the view model.
 
 frost_add_test(project_unit_tests
     SOURCES
+        cmake_file_api_test.cpp
+        cmake_presets_test.cpp
+        cmake_profile_test.cpp
         paths_test.cpp
         sln_reader_test.cpp
         slnx_reader_test.cpp

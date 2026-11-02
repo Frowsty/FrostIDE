@@ -85,9 +85,13 @@ inline constexpr Key<bool> buildSaveAllBeforeBuild{"build.saveAllBeforeBuild"};
 inline constexpr Key<StringList> buildMsbuildExtraArguments{"build.msbuild.extraArguments"};
 inline constexpr Key<std::int64_t> buildMsbuildMaxCpuCount{"build.msbuild.maxCpuCount"};
 
+// CMake profiles (frost::build's cmakeProfileRecords reads the records).
+inline constexpr Key<RecordList> cmakeProfiles{"cmake.profiles"};
+
 // Tool paths: Application-only `executes` keys; empty means "detect" or "bundled".
 inline constexpr Key<std::string> toolsMsbuildPath{"tools.msbuild.path"};
 inline constexpr Key<std::string> toolsCmakePath{"tools.cmake.path"};
+inline constexpr Key<std::string> toolsNinjaPath{"tools.ninja.path"};
 inline constexpr Key<std::string> toolsGitPath{"tools.git.path"};
 inline constexpr Key<std::string> toolsClangdPath{"tools.clangd.path"};
 inline constexpr Key<std::string> toolsClangFormatPath{"tools.clangFormat.path"};

@@ -1,0 +1,22 @@
+{
+  "artifacts": [{"path": "app/app"}],
+  "backtrace": 1,
+  "compileGroups": [
+    {
+      "defines": [{"define": "TINY_APP"}],
+      "includes": [{"path": "@SOURCE@/include"}],
+      "language": "C",
+      "sourceIndexes": [0]
+    }
+  ],
+  "dependencies": [{"backtrace": 2, "id": "core::@6890427a1f51a3e7e1df"}],
+  "folder": {"name": "Apps"},
+  "id": "app::@6890427a1f51a3e7e1df",
+  "link": {"commandFragments": [], "language": "C"},
+  "name": "app",
+  "nameOnDisk": "app",
+  "paths": {"build": "app", "source": "app"},
+  "sourceGroups": [{"name": "Source Files", "sourceIndexes": [0]}],
+  "sources": [{"backtrace": 1, "compileGroupIndex": 0, "path": "app/main.c", "sourceGroupIndex": 0}],
+  "type": "EXECUTABLE"
+}

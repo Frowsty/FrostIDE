@@ -1,0 +1,9 @@
+{
+  "entries": [
+    {"name": "CMAKE_BUILD_TYPE", "properties": [{"name": "HELPSTRING", "value": "Choose the type of build."}],
+     "type": "STRING", "value": "Debug"},
+    {"name": "CMAKE_EXPORT_COMPILE_COMMANDS", "properties": [], "type": "BOOL", "value": "ON"}
+  ],
+  "kind": "cache",
+  "version": {"major": 2, "minor": 0}
+}

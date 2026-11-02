@@ -1,0 +1,12 @@
+{
+  "inputs": [
+    {"path": "CMakeLists.txt"},
+    {"path": "cmake/warnings.cmake"},
+    {"path": "app/CMakeLists.txt"},
+    {"isCMake": true, "isExternal": true, "path": "@CMAKE_ROOT@/share/cmake-4.4/Modules/CMakeCInformation.cmake"},
+    {"isGenerated": true, "path": "cmake-build-debug/CMakeFiles/4.4.5/CMakeCCompiler.cmake"}
+  ],
+  "kind": "cmakeFiles",
+  "paths": {"build": "@BUILD@", "source": "@SOURCE@"},
+  "version": {"major": 1, "minor": 1}
+}
