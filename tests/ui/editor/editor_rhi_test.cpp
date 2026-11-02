@@ -234,6 +234,36 @@ TEST(RhiGlyphPainter, FontSizeAndPixelRatioChangesRebuildTheAtlas) {
     EXPECT_GT(tallest(), small * 1.5F);
 }
 
+// The VCS change stripes (ADR 0048) are solid quads at the stripes' device pixels, as the raster
+// backend fills them: a bar beside changed lines and a short mark where lines were deleted.
+TEST(RhiGlyphPainter, DrawsTheChangeStripesAsSolidQuads) {
+    RhiGlyphPainter painter(editorFont(13.0));
+    EditorDisplayList list = sampleList(painter.font());
+    painter.prepare(list, 1.0);
+    const std::size_t before = painter.quads().size();
+    list.changeStripes.push_back(
+        DisplayChangeStripe{QRectF(32, 0, 3, 20), QColor(111, 191, 115), ChangeStripeKind::Added, LineIndex{0}, 0});
+    list.changeStripes.push_back(
+        DisplayChangeStripe{QRectF(32, 39, 7, 2), QColor(142, 148, 156), ChangeStripeKind::Deleted, LineIndex{2}, 1});
+    for (const double dpr : {1.0, 2.0}) {
+        SCOPED_TRACE(dpr);
+        painter.prepare(list, dpr);
+        ASSERT_EQ(painter.quads().size(), before + 2);
+        for (const DisplayChangeStripe& stripe : list.changeStripes) {
+            const QRectF want(stripe.rect.topLeft() * dpr, stripe.rect.size() * dpr);
+            const auto quad = std::ranges::find_if(painter.quads(), [&want](const GlyphQuad& q) {
+                return q.x == static_cast<float>(want.x()) && q.y == static_cast<float>(want.y()) &&
+                       q.w == static_cast<float>(want.width()) && q.h == static_cast<float>(want.height());
+            });
+            ASSERT_NE(quad, painter.quads().end()) << stripe.rect.x() << "," << stripe.rect.y();
+            EXPECT_EQ(quad->u0, quad->u1); // A solid quad samples one texel.
+            EXPECT_EQ(quad->v0, quad->v1);
+            EXPECT_EQ(quad->rgba & 0xffU, static_cast<std::uint32_t>(stripe.color.red())); // RGBA, red low.
+            EXPECT_EQ(quad->rgba >> 24, 0xffU);
+        }
+    }
+}
+
 TEST(RhiGlyphPainter, TheRendererForwardsFontChangesToTheViewport) {
     RhiEditorViewport viewport(editorFont(13.0)); // Never shown: no QRhi is created.
     RhiEditorRenderer renderer(viewport);

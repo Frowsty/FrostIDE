@@ -157,8 +157,9 @@ struct DisplayBalloon {
  * to textArea; then the gutter: gutterBackground over `gutter`, `gutterText`, `changeStripes` and
  * `markers`; then the error stripe: stripeBackground over `stripe`, `stripeMarks` and the summary
  * box; then `chrome` shapes and `chromeText`, unclipped. The raster backend draws all of them; the
- * QRhi backend (ADR 0043) not yet the decorations, the error stripe, the chrome layer or
- * `changeStripes`. Plain values; built and read on the GUI thread.
+ * QRhi backend (ADR 0043) draws the fills, lines, text, carets and the gutter with `changeStripes`
+ * and `markers`, not yet the decorations, the error stripe or the chrome layer. Plain values; built
+ * and read on the GUI thread.
  */
 struct EditorDisplayList {
     QRectF viewport;

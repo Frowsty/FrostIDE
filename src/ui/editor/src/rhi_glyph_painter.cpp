@@ -192,6 +192,10 @@ bool RhiGlyphPainter::buildQuads(const EditorDisplayList& list, bool dropWhenFul
                 return false;
             }
         }
+        // The VCS change stripes (ADR 0048): solid bars, as the raster backend's fillRect.
+        for (const DisplayChangeStripe& stripe : list.changeStripes) {
+            addSolid(stripe.rect, stripe.color);
+        }
         for (const DisplayMarker& marker : list.markers) {
             if (!addMarker(marker, dropWhenFull)) {
                 return false;

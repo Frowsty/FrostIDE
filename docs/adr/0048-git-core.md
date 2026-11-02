@@ -78,6 +78,6 @@ line.
 - An editable diff right side.
 - Running the markers' diff off the GUI thread for very large files.
 - The File System view's colours: the view does not exist yet; `vcsFileColorProvider` is its seam.
-- Drawing the stripes in a QRhi backend: no such backend is in the tree yet; the stripes are in the display
-  list for it.
+- Drawing the stripes in a QRhi backend: no such backend was in the slice's tree. Done at the merge into `main`,
+  which has ADR 0043's QRhi backend: RhiGlyphPainter draws `changeStripes` as solid quads in the gutter.
 - Wiring the widgets and actions into the workbench.
