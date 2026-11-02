@@ -17,12 +17,14 @@ add_subdirectory(input)
 # frost::syntax builds in fuzz trees too: it needs no vcpkg port (tree-sitter is vendored, ADR 0023).
 add_subdirectory(syntax)
 # Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash), settings (yyjson), project
-# (pugixml) and build (it depends on project) are left out of them.
+# (pugixml), build (it depends on project) and lang (on project, settings and yyjson) are left out
+# of them.
 if(NOT FROST_FUZZ)
     add_subdirectory(storage)
     add_subdirectory(settings)
     add_subdirectory(project)
     add_subdirectory(build)
+    add_subdirectory(lang)
 endif()
 if(NOT FROST_FUZZ)
     # Crash reports and logging need crashpad, cpptrace and spdlog, which fuzz trees do not install.
