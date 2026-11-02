@@ -60,7 +60,36 @@
     "Toolbar.iconSize": 20,
     "Font.uiSize": 13,
     "Font.smallSize": 11,
-    "Window.inactiveAlpha": 0.44
+    "Window.inactiveAlpha": 0.44,
+    "Editor": {
+      "foreground": "#1F2328",
+      "caretColor": "#1F2328",
+      "selectionBackground": "#C9DAF8",
+      "currentLineBackground": "#F2F5F9",
+      "lineNumberForeground": "#9AA1AB",
+      "lineNumberCurrentForeground": "#5B626C",
+      "searchMatchBackground": "#F7E3A1",
+      "rightMarginColor": "#E1E5EA",
+      "errorMarkerColor": "#C9302C",
+      "warningMarkerColor": "#B7791F"
+    },
+    "Syntax": {
+      "keyword": "#1F5BC4",
+      "comment": "#7A818B",
+      "docComment": "#4F7A4C",
+      "string": "#2E7D32",
+      "stringEscape": "#9A5B00",
+      "number": "#8A3FA8",
+      "type": "#0F7C74",
+      "builtinType": "#1F5BC4",
+      "function": "#7A5300",
+      "macro": "#7046B8",
+      "property": "#6A4BB0",
+      "attribute": "#7046B8",
+      "tag": "#1F5BC4",
+      "heading": "#1F5BC4",
+      "link": "#2F6AD9"
+    }
   },
   "compact": {
     "Island.arc": 8,

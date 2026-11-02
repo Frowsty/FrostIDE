@@ -87,7 +87,36 @@
       "uiSize": 13,
       "smallSize": 11
     },
-    "Window.inactiveAlpha": 0.44
+    "Window.inactiveAlpha": 0.44,
+    "Editor": {
+      "foreground": "#DFE1E5",
+      "caretColor": "#E8EAED",
+      "selectionBackground": "#2E4370",
+      "currentLineBackground": "#2A2D33",
+      "lineNumberForeground": "#6B7079",
+      "lineNumberCurrentForeground": "#A9AEB6",
+      "searchMatchBackground": "#5A4A1C",
+      "rightMarginColor": "#34373D",
+      "errorMarkerColor": "#F2716F",
+      "warningMarkerColor": "#E8B04B"
+    },
+    "Syntax": {
+      "keyword": "#6FA8FF",
+      "comment": "#7E8590",
+      "docComment": "#7FA37C",
+      "string": "#8FC48A",
+      "stringEscape": "#E0B060",
+      "number": "#D49BE6",
+      "type": "#5FCFC4",
+      "builtinType": "#6FA8FF",
+      "function": "#E5C97E",
+      "macro": "#C7A2F2",
+      "property": "#B9A7EB",
+      "attribute": "#C7A2F2",
+      "tag": "#6FA8FF",
+      "heading": "#6FA8FF",
+      "link": "#6CA2FF"
+    }
   },
   "compact": {
     "Island.arc": 8,

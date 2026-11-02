@@ -15,6 +15,8 @@
 #   ui_shell_tests               frost::ui_shell (ADR 0038): the main-window shell, editor tabs,
 #                                tool windows, popups, notifications and background tasks over fake
 #                                editors and a simulated keyboard layout (offscreen);
+#   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
+#                                IME, find/replace, Go to Line, highlighting and live settings;
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, label "unit" with the
 #                                tag "screenshot" (ctest -L screenshot);
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
@@ -130,6 +132,14 @@ frost_add_test(ui_shell_tests QT
         shell/shell_window_test.cpp
     DEPS frost::ui_shell frost::ui frost::input frost::io)
 _frost_ui_test_wiring(ui_shell_tests)
+
+frost_add_test(ui_editor_tests QT
+    SOURCES
+        editor/editor_features_test.cpp
+        editor/editor_view_test.cpp
+    DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
+         frost::input frost::sched frost::io frost_ui_test_support)
+_frost_ui_test_wiring(ui_editor_tests)
 
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp
