@@ -12,6 +12,8 @@
 #   ui_theme_compiler_tests      the .theme.json compiler, the shipped themes, frost-themec and
 #                                frost-icon-baker through their command lines (Qt Core);
 #   ui_tests                     FrostStyle, AppearanceManager, icons and fonts (offscreen);
+#   ui_editor_tests              frost::ui_editor, the EditorView (ADR 0037), offscreen: keys, mouse,
+#                                IME, find/replace, Go to Line, highlighting and live settings;
 #   ui_screenshot_tests          the SamplePanel goldens and rendered contrast, labels "unit;screenshot";
 #   ui_hidpi_tests               the backing store under Qt's real scaling, also as *.qtscale150;
 #   ui_appearance_perf_tests     in-process start-up probes, label "perf";
@@ -117,6 +119,14 @@ frost_add_test(ui_tests QT
         widgets/style_test.cpp
     DEPS frost::ui frost::io frost_ui_test_support)
 _frost_ui_test_wiring(ui_tests)
+
+frost_add_test(ui_editor_tests QT
+    SOURCES
+        editor/editor_features_test.cpp
+        editor/editor_view_test.cpp
+    DEPS frost::ui_editor frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::settings
+         frost::input frost::sched frost::io frost_ui_test_support)
+_frost_ui_test_wiring(ui_editor_tests)
 
 frost_add_test(ui_screenshot_tests QT
     SOURCES screenshot/screenshot_test.cpp

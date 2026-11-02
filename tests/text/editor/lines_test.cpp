@@ -45,7 +45,23 @@ TEST(LineOps, DeleteLinesKeepsTheColumn) {
     EXPECT_EQ(applied("a\nb|", commands::deleteLines), "a|");
     EXPECT_EQ(applied("ab|c", commands::deleteLines), "|");
     EXPECT_EQ(applied("a\n" M_A "b\nc" M_H "\nd", commands::deleteLines), "a\nd|");
-    EXPECT_EQ(applied("|a\nb|\nc", commands::deleteLines), "|c|"); // Each caret keeps its column.
+    // Carets that land on one line merge into one, keeping the primary's column (ADR 0037).
+    EXPECT_EQ(applied("|a\nb|\nc", commands::deleteLines), "|c");
+    EXPECT_EQ(applied("a|\n|b\ncd", commands::deleteLines), "c|d");
+    EXPECT_EQ(applied("a|\nb\nc|d\ne", commands::deleteLines), "b|\ne|"); // Separate lines stay apart.
+}
+
+TEST(LineOps, DeleteLinesMergesCaretsOnTheLastLine) {
+    EXPECT_EQ(applied("x\na|\nb|", commands::deleteLines), "x|");
+    EXPECT_EQ(applied("a|b\nc|d", commands::deleteLines), "|");
+}
+
+TEST(LineOps, PasteLinesGoesAboveTheCaretLine) {
+    EXPECT_EQ(applied("ab|c\nd", commands::pasteLines, "x\n"), "x\nab|c\nd");
+    EXPECT_EQ(applied("a\n|b", commands::pasteLines, "x\n"), "a\nx\n|b");
+    EXPECT_EQ(applied("a|b|\nc|", commands::pasteLines, "x\n"), "x\na|b|\nx\nc|"); // Once per line.
+    EXPECT_EQ(applied("a" M_A "b" M_H "c", commands::pasteLines, "x\n"), "x\na" M_A "b" M_H "c");
+    EXPECT_EQ(applied("a|", commands::pasteLines, ""), "a|");
 }
 
 TEST(LineOps, MoveLinesUpAndDown) {

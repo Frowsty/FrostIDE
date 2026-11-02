@@ -115,7 +115,45 @@ enum class ColorKey : std::uint16_t {
     MenuSelectionForeground,
     MenuSeparatorColor,
     StatusBarForeground,
-    // --- editor --- (m1/editor-view adds its keys here)
+    // --- editor --- (m1/editor-view, ADR 0037)
+    EditorForeground,
+    EditorCaretColor,
+    EditorSelectionBackground,
+    EditorCurrentLineBackground,
+    EditorGutterBackground,
+    EditorLineNumberForeground,
+    EditorLineNumberCurrentForeground,
+    EditorSearchMatchBackground,
+    EditorRightMarginColor,
+    EditorErrorMarkerColor,
+    EditorWarningMarkerColor,
+    // --- editor: syntax token colours (frost::syntax HighlightKind, ADR 0037) ---
+    SyntaxKeyword,
+    SyntaxComment,
+    SyntaxDocComment,
+    SyntaxString,
+    SyntaxStringEscape,
+    SyntaxNumber,
+    SyntaxConstant,
+    SyntaxType,
+    SyntaxBuiltinType,
+    SyntaxFunction,
+    SyntaxFunctionCall,
+    SyntaxMacro,
+    SyntaxDirective,
+    SyntaxNamespace,
+    SyntaxVariable,
+    SyntaxParameter,
+    SyntaxProperty,
+    SyntaxOperator,
+    SyntaxPunctuation,
+    SyntaxAttribute,
+    SyntaxLabel,
+    SyntaxTag,
+    SyntaxTagAttribute,
+    SyntaxHeading,
+    SyntaxLink,
+    SyntaxRaw,
     kCount
 };
 
@@ -270,6 +308,44 @@ inline constexpr std::array<ColorKeyInfo, kColorKeyCount> kColorKeys{{
     {ColorKey::MenuSeparatorColor, "Menu.separatorColor", ColorKey::SeparatorColor, false},
     {ColorKey::StatusBarForeground, "StatusBar.foreground", ColorKey::LabelSecondaryForeground, false},
     // --- editor ---
+    {ColorKey::EditorForeground, "Editor.foreground", ColorKey::LabelForeground, false},
+    {ColorKey::EditorCaretColor, "Editor.caretColor", ColorKey::EditorForeground, false},
+    {ColorKey::EditorSelectionBackground, "Editor.selectionBackground", ColorKey::ListSelectionBackground, false},
+    {ColorKey::EditorCurrentLineBackground, "Editor.currentLineBackground", ColorKey::ListHoverBackground, false},
+    {ColorKey::EditorGutterBackground, "Editor.gutterBackground", ColorKey::EditorBackground, false},
+    {ColorKey::EditorLineNumberForeground, "Editor.lineNumberForeground", ColorKey::LabelDisabledForeground, false},
+    {ColorKey::EditorLineNumberCurrentForeground, "Editor.lineNumberCurrentForeground", ColorKey::LabelSecondaryForeground, false},
+    {ColorKey::EditorSearchMatchBackground, "Editor.searchMatchBackground", ColorKey::ListSelectionInactiveBackground, false},
+    {ColorKey::EditorRightMarginColor, "Editor.rightMarginColor", ColorKey::SeparatorColor, false},
+    {ColorKey::EditorErrorMarkerColor, "Editor.errorMarkerColor", detail::kNoColor, false},
+    {ColorKey::EditorWarningMarkerColor, "Editor.warningMarkerColor", detail::kNoColor, false},
+    // --- editor: syntax token colours ---
+    {ColorKey::SyntaxKeyword, "Syntax.keyword", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxComment, "Syntax.comment", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxDocComment, "Syntax.docComment", ColorKey::SyntaxComment, false},
+    {ColorKey::SyntaxString, "Syntax.string", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxStringEscape, "Syntax.stringEscape", ColorKey::SyntaxKeyword, false},
+    {ColorKey::SyntaxNumber, "Syntax.number", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxConstant, "Syntax.constant", ColorKey::SyntaxNumber, false},
+    {ColorKey::SyntaxType, "Syntax.type", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxBuiltinType, "Syntax.builtinType", ColorKey::SyntaxKeyword, false},
+    {ColorKey::SyntaxFunction, "Syntax.function", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxFunctionCall, "Syntax.functionCall", ColorKey::SyntaxFunction, false},
+    {ColorKey::SyntaxMacro, "Syntax.macro", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxDirective, "Syntax.directive", ColorKey::SyntaxMacro, false},
+    {ColorKey::SyntaxNamespace, "Syntax.namespace", ColorKey::SyntaxType, false},
+    {ColorKey::SyntaxVariable, "Syntax.variable", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxParameter, "Syntax.parameter", ColorKey::SyntaxVariable, false},
+    {ColorKey::SyntaxProperty, "Syntax.property", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxOperator, "Syntax.operator", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxPunctuation, "Syntax.punctuation", ColorKey::EditorForeground, false},
+    {ColorKey::SyntaxAttribute, "Syntax.attribute", ColorKey::SyntaxMacro, false},
+    {ColorKey::SyntaxLabel, "Syntax.label", ColorKey::SyntaxProperty, false},
+    {ColorKey::SyntaxTag, "Syntax.tag", ColorKey::SyntaxKeyword, false},
+    {ColorKey::SyntaxTagAttribute, "Syntax.tagAttribute", ColorKey::SyntaxProperty, false},
+    {ColorKey::SyntaxHeading, "Syntax.heading", ColorKey::SyntaxKeyword, false},
+    {ColorKey::SyntaxLink, "Syntax.link", ColorKey::LinkForeground, false},
+    {ColorKey::SyntaxRaw, "Syntax.raw", ColorKey::SyntaxString, false},
 }};
 
 inline constexpr std::array<MetricKeyInfo, kMetricKeyCount> kMetricKeys{{
@@ -362,6 +438,9 @@ inline constexpr std::array kContrastPairs{
     // Component borders: required in High Contrast only.
     ContrastPair{ColorKey::ComponentBorderColor, ColorKey::IslandBackground, ContrastKind::Border},
     ContrastPair{ColorKey::TextFieldBorderColor, ColorKey::TextFieldBackground, ContrastKind::Border},
+    // Editor text (m1/editor-view). Token colours are not policed yet: TODO(M1) the hardening phase
+    // decides their thresholds (ADR 0037).
+    ContrastPair{ColorKey::EditorForeground, ColorKey::EditorBackground, ContrastKind::Text},
 };
 
 inline constexpr std::array kIconContrastPairs{

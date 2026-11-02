@@ -97,7 +97,36 @@
       "uiSize": 13,
       "smallSize": 11
     },
-    "Window.inactiveAlpha": 0.6
+    "Window.inactiveAlpha": 0.6,
+    "Editor": {
+      "foreground": "#FFFFFF",
+      "caretColor": "#FFFFFF",
+      "selectionBackground": "#1F4FA8",
+      "currentLineBackground": "#2A2A2A",
+      "lineNumberForeground": "#B8B8B8",
+      "lineNumberCurrentForeground": "#FFFFFF",
+      "searchMatchBackground": "#6B5200",
+      "rightMarginColor": "#5A5A5A",
+      "errorMarkerColor": "#FF6B6B",
+      "warningMarkerColor": "#FFD24D"
+    },
+    "Syntax": {
+      "keyword": "#8CC4FF",
+      "comment": "#C8C8C8",
+      "docComment": "#B5E3B0",
+      "string": "#A8F0A0",
+      "stringEscape": "#FFD27A",
+      "number": "#F0B8FF",
+      "type": "#7FF0E6",
+      "builtinType": "#8CC4FF",
+      "function": "#FFE48A",
+      "macro": "#E0C4FF",
+      "property": "#D8CCFF",
+      "attribute": "#E0C4FF",
+      "tag": "#8CC4FF",
+      "heading": "#8CC4FF",
+      "link": "#8CC4FF"
+    }
   },
   "compact": {
     "Island.arc": 8,
