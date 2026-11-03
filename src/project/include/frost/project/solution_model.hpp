@@ -121,6 +121,11 @@ public:
      */
     [[nodiscard]] static Result<SolutionModel> load(io::IFileSystem& fs, std::string_view solutionPath);
 
+    // Worker-thread overlay for one successfully evaluated project's item type.
+    // Unlisted static nodes of this type are disconnected; other item types and filters remain.
+    [[nodiscard]] SolutionModel withEvaluatedFiles(ProjectId project, ItemType type,
+                                                   std::span<const std::string> files) const;
+
     [[nodiscard]] SolutionFormat format() const noexcept { return m_format; }
     [[nodiscard]] const std::string& path() const noexcept { return m_path; }
     [[nodiscard]] const std::string& directory() const noexcept { return m_directory; }

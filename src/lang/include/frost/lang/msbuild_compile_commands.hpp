@@ -7,7 +7,7 @@
 /*
  * Evaluation (msbuildEvaluationSpec). For each project of the active solution configuration:
  *
- *     MSBuild.exe <project> -nologo -nodeReuse:false -getItem:ClCompile
+ *     MSBuild.exe <project> -nologo -nodeReuse:false -getItem:ClCompile;ClInclude
  *                 -getProperty:IncludePath;ExternalIncludePath;MSBuildAllProjects;...
  *                 -p:Configuration=<c> -p:Platform=<p> -p:DesignTimeBuild=true
  *                 -p:SolutionDir=<dir\> -p:SolutionPath=... -p:SolutionName=...
@@ -55,12 +55,15 @@
 #include "frost/lang/msvc_environment.hpp"
 
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -80,6 +83,7 @@ struct EvaluatedItem {
 struct ProjectEvaluation {
     std::map<std::string, std::string, std::less<>> properties;
     std::vector<EvaluatedItem> clCompile;
+    std::optional<std::vector<EvaluatedItem>> clInclude = std::nullopt;
 };
 
 // Reads the -getItem/-getProperty JSON (text before the first '{' is skipped). Errors: Corrupt.
@@ -97,6 +101,39 @@ struct MsBuildEvaluationRequest {
     std::string platform;      // The project platform ("x64").
     std::string preprocessTo;  // Non-empty: a -pp:<file> run instead of the query.
     std::vector<std::pair<std::string, std::optional<std::string>>> environment; // Added to the child's.
+};
+
+// A generation-scoped view of a project; pending and failed retain the static project tree.
+enum class ProjectEvaluationState { Pending, Evaluated, Failed };
+
+struct StreamedProjectContext {
+    std::string projectPath;
+    std::string configuration;
+    std::string platform;
+    ProjectEvaluationState state = ProjectEvaluationState::Pending;
+    std::vector<CompileCommand> commands;
+    std::vector<std::string> compileFiles = {};
+    std::optional<std::vector<std::string>> headers = std::nullopt;
+};
+
+// Publishes whole project records in evaluation order. A cache is never reused across generations.
+class StreamedProjectContexts {
+public:
+    StreamedProjectContexts(std::shared_ptr<GeneratedCommandsRetirement> retirement,
+                            std::shared_ptr<const project::SolutionModel> model);
+    void publish(StreamedProjectContext record);
+    void clear();
+    void invalidate();
+    [[nodiscard]] std::vector<std::shared_ptr<const StreamedProjectContext>> snapshot() const;
+    [[nodiscard]] std::shared_ptr<const project::SolutionModel> modelSnapshot() const;
+
+private:
+    mutable std::mutex m_mutex;
+    std::weak_ptr<GeneratedCommandsRetirement> m_retirement;
+    std::shared_ptr<const project::SolutionModel> m_baseModel;
+    std::shared_ptr<const project::SolutionModel> m_model;
+    std::vector<std::shared_ptr<const StreamedProjectContext>> m_records;
+    bool m_valid = true;
 };
 
 // The process spec of one run (see the header comment). Errors: InvalidArgument (paths not
@@ -129,6 +166,10 @@ struct MsBuildProviderOptions {
     std::vector<std::pair<std::string, std::optional<std::string>>> environment;
     std::string compiler = "clang-cl";
     std::shared_ptr<GeneratedCommandsRetirement> retirement;
+    // Optional generation-owned publication target; never read as a persistent cache.
+    std::shared_ptr<StreamedProjectContexts> streamedProjects;
+    // Internal consumer receives the first usable partial database after it is written.
+    std::function<void(const CompileCommandsLocation&)> onFirstDatabase;
     // The static synthesizer for projects whose evaluation fails, and its MSVC lookup.
     SynthesisOptions fallback;
     std::function<Result<MsvcEnvironment>()> msvc;
@@ -173,6 +214,29 @@ private:
     std::vector<std::string> m_warnings;
 };
 
+// One owned evaluation worker. stopAndJoin() is blocking and must run off the GUI thread.
+class IndependentProjectEvaluation final : public ICompileCommandsProvider {
+public:
+    IndependentProjectEvaluation(io::IProcessLauncher& launcher, io::IFileSystem& fs,
+                                 std::shared_ptr<const project::SolutionModel> model, std::string cacheDirectory,
+                                 MsBuildProviderOptions options);
+    ~IndependentProjectEvaluation() override;
+    void requestStop();
+    void stopAndJoin();
+    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate() override;
+    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate(std::stop_token stop) override;
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable_any m_changed;
+    std::optional<CompileCommandsLocation> m_first;
+    std::optional<Result<std::optional<CompileCommandsLocation>>> m_final;
+    std::shared_ptr<MsBuildCompileCommandsProvider> m_provider;
+    std::function<bool()> m_trusted;
+    std::stop_source m_stop;
+    std::jthread m_worker;
+};
+
 /*
  * The provider order of ADR 0041 for a solution: an existing compile_commands.json under
  * `root`, then MSBuild's evaluation (trusted solutions on Windows), then the static synthesizer.
@@ -181,6 +245,7 @@ private:
 [[nodiscard]] std::shared_ptr<ICompileCommandsProvider>
 solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                              std::shared_ptr<const project::SolutionModel> model, std::string root,
-                             std::string cacheDirectory, MsBuildProviderOptions options);
+                             std::string cacheDirectory, MsBuildProviderOptions options,
+                             std::shared_ptr<ICompileCommandsProvider> evaluated = {});
 
 } // namespace frost::lang

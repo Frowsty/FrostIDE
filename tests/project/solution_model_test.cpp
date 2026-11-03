@@ -66,6 +66,28 @@ constexpr std::string_view kExpectedTree =
     "Tools[Gone(unavailable),Packager(unsupported),README.md],"
     "App[Header Files[app.h],Resource Files[app.ico,app.rc],Source Files[app.cpp,main.cpp],README.md]]";
 
+TEST(SolutionModel, EvaluatedFilesOverlayKeepsFiltersAndOtherItems) {
+    auto model = SolutionModel::load(io::realFileSystem(), sdk("SdkApp.sln"));
+    ASSERT_TRUE(model);
+    const ProjectId core = projectNamed(*model, "Core");
+    const std::string oldFile = sdk("Libraries/Core/src/core.cpp");
+    const std::string header = sdk("Libraries/Core/include/core/core.h");
+    const std::string generated = sdk("Libraries/Core/generated.cpp");
+    ASSERT_TRUE(model->findFileNode(oldFile));
+    ASSERT_TRUE(model->findFileNode(header));
+    const auto oldNode = model->findFileNode(oldFile);
+    ASSERT_TRUE(model->parent(*oldNode));
+    const auto filterKey = model->node(*model->parent(*oldNode)).key;
+    const std::vector<std::string> files{generated};
+    const auto overlay = model->withEvaluatedFiles(core, ItemType::ClCompile, files);
+    EXPECT_TRUE(model->findFileNode(oldFile));
+    EXPECT_FALSE(overlay.findFileNode(oldFile));
+    EXPECT_TRUE(overlay.findFileNode(header));
+    ASSERT_TRUE(overlay.findFileNode(generated));
+    EXPECT_EQ(overlay.owningProject(generated), core);
+    EXPECT_TRUE(overlay.findNode(filterKey));
+}
+
 TEST(SolutionModel, BuildsTheSdkTreeFromSln) {
     auto model = SolutionModel::load(io::realFileSystem(), sdk("SdkApp.sln"));
     ASSERT_TRUE(model.has_value()) << model.error().describe();

@@ -129,6 +129,14 @@
   },
   "qt": {
     "version": "6.12.0",
+    "sources": {
+      "qtbase": {
+        "url": "https://download.qt.io/archive/qt/6.12/6.12.0/submodules/qtbase-everywhere-src-6.12.0.tar.xz",
+        "file": "qtbase-everywhere-src-6.12.0.tar.xz",
+        "directory": "qtbase-everywhere-src-6.12.0",
+        "sha256": "a951bd163c7b80fc6b8c88d7668fb56abf91c152373e13c10666763238131307"
+      }
+    },
     "windows": {
       "repository": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64",
       "package": "qt.qt6.6120.win64_msvc2022_64",

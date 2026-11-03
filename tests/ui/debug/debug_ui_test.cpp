@@ -178,6 +178,49 @@ TEST_F(DebugUiTest, AttachingUsesTheSuppliedAdapterAndKeepsTheHostAlive) {
     EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
 }
 
+TEST_F(DebugUiTest, ManagedAttachUsesMonoIdentityAndVerifiedBreakpointSet) {
+    debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
+    adapter.on("attach", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}};
+    });
+    auto factory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    std::map<std::string, std::vector<debug::BreakpointLine>> lines{{source, {{1, 7}}}};
+    auto allowed = std::vector<std::string>{source};
+    auto started = controller->attachManagedTarget(
+        target(), std::move(factory), [](const debug::DebugFrame&) { return true; }, allowed, lines,
+        [](std::string, std::function<void(bool)> done) { done(true); }, [] { return true; });
+    ASSERT_TRUE(started);
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    const auto initialized = adapter.argumentsOf("initialize");
+    ASSERT_EQ(initialized.size(), 1u);
+    EXPECT_EQ(initialized.front().stringAt("adapterID"), "mono");
+    EXPECT_TRUE(adapter.argumentsOf("launch").empty());
+    const auto sentBreakpoints = adapter.argumentsOf("setBreakpoints");
+    ASSERT_EQ(sentBreakpoints.size(), 1u);
+    const auto* requested = sentBreakpoints.front().find("breakpoints");
+    ASSERT_TRUE(requested);
+    ASSERT_EQ(requested->size(), 1u);
+    EXPECT_EQ(requested->items().front().integerAt("line"), 7);
+    stopSession();
+    const auto disconnects = adapter.argumentsOf("disconnect");
+    ASSERT_EQ(disconnects.size(), 1u);
+    EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+}
+
+TEST_F(DebugUiTest, ManagedAttachRejectsBreakpointOutsideAdmittedSources) {
+    auto factory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    std::map<std::string, std::vector<debug::BreakpointLine>> lines{{workPath("Trusted/other.cpp"), {{1, 7}}}};
+    auto started = controller->attachManagedTarget(
+        target(), std::move(factory), [](const debug::DebugFrame&) { return true; }, {source}, lines,
+        [](std::string, std::function<void(bool)> done) { done(true); }, [] { return true; });
+    EXPECT_FALSE(started);
+    EXPECT_TRUE(adapter.argumentsOf("initialize").empty());
+}
+
 TEST_F(DebugUiTest, CapturedSourceOpensReadOnlyAndClearsOnResume) {
     openEditor();
     controller->attachEditor(editor->view.get());

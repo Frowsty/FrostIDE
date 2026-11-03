@@ -42,6 +42,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class QTimer;
@@ -171,6 +172,12 @@ public:
     // --- Sessions ---
 
     [[nodiscard]] nav::SessionState captureSession() const;
+    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& cmakeTargets() const noexcept {
+        return m_cmakeTargets;
+    }
+    void setCMakeTargets(std::vector<std::pair<std::string, std::string>> targets) {
+        m_cmakeTargets = std::move(targets);
+    }
     // Reopens the tabs (order, pinned, active, caret and scroll), the tool-window layout and the
     // recents. Files that fail to open are skipped (each notified).
     void applySession(const nav::SessionState& state);
@@ -263,6 +270,7 @@ private:
 
     ShellWindow& m_shell;
     WorkbenchServices m_services;
+    std::vector<std::pair<std::string, std::string>> m_cmakeTargets;
     input::FindActionModel m_findActions;
     std::string m_root;
     std::string m_solution;

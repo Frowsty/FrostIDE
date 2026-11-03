@@ -75,6 +75,26 @@ TEST(TrustStore, CoversChildrenButNotSiblings) {
     EXPECT_TRUE((*store)->requireTrusted(MemTree::path("work/keep")).has_value());
 }
 
+TEST(TrustStore, SnapshotRevisionDetectsRevokeAndRegrant) {
+    MemTree tree;
+    auto store = TrustStore::open(tree.fs, MemTree::path("trusted-roots.txt"));
+    ASSERT_TRUE(store);
+    const auto root = MemTree::path("work");
+    ASSERT_TRUE((*store)->trust(root));
+    const auto first = (*store)->snapshot(root);
+    ASSERT_TRUE(first.trusted);
+    ASSERT_TRUE((*store)->untrust(root));
+    const auto revoked = (*store)->snapshot(root);
+    EXPECT_FALSE(revoked.trusted);
+    EXPECT_GT(revoked.revision, first.revision);
+    ASSERT_TRUE((*store)->trust(root));
+    const auto regranted = (*store)->snapshot(root);
+    EXPECT_TRUE(regranted.trusted);
+    EXPECT_GT(regranted.revision, revoked.revision);
+    ASSERT_TRUE((*store)->trust(root));
+    EXPECT_EQ((*store)->snapshot(root).revision, regranted.revision);
+}
+
 TEST(TrustStore, RefusesBadRootsAndFiles) {
     MemTree tree;
     auto store = TrustStore::open(tree.fs, MemTree::path("trusted-roots.txt"));

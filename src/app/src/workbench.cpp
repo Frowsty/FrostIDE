@@ -247,7 +247,24 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     connect(&m_luaTrustWatch, &QTimer::timeout, this, [this] {
         if (m_shutDown || m_projectRoot.empty())
             return;
-        const bool trusted = m_services.trust.isTrusted(m_projectRoot);
+        const auto trust = m_services.trust.snapshot(m_projectRoot);
+        const bool trusted = trust.trusted;
+        if (m_solution && trust.revision != m_projectTrustRevision) {
+            startProjectEvaluation(m_projectRoot);
+            if (m_clangd)
+                restartClangd();
+        }
+        if (m_solution && m_explorer) {
+            auto model = m_solution;
+            if (trust.trusted && trust.revision == m_projectTrustRevision && m_streamedProjects) {
+                if (auto evaluated = m_streamedProjects->modelSnapshot())
+                    model = std::move(evaluated);
+            }
+            const auto current = m_services.trust.snapshot(m_projectRoot);
+            if (!current.trusted || current.revision != m_projectTrustRevision)
+                model = m_solution;
+            m_explorer->setSolution(std::move(model), true);
+        }
         if (trusted != m_luaObservedTrust) {
             m_luaObservedTrust = trusted;
             if (trusted) {
@@ -295,6 +312,10 @@ Workbench::~Workbench() {
         if (stopped.valid())
             stopped.join();
     m_retiredClangd.clear();
+    for (auto& stopped : m_retiredProjectEvaluations)
+        if (stopped.valid())
+            stopped.join();
+    m_retiredProjectEvaluations.clear();
     m_language.reset();
     // The prompter and the actions refer to the controller; the services' threads post to them.
     delete m_trustPrompter;
@@ -364,8 +385,10 @@ void Workbench::createBuildService() {
     }
     // A new configuration builds other files with other flags: clangd follows (ADR 0041).
     connect(m_build.get(), &ui::BuildController::activeConfigurationChanged, this, [this](int) {
-        if (m_solution && m_clangd) {
-            restartClangd();
+        if (m_solution && !m_closingSolution) {
+            startProjectEvaluation(m_projectRoot);
+            if (m_clangd)
+                restartClangd();
         }
     });
 }
@@ -1253,6 +1276,7 @@ void Workbench::shutdown() {
     stopLua();
     stopManaged();
     stopClangd();
+    stopProjectEvaluation();
 }
 
 } // namespace frost::app

@@ -176,6 +176,8 @@ struct RigOptions {
     }();
     // Autosave on frame deactivation and on idle; off by default so the tests decide when saves run.
     bool autosave = false;
+    // Keep project evaluation from consuming a scripted launcher in unrelated admission tests.
+    bool disableProjectEvaluation = false;
     io::IProcessLauncher* launcher = nullptr;
     io::IFileSystem* fileSystem = nullptr;
 };
@@ -219,6 +221,9 @@ public:
         }
         if (wb.compileCommandsCache.empty()) {
             wb.compileCommandsCache = dir.join("data/compile-commands");
+        }
+        if (options.disableProjectEvaluation) {
+            wb.compileCommandsCache.clear();
         }
         if (wb.sessionDirectory.empty()) {
             wb.sessionDirectory = dir.join("data/sessions");

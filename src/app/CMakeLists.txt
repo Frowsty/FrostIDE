@@ -67,6 +67,12 @@ frost_add_library(app LAYER app
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp
+        src/mono_adapter_preparation.cpp
+        src/mono_adapter_preparation.hpp
+        src/mono_source_admission.cpp
+        src/mono_source_admission.hpp
+        src/mono_held_capture.cpp
+        src/mono_held_capture.hpp
         src/workbench_managed_debug.cpp
         src/project_edit_process.cpp
         src/workbench_project_edit.cpp
@@ -87,6 +93,10 @@ set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
     # The DPI-awareness APIs in selftest.cpp and the dialog guard in startup.cpp (user32).
     target_link_libraries(frost_app PRIVATE user32)
+endif()
+
+if(WIN32)
+    frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_main.cpp)
 endif()
 
 if(NOT WIN32)

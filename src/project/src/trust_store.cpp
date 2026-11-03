@@ -109,6 +109,8 @@ Result<void> TrustStore::reload() {
     auto content = m_fs.readFile(m_storePath);
     if (!content) {
         if (content.error().code() == ErrorCode::NotFound) {
+            if (!m_roots.empty())
+                ++m_revision;
             m_roots.clear();
             return {};
         }
@@ -155,6 +157,8 @@ Result<void> TrustStore::reload() {
             roots.push_back(std::move(*root));
         }
     }
+    if (m_roots != roots)
+        ++m_revision;
     m_roots = std::move(roots);
     return {};
 }
@@ -174,18 +178,19 @@ Result<void> TrustStore::save(const std::vector<std::string>& roots) {
     return m_fs.writeFileAtomic(m_storePath, content);
 }
 
-bool TrustStore::isTrusted(std::string_view path) const {
+bool TrustStore::isTrusted(std::string_view path) const { return snapshot(path).trusted; }
+
+TrustSnapshot TrustStore::snapshot(std::string_view path) const {
     auto normalized = normalizeTrustPath(path);
-    if (!normalized) {
-        return false;
-    }
     LockGuard lock(m_mutex);
+    if (!normalized)
+        return {.trusted = false, .revision = m_revision};
     for (const std::string& root : m_roots) {
         if (detail::isSameOrUnder(*normalized, root)) {
-            return true;
+            return {.trusted = true, .revision = m_revision};
         }
     }
-    return false;
+    return {.trusted = false, .revision = m_revision};
 }
 
 Result<void> TrustStore::requireTrusted(std::string_view path) const {
@@ -217,6 +222,7 @@ Result<void> TrustStore::trust(std::string_view root) {
         return saved;
     }
     m_roots = std::move(roots);
+    ++m_revision;
     return {};
 }
 
@@ -243,6 +249,7 @@ Result<void> TrustStore::untrust(std::string_view root) {
         return saved;
     }
     m_roots = std::move(roots);
+    ++m_revision;
     return {};
 }
 

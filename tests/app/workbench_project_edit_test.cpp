@@ -312,6 +312,7 @@ TEST(WorkbenchProjectEdit, ManagedPreparationBlocksRemovalUntilWorkspaceReopened
     launcher.expect({.expectExecutable = dir.join("dotnet.exe"), .neverExits = true});
     launcher.expect({.expectExecutable = dir.join("host.exe"), .neverExits = true});
     RigOptions options;
+    options.disableProjectEvaluation = true;
     options.launcher = &launcher;
     options.workbench.msbuildPath = dir.join("msbuild.exe");
     options.workbench.projectEditHostPath = dir.join("host.exe");
@@ -415,6 +416,7 @@ TEST(WorkbenchProjectEdit, PendingManagedSnapshotBlocksRemovalUntilCancelled) {
     launcher.expect({.expectExecutable = dir.join("host.exe"), .neverExits = true});
     HeldSnapshotFs fs(dir.join("Tiny.sln"), dir.join("Managed.dll"));
     RigOptions options;
+    options.disableProjectEvaluation = true;
     options.fileSystem = &fs;
     options.launcher = &launcher;
     options.workbench.msbuildPath = dir.join("msbuild.exe");

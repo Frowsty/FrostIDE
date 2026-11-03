@@ -445,6 +445,7 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     m_history.clear();
     m_recentFiles.clear();
     m_recentLocations.clear();
+    m_cmakeTargets.clear();
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
@@ -980,6 +981,7 @@ ListPopup* Workbench::showRecentLocations() {
 nav::SessionState Workbench::captureSession() const {
     nav::SessionState state;
     state.root = m_root;
+    state.cmakeTargets = m_cmakeTargets;
     const EditorTabs& tabs = m_shell.tabs();
     state.editorLayout = tabs.saveLayout();
     const auto groups = tabs.groups();
@@ -1009,6 +1011,7 @@ nav::SessionState Workbench::captureSession() const {
 
 void Workbench::applySession(const nav::SessionState& state) {
     m_restoring = true;
+    m_cmakeTargets = state.cmakeTargets;
     EditorTabs& tabs = m_shell.tabs();
     if (!tabs.restoreLayout(state.editorLayout))
         (void)tabs.restoreLayout(R"({"group":0})");

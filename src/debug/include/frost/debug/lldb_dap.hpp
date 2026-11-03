@@ -105,6 +105,6 @@ startDebugSession(const project::TrustStore& trust, const DebugTarget& target, A
 [[nodiscard]] Result<std::unique_ptr<DebugSession>>
 attachDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                    rpc::Json attachArguments, std::map<std::string, std::vector<BreakpointLine>> breakpoints,
-                   DebugSessionCallbacks callbacks);
+                   DebugSessionCallbacks callbacks, std::string adapterId = "lldb-dap");
 
 } // namespace frost::debug

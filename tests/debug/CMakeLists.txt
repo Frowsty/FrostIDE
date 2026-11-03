@@ -17,6 +17,13 @@ frost_add_test(debug_unit_tests
         dap_client_test.cpp
         debug_session_test.cpp
         lldb_dap_test.cpp
+        mono_dap_test.cpp
+        mono_wire_test.cpp
+        mono_session_test.cpp
+        mono_responses_test.cpp
+        mono_gate_test.cpp
+        mono_protocol_session_test.cpp
+        mono_transport_test.cpp
         lua_debug_endpoint_test.cpp
     DEPS frost::debug frost::project frost::text frost::io)
 target_include_directories(debug_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

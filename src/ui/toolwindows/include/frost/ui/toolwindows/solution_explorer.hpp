@@ -93,7 +93,7 @@ public:
     }
 
     // Shows `solution` (nullptr: nothing); see the header comment for reloads.
-    void setSolution(std::shared_ptr<const project::SolutionModel> solution);
+    void setSolution(std::shared_ptr<const project::SolutionModel> solution, bool preserveSearch = false);
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const;
 
     // Selects and reveals the file node at `path` (absolute) for "autoscroll from source", ending a

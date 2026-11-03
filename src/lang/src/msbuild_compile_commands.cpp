@@ -33,6 +33,73 @@
 #endif
 
 namespace frost::lang {
+
+StreamedProjectContexts::StreamedProjectContexts(std::shared_ptr<GeneratedCommandsRetirement> retirement,
+                                                 std::shared_ptr<const project::SolutionModel> model)
+    : m_retirement(std::move(retirement)), m_baseModel(model), m_model(std::move(model)) {}
+void StreamedProjectContexts::publish(StreamedProjectContext record) {
+    std::shared_ptr<const project::SolutionModel> previous;
+    {
+        std::lock_guard lock(m_mutex);
+        if (!m_valid)
+            return;
+        previous = m_model;
+    }
+    std::shared_ptr<const project::SolutionModel> next;
+    if (previous && record.state == ProjectEvaluationState::Evaluated) {
+        if (const auto project = previous->findProjectByPath(record.projectPath)) {
+            next = std::shared_ptr<const project::SolutionModel>(
+                new project::SolutionModel([&] {
+                    auto updated =
+                        previous->withEvaluatedFiles(*project, project::ItemType::ClCompile, record.compileFiles);
+                    if (record.headers)
+                        updated = updated.withEvaluatedFiles(*project, project::ItemType::ClInclude, *record.headers);
+                    return updated;
+                }()),
+                [retirement = m_retirement](const project::SolutionModel* model) {
+                    if (auto owner = retirement.lock())
+                        owner->submit([model] { delete model; });
+                });
+        }
+    }
+    auto immutable = std::shared_ptr<const StreamedProjectContext>(
+        new StreamedProjectContext(std::move(record)), [retirement = m_retirement](const StreamedProjectContext* item) {
+            if (auto owner = retirement.lock())
+                owner->submit([item] { delete item; });
+            // A closed scheduler retains the record rather than destroying it on the caller.
+        });
+    std::lock_guard lock(m_mutex);
+    if (m_valid) {
+        if (next && m_model == previous)
+            m_model = std::move(next);
+        const auto existing = std::ranges::find_if(
+            m_records, [&](const auto& item) { return item->projectPath == immutable->projectPath; });
+        if (existing == m_records.end())
+            m_records.push_back(std::move(immutable));
+        else
+            *existing = std::move(immutable);
+    }
+}
+void StreamedProjectContexts::invalidate() {
+    std::lock_guard lock(m_mutex);
+    m_valid = false;
+    m_records.clear();
+    m_model.reset();
+}
+void StreamedProjectContexts::clear() {
+    std::lock_guard lock(m_mutex);
+    m_records.clear();
+    m_model = m_baseModel;
+}
+std::vector<std::shared_ptr<const StreamedProjectContext>> StreamedProjectContexts::snapshot() const {
+    std::lock_guard lock(m_mutex);
+    return m_records;
+}
+std::shared_ptr<const project::SolutionModel> StreamedProjectContexts::modelSnapshot() const {
+    std::lock_guard lock(m_mutex);
+    return m_valid ? m_model : nullptr;
+}
+
 namespace {
 
 // MSBuild has no stdin input. Drain both pipes independently while wait/terminate remain
@@ -277,6 +344,8 @@ Result<ProjectEvaluation> parseMsBuildEvaluation(std::string_view output) {
     }
     ProjectEvaluation out;
     if (const Json* properties = json->find("Properties"); properties != nullptr) {
+        if (!properties->isObject())
+            return fail(ErrorCode::Corrupt, "MSBuild Properties is not an object");
         for (std::size_t i = 0; i < properties->size(); ++i) {
             if (const std::string* value = properties->items()[i].asString()) {
                 out.properties.emplace(lower(properties->keys()[i]), *value);
@@ -284,9 +353,14 @@ Result<ProjectEvaluation> parseMsBuildEvaluation(std::string_view output) {
         }
     }
     const Json* items = json->find("Items");
-    const Json* clCompile = items != nullptr ? items->find("ClCompile") : nullptr;
-    if (clCompile != nullptr) {
-        for (const Json& item : clCompile->items()) {
+    if (items == nullptr || !items->isObject())
+        return fail(ErrorCode::Corrupt, "MSBuild Items is missing or is not an object");
+    const auto readItems = [](const Json& source, std::vector<EvaluatedItem>& target) -> Result<void> {
+        if (!source.isArray())
+            return fail(ErrorCode::Corrupt, "MSBuild item group is not an array");
+        for (const Json& item : source.items()) {
+            if (!item.isObject())
+                return fail(ErrorCode::Corrupt, "MSBuild item is not an object");
             EvaluatedItem evaluated;
             for (std::size_t i = 0; i < item.size(); ++i) {
                 if (const std::string* value = item.items()[i].asString()) {
@@ -294,10 +368,21 @@ Result<ProjectEvaluation> parseMsBuildEvaluation(std::string_view output) {
                 }
             }
             evaluated.fullPath = valueOf(evaluated.metadata, "fullpath");
-            if (!evaluated.fullPath.empty()) {
-                out.clCompile.push_back(std::move(evaluated));
-            }
+            if (!io::isAbsolutePath(evaluated.fullPath, io::PathStyle::Windows))
+                return fail(ErrorCode::Corrupt, "MSBuild item FullPath is missing or is not absolute");
+            target.push_back(std::move(evaluated));
         }
+        return {};
+    };
+    const Json* clCompile = items->find("ClCompile");
+    if (clCompile == nullptr)
+        return fail(ErrorCode::Corrupt, "MSBuild ClCompile item group is missing");
+    if (auto read = readItems(*clCompile, out.clCompile); !read)
+        return std::unexpected(std::move(read.error()));
+    if (const Json* clInclude = items->find("ClInclude")) {
+        out.clInclude.emplace();
+        if (auto read = readItems(*clInclude, *out.clInclude); !read)
+            return std::unexpected(std::move(read.error()));
     }
     return out;
 }
@@ -316,7 +401,7 @@ Result<io::ProcessSpec> msbuildEvaluationSpec(const MsBuildEvaluationRequest& re
     spec.executable = request.msbuildPath;
     spec.arguments = {request.projectPath, "-nologo", "-nodeReuse:false"};
     if (request.preprocessTo.empty()) {
-        spec.arguments.emplace_back("-getItem:ClCompile");
+        spec.arguments.emplace_back("-getItem:ClCompile;ClInclude");
         std::string properties = "-getProperty:";
         const std::vector<std::string> names = evaluatedPropertyNames();
         for (std::size_t i = 0; i < names.size(); ++i) {
@@ -485,8 +570,13 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::l
 Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::locate(std::stop_token stop) {
     m_stats = {};
     m_warnings.clear();
-    if (stop.stop_requested())
+    if (m_options.streamedProjects)
+        m_options.streamedProjects->clear();
+    if (stop.stop_requested()) {
+        if (m_options.streamedProjects)
+            m_options.streamedProjects->invalidate();
         return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
+    }
     if (m_cacheDirectory.empty())
         return fail(ErrorCode::IoError, "cannot allocate an isolated compile commands directory");
     if constexpr (io::kNativePathStyle != io::PathStyle::Windows) {
@@ -498,6 +588,8 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::l
 
 Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::evaluateAll(std::stop_token stop) {
     if (!m_options.trusted || !m_options.trusted()) {
+        if (m_options.streamedProjects)
+            m_options.streamedProjects->invalidate();
         log::info(kLogCategory, "{} is not trusted: compile commands come from the static project model",
                   m_model->path());
         return std::optional<CompileCommandsLocation>();
@@ -506,23 +598,64 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
     if (!configurationIndex) {
         return std::unexpected(std::move(configurationIndex.error()));
     }
+    std::vector<CompileCommand> all;
+    std::vector<std::vector<CompileCommand>> byProject(m_model->projects().size());
+    std::optional<Error> firstError;
+    bool publishedFirst = false;
+    std::vector<project::ProjectId> order;
+    // A partial database must have the same duplicate-file precedence as the final one.
+    // An unevaluated earlier project can introduce a file absent from its static model,
+    // so evaluate in solution order before publishing any later project's commands.
+    for (std::size_t p = 0; p < m_model->projects().size(); ++p) {
+        const project::ProjectId id{static_cast<std::uint32_t>(p)};
+        const auto& info = m_model->project(id);
+        const auto& mapping = m_model->projectConfiguration(id, *configurationIndex);
+        if (info.vcxproj && mapping && !info.path.empty())
+            order.push_back(id);
+    }
+    if (m_options.streamedProjects) {
+        for (const project::ProjectId id : order) {
+            const auto& info = m_model->project(id);
+            const auto& mapping = *m_model->projectConfiguration(id, *configurationIndex);
+            m_options.streamedProjects->publish({.projectPath = info.path,
+                                                 .configuration = mapping.configuration,
+                                                 .platform = mapping.platform,
+                                                 .state = ProjectEvaluationState::Pending,
+                                                 .commands = {}});
+        }
+    }
+    const auto failPending = [&] {
+        if (!m_options.streamedProjects)
+            return;
+        for (const project::ProjectId id : order) {
+            const auto& info = m_model->project(id);
+            const auto& mapping = *m_model->projectConfiguration(id, *configurationIndex);
+            m_options.streamedProjects->publish({.projectPath = info.path,
+                                                 .configuration = mapping.configuration,
+                                                 .platform = mapping.platform,
+                                                 .state = ProjectEvaluationState::Failed,
+                                                 .commands = {}});
+        }
+    };
     std::string msbuild = m_options.msbuildPath;
     if (msbuild.empty()) {
         if (!m_options.locateMsBuild) {
+            failPending();
             return fail(ErrorCode::NotFound, "no MSBuild to evaluate the projects with");
         }
         auto found = m_options.locateMsBuild();
         if (!found) {
+            failPending();
             return std::unexpected(std::move(found.error().withContext("finding MSBuild for project evaluation")));
         }
         msbuild = std::move(*found);
     }
-    std::vector<CompileCommand> all;
-    std::optional<Error> firstError;
-    for (std::size_t p = 0; p < m_model->projects().size(); ++p) {
-        if (stop.stop_requested())
+    for (const project::ProjectId id : order) {
+        if (stop.stop_requested()) {
+            if (m_options.streamedProjects)
+                m_options.streamedProjects->invalidate();
             return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
-        const project::ProjectId id{static_cast<std::uint32_t>(p)};
+        }
         const project::ProjectInfo& info = m_model->project(id);
         const std::optional<project::ProjectConfigurationMapping>& mapping =
             m_model->projectConfiguration(id, *configurationIndex);
@@ -538,7 +671,7 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
                                          .platform = mapping->platform,
                                          .preprocessTo = {},
                                          .environment = m_options.environment};
-        const auto evaluate = [&]() -> Result<std::vector<CompileCommand>> {
+        const auto evaluate = [&]() -> Result<std::pair<ProjectEvaluation, std::vector<CompileCommand>>> {
             if (!m_options.trusted || !m_options.trusted())
                 return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
             auto spec = msbuildEvaluationSpec(request);
@@ -557,15 +690,28 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
             if (!evaluation) {
                 return std::unexpected(std::move(evaluation.error()));
             }
-            return commandsFromEvaluation(*evaluation, info.vcxproj->directory, mapping->configuration,
-                                          mapping->platform, m_options.compiler);
+            auto commands = commandsFromEvaluation(*evaluation, info.vcxproj->directory, mapping->configuration,
+                                                   mapping->platform, m_options.compiler);
+            return std::pair(std::move(*evaluation), std::move(commands));
         };
         auto evaluated = evaluate();
-        if (stop.stop_requested() || (!evaluated && evaluated.error().code() == ErrorCode::Cancelled))
+        if (stop.stop_requested() || (!evaluated && evaluated.error().code() == ErrorCode::Cancelled)) {
+            if (m_options.streamedProjects)
+                m_options.streamedProjects->invalidate();
             return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
-        if (!m_options.trusted || !m_options.trusted())
+        }
+        if (!m_options.trusted || !m_options.trusted()) {
+            if (m_options.streamedProjects)
+                m_options.streamedProjects->invalidate();
             return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
+        }
         if (!evaluated) {
+            if (m_options.streamedProjects)
+                m_options.streamedProjects->publish({.projectPath = info.path,
+                                                     .configuration = mapping->configuration,
+                                                     .platform = mapping->platform,
+                                                     .state = ProjectEvaluationState::Failed,
+                                                     .commands = {}});
             const std::string warning =
                 std::format("MSBuild could not evaluate {} ({}|{}); using the static project model: {}", info.path,
                             mapping->configuration, mapping->platform, evaluated.error().describe());
@@ -582,33 +728,125 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
             }
             std::vector<CompileCommand> fallback =
                 synthesizeProjectCompileCommands(*m_model, id, *configurationIndex, m_options.fallback);
-            all.insert(all.end(), std::make_move_iterator(fallback.begin()), std::make_move_iterator(fallback.end()));
+            byProject[id.value()] = std::move(fallback);
             ++m_stats.fellBack;
             continue;
         }
         ++m_stats.evaluated;
-        all.insert(all.end(), std::make_move_iterator(evaluated->begin()), std::make_move_iterator(evaluated->end()));
+        if (m_options.streamedProjects) {
+            std::vector<std::string> compileFiles;
+            compileFiles.reserve(evaluated->first.clCompile.size());
+            for (const auto& item : evaluated->first.clCompile)
+                compileFiles.push_back(item.fullPath);
+            std::optional<std::vector<std::string>> headers;
+            if (evaluated->first.clInclude) {
+                headers.emplace();
+                for (const auto& item : *evaluated->first.clInclude)
+                    headers->push_back(item.fullPath);
+            }
+            m_options.streamedProjects->publish({.projectPath = info.path,
+                                                 .configuration = mapping->configuration,
+                                                 .platform = mapping->platform,
+                                                 .state = ProjectEvaluationState::Evaluated,
+                                                 .commands = evaluated->second,
+                                                 .compileFiles = std::move(compileFiles),
+                                                 .headers = std::move(headers)});
+        }
+        if (!publishedFirst && m_options.onFirstDatabase && !evaluated->second.empty()) {
+            std::vector<CompileCommand> prefix;
+            for (std::size_t p = 0; p < id.value(); ++p)
+                prefix.insert(prefix.end(), byProject[p].begin(), byProject[p].end());
+            prefix.insert(prefix.end(), evaluated->second.begin(), evaluated->second.end());
+            auto partial =
+                writeCompileCommandsLocation(m_fs, m_cacheDirectory, prefix, CompileCommandsSource::Evaluated);
+            if (!partial)
+                return std::unexpected(std::move(partial.error()));
+            if (stop.stop_requested() || !m_options.trusted || !m_options.trusted())
+                return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled before publication");
+            if (*partial) {
+                (**partial).generatedLease = m_lease;
+                m_options.onFirstDatabase(**partial);
+                publishedFirst = true;
+            }
+        }
+        byProject[id.value()] = std::move(evaluated->second);
     }
+    // Evaluation priority must not change duplicate-file precedence in the final database.
+    for (auto& commands : byProject)
+        all.insert(all.end(), std::make_move_iterator(commands.begin()), std::make_move_iterator(commands.end()));
     if (m_stats.evaluated + m_stats.cached == 0 && firstError) {
         // Nothing was evaluated: let the chain's static provider answer under its own name.
         return std::unexpected(std::move(firstError->withContext("MSBuild evaluated no project")));
     }
     log::info(kLogCategory, "MSBuild compile commands: {} evaluated, {} cached, {} from the static model",
               m_stats.evaluated, m_stats.cached, m_stats.fellBack);
-    if (!m_options.trusted || !m_options.trusted())
+    if (!m_options.trusted || !m_options.trusted()) {
+        if (m_options.streamedProjects)
+            m_options.streamedProjects->invalidate();
         return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
-    if (stop.stop_requested())
+    }
+    if (stop.stop_requested()) {
+        if (m_options.streamedProjects)
+            m_options.streamedProjects->invalidate();
         return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
+    }
     auto result = writeCompileCommandsLocation(m_fs, m_cacheDirectory, all, CompileCommandsSource::Evaluated);
     if (result && *result)
         (**result).generatedLease = m_lease;
     return result;
 }
 
+IndependentProjectEvaluation::IndependentProjectEvaluation(io::IProcessLauncher& launcher, io::IFileSystem& fs,
+                                                           std::shared_ptr<const project::SolutionModel> model,
+                                                           std::string cacheDirectory, MsBuildProviderOptions options) {
+    m_trusted = options.trusted;
+    options.onFirstDatabase = [this](const CompileCommandsLocation& first) {
+        std::lock_guard lock(m_mutex);
+        m_first = first;
+        m_changed.notify_all();
+    };
+    m_provider = std::make_shared<MsBuildCompileCommandsProvider>(launcher, fs, std::move(model),
+                                                                  std::move(cacheDirectory), std::move(options));
+    m_worker = std::jthread([this] {
+        auto result = m_provider->locate(m_stop.get_token());
+        std::lock_guard lock(m_mutex);
+        m_final = std::move(result);
+        m_changed.notify_all();
+    });
+}
+
+IndependentProjectEvaluation::~IndependentProjectEvaluation() { stopAndJoin(); }
+void IndependentProjectEvaluation::requestStop() {
+    m_stop.request_stop();
+    m_changed.notify_all();
+}
+void IndependentProjectEvaluation::stopAndJoin() {
+    requestStop();
+    if (m_worker.joinable())
+        m_worker.join();
+}
+Result<std::optional<CompileCommandsLocation>> IndependentProjectEvaluation::locate() { return locate({}); }
+Result<std::optional<CompileCommandsLocation>> IndependentProjectEvaluation::locate(std::stop_token stop) {
+    std::unique_lock lock(m_mutex);
+    m_changed.wait(lock, stop, [this] { return m_first.has_value() || m_final.has_value(); });
+    if (stop.stop_requested() || m_stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "project evaluation cancelled");
+    if (!m_trusted || !m_trusted())
+        return fail(ErrorCode::Busy, "project trust changed during evaluation");
+    if (m_final && !*m_final)
+        return std::unexpected(m_final->error());
+    if (m_first)
+        return std::optional<CompileCommandsLocation>(*m_first);
+    if (m_final)
+        return **m_final;
+    return fail(ErrorCode::Cancelled, "project evaluation cancelled");
+}
+
 std::shared_ptr<ICompileCommandsProvider>
 solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                              std::shared_ptr<const project::SolutionModel> model, std::string root,
-                             std::string cacheDirectory, MsBuildProviderOptions options) {
+                             std::string cacheDirectory, MsBuildProviderOptions options,
+                             std::shared_ptr<ICompileCommandsProvider> evaluated) {
     const std::string cleanupBoundary = cacheDirectory;
     cacheDirectory = outputDirectory(cacheDirectory);
     SynthesisOptions synthesis = options.fallback;
@@ -623,9 +861,12 @@ solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs
         chain.push_back(std::make_shared<UnavailableCompileCommandsProvider>());
         return std::make_shared<FirstAvailableCompileCommandsProvider>(std::move(chain));
     }
-    chain.push_back(std::make_shared<MsBuildCompileCommandsProvider>(
-        launcher, fs, model, join(cacheDirectory, "evaluated"), std::move(options), cleanupBoundary,
-        std::vector<std::string>{join(cacheDirectory, "evaluated"), cacheDirectory}));
+    if (evaluated)
+        chain.push_back(std::move(evaluated));
+    else
+        chain.push_back(std::make_shared<MsBuildCompileCommandsProvider>(
+            launcher, fs, model, join(cacheDirectory, "evaluated"), std::move(options), cleanupBoundary,
+            std::vector<std::string>{join(cacheDirectory, "evaluated"), cacheDirectory}));
     const std::string synthesized = join(cacheDirectory, "synthesized");
     auto fallback = std::make_shared<SolutionCompileCommandsProvider>(fs, std::move(model), synthesized,
                                                                       std::move(synthesis), std::move(msvc));

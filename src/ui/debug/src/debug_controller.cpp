@@ -315,6 +315,48 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
     return started;
 }
 
+Result<void>
+DebugController::attachManagedTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
+                                     std::function<bool(const debug::DebugFrame&)> frameAllowed,
+                                     std::vector<std::string> allowedSources,
+                                     std::map<std::string, std::vector<debug::BreakpointLine>> verifiedBreakpoints,
+                                     std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint,
+                                     std::function<bool()> ownerAdmission) {
+    const bool admitted = ownerAdmission && ownerAdmission();
+    if (m_pendingRun || m_alternatePending || !admitted)
+        return fail(ErrorCode::Busy, "another run or debug launch is already pending");
+    if (!factory || !frameAllowed || !validateBreakpoint || allowedSources.empty())
+        return fail(ErrorCode::InvalidArgument, "verified managed source policy is required");
+    if (m_session)
+        return fail(ErrorCode::Busy, "a debug session is running already; stop it first");
+    for (const auto& [path, lines] : verifiedBreakpoints) {
+        (void)lines;
+        if (std::ranges::find(allowedSources, path) == allowedSources.end())
+            return fail(ErrorCode::InvalidArgument, "breakpoint source is not admitted");
+    }
+    m_coreClrSession = true;
+    m_coreClrFrameAllowed = std::move(frameAllowed);
+    m_coreClrAllowedSources = std::move(allowedSources);
+    m_coreClrBreakpointValidator = std::move(validateBreakpoint);
+    auto started = startSession(
+        target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, "Mono",
+        [this, target, factory = std::move(factory),
+         verifiedBreakpoints = std::move(verifiedBreakpoints)](debug::DebugSessionCallbacks callbacks) mutable {
+            return debug::attachDebugSession(*m_options.trust, target, std::move(factory), rpc::Json::object(),
+                                             std::move(verifiedBreakpoints), std::move(callbacks), "mono");
+        },
+        true);
+    if (!started) {
+        m_coreClrSession = false;
+        m_coreClrFrameAllowed = {};
+        m_coreClrAllowedSources.clear();
+        m_coreClrBreakpointValidator = {};
+    } else {
+        m_lastCoreClrSession = true;
+    }
+    return started;
+}
+
 Result<void> DebugController::startCoreClrTarget(
     const debug::CoreClrTarget& target, const std::vector<std::string>& trustRoots, debug::AdapterFactory factory,
     std::function<bool(const debug::DebugFrame&)> frameAllowed, std::vector<std::string> allowedSources,

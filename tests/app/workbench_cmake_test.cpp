@@ -62,6 +62,84 @@ TEST(WorkbenchCMake, ReloadOffersTrustBeforeConfiguring) {
     rig.workbench->cmakeService()->cancel();
 }
 
+TEST(WorkbenchCMake, TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved) {
+    WorkDir dir("cmake-target-session");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    const std::string prefix = "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                               "\" CACHE FILEPATH \"\" FORCE)\nproject(TargetSession C)\n";
+    dir.write("CMakeLists.txt", prefix + "add_executable(first main.c)\nadd_executable(second main.c)\n"
+                                         "add_library(helper STATIC main.c)\n");
+    dir.write("main.c", "int main(void) { return 0; }\n");
+    dir.write("CMakePresets.json", R"({"version":3,"configurePresets":[
+        {"name":"Debug","generator":"Ninja","binaryDir":"${sourceDir}/build-debug"},
+        {"name":"Release","generator":"Ninja","binaryDir":"${sourceDir}/build-release"}]})");
+    {
+        WorkbenchRig rig(dir);
+        ASSERT_TRUE(rig.trust->trust(dir.path()));
+        ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
+        auto* combo = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"));
+        ASSERT_NE(combo, nullptr);
+        combo->setCurrentIndex(combo->findText(QStringLiteral("second")));
+        emit combo->activated(combo->currentIndex());
+        ASSERT_EQ(combo->currentText(), QStringLiteral("second"));
+        auto* service = rig.workbench->cmakeService();
+        ASSERT_TRUE(service->configure());
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
+        ASSERT_TRUE(service->setActiveProfile(1));
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
+        ASSERT_TRUE(service->setActiveProfile(0));
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
+        // The service switches synchronously, while its new model is still queued for the UI.
+        // Selecting the old tree during that gap must not overwrite Release's preference.
+        auto* tree = rig.window->findChild<QTreeView*>(QStringLiteral("cmakeTargets"));
+        ASSERT_NE(tree, nullptr);
+        const auto findTarget = [&](auto&& self, const QModelIndex& parent, const QString& name) -> QModelIndex {
+            for (int row = 0; row < tree->model()->rowCount(parent); ++row) {
+                const QModelIndex index = tree->model()->index(row, 0, parent);
+                if (index.data().toString() == name && index.data(frost::ui::cmake::CMakeTreeModel::KindRole).toInt() ==
+                                                           static_cast<int>(frost::project::CMakeViewNodeKind::Target))
+                    return index;
+                if (const QModelIndex found = self(self, index, name); found.isValid())
+                    return found;
+            }
+            return {};
+        };
+        const QModelIndex first = findTarget(findTarget, {}, QStringLiteral("first"));
+        const QModelIndex second = findTarget(findTarget, {}, QStringLiteral("second"));
+        const QModelIndex helper = findTarget(findTarget, {}, QStringLiteral("helper"));
+        ASSERT_TRUE(first.isValid());
+        ASSERT_TRUE(second.isValid());
+        ASSERT_TRUE(helper.isValid());
+        tree->setCurrentIndex(helper);
+        EXPECT_EQ(tree->currentIndex(), helper);
+        EXPECT_EQ(combo->currentText(), QStringLiteral("second"));
+        ASSERT_TRUE(service->setActiveProfile(1));
+        tree->setCurrentIndex(first);
+        tree->setCurrentIndex(second);
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
+        ASSERT_TRUE(service->setActiveProfile(0));
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
+        ASSERT_TRUE(rig.workbench->closeProject());
+    }
+    {
+        WorkbenchRig rig(dir);
+        ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
+        dir.write("CMakeLists.txt", prefix + "add_executable(first main.c)\n");
+        ASSERT_TRUE(rig.workbench->cmakeService()->configure());
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
+        auto* combo = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"));
+        ASSERT_NE(combo, nullptr);
+        emit combo->activated(combo->currentIndex()); // Explicitly accept the already-selected fallback.
+        dir.write("CMakeLists.txt", prefix + "add_executable(first main.c)\nadd_executable(second main.c)\n");
+        ASSERT_TRUE(rig.workbench->cmakeService()->configure());
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
+        EXPECT_TRUE(rig.workbench->closeProject());
+    }
+}
+
 TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     WorkDir dir("cmake-app");
     std::string compiler = FROST_TEST_C_COMPILER;

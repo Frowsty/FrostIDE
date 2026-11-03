@@ -3,6 +3,76 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Project, target persistence and Mono integration verification
+
+- Corrected combined tree `f6391d0a` passed both full quick gates: Windows 3034/3059
+  with 25 skips and one additional disabled test; native Linux 2867/2918 with 51 skips.
+  Format, frost-lint, featurecheck and platform licence checks pass (Windows 107 and
+  Linux 102 packages, zero violations). The five admission fixtures now disable only
+  unrelated background project evaluation, preserving strict launch counts and admission
+  assertions; 17 Mono files received purpose comments. Both changes were independently
+  reviewed. Logs are `build/verify-resume-combined-windows-r5.log` and
+  `build/verify-resume-combined-native-r6.log`; exact CTest archives are
+  `E:/FrostBuilds/orchestration/resume-windows-f639-r5-ctest.log` and
+  `E:/FrostBuilds/orchestration/resume-native-f639-r6-ctest.log`. Earlier failed evidence
+  remains preserved below. Final checkpoint review and commit follow these gates.
+- Reviewed checkpoint `18ee1aa` was committed, merged to main and pushed under D23 after
+  the c499 Windows gate, e3 native gate and changed Windows shutdown test passed. It
+  includes signed update discovery, Keymap/Updates settings and CMake profile fixes;
+  it does not provide an installer or a production signing key.
+- The next combined candidate joins reviewed evaluated-project parsing/search/precedence,
+  per-project/profile CMake target persistence, staged dependency notices and pinned Qtbase
+  source delivery, and the Mono adapter preparation/transport foundation. Formatted source
+  tree `b708e249` built on Windows. Linux exposed a socket-length conversion in a new Mono
+  test; reviewed test-only successor `2c55dcb6` preserves POSIX size_t and clamps Winsock
+  lengths before int conversion. Its full native gate passed 2867/2918 with 51 skips and
+  licence check 102 packages/zero violations. Evidence: `build/verify-resume-combined-native-r5.log`
+  and `E:/FrostBuilds/orchestration/resume-native-2c55-r5-ctest.log`.
+- Windows b708 full gate failed: 3029/3059 passed, 25 skipped, one additional disabled
+  test and five failures. All five reported process-launch count mismatches after project
+  evaluation began running independently of clangd; the fixtures and actual admission
+  behavior are being checked. Format passed; frost-lint found 17 Mono files without purpose
+  comments; licence check passed 107 packages/zero violations and featurecheck passed.
+  Preserve `build/verify-resume-combined-windows-r4.log` and
+  `E:/FrostBuilds/orchestration/resume-windows-b708-r4-ctest.log` as failed evidence.
+  That failed candidate was not approved for merge or promotion; f639 above is its
+  reviewed correction, with matching successful gates.
+- Candidate `E:/FrostBuilds/preview/codex-20261103-b708-candidate` contains app DLL
+  SHA256 `B4752B4E3B8D6E0531EC0C753ABCB6F085F5C672CF17BFCD7613685382A918A0`.
+  Independently reviewed private-desktop acceptance covers actual FrostEngine target
+  selection, clean exit and persistence after reopen (22 evidence hashes), plus joint
+  Keymap/Updates Apply, restart persistence and F12 Go to Line dispatch (21 hashes).
+  These are bounded menu/message/UIA checks, not physical keyboard acceptance or the
+  full engine build/debug workflow. The rebuilt/staged `codex-20261103-f639-candidate`
+  has DLL SHA256 `34E70BF1D1FA8DBB5C7AB248EB7CEDA14312DA4F785F0AB1A5211909072EFC3B`
+  and passed its private-desktop startup self-test. Astra verified package/build provenance
+  and that the production delta from b708 is purpose comments only. The earlier b708
+  captures remain behavioral evidence; they are not new f639 workflow runs. The expanded
+  Settings manifest includes all 27 original/helper hashes, independently checked.
+- The owned `E:/FrostBuilds/beta-engine-8237` fixture built FrostTests successfully through
+  authoritative Build.py, serially, with canonical engine source untouched. The first run
+  was intentionally stopped before final linking to reserve memory; resumed r2 exited zero.
+  Its final link took 8m14.8s across two internal linker passes; sampled peak working set was
+  about 24.03 GiB, with peak pagefile usage about 12.27 GiB. Future admission must account
+  for this observed full-target load rather than extrapolate from smaller focused links.
+  `E:/FrostBuilds/orchestration/beta-engine-build-tests-resume-r2.log` and archived
+  `beta-engine-8237-frosttests-build-r2` preserve the build/binary/PDB evidence.
+  A private-desktop HMAC subset passed one case/eight assertions, with 8490 cases skipped;
+  this is not the full engine suite. PDB TestMain.cpp points to an older cached worktree,
+  but its embedded SHA256 matches the owned source. Manual source mapping and authoritative
+  toolbar build-wrapper support are being implemented; actual IDE error/rebuild and live
+  debugger binding remain open.
+- Isolated work continues on CMake transaction coordination, Rename leases/recovery,
+  MSBuild target extraction, Lua source binding and managed owned-process attachment.
+  The Lua engine provenance slice passed 57 cases/4699 assertions with independently
+  verified source/binary evidence; that is not complete breakpoint support. Registry
+  restoration experiments use owned scratch keys only and do not authorize Editor launch
+  or production preference restoration. No installer, release or parity completion is claimed.
+- Next: final independent checkpoint audit and commit, then integrate/review the manual
+  debugger source-map and explicit build-wrapper slices and exercise the actual engine
+  workflow. Continue isolated project-edit and debugger paths without weakening admission,
+  recovery or source-identity requirements. Full daily-work beta/parity remains incomplete.
+
 ## 2026-11-03: Restart resumed; combined gates and real engine configure fixes
 
 - Later integration checkpoint: reviewed Keymap/Updates join and upstream sodium notice

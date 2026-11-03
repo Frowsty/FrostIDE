@@ -53,6 +53,11 @@ sched::Task<void> stopOwnedClangd(std::shared_ptr<lang::ClangdService> service, 
     co_await std::move(stopped);
 }
 
+sched::Task<void> stopOwnedProjectEvaluation(std::shared_ptr<lang::IndependentProjectEvaluation> service) {
+    service->stopAndJoin();
+    co_return;
+}
+
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
 
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
@@ -217,6 +222,7 @@ Result<void> Workbench::openSolution(const std::string& path) {
     if (m_window) {
         m_window->toolWindows().show(ui::tool_windows::kProject, false);
     }
+    startProjectEvaluation(model->directory());
     startClangd(model->directory());
     startLua(model->directory());
     startManaged(model->directory());
@@ -281,6 +287,12 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     if (m_nav) {
         if (auto opened = m_nav->openProject(path); !opened) {
             log::warn(kLog, "navigation: {}", opened.error().describe());
+        }
+        if (m_cmake) {
+            m_cmake->setTargetPreferences(m_nav->cmakeTargets(), [this](const auto& targets) {
+                if (m_nav)
+                    m_nav->setCMakeTargets(targets);
+            });
         }
     }
     const std::string_view name = io::fileName(path);
@@ -373,9 +385,11 @@ bool Workbench::closeForOpen() {
             return false;
         }
     }
+    m_closingSolution = true;
     stopLua();
     stopManaged();
     stopClangd();
+    stopProjectEvaluation();
     if (m_cmake) {
         m_build->setBackend(m_buildBackend.get());
         m_cmake.reset();
@@ -396,6 +410,7 @@ bool Workbench::closeForOpen() {
         }
     }
     m_solution.reset();
+    m_closingSolution = false;
     if (m_debug)
         (void)m_debug->setWorkspaceRoot({});
     m_projectRoot.clear();
@@ -458,6 +473,65 @@ Result<void> Workbench::reopenRoot(const std::string& root) {
 
 // --- clangd ---
 
+void Workbench::stopProjectEvaluation() {
+    if (m_streamedProjects) {
+        m_streamedProjects->invalidate();
+        m_streamedProjects.reset();
+    }
+    std::erase_if(m_retiredProjectEvaluations, [](auto& stopped) {
+        if (!stopped.ready())
+            return false;
+        stopped.join();
+        return true;
+    });
+    if (!m_projectEvaluation)
+        return;
+    auto old = std::move(m_projectEvaluation);
+    old->requestStop();
+    m_retiredProjectEvaluations.push_back(
+        m_pool->spawn(sched::Lane::Background, stopOwnedProjectEvaluation(std::move(old))));
+}
+
+void Workbench::startProjectEvaluation(const std::string& root) {
+    if (m_explorer) {
+        m_explorer->endSpeedSearch();
+        if (m_solution)
+            m_explorer->setSolution(m_solution);
+    }
+    stopProjectEvaluation();
+    const auto admission = m_services.trust.snapshot(root);
+    m_projectTrustRevision = admission.revision;
+    if (!m_solution || !admission.trusted || m_options.compileCommandsCache.empty())
+        return;
+    auto cache = io::joinPath(m_options.compileCommandsCache, cacheNameFor(root));
+    if (!cache)
+        return;
+    m_streamedProjects = std::make_shared<lang::StreamedProjectContexts>(m_commandsRetirement, m_solution);
+    lang::MsBuildProviderOptions options;
+    options.retirement = m_commandsRetirement;
+    options.streamedProjects = m_streamedProjects;
+    if (const auto active = m_build->activeConfigurationIndex(); active && *active < m_build->configurations().size())
+        options.configuration = m_build->configurations()[*active].name();
+    const auto settings = m_services.settings.snapshot();
+    options.msbuildPath =
+        !m_options.msbuildPath.empty() ? m_options.msbuildPath : settings->get(settings::key::toolsMsbuildPath);
+    options.locateMsBuild = [launcher = &m_services.launcher, fs = &m_services.fs]() -> Result<std::string> {
+        auto instance = build::findMsBuild(*launcher, *fs);
+        if (!instance)
+            return std::unexpected(std::move(instance.error()));
+        if (instance->msbuildPath.empty())
+            return fail(ErrorCode::NotFound, instance->displayName + " has no MSBuild.exe");
+        return instance->msbuildPath;
+    };
+    options.trusted = [trust = &m_services.trust, root, revision = admission.revision] {
+        const auto current = trust->snapshot(root);
+        return current.trusted && current.revision == revision;
+    };
+    options.fallback.configuration = options.configuration;
+    m_projectEvaluation = std::make_shared<lang::IndependentProjectEvaluation>(m_services.launcher, m_services.fs,
+                                                                               m_solution, *cache, std::move(options));
+}
+
 void Workbench::startClangd(const std::string& root) {
     stopClangd();
     if (!m_options.clangd) {
@@ -512,7 +586,11 @@ void Workbench::startClangd(const std::string& root) {
             }
             return instance->msbuildPath;
         };
-        options.trusted = [trust = &m_services.trust, root] { return trust->isTrusted(root); };
+        const auto admission = m_services.trust.snapshot(root);
+        options.trusted = [trust = &m_services.trust, root, revision = admission.revision] {
+            const auto current = trust->snapshot(root);
+            return current.trusted && current.revision == revision;
+        };
         options.fallback.configuration = options.configuration;
         if constexpr (io::kNativePathStyle == io::PathStyle::Windows) {
             options.msvc = [launcher = &m_services.launcher, fs = &m_services.fs] {
@@ -520,7 +598,7 @@ void Workbench::startClangd(const std::string& root) {
             };
         }
         m_compileCommands = lang::solutionCompileCommandsChain(m_services.launcher, m_services.fs, m_solution, root,
-                                                               *cache, std::move(options));
+                                                               *cache, std::move(options), m_projectEvaluation);
     } else {
         m_compileCommands = std::make_shared<lang::ExistingCompileCommandsProvider>(m_services.fs, root);
     }

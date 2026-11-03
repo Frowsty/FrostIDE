@@ -195,6 +195,29 @@ TEST(SolutionExplorer, SpeedSearchFindsAFileAndEnterOpensIt) {
     EXPECT_EQ(explorer.currentPath().toStdString(), project::test::sdk("Libraries/Core/src/detail/strings.cpp"));
 }
 
+TEST(SolutionExplorer, StreamedSnapshotPreservesSearchAndSelection) {
+    SolutionExplorer explorer;
+    const auto initial = loadSdk();
+    explorer.setSolution(initial);
+    typeText(explorer.view(), QStringLiteral("strin"));
+    ASSERT_TRUE(explorer.isSpeedSearchActive());
+    const QString selected = explorer.currentPath();
+    const auto project = initial->findProjectByPath(project::test::sdk("App/App.vcxproj"));
+    ASSERT_TRUE(project);
+    const std::vector<std::string> files{project::test::sdk("App/generated.cpp")};
+    auto next = std::make_shared<const project::SolutionModel>(
+        initial->withEvaluatedFiles(*project, project::ItemType::ClCompile, files));
+    explorer.setSolution(next, true);
+    EXPECT_TRUE(explorer.isSpeedSearchActive());
+    EXPECT_EQ(explorer.speedSearchText(), QStringLiteral("strin"));
+    EXPECT_EQ(explorer.filterModel()->query(), QStringLiteral("strin"));
+    EXPECT_EQ(explorer.currentPath(), selected);
+    ASSERT_EQ(explorer.speedSearchMatches().size(), 1u);
+    EXPECT_EQ(explorer.solution()->node(explorer.speedSearchMatches()[0]).path, selected.toStdString());
+    explorer.setSolution(initial);
+    EXPECT_FALSE(explorer.isSpeedSearchActive());
+}
+
 TEST(SolutionExplorer, SpeedSearchStepsNarrowsAndEnds) {
     SolutionExplorer explorer;
     explorer.setSolution(loadSdk());

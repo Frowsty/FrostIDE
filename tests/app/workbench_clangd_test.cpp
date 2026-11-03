@@ -13,10 +13,17 @@
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
+#include "frost/ui/toolwindows/solution_explorer.hpp"
+#include "frost/ui/toolwindows/solution_tree_model.hpp"
 
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QKeyEvent>
 #include <QLineEdit>
+#include <QTreeView>
 
 #include <algorithm>
 #include <atomic>
@@ -159,7 +166,7 @@ TEST(WorkbenchClangd, ClosingProjectCancelsHeldMsBuildEvaluation) {
     options.workbench.workers = 1; // Cancellation must not wait for a second scheduler worker.
     options.workbench.msbuildPath = msbuild;
     WorkbenchRig rig(dir, std::move(options));
-    // The scripted launcher belongs to the held MSBuild evaluation, not ambient language servers.
+    // Ambient language servers share the launcher but are unrelated to this cancellation test.
     ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
                                   dir.join("missing-language-server.dll")));
     ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
@@ -170,21 +177,410 @@ TEST(WorkbenchClangd, ClosingProjectCancelsHeldMsBuildEvaluation) {
     const auto started = std::chrono::steady_clock::now();
     EXPECT_TRUE(rig.workbench->closeProject());
     EXPECT_LT(std::chrono::steady_clock::now() - started, 2s);
-    ASSERT_TRUE(waitFor(
+    const bool terminated = waitFor(
         [&] {
             const auto launches = launcher.launches();
             return launches.size() == 1 && launches.front().terminated;
         },
-        10s))
-        << [&] {
-               std::string details;
-               for (const auto& entry : launcher.launches())
-                   details += entry.spec.executable + " terminated=" + (entry.terminated ? "yes; " : "no; ");
-               return details;
-           }();
+        10s);
+    if (!terminated)
+        for (const auto& launch : launcher.launches())
+            ADD_FAILURE() << "recorded executable: " << launch.spec.executable << " terminated=" << launch.terminated;
+    ASSERT_TRUE(terminated);
     EXPECT_EQ(launcher.launches().size(), 1U); // No fallback process or clangd launch after cancellation.
-    EXPECT_EQ(launcher.launches().front().spec.executable, msbuild);
 }
+
+TEST(WorkbenchClangd, FirstEvaluatedProjectIsAvailableBeforeSecondCompletes) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    WorkDir dir("clangd-first-project-stream", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.expect(
+        {.expectExecutable = msbuild,
+         .stdoutBytes =
+             R"({"Properties":{"Platform":"x64"},"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\first.cpp"}],"ClInclude":[{"FullPath":"C:\\fixture\\first.hpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->streamedProjectContexts().size() == 2 && launcher.launches().size() == 2; }, 10s));
+    const auto streamed = rig.workbench->streamedProjectContexts();
+    ASSERT_EQ(streamed.size(), 2u);
+    EXPECT_EQ(streamed[0]->state, frost::lang::ProjectEvaluationState::Evaluated);
+    EXPECT_EQ(streamed[1]->state, frost::lang::ProjectEvaluationState::Pending);
+    EXPECT_EQ(streamed[0]->projectPath, dir.join("Lib/Lib.vcxproj"));
+    EXPECT_FALSE(streamed[0]->commands.empty());
+    auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return explorer->solution() && explorer->solution()->findFileNode("C:\\fixture\\first.cpp") &&
+                   explorer->solution()->findFileNode("C:\\fixture\\first.hpp");
+        },
+        10s));
+    EXPECT_TRUE(explorer->selectPath("C:\\fixture\\first.cpp"));
+    ASSERT_TRUE(rig.workbench->closeProject());
+    EXPECT_TRUE(rig.workbench->streamedProjectContexts().empty());
+    ASSERT_TRUE(waitFor([&] { return launcher.launches().back().terminated; }, 10s));
+}
+
+TEST(WorkbenchClangd, RevokeAndRegrantCannotReviveHeldProjectContext) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    WorkDir dir("clangd-trust-generation", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.expect(
+        {.expectExecutable = msbuild,
+         .stdoutBytes =
+             R"({"Properties":{"Platform":"x64"},"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\old.cpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    launcher.expect(
+        {.expectExecutable = msbuild,
+         .stdoutBytes =
+             R"({"Properties":{"Platform":"x64"},"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\fresh.cpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->streamedProjectContexts().size() == 2 && launcher.launches().size() == 2; }, 10s));
+    auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] { return explorer->solution() && explorer->solution()->findFileNode("C:\\fixture\\old.cpp"); }, 10s));
+    ASSERT_TRUE(rig.trust->untrust(dir.path()));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    EXPECT_TRUE(rig.workbench->streamedProjectContexts().empty());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto records = rig.workbench->streamedProjectContexts();
+            return records.size() == 2 && !records[0]->commands.empty() &&
+                   records[0]->commands[0].file.find("fresh.cpp") != std::string::npos &&
+                   launcher.launches().size() == 4;
+        },
+        10s));
+    EXPECT_TRUE(launcher.launches()[1].terminated);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return explorer->solution() && !explorer->solution()->findFileNode("C:\\fixture\\old.cpp") &&
+                   explorer->solution()->findFileNode("C:\\fixture\\fresh.cpp");
+        },
+        10s));
+    ASSERT_TRUE(rig.workbench->closeProject());
+    ASSERT_TRUE(waitFor([&] { return launcher.launches().back().terminated; }, 10s));
+}
+
+TEST(WorkbenchClangd, ConfigurationChangeRejectsHeldEvaluation) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    WorkDir dir("project-stream-configuration", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.expect({.expectExecutable = msbuild,
+                     .stdoutBytes = R"({"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\old-config.cpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    launcher.expect({.expectExecutable = msbuild,
+                     .stdoutBytes = R"({"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\new-config.cpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(waitFor([&] { return launcher.launches().size() == 2; }, 10s));
+    ASSERT_TRUE(rig.workbench->build().setActiveConfiguration(1));
+    auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return launcher.launches().size() == 4 && explorer->solution() &&
+                   explorer->solution()->findFileNode("C:\\fixture\\new-config.cpp") &&
+                   !explorer->solution()->findFileNode("C:\\fixture\\old-config.cpp");
+        },
+        10s));
+    EXPECT_TRUE(launcher.launches()[1].terminated);
+    ASSERT_TRUE(rig.workbench->closeProject());
+    ASSERT_TRUE(waitFor([&] { return launcher.launches().back().terminated; }, 10s));
+}
+
+TEST(WorkbenchClangd, OpeningAnotherRootRejectsHeldEvaluation) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    WorkDir dir("project-stream-root-switch", "tiny_sln");
+    dir.write("Other/placeholder.txt", "other root");
+    frost::io::ScriptedProcessLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.expect({.expectExecutable = msbuild,
+                     .stdoutBytes = R"({"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\old-root.cpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return launcher.launches().size() == 2 && explorer->solution() &&
+                   explorer->solution()->findFileNode("C:\\fixture\\old-root.cpp");
+        },
+        10s));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Other")));
+    EXPECT_TRUE(rig.workbench->streamedProjectContexts().empty());
+    ASSERT_TRUE(waitFor([&] { return launcher.launches()[1].terminated; }, 10s));
+    EXPECT_FALSE(explorer->solution());
+}
+
+TEST(WorkbenchClangd, ProjectEvaluationStreamsWhenClangdDisabled) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    WorkDir dir("project-stream-no-clangd", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.expect(
+        {.expectExecutable = msbuild,
+         .stdoutBytes =
+             R"({"Properties":{"Platform":"x64"},"Items":{"ClCompile":[{"FullPath":"C:\\fixture\\first.cpp"}]}})"});
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->streamedProjectContexts().size() == 2 && launcher.launches().size() == 2; }, 10s));
+    EXPECT_EQ(rig.workbench->clangd(), nullptr);
+    ASSERT_TRUE(rig.workbench->closeProject());
+    ASSERT_TRUE(waitFor([&] { return launcher.launches().back().terminated; }, 10s));
+}
+
+class ReleaseGatedProcess final : public frost::io::IProcess {
+public:
+    ReleaseGatedProcess(std::unique_ptr<frost::io::IProcess> inner, std::atomic<bool>& release)
+        : m_inner(std::move(inner)), m_release(release) {}
+    frost::io::ProcessId pid() const noexcept override { return m_inner->pid(); }
+    frost::Result<void> writeStdin(std::string_view bytes) override { return m_inner->writeStdin(bytes); }
+    void closeStdin() noexcept override { m_inner->closeStdin(); }
+    frost::Result<std::size_t> readStdout(std::span<char> bytes) override { return m_inner->readStdout(bytes); }
+    frost::Result<std::size_t> readStderr(std::span<char> bytes) override { return m_inner->readStderr(bytes); }
+    frost::Result<frost::io::ExitStatus> wait(std::optional<frost::IClock::Duration> timeout) override {
+        if (!m_release.load() && !m_terminated.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            return frost::fail(frost::ErrorCode::Timeout, "held by test");
+        }
+        return m_inner->wait(timeout);
+    }
+    frost::Result<void> terminate() override {
+        m_terminated.store(true);
+        return m_inner->terminate();
+    }
+    frost::Result<frost::io::ProcessResult> communicate(std::string_view bytes,
+                                                        frost::IClock::Duration timeout) override {
+        return m_inner->communicate(bytes, timeout);
+    }
+    void abandonOutput() noexcept override { m_inner->abandonOutput(); }
+
+private:
+    std::unique_ptr<frost::io::IProcess> m_inner;
+    std::atomic<bool>& m_release;
+    std::atomic<bool> m_terminated{false};
+};
+
+class ReleaseGatedLauncher final : public frost::io::IProcessLauncher {
+public:
+    frost::io::ScriptedProcessLauncher scripted;
+    std::atomic<bool> release{false};
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        auto result = scripted.launch(spec);
+        if (!result || scripted.launches().size() != 2)
+            return result;
+        return std::unique_ptr<frost::io::IProcess>(new ReleaseGatedProcess(std::move(*result), release));
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        return scripted.launchAsync(spec, context);
+    }
+};
+
+TEST(WorkbenchClangd, StreamingNextProjectPreservesExplorerSearchAndOpenDocument) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    WorkDir dir("project-stream-search", "tiny_sln");
+    const auto first = dir.join("Lib/first_shared.cpp");
+    const auto second = dir.join("App/second_shared.cpp");
+    dir.write("Lib/first_shared.cpp", "int first_shared;\n");
+    dir.write("App/second_shared.cpp", "int second_shared;\n");
+    const auto json = [](const std::string& path) {
+        return QJsonDocument(
+                   QJsonObject{{"Items", QJsonObject{{"ClCompile", QJsonArray{QJsonObject{
+                                                                       {"FullPath", QString::fromStdString(path)}}}}}}})
+            .toJson(QJsonDocument::Compact)
+            .toStdString();
+    };
+    ReleaseGatedLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.scripted.expect({.expectExecutable = msbuild, .stdoutBytes = json(first)});
+    launcher.scripted.expect({.expectExecutable = msbuild, .stdoutBytes = json(second)});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(rig.workbench->openPath(first));
+    auto* document = rig.view();
+    ASSERT_NE(document, nullptr);
+    auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return launcher.scripted.launches().size() == 2 && explorer->solution() &&
+                   explorer->solution()->findFileNode(first);
+        },
+        10s));
+    for (const QChar ch : QStringLiteral("shared")) {
+        QKeyEvent key(QEvent::KeyPress, ch.toUpper().unicode(), Qt::NoModifier, QString(ch));
+        QApplication::sendEvent(explorer->view(), &key);
+    }
+    ASSERT_TRUE(explorer->isSpeedSearchActive());
+    ASSERT_EQ(explorer->currentPath().toStdString(), first);
+    launcher.release.store(true);
+    ASSERT_TRUE(waitFor([&] { return explorer->solution() && explorer->solution()->findFileNode(second); }, 10s));
+    EXPECT_TRUE(explorer->isSpeedSearchActive());
+    EXPECT_EQ(explorer->speedSearchText(), QStringLiteral("shared"));
+    EXPECT_EQ(explorer->filterModel()->query(), QStringLiteral("shared"));
+    EXPECT_EQ(explorer->currentPath().toStdString(), first);
+    EXPECT_EQ(explorer->speedSearchMatches().size(), 2u);
+    EXPECT_EQ(rig.view(), document);
+}
+
+#ifdef _WIN32
+class ProjectEvaluationDispatchLauncher final : public frost::io::IProcessLauncher {
+public:
+    explicit ProjectEvaluationDispatchLauncher(std::string msbuild) : m_msbuild(std::move(msbuild)) {}
+    frost::io::ScriptedProcessLauncher scripted;
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        return spec.executable == m_msbuild ? scripted.launch(spec) : frost::io::realProcessLauncher().launch(spec);
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        return frost::io::realProcessLauncher().launchAsync(spec, context);
+    }
+
+private:
+    std::string m_msbuild;
+};
+
+TEST(WorkbenchClangd, RealClangdUsesFirstProjectWhileSecondIsHeld) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    if (!found)
+        GTEST_SKIP() << "clangd is unavailable";
+    WorkDir dir("project-stream-real-clangd", "tiny_sln");
+    const auto source = dir.join("Lib/generated.cpp");
+    dir.write("Lib/generated.cpp", "#ifndef STREAMED_DEFINE\n#error missing streamed define\n#endif\n"
+                                   "int streamed() { return plantedUndeclared; }\n");
+    const QJsonObject item{{"FullPath", QString::fromStdString(source)},
+                           {"PreprocessorDefinitions", "STREAMED_DEFINE=1"}};
+    const auto bytes = QJsonDocument(QJsonObject{{"Properties", QJsonObject{{"Platform", "x64"}}},
+                                                 {"Items", QJsonObject{{"ClCompile", QJsonArray{item}}}}})
+                           .toJson(QJsonDocument::Compact)
+                           .toStdString();
+    const auto msbuild = dir.join("held-msbuild.exe");
+    ProjectEvaluationDispatchLauncher launcher(msbuild);
+    launcher.scripted.expect({.expectExecutable = msbuild, .stdoutBytes = bytes});
+    launcher.scripted.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = true;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(rig.workbench->openPath(source));
+    auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
+    ASSERT_NE(explorer, nullptr);
+    const bool ready = waitFor(
+        [&] {
+            auto* server = rig.workbench->clangd();
+            return launcher.scripted.launches().size() == 2 && server &&
+                   server->state() == frost::lang::ClangdState::Running &&
+                   server->diagnostics().forFile(source).has_value() && explorer->solution() &&
+                   explorer->solution()->findFileNode(source).has_value();
+        },
+        kPatience);
+    if (!ready) {
+        auto* server = rig.workbench->clangd();
+        ADD_FAILURE() << "launches=" << launcher.scripted.launches().size() << " clangd=" << (server != nullptr)
+                      << " state=" << (server ? static_cast<int>(server->state()) : -1)
+                      << " document=" << (server && server->documentVersion(source).has_value())
+                      << " database=" << (server && server->compileCommands().has_value())
+                      << " diagnostics=" << (server && server->diagnostics().forFile(source).has_value())
+                      << " tree=" << (explorer->solution() && explorer->solution()->findFileNode(source).has_value());
+    }
+    ASSERT_TRUE(ready);
+    const auto diagnostics = rig.workbench->clangd()->diagnostics().forFile(source);
+    ASSERT_TRUE(diagnostics);
+    ASSERT_EQ(diagnostics->diagnostics.size(), 1u);
+    EXPECT_NE(diagnostics->diagnostics[0].message.find("plantedUndeclared"), std::string::npos);
+    EXPECT_FALSE(launcher.scripted.launches()[1].terminated);
+    ASSERT_TRUE(rig.workbench->closeProject());
+    ASSERT_TRUE(waitFor([&] { return launcher.scripted.launches().back().terminated; }, 10s));
+}
+#endif
 
 #ifdef _WIN32
 // Records a waitable handle to the real child while leaving all process ownership with FrostIDE.

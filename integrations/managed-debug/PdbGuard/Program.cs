@@ -2,8 +2,10 @@
 // Validate one portable PDB, its PE image and one exact on-disk source document.
 using System;
 using System.Collections.Generic;
+using System.Buffers.Binary;
 using System.IO;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -17,12 +19,24 @@ internal static class Program
     // before starting an adapter. The helper checks the bytes it read, not later filesystem changes.
     private static int Main(string[] args)
     {
-        if (args.Length != 3 || !Path.IsPathFullyQualified(args[0]) || !Path.IsPathFullyQualified(args[1]) ||
-            (args[2] != "--all" && args[2] != "--manifest" && !Path.IsPathFullyQualified(args[2])))
-            return Fail("expected absolute assembly and portable PDB paths and an absolute source path or --all or --manifest");
+        bool pipeDocuments = args.Length >= 1 && args[0] == "--mono-documents-pipe";
+        bool pipeMap = args.Length >= 1 && args[0] == "--mono-map-pipe";
+        bool pipeMode = pipeDocuments || pipeMap;
+        string mode = pipeMode ? (pipeDocuments ? "--mono-documents" : "--mono-map") : (args.Length >= 3 ? args[2] : "");
+        if (pipeMode ? (args.Length != 1 && !(pipeMap && args.Length == 2)) :
+            ((args.Length != 3 && args.Length != 4) || !Path.IsPathFullyQualified(args[0]) || !Path.IsPathFullyQualified(args[1]) ||
+             (mode != "--all" && mode != "--manifest" && mode != "--mono-map" && mode != "--mono-documents" && !Path.IsPathFullyQualified(mode))))
+            return Fail("invalid PDB guard arguments");
+        int mapLimit = 8 * 1024 * 1024;
+        string? requestedLimit = pipeMap && args.Length == 2 ? args[1] : !pipeMode && args.Length == 4 ? args[3] : null;
+        if (requestedLimit != null && (mode != "--mono-map" || !int.TryParse(requestedLimit, out mapLimit) ||
+                                       mapLimit < 1 || mapLimit > 8 * 1024 * 1024))
+            return Fail("invalid mono map output limit");
         try
         {
-            var pdbBytes = ReadBounded(args[1]);
+            using var input = pipeMode ? Console.OpenStandardInput() : null;
+            byte[]? pipePeBytes = pipeMode ? ReadPipeBlob(input!, 1024 * 1024 - 15) : null;
+            var pdbBytes = pipeMode ? ReadPipeBlob(input!, 1024 * 1024 - 15) : ReadBounded(args[1]);
             using var pdbStream = new MemoryStream(pdbBytes, writable: false);
             using var provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
             var metadata = provider.GetMetadataReader();
@@ -34,12 +48,14 @@ internal static class Program
             var checksumBytes = (byte[])pdbBytes.Clone();
             Array.Clear(checksumBytes, idOffset, 20);
             bool matchedId = false, matchedChecksum = false;
-            byte[] peBytes = ReadBounded(args[0]);
+            byte[] peBytes = pipeMode ? pipePeBytes! : ReadBounded(args[0]);
             Guid moduleId;
+            int methodCount;
             using (var peStream = new MemoryStream(peBytes, writable: false))
             using (var pe = new PEReader(peStream))
             {
                 var peMetadata = pe.GetMetadataReader();
+                methodCount = peMetadata.MethodDefinitions.Count;
                 moduleId = peMetadata.GetGuid(peMetadata.GetModuleDefinition().Mvid);
                 if (moduleId == Guid.Empty)
                     return Fail("assembly has no module identity");
@@ -67,14 +83,54 @@ internal static class Program
             }
             if (!matchedId || !matchedChecksum)
                 return Fail("assembly and portable PDB do not match");
-            bool manifest = args[2] == "--manifest";
-            bool allDocuments = args[2] == "--all" || manifest;
-            string sourcePath = allDocuments ? "" : Path.GetFullPath(args[2]);
+            if (mode == "--mono-documents")
+            {
+                using var output = new BoundedOutput(8 * 1024 * 1024 - 1);
+                var seen = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase
+                                                                            : StringComparer.Ordinal);
+                using (var writer = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true }))
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("moduleId", moduleId.ToString());
+                    writer.WriteString("assemblySha256", Convert.ToHexString(SHA256.HashData(peBytes)).ToLowerInvariant());
+                    writer.WriteString("pdbSha256", Convert.ToHexString(SHA256.HashData(pdbBytes)).ToLowerInvariant());
+                    writer.WriteStartArray("documents");
+                    foreach (var handle in metadata.Documents)
+                    {
+                        string name = metadata.GetString(metadata.GetDocument(handle).Name);
+                        if (!Path.IsPathFullyQualified(name))
+                            return Fail("portable PDB contains a non-absolute source document path");
+                        string path = Path.GetFullPath(name);
+                        if (path.Length > 4096 || !seen.Add(path) || seen.Count > 16384)
+                            return Fail("portable PDB has duplicate, too many or too-long source paths");
+                        writer.WriteStringValue(path);
+                        writer.Flush();
+                    }
+                    if (seen.Count == 0)
+                        return Fail("portable PDB does not identify source documents");
+                    writer.WriteEndArray();
+                    writer.WriteEndObject();
+                }
+                if (pipeMode && input!.ReadByte() != -1)
+                    return Fail("unexpected trailing input");
+                if (!output.TryGetBuffer(out var documentBuffer))
+                    throw new IOException("could not access document output");
+                var destination = Console.OpenStandardOutput();
+                destination.Write(documentBuffer.AsSpan(0, checked((int)output.Length)));
+                destination.WriteByte((byte)'\n');
+                return 0;
+            }
+            bool monoMap = mode == "--mono-map";
+            bool manifest = mode == "--manifest" || monoMap;
+            bool allDocuments = mode == "--all" || manifest;
+            string sourcePath = allDocuments ? "" : Path.GetFullPath(mode);
             // Windows can enable case-sensitive directories. Require the PDB's exact spelling
             // until the caller can compare filesystem identities for differently cased aliases.
             const StringComparison comparison = StringComparison.Ordinal;
             var validatedSources = new List<string>();
             var sourceHashes = new List<object>();
+            var sourceIndices = new Dictionary<DocumentHandle, int>();
+            long sourceTotal = 0;
             // The IDE's Windows document model compares paths case-insensitively. Refuse
             // two PDB entries it would conflate, even on a case-sensitive Windows directory.
             var seenSources = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase
@@ -94,17 +150,75 @@ internal static class Program
                     continue;
                 if (!seenSources.Add(documentPath))
                     return Fail("portable PDB contains duplicate source document paths");
-                byte[] source = ReadBounded(documentPath);
+                if (monoMap && (sourceHashes.Count >= 16384 || documentPath.Length > 4096))
+                    return Fail("portable PDB has too many or too-long source paths");
+                byte[] source = pipeMap ? ReadPipeSource(input!, ref sourceTotal) : ReadBounded(documentPath);
                 Guid algorithm = metadata.GetGuid(document.HashAlgorithm);
                 byte[]? actual = algorithm == Sha256 ? SHA256.HashData(source) : null;
                 if (actual == null || !CryptographicOperations.FixedTimeEquals(metadata.GetBlobBytes(document.Hash), actual))
                     return Fail("source document checksum does not match portable PDB");
                 validatedSources.Add(documentPath);
+                sourceIndices.Add(handle, sourceHashes.Count);
                 sourceHashes.Add(new { path = documentPath, sha256 = Convert.ToHexString(actual).ToLowerInvariant() });
             }
+            if (pipeMap && input!.ReadByte() != -1)
+                return Fail("unexpected trailing input");
             if (validatedSources.Count == 0 || (!allDocuments && validatedSources.Count != 1))
                 return Fail("portable PDB does not identify the required source documents");
-            if (manifest)
+            if (monoMap)
+            {
+                const int MaxPoints = 100000;
+                int count = 0;
+                using var output = new BoundedOutput(mapLimit - 1);
+                using (var writer = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true }))
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("moduleId", moduleId.ToString());
+                    writer.WriteString("assemblySha256", Convert.ToHexString(SHA256.HashData(peBytes)).ToLowerInvariant());
+                    writer.WriteString("pdbSha256", Convert.ToHexString(SHA256.HashData(pdbBytes)).ToLowerInvariant());
+                    writer.WriteStartArray("sources");
+                    foreach (var source in sourceHashes)
+                    {
+                        JsonSerializer.Serialize(writer, source);
+                        writer.Flush();
+                    }
+                    writer.WriteEndArray();
+                    writer.WriteStartArray("sequencePoints");
+                    writer.Flush();
+                    foreach (var methodHandle in metadata.MethodDebugInformation)
+                    {
+                        int row = MetadataTokens.GetRowNumber(methodHandle);
+                        if (row <= 0 || row > methodCount)
+                            return Fail("portable PDB method row is outside the assembly");
+                        var method = metadata.GetMethodDebugInformation(methodHandle);
+                        foreach (var point in method.GetSequencePoints())
+                        {
+                            if (point.IsHidden)
+                                continue;
+                            var document = point.Document.IsNil ? method.Document : point.Document;
+                            if (!sourceIndices.TryGetValue(document, out int index) || point.Offset < 0 || point.StartLine <= 0)
+                                return Fail("portable PDB sequence point has an invalid source or location");
+                            if (++count > MaxPoints)
+                                return Fail("portable PDB has too many sequence points");
+                            writer.WriteStartObject();
+                            writer.WriteNumber("methodToken", MetadataTokens.GetToken(MetadataTokens.MethodDefinitionHandle(row)));
+                            writer.WriteNumber("sourceIndex", index);
+                            writer.WriteNumber("line", point.StartLine);
+                            writer.WriteNumber("ilOffset", point.Offset);
+                            writer.WriteEndObject();
+                            writer.Flush();
+                        }
+                    }
+                    writer.WriteEndArray();
+                    writer.WriteEndObject();
+                }
+                var destination = Console.OpenStandardOutput();
+                if (!output.TryGetBuffer(out var buffer))
+                    throw new IOException("could not access map output");
+                destination.Write(buffer.AsSpan(0, checked((int)output.Length)));
+                destination.WriteByte((byte)'\n');
+            }
+            else if (manifest)
                 Console.WriteLine(JsonSerializer.Serialize(new {
                     moduleId = moduleId.ToString(),
                     assemblySha256 = Convert.ToHexString(SHA256.HashData(peBytes)).ToLowerInvariant(),
@@ -120,6 +234,45 @@ internal static class Program
                                       error is InvalidOperationException || error is NotSupportedException)
         {
             return Fail(error.Message);
+        }
+    }
+
+    private static byte[] ReadPipeSource(Stream input, ref long total)
+    {
+        const long MaxSources = 16 * 1024 * 1024;
+        if (total < 0 || total > MaxSources)
+            throw new IOException("source input exceeds the size limit");
+        int remaining = (int)Math.Min(4 * 1024 * 1024, MaxSources - total);
+        byte[] bytes = ReadPipeBlob(input, remaining, allowEmpty: true);
+        total += bytes.Length;
+        return bytes;
+    }
+
+    private static byte[] ReadPipeBlob(Stream input, int limit, bool allowEmpty = false)
+    {
+        Span<byte> lengthBytes = stackalloc byte[4];
+        input.ReadExactly(lengthBytes);
+        uint length = BinaryPrimitives.ReadUInt32LittleEndian(lengthBytes);
+        if ((!allowEmpty && length == 0) || length > limit)
+            throw new IOException("input frame exceeds the size limit or is empty");
+        var bytes = new byte[(int)length];
+        input.ReadExactly(bytes);
+        return bytes;
+    }
+
+    private sealed class BoundedOutput : MemoryStream
+    {
+        private readonly long limit;
+        public BoundedOutput(long limit) { this.limit = limit; }
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (count > limit - Length) throw new IOException("map output exceeds the size limit");
+            base.Write(buffer, offset, count);
+        }
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length > limit - Length) throw new IOException("map output exceeds the size limit");
+            base.Write(buffer);
         }
     }
 

@@ -8,6 +8,7 @@
 # LICENSE files under licenses\). Windows only.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage.ps1 -Destination E:\FrostBuilds\preview\x
+#              -QtSourceArchive <pinned-qtbase-source.tar.xz>
 #              [-Config Release|RelWithDebInfo] [-BuildDir build\win-clangcl] [-Jobs 6] [-SkipBuild] [-Force]
 #
 # The destination must not exist or be empty; -Force replaces it. -SkipBuild stages what the build
@@ -25,6 +26,7 @@ param(
     [int]$Jobs = 0,
     [string]$SdkRoot = 'E:\sdk',
     [string]$WinDeployQt = '',
+    [string]$QtSourceArchive = '',
     [switch]$SkipBuild,
     [switch]$Force
 )
@@ -38,6 +40,15 @@ $Destination = [System.IO.Path]::GetFullPath($Destination)
 function Fail([string]$message) {
     Write-Host "stage: FAIL $message"
     exit 1
+}
+
+# Release staging must include source and notices. Debug remains useful for local
+# fixture/preview checks; supply the archive there too when preparing a package.
+if ($Config -ne 'Debug' -and -not $QtSourceArchive) {
+    Fail '-QtSourceArchive is required for Release/RelWithDebInfo packaging'
+}
+if ($QtSourceArchive -and -not (Test-Path -LiteralPath $QtSourceArchive -PathType Leaf)) {
+    Fail 'the Qt source archive does not exist'
 }
 
 # The pinned Qt's windeployqt, unless one was given.
@@ -192,6 +203,18 @@ foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {
 }
 $qtCore = if ($Config -eq 'Debug') { 'Qt6Cored.dll' } else { 'Qt6Core.dll' }
 if (-not (Test-Path -LiteralPath (Join-Path $Destination $qtCore))) { Fail "the staged folder has no $qtCore" }
+if ($QtSourceArchive) {
+    $python = Join-Path $SdkRoot 'py\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { Fail 'packaging requires the SDK Python' }
+    $qtRoot = Split-Path -Parent (Split-Path -Parent $WinDeployQt)
+    & $python (Join-Path $PSScriptRoot 'package_notices.py') --repo $repoRoot --stage $Destination `
+        --installed $installedMatch.Groups[1].Value --triplet $tripletMatch.Groups[1].Value `
+        --qt-root $qtRoot --qt-source $QtSourceArchive
+    if ($LASTEXITCODE -ne 0) { Fail 'dependency source/notice packaging failed' }
+}
+else {
+    Write-Host 'stage: local Debug preview; dependency source/notice packaging was not requested'
+}
 $files = @(Get-ChildItem -LiteralPath $Destination -Recurse -File)
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
 Write-Host ("stage: ok {0} ({1} files, {2:N1} MB)" -f $Destination, $files.Count, ($bytes / 1MB))

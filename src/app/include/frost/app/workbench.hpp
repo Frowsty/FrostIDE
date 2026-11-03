@@ -82,6 +82,7 @@
 #include "frost/lang/json.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
+#include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
@@ -386,6 +387,14 @@ public:
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
+    // Current generation's completed MSBuild contexts, copied safely from the evaluator thread.
+    [[nodiscard]] std::vector<std::shared_ptr<const lang::StreamedProjectContext>> streamedProjectContexts() const {
+        const auto trust = m_services.trust.snapshot(m_projectRoot);
+        if (!trust.trusted || trust.revision != m_projectTrustRevision)
+            return {};
+        return m_streamedProjects ? m_streamedProjects->snapshot()
+                                  : std::vector<std::shared_ptr<const lang::StreamedProjectContext>>{};
+    }
     [[nodiscard]] ui::nav::SessionStore* sessions() noexcept { return m_sessions.get(); }
     // The window's parts (null before attach()).
     [[nodiscard]] ui::Workbench* navigation() const noexcept { return m_nav.get(); }
@@ -478,6 +487,8 @@ private:
 
     // clangd.
     void startClangd(const std::string& root);
+    void startProjectEvaluation(const std::string& root);
+    void stopProjectEvaluation();
     void stopClangd();
     void restartClangd();
     void onLiveDiagnostics(const std::string& file);
@@ -554,6 +565,10 @@ private:
     std::string m_managedDebugRoot;
 
     std::shared_ptr<lang::ICompileCommandsProvider> m_compileCommands;
+    std::shared_ptr<lang::StreamedProjectContexts> m_streamedProjects;
+    std::shared_ptr<lang::IndependentProjectEvaluation> m_projectEvaluation;
+    bool m_closingSolution = false;
+    std::vector<sched::JoinHandle<void>> m_retiredProjectEvaluations;
     std::shared_ptr<lang::ManagedService> m_managed;
     std::uint64_t m_managedListener = 0;
     std::vector<sched::JoinHandle<void>> m_retiredManaged;
@@ -573,6 +588,7 @@ private:
     std::shared_ptr<lang::ClangdService> m_clangd;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
     std::uint64_t m_clangdGeneration = 0;
+    std::uint64_t m_projectTrustRevision = 0;
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
     std::string m_indexToken;

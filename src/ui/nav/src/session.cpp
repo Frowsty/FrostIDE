@@ -129,6 +129,14 @@ std::string encodeSession(const SessionState& state) {
         addPlace(doc.get(), locations, place);
     }
     yyjson_mut_obj_add_val(doc.get(), root, "recentLocations", locations);
+    yyjson_mut_val* targets = yyjson_mut_arr(doc.get());
+    for (const auto& [profile, target] : state.cmakeTargets) {
+        yyjson_mut_val* entry = yyjson_mut_obj(doc.get());
+        addString(doc.get(), entry, "profile", profile);
+        addString(doc.get(), entry, "target", target);
+        yyjson_mut_arr_append(targets, entry);
+    }
+    yyjson_mut_obj_add_val(doc.get(), root, "cmakeTargets", targets);
     return writeJson(doc.get());
 }
 
@@ -156,6 +164,14 @@ Result<SessionState> decodeSession(std::string_view json) {
     std::size_t index = 0;
     std::size_t count = 0;
     yyjson_val* item = nullptr;
+    if (yyjson_val* targets = yyjson_obj_get(root, "cmakeTargets"); yyjson_is_arr(targets)) {
+        yyjson_arr_foreach(targets, index, count, item) {
+            std::string profile = stringOf(yyjson_obj_get(item, "profile"));
+            std::string target = stringOf(yyjson_obj_get(item, "target"));
+            if (!profile.empty() && !target.empty())
+                state.cmakeTargets.emplace_back(std::move(profile), std::move(target));
+        }
+    }
     if (yyjson_val* tabs = yyjson_obj_get(root, "tabs"); yyjson_is_arr(tabs)) {
         yyjson_arr_foreach(tabs, index, count, item) {
             SessionTab tab;
@@ -240,7 +256,11 @@ Result<SessionState> SessionStore::load(std::string_view root) const {
     }
     auto state = decodeSession(*bytes);
     if (state && state->root.empty()) {
+        if (!state->cmakeTargets.empty())
+            return fail(ErrorCode::Corrupt, "session: CMake target preferences have no project root");
         state->root = std::string(root);
+    } else if (state && state->root != root) {
+        return fail(ErrorCode::Corrupt, "session: project root does not match the requested root");
     }
     return state;
 }

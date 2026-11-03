@@ -215,6 +215,14 @@ class StageScriptTest(TempDirTestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("missing upstream libsodium copyright notice", result.stdout)
 
+    def test_release_requires_source_archive_before_staging(self) -> None:
+        destination = self.tmp / "release"
+        result = run_powershell(TOOLS / "stage.ps1", "-Destination", str(destination), "-Config", "Release",
+                                "-SkipBuild")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("-QtSourceArchive is required", result.stdout)
+        self.assertFalse(destination.exists())
+
     def test_missing_https_backend_fails(self) -> None:
         build = self._fake_build()
         (build / "src/app/Debug/tls/qschannelbackendd.dll").unlink()

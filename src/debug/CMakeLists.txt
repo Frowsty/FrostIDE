@@ -34,7 +34,19 @@ frost_add_library(debug LAYER debug
         src/debug_session.cpp
         src/fake_debug_adapter.cpp
         src/lldb_dap.cpp
+        src/mono_dap.cpp
+        src/mono_wire.cpp
+        src/mono_session.cpp
+        src/mono_responses.cpp
+        src/mono_gate.cpp
+        src/mono_protocol_session.cpp
+        src/mono_transport.cpp
+        src/mono_windows_peer.cpp
         src/lua_debug_adapter.cpp
         src/lua_debug_endpoint.cpp
     DEPS frost::rpc frost::project frost::settings frost::text frost::io frost::core)
 target_compile_definitions(frost_debug PRIVATE FROST_PINNED_LLDB_VERSION="${_frost_lldb_version}")
+
+if(WIN32)
+    target_link_libraries(frost_debug PRIVATE iphlpapi)
+endif()

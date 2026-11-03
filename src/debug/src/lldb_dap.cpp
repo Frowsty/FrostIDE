@@ -177,11 +177,11 @@ Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStor
 Result<std::unique_ptr<DebugSession>> attachDebugSession(const project::TrustStore& trust, const DebugTarget& target,
                                                          AdapterFactory factory, rpc::Json attachArguments,
                                                          std::map<std::string, std::vector<BreakpointLine>> breakpoints,
-                                                         DebugSessionCallbacks callbacks) {
+                                                         DebugSessionCallbacks callbacks, std::string adapterId) {
     if (auto allowed = checkDebugTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
     return DebugSession::start(std::move(factory), std::move(attachArguments), std::move(breakpoints),
-                               std::move(callbacks), false, DebugTargetMode::Attach);
+                               std::move(callbacks), false, std::move(adapterId), DebugTargetMode::Attach);
 }
 
 } // namespace frost::debug

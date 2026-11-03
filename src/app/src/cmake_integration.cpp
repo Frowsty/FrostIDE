@@ -118,11 +118,15 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     m_targetAction = toolbar.insertWidget(before, m_targets);
     connect(m_profiles, &QComboBox::activated, this, [this](int index) { m_controller->selectProfile(index); });
     connect(m_targets, &QComboBox::activated, this, [this](int index) {
+        if (!targetsCurrent() || m_displayProfileGeneration != m_service->profileGeneration())
+            return;
         const std::string key = "target:" + m_targets->itemData(index).toString().toUtf8().toStdString();
         const QModelIndex selected = m_controller->treeModel()->indexForKey(key);
-        if (selected.isValid())
+        if (selected.isValid()) {
             m_tree->setCurrentIndex(selected);
-        else
+            // Activation can choose the already-current fallback, which emits no currentChanged.
+            rememberTreeTarget();
+        } else
             refreshRunTarget();
     });
     connect(m_controller.get(), &ui::cmake::CMakeController::profilesChanged, this, [this] { refreshProfiles(); });
@@ -162,7 +166,10 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     targetsLayout->addWidget(m_guidanceLabel);
     targetsLayout->addWidget(m_targetLabel);
     targetsLayout->addWidget(tree, 1);
-    connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this] { refreshRunTarget(); });
+    connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this] {
+        rememberTreeTarget();
+        refreshRunTarget();
+    });
     connect(tree, &QTreeView::customContextMenuRequested, this, [this](QPoint point) {
         const QModelIndex index = m_tree->indexAt(point);
         const QVariant target = index.data(ui::cmake::CMakeTreeModel::TargetIndexRole);
@@ -214,6 +221,10 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     });
     connect(m_controller.get(), &ui::cmake::CMakeController::modelChanged, this,
             [this, changed = std::move(modelChanged)] {
+                if (targetsCurrent()) {
+                    m_displayProfileGeneration = m_service->profileGeneration();
+                    restoreRunTarget();
+                }
                 refreshRunTarget();
                 changed();
             });
@@ -270,22 +281,17 @@ Result<void> CMakeIntegration::debug(std::function<void(Result<debug::DebugTarge
 
 std::optional<std::size_t> CMakeIntegration::runTarget(const project::CMakeProject& model) const {
     std::optional<std::size_t> target;
-    if (m_tree && m_tree->currentIndex().isValid()) {
-        // The service can publish a new model before the queued tree reset arrives. Resolve
-        // the selected tree node by target name, not by its index in the previous model.
-        QModelIndex selected = m_tree->currentIndex();
-        while (selected.isValid() && selected.data(ui::cmake::CMakeTreeModel::KindRole).toInt() !=
-                                         static_cast<int>(project::CMakeViewNodeKind::Target)) {
-            selected = selected.parent();
-        }
-        if (selected.isValid()) {
-            const std::string name = selected.data().toString().toStdString();
-            for (std::size_t i = 0; i < model.targets.size(); ++i) {
-                if (model.targets[i].name == name && model.targets[i].type == project::CMakeTargetType::Executable) {
+    const auto profile = m_service->activeProfile();
+    if (profile) {
+        const auto preferred =
+            std::ranges::find(m_targetPreferences, profile->name, &std::pair<std::string, std::string>::first);
+        if (preferred != m_targetPreferences.end()) {
+            for (std::size_t i = 0; i < model.targets.size(); ++i)
+                if (model.targets[i].name == preferred->second &&
+                    model.targets[i].type == project::CMakeTargetType::Executable) {
                     target = i;
                     break;
                 }
-            }
         }
     }
     if (!target) {
@@ -335,6 +341,63 @@ void CMakeIntegration::refreshRunTarget() {
                                ? tr("Run/Debug: %1").arg(QString::fromStdString(model->targets[*target].name))
                                : tr("Run/Debug: configure an executable target"));
     m_targetLabel->setToolTip(tr("Select an executable in the CMake targets tree to change the Run/Debug target."));
+}
+
+void CMakeIntegration::rememberTreeTarget() {
+    if (m_restoringTarget || !m_tree || !targetsCurrent() ||
+        m_displayProfileGeneration != m_service->profileGeneration())
+        return;
+    const auto profile = m_service->activeProfile();
+    const auto model = m_controller->model();
+    // Recheck after reading the profile: a service-side presets reload can advance the
+    // generation between the first fence and these reads.
+    if (!profile || !model || m_displayProfileGeneration != m_service->profileGeneration() ||
+        model != m_service->model())
+        return;
+    QModelIndex index = m_tree->currentIndex();
+    while (index.isValid() && index.data(ui::cmake::CMakeTreeModel::KindRole).toInt() !=
+                                  static_cast<int>(project::CMakeViewNodeKind::Target))
+        index = index.parent();
+    if (!index.isValid())
+        return;
+    const std::string name = index.data().toString().toStdString();
+    const auto target = std::ranges::find(model->targets, name, &project::CMakeTarget::name);
+    if (target == model->targets.end() || target->type != project::CMakeTargetType::Executable)
+        return;
+    auto existing = std::ranges::find(m_targetPreferences, profile->name, &std::pair<std::string, std::string>::first);
+    if (existing != m_targetPreferences.end()) {
+        if (existing->second == name)
+            return;
+        existing->second = name;
+    } else {
+        m_targetPreferences.emplace_back(profile->name, name);
+    }
+    if (m_targetPreferencesChanged)
+        m_targetPreferencesChanged(m_targetPreferences);
+}
+
+void CMakeIntegration::setTargetPreferences(
+    std::vector<std::pair<std::string, std::string>> preferences,
+    std::function<void(const std::vector<std::pair<std::string, std::string>>&)> changed) {
+    m_targetPreferences = std::move(preferences);
+    m_targetPreferencesChanged = std::move(changed);
+    restoreRunTarget();
+    refreshRunTarget();
+}
+
+void CMakeIntegration::restoreRunTarget() {
+    if (!m_tree || !targetsCurrent() || m_displayProfileGeneration != m_service->profileGeneration())
+        return;
+    const auto model = m_controller->model();
+    const auto target = runTarget(*model);
+    if (!target)
+        return;
+    const QModelIndex selected = m_controller->treeModel()->indexForKey("target:" + model->targets[*target].name);
+    if (selected.isValid()) {
+        m_restoringTarget = true;
+        m_tree->setCurrentIndex(selected);
+        m_restoringTarget = false;
+    }
 }
 
 void CMakeIntegration::refreshProfiles() {

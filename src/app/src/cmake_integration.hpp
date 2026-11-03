@@ -16,6 +16,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 class QTreeView;
 class QLabel;
@@ -45,6 +47,8 @@ public:
                      std::function<void(const std::string&)> openFile, std::function<void()> modelChanged);
     ~CMakeIntegration() override;
     Result<void> open(const std::string& folder);
+    void setTargetPreferences(std::vector<std::pair<std::string, std::string>> preferences,
+                              std::function<void(const std::vector<std::pair<std::string, std::string>>&)> changed);
     [[nodiscard]] build::CMakeService& service() const { return *m_service; }
     [[nodiscard]] std::shared_ptr<build::CMakeService> sharedService() const { return m_service; }
     [[nodiscard]] bool targetsCurrent() const {
@@ -84,6 +88,10 @@ private:
     bool m_solutionActionVisible = false;
     bool m_runActionVisible = false;
     QStringList m_expandedKeys;
+    std::vector<std::pair<std::string, std::string>> m_targetPreferences;
+    std::function<void(const std::vector<std::pair<std::string, std::string>>&)> m_targetPreferencesChanged;
+    bool m_restoringTarget = false;
+    std::uint64_t m_displayProfileGeneration = 0;
     struct RunRelay;
     std::shared_ptr<RunRelay> m_runRelay;
     std::unique_ptr<build::RunSession> m_session;
@@ -100,6 +108,8 @@ private:
     void maybeRerun();
     [[nodiscard]] std::optional<std::size_t> runTarget(const project::CMakeProject& model) const;
     void refreshRunTarget();
+    void restoreRunTarget();
+    void rememberTreeTarget();
     void refreshProfiles();
 };
 } // namespace frost::app

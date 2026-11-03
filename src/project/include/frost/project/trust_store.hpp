@@ -29,6 +29,7 @@
 #include "frost/core/error.hpp"
 #include "frost/core/mutex.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -42,6 +43,11 @@ class IFileSystem;
 namespace frost::project {
 
 class SolutionModel;
+
+struct TrustSnapshot {
+    bool trusted = false;
+    std::uint64_t revision = 0;
+};
 
 class TrustStore {
 public:
@@ -59,6 +65,8 @@ public:
 
     // True when `path` (absolute) is a trusted root or lies below one; false for invalid paths.
     [[nodiscard]] bool isTrusted(std::string_view path) const;
+    // Atomic trust decision and in-process revision; any observed root-list change advances it.
+    [[nodiscard]] TrustSnapshot snapshot(std::string_view path) const;
 
     // Success when isTrusted(path); otherwise PermissionDenied naming the path, for gates such as
     // the build driver's.
@@ -94,6 +102,7 @@ private:
     mutable Mutex m_mutex;
     std::vector<std::string> m_roots FROST_GUARDED_BY(m_mutex);
     std::vector<std::string> m_warnings FROST_GUARDED_BY(m_mutex);
+    std::uint64_t m_revision FROST_GUARDED_BY(m_mutex) = 0;
 };
 
 // The folders a build of `model` runs project code from: the solution's directory and the

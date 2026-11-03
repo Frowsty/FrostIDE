@@ -474,6 +474,82 @@ std::optional<NodeId> SolutionModel::findNode(std::string_view key) const {
     return it->second;
 }
 
+SolutionModel SolutionModel::withEvaluatedFiles(ProjectId projectId, ItemType type,
+                                                std::span<const std::string> files) const {
+    SolutionModel out = *this;
+    const ProjectInfo& info = out.project(projectId);
+    std::unordered_set<std::string> wanted;
+    for (const auto& file : files) {
+        if (auto normalized = detail::normalizeAbsolute(file))
+            wanted.insert(detail::pathKey(*normalized));
+    }
+    std::unordered_set<std::string> present;
+    for (std::size_t i = 0; i < out.m_nodes.size(); ++i) {
+        Node& node = out.m_nodes[i];
+        if (node.kind != NodeKind::File || node.project != projectId || node.itemType != type)
+            continue;
+        const auto key = detail::pathKey(node.path);
+        if (wanted.contains(key)) {
+            present.insert(key);
+            continue;
+        }
+        const NodeId id{static_cast<std::uint32_t>(i)};
+        if (node.parent)
+            std::erase(out.m_nodes[node.parent->value()].children, id);
+        out.m_nodesByKey.erase(node.key);
+        auto it = out.m_filesByPath.find(key);
+        if (it != out.m_filesByPath.end()) {
+            std::erase(it->second, id);
+            if (it->second.empty())
+                out.m_filesByPath.erase(it);
+        }
+    }
+    const std::string projectKey = out.node(info.node).key;
+    for (const auto& file : files) {
+        auto normalized = detail::normalizeAbsolute(file);
+        if (!normalized)
+            continue;
+        const auto pathKey = detail::pathKey(*normalized);
+        if (!present.insert(pathKey).second)
+            continue;
+        const NodeId id{static_cast<std::uint32_t>(out.m_nodes.size())};
+        std::string key = projectKey + "/file:" + pathKey;
+        const std::string base = key;
+        for (unsigned n = 2; out.m_nodesByKey.contains(key); ++n)
+            key = std::format("{}#{}", base, n);
+        out.m_nodes.push_back({.kind = NodeKind::File,
+                               .parent = info.node,
+                               .children = {},
+                               .displayName = std::string(io::fileName(*normalized)),
+                               .path = *normalized,
+                               .key = key,
+                               .project = projectId,
+                               .itemType = type});
+        out.m_nodes[info.node.value()].children.push_back(id);
+        out.m_nodesByKey.emplace(std::move(key), id);
+        auto& matches = out.m_filesByPath[pathKey];
+        matches.push_back(id);
+        std::ranges::stable_sort(matches, [&out](NodeId a, NodeId b) {
+            const auto left = out.node(a).project;
+            const auto right = out.node(b).project;
+            if (!left || !right)
+                return !left && right.has_value();
+            return left->value() < right->value();
+        });
+    }
+    auto& children = out.m_nodes[info.node.value()].children;
+    std::ranges::sort(children, [&out](NodeId a, NodeId b) {
+        const Node& x = out.node(a);
+        const Node& y = out.node(b);
+        if (rank(x.kind) != rank(y.kind))
+            return rank(x.kind) < rank(y.kind);
+        if (const int c = detail::icompare(x.displayName, y.displayName); c != 0)
+            return c < 0;
+        return x.key < y.key;
+    });
+    return out;
+}
+
 const ProjectInfo& SolutionModel::project(ProjectId id) const {
     FROST_PRE(id.value() < m_projects.size());
     return m_projects[id.value()];

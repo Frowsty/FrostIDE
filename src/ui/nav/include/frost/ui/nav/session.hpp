@@ -9,7 +9,8 @@
  * "recentProjects": ["<root>", ...]}. <directory>/project-<16 hex>.json, the hex being the FNV-1a
  * 64-bit hash of the canonical project root: {"version": 1, "root": ..., "tabs": [{"path", "pinned",
  * "line", "column", "top"}], "active": <index or -1>, "toolWindows": [{"id", "visible", "size"}],
- * "recentFiles": [...], "recentLocations": [{"path", "line", "column"}]}. Unknown keys are ignored;
+ * "recentFiles": [...], "recentLocations": [{"path", "line", "column"}], and optional
+ * "cmakeTargets": [{"profile", "target"}]}. Unknown keys are ignored;
  * a newer version or malformed JSON is Corrupt or Unsupported, and the shell then starts empty.
  * Writes go through IFileSystem::writeFileAtomic. Thread safety: none (the UI thread).
  */
@@ -59,6 +60,8 @@ struct SessionState {
     std::vector<SessionToolWindow> toolWindows;
     std::vector<std::string> recentFiles;
     std::vector<Place> recentLocations;
+    // CMake configure profile name to executable target name, scoped to this root.
+    std::vector<std::pair<std::string, std::string>> cmakeTargets;
     friend bool operator==(const SessionState&, const SessionState&) = default;
 };
 
@@ -77,7 +80,8 @@ public:
     // `directory` is absolute (created on the first save); `fs` outlives the store.
     SessionStore(io::IFileSystem& fs, std::string directory);
 
-    // The saved session of `root`. Errors: NotFound (none saved), decodeSession's, the file system's.
+    // The saved session of `root`. A stored different root, or unbound CMake preferences, is Corrupt.
+    // Errors: NotFound (none saved), decodeSession's, the file system's.
     [[nodiscard]] Result<SessionState> load(std::string_view root) const;
     // Saves `state` as the session of state.root and makes it the last project. Errors: the file
     // system's (createDirectories, writeFileAtomic).

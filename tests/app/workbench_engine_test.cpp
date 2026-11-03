@@ -822,6 +822,7 @@ TEST(WorkbenchEngine, ManagedSelectionRechecksSharedOwnerBeforePreparation) {
     WorkbenchRig* activeRig = nullptr;
     std::optional<std::uint64_t> owner;
     RigOptions options;
+    options.disableProjectEvaluation = true;
     options.launcher = &launcher;
     options.workbench.managedPdbGuardPath = dir.join("guard.dll");
     options.workbench.selectManagedDebug = [&](std::string_view) -> std::optional<frost::app::ManagedDebugSelection> {
@@ -866,6 +867,7 @@ TEST(WorkbenchEngine, ManagedSelectionRechecksActiveDebugAfterReservationRelease
     WorkbenchRig* activeRig = nullptr;
     bool sessionStarted = false;
     RigOptions options;
+    options.disableProjectEvaluation = true;
     options.launcher = &launcher;
     options.workbench.managedPdbGuardPath = dir.join("guard.dll");
     options.workbench.debugAdapterFactory =
@@ -960,6 +962,7 @@ TEST(WorkbenchEngine, LuaStartRefusesAnActiveProjectEditReservation) {
     WorkDir dir("engine-lua-reverse-admission", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
     RigOptions options;
+    options.disableProjectEvaluation = true;
     options.launcher = &launcher;
     WorkbenchRig rig(dir, options);
     ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,

@@ -30,7 +30,7 @@ set_tests_properties(managed_pdb_guard PROPERTIES
     ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 
 set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch asset_fetch budgets symbolize
-    verify_support frost_perf verify_scripts build_lldb managed_server)
+    verify_support frost_perf verify_scripts build_lldb managed_server package_notices)
 if(WIN32)
     # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.
     list(APPEND _frost_tool_suites windows_scripts)

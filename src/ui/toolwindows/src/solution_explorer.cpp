@@ -96,12 +96,16 @@ void SolutionExplorer::setController(BuildController* controller) {
     setSolution(m_controller->solution());
 }
 
-void SolutionExplorer::setSolution(std::shared_ptr<const project::SolutionModel> solution) {
+void SolutionExplorer::setSolution(std::shared_ptr<const project::SolutionModel> solution, bool preserveSearch) {
     const std::shared_ptr<const project::SolutionModel>& old = m_model->solution();
     if (old == solution) {
         return;
     }
     const bool reload = old && solution && old->path() == solution->path();
+    const bool restoreSearch = preserveSearch && reload && m_searchActive;
+    const QString query = m_query;
+    const QString filterQuery = m_filter->query();
+    const QStringList expandedBeforeSearch = m_expandedBeforeSearch;
     QStringList expanded;
     QString selectedKey;
     if (reload) {
@@ -122,7 +126,22 @@ void SolutionExplorer::setSolution(std::shared_ptr<const project::SolutionModel>
     }
     if (reload) {
         restoreExpansion(expanded);
-        if (const auto node = current->findNode(toUtf8(selectedKey))) {
+        if (restoreSearch) {
+            m_searchActive = true;
+            m_expandedBeforeSearch = expandedBeforeSearch;
+            m_searchField->show();
+            if (!filterQuery.isEmpty())
+                updateSpeedSearch(filterQuery);
+            if (query != filterQuery)
+                updateSpeedSearch(query);
+            if (const auto node = current->findNode(toUtf8(selectedKey))) {
+                const auto match = std::ranges::find(m_matches, *node);
+                if (match != m_matches.end()) {
+                    m_matchIndex = static_cast<std::size_t>(match - m_matches.begin());
+                    selectNode(*node);
+                }
+            }
+        } else if (const auto node = current->findNode(toUtf8(selectedKey))) {
             selectNode(*node);
         }
     } else {

@@ -151,6 +151,7 @@ TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     state.toolWindows = {{"fileSystem", true, 280}, {"problems", false, 200}};
     state.recentFiles = {"/proj/b.cpp", "/proj/a.cpp"};
     state.recentLocations = {Place{"/proj/a.cpp", 12, 3}};
+    state.cmakeTargets = {{"Debug", "tests"}, {"Release", "editor"}};
     ASSERT_TRUE(store.save(state).has_value());
     const auto loaded = store.load("/proj");
     ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
@@ -169,9 +170,18 @@ TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     EXPECT_TRUE(loaded->toolWindows[0].visible);
     EXPECT_EQ(loaded->toolWindows[0].size, 280);
     EXPECT_EQ(loaded->recentFiles, state.recentFiles);
+    EXPECT_EQ(loaded->cmakeTargets, state.cmakeTargets);
     ASSERT_EQ(loaded->recentLocations.size(), 1U);
     EXPECT_EQ(loaded->recentLocations[0].line, 12);
     EXPECT_EQ(store.lastProject().value_or(""), "/proj");
+    ASSERT_TRUE(fs.writeFileAtomic(
+        store.fileOf("/proj"),
+        R"({"version":1,"root":"/different","cmakeTargets":[{"profile":"Debug","target":"wrong"}]})"));
+    EXPECT_EQ(store.load("/proj").error().code(), ErrorCode::Corrupt);
+    ASSERT_TRUE(fs.writeFileAtomic(store.fileOf("/proj"),
+                                   R"({"version":1,"cmakeTargets":[{"profile":"Debug","target":"wrong"}]})"));
+    EXPECT_EQ(store.load("/proj").error().code(), ErrorCode::Corrupt);
+    ASSERT_TRUE(store.save(state));
     EXPECT_EQ(frost::ui::nav::decodeSession("{not json").error().code(), ErrorCode::Corrupt);
 
     // Closing the project forgets it as the last one (the next start shows the Welcome screen), but

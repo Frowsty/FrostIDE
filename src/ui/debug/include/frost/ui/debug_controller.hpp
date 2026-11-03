@@ -137,6 +137,16 @@ public:
     [[nodiscard]] Result<void> attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
                                             rpc::Json attachArguments, std::function<bool()> ownerAdmission = {});
 
+    // Attaches a verified managed module with a source allowlist and per-change validator.
+    // The caller must establish process identity, trust, and source freshness before calling.
+    [[nodiscard]] Result<void>
+    attachManagedTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
+                        std::function<bool(const debug::DebugFrame&)> frameAllowed,
+                        std::vector<std::string> allowedSources,
+                        std::map<std::string, std::vector<debug::BreakpointLine>> verifiedBreakpoints,
+                        std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint,
+                        std::function<bool()> ownerAdmission);
+
     // Whether a session is live (Starting, Running or Stopped).
     [[nodiscard]] bool debugging() const noexcept {
         return m_session != nullptr || m_pendingRun.has_value() || m_alternatePending;
