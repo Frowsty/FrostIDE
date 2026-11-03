@@ -3,6 +3,22 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Explicit C++ completion inventory
+
+- Unity controls checkpoint `cbab971` is committed and pushed. PLAN Appendix B.3 now records separate
+  C++ acceptance scenarios for project reading/fidelity, MSVC builds, structural edits, native debugging,
+  CMake and language intelligence. Existing passing workflows do not close those broader scenarios.
+  The Unity controls status now reflects the committed bounded checkpoint and its remaining gaps.
+- The dedicated C++ project-edit worktree has a VS-backed ownership/removal and Windows transaction
+  prototype. Corrected tree `46626e1afc0981c41f64c9d3189e24b4f9bf38bb` passes scratch refusal/recovery
+  tests and a copied real VS solution build; independent re-review is pending. Import/global-input
+  enforcement, TrustStore admission, product recovery and UI are not integrated. Controlled process exit
+  after one flushed write is not evidence of partial-write or power-loss recovery.
+- Lua source capture and the managed application workflow continue in isolated worktrees. Their changing
+  candidates are not merged or counted as accepted features. Main remains at the verified product source
+  checkpoint while these candidates receive review and matching-build tests. This entry is documentation
+  only; feature consistency and whitespace checks passed.
+
 ## 2026-11-03: Bounded Unity controls acceptance and continuing C++/debugger work
 
 - The reviewed Unity controls integration passed the combined gates recorded below and two subsequent
