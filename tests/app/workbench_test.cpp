@@ -36,6 +36,8 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QMenuBar>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
@@ -112,6 +114,46 @@ TEST(Workbench, ExplicitEditorSaveReportsCommittedWarning) {
     ASSERT_FALSE(log.empty());
     EXPECT_EQ(log.back().notification.kind, frost::ui::NotificationKind::Warning);
     EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("recovery metadata needs attention")));
+}
+
+TEST(Workbench, TopLevelMenusReceiveClicksWithoutOpeningAnotherMenu) {
+    WorkDir dir("menu-hit-testing");
+    WorkbenchRig rig(dir);
+    rig.show();
+    auto* bar = rig.window->menuBar();
+    const auto checkMenus = [&] {
+        for (auto* action : bar->actions()) {
+            if (!action->isVisible())
+                continue;
+            const auto local = bar->actionGeometry(action).center();
+            auto* hit = rig.window->childAt(bar->mapTo(rig.window.get(), local));
+            ASSERT_NE(hit, nullptr);
+            ASSERT_EQ(hit, bar) << action->text().toStdString() << " intercepted by " << hit->metaObject()->className()
+                                << " " << hit->objectName().toStdString();
+            const auto global = bar->mapToGlobal(local);
+            QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(hit, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, local, global, Qt::LeftButton, Qt::NoButton,
+                                Qt::NoModifier);
+            QApplication::sendEvent(hit, &release);
+            ASSERT_NE(action->menu(), nullptr);
+            EXPECT_TRUE(action->menu()->isVisible()) << action->text().toStdString();
+            action->menu()->close();
+            QApplication::processEvents();
+        }
+    };
+    checkMenus();
+    auto* panel = rig.window->findChild<QWidget*>(QStringLiteral("frostEnginePanel"));
+    ASSERT_NE(panel, nullptr);
+    EXPECT_FALSE(panel->isVisible());
+    rig.window->toolWindows().show("frostEngine");
+    QApplication::processEvents();
+    EXPECT_TRUE(panel->isVisible());
+    checkMenus();
+    rig.window->toolWindows().hide("frostEngine");
+    QApplication::processEvents();
+    EXPECT_FALSE(panel->isVisible());
+    checkMenus();
 }
 
 TEST(Workbench, DirtyTabCloseReportsCommittedWarningWithoutDiscardPrompt) {

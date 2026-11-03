@@ -3,6 +3,38 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Disk cleanup and File/Edit click fix
+
+- User requested removal of obsolete FrostIDE files. Inventoried the repository,
+  linked worktrees and E:/FrostBuilds; removed 54 clean worktrees whose HEADs are
+  ancestors of main, plus 59 superseded preview folders. Rechecked clean status and
+  ancestry before each worktree removal. No branch history or unmerged source was
+  deleted. Root build, SDK, current beta and independent evidence remain available.
+- Removed paths occupied 98.31 GiB; E: free space increased from about 38.2 GiB to
+  136.4 GiB. Ignored nonbinary files, logs, scripts, notes and old preview metadata
+  were archived and ZIP-verified before removal. Inventory, per-path deletion log
+  and archive hashes: `E:/FrostBuilds/cleanup-20261103/`. Earlier progress links to
+  removed preview binaries/worktrees are historical; their source remains in Git,
+  and retained notes are indexed by `removed.json`. Unmerged worktrees are retained.
+- User reported File/Edit accepting clicks only after opening another menu. A new
+  regression reproduced both menu centers being covered by the unnamed, unopened
+  FrostEngine panel. Hide that child until ToolWindowManager adopts it, matching
+  the existing Unity panel pattern. The regression now verifies hit targets and
+  independent menu clicks before and after showing/hiding the engine panel.
+  It failed before the fix and passed afterward, including on a private native Windows
+  desktop. Astra independently approved the source change and regression.
+- Combined verification of `cbc96bec` passed: Windows 3079/3104 (25 skipped, one disabled),
+  Linux 2896/2947 (51 skipped); no failures. Windows format/lint/licence/feature checks
+  and native licence check passed. Logs/source archive: `E:/FrostBuilds/orchestration/beta2-*`.
+- Updated portable package: `E:/FrostBuilds/beta/FrostIDE-2026.11.03-beta.2/frost.exe`.
+  Staging and private-desktop startup selftest passed. DLL SHA-256:
+  `9D33AB980A59C00D857AF88740ADB8359CEF41BEE49EFAB4467E79EBF171949E`.
+  README/build-info record scope and provenance. The user's running beta 1 was not
+  stopped or overwritten; close it before launching beta 2. Next: user feedback;
+  unfinished feature branches remain held.
+- Clarified beta scope: project/folder opening is implemented; New Project and
+  New File are not. No project-creation feature work is included in this fix.
+
 ## 2026-11-03: Limited beta with the new GUI
 
 - The user explicitly requested the minimum work to deliver a usable beta with the

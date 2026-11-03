@@ -744,6 +744,9 @@ struct EngineIntegration::Impl {
 EngineIntegration::EngineIntegration(Workbench& workbench)
     : QObject(&workbench), m_impl(std::make_unique<Impl>(*this, workbench)) {
     auto* panel = new QWidget(workbench.m_window);
+    panel->setObjectName(QStringLiteral("frostEnginePanel"));
+    // The tool window reparents this child lazily; keep it off the menu bar until then.
+    panel->hide();
     m_impl->panel = panel;
     auto* layout = new QVBoxLayout(panel);
     auto* row = new QHBoxLayout();
