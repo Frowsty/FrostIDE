@@ -1156,7 +1156,7 @@ proof of the full scenario. Add real Windows/Linux input and application evidenc
 | EDIT-04 | Reformat documents/selections using resolved file settings; accept snippets and parameter hints without losing edits or applying stale replies. | Advanced Lua formatting/settings, real LuaLS responses, parameter hints, Unicode positions and engine-API editing pass independent review and combined Windows/Linux gates. Broader snippet transforms and other language coverage remain. |
 | EDIT-05 | Edit and navigate within split/detached editors while preserving document identity, undo, focus and recovery across project windows. | Tab reordering/pinning and project-specific process routing exist. They do not establish split/detached-editor behavior. |
 | SHELL-01 | Dock, float, resize, hide, restore and keyboard-focus tool windows, preserving layout and returning focus to the correct editor. | Tool-window manager and application contents exist. A complete interaction/layout acceptance matrix remains, including both native displays. |
-| SHELL-02 | Navigate and act through a persistent structure view, breadcrumbs, bookmarks and sticky context without stale locations after edits. | File-structure popup exists; it is not evidence for the remaining persistent navigation surfaces. M15/M11 own the gaps. |
+| SHELL-02 | Navigate and act through a persistent structure view, breadcrumbs, bookmarks and sticky context without stale locations after edits. | Persistent Structure and current-directory breadcrumbs are integrated with lifecycle/focus tests and staged Windows clangd/navigation evidence. Nested file menus and narrow-width scrolling work in the demonstrated fixtures. Full Structure, symbol/target breadcrumbs, bookmarks, sticky context and the complete native-display/input matrix remain; M15/M11 own the gaps. |
 | INPUT-01 | Exercise supported keymaps/layouts, IME composition and keyboard-only workflows without shortcut collisions or text corruption. | IntelliJ bindings and editor input tests exist. Additional keymaps and the complete real-layout/IME matrix remain. |
 | ACCESS-01 | Screen readers expose editable text, selections, diagnostics and terminal content; keyboard navigation and high-contrast modes work through actual Windows/Linux accessibility interfaces. | Themes and ordinary Qt widgets alone do not establish custom-editor/terminal accessibility. Full application evidence and explicit accessible-text integration remain. |
 
@@ -1189,7 +1189,10 @@ requirements. The later `codex-20261103-cpp-edit` stage adds bounded Windows Rem
 acceptance, with its exact evidence and initial verification failures recorded in `docs/progress.md`.
 The `codex-20261103-gui-preview` stage adds accepted Add Existing workflows for both solution formats,
 upright tool-window rails, regrouped toolbar controls and a persistent Structure panel verified with
-real clangd. Toolbar keyboard traversal, navigation breadcrumbs and full Structure parity remain open.
+real clangd. The `codex-20261103-navigation` stage adds current-directory breadcrumbs, nested file menus,
+focused-crumb scrolling and toolbar keyboard focus order, with full Windows/Linux functional gates.
+Staged Windows evidence confirms one forward toolbar Tab transition; physical modifier shortcuts and
+complete keyboard traversal remain unproven. Symbol/target navigation and full Structure parity remain open.
 CPP-01/03/06 remain open.
 
 Keep these scenarios alongside Appendix A and the expanded language/engine tracks. A passing build or

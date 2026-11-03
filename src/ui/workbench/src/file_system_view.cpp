@@ -32,8 +32,8 @@ using workbench_detail::toUtf8;
 
 namespace {
 
-constexpr int kPathRole = Qt::UserRole + 1;
-constexpr int kDirectoryRole = Qt::UserRole + 2;
+constexpr int kPathRole = FileSystemView::PathRole;
+constexpr int kDirectoryRole = FileSystemView::DirectoryRole;
 
 void collectVisible(const QTreeView& tree, const QAbstractItemModel& model, const QModelIndex& parent,
                     QStringList& out) {
@@ -511,6 +511,8 @@ std::string FileSystemView::selectedPath() const {
     const QModelIndex index = m_tree->currentIndex();
     return index.isValid() ? toUtf8(index.data(kPathRole).toString()) : std::string();
 }
+
+QModelIndex FileSystemView::indexOfPath(const std::string& path) const { return m_model->indexForPath(path); }
 
 bool FileSystemView::select(const std::string& path) {
     const QModelIndex found = m_model->indexForPath(path);

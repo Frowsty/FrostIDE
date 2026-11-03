@@ -39,6 +39,8 @@ class FileSystemView final : public QWidget {
     Q_OBJECT
 
 public:
+    // Roles on tree()->model(); paths are absolute and DirectoryRole is a bool.
+    enum Role : int { PathRole = Qt::UserRole + 1, DirectoryRole };
     explicit FileSystemView(QWidget* parent = nullptr, sched::IScheduler* scheduler = nullptr);
     ~FileSystemView() override;
 
@@ -63,6 +65,8 @@ public:
     void refreshFileColors();
 
     [[nodiscard]] QTreeView* tree() const noexcept { return m_tree; }
+    // Index in the displayed tree, invalid when absent or filtered out. GUI thread only.
+    [[nodiscard]] QModelIndex indexOfPath(const std::string& path) const;
     [[nodiscard]] QLineEdit* searchField() const noexcept { return m_search; }
 
 signals:

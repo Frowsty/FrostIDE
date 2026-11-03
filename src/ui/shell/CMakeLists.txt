@@ -11,6 +11,7 @@ frost_add_library(ui_shell LAYER ui
         src/background_tasks.cpp
         src/editor_tabs.cpp
         src/main_toolbar.cpp
+        src/navigation_bar.cpp
         src/notifications.cpp
         src/placeholder_editor.cpp
         src/popup.cpp
@@ -27,6 +28,7 @@ target_sources(frost_ui_shell PRIVATE
     include/frost/ui/shell/background_tasks.hpp
     include/frost/ui/shell/editor_tabs.hpp
     include/frost/ui/shell/main_toolbar.hpp
+    include/frost/ui/shell/navigation_bar.hpp
     include/frost/ui/shell/notifications.hpp
     include/frost/ui/shell/popup.hpp
     include/frost/ui/shell/shell_menus.hpp

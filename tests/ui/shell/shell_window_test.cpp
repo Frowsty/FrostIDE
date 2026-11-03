@@ -10,6 +10,7 @@
 #include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
+#include "frost/ui/shell/navigation_bar.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
@@ -21,14 +22,19 @@
 #include "shell/shell_rig.hpp"
 #include <QAction>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSplitter>
+#include <QStandardItemModel>
 #include <QStatusBar>
+#include <QTimer>
 #include <QToolButton>
 #include <gtest/gtest.h>
 
@@ -90,6 +96,188 @@ TEST(ShellWindow, BuildsTheRiderLayout) {
         EXPECT_FALSE(window.toolWindows().stripeButton(id)->accessibleName().isEmpty()) << id;
         EXPECT_FALSE(window.toolWindows().isVisible(id)) << id;
     }
+}
+
+TEST(ShellWindow, ToolbarFocusFollowsVisibleDynamicControls) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    auto& toolbar = window.mainToolbar();
+    QAction* runAction = nullptr;
+    for (QAction* action : toolbar.actions()) {
+        if (toolbar.widgetForAction(action) == toolbar.runConfigurations()) {
+            runAction = action;
+            break;
+        }
+    }
+    ASSERT_NE(runAction, nullptr);
+    auto* profile = new QComboBox(&toolbar);
+    profile->addItem(QStringLiteral("Profile"));
+    QAction* profileAction = toolbar.insertWidget(runAction, profile);
+    auto* disabled = new QComboBox(&toolbar);
+    disabled->setEnabled(false);
+    toolbar.insertWidget(runAction, disabled);
+    auto* middle = new QComboBox(&toolbar);
+    middle->addItem(QStringLiteral("Intermediate target"));
+    QAction* middleAction = toolbar.insertWidget(runAction, middle);
+    int builds = 0;
+    rig.addCounted("build.project", "Build Solution", builds);
+    window.refreshActions();
+    toolbar.runConfigurations()->addItem(QStringLiteral("Target"));
+    window.show();
+    QApplication::processEvents();
+    auto order = toolbar.focusOrder();
+    ASSERT_GE(order.size(), 2U);
+    EXPECT_EQ(order[0], profile);
+    EXPECT_EQ(order[1], middle);
+    EXPECT_EQ(toolbar.projectButton()->focusPolicy(), Qt::NoFocus);
+    window.invoke(actions::kFocusToolbar);
+    EXPECT_EQ(QApplication::focusWidget(), profile);
+    sendKey(profile, Qt::Key_Tab, Qt::NoModifier);
+    EXPECT_EQ(QApplication::focusWidget(), middle);
+    middleAction->setVisible(false);
+    profile->setFocus();
+    sendKey(profile, Qt::Key_Tab, Qt::NoModifier);
+    EXPECT_EQ(QApplication::focusWidget(), toolbar.runConfigurations());
+    sendKey(toolbar.runConfigurations(), Qt::Key_Tab, Qt::NoModifier);
+    EXPECT_EQ(QApplication::focusWidget(), toolbar.button(frost::ui::MainToolbar::kBuild));
+    sendKey(toolbar.button(frost::ui::MainToolbar::kBuild), Qt::Key_Backtab, Qt::ShiftModifier);
+    EXPECT_EQ(QApplication::focusWidget(), toolbar.runConfigurations());
+    toolbar.removeAction(middleAction);
+    QApplication::processEvents();
+    profile->setFocus();
+    sendKey(profile, Qt::Key_Tab, Qt::NoModifier);
+    EXPECT_EQ(QApplication::focusWidget(), toolbar.runConfigurations());
+    sendKey(toolbar.runConfigurations(), Qt::Key_Tab, Qt::NoModifier);
+    auto* build = toolbar.button(frost::ui::MainToolbar::kBuild);
+    EXPECT_EQ(QApplication::focusWidget(), build);
+    sendKey(build, Qt::Key_Tab, Qt::NoModifier);
+    QWidget* afterToolbar = QApplication::focusWidget();
+    ASSERT_NE(afterToolbar, nullptr);
+    EXPECT_FALSE(toolbar.isAncestorOf(afterToolbar));
+    sendKey(afterToolbar, Qt::Key_Backtab, Qt::ShiftModifier);
+    EXPECT_EQ(QApplication::focusWidget(), build);
+    profileAction->setVisible(false);
+    order = toolbar.focusOrder();
+    ASSERT_FALSE(order.empty());
+    EXPECT_EQ(order[0], toolbar.runConfigurations());
+    window.invoke(actions::kFocusToolbar);
+    EXPECT_EQ(QApplication::focusWidget(), toolbar.runConfigurations());
+}
+
+TEST(ShellWindow, NavigationBarOpensModelFilesAndRejectsStaleMenus) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    QStandardItemModel model;
+    constexpr int kPath = Qt::UserRole + 1;
+    constexpr int kDir = Qt::UserRole + 2;
+    auto* root = new QStandardItem(QStringLiteral("Project"));
+    root->setData(true, kDir);
+    model.appendRow(root);
+    auto* folder = new QStandardItem(QStringLiteral("Folder"));
+    folder->setData(true, kDir);
+    root->appendRow(folder);
+    auto* first = new QStandardItem(QStringLiteral("first.cpp"));
+    first->setData(QStringLiteral("/project/first.cpp"), kPath);
+    folder->appendRow(first);
+    auto* second = new QStandardItem(QStringLiteral("second.cpp"));
+    second->setData(QStringLiteral("/project/second.cpp"), kPath);
+    folder->appendRow(second);
+    std::string opened;
+    auto& bar = window.navigationBar();
+    bar.setModel(
+        &model, kPath,
+        [&model](const std::string& path) {
+            const QModelIndex folderIndex = model.index(0, 0, model.index(0, 0));
+            for (int row = 0; row < model.rowCount(folderIndex); ++row) {
+                const QModelIndex child = model.index(row, 0, folderIndex);
+                if (child.data(kPath).toString().toStdString() == path)
+                    return child;
+            }
+            return QModelIndex();
+        },
+        [](const QModelIndex& index) { return index.data(kDir).toBool(); },
+        [&opened](const std::string& path) { opened = path; });
+    bar.setPath("/project/first.cpp");
+    window.show();
+    QApplication::processEvents();
+    window.invoke(actions::kFocusNavigationBar);
+    auto* button = qobject_cast<QToolButton*>(QApplication::focusWidget());
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(button->text(), QStringLiteral("Project"));
+    ASSERT_NE(button->menu(), nullptr);
+    sendKey(button, Qt::Key_Tab, Qt::NoModifier);
+    auto* folderButton = qobject_cast<QToolButton*>(QApplication::focusWidget());
+    ASSERT_NE(folderButton, nullptr);
+    EXPECT_EQ(folderButton->text(), QStringLiteral("Folder"));
+    auto* scroll = window.findChild<QScrollArea*>(QStringLiteral("navigationScroll"));
+    ASSERT_NE(scroll, nullptr);
+    scroll->setFixedWidth(30);
+    QApplication::processEvents();
+    button->setFocus();
+    folderButton->setFocus();
+    QApplication::processEvents();
+    EXPECT_GT(scroll->horizontalScrollBar()->value(), 0);
+    scroll->setMinimumWidth(0);
+    scroll->setMaximumWidth(QWIDGETSIZE_MAX);
+    sendKey(folderButton, Qt::Key_Backtab, Qt::ShiftModifier);
+    EXPECT_EQ(QApplication::focusWidget(), button);
+    folderButton->setFocus();
+    bool sawPopup = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (!menu)
+            return;
+        sawPopup = true;
+        sendKey(menu, Qt::Key_Down, Qt::NoModifier);
+        sendKey(menu, Qt::Key_Down, Qt::NoModifier);
+        sendKey(menu, Qt::Key_Return, Qt::NoModifier);
+    });
+    sendKey(folderButton, Qt::Key_Space, Qt::NoModifier);
+    QElapsedTimer waitForOpen;
+    waitForOpen.start();
+    while (opened.empty() && waitForOpen.elapsed() < 1000) {
+        QApplication::processEvents();
+    }
+    EXPECT_TRUE(sawPopup);
+    EXPECT_EQ(opened, "/project/second.cpp");
+    opened.clear();
+    QTimer::singleShot(0, &window, [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (menu)
+            sendKey(menu, Qt::Key_Escape, Qt::NoModifier);
+    });
+    sendKey(folderButton, Qt::Key_Space, Qt::NoModifier);
+    EXPECT_TRUE(opened.empty());
+    QTimer::singleShot(0, &window, [&] { model.clear(); });
+    sendKey(folderButton, Qt::Key_Space, Qt::NoModifier);
+    QApplication::processEvents();
+    EXPECT_TRUE(opened.empty());
+}
+
+TEST(ShellWindow, NavigationBarRejectsQueuedSelectionAfterReset) {
+    frost::ui::NavigationBar bar;
+    QStandardItemModel model;
+    constexpr int kPath = Qt::UserRole + 1;
+    auto* root = new QStandardItem(QStringLiteral("Project"));
+    model.appendRow(root);
+    auto* file = new QStandardItem(QStringLiteral("file.cpp"));
+    file->setData(QStringLiteral("/project/file.cpp"), kPath);
+    root->appendRow(file);
+    int opened = 0;
+    bar.setModel(
+        &model, kPath, [&model](const std::string&) { return model.index(0, 0, model.index(0, 0)); },
+        [](const QModelIndex& index) { return !index.parent().isValid(); },
+        [&opened](const std::string&) { ++opened; });
+    bar.setPath("/project/file.cpp");
+    auto* button = bar.findChild<QToolButton*>();
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(button->menu(), nullptr);
+    QMetaObject::invokeMethod(button->menu(), "aboutToShow", Qt::DirectConnection);
+    ASSERT_EQ(button->menu()->actions().size(), 1);
+    button->menu()->actions()[0]->trigger();
+    model.clear();
+    QApplication::processEvents();
+    EXPECT_EQ(opened, 0);
 }
 
 TEST(ShellWindow, MenusComeFromTheRegistryWithShortcutText) {

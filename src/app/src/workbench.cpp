@@ -24,6 +24,7 @@
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
+#include "frost/ui/shell/navigation_bar.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -552,6 +553,7 @@ void Workbench::attach(ui::ShellWindow& window) {
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
 
     attachToolWindows();
+    attachNavigationBar();
     m_engine = std::make_unique<EngineIntegration>(*this);
     m_unity = std::make_unique<UnityControlIntegration>(*this);
     attachToolbar();
@@ -635,6 +637,8 @@ void Workbench::detach() {
     stopTerminal();
     m_terminal.reset();
     // The navigation workbench saves the session and stops its watcher while the tabs exist.
+    disconnect(this, &Workbench::projectChanged, &m_window->navigationBar(), nullptr);
+    m_window->navigationBar().clearModel();
     m_nav.reset();
     // Navigation saves tab state by directory; retain the exact project the user opened.
     if (m_sessions && !m_projectIdentity.empty()) {

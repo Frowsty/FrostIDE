@@ -45,6 +45,7 @@ inline constexpr std::string_view kResetZoom = "view.resetIdeZoom";
 inline constexpr std::string_view kQuickSwitchTheme = "view.quickSwitchScheme";
 // Navigate.
 inline constexpr std::string_view kGoToLine = "editor.gotoLine";
+inline constexpr std::string_view kFocusNavigationBar = "navigate.navigationBar";
 // Help.
 inline constexpr std::string_view kAbout = "help.about";
 

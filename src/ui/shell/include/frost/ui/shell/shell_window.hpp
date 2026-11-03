@@ -35,6 +35,7 @@ class EditorTabs;
 class InputPopup;
 class ListPopup;
 class MainToolbar;
+class NavigationBar;
 class NotificationCenter;
 class Popup;
 class ShellMenus;
@@ -93,6 +94,7 @@ public:
     [[nodiscard]] BackgroundTaskManager& backgroundTasks() const noexcept { return *m_tasks; }
     [[nodiscard]] ShellMenus& menus() const noexcept { return *m_menus; }
     [[nodiscard]] MainToolbar& mainToolbar() const noexcept { return *m_toolbar; }
+    [[nodiscard]] NavigationBar& navigationBar() const noexcept { return *m_navigationBar; }
     [[nodiscard]] ShellStatusBar& statusWidgets() const noexcept { return *m_status; }
     [[nodiscard]] ShortcutDispatcher& dispatcher() const noexcept { return *m_dispatcher; }
     [[nodiscard]] const ShellEnvironment& environment() const noexcept { return m_env; }
@@ -175,6 +177,7 @@ private:
     ToolWindowManager* m_toolWindows = nullptr;
     ShellMenus* m_menus = nullptr;
     MainToolbar* m_toolbar = nullptr;
+    NavigationBar* m_navigationBar = nullptr;
     ShellStatusBar* m_status = nullptr;
     ShortcutDispatcher* m_dispatcher = nullptr;
     QTimer* m_refreshTimer = nullptr;

@@ -113,6 +113,7 @@ constexpr std::array kNavigateMenu{
     act("navigate.back"),
     act("navigate.forward"),
     act("navigate.lastEditLocation"),
+    act(a::kFocusNavigationBar),
     sep(),
     act("search.everywhere"),
     act("navigate.gotoClass"),

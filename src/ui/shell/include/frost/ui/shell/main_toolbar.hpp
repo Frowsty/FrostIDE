@@ -18,6 +18,7 @@
 #include <vector>
 
 class QComboBox;
+class QActionEvent;
 
 namespace frost::ui {
 
@@ -61,6 +62,9 @@ public:
 
     void refresh(input::ActionRegistry& registry, input::KeymapService& keymap, const input::ActionContext& context);
 
+protected:
+    void actionEvent(QActionEvent* event) override;
+
 private:
     struct Slot {
         std::string slotId;   // The k* id the slot was created with.
@@ -69,6 +73,7 @@ private:
     };
 
     void addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText);
+    void updateTabOrder();
 
     Invoker m_invoke;
     QToolButton* m_project;

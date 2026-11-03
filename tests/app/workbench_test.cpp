@@ -16,6 +16,7 @@
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
+#include "frost/ui/shell/navigation_bar.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/shell_menus.hpp"
@@ -28,7 +29,9 @@
 #include "workbench_rig.hpp"
 #include <QAction>
 #include <QListWidget>
+#include <QMenu>
 #include <QPushButton>
+#include <QToolButton>
 #include <QTreeWidget>
 
 #include <algorithm>
@@ -51,6 +54,50 @@ using frost::app::test::WorkDir;
 namespace tool_windows = frost::ui::tool_windows;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
+
+TEST(Workbench, NavigationBarUsesSolutionAndFolderModels) {
+    WorkDir dir("navigation-bar", "tiny_sln");
+    dir.write("folder/CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    dir.write("folder/first.cpp", "int first;\n");
+    dir.write("folder/second.cpp", "int second;\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")));
+    auto& bar = rig.window->navigationBar();
+    ASSERT_TRUE(waitFor([&] {
+        for (auto* button : bar.findChildren<QToolButton*>())
+            if (button->text() == QStringLiteral("App"))
+                return true;
+        return false;
+    }));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("folder")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("folder/first.cpp")));
+    QToolButton* rootButton = nullptr;
+    ASSERT_TRUE(waitFor([&] {
+        for (auto* button : bar.findChildren<QToolButton*>()) {
+            if (button->text() == QStringLiteral("folder") && button->menu()) {
+                rootButton = button;
+                return true;
+            }
+        }
+        return false;
+    }));
+    QMetaObject::invokeMethod(rootButton->menu(), "aboutToShow", Qt::DirectConnection);
+    QAction* second = nullptr;
+    for (QAction* action : rootButton->menu()->actions())
+        if (action->text() == QStringLiteral("second.cpp"))
+            second = action;
+    ASSERT_NE(second, nullptr);
+    second->trigger();
+    ASSERT_TRUE(waitFor([&] { return rig.window->tabs().indexOf(dir.join("folder/second.cpp")) >= 0; }));
+    auto* editor = rig.window->tabs().currentEditor();
+    ASSERT_NE(editor, nullptr);
+    QWidget* focus = QApplication::focusWidget();
+    EXPECT_TRUE(focus == editor->widget() || editor->widget()->isAncestorOf(focus));
+    ASSERT_TRUE(rig.workbench->closeProject());
+    EXPECT_TRUE(bar.isHidden());
+}
 
 TEST(Workbench, OpenDialogRecognizesCMakeProjectAndStillEditsItsLists) {
     WorkDir dir("cmake-open");

@@ -13,6 +13,7 @@
 #include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
+#include "frost/ui/shell/navigation_bar.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
@@ -32,6 +33,8 @@
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QPlainTextEdit>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
@@ -234,6 +237,24 @@ void ShellWindow::buildCentral() {
     auto* editorLayout = new QVBoxLayout(editorIsland);
     editorLayout->setContentsMargins(1, 1, 1, 1);
     editorLayout->setSpacing(0);
+    auto* navigationScroll = new QScrollArea(editorIsland);
+    navigationScroll->setObjectName(QStringLiteral("navigationScroll"));
+    navigationScroll->setFrameShape(QFrame::NoFrame);
+    navigationScroll->setWidgetResizable(true);
+    navigationScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    navigationScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_navigationBar = new NavigationBar(navigationScroll);
+    navigationScroll->setWidget(m_navigationBar);
+    navigationScroll->setFixedHeight(fontMetrics().height() + 12);
+    connect(navigationScroll->horizontalScrollBar(), &QScrollBar::rangeChanged, navigationScroll,
+            [navigationScroll](int, int maximum) {
+                navigationScroll->setFixedHeight(
+                    navigationScroll->fontMetrics().height() + 12 +
+                    (maximum > 0 ? navigationScroll->horizontalScrollBar()->sizeHint().height() : 0));
+            });
+    navigationScroll->hide();
+    connect(m_navigationBar, &NavigationBar::contentVisibilityChanged, navigationScroll, &QWidget::setVisible);
+    editorLayout->addWidget(navigationScroll);
     editorLayout->addWidget(m_tabs);
 
     m_toolWindows = new ToolWindowManager(*dock, *editorIsland, m_env.settings, this);
@@ -366,6 +387,9 @@ void ShellWindow::registerActions() {
     addShellAction(a::kJumpToLastWindow, "Jump to Last Tool Window", "Window", [this] { m_toolWindows->jumpToLast(); });
     addShellAction(a::kFocusEditor, "Focus Editor", "Window", [this] { focusEditor(); }, {}, kToolWindowRule);
     addShellAction(a::kFocusToolbar, "Focus Main Toolbar", "Window", [this] { focusFirst(m_toolbar->focusOrder()); });
+    addShellAction(
+        a::kFocusNavigationBar, "Focus Navigation Bar", "Navigate", [this] { m_navigationBar->focusNavigation(); },
+        [this] { return m_navigationBar->hasNavigation(); });
     addShellAction(a::kFocusStatusBar, "Focus Status Bar", "Window", [this] { focusFirst(m_status->focusOrder()); });
 
     addShellAction(a::kToggleToolbar, "Toolbar", "View", [this] {
@@ -623,6 +647,7 @@ void ShellWindow::hideEvent(QHideEvent* event) {
 
 void ShellWindow::onCurrentEditorChanged(IEditorView* editor) {
     updateTitle();
+    m_navigationBar->setPath(editor != nullptr ? editor->path() : std::string());
     if (editor == nullptr) {
         m_status->showEditor(nullptr);
     } else {

@@ -425,6 +425,7 @@ private:
     void createBuildService();
     void createRunService();
     void attachToolWindows();
+    void attachNavigationBar();
     void attachToolbar();
     void attachRun();
     void attachLanguage();

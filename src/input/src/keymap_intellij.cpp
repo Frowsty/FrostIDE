@@ -146,6 +146,7 @@ navigate.callHierarchy = Ctrl+Alt+H
 navigate.typeHierarchy = Ctrl+H
 navigate.quickDefinition = Ctrl+Shift+I
 navigate.relatedFiles = Ctrl+Alt+Home
+navigate.navigationBar = Alt+Home
 
 # Code.
 code.completion = Ctrl+Space

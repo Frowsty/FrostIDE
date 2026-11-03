@@ -9,8 +9,10 @@
 
 #include "shell_util.hpp"
 #include <QAbstractItemModel>
+#include <QActionEvent>
 #include <QComboBox>
 #include <QSizePolicy>
+#include <QTimer>
 
 #include <utility>
 
@@ -29,6 +31,8 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
 
     m_project->setObjectName(QStringLiteral("projectWidget"));
     m_project->setAutoRaise(true);
+    // Project identity is informational until project switching is implemented.
+    m_project->setFocusPolicy(Qt::NoFocus);
     m_project->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_project->setIcon(shell_detail::themedIcon(icons::kNodesFolder));
     m_project->setToolTip(text("Current project"));
@@ -93,17 +97,40 @@ void MainToolbar::setSlotAction(std::string_view slotId, std::string_view action
 
 std::vector<QWidget*> MainToolbar::focusOrder() const {
     std::vector<QWidget*> order;
-    for (QWidget* candidate : {static_cast<QWidget*>(m_project), static_cast<QWidget*>(m_configurations)}) {
-        if (candidate->isVisible() && candidate->isEnabled()) {
+    // Workbench integrations insert their profile and target combos dynamically. Walk the
+    // toolbar's actual action order so keyboard focus follows the controls currently displayed.
+    for (QAction* action : actions()) {
+        QWidget* candidate = widgetForAction(action);
+        if (candidate != nullptr && candidate->isVisible() && candidate->isEnabled() &&
+            (candidate->focusPolicy() & Qt::TabFocus) != 0) {
             order.push_back(candidate);
         }
     }
-    for (const Slot& slot : m_slots) {
-        if (slot.button->isEnabled()) {
-            order.push_back(slot.button);
-        }
-    }
     return order;
+}
+
+void MainToolbar::actionEvent(QActionEvent* event) {
+    QToolBar::actionEvent(event);
+    if (event->type() != QEvent::ActionAdded && event->type() != QEvent::ActionRemoved) {
+        return;
+    }
+    // insertWidget() can add controls after construction. Defer until Qt has associated the
+    // widget with its action; QObject ownership cancels this callback on destruction.
+    QTimer::singleShot(0, this, [this] { updateTabOrder(); });
+}
+
+void MainToolbar::updateTabOrder() {
+    QWidget* previous = nullptr;
+    for (QAction* action : actions()) {
+        QWidget* candidate = widgetForAction(action);
+        if (candidate == nullptr || (candidate->focusPolicy() & Qt::TabFocus) == 0) {
+            continue;
+        }
+        if (previous != nullptr) {
+            QWidget::setTabOrder(previous, candidate);
+        }
+        previous = candidate;
+    }
 }
 
 void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText) {

@@ -62,6 +62,7 @@ frost_add_library(app LAYER app
         src/workbench_project_edit.cpp
         src/unity_context.hpp
         src/workbench_project.cpp
+        src/workbench_navigation_bar.cpp
         src/workbench_terminal.cpp
         src/workbench_find.cpp
         ${frost_startup_core_sources}

@@ -3,6 +3,41 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Navigation and toolbar keyboard checkpoint verified
+
+- Frozen tree `14534d18` adds current-directory breadcrumbs with nested file menus, a Focus Navigation
+  Bar action, scroll-to-focused breadcrumb behavior and explicit toolbar keyboard focus order.
+  It preserves the preceding Structure and Add Existing checkpoint. Astra reviewed the implementation
+  and the native scroll/focus correction; tests exercise hidden controls, focus boundaries, deferred
+  file opening and navigation reset on project changes.
+- Full Windows quick verification passed: 2811/2832 active tests, 21 skipped and one additional
+  disabled; formatting, lint, licences and feature checks passed. The focused Windows run passed
+  86/86. Full native Linux quick verification passed: 2678/2704, 26 skipped, and licence checks.
+  Logs: `build/verify-managed-main-20261103-101742.log`,
+  `build/gui-navigation-windows-tests.log` and `build/verify-navigation-full-native.log`.
+  Both full gate processes exited zero. Sanitizers, stress and performance acceptance remain deferred
+  under the existing feature-first policy; skipped host/GPU fixtures are not platform acceptance.
+- New stage `E:\FrostBuilds\preview\codex-20261103-navigation` passed startup, D3D11 and ConPTY
+  checks. Its GUI DLL was rebuilt at 09:58 local on Nov 3 and has SHA-256
+  `67dab313e21aaa42f94f660b1fbbaad9a6465e74a2d4e0582cfcb9e6b680cbc6`.
+  The unchanged launcher retains its Nov 2 timestamp. `build-info.json` distinguishes them.
+- Astra independently matched that DLL and all 81 artifacts in
+  `E:\FrostBuilds\navigation-acceptance-20261103\evidence\manifest.txt`. Actual private-desktop
+  captures demonstrate nested menus, sibling-file opening, editor input, narrow-window breadcrumb
+  scrolling and project-switch reset. A separate toolbar-click capture shows posted Tab moving focus
+  from the solution configuration combo to the run target combo. It proves that transition, not
+  complete toolbar traversal. Physical Alt+Home and Shift+Tab remain inconclusive in the harness;
+  End-key movement is also unproven. The menu action focuses navigation. An intentional typing probe
+  changed only an owned scratch file, which was restored before subsequent hash-preserving checks.
+- Next GUI work is a real recent-project switcher and broader symbol/target navigation, Structure and
+  docking workflows. This checkpoint does not establish full keyboard acceptance, U1 or Rider parity.
+  Parallel C++ cancellation passed separate Windows provider and real-child tests, but its cleanup
+  join needs a deletion-identity correction before integration. CMake membership writing and Rename
+  remain unfinished. Lua paused-main Stop has separate engine and IDE tests but still needs matching
+  real-host acceptance and coroutine support. The standalone Mono C++ diagnostic reaches verified
+  debug operations and detach acknowledgement but fails natural process exit; Unity debugging is
+  not accepted. These isolated candidates are not included in this navigation stage.
+
 ## 2026-11-03: GUI and Add Existing checkpoint verified
 
 - Fresh preview `E:\FrostBuilds\preview\codex-20261103-gui-preview` contains persistent Structure,
