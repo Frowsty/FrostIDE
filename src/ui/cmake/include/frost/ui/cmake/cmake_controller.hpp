@@ -35,9 +35,11 @@
 #include <QStringList>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace frost::ui::cmake {
@@ -65,15 +67,25 @@ protected:
 // ICMakeBackend over a CMakeService, which must outlive it.
 class CMakeServiceBackend final : public ICMakeBackend {
 public:
-    explicit CMakeServiceBackend(build::CMakeService& service) noexcept : m_service(service) {}
-    [[nodiscard]] Result<void> reload() override { return m_service.configure(); }
-    [[nodiscard]] Result<void> selectProfile(std::size_t index) override { return m_service.setActiveProfile(index); }
+    explicit CMakeServiceBackend(build::CMakeService& service, std::function<bool()> allowed = {}) noexcept
+        : m_service(service), m_allowed(std::move(allowed)) {}
+    [[nodiscard]] Result<void> reload() override {
+        if (m_allowed && !m_allowed())
+            return fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        return m_service.configure();
+    }
+    [[nodiscard]] Result<void> selectProfile(std::size_t index) override {
+        if (m_allowed && !m_allowed())
+            return fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        return m_service.setActiveProfile(index);
+    }
     void cancel() override { m_service.cancel(); }
     [[nodiscard]] std::vector<std::string> presetFiles() const override { return m_service.presetFiles(); }
     [[nodiscard]] std::optional<std::string> presetsError() const override { return m_service.presetsError(); }
 
 private:
     build::CMakeService& m_service;
+    std::function<bool()> m_allowed;
 };
 
 class CMakeController final : public QObject {

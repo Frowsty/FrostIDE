@@ -27,6 +27,9 @@ class BuildController;
 class ShellWindow;
 class RunConsole;
 } // namespace frost::ui
+namespace frost::build {
+class BuildService;
+}
 namespace frost::settings {
 class SettingsStore;
 }
@@ -36,8 +39,9 @@ class CMakeBuildBackend;
 class CMakeIntegration final : public QObject {
 public:
     CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& launcher, project::TrustStore& trust,
-                     settings::SettingsStore& settings, ui::BuildController& build, ui::ShellWindow& window,
-                     ui::RunConsole& console, std::string statePath, std::function<void()> runStateChanged,
+                     settings::SettingsStore& settings, ui::BuildController& buildController,
+                     build::BuildService& sharedAdmission, ui::ShellWindow& window, ui::RunConsole& console,
+                     std::string statePath, std::function<void()> runStateChanged,
                      std::function<void(const std::string&)> openFile, std::function<void()> modelChanged);
     ~CMakeIntegration() override;
     Result<void> open(const std::string& folder);
@@ -57,6 +61,8 @@ public:
 
 private:
     ui::BuildController& m_build;
+    build::BuildService& m_sharedAdmission;
+    std::shared_ptr<void> m_runAdmission;
     ui::ShellWindow& m_window;
     io::IProcessLauncher& m_launcher;
     project::TrustStore& m_trust;

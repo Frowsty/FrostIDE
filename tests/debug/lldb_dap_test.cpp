@@ -196,6 +196,32 @@ TEST_F(DebugTrust, AnUntrustedRootIsRefusedBeforeAnyAdapterStarts) {
     EXPECT_EQ(factoryCalls, 0);
 }
 
+TEST_F(DebugTrust, AttachChecksTrustAndNeverLaunchesOrTerminatesTheHost) {
+    DebugTarget target{.program = workPath("Untrusted/x64/Debug/App.exe"), .trustRoots = {workPath("Untrusted")}};
+    auto rejected = attachDebugSession(*trust, target, countingFactory(), rpc::Json::object(), {}, {});
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code(), ErrorCode::Untrusted);
+    EXPECT_EQ(factoryCalls, 0);
+
+    target.program = workPath("Trusted/x64/Debug/App.exe");
+    target.trustRoots = {workPath("Trusted")};
+    scriptProgram(adapter, FakeProgram{.runsForever = true});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}}; });
+    test::SessionRecorder recorder;
+    auto attached = attachDebugSession(*trust, target, countingFactory(), rpc::Json::object().set("marker", 17), {},
+                                       recorder.callbacks());
+    ASSERT_TRUE(attached);
+    ASSERT_TRUE(adapter.waitForRequest("attach"));
+    EXPECT_EQ(adapter.argumentsOf("attach").front().integerAt("marker"), 17);
+    EXPECT_TRUE(adapter.argumentsOf("launch").empty());
+    (*attached)->stop();
+    ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
+    const auto disconnects = adapter.argumentsOf("disconnect");
+    ASSERT_EQ(disconnects.size(), 1U);
+    EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+}
+
 TEST_F(DebugTrust, ATrustedRootStartsTheSession) {
     scriptProgram(adapter, FakeProgram{.sourcePath = workPath("Trusted/main.cpp"), .codeLines = {}});
     DebugTarget target{.program = workPath("Trusted/x64/Debug/App.exe"), .trustRoots = {workPath("Trusted")}};

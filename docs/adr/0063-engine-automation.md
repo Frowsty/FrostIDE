@@ -1,6 +1,6 @@
 # ADR 0063: FrostEngine automation
 
-Status: prototype; acceptance and review pending.
+Status: bounded automation and experimental Lua integration; broader acceptance remains open.
 
 FrostEngine publishes per-project discovery records containing loopback endpoints and, when enabled,
 credentials. FrostIDE uses the existing project trust decision before reading a record or issuing a
@@ -31,3 +31,18 @@ those separate requests.
 The engine protocol does not make the identity check and a later action atomic. A filesystem or
 kernel that does not complete cancellation can also delay OS-level process cleanup after the IDE has
 stopped waiting; the IDE does not claim the engine action was rolled back.
+
+The experimental Lua path reserves launch admission before asynchronous discovery and authentication,
+then rechecks the reservation, project identity, trust and debugger state after reentrant callbacks.
+Build, CMake configuration, project edits and managed debug preparation share that admission state.
+The adapter exposes captured stack/source data and pause/continue. Breakpoints, variable inspection,
+evaluation and stepping remain unsupported. Disconnecting an attached debugger does not terminate
+the engine process.
+
+Owned play Stop carries the exact engine operation identity and only completes the matching session.
+An uncertain transport outcome retains cleanup ownership until reconciled; an explicit refusal is
+reported without pretending that play stopped. The accepted real-host scenario is a paused main Lua
+stack: the workbench stops its owned play session, reaches Ended, completes cleanup and leaves the
+host usable in Edit state. The tested FrostEditor then exits cleanly through its own window close.
+Running and coroutine Stop are not accepted by this slice. Source and platform evidence is recorded
+in the 2026-11-03 Lua entry in `docs/progress.md`; this is not complete Lua debugger acceptance.

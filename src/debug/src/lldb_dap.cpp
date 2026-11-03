@@ -142,10 +142,8 @@ AdapterFactory lldbDapAdapterFactory(io::IProcessLauncher& launcher, std::string
     };
 }
 
-Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStore& trust, const DebugTarget& target,
-                                                        AdapterFactory factory,
-                                                        std::map<std::string, std::vector<BreakpointLine>> breakpoints,
-                                                        DebugSessionCallbacks callbacks) {
+namespace {
+Result<void> checkDebugTrust(const project::TrustStore& trust, const DebugTarget& target) {
     if (!io::isAbsolutePath(target.program)) {
         return fail(ErrorCode::InvalidArgument,
                     std::format("the program to debug is not an absolute path: {}", target.program));
@@ -162,8 +160,28 @@ Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStor
                                     root));
         }
     }
+    return {};
+}
+} // namespace
+
+Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStore& trust, const DebugTarget& target,
+                                                        AdapterFactory factory,
+                                                        std::map<std::string, std::vector<BreakpointLine>> breakpoints,
+                                                        DebugSessionCallbacks callbacks) {
+    if (auto allowed = checkDebugTrust(trust, target); !allowed)
+        return std::unexpected(std::move(allowed.error()));
     return DebugSession::start(std::move(factory), lldbDapLaunchArguments(target), std::move(breakpoints),
                                std::move(callbacks), io::kWindowsProcessRules);
+}
+
+Result<std::unique_ptr<DebugSession>> attachDebugSession(const project::TrustStore& trust, const DebugTarget& target,
+                                                         AdapterFactory factory, rpc::Json attachArguments,
+                                                         std::map<std::string, std::vector<BreakpointLine>> breakpoints,
+                                                         DebugSessionCallbacks callbacks) {
+    if (auto allowed = checkDebugTrust(trust, target); !allowed)
+        return std::unexpected(std::move(allowed.error()));
+    return DebugSession::start(std::move(factory), std::move(attachArguments), std::move(breakpoints),
+                               std::move(callbacks), false, DebugTargetMode::Attach);
 }
 
 } // namespace frost::debug

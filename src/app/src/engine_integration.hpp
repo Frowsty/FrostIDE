@@ -11,6 +11,9 @@ public:
     explicit EngineIntegration(Workbench& workbench);
     ~EngineIntegration() override;
     void cancel();
+    // Called when the current project's trust changes.
+    void trustChanged();
+    [[nodiscard]] bool luaReservationPending() const noexcept;
     // Stops accepting work, cancels requests and drains them before the scheduler is destroyed.
     void shutdown();
 

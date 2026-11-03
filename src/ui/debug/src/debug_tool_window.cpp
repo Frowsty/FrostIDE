@@ -21,10 +21,12 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTextBlock>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeView>
@@ -121,6 +123,15 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     m_framesView->setModel(m_frames);
     m_framesView->setUniformItemSizes(true);
     framesLayout->addWidget(m_framesView, 1);
+    m_loadedLabel = new QLabel(framesPane);
+    m_loadedLabel->setObjectName(QStringLiteral("debugLoadedSourceLabel"));
+    m_loadedLabel->hide();
+    framesLayout->addWidget(m_loadedLabel);
+    m_loadedSource = new QPlainTextEdit(framesPane);
+    m_loadedSource->setObjectName(QStringLiteral("debugLoadedSource"));
+    m_loadedSource->setReadOnly(true);
+    m_loadedSource->hide();
+    framesLayout->addWidget(m_loadedSource, 2);
 
     m_variables = new VariablesModel(m_controller, VariablesModel::Mode::Scopes, this);
     m_variablesView = makeVariablesView(splitter, m_variables);
@@ -169,6 +180,27 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
         }
     });
 
+    connect(&m_controller, &DebugController::loadedSourceChanged, this,
+            [this](const QString& name, const QString& content, int line) {
+                const bool available = !name.isEmpty();
+                m_loadedLabel->setVisible(available);
+                m_loadedSource->setVisible(available);
+                if (!available) {
+                    m_loadedSource->clear();
+                    return;
+                }
+                m_loadedLabel->setText(QStringLiteral("Loaded source: %1 (read-only)").arg(name));
+                m_loadedSource->setPlainText(content);
+                if (line > 0) {
+                    const QTextBlock block = m_loadedSource->document()->findBlockByNumber(line - 1);
+                    if (block.isValid()) {
+                        QTextCursor cursor(block);
+                        cursor.select(QTextCursor::LineUnderCursor);
+                        m_loadedSource->setTextCursor(cursor);
+                        m_loadedSource->centerCursor();
+                    }
+                }
+            });
     connect(&m_controller, &DebugController::stateChanged, this, &DebugToolWindow::updateActions);
     connect(&m_controller, &DebugController::threadsChanged, this, &DebugToolWindow::updateThreads);
     connect(&m_controller, &DebugController::frameSelected, this, [this] {

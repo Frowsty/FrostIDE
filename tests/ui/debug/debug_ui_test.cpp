@@ -30,6 +30,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
@@ -149,6 +150,210 @@ protected:
     int factoryCalls = 0;
     std::unique_ptr<DebugController> controller;
 };
+
+TEST_F(DebugUiTest, AttachingUsesTheSuppliedAdapterAndKeepsTheHostAlive) {
+    RunConsole console;
+    controller->setConsole(&console);
+    debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
+    adapter.on("attach", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}};
+    });
+    auto attachedFactory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    ASSERT_TRUE(controller->attachTarget(target(), std::move(attachedFactory), rpc::Json::object()).has_value());
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    EXPECT_EQ(factoryCalls, 0);
+    EXPECT_FALSE(adapter.argumentsOf("attach").empty());
+    EXPECT_TRUE(adapter.argumentsOf("launch").empty());
+    EXPECT_FALSE(console.rerunButton()->isEnabled());
+    controller->rerun();
+    EXPECT_FALSE(controller->rerunPending());
+    EXPECT_TRUE(controller->debugging());
+    EXPECT_TRUE(adapter.argumentsOf("disconnect").empty());
+    stopSession();
+    EXPECT_FALSE(console.rerunButton()->isEnabled());
+    const auto disconnects = adapter.argumentsOf("disconnect");
+    ASSERT_EQ(disconnects.size(), 1U);
+    EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+}
+
+TEST_F(DebugUiTest, CapturedSourceOpensReadOnlyAndClearsOnResume) {
+    openEditor();
+    controller->attachEditor(editor->view.get());
+    DebugToolWindow window(*controller);
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .runsForever = true});
+    adapter.on("stackTrace", [this](const rpc::Json&) {
+        auto frame =
+            rpc::Json::object()
+                .set("id", 1000)
+                .set("name", "loaded")
+                .set("line", 2)
+                .set("source",
+                     rpc::Json::object().set("name", "space ?.lua").set("path", source).set("sourceReference", 91));
+        return debug::FakeDebugAdapter::Reply{
+            .body = rpc::Json::object().set("stackFrames", rpc::Json::array({frame})).set("totalFrames", 1)};
+    });
+    adapter.on("source", [](const rpc::Json& arguments) {
+        EXPECT_EQ(arguments.integerAt("sourceReference"), 91);
+        return debug::FakeDebugAdapter::Reply{.body = rpc::Json::object().set("content", "old bytes\nsecond line\n")};
+    });
+    ASSERT_TRUE(controller->startTarget(target()).has_value());
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    adapter.sendEvent("stopped", rpc::Json::object().set("reason", "breakpoint").set("threadId", 1));
+    auto* loaded = window.findChild<QPlainTextEdit*>(QStringLiteral("debugLoadedSource"));
+    ASSERT_NE(loaded, nullptr);
+    ASSERT_TRUE(spinUntil([&] { return loaded->toPlainText() == QStringLiteral("old bytes\nsecond line\n"); }));
+    EXPECT_TRUE(loaded->isReadOnly());
+    EXPECT_TRUE(opened.empty());
+    EXPECT_FALSE(editor->view->executionPoint().has_value());
+    ASSERT_TRUE(controller->resume());
+    ASSERT_TRUE(spinUntil([&] { return loaded->toPlainText().isEmpty(); }));
+    stopSession();
+}
+
+TEST_F(DebugUiTest, QueuedSourceForAnOlderSelectionCannotReplaceReusedFrameIds) {
+    DebugToolWindow window(*controller);
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .runsForever = true});
+    adapter.on("stackTrace", [this](const rpc::Json&) {
+        auto frame =
+            rpc::Json::object()
+                .set("id", 1000)
+                .set("name", "loaded")
+                .set("line", 1)
+                .set("source",
+                     rpc::Json::object().set("name", "loaded.lua").set("path", source).set("sourceReference", 91));
+        return debug::FakeDebugAdapter::Reply{
+            .body = rpc::Json::object().set("stackFrames", rpc::Json::array({frame})).set("totalFrames", 1)};
+    });
+    adapter.on("source", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.respond = false}; });
+    ASSERT_TRUE(controller->startTarget(target()).has_value());
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    adapter.sendEvent("stopped", rpc::Json::object().set("reason", "pause").set("threadId", 1));
+    ASSERT_TRUE(spinUntil([&] { return adapter.argumentsOf("source").size() == 1; }));
+    auto sourceRequests = [&] {
+        std::vector<rpc::Json> result;
+        for (const auto& request : adapter.requests())
+            if (request.stringAt("command") == "source")
+                result.push_back(request);
+        return result;
+    };
+    const auto first = sourceRequests();
+    ASSERT_EQ(first.size(), 1U);
+    ASSERT_TRUE(first.front().integerAt("seq"));
+    controller->selectFrame(1000); // The adapter reuses both frame and source IDs for this selection.
+    ASSERT_TRUE(spinUntil([&] { return adapter.argumentsOf("source").size() == 2; }));
+    const auto second = sourceRequests();
+    ASSERT_EQ(second.size(), 2U);
+    ASSERT_TRUE(second.back().integerAt("seq"));
+    auto reply = [](std::int64_t seq, std::string_view text) {
+        return rpc::encodeFrame(rpc::Json::object()
+                                    .set("seq", 999)
+                                    .set("type", "response")
+                                    .set("request_seq", seq)
+                                    .set("command", "source")
+                                    .set("success", true)
+                                    .set("body", rpc::Json::object().set("content", text))
+                                    .dump());
+    };
+    adapter.sendRaw(reply(*first.front().integerAt("seq"), "stale bytes"));
+    adapter.sendReverseRequest("barrier", rpc::Json());
+    ASSERT_TRUE(debug::test::waitUntil([&] { return !adapter.reverseResponses().empty(); }));
+    auto* loaded = window.findChild<QPlainTextEdit*>(QStringLiteral("debugLoadedSource"));
+    ASSERT_NE(loaded, nullptr);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(loaded->toPlainText().isEmpty());
+    adapter.sendRaw(reply(*second.back().integerAt("seq"), "current bytes"));
+    ASSERT_TRUE(spinUntil([&] { return loaded->toPlainText() == QStringLiteral("current bytes"); }));
+    controller->shutdown();
+    EXPECT_TRUE(loaded->toPlainText().isEmpty());
+}
+
+TEST_F(DebugUiTest, QueuedOldSourceCannotAppearAfterResumeAndAReusedStop) {
+    DebugToolWindow window(*controller);
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .runsForever = true});
+    adapter.on("stackTrace", [this](const rpc::Json&) {
+        auto frame =
+            rpc::Json::object()
+                .set("id", 1000)
+                .set("name", "loaded")
+                .set("line", 1)
+                .set("source",
+                     rpc::Json::object().set("name", "loaded.lua").set("path", source).set("sourceReference", 91));
+        return debug::FakeDebugAdapter::Reply{
+            .body = rpc::Json::object().set("stackFrames", rpc::Json::array({frame})).set("totalFrames", 1)};
+    });
+    adapter.on("source", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.respond = false}; });
+    ASSERT_TRUE(controller->startTarget(target()).has_value());
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    adapter.sendEvent("stopped", rpc::Json::object().set("reason", "pause").set("threadId", 1));
+    ASSERT_TRUE(spinUntil([&] { return adapter.argumentsOf("source").size() == 1; }));
+    auto sourceRequests = [&] {
+        std::vector<rpc::Json> result;
+        for (const auto& request : adapter.requests())
+            if (request.stringAt("command") == "source")
+                result.push_back(request);
+        return result;
+    };
+    const auto first = sourceRequests();
+    ASSERT_EQ(first.size(), 1U);
+    ASSERT_TRUE(first.front().integerAt("seq"));
+    // Queue the user's Resume before the successful old source callback reaches the GUI.
+    QMetaObject::invokeMethod(controller.get(), [this] { EXPECT_TRUE(controller->resume()); }, Qt::QueuedConnection);
+    auto reply = [](std::int64_t seq, std::string_view text) {
+        return rpc::encodeFrame(rpc::Json::object()
+                                    .set("seq", 999)
+                                    .set("type", "response")
+                                    .set("request_seq", seq)
+                                    .set("command", "source")
+                                    .set("success", true)
+                                    .set("body", rpc::Json::object().set("content", text))
+                                    .dump());
+    };
+    adapter.sendRaw(reply(*first.front().integerAt("seq"), "stale bytes"));
+    adapter.sendReverseRequest("barrier", rpc::Json());
+    ASSERT_TRUE(debug::test::waitUntil([&] { return !adapter.reverseResponses().empty(); }));
+    auto* loaded = window.findChild<QPlainTextEdit*>(QStringLiteral("debugLoadedSource"));
+    ASSERT_NE(loaded, nullptr);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(loaded->toPlainText().isEmpty());
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    adapter.sendEvent("stopped", rpc::Json::object().set("reason", "pause").set("threadId", 1));
+    ASSERT_TRUE(spinUntil([&] { return adapter.argumentsOf("source").size() == 2; }));
+    const auto second = sourceRequests();
+    ASSERT_EQ(second.size(), 2U);
+    ASSERT_TRUE(second.back().integerAt("seq"));
+    adapter.sendRaw(reply(*second.back().integerAt("seq"), "new stop bytes"));
+    ASSERT_TRUE(spinUntil([&] { return loaded->toPlainText() == QStringLiteral("new stop bytes"); }));
+    controller->shutdown();
+    EXPECT_TRUE(loaded->toPlainText().isEmpty());
+}
+
+TEST_F(DebugUiTest, LoadedSourceReferenceDoesNotNavigateToUnverifiedDiskBytes) {
+    openEditor();
+    controller->attachEditor(editor->view.get());
+    editor->view->setExecutionPoint(LineIndex{3});
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .runsForever = true});
+    adapter.on("stackTrace", [this](const rpc::Json&) {
+        auto frame = rpc::Json::object()
+                         .set("id", 1000)
+                         .set("name", "loaded")
+                         .set("line", 10)
+                         .set("source", rpc::Json::object().set("path", source).set("sourceReference", 91));
+        return debug::FakeDebugAdapter::Reply{
+            .body = rpc::Json::object().set("stackFrames", rpc::Json::array({frame})).set("totalFrames", 1)};
+    });
+    ASSERT_TRUE(controller->startTarget(target()).has_value());
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    adapter.sendEvent("stopped", rpc::Json::object().set("reason", "breakpoint").set("threadId", 1));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused() && controller->selectedFrame().has_value(); }));
+    EXPECT_EQ(controller->selectedFrame()->sourceReference, 91);
+    EXPECT_TRUE(opened.empty());
+    EXPECT_FALSE(editor->view->executionPoint().has_value());
+    ASSERT_TRUE(spinUntil([&] { return !notes.empty(); }));
+    EXPECT_TRUE(notes.back().first.contains(QStringLiteral("cannot yet be verified")));
+    stopSession();
+}
 
 TEST_F(DebugUiTest, ShutdownRejectsADelayedAlternateBuildCompletion) {
     std::function<void(Result<debug::DebugTarget>)> completion;

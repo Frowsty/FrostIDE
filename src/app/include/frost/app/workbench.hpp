@@ -408,6 +408,7 @@ protected:
 private:
     friend class LanguageBridge;
     friend class EngineIntegration;
+    [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;
 

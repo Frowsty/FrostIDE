@@ -12,6 +12,7 @@
 #include "frost/ui/tr.hpp"
 #include "frost/ui/workbench/workbench.hpp"
 
+#include "engine_integration.hpp"
 #include "managed_debug_preparation.hpp"
 #include "project_edit_process.hpp"
 #include <QCoreApplication>
@@ -50,7 +51,8 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
     const auto solution = m_solution;
     const std::string root = m_projectRoot;
     const auto managedIdle = [this] {
-        return (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+        return (!m_engine || !m_engine->luaReservationPending()) &&
+               (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     if (!solution || !m_projectEdit || m_projectEdit->busy() || root.empty() || !m_services.trust.isTrusted(root) ||
         !m_services.trust.isTrusted(projectPath) || m_buildService->state() != build::BuildState::Idle ||
@@ -188,6 +190,10 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
         }
         if (!m_services.prompts.confirmProjectRecovery(m_window, projectName))
             return;
+        if (!managedIdle()) {
+            failEdit(QStringLiteral("Wait for the pending debug launch to finish."));
+            return;
+        }
         if (!m_buildService->projectEditInProgress()) {
             if (auto reserved = m_buildService->beginProjectEdit(); !reserved) {
                 failEdit(q(reserved.error().message()));
@@ -265,6 +271,10 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
     io::ProcessSpec spec;
     spec.executable = executable;
     spec.arguments = {std::string(io::parentPath(msbuild))};
+    if (!managedIdle()) {
+        failEdit(QStringLiteral("Wait for the pending debug launch to finish."));
+        return;
+    }
     if (auto reserved = m_buildService->beginProjectEdit(); !reserved) {
         failEdit(q(reserved.error().message()));
         return;

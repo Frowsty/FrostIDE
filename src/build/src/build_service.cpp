@@ -20,6 +20,7 @@
 #include <condition_variable>
 #include <deque>
 #include <format>
+#include <limits>
 #include <set>
 #include <span>
 #include <thread>
@@ -263,6 +264,11 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
     std::optional<std::size_t> active FROST_GUARDED_BY(mutex);
     BuildState state FROST_GUARDED_BY(mutex) = BuildState::Idle;
     bool projectEditing FROST_GUARDED_BY(mutex) = false;
+    std::uint64_t externalLaunch FROST_GUARDED_BY(mutex) = 0;
+    std::uint64_t nextExternalLaunch FROST_GUARDED_BY(mutex) = 0;
+    bool externalClosing FROST_GUARDED_BY(mutex) = false;
+    std::uint64_t nextExternalChild FROST_GUARDED_BY(mutex) = 0;
+    std::set<std::uint64_t> externalChildren FROST_GUARDED_BY(mutex);
     std::size_t activeRuns FROST_GUARDED_BY(mutex) = 0;
     std::optional<Run> run FROST_GUARDED_BY(mutex);
     std::uint64_t lastRunId FROST_GUARDED_BY(mutex) = 0;
@@ -712,7 +718,8 @@ BuildService::~BuildService() {
 
 Result<void> BuildService::beginProjectEdit() {
     LockGuard lock(m_state->mutex);
-    if (m_state->projectEditing || m_state->state != BuildState::Idle || m_state->activeRuns != 0)
+    if (m_state->projectEditing || m_state->externalLaunch || m_state->state != BuildState::Idle ||
+        m_state->activeRuns != 0)
         return fail(ErrorCode::Busy, "a build or project edit is in progress");
     if (!m_state->solution)
         return fail(ErrorCode::InvalidArgument, "no solution is open");
@@ -722,7 +729,7 @@ Result<void> BuildService::beginProjectEdit() {
 
 Result<void> BuildService::reserveRun() {
     LockGuard lock(m_state->mutex);
-    if (m_state->projectEditing || m_state->state != BuildState::Idle)
+    if (m_state->projectEditing || m_state->externalLaunch || m_state->state != BuildState::Idle)
         return fail(ErrorCode::Busy, "a build or project edit is in progress");
     ++m_state->activeRuns;
     return {};
@@ -732,6 +739,54 @@ void BuildService::releaseRun() {
     LockGuard lock(m_state->mutex);
     if (m_state->activeRuns != 0)
         --m_state->activeRuns;
+}
+
+bool BuildService::externalLaunchAdmissionBusy() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->projectEditing || m_state->externalLaunch || m_state->state != BuildState::Idle ||
+           m_state->activeRuns != 0;
+}
+
+Result<std::uint64_t> BuildService::reserveExternalLaunch() {
+    LockGuard lock(m_state->mutex);
+    if (m_state->projectEditing || m_state->externalLaunch || m_state->state != BuildState::Idle ||
+        m_state->activeRuns != 0)
+        return fail(ErrorCode::Busy, "a build, run or project edit is in progress");
+    if (m_state->nextExternalLaunch == std::numeric_limits<std::uint64_t>::max())
+        return fail(ErrorCode::OutOfRange, "external launch generation exhausted");
+    return m_state->externalLaunch = ++m_state->nextExternalLaunch;
+}
+
+void BuildService::releaseExternalLaunch(std::uint64_t token) {
+    LockGuard lock(m_state->mutex);
+    if (token != 0 && m_state->externalLaunch == token) {
+        m_state->externalClosing = true;
+        if (m_state->externalChildren.empty()) {
+            m_state->externalLaunch = 0;
+            m_state->externalClosing = false;
+        }
+    }
+}
+
+Result<std::uint64_t> BuildService::reserveExternalChild(std::uint64_t owner) {
+    LockGuard lock(m_state->mutex);
+    if (!owner || m_state->externalLaunch != owner || m_state->externalClosing)
+        return fail(ErrorCode::Busy, "external owner is no longer active");
+    if (m_state->nextExternalChild == std::numeric_limits<std::uint64_t>::max())
+        return fail(ErrorCode::OutOfRange, "external child generation exhausted");
+    const auto child = ++m_state->nextExternalChild;
+    m_state->externalChildren.insert(child);
+    return child;
+}
+
+void BuildService::releaseExternalChild(std::uint64_t owner, std::uint64_t child) {
+    LockGuard lock(m_state->mutex);
+    if (!owner || !child || m_state->externalLaunch != owner || !m_state->externalChildren.erase(child))
+        return;
+    if (m_state->externalClosing && m_state->externalChildren.empty()) {
+        m_state->externalLaunch = 0;
+        m_state->externalClosing = false;
+    }
 }
 
 Result<void> BuildService::finishProjectEdit(std::shared_ptr<const project::SolutionModel> solution) {
@@ -771,7 +826,7 @@ Result<void> BuildService::openSolution(std::shared_ptr<const project::SolutionM
     }
     const std::optional<std::string> persisted = m_state->persistedConfiguration(solution->path());
     LockGuard lock(m_state->mutex);
-    if (m_state->projectEditing)
+    if (m_state->projectEditing || m_state->externalLaunch)
         return fail(ErrorCode::Busy, "a project edit is in progress");
     if (m_state->state != BuildState::Idle) {
         return fail(ErrorCode::Busy, "a build is in progress; cancel it before opening another solution");
@@ -798,7 +853,7 @@ Result<void> BuildService::openSolution(std::shared_ptr<const project::SolutionM
 
 Result<void> BuildService::closeSolution() {
     LockGuard lock(m_state->mutex);
-    if (m_state->projectEditing)
+    if (m_state->projectEditing || m_state->externalLaunch)
         return fail(ErrorCode::Busy, "a project edit is in progress");
     if (m_state->state != BuildState::Idle) {
         return fail(ErrorCode::Busy, "a build is in progress; cancel it before closing the solution");
@@ -847,7 +902,7 @@ Result<void> BuildService::setActiveConfiguration(std::size_t index) {
     std::string name;
     {
         LockGuard lock(m_state->mutex);
-        if (m_state->projectEditing)
+        if (m_state->projectEditing || m_state->externalLaunch)
             return fail(ErrorCode::Busy, "a project edit is in progress");
         if (!m_state->solution) {
             return fail(ErrorCode::InvalidArgument, "no solution is open");
@@ -895,7 +950,7 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
                                  BuildCompletion onDone) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
-    if (s.projectEditing)
+    if (s.projectEditing || s.externalLaunch)
         return fail(ErrorCode::Busy, "a project edit is in progress");
     if (s.state != BuildState::Idle) {
         return fail(ErrorCode::Busy, std::format("a build is already in progress ({})", toString(s.state)));

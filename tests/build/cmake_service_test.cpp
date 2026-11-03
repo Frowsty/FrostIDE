@@ -7,6 +7,7 @@
 // debounced reconfigure on a CMake file change, and profiles (settings records, persistence).
 // The synthetic File API reply comes from tests/project/fixtures/cmake/reply.
 
+#include "frost/build/build_service.hpp"
 #include "frost/build/cmake_service.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
@@ -18,10 +19,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace frost::build {
@@ -144,6 +147,156 @@ protected:
     Events events;
     std::unique_ptr<CMakeService> service;
 };
+
+TEST_F(CMakeServiceTest, DeferredWatcherReloadWaitsForExternalAdmission) {
+    std::atomic<bool> blocked{false};
+    std::atomic<int> held{0};
+    auto opts = options();
+    opts.reserveProjectCode = [&]() -> Result<void> {
+        if (blocked.load())
+            return fail(ErrorCode::Busy, "external launch pending");
+        ++held;
+        return {};
+    };
+    opts.releaseProjectCode = [&] { --held; };
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    expectFirstConfigure();
+    start(std::move(opts));
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    ASSERT_EQ(launcher.launches().size(), 2U);
+    EXPECT_EQ(held.load(), 0);
+    blocked = true;
+    service->filesChanged({.changes = {io::FileChange{.kind = io::FileChangeKind::Modified,
+                                                      .path = MemTree::path("tiny/CMakeLists.txt")}},
+                           .sequence = 1});
+    waitIdle();
+    EXPECT_EQ(launcher.launches().size(), 2U);
+    EXPECT_FALSE(service->configure());
+    EXPECT_FALSE(service->setActiveProfile(std::size_t{0}));
+    launcher.expect({.expectExecutable = cmake()});
+    blocked = false;
+    service->admissionAvailable();
+    waitIdle();
+    EXPECT_EQ(launcher.launches().size(), 3U);
+    EXPECT_EQ(held.load(), 0);
+}
+
+TEST_F(CMakeServiceTest, OwnedConfigureRetainsExactChildUntilCancellation) {
+    std::atomic<int> held{0};
+    auto opts = options();
+    opts.reserveOwnedProjectCode = [&](std::uint64_t owner) -> Result<std::uint64_t> {
+        if (owner != 42)
+            return fail(ErrorCode::Busy, "wrong owner");
+        ++held;
+        return 17;
+    };
+    opts.releaseOwnedProjectCode = [&](std::uint64_t owner, std::uint64_t child) {
+        EXPECT_EQ(owner, 42U);
+        EXPECT_EQ(child, 17U);
+        --held;
+    };
+    start(std::move(opts));
+    ASSERT_TRUE(service->openFolder(folder()));
+    EXPECT_FALSE(service->configureOwned(41));
+    ASSERT_TRUE(service->configureOwned(42));
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_EQ(held.load(), 1);
+    service->cancel();
+    waitIdle();
+    EXPECT_EQ(held.load(), 0);
+}
+
+TEST_F(CMakeServiceTest, OwnedConfigureKeepsAdmissionUntilRunningProcessIsCancelled) {
+    auto shared = BuildService::create(tree.fs, launcher, *trustStore);
+    auto owner = shared->reserveExternalLaunch();
+    ASSERT_TRUE(owner);
+    auto opts = options();
+    opts.configureOnOpen = false;
+    opts.reserveOwnedProjectCode = [&](std::uint64_t token) { return shared->reserveExternalChild(token); };
+    opts.releaseOwnedProjectCode = [&](std::uint64_t token, std::uint64_t child) {
+        shared->releaseExternalChild(token, child);
+    };
+    ASSERT_TRUE(trustStore->trust(folder()));
+    expectFirstConfigure({.neverExits = true});
+    auto local = CMakeService::create(tree.fs, launcher, *trustStore, std::move(opts), events.callbacks());
+    ASSERT_TRUE(local->openFolder(folder()));
+    ASSERT_TRUE(local->configureOwned(*owner));
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (launcher.launches().size() < 2 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+    ASSERT_EQ(launcher.launches().size(), 2U);
+    shared->releaseExternalLaunch(*owner);
+    EXPECT_FALSE(shared->reserveExternalLaunch());
+    local->cancel();
+    ASSERT_TRUE(local->waitForIdle(kWait));
+    EXPECT_TRUE(launcher.launches().back().terminated);
+    auto successor = shared->reserveExternalLaunch();
+    ASSERT_TRUE(successor);
+    shared->releaseExternalLaunch(*successor);
+    local.reset();
+}
+
+TEST_F(CMakeServiceTest, CancelDuringProbeRetainsAdmissionUntilProbeReturns) {
+    class HeldLauncher final : public io::IProcessLauncher {
+    public:
+        io::ScriptedProcessLauncher delegate;
+        std::atomic<bool> entered{false}, release{false};
+        Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+            entered = true;
+            while (!release.load())
+                std::this_thread::sleep_for(5ms);
+            return delegate.launch(spec);
+        }
+        Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                               const io::AsyncContext& context) override {
+            return delegate.launchAsync(spec, context);
+        }
+    } held;
+    auto shared = BuildService::create(tree.fs, held, *trustStore);
+    auto owner = shared->reserveExternalLaunch();
+    ASSERT_TRUE(owner);
+    auto opts = options();
+    std::atomic<int> refused{0};
+    opts.reserveProjectCode = [&]() -> Result<void> {
+        auto result = shared->reserveRun();
+        if (!result)
+            ++refused;
+        return result;
+    };
+    opts.releaseProjectCode = [&] { shared->releaseRun(); };
+    opts.reserveOwnedProjectCode = [&](std::uint64_t token) { return shared->reserveExternalChild(token); };
+    opts.releaseOwnedProjectCode = [&](std::uint64_t token, std::uint64_t child) {
+        shared->releaseExternalChild(token, child);
+    };
+    held.delegate.expect({.expectExecutable = cmake(), .stdoutBytes = "cmake version 4.4.5\n"});
+    held.delegate.expect({.expectExecutable = cmake()});
+    auto local = CMakeService::create(tree.fs, held, *trustStore, std::move(opts), events.callbacks());
+    ASSERT_TRUE(local->openFolder(folder()));
+    ASSERT_TRUE(trustStore->trust(folder()));
+    ASSERT_TRUE(local->configureOwned(*owner));
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (!held.entered.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+    if (!held.entered.load()) {
+        held.release = true;
+        local.reset();
+        FAIL() << "probe did not start";
+    }
+    local->cancel();
+    shared->releaseExternalLaunch(*owner);
+    EXPECT_FALSE(shared->reserveExternalLaunch());
+    EXPECT_TRUE(local->openFolder(folder())); // Automatic configure is deferred under the closing owner.
+    EXPECT_GT(refused.load(), 0);
+    held.release = true;
+    ASSERT_TRUE(local->waitForIdle(kWait));
+    EXPECT_EQ(held.delegate.launches().size(), 2U);
+    auto successor = shared->reserveExternalLaunch();
+    ASSERT_TRUE(successor);
+    shared->releaseExternalLaunch(*successor);
+    local.reset();
+}
 
 TEST_F(CMakeServiceTest, NothingRunsBeforeTrust) {
     start();

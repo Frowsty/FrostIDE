@@ -4,7 +4,9 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
+#include <future>
 #include <stop_token>
 #include <thread>
 
@@ -124,6 +126,40 @@ TEST(LoopbackStream, EnforcesCallerReplyLimit) {
     auto reply = (*stream)->exchange("hello", 128);
     ASSERT_FALSE(reply);
     EXPECT_EQ(reply.error().code(), frost::ErrorCode::OutOfRange);
+}
+
+TEST(LoopbackStream, DuplexBytesAndCloseWakeAReader) {
+    Listener listener;
+    ASSERT_NE(listener.port, 0);
+    std::jthread server([&] {
+        const Socket peer = listener.acceptOne();
+        if (peer == kInvalid)
+            return;
+        std::array<char, 16> bytes{};
+        if (recv(peer, bytes.data(), static_cast<int>(bytes.size()), 0) > 0) {
+            static_cast<void>(send(peer, "world", 5, 0));
+            static_cast<void>(recv(peer, bytes.data(), static_cast<int>(bytes.size()), 0));
+        }
+        closeSocket(peer);
+    });
+    auto stream = frost::io::LoopbackStream::connectDuplex(listener.port, std::chrono::steady_clock::now() + 3s);
+    ASSERT_TRUE(stream);
+    ASSERT_TRUE((*stream)->write("hello"));
+    std::array<char, 16> bytes{};
+    std::size_t count = 0;
+    while (count < 5) {
+        auto read = (*stream)->read(std::span<char>(bytes).subspan(count));
+        ASSERT_TRUE(read);
+        ASSERT_GT(*read, 0U);
+        count += *read;
+    }
+    EXPECT_EQ(std::string_view(bytes.data(), count), "world");
+    auto blocked = std::async(std::launch::async, [&] { return (*stream)->read(bytes); });
+    (*stream)->close();
+    ASSERT_EQ(blocked.wait_for(3s), std::future_status::ready);
+    const auto result = blocked.get();
+    EXPECT_TRUE(!result || *result == 0);
+    (*stream)->close();
 }
 
 TEST(LoopbackStream, CancelsPendingReadWithoutWaitingForServer) {

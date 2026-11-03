@@ -185,6 +185,13 @@ std::vector<project::CMakeProfileRecord> cmakeProfileRecords(const settings::Rec
 struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     enum class JobKind : std::uint8_t { Configure, Build };
 
+    struct AdmissionLease {
+        std::function<void()> release;
+        ~AdmissionLease() {
+            if (release)
+                release();
+        }
+    };
     struct Job {
         std::uint64_t id = 0;
         JobKind kind = JobKind::Configure;
@@ -200,6 +207,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         project::CMakeEnvironment msvc{};
         BuildResult lastResult{};
         CMakeBuildCompletion done{};
+        std::shared_ptr<AdmissionLease> admission;
     };
 
     State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,
@@ -480,7 +488,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
      * profile is dropped. Errors: InvalidArgument (no folder, unusable profile), Busy.
      */
     Result<void> startJobLocked(JobKind kind, bool automatic, CMakeBuildRequest request, std::vector<CMakeStep> steps,
-                                CMakeBuildCompletion done = {}) FROST_REQUIRES(mutex) {
+                                CMakeBuildCompletion done = {}, std::uint64_t owner = 0) FROST_REQUIRES(mutex) {
         if (sourceDir.empty()) {
             return fail(ErrorCode::InvalidArgument, "no CMake folder is open");
         }
@@ -499,6 +507,55 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         if (automatic && !trusted) {
             return {}; // Nothing runs before trust, and nothing asks for it unprompted.
         }
+        bool admissionReserved = false;
+        std::uint64_t admissionChild = 0;
+        if (owner) {
+            if (!options.reserveOwnedProjectCode || !options.releaseOwnedProjectCode)
+                return fail(ErrorCode::InvalidArgument, "owned admission is unavailable");
+            auto child = options.reserveOwnedProjectCode(owner);
+            if (!child)
+                return std::unexpected(std::move(child.error()));
+            admissionChild = *child;
+        } else if (options.reserveProjectCode && options.releaseProjectCode) {
+            auto reserved = options.reserveProjectCode();
+            if (!reserved) {
+                if (automatic && reserved.error().code() == ErrorCode::Busy)
+                    reloadPending = true;
+                return std::unexpected(std::move(reserved.error()));
+            }
+            admissionReserved = true;
+        }
+        std::shared_ptr<AdmissionLease> admission;
+        if (admissionChild) {
+            auto release = options.releaseOwnedProjectCode;
+            admission = std::make_shared<AdmissionLease>();
+            admission->release = [release = std::move(release), owner, admissionChild] {
+                release(owner, admissionChild);
+            };
+        } else if (admissionReserved) {
+            admission = std::make_shared<AdmissionLease>();
+            admission->release = options.releaseProjectCode;
+        }
+        if (admission) {
+            auto release = std::move(admission->release);
+            auto weak = weak_from_this();
+            admission->release = [release = std::move(release), weak] {
+                release();
+                if (auto state = weak.lock()) {
+                    state->post([weak] {
+                        if (auto state = weak.lock()) {
+                            bool retry;
+                            {
+                                LockGuard lock(state->mutex);
+                                retry = state->reloadPending && state->state == BuildState::Idle;
+                            }
+                            if (retry)
+                                state->fireReload();
+                        }
+                    });
+                }
+            };
+        }
         request.profile = profile->name;
         diagnostics.clear();
         emitDiagnosticsCleared();
@@ -515,7 +572,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                   .tools = {},
                   .msvc = {},
                   .lastResult = {},
-                  .done = std::move(done)};
+                  .done = std::move(done),
+                  .admission = std::move(admission)};
         if (!trusted) {
             job->untrusted = {sourceDir};
             setStateLocked(BuildState::NeedsTrust);
@@ -588,11 +646,13 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         std::optional<CMakeTools> cachedTools;
         std::optional<std::vector<VsInstance>> cachedInstances;
         std::string announced;
+        std::shared_ptr<AdmissionLease> admission;
         {
             LockGuard lock(mutex);
             if (!isCurrentLocked(id)) {
                 return;
             }
+            admission = job->admission;
             profile = job->profile;
             cachedTools = tools;
             cachedInstances = instances;
@@ -949,6 +1009,26 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
 
     // Service thread: the debounce of a watched change ran out.
     void fireReload() {
+        // Acquire before reading presets: a deferred reload must retain the
+        // notification until project-code admission becomes available.
+        bool reserved = false;
+        if (options.reserveProjectCode && options.releaseProjectCode) {
+            auto admission = options.reserveProjectCode();
+            if (!admission) {
+                LockGuard lock(mutex);
+                reloadPending = true;
+                return;
+            }
+            reserved = true;
+        }
+        struct Release {
+            State* state;
+            bool reserved;
+            ~Release() {
+                if (reserved)
+                    state->options.releaseProjectCode();
+            }
+        } release{this, reserved};
         std::string folder;
         bool reloadPresets = false;
         {
@@ -989,6 +1069,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             reloadPending = true;
             return;
         }
+        reloadPending = false;
         static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
     }
 };
@@ -1014,9 +1095,11 @@ CMakeService::CMakeService(std::shared_ptr<State> state) noexcept : m_state(std:
 
 CMakeService::~CMakeService() {
     std::unique_ptr<BuildSession> session;
+    std::shared_ptr<State::AdmissionLease> admission;
     {
         LockGuard lock(m_state->mutex);
         if (m_state->job) {
+            admission = m_state->job->admission;
             session = std::move(m_state->job->session);
             m_state->job.reset();
         }
@@ -1035,6 +1118,7 @@ CMakeService::~CMakeService() {
     if (m_state->worker.joinable()) {
         m_state->worker.join();
     }
+    admission.reset();
     LockGuard lock(m_state->queueMutex);
     m_state->tasks.clear();
 }
@@ -1146,6 +1230,21 @@ std::optional<project::CMakeProfile> CMakeService::activeProfile() const {
 
 Result<void> CMakeService::setActiveProfile(std::size_t index) {
     State& s = *m_state;
+    bool admissionReserved = false;
+    if (s.options.reserveProjectCode && s.options.releaseProjectCode) {
+        auto reserved = s.options.reserveProjectCode();
+        if (!reserved)
+            return std::unexpected(std::move(reserved.error()));
+        admissionReserved = true;
+    }
+    struct Release {
+        State& state;
+        bool active;
+        ~Release() {
+            if (active)
+                state.options.releaseProjectCode();
+        }
+    } release{s, admissionReserved};
     project::CMakeProfile profile;
     std::string folder;
     {
@@ -1264,6 +1363,25 @@ bool CMakeService::modelStale() const {
 Result<void> CMakeService::configure() {
     LockGuard lock(m_state->mutex);
     return m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
+}
+
+Result<void> CMakeService::configureOwned(std::uint64_t owner) {
+    if (!owner)
+        return fail(ErrorCode::InvalidArgument, "owned configure requires an owner");
+    LockGuard lock(m_state->mutex);
+    return m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure}, {}, owner);
+}
+
+void CMakeService::admissionAvailable() {
+    bool pending;
+    {
+        LockGuard lock(m_state->mutex);
+        pending = m_state->reloadPending && m_state->state == BuildState::Idle;
+    }
+    if (pending) {
+        auto* state = m_state.get();
+        state->post([state] { state->fireReload(); });
+    }
 }
 
 std::optional<CMakeConfigureOutcome> CMakeService::lastConfigure() const {

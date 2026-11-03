@@ -51,18 +51,27 @@ struct CMakeIntegration::RunRelay {
 
 CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& launcher, project::TrustStore& trust,
                                    settings::SettingsStore& settingsStore, ui::BuildController& buildController,
-                                   ui::ShellWindow& window, ui::RunConsole& console, std::string statePath,
+                                   build::BuildService& sharedAdmission, ui::ShellWindow& window,
+                                   ui::RunConsole& console, std::string statePath,
                                    std::function<void()> runStateChanged,
                                    std::function<void(const std::string&)> openFile, std::function<void()> modelChanged)
-    : m_build(buildController), m_window(window), m_launcher(launcher), m_trust(trust), m_console(console),
-      m_runStateChanged(std::move(runStateChanged)), m_controller(std::make_unique<ui::cmake::CMakeController>()),
-      m_runRelay(std::make_shared<RunRelay>()) {
+    : m_build(buildController), m_sharedAdmission(sharedAdmission), m_window(window), m_launcher(launcher),
+      m_trust(trust), m_console(console), m_runStateChanged(std::move(runStateChanged)),
+      m_controller(std::make_unique<ui::cmake::CMakeController>()), m_runRelay(std::make_shared<RunRelay>()) {
     {
         LockGuard lock(m_runRelay->mutex);
         m_runRelay->target = this;
     }
     const auto snapshot = settingsStore.snapshot();
     build::CMakeServiceOptions options;
+    options.reserveProjectCode = [&sharedAdmission] { return sharedAdmission.reserveRun(); };
+    options.releaseProjectCode = [&sharedAdmission] { sharedAdmission.releaseRun(); };
+    options.reserveOwnedProjectCode = [&sharedAdmission](std::uint64_t owner) {
+        return sharedAdmission.reserveExternalChild(owner);
+    };
+    options.releaseOwnedProjectCode = [&sharedAdmission](std::uint64_t owner, std::uint64_t child) {
+        sharedAdmission.releaseExternalChild(owner, child);
+    };
     options.stateFilePath = std::move(statePath);
     options.cmakePath = snapshot->get(settings::key::toolsCmakePath);
     options.ninjaPath = snapshot->get(settings::key::toolsNinjaPath);
@@ -72,7 +81,8 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         cmakeBuildCallbacks(
             m_controller->callbacks(),
             buildController.serviceCallbacks([self = QPointer<CMakeIntegration>(this)] { return !self.isNull(); })));
-    m_controllerBackend = std::make_unique<ui::cmake::CMakeServiceBackend>(*m_service);
+    m_controllerBackend =
+        std::make_unique<ui::cmake::CMakeServiceBackend>(*m_service, [this] { return m_build.buildAdmitted(); });
     m_buildBackend = std::make_unique<CMakeBuildBackend>(*m_service);
     m_controller->setBackend(m_controllerBackend.get());
 
@@ -165,6 +175,10 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         QMenu menu(m_tree);
         QAction* buildAction = menu.addAction(tr("Build Target"));
         if (menu.exec(m_tree->viewport()->mapToGlobal(point)) == buildAction) {
+            if (!m_build.buildAdmitted()) {
+                m_console.appendOutput(build::RunOutputKind::System, "a Lua debug launch is pending");
+                return;
+            }
             if (auto result = m_service->build(build::BuildAction::Build, selected, {}, model); !result)
                 m_console.appendOutput(build::RunOutputKind::System, result.error().message());
         }
@@ -222,6 +236,7 @@ CMakeIntegration::~CMakeIntegration() {
         m_runRelay->target = nullptr;
     }
     m_session.reset();
+    m_runAdmission.reset();
     auto& toolbar = m_window.mainToolbar();
     if (m_profileAction)
         toolbar.removeAction(m_profileAction);
@@ -331,6 +346,8 @@ void CMakeIntegration::refreshProfiles() {
 }
 
 Result<build::RunId> CMakeIntegration::run() {
+    if (!m_build.buildAdmitted())
+        return fail(ErrorCode::Busy, "a Lua debug launch is pending");
     if (m_shutdown)
         return fail(ErrorCode::Cancelled, "the workbench is shutting down");
     if (running())
@@ -341,6 +358,11 @@ Result<build::RunId> CMakeIntegration::run() {
     const auto target = runTarget(*model);
     if (!target)
         return fail(ErrorCode::NotFound, "the CMake project has no executable target");
+    auto reserved = m_sharedAdmission.reserveRun();
+    if (!reserved)
+        return std::unexpected(std::move(reserved.error()));
+    m_runAdmission = std::shared_ptr<void>(
+        &m_sharedAdmission, [](void* service) { static_cast<build::BuildService*>(service)->releaseRun(); });
     m_runTarget = model->targets[*target].id;
     m_profileGeneration = m_service->profileGeneration();
     const std::uint64_t generation = ++m_runGeneration;
@@ -358,6 +380,7 @@ Result<build::RunId> CMakeIntegration::run() {
             model);
         !started) {
         m_pending = false;
+        m_runAdmission.reset();
         m_runStateChanged();
         build::RunOutcome outcome;
         outcome.error = started.error();
@@ -371,6 +394,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     if (m_shutdown || generation != m_runGeneration || !m_pending)
         return;
     m_pending = false;
+    auto admission = std::move(m_runAdmission);
     build::RunOutcome failed;
     const auto failDebug = [this](const Error& error) {
         if (m_debugDone) {
@@ -473,6 +497,8 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
             if (self.m_shutdown)
                 return;
             self.m_running = false;
+            self.m_session.reset();
+            self.m_runAdmission.reset();
             build::RunOutcome finished;
             finished.exitCode = exit.exitCode;
             finished.stopped = exit.stopped;
@@ -488,6 +514,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         m_console.finish(failed);
     } else {
         m_session = std::move(*started);
+        m_runAdmission = std::move(admission);
         m_running = true;
         m_console.setRunning(true, m_session->acceptsInput());
     }
@@ -517,6 +544,7 @@ void CMakeIntegration::shutdown() {
         m_session.reset();
     }
     m_running = false;
+    m_runAdmission.reset();
     m_runStateChanged();
 }
 

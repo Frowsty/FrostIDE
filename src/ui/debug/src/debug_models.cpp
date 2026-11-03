@@ -74,14 +74,21 @@ QVariant FramesModel::data(const QModelIndex& index, int role) const {
     case Qt::DisplayRole: {
         const QString name = QString::fromStdString(frame.name);
         if (frame.hasSource()) {
-            const QString file = QString::fromStdString(frame.sourceName.empty() ? frame.path : frame.sourceName);
+            const std::string& label = frame.sourceName.empty() ? frame.path : frame.sourceName;
+            const QString file = label.empty() ? QStringLiteral("Loaded source") : QString::fromStdString(label);
             return QStringLiteral("%1, %2:%3").arg(name, file).arg(frame.line);
         }
         return frame.module.empty() ? name : QStringLiteral("%1 [%2]").arg(name, QString::fromStdString(frame.module));
     }
     case Qt::ToolTipRole:
-        return frame.hasSource() ? QStringLiteral("%1:%2").arg(QString::fromStdString(frame.path)).arg(frame.line)
-                                 : QString::fromStdString(frame.name);
+        if (!frame.hasSource())
+            return QString::fromStdString(frame.name);
+        if (frame.path.empty())
+            return QStringLiteral("%1:%2")
+                .arg(frame.sourceName.empty() ? QStringLiteral("Loaded source")
+                                              : QString::fromStdString(frame.sourceName))
+                .arg(frame.line);
+        return QStringLiteral("%1:%2").arg(QString::fromStdString(frame.path)).arg(frame.line);
     case Qt::ForegroundRole:
         if (!frame.hasSource() || frame.subtle) {
             return QBrush(QColor(0x8C, 0x8F, 0x94)); // Library frames are dimmed, as in Rider.

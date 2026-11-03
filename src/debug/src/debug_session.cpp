@@ -66,6 +66,7 @@ DebugFrame toFrame(const dap::StackFrame& frame) {
     if (frame.source) {
         out.path = frame.source->path;
         out.sourceName = frame.source->name;
+        out.sourceReference = frame.source->sourceReference;
         if (frame.source->presentationHint == "deemphasize") {
             out.subtle = true;
         }
@@ -98,9 +99,9 @@ std::optional<DebugFrame> pickFrame(const std::vector<DebugFrame>& frames, bool 
 
 struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     State(rpc::Json arguments, std::map<std::string, std::vector<BreakpointLine>> lines,
-          DebugSessionCallbacks sessionCallbacks, bool catchAbort, std::string identity)
+          DebugSessionCallbacks sessionCallbacks, bool catchAbort, std::string identity, DebugTargetMode mode)
         : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)), adapterId(std::move(identity)),
-          breakpoints(std::move(lines)), breakOnAbort(catchAbort) {}
+          breakpoints(std::move(lines)), breakOnAbort(catchAbort), targetMode(mode) {}
 
     const DebugSessionCallbacks callbacks;
     const rpc::Json launchArguments;
@@ -132,6 +133,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::map<std::int64_t, std::uint64_t> adapterIds FROST_GUARDED_BY(mutex); // Adapter id -> caller id.
     std::optional<std::pair<std::string, std::int64_t>> runTo FROST_GUARDED_BY(mutex);
     const bool breakOnAbort;
+    const DebugTargetMode targetMode;
     std::optional<std::int64_t> abortBreakpointId FROST_GUARDED_BY(mutex);
     std::optional<int> exitCode FROST_GUARDED_BY(mutex);
     std::optional<Error> fatalError FROST_GUARDED_BY(mutex);
@@ -245,10 +247,14 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
             if (IDebugAdapterClient* const live = adapter.load()) {
                 live->setSupportsCancel(found.supportsCancelRequest);
             }
-            send("launch", launchArguments, [weak = weak()](Result<rpc::Json> answer) {
+            const char* const command = targetMode == DebugTargetMode::Attach ? "attach" : "launch";
+            send(command, launchArguments, [weak = weak()](Result<rpc::Json> answer) {
                 if (const auto self = weak.lock(); self && !answer) {
-                    self->fatal(Error(answer.error().code(),
-                                      std::format("The program could not be started: {}", answer.error().message())));
+                    self->fatal(
+                        Error(answer.error().code(),
+                              self->targetMode == DebugTargetMode::Attach
+                                  ? std::format("Could not attach to the program: {}", answer.error().message())
+                                  : std::format("The program could not be started: {}", answer.error().message())));
                 }
             });
         });
@@ -699,7 +705,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                 fatalError = std::move(error);
             }
         }
-        disconnect(true);
+        disconnect(targetMode == DebugTargetMode::Launch);
     }
 
     void closed(const Error& why) {
@@ -766,6 +772,10 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                 LockGuard lock(mutex);
                 terminatedSeen = true;
             }
+            emit([&] {
+                if (callbacks.onTerminated)
+                    callbacks.onTerminated();
+            });
             disconnect(false);
         } else if (name == "breakpoint") {
             breakpointEvent(body);
@@ -775,12 +785,20 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
 
 DebugSession::DebugSession(std::shared_ptr<State> state) noexcept : m_state(std::move(state)) {}
 
+std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::Json arguments,
+                                                  std::map<std::string, std::vector<BreakpointLine>> breakpoints,
+                                                  DebugSessionCallbacks callbacks, bool breakOnAbort,
+                                                  DebugTargetMode targetMode) {
+    return start(std::move(factory), std::move(arguments), std::move(breakpoints), std::move(callbacks), breakOnAbort,
+                 "lldb-dap", targetMode);
+}
+
 std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::Json launchArguments,
                                                   std::map<std::string, std::vector<BreakpointLine>> breakpoints,
                                                   DebugSessionCallbacks callbacks, bool breakOnAbort,
-                                                  std::string adapterId) {
+                                                  std::string adapterId, DebugTargetMode targetMode) {
     auto state = std::make_shared<State>(std::move(launchArguments), std::move(breakpoints), std::move(callbacks),
-                                         breakOnAbort, std::move(adapterId));
+                                         breakOnAbort, std::move(adapterId), targetMode);
     std::unique_ptr<DebugSession> session(new DebugSession(state));
     const std::weak_ptr<State> weak = state;
     DapHandlers handlers{
@@ -992,6 +1010,48 @@ void DebugSession::loadMoreFrames(std::int64_t threadId) {
     m_state->loadFrames(threadId, gen, false);
 }
 
+std::int64_t DebugSession::source(std::int64_t sourceReference, SourceDone done) {
+    std::uint64_t generation = 0;
+    bool stopped = false;
+    {
+        LockGuard lock(m_state->mutex);
+        stopped = sourceReference > 0 && m_state->state == DebugState::Stopped;
+        generation = m_state->generation;
+    }
+    if (!stopped) {
+        done(fail(ErrorCode::Busy, "loaded source needs a stopped session"));
+        return 0;
+    }
+    const std::weak_ptr<State> weak = m_state;
+    return m_state->send("source", rpc::Json::object().set("sourceReference", sourceReference),
+                         [weak, generation, done = std::move(done)](Result<rpc::Json> body) {
+                             const auto state = weak.lock();
+                             if (!state) {
+                                 done(fail(ErrorCode::Cancelled, "debug session ended"));
+                                 return;
+                             }
+                             bool current = false;
+                             {
+                                 LockGuard lock(state->mutex);
+                                 current = state->generation == generation && state->state == DebugState::Stopped;
+                             }
+                             if (!current) {
+                                 done(fail(ErrorCode::Cancelled, "loaded source reference expired"));
+                                 return;
+                             }
+                             if (!body) {
+                                 done(std::unexpected(std::move(body.error())));
+                                 return;
+                             }
+                             const rpc::Json* content = body->find("content");
+                             if (!content || !content->asString()) {
+                                 done(fail(ErrorCode::Corrupt, "adapter returned invalid loaded source"));
+                                 return;
+                             }
+                             done(*content->asString());
+                         });
+}
+
 std::int64_t DebugSession::scopes(std::int64_t frameId, ScopesDone done) {
     return m_state->send("scopes", rpc::Json::object().set("frameId", frameId),
                          [done = std::move(done)](Result<rpc::Json> body) {
@@ -1046,6 +1106,10 @@ std::int64_t DebugSession::evaluate(std::string expression, std::optional<std::i
                          });
 }
 
+std::int64_t DebugSession::stopPlay(StopPlayDone done) {
+    return m_state->send("frost.stopPlay", rpc::Json::object(), std::move(done));
+}
+
 void DebugSession::cancel(std::int64_t seq) {
     if (IDebugAdapterClient* const client = m_state->adapter.load(); client != nullptr && seq != 0) {
         client->cancel(seq);
@@ -1060,7 +1124,7 @@ void DebugSession::stop() {
                 return;
             m_state->stopRequested = true;
         }
-        m_state->disconnect(true);
+        m_state->disconnect(m_state->targetMode == DebugTargetMode::Launch);
     });
 }
 

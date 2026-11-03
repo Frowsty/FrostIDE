@@ -15,7 +15,9 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <climits>
 #include <format>
+#include <limits>
 #include <utility>
 
 namespace frost::ui {
@@ -282,15 +284,32 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
         return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     }
     auto factory = adapterFactory();
-    if (!factory) {
+    if (!factory)
         return std::unexpected(std::move(factory.error()));
-    }
     auto started = startSession(
         target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, "lldb-dap",
         [this, target, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
             return debug::startDebugSession(*m_options.trust, target, std::move(factory), m_breakpoints.sessionLines(),
                                             std::move(callbacks));
         });
+    if (started)
+        m_lastCoreClrSession = false;
+    return started;
+}
+
+Result<void> DebugController::attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
+                                           rpc::Json attachArguments, std::function<bool()> ownerAdmission) {
+    const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
+    if (m_pendingRun || m_alternatePending || !admitted)
+        return fail(ErrorCode::Busy, "another run or debug launch is already pending");
+    auto started = startSession(
+        target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, "Lua",
+        [this, target, factory = std::move(factory),
+         arguments = std::move(attachArguments)](debug::DebugSessionCallbacks callbacks) mutable {
+            return debug::attachDebugSession(*m_options.trust, target, std::move(factory), std::move(arguments),
+                                             m_breakpoints.sessionLines(), std::move(callbacks));
+        },
+        true);
     if (started)
         m_lastCoreClrSession = false;
     return started;
@@ -334,7 +353,7 @@ Result<void> DebugController::startCoreClrTarget(
 }
 
 Result<void> DebugController::startSession(std::string title, std::string program, std::string adapterName,
-                                           SessionStarter starter) {
+                                           SessionStarter starter, bool attach) {
     if (m_shutdown)
         return fail(ErrorCode::Cancelled, "the workbench is shutting down");
     if (m_session)
@@ -380,6 +399,11 @@ Result<void> DebugController::startSession(std::string title, std::string progra
             [relay, generation](const debug::DebugOutcome& outcome) {
                 relay->post(generation, [outcome](DebugController* self) { self->onEnded(outcome); });
             },
+        .onTerminated =
+            [relay, generation] {
+                relay->post(generation,
+                            [generation](DebugController* self) { emit self->adapterTerminated(generation); });
+            },
     };
     m_breakpoints.resetStatus(debug::BreakpointStatus::Pending);
     auto session = starter(std::move(callbacks));
@@ -394,6 +418,7 @@ Result<void> DebugController::startSession(std::string title, std::string progra
         return std::unexpected(*outcome->error);
     }
     m_session = std::move(*session);
+    m_rerunAllowed = !attach;
     m_state = debug::DebugState::Starting;
     m_title = QString::fromStdString(title);
     m_stop.reset();
@@ -406,9 +431,10 @@ Result<void> DebugController::startSession(std::string title, std::string progra
             m_console->beginRun(m_title);
         }
         m_console->appendOutput(build::RunOutputKind::System,
-                                std::format("Debugging {} with {}\n", program, adapterName));
+                                attach ? std::format("Attached debugger to {}\n", title)
+                                       : std::format("Debugging {} with {}\n", program, adapterName));
         m_console->setRunning(true, false);
-        m_console->rerunButton()->setEnabled(!m_coreClrSession);
+        m_console->rerunButton()->setEnabled(!m_coreClrSession && m_rerunAllowed);
     }
     if (m_hooks.showToolWindow) {
         m_hooks.showToolWindow();
@@ -428,6 +454,7 @@ void DebugController::onState(debug::DebugState state) {
         m_stop.reset();
         m_frames = {};
         m_frame.reset();
+        clearLoadedSource();
         showExecutionPoint();
         emit framesChanged();
     }
@@ -435,6 +462,7 @@ void DebugController::onState(debug::DebugState state) {
 }
 
 void DebugController::onStopped(const debug::StopInfo& stop) {
+    clearLoadedSource();
     m_state = debug::DebugState::Stopped;
     m_stop = stop;
     if (stop.threadId) {
@@ -476,7 +504,42 @@ void DebugController::onFrameSelected(std::int64_t threadId, const debug::DebugF
     }
     m_thread = threadId;
     m_frame = frame;
-    if (frame.hasSource() && m_hooks.openSource) {
+    clearLoadedSource();
+    if (frame.sourceReference != 0 && !m_coreClrSession) {
+        // Never navigate to current disk bytes for an adapter-owned revision.
+        const auto generation = m_generation;
+        const auto sourceEpoch = m_sourceEpoch;
+        const auto frameId = frame.id;
+        const auto reference = frame.sourceReference;
+        const auto name = frame.sourceName.empty() ? std::string("(loaded source)") : frame.sourceName;
+        const auto line = frame.line;
+        const std::shared_ptr<Relay> relay = m_relay;
+        if (m_session && !m_sourceEpochExhausted) {
+            m_session->source(reference, [relay, generation, sourceEpoch, frameId, reference, name,
+                                          line](Result<std::string> source) {
+                relay->post(generation, [sourceEpoch, frameId, reference, name, line,
+                                         source = std::move(source)](DebugController* self) {
+                    if (self->m_sourceEpochExhausted || self->m_sourceEpoch != sourceEpoch ||
+                        self->m_state != debug::DebugState::Stopped || !self->m_frame || self->m_frame->id != frameId ||
+                        self->m_frame->sourceReference != reference)
+                        return;
+                    if (!source) {
+                        if (self->m_hooks.notify)
+                            self->m_hooks.notify(
+                                self->m_title.isEmpty() ? QStringLiteral("Debug") : self->m_title,
+                                QStringLiteral(
+                                    "The running source version cannot yet be verified; navigation is disabled."),
+                                false);
+                        return;
+                    }
+                    emit self->loadedSourceChanged(
+                        QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size())),
+                        QString::fromUtf8(source->data(), static_cast<qsizetype>(source->size())),
+                        static_cast<int>(std::min<std::int64_t>(line, INT_MAX)));
+                });
+            });
+        }
+    } else if (frame.hasSource() && m_hooks.openSource) {
         if (EditorView* view = m_hooks.openSource(QString::fromStdString(frame.path), static_cast<int>(frame.line))) {
             attachEditor(view);
         }
@@ -515,7 +578,7 @@ void DebugController::onEnded(const debug::DebugOutcome& outcome) {
         finished.stopped && !finished.exitCode ? QStringLiteral("Process stopped") : runFinishedLine(finished);
     if (m_console) {
         m_console->finish(finished, summary);
-        if (m_coreClrSession)
+        if (m_coreClrSession || !m_rerunAllowed)
             m_console->rerunButton()->setEnabled(false);
     }
     if (outcome.error && !outcome.stopped && m_hooks.notify) {
@@ -540,6 +603,7 @@ void DebugController::endSession() {
     m_coreClrPathRequests.clear();
     ++m_coreClrValidationEpoch;
     m_coreClrSession = false;
+    clearLoadedSource();
     std::unique_ptr<debug::DebugSession> ended = std::move(m_session);
     ended.reset(); // Joins the client's threads (the adapter has exited or was killed).
     m_breakpoints.resetStatus(debug::BreakpointStatus::Unknown);
@@ -562,15 +626,35 @@ bool DebugController::report(Result<void> result, const QString& what) {
     return false;
 }
 
-bool DebugController::resume() { return m_session && report(m_session->continueRun(), QStringLiteral("Resume")); }
+bool DebugController::resume() {
+    const bool resumed = m_session && report(m_session->continueRun(), QStringLiteral("Resume"));
+    if (resumed)
+        clearLoadedSource();
+    return resumed;
+}
 
 bool DebugController::pause() { return m_session && report(m_session->pause(), QStringLiteral("Pause")); }
 
-bool DebugController::stepOver() { return m_session && report(m_session->next(), QStringLiteral("Step Over")); }
+bool DebugController::stepOver() {
+    const bool resumed = m_session && report(m_session->next(), QStringLiteral("Step Over"));
+    if (resumed)
+        clearLoadedSource();
+    return resumed;
+}
 
-bool DebugController::stepInto() { return m_session && report(m_session->stepIn(), QStringLiteral("Step Into")); }
+bool DebugController::stepInto() {
+    const bool resumed = m_session && report(m_session->stepIn(), QStringLiteral("Step Into"));
+    if (resumed)
+        clearLoadedSource();
+    return resumed;
+}
 
-bool DebugController::stepOut() { return m_session && report(m_session->stepOut(), QStringLiteral("Step Out")); }
+bool DebugController::stepOut() {
+    const bool resumed = m_session && report(m_session->stepOut(), QStringLiteral("Step Out"));
+    if (resumed)
+        clearLoadedSource();
+    return resumed;
+}
 
 bool DebugController::validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved) {
     if (!m_coreClrBreakpointValidator ||
@@ -609,8 +693,11 @@ bool DebugController::runToCursor() {
                 self.report(self.m_session->runToLine(path, targetLine), QStringLiteral("Run to Cursor")));
         });
     }
-    return report(m_session->runToLine(*path, static_cast<std::int64_t>(line.value()) + 1),
-                  QStringLiteral("Run to Cursor"));
+    const bool resumed = report(m_session->runToLine(*path, static_cast<std::int64_t>(line.value()) + 1),
+                                QStringLiteral("Run to Cursor"));
+    if (resumed)
+        clearLoadedSource();
+    return resumed;
 }
 
 void DebugController::shutdown() {
@@ -631,6 +718,7 @@ void DebugController::shutdown() {
     m_state = debug::DebugState::Ended;
     m_stop.reset();
     m_frame.reset();
+    clearLoadedSource();
     showExecutionPoint();
     emit stateChanged();
 }
@@ -644,6 +732,12 @@ void DebugController::rerun() {
     if (m_coreClrSession || m_lastCoreClrSession) {
         if (m_hooks.notify)
             m_hooks.notify(QStringLiteral("Debug .NET"), QStringLiteral("Start the .NET project again to rebuild it."),
+                           false);
+        return;
+    }
+    if (!m_rerunAllowed) {
+        if (m_hooks.notify)
+            m_hooks.notify(QStringLiteral("Debug"), QStringLiteral("Rerun is not available for an attached session"),
                            false);
         return;
     }
@@ -864,13 +958,21 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
     }
 }
 
+void DebugController::clearLoadedSource() {
+    if (m_sourceEpoch == std::numeric_limits<std::uint64_t>::max())
+        m_sourceEpochExhausted = true;
+    else
+        ++m_sourceEpoch;
+    emit loadedSourceChanged({}, {}, 0);
+}
+
 void DebugController::showExecutionPoint() {
     for (auto& [view, attached] : m_editors) {
         if (!attached->view) {
             continue;
         }
-        if (!m_coreClrFrameAllowed && m_frame && m_frame->hasSource() &&
-            m_breakpoints.samePath(attached->path, m_frame->path)) {
+        if (!m_coreClrFrameAllowed && m_frame && (m_coreClrSession || m_frame->sourceReference == 0) &&
+            m_frame->hasSource() && m_breakpoints.samePath(attached->path, m_frame->path)) {
             attached->view->setExecutionPoint(LineIndex(static_cast<std::uint32_t>(m_frame->line - 1)));
         } else {
             attached->view->setExecutionPoint(std::nullopt);

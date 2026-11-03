@@ -161,6 +161,12 @@ struct CMakeServiceCallbacks {
 };
 
 struct CMakeServiceOptions {
+    // Optional thread-safe shared admission lease. Both callbacks must be supplied together;
+    // the lease covers each configure/build and profile switch through completion.
+    std::function<Result<void>()> reserveProjectCode;
+    std::function<void()> releaseProjectCode;
+    std::function<Result<std::uint64_t>(std::uint64_t)> reserveOwnedProjectCode;
+    std::function<void(std::uint64_t, std::uint64_t)> releaseOwnedProjectCode;
     std::string cmakePath{};            // tools.cmake.path; "" detects (cmake_toolchain.hpp).
     std::string ninjaPath{};            // tools.ninja.path; "" detects.
     std::string pathVariable{};         // The PATH searched for tools; "" uses this process's.
@@ -243,6 +249,9 @@ public:
     // Reload: configures the active profile in the background. Errors: InvalidArgument (no folder,
     // an unusable profile: CMakeProfile::problem), Busy.
     [[nodiscard]] Result<void> configure();
+    [[nodiscard]] Result<void> configureOwned(std::uint64_t owner);
+    // Retry a deferred automatic configure after an external admission lease is released.
+    void admissionAvailable();
     [[nodiscard]] std::optional<CMakeConfigureOutcome> lastConfigure() const;
 
     // The UI's Save All before builds (BuildService::setSaveAllHook).

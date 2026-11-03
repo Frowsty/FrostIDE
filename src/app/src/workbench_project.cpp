@@ -266,8 +266,8 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     const auto lists = io::joinPath(path, "CMakeLists.txt");
     if (m_window && lists && m_services.fs.exists(*lists).value_or(false)) {
         m_cmake = std::make_unique<CMakeIntegration>(
-            m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_window,
-            *m_runConsole, m_options.cmakeStatePath, [this] { m_runController->alternateStateChanged(); },
+            m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_buildService,
+            *m_window, *m_runConsole, m_options.cmakeStatePath, [this] { m_runController->alternateStateChanged(); },
             [this](const std::string& file) { (void)openPath(file); },
             [this] {
                 if (m_cmake && m_clangd)

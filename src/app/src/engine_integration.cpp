@@ -3,6 +3,8 @@
 #include "engine_integration.hpp"
 
 #include "frost/app/workbench.hpp"
+#include "frost/debug/lua_debug_adapter.hpp"
+#include "frost/debug/lua_debug_endpoint.hpp"
 #include "frost/io/async_process.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
@@ -11,8 +13,10 @@
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/scheduler.hpp"
+#include "frost/ui/debug_controller.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
+#include "cmake_integration.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QHBoxLayout>
@@ -21,6 +25,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QPushButton>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -94,6 +99,18 @@ sched::Task<void> execute(Request request, Completion completion) {
     completion(std::move(result));
     co_return;
 }
+using PreparedLua = Result<debug::LuaDebugPlayConnection>;
+using PreparedLuaCompletion = std::function<void(std::shared_ptr<PreparedLua>)>;
+sched::Task<void> prepareLua(std::uint16_t port, std::string token, std::string root, project::TrustStore* trust,
+                             std::shared_ptr<RequestState> state, PreparedLuaCompletion completion) {
+    PreparedLua result = fail(ErrorCode::Cancelled, "Lua debug start was cancelled");
+    if (state->active.load() && trust->isTrusted(root)) {
+        result = debug::connectLuaDebugPlayEndpoint(
+            port, token, std::chrono::steady_clock::now() + std::chrono::seconds(5), state->stop.get_token());
+    }
+    completion(std::make_shared<PreparedLua>(std::move(result)));
+    co_return;
+}
 } // namespace
 
 struct EngineIntegration::Impl {
@@ -103,6 +120,25 @@ struct EngineIntegration::Impl {
     QPointer<QLabel> status;
     QPointer<QListWidget> output;
     std::shared_ptr<RequestState> current;
+    std::string luaPreparingRoot;
+    std::string luaPreparingEndpoint;
+    std::uint64_t luaReservation = 0;
+    struct LuaPending {
+        std::shared_ptr<RequestState> request;
+        std::string root;
+        std::string endpointId;
+        std::uint64_t sessionGeneration = 0;
+        std::uint64_t connectionGeneration = 0;
+        std::uint64_t operationId = 0;
+        bool playRequested = false;
+        bool playSettled = false;
+        bool stopRequested = false;
+        bool stopCompleted = false;
+        bool cleanupPending = false;
+        QMetaObject::Connection ready;
+        QMetaObject::Connection terminated;
+    };
+    std::shared_ptr<LuaPending> luaPending;
     std::shared_ptr<io::Reactor> reactor;
     struct Running {
         std::shared_ptr<RequestState> state;
@@ -114,12 +150,47 @@ struct EngineIntegration::Impl {
     std::size_t outputBytes = 0;
     bool evicted = false;
 
+    void releaseLua(std::uint64_t token) {
+        if (token == 0 || luaReservation != token)
+            return;
+        workbench.m_buildService->releaseExternalLaunch(token);
+        luaReservation = 0;
+        luaPreparingRoot.clear();
+        luaPreparingEndpoint.clear();
+        QPointer<EngineIntegration> receiver(&owner);
+        QMetaObject::invokeMethod(
+            &owner,
+            [receiver] {
+                if (receiver && receiver->m_impl->workbench.m_cmake)
+                    receiver->m_impl->workbench.m_cmake->service().admissionAvailable();
+                if (receiver && receiver->m_impl->workbench.m_window)
+                    receiver->m_impl->workbench.m_window->refreshActions();
+            },
+            Qt::QueuedConnection);
+    }
+
     void cancel(bool resetLog = true) {
+        const auto reservation = luaReservation;
+        const std::string preparingRoot = luaPreparingRoot;
+        const std::string preparingEndpoint = luaPreparingEndpoint;
+        luaPreparingRoot.clear();
+        auto pending = std::move(luaPending);
+        if (pending) {
+            QObject::disconnect(pending->ready);
+            QObject::disconnect(pending->terminated);
+            if (workbench.m_debug && workbench.m_debug->sessionGeneration() == pending->sessionGeneration)
+                workbench.m_debug->stop();
+        }
         if (current) {
             current->active.store(false);
             current->stop.request_stop();
             current.reset();
         }
+        releaseLua(reservation);
+        if (!preparingEndpoint.empty())
+            stopLuaEndpoint(preparingRoot, preparingEndpoint);
+        if (pending)
+            stopLuaEndpoint(pending->root, pending->endpointId);
         if (resetLog)
             since = 0;
         if (resetLog && output) {
@@ -173,25 +244,26 @@ struct EngineIntegration::Impl {
         for (const auto& child : value.items())
             showItems(child, locations);
     }
-    void run(std::string method, std::string location = {}, int line = 0) {
+    bool run(std::string method, std::string location = {}, int line = 0,
+             lang::Json suppliedParams = lang::Json::object(), Completion done = {}) {
         if (stopped || workbench.m_shutDown)
-            return;
+            return false;
         std::erase_if(tasks, [](Running& running) { return running.task.ready(); });
         if (current) {
             status->setText(QStringLiteral("A FrostEngine request is already running"));
-            return;
+            return false;
         }
         const std::string root = workbench.projectRoot();
         if (root.empty() || !workbench.m_services.trust.isTrusted(root)) {
             status->setText(QStringLiteral("Trust the project before using FrostEngine automation"));
-            return;
+            return false;
         }
         const QString directory = discoveryDirectory();
         if (!io::isAbsolutePath(root) || !QDir::isAbsolutePath(directory)) {
             status->setText(QStringLiteral("Cannot locate the project or automation directory"));
-            return;
+            return false;
         }
-        lang::Json params = lang::Json::object();
+        lang::Json params = std::move(suppliedParams);
         std::optional<text::Snapshot> source;
         if (method == "log.get")
             params.set("since", since);
@@ -201,12 +273,12 @@ struct EngineIntegration::Impl {
             auto* view = workbench.currentView();
             if (!view || !qs(view->path()).endsWith(QStringLiteral(".lua"), Qt::CaseInsensitive)) {
                 status->setText(QStringLiteral("Open a Lua script to validate"));
-                return;
+                return false;
             }
             const QString relative = QDir(qs(root)).relativeFilePath(qs(view->path()));
             if (!relative.startsWith(QStringLiteral("Assets/")) || relative.split('/').contains(QStringLiteral(".."))) {
                 status->setText(QStringLiteral("The script must be inside this project's Assets folder"));
-                return;
+                return false;
             }
             params.set("path", utf8(relative));
             source = view->document().document().text();
@@ -219,7 +291,7 @@ struct EngineIntegration::Impl {
             auto created = io::Reactor::create(io::ReactorOptions{1, "frost-engine-io"});
             if (!created) {
                 status->setText(QStringLiteral("Cannot start the FrostEngine I/O service"));
-                return;
+                return false;
             }
             reactor = std::shared_ptr<io::Reactor>(std::move(*created));
         }
@@ -239,18 +311,38 @@ struct EngineIntegration::Impl {
                         reactor,
                         &workbench.m_services.trust,
                         state};
-        status->setText(QStringLiteral("Contacting FrostEngine…"));
+        status->setText(QStringLiteral("Contacting FrostEngine..."));
         QPointer<EngineIntegration> receiver(&owner);
-        auto completion = [receiver, state, root, method, line](Result<lang::Json> result) mutable {
+        auto completion = [receiver, state, root, method, line,
+                           done = std::move(done)](Result<lang::Json> result) mutable {
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
-                [receiver, state, root, method, line, result = std::move(result)]() mutable {
-                    if (!receiver || !state->active.load())
+                [receiver, state, root, method, line, done = std::move(done), result = std::move(result)]() mutable {
+                    if (!receiver)
                         return;
                     auto& impl = *receiver->m_impl;
-                    if (impl.current != state || impl.workbench.projectRoot() != root)
+                    if (!state->active.load() || impl.current != state || impl.workbench.projectRoot() != root) {
+                        // A successful start can arrive after cancellation. Clean up only the endpoint
+                        // named by that response; never disturb a successor request or reservation.
+                        if (method == "script.debug.start" && result) {
+                            const auto* endpoint = result->find("result");
+                            if (endpoint && endpoint->isObject()) {
+                                const std::string endpointId(endpoint->stringAt("endpointId"));
+                                if (!endpointId.empty())
+                                    impl.stopLuaEndpoint(root, endpointId);
+                            }
+                        }
                         return;
+                    }
                     impl.current.reset();
+                    QTimer::singleShot(0, receiver, [receiver] {
+                        if (receiver)
+                            receiver->m_impl->drainLuaCleanup();
+                    });
+                    if (done) {
+                        done(std::move(result));
+                        return;
+                    }
                     if (!result) {
                         const bool uncertain = result.error().code() == ErrorCode::Timeout ||
                                                result.error().code() == ErrorCode::Cancelled;
@@ -302,6 +394,350 @@ struct EngineIntegration::Impl {
         };
         tasks.push_back({state, workbench.m_pool->spawn(sched::Lane::Background,
                                                         execute(std::move(request), std::move(completion)))});
+        return true;
+    }
+
+    void stopLuaEndpoint(std::string root, std::string endpointId) {
+        const QString directory = discoveryDirectory();
+        if (stopped || workbench.m_shutDown || !reactor || workbench.projectRoot() != root ||
+            !workbench.m_services.trust.isTrusted(root) || !QDir::isAbsolutePath(directory))
+            return;
+        auto state = std::make_shared<RequestState>();
+        Request request{root,
+                        utf8(directory),
+                        "script.debug.stop",
+                        workbench.m_options.engineDiscoveryHelperPath.empty()
+                            ? utf8(QCoreApplication::applicationFilePath())
+                            : workbench.m_options.engineDiscoveryHelperPath,
+                        workbench.m_services.trust.storePath(),
+                        lang::Json::object().set("endpointId", endpointId),
+                        std::nullopt,
+                        &workbench.m_services.launcher,
+                        workbench.m_pool.get(),
+                        reactor,
+                        &workbench.m_services.trust,
+                        state};
+        tasks.push_back({state, workbench.m_pool->spawn(sched::Lane::Background,
+                                                        execute(std::move(request), [](Result<lang::Json>) {}))});
+    }
+
+    void drainLuaCleanup() {
+        auto pending = luaPending;
+        if (!pending || !pending->cleanupPending || current || stopped || workbench.m_shutDown ||
+            workbench.projectRoot() != pending->root || !workbench.m_services.trust.isTrusted(pending->root))
+            return;
+        if (!run("script.debug.stop", {}, 0, lang::Json::object().set("endpointId", pending->endpointId)) ||
+            luaPending != pending)
+            return;
+        QObject::disconnect(pending->ready);
+        QObject::disconnect(pending->terminated);
+        luaPending.reset();
+    }
+
+    void startLuaDebug() {
+        if (stopped || current || luaPending || luaReservation || !workbench.canStartLuaDebug()) {
+            status->setText(QStringLiteral("Stop the current request or debug session first"));
+            return;
+        }
+        auto acquired = workbench.m_buildService->reserveExternalLaunch();
+        if (!acquired) {
+            status->setText(qs(acquired.error().message()));
+            return;
+        }
+        const std::string root = workbench.projectRoot();
+        const std::uint64_t reservation = *acquired;
+        luaReservation = reservation;
+        luaPreparingRoot = root;
+        QPointer<EngineIntegration> receiver(&owner);
+        if (workbench.m_window)
+            workbench.m_window->refreshActions();
+        if (!receiver)
+            return;
+        auto& afterRefresh = *receiver->m_impl;
+        if (afterRefresh.stopped || afterRefresh.workbench.m_shutDown || afterRefresh.luaReservation != reservation ||
+            afterRefresh.current || afterRefresh.luaPending || afterRefresh.workbench.projectRoot() != root ||
+            !afterRefresh.workbench.m_services.trust.isTrusted(root) || !afterRefresh.workbench.canStartLuaDebug()) {
+            afterRefresh.releaseLua(reservation);
+            return;
+        }
+        afterRefresh.run(
+            "script.debug.start", {}, 0, lang::Json::object(),
+            [receiver, root, reservation](Result<lang::Json> result) mutable {
+                if (!receiver)
+                    return;
+                auto& impl = *receiver->m_impl;
+                if (impl.luaReservation != reservation)
+                    return;
+                if (!result) {
+                    impl.releaseLua(reservation);
+                    impl.status->setText(qs(result.error().message()));
+                    return;
+                }
+                const lang::Json* endpoint = result->find("result");
+                if (!endpoint || !endpoint->isObject()) {
+                    impl.releaseLua(reservation);
+                    impl.status->setText(QStringLiteral("Invalid Lua debug endpoint"));
+                    return;
+                }
+                const auto port = endpoint->integerAt("port");
+                const std::string token(endpoint->stringAt("token"));
+                const std::string endpointId(endpoint->stringAt("endpointId"));
+                const std::string projectFile(endpoint->stringAt("projectFile"));
+                if (!port || *port <= 0 || *port > 65535 || token.empty() || endpointId.empty() ||
+                    projectFile.empty()) {
+                    impl.releaseLua(reservation);
+                    impl.status->setText(QStringLiteral("Invalid Lua debug endpoint"));
+                    return;
+                }
+                if (impl.workbench.projectRoot() != root || !impl.workbench.m_services.trust.isTrusted(root)) {
+                    impl.releaseLua(reservation);
+                    impl.stopLuaEndpoint(root, endpointId);
+                    return;
+                }
+                auto state = std::make_shared<RequestState>();
+                impl.current = state;
+                impl.luaPreparingRoot = root;
+                impl.luaPreparingEndpoint = endpointId;
+                impl.status->setText(QStringLiteral("Connecting Lua debugger..."));
+                auto complete = [receiver, state, root, endpointId, projectFile,
+                                 reservation](std::shared_ptr<PreparedLua> connection) {
+                    QMetaObject::invokeMethod(
+                        QCoreApplication::instance(),
+                        [receiver, state, root, endpointId, projectFile, reservation, connection] {
+                            if (!receiver)
+                                return;
+                            auto& impl = *receiver->m_impl;
+                            if (impl.luaReservation != reservation) {
+                                if (*connection)
+                                    (**connection).stream.reset();
+                                return;
+                            }
+                            if (impl.current != state || !state->active.load() ||
+                                impl.workbench.projectRoot() != root ||
+                                !impl.workbench.m_services.trust.isTrusted(root)) {
+                                if (impl.current == state)
+                                    impl.current.reset();
+                                if (*connection)
+                                    (**connection).stream.reset();
+                                impl.releaseLua(reservation);
+                                impl.stopLuaEndpoint(root, endpointId);
+                                return;
+                            }
+                            if (!*connection) {
+                                impl.current.reset();
+                                impl.releaseLua(reservation);
+                                impl.status->setText(qs(connection->error().message()));
+                                impl.stopLuaEndpoint(root, endpointId);
+                                return;
+                            }
+                            debug::DebugTarget target{
+                                .name = "FrostEngine Lua", .program = projectFile, .trustRoots = {root}};
+                            const std::uint64_t expectedSession = impl.workbench.m_debug->sessionGeneration() + 1;
+                            auto attached = impl.workbench.m_debug->attachTarget(
+                                target,
+                                debug::luaDebugAdapterFactory(std::move((**connection).stream),
+                                                              (**connection).nextWireRequest,
+                                                              (**connection).operationId),
+                                rpc::Json::object(), [receiver, reservation] {
+                                    return receiver && receiver->m_impl->luaReservation == reservation &&
+                                           receiver->m_impl->workbench.canStartLuaDebug();
+                                });
+                            if (!receiver)
+                                return;
+                            auto& liveImpl = *receiver->m_impl;
+                            if (liveImpl.luaReservation != reservation) {
+                                if (attached && liveImpl.workbench.m_debug->sessionGeneration() == expectedSession)
+                                    liveImpl.workbench.m_debug->stop();
+                                return;
+                            }
+                            if (!attached) {
+                                liveImpl.current.reset();
+                                liveImpl.releaseLua(reservation);
+                                liveImpl.status->setText(qs(attached.error().message()));
+                                liveImpl.stopLuaEndpoint(root, endpointId);
+                                return;
+                            }
+                            // attachTarget emits stateChanged synchronously. Cancellation or a project change
+                            // may therefore have occurred before it returned and before readiness is subscribed.
+                            if (liveImpl.luaReservation != reservation || liveImpl.current != state ||
+                                !state->active.load() || liveImpl.workbench.projectRoot() != root ||
+                                !liveImpl.workbench.m_services.trust.isTrusted(root) ||
+                                liveImpl.workbench.m_debug->sessionGeneration() != expectedSession) {
+                                if (liveImpl.workbench.m_debug->sessionGeneration() == expectedSession)
+                                    liveImpl.workbench.m_debug->stop();
+                                if (liveImpl.current == state)
+                                    liveImpl.current.reset();
+                                liveImpl.releaseLua(reservation);
+                                liveImpl.stopLuaEndpoint(root, endpointId);
+                                return;
+                            }
+                            auto pending = std::make_shared<LuaPending>();
+                            pending->request = state;
+                            pending->root = root;
+                            pending->endpointId = endpointId;
+                            pending->sessionGeneration = expectedSession;
+                            pending->connectionGeneration = (**connection).connectionGeneration;
+                            pending->operationId = (**connection).operationId;
+                            liveImpl.luaPending = pending;
+                            liveImpl.releaseLua(reservation); // Admission/UI notifications are queued.
+                            if (!receiver)
+                                return;
+                            auto& readyImpl = *receiver->m_impl;
+                            if (readyImpl.luaPending != pending || !pending->request->active.load() ||
+                                readyImpl.workbench.projectRoot() != pending->root ||
+                                !readyImpl.workbench.m_services.trust.isTrusted(pending->root) ||
+                                !readyImpl.workbench.m_debug ||
+                                readyImpl.workbench.m_debug->sessionGeneration() != pending->sessionGeneration) {
+                                if (readyImpl.luaPending == pending)
+                                    readyImpl.cancel(false); // Only the matching generation may be stopped.
+                                return;
+                            }
+                            auto ready = [receiver, pending] {
+                                if (!receiver)
+                                    return;
+                                auto& ownerImpl = *receiver->m_impl;
+                                if (ownerImpl.luaPending != pending)
+                                    return;
+                                const bool sameSession =
+                                    ownerImpl.workbench.m_debug &&
+                                    ownerImpl.workbench.m_debug->sessionGeneration() == pending->sessionGeneration;
+                                if (!sameSession) {
+                                    if (pending->playRequested && !pending->playSettled)
+                                        return;
+                                    if (pending->stopRequested && !pending->stopCompleted) {
+                                        ownerImpl.status->setText(QStringLiteral("Lua play stop outcome is unknown"));
+                                        return;
+                                    }
+                                    if (ownerImpl.current == pending->request)
+                                        ownerImpl.current.reset();
+                                    pending->cleanupPending = true;
+                                    ownerImpl.drainLuaCleanup();
+                                    return;
+                                }
+                                if (!pending->request->active.load() ||
+                                    ownerImpl.workbench.projectRoot() != pending->root ||
+                                    !ownerImpl.workbench.m_services.trust.isTrusted(pending->root)) {
+                                    ownerImpl.cancel(false);
+                                    return;
+                                }
+                                if (pending->playRequested ||
+                                    ownerImpl.workbench.m_debug->state() != debug::DebugState::Running)
+                                    return;
+                                pending->playRequested = true;
+                                if (ownerImpl.current == pending->request)
+                                    ownerImpl.current.reset();
+                                ownerImpl.run(
+                                    "script.debug.play", {}, 0,
+                                    lang::Json::object()
+                                        .set("endpointId", pending->endpointId)
+                                        .set("connectionGeneration", pending->connectionGeneration)
+                                        .set("operationId", pending->operationId),
+                                    [receiver, pending](Result<lang::Json> result) {
+                                        if (!receiver || receiver->m_impl->luaPending != pending)
+                                            return;
+                                        auto& impl = *receiver->m_impl;
+                                        pending->playSettled = true;
+                                        const bool sameSession =
+                                            impl.workbench.m_debug &&
+                                            impl.workbench.m_debug->sessionGeneration() == pending->sessionGeneration;
+                                        if (!sameSession) {
+                                            if (pending->stopRequested && !pending->stopCompleted) {
+                                                impl.status->setText(
+                                                    QStringLiteral("Lua play stop outcome is unknown"));
+                                                return;
+                                            }
+                                            pending->cleanupPending = true;
+                                            impl.drainLuaCleanup();
+                                            return;
+                                        }
+                                        if (!result) {
+                                            const auto code = result.error().code();
+                                            const bool refused = code == ErrorCode::PermissionDenied ||
+                                                                 code == ErrorCode::Untrusted ||
+                                                                 code == ErrorCode::InvalidArgument;
+                                            if (refused) {
+                                                impl.cancel(false);
+                                                impl.status->setText(qs(result.error().message()));
+                                            } else {
+                                                impl.status->setText(QStringLiteral(
+                                                    "Play request outcome is unknown; check FrostEngine state"));
+                                            }
+                                        } else if (!pending->stopRequested) {
+                                            impl.status->setText(QStringLiteral("FrostEngine play started"));
+                                        }
+                                    });
+                            };
+                            pending->ready = QObject::connect(readyImpl.workbench.m_debug.get(),
+                                                              &ui::DebugController::stateChanged, receiver, ready);
+                            pending->terminated = QObject::connect(
+                                readyImpl.workbench.m_debug.get(), &ui::DebugController::adapterTerminated, receiver,
+                                [receiver, pending](std::uint64_t generation) {
+                                    if (receiver && receiver->m_impl->luaPending == pending &&
+                                        generation == pending->sessionGeneration && pending->stopRequested)
+                                        pending->stopCompleted = true;
+                                });
+                            readyImpl.status->setText(QStringLiteral("Lua debugger attached; starting play..."));
+                            ready(); // Covers a synchronous Running or Ended transition before subscription.
+                        },
+                        Qt::QueuedConnection);
+                };
+                impl.tasks.push_back(
+                    {state, impl.workbench.m_pool->spawn(sched::Lane::Background,
+                                                         prepareLua(static_cast<std::uint16_t>(*port), token, root,
+                                                                    &impl.workbench.m_services.trust, state,
+                                                                    std::move(complete)))});
+            });
+        if (receiver && !receiver->m_impl->current)
+            receiver->m_impl->releaseLua(reservation);
+    }
+
+    void stopPlay() {
+        auto pending = luaPending;
+        if (pending && pending->cleanupPending) {
+            drainLuaCleanup();
+            return;
+        }
+        if (!pending) {
+            run("play.stop");
+            return;
+        }
+        if (pending->stopRequested || !workbench.m_debug ||
+            workbench.m_debug->sessionGeneration() != pending->sessionGeneration || !workbench.m_debug->session()) {
+            status->setText(QStringLiteral("Lua play stop is already pending or its outcome is unknown"));
+            return;
+        }
+        pending->stopRequested = true;
+        QPointer<EngineIntegration> receiver(&owner);
+        workbench.m_debug->session()->stopPlay([receiver, pending](Result<rpc::Json> result) mutable {
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(),
+                [receiver, pending, result = std::move(result)]() mutable {
+                    if (!receiver || receiver->m_impl->luaPending != pending)
+                        return;
+                    auto& impl = *receiver->m_impl;
+                    if (!result) {
+                        // A transport failure can follow acceptance; only an explicit adapter
+                        // refusal permits retrying without first reconciling the owned operation.
+                        if (result.error().code() == ErrorCode::Busy ||
+                            result.error().code() == ErrorCode::PermissionDenied ||
+                            result.error().code() == ErrorCode::InvalidArgument) {
+                            pending->stopRequested = false;
+                            impl.status->setText(QStringLiteral("Lua play stop was refused"));
+                        } else {
+                            impl.status->setText(QStringLiteral("Lua play stop outcome is unknown"));
+                        }
+                        return;
+                    }
+                    if (!pending->stopCompleted &&
+                        (!impl.workbench.m_debug ||
+                         impl.workbench.m_debug->sessionGeneration() != pending->sessionGeneration)) {
+                        impl.status->setText(QStringLiteral("Lua play stop outcome is unknown"));
+                        return;
+                    }
+                    impl.status->setText(QStringLiteral("Stopping Lua play..."));
+                },
+                Qt::QueuedConnection);
+        });
     }
 };
 
@@ -320,8 +756,16 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
                                         {"Focus Editor", "editor.focus"}}) {
         auto* button = new QPushButton(QString::fromLatin1(title), panel);
         row->addWidget(button);
-        connect(button, &QPushButton::clicked, this, [this, method] { m_impl->run(method); });
+        connect(button, &QPushButton::clicked, this, [this, method] {
+            if (std::string_view(method) == "play.stop")
+                m_impl->stopPlay();
+            else
+                m_impl->run(method);
+        });
     }
+    auto* luaDebugButton = new QPushButton(QStringLiteral("Debug Lua (experimental)"), panel);
+    row->addWidget(luaDebugButton);
+    connect(luaDebugButton, &QPushButton::clicked, this, [this] { m_impl->startLuaDebug(); });
     auto* cancelButton = new QPushButton(QStringLiteral("Cancel Request"), panel);
     row->addWidget(cancelButton);
     connect(cancelButton, &QPushButton::clicked, this, [this] {
@@ -354,6 +798,12 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
 }
 EngineIntegration::~EngineIntegration() { shutdown(); }
 void EngineIntegration::cancel() { m_impl->cancel(); }
+bool EngineIntegration::luaReservationPending() const noexcept { return m_impl->luaReservation != 0; }
+void EngineIntegration::trustChanged() {
+    if ((m_impl->luaPending && !m_impl->workbench.m_services.trust.isTrusted(m_impl->luaPending->root)) ||
+        (!m_impl->luaPreparingRoot.empty() && !m_impl->workbench.m_services.trust.isTrusted(m_impl->luaPreparingRoot)))
+        m_impl->cancel(false);
+}
 void EngineIntegration::shutdown() {
     if (m_impl->stopped)
         return;

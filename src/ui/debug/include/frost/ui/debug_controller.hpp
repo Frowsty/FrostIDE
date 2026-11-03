@@ -16,7 +16,9 @@
  *
  * Stops. On a stop the frames of the stopped thread load, the selected frame's source opens at its
  * line through hooks.openSource (the workbench's open path) and gets the execution point: a yellow
- * gutter arrow and a highlighted line. A crash or an unhandled exception selects the faulting frame
+ * gutter arrow and a highlighted line. If the adapter supplies a sourceReference, navigation and
+ * marking are refused with a notice until its loaded bytes can be verified or shown separately.
+ * A crash or an unhandled exception selects the faulting frame
  * (the first one with a source) and is reported in the tool window and as a notification
  * (hooks.notify).
  *
@@ -130,6 +132,10 @@ public:
                        debug::AdapterFactory factory, std::function<bool(const debug::DebugFrame&)> frameAllowed = {},
                        std::vector<std::string> allowedSources = {},
                        std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint = {});
+    // Attach to an existing host using a preconnected adapter. Trust is checked again here; Stop
+    // disconnects the adapter without terminating that host.
+    [[nodiscard]] Result<void> attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
+                                            rpc::Json attachArguments, std::function<bool()> ownerAdmission = {});
 
     // Whether a session is live (Starting, Running or Stopped).
     [[nodiscard]] bool debugging() const noexcept {
@@ -144,6 +150,8 @@ public:
     void cancelRerun();
     [[nodiscard]] bool rerunPending() const noexcept { return m_rerunPending; }
     [[nodiscard]] debug::DebugState state() const noexcept { return m_state; }
+    // Changes on every session start and end; use to reject stale asynchronous work.
+    [[nodiscard]] std::uint64_t sessionGeneration() const noexcept { return m_generation; }
     [[nodiscard]] bool paused() const noexcept { return m_state == debug::DebugState::Stopped; }
     [[nodiscard]] const std::optional<debug::StopInfo>& stopInfo() const noexcept { return m_stop; }
     // "Paused on breakpoint", "Exception: ..." while paused; "Running"; "" without a session.
@@ -194,6 +202,8 @@ public:
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
 
 signals:
+    // Adapter-confirmed termination, tagged with the session that emitted it.
+    void adapterTerminated(std::uint64_t generation);
     // Started, paused, resumed or ended (the toolbar's enabled states).
     void stateChanged();
     // A stop: its summary, and whether it is a crash or an unhandled exception.
@@ -202,6 +212,8 @@ signals:
     void framesChanged();
     // The selected frame changed (the Variables view reloads; watches are evaluated again).
     void frameSelected();
+    // Exact adapter-owned source for the selected frame; empty name clears the read-only view.
+    void loadedSourceChanged(const QString& name, const QString& content, int line);
     // The session ended: why, in one line ("Process finished with exit code 0").
     void sessionEnded(const QString& summary);
     // Evaluate Expression (Alt+F8) was asked for, with the editor's selection as the expression.
@@ -226,13 +238,14 @@ private:
     void onBreakpointsChanged(std::string_view path, debug::BreakpointManager::Change change);
     void refreshMarkers(EditorView& view);
     void showExecutionPoint();
+    void clearLoadedSource();
     void save();
     bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
 
     [[nodiscard]] Result<debug::AdapterFactory> adapterFactory();
     using SessionStarter = std::function<Result<std::unique_ptr<debug::DebugSession>>(debug::DebugSessionCallbacks)>;
     [[nodiscard]] Result<void> startSession(std::string title, std::string program, std::string adapterName,
-                                            SessionStarter starter);
+                                            SessionStarter starter, bool attach = false);
     bool report(Result<void> result, const QString& what);
     void endSession();
 
@@ -256,8 +269,11 @@ private:
     bool m_alternatePending = false;
     bool m_shutdown = false;
     bool m_rerunPending = false;
+    bool m_rerunAllowed = true;
     QTimer m_rerunTimer;
     std::uint64_t m_generation = 0; // Bumped per session; stale events are dropped.
+    std::uint64_t m_sourceEpoch = 0;
+    bool m_sourceEpochExhausted = false;
     std::optional<build::RunId> m_pendingRun;
     QString m_title;
     debug::DebugState m_state = debug::DebugState::Ended;

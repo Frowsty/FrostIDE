@@ -3,6 +3,51 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Experimental Lua ownership and paused-main Stop verified
+
+- Behavioral source tree `61929ebf` integrates authenticated Lua discovery/session startup,
+  captured stack/source navigation, pause/continue and owned play Stop with the Settings/split-editor
+  checkpoint. Launch reservations cover discovery and are rechecked after reentrant callbacks;
+  build, CMake configuration, project editing and managed preparation share admission guards.
+  Astra reviewed the join and its lifetime/admission corrections. The final documentation changes
+  describe this bounded behavior; breakpoints, variable inspection, evaluation and stepping remain open.
+- Windows quick verification exited zero: 2918/2941 active tests, 23 skipped and one additional
+  disabled; formatting, lint, licences and feature checks passed. Linux incremental full build/test
+  and licence verification exited zero: 2771/2808, 37 skipped, 99 packages without violations.
+  Logs: `build/verify-managed-main-20261103-145554.log` and
+  `build/verify-lua-gui-r4-native-retry.log`; exact CTest logs are
+  `build/lua-gui-r4-windows-ctest.log` and `build/lua-gui-r4-native-ctest.log`.
+- Initial native builds exposed socket-length signedness errors, corrected with platform-specific
+  length types. The first complete Windows and Linux runs then failed the launch-refusal fixture.
+  A diagnostic replay recorded an ambient LuaLS launch attempt before the button and the same record
+  after it (`launched=false`). Private missing C#/Lua server paths isolate the fixture while retaining
+  both refusal assertions; failure-only executable diagnostics were added. Original failures and
+  diagnostic logs remain preserved. The initial R4 native wrapper used a nonexistent preset and
+  failed before building; the corrected wrapper and terminal results are recorded separately.
+- Real FrostEngine acceptance uses archived engine tree `b3476171` and an archived `61929ebf` test
+  binary/runtime in `E:\FrostBuilds\lua-debug\accepted-61929-test-bin`. A fresh Unicode scratch project,
+  private desktop/config/discovery and the actual workbench verify paused-main Stop, Ended, cleanup,
+  host Edit state and owned FrostEditor window-close exit zero. Astra independently matched all 12
+  hashes and the invocation in `real-lua-stop-combined-61929-1-manifest.json`; the test passed 1/1.
+  The app library and staged product bytes are unchanged from the earlier `64bd31e7` host run;
+  the only later behavioral-tree delta isolated the unrelated fixture. Canonical engine sources
+  were not changed. Running/coroutine Stop and full Lua debugging remain unfinished.
+- Preview `E:\FrostBuilds\preview\codex-20261103-lua-stop` retains startup, D3D11 and ConPTY smoke
+  evidence and app DLL SHA-256 `f35261d8a46369164a4883e98344b768430a579d9d635eb7d6f06347e9181d9c`.
+  It includes the verified Settings and split editors. This checkpoint does not establish U1 or
+  complete C++, Lua, Unity or FrostEngine acceptance.
+- Separate updater work targets the selected GitHub Releases repository. Bounded authenticated
+  release selection, final-buffer download verification, durable release floors and cancellable
+  progress UI have Astra source review. Native standalone components pass 24 tests with one child
+  skip, core tests pass 5/5, and Windows standalone components pass 28 with one child skip; actual
+  independent-process state checks pass on both platforms. Windows commit-sharing failure preserves
+  the previous floor. These use existing engine libsodium archives and are not full updater gates.
+  Its pinned Windows dependency build is still being corrected; original failures are retained.
+  Installer handoff, real package acceptance, production signing and full product verification remain.
+- Next: finish updater packaging/handoff, then continue the isolated CMake writer, Rename, evaluated
+  project trees and Unity Mono work. Terra remains quota-limited; root continues implementation with
+  Astra verification. Missing features remain implementation work, not deferred hardening.
+
 ## 2026-11-03: Settings and split editors verified
 
 - Combined source tree `d77c8452` adds a searchable application Settings dialog with Apply,

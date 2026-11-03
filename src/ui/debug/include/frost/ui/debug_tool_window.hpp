@@ -20,6 +20,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListView;
+class QPlainTextEdit;
 class QTabWidget;
 class QToolBar;
 class QTreeView;
@@ -85,6 +86,8 @@ private:
     QTabWidget* m_tabs = nullptr;
     QComboBox* m_threads = nullptr;
     QListView* m_framesView = nullptr;
+    QLabel* m_loadedLabel = nullptr;
+    QPlainTextEdit* m_loadedSource = nullptr;
     QTreeView* m_variablesView = nullptr;
     QTreeView* m_watchesView = nullptr;
     QLineEdit* m_watchInput = nullptr;

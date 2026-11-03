@@ -34,5 +34,7 @@ frost_add_library(debug LAYER debug
         src/debug_session.cpp
         src/fake_debug_adapter.cpp
         src/lldb_dap.cpp
+        src/lua_debug_adapter.cpp
+        src/lua_debug_endpoint.cpp
     DEPS frost::rpc frost::project frost::settings frost::text frost::io frost::core)
 target_compile_definitions(frost_debug PRIVATE FROST_PINNED_LLDB_VERSION="${_frost_lldb_version}")

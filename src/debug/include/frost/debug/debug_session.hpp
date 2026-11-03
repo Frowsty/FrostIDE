@@ -25,7 +25,8 @@
  * breakpoint that bound when its module loaded) too. runToLine adds a temporary breakpoint, continues
  * and removes it at the next stop.
  *
- * The end. stop() sends disconnect with terminateDebuggee; the terminated event also leads to
+ * The end. stop() sends disconnect, terminating launched debuggees and detaching from attached ones;
+ * the terminated event also leads to
  * disconnect; once the adapter answers (or exits) the client is closed. kill() closes it at once (the
  * process transport ends lldb-dap's whole tree, the debuggee with it). onEnded runs once, with the
  * debuggee's exit code when an exited event came and an error when the adapter failed or vanished.
@@ -58,6 +59,9 @@ using AdapterFactory = std::function<Result<std::unique_ptr<IDebugAdapterClient>
 
 enum class DebugState : std::uint8_t { Starting, Running, Stopped, Ended };
 
+// An attached process remains owned by its host when the session ends.
+enum class DebugTargetMode : std::uint8_t { Launch, Attach };
+
 // "Starting", "Running", "Stopped" or "Ended".
 [[nodiscard]] std::string_view toString(DebugState state) noexcept;
 
@@ -88,14 +92,15 @@ struct DebugThread {
 struct DebugFrame {
     std::int64_t id = 0;
     std::string name;
-    std::string path;       // The source file; "" without one.
-    std::string sourceName; // Its file name.
-    std::int64_t line = 0;  // 1-based; 0 without a source position.
+    std::string path;                 // The source file; "" without one.
+    std::string sourceName;           // Its file name.
+    std::int64_t sourceReference = 0; // Adapter-owned loaded source; 0 means a disk path.
+    std::int64_t line = 0;            // 1-based; 0 without a source position.
     std::int64_t column = 0;
     std::string module;
     bool subtle = false; // presentationHint "subtle" or "label".
 
-    [[nodiscard]] bool hasSource() const noexcept { return !path.empty() && line > 0; }
+    [[nodiscard]] bool hasSource() const noexcept { return (!path.empty() || sourceReference > 0) && line > 0; }
 };
 
 // The frames of one thread loaded so far.
@@ -145,6 +150,7 @@ struct DebugSessionCallbacks {
     std::function<void(const std::vector<BreakpointResult>& results)> onBreakpoints{};
     std::function<void(int exitCode)> onExited{};
     std::function<void(const DebugOutcome& outcome)> onEnded{};
+    std::function<void()> onTerminated{};
 };
 
 class DebugSession {
@@ -156,13 +162,18 @@ public:
      * Creates the adapter client through `factory` and sends initialize; the launch request carries
      * `launchArguments` as they are (lldbDapLaunchArguments builds them). `breakpoints` are the lines
      * per source to configure; `adapterId` identifies the adapter in initialize. A factory error
-     * ends the session at once (onEnded with the error, and
-     * the session is returned in state Ended).
+     * ends the session at once (onEnded with the error, and the session is returned in state Ended).
+     * `targetMode` selects launch ownership or a nonterminating attach.
      */
     [[nodiscard]] static std::unique_ptr<DebugSession>
     start(AdapterFactory factory, rpc::Json launchArguments,
           std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-          bool breakOnAbort = false, std::string adapterId = "lldb-dap");
+          bool breakOnAbort = false, std::string adapterId = "lldb-dap",
+          DebugTargetMode targetMode = DebugTargetMode::Launch);
+    [[nodiscard]] static std::unique_ptr<DebugSession>
+    start(AdapterFactory factory, rpc::Json launchArguments,
+          std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+          bool breakOnAbort, DebugTargetMode targetMode);
 
     // Closes the client (kill()) without running callbacks; joins the client's threads.
     ~DebugSession();
@@ -201,6 +212,9 @@ public:
     using ScopesDone = std::function<void(Result<ScopeList>)>;
     using VariablesDone = std::function<void(Result<VariableList>)>;
     using EvaluateDone = std::function<void(Result<dap::Variable>)>;
+    using SourceDone = std::function<void(Result<std::string>)>;
+    // Retrieves the adapter-owned bytes for a stopped source reference; stale stops return Cancelled.
+    std::int64_t source(std::int64_t sourceReference, SourceDone done);
     // The scopes of frame `frameId`. Returns the request's seq (for cancel), 0 when not sent.
     std::int64_t scopes(std::int64_t frameId, ScopesDone done);
     // The children of `variablesReference`; `count` 0 asks for all, else `start`.. `start + count`.
@@ -209,10 +223,15 @@ public:
     // "hover"); the result is a Variable named after the expression.
     std::int64_t evaluate(std::string expression, std::optional<std::int64_t> frameId, std::string context,
                           EvaluateDone done);
-    // Cancels a scopes, variables or evaluate request (its completion runs with Cancelled).
+    // Cancels a source, scopes, variables or evaluate request (its completion runs with Cancelled).
     void cancel(std::int64_t seq);
 
-    // Ends the debuggee and the adapter politely (disconnect with terminateDebuggee). Idempotent.
+    // Requests the Lua adapter to stop its owned play operation. Completion reports admission;
+    // the terminated event reports completion separately.
+    using StopPlayDone = std::function<void(Result<rpc::Json>)>;
+    std::int64_t stopPlay(StopPlayDone done);
+
+    // Ends the session politely; an attached debuggee is not terminated. Idempotent.
     void stop();
     // Ends the adapter's process tree now. Idempotent.
     void kill();

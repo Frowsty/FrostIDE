@@ -481,6 +481,66 @@ TEST_F(DebugSessionTest, BreakpointsChangeDuringTheSessionAndRunToLineUsesATempo
     }
 }
 
+TEST_F(DebugSessionTest, LoadedSourceResponseExpiresWhenExecutionResumes) {
+    start(FakeProgram{.codeLines = {10}, .runsForever = true}, {{kSource, {{1, 10}}}});
+    waitForStop(1);
+    adapter.on("source", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.respond = false}; });
+    auto completion = std::make_shared<std::promise<Result<std::string>>>();
+    auto future = completion->get_future();
+    ASSERT_NE(
+        session->source(91, [completion](Result<std::string> result) { completion->set_value(std::move(result)); }), 0);
+    ASSERT_TRUE(adapter.waitForRequest("source"));
+    const auto requests = adapter.requests();
+    const auto request =
+        std::ranges::find_if(requests, [](const rpc::Json& value) { return value.stringAt("command") == "source"; });
+    ASSERT_NE(request, requests.end());
+    const auto seq = request->integerAt("seq");
+    ASSERT_TRUE(seq);
+    ASSERT_TRUE(session->continueRun());
+    ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
+    adapter.sendRaw(rpc::encodeFrame(rpc::Json::object()
+                                         .set("seq", 999)
+                                         .set("type", "response")
+                                         .set("request_seq", *seq)
+                                         .set("command", "source")
+                                         .set("success", true)
+                                         .set("body", rpc::Json::object().set("content", "old revision"))
+                                         .dump()));
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    auto result = future.get();
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
+}
+
+TEST_F(DebugSessionTest, AttachedSessionDisconnectsWithoutTerminatingTheHost) {
+    scriptProgram(adapter, FakeProgram{.codeLines = {10}, .runsForever = true});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}}; });
+    session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, recorder.callbacks(), false,
+                                  DebugTargetMode::Attach);
+    ASSERT_TRUE(adapter.waitForRequest("attach"));
+    session->stop();
+    ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
+    const auto disconnects = adapter.argumentsOf("disconnect");
+    ASSERT_EQ(disconnects.size(), 1U);
+    EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+    EXPECT_TRUE(adapter.argumentsOf("launch").empty());
+}
+
+TEST_F(DebugSessionTest, FailedAttachDoesNotTerminateTheHost) {
+    scriptProgram(adapter, FakeProgram{});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.success = false, .message = "refused"}; });
+    session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, recorder.callbacks(), false,
+                                  DebugTargetMode::Attach);
+    ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
+    const auto disconnects = adapter.argumentsOf("disconnect");
+    ASSERT_EQ(disconnects.size(), 1U);
+    EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+    ASSERT_TRUE(session->outcome().has_value());
+    EXPECT_TRUE(session->outcome()->error.has_value());
+}
+
 TEST_F(DebugSessionTest, StopDisconnectsAndTerminatesTheDebuggee) {
     start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
     waitForStop(1);

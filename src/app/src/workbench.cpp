@@ -245,6 +245,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                 startManaged(m_projectRoot);
             } else {
                 invalidateManagedDebug();
+                if (m_engine)
+                    m_engine->trustChanged();
                 stopLua();
                 stopManaged();
             }
@@ -320,6 +322,7 @@ Workbench::~Workbench() {
 
 void Workbench::createBuildService() {
     m_build = std::make_unique<ui::BuildController>();
+    m_build->setBuildAdmission([this] { return !m_engine || !m_engine->luaReservationPending(); });
     const auto snapshot = m_services.settings.snapshot();
     build::BuildServiceOptions options;
     options.stateFilePath = m_options.buildStatePath;
@@ -355,7 +358,7 @@ void Workbench::createRunService() {
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
     hooks.mayRun = [this] {
-        return !m_buildService->projectEditInProgress() &&
+        return (!m_engine || !m_engine->luaReservationPending()) && !m_buildService->projectEditInProgress() &&
                (!m_debug || (!m_debug->debugging() && !m_debug->rerunPending()));
     };
     hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
@@ -404,8 +407,8 @@ void Workbench::createRunService() {
     };
     debugHooks.alternateAvailable = [this] { return m_cmake != nullptr; };
     debugHooks.mayStart = [this] {
-        return !m_buildService->projectEditInProgress() && !m_runController->running() &&
-               m_runService->activeRuns().empty() &&
+        return (!m_engine || !m_engine->luaReservationPending()) && !m_buildService->projectEditInProgress() &&
+               !m_runController->running() && m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     debugHooks.startAlternate = [this](auto done) { return m_cmake->debug(std::move(done)); };
@@ -430,7 +433,8 @@ void Workbench::createRunService() {
     managedDebug.group = "Debug";
     managedDebug.executesProjectCode = true;
     managedDebug.enabled = [this](const input::ActionContext&) {
-        return !m_projectRoot.empty() && !m_buildService->projectEditInProgress() && m_debug && !m_debug->debugging() &&
+        return (!m_engine || !m_engine->luaReservationPending()) && !m_projectRoot.empty() &&
+               !m_buildService->projectEditInProgress() && m_debug && !m_debug->debugging() &&
                m_managedDebugPreparation && !m_managedDebugPreparation->active() && !m_managedSnapshotJob;
     };
     managedDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startManagedDebug(); };
@@ -438,10 +442,15 @@ void Workbench::createRunService() {
         log::warn(kLog, "managed debug action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
     actionHooks.debugging = [this] {
-        return (m_debug && (m_debug->debugging() || m_debug->rerunPending())) ||
+        return (m_engine && m_engine->luaReservationPending()) ||
+               (m_debug && (m_debug->debugging() || m_debug->rerunPending())) ||
                (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
     };
     actionHooks.stopDebugging = [this] {
+        if (m_engine && m_engine->luaReservationPending()) {
+            m_engine->cancel();
+            return;
+        }
         if ((m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob)
             invalidateManagedDebug();
         if (m_debug)
@@ -462,6 +471,15 @@ void Workbench::createRunService() {
             m_window->toolWindows().show(ui::tool_windows::kRun, false);
         }
     });
+}
+
+bool Workbench::canStartLuaDebug() const {
+    return !m_shutDown && !m_projectRoot.empty() && m_buildService && !m_buildService->projectEditInProgress() &&
+           m_buildService->state() == build::BuildState::Idle &&
+           (!m_cmake || (!m_cmake->running() && m_cmake->service().state() == build::BuildState::Idle)) &&
+           m_runController && !m_runController->running() && m_runService && m_runService->activeRuns().empty() &&
+           m_debug && !m_debug->debugging() && !m_debug->rerunPending() &&
+           (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
 }
 
 void Workbench::registerActions() {

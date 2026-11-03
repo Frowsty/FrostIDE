@@ -272,6 +272,55 @@ TEST_F(ServiceTest, ProjectEditExcludesBuildAndPublishesBeforeRelease) {
     EXPECT_FALSE(service->projectEditInProgress());
 }
 
+TEST_F(ServiceTest, ExternalLaunchReservationExcludesCompetingOperationsByGeneration) {
+    createService();
+    auto first = service->reserveExternalLaunch();
+    ASSERT_TRUE(first);
+    EXPECT_EQ(service->build(BuildAction::Build).error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->beginProjectEdit().error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->reserveRun().error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->setActiveConfiguration(std::size_t{0}).error().code(), ErrorCode::Busy);
+    service->releaseExternalLaunch(*first);
+    auto second = service->reserveExternalLaunch();
+    ASSERT_TRUE(second);
+    EXPECT_NE(*first, *second);
+    service->releaseExternalLaunch(*first);
+    EXPECT_EQ(service->build(BuildAction::Build).error().code(), ErrorCode::Busy);
+    service->releaseExternalLaunch(*second);
+    ASSERT_TRUE(service->beginProjectEdit());
+    EXPECT_EQ(service->reserveExternalLaunch().error().code(), ErrorCode::Busy);
+    service->cancelProjectEdit();
+    ASSERT_TRUE(service->reserveRun());
+    EXPECT_EQ(service->reserveExternalLaunch().error().code(), ErrorCode::Busy);
+    service->releaseRun();
+}
+
+TEST_F(ServiceTest, ExternalOwnerClosesOnlyAfterItsExactChildrenRelease) {
+    createService();
+    auto owner = service->reserveExternalLaunch();
+    ASSERT_TRUE(owner);
+    auto first = service->reserveExternalChild(*owner);
+    auto second = service->reserveExternalChild(*owner);
+    ASSERT_TRUE(first);
+    ASSERT_TRUE(second);
+    EXPECT_NE(*first, *second);
+    service->releaseExternalLaunch(*owner);
+    EXPECT_FALSE(service->reserveExternalChild(*owner));
+    EXPECT_FALSE(service->reserveRun());
+    service->releaseExternalChild(*owner + 1, *first);
+    service->releaseExternalChild(*owner, *first);
+    service->releaseExternalChild(*owner, *first);
+    EXPECT_FALSE(service->reserveExternalLaunch());
+    service->releaseExternalChild(*owner, *second);
+    auto successor = service->reserveExternalLaunch();
+    ASSERT_TRUE(successor);
+    service->releaseExternalChild(*owner, *second);
+    EXPECT_FALSE(service->reserveRun());
+    service->releaseExternalLaunch(*successor);
+    ASSERT_TRUE(service->reserveRun());
+    service->releaseRun();
+}
+
 TEST_F(ServiceTest, DefaultsToTheFirstDebugConfigurationAndPersistsTheChoice) {
     createService();
     EXPECT_EQ(service->configurations().size(), 2U);

@@ -42,6 +42,7 @@
 
 namespace frost::io {
 class IProcess;
+class LoopbackStream;
 } // namespace frost::io
 
 namespace frost::debug {
@@ -78,6 +79,9 @@ protected:
  * has those three pipes.
  */
 [[nodiscard]] std::unique_ptr<IDapTransport> processTransport(std::unique_ptr<io::IProcess> process);
+
+// Takes a non-null, already connected duplex loopback stream. Closing it never terminates the remote host.
+[[nodiscard]] std::unique_ptr<IDapTransport> loopbackTransport(std::unique_ptr<io::LoopbackStream> stream);
 
 // What the adapter sends that the client hands to its owner. Each callback may be empty.
 struct DapHandlers {

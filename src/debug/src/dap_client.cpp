@@ -9,6 +9,7 @@
 #include "frost/core/log.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/debug/dap_types.hpp"
+#include "frost/io/loopback_stream.hpp"
 #include "frost/io/process.hpp"
 #include "frost/rpc/framing.hpp"
 
@@ -97,6 +98,26 @@ public:
 private:
     std::unique_ptr<io::IProcess> m_process;
     std::thread m_stderr;
+    std::atomic<bool> m_closed{false};
+};
+
+class LoopbackTransport final : public IDapTransport {
+public:
+    explicit LoopbackTransport(std::unique_ptr<io::LoopbackStream> stream) : m_stream(std::move(stream)) {}
+    Result<std::size_t> read(std::span<char> buffer) override {
+        auto result = m_stream->read(buffer);
+        if (!result && m_closed.load())
+            return std::size_t{0};
+        return result;
+    }
+    Result<void> write(std::string_view bytes) override { return m_stream->write(bytes); }
+    void close() noexcept override {
+        m_closed.store(true);
+        m_stream->close();
+    }
+
+private:
+    std::unique_ptr<io::LoopbackStream> m_stream;
     std::atomic<bool> m_closed{false};
 };
 
@@ -396,6 +417,10 @@ private:
 };
 
 } // namespace
+
+std::unique_ptr<IDapTransport> loopbackTransport(std::unique_ptr<io::LoopbackStream> stream) {
+    return std::make_unique<LoopbackTransport>(std::move(stream));
+}
 
 std::unique_ptr<IDapTransport> processTransport(std::unique_ptr<io::IProcess> process) {
     return std::make_unique<ProcessTransport>(std::move(process));

@@ -54,6 +54,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace frost::ui {
@@ -139,6 +140,9 @@ public:
 
     // The Save All to run before each build (not owned; must outlive the controller or be reset).
     void setSaveAllHandler(ISaveAllHandler* handler) noexcept { m_saveAll = handler; }
+    // GUI-thread admission gate shared with project-code launch preparation.
+    void setBuildAdmission(std::function<bool()> allowed) { m_buildAdmission = std::move(allowed); }
+    [[nodiscard]] bool buildAdmitted() const { return !m_buildAdmission || m_buildAdmission(); }
 
     /*
      * Opens or closes the solution through the backend, then refreshes the configurations and emits
@@ -174,7 +178,7 @@ public:
     // A build is anywhere between its request and Idle.
     [[nodiscard]] bool isBuilding() const noexcept { return m_state != build::BuildState::Idle; }
     // Build commands may start: a solution is open and no build runs.
-    [[nodiscard]] bool canBuild() const noexcept { return m_hasProject && !isBuilding(); }
+    [[nodiscard]] bool canBuild() const { return m_hasProject && !isBuilding() && buildAdmitted(); }
     [[nodiscard]] const std::vector<std::string>& untrustedRoots() const noexcept { return m_untrusted; }
     [[nodiscard]] const std::vector<build::BuildDiagnostic>& diagnostics() const noexcept { return m_diagnostics; }
     [[nodiscard]] const std::deque<BuildOutputEntry>& currentOutput() const noexcept { return m_output; }
@@ -214,6 +218,7 @@ private:
 
     std::shared_ptr<Relay> m_relay;
     IBuildBackend* m_backend = nullptr;
+    std::function<bool()> m_buildAdmission;
     ISaveAllHandler* m_saveAll = nullptr;
     std::shared_ptr<const project::SolutionModel> m_solution;
     bool m_hasProject = false;

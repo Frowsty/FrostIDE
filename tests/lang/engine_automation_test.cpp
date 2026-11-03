@@ -22,7 +22,15 @@ struct Script {
     std::string liveRoot = kRoot;
     bool malformed = false;
     std::string timeoutMethod;
+    std::string rejectMethod;
+    bool refusePlayAdmission = false;
+    std::string ioFailureMethod;
+    std::string playEndpoint;
+    std::int64_t playGeneration = 0;
     std::function<void()> afterProject;
+    std::string debugInstance = "instance-a";
+    std::function<void()> afterDebugStart;
+    std::string stoppedEndpoint;
 };
 class Fake final : public IEngineConnection {
 public:
@@ -35,6 +43,14 @@ public:
         m_script->methods.emplace_back(method);
         if (method == m_script->timeoutMethod)
             return fail(ErrorCode::Timeout, "simulated timeout");
+        if (method == m_script->ioFailureMethod)
+            return fail(ErrorCode::IoError, "simulated disconnect");
+        if (method == m_script->rejectMethod)
+            return Json::object()
+                .set("jsonrpc", "2.0")
+                .set("id", *request->integerAt("id"))
+                .set("error", Json::object().set("code", -32000))
+                .dump();
         auto result = Json::object();
         if (method == "auth")
             result.set("authenticated", request->find("params")->stringAt("token") == "secret");
@@ -44,6 +60,25 @@ public:
             result.set("directory", m_script->liveRoot);
             if (m_script->afterProject)
                 m_script->afterProject();
+        } else if (method == "script.debug.start") {
+            result.set("host", "127.0.0.1")
+                .set("port", 9011)
+                .set("token", "0123456789abcdef0123456789abcdef")
+                .set("endpointId", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .set("projectPath", kRoot)
+                .set("projectFile", std::string(kRoot) + "/game.frostproj")
+                .set("editorInstanceId", m_script->debugInstance)
+                .set("processId", 77)
+                .set("automationStartedAtMs", 123);
+            if (m_script->afterDebugStart)
+                m_script->afterDebugStart();
+        } else if (method == "script.debug.play") {
+            m_script->playEndpoint = std::string(request->find("params")->stringAt("endpointId"));
+            m_script->playGeneration = request->find("params")->integerAt("connectionGeneration").value_or(0);
+            result.set("admitted", !m_script->refusePlayAdmission).set("state", "Play");
+        } else if (method == "script.debug.stop") {
+            m_script->stoppedEndpoint = std::string(request->find("params")->stringAt("endpointId"));
+            result.set("stopped", true);
         } else
             result.set("state", "Play");
         if (m_script->malformed)
@@ -115,6 +150,68 @@ TEST(EngineAutomation, RefusesRemoteHostUnknownCommandAndMalformedReply) {
                                   deadline()));
     EXPECT_EQ(script->methods.size(), 1);
 }
+TEST(EngineAutomation, DebugEndpointRequiresAuthenticatedMatchingInstanceAndCurrentTrust) {
+    auto script = std::make_shared<Script>();
+    auto doc = discovery()
+                   .set("projectFile", std::string(kRoot) + "/game.frostproj")
+                   .set("editorInstanceId", "instance-a")
+                   .set("processId", 77)
+                   .set("startedAtMs", 123);
+    auto result = runEngineCommand(doc, kRoot, "script.debug.start", Json::object(), same, trusted, connector(script),
+                                   deadline());
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result->integerAt("port"), 9011);
+    script->debugInstance = "other-instance";
+    result = runEngineCommand(doc, kRoot, "script.debug.start", Json::object(), same, trusted, connector(script),
+                              deadline());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+    EXPECT_EQ(script->methods.back(), "script.debug.stop");
+    EXPECT_EQ(script->stoppedEndpoint, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    script->debugInstance = "instance-a";
+    bool permission = true;
+    script->afterDebugStart = [&permission] { permission = false; };
+    result = runEngineCommand(
+        doc, kRoot, "script.debug.start", Json::object(), same, [&permission] { return permission; }, connector(script),
+        deadline());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Untrusted);
+    EXPECT_EQ(script->methods.back(), "script.debug.stop");
+    auto unauthenticated = doc;
+    unauthenticated.set("tokenRequired", false);
+    result = runEngineCommand(unauthenticated, kRoot, "script.debug.start", Json::object(), same, trusted,
+                              connector(script), deadline());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+}
+
+TEST(EngineAutomation, DebugPlayDistinguishesRejectionFromUncertainDisconnect) {
+    auto script = std::make_shared<Script>();
+    auto params = Json::object().set("endpointId", "exact-endpoint").set("connectionGeneration", 7);
+    auto started =
+        runEngineCommand(discovery(), kRoot, "script.debug.play", params, same, trusted, connector(script), deadline());
+    ASSERT_TRUE(started);
+    EXPECT_EQ(script->playEndpoint, "exact-endpoint");
+    EXPECT_EQ(script->playGeneration, 7);
+    script->refusePlayAdmission = true;
+    auto rejected =
+        runEngineCommand(discovery(), kRoot, "script.debug.play", params, same, trusted, connector(script), deadline());
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code(), ErrorCode::PermissionDenied);
+    script->refusePlayAdmission = false;
+    script->rejectMethod = "script.debug.play";
+    auto rpcError =
+        runEngineCommand(discovery(), kRoot, "script.debug.play", params, same, trusted, connector(script), deadline());
+    ASSERT_FALSE(rpcError);
+    EXPECT_EQ(rpcError.error().code(), ErrorCode::IoError);
+    script->rejectMethod.clear();
+    script->ioFailureMethod = "script.debug.play";
+    auto disconnected =
+        runEngineCommand(discovery(), kRoot, "script.debug.play", params, same, trusted, connector(script), deadline());
+    ASSERT_FALSE(disconnected);
+    EXPECT_EQ(disconnected.error().code(), ErrorCode::IoError);
+}
+
 TEST(EngineAutomation, CancellationBeforeDispatchNeverConnects) {
     auto script = std::make_shared<Script>();
     std::stop_source cancel;

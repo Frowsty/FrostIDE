@@ -239,6 +239,13 @@ public:
     [[nodiscard]] bool projectEditInProgress() const;
     [[nodiscard]] Result<void> reserveRun();
     void releaseRun();
+    // Reserve against builds, runs and project edits during an external debugger handoff.
+    // Release is generation-checked, so an old completion cannot release a successor.
+    [[nodiscard]] bool externalLaunchAdmissionBusy() const;
+    [[nodiscard]] Result<std::uint64_t> reserveExternalLaunch();
+    void releaseExternalLaunch(std::uint64_t token);
+    [[nodiscard]] Result<std::uint64_t> reserveExternalChild(std::uint64_t owner);
+    void releaseExternalChild(std::uint64_t owner, std::uint64_t child);
 
     // Cancels the build in progress, if any: before MSBuild starts it ends at once (cancelled);
     // while MSBuild runs, its process tree is ended. Idempotent.

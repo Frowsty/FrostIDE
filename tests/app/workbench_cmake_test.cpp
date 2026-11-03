@@ -241,7 +241,11 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     const auto reopenedRun = rig.workbench->runController()->run();
     ASSERT_TRUE(reopenedRun.has_value()) << reopenedRun.error().describe();
     ASSERT_TRUE(service->waitForIdle(60s)); // The Run completion is still queued on the GUI thread.
+    EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch());
     rig.workbench->shutdown();
+    auto afterShutdown = rig.workbench->buildService().reserveExternalLaunch();
+    ASSERT_TRUE(afterShutdown);
+    rig.workbench->buildService().releaseExternalLaunch(*afterShutdown);
     QCoreApplication::processEvents();
     EXPECT_FALSE(rig.workbench->runController()->running());
     EXPECT_FALSE(rig.workbench->runConsole()->text().contains(QStringLiteral("cmake works")));
@@ -399,8 +403,12 @@ TEST(WorkbenchCMake, ShutdownWhileDebugBuildWaitsForSaveDoesNotLaunch) {
             return static_cast<bool>(held);
         },
         30s));
+    EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch());
     EXPECT_FALSE(rig.workbench->closeProject());
     rig.workbench->shutdown();
+    auto admission = rig.workbench->buildService().reserveExternalLaunch();
+    ASSERT_TRUE(admission);
+    rig.workbench->buildService().releaseExternalLaunch(*admission);
     {
         std::lock_guard guard(mutex);
         held({});
@@ -426,10 +434,15 @@ TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {
     ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
     ASSERT_TRUE(displayedTarget(rig, QStringLiteral("stop")));
     ASSERT_TRUE(rig.workbench->runController()->run().has_value());
+    EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch()); // Pending build and handoff.
     ASSERT_TRUE(waitFor([&] { return rig.workbench->runConsole()->text().contains(QStringLiteral("started")); }, 240s));
+    EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch()); // Live target process.
     ASSERT_TRUE(rig.workbench->runController()->running());
     rig.workbench->shutdown();
     EXPECT_FALSE(rig.workbench->runController()->running());
+    auto admission = rig.workbench->buildService().reserveExternalLaunch();
+    ASSERT_TRUE(admission);
+    rig.workbench->buildService().releaseExternalLaunch(*admission);
     auto refused = rig.workbench->runController()->run();
     ASSERT_FALSE(refused.has_value());
     EXPECT_EQ(refused.error().code(), frost::ErrorCode::Cancelled);

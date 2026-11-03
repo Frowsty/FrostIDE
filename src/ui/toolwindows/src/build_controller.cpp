@@ -228,6 +228,11 @@ Result<void> BuildController::setActiveConfiguration(std::size_t index) {
 }
 
 Result<void> BuildController::build(build::BuildAction action, std::optional<project::ProjectId> project) {
+    if (!buildAdmitted()) {
+        auto blocked = fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        reportFailure(blocked.error());
+        return blocked;
+    }
     if (m_backend == nullptr) {
         return fail(ErrorCode::InvalidArgument, "no build service is bound");
     }

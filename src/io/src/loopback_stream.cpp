@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <utility>
@@ -35,13 +36,16 @@ void closeSocket(Socket socket) { closesocket(socket); }
 using Socket = int;
 constexpr Socket kInvalid = -1;
 int lastError() { return errno; }
-bool pending(int code) { return code == EAGAIN || code == EWOULDBLOCK || code == EINPROGRESS || code == EALREADY; }
+bool pending(int code) {
+    return code == EAGAIN || code == EWOULDBLOCK || code == EINPROGRESS || code == EALREADY || code == EINTR;
+}
 void closeSocket(Socket socket) { close(socket); }
 #endif
 } // namespace
 
 struct LoopbackStream::Impl {
     Socket socket = kInvalid;
+    std::atomic<bool> closed{false};
     Deadline deadline;
     std::stop_token stop;
     std::string buffered;
@@ -58,6 +62,8 @@ struct LoopbackStream::Impl {
     }
     Result<void> ready(bool write) {
         for (;;) {
+            if (closed.load())
+                return fail(ErrorCode::Cancelled, "loopback stream closed");
             if (stop.stop_requested())
                 return fail(ErrorCode::Cancelled, "loopback request cancelled");
             const auto now = std::chrono::steady_clock::now();
@@ -138,6 +144,63 @@ Result<std::unique_ptr<LoopbackStream>> LoopbackStream::connect(std::uint16_t po
     return std::unique_ptr<LoopbackStream>(new LoopbackStream(std::move(impl)));
 }
 
+Result<std::unique_ptr<LoopbackStream>> LoopbackStream::connectDuplex(std::uint16_t port, Deadline deadline) {
+    auto stream = connect(port, deadline);
+    if (!stream)
+        return std::unexpected(std::move(stream.error()));
+    (*stream)->beginDuplex();
+    return stream;
+}
+
+void LoopbackStream::beginDuplex() noexcept { m_impl->deadline = Deadline::max(); }
+
+Result<std::size_t> LoopbackStream::read(std::span<char> buffer) {
+    if (buffer.empty())
+        return std::size_t{0};
+    for (;;) {
+        if (auto ready = m_impl->ready(false); !ready)
+            return std::unexpected(std::move(ready.error()));
+        const auto size = std::min<std::size_t>(buffer.size(), 65536);
+#ifdef _WIN32
+        const int count = recv(m_impl->socket, buffer.data(), static_cast<int>(size), 0);
+#else
+        const auto count = recv(m_impl->socket, buffer.data(), size, 0);
+#endif
+        if (count >= 0)
+            return static_cast<std::size_t>(count);
+        if (!pending(lastError()))
+            return fail(ErrorCode::IoError, "loopback receive failed");
+    }
+}
+
+Result<void> LoopbackStream::write(std::string_view bytes) {
+    while (!bytes.empty()) {
+        if (auto ready = m_impl->ready(true); !ready)
+            return std::unexpected(std::move(ready.error()));
+        const auto size = std::min<std::size_t>(bytes.size(), 65536);
+#ifdef _WIN32
+        const int count = send(m_impl->socket, bytes.data(), static_cast<int>(size), 0);
+#else
+        const auto count = send(m_impl->socket, bytes.data(), size, MSG_NOSIGNAL);
+#endif
+        if (count > 0)
+            bytes.remove_prefix(static_cast<std::size_t>(count));
+        else if (count == 0 || !pending(lastError()))
+            return fail(ErrorCode::IoError, "loopback send failed");
+    }
+    return {};
+}
+
+void LoopbackStream::close() noexcept {
+    if (m_impl->closed.exchange(true))
+        return;
+#ifdef _WIN32
+    shutdown(m_impl->socket, SD_BOTH);
+#else
+    shutdown(m_impl->socket, SHUT_RDWR);
+#endif
+}
+
 Result<std::string> LoopbackStream::exchange(std::string_view line, std::size_t maxReplyBytes) {
     if (line.size() > kMaxLine || maxReplyBytes == 0 || maxReplyBytes > kMaxLine ||
         line.find('\n') != std::string_view::npos)
@@ -173,7 +236,11 @@ Result<std::string> LoopbackStream::exchange(std::string_view line, std::size_t 
         if (auto ready = m_impl->ready(false); !ready)
             return std::unexpected(std::move(ready.error()));
         std::array<char, 4096> bytes{};
-        const auto count = recv(m_impl->socket, bytes.data(), static_cast<int>(bytes.size()), 0);
+#ifdef _WIN32
+        const int count = recv(m_impl->socket, bytes.data(), static_cast<int>(bytes.size()), 0);
+#else
+        const auto count = recv(m_impl->socket, bytes.data(), bytes.size(), 0);
+#endif
         if (count > 0)
             m_impl->buffered.append(bytes.data(), static_cast<std::size_t>(count));
         else if (count == 0 || !pending(lastError()))

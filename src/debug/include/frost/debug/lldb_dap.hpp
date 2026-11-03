@@ -100,4 +100,11 @@ struct DebugTarget {
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks);
 
+// Starts an already-running target using an explicitly supplied adapter and attach arguments.
+// The same trusted-root and absolute target checks apply; disconnect never terminates the host.
+[[nodiscard]] Result<std::unique_ptr<DebugSession>>
+attachDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
+                   rpc::Json attachArguments, std::map<std::string, std::vector<BreakpointLine>> breakpoints,
+                   DebugSessionCallbacks callbacks);
+
 } // namespace frost::debug
