@@ -13,10 +13,15 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QSplitter>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -69,9 +74,9 @@ void EditorTabBar::contextMenuEvent(QContextMenuEvent* event) {
     }
 }
 
-EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
+EditorTabGroup::EditorTabGroup(IEditorFactory& factory, QWidget* parent)
     : QWidget(parent), m_factory(factory), m_bar(new EditorTabBar(this)), m_listButton(new QToolButton(this)),
-      m_stack(new QStackedWidget(this)), m_empty(new QLabel(m_stack)) {
+      m_closeGroupButton(new QToolButton(this)), m_stack(new QStackedWidget(this)), m_empty(new QLabel(m_stack)) {
     setObjectName(QStringLiteral("editorTabs"));
     m_listButton->setObjectName(QStringLiteral("tabListButton"));
     m_listButton->setAutoRaise(true);
@@ -79,7 +84,7 @@ EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
     m_listButton->setPopupMode(QToolButton::InstantPopup);
     const QIcon chevron = shell_detail::themedIcon(icons::kNavChevronDown);
     if (chevron.isNull()) {
-        m_listButton->setText(QStringLiteral("▾"));
+        m_listButton->setText(QStringLiteral("â–¾"));
     } else {
         m_listButton->setIcon(chevron);
     }
@@ -88,6 +93,17 @@ EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
     connect(listMenu, &QMenu::aboutToShow, this, [this, listMenu] { populateTabList(*listMenu); });
     m_listButton->setMenu(listMenu);
     m_listButton->hide();
+    m_closeGroupButton->setObjectName(QStringLiteral("closeEditorGroup"));
+    const QIcon closeIcon = shell_detail::themedIcon(icons::kActionsClose);
+    if (closeIcon.isNull())
+        m_closeGroupButton->setText(QStringLiteral("x"));
+    else
+        m_closeGroupButton->setIcon(closeIcon);
+    m_closeGroupButton->setToolTip(text("Close Editor Group"));
+    m_closeGroupButton->setAccessibleName(text("Close Editor Group"));
+    m_closeGroupButton->setAutoRaise(true);
+    m_closeGroupButton->hide();
+    connect(m_closeGroupButton, &QToolButton::clicked, this, &EditorTabGroup::closeGroupRequested);
 
     // The empty state names the way in (the M0 window's placeholder label keeps its object name).
     m_empty->setObjectName(QStringLiteral("placeholder"));
@@ -100,6 +116,7 @@ EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
     strip->setSpacing(0);
     strip->addWidget(m_bar, 1);
     strip->addWidget(m_listButton);
+    strip->addWidget(m_closeGroupButton);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
@@ -107,12 +124,12 @@ EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
     layout->addWidget(m_stack, 1);
     m_bar->hide();
 
-    connect(m_bar, &QTabBar::currentChanged, this, &EditorTabs::onBarCurrentChanged);
+    connect(m_bar, &QTabBar::currentChanged, this, &EditorTabGroup::onBarCurrentChanged);
     connect(m_bar, &QTabBar::tabCloseRequested, this, [this](int index) { static_cast<void>(close(index)); });
-    connect(m_bar, &EditorTabBar::contextMenuRequested, this, &EditorTabs::showContextMenu);
+    connect(m_bar, &EditorTabBar::contextMenuRequested, this, &EditorTabGroup::showContextMenu);
 }
 
-EditorTabs::~EditorTabs() {
+EditorTabGroup::~EditorTabGroup() {
     // Views delete their widgets; take them out of the stack first so the stack never sees a
     // dangling child.
     for (Tab& tab : m_tabs) {
@@ -123,7 +140,7 @@ EditorTabs::~EditorTabs() {
     }
 }
 
-Result<int> EditorTabs::open(const std::string& requested, bool activateTab) {
+Result<int> EditorTabGroup::open(const std::string& requested, bool activateTab) {
     const std::string path = m_factory.canonicalPath(requested);
     if (const int existing = indexOf(path); existing >= 0) {
         if (activateTab) {
@@ -146,7 +163,7 @@ Result<int> EditorTabs::open(const std::string& requested, bool activateTab) {
     return index;
 }
 
-void EditorTabs::setEmptyStateWidget(QWidget* widget) {
+void EditorTabGroup::setEmptyStateWidget(QWidget* widget) {
     if (widget != nullptr && m_stack->indexOf(widget) < 0) {
         m_stack->addWidget(widget);
     }
@@ -156,13 +173,13 @@ void EditorTabs::setEmptyStateWidget(QWidget* widget) {
     }
 }
 
-QWidget* EditorTabs::emptyStateWidget() const noexcept {
+QWidget* EditorTabGroup::emptyStateWidget() const noexcept {
     return m_emptyWidget != nullptr ? m_emptyWidget : static_cast<QWidget*>(m_empty);
 }
 
-int EditorTabs::currentIndex() const { return m_tabs.empty() ? -1 : m_bar->currentIndex(); }
+int EditorTabGroup::currentIndex() const { return m_tabs.empty() ? -1 : m_bar->currentIndex(); }
 
-int EditorTabs::indexOf(const std::string& path) const {
+int EditorTabGroup::indexOf(const std::string& path) const {
     for (int i = 0; i < count(); ++i) {
         if (m_tabs[static_cast<std::size_t>(i)].editor->path() == path) {
             return i;
@@ -179,14 +196,14 @@ int EditorTabs::indexOf(const std::string& path) const {
     return -1;
 }
 
-IEditorView* EditorTabs::editor(int index) const {
+IEditorView* EditorTabGroup::editor(int index) const {
     if (index < 0 || index >= count()) {
         return nullptr;
     }
     return m_tabs[static_cast<std::size_t>(index)].editor.get();
 }
 
-QString EditorTabs::tabText(int index) const {
+QString EditorTabGroup::tabText(int index) const {
     const IEditorView* view = editor(index);
     if (view == nullptr) {
         return {};
@@ -195,7 +212,7 @@ QString EditorTabs::tabText(int index) const {
     return view->status().dirty ? QStringLiteral("*") + name : name;
 }
 
-void EditorTabs::activate(int index) {
+void EditorTabGroup::activate(int index) {
     if (index < 0 || index >= count()) {
         return;
     }
@@ -206,19 +223,19 @@ void EditorTabs::activate(int index) {
     }
 }
 
-void EditorTabs::activateNext() {
+void EditorTabGroup::activateNext() {
     if (count() > 1) {
         activate((currentIndex() + 1) % count());
     }
 }
 
-void EditorTabs::activatePrevious() {
+void EditorTabGroup::activatePrevious() {
     if (count() > 1) {
         activate((currentIndex() + count() - 1) % count());
     }
 }
 
-bool EditorTabs::close(int index) {
+bool EditorTabGroup::close(int index) {
     IEditorView* view = editor(index);
     if (view == nullptr || !view->requestClose()) {
         return false;
@@ -247,7 +264,7 @@ bool EditorTabs::close(int index) {
     return true;
 }
 
-void EditorTabs::closeOthers(int index) {
+void EditorTabGroup::closeOthers(int index) {
     IEditorView* keep = editor(index);
     if (keep == nullptr) {
         return;
@@ -260,13 +277,13 @@ void EditorTabs::closeOthers(int index) {
     activate(indexOfEditor(keep));
 }
 
-void EditorTabs::closeAll() {
+void EditorTabGroup::closeAll() {
     for (int i = count() - 1; i >= 0; --i) {
         static_cast<void>(close(i));
     }
 }
 
-void EditorTabs::closeAllButPinned() {
+void EditorTabGroup::closeAllButPinned() {
     for (int i = count() - 1; i >= 0; --i) {
         if (!isPinned(i)) {
             static_cast<void>(close(i));
@@ -274,7 +291,7 @@ void EditorTabs::closeAllButPinned() {
     }
 }
 
-void EditorTabs::setPinned(int index, bool pinned) {
+void EditorTabGroup::setPinned(int index, bool pinned) {
     if (index < 0 || index >= count() || isPinned(index) == pinned) {
         return;
     }
@@ -286,16 +303,16 @@ void EditorTabs::setPinned(int index, bool pinned) {
     syncBar(indexOfEditor(current));
 }
 
-bool EditorTabs::isPinned(int index) const {
+bool EditorTabGroup::isPinned(int index) const {
     return index >= 0 && index < count() && m_tabs[static_cast<std::size_t>(index)].pinned;
 }
 
-bool EditorTabs::isDirty(int index) const {
+bool EditorTabGroup::isDirty(int index) const {
     const IEditorView* view = editor(index);
     return view != nullptr && view->status().dirty;
 }
 
-std::vector<int> EditorTabs::mruOrder() const {
+std::vector<int> EditorTabGroup::mruOrder() const {
     std::vector<int> order(m_tabs.size());
     std::iota(order.begin(), order.end(), 0);
     std::ranges::stable_sort(order, [this](int a, int b) {
@@ -304,7 +321,7 @@ std::vector<int> EditorTabs::mruOrder() const {
     return order;
 }
 
-void EditorTabs::populateTabList(QMenu& menu) {
+void EditorTabGroup::populateTabList(QMenu& menu) {
     menu.clear();
     for (int i = 0; i < count(); ++i) {
         QAction* action = menu.addAction(escapeMnemonics(tabText(i)));
@@ -315,16 +332,16 @@ void EditorTabs::populateTabList(QMenu& menu) {
     }
 }
 
-bool EditorTabs::isOverflowing() const {
+bool EditorTabGroup::isOverflowing() const {
     return !m_tabs.empty() && m_bar->isVisible() && m_bar->sizeHint().width() > m_bar->width();
 }
 
-void EditorTabs::resizeEvent(QResizeEvent* event) {
+void EditorTabGroup::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updateOverflow();
 }
 
-void EditorTabs::editorStatusChanged(IEditorView& view) {
+void EditorTabGroup::editorStatusChanged(IEditorView& view) {
     const int index = indexOfEditor(&view);
     if (index < 0) {
         return;
@@ -333,7 +350,7 @@ void EditorTabs::editorStatusChanged(IEditorView& view) {
     emit statusUpdated(&view);
 }
 
-int EditorTabs::indexOfEditor(const IEditorView* view) const {
+int EditorTabGroup::indexOfEditor(const IEditorView* view) const {
     for (int i = 0; i < count(); ++i) {
         if (m_tabs[static_cast<std::size_t>(i)].editor.get() == view) {
             return i;
@@ -342,7 +359,7 @@ int EditorTabs::indexOfEditor(const IEditorView* view) const {
     return -1;
 }
 
-void EditorTabs::syncBar(int current) {
+void EditorTabGroup::syncBar(int current) {
     m_syncing = true;
     while (m_bar->count() > 0) {
         m_bar->removeTab(m_bar->count() - 1);
@@ -368,7 +385,7 @@ void EditorTabs::syncBar(int current) {
     updateOverflow();
 }
 
-void EditorTabs::updateTabText(int index) {
+void EditorTabGroup::updateTabText(int index) {
     if (index < 0 || index >= m_bar->count()) {
         return;
     }
@@ -380,22 +397,24 @@ void EditorTabs::updateTabText(int index) {
     m_bar->setTabTextColor(index, color.value_or(QColor()));
 }
 
-void EditorTabs::setTitleColorProvider(TitleColorProvider provider) {
+void EditorTabGroup::setTitleColorProvider(TitleColorProvider provider) {
     m_titleColors = std::move(provider);
     refreshTitleColors();
 }
 
-void EditorTabs::refreshTitleColors() {
+void EditorTabGroup::refreshTitleColors() {
     for (int i = 0; i < m_bar->count(); ++i) {
         updateTabText(i);
     }
 }
 
-QColor EditorTabs::titleColor(int index) const {
+void EditorTabGroup::setGroupCloseVisible(bool visible) { m_closeGroupButton->setVisible(visible); }
+
+QColor EditorTabGroup::titleColor(int index) const {
     return index >= 0 && index < m_bar->count() ? m_bar->tabTextColor(index) : QColor();
 }
 
-void EditorTabs::onBarCurrentChanged(int index) {
+void EditorTabGroup::onBarCurrentChanged(int index) {
     if (m_syncing) {
         return;
     }
@@ -410,7 +429,7 @@ void EditorTabs::onBarCurrentChanged(int index) {
     emit currentEditorChanged(view);
 }
 
-void EditorTabs::showContextMenu(int index, QPoint globalPos) {
+void EditorTabGroup::showContextMenu(int index, QPoint globalPos) {
     IEditorView* view = editor(index);
     if (view == nullptr) {
         return;
@@ -423,6 +442,17 @@ void EditorTabs::showContextMenu(int index, QPoint globalPos) {
     connect(menu.addAction(text("Close All Tabs")), &QAction::triggered, this, [this] { closeAll(); });
     connect(menu.addAction(text("Close All but Pinned")), &QAction::triggered, this, [this] { closeAllButPinned(); });
     menu.addSeparator();
+    connect(menu.addAction(text("Split Right")), &QAction::triggered, this, [this, at] {
+        activate(at());
+        emit splitRequested(Qt::Horizontal);
+    });
+    connect(menu.addAction(text("Split Down")), &QAction::triggered, this, [this, at] {
+        activate(at());
+        emit splitRequested(Qt::Vertical);
+    });
+    connect(menu.addAction(text("Close Editor Group")), &QAction::triggered, this,
+            [this] { emit closeGroupRequested(); });
+    menu.addSeparator();
     const bool pinned = isPinned(index);
     connect(menu.addAction(pinned ? text("Unpin Tab") : text("Pin Tab")), &QAction::triggered, this,
             [this, at, pinned] { setPinned(at(), !pinned); });
@@ -431,9 +461,9 @@ void EditorTabs::showContextMenu(int index, QPoint globalPos) {
     menu.exec(globalPos);
 }
 
-void EditorTabs::updateOverflow() { m_listButton->setVisible(isOverflowing()); }
+void EditorTabGroup::updateOverflow() { m_listButton->setVisible(isOverflowing()); }
 
-void EditorTabs::moveTab(int from, int to) {
+void EditorTabGroup::moveTab(int from, int to) {
     if (from == to || from < 0 || to < 0 || from >= count() || to >= count()) {
         return;
     }
@@ -442,6 +472,305 @@ void EditorTabs::moveTab(int from, int to) {
     m_tabs.insert(m_tabs.begin() + to, std::move(moving));
 }
 
-int EditorTabs::pinnedCount() const { return static_cast<int>(std::ranges::count_if(m_tabs, &Tab::pinned)); }
+int EditorTabGroup::pinnedCount() const { return static_cast<int>(std::ranges::count_if(m_tabs, &Tab::pinned)); }
+
+EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
+    : QWidget(parent), m_factory(factory), m_root(new QSplitter(Qt::Horizontal, this)) {
+    setObjectName(QStringLiteral("editorTabs"));
+    m_root->setObjectName(QStringLiteral("editorGroups"));
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(m_root);
+    m_active = makeGroup();
+    m_root->addWidget(m_active);
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
+        if (!now)
+            return;
+        for (EditorTabGroup* group : m_groups) {
+            if (group == now || group->isAncestorOf(now)) {
+                setActiveGroup(group);
+                break;
+            }
+        }
+    });
+}
+
+EditorTabs::~EditorTabs() {
+    disconnect(qApp, nullptr, this, nullptr);
+    m_active = nullptr;
+    const auto groups = std::exchange(m_groups, {});
+    for (EditorTabGroup* group : groups)
+        disconnect(group, nullptr, this, nullptr);
+    for (EditorTabGroup* group : groups)
+        delete group;
+}
+
+EditorTabGroup* EditorTabs::makeGroup() {
+    auto* group = new EditorTabGroup(m_factory);
+    group->setTitleColorProvider(m_titleColors);
+    m_groups.push_back(group);
+    connect(group, &EditorTabGroup::currentEditorChanged, this, [this, group](IEditorView* editor) {
+        if (group == m_active)
+            emit currentEditorChanged(editor);
+    });
+    connect(group, &EditorTabGroup::statusUpdated, this, &EditorTabs::statusUpdated);
+    connect(group, &EditorTabGroup::tabCountChanged, this, [this](int) { emit tabCountChanged(totalCount()); });
+    connect(group, &EditorTabGroup::splitRequested, this, [this, group](Qt::Orientation orientation) {
+        setActiveGroup(group);
+        (void)split(orientation);
+    });
+    connect(group, &EditorTabGroup::closeGroupRequested, this, [this, group] {
+        setActiveGroup(group);
+        (void)closeGroup();
+    });
+    return group;
+}
+
+void EditorTabs::setActiveGroup(EditorTabGroup* group) {
+    if (group == m_active || std::ranges::find(m_groups, group) == m_groups.end())
+        return;
+    m_active = group;
+    emit currentEditorChanged(group->currentEditor());
+}
+
+bool EditorTabs::split(Qt::Orientation orientation) {
+    IEditorView* current = currentEditor();
+    if (!current)
+        return false;
+    const std::string path = current->path();
+    const EditorViewState state = current->viewState();
+    EditorTabGroup* group = makeGroup();
+    auto opened = group->open(path);
+    if (!opened) {
+        std::erase(m_groups, group);
+        delete group;
+        return false;
+    }
+    group->currentEditor()->restoreViewState(state);
+    auto* parent = qobject_cast<QSplitter*>(m_active->parentWidget());
+    if (!parent) {
+        std::erase(m_groups, group);
+        delete group;
+        return false;
+    }
+    const int index = parent->indexOf(m_active);
+    if (parent->count() == 1 || parent->orientation() == orientation) {
+        parent->setOrientation(orientation);
+        parent->insertWidget(index + 1, group);
+    } else {
+        auto* nested = new QSplitter(orientation);
+        parent->replaceWidget(index, nested);
+        nested->addWidget(m_active);
+        nested->addWidget(group);
+    }
+    for (auto* pane : m_groups)
+        pane->setGroupCloseVisible(true);
+    setActiveGroup(group);
+    group->currentEditor()->widget()->setFocus(Qt::OtherFocusReason);
+    return true;
+}
+
+bool EditorTabs::closeGroup() {
+    if (m_groups.size() <= 1)
+        return false;
+    EditorTabGroup* closing = m_active;
+    closing->closeAll();
+    if (closing->count() != 0)
+        return false;
+    QWidget* welcome = closing->emptyStateWidget();
+    if (welcome == closing->emptyState())
+        welcome = nullptr;
+    const bool wasFirst = closing == m_groups.front();
+    std::erase(m_groups, closing);
+    if (m_groups.size() == 1)
+        m_groups.front()->setGroupCloseVisible(false);
+    if (wasFirst && welcome)
+        m_groups.front()->setEmptyStateWidget(welcome);
+    m_active = nullptr;
+    setActiveGroup(m_groups.front());
+    auto* branch = qobject_cast<QSplitter*>(closing->parentWidget());
+    closing->hide();
+    closing->setParent(this);
+    closing->deleteLater();
+    while (branch && branch != m_root && branch->count() <= 1) {
+        auto* parent = qobject_cast<QSplitter*>(branch->parentWidget());
+        if (!parent)
+            break;
+        const int index = parent->indexOf(branch);
+        const QList<int> sizes = parent->sizes();
+        if (branch->count() == 1) {
+            QWidget* remaining = branch->widget(0);
+            remaining->setParent(nullptr);
+            parent->replaceWidget(index, remaining);
+        } else {
+            branch->setParent(nullptr);
+        }
+        branch->setParent(this);
+        branch->deleteLater();
+        parent->setSizes(sizes);
+        branch = parent;
+    }
+    if (IEditorView* editor = currentEditor())
+        editor->widget()->setFocus(Qt::OtherFocusReason);
+    return true;
+}
+
+std::string EditorTabs::saveLayout() const {
+    const std::function<QJsonObject(QWidget*)> encode = [&](QWidget* widget) -> QJsonObject {
+        if (auto* group = qobject_cast<EditorTabGroup*>(widget)) {
+            auto it = std::ranges::find(m_groups, group);
+            return {{QStringLiteral("group"), static_cast<int>(it - m_groups.begin())}};
+        }
+        auto* splitter = qobject_cast<QSplitter*>(widget);
+        if (!splitter)
+            return {};
+        QJsonArray children;
+        for (int i = 0; i < splitter->count(); ++i)
+            children.append(encode(splitter->widget(i)));
+        QJsonArray sizes;
+        for (int size : splitter->sizes())
+            sizes.append(size);
+        return {{QStringLiteral("vertical"), splitter->orientation() == Qt::Vertical},
+                {QStringLiteral("children"), children},
+                {QStringLiteral("sizes"), sizes}};
+    };
+    return QJsonDocument(encode(m_root)).toJson(QJsonDocument::Compact).toStdString();
+}
+
+bool EditorTabs::restoreLayout(const std::string& layout) {
+    if (totalCount() != 0 || layout.empty() || layout.size() > 65536)
+        return false;
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(QByteArray::fromStdString(layout), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject())
+        return false;
+    std::vector<int> ids;
+    const std::function<bool(const QJsonObject&, int)> valid = [&](const QJsonObject& node, int depth) {
+        if (depth > 16)
+            return false;
+        if (node.contains(QStringLiteral("group"))) {
+            const QJsonValue value = node.value(QStringLiteral("group"));
+            const int id = value.toInt(-1);
+            if (!value.isDouble() || id < 0 || id >= 64 || std::ranges::find(ids, id) != ids.end())
+                return false;
+            ids.push_back(id);
+            return true;
+        }
+        const QJsonValue childrenValue = node.value(QStringLiteral("children"));
+        if (!childrenValue.isArray())
+            return false;
+        const QJsonArray children = childrenValue.toArray();
+        if (children.empty() || children.size() > 64)
+            return false;
+        for (const QJsonValue& child : children)
+            if (!child.isObject() || !valid(child.toObject(), depth + 1))
+                return false;
+        return true;
+    };
+    if (!valid(document.object(), 0) || ids.empty())
+        return false;
+    std::ranges::sort(ids);
+    for (int i = 0; i < static_cast<int>(ids.size()); ++i)
+        if (ids[static_cast<std::size_t>(i)] != i)
+            return false;
+
+    QWidget* welcome = m_groups.front()->emptyStateWidget();
+    if (welcome == m_groups.front()->emptyState())
+        welcome = nullptr;
+    if (welcome)
+        welcome->setParent(this);
+    m_active = nullptr;
+    while (!m_groups.empty()) {
+        EditorTabGroup* group = m_groups.back();
+        m_groups.pop_back();
+        delete group;
+    }
+    while (m_root->count())
+        delete m_root->widget(0);
+    std::vector<EditorTabGroup*> ordered(ids.size());
+    const std::function<QWidget*(const QJsonObject&)> build = [&](const QJsonObject& node) -> QWidget* {
+        if (node.contains(QStringLiteral("group"))) {
+            auto* group = makeGroup();
+            ordered[static_cast<std::size_t>(node.value(QStringLiteral("group")).toInt())] = group;
+            return group;
+        }
+        auto* splitter = new QSplitter(node.value(QStringLiteral("vertical")).toBool() ? Qt::Vertical : Qt::Horizontal);
+        for (const auto& child : node.value(QStringLiteral("children")).toArray())
+            splitter->addWidget(build(child.toObject()));
+        QList<int> sizes;
+        for (const auto& size : node.value(QStringLiteral("sizes")).toArray())
+            sizes.push_back(std::max(0, size.toInt()));
+        if (sizes.size() == splitter->count())
+            splitter->setSizes(sizes);
+        return splitter;
+    };
+    const QJsonObject rootNode = document.object();
+    if (rootNode.contains(QStringLiteral("group"))) {
+        m_root->addWidget(build(rootNode));
+    } else {
+        m_root->setOrientation(rootNode.value(QStringLiteral("vertical")).toBool() ? Qt::Vertical : Qt::Horizontal);
+        for (const auto& child : rootNode.value(QStringLiteral("children")).toArray())
+            m_root->addWidget(build(child.toObject()));
+        QList<int> sizes;
+        for (const auto& size : rootNode.value(QStringLiteral("sizes")).toArray())
+            sizes.push_back(std::max(0, size.toInt()));
+        if (sizes.size() == m_root->count())
+            m_root->setSizes(sizes);
+    }
+    m_groups = std::move(ordered);
+    for (auto* pane : m_groups)
+        pane->setGroupCloseVisible(m_groups.size() > 1);
+    m_active = m_groups.front();
+    if (welcome)
+        m_active->setEmptyStateWidget(welcome);
+    emit currentEditorChanged(nullptr);
+    return true;
+}
+
+Result<int> EditorTabs::open(const std::string& path, bool activate) { return m_active->open(path, activate); }
+int EditorTabs::count() const noexcept { return m_active ? m_active->count() : 0; }
+int EditorTabs::totalCount() const noexcept {
+    int n = 0;
+    for (auto* group : m_groups)
+        n += group->count();
+    return n;
+}
+int EditorTabs::groupCount() const noexcept { return static_cast<int>(m_groups.size()); }
+int EditorTabs::currentIndex() const { return m_active ? m_active->currentIndex() : -1; }
+int EditorTabs::indexOf(const std::string& path) const { return m_active->indexOf(path); }
+IEditorView* EditorTabs::editor(int index) const { return m_active->editor(index); }
+IEditorView* EditorTabs::currentEditor() const { return m_active ? m_active->currentEditor() : nullptr; }
+QString EditorTabs::tabText(int index) const { return m_active->tabText(index); }
+void EditorTabs::activate(int index) { m_active->activate(index); }
+void EditorTabs::activateNext() { m_active->activateNext(); }
+void EditorTabs::activatePrevious() { m_active->activatePrevious(); }
+bool EditorTabs::close(int index) { return m_active->close(index); }
+void EditorTabs::closeOthers(int index) { m_active->closeOthers(index); }
+void EditorTabs::closeAll() {
+    for (auto* group : m_groups)
+        group->closeAll();
+}
+void EditorTabs::closeAllButPinned() { m_active->closeAllButPinned(); }
+void EditorTabs::setPinned(int index, bool pinned) { m_active->setPinned(index, pinned); }
+bool EditorTabs::isPinned(int index) const { return m_active->isPinned(index); }
+bool EditorTabs::isDirty(int index) const { return m_active->isDirty(index); }
+std::vector<int> EditorTabs::mruOrder() const { return m_active->mruOrder(); }
+EditorTabBar* EditorTabs::tabBar() const noexcept { return m_active->tabBar(); }
+QToolButton* EditorTabs::tabListButton() const noexcept { return m_active->tabListButton(); }
+void EditorTabs::populateTabList(QMenu& menu) { m_active->populateTabList(menu); }
+bool EditorTabs::isOverflowing() const { return m_active->isOverflowing(); }
+QLabel* EditorTabs::emptyState() const noexcept { return m_active->emptyState(); }
+void EditorTabs::setEmptyStateWidget(QWidget* widget) { m_groups.front()->setEmptyStateWidget(widget); }
+QWidget* EditorTabs::emptyStateWidget() const noexcept { return m_groups.front()->emptyStateWidget(); }
+void EditorTabs::setTitleColorProvider(TitleColorProvider provider) {
+    m_titleColors = std::move(provider);
+    for (auto* group : m_groups)
+        group->setTitleColorProvider(m_titleColors);
+}
+void EditorTabs::refreshTitleColors() {
+    for (auto* group : m_groups)
+        group->refreshTitleColors();
+}
+QColor EditorTabs::titleColor(int index) const { return m_active->titleColor(index); }
 
 } // namespace frost::ui

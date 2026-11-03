@@ -244,7 +244,7 @@ public:
     bool apply(const text::CommandResult& result);
     // Follows an externally applied change to this document, updating display, caret and listeners.
     // The change must start at this editor's current version. GUI thread; errors are from Editor::follow.
-    [[nodiscard]] Result<void> followExternalChange(const text::ChangeSet& change);
+    [[nodiscard]] Result<void> followExternalChange(const text::ChangeSet& change, bool notifyTextChange = true);
     // Moves the primary caret to 1-based `line` and `column` (clamped) as one caret.
     void goToLine(int line, int column);
     // Inverse of status().column, for persisted status positions; goToLine uses byte columns.
@@ -498,7 +498,7 @@ private:
 
     // Model plumbing.
     bool applyUpdate(Result<text::EditorUpdate> update);
-    void afterChange(const text::EditorUpdate& update);
+    void afterChange(const text::EditorUpdate& update, bool notifyTextChange = true);
     void ensureCaretVisible();
     void emitStatus();
     [[nodiscard]] text::CommandInput commandInput() const;

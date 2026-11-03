@@ -90,6 +90,8 @@ std::string encodeSession(const SessionState& state) {
         yyjson_mut_obj_add_int(doc.get(), item, "line", tab.line);
         yyjson_mut_obj_add_int(doc.get(), item, "column", tab.column);
         yyjson_mut_obj_add_int(doc.get(), item, "top", tab.top);
+        yyjson_mut_obj_add_int(doc.get(), item, "group", tab.group);
+        yyjson_mut_obj_add_bool(doc.get(), item, "groupActive", tab.groupActive);
         if (!tab.folds.empty()) {
             yyjson_mut_obj_add_uint(doc.get(), item, "foldTextHash", tab.foldTextHash);
             yyjson_mut_val* folds = yyjson_mut_arr(doc.get());
@@ -105,6 +107,9 @@ std::string encodeSession(const SessionState& state) {
     }
     yyjson_mut_obj_add_val(doc.get(), root, "tabs", tabs);
     yyjson_mut_obj_add_int(doc.get(), root, "active", state.active);
+    if (!state.editorLayout.empty())
+        addString(doc.get(), root, "editorLayout", state.editorLayout);
+    yyjson_mut_obj_add_int(doc.get(), root, "activeGroup", state.activeGroup);
     yyjson_mut_val* windows = yyjson_mut_arr(doc.get());
     for (const SessionToolWindow& window : state.toolWindows) {
         yyjson_mut_val* item = yyjson_mut_obj(doc.get());
@@ -159,6 +164,8 @@ Result<SessionState> decodeSession(std::string_view json) {
             tab.line = std::max(1, intOf(yyjson_obj_get(item, "line"), 1));
             tab.column = std::max(1, intOf(yyjson_obj_get(item, "column"), 1));
             tab.top = std::max(0, intOf(yyjson_obj_get(item, "top"), 0));
+            tab.group = std::clamp(intOf(yyjson_obj_get(item, "group"), 0), 0, 63);
+            tab.groupActive = boolOf(yyjson_obj_get(item, "groupActive"));
             yyjson_val* hash = yyjson_obj_get(item, "foldTextHash");
             yyjson_val* folds = yyjson_obj_get(item, "folds");
             if (yyjson_is_uint(hash) && yyjson_is_arr(folds) && yyjson_arr_size(folds) <= 100'000) {
@@ -182,6 +189,8 @@ Result<SessionState> decodeSession(std::string_view json) {
             }
         }
     }
+    state.editorLayout = stringOf(yyjson_obj_get(root, "editorLayout"));
+    state.activeGroup = std::clamp(intOf(yyjson_obj_get(root, "activeGroup"), 0), 0, 63);
     state.active = intOf(yyjson_obj_get(root, "active"), -1);
     if (state.active >= static_cast<int>(state.tabs.size())) {
         state.active = state.tabs.empty() ? -1 : 0;

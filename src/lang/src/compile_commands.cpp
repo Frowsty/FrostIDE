@@ -7,15 +7,23 @@
 
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/utf.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/vcxproj.hpp"
+#include "frost/sched/scheduler.hpp"
 
 #include "msvc_flags.hpp"
 
 #include <algorithm>
 #include <format>
 #include <string_view>
+#include <utility>
+#ifdef _WIN32
+#include <windows.h>
+
+#include <winternl.h>
+#endif
 
 namespace frost::lang {
 
@@ -60,6 +68,248 @@ using namespace detail; // msvc_flags.hpp
 void sortByName(std::vector<io::DirEntry>& entries) { std::ranges::sort(entries, {}, &io::DirEntry::name); }
 
 } // namespace
+
+GeneratedCommandsLease::GeneratedCommandsLease(io::IFileSystem& fs, std::string boundary, std::string directory,
+                                               std::vector<std::string> ownedParents,
+                                               std::shared_ptr<GeneratedCommandsRetirement> retirement,
+                                               std::function<void()> beforeDeleteForTesting,
+                                               PendingProbe pendingForTesting)
+    : m_fs(&fs == &io::realFileSystem() ? &fs : nullptr), m_boundary(std::move(boundary)),
+      m_directory(std::move(directory)), m_ownedParents(std::move(ownedParents)), m_retirement(retirement),
+      m_beforeDeleteForTesting(std::move(beforeDeleteForTesting)), m_pendingForTesting(pendingForTesting) {}
+
+namespace {
+sched::Task<void> runGeneratedRetirement(std::shared_ptr<GeneratedCommandsRetirement> owner,
+                                         std::function<void()> task) {
+    task();
+    owner->finished();
+    co_return;
+}
+} // namespace
+GeneratedCommandsRetirement::GeneratedCommandsRetirement(sched::IScheduler& scheduler) : m_scheduler(&scheduler) {}
+void GeneratedCommandsRetirement::close() {
+    std::lock_guard lock(m_mutex);
+    m_scheduler = nullptr;
+}
+void GeneratedCommandsRetirement::submit(std::function<void()> task) {
+    std::lock_guard lock(m_mutex);
+    if (m_scheduler) {
+        ++m_pending;
+        m_scheduler->spawn(sched::Lane::Background, runGeneratedRetirement(shared_from_this(), std::move(task)))
+            .detach();
+    }
+}
+void GeneratedCommandsRetirement::finished() {
+    std::lock_guard lock(m_mutex);
+    if (--m_pending == 0)
+        m_idle.notify_all();
+}
+void GeneratedCommandsRetirement::waitForIdle() {
+    std::unique_lock lock(m_mutex);
+    m_idle.wait(lock, [this] { return m_pending == 0; });
+}
+
+GeneratedCommandsLease::~GeneratedCommandsLease() {
+    if (!m_fs || m_uses || m_uncertain)
+        return;
+    auto retirement = m_retirement.lock();
+    if (!retirement)
+        return;
+    retirement->submit([boundary = std::move(m_boundary), directory = std::move(m_directory),
+                        ownedParents = std::move(m_ownedParents), beforeDelete = std::move(m_beforeDeleteForTesting),
+                        pendingProbe = m_pendingForTesting] {
+        static_cast<void>(pendingProbe);
+        static_cast<void>(ownedParents);
+        static_cast<void>(beforeDelete);
+        if (!io::isAbsolutePath(directory) || !io::isAbsolutePath(boundary) || directory == boundary)
+            return;
+        std::vector<std::string> components;
+        for (std::string current = directory; current != boundary;) {
+            const std::string parent(io::parentPath(current));
+            if (parent.empty() || parent == current)
+                return;
+            components.push_back(current);
+            current = parent;
+        }
+#ifdef _WIN32
+        // Resolve each component relative to an already opened directory handle. An
+        // attribute-only writer can retarget a directory even while sharing denies writes.
+        struct Handle {
+            HANDLE value = INVALID_HANDLE_VALUE;
+            ~Handle() {
+                if (value != INVALID_HANDLE_VALUE)
+                    CloseHandle(value);
+            }
+            Handle() = default;
+            explicit Handle(HANDLE h) : value(h) {}
+            Handle(const Handle&) = delete;
+            Handle& operator=(const Handle&) = delete;
+            Handle(Handle&& other) noexcept : value(std::exchange(other.value, INVALID_HANDLE_VALUE)) {}
+            Handle& operator=(Handle&& other) noexcept {
+                if (this != &other) {
+                    if (value != INVALID_HANDLE_VALUE)
+                        CloseHandle(value);
+                    value = std::exchange(other.value, INVALID_HANDLE_VALUE);
+                }
+                return *this;
+            }
+        };
+        using CreateRelative = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                                                PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        const auto createRelative =
+            ntdll ? reinterpret_cast<CreateRelative>(GetProcAddress(ntdll, "NtCreateFile")) : nullptr;
+        if (!createRelative)
+            return;
+        struct Request {
+            std::wstring name;
+            UNICODE_STRING unicode{};
+            OBJECT_ATTRIBUTES attributes{};
+            IO_STATUS_BLOCK status{};
+            HANDLE parent = nullptr;
+            HANDLE handle = nullptr;
+            ~Request() {
+                if (handle && handle != INVALID_HANDLE_VALUE)
+                    CloseHandle(handle);
+                if (parent && parent != INVALID_HANDLE_VALUE)
+                    CloseHandle(parent);
+            }
+        };
+        NTSTATUS openStatus = 0;
+        const auto openChild = [&](HANDLE parent, std::string_view component, bool directory,
+                                   bool mayDelete) -> Handle {
+            auto name = io::toWide(component);
+            if (!name || name->empty() || name->size() > 32766 || name->find_first_of(L"\\/:") != std::wstring::npos ||
+                name->find(L'\0') != std::wstring::npos || *name == L"." || *name == L"..")
+                return {};
+            auto request = std::make_unique<Request>();
+            request->name = std::move(*name);
+            if (!DuplicateHandle(GetCurrentProcess(), parent, GetCurrentProcess(), &request->parent, 0, FALSE,
+                                 DUPLICATE_SAME_ACCESS))
+                return {};
+            request->unicode.Buffer = request->name.data();
+            request->unicode.Length = static_cast<USHORT>(request->name.size() * sizeof(wchar_t));
+            request->unicode.MaximumLength = request->unicode.Length;
+            request->attributes.Length = sizeof(OBJECT_ATTRIBUTES);
+            request->attributes.RootDirectory = request->parent;
+            request->attributes.ObjectName = &request->unicode;
+            request->attributes.Attributes = OBJ_DONT_REPARSE;
+            request->status.Status = 0x103;
+            const ACCESS_MASK access = FILE_READ_ATTRIBUTES | SYNCHRONIZE | (mayDelete ? DELETE : 0);
+            const ULONG options = FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT |
+                                  (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE);
+            if (pendingProbe != PendingProbe::None) {
+                request->handle = CreateEventW(nullptr, TRUE, pendingProbe == PendingProbe::StillPending, nullptr);
+                if (!request->handle)
+                    return {};
+                request->status.Status = 0x103;
+                openStatus = 0x103;
+            } else {
+                openStatus = createRelative(&request->handle, access, &request->attributes, &request->status, nullptr,
+                                            FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+                                            options, nullptr, 0);
+            }
+            if (openStatus == 0x103) {
+                // On an anomalous pending open, retain all kernel-visible buffers unless
+                // completion is confirmed. Never free an IOSB still owned by the kernel.
+                if (!request->handle || request->handle == INVALID_HANDLE_VALUE ||
+                    WaitForSingleObject(request->handle, 0) != WAIT_OBJECT_0) {
+                    (void)request.release();
+                    return {};
+                }
+                openStatus = request->status.Status;
+                if (openStatus == 0x103) {
+                    (void)request.release();
+                    return {};
+                }
+            }
+            Handle handle(request->handle ? std::exchange(request->handle, nullptr) : INVALID_HANDLE_VALUE);
+            if (openStatus < 0 || handle.value == INVALID_HANDLE_VALUE)
+                return {};
+            FILE_ATTRIBUTE_TAG_INFO info{};
+            if (GetFileType(handle.value) != FILE_TYPE_DISK ||
+                !GetFileInformationByHandleEx(handle.value, FileAttributeTagInfo, &info, sizeof(info)) ||
+                (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+                static_cast<bool>(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory)
+                return {};
+            return handle;
+        };
+        auto boundaryWide = io::toWin32Path(boundary);
+        if (!boundaryWide || boundaryWide->size() < 7 || boundaryWide->substr(0, 4) != L"\\\\?\\" ||
+            (*boundaryWide)[5] != L':' || (*boundaryWide)[6] != L'\\')
+            return;
+        const std::wstring volume = boundaryWide->substr(0, 7);
+        std::vector<Handle> handles;
+        handles.emplace_back(CreateFileW(volume.c_str(), FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        if (handles.back().value == INVALID_HANDLE_VALUE)
+            return;
+        FILE_ATTRIBUTE_TAG_INFO volumeInfo{};
+        if (!GetFileInformationByHandleEx(handles.back().value, FileAttributeTagInfo, &volumeInfo,
+                                          sizeof(volumeInfo)) ||
+            !(volumeInfo.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (volumeInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            return;
+        std::vector<std::string> boundaryChain;
+        for (std::string current = boundary;;) {
+            const std::string parent(io::parentPath(current));
+            if (parent.empty() || parent == current)
+                break;
+            boundaryChain.push_back(current);
+            current = parent;
+        }
+        for (auto it = boundaryChain.rbegin(); it != boundaryChain.rend(); ++it) {
+            handles.push_back(openChild(handles.back().value, io::fileName(*it), true, false));
+            if (handles.back().value == INVALID_HANDLE_VALUE)
+                return;
+        }
+        for (auto it = components.rbegin(); it != components.rend(); ++it) {
+            handles.push_back(openChild(handles.back().value, io::fileName(*it), true, true));
+            if (handles.back().value == INVALID_HANDLE_VALUE)
+                return;
+        }
+        if (beforeDelete)
+            beforeDelete();
+        auto fileHandle = openChild(handles.back().value, "compile_commands.json", false, true);
+        if (fileHandle.value != INVALID_HANDLE_VALUE) {
+            FILE_DISPOSITION_INFO disposition{TRUE};
+            if (!SetFileInformationByHandle(fileHandle.value, FileDispositionInfo, &disposition, sizeof(disposition)))
+                return;
+            fileHandle = Handle{};
+        } else if (static_cast<unsigned long>(openStatus) != 0xC0000034UL) {
+            return;
+        }
+        std::vector<std::string> toRemove{directory};
+        toRemove.insert(toRemove.end(), ownedParents.begin(), ownedParents.end());
+        for (std::size_t i = 0; i < toRemove.size(); ++i) {
+            if (i >= components.size() || toRemove[i] != components[i])
+                return;
+            FILE_DISPOSITION_INFO disposition{TRUE};
+            if (!SetFileInformationByHandle(handles.back().value, FileDispositionInfo, &disposition,
+                                            sizeof(disposition)))
+                return;
+            handles.pop_back();
+        }
+#endif
+    });
+}
+
+void GeneratedCommandsLease::beginUse() {
+    std::lock_guard lock(m_mutex);
+    ++m_uses;
+}
+void GeneratedCommandsLease::confirmExit() {
+    std::lock_guard lock(m_mutex);
+    if (m_uses)
+        --m_uses;
+}
+void GeneratedCommandsLease::abandonUse() {
+    std::lock_guard lock(m_mutex);
+    m_uncertain = true;
+    if (m_uses)
+        --m_uses;
+}
 
 std::string compileCommandsJson(std::span<const CompileCommand> commands) {
     std::string out = "[\n";

@@ -704,6 +704,33 @@ TEST_F(WorkbenchTest, SessionRoundTripAndTheLastProjectAtStartUp) {
     m_ide.reset(); // Before the store.
 }
 
+TEST_F(WorkbenchTest, SplitSessionRestoresGroupsAndEmptyActiveGroup) {
+    nav::SessionStore store(fs, "/data/sessions");
+    Ide& app = ide(&store);
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/README.md").has_value());
+    EditorTabs& tabs = app.window->tabs();
+    tabs.currentEditor()->goToLine(2, 1);
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    tabs.currentEditor()->goToLine(3, 1);
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/util.cpp").has_value());
+    ASSERT_TRUE(tabs.split(Qt::Vertical));
+    ASSERT_TRUE(tabs.close(tabs.currentIndex()));
+    ASSERT_EQ(tabs.groupCount(), 3);
+    ASSERT_EQ(tabs.count(), 0);
+    app.workbench->closeProject();
+    openProject(app);
+    EXPECT_EQ(tabs.groupCount(), 3);
+    EXPECT_EQ(tabs.count(), 0);
+    const auto groups = tabs.groups();
+    ASSERT_EQ(groups.size(), 3U);
+    EXPECT_EQ(groups[0]->editor(0)->path(), "/proj/README.md");
+    EXPECT_EQ(groups[0]->editor(0)->status().line, 2);
+    EXPECT_EQ(groups[1]->editor(groups[1]->indexOf("/proj/README.md"))->status().line, 3);
+    EXPECT_GE(groups[1]->indexOf("/proj/src/util.cpp"), 0);
+    m_ide.reset(); // Before the local session store.
+}
+
 TEST_F(WorkbenchTest, RestorePromptCallsSaveManagerRestore) {
     frost::test::ScratchDir scratch("workbench-hot-exit");
     const std::string journals = scratch.join("journals");

@@ -123,7 +123,7 @@ void Workbench::startLua(const std::string& root) {
         return;
     }
     m_bridge->setLuaServer(m_lua);
-    for (auto* view : m_editors->views())
+    for (auto* view : m_editors->uniqueDocumentViews())
         syncLuaDocument(*view);
     updateLanguageTarget();
     m_language->structureChanged();
@@ -186,7 +186,9 @@ void Workbench::onLuaDiagnostics(const std::string& file) {
         m_liveMarkers.erase(key);
     else
         m_liveMarkers[key] = std::move(markers);
-    if (auto* view = m_editors->find(file)) {
+    for (DocumentEditorView* view : m_editors->views()) {
+        if (lang::documentKey(view->path()) != key)
+            continue;
         view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
                                       set ? ui::lang::toEditorDiagnostics(*set) : std::vector<ui::EditorDiagnostic>{});
         refreshMarkers(*view);

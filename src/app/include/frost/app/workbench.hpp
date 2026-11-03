@@ -444,6 +444,7 @@ private:
     [[nodiscard]] bool closeForOpen();
     void refreshRecent();
     void showOpenRecent();
+    void showSettings();
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
     [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
 
@@ -495,6 +496,7 @@ private:
     // sessions and clangd use outlive them.
     syntax::LanguageRegistry m_languages;
     std::unique_ptr<sched::ThreadPool> m_pool;
+    std::shared_ptr<lang::GeneratedCommandsRetirement> m_commandsRetirement;
     std::unique_ptr<io::Reactor> m_reactor;
     std::unique_ptr<io::RealFileWatcher> m_watcher;
 
@@ -535,6 +537,7 @@ private:
     std::unique_ptr<ManagedDebugPreparation> m_managedDebugPreparation;
     std::shared_ptr<ManagedSourceSnapshot> m_managedDebugSnapshot;
     QPointer<QDialog> m_managedSourceDialog;
+    QPointer<QDialog> m_settingsDialog;
     QPointer<QPlainTextEdit> m_managedSourceView;
     std::shared_ptr<ManagedSnapshotJob> m_managedSnapshotJob;
     std::vector<std::shared_ptr<ManagedSnapshotJob>> m_managedBreakpointJobs;

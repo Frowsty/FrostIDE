@@ -35,9 +35,11 @@
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/project/solution_model.hpp"
 
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -48,6 +50,9 @@
 namespace frost::io {
 class IFileSystem;
 } // namespace frost::io
+namespace frost::sched {
+class IScheduler;
+}
 
 namespace frost::lang {
 
@@ -77,10 +82,57 @@ enum class CompileCommandsSource : std::uint8_t {
 
 [[nodiscard]] std::string_view toString(CompileCommandsSource source) noexcept;
 
+// Closed before the scheduler shuts down; late leases retain their files.
+class GeneratedCommandsRetirement : public std::enable_shared_from_this<GeneratedCommandsRetirement> {
+public:
+    explicit GeneratedCommandsRetirement(sched::IScheduler& scheduler);
+    void close();
+    void submit(std::function<void()> task);
+    // Waits for submitted cleanup (tests/shutdown only; never call from the scheduler).
+    void waitForIdle();
+    void finished();
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_idle;
+    sched::IScheduler* m_scheduler;
+    unsigned m_pending = 0;
+};
+
+// A private generated directory remains alive through all location copies and process uses.
+class GeneratedCommandsLease {
+public:
+    enum class PendingProbe { None, Timeout, StillPending };
+    GeneratedCommandsLease(io::IFileSystem& fs, std::string boundary, std::string directory,
+                           std::vector<std::string> ownedParents = {},
+                           std::shared_ptr<GeneratedCommandsRetirement> retirement = {},
+                           std::function<void()> beforeDeleteForTesting = {},
+                           PendingProbe pendingForTesting = PendingProbe::None);
+    ~GeneratedCommandsLease();
+    GeneratedCommandsLease(const GeneratedCommandsLease&) = delete;
+    GeneratedCommandsLease& operator=(const GeneratedCommandsLease&) = delete;
+    void beginUse();
+    void confirmExit();
+    void abandonUse();
+
+private:
+    io::IFileSystem* m_fs;
+    std::string m_boundary;
+    std::string m_directory;
+    std::vector<std::string> m_ownedParents;
+    std::weak_ptr<GeneratedCommandsRetirement> m_retirement;
+    std::function<void()> m_beforeDeleteForTesting;
+    PendingProbe m_pendingForTesting;
+    std::mutex m_mutex;
+    unsigned m_uses = 0;
+    bool m_uncertain = false;
+};
+
 struct CompileCommandsLocation {
     std::string directory; // Absolute; holds compile_commands.json (for --compile-commands-dir).
     std::string file;      // <directory>/compile_commands.json.
     CompileCommandsSource source = CompileCommandsSource::Existing;
+    std::shared_ptr<GeneratedCommandsLease> generatedLease{};
 };
 
 // The seam ClangdService asks before each (re)start.

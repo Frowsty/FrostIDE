@@ -367,7 +367,7 @@ bool Workbench::closeForOpen() {
         }
     } else if (m_window) {
         m_window->tabs().closeAll();
-        if (m_window->tabs().count() > 0) {
+        if (m_window->tabs().totalCount() > 0) {
             if (m_git)
                 m_git->openProject(m_projectRoot);
             return false;
@@ -495,6 +495,7 @@ void Workbench::startClangd(const std::string& root) {
         });
     } else if (m_solution && cache) {
         lang::MsBuildProviderOptions options;
+        options.retirement = m_commandsRetirement;
         if (const std::optional<std::size_t> active = m_build->activeConfigurationIndex();
             active && *active < m_build->configurations().size()) {
             options.configuration = m_build->configurations()[*active].name();
@@ -570,8 +571,9 @@ void Workbench::startClangd(const std::string& root) {
         return;
     }
     m_bridge->setServer(m_clangd);
-    for (DocumentEditorView* view : m_editors->views()) {
+    for (DocumentEditorView* view : m_editors->uniqueDocumentViews())
         syncClangdDocument(*view);
+    for (DocumentEditorView* view : m_editors->views()) {
         if (isCFamilySource(view->path()) && view == currentView()) {
             auto* binding = new ui::lang::EditorInsightBinding(view->editor(), {*m_bridge, *m_pool});
             binding->attach(*m_clangd);
@@ -676,7 +678,9 @@ void Workbench::onLiveDiagnostics(const std::string& file) {
         } else {
             m_liveMarkers[key] = std::move(markers);
         }
-        if (DocumentEditorView* view = m_editors->find(file); view != nullptr) {
+        for (DocumentEditorView* view : m_editors->views()) {
+            if (lang::documentKey(view->path()) != key)
+                continue;
             // The squiggles: every live diagnostic (editor-insight's translation; ranges of the
             // published text version, mapped by the view through the edits made since).
             view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, set ? ui::lang::toEditorDiagnostics(*set)

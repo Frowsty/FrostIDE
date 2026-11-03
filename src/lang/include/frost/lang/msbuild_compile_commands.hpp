@@ -128,6 +128,7 @@ struct MsBuildProviderOptions {
     // Extra environment for MSBuild (tests set SDK roots here instead of in this process).
     std::vector<std::pair<std::string, std::optional<std::string>>> environment;
     std::string compiler = "clang-cl";
+    std::shared_ptr<GeneratedCommandsRetirement> retirement;
     // The static synthesizer for projects whose evaluation fails, and its MSVC lookup.
     SynthesisOptions fallback;
     std::function<Result<MsvcEnvironment>()> msvc;
@@ -145,7 +146,8 @@ public:
     // `launcher`, `fs` and `model` must outlive the provider. Commands go to `cacheDirectory`.
     MsBuildCompileCommandsProvider(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                    std::shared_ptr<const project::SolutionModel> model, std::string cacheDirectory,
-                                   MsBuildProviderOptions options);
+                                   MsBuildProviderOptions options, std::string cleanupBoundary = {},
+                                   std::vector<std::string> cleanupParents = {});
 
     // See the header comment. Errors: the configuration's (NotFound, InvalidArgument), those of
     // locateMsBuild (the chain then falls back), the cache directory's I/O errors.
@@ -164,6 +166,7 @@ private:
     io::IFileSystem& m_fs;
     std::shared_ptr<const project::SolutionModel> m_model;
     std::string m_cacheDirectory;
+    std::shared_ptr<GeneratedCommandsLease> m_lease;
     MsBuildProviderOptions m_options;
     bool m_msvcLooked = false;
     MsBuildProviderStats m_stats;

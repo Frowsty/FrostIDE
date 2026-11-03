@@ -141,6 +141,8 @@ public:
 
     // The open views, in opening order.
     [[nodiscard]] const std::vector<DocumentEditorView*>& views() const noexcept { return m_views; }
+    // One representative view for each shared document.
+    [[nodiscard]] std::vector<DocumentEditorView*> uniqueDocumentViews() const;
     // The view of `document`, or nullptr.
     [[nodiscard]] DocumentEditorView* find(const document::FileDocument& document) const noexcept;
     // The view whose path has `path`'s document key (lang::documentKey), or nullptr.

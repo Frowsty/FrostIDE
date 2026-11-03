@@ -229,6 +229,32 @@ TEST(MsBuildEvaluationE2E, ChangedEnvironmentReevaluatesCommands) {
     EXPECT_FALSE(has(changed, "/I" + solution.sdkRoot() + "\\include"));
 }
 
+TEST(MsBuildEvaluationE2E, GeneratedChainDirectoriesRetireAfterLastLocation) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild on this machine";
+    PropsSolution solution("lang-msbuild-generation-retire");
+    ASSERT_NE(solution.model(), nullptr);
+    frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount = 2});
+    auto retirement = std::make_shared<frost::lang::GeneratedCommandsRetirement>(pool);
+    auto options = solution.options(*msbuild);
+    options.retirement = retirement;
+    auto chain = frost::lang::solutionCompileCommandsChain(frost::io::realProcessLauncher(),
+                                                           frost::io::realFileSystem(), solution.model(),
+                                                           solution.sdkRoot(), solution.cache(), std::move(options));
+    auto result = chain->locate();
+    ASSERT_TRUE(result && result->has_value());
+    ASSERT_EQ((*result)->source, frost::lang::CompileCommandsSource::Evaluated);
+    const std::string file = (*result)->file;
+    const std::string root(frost::io::parentPath(frost::io::parentPath((*result)->directory)));
+    chain.reset();
+    EXPECT_TRUE(frost::io::realFileSystem().exists(file).value_or(false));
+    result->reset();
+    retirement->waitForIdle();
+    EXPECT_FALSE(frost::io::realFileSystem().exists(file).value_or(true));
+    EXPECT_FALSE(frost::io::realFileSystem().exists(root).value_or(true));
+}
+
 TEST(MsBuildEvaluationE2E, ChangedInheritedEnvironmentReevaluatesCommands) {
     const auto msbuild = machineMsBuild();
     if (!msbuild)

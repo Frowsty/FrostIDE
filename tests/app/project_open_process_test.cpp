@@ -272,6 +272,15 @@ TEST(ProjectOpenProcess, TwoRealProcessesReuseProjectAndReleaseOnCrash) {
     EXPECT_EQ(forwarded->exitCode, 0) << forwarded->stderrBytes;
     ASSERT_TRUE((*primary)->terminate());
     ASSERT_TRUE((*primary)->wait(5s));
+    // wait() observes the leader only. Its contained processes must also release
+    // the private project/profile before WorkDir attempts directory cleanup.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto processes = (*primary)->containedProcesses();
+            return processes && processes->empty();
+        },
+        5s));
+    primary->reset();
     auto recovered = frost::io::LocalIpcOwner::claim(id);
     ASSERT_TRUE(recovered.has_value()) << recovered.error().describe();
 }

@@ -1200,7 +1200,11 @@ the recent-project menu and the pure CMake membership planner, with full Windows
 It does not enable CMake writes. Separately audited navigation-stage Tiny.slnx acceptance includes an
 actual build, native breakpoint/step, stack/locals/watch and Stop; this remains a bounded fixture scenario.
 Recent-menu dirty/busy guards have component tests, while posted-key/UIA folder switching has staged
-Windows evidence. Full project switching, settings, editor groups and broader input parity remain required.
+Windows evidence. The `codex-20261103-settings-splits-r2` stage adds a searchable application Settings
+dialog and independent editor groups with shared edits/undo and persisted layouts. Combined Windows
+and native functional gates pass; private-desktop Settings/split/reopen evidence preserves fixture bytes.
+This does not establish broader settings scopes, every group/navigation combination, full project
+switching or complete input parity; those remain required.
 
 Keep these scenarios alongside Appendix A and the expanded language/engine tracks. A passing build or
 debugger fixture closes only its demonstrated workflow; it does not mark all C++ support complete.

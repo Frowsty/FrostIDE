@@ -37,6 +37,8 @@ struct SessionTab {
     int top = 0; // The first visible line, 0-based.
     std::uint64_t foldTextHash = 0;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> folds{};
+    int group = 0;
+    bool groupActive = false;
     friend bool operator==(const SessionTab&, const SessionTab&) = default;
 };
 
@@ -51,7 +53,9 @@ struct SessionToolWindow {
 struct SessionState {
     std::string root; // The canonical project root the state belongs to.
     std::vector<SessionTab> tabs;
-    int active = -1; // Index into tabs, or -1.
+    int active = -1;          // Index into tabs, or -1.
+    std::string editorLayout; // Splitter tree; empty for legacy flat sessions.
+    int activeGroup = 0;
     std::vector<SessionToolWindow> toolWindows;
     std::vector<std::string> recentFiles;
     std::vector<Place> recentLocations;

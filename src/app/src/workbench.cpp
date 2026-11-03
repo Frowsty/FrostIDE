@@ -13,6 +13,7 @@
 #include "frost/input/keymap.hpp"
 #include "frost/input/simulated_keyboard.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
@@ -43,6 +44,7 @@
 #include "language_bridge.hpp"
 #include "managed_debug_preparation.hpp"
 #include "project_edit_process.hpp"
+#include "settings_dialog.hpp"
 #include "unity_control.hpp"
 #include <QAction>
 #include <QApplication>
@@ -133,6 +135,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
       m_keymapSettings(services.settings), m_appearanceSettings(services.settings) {
     m_pool = std::make_unique<sched::ThreadPool>(
         sched::ThreadPoolOptions{.workerCount = m_options.workers != 0 ? m_options.workers : 2U});
+    m_commandsRetirement = std::make_shared<lang::GeneratedCommandsRetirement>(*m_pool);
 
     // The keymap on the given layout, else the thread's active one (en-US when it cannot be read).
     input::LayoutTable layout = [&] {
@@ -307,6 +310,7 @@ Workbench::~Workbench() {
         m_reactor->shutdown();
     }
     m_watcher.reset();
+    m_commandsRetirement->close();
     if (m_pool) {
         m_pool->shutdown();
     }
@@ -388,7 +392,7 @@ void Workbench::createRunService() {
         }
         if (!openPath(path.toStdString(), FileLocation{line, 1}))
             return nullptr;
-        auto* view = m_editors->find(path.toStdString());
+        auto* view = currentView();
         return view ? &view->editor() : nullptr;
     };
     debugHooks.notify = [this](const QString& title, const QString& message, bool error) {
@@ -483,6 +487,7 @@ void Workbench::registerActions() {
     };
     // Save All, Save, Reload All from Disk and Close Project are the navigation workbench's.
     add(wa::kOpenFolder, "Open Folder...", [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
+    add("file.settings", "Settings...", [this] { showSettings(); }, [this] { return m_window != nullptr; });
     add("window.structure", "Structure", [this] {
         if (m_window)
             m_window->toolWindows().activate("structure");
@@ -610,8 +615,10 @@ void Workbench::attach(ui::ShellWindow& window) {
         refreshAllMarkers();
     });
     connect(m_build.get(), &ui::BuildController::diagnosticAdded, this, [this](const build::BuildDiagnostic& d) {
-        if (DocumentEditorView* view = d.path.empty() ? nullptr : m_editors->find(d.path); view != nullptr) {
-            refreshMarkers(*view);
+        if (!d.path.empty()) {
+            for (DocumentEditorView* view : m_editors->views())
+                if (lang::documentKey(view->path()) == lang::documentKey(d.path))
+                    refreshMarkers(*view);
         }
     });
     connect(m_build.get(), &ui::BuildController::diagnosticsCleared, this, [this] { refreshAllMarkers(); });
@@ -628,6 +635,8 @@ void Workbench::detach() {
     if (!m_window) {
         return;
     }
+    delete m_settingsDialog.data();
+    m_settingsDialog = nullptr;
     m_window->mainToolbar().setProjectMenuBuilder({});
     QCoreApplication::instance()->removeEventFilter(this);
     cancelFind();
@@ -916,6 +925,20 @@ void Workbench::showOpenRecent() {
         QMetaObject::invokeMethod(this, [this, path] { (void)openProjectIdentity(path); }, Qt::QueuedConnection);
     });
     popup->showCentered(m_window, 0.2);
+}
+
+void Workbench::showSettings() {
+    if (!m_window)
+        return;
+    if (m_settingsDialog) {
+        m_settingsDialog->raise();
+        m_settingsDialog->activateWindow();
+        return;
+    }
+    auto* dialog = new SettingsDialog(m_services.settings, m_window);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_settingsDialog = dialog;
+    dialog->open();
 }
 
 void Workbench::refreshRecent() {

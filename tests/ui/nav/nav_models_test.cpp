@@ -110,6 +110,26 @@ protected:
     frost::io::MemFs fs;
 };
 
+TEST(Session, SplitMetadataRoundTripsAndLegacyDefaultsToOneGroup) {
+    frost::ui::nav::SessionState state;
+    state.root = "/project";
+    state.editorLayout = R"({"children":[{"group":0},{"group":1}]})";
+    state.activeGroup = 1;
+    frost::ui::nav::SessionTab tab;
+    tab.path = "/project/a.cpp";
+    tab.group = 1;
+    tab.groupActive = true;
+    state.tabs.push_back(tab);
+    const auto decoded = frost::ui::nav::decodeSession(frost::ui::nav::encodeSession(state));
+    ASSERT_TRUE(decoded);
+    EXPECT_EQ(*decoded, state);
+    const auto legacy = frost::ui::nav::decodeSession(R"({"version":1,"tabs":[{"path":"/a"}]})");
+    ASSERT_TRUE(legacy);
+    EXPECT_TRUE(legacy->editorLayout.empty());
+    ASSERT_EQ(legacy->tabs.size(), 1U);
+    EXPECT_EQ(legacy->tabs.front().group, 0);
+}
+
 TEST(Session, MalformedFoldEntryDiscardsTheEntireFoldState) {
     const auto loaded = frost::ui::nav::decodeSession(
         R"({"version":1,"root":"/proj","tabs":[{"path":"/proj/a.cpp","foldTextHash":42,"folds":[[1,4],[9,2],[12,15]]}]})");

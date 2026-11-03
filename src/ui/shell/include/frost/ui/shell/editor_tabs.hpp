@@ -23,6 +23,7 @@
 class QLabel;
 class QMenu;
 class QStackedWidget;
+class QSplitter;
 class QToolButton;
 
 namespace frost::ui {
@@ -55,12 +56,12 @@ private:
  * open path activates its tab. Closing asks IEditorView::requestClose() first; a veto keeps the
  * tab. The factory must outlive the widget. GUI thread only. Every operation is O(tabs).
  */
-class EditorTabs final : public QWidget, private IEditorHost {
+class EditorTabGroup final : public QWidget, private IEditorHost {
     Q_OBJECT
 
 public:
-    explicit EditorTabs(IEditorFactory& factory, QWidget* parent = nullptr);
-    ~EditorTabs() override;
+    explicit EditorTabGroup(IEditorFactory& factory, QWidget* parent = nullptr);
+    ~EditorTabGroup() override;
 
     // Opens `path` (UTF-8) in a new tab, or activates its tab; returns the tab index. The tab is
     // keyed by IEditorFactory::canonicalPath(path) (ADR 0042). Errors: the factory's.
@@ -123,6 +124,7 @@ public:
     void setTitleColorProvider(TitleColorProvider provider);
     // Recolours every tab title from the provider (after the colours moved). O(tabs).
     void refreshTitleColors();
+    void setGroupCloseVisible(bool visible);
     // The title colour tab `index` shows (invalid: the default).
     [[nodiscard]] QColor titleColor(int index) const;
 
@@ -133,6 +135,8 @@ signals:
     void statusUpdated(frost::ui::IEditorView* editor);
     // A tab was opened or closed.
     void tabCountChanged(int count);
+    void splitRequested(Qt::Orientation orientation);
+    void closeGroupRequested();
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -159,12 +163,74 @@ private:
     IEditorFactory& m_factory;
     EditorTabBar* m_bar;
     QToolButton* m_listButton;
+    QToolButton* m_closeGroupButton;
     QStackedWidget* m_stack;
     QLabel* m_empty;
     QWidget* m_emptyWidget = nullptr; // setEmptyStateWidget's; nullptr: m_empty.
     std::vector<Tab> m_tabs;
     std::uint64_t m_activationClock = 0;
     bool m_syncing = false;
+    TitleColorProvider m_titleColors;
+};
+
+// Stable editor-area API. Tab indexes are local to the active group.
+class EditorTabs final : public QWidget {
+    Q_OBJECT
+public:
+    explicit EditorTabs(IEditorFactory& factory, QWidget* parent = nullptr);
+    ~EditorTabs() override;
+    [[nodiscard]] Result<int> open(const std::string& path, bool activate = true);
+    [[nodiscard]] int count() const noexcept;
+    [[nodiscard]] int totalCount() const noexcept;
+    [[nodiscard]] int groupCount() const noexcept;
+    [[nodiscard]] int currentIndex() const;
+    [[nodiscard]] int indexOf(const std::string& path) const;
+    [[nodiscard]] IEditorView* editor(int index) const;
+    [[nodiscard]] IEditorView* currentEditor() const;
+    [[nodiscard]] QString tabText(int index) const;
+    void activate(int index);
+    void activateNext();
+    void activatePrevious();
+    bool close(int index);
+    void closeOthers(int index);
+    void closeAll();
+    void closeAllButPinned();
+    void setPinned(int index, bool pinned);
+    [[nodiscard]] bool isPinned(int index) const;
+    [[nodiscard]] bool isDirty(int index) const;
+    [[nodiscard]] std::vector<int> mruOrder() const;
+    [[nodiscard]] EditorTabBar* tabBar() const noexcept;
+    [[nodiscard]] QToolButton* tabListButton() const noexcept;
+    void populateTabList(QMenu& menu);
+    [[nodiscard]] bool isOverflowing() const;
+    [[nodiscard]] QLabel* emptyState() const noexcept;
+    void setEmptyStateWidget(QWidget* widget);
+    [[nodiscard]] QWidget* emptyStateWidget() const noexcept;
+    using TitleColorProvider = EditorTabGroup::TitleColorProvider;
+    void setTitleColorProvider(TitleColorProvider provider);
+    void refreshTitleColors();
+    [[nodiscard]] QColor titleColor(int index) const;
+    // Split the active group, opening a second view of its current document.
+    [[nodiscard]] bool split(Qt::Orientation orientation);
+    // Closes the active group, respecting each document's close veto.
+    [[nodiscard]] bool closeGroup();
+    [[nodiscard]] std::string saveLayout() const;
+    [[nodiscard]] bool restoreLayout(const std::string& layout);
+    [[nodiscard]] std::vector<EditorTabGroup*> groups() const { return m_groups; }
+    [[nodiscard]] EditorTabGroup* activeGroup() const noexcept { return m_active; }
+    void setActiveGroup(EditorTabGroup* group);
+signals:
+    void currentEditorChanged(frost::ui::IEditorView* editor);
+    void statusUpdated(frost::ui::IEditorView* editor);
+    // The total across groups; count() reports only the active group.
+    void tabCountChanged(int count);
+
+private:
+    EditorTabGroup* makeGroup();
+    IEditorFactory& m_factory;
+    QSplitter* m_root;
+    EditorTabGroup* m_active = nullptr;
+    std::vector<EditorTabGroup*> m_groups;
     TitleColorProvider m_titleColors;
 };
 

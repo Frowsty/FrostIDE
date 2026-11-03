@@ -473,11 +473,11 @@ bool EditorView::applyUpdate(Result<text::EditorUpdate> update) {
     return true;
 }
 
-Result<void> EditorView::followExternalChange(const text::ChangeSet& change) {
+Result<void> EditorView::followExternalChange(const text::ChangeSet& change, bool notifyTextChange) {
     auto update = m_editor->follow(change);
     if (!update)
         return std::unexpected(std::move(update.error()));
-    afterChange(*update);
+    afterChange(*update, notifyTextChange);
     return {};
 }
 
@@ -504,7 +504,7 @@ bool EditorView::apply(const text::CommandResult& result) {
     return applyUpdate(m_editor->apply(result));
 }
 
-void EditorView::afterChange(const text::EditorUpdate& update) {
+void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextChange) {
     if (update.change) {
         // Grapheme boundaries can change anywhere on an edited line (for example regional
         // indicator parity), even when the edit did not touch the stored endpoint itself.
@@ -579,7 +579,7 @@ void EditorView::afterChange(const text::EditorUpdate& update) {
     viewport()->update();
     emitStatus();
     armInputToPaint();
-    if (update.change && update.change->version != update.change->baseVersion) {
+    if (notifyTextChange && update.change && update.change->version != update.change->baseVersion) {
         emit textChanged(*update.change);
     }
 }

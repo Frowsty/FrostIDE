@@ -191,7 +191,7 @@ void LanguageBridge::openLocation(std::string_view path, lang::LspPosition posit
     if (!m_workbench.openPath(path)) {
         return;
     }
-    DocumentEditorView* view = m_workbench.editors().find(path);
+    DocumentEditorView* view = m_workbench.currentView();
     if (view == nullptr) {
         return;
     }
@@ -215,7 +215,7 @@ void LanguageBridge::setUsageHighlights(std::vector<lang::DocumentHighlight> hig
 
 std::vector<std::pair<std::string, text::Snapshot>> LanguageBridge::openDocuments() const {
     std::vector<std::pair<std::string, text::Snapshot>> documents;
-    for (DocumentEditorView* view : m_workbench.editors().views()) {
+    for (DocumentEditorView* view : m_workbench.editors().uniqueDocumentViews()) {
         documents.emplace_back(view->path(), view->editor().editor().text());
     }
     return documents;

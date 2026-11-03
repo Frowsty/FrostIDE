@@ -15,13 +15,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <format>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -63,6 +67,68 @@ struct StoreTest : ::testing::Test {
     void SetUp() override { ASSERT_TRUE(fs.createDirectories(kRoot)); }
 };
 
+// Holds one completed read or exists call so the test controls the read/publish interleaving.
+class HeldFs final : public frost::io::IFileSystem {
+public:
+    enum class Gate { None, Read, Exists };
+    explicit HeldFs(MemFs& fs) : m_fs(fs) {}
+    void arm(Gate gate) {
+        std::lock_guard lock(m_mutex);
+        m_gate = gate;
+        m_entered = false;
+        m_released = false;
+    }
+    bool waitEntered() {
+        std::unique_lock lock(m_mutex);
+        return m_cv.wait_for(lock, 5s, [&] { return m_entered; });
+    }
+    void release() {
+        std::lock_guard lock(m_mutex);
+        m_released = true;
+        m_cv.notify_all();
+    }
+    frost::Result<std::string> readFile(std::string_view path) override {
+        auto result = m_fs.readFile(path);
+        hold(Gate::Read, path);
+        return result;
+    }
+    frost::Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return m_fs.writeFileAtomic(path, data);
+    }
+    frost::Result<frost::io::FileStatus> status(std::string_view path) override { return m_fs.status(path); }
+    frost::Result<std::vector<frost::io::DirEntry>> listDirectory(std::string_view path) override {
+        return m_fs.listDirectory(path);
+    }
+    frost::Result<frost::io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        return m_fs.listDirectoryWithDiagnostics(path);
+    }
+    frost::Result<void> createDirectories(std::string_view path) override { return m_fs.createDirectories(path); }
+    frost::Result<void> removeFile(std::string_view path) override { return m_fs.removeFile(path); }
+    frost::Result<void> removeDirectory(std::string_view path) override { return m_fs.removeDirectory(path); }
+    frost::Result<bool> exists(std::string_view path) override {
+        auto result = m_fs.exists(path);
+        hold(Gate::Exists, path);
+        return result;
+    }
+
+private:
+    void hold(Gate gate, std::string_view path) {
+        std::unique_lock lock(m_mutex);
+        if (path != kAppFile || m_gate != gate)
+            return;
+        m_gate = Gate::None;
+        m_entered = true;
+        m_cv.notify_all();
+        m_cv.wait(lock, [&] { return m_released; });
+    }
+    MemFs& m_fs;
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    Gate m_gate = Gate::None;
+    bool m_entered = false;
+    bool m_released = false;
+};
+
 TEST_F(StoreTest, DefaultsWithoutFiles) {
     const auto store = open();
     const auto snapshot = store->snapshot();
@@ -101,6 +167,160 @@ TEST_F(StoreTest, ScopePrecedence) {
     ASSERT_TRUE(store->reset(Scope::Application, key::editorTabSize.name));
     EXPECT_EQ(store->snapshot()->get(key::editorTabSize), 4);
     EXPECT_NE(read(kPersonal).find("\"layout\": {\"left\": 200}"), std::string::npos);
+}
+
+TEST_F(StoreTest, ConditionalEditsPreserveOtherChangesAndRejectConflicts) {
+    write(kAppFile, R"({"schemaVersion": 1, "editor.tabSize": 2, "unknown": "keep"})");
+    const auto store = open();
+    auto before = store->readScopeDocument(Scope::Application);
+    ASSERT_TRUE(before);
+    const auto* member = before->find(key::editorTabSize.name);
+    ASSERT_NE(member, nullptr);
+    const std::string original(before->rawValue(*member));
+    // An unrelated external edit is retained by the single replacement.
+    write(kAppFile, R"({"schemaVersion": 1, "editor.tabSize": 2, "unknown": "changed"})");
+    const std::vector<ConditionalSettingEdit> edits{
+        {std::string(key::editorTabSize.name), original, Value(std::int64_t{8})},
+        {std::string(key::editorSoftWrap.name), std::nullopt, Value(true)}};
+    ASSERT_TRUE(store->applyConditional(Scope::Application, edits));
+    EXPECT_NE(read(kAppFile).find("\"unknown\": \"changed\""), std::string::npos);
+    EXPECT_EQ(store->snapshot()->get(key::editorTabSize), 8);
+    write(kAppFile, R"({"schemaVersion": 1, "editor.tabSize": 7, "unknown": "changed"})");
+    const std::string external = read(kAppFile);
+    EXPECT_EQ(store->applyConditional(Scope::Application, edits).error().code(), ErrorCode::Busy);
+    EXPECT_EQ(read(kAppFile), external);
+    const std::vector<ConditionalSettingEdit> invalid{
+        {std::string(key::editorTabSize.name), std::string("7"), Value(std::int64_t{0})}};
+    EXPECT_EQ(store->applyConditional(Scope::Application, invalid).error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(read(kAppFile), external);
+}
+
+TEST_F(StoreTest, ConcurrentConditionalEditsOnOneStoreHaveOneWinner) {
+    write(kAppFile, R"({"editor.tabSize": 2})");
+    const auto store = open();
+    const std::vector<ConditionalSettingEdit> first{
+        {std::string(key::editorTabSize.name), std::string("2"), Value(std::int64_t{4})}};
+    const std::vector<ConditionalSettingEdit> second{
+        {std::string(key::editorTabSize.name), std::string("2"), Value(std::int64_t{8})}};
+    std::atomic<int> successes{0};
+    std::atomic<int> conflicts{0};
+    const auto attempt = [&](const std::vector<ConditionalSettingEdit>& edits) {
+        auto result = store->applyConditional(Scope::Application, edits);
+        if (result)
+            ++successes;
+        else if (result.error().code() == ErrorCode::Busy)
+            ++conflicts;
+    };
+    std::thread a(attempt, std::cref(first));
+    std::thread b(attempt, std::cref(second));
+    a.join();
+    b.join();
+    EXPECT_EQ(successes, 1);
+    EXPECT_EQ(conflicts, 1);
+}
+
+TEST_F(StoreTest, HeldPrepareAndReloadCannotOverwriteNewerStoreWrites) {
+    HeldFs held(fs);
+    auto opened = SettingsStore::open(builtinRegistry(), held, paths(), StoreOptions{.style = PathStyle::Posix});
+    ASSERT_TRUE(opened);
+    auto store = std::move(*opened);
+    held.arm(HeldFs::Gate::Exists);
+    std::thread prepare([&] { (void)store->prepareForEditing(Scope::Application); });
+    const bool entered = held.waitEntered();
+    std::atomic<bool> started{false};
+    std::atomic<bool> finished{false};
+    std::thread writer([&] {
+        started = true;
+        (void)store->set(Scope::Application, key::editorTabSize, std::int64_t{8});
+        finished = true;
+    });
+    while (!started)
+        std::this_thread::yield();
+    const auto firstDeadline = std::chrono::steady_clock::now() + 200ms;
+    while (!finished && std::chrono::steady_clock::now() < firstDeadline)
+        std::this_thread::yield();
+    EXPECT_FALSE(finished.load());
+    held.release();
+    prepare.join();
+    writer.join();
+    ASSERT_TRUE(entered);
+    EXPECT_EQ(store->snapshot()->get(key::editorTabSize), 8);
+    EXPECT_NE(read(kAppFile).find("\"editor.tabSize\": 8"), std::string::npos);
+
+    held.arm(HeldFs::Gate::Read);
+    std::thread reload([&] { (void)store->reload(Scope::Application); });
+    const bool readEntered = held.waitEntered();
+    started = false;
+    finished = false;
+    std::thread second([&] {
+        started = true;
+        (void)store->set(Scope::Application, key::editorTabSize, std::int64_t{12});
+        finished = true;
+    });
+    while (!started)
+        std::this_thread::yield();
+    const auto secondDeadline = std::chrono::steady_clock::now() + 200ms;
+    while (!finished && std::chrono::steady_clock::now() < secondDeadline)
+        std::this_thread::yield();
+    EXPECT_FALSE(finished.load());
+    held.release();
+    reload.join();
+    second.join();
+    ASSERT_TRUE(readEntered);
+    EXPECT_EQ(store->snapshot()->get(key::editorTabSize), 12);
+    EXPECT_NE(read(kAppFile).find("\"editor.tabSize\": 12"), std::string::npos);
+}
+
+TEST_F(StoreTest, ConditionalBatchFailureIsAtomicAndListenersCanWrite) {
+    write(kAppFile, R"({"editor.tabSize": 2})");
+    const auto store = open();
+    const std::string before = read(kAppFile);
+    const std::vector<ConditionalSettingEdit> edits{
+        {std::string(key::editorTabSize.name), std::string("2"), Value(std::int64_t{8})},
+        {std::string(key::editorSoftWrap.name), std::nullopt, Value(true)}};
+    fs.injectFault(frost::io::FsOp::AtomicRename, kAppFile, ErrorCode::PermissionDenied);
+    EXPECT_EQ(store->applyConditional(Scope::Application, edits).error().code(), ErrorCode::PermissionDenied);
+    EXPECT_EQ(read(kAppFile), before);
+    EXPECT_EQ(store->snapshot()->get(key::editorTabSize), 2);
+    EXPECT_FALSE(store->snapshot()->get(key::editorSoftWrap));
+    bool nested = false;
+    const Subscription listener = store->subscribe([&](const SettingsChange&) {
+        if (!nested) {
+            nested = true;
+            EXPECT_TRUE(store->set(Scope::Application, key::uiZoom, std::int64_t{125}));
+        }
+    });
+    ASSERT_TRUE(store->applyConditional(Scope::Application, edits));
+    EXPECT_TRUE(nested);
+    EXPECT_EQ(store->snapshot()->get(key::uiZoom), 125);
+    EXPECT_EQ(store->snapshot()->get(key::editorTabSize), 8);
+}
+
+TEST_F(StoreTest, ConditionalResetAbsentKeyDoesNotCreateFileOrDirectory) {
+    const auto store = open();
+    const std::vector<ConditionalSettingEdit> edits{{std::string(key::editorTabSize.name), std::nullopt, std::nullopt}};
+    ASSERT_TRUE(store->applyConditional(Scope::ProjectShared, edits));
+    EXPECT_FALSE(fs.exists(kShared).value());
+    EXPECT_FALSE(fs.exists("/work/app/.frost").value());
+}
+
+TEST_F(StoreTest, SavedProjectDiagnosticsKeepTrustWarningsWithoutPublishingStaleBytes) {
+    const auto store = open(false);
+    const std::string oldBytes = R"({"cmake.profiles":[{"name":"old"}]})";
+    const std::string newerBytes = R"({"build.msbuild.extraArguments":["/v:minimal"]})";
+    write(kShared, newerBytes);
+    const auto check = store->checkSavedFile(kShared, oldBytes);
+    ASSERT_TRUE(check);
+    EXPECT_TRUE(std::ranges::any_of(check->diagnostics, [](const Diagnostic& diagnostic) {
+        return diagnostic.key == "cmake.profiles" && diagnostic.severity == Severity::Warning;
+    }));
+    EXPECT_FALSE(check->notifications.empty());
+    const auto snapshot = store->snapshot();
+    EXPECT_NE(std::ranges::find(snapshot->ignoredUntilTrusted(), "build.msbuild.extraArguments"),
+              snapshot->ignoredUntilTrusted().end());
+    EXPECT_EQ(std::ranges::find(snapshot->ignoredUntilTrusted(), "cmake.profiles"),
+              snapshot->ignoredUntilTrusted().end());
+    EXPECT_EQ(read(kShared), newerBytes);
 }
 
 TEST_F(StoreTest, InvalidValuesAndDisallowedScopesFallBack) {

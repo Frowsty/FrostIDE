@@ -101,6 +101,62 @@ TEST(WorkbenchStructure, ClangdRestartChangesEncodingAndRefreshes) {
     EXPECT_EQ(rig.workbench->currentView()->editor().editor().state().primary().head, frost::ByteOffset{8});
 }
 
+TEST(WorkbenchStructure, SplitViewsSendOneDocumentChangeAndRetainOpenUntilLastView) {
+    WorkDir dir("structure-split-notifications");
+    dir.write("main.cpp", "-- \xf0\x9f\x98\x80 target\n");
+    dir.write("structure-name", "symbol\n");
+    dir.write("other.cpp", "int other;\n");
+    dir.write("structure-log", "enabled\n");
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsClangdPath,
+                                  std::string(FROST_STRUCTURE_LSP)));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    rig.window->toolWindows().show("structure");
+    const QString barrier = QString::fromStdString(dir.join("structure-requested"));
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    auto readLog = [&] { return dir.read("structure-notifications"); };
+    auto count = [&](std::string_view needle) {
+        const std::string log = readLog();
+        int total = 0;
+        for (std::size_t at = 0; (at = log.find(needle, at)) != std::string::npos; at += needle.size())
+            ++total;
+        return total;
+    };
+    auto& tabs = rig.window->tabs();
+    QFile::remove(barrier);
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    EXPECT_EQ(count("notification textDocument/didOpen"), 1);
+    EXPECT_EQ(count("notification textDocument/didChange"), 0);
+    QFile::remove(barrier);
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("x"));
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    EXPECT_EQ(count("notification textDocument/didChange"), 1);
+    QFile::remove(barrier);
+    ASSERT_TRUE(tabs.closeGroup());
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    EXPECT_EQ(count("notification textDocument/didClose"), 0);
+    auto* service = rig.workbench->clangd();
+    ASSERT_NE(service, nullptr);
+    QFile::remove(barrier);
+    ASSERT_TRUE(service->killServerForTesting());
+    ASSERT_TRUE(waitFor([&] { return service->restarts() == 1 && QFile::exists(barrier); }, 20s));
+    EXPECT_EQ(count("notification textDocument/didOpen"), 2);
+    EXPECT_EQ(count("notification textDocument/didChange"), 1);
+    QFile::remove(barrier);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("other.cpp")));
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    QFile::remove(barrier);
+    ASSERT_TRUE(tabs.close(tabs.indexOf(dir.join("main.cpp"))));
+    tabs.activate(tabs.currentIndex());
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    EXPECT_EQ(count("notification textDocument/didClose"), 1);
+}
+
 TEST(WorkbenchLua, FrostProjectIdentitySurvivesRecentAndSessionReopen) {
     WorkDir dir("frost-identity", "tiny_sln");
     dir.write("Game.frostproj", "{}");

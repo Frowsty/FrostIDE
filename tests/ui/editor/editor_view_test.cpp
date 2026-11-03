@@ -75,6 +75,32 @@ TEST(EditorView, TypingAppearsInTheDocumentAndRepaints) {
     EXPECT_EQ(h.text(), "ab c");
 }
 
+TEST(EditorView, PeerFollowKeepsSharedDocumentInSyncWithoutRepeatingTextChange) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("abc");
+    EditorServices services;
+    services.keys = h.keys.get();
+    services.clock = &h.sim;
+    auto peer = createEditorView(h.document, "notes.txt", services, {});
+    int originChanges = 0;
+    int peerChanges = 0;
+    QObject::connect(peer.get(), &EditorView::textChanged, [&] { ++peerChanges; });
+    QObject::connect(h.view.get(), &EditorView::textChanged, [&](const text::ChangeSet& change) {
+        ++originChanges;
+        EXPECT_TRUE(peer->followExternalChange(change, false).has_value());
+    });
+    h.type("x");
+    EXPECT_EQ(h.text(), "xabc");
+    EXPECT_EQ(originChanges, 1);
+    EXPECT_EQ(peerChanges, 0);
+    EXPECT_EQ(peer->editor().display().version(), h.document.version());
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), "abc");
+    EXPECT_EQ(originChanges, 2);
+    EXPECT_EQ(peerChanges, 0);
+    EXPECT_EQ(peer->editor().display().version(), h.document.version());
+}
+
 TEST(EditorView, FoldedTextIsPaintedAndNavigationRevealsIt) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("before {\nsecret\n}\nafter\n");

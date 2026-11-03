@@ -225,6 +225,23 @@ public:
     }
 };
 
+class OwnedCompileCommandsProvider final : public ICompileCommandsProvider {
+public:
+    OwnedCompileCommandsProvider(std::shared_ptr<ICompileCommandsProvider> inner,
+                                 std::shared_ptr<GeneratedCommandsLease> lease)
+        : m_inner(std::move(inner)), m_lease(std::move(lease)) {}
+    Result<std::optional<CompileCommandsLocation>> locate() override {
+        auto result = m_inner->locate();
+        if (result && *result)
+            (**result).generatedLease = m_lease;
+        return result;
+    }
+
+private:
+    std::shared_ptr<ICompileCommandsProvider> m_inner;
+    std::shared_ptr<GeneratedCommandsLease> m_lease;
+};
+
 [[nodiscard]] std::string firstLines(std::string_view text, std::size_t count) {
     std::string out;
     std::size_t start = 0;
@@ -454,8 +471,13 @@ std::vector<CompileCommand> commandsFromEvaluation(const ProjectEvaluation& eval
 MsBuildCompileCommandsProvider::MsBuildCompileCommandsProvider(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                                std::shared_ptr<const project::SolutionModel> model,
                                                                std::string cacheDirectory,
-                                                               MsBuildProviderOptions options)
+                                                               MsBuildProviderOptions options,
+                                                               std::string cleanupBoundary,
+                                                               std::vector<std::string> cleanupParents)
     : m_launcher(launcher), m_fs(fs), m_model(std::move(model)), m_cacheDirectory(outputDirectory(cacheDirectory)),
+      m_lease(std::make_shared<GeneratedCommandsLease>(fs, cleanupBoundary.empty() ? cacheDirectory : cleanupBoundary,
+                                                       m_cacheDirectory, std::move(cleanupParents),
+                                                       options.retirement)),
       m_options(std::move(options)) {}
 
 Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::locate() { return locate({}); }
@@ -577,19 +599,24 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
         return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
-    return writeCompileCommandsLocation(m_fs, m_cacheDirectory, all, CompileCommandsSource::Evaluated);
+    auto result = writeCompileCommandsLocation(m_fs, m_cacheDirectory, all, CompileCommandsSource::Evaluated);
+    if (result && *result)
+        (**result).generatedLease = m_lease;
+    return result;
 }
 
 std::shared_ptr<ICompileCommandsProvider>
 solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                              std::shared_ptr<const project::SolutionModel> model, std::string root,
                              std::string cacheDirectory, MsBuildProviderOptions options) {
+    const std::string cleanupBoundary = cacheDirectory;
     cacheDirectory = outputDirectory(cacheDirectory);
     SynthesisOptions synthesis = options.fallback;
     if (synthesis.configuration.empty()) {
         synthesis.configuration = options.configuration;
     }
     std::function<Result<MsvcEnvironment>()> msvc = options.msvc;
+    auto retirement = options.retirement;
     std::vector<std::shared_ptr<ICompileCommandsProvider>> chain;
     chain.push_back(std::make_shared<ExistingCompileCommandsProvider>(fs, std::move(root)));
     if (cacheDirectory.empty()) {
@@ -597,9 +624,15 @@ solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs
         return std::make_shared<FirstAvailableCompileCommandsProvider>(std::move(chain));
     }
     chain.push_back(std::make_shared<MsBuildCompileCommandsProvider>(
-        launcher, fs, model, join(cacheDirectory, "evaluated"), std::move(options)));
-    chain.push_back(std::make_shared<SolutionCompileCommandsProvider>(
-        fs, std::move(model), join(cacheDirectory, "synthesized"), std::move(synthesis), std::move(msvc)));
+        launcher, fs, model, join(cacheDirectory, "evaluated"), std::move(options), cleanupBoundary,
+        std::vector<std::string>{join(cacheDirectory, "evaluated"), cacheDirectory}));
+    const std::string synthesized = join(cacheDirectory, "synthesized");
+    auto fallback = std::make_shared<SolutionCompileCommandsProvider>(fs, std::move(model), synthesized,
+                                                                      std::move(synthesis), std::move(msvc));
+    chain.push_back(std::make_shared<OwnedCompileCommandsProvider>(
+        std::move(fallback),
+        std::make_shared<GeneratedCommandsLease>(fs, cleanupBoundary, synthesized,
+                                                 std::vector<std::string>{cacheDirectory}, std::move(retirement))));
     return std::make_shared<FirstAvailableCompileCommandsProvider>(std::move(chain));
 }
 

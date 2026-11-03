@@ -460,7 +460,7 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
 bool Workbench::closeProject() {
     static_cast<void>(saveSession());
     m_shell.tabs().closeAll();
-    if (m_shell.tabs().count() > 0) {
+    if (m_shell.tabs().totalCount() > 0) {
         return false; // A tab whose save failed was kept by the user; so is the project.
     }
     stopWatching();
@@ -980,13 +980,22 @@ nav::SessionState Workbench::captureSession() const {
     nav::SessionState state;
     state.root = m_root;
     const EditorTabs& tabs = m_shell.tabs();
-    for (int i = 0; i < tabs.count(); ++i) {
-        const IEditorView* editor = tabs.editor(i);
-        const EditorViewState view = editor->viewState();
-        state.tabs.push_back(nav::SessionTab{editor->path(), tabs.isPinned(i), view.line, view.column, view.topLine,
-                                             view.foldTextHash, view.folds});
+    state.editorLayout = tabs.saveLayout();
+    const auto groups = tabs.groups();
+    for (std::size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+        const EditorTabGroup* group = groups[groupIndex];
+        if (group == tabs.activeGroup())
+            state.activeGroup = static_cast<int>(groupIndex);
+        for (int i = 0; i < group->count(); ++i) {
+            const IEditorView* editor = group->editor(i);
+            const EditorViewState view = editor->viewState();
+            if (group == tabs.activeGroup() && i == group->currentIndex())
+                state.active = static_cast<int>(state.tabs.size());
+            state.tabs.push_back(nav::SessionTab{editor->path(), group->isPinned(i), view.line, view.column,
+                                                 view.topLine, view.foldTextHash, view.folds,
+                                                 static_cast<int>(groupIndex), i == group->currentIndex()});
+        }
     }
-    state.active = tabs.currentIndex();
     ToolWindowManager& windows = m_shell.toolWindows();
     windows.syncSizesFromSplitters();
     for (const std::string& id : windows.ids()) {
@@ -1000,30 +1009,42 @@ nav::SessionState Workbench::captureSession() const {
 void Workbench::applySession(const nav::SessionState& state) {
     m_restoring = true;
     EditorTabs& tabs = m_shell.tabs();
-    int active = -1;
+    if (!tabs.restoreLayout(state.editorLayout))
+        (void)tabs.restoreLayout(R"({"group":0})");
+    const auto groups = tabs.groups();
+    std::vector<std::string> selected(groups.size());
+    int activeGroup =
+        state.activeGroup >= 0 && static_cast<std::size_t>(state.activeGroup) < groups.size() ? state.activeGroup : 0;
+    std::string activePath;
     for (std::size_t i = 0; i < state.tabs.size(); ++i) {
         const nav::SessionTab& tab = state.tabs[i];
-        // ShellWindow::openFile notifies a failure (a deleted file, the large-file guard).
+        const int groupIndex = tab.group >= 0 && static_cast<std::size_t>(tab.group) < groups.size() ? tab.group : 0;
+        tabs.setActiveGroup(groups[static_cast<std::size_t>(groupIndex)]);
         Result<int> opened = m_shell.openFile(tab.path);
-        if (!opened) {
+        if (!opened)
             continue;
-        }
         IEditorView* editor = tabs.editor(*opened);
         editor->restoreViewState(EditorViewState{tab.line, tab.column, tab.top, tab.foldTextHash, tab.folds});
         m_lastPlaces[editor->path()] = nav::Place{editor->path(), tab.line, tab.column};
-        if (tab.pinned) {
+        if (tab.pinned)
             tabs.setPinned(tabs.indexOf(editor->path()), true);
-        }
+        if (tab.groupActive)
+            selected[static_cast<std::size_t>(groupIndex)] = editor->path();
         if (static_cast<int>(i) == state.active) {
-            active = tabs.indexOf(editor->path());
+            activeGroup = groupIndex;
+            activePath = editor->path();
         }
     }
-    if (active < 0 && state.active >= 0 && static_cast<std::size_t>(state.active) < state.tabs.size()) {
-        active = tabs.indexOf(state.tabs[static_cast<std::size_t>(state.active)].path);
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        if (!selected[i].empty()) {
+            tabs.setActiveGroup(groups[i]);
+            tabs.activate(tabs.indexOf(selected[i]));
+        }
     }
-    if (active >= 0) {
-        tabs.activate(active);
-        m_activePath = tabs.editor(active)->path();
+    tabs.setActiveGroup(groups[static_cast<std::size_t>(activeGroup)]);
+    if (!activePath.empty()) {
+        tabs.activate(tabs.indexOf(activePath));
+        m_activePath = activePath;
     }
     ToolWindowManager& windows = m_shell.toolWindows();
     for (const nav::SessionToolWindow& window : state.toolWindows) {

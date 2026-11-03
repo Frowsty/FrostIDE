@@ -62,6 +62,108 @@ TEST(EditorTabs, OpensActivatesAndReusesTabs) {
     EXPECT_EQ(tabs.count(), 3);
 }
 
+TEST(EditorTabs, SplitGroupsKeepIndependentTabsAndActiveRouting) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/a.cpp").has_value());
+    auto* first = tabs.activeGroup();
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    auto* second = tabs.activeGroup();
+    ASSERT_NE(first, second);
+    EXPECT_EQ(tabs.groupCount(), 2);
+    EXPECT_EQ(tabs.currentEditor()->path(), "/a.cpp");
+    ASSERT_TRUE(tabs.open("/b.cpp").has_value());
+    EXPECT_EQ(second->count(), 2);
+    EXPECT_EQ(first->count(), 1);
+    tabs.setActiveGroup(first);
+    EXPECT_EQ(tabs.currentEditor()->path(), "/a.cpp");
+    ASSERT_TRUE(tabs.split(Qt::Vertical));
+    EXPECT_EQ(tabs.groupCount(), 3);
+    EXPECT_TRUE(tabs.closeGroup());
+    EXPECT_EQ(tabs.groupCount(), 2);
+    tabs.setActiveGroup(second);
+    EXPECT_EQ(tabs.currentEditor()->path(), "/b.cpp");
+    tabs.closeAll();
+    EXPECT_EQ(tabs.totalCount(), 0);
+}
+
+TEST(EditorTabs, FocusSwitchChangesActiveGroup) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    tabs.show();
+    ASSERT_TRUE(tabs.open("/a.cpp").has_value());
+    auto* first = tabs.activeGroup();
+    QWidget* firstWidget = tabs.currentEditor()->widget();
+    firstWidget->setFocusPolicy(Qt::StrongFocus);
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    auto* second = tabs.activeGroup();
+    QWidget* secondWidget = tabs.currentEditor()->widget();
+    secondWidget->setFocusPolicy(Qt::StrongFocus);
+    firstWidget->setFocus();
+    QApplication::processEvents();
+    EXPECT_EQ(tabs.activeGroup(), first);
+    secondWidget->setFocus();
+    QApplication::processEvents();
+    EXPECT_EQ(tabs.activeGroup(), second);
+}
+
+TEST(EditorTabs, EmptySplitGroupHasCloseControl) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/a.cpp"));
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    ASSERT_TRUE(tabs.close(tabs.currentIndex()));
+    auto* button = tabs.activeGroup()->findChild<QToolButton*>(QStringLiteral("closeEditorGroup"));
+    ASSERT_NE(button, nullptr);
+    EXPECT_FALSE(button->isHidden());
+    button->click();
+    EXPECT_EQ(tabs.groupCount(), 1);
+    EXPECT_EQ(tabs.currentEditor()->path(), "/a.cpp");
+}
+
+TEST(EditorTabs, SplitLayoutRoundTripsAndRejectsInvalidTree) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/a.cpp").has_value());
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    ASSERT_TRUE(tabs.split(Qt::Vertical));
+    const std::string layout = tabs.saveLayout();
+    tabs.closeAll();
+    ASSERT_TRUE(tabs.restoreLayout(layout));
+    EXPECT_EQ(tabs.groupCount(), 3);
+    EXPECT_EQ(tabs.saveLayout(), layout);
+    EXPECT_FALSE(tabs.restoreLayout(R"({"children":[{"group":0},{"group":0}]})"));
+    EXPECT_EQ(tabs.groupCount(), 3);
+}
+
+TEST(EditorTabs, CloseGroupRespectsInactiveDocumentVeto) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/a.cpp").has_value());
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    ASSERT_TRUE(tabs.open("/b.cpp").has_value());
+    factory.last->allowClose = false;
+    EXPECT_FALSE(tabs.closeGroup());
+    EXPECT_EQ(tabs.groupCount(), 2);
+    EXPECT_EQ(tabs.totalCount(), 2);
+    tabs.closeAll();
+    EXPECT_EQ(tabs.totalCount(), 1);
+}
+
+TEST(EditorTabs, CloseAllRetainsVetoedTabInInactiveGroup) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/a.cpp"));
+    auto* first = tabs.activeGroup();
+    factory.last->allowClose = false;
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    ASSERT_TRUE(tabs.open("/b.cpp"));
+    tabs.closeAll();
+    EXPECT_EQ(tabs.totalCount(), 1);
+    EXPECT_EQ(first->count(), 1);
+    EXPECT_EQ(first->currentEditor()->path(), "/a.cpp");
+}
+
 TEST(EditorTabs, DirtyMarkerFollowsTheEditor) {
     FakeEditorFactory factory;
     EditorTabs tabs(factory);

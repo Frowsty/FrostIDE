@@ -344,7 +344,7 @@ void SettingsStore::notify(const SettingsChange& change) {
     }
 }
 
-std::vector<std::string> SettingsStore::replaceLayer(Scope scope, Layer layer) {
+SettingsChange SettingsStore::installLayer(Scope scope, Layer layer) {
     SettingsChange change;
     {
         const LockGuard lock(m_mutex);
@@ -355,8 +355,7 @@ std::vector<std::string> SettingsStore::replaceLayer(Scope scope, Layer layer) {
         slot = std::move(layer);
         change = republish();
     }
-    notify(change);
-    return change.keys;
+    return change;
 }
 
 std::shared_ptr<const SettingsSnapshot> SettingsStore::snapshot() const {
@@ -404,22 +403,26 @@ std::vector<std::string> SettingsStore::watchDirectories() const {
 }
 
 Result<void> SettingsStore::setProject(std::optional<ProjectLayout> project) {
-    if (project) {
-        auto layout = ProjectLayout::forRoot(project->root, m_style);
-        if (!layout) {
-            return std::unexpected(layout.error());
-        }
-        project = std::move(*layout);
-    }
-    Layer shared = loadLayer(Scope::ProjectShared, project ? project->sharedSettings : std::string(), nullptr);
-    Layer personal = loadLayer(Scope::ProjectPersonal, project ? project->personalSettings : std::string(), nullptr);
     SettingsChange change;
     {
-        const LockGuard lock(m_mutex);
-        m_state->paths.project = std::move(project);
-        m_state->layers[1] = std::move(shared);
-        m_state->layers[2] = std::move(personal);
-        change = republish();
+        const LockGuard editLock(m_editMutex);
+        if (project) {
+            auto layout = ProjectLayout::forRoot(project->root, m_style);
+            if (!layout) {
+                return std::unexpected(layout.error());
+            }
+            project = std::move(*layout);
+        }
+        Layer shared = loadLayer(Scope::ProjectShared, project ? project->sharedSettings : std::string(), nullptr);
+        Layer personal =
+            loadLayer(Scope::ProjectPersonal, project ? project->personalSettings : std::string(), nullptr);
+        {
+            const LockGuard lock(m_mutex);
+            m_state->paths.project = std::move(project);
+            m_state->layers[1] = std::move(shared);
+            m_state->layers[2] = std::move(personal);
+            change = republish();
+        }
     }
     notify(change);
     return {};
@@ -440,13 +443,19 @@ std::vector<std::string> SettingsStore::reload(Scope scope) {
     if (!index) {
         return {};
     }
-    Layer previous;
+    SettingsChange change;
     {
-        const LockGuard lock(m_mutex);
-        previous = m_state->layers[*index];
+        const LockGuard editLock(m_editMutex);
+        Layer previous;
+        {
+            const LockGuard lock(m_mutex);
+            previous = m_state->layers[*index];
+        }
+        Layer layer = loadLayer(scope, previous.path, &previous);
+        change = installLayer(scope, std::move(layer));
     }
-    Layer layer = loadLayer(scope, previous.path, &previous);
-    return replaceLayer(scope, std::move(layer));
+    notify(change);
+    return change.keys;
 }
 
 std::vector<std::string> SettingsStore::applyChanges(const io::FileChangeBatch& batch) {
@@ -496,58 +505,63 @@ Result<void> SettingsStore::editFile(Scope scope, const std::function<Result<boo
     if (auto ok = checkFileScope(scope); !ok) {
         return ok;
     }
-    std::string path;
-    std::optional<ProjectLayout> project;
+    SettingsChange change;
     {
-        const LockGuard lock(m_mutex);
-        path = m_state->layers[*layerIndex(scope)].path;
-        project = m_state->paths.project;
-    }
-    if (path.empty()) {
-        return fail(ErrorCode::NotFound,
-                    std::format("there is no {} settings file (no project is open)", toString(scope)));
-    }
-    if (isProjectScope(scope) && project) {
-        if (auto ok = ensureProjectLayout(*m_fs, *project); !ok) {
-            return ok;
+        const LockGuard editLock(m_editMutex);
+        std::string path;
+        std::optional<ProjectLayout> project;
+        {
+            const LockGuard lock(m_mutex);
+            path = m_state->layers[*layerIndex(scope)].path;
+            project = m_state->paths.project;
         }
-    } else if (auto made = m_fs->createDirectories(io::parentPath(path, m_style)); !made) {
-        return made;
-    }
-    auto bytes = m_fs->readFile(path);
-    SettingsDocument document;
-    if (bytes) {
-        auto parsed = SettingsDocument::parse(std::move(*bytes));
-        if (!parsed) {
-            Error error = parsed.error();
-            return std::unexpected(std::move(error).withContext(std::format("{} was left unchanged", path)));
+        if (path.empty()) {
+            return fail(ErrorCode::NotFound,
+                        std::format("there is no {} settings file (no project is open)", toString(scope)));
         }
-        document = std::move(*parsed);
-    } else if (bytes.error().code() == ErrorCode::NotFound) {
-        document = SettingsDocument::create(m_migrations->currentVersion());
-    } else {
-        return std::unexpected(bytes.error());
+        auto bytes = m_fs->readFile(path);
+        SettingsDocument document;
+        if (bytes) {
+            auto parsed = SettingsDocument::parse(std::move(*bytes));
+            if (!parsed) {
+                Error error = parsed.error();
+                return std::unexpected(std::move(error).withContext(std::format("{} was left unchanged", path)));
+            }
+            document = std::move(*parsed);
+        } else if (bytes.error().code() == ErrorCode::NotFound) {
+            document = SettingsDocument::create(m_migrations->currentVersion());
+        } else {
+            return std::unexpected(bytes.error());
+        }
+        auto migrated = m_migrations->apply(document);
+        if (!migrated) {
+            return std::unexpected(migrated.error());
+        }
+        if (migrated->newer) {
+            return fail(ErrorCode::Unsupported,
+                        std::format("{} was written by a newer FrostIDE (settings version {}); it is left unchanged",
+                                    path, migrated->fromVersion));
+        }
+        auto edited = edit(document);
+        if (!edited) {
+            return std::unexpected(edited.error());
+        }
+        if (!*edited) {
+            return {}; // Nothing to change on disk.
+        }
+        if (isProjectScope(scope) && project) {
+            if (auto ok = ensureProjectLayout(*m_fs, *project); !ok) {
+                return ok;
+            }
+        } else if (auto made = m_fs->createDirectories(io::parentPath(path, m_style)); !made) {
+            return made;
+        }
+        if (auto written = m_fs->writeFileAtomic(path, document.bytes()); !written) {
+            return written;
+        }
+        change = installLayer(scope, layerFromBytes(scope, path, document.bytes(), nullptr));
     }
-    auto migrated = m_migrations->apply(document);
-    if (!migrated) {
-        return std::unexpected(migrated.error());
-    }
-    if (migrated->newer) {
-        return fail(ErrorCode::Unsupported,
-                    std::format("{} was written by a newer FrostIDE (settings version {}); it is left unchanged", path,
-                                migrated->fromVersion));
-    }
-    auto edited = edit(document);
-    if (!edited) {
-        return std::unexpected(edited.error());
-    }
-    if (!*edited && bytes) {
-        return {}; // Nothing to change on disk.
-    }
-    if (auto written = m_fs->writeFileAtomic(path, document.bytes()); !written) {
-        return written;
-    }
-    (void)replaceLayer(scope, layerFromBytes(scope, path, document.bytes(), nullptr));
+    notify(change);
     return {};
 }
 
@@ -584,71 +598,179 @@ Result<void> SettingsStore::reset(Scope scope, std::string_view key) {
         return fail(ErrorCode::NotFound,
                     std::format("there is no {} settings file (no project is open)", toString(scope)));
     }
-    // A missing file has nothing to reset: do not create one (and no .frost/ either).
-    auto exists = m_fs->exists(pathOf(scope));
-    if (!exists) {
-        return std::unexpected(exists.error());
-    }
-    if (!*exists) {
-        return {};
-    }
     return editFile(scope, [&](SettingsDocument& document) -> Result<bool> { return document.remove(key); });
 }
 
-std::optional<SaveCheck> SettingsStore::checkSavedFile(std::string_view path, std::string_view bytes) {
-    const auto scope = scopeOf(path);
-    if (!scope) {
-        return std::nullopt;
+Result<SettingsDocument> SettingsStore::readScopeDocument(Scope scope) const {
+    const LockGuard editLock(m_editMutex);
+    if (auto ok = checkFileScope(scope); !ok) {
+        return std::unexpected(ok.error());
     }
-    Layer previous;
-    {
-        const LockGuard lock(m_mutex);
-        previous = m_state->layers[*layerIndex(*scope)];
+    const std::string path = pathOf(scope);
+    if (path.empty()) {
+        return fail(ErrorCode::NotFound, "there is no settings file for this scope");
     }
-    (void)replaceLayer(*scope, layerFromBytes(*scope, previous.path, bytes, &previous));
-    SaveCheck check{.scope = *scope, .diagnostics = {}, .notifications = {}};
-    for (const Diagnostic& diagnostic : snapshot()->diagnostics()) {
-        if (diagnostic.path == previous.path) {
-            check.diagnostics.push_back(diagnostic);
+    auto bytes = m_fs->readFile(path);
+    if (!bytes && bytes.error().code() != ErrorCode::NotFound) {
+        return std::unexpected(bytes.error());
+    }
+    auto document = bytes ? SettingsDocument::parse(std::move(*bytes))
+                          : Result<SettingsDocument>(SettingsDocument::create(m_migrations->currentVersion()));
+    if (!document) {
+        return std::unexpected(document.error());
+    }
+    auto migrated = m_migrations->apply(*document);
+    if (!migrated) {
+        return std::unexpected(migrated.error());
+    }
+    if (migrated->newer) {
+        return fail(ErrorCode::Unsupported, std::format("{} was written by a newer FrostIDE", path));
+    }
+    return document;
+}
+
+Result<void> SettingsStore::applyConditional(Scope scope, std::span<const ConditionalSettingEdit> edits) {
+    if (edits.empty()) {
+        return {};
+    }
+    if (auto ok = checkFileScope(scope); !ok) {
+        return ok;
+    }
+    for (std::size_t i = 0; i < edits.size(); ++i) {
+        const auto& edit = edits[i];
+        const KeySpec* spec = m_registry->find(edit.key);
+        if (spec == nullptr) {
+            return fail(ErrorCode::NotFound, std::format("{} is not a known setting", edit.key));
+        }
+        if (!spec->scopes.has(scope)) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("{} cannot be set in {} settings", edit.key, toString(scope)));
+        }
+        if (std::ranges::any_of(edits.first(i), [&](const auto& previous) { return previous.key == edit.key; })) {
+            return fail(ErrorCode::InvalidArgument, std::format("{} is edited twice", edit.key));
+        }
+        if (edit.value) {
+            if (auto valid = validateValue(spec->schema, *edit.value); !valid) {
+                return fail(ErrorCode::InvalidArgument, std::format("{} {}", edit.key, valid.error().message()));
+            }
         }
     }
-    check.notifications = toNotifications(check.diagnostics);
-    return check;
+    return editFile(scope, [&](SettingsDocument& document) -> Result<bool> {
+        for (const auto& edit : edits) {
+            const auto* member = document.find(edit.key);
+            const std::optional<std::string> current =
+                member ? std::optional<std::string>(document.rawValue(*member)) : std::nullopt;
+            if (current != edit.expectedRaw) {
+                return fail(ErrorCode::Busy, std::format("{} changed since the dialog was opened", edit.key));
+            }
+        }
+        bool changed = false;
+        for (const auto& edit : edits) {
+            if (edit.value) {
+                if (auto set = document.set(edit.key, *edit.value); !set)
+                    return std::unexpected(set.error());
+                changed = true;
+            } else {
+                auto removed = document.remove(edit.key);
+                if (!removed)
+                    return std::unexpected(removed.error());
+                changed = changed || *removed;
+            }
+        }
+        return changed;
+    });
+}
+
+std::optional<SaveCheck> SettingsStore::checkSavedFile(std::string_view path, std::string_view bytes) {
+    SettingsChange change;
+    std::optional<SaveCheck> result;
+    {
+        const LockGuard editLock(m_editMutex);
+        const auto scope = scopeOf(path);
+        if (!scope) {
+            return std::nullopt;
+        }
+        Layer previous;
+        {
+            const LockGuard lock(m_mutex);
+            previous = m_state->layers[*layerIndex(*scope)];
+        }
+        Layer saved = layerFromBytes(*scope, previous.path, bytes, &previous);
+        SaveCheck check{.scope = *scope, .diagnostics = saved.diagnostics, .notifications = {}};
+        bool trusted = false;
+        {
+            const LockGuard lock(m_mutex);
+            trusted = m_state->trusted;
+        }
+        if (isProjectScope(*scope) && !trusted) {
+            for (std::size_t i = 0; i < saved.values.size(); ++i) {
+                const KeySpec& spec = m_registry->at(i);
+                if (!saved.values[i] || !spec.executes || !spec.scopes.has(*scope))
+                    continue;
+                const auto position =
+                    std::ranges::find_if(saved.positions, [i](const auto& entry) { return entry.first == i; });
+                check.diagnostics.push_back(
+                    Diagnostic{.severity = Severity::Warning,
+                               .scope = *scope,
+                               .path = previous.path,
+                               .key = spec.key,
+                               .line = position != saved.positions.end() ? position->second.first : 0,
+                               .column = position != saved.positions.end() ? position->second.second : 0,
+                               .message = "runs code, so it is ignored until the project is trusted"});
+            }
+        }
+        check.notifications = toNotifications(check.diagnostics);
+        auto disk = m_fs->readFile(previous.path);
+        if (disk && *disk == bytes) {
+            change = installLayer(*scope, std::move(saved));
+        } else {
+            change = installLayer(*scope, loadLayer(*scope, previous.path, &previous));
+        }
+        result = std::move(check);
+    }
+    notify(change);
+    return result;
 }
 
 Result<std::string> SettingsStore::prepareForEditing(Scope scope) {
     if (auto ok = checkFileScope(scope); !ok) {
         return std::unexpected(ok.error());
     }
-    const std::string path = pathOf(scope);
-    std::optional<ProjectLayout> project;
+    std::string path;
+    SettingsChange change;
     {
-        const LockGuard lock(m_mutex);
-        project = m_state->paths.project;
-    }
-    if (path.empty()) {
-        return fail(ErrorCode::NotFound,
-                    std::format("there is no {} settings file (no project is open)", toString(scope)));
-    }
-    if (isProjectScope(scope) && project) {
-        if (auto ok = ensureProjectLayout(*m_fs, *project); !ok) {
-            return std::unexpected(ok.error());
+        const LockGuard editLock(m_editMutex);
+        path = pathOf(scope);
+        std::optional<ProjectLayout> project;
+        {
+            const LockGuard lock(m_mutex);
+            project = m_state->paths.project;
         }
-    } else if (auto made = m_fs->createDirectories(io::parentPath(path, m_style)); !made) {
-        return std::unexpected(made.error());
-    }
-    auto exists = m_fs->exists(path);
-    if (!exists) {
-        return std::unexpected(exists.error());
-    }
-    if (!*exists) {
-        if (auto written =
-                m_fs->writeFileAtomic(path, SettingsDocument::create(m_migrations->currentVersion()).bytes());
-            !written) {
-            return std::unexpected(written.error());
+        if (path.empty()) {
+            return fail(ErrorCode::NotFound,
+                        std::format("there is no {} settings file (no project is open)", toString(scope)));
         }
-        (void)reload(scope);
+        if (isProjectScope(scope) && project) {
+            if (auto ok = ensureProjectLayout(*m_fs, *project); !ok) {
+                return std::unexpected(ok.error());
+            }
+        } else if (auto made = m_fs->createDirectories(io::parentPath(path, m_style)); !made) {
+            return std::unexpected(made.error());
+        }
+        auto exists = m_fs->exists(path);
+        if (!exists) {
+            return std::unexpected(exists.error());
+        }
+        if (!*exists) {
+            if (auto written =
+                    m_fs->writeFileAtomic(path, SettingsDocument::create(m_migrations->currentVersion()).bytes());
+                !written) {
+                return std::unexpected(written.error());
+            }
+            change = installLayer(scope, loadLayer(scope, path, nullptr));
+        }
     }
+    notify(change);
     return path;
 }
 

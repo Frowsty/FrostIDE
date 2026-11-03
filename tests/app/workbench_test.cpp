@@ -26,11 +26,17 @@
 #include "frost/ui/toolwindows/solution_tree_model.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
 
+#include "../../src/app/src/language_bridge.hpp"
 #include "workbench_rig.hpp"
 #include <QAction>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -387,6 +393,58 @@ TEST(Workbench, TypingMarksTheTabDirtyAndCtrlSWritesTheExactBytes) {
     EXPECT_EQ(view->status().lineSeparator, "CRLF");
 }
 
+TEST(Workbench, SplitViewsShareUndoAndClosingOneKeepsDirtyDocument) {
+    WorkDir dir("split-shared");
+    dir.write("a.txt", "one\n");
+    dir.write("b.txt", "two\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.txt")));
+    auto& tabs = rig.window->tabs();
+    auto* firstGroup = tabs.activeGroup();
+    DocumentEditorView* first = rig.workbench->editors().views().front();
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    ASSERT_EQ(rig.workbench->editors().views().size(), 2U);
+    DocumentEditorView* second = rig.workbench->editors().views().back();
+    ASSERT_EQ(&first->document(), &second->document());
+    ASSERT_TRUE(second->editor().typeText("x"));
+    EXPECT_EQ(first->editor().editor().display().version(), first->document().document().version());
+    EXPECT_TRUE(first->document().dirty());
+    tabs.setActiveGroup(firstGroup);
+    first->widget()->setFocus();
+    QApplication::processEvents();
+    sendKey(first->widget(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(first->document().document().text().text(), "one\n");
+    sendKey(first->widget(), Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(first->document().document().text().text(), "xone\n");
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("b.txt")));
+    ASSERT_EQ(firstGroup->count(), 2);
+    tabs.setActiveGroup(tabs.groups().back());
+    ASSERT_TRUE(tabs.closeGroup());
+    EXPECT_TRUE(first->document().dirty());
+    EXPECT_EQ(dir.read("a.txt"), "one\n");
+    tabs.setActiveGroup(firstGroup);
+    ASSERT_TRUE(tabs.close(tabs.indexOf(dir.join("a.txt"))));
+    EXPECT_EQ(dir.read("a.txt"), "xone\n");
+}
+
+TEST(Workbench, LanguageLocationUsesActiveSplitAndDocumentsAreUnique) {
+    WorkDir dir("split-language-location");
+    dir.write("a.cpp", "one\ntwo\nthree\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.cpp")));
+    auto& tabs = rig.window->tabs();
+    auto* first = rig.workbench->editors().views().front();
+    ASSERT_TRUE(tabs.split(Qt::Horizontal));
+    auto* second = rig.workbench->editors().views().back();
+    frost::app::LanguageBridge bridge(*rig.workbench);
+    ASSERT_EQ(bridge.openDocuments().size(), 1U);
+    bridge.openLocation(dir.join("a.cpp"), frost::lang::LspPosition{2, 0});
+    EXPECT_EQ(second->status().line, 3);
+    EXPECT_EQ(first->status().line, 1);
+}
+
 TEST(Workbench, ClosingADirtyTabSavesIt) {
     WorkDir dir("close");
     dir.write("a.txt", "one\n");
@@ -611,6 +669,62 @@ TEST(Workbench, ProjectSwitcherOpenTreatsCMakeListsAsProjectIdentity) {
     EXPECT_EQ(rig.window->tabs().count(), 0);
     ASSERT_FALSE(frost::app::recentProjects(*rig.settings->snapshot()).empty());
     EXPECT_EQ(frost::app::recentProjects(*rig.settings->snapshot()).front(), dir.join("cmake/CMakeLists.txt"));
+}
+
+TEST(Workbench, SettingsDialogAppliesResetsAndDetectsExternalChanges) {
+    WorkDir dir("settings-dialog");
+    WorkbenchRig rig(dir);
+    rig.show();
+    rig.window->refreshActions();
+    auto* gear = rig.window->mainToolbar().button(frost::ui::MainToolbar::kSettings);
+    ASSERT_NE(gear, nullptr);
+    ASSERT_TRUE(gear->isEnabled());
+    gear->click();
+    auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto* tabSize = dialog->findChild<QSpinBox*>(QStringLiteral("setting.editor.tabSize"));
+    auto* search = dialog->findChild<QLineEdit*>(QStringLiteral("settingsSearch"));
+    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+    ASSERT_NE(tabSize, nullptr);
+    ASSERT_NE(search, nullptr);
+    ASSERT_NE(buttons, nullptr);
+    search->setText(QStringLiteral("no matching setting exists"));
+    auto* empty = dialog->findChild<QLabel*>(QStringLiteral("settingsNoResults"));
+    ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->isVisible());
+    search->setText(QStringLiteral("tab size"));
+    EXPECT_TRUE(tabSize->isVisible());
+    tabSize->setValue(6);
+    // Another setting changed while this dialog was open survives Apply.
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::uiZoom, std::int64_t{125}));
+    buttons->button(QDialogButtonBox::Apply)->click();
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTabSize), 6);
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::uiZoom), 125);
+    tabSize->setValue(7);
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::editorTabSize, std::int64_t{8}));
+    buttons->button(QDialogButtonBox::Apply)->click();
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTabSize), 8);
+    auto* status = dialog->findChild<QLabel*>(QStringLiteral("settingsStatus"));
+    ASSERT_NE(status, nullptr);
+    EXPECT_TRUE(status->text().contains(QStringLiteral("changed"), Qt::CaseInsensitive));
+    QPushButton* reload = nullptr;
+    for (auto* button : buttons->findChildren<QPushButton*>())
+        if (button->text() == QStringLiteral("Reload"))
+            reload = button;
+    ASSERT_NE(reload, nullptr);
+    reload->click();
+    EXPECT_EQ(tabSize->value(), 8);
+    auto* reset = dialog->findChild<QPushButton*>(QStringLiteral("reset.editor.tabSize"));
+    ASSERT_NE(reset, nullptr);
+    EXPECT_EQ(reset->accessibleName(), QStringLiteral("Reset Tab size"));
+    reset->click();
+    buttons->button(QDialogButtonBox::Apply)->click();
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTabSize), 4);
+    tabSize->setValue(9);
+    buttons->button(QDialogButtonBox::Cancel)->click();
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTabSize), 4);
 }
 
 TEST(Workbench, WelcomeScreenListsRecentProjectsAndOpensOne) {

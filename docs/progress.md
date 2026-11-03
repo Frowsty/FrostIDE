@@ -3,6 +3,48 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Settings and split editors verified
+
+- Combined source tree `d77c8452` adds a searchable application Settings dialog with Apply,
+  Cancel and Reset, independent editor groups, shared document/undo state and persisted group
+  layouts. Language synchronization is deduplicated across views of the same document. Generated
+  compilation-command ownership now performs guarded cleanup on Windows; unsupported native
+  cleanup retains files. Astra reviewed the source joins and follow-up corrections.
+- Full Windows quick verification passed: 2869/2890 active tests, 21 skipped and one additional
+  disabled; formatting, lint, licences and feature checks passed. Equipped native Linux quick
+  verification passed 2722/2757, 35 skipped, and licence checks. Both processes exited zero.
+  Logs: `build/verify-managed-main-20261103-135719.log` and
+  `build/verify-settings-splits-r2-native.log`. Exact CTest logs are preserved as
+  `build/settings-splits-r2-windows-ctest.log` and `build/settings-splits-r2-native-ctest.log`.
+- The initial combined Windows gate failed an IPC fixture's directory cleanup and a C# diagnostics
+  wait, plus eight formatting checks. Both tests passed unchanged-binary reruns; their original
+  causes remain unproven. The IPC fixture now explicitly waits for its contained process tree and
+  releases the process handle before recovery/cleanup. The C# fixture retains its 30-second wait
+  and adds failure-only diagnostics. Both corrected cases passed three repetitions and the full gate.
+  Initial failures and the original unaccepted `codex-20261103-settings-splits` stage are retained.
+- New stage `E:\FrostBuilds\preview\codex-20261103-settings-splits-r2` passed startup, D3D11
+  and ConPTY checks. App DLL SHA-256 is
+  `08013716b0c1f06708228667fbff93d2c99132b4dc3ab590c89917002dea7ace`.
+  A private-desktop run verifies Settings tab size Apply/save, normal and narrow splits, reopen,
+  different documents in separate groups, shared edits/undo, group close and restored single-group
+  layout. Source bytes remained unchanged before cleanup. Astra matched all 60 entries in
+  `E:\FrostBuilds\settings-splits-acceptance\manifest-after-d77-r2-01.json` and reviewed captures.
+  The fixture has an unavailable library/include diagnostics: this establishes Settings, splits
+  and session behavior, not C++ build/intelligence or U1 acceptance.
+- Separate Lua work now has reviewed real FrostEngine paused-main Stop evidence and a reviewed
+  combined GUI/Lua source candidate. Three admission/reentrancy regressions pass; a broader isolated
+  selection has 26 passed and eight skipped. These changes are not included in this stage. CMake
+  in-place writer, project Rename, evaluated project trees and Unity Mono remain isolated unfinished
+  work. No complete Rider parity or language/engine acceptance is claimed.
+- The user selected GitHub Releases for `Frowsty/FrostIDE` as the updater host. Separate updater work
+  includes signed manifest/download verification and nine passing offline request-lifetime tests;
+  accepted-release persistence, full platform builds and installer handoff remain unfinished.
+  Installer format remains an open optional question. All eight Terra implementation agents hit
+  their usage limit; root continues implementation and Astra review remains available.
+- Next: integrate and fully verify Lua Stop/admission, complete the updater and continue CMake,
+  Rename, project evaluation and Unity integration. Existing hardening deferrals remain; missing
+  product behavior is not reclassified as hardening.
+
 ## 2026-11-03: Fresh C++ context and recent-project switcher verified
 
 - Frozen combined tree `cf5ef892` refreshes MSBuild compilation context instead of reusing an

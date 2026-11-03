@@ -46,7 +46,14 @@ DocumentEditorView* Workbench::currentView() const {
         return nullptr;
     }
     const ui::IEditorView* tab = m_window->tabs().currentEditor();
-    return tab != nullptr ? m_editors->find(tab->path()) : nullptr;
+    if (tab == nullptr)
+        return nullptr;
+    QWidget* container = const_cast<ui::IEditorView*>(tab)->widget();
+    for (DocumentEditorView* view : m_editors->views()) {
+        if (container == &view->editor() || container->isAncestorOf(&view->editor()))
+            return view;
+    }
+    return nullptr;
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
@@ -56,9 +63,11 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     if (m_debug)
         m_debug->attachEditor(&view.editor());
     refreshMarkers(view);
-    syncClangdDocument(view);
-    syncLuaDocument(view);
-    syncManagedDocument(view);
+    if (m_documentRegistry->viewCount(view.path()) == 1) {
+        syncClangdDocument(view);
+        syncLuaDocument(view);
+        syncManagedDocument(view);
+    }
     if (isManagedSource(view.path()) && !m_managed)
         offerManagedTrust();
     if (isLuaSource(view.path()) && !m_lua)
@@ -89,6 +98,8 @@ void Workbench::editorClosing(DocumentEditorView& view) {
 
 void Workbench::editorClosed(DocumentEditorView& view) {
     const std::string path = view.path();
+    if (m_documentRegistry->viewCount(path) > 1)
+        return;
     if (m_clangd && isCFamilySource(path))
         (void)m_clangd->closeDocument(path);
     if (m_managed && isManagedSource(path))
@@ -112,6 +123,14 @@ void Workbench::editorClosed(DocumentEditorView& view) {
 }
 
 void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) {
+    for (DocumentEditorView* peer : m_editors->views()) {
+        if (peer == &view || &peer->document() != &view.document())
+            continue;
+        if (auto followed = peer->editor().followExternalChange(change, false); !followed) {
+            log::warn(kLog, "peer editor synchronization: {}", followed.error().describe());
+            peer->reloadFromDocument();
+        }
+    }
     if (m_git)
         m_git->editorChanged();
     if (m_clangd && m_clangd->state() != lang::ClangdState::Stopped && isCFamilySource(view.path())) {
@@ -121,7 +140,7 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
         (void)m_managed->changeDocument(view.path(), change, view.document().document().text());
     if (m_lua && isLuaSource(view.path()))
         (void)m_lua->changeDocument(view.path(), change, view.document().document().text());
-    if (currentView() == &view)
+    if (DocumentEditorView* current = currentView(); current && &current->document() == &view.document())
         m_language->structureChanged();
     // What the user typed, now in the document and with clangd: completion and parameter info.
     if (!m_typed.empty()) {
@@ -133,6 +152,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
 }
 
 bool Workbench::editorCloseRequested(DocumentEditorView& view) {
+    if (m_documentRegistry->viewCount(view.path()) > 1)
+        return true;
     if (!view.document().dirty()) {
         return true;
     }
@@ -156,28 +177,36 @@ void Workbench::documentChanged(const std::string& path) {
     if (view == nullptr) {
         return;
     }
-    switch (view->followDocument()) {
-    case DocumentEditorView::Followed::Reloaded:
-        // The editor keeps its live diagnostics and usages (clamped) until clangd's next answer.
+    bool reloaded = false;
+    bool saved = false;
+    for (DocumentEditorView* peer : m_editors->views()) {
+        if (&peer->document() != &view->document())
+            continue;
+        switch (peer->followDocument()) {
+        case DocumentEditorView::Followed::Reloaded: reloaded = true; break;
+        case DocumentEditorView::Followed::Saved: saved = true; break;
+        case DocumentEditorView::Followed::Nothing: break;
+        }
+    }
+    if (reloaded) {
         syncClangdDocument(*view);
         syncLuaDocument(*view);
         syncManagedDocument(*view);
-        if (currentView() == view)
-            m_language->structureChanged();
-        if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>()) {
-            binding->refreshSemanticTokens();
+        for (DocumentEditorView* peer : m_editors->views()) {
+            if (&peer->document() == &view->document()) {
+                if (auto* binding = peer->editor().findChild<ui::lang::EditorInsightBinding*>())
+                    binding->refreshSemanticTokens();
+            }
         }
-        break;
-    case DocumentEditorView::Followed::Saved:
+        if (DocumentEditorView* current = currentView(); current && &current->document() == &view->document())
+            m_language->structureChanged();
+    } else if (saved) {
         if (m_managed && isManagedSource(view->path()))
             (void)m_managed->saveDocument(view->path());
         if (m_lua && isLuaSource(view->path()))
             (void)m_lua->saveDocument(view->path());
-        if (m_clangd && isCFamilySource(view->path())) {
+        if (m_clangd && isCFamilySource(view->path()))
             (void)m_clangd->saveDocument(view->path());
-        }
-        break;
-    case DocumentEditorView::Followed::Nothing: break;
     }
 }
 

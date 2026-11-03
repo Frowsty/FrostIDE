@@ -151,6 +151,14 @@ struct SaveCheck {
     std::vector<SettingsNotification> notifications; // toNotifications(diagnostics).
 };
 
+// One optimistic file edit. expectedRaw is the previously read JSON value, or nullopt
+// when the key was absent. value == nullopt removes the application override.
+struct ConditionalSettingEdit {
+    std::string key;
+    std::optional<std::string> expectedRaw;
+    std::optional<Value> value;
+};
+
 class SettingsStore {
 public:
     /*
@@ -197,6 +205,18 @@ public:
     // Removes `key` from `scope`'s file (the next lower scope applies again). Absent: success, no
     // write. Errors: as set(), without the value checks.
     [[nodiscard]] Result<void> reset(Scope scope, std::string_view key);
+
+    // Reads a migrated scope document without creating a missing file. Errors: as set(),
+    // including parse, migration and filesystem failures. Blocking; thread-safe.
+    [[nodiscard]] Result<SettingsDocument> readScopeDocument(Scope scope) const;
+    /*
+     * Applies validated edits to a freshly read scope document in one atomic replacement.
+     * If any edited key's raw JSON no longer matches expectedRaw, returns Busy without writing.
+     * Unrelated members are preserved. The underlying filesystem has no cross-process conditional
+     * replace: another writer racing between the read and atomic replacement can still win or lose.
+     * Blocking; thread-safe subject to that filesystem limitation. O(edits * file size).
+     */
+    [[nodiscard]] Result<void> applyConditional(Scope scope, std::span<const ConditionalSettingEdit> edits);
 
     /*
      * Reloads every scope file the batch touches, following file_watcher.hpp's rules for a consumer
@@ -246,13 +266,15 @@ private:
     // Rebuilds the snapshot from the layers; returns the change to publish (empty keys: nothing changed).
     [[nodiscard]] SettingsChange republish() FROST_REQUIRES(m_mutex);
     void notify(const SettingsChange& change);
-    std::vector<std::string> replaceLayer(Scope scope, Layer layer);
+    [[nodiscard]] SettingsChange installLayer(Scope scope, Layer layer);
     [[nodiscard]] Result<void> editFile(Scope scope, const std::function<Result<bool>(SettingsDocument&)>& edit);
 
     const Registry* m_registry;
     io::IFileSystem* m_fs;
     const MigrationSet* m_migrations;
     io::PathStyle m_style;
+    // Serializes this store's file read/modify/write operations; listeners run after release.
+    mutable Mutex m_editMutex;
     mutable Mutex m_mutex;
     std::unique_ptr<State> m_state FROST_PT_GUARDED_BY(m_mutex);
     std::shared_ptr<detail::ListenerTable> m_listeners;

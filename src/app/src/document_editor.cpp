@@ -202,6 +202,16 @@ Result<std::unique_ptr<ui::IEditorView>> DocumentEditorFactory::open(const std::
     return std::unique_ptr<ui::IEditorView>(std::move(view));
 }
 
+std::vector<DocumentEditorView*> DocumentEditorFactory::uniqueDocumentViews() const {
+    std::vector<DocumentEditorView*> result;
+    for (DocumentEditorView* view : m_views) {
+        if (std::ranges::none_of(
+                result, [view](DocumentEditorView* existing) { return &existing->document() == &view->document(); }))
+            result.push_back(view);
+    }
+    return result;
+}
+
 DocumentEditorView* DocumentEditorFactory::find(const document::FileDocument& document) const noexcept {
     const auto it =
         std::ranges::find_if(m_views, [&](DocumentEditorView* view) { return &view->document() == &document; });

@@ -45,6 +45,8 @@ frost_add_library(app LAYER app
         src/document_editor.cpp
         src/main_window.cpp
         src/selftest.cpp
+        src/settings_dialog.cpp
+        src/settings_dialog.hpp
         src/settings_adapters.cpp
         src/startup.cpp
         src/welcome_screen.cpp

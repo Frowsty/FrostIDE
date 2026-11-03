@@ -82,6 +82,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     unsigned restarts FROST_GUARDED_BY(mutex) = 0;
     std::uint64_t round FROST_GUARDED_BY(mutex) = 0; // Increments per launch; older clients' callbacks are ignored.
     std::shared_ptr<io::IAsyncProcess> process FROST_GUARDED_BY(mutex);
+    std::shared_ptr<GeneratedCommandsLease> processLease FROST_GUARDED_BY(mutex);
     std::shared_ptr<LspClient> client FROST_GUARDED_BY(mutex);
     std::optional<ServerCapabilities> capabilities FROST_GUARDED_BY(mutex);
     std::optional<CompileCommandsLocation> compileCommands FROST_GUARDED_BY(mutex);
@@ -354,6 +355,9 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 co_return;
             }
             std::shared_ptr<io::IAsyncProcess> process(std::move(*launched));
+            auto processLease = location ? location->generatedLease : nullptr;
+            if (processLease)
+                processLease->beginUse();
             std::uint64_t thisRound = 0;
             {
                 LockGuard lock(self->mutex);
@@ -364,6 +368,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             {
                 LockGuard lock(self->mutex);
                 self->process = process;
+                self->processLease = processLease;
                 self->client = client;
                 self->compileCommands = location;
                 self->capabilities.reset();
@@ -397,12 +402,22 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 if (!exited) {
                     co_return; // Stopped (or the reactor shut down): stop() takes over.
                 }
+                if (processLease)
+                    processLease->confirmExit();
                 roundError = Error(ErrorCode::IoError,
                                    std::format("clangd exited unexpectedly (exit code {})", exited->exitCode));
             } else {
                 static_cast<void>(process->terminate());
                 detail::Deadline reap(scheduler, std::chrono::seconds(5), stop);
-                static_cast<void>(co_await process->exited(reap.token()));
+                const auto exited = co_await process->exited(reap.token());
+                if (processLease) {
+                    if (exited)
+                        processLease->confirmExit();
+                    else
+                        processLease->abandonUse();
+                    LockGuard lock(self->mutex);
+                    self->processLease.reset();
+                }
                 if (stop.stop_requested()) {
                     co_return;
                 }
@@ -413,6 +428,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 ++self->restarts;
                 self->client.reset();
                 self->process.reset();
+                self->processLease.reset();
                 self->capabilities.reset();
             }
             if (self->options.onLifecycle)
@@ -445,10 +461,12 @@ ClangdService::~ClangdService() {
     m_shared->stop.request_stop();
     std::shared_ptr<LspClient> client;
     std::shared_ptr<io::IAsyncProcess> process;
+    std::shared_ptr<GeneratedCommandsLease> processLease;
     {
         LockGuard lock(m_shared->mutex);
         client = std::move(m_shared->client);
         process = std::move(m_shared->process);
+        processLease = std::move(m_shared->processLease);
         m_shared->state = ClangdState::Stopped;
     }
     if (client) {
@@ -457,6 +475,8 @@ ClangdService::~ClangdService() {
     if (process) {
         static_cast<void>(process->terminate());
     }
+    if (processLease)
+        processLease->abandonUse();
     m_supervisor.detach();
 }
 
@@ -490,11 +510,13 @@ sched::Task<void> ClangdService::finishStop() {
     }
     std::shared_ptr<LspClient> client;
     std::shared_ptr<io::IAsyncProcess> process;
+    std::shared_ptr<GeneratedCommandsLease> processLease;
     bool running = false;
     {
         LockGuard lock(self->mutex);
         client = std::move(self->client);
         process = std::move(self->process);
+        processLease = std::move(self->processLease);
         running = self->state == ClangdState::Running;
         self->state = ClangdState::Stopped;
         self->capabilities.reset();
@@ -518,9 +540,15 @@ sched::Task<void> ClangdService::finishStop() {
             log::warn(kLogCategory, "clangd did not exit in time; killing it");
             static_cast<void>(process->terminate());
             detail::Deadline reap(scheduler, std::chrono::seconds(5));
-            static_cast<void>(co_await process->exited(reap.token()));
+            exited = co_await process->exited(reap.token());
         } else {
             log::info(kLogCategory, "clangd exited with {}", exited->exitCode);
+        }
+        if (processLease) {
+            if (exited)
+                processLease->confirmExit();
+            else
+                processLease->abandonUse();
         }
     }
 }

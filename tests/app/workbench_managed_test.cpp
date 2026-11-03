@@ -259,7 +259,20 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
         [&] { return rig.workbench->managed() && rig.workbench->managed()->state() == frost::lang::LuaState::Running; },
         30s));
     auto* editor = &rig.workbench->currentView()->editor();
-    ASSERT_TRUE(waitFor([&] { return !editor->diagnostics().empty(); }, 30s));
+    ASSERT_TRUE(waitFor([&] { return !editor->diagnostics().empty(); }, 30s)) << [&] {
+        const auto* service = rig.workbench->managed();
+        if (!service)
+            return std::string("managed service stopped while waiting for diagnostics");
+        std::string details = "managed state=" + std::to_string(static_cast<int>(service->state())) +
+                              ", restarts=" + std::to_string(service->restarts());
+        const auto version = service->documentVersion(dir.join("App/Example.cs"));
+        details += ", open document version=" + (version ? std::to_string(*version) : "none");
+        if (const auto error = service->lastError())
+            details += "\n" + error->describe();
+        for (const auto& line : service->recentStderr())
+            details += "\n" + line;
+        return details;
+    }();
     editor->goToLine(6, 14);
     bool hover = waitFor(
         [&] {

@@ -329,6 +329,7 @@ void ShellWindow::addShellAction(std::string_view id, std::string_view name, std
 void ShellWindow::registerActions() {
     namespace a = actions;
     const auto hasTabs = [this] { return m_tabs != nullptr && m_tabs->count() > 0; };
+    const auto hasAnyTabs = [this] { return m_tabs != nullptr && m_tabs->totalCount() > 0; };
     const auto hasEditor = [this] { return m_tabs != nullptr && m_tabs->currentEditor() != nullptr; };
     const auto hasAppearance = [this] { return m_env.appearance != nullptr && m_env.appearanceSettings != nullptr; };
 
@@ -350,7 +351,7 @@ void ShellWindow::registerActions() {
     addShellAction(
         a::kCloseOtherTabs, "Close Other Tabs", "Window", [this] { m_tabs->closeOthers(m_tabs->currentIndex()); },
         hasTabs);
-    addShellAction(a::kCloseAllTabs, "Close All Tabs", "Window", [this] { m_tabs->closeAll(); }, hasTabs);
+    addShellAction(a::kCloseAllTabs, "Close All Tabs", "Window", [this] { m_tabs->closeAll(); }, hasAnyTabs);
     addShellAction(
         a::kCloseAllButPinned, "Close All but Pinned", "Window", [this] { m_tabs->closeAllButPinned(); }, hasTabs);
     addShellAction(

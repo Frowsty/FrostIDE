@@ -50,9 +50,13 @@ int main() {
         if (!message)
             return 2;
         const auto* id = message->find("id");
+        const auto method = message->stringAt("method");
+        if (std::filesystem::exists("structure-log")) {
+            std::ofstream log("structure-notifications", std::ios::app);
+            log << (id ? "request " : "notification ") << method << '\n';
+        }
         if (!id)
             continue;
-        const auto method = message->stringAt("method");
         Json result;
         if (method == "initialize") {
             result = Json::object().set("capabilities", Json::object()
