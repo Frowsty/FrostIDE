@@ -231,4 +231,26 @@ TEST(CompileCommandsProviders, SolutionGeneratorAndChain) {
     EXPECT_FALSE(broken.locate().has_value()); // The error surfaces when nothing was found.
 }
 
+TEST(CompileCommandsProviders, CancellationStopsTheChainBeforeFallback) {
+    frost::test::ScratchDir scratch("cancel-ccdb");
+    auto& fs = frost::io::realFileSystem();
+    std::stop_source stop;
+    int fallbackCalls = 0;
+    auto first = std::make_shared<frost::lang::GeneratorCompileCommandsProvider>(
+        fs, scratch.join("first"), [&]() -> frost::Result<std::vector<CompileCommand>> {
+            stop.request_stop();
+            return frost::fail(ErrorCode::IoError, "cancelled during provider");
+        });
+    auto fallback = std::make_shared<frost::lang::GeneratorCompileCommandsProvider>(
+        fs, scratch.join("fallback"), [&]() -> frost::Result<std::vector<CompileCommand>> {
+            ++fallbackCalls;
+            return std::vector<CompileCommand>{};
+        });
+    frost::lang::FirstAvailableCompileCommandsProvider chain({first, fallback});
+    const auto result = chain.locate(stop.get_token());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
+    EXPECT_EQ(fallbackCalls, 0);
+}
+
 } // namespace

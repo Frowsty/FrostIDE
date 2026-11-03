@@ -336,13 +336,15 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             self->setState(ClangdState::Starting);
             std::optional<CompileCommandsLocation> location;
             if (self->options.compileCommands) {
-                auto found = self->options.compileCommands->locate();
+                auto found = self->options.compileCommands->locate(stop);
                 if (found) {
                     location = *found;
                 } else {
                     log::warn(kLogCategory, "no compile commands: {}", found.error().describe());
                 }
             }
+            if (stop.stop_requested())
+                co_return;
             if (location) {
                 log::info(kLogCategory, "compile commands ({}): {}", toString(location->source), location->file);
             }
@@ -476,8 +478,12 @@ Result<void> ClangdService::start() {
 }
 
 sched::Task<void> ClangdService::stop() {
+    m_shared->stop.request_stop();
+    return finishStop();
+}
+
+sched::Task<void> ClangdService::finishStop() {
     std::shared_ptr<Shared> self = m_shared;
-    self->stop.request_stop();
     if (m_supervisor.valid()) {
         sched::JoinHandle<void> supervisor = std::move(m_supervisor);
         co_await std::move(supervisor);

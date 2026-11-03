@@ -11,6 +11,7 @@
 #include <QAbstractItemModel>
 #include <QActionEvent>
 #include <QComboBox>
+#include <QMenu>
 #include <QSizePolicy>
 #include <QTimer>
 
@@ -22,7 +23,7 @@ using shell_detail::text;
 
 MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     : QToolBar(parent), m_invoke(std::move(invoke)), m_project(new QToolButton(this)),
-      m_configurations(new QComboBox(this)) {
+      m_projectMenu(new QMenu(m_project)), m_configurations(new QComboBox(this)) {
     setObjectName(QStringLiteral("mainToolbar"));
     setWindowTitle(text("Main Toolbar"));
     setMovable(false);
@@ -36,6 +37,13 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     m_project->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_project->setIcon(shell_detail::themedIcon(icons::kNodesFolder));
     m_project->setToolTip(text("Current project"));
+    m_projectMenu->setObjectName(QStringLiteral("projectSwitcherMenu"));
+    connect(m_projectMenu, &QMenu::aboutToShow, this, [this] {
+        m_projectMenu->clear();
+        if (m_projectMenuBuilder) {
+            m_projectMenuBuilder(*m_projectMenu);
+        }
+    });
     QFont projectFont = m_project->font();
     projectFont.setBold(true);
     m_project->setFont(projectFont);
@@ -76,6 +84,18 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
 
 void MainToolbar::setProjectName(const QString& name) {
     m_project->setText(name.isEmpty() ? text("No project") : name);
+    m_project->setAccessibleName(text("Project: %1").arg(m_project->text()));
+}
+
+void MainToolbar::setProjectMenuBuilder(std::function<void(QMenu&)> builder) {
+    m_projectMenu->close();
+    m_projectMenuBuilder = std::move(builder);
+    const bool available = static_cast<bool>(m_projectMenuBuilder);
+    m_project->setMenu(available ? m_projectMenu : nullptr);
+    m_project->setPopupMode(available ? QToolButton::InstantPopup : QToolButton::DelayedPopup);
+    m_project->setFocusPolicy(available ? Qt::TabFocus : Qt::NoFocus);
+    m_project->setToolTip(available ? text("Open or switch project") : text("Current project"));
+    updateTabOrder();
 }
 
 QToolButton* MainToolbar::button(std::string_view actionId) const {

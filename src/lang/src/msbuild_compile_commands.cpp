@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The MSBuild-evaluated compile-commands provider (msbuild_compile_commands.hpp): the evaluation
-// command line, its JSON, the -pp import list, the clang-cl commands, the per-project cache and
+// command line, its JSON, the -pp import list, the clang-cl commands and
 // the provider chain of ADR 0041.
 
 #include "frost/lang/msbuild_compile_commands.hpp"
@@ -16,18 +16,103 @@
 #include "msvc_flags.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <format>
+#include <mutex>
 #include <set>
-#include <unordered_map>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace frost::lang {
 namespace {
 
+// MSBuild has no stdin input. Drain both pipes independently while wait/terminate remain
+// concurrent, as IProcess permits; communicate() cannot overlap terminate(). The watchdog
+// also bounds a descendant retaining an output pipe after the MSBuild process exits.
+Result<io::ProcessResult> runEvaluation(io::IProcessLauncher& launcher, const io::ProcessSpec& spec,
+                                        IClock::Duration timeout, std::stop_token stop) {
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
+    auto launched = launcher.launch(spec);
+    if (!launched)
+        return std::unexpected(std::move(launched.error()));
+    auto& process = **launched;
+    process.closeStdin();
+    std::atomic<bool> interrupted{false};
+    std::atomic<bool> expired{false};
+    auto interrupt = [&] {
+        if (!interrupted.exchange(true)) {
+            static_cast<void>(process.terminate());
+            process.abandonOutput();
+        }
+    };
+    std::stop_callback cancel(stop, interrupt);
+    std::mutex timerMutex;
+    std::condition_variable_any timer;
+    std::jthread watchdog([&](std::stop_token done) {
+        std::unique_lock lock(timerMutex);
+        if (!timer.wait_for(lock, done, timeout, [] { return false; }) && !done.stop_requested()) {
+            expired.store(true);
+            interrupt();
+        }
+    });
+    std::string out, err;
+    std::optional<Error> outError, errError;
+    auto drain = [&](bool stdoutStream, std::string& sink, std::optional<Error>& error) {
+        std::array<char, 8192> buffer{};
+        for (;;) {
+            auto count = stdoutStream ? process.readStdout(buffer) : process.readStderr(buffer);
+            if (!count) {
+                error = std::move(count.error());
+                return;
+            }
+            if (*count == 0)
+                return;
+            sink.append(buffer.data(), *count);
+        }
+    };
+    std::jthread stdoutReader([&] { drain(true, out, outError); });
+    std::jthread stderrReader([&] { drain(false, err, errError); });
+    Result<io::ExitStatus> status = fail(ErrorCode::Timeout, "MSBuild is running");
+    while (!interrupted.load()) {
+        status = process.wait(std::chrono::milliseconds(50));
+        if (status || status.error().code() != ErrorCode::Timeout)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // Scripted waits may return immediately.
+    }
+    if (!status && status.error().code() != ErrorCode::Timeout)
+        interrupt();
+    if (interrupted.load())
+        status = process.wait(std::chrono::seconds(5));
+    stdoutReader.join();
+    stderrReader.join();
+    watchdog.request_stop();
+    watchdog.join();
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
+    if (expired.load())
+        return fail(ErrorCode::Timeout, "MSBuild evaluation timed out");
+    if (!status)
+        return std::unexpected(std::move(status.error()));
+    if (outError)
+        return std::unexpected(std::move(*outError));
+    if (errError)
+        return std::unexpected(std::move(*errError));
+    return io::ProcessResult{status->exitCode, status->signal, std::move(out), std::move(err)};
+}
+
 using namespace detail; // msvc_flags.hpp
 
 constexpr std::string_view kLogCategory = "lang";
-constexpr int kCacheVersion = 1;
 
 [[nodiscard]] std::string escapeMsBuildValue(std::string_view value) {
     std::string out;
@@ -113,73 +198,32 @@ constexpr int kCacheVersion = 1;
     return "/EHsc"; // Sync and MSVC's default.
 }
 
-[[nodiscard]] std::uint64_t fnv1a(std::string_view text) noexcept {
-    std::uint64_t hash = 0xcbf29ce484222325ULL;
-    for (const char c : text) {
-        hash ^= static_cast<unsigned char>(c);
-        hash *= 0x100000001b3ULL;
-    }
-    return hash;
-}
-
 [[nodiscard]] std::string join(std::string_view base, std::string_view name) {
     auto joined = io::joinPath(base, name);
     return joined ? std::move(*joined) : std::string(base);
 }
 
-// File status for cache keys: size and modification time, or size -1 for a missing file.
-struct FileStamp {
-    std::int64_t size = -1;
-    std::int64_t mtime = 0;
-    friend bool operator==(const FileStamp&, const FileStamp&) = default;
-};
+[[nodiscard]] std::string outputDirectory(std::string_view base) {
+    static std::atomic<std::uint64_t> sequence{0};
+#ifdef _WIN32
+    const auto pid = GetCurrentProcessId();
+    FILETIME creation{}, exit{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user))
+        return {};
+    const auto started = (static_cast<std::uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+#else
+    const auto pid = getpid();
+    const std::uint64_t started = 0;
+#endif
+    return join(base, std::format("evaluation-{}-{}-{}", pid, started, sequence.fetch_add(1)));
+}
 
-class StampCache {
+class UnavailableCompileCommandsProvider final : public ICompileCommandsProvider {
 public:
-    explicit StampCache(io::IFileSystem& fs) : m_fs(fs) {}
-    FileStamp stamp(const std::string& path) {
-        auto [it, inserted] = m_stamps.try_emplace(documentKey(path));
-        if (inserted) {
-            if (auto status = m_fs.status(path)) {
-                it->second.size = static_cast<std::int64_t>(status->size);
-                it->second.mtime =
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(status->mtime.time_since_epoch()).count();
-            }
-        }
-        return it->second;
+    Result<std::optional<CompileCommandsLocation>> locate() override {
+        return fail(ErrorCode::IoError, "cannot allocate an isolated compile commands directory");
     }
-
-private:
-    io::IFileSystem& m_fs;
-    std::unordered_map<std::string, FileStamp> m_stamps;
 };
-
-[[nodiscard]] Json commandToJson(const CompileCommand& command) {
-    Json arguments = Json::array();
-    for (const std::string& argument : command.arguments) {
-        arguments.push(argument);
-    }
-    return Json::object()
-        .set("directory", command.directory)
-        .set("file", command.file)
-        .set("arguments", std::move(arguments));
-}
-
-[[nodiscard]] std::optional<CompileCommand> commandFromJson(const Json& json) {
-    CompileCommand command;
-    command.directory = std::string(json.stringAt("directory"));
-    command.file = std::string(json.stringAt("file"));
-    const Json* arguments = json.find("arguments");
-    if (command.file.empty() || arguments == nullptr) {
-        return std::nullopt;
-    }
-    for (const Json& argument : arguments->items()) {
-        if (const std::string* text = argument.asString()) {
-            command.arguments.push_back(*text);
-        }
-    }
-    return command;
-}
 
 [[nodiscard]] std::string firstLines(std::string_view text, std::size_t count) {
     std::string out;
@@ -411,20 +455,26 @@ MsBuildCompileCommandsProvider::MsBuildCompileCommandsProvider(io::IProcessLaunc
                                                                std::shared_ptr<const project::SolutionModel> model,
                                                                std::string cacheDirectory,
                                                                MsBuildProviderOptions options)
-    : m_launcher(launcher), m_fs(fs), m_model(std::move(model)), m_cacheDirectory(std::move(cacheDirectory)),
+    : m_launcher(launcher), m_fs(fs), m_model(std::move(model)), m_cacheDirectory(outputDirectory(cacheDirectory)),
       m_options(std::move(options)) {}
 
-Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::locate() {
+Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::locate() { return locate({}); }
+
+Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::locate(std::stop_token stop) {
     m_stats = {};
     m_warnings.clear();
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
+    if (m_cacheDirectory.empty())
+        return fail(ErrorCode::IoError, "cannot allocate an isolated compile commands directory");
     if constexpr (io::kNativePathStyle != io::PathStyle::Windows) {
         return std::optional<CompileCommandsLocation>(); // No MSBuild off Windows.
     } else {
-        return evaluateAll();
+        return evaluateAll(stop);
     }
 }
 
-Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::evaluateAll() {
+Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::evaluateAll(std::stop_token stop) {
     if (!m_options.trusted || !m_options.trusted()) {
         log::info(kLogCategory, "{} is not trusted: compile commands come from the static project model",
                   m_model->path());
@@ -445,15 +495,11 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
         }
         msbuild = std::move(*found);
     }
-    const std::string evalDirectory = join(m_cacheDirectory, "msbuild-eval");
-    if (auto created = m_fs.createDirectories(evalDirectory); !created) {
-        return std::unexpected(std::move(created.error()));
-    }
-
-    StampCache stamps(m_fs);
     std::vector<CompileCommand> all;
     std::optional<Error> firstError;
     for (std::size_t p = 0; p < m_model->projects().size(); ++p) {
+        if (stop.stop_requested())
+            return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
         const project::ProjectId id{static_cast<std::uint32_t>(p)};
         const project::ProjectInfo& info = m_model->project(id);
         const std::optional<project::ProjectConfigurationMapping>& mapping =
@@ -461,41 +507,8 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
         if (!info.vcxproj || !mapping || info.path.empty()) {
             continue;
         }
-        const std::string identity = documentKey(info.path) + "|" + mapping->configuration + "|" + mapping->platform;
-        const std::string cacheFile = join(evalDirectory, std::format("{:016x}.json", fnv1a(identity)));
-
-        // 1. The cache, when every file it depends on is unchanged.
-        if (auto text = m_fs.readFile(cacheFile)) {
-            if (auto cached = parseJson(*text); cached && cached->integerAt("version") == kCacheVersion &&
-                                                cached->stringAt("msbuild") == msbuild &&
-                                                cached->stringAt("identity") == identity) {
-                bool fresh = true;
-                if (const Json* files = cached->find("files"); files != nullptr) {
-                    for (const Json& file : files->items()) {
-                        const FileStamp now = stamps.stamp(std::string(file.stringAt("path")));
-                        if (now != FileStamp{.size = file.integerAt("size").value_or(-2),
-                                             .mtime = file.integerAt("mtime").value_or(0)}) {
-                            fresh = false;
-                            break;
-                        }
-                    }
-                } else {
-                    fresh = false;
-                }
-                const Json* commands = cached->find("commands");
-                if (fresh && commands != nullptr) {
-                    for (const Json& command : commands->items()) {
-                        if (auto parsed = commandFromJson(command)) {
-                            all.push_back(std::move(*parsed));
-                        }
-                    }
-                    ++m_stats.cached;
-                    continue;
-                }
-            }
-        }
-
-        // 2. Evaluate: the query, then the preprocess run for the import list.
+        // Evaluation may depend on environment, absent imports, globs and property functions.
+        // A previous import list cannot prove those inputs unchanged, so always query MSBuild.
         MsBuildEvaluationRequest request{.msbuildPath = msbuild,
                                          .projectPath = info.path,
                                          .solutionPath = m_model->path(),
@@ -503,12 +516,14 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
                                          .platform = mapping->platform,
                                          .preprocessTo = {},
                                          .environment = m_options.environment};
-        const auto evaluate = [&]() -> Result<std::pair<std::vector<CompileCommand>, std::vector<std::string>>> {
+        const auto evaluate = [&]() -> Result<std::vector<CompileCommand>> {
+            if (!m_options.trusted || !m_options.trusted())
+                return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
             auto spec = msbuildEvaluationSpec(request);
             if (!spec) {
                 return std::unexpected(std::move(spec.error()));
             }
-            auto run = io::runToCompletion(m_launcher, *spec, {}, m_options.timeout);
+            auto run = runEvaluation(m_launcher, *spec, m_options.timeout, stop);
             if (!run) {
                 return std::unexpected(std::move(run.error()));
             }
@@ -520,44 +535,14 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
             if (!evaluation) {
                 return std::unexpected(std::move(evaluation.error()));
             }
-            std::vector<CompileCommand> commands = commandsFromEvaluation(
-                *evaluation, info.vcxproj->directory, mapping->configuration, mapping->platform, m_options.compiler);
-
-            std::vector<std::string> files{info.path};
-            request.preprocessTo = join(evalDirectory, std::format("{:016x}.pp.xml", fnv1a(identity)));
-            auto ppSpec = msbuildEvaluationSpec(request);
-            if (!ppSpec) {
-                return std::unexpected(std::move(ppSpec.error()));
-            }
-            auto pp = io::runToCompletion(m_launcher, *ppSpec, {}, m_options.timeout);
-            if (!pp) {
-                return std::unexpected(std::move(pp.error().withContext("preprocessing for the import list")));
-            }
-            auto preprocessed = m_fs.readFile(request.preprocessTo);
-            static_cast<void>(m_fs.removeFile(request.preprocessTo));
-            if (!preprocessed) {
-                return std::unexpected(std::move(preprocessed.error().withContext("the preprocessed project")));
-            }
-            for (std::string& import : parsePreprocessedImports(*preprocessed)) {
-                if (stamps.stamp(import).size < 0 && import.find("__") != std::string::npos) {
-                    // MSBuild wrote "--" as "__" in the banner comment.
-                    std::string repaired = import;
-                    for (std::size_t at = repaired.find("__"); at != std::string::npos;
-                         at = repaired.find("__", at + 2)) {
-                        repaired.replace(at, 2, "--");
-                    }
-                    if (stamps.stamp(repaired).size >= 0) {
-                        import = std::move(repaired);
-                    }
-                }
-                files.push_back(std::move(import));
-            }
-            for (std::string& file : listEntries(valueOf(evaluation->properties, "msbuildallprojects"))) {
-                files.push_back(std::move(file));
-            }
-            return std::pair{std::move(commands), std::move(files)};
+            return commandsFromEvaluation(*evaluation, info.vcxproj->directory, mapping->configuration,
+                                          mapping->platform, m_options.compiler);
         };
         auto evaluated = evaluate();
+        if (stop.stop_requested() || (!evaluated && evaluated.error().code() == ErrorCode::Cancelled))
+            return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
+        if (!m_options.trusted || !m_options.trusted())
+            return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
         if (!evaluated) {
             const std::string warning =
                 std::format("MSBuild could not evaluate {} ({}|{}); using the static project model: {}", info.path,
@@ -580,30 +565,7 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
             continue;
         }
         ++m_stats.evaluated;
-        Json files = Json::array();
-        std::set<std::string> seen;
-        for (const std::string& file : evaluated->second) {
-            if (!seen.insert(documentKey(file)).second) {
-                continue;
-            }
-            const FileStamp stamp = stamps.stamp(file);
-            files.push(Json::object().set("path", file).set("size", stamp.size).set("mtime", stamp.mtime));
-        }
-        Json commands = Json::array();
-        for (const CompileCommand& command : evaluated->first) {
-            commands.push(commandToJson(command));
-        }
-        const Json entry = Json::object()
-                               .set("version", kCacheVersion)
-                               .set("identity", identity)
-                               .set("msbuild", msbuild)
-                               .set("files", std::move(files))
-                               .set("commands", std::move(commands));
-        if (auto written = m_fs.writeFileAtomic(cacheFile, entry.dump()); !written) {
-            log::warn(kLogCategory, "could not cache the evaluation of {}: {}", info.path, written.error().describe());
-        }
-        all.insert(all.end(), std::make_move_iterator(evaluated->first.begin()),
-                   std::make_move_iterator(evaluated->first.end()));
+        all.insert(all.end(), std::make_move_iterator(evaluated->begin()), std::make_move_iterator(evaluated->end()));
     }
     if (m_stats.evaluated + m_stats.cached == 0 && firstError) {
         // Nothing was evaluated: let the chain's static provider answer under its own name.
@@ -611,6 +573,10 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
     }
     log::info(kLogCategory, "MSBuild compile commands: {} evaluated, {} cached, {} from the static model",
               m_stats.evaluated, m_stats.cached, m_stats.fellBack);
+    if (!m_options.trusted || !m_options.trusted())
+        return fail(ErrorCode::Busy, "solution trust was revoked during MSBuild evaluation");
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
     return writeCompileCommandsLocation(m_fs, m_cacheDirectory, all, CompileCommandsSource::Evaluated);
 }
 
@@ -618,6 +584,7 @@ std::shared_ptr<ICompileCommandsProvider>
 solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                              std::shared_ptr<const project::SolutionModel> model, std::string root,
                              std::string cacheDirectory, MsBuildProviderOptions options) {
+    cacheDirectory = outputDirectory(cacheDirectory);
     SynthesisOptions synthesis = options.fallback;
     if (synthesis.configuration.empty()) {
         synthesis.configuration = options.configuration;
@@ -625,6 +592,10 @@ solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs
     std::function<Result<MsvcEnvironment>()> msvc = options.msvc;
     std::vector<std::shared_ptr<ICompileCommandsProvider>> chain;
     chain.push_back(std::make_shared<ExistingCompileCommandsProvider>(fs, std::move(root)));
+    if (cacheDirectory.empty()) {
+        chain.push_back(std::make_shared<UnavailableCompileCommandsProvider>());
+        return std::make_shared<FirstAvailableCompileCommandsProvider>(std::move(chain));
+    }
     chain.push_back(std::make_shared<MsBuildCompileCommandsProvider>(
         launcher, fs, model, join(cacheDirectory, "evaluated"), std::move(options)));
     chain.push_back(std::make_shared<SolutionCompileCommandsProvider>(

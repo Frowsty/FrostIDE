@@ -130,7 +130,61 @@ void collectObjects(const JsonNode* list, ObjectFiles& files) {
     }
 }
 
+// Invalid or cyclic graphs produce no origin: consumers must never guess ownership.
+std::vector<CMakeBacktraceFrame> readBacktrace(const JsonNode& json, std::optional<std::int64_t> index,
+                                               std::string_view sourceDir) {
+    const JsonNode* graph = json.find("backtraceGraph");
+    if (!index || *index < 0 || graph == nullptr)
+        return {};
+    const JsonNode* nodes = graph->find("nodes");
+    const JsonNode* files = graph->find("files");
+    const JsonNode* commands = graph->find("commands");
+    if (!nodes || !nodes->isArray() || !files || !files->isArray() || !commands || !commands->isArray())
+        return {};
+    std::vector<CMakeBacktraceFrame> result;
+    std::vector<bool> seen(nodes->items.size(), false);
+    auto current = static_cast<std::size_t>(*index);
+    while (true) {
+        if (current >= nodes->items.size() || seen[current])
+            return {};
+        seen[current] = true;
+        const JsonNode& node = nodes->items[current];
+        const auto file = node.integerAt("file");
+        if (!file || *file < 0 || static_cast<std::size_t>(*file) >= files->items.size() ||
+            !files->items[static_cast<std::size_t>(*file)].isString() ||
+            files->items[static_cast<std::size_t>(*file)].text.empty())
+            return {};
+        CMakeBacktraceFrame frame;
+        frame.file = resolvePath(sourceDir, files->items[static_cast<std::size_t>(*file)].text);
+        if (const auto line = node.integerAt("line")) {
+            if (*line <= 0)
+                return {};
+            frame.line = static_cast<std::size_t>(*line);
+        } else if (node.find("line"))
+            return {};
+        if (const auto command = node.integerAt("command")) {
+            if (*command < 0 || static_cast<std::size_t>(*command) >= commands->items.size() ||
+                !commands->items[static_cast<std::size_t>(*command)].isString())
+                return {};
+            frame.command = commands->items[static_cast<std::size_t>(*command)].text;
+        } else if (node.find("command"))
+            return {};
+        result.push_back(std::move(frame));
+        const auto parent = node.integerAt("parent");
+        if (!parent) {
+            if (node.find("parent"))
+                return {};
+            break;
+        }
+        if (*parent < 0)
+            return {};
+        current = static_cast<std::size_t>(*parent);
+    }
+    return result;
+}
+
 void readTarget(const JsonNode& json, const std::string& sourceDir, const std::string& buildDir, CMakeTarget& target) {
+    target.backtrace = readBacktrace(json, json.integerAt("backtrace"), sourceDir);
     target.name = json.stringAt("name", target.name);
     target.id = json.stringAt("id", target.id);
     target.type = targetType(json.stringAt("type"));
@@ -188,6 +242,20 @@ void readTarget(const JsonNode& json, const std::string& sourceDir, const std::s
     if (const JsonNode* sources = json.find("sources"); sources != nullptr && sources->isArray()) {
         for (const JsonNode& source : sources->items) {
             CMakeSource entry;
+            if (const JsonNode* origins = source.find("backtraces")) {
+                if (origins->isArray()) {
+                    for (const JsonNode& origin : origins->items) {
+                        auto trace = readBacktrace(json, origin.integer, sourceDir);
+                        if (trace.empty()) {
+                            entry.backtraces.clear();
+                            break;
+                        }
+                        entry.backtraces.push_back(std::move(trace));
+                    }
+                }
+            } else if (auto trace = readBacktrace(json, source.integerAt("backtrace"), sourceDir); !trace.empty()) {
+                entry.backtraces.push_back(std::move(trace));
+            }
             entry.path = resolvePath(sourceDir, source.stringAt("path"));
             entry.generated = source.boolAt("isGenerated");
             if (const auto group = source.integerAt("sourceGroupIndex");
@@ -396,7 +464,15 @@ Result<std::optional<CMakeProject>> readCMakeFileApiReply(io::IFileSystem& fs, s
     if (!files.cmakeFiles.empty()) {
         if (auto json = reader.object(files.cmakeFiles)) {
             if (const JsonNode* inputs = json->find("inputs"); inputs != nullptr && inputs->isArray()) {
+                project.inputsAvailable = true;
                 for (const JsonNode& input : inputs->items) {
+                    const JsonNode* path = input.find("path");
+                    if (!path || !path->isString() || path->text.empty())
+                        project.inputsAvailable = false;
+                    for (std::string_view key : {"isGenerated", "isExternal", "isCMake"}) {
+                        if (const JsonNode* flag = input.find(key); flag && !flag->isBool())
+                            project.inputsAvailable = false;
+                    }
                     project.inputs.push_back(
                         CMakeInputFile{.path = resolvePath(project.sourceDirectory, input.stringAt("path")),
                                        .generated = input.boolAt("isGenerated"),
@@ -410,7 +486,12 @@ Result<std::optional<CMakeProject>> readCMakeFileApiReply(io::IFileSystem& fs, s
         if (auto json = reader.object(files.cache)) {
             if (const JsonNode* cacheEntries = json->find("entries");
                 cacheEntries != nullptr && cacheEntries->isArray()) {
+                project.cacheAvailable = true;
                 for (const JsonNode& entry : cacheEntries->items) {
+                    const JsonNode* name = entry.find("name");
+                    const JsonNode* value = entry.find("value");
+                    if (!name || !name->isString() || name->text.empty() || !value || !value->isString())
+                        project.cacheAvailable = false;
                     project.cache.push_back(CMakeCacheEntry{.name = entry.stringAt("name"),
                                                             .type = entry.stringAt("type"),
                                                             .value = entry.stringAt("value")});

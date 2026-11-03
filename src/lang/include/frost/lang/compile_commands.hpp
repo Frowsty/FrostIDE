@@ -40,6 +40,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -89,6 +90,9 @@ public:
     // The database to use, or nullopt when this provider has none (clangd then falls back to its
     // default flags). Blocking. Errors: the provider's I/O errors.
     [[nodiscard]] virtual Result<std::optional<CompileCommandsLocation>> locate() = 0;
+    // A cancelled lookup must not start a later provider. Implementations doing blocking work
+    // override this overload to interrupt it; the default checks before and after locate().
+    [[nodiscard]] virtual Result<std::optional<CompileCommandsLocation>> locate(std::stop_token stop);
 
 protected:
     ICompileCommandsProvider() = default;
@@ -214,6 +218,7 @@ public:
     explicit FirstAvailableCompileCommandsProvider(std::vector<std::shared_ptr<ICompileCommandsProvider>> providers)
         : m_providers(std::move(providers)) {}
     [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate() override;
+    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate(std::stop_token stop) override;
 
 private:
     std::vector<std::shared_ptr<ICompileCommandsProvider>> m_providers;

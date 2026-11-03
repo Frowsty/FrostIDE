@@ -3,10 +3,9 @@
 // The MSBuild-evaluated compile-commands provider with this machine's real MSBuild (Windows,
 // labels "msbuild" and "clangd"), on the synthetic fixture fixtures/msbuild_props: its include
 // directory and define come only from an imported property sheet and an environment variable.
-// The tests check the evaluated commands, the cache (a second locate() runs no MSBuild, a changed
-// .props evaluates again) and that a real clangd given those commands reports only the planted
-// error. A machine without Visual Studio skips them. The fixture is copied to a scratch
-// directory because one test rewrites the .props.
+// The tests check the evaluated commands, fresh evaluation after environment and property-sheet changes and that a real
+// clangd given those commands reports only the planted error. A machine without Visual Studio skips them. The fixture
+// is copied to a scratch directory because one test rewrites the .props.
 
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/io/file_system.hpp"
@@ -29,6 +28,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -155,7 +155,7 @@ std::string joined(const std::vector<std::string>& args) {
     return out;
 }
 
-TEST(MsBuildEvaluationE2E, PropsSheetAndEnvironmentReachTheCommandsAndTheCacheFollowsTheSheet) {
+TEST(MsBuildEvaluationE2E, PropsSheetAndEnvironmentReachFreshCommands) {
     const auto msbuild = machineMsBuild();
     if (!msbuild) {
         GTEST_SKIP() << "no Visual Studio with MSBuild on this machine";
@@ -180,11 +180,11 @@ TEST(MsBuildEvaluationE2E, PropsSheetAndEnvironmentReachTheCommandsAndTheCacheFo
     EXPECT_TRUE(std::ranges::any_of(args, [](const std::string& arg) { return arg.starts_with("/imsvc"); }))
         << joined(args);
 
-    // Unchanged: from the cache, without MSBuild.
+    // Re-evaluate: MSBuild inputs include more than the previously discovered files.
     auto second = provider.locate();
     ASSERT_TRUE(second.has_value() && second->has_value());
-    EXPECT_EQ(provider.lastStats().cached, 1u);
-    EXPECT_EQ(provider.lastStats().evaluated, 0u);
+    EXPECT_EQ(provider.lastStats().cached, 0u);
+    EXPECT_EQ(provider.lastStats().evaluated, 1u);
 
     // The sheet changes: evaluated again, with the new define.
     auto& fs = frost::io::realFileSystem();
@@ -200,6 +200,87 @@ TEST(MsBuildEvaluationE2E, PropsSheetAndEnvironmentReachTheCommandsAndTheCacheFo
     EXPECT_EQ(provider.lastStats().cached, 0u);
     const auto changed = argumentsFor(**third, solution.mainCpp()).value_or(std::vector<std::string>{});
     EXPECT_TRUE(has(changed, "/DFROST_SDK_EXTRA=2")) << joined(changed);
+}
+
+TEST(MsBuildEvaluationE2E, ChangedEnvironmentReevaluatesCommands) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild on this machine";
+    PropsSolution solution("lang-msbuild-environment-change");
+    ASSERT_NE(solution.model(), nullptr);
+    auto options = solution.options(*msbuild);
+    MsBuildCompileCommandsProvider first(frost::io::realProcessLauncher(), frost::io::realFileSystem(),
+                                         solution.model(), solution.cache(), options);
+    auto initial = first.locate();
+    ASSERT_TRUE(initial && initial->has_value());
+    const auto initialArgs = argumentsFor(**initial, solution.mainCpp()).value_or(std::vector<std::string>{});
+    ASSERT_TRUE(has(initialArgs, "/I" + solution.sdkRoot() + "\\include")) << joined(initialArgs);
+    const std::string changedRoot = solution.sdkRoot() + "-changed";
+    options.environment = {{"FROST_TEST_SDK_ROOT", changedRoot}};
+    MsBuildCompileCommandsProvider second(frost::io::realProcessLauncher(), frost::io::realFileSystem(),
+                                          solution.model(), solution.cache(), options);
+    auto updated = second.locate();
+    ASSERT_TRUE(updated && updated->has_value());
+    EXPECT_NE((*initial)->file, (*updated)->file);
+    const auto stillInitial = argumentsFor(**initial, solution.mainCpp()).value_or(std::vector<std::string>{});
+    EXPECT_TRUE(has(stillInitial, "/I" + solution.sdkRoot() + "\\include"));
+    const auto changed = argumentsFor(**updated, solution.mainCpp()).value_or(std::vector<std::string>{});
+    EXPECT_TRUE(has(changed, "/I" + changedRoot + "\\include")) << joined(changed);
+    EXPECT_FALSE(has(changed, "/I" + solution.sdkRoot() + "\\include"));
+}
+
+TEST(MsBuildEvaluationE2E, ChangedInheritedEnvironmentReevaluatesCommands) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild on this machine";
+    PropsSolution solution("lang-msbuild-inherited-env");
+    ASSERT_NE(solution.model(), nullptr);
+    char* previous = nullptr;
+    std::size_t length = 0;
+    ASSERT_EQ(_dupenv_s(&previous, &length, "FROST_TEST_SDK_ROOT"), 0);
+    const std::optional<std::string> saved = previous ? std::optional<std::string>(previous) : std::nullopt;
+    std::free(previous);
+    struct Restore {
+        std::optional<std::string> value;
+        ~Restore() { _putenv_s("FROST_TEST_SDK_ROOT", value ? value->c_str() : ""); }
+    } restore{saved};
+    ASSERT_EQ(_putenv_s("FROST_TEST_SDK_ROOT", solution.sdkRoot().c_str()), 0);
+    auto options = solution.options(*msbuild);
+    options.environment.clear();
+    MsBuildCompileCommandsProvider provider(frost::io::realProcessLauncher(), frost::io::realFileSystem(),
+                                            solution.model(), solution.cache(), options);
+    auto initial = provider.locate();
+    ASSERT_TRUE(initial && initial->has_value());
+    const auto before = argumentsFor(**initial, solution.mainCpp()).value_or(std::vector<std::string>{});
+    ASSERT_TRUE(has(before, "/I" + solution.sdkRoot() + "\\include"));
+    const std::string changedRoot = solution.sdkRoot() + "-inherited-change";
+    ASSERT_EQ(_putenv_s("FROST_TEST_SDK_ROOT", changedRoot.c_str()), 0);
+    auto updated = provider.locate();
+    ASSERT_TRUE(updated && updated->has_value());
+    const auto args = argumentsFor(**updated, solution.mainCpp()).value_or(std::vector<std::string>{});
+    EXPECT_TRUE(has(args, "/I" + changedRoot + "\\include")) << joined(args);
+}
+
+TEST(MsBuildEvaluationE2E, NewlyCreatedDirectoryBuildPropsChangesCommands) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild on this machine";
+    PropsSolution solution("lang-msbuild-new-import");
+    ASSERT_NE(solution.model(), nullptr);
+    MsBuildCompileCommandsProvider provider(frost::io::realProcessLauncher(), frost::io::realFileSystem(),
+                                            solution.model(), solution.cache(), solution.options(*msbuild));
+    auto initial = provider.locate();
+    ASSERT_TRUE(initial && initial->has_value());
+    auto path = frost::io::joinPath(frost::io::parentPath(solution.sln()), "Directory.Build.props");
+    ASSERT_TRUE(path);
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(
+        *path, "<Project><ItemDefinitionGroup><ClCompile><PreprocessorDefinitions>"
+               "NEW_DIRECTORY_PROP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>"
+               "</ClCompile></ItemDefinitionGroup></Project>"));
+    auto updated = provider.locate();
+    ASSERT_TRUE(updated && updated->has_value());
+    const auto args = argumentsFor(**updated, solution.mainCpp()).value_or(std::vector<std::string>{});
+    EXPECT_TRUE(has(args, "/DNEW_DIRECTORY_PROP=1")) << joined(args);
 }
 
 // The reactor and pool a ClangdService runs on, shut down in the documented order.

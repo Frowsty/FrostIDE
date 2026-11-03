@@ -18,6 +18,16 @@
 #include <string_view>
 
 namespace frost::lang {
+
+Result<std::optional<CompileCommandsLocation>> ICompileCommandsProvider::locate(std::stop_token stop) {
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "compile commands lookup cancelled");
+    auto result = locate();
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "compile commands lookup cancelled");
+    return result;
+}
+
 namespace {
 
 constexpr std::string_view kDatabaseName = "compile_commands.json";
@@ -319,13 +329,19 @@ Result<std::optional<CompileCommandsLocation>> GeneratorCompileCommandsProvider:
     return writeToCache(m_fs, m_cacheDirectory, *commands, CompileCommandsSource::Generator);
 }
 
-Result<std::optional<CompileCommandsLocation>> FirstAvailableCompileCommandsProvider::locate() {
+Result<std::optional<CompileCommandsLocation>> FirstAvailableCompileCommandsProvider::locate() { return locate({}); }
+
+Result<std::optional<CompileCommandsLocation>> FirstAvailableCompileCommandsProvider::locate(std::stop_token stop) {
     std::optional<Error> firstError;
     for (const std::shared_ptr<ICompileCommandsProvider>& provider : m_providers) {
+        if (stop.stop_requested())
+            return fail(ErrorCode::Cancelled, "compile commands lookup cancelled");
         if (!provider) {
             continue;
         }
-        auto found = provider->locate();
+        auto found = provider->locate(stop);
+        if (stop.stop_requested() || (!found && found.error().code() == ErrorCode::Cancelled))
+            return fail(ErrorCode::Cancelled, "compile commands lookup cancelled");
         if (found && *found) {
             return found;
         }

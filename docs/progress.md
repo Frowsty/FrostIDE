@@ -3,6 +3,51 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Fresh C++ context and recent-project switcher verified
+
+- Frozen combined tree `cf5ef892` refreshes MSBuild compilation context instead of reusing an
+  unproven evaluation cache, isolates each provider chain's generated output, and cancels held
+  evaluation processes when closing or switching projects. Retiring clangd services finish cleanup
+  outside the project-close path; stale callbacks remain generation-guarded. Real-child tests verify
+  prompt close and process termination. This does not complete B23 streaming, the persistent project
+  model cache, design-time target fidelity or generated-output cleanup; those remain separate work.
+- The project identity is now an actual recent-project menu with Open and Open Folder actions.
+  It uses existing project-opening, dirty-close and busy-build guards; selecting a CMakeLists file
+  through this menu opens its project. Astra reviewed the implementation, four app and four shell
+  cases, and 34 staged evidence artifacts. Private-desktop posted Space/UIA checks show recent-folder
+  switching at normal and 899-pixel widths with unchanged source bytes and clean exits. An untrusted
+  CMake capture shows trust guidance, not an audit of process-launch counts. Dirty cancellation and
+  busy-build refusal have component evidence. The initial stale-window-handle harness failure remains
+  preserved in `E:\FrostBuilds\gui-switcher-acceptance\evidence`.
+- The pure CMake membership planner retains configured input and ownership checks. Windows validation
+  exposed missing support for the versioned generated RC compiler file and exact MSVC C/CXX
+  architecture metadata. The reviewed correction accepts only those known metadata forms; external
+  inputs, generated hooks and target mutations remain refused. Eleven focused Windows cases passed,
+  including actual nested configure/plan/edit/reconfigure/build. No application CMake writer is enabled.
+- Full combined Windows quick verification passed: 2839/2860 active tests, 21 skipped and one additional
+  disabled; format, lint, licences and feature checks passed. Native Linux passed 2698/2728, 30 skipped,
+  and licence checks. Logs: `build/verify-managed-main-20261103-111503.log` and
+  `build/verify-context-switcher-full-native.log`; both gate processes exited zero.
+- The prior tree `293cfea3` failed two Windows cases: generated CMake metadata, corrected above, and
+  the scripted held-MSBuild fixture's exact-launch/termination assertion. The real held-child case
+  passed. The scripted failure was not reproduced in its focused diagnostic runs; its original cause
+  remains unproven. Private missing Lua/C# server settings now isolate that fixture, with the exact
+  one-MSBuild termination, no-fallback and two-second close assertions preserved and stronger launch
+  diagnostics. Both held-child cases passed five focused repetitions and the combined gate.
+  Original failures are retained in `build/project-context-full-windows-failed-ctest.log`; no timeout
+  or assertion was weakened. The old `codex-20261103-project-context` stage remains unaccepted.
+- New combined stage `E:\FrostBuilds\preview\codex-20261103-context-switcher` passed startup, D3D11
+  and ConPTY checks. App DLL SHA-256 is
+  `5a6e0fd358ec14f2e08b66e8436acb8dbb39c6a0d49c5f99efadbcdf1095c1b7`.
+  Its build record distinguishes combined gates/smokes from the separate exact switcher GUI evidence.
+- Additional acceptance on the earlier navigation stage demonstrates a fresh Tiny.slnx GUI build,
+  breakpoint at main.cpp:17, step to line 18, stack/locals and watch `argc=6`, Stop and clean IDE exit.
+  Astra verified the stage/fixture hashes and captures. The watch run reused a persisted breakpoint;
+  this does not establish natural debuggee completion, all solution combinations or U1.
+- Next work remains editor groups, Settings, project Rename, guarded CMake writes, full Lua Stop and
+  production Unity debugging. Their isolated components/tests are not included in this checkpoint.
+  Full Rider parity and the expanded acceptance tracks remain open.
+
 ## 2026-11-03: Navigation and toolbar keyboard checkpoint verified
 
 - Frozen tree `14534d18` adds current-directory breadcrumbs with nested file menus, a Focus Navigation

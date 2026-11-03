@@ -14,8 +14,10 @@
 frost_add_library(project LAYER project
     SOURCES
         src/cmake_file_api.cpp
+        src/cmake_membership.cpp
         src/cmake_presets.cpp
         src/cmake_profile.cpp
+        src/cmake_syntax.cpp
         src/cmake_view_model.cpp
         src/json.cpp
         src/paths.cpp

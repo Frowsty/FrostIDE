@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -219,6 +220,49 @@ TEST(MsBuildProvider, UntrustedSolutionsAreNeverEvaluated) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
+TEST(MsBuildProvider, RevokedTrustPreventsPublicationAfterEvaluation) {
+    if (!kWindows)
+        GTEST_SKIP() << "MSBuild evaluation runs on Windows only";
+    auto model = frost::project::SolutionModel::load(frost::io::realFileSystem(), fixture("msvc_solution/Tiny.sln"));
+    ASSERT_TRUE(model);
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.stdoutBytes = std::string(kEvaluation)});
+    frost::io::MemFs fs(frost::systemClock());
+    unsigned checks = 0;
+    frost::lang::MsBuildProviderOptions options;
+    options.msbuildPath = "C:\\VS\\MSBuild.exe";
+    options.trusted = [&] { return ++checks <= 2; };
+    frost::lang::MsBuildCompileCommandsProvider provider(
+        launcher, fs, std::make_shared<const frost::project::SolutionModel>(std::move(*model)), "C:\\cache", options);
+    EXPECT_FALSE(provider.locate());
+    ASSERT_EQ(launcher.launches().size(), 1u);
+    EXPECT_FALSE(fs.exists("C:\\cache").value_or(true));
+}
+
+TEST(MsBuildProvider, ExitedChildWithHeldOutputTimesOutAndAbandonsPipes) {
+    if (!kWindows)
+        GTEST_SKIP() << "MSBuild evaluation runs on Windows only";
+    auto model = frost::project::SolutionModel::load(frost::io::realFileSystem(), fixture("msvc_solution/Tiny.sln"));
+    ASSERT_TRUE(model);
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.outputHeld = true}); // Child exits, but a descendant retains both pipes.
+    frost::io::MemFs fs(frost::systemClock());
+    frost::lang::MsBuildProviderOptions options;
+    options.msbuildPath = "C:\\VS\\MSBuild.exe";
+    options.trusted = [] { return true; };
+    options.timeout = std::chrono::milliseconds(150);
+    frost::lang::MsBuildCompileCommandsProvider provider(
+        launcher, fs, std::make_shared<const frost::project::SolutionModel>(std::move(*model)), "C:\\cache", options);
+    const auto start = std::chrono::steady_clock::now();
+    const auto result = provider.locate();
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(5));
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), frost::ErrorCode::Timeout);
+    ASSERT_EQ(launcher.launches().size(), 1U);
+    EXPECT_TRUE(launcher.launches()[0].terminated);
+    EXPECT_TRUE(launcher.launches()[0].outputAbandoned);
+}
+
 TEST(MsBuildProvider, FailedEvaluationFallsBackToTheStaticModel) {
     if (!kWindows) {
         GTEST_SKIP() << "MSBuild evaluation runs on Windows only";
@@ -255,6 +299,39 @@ TEST(MsBuildProvider, FailedEvaluationFallsBackToTheStaticModel) {
     ASSERT_TRUE(fromChain.has_value()) << fromChain.error().describe();
     ASSERT_TRUE(fromChain->has_value());
     EXPECT_EQ((*fromChain)->source, CompileCommandsSource::Synthesized);
+}
+
+TEST(MsBuildProvider, LateFallbackCannotOverwriteAnotherChainDatabase) {
+    if (!kWindows)
+        GTEST_SKIP() << "MSBuild evaluation runs on Windows only";
+    auto model = frost::project::SolutionModel::load(frost::io::realFileSystem(), fixture("msvc_solution/Tiny.sln"));
+    ASSERT_TRUE(model);
+    auto shared = std::make_shared<const frost::project::SolutionModel>(std::move(*model));
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::io::ScriptedProcess failing;
+    failing.exitCode = 1;
+    launcher.expect(failing);
+    launcher.expect(failing);
+    frost::io::MemFs fs(frost::systemClock());
+    frost::lang::MsBuildProviderOptions oldOptions;
+    oldOptions.msbuildPath = "C:\\VS\\MSBuild.exe";
+    oldOptions.trusted = [] { return true; };
+    oldOptions.configuration = "Debug|x64";
+    auto newOptions = oldOptions;
+    newOptions.configuration = "Release|x64";
+    auto oldChain =
+        frost::lang::solutionCompileCommandsChain(launcher, fs, shared, "C:\\none", "C:\\cache", oldOptions);
+    auto newChain =
+        frost::lang::solutionCompileCommandsChain(launcher, fs, shared, "C:\\none", "C:\\cache", newOptions);
+    auto newer = newChain->locate();
+    ASSERT_TRUE(newer && newer->has_value());
+    ASSERT_EQ((*newer)->source, CompileCommandsSource::Synthesized);
+    const auto before = fs.readFile((*newer)->file);
+    ASSERT_TRUE(before);
+    auto older = oldChain->locate();
+    ASSERT_TRUE(older && older->has_value());
+    EXPECT_NE((*older)->file, (*newer)->file);
+    EXPECT_EQ(fs.readFile((*newer)->file).value_or(""), *before);
 }
 
 } // namespace

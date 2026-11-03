@@ -19,6 +19,7 @@
 
 class QComboBox;
 class QActionEvent;
+class QMenu;
 
 namespace frost::ui {
 
@@ -46,6 +47,9 @@ public:
     // The project widget ("No project" until a solution opens).
     [[nodiscard]] QToolButton* projectButton() const noexcept { return m_project; }
     void setProjectName(const QString& name);
+    // Installs the GUI-thread menu builder (called each time it opens). An empty builder
+    // removes the interactive menu; the caller must clear it before captured services die.
+    void setProjectMenuBuilder(std::function<void(QMenu&)> builder);
     // The run/build configuration slot; disabled while it has no items.
     [[nodiscard]] QComboBox* runConfigurations() const noexcept { return m_configurations; }
     // The button whose slot is `actionId` (one of the k* ids above) or that is bound to it now, or
@@ -77,8 +81,10 @@ private:
 
     Invoker m_invoke;
     QToolButton* m_project;
+    QMenu* m_projectMenu;
     QComboBox* m_configurations;
     std::vector<Slot> m_slots;
+    std::function<void(QMenu&)> m_projectMenuBuilder;
 };
 
 } // namespace frost::ui

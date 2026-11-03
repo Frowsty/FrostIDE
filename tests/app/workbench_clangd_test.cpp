@@ -6,6 +6,7 @@
 // gutter marker; typing the declaration clears all three. A second folder checks the language
 // controller: Ctrl+B and Ctrl+click open a declaration, Alt+F7 shows Find Usages.
 
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/find/find_popup.hpp"
@@ -18,10 +19,15 @@
 #include <QLineEdit>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -136,6 +142,102 @@ TEST(WorkbenchClangd, ConfigurationSwitchRestartsInsightForOpenEditors) {
     EXPECT_TRUE(view->editor().insightEnabled());
     ASSERT_TRUE(waitFor([&] { return !view->editor().semanticTokens().empty(); }, kPatience));
 }
+
+TEST(WorkbenchClangd, ClosingProjectCancelsHeldMsBuildEvaluation) {
+    if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
+        GTEST_SKIP() << "MSBuild evaluation is Windows-only";
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    if (!found)
+        GTEST_SKIP() << "clangd is unavailable";
+    WorkDir dir("clangd-held-evaluation", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    const auto msbuild = dir.join("held-msbuild.exe");
+    launcher.expect({.expectExecutable = msbuild, .neverExits = true, .outputHeld = true});
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = true;
+    options.workbench.workers = 1; // Cancellation must not wait for a second scheduler worker.
+    options.workbench.msbuildPath = msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    // The scripted launcher belongs to the held MSBuild evaluation, not ambient language servers.
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing-language-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  dir.join("missing-lua-language-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(waitFor([&] { return !launcher.launches().empty(); }, 10s));
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_TRUE(rig.workbench->closeProject());
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 2s);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto launches = launcher.launches();
+            return launches.size() == 1 && launches.front().terminated;
+        },
+        10s))
+        << [&] {
+               std::string details;
+               for (const auto& entry : launcher.launches())
+                   details += entry.spec.executable + " terminated=" + (entry.terminated ? "yes; " : "no; ");
+               return details;
+           }();
+    EXPECT_EQ(launcher.launches().size(), 1U); // No fallback process or clangd launch after cancellation.
+    EXPECT_EQ(launcher.launches().front().spec.executable, msbuild);
+}
+
+#ifdef _WIN32
+// Records a waitable handle to the real child while leaving all process ownership with FrostIDE.
+class HeldChildLauncher final : public frost::io::IProcessLauncher {
+public:
+    explicit HeldChildLauncher(std::string executable) : m_executable(std::move(executable)) {}
+    ~HeldChildLauncher() {
+        if (auto handle = m_handle.load())
+            CloseHandle(handle);
+    }
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        auto child = frost::io::realProcessLauncher().launch(spec);
+        if (child && spec.executable == m_executable) {
+            HANDLE handle = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>((*child)->pid()));
+            m_handle.store(handle);
+        }
+        return child;
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        return frost::io::realProcessLauncher().launchAsync(spec, context);
+    }
+    [[nodiscard]] HANDLE handle() const { return m_handle.load(); }
+
+private:
+    std::string m_executable;
+    std::atomic<HANDLE> m_handle{nullptr};
+};
+
+TEST(WorkbenchClangd, ClosingProjectTerminatesRealHeldEvaluation) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    if (!found)
+        GTEST_SKIP() << "clangd is unavailable";
+    WorkDir dir("clangd-real-held-evaluation", "tiny_sln");
+    const auto msbuild = frost::io::normalizePath(FROST_HELD_MSBUILD);
+    ASSERT_TRUE(msbuild);
+    HeldChildLauncher launcher(*msbuild);
+    RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = true;
+    options.workbench.workers = 1;
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_TRUE(waitFor([&] { return launcher.handle() != nullptr; }, 10s));
+    EXPECT_EQ(WaitForSingleObject(launcher.handle(), 0), WAIT_TIMEOUT);
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_TRUE(rig.workbench->closeProject());
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 2s);
+    EXPECT_EQ(WaitForSingleObject(launcher.handle(), 10000), WAIT_OBJECT_0);
+}
+#endif
 
 /*
  * The language controller over the workbench's editors: Ctrl+B on a call in main.cpp opens the

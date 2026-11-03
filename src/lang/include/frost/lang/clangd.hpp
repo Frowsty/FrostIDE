@@ -194,7 +194,8 @@ public:
     [[nodiscard]] Result<void> start();
 
     // The clean shutdown: stops the supervisor, sends shutdown and exit within shutdownTimeout,
-    // waits for clangd to exit within the same limit, and kills it otherwise. Idempotent.
+    // waits for clangd to exit within the same limit, and kills it otherwise. Requests the stop
+    // immediately; awaiting the returned task completes cleanup. Idempotent.
     [[nodiscard]] sched::Task<void> stop();
 
     [[nodiscard]] ClangdState state() const;
@@ -250,6 +251,7 @@ public:
     struct Shared; // src/lang/src/clangd_service.cpp.
 
 private:
+    [[nodiscard]] sched::Task<void> finishStop();
     std::shared_ptr<Shared> m_shared;
     sched::JoinHandle<void> m_supervisor;
 };

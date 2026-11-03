@@ -15,8 +15,7 @@
  *
  * MSBuild evaluates (no target runs) and prints JSON: the properties and every ClCompile item
  * with its evaluated metadata (ItemDefinitionGroups from the project and its imports applied).
- * A second run with -pp:<file> preprocesses the project, and the import banners of that output
- * name every imported file. MSBuild is started through IProcessLauncher with the absolute path
+ * MSBuild is started through IProcessLauncher with the absolute path
  * the caller found (frost::build's discovery; lang cannot depend on build, so it is injected),
  * with DOTNET_CLI_UI_LANGUAGE=en-US (UTF-8 output), MSBUILDTERMINALLOGGER=off and
  * MSBUILDDISABLENODEREUSE=1, in the project's directory, within `timeout` per run.
@@ -34,13 +33,9 @@
  * passed through, except the PCH, output and parallel-build switches (/Y*, /Fp*, /Fo*, /Fd*,
  * /MP*), which clangd must not act on; then /c and the file.
  *
- * Cache. Each project's commands are kept in <cacheDirectory>/msbuild-eval/<key>.json with the
- * files they depend on (the project, every import of the -pp run and MSBuildAllProjects) and
- * their sizes and modification times. A later locate() re-evaluates only the projects whose
- * files changed (a .props edit invalidates its importers). Since MSBuild 16 MSBuildAllProjects no
- * longer lists every import, hence the -pp run. Not covered: environment variables that change
- * between runs and files that start to exist later (a new Directory.Build.props); clearing
- * the cache directory forces a fresh evaluation. TODO(M4): key on the environment too.
+ * Every locate() evaluates afresh. Prior import lists cannot prove that environment variables,
+ * newly created imports, glob matches or property functions have remained unchanged. The generated
+ * compilation database is written in the cache directory for clangd to consume.
  *
  * Fallback and trust. Evaluation runs project logic (property functions, conditions, imports),
  * so it needs a trusted solution: when `trusted` is unset or says no, locate() returns nullopt and
@@ -155,6 +150,7 @@ public:
     // See the header comment. Errors: the configuration's (NotFound, InvalidArgument), those of
     // locateMsBuild (the chain then falls back), the cache directory's I/O errors.
     [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate() override;
+    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> locate(std::stop_token stop) override;
 
     [[nodiscard]] const MsBuildProviderStats& lastStats() const noexcept { return m_stats; }
     // The warnings of the last locate() (one per project that fell back).
@@ -162,7 +158,7 @@ public:
 
 private:
     // locate() on Windows.
-    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> evaluateAll();
+    [[nodiscard]] Result<std::optional<CompileCommandsLocation>> evaluateAll(std::stop_token stop);
 
     io::IProcessLauncher& m_launcher;
     io::IFileSystem& m_fs;

@@ -57,11 +57,22 @@ enum class CMakeTargetType : std::uint8_t {
 // "EXECUTABLE", "STATIC_LIBRARY", ... as the File API spells them.
 [[nodiscard]] std::string_view toString(CMakeTargetType type) noexcept;
 
+// One frame of a File API backtrace, ordered from the reported command outwards.
+struct CMakeBacktraceFrame {
+    std::string file{};                // Absolute source path.
+    std::optional<std::size_t> line{}; // One-based when supplied by CMake.
+    std::string command{};
+
+    friend bool operator==(const CMakeBacktraceFrame&, const CMakeBacktraceFrame&) = default;
+};
+
 struct CMakeSource {
     std::string path{};                        // Absolute.
     bool generated = false;                    // isGenerated: produced by the build ("Build to generate").
     std::string sourceGroup{};                 // source_group() name ("Source Files"), or "".
     std::optional<std::size_t> compileGroup{}; // Index into CMakeTarget::compileGroups; empty for headers.
+
+    std::vector<std::vector<CMakeBacktraceFrame>> backtraces{}; // Empty when missing or invalid.
 
     friend bool operator==(const CMakeSource&, const CMakeSource&) = default;
 };
@@ -89,6 +100,8 @@ struct CMakeTarget {
     std::vector<CMakeCompileGroup> compileGroups{};
     std::vector<std::string> dependencies{}; // Ids of the targets it depends on.
     bool generatorProvided = false;          // A target CMake adds itself (ALL_BUILD, ZERO_CHECK).
+
+    std::vector<CMakeBacktraceFrame> backtrace{}; // Empty when missing or invalid.
 
     friend bool operator==(const CMakeTarget&, const CMakeTarget&) = default;
 };
@@ -133,7 +146,9 @@ struct CMakeProject {
     std::vector<CMakeInputFile> inputs{};
     std::vector<CMakeCacheEntry> cache{};
     std::vector<CMakeToolchain> toolchains{};
-    std::string replyIndex{}; // The index file read (absolute), which identifies the reply.
+    std::string replyIndex{};     // The index file read (absolute), which identifies the reply.
+    bool inputsAvailable = false; // cmakeFiles input list was present and structurally valid.
+    bool cacheAvailable = false;  // cache entries were present and structurally valid.
 
     // The target named `name`, or nullptr. O(targets).
     [[nodiscard]] const CMakeTarget* findTarget(std::string_view name) const noexcept;

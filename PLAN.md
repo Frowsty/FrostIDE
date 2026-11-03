@@ -1174,7 +1174,7 @@ do not establish accepted application behavior.
 
 | ID | Required application scenario | Evidence and remaining gap |
 |---|---|---|
-| CPP-01 | Open `.sln` and `.slnx`, resolve project/configuration mappings, and show the correct evaluated `.vcxproj` items, filters, references and properties. | Static readers, solution models and tree tests exist. MSBuild evaluation supplies compilation context, but the static project tree is not full evaluated ownership/fidelity. ProjectHost integration and complete imported/conditional-item coverage remain. |
+| CPP-01 | Open `.sln` and `.slnx`, resolve project/configuration mappings, and show the correct evaluated `.vcxproj` items, filters, references and properties. | Static readers, solution models and tree tests exist. Fresh MSBuild compilation-context evaluation and cancellable project/service retirement pass combined gates, including real Windows held-child termination. The static project tree is not full evaluated ownership/fidelity. B23 streaming/cache, design-time target fidelity, ProjectHost integration and complete imported/conditional-item coverage remain. |
 | CPP-02 | Build, rebuild, clean and run the selected MSVC project/configuration from either solution format, with saved source and navigable diagnostics. | Real Windows `.sln`, `.slnx`, project build and run tests pass, including `MsBuildBuild.BuildsAnSlnx`. This does not establish every configuration/toolchain combination or the complete W1/U1 scenarios. MSVC solution build/run remains Windows-only; Linux approximate reading is a separate capability. |
 | CPP-03 | Add, remove and rename project files while correctly updating `.vcxproj`, `.filters`, solution definitions and supported CMake source declarations, preserving unrelated content and concurrent changes. | Bounded Windows removal passes platform functional gates and actual staged `.sln`/`.slnx` removal/build/reopen checks, preserving source files, dirty tabs and unrelated XML. Journal recovery and cross-feature admission have focused tests. Add Existing now passes combined functional gates and actual native-dialog source/header addition, build and reopen for both formats, with exact XML and source-byte preservation audited. Rename, new-file creation, general solution changes and CMake structural edits remain open; Linux shared-logic tests do not establish Linux editing support. |
 | CPP-04 | Debug native targets with breakpoints, stepping, threads, stack, values, watches, evaluation and reliable stop/ownership across both project systems. | Real LLDB-backed Workbench tests pass for MSBuild and CMake. The recorded Notepad++ acceptance verifies the Windows C++/PDB workflow. These do not establish all `.slnx` debug combinations, attach, advanced breakpoint/value features, GDB/DbgEng, full natvis/formatter behavior or debugger parity. The earlier slow Globals expansion remains a limitation. |
@@ -1194,6 +1194,13 @@ focused-crumb scrolling and toolbar keyboard focus order, with full Windows/Linu
 Staged Windows evidence confirms one forward toolbar Tab transition; physical modifier shortcuts and
 complete keyboard traversal remain unproven. Symbol/target navigation and full Structure parity remain open.
 CPP-01/03/06 remain open.
+
+The `codex-20261103-context-switcher` checkpoint adds fresh/cancellable C++ compilation context,
+the recent-project menu and the pure CMake membership planner, with full Windows/Linux functional gates.
+It does not enable CMake writes. Separately audited navigation-stage Tiny.slnx acceptance includes an
+actual build, native breakpoint/step, stack/locals/watch and Stop; this remains a bounded fixture scenario.
+Recent-menu dirty/busy guards have component tests, while posted-key/UIA folder switching has staged
+Windows evidence. Full project switching, settings, editor groups and broader input parity remain required.
 
 Keep these scenarios alongside Appendix A and the expanded language/engine tracks. A passing build or
 debugger fixture closes only its demonstrated workflow; it does not mark all C++ support complete.

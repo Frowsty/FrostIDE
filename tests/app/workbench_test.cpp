@@ -31,6 +31,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QPushButton>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
 
@@ -475,6 +476,7 @@ TEST(Workbench, SwitchingProjectsDuringBuildKeepsTheCurrentProjectAndTabs) {
         return frost::fail(frost::ErrorCode::Unsupported, "test build finished");
     };
     WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(frost::app::addRecentProject(*rig.settings, other.path()).has_value());
     ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")).has_value());
@@ -485,6 +487,18 @@ TEST(Workbench, SwitchingProjectsDuringBuildKeepsTheCurrentProjectAndTabs) {
     const bool running = waitFor([&] { return started.load(); });
     EXPECT_TRUE(running);
     if (running) {
+        QMenu* switcher = rig.window->mainToolbar().projectButton()->menu();
+        ASSERT_NE(switcher, nullptr);
+        QMetaObject::invokeMethod(switcher, "aboutToShow", Qt::DirectConnection);
+        QAction* otherAction = nullptr;
+        for (QAction* action : switcher->actions()) {
+            if (action->data().toString().toUtf8().toStdString() == other.path())
+                otherAction = action;
+        }
+        ASSERT_NE(otherAction, nullptr);
+        otherAction->trigger();
+        QApplication::processEvents();
+        QApplication::processEvents();
         EXPECT_FALSE(rig.workbench->openPath(other.path()).has_value());
         EXPECT_FALSE(rig.workbench->closeProject());
         ASSERT_NE(rig.workbench->solution(), nullptr);
@@ -493,6 +507,110 @@ TEST(Workbench, SwitchingProjectsDuringBuildKeepsTheCurrentProjectAndTabs) {
     }
     release = true;
     EXPECT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }));
+}
+
+TEST(Workbench, ProjectSwitcherOpensRecentIdentityAndKeepsCurrentOnMissingPath) {
+    WorkDir dir("project-switcher", "tiny_sln");
+    WorkDir other("project-switcher-folder");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(other.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.slnx")));
+    auto* button = rig.window->mainToolbar().projectButton();
+    ASSERT_EQ(button->focusPolicy(), Qt::TabFocus);
+    ASSERT_NE(button->menu(), nullptr);
+    EXPECT_EQ(button->accessibleName(), QStringLiteral("Project: Tiny"));
+    auto* menu = button->menu();
+    rig.show();
+    rig.window->invoke(frost::ui::actions::kFocusToolbar);
+    EXPECT_EQ(QApplication::focusWidget(), button);
+    bool keyboardOpened = false;
+    QTimer::singleShot(0, menu, [&] {
+        keyboardOpened = menu->isVisible();
+        menu->close();
+    });
+    sendKey(button, Qt::Key_Space, Qt::NoModifier);
+    QApplication::processEvents();
+    EXPECT_TRUE(keyboardOpened);
+    QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+    bool currentMarked = false;
+    for (QAction* action : menu->actions()) {
+        if (action->data().toString().toUtf8().toStdString() == dir.join("Tiny.slnx"))
+            currentMarked = action->isChecked();
+    }
+    EXPECT_TRUE(currentMarked);
+    const auto recentAction = [&](const std::string& path) -> QAction* {
+        QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+        for (QAction* action : menu->actions()) {
+            if (action->data().toString().toUtf8().toStdString() == path)
+                return action;
+        }
+        return nullptr;
+    };
+    QAction* folder = recentAction(other.path());
+    ASSERT_NE(folder, nullptr);
+    folder->trigger();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->projectRoot() == other.path(); }));
+    EXPECT_FALSE(rig.workbench->solution());
+    ASSERT_EQ(frost::app::recentProjects(*rig.settings->snapshot()).front(), other.path());
+    const std::string missing = dir.join("missing.sln");
+    ASSERT_TRUE(frost::app::addRecentProject(*rig.settings, missing).has_value());
+    QAction* stale = recentAction(missing);
+    ASSERT_NE(stale, nullptr);
+    stale->trigger();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    EXPECT_EQ(rig.workbench->projectRoot(), other.path());
+    QAction* solution = recentAction(dir.join("Tiny.slnx"));
+    ASSERT_NE(solution, nullptr);
+    solution->trigger();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->solution() != nullptr; }));
+    EXPECT_EQ(rig.workbench->solution()->path(), dir.join("Tiny.slnx"));
+}
+
+TEST(Workbench, ProjectSwitcherHonorsCancelledDirtyClose) {
+    WorkDir dir("switcher-dirty");
+    WorkDir other("switcher-dirty-other");
+    dir.write("source.cpp", "int value;\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("source.cpp")));
+    ASSERT_TRUE(rig.view()->editor().typeText("x"));
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(dir.join("source.cpp")).has_value());
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("source.cpp/blocked")).has_value());
+    ASSERT_TRUE(frost::app::addRecentProject(*rig.settings, other.path()).has_value());
+    rig.prompts.discard = false;
+    QMenu* menu = rig.window->mainToolbar().projectButton()->menu();
+    ASSERT_NE(menu, nullptr);
+    QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+    QAction* target = nullptr;
+    for (QAction* action : menu->actions()) {
+        if (action->data().toString().toUtf8().toStdString() == other.path())
+            target = action;
+    }
+    ASSERT_NE(target, nullptr);
+    target->trigger();
+    ASSERT_TRUE(waitFor([&] { return rig.prompts.discardCalls > 0; }));
+    EXPECT_EQ(rig.workbench->projectRoot(), dir.path());
+    EXPECT_TRUE(rig.window->tabs().isDirty(0));
+    rig.prompts.discard = true;
+}
+
+TEST(Workbench, ProjectSwitcherOpenTreatsCMakeListsAsProjectIdentity) {
+    WorkDir dir("switcher-cmake", "tiny_sln");
+    dir.write("cmake/CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    rig.prompts.openPath = dir.join("cmake/CMakeLists.txt");
+    QMenu* menu = rig.window->mainToolbar().projectButton()->menu();
+    ASSERT_NE(menu, nullptr);
+    QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+    ASSERT_FALSE(menu->actions().empty());
+    menu->actions().front()->trigger();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->projectRoot() == dir.join("cmake"); }));
+    EXPECT_FALSE(rig.workbench->solution());
+    EXPECT_EQ(rig.window->tabs().count(), 0);
+    ASSERT_FALSE(frost::app::recentProjects(*rig.settings->snapshot()).empty());
+    EXPECT_EQ(frost::app::recentProjects(*rig.settings->snapshot()).front(), dir.join("cmake/CMakeLists.txt"));
 }
 
 TEST(Workbench, WelcomeScreenListsRecentProjectsAndOpensOne) {

@@ -13,6 +13,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/reactor.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
@@ -28,7 +29,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -137,6 +140,72 @@ void stopAndCheck(Env& env, ClangdService& service) {
 }
 
 bool running(const ClangdService& service) { return service.state() == ClangdState::Running; }
+
+class HeldCommands final : public frost::lang::ICompileCommandsProvider {
+public:
+    frost::Result<std::optional<frost::lang::CompileCommandsLocation>> locate() override {
+        std::unique_lock lock(mutex);
+        entered = true;
+        changed.notify_all();
+        changed.wait(lock, [&] { return released; });
+        return std::optional<frost::lang::CompileCommandsLocation>{};
+    }
+    bool waitUntilEntered() {
+        std::unique_lock lock(mutex);
+        return changed.wait_for(lock, 10s, [&] { return entered; });
+    }
+    void release() {
+        std::lock_guard lock(mutex);
+        released = true;
+        changed.notify_all();
+    }
+
+private:
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool released = false;
+};
+
+TEST(ClangdE2E, DestroyDuringHeldDatabaseLookupDoesNotStartClangd) {
+    frost::io::ScriptedProcessLauncher launcher;
+    auto provider = std::make_shared<HeldCommands>();
+    {
+        Env env;
+        ASSERT_TRUE(env.ok());
+        ClangdServiceOptions options;
+        options.clangdPath = fixture("dummy-clangd");
+        options.workspaceRoot = fixture(".");
+        options.compileCommands = provider;
+        auto service = std::make_unique<ClangdService>(launcher, env.context(), std::move(options));
+        ASSERT_TRUE(service->start());
+        const bool entered = provider->waitUntilEntered();
+        service.reset();
+        provider->release();
+        EXPECT_TRUE(entered);
+    }
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+TEST(ClangdE2E, StopDuringHeldDatabaseLookupDoesNotStartClangd) {
+    frost::io::ScriptedProcessLauncher launcher;
+    auto provider = std::make_shared<HeldCommands>();
+    Env env;
+    ASSERT_TRUE(env.ok());
+    ClangdServiceOptions options;
+    options.clangdPath = fixture("dummy-clangd");
+    options.workspaceRoot = fixture(".");
+    options.compileCommands = provider;
+    ClangdService service(launcher, env.context(), std::move(options));
+    ASSERT_TRUE(service.start());
+    const bool entered = provider->waitUntilEntered();
+    auto stopping = service.stop();
+    provider->release();
+    env.run(std::move(stopping));
+    EXPECT_TRUE(entered);
+    EXPECT_EQ(service.state(), ClangdState::Stopped);
+    EXPECT_TRUE(launcher.launches().empty());
+}
 
 std::vector<frost::lang::LiveDiagnostic> errorsIn(ClangdService& service, const std::string& path) {
     std::vector<frost::lang::LiveDiagnostic> out;

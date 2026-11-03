@@ -122,6 +122,12 @@ frost_add_test(app_workbench_clangd_tests QT
     LABELS integration clangd)
 target_include_directories(app_workbench_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_clangd_tests PRIVATE ${_frost_workbench_definitions})
+if(WIN32)
+    add_executable(held_msbuild_fixture held_msbuild_fixture.cpp)
+    frost_apply_compile_options(held_msbuild_fixture TEST)
+    target_compile_definitions(app_workbench_clangd_tests PRIVATE FROST_HELD_MSBUILD="$<TARGET_FILE:held_msbuild_fixture>")
+    add_dependencies(app_workbench_clangd_tests held_msbuild_fixture)
+endif()
 
 frost_add_test(app_workbench_lua_tests QT
     SOURCES workbench_lua_test.cpp

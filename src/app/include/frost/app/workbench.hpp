@@ -559,6 +559,8 @@ private:
     std::string m_luaConfiguredPath;
     std::string m_luaRuntimeVersion;
     std::shared_ptr<lang::ClangdService> m_clangd;
+    std::vector<sched::JoinHandle<void>> m_retiredClangd;
+    std::uint64_t m_clangdGeneration = 0;
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
     std::string m_indexToken;

@@ -52,6 +52,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QStyleHints>
@@ -261,6 +262,10 @@ Workbench::~Workbench() {
     m_projectEdit.reset();
     m_settingsSubscription.reset();
     detach();
+    for (auto& stopped : m_retiredClangd)
+        if (stopped.valid())
+            stopped.join();
+    m_retiredClangd.clear();
     m_language.reset();
     // The prompter and the actions refer to the controller; the services' threads post to them.
     delete m_trustPrompter;
@@ -623,6 +628,7 @@ void Workbench::detach() {
     if (!m_window) {
         return;
     }
+    m_window->mainToolbar().setProjectMenuBuilder({});
     QCoreApplication::instance()->removeEventFilter(this);
     cancelFind();
     m_find.reset();
@@ -735,6 +741,47 @@ void Workbench::attachToolWindows() {
 
 void Workbench::attachToolbar() {
     ui::MainToolbar& toolbar = m_window->mainToolbar();
+    toolbar.setProjectMenuBuilder([this](QMenu& menu) {
+        auto* open = menu.addAction(text("Open..."));
+        connect(open, &QAction::triggered, this, [this] {
+            QTimer::singleShot(0, this, [this] {
+                if (m_window && m_nav) {
+                    const std::string chosen =
+                        m_services.prompts.chooseOpenPath(m_window, IWorkbenchPrompts::OpenKind::SolutionOrFile);
+                    if (!chosen.empty())
+                        (void)openProjectIdentity(chosen);
+                }
+            });
+        });
+        auto* folder = menu.addAction(text("Open Folder..."));
+        connect(folder, &QAction::triggered, this, [this] {
+            QTimer::singleShot(0, this, [this] {
+                if (m_window && m_nav)
+                    showOpenDialog(IWorkbenchPrompts::OpenKind::Folder);
+            });
+        });
+        const auto recent = recentProjects(*m_services.settings.snapshot());
+        if (!recent.empty()) {
+            menu.addSeparator();
+        }
+        for (const std::string& path : recent) {
+            const QString native = QDir::toNativeSeparators(qs(path));
+            const int maxWidth = menu.fontMetrics().horizontalAdvance(QString(64, QLatin1Char('n')));
+            QString label = menu.fontMetrics().elidedText(native, Qt::ElideMiddle, maxWidth);
+            label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+            QAction* action = menu.addAction(label);
+            action->setData(qs(path));
+            action->setToolTip(native);
+            action->setCheckable(true);
+            action->setChecked(path == m_projectIdentity);
+            connect(action, &QAction::triggered, this, [this, path] {
+                QTimer::singleShot(0, this, [this, path] {
+                    if (m_window && m_nav)
+                        (void)openProjectIdentity(path);
+                });
+            });
+        }
+    });
     toolbar.setSlotAction(ui::MainToolbar::kBuild, ui::build_actions::kBuildSolution);
     toolbar.setSlotAction(ui::MainToolbar::kDebug, "run.debug");
     auto* combo = new ui::ConfigurationCombo(*m_build, &toolbar);

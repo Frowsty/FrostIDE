@@ -2,6 +2,7 @@
   "archive": {},
   "artifacts": [{"path": "libcore.a"}],
   "backtrace": 1,
+  "backtraceGraph": {"files": ["CMakeLists.txt", "sub/part.cmake"], "commands": ["include", "add_library"], "nodes": [{"file": 0, "line": 4, "command": 0}, {"file": 1, "line": 9, "command": 1, "parent": 0}]},
   "compileGroups": [
     {
       "compileCommandFragments": [{"fragment": "-g"}, {"fragment": "-Wall"}],

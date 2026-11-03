@@ -47,6 +47,12 @@ namespace {
 
 constexpr std::string_view kLog = "workbench";
 
+// Retain the service until its supervisor and process have finished stopping.
+sched::Task<void> stopOwnedClangd(std::shared_ptr<lang::ClangdService> service, sched::Task<void> stopped) {
+    (void)service;
+    co_await std::move(stopped);
+}
+
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
 
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
@@ -523,28 +529,41 @@ void Workbench::startClangd(const std::string& root) {
     options.workspaceRoot = root;
     options.launch.jobs = m_options.clangdJobs;
     options.compileCommands = m_compileCommands;
+    const auto generation = m_clangdGeneration;
     // The owned server supervisors are joined before Workbench's QObject base is destroyed;
     // this worker callback only posts, and the queued GUI callback rechecks the controller.
-    options.onLifecycle = [self = QPointer<Workbench>(this)] {
+    options.onLifecycle = [self = QPointer<Workbench>(this), generation] {
         if (self)
             QMetaObject::invokeMethod(
                 self.data(),
-                [self] {
-                    if (self && self->m_language)
+                [self, generation] {
+                    if (self && self->m_clangdGeneration == generation && self->m_language)
                         self->m_language->structureChanged();
                 },
                 Qt::QueuedConnection);
     };
     // Called on clangd's threads; the queued calls die with this object.
-    options.onProgress = [this](const lang::ClangdProgress& progress) {
-        QMetaObject::invokeMethod(this, [this, progress] { onClangdProgress(progress); }, Qt::QueuedConnection);
+    options.onProgress = [this, generation](const lang::ClangdProgress& progress) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, generation, progress] {
+                if (generation == m_clangdGeneration)
+                    onClangdProgress(progress);
+            },
+            Qt::QueuedConnection);
     };
     m_clangd = std::make_shared<lang::ClangdService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},
                                                      std::move(options));
-    m_clangdListener = m_clangd->diagnostics().addListener([this](const lang::FileDiagnostics& diagnostics) {
-        QMetaObject::invokeMethod(
-            this, [this, file = diagnostics.file] { onLiveDiagnostics(file); }, Qt::QueuedConnection);
-    });
+    m_clangdListener =
+        m_clangd->diagnostics().addListener([this, generation](const lang::FileDiagnostics& diagnostics) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, generation, file = diagnostics.file] {
+                    if (generation == m_clangdGeneration)
+                        onLiveDiagnostics(file);
+                },
+                Qt::QueuedConnection);
+        });
     if (auto started = m_clangd->start(); !started) {
         notify(text("clangd cannot start"), qs(started.error().message()), ui::NotificationKind::Warning);
         stopClangd();
@@ -570,6 +589,13 @@ void Workbench::restartClangd() {
 }
 
 void Workbench::stopClangd() {
+    ++m_clangdGeneration;
+    std::erase_if(m_retiredClangd, [](auto& stopped) {
+        if (!stopped.ready())
+            return false;
+        stopped.join();
+        return true;
+    });
     if (!m_clangd) {
         return;
     }
@@ -581,8 +607,10 @@ void Workbench::stopClangd() {
     m_bridge->setServer(nullptr);
     m_clangd->diagnostics().removeListener(m_clangdListener);
     m_clangdListener = 0;
-    m_pool->spawn(sched::Lane::UserVisible, m_clangd->stop()).join();
-    m_clangd.reset();
+    auto old = std::move(m_clangd);
+    auto stopped = old->stop(); // Signal even when the only pool worker is inside evaluation.
+    m_retiredClangd.push_back(
+        m_pool->spawn(sched::Lane::Background, stopOwnedClangd(std::move(old), std::move(stopped))));
     m_compileCommands.reset();
     if (m_indexing) {
         m_indexing->finish();

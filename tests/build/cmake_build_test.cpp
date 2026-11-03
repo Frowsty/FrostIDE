@@ -15,6 +15,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/reactor.hpp"
+#include "frost/project/cmake_membership.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/thread_pool.hpp"
@@ -313,6 +314,118 @@ TEST(CMakeRealBuild, ConfigureBuildCleanReconfigure) {
     EXPECT_TRUE(cmakeError->jumpable);
 
     // The rig, then the service (which ends its children), go out of scope in that order.
+}
+
+// Owned scratch inputs only: this exercises planning and CMake refresh, not the protected
+// transaction or editor admission required before project edits can touch user files.
+TEST(CMakeRealBuild, PlansNestedMembershipAndRefreshesTheActualModel) {
+    frost::test::ScratchDir scratch("cmake-membership-real");
+    auto& fs = io::realFileSystem();
+    const auto root = scratch.join("fixture");
+    const auto sub = under(root, "sub");
+    const auto child = under(sub, "child");
+    ASSERT_TRUE(fs.createDirectories(child).has_value());
+    const auto rootList = under(root, "CMakeLists.txt");
+    const auto subList = under(sub, "CMakeLists.txt");
+    const auto childList = under(child, "CMakeLists.txt");
+    const auto added = under(sub, "added file.c");
+    const auto removed = under(child, "extra file.c");
+    const std::string rootBytes =
+        "cmake_minimum_required(VERSION 3.20)\nproject(EditFixture C)\nadd_subdirectory(sub)\n";
+    const std::string subBytes = "add_library(core STATIC base.c) # target comment\nadd_subdirectory(child)\n";
+    const std::string childBytes = "target_sources(core PRIVATE [=[extra file.c]=]) # keep\n"
+                                   "target_sources(core PRIVATE other.c)\n";
+    ASSERT_TRUE(fs.writeFileAtomic(rootList, rootBytes).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(subList, subBytes).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(childList, childBytes).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(under(sub, "base.c"), "int base(void) { return 0; }\n").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(added, "int added(void) { return 1; }\n").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(removed, "int extra(void) { return 2; }\n").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(under(child, "other.c"), "int other(void) { return 3; }\n").has_value());
+    auto trust = project::TrustStore::open(fs, scratch.join("trusted-roots.txt"));
+    ASSERT_TRUE(trust.has_value());
+    ASSERT_TRUE((*trust)->trust(root).has_value());
+    CMakeServiceOptions options;
+    options.cmakePath = native(FROST_TEST_CMAKE);
+    options.ninjaPath = native(FROST_TEST_NINJA);
+    options.msvcCacheDirectory = scratch.join("msvc");
+    options.profileRecords = {project::CMakeProfileRecord{
+        .name = "Debug", .cacheVariables = {std::string("CMAKE_C_COMPILER:FILEPATH=") + FROST_TEST_C_COMPILER}}};
+    auto service = CMakeService::create(fs, io::realProcessLauncher(), **trust, options);
+    ASSERT_TRUE(service->openFolder(root).has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastConfigure().has_value() && service->lastConfigure()->succeeded());
+    ASSERT_TRUE(service->build(BuildAction::Build).has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
+
+    const auto snapshots = [&](const project::CMakeProject& model) -> Result<std::vector<project::CMakeInputSnapshot>> {
+        std::vector<project::CMakeInputSnapshot> result;
+        for (const auto& input : model.inputs) {
+            if (input.cmake || std::ranges::any_of(result, [&](const auto& item) {
+                    return documentKey(item.path) == documentKey(input.path);
+                }))
+                continue;
+            auto contents = fs.readFile(input.path);
+            if (!contents)
+                return std::unexpected(std::move(contents.error()));
+            result.push_back({.path = input.path, .contents = std::move(*contents)});
+        }
+        return result;
+    };
+    const auto findCore = [](const project::CMakeProject& model) {
+        const auto found =
+            std::ranges::find_if(model.targets, [](const auto& target) { return target.name == "core"; });
+        return static_cast<std::size_t>(std::distance(model.targets.begin(), found));
+    };
+    auto model = service->model();
+    ASSERT_NE(model, nullptr);
+    auto inputs = snapshots(*model);
+    ASSERT_TRUE(inputs.has_value());
+    auto add = project::planCMakeMembership(*model, findCore(*model), project::CMakeMembershipOperation::Add, added,
+                                            subList, *inputs);
+    ASSERT_TRUE(add.has_value()) << add.error().describe();
+    EXPECT_EQ(add->original, subBytes);
+    EXPECT_EQ(add->replacement, "add_library(core STATIC base.c \"added file.c\") # target comment\n"
+                                "add_subdirectory(child)\n");
+    ASSERT_TRUE(fs.writeFileAtomic(subList, add->replacement).has_value());
+    ASSERT_TRUE(service->configure().has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastConfigure().has_value() && service->lastConfigure()->succeeded());
+    model = service->model();
+    ASSERT_NE(model, nullptr);
+    const auto* core = model->findTarget("core");
+    ASSERT_NE(core, nullptr);
+    EXPECT_NE(std::ranges::find_if(core->sources,
+                                   [&](const auto& item) { return documentKey(item.path) == documentKey(added); }),
+              core->sources.end());
+    ASSERT_TRUE(service->build(BuildAction::Build).has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
+
+    inputs = snapshots(*model);
+    ASSERT_TRUE(inputs.has_value());
+    auto remove = project::planCMakeMembership(*model, findCore(*model), project::CMakeMembershipOperation::Remove,
+                                               removed, childList, *inputs);
+    ASSERT_TRUE(remove.has_value()) << remove.error().describe();
+    EXPECT_EQ(remove->original, childBytes);
+    EXPECT_EQ(remove->replacement, "target_sources(core PRIVATE ) # keep\ntarget_sources(core PRIVATE other.c)\n");
+    ASSERT_TRUE(fs.writeFileAtomic(childList, remove->replacement).has_value());
+    ASSERT_TRUE(service->configure().has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastConfigure().has_value() && service->lastConfigure()->succeeded());
+    model = service->model();
+    ASSERT_NE(model, nullptr);
+    core = model->findTarget("core");
+    ASSERT_NE(core, nullptr);
+    EXPECT_EQ(std::ranges::find_if(core->sources,
+                                   [&](const auto& item) { return documentKey(item.path) == documentKey(removed); }),
+              core->sources.end());
+    EXPECT_EQ(fs.readFile(rootList).value(), rootBytes);
+    EXPECT_EQ(fs.readFile(removed).value(), "int extra(void) { return 2; }\n");
+    ASSERT_TRUE(service->build(BuildAction::Build).has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
 }
 
 } // namespace
