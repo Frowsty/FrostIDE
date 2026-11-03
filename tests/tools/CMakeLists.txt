@@ -16,6 +16,19 @@ if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{
 endif()
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+# Real portable-PDB checks use a private build-tree profile and never create the real NuGet marker.
+set(_frost_managed_test_dotnet "")
+if(DEFINED ENV{DOTNET_ROOT} AND EXISTS "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
+    set(_frost_managed_test_dotnet "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
+endif()
+add_test(NAME managed_pdb_guard
+    COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/managed/test_pdb_guard.py")
+set_tests_properties(managed_pdb_guard PROPERTIES
+    LABELS integration
+    RESOURCE_LOCK frost_desktop
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
+
 set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch asset_fetch budgets symbolize
     verify_support frost_perf verify_scripts build_lldb managed_server)
 if(WIN32)

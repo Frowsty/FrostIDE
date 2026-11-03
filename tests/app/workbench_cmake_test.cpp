@@ -3,9 +3,11 @@
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/debug/lldb_dap.hpp"
+#include "frost/ui/cmake/cmake_tree_model.hpp"
 #include "frost/ui/debug_tool_window.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
@@ -14,6 +16,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QToolButton>
 #include <QTreeView>
 
 #include <algorithm>
@@ -28,6 +31,37 @@ using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
 
+// The service publishes on a worker; the toolbar receives its immutable model on the UI queue.
+bool displayedTarget(WorkbenchRig& rig, const QString& name) {
+    return waitFor(
+        [&] {
+            auto* combo = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"));
+            const auto* service = rig.workbench->cmakeService();
+            return combo && combo->currentText() == name && service && rig.workbench->cmakeTargetsCurrent() &&
+                   service->state() == frost::build::BuildState::Idle;
+        },
+        60s);
+}
+
+TEST(WorkbenchCMake, ReloadOffersTrustBeforeConfiguring) {
+    WorkDir dir("cmake-trust-guidance");
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    auto* guidance = rig.window->findChild<QLabel*>(QStringLiteral("cmakeConfigureGuidance"));
+    auto* reload = rig.window->findChild<QToolButton*>(QStringLiteral("cmakeReload"));
+    ASSERT_NE(guidance, nullptr);
+    ASSERT_NE(reload, nullptr);
+    EXPECT_TRUE(guidance->text().contains(QStringLiteral("not trusted")));
+    auto* targets = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"));
+    ASSERT_NE(targets, nullptr);
+    EXPECT_EQ(targets->placeholderText(), QStringLiteral("Configure CMake to select a target"));
+    reload->click();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->build().state() == frost::build::BuildState::NeedsTrust; }, 30s));
+    EXPECT_FALSE(rig.trust->isTrusted(dir.path()));
+    rig.workbench->cmakeService()->cancel();
+}
+
 TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     WorkDir dir("cmake-app");
     std::string compiler = FROST_TEST_C_COMPILER;
@@ -36,8 +70,10 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
                                 "set(CMAKE_C_COMPILER \"" +
                                     compiler +
                                     "\" CACHE FILEPATH \"\" FORCE)\n"
-                                    "project(Integration C)\nadd_executable(hello main.c)\n");
+                                    "project(Integration C)\nadd_executable(hello main.c)\n"
+                                    "add_executable(other other.c)\n");
     dir.write("main.c", "#include <stdio.h>\nint main(void) { puts(\"cmake works\"); return 0; }\n");
+    dir.write("other.c", "int main(void) { return 0; }\n");
     dir.write("CMakePresets.json", R"({"version":3,"configurePresets":[
         {"name":"Debug","generator":"Ninja","binaryDir":"${sourceDir}/cmake-build-debug"},
         {"name":"Release","generator":"Ninja","binaryDir":"${sourceDir}/cmake-build-release"}]})");
@@ -47,6 +83,10 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     WorkbenchRig rig(dir, std::move(options));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     EXPECT_FALSE(rig.trust->isTrusted(dir.path()));
+    auto* guidance = rig.window->findChild<QLabel*>(QStringLiteral("cmakeConfigureGuidance"));
+    ASSERT_NE(guidance, nullptr);
+    EXPECT_TRUE(guidance->text().contains(QStringLiteral("not trusted")));
+    EXPECT_TRUE(guidance->text().contains(QStringLiteral("Reload CMake Project")));
     EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("cmake-build-debug/CMakeCache.txt")).value_or(false));
     ASSERT_TRUE(rig.workbench->build().build(frost::build::BuildAction::Build).has_value());
     ASSERT_TRUE(waitFor([&] { return rig.workbench->build().state() == frost::build::BuildState::NeedsTrust; }, 30s));
@@ -66,6 +106,49 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     auto* tree = rig.window->findChild<QTreeView*>(QStringLiteral("cmakeTargets"));
     ASSERT_NE(tree, nullptr);
     ASSERT_TRUE(waitFor([&] { return tree->model()->rowCount(tree->model()->index(0, 0)) > 0; }, 30s));
+    EXPECT_TRUE(guidance->text().isEmpty());
+    auto* targetLabel = rig.window->findChild<QLabel*>(QStringLiteral("cmakeRunTarget"));
+    ASSERT_NE(targetLabel, nullptr);
+    auto* toolbarTargets = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"));
+    auto* toolbarProfiles = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarProfiles"));
+    ASSERT_NE(toolbarTargets, nullptr);
+    ASSERT_NE(toolbarProfiles, nullptr);
+    ASSERT_TRUE(waitFor([&] { return toolbarTargets->count() == 2 && toolbarProfiles->count() == 2; }, 30s));
+    EXPECT_TRUE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    const auto findTarget = [&](auto&& self, const QModelIndex& parent, const QString& name) -> QModelIndex {
+        for (int row = 0; row < tree->model()->rowCount(parent); ++row) {
+            const QModelIndex index = tree->model()->index(row, 0, parent);
+            const QVariant target = index.data(frost::ui::cmake::CMakeTreeModel::TargetIndexRole);
+            if (target.isValid() && target.toInt() >= 0 && index.data().toString() == name)
+                return index;
+            if (const QModelIndex found = self(self, index, name); found.isValid())
+                return found;
+        }
+        return {};
+    };
+    const QModelIndex other = findTarget(findTarget, {}, QStringLiteral("other"));
+    ASSERT_TRUE(other.isValid());
+    toolbarTargets->setCurrentIndex(toolbarTargets->findText(QStringLiteral("other")));
+    emit toolbarTargets->activated(toolbarTargets->currentIndex());
+    EXPECT_EQ(targetLabel->text(), QStringLiteral("Run/Debug: other"));
+    EXPECT_EQ(tree->currentIndex(), other);
+    tree->setCurrentIndex(findTarget(findTarget, {}, QStringLiteral("hello")));
+    EXPECT_EQ(targetLabel->text(), QStringLiteral("Run/Debug: hello"));
+    EXPECT_EQ(toolbarTargets->currentText(), QStringLiteral("hello"));
+    const auto findSource = [&](auto&& self, const QModelIndex& parent) -> QModelIndex {
+        for (int row = 0; row < tree->model()->rowCount(parent); ++row) {
+            const QModelIndex index = tree->model()->index(row, 0, parent);
+            if (index.data(frost::ui::cmake::CMakeTreeModel::PathRole).toString().endsWith(QStringLiteral("main.c")))
+                return index;
+            if (const QModelIndex found = self(self, index); found.isValid())
+                return found;
+        }
+        return {};
+    };
+    const QModelIndex source = findSource(findSource, {});
+    ASSERT_TRUE(source.isValid());
+    tree->setCurrentIndex(source);
+    EXPECT_EQ(targetLabel->text(), QStringLiteral("Run/Debug: hello"));
 
     // Keep a successful ordinary build's GUI completion queued, then start a failing Run build.
     // The old completion must not launch its already-built executable or end the pending Run.
@@ -113,13 +196,15 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     // build's old-profile artifact must not launch after the new profile becomes active.
     ASSERT_TRUE(rig.workbench->runController()->run().has_value());
     ASSERT_TRUE(service->waitForIdle(60s));
-    ASSERT_TRUE(service->setActiveProfile(1).has_value());
+    toolbarProfiles->setCurrentIndex(1);
+    emit toolbarProfiles->activated(1);
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->runController()->running(); }, 30s));
     EXPECT_FALSE(rig.workbench->runConsole()->text().contains(QStringLiteral("cmake works")));
     // Switching profile configures its own build tree and clangd follows its database.
     auto* profiles = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeProfiles"));
     ASSERT_NE(profiles, nullptr);
     ASSERT_TRUE(waitFor([&] { return profiles->count() == 2; }, 30s));
+    ASSERT_TRUE(waitFor([&] { return profiles->currentIndex() == 1 && toolbarProfiles->currentIndex() == 1; }, 30s));
     ASSERT_TRUE(waitFor(
         [&] {
             const auto* clangd = rig.workbench->clangd();
@@ -131,6 +216,18 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
         << " banner=" << rig.window->findChild<QLabel*>(QStringLiteral("cmakeErrorBanner"))->text().toStdString()
         << " output="
         << rig.window->findChild<QPlainTextEdit*>(QStringLiteral("cmakeOutput"))->toPlainText().toStdString();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto model = service->model();
+            if (!model)
+                return false;
+            const auto first = std::ranges::find_if(model->targets, [](const auto& target) {
+                return target.type == frost::project::CMakeTargetType::Executable;
+            });
+            return first != model->targets.end() &&
+                   targetLabel->text() == QStringLiteral("Run/Debug: %1").arg(QString::fromStdString(first->name));
+        },
+        30s));
     EXPECT_TRUE(rig.workbench->closeProject());
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     profiles = rig.window->findChild<QComboBox*>(QStringLiteral("cmakeProfiles"));
@@ -139,8 +236,10 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->state() == frost::build::BuildState::Idle; }, 60s));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("hello")));
     service->setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
-    ASSERT_TRUE(rig.workbench->runController()->run().has_value());
+    const auto reopenedRun = rig.workbench->runController()->run();
+    ASSERT_TRUE(reopenedRun.has_value()) << reopenedRun.error().describe();
     ASSERT_TRUE(service->waitForIdle(60s)); // The Run completion is still queued on the GUI thread.
     rig.workbench->shutdown();
     QCoreApplication::processEvents();
@@ -177,6 +276,7 @@ TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("debuggee")));
     auto* debug = rig.workbench->debugController();
     ASSERT_NE(debug, nullptr);
     // Before the Debug tool window exists, the Run console reruns only a normal process.
@@ -260,6 +360,7 @@ TEST(WorkbenchCMake, DebugRejectsCompletionAfterProfileSwitch) {
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("debuggee")));
     service->setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
     auto* debug = rig.workbench->debugController();
     ASSERT_TRUE(debug->debug().has_value());
@@ -283,6 +384,7 @@ TEST(WorkbenchCMake, ShutdownWhileDebugBuildWaitsForSaveDoesNotLaunch) {
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("debuggee")));
     std::mutex mutex;
     frost::build::SaveAllCompletion held;
     service->setSaveAllHook([&](frost::build::SaveAllCompletion done) {
@@ -322,6 +424,7 @@ TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("stop")));
     ASSERT_TRUE(rig.workbench->runController()->run().has_value());
     ASSERT_TRUE(waitFor([&] { return rig.workbench->runConsole()->text().contains(QStringLiteral("started")); }, 240s));
     ASSERT_TRUE(rig.workbench->runController()->running());

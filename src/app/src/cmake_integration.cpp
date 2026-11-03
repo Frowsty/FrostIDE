@@ -10,14 +10,20 @@
 #include "frost/settings/store.hpp"
 #include "frost/ui/cmake/cmake_tool_window.hpp"
 #include "frost/ui/run_console.hpp"
+#include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/shell_window.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "cmake_build_backend.hpp"
+#include <QComboBox>
+#include <QItemSelectionModel>
+#include <QLabel>
 #include <QMenu>
 #include <QMetaObject>
+#include <QSignalBlocker>
 #include <QTreeView>
+#include <QVBoxLayout>
 #include <QWidget>
 
 #include <algorithm>
@@ -70,6 +76,47 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     m_buildBackend = std::make_unique<CMakeBuildBackend>(*m_service);
     m_controller->setBackend(m_controllerBackend.get());
 
+    auto& toolbar = window.mainToolbar();
+    auto* runCombo = toolbar.runConfigurations();
+    auto* solutionCombo = toolbar.findChild<QWidget*>(QStringLiteral("solutionConfigurations"));
+    QAction* before = nullptr;
+    for (QAction* action : toolbar.actions()) {
+        if (toolbar.widgetForAction(action) == runCombo) {
+            before = action;
+            m_runAction = action;
+        }
+        if (solutionCombo && toolbar.widgetForAction(action) == solutionCombo)
+            m_solutionAction = action;
+    }
+    if (m_solutionAction) {
+        m_solutionActionVisible = m_solutionAction->isVisible();
+        m_solutionAction->setVisible(false);
+    }
+    if (m_runAction) {
+        m_runActionVisible = m_runAction->isVisible();
+        m_runAction->setVisible(false);
+    }
+    m_profiles = new QComboBox(&toolbar);
+    m_profiles->setObjectName(QStringLiteral("cmakeToolbarProfiles"));
+    m_profiles->setToolTip(tr("CMake profile"));
+    m_profiles->setPlaceholderText(tr("No CMake profile"));
+    m_profileAction = toolbar.insertWidget(before, m_profiles);
+    m_targets = new QComboBox(&toolbar);
+    m_targets->setObjectName(QStringLiteral("cmakeToolbarTargets"));
+    m_targets->setToolTip(tr("CMake Run/Debug target"));
+    m_targets->setPlaceholderText(tr("No executable target"));
+    m_targetAction = toolbar.insertWidget(before, m_targets);
+    connect(m_profiles, &QComboBox::activated, this, [this](int index) { m_controller->selectProfile(index); });
+    connect(m_targets, &QComboBox::activated, this, [this](int index) {
+        const std::string key = "target:" + m_targets->itemData(index).toString().toUtf8().toStdString();
+        const QModelIndex selected = m_controller->treeModel()->indexForKey(key);
+        if (selected.isValid())
+            m_tree->setCurrentIndex(selected);
+        else
+            refreshRunTarget();
+    });
+    connect(m_controller.get(), &ui::cmake::CMakeController::profilesChanged, this, [this] { refreshProfiles(); });
+
     auto& windows = window.toolWindows();
     if (!windows.contains(kTargets)) {
         ui::ToolWindowSpec spec;
@@ -91,16 +138,34 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     tree->setHeaderHidden(true);
     tree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tree = tree;
+    auto* targets = new QWidget();
+    auto* targetsLayout = new QVBoxLayout(targets);
+    targetsLayout->setContentsMargins(0, 0, 0, 0);
+    m_targetLabel = new QLabel(targets);
+    m_targetLabel->setObjectName(QStringLiteral("cmakeRunTarget"));
+    m_targetLabel->setWordWrap(true);
+    m_targetLabel->setContentsMargins(6, 4, 6, 4);
+    m_guidanceLabel = new QLabel(targets);
+    m_guidanceLabel->setObjectName(QStringLiteral("cmakeConfigureGuidance"));
+    m_guidanceLabel->setWordWrap(true);
+    m_guidanceLabel->setContentsMargins(6, 4, 6, 4);
+    targetsLayout->addWidget(m_guidanceLabel);
+    targetsLayout->addWidget(m_targetLabel);
+    targetsLayout->addWidget(tree, 1);
+    connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this] { refreshRunTarget(); });
     connect(tree, &QTreeView::customContextMenuRequested, this, [this](QPoint point) {
         const QModelIndex index = m_tree->indexAt(point);
         const QVariant target = index.data(ui::cmake::CMakeTreeModel::TargetIndexRole);
         if (!target.isValid() || target.toInt() < 0)
             return;
         const auto selected = static_cast<std::size_t>(target.toInt());
+        const auto model = m_controller->model();
+        if (!model)
+            return;
         QMenu menu(m_tree);
         QAction* buildAction = menu.addAction(tr("Build Target"));
         if (menu.exec(m_tree->viewport()->mapToGlobal(point)) == buildAction) {
-            if (auto result = m_service->build(build::BuildAction::Build, selected); !result)
+            if (auto result = m_service->build(build::BuildAction::Build, selected, {}, model); !result)
                 m_console.appendOutput(build::RunOutputKind::System, result.error().message());
         }
     });
@@ -134,12 +199,19 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
             open(path.toStdString());
     });
     connect(m_controller.get(), &ui::cmake::CMakeController::modelChanged, this,
-            [changed = std::move(modelChanged)] { changed(); });
+            [this, changed = std::move(modelChanged)] {
+                refreshRunTarget();
+                changed();
+            });
     connect(m_controller.get(), &ui::cmake::CMakeController::busyChanged, this, [this](bool busy) {
+        refreshProfiles();
+        refreshRunTarget();
         if (!busy)
             maybeRerun();
     });
-    windows.setContent(kTargets, tree);
+    refreshRunTarget();
+    refreshProfiles();
+    windows.setContent(kTargets, targets);
     auto* tool = new ui::cmake::CMakeToolWindow(*m_controller);
     windows.setContent(kCMake, tool);
 }
@@ -150,6 +222,17 @@ CMakeIntegration::~CMakeIntegration() {
         m_runRelay->target = nullptr;
     }
     m_session.reset();
+    auto& toolbar = m_window.mainToolbar();
+    if (m_profileAction)
+        toolbar.removeAction(m_profileAction);
+    if (m_targetAction)
+        toolbar.removeAction(m_targetAction);
+    delete m_profileAction.data();
+    delete m_targetAction.data();
+    if (m_solutionAction)
+        m_solutionAction->setVisible(m_solutionActionVisible);
+    if (m_runAction)
+        m_runAction->setVisible(m_runActionVisible);
     // The tool window holds a controller reference, so dispose widgets before the controller.
     m_window.toolWindows().hide(kTargets);
     m_window.toolWindows().hide(kCMake);
@@ -170,31 +253,92 @@ Result<void> CMakeIntegration::debug(std::function<void(Result<debug::DebugTarge
     return {};
 }
 
-Result<build::RunId> CMakeIntegration::run() {
-    if (m_shutdown)
-        return fail(ErrorCode::Cancelled, "the workbench is shutting down");
-    if (running())
-        return fail(ErrorCode::Busy, "a CMake target is already running");
-    const auto model = m_service->model();
-    if (!model)
-        return fail(ErrorCode::InvalidArgument, "configure the CMake project first");
+std::optional<std::size_t> CMakeIntegration::runTarget(const project::CMakeProject& model) const {
     std::optional<std::size_t> target;
     if (m_tree && m_tree->currentIndex().isValid()) {
-        const QVariant data = m_tree->currentIndex().data(ui::cmake::CMakeTreeModel::TargetIndexRole);
-        const int index = data.isValid() ? data.toInt() : -1;
-        if (index >= 0 && static_cast<std::size_t>(index) < model->targets.size() &&
-            model->targets[static_cast<std::size_t>(index)].type == project::CMakeTargetType::Executable) {
-            target = static_cast<std::size_t>(index);
+        // The service can publish a new model before the queued tree reset arrives. Resolve
+        // the selected tree node by target name, not by its index in the previous model.
+        QModelIndex selected = m_tree->currentIndex();
+        while (selected.isValid() && selected.data(ui::cmake::CMakeTreeModel::KindRole).toInt() !=
+                                         static_cast<int>(project::CMakeViewNodeKind::Target)) {
+            selected = selected.parent();
+        }
+        if (selected.isValid()) {
+            const std::string name = selected.data().toString().toStdString();
+            for (std::size_t i = 0; i < model.targets.size(); ++i) {
+                if (model.targets[i].name == name && model.targets[i].type == project::CMakeTargetType::Executable) {
+                    target = i;
+                    break;
+                }
+            }
         }
     }
     if (!target) {
-        for (std::size_t i = 0; i < model->targets.size(); ++i) {
-            if (model->targets[i].type == project::CMakeTargetType::Executable) {
+        for (std::size_t i = 0; i < model.targets.size(); ++i) {
+            if (model.targets[i].type == project::CMakeTargetType::Executable) {
                 target = i;
                 break;
             }
         }
     }
+    return target;
+}
+
+void CMakeIntegration::refreshRunTarget() {
+    const auto model = m_controller->model();
+    const auto target = model ? runTarget(*model) : std::nullopt;
+    const QSignalBlocker blocker(m_targets);
+    m_targets->clear();
+    m_targets->setPlaceholderText(model ? tr("No executable target") : tr("Configure CMake to select a target"));
+    int selected = -1;
+    if (model) {
+        for (std::size_t i = 0; i < model->targets.size(); ++i) {
+            const auto& entry = model->targets[i];
+            if (entry.type != project::CMakeTargetType::Executable ||
+                (entry.generatorProvided && (!target || *target != i)))
+                continue;
+            const QString name = QString::fromStdString(entry.name);
+            m_targets->addItem(name, name);
+            if (target && *target == i)
+                selected = m_targets->count() - 1;
+        }
+    }
+    m_targets->setCurrentIndex(selected);
+    m_targets->setEnabled(m_targets->count() > 0);
+    const std::string folder = m_service->sourceDirectory();
+    QString guidance;
+    if (!folder.empty() && !m_trust.isTrusted(folder)) {
+        guidance = tr("Project is not trusted. Choose Reload CMake Project below to review trust and configure.");
+    } else if (!model && !folder.empty()) {
+        guidance = m_service->state() == build::BuildState::Idle
+                       ? tr("Choose Reload CMake Project below to configure this project.")
+                       : tr("CMake is preparing the project.");
+    }
+    m_guidanceLabel->setText(guidance);
+    m_guidanceLabel->setVisible(!guidance.isEmpty());
+    m_targetLabel->setText(target && model
+                               ? tr("Run/Debug: %1").arg(QString::fromStdString(model->targets[*target].name))
+                               : tr("Run/Debug: configure an executable target"));
+    m_targetLabel->setToolTip(tr("Select an executable in the CMake targets tree to change the Run/Debug target."));
+}
+
+void CMakeIntegration::refreshProfiles() {
+    const QSignalBlocker blocker(m_profiles);
+    m_profiles->clear();
+    m_profiles->addItems(m_controller->profileLabels());
+    m_profiles->setCurrentIndex(m_controller->activeProfile());
+    m_profiles->setEnabled(m_profiles->count() > 1 && !m_controller->busy());
+}
+
+Result<build::RunId> CMakeIntegration::run() {
+    if (m_shutdown)
+        return fail(ErrorCode::Cancelled, "the workbench is shutting down");
+    if (running())
+        return fail(ErrorCode::Busy, "a CMake target is already running");
+    const auto model = m_controller->model();
+    if (!model)
+        return fail(ErrorCode::InvalidArgument, "configure the CMake project first");
+    const auto target = runTarget(*model);
     if (!target)
         return fail(ErrorCode::NotFound, "the CMake project has no executable target");
     m_runTarget = model->targets[*target].id;
@@ -206,12 +350,12 @@ Result<build::RunId> CMakeIntegration::run() {
     m_window.toolWindows().show(ui::tool_windows::kRun, false);
     m_runStateChanged();
     const auto relay = m_runRelay;
-    if (auto started = m_service->build(build::BuildAction::Build, target,
-                                        [relay, generation](const build::CMakeBuildOutcome& outcome) {
-                                            relay->post([generation, outcome](CMakeIntegration& self) {
-                                                self.buildFinished(generation, outcome);
-                                            });
-                                        });
+    if (auto started = m_service->build(
+            build::BuildAction::Build, target,
+            [relay, generation](const build::CMakeBuildOutcome& outcome) {
+                relay->post([generation, outcome](CMakeIntegration& self) { self.buildFinished(generation, outcome); });
+            },
+            model);
         !started) {
         m_pending = false;
         m_runStateChanged();
@@ -403,6 +547,7 @@ void CMakeIntegration::input(const QString& line) {
 Result<void> CMakeIntegration::open(const std::string& folder) {
     auto opened = m_service->openFolder(folder);
     if (opened) {
+        refreshRunTarget();
         m_build.setBackend(m_buildBackend.get());
         m_window.toolWindows().show(kTargets, false);
         m_window.toolWindows().show(kCMake, false);

@@ -51,6 +51,108 @@ namespace tool_windows = frost::ui::tool_windows;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
 
+TEST(Workbench, OpenDialogRecognizesCMakeProjectAndStillEditsItsLists) {
+    WorkDir dir("cmake-open");
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    dir.write("sub/CMakeLists.txt", "# nested\n");
+    WorkbenchRig rig(dir);
+    rig.prompts.openPath = dir.join("CMakeLists.txt");
+    rig.window->menus().action("file.openFile")->trigger();
+    ASSERT_TRUE(rig.workbench->hasProject());
+    EXPECT_FALSE(rig.workbench->solution());
+    EXPECT_EQ(rig.window->tabs().count(), 0);
+
+    rig.window->menus().action("file.openFile")->trigger();
+    EXPECT_EQ(rig.window->tabs().count(), 1);
+    rig.prompts.openPath = dir.join("sub/CMakeLists.txt");
+    rig.window->menus().action("file.openFile")->trigger();
+    EXPECT_TRUE(rig.workbench->hasProject());
+    EXPECT_EQ(rig.window->tabs().count(), 2);
+}
+
+TEST(Workbench, FindUsagesToolWindowHasDistinctLabel) {
+    WorkDir dir("find-usages-label");
+    WorkbenchRig rig(dir);
+    const auto* button = rig.window->toolWindows().stripeButton(frost::app::kFindUsagesToolWindow);
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(button->text(), QStringLiteral("Find Usages"));
+}
+
+TEST(Workbench, SwitchingFromCMakeRestoresSolutionToolbar) {
+    WorkDir dir("cmake-to-solution", "tiny_sln");
+    dir.write("cmake/CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("cmake")));
+    rig.show();
+    rig.window->resize(1100, 700);
+    QApplication::processEvents();
+    ASSERT_NE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarProfiles")), nullptr);
+    ASSERT_NE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets")), nullptr);
+    EXPECT_TRUE(rig.workbench->configurationCombo()->isHidden());
+    EXPECT_TRUE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    rig.window->resize(1200, 750);
+    QApplication::processEvents();
+    EXPECT_EQ(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarProfiles")), nullptr);
+    EXPECT_EQ(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets")), nullptr);
+    EXPECT_FALSE(rig.workbench->configurationCombo()->isHidden());
+    EXPECT_FALSE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    EXPECT_EQ(rig.workbench->configurationCombo()->count(), 2);
+    EXPECT_GT(rig.window->mainToolbar().runConfigurations()->count(), 0);
+}
+
+TEST(Workbench, ExplicitCMakeProjectWinsOverSiblingSolution) {
+    WorkDir dir("explicit-cmake", "tiny_sln");
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openCMakeProject(dir.join("CMakeLists.txt")));
+    EXPECT_TRUE(rig.workbench->hasProject());
+    EXPECT_EQ(rig.workbench->solution(), nullptr);
+    EXPECT_EQ(rig.workbench->projectRoot(), dir.path());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("CMakeLists.txt")));
+    EXPECT_EQ(rig.window->tabs().count(), 1);
+}
+
+TEST(Workbench, ExplicitCMakeIdentitySurvivesRestoreAndRecent) {
+    WorkDir dir("explicit-cmake-restore", "tiny_sln");
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    const auto lists = dir.join("CMakeLists.txt");
+    {
+        WorkbenchRig first(dir);
+        ASSERT_TRUE(first.workbench->openCMakeProject(lists));
+        ASSERT_EQ(frost::app::recentProjects(*first.settings->snapshot()).front(), lists);
+    }
+    {
+        WorkbenchRig second(dir);
+        ASSERT_TRUE(second.workbench->restoreLastProject());
+        EXPECT_EQ(second.workbench->solution(), nullptr);
+        EXPECT_EQ(second.workbench->projectRoot(), dir.path());
+        ASSERT_TRUE(second.workbench->closeProject());
+        auto* welcome = second.workbench->welcomeScreen();
+        ASSERT_NE(welcome, nullptr);
+        ASSERT_FALSE(welcome->recentProjects().empty());
+        welcome->activateRow(0);
+        ASSERT_TRUE(waitFor([&] { return second.workbench->hasProject(); }));
+        EXPECT_EQ(second.workbench->solution(), nullptr);
+        EXPECT_EQ(second.workbench->projectRoot(), dir.path());
+    }
+}
+
+TEST(Workbench, CMakeOpenDialogKeepsStandaloneUnsavedFile) {
+    WorkDir dir("cmake-open-cancel");
+    dir.write("CMakeLists.txt", "project(Example C)\n");
+    dir.write("dirty.cpp", "int main() {}\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("dirty.cpp")));
+    ASSERT_TRUE(rig.view()->editor().typeText("edit "));
+    rig.prompts.openPath = dir.join("CMakeLists.txt");
+    rig.window->menus().action("file.openFile")->trigger();
+    EXPECT_EQ(rig.prompts.discardCalls, 0);
+    EXPECT_TRUE(rig.workbench->hasProject());
+    EXPECT_EQ(rig.window->tabs().count(), 1);
+    EXPECT_TRUE(rig.window->tabs().isDirty(0));
+}
+
 // The same path with its ASCII letters upper-cased (on Windows the same file; unused elsewhere).
 [[maybe_unused]] std::string upperCased(std::string path) {
     std::ranges::transform(path, path.begin(),

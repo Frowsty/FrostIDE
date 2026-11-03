@@ -12,7 +12,9 @@
 #include "frost/ui/run_console.hpp"
 
 #include <QMetaObject>
+#include <QToolButton>
 
+#include <algorithm>
 #include <format>
 #include <utility>
 
@@ -216,6 +218,7 @@ Result<void> DebugController::debug(std::optional<project::ProjectId> project) {
         return std::unexpected(std::move(started.error()));
     }
     m_pendingRun = *started;
+    m_lastCoreClrSession = false;
     if (m_console) {
         m_console->beginRun(QStringLiteral("Debug"));
     }
@@ -282,6 +285,62 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
     if (!factory) {
         return std::unexpected(std::move(factory.error()));
     }
+    auto started = startSession(
+        target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, "lldb-dap",
+        [this, target, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
+            return debug::startDebugSession(*m_options.trust, target, std::move(factory), m_breakpoints.sessionLines(),
+                                            std::move(callbacks));
+        });
+    if (started)
+        m_lastCoreClrSession = false;
+    return started;
+}
+
+Result<void> DebugController::startCoreClrTarget(
+    const debug::CoreClrTarget& target, const std::vector<std::string>& trustRoots, debug::AdapterFactory factory,
+    std::function<bool(const debug::DebugFrame&)> frameAllowed, std::vector<std::string> allowedSources,
+    std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint) {
+    if (m_pendingRun || m_alternatePending || (m_hooks.mayStart && !m_hooks.mayStart()))
+        return fail(ErrorCode::Busy, "another run or debug launch is already pending");
+    if (!factory)
+        return fail(ErrorCode::InvalidArgument, "the CoreCLR adapter factory is missing");
+    if (m_session)
+        return fail(ErrorCode::Busy, "a debug session is running already; stop it first");
+    m_coreClrSession = true;
+    m_coreClrFrameAllowed = std::move(frameAllowed);
+    m_coreClrAllowedSources = allowedSources;
+    m_coreClrBreakpointValidator = std::move(validateBreakpoint);
+    auto started = startSession(
+        std::string(io::fileName(target.assembly)), target.assembly, "CoreCLR",
+        [this, target, trustRoots, factory = std::move(factory), allowedSources = std::move(allowedSources),
+         restrictSources = static_cast<bool>(m_coreClrFrameAllowed)](debug::DebugSessionCallbacks callbacks) mutable {
+            auto breakpoints = m_breakpoints.sessionLines();
+            if (restrictSources) {
+                std::erase_if(breakpoints, [&allowedSources](const auto& entry) {
+                    return std::ranges::find(allowedSources, entry.first) == allowedSources.end();
+                });
+            }
+            return debug::startCoreClrSession(*m_options.trust, target, trustRoots, std::move(factory),
+                                              std::move(breakpoints), std::move(callbacks));
+        });
+    if (!started) {
+        m_coreClrSession = false;
+        m_coreClrFrameAllowed = {};
+        m_coreClrAllowedSources.clear();
+        m_coreClrBreakpointValidator = {};
+    } else
+        m_lastCoreClrSession = true;
+    return started;
+}
+
+Result<void> DebugController::startSession(std::string title, std::string program, std::string adapterName,
+                                           SessionStarter starter) {
+    if (m_shutdown)
+        return fail(ErrorCode::Cancelled, "the workbench is shutting down");
+    if (m_session)
+        return fail(ErrorCode::Busy, "a debug session is running already; stop it first");
+    if (m_options.trust == nullptr)
+        return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     const std::uint64_t generation = ++m_generation;
     const std::shared_ptr<Relay> relay = m_relay;
     debug::DebugSessionCallbacks callbacks{
@@ -323,8 +382,7 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
             },
     };
     m_breakpoints.resetStatus(debug::BreakpointStatus::Pending);
-    auto session = debug::startDebugSession(*m_options.trust, target, std::move(*factory), m_breakpoints.sessionLines(),
-                                            std::move(callbacks));
+    auto session = starter(std::move(callbacks));
     if (!session) {
         ++m_generation;
         m_breakpoints.resetStatus(debug::BreakpointStatus::Unknown);
@@ -337,7 +395,7 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
     }
     m_session = std::move(*session);
     m_state = debug::DebugState::Starting;
-    m_title = QString::fromStdString(target.name.empty() ? std::string(io::fileName(target.program)) : target.name);
+    m_title = QString::fromStdString(title);
     m_stop.reset();
     m_threads.clear();
     m_thread.reset();
@@ -348,8 +406,9 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
             m_console->beginRun(m_title);
         }
         m_console->appendOutput(build::RunOutputKind::System,
-                                std::format("Debugging {} with lldb-dap\n", target.program));
+                                std::format("Debugging {} with {}\n", program, adapterName));
         m_console->setRunning(true, false);
+        m_console->rerunButton()->setEnabled(!m_coreClrSession);
     }
     if (m_hooks.showToolWindow) {
         m_hooks.showToolWindow();
@@ -402,11 +461,19 @@ void DebugController::onFrames(std::int64_t threadId, debug::FrameList frames) {
         return;
     }
     m_thread = threadId;
+    if (m_coreClrFrameAllowed)
+        std::erase_if(frames.frames, [this](const auto& frame) { return !m_coreClrFrameAllowed(frame); });
     m_frames = std::move(frames);
     emit framesChanged();
 }
 
 void DebugController::onFrameSelected(std::int64_t threadId, const debug::DebugFrame& frame) {
+    if (m_coreClrFrameAllowed && !m_coreClrFrameAllowed(frame)) {
+        m_frame.reset();
+        showExecutionPoint();
+        emit frameSelected();
+        return;
+    }
     m_thread = threadId;
     m_frame = frame;
     if (frame.hasSource() && m_hooks.openSource) {
@@ -448,6 +515,8 @@ void DebugController::onEnded(const debug::DebugOutcome& outcome) {
         finished.stopped && !finished.exitCode ? QStringLiteral("Process stopped") : runFinishedLine(finished);
     if (m_console) {
         m_console->finish(finished, summary);
+        if (m_coreClrSession)
+            m_console->rerunButton()->setEnabled(false);
     }
     if (outcome.error && !outcome.stopped && m_hooks.notify) {
         m_hooks.notify(QStringLiteral("Debug"), QString::fromStdString(outcome.error->message()), true);
@@ -465,6 +534,12 @@ void DebugController::endSession() {
     m_thread.reset();
     m_frames = {};
     m_frame.reset();
+    m_coreClrFrameAllowed = {};
+    m_coreClrAllowedSources.clear();
+    m_coreClrBreakpointValidator = {};
+    m_coreClrPathRequests.clear();
+    ++m_coreClrValidationEpoch;
+    m_coreClrSession = false;
     std::unique_ptr<debug::DebugSession> ended = std::move(m_session);
     ended.reset(); // Joins the client's threads (the adapter has exited or was killed).
     m_breakpoints.resetStatus(debug::BreakpointStatus::Unknown);
@@ -497,6 +572,26 @@ bool DebugController::stepInto() { return m_session && report(m_session->stepIn(
 
 bool DebugController::stepOut() { return m_session && report(m_session->stepOut(), QStringLiteral("Step Out")); }
 
+bool DebugController::validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved) {
+    if (!m_coreClrBreakpointValidator ||
+        std::ranges::find(m_coreClrAllowedSources, path) == m_coreClrAllowedSources.end())
+        return false;
+    const auto sequence = ++m_coreClrPathRequests[path];
+    const auto epoch = m_coreClrValidationEpoch;
+    const auto generation = m_generation;
+    const auto relay = m_relay;
+    m_coreClrBreakpointValidator(
+        path, [relay, generation, epoch, sequence, path, approved = std::move(approved)](bool ok) {
+            relay->post(generation, [ok, epoch, sequence, path, approved](DebugController* self) {
+                const auto it = self->m_coreClrPathRequests.find(path);
+                if (ok && self->m_session && self->m_coreClrSession && self->m_coreClrValidationEpoch == epoch &&
+                    it != self->m_coreClrPathRequests.end() && it->second == sequence)
+                    approved(*self);
+            });
+        });
+    return true;
+}
+
 bool DebugController::runToCursor() {
     EditorView* view = m_hooks.currentEditor ? m_hooks.currentEditor() : nullptr;
     if (!m_session || view == nullptr) {
@@ -506,6 +601,13 @@ bool DebugController::runToCursor() {
     auto path = io::normalizePath(view->path());
     if (!path) {
         return false;
+    }
+    if (m_coreClrSession) {
+        const auto targetLine = static_cast<std::int64_t>(line.value()) + 1;
+        return validateCoreClrPath(*path, [path = *path, targetLine](DebugController& self) {
+            static_cast<void>(
+                self.report(self.m_session->runToLine(path, targetLine), QStringLiteral("Run to Cursor")));
+        });
     }
     return report(m_session->runToLine(*path, static_cast<std::int64_t>(line.value()) + 1),
                   QStringLiteral("Run to Cursor"));
@@ -539,12 +641,19 @@ void DebugController::cancelRerun() {
 }
 
 void DebugController::rerun() {
+    if (m_coreClrSession || m_lastCoreClrSession) {
+        if (m_hooks.notify)
+            m_hooks.notify(QStringLiteral("Debug .NET"), QStringLiteral("Start the .NET project again to rebuild it."),
+                           false);
+        return;
+    }
     stop();
     m_rerunPending = true;
     m_rerunTimer.start();
 }
 
 void DebugController::stop() {
+    ++m_coreClrValidationEpoch;
     m_rerunPending = false;
     m_rerunTimer.stop();
     if (m_alternatePending) {
@@ -577,6 +686,8 @@ void DebugController::selectThread(std::int64_t threadId) {
     }
     m_thread = threadId;
     m_frames = m_session->frames(threadId);
+    if (m_coreClrFrameAllowed)
+        std::erase_if(m_frames.frames, [this](const auto& frame) { return !m_coreClrFrameAllowed(frame); });
     m_frame.reset();
     emit framesChanged();
     static_cast<void>(report(m_session->selectThread(threadId), QStringLiteral("Select Thread")));
@@ -741,7 +852,12 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
         }
     }
     if (change == debug::BreakpointManager::Change::Lines) {
-        if (m_session) {
+        if (m_session && m_coreClrSession) {
+            const std::string file(path);
+            static_cast<void>(validateCoreClrPath(file, [file](DebugController& self) {
+                self.m_session->setBreakpoints(file, self.m_breakpoints.sessionLines(file));
+            }));
+        } else if (m_session) {
             m_session->setBreakpoints(std::string(path), m_breakpoints.sessionLines(path));
         }
         save();
@@ -753,7 +869,8 @@ void DebugController::showExecutionPoint() {
         if (!attached->view) {
             continue;
         }
-        if (m_frame && m_frame->hasSource() && m_breakpoints.samePath(attached->path, m_frame->path)) {
+        if (!m_coreClrFrameAllowed && m_frame && m_frame->hasSource() &&
+            m_breakpoints.samePath(attached->path, m_frame->path)) {
             attached->view->setExecutionPoint(LineIndex(static_cast<std::uint32_t>(m_frame->line - 1)));
         } else {
             attached->view->setExecutionPoint(std::nullopt);

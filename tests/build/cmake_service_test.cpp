@@ -275,6 +275,13 @@ TEST_F(CMakeServiceTest, BuildsCleansAndRebuildsTargets) {
     const auto& targets = service->model()->targets;
     const auto core =
         static_cast<std::size_t>(std::ranges::find(targets, "core", &project::CMakeTarget::name) - targets.begin());
+    const auto current = service->model();
+    auto stale = std::make_shared<project::CMakeProject>(*current);
+    std::ranges::reverse(stale->targets);
+    const auto refused = service->build(BuildAction::Build, core, {}, stale);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->state(), BuildState::Idle);
 
     const std::string output = "[1/2] Building C object CMakeFiles/core.dir/src/core.c.o\n"
                                "../src/core.c:1:22: warning: unused variable 'x' [-Wunused-variable]\n"
@@ -282,10 +289,11 @@ TEST_F(CMakeServiceTest, BuildsCleansAndRebuildsTargets) {
                                "ninja: build stopped: subcommand failed.\n";
     launcher.expect({.expectExecutable = cmake(), .exitCode = 1, .stdoutBytes = output});
     std::optional<CMakeBuildOutcome> completed;
-    ASSERT_TRUE(
-        service
-            ->build(BuildAction::Build, core, [&completed](const CMakeBuildOutcome& outcome) { completed = outcome; })
-            .has_value());
+    ASSERT_TRUE(service
+                    ->build(
+                        BuildAction::Build, core,
+                        [&completed](const CMakeBuildOutcome& outcome) { completed = outcome; }, current)
+                    .has_value());
     waitIdle();
     ASSERT_TRUE(completed.has_value());
     EXPECT_FALSE(completed->succeeded());

@@ -24,6 +24,19 @@
 namespace {
 using namespace std::chrono_literals;
 using namespace frost::app::test;
+
+TEST(WorkbenchUnity, ControlsStayHiddenUntilTheirToolWindowOpens) {
+    WorkDir dir("unity-panel-visibility");
+    WorkbenchRig rig(dir);
+    auto* panel = rig.window->findChild<QWidget*>(QStringLiteral("unityControlsPanel"));
+    ASSERT_NE(panel, nullptr);
+    rig.show();
+    EXPECT_FALSE(panel->isVisible());
+    rig.window->toolWindows().show("unityControls");
+    ASSERT_EQ(rig.window->toolWindows().content("unityControls"), panel);
+    EXPECT_TRUE(panel->isVisible());
+}
+
 frost::lang::Json announcement(const std::string& root, char session, int pid = 123) {
     return frost::lang::Json::object()
         .set("version", 2)

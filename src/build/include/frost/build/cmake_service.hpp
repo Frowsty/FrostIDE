@@ -252,10 +252,11 @@ public:
      * targets. On acceptance, `done` receives this job's outcome and completion-time model once on
      * the service thread; no callback is made when the request is refused or the service is destroyed.
      * Errors: InvalidArgument (no folder, an unusable profile, `target` out of range or
-     * without a model), Busy.
+     * without a model), Busy (including when a supplied `expectedModel` is no longer current).
      */
     [[nodiscard]] Result<void> build(BuildAction action, std::optional<std::size_t> target = std::nullopt,
-                                     CMakeBuildCompletion done = {});
+                                     CMakeBuildCompletion done = {},
+                                     std::shared_ptr<const project::CMakeProject> expectedModel = {});
     // Cancels the job in progress (BuildService::cancel). Idempotent.
     void cancel();
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no

@@ -362,6 +362,10 @@ struct UnityControlIntegration::Impl {
 UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     : QObject(&workbench), m_impl(std::make_unique<Impl>(*this, workbench)) {
     auto* panel = new QWidget(workbench.m_window);
+    panel->setObjectName(QStringLiteral("unityControlsPanel"));
+    // The tool window takes ownership lazily; do not show this child over the menu bar
+    // while it is still parented to the main window.
+    panel->hide();
     m_impl->panel = panel;
     auto* layout = new QVBoxLayout(panel);
     auto* row = new QHBoxLayout();

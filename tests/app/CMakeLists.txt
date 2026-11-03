@@ -151,7 +151,7 @@ target_include_directories(app_workbench_unity_tests PRIVATE ${FROST_SOURCE_DIR}
 target_compile_definitions(app_workbench_unity_tests PRIVATE ${_frost_workbench_definitions})
 
 frost_add_test(app_workbench_managed_tests QT
-    SOURCES workbench_managed_test.cpp
+    SOURCES workbench_managed_test.cpp managed_debug_preparation_test.cpp
     DEPS frost::app frost::lang frost::io
     LABELS integration)
 target_include_directories(app_workbench_managed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

@@ -28,6 +28,41 @@ using test::workPath;
 
 const std::string kSource = workPath("App/main.cpp");
 
+TEST(DebugSessionAdapterProfile, InitializeCarriesTheSelectedAdapterId) {
+    FakeDebugAdapter adapter;
+    scriptProgram(adapter, FakeProgram{});
+    auto session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, {}, false, "coreclr");
+    ASSERT_TRUE(adapter.waitForRequest("initialize"));
+    ASSERT_EQ(adapter.argumentsOf("initialize").size(), 1U);
+    EXPECT_EQ(adapter.argumentsOf("initialize").front().stringAt("adapterID"), "coreclr");
+}
+
+TEST(DebugSessionAdapterProfile, FrameIdZeroRemainsSelectableAndCanRequestScopes) {
+    FakeDebugAdapter adapter;
+    FakeProgram program{.sourcePath = kSource, .codeLines = {10}};
+    scriptProgram(adapter, std::move(program));
+    adapter.on("stackTrace", [](const rpc::Json&) {
+        return FakeDebugAdapter::Reply{
+            .body = rpc::Json::object()
+                        .set("stackFrames",
+                             rpc::Json::array({rpc::Json::object()
+                                                   .set("id", 0)
+                                                   .set("name", "Main")
+                                                   .set("line", 10)
+                                                   .set("column", 1)
+                                                   .set("source", rpc::Json::object().set("path", kSource))}))
+                        .set("totalFrames", 1)};
+    });
+    auto session =
+        DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {{kSource, {{1, 10}}}}, {}, false, "coreclr");
+    ASSERT_TRUE(waitUntil([&] { return session->selectedFrame().has_value(); }));
+    EXPECT_EQ(session->selectedFrame()->id, 0);
+    ASSERT_TRUE(session->selectFrame(1, 0));
+    session->scopes(0, [](Result<ScopeList>) {});
+    ASSERT_TRUE(adapter.waitForRequest("scopes"));
+    EXPECT_EQ(adapter.argumentsOf("scopes").front().integerAt("frameId"), 0);
+}
+
 rpc::Json launchArguments() {
     return rpc::Json::object()
         .set("name", "App")

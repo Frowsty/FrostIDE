@@ -32,6 +32,7 @@
 #include "frost/build/run_service.hpp"
 #include "frost/core/error.hpp"
 #include "frost/debug/breakpoints.hpp"
+#include "frost/debug/coreclr_dap.hpp"
 #include "frost/debug/debug_session.hpp"
 #include "frost/debug/lldb_dap.hpp"
 
@@ -122,6 +123,13 @@ public:
     // InvalidArgument (no trust store), NotFound (lldb-dap is missing), Untrusted (no adapter
     // started), the adapter factory's.
     [[nodiscard]] Result<void> startTarget(const debug::DebugTarget& target);
+    // The caller must finish the trusted managed build and verify assembly/PDB/source revisions.
+    // Starts the supplied adapter through the same UI and session lifetime as native debugging.
+    [[nodiscard]] Result<void>
+    startCoreClrTarget(const debug::CoreClrTarget& target, const std::vector<std::string>& trustRoots,
+                       debug::AdapterFactory factory, std::function<bool(const debug::DebugFrame&)> frameAllowed = {},
+                       std::vector<std::string> allowedSources = {},
+                       std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint = {});
 
     // Whether a session is live (Starting, Running or Stopped).
     [[nodiscard]] bool debugging() const noexcept {
@@ -219,8 +227,12 @@ private:
     void refreshMarkers(EditorView& view);
     void showExecutionPoint();
     void save();
+    bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
 
     [[nodiscard]] Result<debug::AdapterFactory> adapterFactory();
+    using SessionStarter = std::function<Result<std::unique_ptr<debug::DebugSession>>(debug::DebugSessionCallbacks)>;
+    [[nodiscard]] Result<void> startSession(std::string title, std::string program, std::string adapterName,
+                                            SessionStarter starter);
     bool report(Result<void> result, const QString& what);
     void endSession();
 
@@ -234,6 +246,13 @@ private:
 
     std::shared_ptr<Relay> m_relay;
     std::unique_ptr<debug::DebugSession> m_session;
+    std::function<bool(const debug::DebugFrame&)> m_coreClrFrameAllowed;
+    std::vector<std::string> m_coreClrAllowedSources;
+    std::function<void(std::string, std::function<void(bool)>)> m_coreClrBreakpointValidator;
+    std::map<std::string, std::uint64_t> m_coreClrPathRequests;
+    std::uint64_t m_coreClrValidationEpoch = 0;
+    bool m_coreClrSession = false;
+    bool m_lastCoreClrSession = false;
     bool m_alternatePending = false;
     bool m_shutdown = false;
     bool m_rerunPending = false;

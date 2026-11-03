@@ -159,11 +159,11 @@ BreakpointEvent parseBreakpointEvent(const rpc::Json& body) {
     return event;
 }
 
-rpc::Json initializeArguments() {
+rpc::Json initializeArguments(std::string_view adapterId) {
     return rpc::Json::object()
         .set("clientID", "frostide")
         .set("clientName", "FrostIDE")
-        .set("adapterID", "lldb-dap")
+        .set("adapterID", adapterId)
         .set("locale", "en-US")
         .set("linesStartAt1", true)
         .set("columnsStartAt1", true)

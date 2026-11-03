@@ -53,6 +53,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import struct
 import sys
 import uuid
@@ -494,10 +495,25 @@ def elf_needed(path: Path) -> list[str]:
     """
     DT_NEEDED entries of a 64-bit little-endian ELF executable or shared object, read from
     the section headers (the SHT_DYNAMIC section and its linked string table). Returns []
-    for anything else, including relocatable objects. Written from the ELF specification.
+    for anything else, including relocatable objects and special files. Symlinks to regular
+    files are followed. Written from the ELF specification.
     """
     try:
-        with path.open("rb") as stream:
+        # Do not open known special files. On Unix O_NONBLOCK also prevents a FIFO substituted
+        # after this check from blocking; fstat verifies the object actually opened before reading.
+        if not stat.S_ISREG(path.stat().st_mode):
+            return []
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                return []
+            stream = os.fdopen(descriptor, "rb")
+            descriptor = -1  # The file object now owns it.
+        finally:
+            if descriptor != -1:
+                os.close(descriptor)
+        with stream:
             header = stream.read(64)
             if len(header) < 64 or header[:4] != b"\x7fELF" or header[4] != 2 or header[5] != 1:
                 return []
@@ -546,8 +562,17 @@ def binary_qt_uses(repo: Path, build_dirs: list[Path]) -> list[QtUse]:
             parent = folder.name
             for name in names:
                 path = folder / name
-                shown = _display(repo, path)
                 lower = name.lower()
+                if lower.endswith((".o", ".a", ".obj", ".lib", ".pdb", ".ninja", ".txt", ".cmake", ".json")):
+                    continue
+                try:
+                    # os.walk includes FIFOs and other special entries in names; only files
+                    # (including symlinks to regular files) can be deployed Qt components.
+                    if not stat.S_ISREG(path.stat().st_mode):
+                        continue
+                except OSError:
+                    continue
+                shown = _display(repo, path)
                 m = _QT_DLL.match(name)
                 if m:
                     uses.append(QtUse(_module_from_library(m.group(1)), False, context, ("windows",), shown, 1))
@@ -565,8 +590,6 @@ def binary_qt_uses(repo: Path, build_dirs: list[Path]) -> list[QtUse]:
                     if platform == "windows" and key not in QT_PLUGIN_TARGETS and key[:-1] in QT_PLUGIN_TARGETS:
                         key = key[:-1]  # debug plugin, e.g. qwindowsd.dll
                     uses.append(QtUse(key, True, context, (platform,), shown, 1))
-                    continue
-                if lower.endswith((".o", ".a", ".obj", ".lib", ".pdb", ".ninja", ".txt", ".cmake", ".json")):
                     continue
                 for needed in elf_needed(path):
                     nm = _QT_SO.match(needed)

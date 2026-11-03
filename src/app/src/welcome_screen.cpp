@@ -44,9 +44,10 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     auto* buttons = new QHBoxLayout();
     m_open = new QPushButton(text("Open..."), this);
     m_open->setObjectName(QStringLiteral("welcomeOpen"));
-    m_open->setToolTip(text("Open a solution (.sln, .slnx) or a file"));
+    m_open->setToolTip(text("Open a solution (.sln, .slnx), CMakeLists.txt, or a file"));
     m_openFolder = new QPushButton(text("Open Folder..."), this);
     m_openFolder->setObjectName(QStringLiteral("welcomeOpenFolder"));
+    m_openFolder->setToolTip(text("Open a project folder, including a CMake project"));
     buttons->addWidget(m_open);
     buttons->addWidget(m_openFolder);
     buttons->addStretch(1);

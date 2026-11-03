@@ -5,6 +5,7 @@
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
+#include "../../src/app/src/managed_source_snapshot.hpp"
 #include "../../src/app/src/unity_context.hpp"
 #include "support/managed_profile_guard.hpp"
 #include "workbench_rig.hpp"
@@ -32,6 +33,139 @@ using namespace std::chrono_literals;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
+
+TEST(WorkbenchManaged, RealConsoleProjectBuildsAndDebugsWithVerifiedSource) {
+    if (!frost::test::sdkTestMayStart())
+        GTEST_SKIP() << "NuGet migration marker absent";
+    const std::string dotnet = qgetenv("FROST_TEST_CSHARP_DOTNET").toStdString();
+    const std::string adapter = qgetenv("FROST_TEST_MANAGED_DEBUG_ADAPTER").toStdString();
+    const std::string guard = qgetenv("FROST_TEST_MANAGED_DEBUG_GUARD").toStdString();
+    const bool useBundle = qgetenv("FROST_TEST_MANAGED_USE_BUNDLE") == "1";
+    if (dotnet.empty() || (!useBundle && (adapter.empty() || guard.empty())))
+        GTEST_SKIP() << "set the isolated SDK, source-built adapter and verifier paths";
+    WorkDir dir("managed-debug-real");
+    const std::vector<QByteArray> names = {"HOME",
+                                           "USERPROFILE",
+                                           "APPDATA",
+                                           "LOCALAPPDATA",
+                                           "XDG_CONFIG_HOME",
+                                           "XDG_DATA_HOME",
+                                           "XDG_CACHE_HOME",
+                                           "DOTNET_CLI_HOME",
+                                           "DOTNET_ROOT",
+                                           "DOTNET_GENERATE_ASPNET_CERTIFICATE",
+                                           "DOTNET_CLI_TELEMETRY_OPTOUT",
+                                           "DOTNET_ADD_GLOBAL_TOOLS_TO_PATH",
+                                           "NUGET_PACKAGES",
+                                           "NUGET_HTTP_CACHE_PATH",
+                                           "NUGET_PLUGINS_CACHE_PATH",
+                                           "NUGET_PLUGIN_PATHS",
+                                           "TMP",
+                                           "TEMP",
+                                           "TMPDIR"};
+    std::vector<QByteArray> old;
+    for (const auto& name : names)
+        old.push_back(qgetenv(name.constData()));
+    const auto restore = qScopeGuard([names, old] {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (old[i].isNull())
+                qunsetenv(names[i].constData());
+            else
+                qputenv(names[i].constData(), old[i]);
+        }
+    });
+    const std::vector<std::pair<QByteArray, std::string>> values = {
+        {"HOME", dir.join("profile")},
+        {"USERPROFILE", dir.join("profile")},
+        {"APPDATA", dir.join("profile/appdata")},
+        {"LOCALAPPDATA", dir.join("profile/local")},
+        {"XDG_CONFIG_HOME", dir.join("profile/config")},
+        {"XDG_DATA_HOME", dir.join("profile/data")},
+        {"XDG_CACHE_HOME", dir.join("profile/cache")},
+        {"DOTNET_CLI_HOME", dir.join("profile")},
+        {"DOTNET_ROOT", std::string(frost::io::parentPath(dotnet))},
+        {"DOTNET_GENERATE_ASPNET_CERTIFICATE", "false"},
+        {"DOTNET_CLI_TELEMETRY_OPTOUT", "1"},
+        {"DOTNET_ADD_GLOBAL_TOOLS_TO_PATH", "false"},
+        {"NUGET_PACKAGES", dir.join("packages")},
+        {"NUGET_HTTP_CACHE_PATH", dir.join("http")},
+        {"NUGET_PLUGINS_CACHE_PATH", dir.join("plugins")},
+        {"TMP", dir.join("tmp")},
+        {"TEMP", dir.join("tmp")},
+        {"TMPDIR", dir.join("tmp")}};
+    for (const auto& [name, value] : values)
+        qputenv(name.constData(), QByteArray::fromStdString(value));
+    qunsetenv("NUGET_PLUGIN_PATHS");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("tmp")));
+    dir.write("NuGet.Config", "<configuration><packageSources><clear /></packageSources></configuration>");
+    dir.write(
+        "App.csproj",
+        R"(<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>)");
+    dir.write("Program.cs", "using System;\nclass Program {\n static void Main() {\n  int value = 41;\n  "
+                            "Console.WriteLine(value);\n  Console.WriteLine(\"done\");\n }\n}\n");
+    frost::app::test::RigOptions config;
+    config.workbench.clangd = false;
+    config.workbench.git = false;
+    if (!useBundle)
+        config.workbench.managedPdbGuardPath = guard;
+    config.workbench.selectManagedDebug = [&](std::string_view) -> std::optional<frost::app::ManagedDebugSelection> {
+        return frost::app::ManagedDebugSelection{.project = dir.join("App.csproj"),
+                                                 .dotnet = dotnet,
+                                                 .configuration = "Debug",
+                                                 .framework = "net10.0",
+                                                 .runtimeIdentifier = "",
+                                                 .adapter = useBundle ? std::string() : adapter};
+    };
+    WorkbenchRig rig(dir, config);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Program.cs")));
+    auto* editor = &rig.workbench->currentView()->editor();
+    editor->goToLine(8, 1);
+    ASSERT_TRUE(editor->typeText("// saved before build\n"));
+    auto* debugger = rig.workbench->debugController();
+    debugger->toggleBreakpoint(dir.join("Program.cs"), 4);
+    auto action = rig.workbench->registry().find("run.debugManaged");
+    ASSERT_TRUE(action);
+    frost::input::ActionContext context;
+    context.trusted = true;
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return debugger->paused() && debugger->selectedFrame().has_value(); }, 60s));
+    EXPECT_FALSE(rig.workbench->currentView()->document().dirty());
+    EXPECT_EQ(debugger->selectedFrame()->path, dir.join("Program.cs"));
+    EXPECT_EQ(debugger->selectedFrame()->line, 5);
+    std::optional<frost::Result<frost::debug::ScopeList>> scopes;
+    debugger->scopes(debugger->selectedFrame()->id, [&](auto value) { scopes = std::move(value); });
+    ASSERT_TRUE(waitFor([&] { return scopes.has_value(); }, 10s));
+    ASSERT_TRUE(*scopes);
+    ASSERT_FALSE((*scopes)->empty());
+    std::optional<frost::Result<frost::debug::VariableList>> variables;
+    debugger->variables((*scopes)->front().variablesReference, 0, 0, [&](auto value) { variables = std::move(value); });
+    ASSERT_TRUE(waitFor([&] { return variables.has_value(); }, 10s));
+    ASSERT_TRUE(*variables);
+    EXPECT_TRUE(std::ranges::any_of(**variables,
+                                    [](const auto& value) { return value.name == "value" && value.value == "41"; }));
+    ASSERT_TRUE(debugger->stepOver());
+    ASSERT_TRUE(waitFor(
+        [&] { return debugger->paused() && debugger->selectedFrame() && debugger->selectedFrame()->line == 6; }, 10s));
+    EXPECT_EQ(rig.window->findChildren<QDialog*>(QStringLiteral("managedVerifiedSource")).size(), 1);
+    ASSERT_TRUE(debugger->resume());
+    ASSERT_TRUE(waitFor([&] { return !debugger->debugging(); }, 10s));
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return debugger->paused() && debugger->selectedFrame().has_value(); }, 60s));
+    ASSERT_TRUE(editor->typeText("// invalidate source\n"));
+    ASSERT_TRUE(waitFor([&] { return !debugger->debugging(); }, 10s));
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return debugger->paused() && debugger->selectedFrame().has_value(); }, 60s));
+    debugger->stop();
+    ASSERT_TRUE(waitFor([&] { return !debugger->debugging(); }, 10s));
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return debugger->paused() && debugger->selectedFrame().has_value(); }, 60s));
+    ASSERT_TRUE(rig.trust->untrust(dir.path()));
+    ASSERT_TRUE(waitFor([&] { return !debugger->debugging(); }, 10s));
+}
+
 TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     if (!frost::test::sdkTestMayStart())
         GTEST_SKIP()
@@ -172,6 +306,15 @@ TEST(WorkbenchManaged, UnityDiscoveryRequiresOwnedVersionedRegularFiles) {
 }
 
 #ifndef _WIN32
+TEST(WorkbenchManaged, ManagedDebugRejectsSymlinkComponents) {
+    WorkDir dir("managed-debug-links");
+    dir.write("inside/real/Program.cs", "source\n");
+    std::filesystem::create_directory_symlink(dir.join("inside/real"), dir.join("inside/link"));
+    EXPECT_TRUE(frost::app::managedPathHasNoLinks(frost::io::realFileSystem(), dir.join("inside/real/Program.cs")));
+    EXPECT_FALSE(frost::app::managedPathHasNoLinks(frost::io::realFileSystem(), dir.join("inside/link/Program.cs")));
+    EXPECT_FALSE(frost::app::managedPathHasNoLinks(frost::io::realFileSystem(), dir.join("inside/link")));
+}
+
 TEST(WorkbenchManaged, UnityDiscoveryDoesNotOpenUntrustedMetadataAndRejectsFifo) {
     WorkDir dir("unity-untrusted-fifo");
     dir.write("Assets/Probe.cs", "public class Probe {}\n");

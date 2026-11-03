@@ -1276,9 +1276,12 @@ void CMakeService::setSaveAllHook(SaveAllHook hook) {
     m_state->saveAll = std::move(hook);
 }
 
-Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target, CMakeBuildCompletion done) {
+Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target, CMakeBuildCompletion done,
+                                 std::shared_ptr<const project::CMakeProject> expectedModel) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
+    if (expectedModel && expectedModel != s.model)
+        return fail(ErrorCode::Busy, "CMake targets changed; wait for the project view to refresh");
     CMakeBuildRequest request{.action = action, .target = target, .targetName = {}, .profile = {}};
     if (target) {
         if (!s.model || *target >= s.model->targets.size()) {

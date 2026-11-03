@@ -3,6 +3,137 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Managed debugger and CMake GUI functional verification
+
+- Combined tree `a640dbcb01030828b2bbc01f27e3779883e76665` passed all executed functional tests:
+  Windows 2783/2805 with 22 skipped and one additional disabled; native Linux 2658/2684 with 26 skipped.
+  Linux's full gate exited zero, including its 99-package licence check. Windows lint, 103-package licence
+  check and feature consistency passed, but its original gate exited one for a single clang-format
+  wrapping difference in `workbench.cpp`. The formatter correction `c08d6da` passes the formatting check;
+  Astra verified that its tokens and whitespace-normalized source are unchanged. The original failed
+  script is retained, not retrospectively reported as green. The extra Windows skip records the active
+  Swedish keyboard layout rather than running the en-US-only equality test.
+- Gate logs are `build/verify-managed-gui-windows.log`,
+  `build/verify-managed-main-20261103-063725.log` and `build/verify-managed-gui-native.log`.
+  Complete platform test logs are retained separately as `build/verify-managed-gui-*-tests.log`.
+  Earlier stale-fixture runs and the model-publication failures remain recorded below.
+- The final local Windows stage is `E:\FrostBuilds\preview\codex-20261103-cpp-gui-2`. Its app DLL SHA-256
+  is `6522cd1b3e9d8a72605fa9915c46a701a8cd4e8e4e2d038dd072c0e24b9ba8a1`.
+  Startup, actual D3D11 rendering and the ConPTY probe passed. Actual private-desktop checks on this
+  exact binary verified positional CMakeLists opening and restart with a sibling solution, selected beta
+  Run/Debug/Step and local value, Release-profile Run, `.sln` and `.slnx` Build/Debug/Step, and same-window CMake
+  to MSBuild switching through the native file dialog. Screenshots show unobstructed menus and distinct
+  Find Usages/Find labels. Astra checked the bounded evidence and hashes; these are not full U1 results.
+- Managed support remains one trusted .NET 10 console module with verified portable PDB/source snapshots
+  and the reviewed local source-built payload. C++ project editing and Lua debugging remain separate
+  candidates. The C++ integration has reviewed cross-feature admission guards and tests being built.
+  Lua detach cleanup passed real-host acceptance; a proposed general coroutine wrapper was rejected
+  before product compilation because it changed normal error/close semantics. Cancellation-specific
+  probes continue without counting Stop while paused as implemented. No user answer is pending.
+
+## 2026-11-03: Work resumed; actual C++ GUI acceptance and reviewed GUI integration
+
+- The user resumed the full goal after restarting with increased agent concurrency. The active runtime
+  provides 12 worker slots plus root. The scope remains independent Rider feature/workflow parity,
+  CMake, Lua, Unity and FrostEngine; the immediate delivery priority is a usable C/C++ preview and GUI.
+- Managed integration tree `25d3086` passed the Windows functional gate: 2776/2797, 21 skipped and one
+  additional disabled; format, lint (2429 files), licence (103 packages) and feature checks passed.
+  Linux passed 2650/2676 with 26 skipped, but its licence scanner blocked opening a .NET runtime FIFO
+  left in the test scratch directory. Root confirmed the blocked process and terminated only that
+  scanner; this original Linux gate remains failed. The reviewed regular-file/nonblocking-open fix
+  passes 40 Linux tests and 38 Windows tests with two Unix-only skips. The corrected scanner also
+  passed against the original Linux build tree: 99 packages, no violations. Full combined gates for
+  the subsequent GUI integration remain pending.
+- Fresh stage `E:\FrostBuilds\preview\codex-20261103-managed-debug` installed the reviewed payload by
+  its retained manifest digest. Startup, actual D3D11 rendering and the staged ConPTY probe passed.
+  That stage precedes the new GUI changes. Managed support remains bounded to trusted .NET 10 console
+  projects and one verified module; ADR 0073 and the build README now describe the implemented path
+  and its source, toolchain and distribution limits accurately.
+- Actual private-desktop tests of the earlier `codex-20261103-unity-controls` stage opened `.sln` and
+  `.slnx`, restored a solution session, built and ran copied MSBuild projects, saved an editor change
+  during Build, displayed compiler diagnostics and navigated a Problems entry to its source. Real
+  breakpoints, stack/locals and Step Over passed for both MSBuild and CMake fixtures; CMake also
+  configured, built and ran. Evidence is under `E:\FrostBuilds\cpp-preview-acceptance-20261103`.
+  These are bounded Windows workflows, not full U1 or broad project-fidelity acceptance.
+- Reviewed GUI integration `7f99bbf` built, but its initial 43-test run used stale CMake and Unity fixture
+  executables because root omitted their separate build targets. That run does not validate the new
+  regressions. The corrected matching run on `625866e` passed 41/46: five CMake Run/Debug tests failed
+  after observing service completion before the queued displayed model was ready. The worker is
+  checking synchronization without removing the displayed-model admission guard. A name-only wait
+  subsequently passed 45/46, but reopening could still expose an older model with the same target name.
+  The returned Busy error confirmed this. The reviewed exact displayed/service-model readiness query
+  and test wait now pass all 46 matching focused tests on `352a94b`; both earlier failures are retained.
+  The integration makes direct CMake
+  project opening and the chosen Run/Debug target clearer, binds target admission to the displayed
+  model, keeps the unopened Unity controls panel from drawing over the menu, and distinguishes Find
+  Usages. The subsequent reviewed toolbar candidate `976b174` adds functional CMake profile and target
+  selectors and restores solution selectors on teardown. Its combined product source is `5ca074e`;
+  the matching build and corrected focused tests passed. Actual stage `codex-20261103-cpp-gui` also
+  passed startup/render/terminal smoke checks and GUI selection/run of two distinct targets, debugging
+  the second target and changing Debug to Release. It predates the read-only readiness query. A separate
+  CLI check found positional CMakeLists opened only as a file; reviewed correction `d3248f7` is now
+  integrated as `4da0cfd`, preserving explicit CMake identity through recent/session reopening even with
+  a sibling solution. The combined full gates and matching staged CLI check remain pending.
+- C++ project-edit corrections `c16d3062` received Astra approval and passed the retained Windows
+  helper, staging, cancellation, build/run exclusion and Workbench tests. The separate post-commit
+  reload-failure regression `704e8f49` passed 1/1 and received review. Native compilation is running
+  in its isolated worktree; this feature is not yet integrated or accepted on main.
+- Lua engine stack/source tests passed 27 cases with 2042 assertions. Real FrostEditor-to-Workbench
+  evidence now includes an explicit ended debug session, but it exposed premature endpoint cleanup
+  during Play. The worker is correcting that lifetime problem. Stop while paused also remains open:
+  review identified a Lua coroutine hook-error cleanup hazard that must be resolved. No complete Lua
+  debugger, graceful host shutdown or whole-project completion is claimed. No user answer is pending.
+
+## 2026-11-03: Paused for the user's application restart
+
+- The user requested all subagents stop so they can quit cleanly after setting agent concurrency to 12.
+  The current session still advertised four total slots. The project goal is paused, not complete.
+- Main HEAD remains `d22ba31`; the managed integration is staged but uncommitted. Combined source tree
+  `3b0f08cd2dba355f0caa1d425dc675cc8abb6c8b` completed both full functional gates with one failure
+  each: `managed_pdb_guard` lacked the required integration-test resource lock. Windows passed 2775/2797
+  with 21 skipped and one additional disabled; Linux passed 2649/2676 with 26 skipped. Format, lint,
+  licence and feature checks passed. `RESOURCE_LOCK frost_desktop` is now staged, but its matching
+  reconfiguration and verification remain pending. Neither original gate is being called green.
+- Astra's C++ review found two blockers in candidate `2ef3e91`: private recovery metadata must bind the
+  exact journal contents, and edit admission must exclude RunService property resolution, including runs
+  that skip building. The three Workbench removal/recovery tests pass, but the candidate is not accepted.
+- GUI work started toward the user's usable C/C++ preview priority. Unbuilt tree `88f2e36` improves
+  direct CMake project opening and shows the executable chosen for Run/Debug. Trust/configure guidance
+  remains open. Root's provisional preview estimate was 1–2 days of uninterrupted work, subject to real
+  staged-workflow acceptance; it is not a completion guarantee or a reduction of the whole-project scope.
+- Lua engine tree `572d674` remains untested: its resumed build hit MSVC C1090 PDB RPC error 0x6BA,
+  and the owned retry was stopped before linking. The worker verified its process tree had exited.
+  The real-host IDE acceptance draft `057a3b16` is also unbuilt. Existing passing IDE focused tests remain
+  separate evidence. Continue from `E:\FrostBuilds\orchestration\root-handoff-20261103-current.txt` and
+  the Lua and GUI worker handoffs named there. Preserve all uncommitted work and frozen candidate trees.
+
+## 2026-11-03: Managed integration preparation; C++ removal and Lua stack work continue
+
+- C++ remains incomplete. The real Workbench removal attempt refused before modifying files with
+  an XML source-span validation error. An adjacent-whitespace correction passes helper regressions but
+  did not resolve the Workbench failure; project versus filters validation is being investigated. Build
+  exclusion and recovery UI drafts remain unaccepted; add/rename, CMake editing and fidelity remain open.
+- Managed component tree `9a15886f0cb6b16149f298a2192ba4ee99daee84` passed native ext4 Linux UI
+  14/14, app 7/7, build 109/109 and debug 41/41. Its real Workbench fixture exercises Save All, breakpoint,
+  local value, step, continue/session end, source-edit cancellation, Stop, trust revocation and a reused
+  source window. Windows component tests passed previously. These fixtures do not assert debuggee exit
+  code or stdout. Logs are `E:\FrostBuilds\managed-debug\ide-linux-*-v11.log`.
+- Root imported the reviewed managed component onto `d22ba31`, excluding worker progress, as uncommitted
+  tree `f4d5bb6bdce1a54555e711ffc00f0ac9793fa7f4`. Astra verified 46 identical worker files and five
+  shared-file joins; both Unity and managed includes are preserved. The preliminary Windows app/debug
+  build, changed-source formatting, frost-lint (2425 files) and feature consistency passed. Full combined
+  gates remain pending; this is not a committed acceptance checkpoint.
+- Astra approved packaging candidate `cedbd6946c731b3d1851d2b3f820ed5805941d0e` within its stated
+  boundary. A fresh Windows source build, manifest-gated installation into private scratch and real
+  Workbench test using the relocated adapter/verifier passed. The payload manifest SHA-256 is
+  `e4352d7b28e328742db7c12e9485605983ddfcb132c77e7006086f3d4b2b3e18`. Installed default-path
+  discovery needs a correction/test; native recipe and combined gates remain. Existing pinned tool roots
+  and recorded executable hashes are not a full reproducible-release claim.
+- Astra approved the Lua stack/source corrections: oversized encoded stack replies return a bounded
+  error without resuming execution, and source-request epochs discard stale UI replies. Matching builds,
+  real engine-to-Workbench acceptance and full engine/platform gates remain. Stack/source support does
+  not close breakpoints, stepping, variables or complete Lua debugging. No user answer is pending.
+
 ## 2026-11-03: Explicit C++ completion inventory
 
 - Unity controls checkpoint `cbab971` is committed and pushed. PLAN Appendix B.3 now records separate

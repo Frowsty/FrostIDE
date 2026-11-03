@@ -132,7 +132,7 @@ struct BreakpointEvent {
 
 // The arguments FrostIDE sends with initialize (clientID "frostide", lines and columns 1-based, paths
 // as paths, variable types and paging on, runInTerminal off).
-[[nodiscard]] rpc::Json initializeArguments();
+[[nodiscard]] rpc::Json initializeArguments(std::string_view adapterId = "lldb-dap");
 
 // {"source": {"path": path}, "breakpoints": [{"line": l}, ...]} for setBreakpoints.
 [[nodiscard]] rpc::Json setBreakpointsArguments(std::string_view path, const std::vector<std::int64_t>& lines);

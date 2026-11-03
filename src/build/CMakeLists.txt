@@ -25,6 +25,7 @@ set(frost_build_sources
     src/diagnostic.cpp
     src/json.cpp
     src/line_splitter.cpp
+    src/managed_project.cpp
     src/msbuild_driver.cpp
     src/msbuild_locator.cpp
     src/output_parsers.cpp

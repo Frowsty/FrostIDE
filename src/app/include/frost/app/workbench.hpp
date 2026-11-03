@@ -117,6 +117,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -125,6 +126,8 @@
 #include <vector>
 
 class QApplication;
+class QDialog;
+class QPlainTextEdit;
 class QWidget;
 
 namespace frost::build {
@@ -143,6 +146,9 @@ class LanguageController;
 } // namespace frost::ui::lang
 
 namespace frost::app {
+class ManagedDebugPreparation;
+struct ManagedSnapshotJob;
+struct ManagedSourceSnapshot;
 
 class LanguageBridge;
 class CMakeIntegration;
@@ -214,6 +220,15 @@ struct WorkbenchServices {
     IWorkbenchPrompts& prompts;
 };
 
+struct ManagedDebugSelection {
+    std::string project;
+    std::string dotnet;
+    std::string configuration;
+    std::string framework;
+    std::string runtimeIdentifier;
+    std::string adapter;
+};
+
 struct WorkbenchOptions {
     // This process's hot-exit journal and the recovery scan (absolute); "" disables hot exit.
     std::string journalDirectory;
@@ -242,6 +257,8 @@ struct WorkbenchOptions {
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
     std::string msbuildPath;
     debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
+    std::string managedPdbGuardPath;             // Test override; normally resolved beside the application.
+    std::function<std::optional<ManagedDebugSelection>(std::string_view)> selectManagedDebug; // Test seam.
     // Replaces MSBuild (tests); empty runs MSBuild.
     build::BuildStarter startBuild;
     // Starts clangd for an opened project when it is found (tools.clangd.path, then the SDK, PATH).
@@ -303,6 +320,9 @@ public:
     // Opens a solution, folder or file (see the header comment). Errors: the loader's, shown as
     // notifications too; Cancelled when the open project's tabs could not all be closed.
     Result<void> openPath(std::string_view path, FileLocation at = {});
+    // Opens the folder containing an existing CMakeLists.txt as a CMake project, without choosing
+    // a sibling solution. Cancelled if the current project's documents cannot be closed.
+    [[nodiscard]] Result<void> openCMakeProject(std::string_view path);
     // Opens a FrostEngine project file or root without auto-selecting a sibling solution.
     // A directory with multiple .frostproj files is ambiguous and is refused.
     [[nodiscard]] Result<void> openExternalProject(std::string_view path);
@@ -346,6 +366,8 @@ public:
     [[nodiscard]] ui::BuildController& build() noexcept { return *m_build; }
     [[nodiscard]] build::BuildService& buildService() noexcept { return *m_buildService; }
     [[nodiscard]] build::CMakeService* cmakeService() noexcept;
+    // Whether the CMake target view has received the service's current immutable model.
+    [[nodiscard]] bool cmakeTargetsCurrent() const;
     [[nodiscard]] build::RunService* runService() noexcept { return m_runService.get(); }
     [[nodiscard]] ui::DebugController* debugController() noexcept { return m_debug.get(); }
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
@@ -412,6 +434,7 @@ private:
     void refreshRecent();
     void showOpenRecent();
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
+    [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
 
     // LuaLS, only in trusted workspaces.
     void startManaged(const std::string& root);
@@ -426,6 +449,11 @@ private:
     void onLuaDiagnostics(const std::string& file);
     void updateLanguageTarget();
     void offerLuaTrust();
+    void startManagedDebug();
+    void invalidateManagedDebug();
+    [[nodiscard]] bool managedDebugFrameAllowed(const debug::DebugFrame& frame) const;
+    void validateManagedBreakpoint(std::string path, std::function<void(bool)> done);
+    void showManagedDebugSource(const std::string& path, int line);
 
     // clangd.
     void startClangd(const std::string& root);
@@ -493,6 +521,14 @@ private:
     std::unique_ptr<build::RunService> m_runService;
     debug::BreakpointManager m_breakpoints;
     std::unique_ptr<ui::DebugController> m_debug;
+    std::unique_ptr<ManagedDebugPreparation> m_managedDebugPreparation;
+    std::shared_ptr<ManagedSourceSnapshot> m_managedDebugSnapshot;
+    QPointer<QDialog> m_managedSourceDialog;
+    QPointer<QPlainTextEdit> m_managedSourceView;
+    std::shared_ptr<ManagedSnapshotJob> m_managedSnapshotJob;
+    std::vector<std::shared_ptr<ManagedSnapshotJob>> m_managedBreakpointJobs;
+    std::vector<sched::JoinHandle<void>> m_managedSnapshotTasks;
+    std::string m_managedDebugRoot;
 
     std::shared_ptr<lang::ICompileCommandsProvider> m_compileCommands;
     std::shared_ptr<lang::ManagedService> m_managed;

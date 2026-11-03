@@ -1167,8 +1167,10 @@ expanded product scope. Coverage must be reconciled with actual behavior, rather
 ### B.3 C++ project, build and debugger acceptance inventory (2026-11-03)
 
 This records the distinction requested by the user between editing source text and modifying project
-definitions. C++ remains in scope and is not complete. Evidence below is from main through `cbab971`;
-experimental worktrees are identified separately and do not establish accepted application behavior.
+definitions. C++ remains in scope and is not complete. The baseline evidence below is from `cbab971`;
+the managed/CMake GUI checkpoint additionally records actual Windows stage-two workflows and combined
+functional verification in `docs/progress.md`. Experimental worktrees are identified separately and
+do not establish accepted application behavior.
 
 | ID | Required application scenario | Evidence and remaining gap |
 |---|---|---|
@@ -1178,6 +1180,12 @@ experimental worktrees are identified separately and do not establish accepted a
 | CPP-04 | Debug native targets with breakpoints, stepping, threads, stack, values, watches, evaluation and reliable stop/ownership across both project systems. | Real LLDB-backed Workbench tests pass for MSBuild and CMake. The recorded Notepad++ acceptance verifies the Windows C++/PDB workflow. These do not establish all `.slnx` debug combinations, attach, advanced breakpoint/value features, GDB/DbgEng, full natvis/formatter behavior or debugger parity. The earlier slow Globals expansion remains a limitation. |
 | CPP-05 | Configure CMake profiles/presets, choose targets, build/reconfigure/run/debug, and refresh language context without stale launches. | File API, profiles, compilation database, diagnostics, Run and native Debug are integrated and functionally tested on Windows/Linux. Full presets/toolchain combinations, cache editing, CMakeLists semantic tooling and CMake-script debugging remain open. Configuring a project is not the same as safely rewriting its CMake code. |
 | CPP-06 | Provide complete C++ language assistance, inspections, refactoring and code generation with correct project context. | clangd integration and editor/navigation workflows exist. Full inspection/refactoring coverage, generation/templates, inlays and remaining language/context acceptance in M7/M9/M17 are unfinished. Test count does not establish semantic parity. |
+
+The local `codex-20261103-cpp-gui-2` stage additionally demonstrates a functional CMake profile/target
+toolbar, selected-target Run/Debug/Step, direct CMakeLists opening and persistent project identity,
+MSBuild Build/Debug/Step, and switching between project systems. These observations advance CPP-02,
+CPP-04 and CPP-05 within their tested Windows fixtures; they do not close those scenarios' broader
+requirements. The project-edit candidate remains unintegrated, and CPP-01/03/06 remain open.
 
 Keep these scenarios alongside Appendix A and the expanded language/engine tracks. A passing build or
 debugger fixture closes only its demonstrated workflow; it does not mark all C++ support complete.

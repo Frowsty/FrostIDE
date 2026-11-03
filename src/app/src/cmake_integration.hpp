@@ -14,9 +14,13 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 class QTreeView;
+class QLabel;
+class QAction;
+class QComboBox;
 
 namespace frost::ui {
 class BuildController;
@@ -39,6 +43,9 @@ public:
     Result<void> open(const std::string& folder);
     [[nodiscard]] build::CMakeService& service() const { return *m_service; }
     [[nodiscard]] std::shared_ptr<build::CMakeService> sharedService() const { return m_service; }
+    [[nodiscard]] bool targetsCurrent() const {
+        return m_controller->model() && m_controller->model() == m_service->model();
+    }
     void filesChanged(const io::FileChangeBatch& batch) { m_service->filesChanged(batch); }
     [[nodiscard]] Result<build::RunId> run();
     [[nodiscard]] Result<void> debug(std::function<void(Result<debug::DebugTarget>)> done);
@@ -60,6 +67,16 @@ private:
     std::unique_ptr<ui::cmake::CMakeServiceBackend> m_controllerBackend;
     std::unique_ptr<CMakeBuildBackend> m_buildBackend;
     QPointer<QTreeView> m_tree;
+    QPointer<QLabel> m_targetLabel;
+    QPointer<QLabel> m_guidanceLabel;
+    QPointer<QComboBox> m_profiles;
+    QPointer<QComboBox> m_targets;
+    QPointer<QAction> m_solutionAction;
+    QPointer<QAction> m_runAction;
+    QPointer<QAction> m_profileAction;
+    QPointer<QAction> m_targetAction;
+    bool m_solutionActionVisible = false;
+    bool m_runActionVisible = false;
     QStringList m_expandedKeys;
     struct RunRelay;
     std::shared_ptr<RunRelay> m_runRelay;
@@ -75,5 +92,8 @@ private:
     std::uint64_t m_profileGeneration = 0;
     void buildFinished(std::uint64_t generation, const build::CMakeBuildOutcome& outcome);
     void maybeRerun();
+    [[nodiscard]] std::optional<std::size_t> runTarget(const project::CMakeProject& model) const;
+    void refreshRunTarget();
+    void refreshProfiles();
 };
 } // namespace frost::app

@@ -13,6 +13,7 @@
 frost_add_test(debug_unit_tests
     SOURCES
         breakpoints_test.cpp
+        coreclr_dap_test.cpp
         dap_client_test.cpp
         debug_session_test.cpp
         lldb_dap_test.cpp

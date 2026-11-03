@@ -40,6 +40,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "managed_debug_preparation.hpp"
 #include "unity_control.hpp"
 #include <QAction>
 #include <QApplication>
@@ -92,9 +93,11 @@ std::string DialogWorkbenchPrompts::chooseOpenPath(QWidget* parent, OpenKind kin
     const QString chosen =
         kind == OpenKind::Folder
             ? QFileDialog::getExistingDirectory(parent, text("Open Folder"))
-            : QFileDialog::getOpenFileName(parent, text("Open"), QString(),
-                                           text("Solutions and files (*.sln *.slnx *);;Solutions (*.sln *.slnx);;"
-                                                "All files (*)"));
+            : QFileDialog::getOpenFileName(
+                  parent, text("Open"), QString(),
+                  text("Projects and files (*.sln *.slnx CMakeLists.txt *);;Solutions (*.sln *.slnx);;"
+                       "CMake project (CMakeLists.txt);;"
+                       "All files (*)"));
     return QDir::toNativeSeparators(chosen).toStdString();
 }
 
@@ -228,6 +231,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                 startLua(m_projectRoot);
                 startManaged(m_projectRoot);
             } else {
+                invalidateManagedDebug();
                 stopLua();
                 stopManaged();
             }
@@ -257,6 +261,7 @@ Workbench::~Workbench() {
         m_runController->setService(nullptr);
     }
     m_debug.reset();
+    m_managedDebugPreparation.reset();
     m_runService.reset(); // Stops every run and joins its thread before the builder goes.
     m_runBuilder.reset();
     if (m_runConsole != nullptr && m_runConsole->parent() == nullptr) {
@@ -320,6 +325,7 @@ void Workbench::createBuildService() {
 }
 
 build::CMakeService* Workbench::cmakeService() noexcept { return m_cmake ? &m_cmake->service() : nullptr; }
+bool Workbench::cmakeTargetsCurrent() const { return m_cmake && m_cmake->targetsCurrent(); }
 
 void Workbench::createRunService() {
     // The Run console exists before the window (the actions drive it); attachRun() docks it.
@@ -358,6 +364,10 @@ void Workbench::createRunService() {
         return view ? &view->editor() : nullptr;
     };
     debugHooks.openSource = [this](const QString& path, int line) -> ui::EditorView* {
+        if (m_managedDebugSnapshot) {
+            showManagedDebugSource(path.toStdString(), line);
+            return nullptr;
+        }
         if (!openPath(path.toStdString(), FileLocation{line, 1}))
             return nullptr;
         auto* view = m_editors->find(path.toStdString());
@@ -371,19 +381,46 @@ void Workbench::createRunService() {
             m_window->toolWindows().show(ui::kDebugToolWindowId, false);
     };
     debugHooks.alternateAvailable = [this] { return m_cmake != nullptr; };
-    debugHooks.mayStart = [this] { return !m_runController->running() && m_runService->activeRuns().empty(); };
+    debugHooks.mayStart = [this] {
+        return !m_runController->running() && m_runService->activeRuns().empty() &&
+               (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+    };
     debugHooks.startAlternate = [this](auto done) { return m_cmake->debug(std::move(done)); };
     debugHooks.stopAlternate = [this] {
         if (m_cmake)
             m_cmake->stop();
     };
     m_debug = std::make_unique<ui::DebugController>(m_breakpoints, std::move(debugOptions), std::move(debugHooks));
+    connect(m_debug.get(), &ui::DebugController::stateChanged, this, [this] {
+        if (m_managedDebugSnapshot && !m_debug->debugging())
+            invalidateManagedDebug();
+    });
+    m_managedDebugPreparation =
+        std::make_unique<ManagedDebugPreparation>(m_services.launcher, m_services.trust, systemClock());
     m_debug->setRunService(m_runService.get());
     if (auto registered = ui::registerDebugActions(m_registry, *m_debug); !registered)
         log::warn(kLog, "debug actions: {}", registered.error().describe());
+    input::ActionSpec managedDebug;
+    managedDebug.id = "run.debugManaged";
+    managedDebug.name = "Debug .NET Project";
+    managedDebug.description = "Build and debug a trusted .NET console project";
+    managedDebug.group = "Debug";
+    managedDebug.executesProjectCode = true;
+    managedDebug.enabled = [this](const input::ActionContext&) {
+        return !m_projectRoot.empty() && m_debug && !m_debug->debugging() && m_managedDebugPreparation &&
+               !m_managedDebugPreparation->active() && !m_managedSnapshotJob;
+    };
+    managedDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startManagedDebug(); };
+    if (auto added = m_registry.add(std::move(managedDebug)); !added)
+        log::warn(kLog, "managed debug action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
-    actionHooks.debugging = [this] { return m_debug && (m_debug->debugging() || m_debug->rerunPending()); };
+    actionHooks.debugging = [this] {
+        return (m_debug && (m_debug->debugging() || m_debug->rerunPending())) ||
+               (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
+    };
     actionHooks.stopDebugging = [this] {
+        if ((m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob)
+            invalidateManagedDebug();
         if (m_debug)
             m_debug->stop();
     };
@@ -524,7 +561,8 @@ void Workbench::attach(ui::ShellWindow& window) {
             [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
     connect(welcome, &WelcomeScreen::openRecent, this, [this](const QString& path) {
         // Queued: opening replaces the Welcome screen whose click is being handled.
-        QMetaObject::invokeMethod(this, [this, path] { (void)openPath(path.toStdString()); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this, [this, path] { (void)openProjectIdentity(path.toStdString()); }, Qt::QueuedConnection);
     });
     connect(welcome, &WelcomeScreen::removeRecent, this, [this](const QString& path) {
         if (auto removed = removeRecentProject(m_services.settings, path.toStdString()); !removed) {
@@ -677,7 +715,7 @@ void Workbench::attachLanguage() {
     ui::lang::FindUsagesPanel* panel = &m_language->usagesPanel();
     ui::ToolWindowSpec spec;
     spec.id = std::string(kFindUsagesToolWindow);
-    spec.title = text("Find");
+    spec.title = text("Find Usages");
     spec.side = ui::ToolWindowSide::Bottom;
     spec.iconId = std::string(ui::icons::kActionsSearch);
     const QPointer<QWidget> content(panel);
@@ -743,6 +781,13 @@ bool Workbench::eventFilter(QObject* watched, QEvent* event) {
 void Workbench::showOpenDialog(IWorkbenchPrompts::OpenKind kind) {
     const std::string chosen = m_services.prompts.chooseOpenPath(m_window, kind);
     if (!chosen.empty()) {
+        // At the welcome screen a CMakeLists.txt is a project entry point. Once a project is
+        // open, File > Open continues to edit CMake files, including nested lists.
+        if (kind == IWorkbenchPrompts::OpenKind::SolutionOrFile && !hasProject() &&
+            io::fileName(chosen) == "CMakeLists.txt") {
+            (void)openCMakeProject(chosen);
+            return;
+        }
         (void)openPath(chosen);
     }
 }
@@ -761,7 +806,7 @@ void Workbench::showOpenRecent() {
     popup->setItems(std::move(items));
     connect(popup, &ui::ListPopup::itemAccepted, this, [this](int, const QVariant& data) {
         const std::string path = data.toString().toStdString();
-        QMetaObject::invokeMethod(this, [this, path] { (void)openPath(path); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this, path] { (void)openProjectIdentity(path); }, Qt::QueuedConnection);
     });
     popup->showCentered(m_window, 0.2);
 }
@@ -777,6 +822,7 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    invalidateManagedDebug();
     m_luaTrustWatch.stop();
     cancelFind();
     // Registered shell callbacks hold QPointers: destroying the feature makes queued actions inert.

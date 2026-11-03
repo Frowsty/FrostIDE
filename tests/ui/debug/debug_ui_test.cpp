@@ -31,6 +31,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 #include <gtest/gtest.h>
 
@@ -169,6 +170,12 @@ TEST_F(DebugUiTest, ShutdownRejectsADelayedAlternateBuildCompletion) {
     DebugController pending(breakpoints, std::move(options), std::move(hooks));
     ASSERT_TRUE(pending.debug().has_value());
     ASSERT_TRUE(pending.debugging());
+    debug::CoreClrTarget managed{.dotnet = workPath("sdk/dotnet"),
+                                 .assembly = workPath("Trusted/x64/Debug/App.dll"),
+                                 .workingDirectory = workPath("Trusted")};
+    auto refused = pending.startCoreClrTarget(managed, {workPath("Trusted")}, {});
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code(), ErrorCode::Busy);
     pending.shutdown();
     ASSERT_TRUE(completion);
     completion(target());
@@ -189,6 +196,80 @@ TEST_F(DebugUiTest, OpeningAWorkspaceDoesNotRewriteItsBreakpointsWhileLoading) {
     ASSERT_TRUE(controller->setWorkspaceRoot(workPath("Trusted")).has_value());
     ASSERT_EQ(breakpoints.size(), 2U);
     EXPECT_EQ(fs.readFile(path).value(), *before);
+}
+
+TEST_F(DebugUiTest, CoreClrTargetUsesTheSharedDebuggerUiAndAdapterIdentity) {
+    ASSERT_TRUE(controller->setWorkspaceRoot(workPath("Trusted")));
+    controller->toggleBreakpoint(source, 1);
+    debug::FakeProgram program;
+    program.sourcePath = source;
+    program.codeLines = {2};
+    debug::scriptProgram(adapter, std::move(program));
+    debug::CoreClrTarget target{.dotnet = workPath("sdk/dotnet"),
+                                .assembly = workPath("Trusted/x64/Debug/App.dll"),
+                                .workingDirectory = workPath("Trusted")};
+    debug::AdapterFactory factory =
+        [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    ASSERT_TRUE(controller->startCoreClrTarget(target, {workPath("Trusted")}, std::move(factory)));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused() && controller->selectedFrame().has_value(); }));
+    ASSERT_FALSE(adapter.argumentsOf("initialize").empty());
+    EXPECT_EQ(adapter.argumentsOf("initialize").front().stringAt("adapterID"), "coreclr");
+    EXPECT_EQ(controller->selectedFrame()->line, 2);
+    stopSession();
+}
+
+TEST_F(DebugUiTest, CoreClrNeverSendsBreakpointsForUnverifiedSources) {
+    openEditor();
+    RunConsole console;
+    controller->setConsole(&console);
+    const auto foreign = workPath("Trusted/foreign.cs");
+    controller->toggleBreakpoint(source, 1);
+    controller->toggleBreakpoint(foreign, 1);
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {2}, .runsForever = true});
+    debug::CoreClrTarget target{.dotnet = workPath("sdk/dotnet"),
+                                .assembly = workPath("Trusted/x64/Debug/App.dll"),
+                                .workingDirectory = workPath("Trusted")};
+    debug::AdapterFactory factory =
+        [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    std::vector<std::function<void(bool)>> pending;
+    ASSERT_TRUE(controller->startCoreClrTarget(
+        target, {workPath("Trusted")}, std::move(factory), [](const debug::DebugFrame&) { return true; }, {source},
+        [&pending](std::string, std::function<void(bool)> done) { pending.push_back(std::move(done)); }));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused(); }));
+    const auto before = adapter.argumentsOf("setBreakpoints");
+    ASSERT_EQ(before.size(), 1U);
+    ASSERT_NE(before.front().find("source"), nullptr);
+    EXPECT_EQ(before.front().find("source")->stringAt("path"), source);
+    controller->toggleBreakpoint(foreign, 2);
+    EXPECT_EQ(adapter.argumentsOf("setBreakpoints").size(), before.size());
+    controller->toggleBreakpoint(source, 2);
+    controller->toggleBreakpoint(source, 3);
+    ASSERT_EQ(pending.size(), 2U);
+    pending[0](true);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(adapter.argumentsOf("setBreakpoints").size(), before.size());
+    pending[1](true);
+    ASSERT_TRUE(spinUntil([&] { return adapter.argumentsOf("setBreakpoints").size() > before.size(); }));
+    EXPECT_TRUE(controller->runToCursor());
+    ASSERT_EQ(pending.size(), 3U);
+    controller->rerun();
+    EXPECT_FALSE(controller->rerunPending());
+    EXPECT_TRUE(controller->debugging());
+    stopSession();
+    const auto breakpointRequests = adapter.argumentsOf("setBreakpoints").size();
+    const auto continueRequests = adapter.argumentsOf("continue").size();
+    pending[2](true);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(adapter.argumentsOf("setBreakpoints").size(), breakpointRequests);
+    EXPECT_EQ(adapter.argumentsOf("continue").size(), continueRequests);
+    EXPECT_FALSE(console.rerunButton()->isEnabled());
+    controller->rerun();
+    EXPECT_FALSE(controller->rerunPending());
+    EXPECT_FALSE(controller->debugging());
 }
 
 TEST_F(DebugUiTest, AnUntrustedRootIsRefusedBeforeLldbDapStarts) {

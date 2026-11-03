@@ -1,0 +1,734 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -6,6 +6,10 @@
+ 
+ project(netcoredbg)
+ 
++if(BUILD_TESTING OR INTEROP_DEBUGGING OR NCDB_DOTNET_STARTUP_HOOK)
++    message(FATAL_ERROR "Frost DAP build excludes tests, interop and the hot-reload hook")
++endif()
++
+ set(CORECLR_DIR "" CACHE FILEPATH "Path to CoreCLR source directory")
+ set(DOTNET_DIR "" CACHE FILEPATH "Path to .NET SDK directory")
+ set(CORECLR_BRANCH "release/10.0" CACHE STRING "CoreCLR source branch")
+@@ -13,6 +17,9 @@
+ set(DOTNET_CHANNEL "10.0" CACHE STRING ".NET SDK channel")
+ set(BUILD_MANAGED ON CACHE BOOL "Build managed part")
+ set(DBGSHIM_DIR "" CACHE FILEPATH "Path to dbgshim library directory")
++if(NOT CORECLR_DIR OR NOT DOTNET_DIR OR DBGSHIM_DIR OR NOT BUILD_MANAGED)
++    message(FATAL_ERROR "Frost DAP build requires explicit CORECLR_DIR and DOTNET_DIR, BUILD_MANAGED, and adjacent shim")
++endif()
+ 
+ function(clr_unknown_arch)
+     message(FATAL_ERROR "Only AMD64, ARM64, ARM, ARMEL, I386 and WASM are supported")
+@@ -97,7 +104,6 @@
+ VCSInfo(CORECLR_VCS_INFO ${CORECLR_DIR})
+ 
+ 
+-add_subdirectory(third_party/linenoise-ng)
+ if (INTEROP_DEBUGGING)
+     add_subdirectory(third_party/libelfin)
+ endif (INTEROP_DEBUGGING)
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -12,8 +12,6 @@
+ 
+ #include "protocols/vscodeprotocol.h"
+ #include "debugger/manageddebugger.h"
+-#include "protocols/miprotocol.h"
+-#include "protocols/cliprotocol.h"
+ #include "managed/interop.h"
+ #include "utils/utf.h"
+ #include "utils/logger.h"
+@@ -55,8 +53,6 @@
+         "Options:\n"
+         "--buildinfo                           Print build info.\n"
+         "--attach <process-id>                 Attach the debugger to the specified process id.\n"
+-        "--interpreter=cli                     Runs the debugger with Command Line Interface. \n"
+-        "--interpreter=mi                      Puts the debugger into MI mode.\n"
+         "--interpreter=vscode                  Puts the debugger into VS Code Debugger mode.\n"
+ #ifdef INTEROP_DEBUGGING
+         "--interop-debugging                   Puts the debugger into interop (mixed) mode.\n"
+@@ -101,9 +97,7 @@
+ 
+ // protocol names for logging
+ template <typename ProtocolType> struct ProtocolDetails { static const char name[]; };
+-template <> const char ProtocolDetails<MIProtocol>::name[] = "MIProtocol";
+ template <> const char ProtocolDetails<VSCodeProtocol>::name[] = "VSCodeProtocol";
+-template <> const char ProtocolDetails<CLIProtocol>::name[] = "CLIProtocol";
+ 
+ // argument needed for protocol creation
+ using Streams = std::pair<std::istream&, std::ostream&>;
+@@ -119,18 +113,9 @@
+     return ProtocolHolder{new ProtocolType(streams.first, streams.second)};
+ }
+ 
+-template <>
+-ProtocolHolder instantiate_protocol<CLIProtocol>(Streams streams)
+-{
+-    using ProtocolType = CLIProtocol;
+-    LOGI("Creating protocol %s", ProtocolDetails<ProtocolType>::name);
+-    return ProtocolHolder{new ProtocolType(dynamic_cast<InStream&>(streams.first), dynamic_cast<OutStream&>(streams.second))};
+-}
+-
+-
+ // function creates pair of input/output streams for debugger protocol
+ template <typename Holder>
+-Streams open_streams(Holder& holder, unsigned server_port, ProtocolConstructor constructor)
++Streams open_streams(Holder& holder, unsigned server_port, ProtocolConstructor)
+ {
+     if (server_port != 0)
+     {
+@@ -151,16 +136,6 @@
+     _setmode(_fileno(stdout), _O_BINARY);
+ #endif
+ 
+-    if (constructor == instantiate_protocol<CLIProtocol>)
+-    {
+-        IOSystem::StdFiles stdio = IOSystem::get_std_files();
+-        auto cin = new InStream(InStreamBuf(std::get<IOSystem::Stdin>(stdio)));
+-        auto cout = new OutStream(OutStreamBuf(std::get<IOSystem::Stdout>(stdio)));
+-        holder.push_back(typename Holder::value_type{cin}),
+-        holder.push_back(typename Holder::value_type{cout});
+-        return {*cin, *cout};
+-    }
+-
+     return {std::cin, std::cout};
+ }
+ 
+@@ -183,10 +158,10 @@
+     exit(EXIT_FAILURE);
+ }
+ 
+-static void CheckStartOptions(ProtocolConstructor &protocol_constructor, std::vector<string_view> &initCommands,
+-                              char* argv[], std::string &execFile, bool run, uint16_t serverPort)
+-{
+-    if (protocol_constructor != &instantiate_protocol<CLIProtocol> && !initCommands.empty())
++static void CheckStartOptions(ProtocolConstructor &, std::vector<string_view> &initCommands,
++                              char* argv[], std::string &execFile, bool run, uint16_t)
++{
++    if (!initCommands.empty())
+     {
+         fprintf(stderr, "%s: options -ex and --command can be used only with CLI interpreter!\n", argv[0]);
+         exit(EXIT_FAILURE);
+@@ -198,11 +173,6 @@
+         exit(EXIT_FAILURE);
+     }
+ 
+-    if (protocol_constructor == &instantiate_protocol<CLIProtocol> && serverPort)
+-    {
+-        fprintf(stderr, "server mode can't be used with CLI interpreter!\n");
+-        exit(EXIT_FAILURE);
+-    }
+ }
+ 
+ static HRESULT AttachToExistingProcess(IDebugger *pDebugger, DWORD pidDebuggee)
+@@ -242,13 +212,8 @@
+     // prevent std::cout flush triggered by read operation on std::cin
+     std::cin.tie(nullptr);
+ 
+-    ProtocolConstructor protocol_constructor =
+-#ifdef DEBUGGER_FOR_TIZEN
+-        &instantiate_protocol<MIProtocol>;
+-#else
+-        _isatty(_fileno(stdin)) ?  &instantiate_protocol<CLIProtocol> : &instantiate_protocol<MIProtocol>;
+-#endif
+-
++
++    ProtocolConstructor protocol_constructor = &instantiate_protocol<VSCodeProtocol>;
+     bool engineLogging = false;
+     std::string logFilePath;
+ 
+@@ -283,19 +248,9 @@
+             }
+ 
+         } },
+-        { "--interpreter=mi", [&](int& i){
+-
+-            protocol_constructor = &instantiate_protocol<MIProtocol>;
+-
+-        } },
+         { "--interpreter=vscode", [&](int& i){
+ 
+             protocol_constructor = &instantiate_protocol<VSCodeProtocol>;
+-
+-        } },
+-        { "--interpreter=cli", [&](int& i){
+-
+-            protocol_constructor = &instantiate_protocol<CLIProtocol>;
+ 
+         } },
+         { "--interop-debugging", [&](int& i){
+@@ -364,7 +319,7 @@
+ 
+             char tmp[PATH_MAX];
+             auto tempdir = GetTempDir();
+-            snprintf(tmp, sizeof(tmp), "%.*s/%s.%u.log", int(tempdir.size()), tempdir.data(), s, getpid());
++            snprintf(tmp, sizeof(tmp), "%.*s/%s.%u.log", int(tempdir.size()), tempdir.data(), s, static_cast<unsigned int>(getpid()));
+             setenv("LOG_OUTPUT", tmp, 1);
+ 
+         } },
+@@ -488,37 +443,19 @@
+     if (!execFile.empty())
+         protocol->SetLaunchCommand(execFile, execArgs);
+ 
+-    LOGI("pidDebugee %d", pidDebuggee);
++    LOGI("pidDebugee %u", static_cast<unsigned int>(pidDebuggee));
+     HRESULT Status;
+     if (pidDebuggee != 0 && FAILED(Status = AttachToExistingProcess(debugger.get(), pidDebuggee)))
+     {
+-        fprintf(stderr, "Error: 0x%x Failed to attach to %i\n", Status, pidDebuggee);
++        fprintf(stderr, "Error: 0x%x Failed to attach to %u\n", static_cast<unsigned int>(Status), static_cast<unsigned int>(pidDebuggee));
+         Interop::Shutdown();
+         return EXIT_FAILURE;
+     }
+     else if (run && FAILED(Status = LaunchNewProcess(debugger.get(), execFile, execArgs)))
+     {
+-        fprintf(stderr, "Error: %#x %s\n", Status, errormessage(Status));
++        fprintf(stderr, "Error: %#x %s\n", static_cast<unsigned int>(Status), errormessage(Status));
+         Interop::Shutdown();
+         return EXIT_FAILURE;
+-    }
+-
+-    // switch CLIProtocol to asynchronous mode when attaching
+-    auto cliProtocol = dynamic_cast<CLIProtocol*>(protocol.get());
+-    if (cliProtocol)
+-    {
+-        if (pidDebuggee != 0)
+-            cliProtocol->SetCommandMode(CLIProtocol::CommandMode::Asynchronous);
+-
+-        // inform CLIProtocol that process is already running
+-        if (run || pidDebuggee)
+-            cliProtocol->SetRunningState();
+-
+-        if (pidDebuggee != 0)
+-            cliProtocol->Pause();
+-
+-        // run commands passed in command line via '-ex' option
+-        cliProtocol->Source({initCommands});
+     }
+ 
+     protocol->CommandLoop();
+--- a/src/utils/iosystem_win32.cpp
++++ b/src/utils/iosystem_win32.cpp
+@@ -41,7 +41,7 @@
+                 return msg.buf;
+             }
+             
+-            snprintf(msg.buf + len, sizeof(msg.buf) - len, "error %#x", error);
++            snprintf(msg.buf + len, sizeof(msg.buf) - len, "error %#lx", error);
+             return msg.buf;
+         }
+ 
+@@ -179,8 +179,8 @@
+ 
+     static std::atomic<long> pipe_num;
+     char pipe_name[MAX_PATH + 1];
+-    snprintf(pipe_name, sizeof(pipe_name), "\\\\.\\Pipe\\Win32Pipes.%08x.%08x",
+-                GetCurrentProcessId(), pipe_num++);
++    snprintf(pipe_name, sizeof(pipe_name), "\\\\.\\Pipe\\Win32Pipes.%08lx.%08lx",
++                GetCurrentProcessId(), static_cast<unsigned long>(pipe_num++));
+ 
+     reading_fd = CreateNamedPipeA(pipe_name,
+                     PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
+@@ -208,7 +208,7 @@
+     {
+         auto err = GetLastError();
+         ::CloseHandle(writing_fd);
+-        fprintf(stderr, "CreateFile pipe error: %#x\n", err);
++        fprintf(stderr, "CreateFile pipe error: %#lx\n", err);
+         return { FileHandle(), FileHandle() };
+     }
+ 
+@@ -529,7 +529,7 @@
+     static mem_align_t mem_align_tmp;
+     char * const mem = mem_align_tmp.mem;
+ #else
+-    /*thread_local*/ static alignas(alignof(Handles)) char mem[sizeof(Handles)]; // TODO
++    /*thread_local*/ alignas(alignof(Handles)) static char mem[sizeof(Handles)]; // TODO
+ #endif
+ 
+     Handles& handles = *new (mem) Handles {
+@@ -572,7 +572,7 @@
+         if (m_orig_handle[n] == INVALID_HANDLE_VALUE)
+         {
+             char msg[256];
+-            snprintf(msg, sizeof(msg), "GetStdHandle(%#x): error", std_handles[n]);
++            snprintf(msg, sizeof(msg), "GetStdHandle(%#lx): error", std_handles[n]);
+             throw std::runtime_error(msg);
+         }
+ 
+@@ -582,7 +582,7 @@
+         if (!SetStdHandle(std_handles[n], new_handles[n].handle))
+         {
+             char msg[256];
+-            snprintf(msg, sizeof(msg), "SetStdHandle(%#x, %p): error", std_handles[n], new_handles[n].handle);
++            snprintf(msg, sizeof(msg), "SetStdHandle(%#lx, %p): error", std_handles[n], new_handles[n].handle);
+             throw std::runtime_error(msg);
+         } 
+ 
+--- a/src/utils/dynlibs_win32.cpp
++++ b/src/utils/dynlibs_win32.cpp
+@@ -30,7 +30,7 @@
+ 
+     name.copy(str, name.size());
+     str[name.size()] = 0;
+-    return ::GetProcAddress((HMODULE)handle, str);
++    return reinterpret_cast<void *>(::GetProcAddress(reinterpret_cast<HMODULE>(handle), str));
+ }
+ 
+ /// This function unloads previously loadded library, specified by handle.
+--- a/third_party/json/json.hpp
++++ b/third_party/json/json.hpp
+@@ -25774,7 +25774,7 @@
+ @since version 1.0.0
+ */
+ JSON_HEDLEY_NON_NULL(1)
+-inline nlohmann::json operator "" _json(const char* s, std::size_t n)
++inline nlohmann::json operator""_json(const char* s, std::size_t n)
+ {
+     return nlohmann::json::parse(s, s + n);
+ }
+@@ -25793,7 +25793,7 @@
+ @since version 2.0.0
+ */
+ JSON_HEDLEY_NON_NULL(1)
+-inline nlohmann::json::json_pointer operator "" _json_pointer(const char* s, std::size_t n)
++inline nlohmann::json::json_pointer operator""_json_pointer(const char* s, std::size_t n)
+ {
+     return nlohmann::json::json_pointer(std::string(s, n));
+ }
+--- a/src/debugger/valueprint.cpp
++++ b/src/debugger/valueprint.cpp
+@@ -5,6 +5,7 @@
+ #include "valueprint.h"
+ 
+ #include <string.h>
++#include <cstdint>
+ #include <sstream>
+ #include <vector>
+ #include <map>
+@@ -21,6 +22,16 @@
+ 
+ namespace netcoredbg
+ {
++
++template <typename Value, typename Byte>
++static ULONG64 ReadEnumBytes(const Byte *bytes)
++{
++    Value value{};
++    auto *dest = reinterpret_cast<unsigned char *>(&value);
++    for (size_t i = 0; i < sizeof(value); ++i)
++        dest[i] = bytes[i];
++    return static_cast<ULONG64>(value);
++}
+ 
+ // From strike.cpp
+ HRESULT DereferenceAndUnboxValue(ICorDebugValue * pValue, ICorDebugValue** ppOutputValue, BOOL * pIsNull)
+@@ -128,35 +139,28 @@
+     }
+     pMD->CloseEnum(fEnum);
+ 
+-    auto getValue = [&enumUnderlyingType](const void *data)
+-    {
++    // Metadata constants are not guaranteed to be aligned. Copy their bytes into a
++    // properly aligned fixed-width object before interpreting their value.
++    auto getValue = [&enumUnderlyingType](UVCP_CONSTANT data)
++    {
++#ifdef _WIN32
++        const auto *bytes = static_cast<const __unaligned unsigned char *>(data);
++#else
++        const auto *bytes = static_cast<const unsigned char *>(data);
++#endif
+         switch (enumUnderlyingType)
+         {
+-            case ELEMENT_TYPE_CHAR:
+-            case ELEMENT_TYPE_I1:
+-                return (ULONG64)(*((CHAR*)data));
+-            case ELEMENT_TYPE_U1:
+-                return (ULONG64)(*((BYTE*)data));
+-            case ELEMENT_TYPE_I2:
+-                return (ULONG64)(*((SHORT*)data));
+-            case ELEMENT_TYPE_U2:
+-                return (ULONG64)(*((USHORT*)data));
+-            case ELEMENT_TYPE_I4:
+-                return (ULONG64)(*((INT32*)data));
+-            case ELEMENT_TYPE_U4:
+-                return (ULONG64)(*((UINT32*)data));
+-            case ELEMENT_TYPE_I8:
+-                return (ULONG64)(*((LONG*)data));
+-            case ELEMENT_TYPE_U8:
+-                return (ULONG64)(*((ULONG*)data));
+-            case ELEMENT_TYPE_I:
+-                return (ULONG64)(*((int*)data));
+-            case ELEMENT_TYPE_U:
+-            case ELEMENT_TYPE_R4:
+-            case ELEMENT_TYPE_R8:
+-            // Technically U and the floating-point ones are options in the CLI, but not in the CLS or C#, so these are NYI
+-            default:
+-                return (ULONG64)0;
++            case ELEMENT_TYPE_CHAR: return ReadEnumBytes<uint16_t>(bytes);
++            case ELEMENT_TYPE_I1: return ReadEnumBytes<int8_t>(bytes);
++            case ELEMENT_TYPE_U1: return ReadEnumBytes<uint8_t>(bytes);
++            case ELEMENT_TYPE_I2: return ReadEnumBytes<int16_t>(bytes);
++            case ELEMENT_TYPE_U2: return ReadEnumBytes<uint16_t>(bytes);
++            case ELEMENT_TYPE_I4: return ReadEnumBytes<int32_t>(bytes);
++            case ELEMENT_TYPE_U4: return ReadEnumBytes<uint32_t>(bytes);
++            case ELEMENT_TYPE_I8: return ReadEnumBytes<int64_t>(bytes);
++            case ELEMENT_TYPE_U8: return ReadEnumBytes<uint64_t>(bytes);
++            case ELEMENT_TYPE_I: return ReadEnumBytes<int32_t>(bytes);
++            default: return ULONG64{0};
+         }
+     };
+ 
+--- a/src/debugger/manageddebugger.cpp
++++ b/src/debugger/manageddebugger.cpp
+@@ -715,7 +715,7 @@
+ 
+ #ifdef INTEROP_DEBUGGING
+     bool prevInteropDebuggingStatus = !!m_interopDebugging;
+-#endif INTEROP_DEBUGGING
++#endif // INTEROP_DEBUGGING
+ 
+     std::vector<char> outEnv;
+     PrepareSystemEnvironmentArg(m_env, outEnv, m_hotReload, m_interopDebugging);
+@@ -727,7 +727,7 @@
+         // Note, debugger include corhost (CoreCLR) that could setup sigaction for SIGCHLD and ruin interop debugger work.
+         SetSigactionMode(!!m_interopDebugging);
+     }
+-#endif INTEROP_DEBUGGING
++#endif // INTEROP_DEBUGGING
+ 
+     // cwd in launch.json set working directory for debugger https://code.visualstudio.com/docs/python/debugging#_cwd
+     if (!m_cwd.empty())
+--- a/src/utils/filesystem_unix.cpp
++++ b/src/utils/filesystem_unix.cpp
+@@ -86,4 +86,4 @@
+ }
+ 
+ }  // ::netcoredbg
+-#endif __unix__
++#endif // __unix__
+--- a/src/managed/interop.cpp
++++ b/src/managed/interop.cpp
+@@ -289,7 +289,7 @@
+     // "Warm up Roslyn" thread still could be running at this point, let `coreclr_shutdown` care about this.
+     HRESULT Status;
+     if (FAILED(Status = shutdownCoreClr(hostHandle, domainId)))
+-        LOGE("coreclr_shutdown failed - status: 0x%08x", Status);
++        LOGE("coreclr_shutdown failed - status: 0x%08x", static_cast<unsigned int>(Status));
+ 
+     shutdownCoreClr = nullptr;
+     loadSymbolsForModuleDelegate = nullptr;
+--- a/src/debugger/evalstackmachine.cpp
++++ b/src/debugger/evalstackmachine.cpp
+@@ -2028,7 +2028,7 @@
+         case CORDBG_E_ILLEGAL_AT_GC_UNSAFE_POINT:
+             output = "This expression causes side effects and will not be evaluated. ";
+             output += errormessage(Status);
+-            LOGE("Eval error: %#x %s\n", Status, errormessage(Status));
++            LOGE("Eval error: %#x %s\n", static_cast<unsigned int>(Status), errormessage(Status));
+             break;
+         case COR_E_TIMEOUT:
+             output = "Evaluation timed out.";
+--- a/src/debugger/evalwaiter.cpp
++++ b/src/debugger/evalwaiter.cpp
+@@ -104,12 +104,12 @@
+     // try setup eval only if all is OK right before we run process.
+     if (FAILED(Status = cbSetupEval(pEval)))
+     {
+-        LOGE("Setup eval failed, %0x", Status);
++        LOGE("Setup eval failed, %0x", static_cast<unsigned int>(Status));
+         m_evalResult.reset(nullptr);
+     }
+     else if (FAILED(Status = pProcess->Continue(0)))
+     {
+-        LOGE("Continue() failed, %0x", Status);
++        LOGE("Continue() failed, %0x", static_cast<unsigned int>(Status));
+         m_evalResult.reset(nullptr);
+     }
+ 
+@@ -296,7 +296,7 @@
+         (FAILED(Status = pEval->QueryInterface(IID_ICorDebugEval2, (LPVOID*) &iCorEval2)) ||
+          FAILED(Status = iCorEval2->RudeAbort())))
+     {
+-        LOGE("Can't abort evaluation in custom notification callback, %0x", Status);
++        LOGE("Can't abort evaluation in custom notification callback, %0x", static_cast<unsigned int>(Status));
+         return Status;
+     }
+ 
+--- a/src/utils/iosystem_win32.h
++++ b/src/utils/iosystem_win32.h
+@@ -63,7 +63,7 @@
+         explicit operator bool() const { return handle != INVALID_HANDLE_VALUE; }
+     };
+ 
+-    using IOSystem = typename IOSystemImpl<IOSystemTraits<Win32PlatformTag> >;
++    using IOSystem = IOSystemImpl<IOSystemTraits<Win32PlatformTag> >;
+     using IOResult = IOSystem::IOResult;
+ 
+     static std::pair<FileHandle, FileHandle> unnamed_pipe();
+--- a/src/utils/torelease.h
++++ b/src/utils/torelease.h
+@@ -106,7 +106,7 @@
+ };
+ 
+ #ifndef IfFailRet
+-#define IfFailRet(EXPR) do { Status = (EXPR); if(FAILED(Status)) { LOGE("%s : 0x%08x", #EXPR, Status); return (Status); } } while (0)
++#define IfFailRet(EXPR) do { Status = (EXPR); if(FAILED(Status)) { LOGE("%s : 0x%08x", #EXPR, static_cast<unsigned int>(Status)); return (Status); } } while (0)
+ #endif
+ 
+ #ifndef _countof
+--- a/compileoptions.cmake
++++ b/compileoptions.cmake
+@@ -85,7 +85,6 @@
+   set(CMAKE_CXX_STANDARD 11)
+ 
+   # The following options are set by the razzle build
+-  add_compile_options(/TP) # compile all files as C++
+   add_compile_options(/d2Zi+) # make optimized builds debugging easier
+   add_compile_options(/nologo) # Suppress Startup Banner
+   add_compile_options(/W3) # set warning level to 3
+@@ -94,14 +93,18 @@
+   add_compile_options(/Oy-) # disable suppressing of the creation of frame pointers on the call stack for quicker function calls
+   add_compile_options(/U_MT) # undefine the predefined _MT macro
+   add_compile_options(/GF) # enable read-only string pooling
++  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   add_compile_options(/Gm-) # disable minimal rebuild
++  endif()
+   add_compile_options(/EHa) # enable C++ EH (w/ SEH exceptions)
+   add_compile_options(/Zp8) # pack structs on 8-byte boundary
+   add_compile_options(/Gy) # separate functions for linker
+   add_compile_options(/Zc:wchar_t-) # C++ language conformance: wchar_t is NOT the native type, but a typedef
+   add_compile_options(/Zc:forScope) # C++ language conformance: enforce Standard C++ for scoping rules
+   add_compile_options(/FC) # use full pathnames in diagnostics
++  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   add_compile_options(/MP) # Build with Multiple Processes (number of processes equal to the number of processors)
++  endif()
+   add_compile_options(/GS) # Buffer Security Check
+   add_compile_options(/Zm200) # Specify Precompiled Header Memory Allocation Limit of 150MB
+   add_compile_options(/wd4960 /wd4961 /wd4603 /wd4627 /wd4838 /wd4456 /wd4457 /wd4458 /wd4459 /wd4091 /we4640)
+@@ -113,7 +116,9 @@
+     add_compile_options(/Gz)
+   endif (CLR_CMAKE_PLATFORM_ARCH_I386)
+ 
++  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   add_compile_options($<$<OR:$<CONFIG:Release>,$<CONFIG:Relwithdebinfo>>:/GL>)
++  endif()
+   add_compile_options($<$<OR:$<OR:$<CONFIG:Release>,$<CONFIG:Relwithdebinfo>>,$<CONFIG:Checked>>:/O1>)
+ 
+   if (CLR_CMAKE_PLATFORM_ARCH_AMD64)
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -16,6 +16,9 @@
+ add_compile_options(-D_MIDL_USE_GUIDDEF_)
+ file(GLOB CORGUIDS_SOURCES "${CORECLR_SRC_DIR}/pal/prebuilt/idl/*_i.cpp")
+ add_library(corguids STATIC ${CORGUIDS_SOURCES})
++if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++    target_compile_options(corguids PRIVATE -Wno-extra-tokens)
++endif()
+ if (NOT WIN32)
+     target_compile_options(corguids PRIVATE -Wno-unused-parameter)
+     target_include_directories(corguids PRIVATE ${CORECLR_SRC_DIR}/pal/inc ${CORECLR_SRC_DIR}/pal/inc/rt)
+@@ -47,11 +50,12 @@
+             set(BIGENDIAN 1)
+         endif()
+ 
+-        configure_file(${CORECLR_MINIPAL_SRC_DIR}/minipalconfig.h.in ${CORECLR_MINIPAL_SRC_DIR}/minipalconfig.h)
++        file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/generated)
++        configure_file(${CORECLR_MINIPAL_SRC_DIR}/minipalconfig.h.in ${PROJECT_BINARY_DIR}/generated/minipalconfig.h)
+ 
+         set(MINIPALGUID_SOURCES "${CORECLR_MINIPAL_SRC_DIR}/guid.c" "${CORECLR_MINIPAL_SRC_DIR}/random.c")
+         add_library(minipalguid STATIC ${MINIPALGUID_SOURCES})
+-        target_include_directories(minipalguid PRIVATE ${CORECLR_MINIPAL_SRC_DIR}/minipalconfig.h ${CORECLR_MINIPAL_SRC_DIR}/utils.h ${CORECLR_MINIPAL_SRC_DIR}/guid.h ${CORECLR_MINIPAL_SRC_DIR}/random.h)
++        target_include_directories(minipalguid PRIVATE ${PROJECT_BINARY_DIR}/generated ${CORECLR_MINIPAL_SRC_DIR})
+     endif()
+ endif()
+ 
+@@ -61,7 +65,7 @@
+     include_directories(${CORECLR_SRC_DIR}/pal/prebuilt/inc)
+     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/coreclr)
+ else()
+-    include_directories(${CORECLR_SRC_DIR}/inc ${CORECLR_SRC_DIR}/debug/inc)
++    include_directories(SYSTEM ${CORECLR_SRC_DIR}/inc ${CORECLR_SRC_DIR}/debug/inc ${CORECLR_SRC_DIR}/pal/prebuilt/inc)
+ endif()
+ include_directories(${CORECLR_SRC_DIR})
+ include_directories(${CORECLR_SRC_DIR}/debug/shim)
+@@ -78,7 +82,6 @@
+ # Build native part of the debugger
+ 
+ include_directories(${PROJECT_SOURCE_DIR}/third_party)
+-include_directories(${PROJECT_SOURCE_DIR}/third_party/linenoise-ng/include)
+ 
+ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+ include_directories(${PROJECT_BINARY_DIR}/generated)
+@@ -87,11 +90,12 @@
+ # Generate error messages from corerror.xml
+ 
+ set(ERRORMESSAGE_DLL_NAME generrmsg/bin/generrmsg.dll)
+-find_program(DOTNETCLI dotnet PATHS "${DOTNET_DIR}" ENV PATH NO_DEFAULT_PATH)
++find_program(DOTNETCLI dotnet PATHS "${DOTNET_DIR}" NO_DEFAULT_PATH REQUIRED)
+ 
+ add_custom_command(
+   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generrmsg/generrmsg.csproj"
+-  COMMAND ${CMAKE_COMMAND} -E env DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NEW_LOCAL_SEARCH_FILE_ONLY=1 ${DOTNETCLI} new console --force -n generrmsg
++  COMMAND ${CMAKE_COMMAND} -E make_directory generrmsg
++  COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/tools/generrmsg/GenErrMsg.csproj generrmsg/generrmsg.csproj
+   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+   COMMENT "Creating new dotnet project"
+   VERBATIM
+@@ -101,7 +105,7 @@
+   OUTPUT ${ERRORMESSAGE_DLL_NAME}
+   COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/tools/generrmsg/GenErrMsg.cs Program.cs
+   COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/tools/generrmsg/nuget.xml nuget.config
+-  COMMAND ${DOTNETCLI} build -o bin/
++  COMMAND ${DOTNETCLI} build -o bin/ --configfile nuget.config
+   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generrmsg"
+   DEPENDS "${PROJECT_SOURCE_DIR}/tools/generrmsg/GenErrMsg.cs" "${CMAKE_CURRENT_BINARY_DIR}/generrmsg/generrmsg.csproj"
+   COMMENT "Compiling ${ERRORMESSAGE_DLL_NAME}"
+@@ -152,11 +156,8 @@
+     metadata/modules_app_update.cpp
+     metadata/modules_sources.cpp
+     metadata/typeprinter.cpp
+-    protocols/cliprotocol.cpp
+     protocols/escaped_string.cpp
+     protocols/protocol_utils.cpp
+-    protocols/miprotocol.cpp
+-    protocols/tokenizer.cpp
+     protocols/vscodeprotocol.cpp
+     protocols/sourcestorage.cpp
+     utils/utf.cpp
+@@ -237,9 +238,9 @@
+ add_executable(netcoredbg ${netcoredbg_SRC})
+ 
+ if (WIN32)
+-    target_link_libraries(netcoredbg corguids wsock32 ws2_32 linenoise)
++    target_link_libraries(netcoredbg corguids wsock32 ws2_32)
+ else()
+-    target_link_libraries(netcoredbg corguids dl pthread linenoise)
++    target_link_libraries(netcoredbg corguids dl pthread)
+     if (EXISTS "${CORECLR_MINIPAL_SRC_DIR}/guid.c")
+         target_link_libraries(netcoredbg minipalguid)
+     endif()
+@@ -323,7 +324,6 @@
+   TARGET netcoredbg
+   PRE_BUILD
+   COMMAND ${CMAKE_COMMAND} -E touch_nocreate ${ERRORMESSAGE_DLL_NAME}
+-  COMMAND ${CMAKE_COMMAND} -E remove -f obj/project.assets.json
+   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+ )
+ 
+@@ -336,17 +336,12 @@
+     set(MANAGEDPART_DLL_NAME ManagedPart.dll)
+     set(DOTNET_BUILD_RESULT ${CMAKE_CURRENT_BINARY_DIR}/${MANAGEDPART_DLL_NAME})
+ 
+-    find_program(DOTNETCLI dotnet PATHS "${DOTNET_DIR}" ENV PATH NO_DEFAULT_PATH)
++    find_program(DOTNETCLI dotnet PATHS "${DOTNET_DIR}" NO_DEFAULT_PATH REQUIRED)
+ 
+     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+         set(MANAGEDPART_BUILD_TYPE "Debug")
+     else() # CMAKE_BUILD_TYPE not set or Release, RelWithDebInfo, MinSizeRel, ...
+         set(MANAGEDPART_BUILD_TYPE "Release")
+-    endif()
+-
+-    set(USE_DBGSHIM_DEPENDENCY "")
+-    if (DBGSHIM_DIR STREQUAL "")
+-        set(USE_DBGSHIM_DEPENDENCY "/p:UseDbgShimDependency=true")
+     endif()
+ 
+     if (NOT RID_NAME)
+@@ -366,9 +361,13 @@
+     endif() # NOT RID_NAME
+ 
+     add_custom_command(OUTPUT ${DOTNET_BUILD_RESULT}
+-      COMMAND ${DOTNETCLI} publish ${MANAGEDPART_PROJECT} -r ${RID_NAME}-${CLR_CMAKE_TARGET_ARCH} --self-contained -c ${MANAGEDPART_BUILD_TYPE} -o ${CMAKE_CURRENT_BINARY_DIR} /p:BaseIntermediateOutputPath=${CMAKE_CURRENT_BINARY_DIR}/obj/ /p:BaseOutputPath=${CMAKE_CURRENT_BINARY_DIR}/bin/ ${USE_DBGSHIM_DEPENDENCY}
++      COMMAND ${DOTNETCLI} publish ${MANAGEDPART_PROJECT} --no-self-contained --no-restore -c ${MANAGEDPART_BUILD_TYPE} -o ${CMAKE_CURRENT_BINARY_DIR} /p:BaseIntermediateOutputPath=${CMAKE_CURRENT_BINARY_DIR}/obj/ /p:BaseOutputPath=${CMAKE_CURRENT_BINARY_DIR}/bin/
+       WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+-      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/managed/*.cs" "${MANAGEDPART_PROJECT}"
++      DEPENDS "${MANAGEDPART_PROJECT}"
++              "${CMAKE_CURRENT_SOURCE_DIR}/managed/Evaluation.cs"
++              "${CMAKE_CURRENT_SOURCE_DIR}/managed/StackMachine.cs"
++              "${CMAKE_CURRENT_SOURCE_DIR}/managed/SymbolReader.cs"
++              "${CMAKE_CURRENT_SOURCE_DIR}/managed/Utils.cs"
+       COMMENT "Compiling ${MANAGEDPART_DLL_NAME}"
+       VERBATIM
+     )
+@@ -389,21 +388,6 @@
+ 
+     install(FILES ${DLLS_TO_DEPLOY} DESTINATION ${CMAKE_INSTALL_PREFIX})
+ 
+-    if (DBGSHIM_DIR STREQUAL "")
+-        if (CLR_CMAKE_PLATFORM_UNIX)
+-            if (CLR_CMAKE_PLATFORM_DARWIN)
+-                set(DBGSHIM_LIB_NAME "libdbgshim.dylib")
+-            else()
+-                set(DBGSHIM_LIB_NAME "libdbgshim.so")
+-            endif()
+-        elseif (WIN32)
+-            set(DBGSHIM_LIB_NAME "dbgshim.dll")
+-        else()
+-            message(FATAL_ERROR "Unsupported platform")
+-        endif()
+-
+-        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${DBGSHIM_LIB_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX})
+-    endif()
+ endif()
+ 
+ # Build Hot Reload managed dll (ncdbhook.dll)
+@@ -414,7 +398,7 @@
+     set(NCDBHOOK_DOTNET_BUILD_RESULT ${CMAKE_CURRENT_BINARY_DIR}/${NCDBHOOK_DLL_NAME})
+     set(NCDB_HOOK_TargetFramework "net6.0")
+ 
+-    find_program(DOTNETCLI dotnet PATHS "${DOTNET_DIR}" ENV PATH NO_DEFAULT_PATH)
++    find_program(DOTNETCLI dotnet PATHS "${DOTNET_DIR}" NO_DEFAULT_PATH REQUIRED)
+ 
+     # Build Debug only, code must be not optimized.
+     add_custom_command(OUTPUT ${NCDBHOOK_DOTNET_BUILD_RESULT}
+--- a/src/managed/ManagedPart.csproj
++++ b/src/managed/ManagedPart.csproj
+@@ -2,7 +2,7 @@
+ 
+   <PropertyGroup>
+     <EnableDefaultCompileItems>False</EnableDefaultCompileItems>
+-    <TargetFramework>netstandard2.0</TargetFramework>
++    <TargetFramework>net10.0</TargetFramework>
+   </PropertyGroup>
+ 
+   <ItemGroup>
+@@ -27,19 +27,7 @@
+   </PropertyGroup>
+ 
+   <ItemGroup>
+-    <PackageReference Include="System.IO.FileSystem">
+-      <Version>4.3.0</Version>
+-    </PackageReference>
+-    <PackageReference Include="System.Runtime.InteropServices">
+-      <Version>4.3.0</Version>
+-    </PackageReference>
+-    <PackageReference Include="System.Reflection.Metadata">
+-      <Version>1.4.2</Version>
+-    </PackageReference>
+-    <PackageReference Include="Microsoft.CSharp" Version="[4.4,)" />
+-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="[2.3,)" />
+-    <PackageReference Include="Microsoft.Diagnostics.DbgShim" Condition="'$(UseDbgShimDependency)' == 'true'" Version="*" />
++    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="[5.9.0]" />
+   </ItemGroup>
+ 
+ </Project>
+-
+--- a/tools/generrmsg/nuget.xml
++++ b/tools/generrmsg/nuget.xml
+@@ -1,3 +1,2 @@
+ <?xml version="1.0" encoding="utf-8"?>
+-<configuration/>
+-<!-- This file contains an empty configuration for the regular local build. For GBS build it will be replaced with packaging/nuget.repo -->
++<configuration><packageSources><clear /></packageSources></configuration>
+--- /dev/null
++++ b/tools/generrmsg/GenErrMsg.csproj
+@@ -0,0 +1,6 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <OutputType>Exe</OutputType>
++    <TargetFramework>net10.0</TargetFramework>
++  </PropertyGroup>
++</Project>

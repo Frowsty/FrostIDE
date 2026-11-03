@@ -1,0 +1,14 @@
+{
+  "netcoredbg": {"commit":"9744e1f051866215611b8440c638042aa2aa2f72","archive":"source.tar.gz","sha256":"76015541132e982ca842facfb685a1fe5a7948f4c42ebba76986bfe324fcc59b","license":"MIT"},
+  "runtimeCommit":"6aa72daa24f66c01c3d7b6a32519e9d21396deec",
+  "dotnetSdkVersion":"10.0.403",
+  "packages":[
+    {"file":"microsoft.codeanalysis.common.5.9.0.nupkg","sha256":"77efd4715c24c8cd6b36f9b92980a2f5a86e4a7b53648d4f1ca3b79a3933a429","license":"MIT"},
+    {"file":"microsoft.codeanalysis.csharp.5.9.0.nupkg","sha256":"7602c3dbaa122268f3b26c6cc0dd02eb9224dea9442ed27af5c3fe56d643993f","license":"MIT"},
+    {"file":"microsoft.codeanalysis.csharp.scripting.5.9.0.nupkg","sha256":"61ff8463c1debf44bfc4ca4bc31a6a74dbbcb44c6163fde1b05ddb851114aa79","license":"MIT"},
+    {"file":"microsoft.codeanalysis.scripting.common.5.9.0.nupkg","sha256":"058777a379e2bd6b004eb8bc8d81aaeb25f09443d80979f2ba46794f434b5345","license":"MIT"},
+    {"file":"microsoft.codeanalysis.analyzers.5.9.0-1.26328.17.nupkg","sha256":"a7ef4c9b2cf403bf54e4b52eb8fb89e946a286894f148ecbe7515d81c7b0f612","license":"MIT"},
+    {"file":"microsoft.diagnostics.dbgshim.win-x64.10.0.750501.nupkg","sha256":"7441fb0c0a14ea705cdc208a4db19a5e238e736699228691712cb90cc4dbf069","license":"MIT"},
+    {"file":"microsoft.diagnostics.dbgshim.linux-x64.10.0.750501.nupkg","sha256":"788a66a8404dfc649abc2ef8765e7285e11bad963cab1dd0c662c5127c39bb5b","license":"MIT"}
+  ]
+}

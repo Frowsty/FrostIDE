@@ -98,12 +98,13 @@ std::optional<DebugFrame> pickFrame(const std::vector<DebugFrame>& frames, bool 
 
 struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     State(rpc::Json arguments, std::map<std::string, std::vector<BreakpointLine>> lines,
-          DebugSessionCallbacks sessionCallbacks, bool catchAbort)
-        : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)), breakpoints(std::move(lines)),
-          breakOnAbort(catchAbort) {}
+          DebugSessionCallbacks sessionCallbacks, bool catchAbort, std::string identity)
+        : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)), adapterId(std::move(identity)),
+          breakpoints(std::move(lines)), breakOnAbort(catchAbort) {}
 
     const DebugSessionCallbacks callbacks;
     const rpc::Json launchArguments;
+    const std::string adapterId;
     std::atomic<IDebugAdapterClient*> adapter{nullptr};
     std::atomic<bool> silent{false}; // The destructor started: no more callbacks.
 
@@ -218,7 +219,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     // --- The launch sequence ---
 
     void sendInitialize() {
-        send("initialize", dap::initializeArguments(), [weak = weak()](Result<rpc::Json> body) {
+        send("initialize", dap::initializeArguments(adapterId), [weak = weak()](Result<rpc::Json> body) {
             if (const auto self = weak.lock()) {
                 self->initialized(std::move(body));
             }
@@ -776,9 +777,10 @@ DebugSession::DebugSession(std::shared_ptr<State> state) noexcept : m_state(std:
 
 std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::Json launchArguments,
                                                   std::map<std::string, std::vector<BreakpointLine>> breakpoints,
-                                                  DebugSessionCallbacks callbacks, bool breakOnAbort) {
-    auto state =
-        std::make_shared<State>(std::move(launchArguments), std::move(breakpoints), std::move(callbacks), breakOnAbort);
+                                                  DebugSessionCallbacks callbacks, bool breakOnAbort,
+                                                  std::string adapterId) {
+    auto state = std::make_shared<State>(std::move(launchArguments), std::move(breakpoints), std::move(callbacks),
+                                         breakOnAbort, std::move(adapterId));
     std::unique_ptr<DebugSession> session(new DebugSession(state));
     const std::weak_ptr<State> weak = state;
     DapHandlers handlers{

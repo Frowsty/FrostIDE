@@ -155,13 +155,14 @@ public:
     /*
      * Creates the adapter client through `factory` and sends initialize; the launch request carries
      * `launchArguments` as they are (lldbDapLaunchArguments builds them). `breakpoints` are the lines
-     * per source to configure. A factory error ends the session at once (onEnded with the error, and
+     * per source to configure; `adapterId` identifies the adapter in initialize. A factory error
+     * ends the session at once (onEnded with the error, and
      * the session is returned in state Ended).
      */
     [[nodiscard]] static std::unique_ptr<DebugSession>
     start(AdapterFactory factory, rpc::Json launchArguments,
           std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-          bool breakOnAbort = false);
+          bool breakOnAbort = false, std::string adapterId = "lldb-dap");
 
     // Closes the client (kill()) without running callbacks; joins the client's threads.
     ~DebugSession();

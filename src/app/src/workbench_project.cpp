@@ -89,6 +89,16 @@ bool isSolutionFile(std::string_view path) noexcept {
 
 // --- Opening ---
 
+Result<void> Workbench::openCMakeProject(std::string_view path) {
+    const std::string canonical = m_documentRegistry->canonicalize(path);
+    const auto status = m_services.fs.status(canonical);
+    if (!status)
+        return std::unexpected(status.error());
+    if (status->type != io::FileType::Regular || io::fileName(canonical) != "CMakeLists.txt")
+        return fail(ErrorCode::InvalidArgument, "a CMake project must name an existing CMakeLists.txt");
+    return openFolder(std::string(io::parentPath(canonical)), false, canonical);
+}
+
 Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
     // The registry's canonical spelling (one document per file), the lexical form for a missing one.
     const std::string canonical = m_documentRegistry->canonicalize(path);
@@ -269,6 +279,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
 }
 
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
+    invalidateManagedDebug();
     cancelFind();
     if (m_debug)
         m_debug->cancelRerun();
@@ -297,6 +308,7 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
+    invalidateManagedDebug();
     if (m_engine)
         m_engine->cancel();
     if (m_unity)
@@ -394,17 +406,24 @@ bool Workbench::restoreLastProject() {
     return m_nav->restoreLastProject();
 }
 
+Result<void> Workbench::openProjectIdentity(const std::string& path) {
+    return io::fileName(path) == "CMakeLists.txt" ? openCMakeProject(path) : openPath(path);
+}
+
 Result<void> Workbench::reopenRoot(const std::string& root) {
+    if (io::fileName(root) == "CMakeLists.txt")
+        return openCMakeProject(root);
     if (isSolutionFile(root) || extensionOf(root) == ".frostproj")
         return openPath(root);
     // Older session stores keep roots; the recent projects say which solution in it the user opened.
     const std::string key = lang::documentKey(root);
     for (const std::string& recent : recentProjects(*m_services.settings.snapshot())) {
-        const std::string recentRoot = isSolutionFile(recent) || extensionOf(recent) == ".frostproj"
-                                           ? std::string(io::parentPath(recent))
-                                           : m_documentRegistry->canonicalize(recent);
+        const std::string recentRoot =
+            isSolutionFile(recent) || extensionOf(recent) == ".frostproj" || io::fileName(recent) == "CMakeLists.txt"
+                ? std::string(io::parentPath(recent))
+                : m_documentRegistry->canonicalize(recent);
         if (lang::documentKey(m_documentRegistry->canonicalize(recentRoot)) == key) {
-            return openPath(recent);
+            return openProjectIdentity(recent);
         }
     }
     return openPath(root);

@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import struct
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -205,6 +208,43 @@ class QtUsageTest(TempDirTestCase):
         messages = self._messages([build])
         self.assertEqual(len(messages), 1)
         self.assertIn("Qt module Network is not on the linux runtime allowlist", messages[0])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are unavailable on this platform")
+    def test_build_scan_skips_fifos_and_still_scans_symlinked_elf(self) -> None:
+        build = self.tmp / "build-linux"
+        target = build / "src/app/actual"
+        _write(target, _elf(["libQt6Network.so.6"]))
+        os.symlink(target.name, target.with_name("linked"))
+        fifo = target.with_name("clr-debug-pipe-in")
+        os.mkfifo(fifo)
+        os.mkfifo(target.with_name("libQt6Charts.so.6"))
+        os.symlink(fifo.name, fifo.with_name("pipe-link"))
+        self.assertEqual(licensecheck.elf_needed(target.with_name("linked")), ["libQt6Network.so.6"])
+        # A timeout bounds the regression: an ordinary blocking open of either FIFO hangs.
+        script = ("import json,sys; from pathlib import Path; "
+                  "sys.path.insert(0,sys.argv[1]); import licensecheck; "
+                  "print(json.dumps([use.component for use in licensecheck.binary_qt_uses(Path(sys.argv[2]), "
+                  "[Path(sys.argv[3])])]))")
+        result = subprocess.run([sys.executable, "-B", "-c", script, str(REPO / "tools"),
+                                 str(self.repo), str(build)], capture_output=True, text=True,
+                                env=clean_env(), timeout=10, check=True)
+        components = json.loads(result.stdout)
+        self.assertIn("Network", components)
+        self.assertNotIn("Charts", components)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo") and hasattr(os, "O_NONBLOCK"),
+                         "nonblocking FIFO opens are unavailable on this platform")
+    def test_elf_scan_does_not_block_if_regular_file_becomes_fifo_before_open(self) -> None:
+        target = self.tmp / "replaced"
+        _write(target, _elf(["libQt6Network.so.6"]))
+        # Replace the file exactly between the regular-file check and open. Run in a child so a
+        # broken blocking implementation fails on timeout instead of hanging the test suite.
+        script = ("import os,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+                  "import licensecheck; path=Path(sys.argv[2]); original=os.open; "
+                  "exec('def swap(p, flags):\\n os.unlink(p)\\n os.mkfifo(p)\\n return original(p, flags)'); "
+                  "licensecheck.os.open=swap; assert licensecheck.elf_needed(path)==[]")
+        subprocess.run([sys.executable, "-B", "-c", script, str(REPO / "tools"), str(target)],
+                       capture_output=True, text=True, env=clean_env(), timeout=10, check=True)
 
 
 class VcpkgTest(TempDirTestCase):

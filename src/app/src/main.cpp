@@ -638,9 +638,12 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             const QFileInfo file(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
             std::string absolute = QDir::toNativeSeparators(file.absoluteFilePath()).toUtf8().toStdString();
             const QString suffix = file.suffix().toLower();
-            const bool project = file.isDir() || (file.isFile() && (suffix == QStringLiteral("sln") ||
-                                                                    suffix == QStringLiteral("slnx") ||
-                                                                    suffix == QStringLiteral("frostproj")));
+            const bool cmakeProject = parsed->project.empty() && parsed->line == 0 && parsed->column == 0 &&
+                                      file.isFile() && file.fileName() == QStringLiteral("CMakeLists.txt");
+            const bool project =
+                cmakeProject || file.isDir() ||
+                (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
+                                   suffix == QStringLiteral("frostproj")));
             (project ? projects : files).push_back(std::move(absolute));
         }
         if (!parsed->project.empty()) {
@@ -654,7 +657,11 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             }
         } else {
             for (const std::string& path : projects) {
-                static_cast<void>(workbench.openPath(path));
+                const QFileInfo info(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())));
+                if (info.isFile() && info.fileName() == QStringLiteral("CMakeLists.txt"))
+                    static_cast<void>(workbench.openCMakeProject(path));
+                else
+                    static_cast<void>(workbench.openPath(path));
             }
             if (projects.empty())
                 static_cast<void>(workbench.restoreLastProject());

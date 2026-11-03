@@ -50,6 +50,7 @@ DocumentEditorView* Workbench::currentView() const {
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
+    connect(&view.editor(), &ui::EditorView::textChanged, this, [this] { invalidateManagedDebug(); });
     if (m_git)
         m_git->attachEditor(view);
     if (m_debug)
@@ -146,6 +147,7 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 }
 
 void Workbench::documentChanged(const std::string& path) {
+    invalidateManagedDebug();
     if (m_git)
         m_git->documentChanged();
     DocumentEditorView* view = m_editors->find(path);
