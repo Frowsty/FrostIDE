@@ -152,6 +152,7 @@ struct ManagedSourceSnapshot;
 
 class LanguageBridge;
 class CMakeIntegration;
+class ProjectEditProcess;
 class EngineIntegration;
 class UnityControlIntegration;
 class GitIntegration;
@@ -194,6 +195,8 @@ public:
     [[nodiscard]] virtual bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) = 0;
     // `project` is running: true stops and reruns it (Rider's "stop and rerun?").
     [[nodiscard]] virtual bool confirmRerun(QWidget* parent, const QString& project) = 0;
+    // Restore the recorded pre-edit definitions after an interrupted owned project edit.
+    [[nodiscard]] virtual bool confirmProjectRecovery(QWidget* parent, const QString& project) = 0;
 
 protected:
     IWorkbenchPrompts() = default;
@@ -208,6 +211,7 @@ public:
     [[nodiscard]] std::string chooseOpenPath(QWidget* parent, OpenKind kind) override;
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
     [[nodiscard]] bool confirmRerun(QWidget* parent, const QString& project) override;
+    [[nodiscard]] bool confirmProjectRecovery(QWidget* parent, const QString& project) override;
 };
 
 // What the workbench borrows; everything outlives it.
@@ -230,6 +234,10 @@ struct ManagedDebugSelection {
 };
 
 struct WorkbenchOptions {
+    // Per-user project edit lineage directory (absolute); empty disables project edits.
+    std::string projectEditStateDirectory;
+    // Packaged Windows ProjectHost executable; empty uses project-host beside the application.
+    std::string projectEditHostPath;
     // This process's hot-exit journal and the recovery scan (absolute); "" disables hot exit.
     std::string journalDirectory;
     // The local history database file (absolute); "" disables local history.
@@ -427,6 +435,7 @@ private:
 
     // Projects.
     Result<void> openSolution(const std::string& path);
+    void removeProjectFile(const QString& project, const QString& source);
     Result<void> openFolder(const std::string& path, bool discoverSolution = true, std::string recentPath = {});
     void setProject(std::string root, QString name, std::string recentPath);
     // Closes the open project before another opens; false when a tab refused (nothing changed).
@@ -572,6 +581,7 @@ private:
     ui::TrustPrompter* m_trustPrompter = nullptr; // Child of this.
 
     std::shared_ptr<const project::SolutionModel> m_solution;
+    std::unique_ptr<ProjectEditProcess> m_projectEdit;
     std::string m_projectRoot;
     // The explicitly opened project file or folder, used as the last-session identity.
     std::string m_projectIdentity;

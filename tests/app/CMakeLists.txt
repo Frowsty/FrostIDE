@@ -90,7 +90,7 @@ set(_frost_workbench_definitions
     FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
-    SOURCES workbench_test.cpp workbench_terminal_test.cpp workbench_engine_test.cpp workbench_find_test.cpp
+    SOURCES workbench_test.cpp workbench_terminal_test.cpp workbench_engine_test.cpp workbench_find_test.cpp project_edit_process_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
@@ -107,11 +107,14 @@ target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_de
 
 if(WIN32)
     frost_add_test(app_workbench_msbuild_tests QT
-        SOURCES workbench_msbuild_test.cpp workbench_r2a_debug_test.cpp
+        SOURCES workbench_msbuild_test.cpp workbench_r2a_debug_test.cpp workbench_project_edit_test.cpp
         DEPS frost::app frost::build frost::io
         LABELS integration msbuild)
     target_include_directories(app_workbench_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
     target_compile_definitions(app_workbench_msbuild_tests PRIVATE ${_frost_workbench_definitions})
+    target_compile_definitions(app_workbench_msbuild_tests PRIVATE
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(app_workbench_msbuild_tests frost_project_host)
 endif()
 frost_add_test(app_workbench_clangd_tests QT
     SOURCES workbench_clangd_test.cpp

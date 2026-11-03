@@ -7,6 +7,7 @@
 
 #include "frost/build/line_splitter.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/io/utf.hpp"
 
 #include <condition_variable>
 #include <deque>
@@ -43,12 +44,15 @@ std::string Utf8ChunkDecoder::feed(std::string_view bytes) {
         }
         break;
     }
-    std::string complete = sanitizeUtf8(std::string_view(m_pending).substr(0, cut));
+    const std::string_view part = std::string_view(m_pending).substr(0, cut);
+    m_invalid = m_invalid || !io::isValidUtf8(part);
+    std::string complete = sanitizeUtf8(part);
     m_pending.erase(0, cut);
     return complete;
 }
 
 std::string Utf8ChunkDecoder::finish() {
+    m_invalid = m_invalid || !io::isValidUtf8(m_pending);
     std::string rest = sanitizeUtf8(m_pending);
     m_pending.clear();
     return rest;
@@ -84,6 +88,7 @@ struct RunSession::State {
     bool inputClosed FROST_GUARDED_BY(stateMutex) = false; // closeInput() was called.
     bool stdinBroken FROST_GUARDED_BY(stateMutex) = false; // A write failed (the program closed stdin).
     bool writerQuit FROST_GUARDED_BY(stateMutex) = false;
+    bool decodingFailed FROST_GUARDED_BY(stateMutex) = false;
     // Written once by the waiter before it sets `done` under stateMutex; never changes afterwards.
     RunExit result;
 
@@ -105,9 +110,27 @@ struct RunSession::State {
             if (!read || *read == 0) {
                 break; // EOF, or the pipe broke because the tree was ended.
             }
-            emit(stream, decoder.feed(std::string_view(buffer.data(), *read)));
+            auto decoded = decoder.feed(std::string_view(buffer.data(), *read));
+            if (options.rejectInvalidUtf8 && decoder.invalid()) {
+                {
+                    LockGuard lock(stateMutex);
+                    decodingFailed = true;
+                }
+                static_cast<void>(process->terminate());
+                break;
+            }
+            emit(stream, decoded);
         }
-        emit(stream, decoder.finish());
+        auto tail = decoder.finish();
+        if (options.rejectInvalidUtf8 && decoder.invalid()) {
+            {
+                LockGuard lock(stateMutex);
+                decodingFailed = true;
+            }
+            static_cast<void>(process->terminate());
+        } else {
+            emit(stream, tail);
+        }
         {
             LockGuard lock(stateMutex);
             ++readersDone;
@@ -217,8 +240,12 @@ struct RunSession::State {
         if (stopped && !waitFailed && status.exitCode != io::kTerminatedExitCode) {
             stopped = false;
         }
-        if (stopped || waitFailed) {
-            static_cast<void>(process->terminate()); // Whatever is left of the tree holds the pipes.
+        bool cleanupFailed = false;
+        if (stopped || waitFailed || options.terminateDescendantsOnExit) {
+            if (auto ended = process->terminate(); !ended) {
+                cleanupFailed = true;
+                process->abandonOutput();
+            }
         } else {
             releaseLeftovers();
         }
@@ -231,8 +258,17 @@ struct RunSession::State {
         if (writer.joinable()) {
             writer.join();
         }
-        RunExit outcome{
-            .exitCode = status.exitCode, .stopped = stopped, .waitFailed = waitFailed, .duration = end - started};
+        bool badEncoding = false;
+        {
+            LockGuard lock(stateMutex);
+            badEncoding = decodingFailed;
+        }
+        RunExit outcome{.exitCode = status.exitCode,
+                        .stopped = stopped,
+                        .waitFailed = waitFailed,
+                        .cleanupFailed = cleanupFailed,
+                        .decodingFailed = badEncoding,
+                        .duration = end - started};
         if (callbacks.onExited) {
             callbacks.onExited(outcome);
         }

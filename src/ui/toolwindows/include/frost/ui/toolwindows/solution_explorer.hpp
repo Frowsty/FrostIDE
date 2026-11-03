@@ -77,6 +77,17 @@ public:
     void setStartupProjectHandler(std::function<void(project::ProjectId)> handler) {
         m_startupHandler = std::move(handler);
     }
+    // Offers Remove from Project for project files when installed. The handler receives the
+    // project and source paths; it owns trust checks, confirmation, persistence and refresh.
+    void setRemoveProjectFileHandler(std::function<void(const QString&, const QString&)> handler) {
+        m_removeProjectFileHandler = std::move(handler);
+    }
+    // Recovery is offered for a project when the caller reports a pending journal.
+    void setRecoverProjectHandler(std::function<bool(const QString&)> available,
+                                  std::function<void(const QString&)> handler) {
+        m_recoveryAvailable = std::move(available);
+        m_recoverProjectHandler = std::move(handler);
+    }
 
     // Shows `solution` (nullptr: nothing); see the header comment for reloads.
     void setSolution(std::shared_ptr<const project::SolutionModel> solution);
@@ -136,6 +147,9 @@ private:
     BuildController* m_controller = nullptr;
     io::IProcessLauncher* m_launcher = nullptr;
     std::function<void(project::ProjectId)> m_startupHandler;
+    std::function<void(const QString&, const QString&)> m_removeProjectFileHandler;
+    std::function<bool(const QString&)> m_recoveryAvailable;
+    std::function<void(const QString&)> m_recoverProjectHandler;
     std::function<void(const QString&)> m_terminalHandler;
     QMetaObject::Connection m_solutionConnection;
 

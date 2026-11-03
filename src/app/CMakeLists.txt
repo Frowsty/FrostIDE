@@ -58,6 +58,8 @@ frost_add_library(app LAYER app
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp
         src/workbench_managed_debug.cpp
+        src/project_edit_process.cpp
+        src/workbench_project_edit.cpp
         src/unity_context.hpp
         src/workbench_project.cpp
         src/workbench_terminal.cpp
@@ -132,6 +134,15 @@ if(FROST_ASAN_RUNTIME_DLL)
 endif()
 # Building frost builds the DLL it loads.
 add_dependencies(frost frost_app_shared)
+# The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with
+# the pinned .NET SDK in a private profile; it does not redistribute those VS assemblies.
+add_custom_target(frost_project_host
+    COMMAND "$ENV{FROST_SDK}/py/Scripts/python.exe" "${CMAKE_SOURCE_DIR}/tools/build_project_host.py"
+            --sdk "$ENV{FROST_SDK}"
+            --work "${CMAKE_BINARY_DIR}/project-host-work/$<CONFIG>"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/project-host"
+    VERBATIM)
+add_dependencies(frost frost_project_host)
 frost_deploy_conpty(frost)
 # Platform plugins are loaded from <exe dir>/platforms: the native one and
 # the offscreen one used by --selftest.

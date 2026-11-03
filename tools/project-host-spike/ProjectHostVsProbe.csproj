@@ -1,0 +1,20 @@
+<!-- SPDX-License-Identifier: Apache-2.0
+     Experimental .NET Framework ownership probe against an installed VS instance. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <StartupObject>VsProbe</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="VsProbe.cs" />
+    <Compile Include="EnvironmentFingerprint.cs" />
+    <Compile Include="TransactionProbe.cs" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="Microsoft.Build" HintPath="$(VisualStudioMSBuildDir)/Microsoft.Build.dll" Private="false" />
+    <Reference Include="Microsoft.Build.Framework" HintPath="$(VisualStudioMSBuildDir)/Microsoft.Build.Framework.dll" Private="false" />
+  </ItemGroup>
+</Project>

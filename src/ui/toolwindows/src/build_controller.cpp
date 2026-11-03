@@ -185,6 +185,15 @@ Result<void> BuildController::openSolution(std::shared_ptr<const project::Soluti
     return {};
 }
 
+void BuildController::projectEditPublished() {
+    if (!m_backend)
+        return;
+    refreshFromBackend();
+    emit diagnosticsCleared();
+    emit solutionChanged();
+    emit activeConfigurationChanged(m_active ? static_cast<int>(*m_active) : -1);
+}
+
 Result<void> BuildController::closeSolution() {
     if (m_backend == nullptr) {
         return fail(ErrorCode::InvalidArgument, "no build service is bound");

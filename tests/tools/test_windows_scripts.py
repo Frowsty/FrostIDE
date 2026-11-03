@@ -155,6 +155,9 @@ class StageScriptTest(TempDirTestCase):
         bin_dir = build / "src" / "app" / "Debug"
         (bin_dir / "platforms").mkdir(parents=True, exist_ok=True)
         (bin_dir / "resources" / "themes").mkdir(parents=True, exist_ok=True)
+        (bin_dir / "project-host").mkdir(parents=True, exist_ok=True)
+        (bin_dir / "project-host" / "ProjectHostVsProbe.exe").write_bytes(b"MZ")
+        (bin_dir / "project-host" / "ProjectHostVsProbe.exe.config").write_text("<configuration/>", encoding="utf-8")
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb"):
             (bin_dir / name).write_bytes(b"MZ")
         (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
@@ -177,6 +180,7 @@ class StageScriptTest(TempDirTestCase):
         self.assertIn("stage: ok", result.stdout)
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",
                      "platforms/qwindowsd.dll", "platforms/qoffscreend.dll", "resources/themes/dark.json",
+                     "project-host/ProjectHostVsProbe.exe", "project-host/ProjectHostVsProbe.exe.config",
                      "LICENSE", "NOTICE", "licenses/tree-sitter-LICENSE"):
             self.assertTrue((destination / name).is_file(), name)
 
@@ -212,6 +216,21 @@ class StageScriptTest(TempDirTestCase):
                 result = self._stage(build, self.tmp / "missing-out")
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("no " + missing, result.stdout)
+
+    def test_missing_project_host_fails(self) -> None:
+        build = self._fake_build()
+        (build / "src" / "app" / "Debug" / "project-host" / "ProjectHostVsProbe.exe").unlink()
+        result = self._stage(build, self.tmp / "missing-host")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no ProjectHost", result.stdout)
+
+    def test_stale_project_host_dll_is_not_staged(self) -> None:
+        build = self._fake_build()
+        (build / "src" / "app" / "Debug" / "project-host" / "Microsoft.Build.dll").write_bytes(b"stale")
+        destination = self.tmp / "host-out"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((destination / "project-host" / "Microsoft.Build.dll").exists())
 
     def test_a_missing_build_output_fails(self) -> None:
         build = self._fake_build()

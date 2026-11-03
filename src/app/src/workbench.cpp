@@ -41,6 +41,7 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "managed_debug_preparation.hpp"
+#include "project_edit_process.hpp"
 #include "unity_control.hpp"
 #include <QAction>
 #include <QApplication>
@@ -114,6 +115,13 @@ bool DialogWorkbenchPrompts::confirmRerun(QWidget* parent, const QString& projec
                                               text("%1 is running. Stop and rerun it?").arg(project),
                                               QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes);
     return answer == QMessageBox::Yes;
+}
+
+bool DialogWorkbenchPrompts::confirmProjectRecovery(QWidget* parent, const QString& project) {
+    return QMessageBox::question(
+               parent, text("Recover Project Edit"),
+               text("Restore the project definitions recorded before the interrupted edit of %1?").arg(project),
+               QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes;
 }
 
 // --- Construction ---
@@ -249,6 +257,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
 
 Workbench::~Workbench() {
     shutdown();
+    m_projectEdit.reset();
     m_settingsSubscription.reset();
     detach();
     m_language.reset();
@@ -335,7 +344,10 @@ void Workbench::createRunService() {
     ui::RunControllerHooks hooks;
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
-    hooks.mayRun = [this] { return !m_debug || (!m_debug->debugging() && !m_debug->rerunPending()); };
+    hooks.mayRun = [this] {
+        return !m_buildService->projectEditInProgress() &&
+               (!m_debug || (!m_debug->debugging() && !m_debug->rerunPending()));
+    };
     hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
     hooks.alternateRunning = [this] { return m_cmake && m_cmake->running(); };
     hooks.alternateRun = [this] { return m_cmake->run(); };
@@ -382,7 +394,8 @@ void Workbench::createRunService() {
     };
     debugHooks.alternateAvailable = [this] { return m_cmake != nullptr; };
     debugHooks.mayStart = [this] {
-        return !m_runController->running() && m_runService->activeRuns().empty() &&
+        return !m_buildService->projectEditInProgress() && !m_runController->running() &&
+               m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     debugHooks.startAlternate = [this](auto done) { return m_cmake->debug(std::move(done)); };
@@ -407,8 +420,8 @@ void Workbench::createRunService() {
     managedDebug.group = "Debug";
     managedDebug.executesProjectCode = true;
     managedDebug.enabled = [this](const input::ActionContext&) {
-        return !m_projectRoot.empty() && m_debug && !m_debug->debugging() && m_managedDebugPreparation &&
-               !m_managedDebugPreparation->active() && !m_managedSnapshotJob;
+        return !m_projectRoot.empty() && !m_buildService->projectEditInProgress() && m_debug && !m_debug->debugging() &&
+               m_managedDebugPreparation && !m_managedDebugPreparation->active() && !m_managedSnapshotJob;
     };
     managedDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startManagedDebug(); };
     if (auto added = m_registry.add(std::move(managedDebug)); !added)
@@ -650,8 +663,20 @@ void Workbench::attachToolWindows() {
     ui::ToolWindowManager& windows = m_window->toolWindows();
 
     auto* explorer = new ui::SolutionExplorer();
+    m_projectEdit = std::make_unique<ProjectEditProcess>(m_services.launcher, m_services.clock);
     explorer->setController(m_build.get());
     explorer->setProcessLauncher(&m_services.launcher);
+    explorer->setRemoveProjectFileHandler(
+        [this](const QString& project, const QString& source) { removeProjectFile(project, source); });
+    explorer->setRecoverProjectHandler(
+        [this](const QString&) {
+            const auto journal = io::joinPath(m_projectRoot, ".frost-project-edit-journal");
+            if (!journal)
+                return false;
+            const auto exists = m_services.fs.exists(*journal);
+            return exists && *exists;
+        },
+        [this](const QString& project) { removeProjectFile(project, QString{}); });
     explorer->setStartupProjectHandler([this](project::ProjectId project) {
         if (auto set = m_runController->setStartupProject(project); !set) {
             notify(text("Set as Startup Project"), qs(set.error().message()), ui::NotificationKind::Error);
@@ -822,6 +847,8 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    if (m_projectEdit)
+        m_projectEdit->stop();
     invalidateManagedDebug();
     m_luaTrustWatch.stop();
     cancelFind();

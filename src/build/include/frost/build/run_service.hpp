@@ -92,6 +92,9 @@ public:
     [[nodiscard]] virtual std::optional<std::size_t> activeConfigurationIndex() const = 0;
     // Whether a build is in progress (run() then fails with Busy).
     [[nodiscard]] virtual bool building() const = 0;
+    // Reserve the build model against project edits for the complete run pipeline.
+    [[nodiscard]] virtual Result<void> reserveRun() { return {}; }
+    virtual void releaseRun() {}
     /*
      * Starts a Build of `project` in the active configuration; `done` is called once with the
      * outcome, on any thread, after this call returned. Errors: Unsupported (the configuration

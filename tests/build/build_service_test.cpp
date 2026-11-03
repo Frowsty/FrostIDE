@@ -251,6 +251,27 @@ protected:
     std::unique_ptr<BuildService> service;
 };
 
+TEST_F(ServiceTest, ProjectEditExcludesBuildAndPublishesBeforeRelease) {
+    createService();
+    ASSERT_TRUE(service->setActiveConfiguration("Release|x64"));
+    ASSERT_TRUE(service->beginProjectEdit());
+    EXPECT_EQ(service->build(BuildAction::Build).error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->setActiveConfiguration(std::size_t{0}).error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->openSolution(solution).error().code(), ErrorCode::Busy);
+    EXPECT_EQ(service->closeSolution().error().code(), ErrorCode::Busy);
+    ASSERT_TRUE(service->finishProjectEdit(solution));
+    EXPECT_FALSE(service->projectEditInProgress());
+    ASSERT_TRUE(service->activeConfiguration());
+    EXPECT_EQ(service->activeConfiguration()->name(), "Release|x64");
+    ASSERT_TRUE(service->beginProjectEdit());
+    const auto rejected = service->finishProjectEdit(nullptr);
+    ASSERT_FALSE(rejected);
+    EXPECT_TRUE(service->projectEditInProgress());
+    EXPECT_EQ(service->build(BuildAction::Build).error().code(), ErrorCode::Busy);
+    service->cancelProjectEdit();
+    EXPECT_FALSE(service->projectEditInProgress());
+}
+
 TEST_F(ServiceTest, DefaultsToTheFirstDebugConfigurationAndPersistsTheChoice) {
     createService();
     EXPECT_EQ(service->configurations().size(), 2U);

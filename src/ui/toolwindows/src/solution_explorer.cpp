@@ -374,6 +374,28 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         QAction* open = menu->addAction(tr("Open"));
         open->setObjectName(QStringLiteral("openFile"));
         connect(open, &QAction::triggered, this, [this, path] { emit openFile(path); });
+        const auto solution = m_model->solution();
+        const auto& item = solution->node(*node);
+        if (m_removeProjectFileHandler && item.project && !item.path.empty()) {
+            const QString projectPath = QString::fromStdString(solution->project(*item.project).path);
+            const QString key = QString::fromStdString(item.key);
+            QAction* remove = menu->addAction(tr("Remove from Project"));
+            remove->setObjectName(QStringLiteral("removeFromProject"));
+            connect(remove, &QAction::triggered, this, [this, key, path, projectPath, solution] {
+                const auto current = m_model->solution();
+                if (current != solution || !m_removeProjectFileHandler)
+                    return;
+                const auto id = current->findNode(toUtf8(key));
+                if (!id)
+                    return;
+                const auto& selected = current->node(*id);
+                if (selected.kind != NodeKind::File || !selected.project ||
+                    QString::fromStdString(selected.path) != path ||
+                    QString::fromStdString(current->project(*selected.project).path) != projectPath)
+                    return;
+                m_removeProjectFileHandler(projectPath, path);
+            });
+        }
         menu->addSeparator();
     }
 
@@ -421,6 +443,16 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
                 if (m_startupHandler) {
                     m_startupHandler(id);
                 }
+            });
+        }
+        if (kind == NodeKind::Project && m_recoveryAvailable && m_recoverProjectHandler && m_recoveryAvailable(path)) {
+            const auto solution = m_model->solution();
+            QAction* recover = menu->addAction(tr("Recover Project Edit"));
+            recover->setObjectName(QStringLiteral("recoverProjectEdit"));
+            connect(recover, &QAction::triggered, this, [this, solution, path] {
+                if (m_model->solution() == solution && m_recoveryAvailable && m_recoverProjectHandler &&
+                    m_recoveryAvailable(path))
+                    m_recoverProjectHandler(path);
             });
         }
         menu->addSeparator();

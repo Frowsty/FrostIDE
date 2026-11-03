@@ -1,0 +1,15 @@
+<!-- SPDX-License-Identifier: Apache-2.0
+     Experimental Windows transaction probe for scratch project edits. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="TransactionProbe.cs" />
+    <Compile Include="EnvironmentFingerprint.cs" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+</Project>

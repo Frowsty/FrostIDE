@@ -15,6 +15,7 @@
 #include "build_test_util.hpp"
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <format>
@@ -722,6 +723,59 @@ TEST_F(RunServiceTest, TheBuildServiceAdapterBuildsBeforeTheRun) {
     EXPECT_EQ(launches[2].spec.executable, programPath("App"));
     service.reset();
     EXPECT_TRUE(buildService->waitForIdle(kWait));
+}
+
+TEST_F(RunServiceTest, ProjectEditExcludesNoBuildRunDuringPropertyResolution) {
+    const std::string slnPath = MemTree::path("Run/Run.sln");
+    auto sln = tree.fs.readFile(slnPath);
+    ASSERT_TRUE(sln);
+    const std::string buildLine = "\t\t{00000000-0000-4000-8000-000000000002}.Debug|x64.Build.0 = Debug|x64\r\n";
+    const auto at = sln->find(buildLine);
+    ASSERT_NE(at, std::string::npos);
+    sln->erase(at, buildLine.size());
+    ASSERT_TRUE(tree.fs.writeFileAtomic(slnPath, *sln));
+    auto loaded = project::SolutionModel::load(tree.fs, slnPath);
+    ASSERT_TRUE(loaded);
+    solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+    auto buildService = BuildService::create(tree.fs, launcher, *trustStore, {});
+    ASSERT_TRUE(buildService->openSolution(solution));
+    const auto adapter = makeRunBuilder(*buildService);
+    std::atomic<bool> entered{false}, release{false};
+    auto runOptions = options();
+    runOptions.properties = [&](const RunPropertyRequest& request) -> Result<RunProperties> {
+        entered.store(true);
+        while (!release.load())
+            std::this_thread::yield();
+        return propertiesFor(request);
+    };
+    service = RunService::create(tree.fs, launcher, *trustStore, *adapter, std::move(runOptions), recorder.callbacks());
+    struct Cleanup {
+        std::atomic<bool>& flag;
+        std::unique_ptr<RunService>& service;
+        ~Cleanup() {
+            flag.store(true);
+            service.reset();
+        }
+    } guard{release, service};
+    ASSERT_TRUE(service->openSolution(solution));
+    writeProgram("App");
+    launcher.expect({.expectExecutable = programPath("App")});
+    ASSERT_TRUE(service->run(projectNamed("App")));
+    ASSERT_TRUE(waitUntil([&] { return entered.load(); }));
+    const auto blockedEdit = buildService->beginProjectEdit();
+    ASSERT_FALSE(blockedEdit);
+    EXPECT_EQ(blockedEdit.error().code(), ErrorCode::Busy);
+    release.store(true);
+    ASSERT_TRUE(service->waitForIdle(kWait));
+    ASSERT_TRUE(buildService->beginProjectEdit());
+    const auto blockedRun = service->run(projectNamed("App"));
+    const auto blockedDebug = service->debug(projectNamed("App"), {});
+    ASSERT_FALSE(blockedRun);
+    ASSERT_FALSE(blockedDebug);
+    EXPECT_EQ(blockedRun.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(blockedDebug.error().code(), ErrorCode::Busy);
+    buildService->cancelProjectEdit();
+    service.reset();
 }
 
 } // namespace

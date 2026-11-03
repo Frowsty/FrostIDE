@@ -181,9 +181,9 @@ void Workbench::showManagedDebugSource(const std::string& path, int line) {
 }
 
 void Workbench::startManagedDebug() {
-    if (m_projectRoot.empty() || !m_managedDebugPreparation || m_managedDebugPreparation->active() ||
-        m_managedSnapshotJob || !m_debug || m_debug->debugging() || m_runController->running() ||
-        !m_runService->activeRuns().empty())
+    if (m_projectRoot.empty() || m_buildService->projectEditInProgress() || !m_managedDebugPreparation ||
+        m_managedDebugPreparation->active() || m_managedSnapshotJob || !m_debug || m_debug->debugging() ||
+        m_runController->running() || !m_runService->activeRuns().empty())
         return;
     const std::string root = m_projectRoot;
     if (!sameCanonical(m_services.fs, root) || !m_services.trust.isTrusted(root)) {
@@ -275,9 +275,9 @@ void Workbench::startManagedDebug() {
                                          .runtimeIdentifier = rid.text().toStdString()};
     m_managedDebugRoot = root;
     auto current = [this, root, projectPath] {
-        return !m_shutDown && m_projectRoot == root && m_services.trust.isTrusted(root) &&
-               sameCanonical(m_services.fs, root) && sameCanonical(m_services.fs, projectPath) &&
-               m_services.trust.isTrusted(io::parentPath(projectPath));
+        return !m_shutDown && !m_buildService->projectEditInProgress() && m_projectRoot == root &&
+               m_services.trust.isTrusted(root) && sameCanonical(m_services.fs, root) &&
+               sameCanonical(m_services.fs, projectPath) && m_services.trust.isTrusted(io::parentPath(projectPath));
     };
     auto started = m_managedDebugPreparation->start(
         request, {root}, guard, current,

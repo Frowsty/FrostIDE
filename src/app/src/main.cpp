@@ -399,6 +399,7 @@ frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
         options.historyPath = under("local-history.db");
         options.compileCommandsCache = under("compile-commands");
         options.sessionDirectory = under("sessions");
+        options.projectEditStateDirectory = under("project-edits");
         options.cmakeStatePath = under("cmake-profiles.txt");
     }
     if (auto state = frost::build::BuildService::defaultStatePath(); state) {

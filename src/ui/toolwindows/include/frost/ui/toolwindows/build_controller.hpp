@@ -147,6 +147,8 @@ public:
      */
     [[nodiscard]] Result<void> openSolution(std::shared_ptr<const project::SolutionModel> solution);
     [[nodiscard]] Result<void> closeSolution();
+    // Publishes the backend's already-installed model after a reserved project edit.
+    void projectEditPublished();
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const { return m_solution; }
     [[nodiscard]] bool hasSolution() const noexcept { return m_solution != nullptr; }
 

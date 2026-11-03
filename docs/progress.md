@@ -3,6 +3,72 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: C++ removal verified through the staged application
+
+- Corrected tree `e414a17b` passed the full Windows quick gate: 2797/2819 tests, 22 skipped,
+  one additional disabled; formatting, lint, licences and feature consistency passed, exit zero.
+  Frozen integration tree `964fbcd6` passed the native Linux gate: 2666/2692 tests, 26 skipped,
+  licence check 99 packages, exit zero. Product source is identical between those trees; later changes
+  affect Windows-only test fixtures, the common test-label registry and documentation. The updated
+  common verification tests also passed 50/50 on native Linux.
+- The original Windows run failed three tests. The suite registry omitted the new MSBuild-tagged
+  project-edit cases. Diagnostics identified ambient LuaLS discovery as an extra launch in the two
+  scripted managed-admission fixtures. Explicit private missing C#/Lua server settings isolate those
+  fixtures while retaining every admission, byte-preservation and exact process-count assertion.
+  Astra reviewed the changes; all seven focused cases then passed in the full environment. The first
+  C#-only correction and diagnostic failures are preserved, not reported as successful runs.
+  Gate logs are `build/verify-cpp-integration-{windows,native}.log`,
+  `build/verify-cpp-integration-corrected-windows.log` and their `-tests.log` companions; focused logs
+  are `build/cpp-gate-fixes-final-tests.log` and `build/cpp-gate-fixes-native-tools.log`.
+- Fresh stage `E:\FrostBuilds\preview\codex-20261103-cpp-edit` includes the reviewed ProjectHost
+  and managed debugger payload. Startup, actual D3D11 rendering and ConPTY checks pass. Its app DLL
+  SHA-256 is `d9d1594cc221d688fb3eb97e6c67ab44f6b6f53a5973eeb117bb8374f0bc22a9`.
+  Actual private-desktop `.sln` and `.slnx` Remove actions deleted only the selected project/filter
+  entries, preserved source bytes and dirty tabs, refreshed the tree and allowed successful builds.
+  Build's Save All subsequently saved the dirty scratch text; this is distinct from the unchanged
+  source immediately after Remove. Fresh reopen/build succeeded, and expanded-tree screenshots/UIA
+  show the removed item absent while its source tab remains available. Astra audited the original
+  evidence; final expanded-reopen captures close the earlier collapsed-tree evidence gap. Evidence is
+  in `E:\FrostBuilds\cpp-preview-acceptance-20261103\remove-*`. App and ProjectHost binary hashes
+  still match the final build. This is bounded Windows removal, not full CPP-03 or U1 acceptance.
+- Separately, Astra approved Add Existing candidate `a2b504cc`: nested Unicode/spaced paths,
+  source/header items and first-item insertion, with stale-filter, cross-configuration and imported
+  dynamic-item refusal tests. Actual VS helper tests, Workbench Add 1/1 with a real MSBuild build, and
+  prior removal/recovery regressions 3/3 pass. A Windows separator-boundary bug found by that test was
+  fixed without admitting sibling-prefix paths. Prospective join `aa4b1687` preserves the final fixture
+  corrections and was independently reviewed; integration and combined acceptance remain next.
+  Rename is starting from a reviewed transaction/recovery design; dirty-document support remains
+  required, alongside new-file creation, general solution changes and CMake structural edits.
+- Lua wire-ID correlation and operation-lifecycle probes passed bounded tests; entry-pause ordering
+  and owner-level Stop integration remain active work. The standalone Unity-bundled Mono probe
+  verified Version and Dispose followed by fresh fixture execution. It did not attach Unity Editor or
+  test breakpoints/values. A corrected guarded Version/Dispose probe also passes; the first expanded
+  breakpoint experiment failed a location assertion and remains under diagnosis. A persistent
+  Structure window has reviewed source and controlled lifecycle fixtures, with native build/testing
+  next. These fixtures do not establish real language-server semantics. Full product scope is unchanged.
+
+## 2026-11-03: C++ project-edit integration entering combined verification
+
+- Managed/CMake GUI checkpoint `350cdd1` is committed and pushed. Its preserved stage-two binary also
+  passed the final `.slnx` build/debug replay. The broader project goal remains active.
+- Root integrated reviewed C++ candidate `0b36c5b6` onto that checkpoint as tree `1e26f155`, preserving
+  the newer CMake opening and session-identity paths. Astra checked the four shared-file joins and
+  verified that the new project-opening paths cannot bypass an active edit. All changed C++ files
+  already pass formatting. Combined platform verification is next; no accepted edit checkpoint yet.
+- The exact worker tree built successfully with the full pinned environment. Its managed admission
+  test passed 1/1 and Workbench project-edit tests passed 6/6. These exercise real removal in `.sln`
+  and `.slnx`, journal refusal/recovery, post-commit reload failure, and refusal while managed preparation
+  or source capture is pending. The latter tests exercise actual Remove actions and verify that no
+  helper or file mutation occurs; cancellation restores admission. Logs are
+  `E:\FrostBuilds\cpp-integration-0b-{env-build,forward-test,removal-tests}.log`.
+- An earlier worker invocation lacked the SDK environment, generated an invalid helper Python path
+  and changed compiler commands by omitting sccache. That failed invocation is retained separately;
+  regeneration with the complete `tools/env.ps1` environment corrected it. It was not a product failure.
+- The edit feature remains narrow Windows removal of supported local items with explicit ownership
+  checks and recovery. Add/rename, general solution changes, CMake structural edits and automatic
+  recovery from arbitrary partial writes or power loss remain open. Linux shared-logic tests are not
+  Linux project-editing support. No user answer is pending.
+
 ## 2026-11-03: Managed debugger and CMake GUI functional verification
 
 - Combined tree `a640dbcb01030828b2bbc01f27e3779883e76665` passed all executed functional tests:

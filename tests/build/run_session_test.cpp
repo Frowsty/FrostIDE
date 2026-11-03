@@ -136,6 +136,24 @@ TEST(RunSession, InputReachesTheProgram) {
     EXPECT_EQ(collected.stdoutText(), "first line\nsecond\n");
 }
 
+TEST(RunSession, StrictProtocolRejectsMalformedUtf8) {
+    Collected collected;
+    auto session = start(childRun({"invalid-utf8"}), collected, {.rejectInvalidUtf8 = true});
+    ASSERT_NE(session, nullptr);
+    const auto exit = session->waitFor(kWait);
+    ASSERT_TRUE(exit);
+    EXPECT_TRUE(exit->decodingFailed);
+    EXPECT_TRUE(collected.stdoutText().empty());
+
+    Collected ordinary;
+    auto userRun = start(childRun({"invalid-utf8"}), ordinary);
+    ASSERT_NE(userRun, nullptr);
+    const auto userExit = userRun->waitFor(kWait);
+    ASSERT_TRUE(userExit);
+    EXPECT_FALSE(userExit->decodingFailed);
+    EXPECT_EQ(ordinary.stdoutText(), "a\xef\xbf\xbd\n");
+}
+
 TEST(RunSession, StopEndsTheProgramAndItsGrandchild) {
     Collected collected;
     auto session = start(childRun({"grandchild", "wait"}), collected);
@@ -156,6 +174,25 @@ TEST(RunSession, StopEndsTheProgramAndItsGrandchild) {
     EXPECT_TRUE(ended) << "Stop left the grandchild running";
     if (!ended) {
         grandchild.kill();
+    }
+}
+
+TEST(RunSession, OwnedHelperEndsDescendantsAfterNaturalExit) {
+    Collected collected;
+    auto session = start(childRun({"grandchild", "exit"}), collected, {.terminateDescendantsOnExit = true});
+    ASSERT_NE(session, nullptr);
+    const auto exit = session->waitFor(kWait);
+    ASSERT_TRUE(exit.has_value());
+    EXPECT_EQ(exit->exitCode, 0);
+    EXPECT_FALSE(exit->stopped);
+    const io::ProcessId pid = grandchildPid(collected.stdoutText());
+    ASSERT_NE(pid, 0U);
+    const test::ProcessWatch grandchild(pid);
+    if (grandchild.valid()) {
+        const bool ended = grandchild.exitsWithin(10s);
+        EXPECT_TRUE(ended) << "The owned helper left its descendant running";
+        if (!ended)
+            grandchild.kill();
     }
 }
 

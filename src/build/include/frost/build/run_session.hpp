@@ -17,11 +17,12 @@
  * runs last, once, after all output. A callback may call stop(), writeInput() and closeInput();
  * it must not destroy the session or wait for it.
  *
- * End of a run. When the program exits by itself, processes it started are left running, as a
+ * End of a run. By default when the program exits by itself, processes it started are left running, as a
  * program started from Explorer or Visual Studio would leave them: the container is released
  * (IProcess::releaseContainer) when anything else is still in it, and if such a process still
  * holds the output pipes after outputGrace, the rest of the output is abandoned. stop() instead
- * ends the whole tree at once (the Job Object or process group); `stopped` is reported only when
+ * ends the whole tree at once (the Job Object or process group); the explicit helper option also
+ * ends descendants on natural exit. `stopped` is reported only when
  * that is what ended the program (a stop that loses the race against its exit is not a stop).
  */
 #pragma once
@@ -47,6 +48,8 @@ struct RunExit {
     int exitCode = 0;            // As io::ExitStatus::exitCode (io::kTerminatedExitCode after stop()).
     bool stopped = false;        // stop() ended it (header comment).
     bool waitFailed = false;     // The exit status could not be read; exitCode is -1.
+    bool cleanupFailed = false;  // An owned descendant tree could not be terminated.
+    bool decodingFailed = false; // A strict stream contained malformed UTF-8.
     IClock::Duration duration{}; // From launch to exit, on the session's clock.
 
     friend bool operator==(const RunExit&, const RunExit&) = default;
@@ -62,6 +65,11 @@ struct RunSessionCallbacks {
 struct RunSessionOptions {
     // How long processes the program left behind may hold the output open after it exited.
     std::chrono::milliseconds outputGrace{500};
+    // Helper processes own their descendants even after the helper exits naturally. User runs
+    // keep the default, allowing children to outlive the launched program.
+    bool terminateDescendantsOnExit = false;
+    // Treat malformed UTF-8 on either output stream as a protocol failure and end the tree.
+    bool rejectInvalidUtf8 = false;
 };
 
 class RunSession {
@@ -123,9 +131,11 @@ class Utf8ChunkDecoder {
 public:
     [[nodiscard]] std::string feed(std::string_view bytes);
     [[nodiscard]] std::string finish();
+    [[nodiscard]] bool invalid() const noexcept { return m_invalid; }
 
 private:
     std::string m_pending;
+    bool m_invalid = false;
 };
 
 } // namespace frost::build

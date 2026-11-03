@@ -166,6 +166,21 @@ TEST(WorkbenchManaged, RealConsoleProjectBuildsAndDebugsWithVerifiedSource) {
     ASSERT_TRUE(waitFor([&] { return !debugger->debugging(); }, 10s));
 }
 
+TEST(WorkbenchManaged, ProjectEditReservationBlocksManagedAndNativeDebugAdmission) {
+    WorkDir dir("managed edit gate", "tiny_sln");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto action = rig.workbench->registry().find("run.debugManaged");
+    ASSERT_TRUE(action);
+    ASSERT_TRUE(rig.workbench->buildService().beginProjectEdit());
+    frost::input::ActionContext context;
+    context.trusted = true;
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, context), frost::input::InvokeResult::Disabled);
+    EXPECT_FALSE(rig.workbench->debugController()->canDebug());
+    rig.workbench->buildService().cancelProjectEdit();
+}
+
 TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     if (!frost::test::sdkTestMayStart())
         GTEST_SKIP()

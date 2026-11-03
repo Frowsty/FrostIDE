@@ -231,6 +231,15 @@ public:
     [[nodiscard]] Result<void> build(BuildAction action, std::optional<project::ProjectId> project = std::nullopt,
                                      BuildCompletion onDone = {});
 
+    // Reserves the open solution against builds and configuration/project changes while its
+    // definition files are edited. finishProjectEdit publishes a replacement before releasing it.
+    [[nodiscard]] Result<void> beginProjectEdit();
+    [[nodiscard]] Result<void> finishProjectEdit(std::shared_ptr<const project::SolutionModel> solution);
+    void cancelProjectEdit();
+    [[nodiscard]] bool projectEditInProgress() const;
+    [[nodiscard]] Result<void> reserveRun();
+    void releaseRun();
+
     // Cancels the build in progress, if any: before MSBuild starts it ends at once (cancelled);
     // while MSBuild runs, its process tree is ended. Idempotent.
     void cancel();

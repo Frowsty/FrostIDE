@@ -307,6 +307,46 @@ TEST_F(WorkbenchTest, SolutionOnlyCandidatesArriveBeforeTheScanFinishes) {
               app.workbench->projectFiles().candidates().end());
 }
 
+TEST_F(WorkbenchTest, RefreshSolutionKeepsDirtyTabsAndNavigation) {
+    const bool windows = io::kNativePathStyle == io::PathStyle::Windows;
+    const std::string root = windows ? "C:\\proj" : "/proj";
+    const std::string solutionPath = root + (windows ? "\\demo.sln" : "/demo.sln");
+    const std::string sourcePath = root + (windows ? "\\main.cpp" : "/main.cpp");
+    io::MemFs nativeFs(clock, io::kNativePathStyle);
+    ASSERT_TRUE(nativeFs.createDirectories(root));
+    ASSERT_TRUE(nativeFs.writeFileAtomic(
+        solutionPath, "Microsoft Visual Studio Solution File, Format Version 12.00\nGlobal\nEndGlobal\n"));
+    ASSERT_TRUE(nativeFs.writeFileAtomic(sourcePath, "int main() {}\n"));
+    Ide app(nativeFs, clock, io::kNativePathStyle, nullptr);
+    auto model = project::SolutionModel::load(nativeFs, solutionPath);
+    ASSERT_TRUE(model);
+    ASSERT_TRUE(app.workbench->openSolution(*model));
+    ASSERT_TRUE(app.workbench->openFile(sourcePath));
+    auto* document = app.documents->find(sourcePath);
+    ASSERT_NE(document, nullptr);
+    edit(*document, 0, 0, "// unsaved\n");
+    app.workbench->history().recordJump(nav::Place{sourcePath, 1, 1});
+    const auto history = std::vector<nav::Place>(app.workbench->history().backStack().begin(),
+                                                 app.workbench->history().backStack().end());
+    const auto tabs = app.tabPaths();
+    const auto recent = std::vector<std::string>(app.workbench->recentFiles().paths().begin(),
+                                                 app.workbench->recentFiles().paths().end());
+    ASSERT_TRUE(app.workbench->refreshSolution(*model));
+    EXPECT_EQ(app.tabPaths(), tabs);
+    EXPECT_EQ(app.activePath(), sourcePath);
+    EXPECT_TRUE(document->dirty());
+    const auto disk = nativeFs.readFile(sourcePath);
+    ASSERT_TRUE(disk);
+    EXPECT_EQ(*disk, "int main() {}\n");
+    EXPECT_EQ(std::vector<std::string>(app.workbench->recentFiles().paths().begin(),
+                                       app.workbench->recentFiles().paths().end()),
+              recent);
+    EXPECT_EQ(std::vector<nav::Place>(app.workbench->history().backStack().begin(),
+                                      app.workbench->history().backStack().end()),
+              history);
+    EXPECT_EQ(app.workbench->projectRoot(), root);
+}
+
 TEST_F(WorkbenchTest, FileTreeFilterKeepsMatchingAncestorsAndSortedRows) {
     sched::SimExecutor sim;
     auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();

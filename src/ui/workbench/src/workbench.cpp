@@ -396,6 +396,21 @@ Result<void> Workbench::openSolution(const project::SolutionModel& solution) {
     return openRoot(std::move(root), std::move(path), nav::solutionFiles(solution));
 }
 
+Result<void> Workbench::refreshSolution(const project::SolutionModel& solution) {
+    if (m_solution.empty() || m_services.documents.canonicalize(solution.path()) != m_solution)
+        return fail(ErrorCode::InvalidArgument, "the solution being refreshed is not open");
+    ++m_projectGeneration;
+    m_scanStop.request_stop();
+    m_initialStop.request_stop();
+    m_scanPublished = false;
+    auto old = std::move(m_solutionFiles);
+    m_solutionFiles = std::make_shared<const std::vector<std::string>>(nav::solutionFiles(solution));
+    retireSolutionSnapshot(m_services.scheduler, std::move(old));
+    startInitialFiles();
+    refresh();
+    return {};
+}
+
 Result<void> Workbench::openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles) {
     if (!m_root.empty() && !closeProject()) {
         return fail(ErrorCode::Cancelled, "a tab of the open project could not be closed");

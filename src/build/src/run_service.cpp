@@ -196,6 +196,8 @@ FileStamp stampOf(io::IFileSystem& fs, std::string_view path) {
 class BuildServiceRunBuilder final : public IRunBuilder {
 public:
     explicit BuildServiceRunBuilder(BuildService& service) noexcept : m_service(service) {}
+    Result<void> reserveRun() override { return m_service.reserveRun(); }
+    void releaseRun() override { m_service.releaseRun(); }
 
     std::optional<std::size_t> activeConfigurationIndex() const override {
         return m_service.activeConfigurationIndex();
@@ -414,6 +416,7 @@ struct RunService::State : std::enable_shared_from_this<RunService::State> {
         });
         last = std::move(outcome);
         runs.erase(id);
+        builder.releaseRun();
         activeCount.store(runs.size());
         return again;
     }
@@ -882,6 +885,8 @@ Result<RunId> RunService::State::startRun(std::optional<project::ProjectId> proj
     if (builder.building()) {
         return fail(ErrorCode::Busy, "a build is in progress; run again when it has finished");
     }
+    if (auto reserved = builder.reserveRun(); !reserved)
+        return std::unexpected(std::move(reserved.error()));
     Run run;
     run.info.id = ++lastId;
     run.info.project = *id;
@@ -936,9 +941,11 @@ RunService::RunService(std::shared_ptr<State> state) noexcept : m_state(std::mov
 
 RunService::~RunService() {
     std::vector<std::unique_ptr<RunSession>> sessions;
+    std::size_t reserved = 0;
     {
         LockGuard lock(m_state->mutex);
         m_state->closing = true;
+        reserved = m_state->runs.size();
         for (auto& [id, run] : m_state->runs) {
             if (run.session) {
                 sessions.push_back(std::move(run.session));
@@ -959,6 +966,8 @@ RunService::~RunService() {
     if (m_state->worker.joinable()) {
         m_state->worker.join();
     }
+    for (std::size_t i = 0; i < reserved; ++i)
+        m_state->builder.releaseRun();
     LockGuard lock(m_state->queueMutex);
     m_state->tasks.clear();
 }

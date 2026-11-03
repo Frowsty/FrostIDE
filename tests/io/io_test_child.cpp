@@ -217,6 +217,12 @@ int run(const std::vector<std::string>& args) {
         return 64;
     }
     const std::string& mode = args[1];
+    if (mode == "invalid-utf8") {
+        constexpr char bytes[] = {'a', static_cast<char>(0xff), '\n'};
+        std::fwrite(bytes, 1, sizeof(bytes), stdout);
+        std::fflush(stdout);
+        return 0;
+    }
     if (mode == "argv") {
         line("crt " + std::to_string(args.size() - 2));
         for (std::size_t i = 2; i < args.size(); ++i) {

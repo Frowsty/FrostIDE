@@ -335,6 +335,33 @@ TEST(SolutionExplorer, ContextMenuOpensTheContainingFolderAndCopiesThePath) {
     EXPECT_EQ(QApplication::clipboard()->text().toStdString(), cpp); // Already native.
 }
 
+TEST(SolutionExplorer, RemoveFromProjectRequiresHandlerAndRejectsStaleMenu) {
+    for (const std::string_view format : {"Tiny.sln", "Tiny.slnx"}) {
+        SolutionExplorer explorer;
+        explorer.setSolution(loadTiny(format));
+        const QModelIndex index =
+            explorer.filterModel()->mapFromSource(explorer.model()->indexOfPath(tiny("App/main.cpp")));
+        std::unique_ptr<QMenu> withoutHandler(explorer.createContextMenu(index));
+        EXPECT_EQ(findAction(*withoutHandler, "removeFromProject"), nullptr);
+        QString projectPath;
+        QString sourcePath;
+        explorer.setRemoveProjectFileHandler([&](const QString& project, const QString& source) {
+            projectPath = project;
+            sourcePath = source;
+        });
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(index));
+        QAction* remove = findAction(*menu, "removeFromProject");
+        ASSERT_NE(remove, nullptr);
+        remove->trigger();
+        EXPECT_EQ(projectPath.toStdString(), tiny("App/App.vcxproj"));
+        EXPECT_EQ(sourcePath.toStdString(), tiny("App/main.cpp"));
+        sourcePath.clear();
+        explorer.setSolution(loadSdk());
+        remove->trigger();
+        EXPECT_TRUE(sourcePath.isEmpty());
+    }
+}
+
 TEST(FileManager, SpecSelectsFilesAndOpensFolders) {
 #ifdef _WIN32
     auto file = fileManagerSpec(R"(C:\src\App\main.cpp)", false);

@@ -148,6 +148,10 @@ public:
         ++rerunCalls;
         return rerun;
     }
+    [[nodiscard]] bool confirmProjectRecovery(QWidget*, const QString&) override {
+        ++recoveryCalls;
+        return recover;
+    }
 
     std::string openPath;
     OpenKind lastOpenKind = OpenKind::SolutionOrFile;
@@ -158,6 +162,8 @@ public:
     QString lastDiscardError;
     bool rerun = true;
     int rerunCalls = 0;
+    bool recover = false;
+    int recoveryCalls = 0;
 };
 
 // What a rig changes from the defaults.
@@ -171,6 +177,7 @@ struct RigOptions {
     // Autosave on frame deactivation and on idle; off by default so the tests decide when saves run.
     bool autosave = false;
     io::IProcessLauncher* launcher = nullptr;
+    io::IFileSystem* fileSystem = nullptr;
 };
 
 /*
@@ -182,7 +189,7 @@ struct RigOptions {
 class WorkbenchRig {
 public:
     explicit WorkbenchRig(const WorkDir& dir, RigOptions options = {}) {
-        io::IFileSystem& fs = io::realFileSystem();
+        io::IFileSystem& fs = options.fileSystem ? *options.fileSystem : io::realFileSystem();
         auto store = settings::SettingsStore::open(settings::builtinRegistry(), fs,
                                                    {dir.join("data/settings.json"), std::nullopt});
         EXPECT_TRUE(store.has_value()) << store.error().describe();

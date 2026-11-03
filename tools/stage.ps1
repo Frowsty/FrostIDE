@@ -2,7 +2,8 @@
 #
 # stage.ps1: builds FrostIDE (Release or RelWithDebInfo) and stages a folder that runs on its own
 # (W1, ADR 0044): frost.exe and frost_app.dll, the crash handler, the baked resources, the Qt
-# runtime windeployqt picks for frost_app.dll (with the platform plugins; the build's offscreen
+# runtime windeployqt picks for frost_app.dll, the .NET Framework ProjectHost (which uses installed
+# Visual Studio MSBuild), and the platform plugins (including the build's offscreen
 # plugin too, for --selftest), and the licence files (LICENSE, NOTICE, the vendored sources'
 # LICENSE files under licenses\). Windows only.
 #
@@ -86,6 +87,20 @@ New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
+}
+$projectHost = Join-Path $binDir 'project-host'
+foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $projectHost $name))) { Fail "the build tree has no ProjectHost $name" }
+}
+$projectHostDestination = Join-Path $Destination 'project-host'
+New-Item -ItemType Directory -Force -Path $projectHostDestination | Out-Null
+foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {
+    Copy-Item -LiteralPath (Join-Path $projectHost $name) -Destination $projectHostDestination
+}
+foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {
+    $sourceHash = (Get-FileHash -LiteralPath (Join-Path $projectHost $name) -Algorithm SHA256).Hash
+    $stagedHash = (Get-FileHash -LiteralPath (Join-Path (Join-Path $Destination 'project-host') $name) -Algorithm SHA256).Hash
+    if ($sourceHash -ne $stagedHash) { Fail "the staged ProjectHost $name differs from the build output" }
 }
 if ($Config -ne 'Release') {
     foreach ($name in @('frost.pdb', 'frost_app.pdb')) {

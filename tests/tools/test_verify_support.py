@@ -1106,7 +1106,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # ui_screenshot_tests.
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
-                                              "MsBuildEvaluationE2E.", "WorkbenchMsBuild.", "WorkbenchR2a.")),
+                                              "MsBuildEvaluationE2E.", "WorkbenchMsBuild.", "WorkbenchR2a.",
+                                              "WorkbenchProjectEdit.")),
                   "clangd": ("integration", ("ClangdE2E.", "MsBuildEvaluationE2E.", "WorkbenchClangd.",
                                               "WorkbenchCMake.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.")),

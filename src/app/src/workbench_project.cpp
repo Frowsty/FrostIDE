@@ -28,6 +28,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "project_edit_process.hpp"
 #include "unity_control.hpp"
 #include <QFileInfo>
 
@@ -184,6 +185,17 @@ Result<void> Workbench::openSolution(const std::string& path) {
             m_explorer->setSolution(model);
         }
     }
+    if (auto journal = io::joinPath(model->directory(), ".frost-project-edit-journal"); journal) {
+        const auto exists = m_services.fs.exists(*journal);
+        if (!exists || *exists) {
+            if (auto blocked = m_buildService->beginProjectEdit(); blocked) {
+                notify(text("Project recovery required"),
+                       text("A project edit journal is present or cannot be checked. Builds are blocked until it is "
+                            "resolved."),
+                       ui::NotificationKind::Warning);
+            }
+        }
+    }
     if (auto opened = m_runService->openSolution(model); !opened) {
         log::warn(kLog, "run service: {}", opened.error().describe());
     }
@@ -308,6 +320,11 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
+    if (m_projectEdit && m_projectEdit->busy()) {
+        notify(text("The project stays open"), text("Wait for the project edit to finish."),
+               ui::NotificationKind::Warning);
+        return false;
+    }
     invalidateManagedDebug();
     if (m_engine)
         m_engine->cancel();
@@ -356,6 +373,8 @@ bool Workbench::closeForOpen() {
         m_cmake.reset();
     }
     if (m_solution) {
+        if (m_buildService->projectEditInProgress())
+            m_buildService->cancelProjectEdit(); // The unresolved on-disk journal remains untouched.
         if (auto closed = m_build->closeSolution(); !closed) {
             log::warn(kLog, "closing the solution: {}", closed.error().describe());
         }

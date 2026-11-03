@@ -130,6 +130,8 @@ public:
     [[nodiscard]] Result<void> openProject(const std::string& path);
     // As openProject() for a solution the caller has loaded already (the composition root's).
     [[nodiscard]] Result<void> openSolution(const project::SolutionModel& solution);
+    // Refreshes navigation for the already-open solution without closing or saving tabs.
+    [[nodiscard]] Result<void> refreshSolution(const project::SolutionModel& solution);
     /*
      * Saves the session and closes every tab; no project afterwards. Returns false, keeping the
      * project and the tabs that refused, when a tab refused to close (a dirty tab whose save failed

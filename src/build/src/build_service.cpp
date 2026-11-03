@@ -262,6 +262,8 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
     std::shared_ptr<const project::SolutionModel> solution FROST_GUARDED_BY(mutex);
     std::optional<std::size_t> active FROST_GUARDED_BY(mutex);
     BuildState state FROST_GUARDED_BY(mutex) = BuildState::Idle;
+    bool projectEditing FROST_GUARDED_BY(mutex) = false;
+    std::size_t activeRuns FROST_GUARDED_BY(mutex) = 0;
     std::optional<Run> run FROST_GUARDED_BY(mutex);
     std::uint64_t lastRunId FROST_GUARDED_BY(mutex) = 0;
     DiagnosticIndex diagnostics FROST_GUARDED_BY(mutex);
@@ -708,12 +710,69 @@ BuildService::~BuildService() {
     m_state->tasks.clear();
 }
 
+Result<void> BuildService::beginProjectEdit() {
+    LockGuard lock(m_state->mutex);
+    if (m_state->projectEditing || m_state->state != BuildState::Idle || m_state->activeRuns != 0)
+        return fail(ErrorCode::Busy, "a build or project edit is in progress");
+    if (!m_state->solution)
+        return fail(ErrorCode::InvalidArgument, "no solution is open");
+    m_state->projectEditing = true;
+    return {};
+}
+
+Result<void> BuildService::reserveRun() {
+    LockGuard lock(m_state->mutex);
+    if (m_state->projectEditing || m_state->state != BuildState::Idle)
+        return fail(ErrorCode::Busy, "a build or project edit is in progress");
+    ++m_state->activeRuns;
+    return {};
+}
+
+void BuildService::releaseRun() {
+    LockGuard lock(m_state->mutex);
+    if (m_state->activeRuns != 0)
+        --m_state->activeRuns;
+}
+
+Result<void> BuildService::finishProjectEdit(std::shared_ptr<const project::SolutionModel> solution) {
+    LockGuard lock(m_state->mutex);
+    if (!m_state->projectEditing || !solution || !m_state->solution || solution->path() != m_state->solution->path())
+        return fail(ErrorCode::InvalidArgument, "the edited solution changed");
+    std::optional<std::string> activeName;
+    if (m_state->active && *m_state->active < m_state->solution->configurations().size())
+        activeName = m_state->solution->configurations()[*m_state->active].name();
+    m_state->solution = std::move(solution);
+    m_state->active = activeName ? m_state->solution->findConfiguration(*activeName) : std::nullopt;
+    if (!m_state->active && !m_state->solution->configurations().empty())
+        m_state->active = defaultConfiguration(m_state->solution->configurations());
+    m_state->diagnostics.clear();
+    m_state->progress = {};
+    m_state->last.reset();
+    m_state->emitDiagnosticsCleared();
+    if (m_state->active)
+        m_state->emitActiveConfiguration(m_state->solution->configurations()[*m_state->active]);
+    m_state->projectEditing = false;
+    return {};
+}
+
+void BuildService::cancelProjectEdit() {
+    LockGuard lock(m_state->mutex);
+    m_state->projectEditing = false;
+}
+
+bool BuildService::projectEditInProgress() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->projectEditing;
+}
+
 Result<void> BuildService::openSolution(std::shared_ptr<const project::SolutionModel> solution) {
     if (!solution) {
         return fail(ErrorCode::InvalidArgument, "openSolution needs a solution");
     }
     const std::optional<std::string> persisted = m_state->persistedConfiguration(solution->path());
     LockGuard lock(m_state->mutex);
+    if (m_state->projectEditing)
+        return fail(ErrorCode::Busy, "a project edit is in progress");
     if (m_state->state != BuildState::Idle) {
         return fail(ErrorCode::Busy, "a build is in progress; cancel it before opening another solution");
     }
@@ -739,6 +798,8 @@ Result<void> BuildService::openSolution(std::shared_ptr<const project::SolutionM
 
 Result<void> BuildService::closeSolution() {
     LockGuard lock(m_state->mutex);
+    if (m_state->projectEditing)
+        return fail(ErrorCode::Busy, "a project edit is in progress");
     if (m_state->state != BuildState::Idle) {
         return fail(ErrorCode::Busy, "a build is in progress; cancel it before closing the solution");
     }
@@ -786,6 +847,8 @@ Result<void> BuildService::setActiveConfiguration(std::size_t index) {
     std::string name;
     {
         LockGuard lock(m_state->mutex);
+        if (m_state->projectEditing)
+            return fail(ErrorCode::Busy, "a project edit is in progress");
         if (!m_state->solution) {
             return fail(ErrorCode::InvalidArgument, "no solution is open");
         }
@@ -832,6 +895,8 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
                                  BuildCompletion onDone) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
+    if (s.projectEditing)
+        return fail(ErrorCode::Busy, "a project edit is in progress");
     if (s.state != BuildState::Idle) {
         return fail(ErrorCode::Busy, std::format("a build is already in progress ({})", toString(s.state)));
     }
