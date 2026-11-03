@@ -102,6 +102,30 @@ TEST(LoopbackStream, ReadsFragmentedLinesAcrossRequests) {
     EXPECT_EQ((*stream)->exchange("two").value_or(""), "second");
 }
 
+TEST(LoopbackStream, EnforcesCallerReplyLimit) {
+    Listener listener;
+    ASSERT_NE(listener.port, 0);
+    std::jthread server([&] {
+        Socket peer = listener.acceptOne();
+        if (peer == kInvalid)
+            return;
+        char buffer[16]{};
+        (void)recv(peer, buffer, sizeof(buffer), 0);
+        const std::string message = std::string(129, 'x') + "\n";
+#ifdef _WIN32
+        (void)send(peer, message.data(), static_cast<int>(message.size()), 0);
+#else
+        (void)send(peer, message.data(), message.size(), MSG_NOSIGNAL);
+#endif
+        closeSocket(peer);
+    });
+    auto stream = frost::io::LoopbackStream::connect(listener.port, std::chrono::steady_clock::now() + 3s);
+    ASSERT_TRUE(stream);
+    auto reply = (*stream)->exchange("hello", 128);
+    ASSERT_FALSE(reply);
+    EXPECT_EQ(reply.error().code(), frost::ErrorCode::OutOfRange);
+}
+
 TEST(LoopbackStream, CancelsPendingReadWithoutWaitingForServer) {
     Listener listener;
     ASSERT_NE(listener.port, 0);

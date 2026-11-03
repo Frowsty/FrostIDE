@@ -40,6 +40,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "unity_control.hpp"
 #include <QAction>
 #include <QApplication>
 #include <QDir>
@@ -460,6 +461,12 @@ ui::ShellEnvironment Workbench::environment() {
     return environment;
 }
 
+Result<void> Workbench::announceUnity(const lang::Json& message) {
+    if (m_shutDown || !m_unity)
+        return fail(ErrorCode::Cancelled, "Unity controls unavailable");
+    return m_unity->announce(message);
+}
+
 // --- The window ---
 
 void Workbench::attach(ui::ShellWindow& window) {
@@ -492,6 +499,7 @@ void Workbench::attach(ui::ShellWindow& window) {
 
     attachToolWindows();
     m_engine = std::make_unique<EngineIntegration>(*this);
+    m_unity = std::make_unique<UnityControlIntegration>(*this);
     attachToolbar();
     attachRun();
     if (auto registered = ui::registerDebugToolWindow(m_window->toolWindows(), m_registry, *m_debug); !registered)
@@ -567,6 +575,7 @@ void Workbench::detach() {
         m_window->toolWindows().hide(ui::kDebugToolWindowId);
         m_window->toolWindows().setContent(ui::kDebugToolWindowId, new QWidget());
     }
+    m_unity.reset();
     m_engine.reset();
     stopTerminal();
     m_terminal.reset();
@@ -777,6 +786,8 @@ void Workbench::shutdown() {
         m_debug->shutdown();
     if (m_engine)
         m_engine->shutdown();
+    if (m_unity)
+        m_unity->shutdown();
     stopTerminal();
     if (m_cmake)
         m_cmake->shutdown();

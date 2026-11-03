@@ -143,6 +143,13 @@ target_include_directories(app_project_open_tests PRIVATE ${FROST_SOURCE_DIR}/te
 target_compile_definitions(app_project_open_tests PRIVATE ${_frost_workbench_definitions} FROST_EXE_PATH="$<TARGET_FILE:frost>")
 add_dependencies(app_project_open_tests frost)
 
+frost_add_test(app_workbench_unity_tests QT
+    SOURCES workbench_unity_test.cpp
+    DEPS frost::app frost::lang frost::io
+    LABELS integration)
+target_include_directories(app_workbench_unity_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_unity_tests PRIVATE ${_frost_workbench_definitions})
+
 frost_add_test(app_workbench_managed_tests QT
     SOURCES workbench_managed_test.cpp
     DEPS frost::app frost::lang frost::io

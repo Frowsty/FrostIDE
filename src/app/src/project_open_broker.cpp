@@ -178,6 +178,15 @@ Result<std::string> ProjectOpenBroker::accept(std::string request) {
     auto json = lang::parseJson(request);
     if (!json || !json->isObject())
         return fail(ErrorCode::InvalidArgument, "invalid open request");
+    if (json->stringAt("method") == "unity.hello") {
+        const std::string announcedRoot(json->stringAt("root"));
+        if (announcedRoot.empty() || m_workbench.projectRoot().empty() ||
+            lang::documentKey(announcedRoot) != lang::documentKey(m_root))
+            return fail(ErrorCode::InvalidArgument, "Unity session does not match this window's project");
+        if (auto accepted = m_workbench.announceUnity(*json); !accepted)
+            return std::unexpected(std::move(accepted.error()));
+        return std::string("ok");
+    }
     const std::string root(json->stringAt("root"));
     const std::string file(json->stringAt("file"));
     auto line = json->integerAt("line");

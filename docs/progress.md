@@ -3,6 +3,73 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Bounded Unity controls acceptance and continuing C++/debugger work
+
+- The reviewed Unity controls integration passed the combined gates recorded below and two subsequent
+  real-Editor Workbench runs: `run-1793671152178932200` and `run-1793675975482702300` under
+  `E:\FrostBuilds\unity-controls-scratch-20261103`. Each passed all seven checkpoints. Stop was
+  dispatched immediately and observed after 53 ms / 81 ms; test durations were 7.582 s / 9.502 s.
+  Each owned job exited normally, source/meta remained unchanged, and nine preference changes were
+  restored with zero full-key differences. This is production Workbench broker/panel acceptance in a test
+  rig, not a staged application-window controls test or Linux Editor acceptance.
+- The earlier Stop timeout remains unexplained. Diagnostic run `run-1793670919737541400` failed before
+  Stop while publishing the observer request; its owned job also exited normally with exact preference
+  restoration. Terra replaced the shared request file with immutable per-checkpoint markers, avoiding
+  concurrent read/truncate access, and added status/timeout evidence without weakening any assertion.
+  Astra approved that change and checked the first successful marker run. Do not infer either failed
+  run's cause solely from subsequent passes. Explicit busy feedback and same-domain uncertainty recovery
+  remain follow-up work; full Unity logs/tests/debugger workflows remain open.
+- Final diagnostic test source was formatted and rebuilt on both platforms. Supplemental broker tests
+  passed 5/12 on Windows (seven platform/opt-in skips) and 9/12 on native Linux (three opt-in skips), logs
+  `build/unity-marker-final-windows.log` and `build/unity-marker-native-corrected.log`. An initial native
+  invocation used the wrong executable path after a successful build; it ran no tests and was corrected.
+  Product source is unchanged from the full-gate tree `796d6a8ab8b8fe342253f8754903a67e0fbdcfb4`.
+- A model-capacity interruption paused root/Astra coordination while Terra workers continued. Work is
+  preserved and coordination resumed. Lua tested host snapshots are engine
+  `d1e6db3984d3241b883c80912e120ac61dfe988e` and IDE `7f8f44ef03b83b436e437c337488759289f234e4`:
+  Windows transport 8/8, editor activation/teardown 3/3, IDE debugger 6/6 and automation 6/6 passed.
+  Source-capture and frontend attachment drafts remain separate, under review/build, not accepted.
+- Astra approved the managed source-built adapter and 21-file per-platform scratch stages, plus the
+  one-module PDB/source-checking helper. No distribution or complete app workflow is approved. Windows
+  build/debug component tests passed 112/112 and 41/41. App integration is being compiled and reviewed;
+  build/query property agreement, pending-owner exclusion and source/trust lifecycle still need correction.
+- C++ is not complete: real MSBuild `.sln`/`.slnx` builds and LLDB-backed MSBuild/CMake workflows are
+  tested, but full solution/project fidelity, structured project edits, advanced debugging and CMake
+  language/cache/script-debugging features remain outstanding. Editing source text does not establish
+  correct project-definition updates. These remain part of the whole-project goal.
+
+## 2026-11-03: Unity combined acceptance investigation; debugger work continues
+
+- Project-index checkpoint `0e0a501` is committed and pushed. Reviewed Unity controls tree
+  `910417e8805660db4e83e5d4940636b841412590` was imported onto it as staged tree
+  `796d6a8ab8b8fe342253f8754903a67e0fbdcfb4`. Astra checked all 27 imported files against the
+  approved worker snapshot. Combined Windows passed 2756/2777 (21 skipped, one additional disabled)
+  and native Linux passed 2629/2655 (26 skipped); format, lint (2394 files), licences and feature
+  consistency passed. Logs: `build/verify-main-integration-20261103-022723.log` and
+  `build/verify-unity-controls-{windows,native}-20261103-tests.log`.
+- Fresh stage `E:\FrostBuilds\preview\codex-20261103-unity-controls` passed startup, Direct3D 11
+  rendering and ConPTY. Its DLL matches the main build SHA-256
+  `eacaefd203c06ad78f8862625251f8c4283c78f47d2226e4e0d363e154fa3006`.
+  All 19 package files match source/stage/deployment after backing up and synchronizing six scratch
+  package files that differed only in line endings.
+- Combined-main real-Editor run `E:\FrostBuilds\unity-controls-scratch-20261103\run-1793670152620894000`
+  FAILED after 67 seconds waiting for the panel's stopped state. Initial, playing, paused, stepped and
+  resumed observer checkpoints exist; stopped/revoked do not. The cause is unconfirmed. Owned Unity
+  exited 0, its job was empty, and all nine changed preference values were restored to the exact current
+  typed baseline with zero differences. This does not recover the earlier lost UnityConnect baseline
+  documented below. The controls integration remains uncommitted pending investigation and acceptance.
+  Terra is adding diagnostic-only panel status and independent observer evidence, preserving assertions.
+- Lua's internal transport checkpoint received bounded Astra approval; it is not a usable complete Lua
+  debugger. Corrected host-activation trees are IDE `52dc193faf136a3340691d5218f2c3ae647fb076` and
+  engine `c0aca41b62351a9ffa7cf1706c21d105bb943f5b`, awaiting independent review/build. They address
+  abandoned endpoint recovery, request/event correlation and revocation before script teardown.
+- Managed debugger source builds and relocated scratch DAP/enum probes now pass on Windows/Linux.
+  Pinned inputs and licences were audited, but final cumulative patch/stage review and actual IDE
+  build/debug integration remain. The partial runtime archive is not an approved input; builds use the
+  verified pinned Git checkout. No managed debugger distribution or complete user workflow is accepted.
+- Next: resolve Unity's real-Editor failure, finish reviewed Lua/managed debugger slices and continue the
+  full project inventory. The whole-project goal remains active; no user answer or approval is pending.
+
 ## 2026-11-03: Verified project-tree preparation and publication checkpoint
 
 - Folding checkpoint `a968580` is committed and pushed. Project-index worker tree

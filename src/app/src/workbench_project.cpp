@@ -28,6 +28,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "unity_control.hpp"
 #include <QFileInfo>
 
 #include <algorithm>
@@ -298,6 +299,8 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 bool Workbench::closeForOpen() {
     if (m_engine)
         m_engine->cancel();
+    if (m_unity)
+        m_unity->cancel();
     if (!hasProject()) {
         return true;
     }

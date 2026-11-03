@@ -3,13 +3,26 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/json.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "../../src/app/src/project_open_broker.hpp"
 #include "workbench_rig.hpp"
+#include <QComboBox>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QLabel>
+#include <QPushButton>
+#include <QStringList>
 
 #include <atomic>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include <chrono>
 #include <filesystem>
+#include <iostream>
 #include <system_error>
 #include <thread>
 
@@ -343,6 +356,267 @@ TEST(ProjectOpenProcess, Utf16RequestIsRejectedByLegacyOwner) {
     }));
     EXPECT_FALSE(frost::app::forwardExternalOpen(*root, dir.join("Example.cs"), 3, 40, true));
     EXPECT_EQ(requests.load(), 1);
+}
+
+TEST(ProjectOpenProcess, UnityAnnouncementRequiresMatchingTrustedProject) {
+    WorkDir dir("unity-announcement");
+    dir.write("project/Assets/a.cs", "");
+    dir.write("project/Packages/manifest.json", "{}");
+    dir.write("project/ProjectSettings/ProjectVersion.txt", "scratch");
+    WorkbenchRig rig(dir);
+    const auto root = frost::app::externalProjectRoot(dir.join("project"));
+    ASSERT_TRUE(root);
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
+    ASSERT_TRUE(owner);
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *root, std::move(*owner));
+    ASSERT_TRUE(broker.start());
+    ASSERT_TRUE(rig.workbench->openExternalProject(*root));
+    auto request = frost::lang::Json::object()
+                       .set("method", "unity.hello")
+                       .set("version", 2)
+                       .set("instance", std::string(32, 'd'))
+                       .set("generation", 1)
+                       .set("root", *root)
+                       .set("session", std::string(32, 'a'))
+                       .set("token", std::string(64, 'b'))
+                       .set("pid", 123)
+                       .set("port", 1);
+    const auto send = [&](const frost::lang::Json& json) {
+        frost::Result<std::string> reply = frost::fail(frost::ErrorCode::Unknown, "not sent");
+        std::atomic<bool> done{false};
+        std::jthread client([&] {
+            reply = frost::io::requestLocalIpc(frost::app::externalProjectKey(*root), json.dump(), 3s);
+            done.store(true, std::memory_order_release);
+        });
+        const bool finished = waitFor([&] { return done.load(std::memory_order_acquire); }, 5s);
+        client.join();
+        EXPECT_TRUE(finished);
+        return reply;
+    };
+    EXPECT_FALSE(send(request));
+    ASSERT_TRUE(rig.trust->trust(*root));
+    auto wrong = request;
+    wrong.set("root", dir.join("other"));
+    EXPECT_FALSE(send(wrong));
+    EXPECT_TRUE(send(request));
+    auto changed = request;
+    changed.set("token", std::string(64, 'c'));
+    EXPECT_FALSE(send(changed));
+}
+
+TEST(ProjectOpenProcess, UnityMonoClientAnnouncesThroughRealBroker) {
+    const auto mono = qgetenv("FROST_TEST_UNITY_MONO").toStdString();
+    const auto clientPath = qgetenv("FROST_TEST_UNITY_MONO_CLIENT").toStdString();
+    if (mono.empty() || clientPath.empty())
+        GTEST_SKIP() << "Unity standalone Mono fixture unavailable";
+    WorkDir dir("unity-mono-broker");
+    dir.write("project/Assets/a.cs", "");
+    dir.write("project/Packages/manifest.json", "{}");
+    dir.write("project/ProjectSettings/ProjectVersion.txt", "scratch");
+    WorkbenchRig rig(dir);
+    auto root = frost::app::externalProjectRoot(dir.join("project"));
+    ASSERT_TRUE(root);
+    ASSERT_TRUE(rig.trust->trust(*root));
+    ASSERT_TRUE(rig.workbench->openExternalProject(*root));
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
+    ASSERT_TRUE(owner);
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *root, std::move(*owner));
+    ASSERT_TRUE(broker.start());
+    const auto request = frost::lang::Json::object()
+                             .set("method", "unity.hello")
+                             .set("version", 2)
+                             .set("instance", std::string(32, 'd'))
+                             .set("generation", 1)
+                             .set("root", *root)
+                             .set("session", std::string(32, 'a'))
+                             .set("token", std::string(64, 'b'))
+                             .set("pid", 123)
+                             .set("port", 1)
+                             .dump();
+    frost::io::ProcessSpec spec;
+    spec.executable = mono;
+    spec.arguments = {clientPath, *root, request};
+    spec.stdoutMode = frost::io::Stdio::Pipe;
+    spec.stderrMode = frost::io::Stdio::Pipe;
+    std::atomic<bool> done{false};
+    frost::Result<frost::io::ProcessResult> result = frost::fail(frost::ErrorCode::Unknown, "not launched");
+    std::jthread client([&] {
+        result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 10s);
+        done.store(true, std::memory_order_release);
+    });
+    const bool finished = waitFor([&] { return done.load(std::memory_order_acquire); }, 12s);
+    client.join();
+    ASSERT_TRUE(finished);
+    ASSERT_TRUE(result) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0);
+    EXPECT_NE(result->stdoutBytes.find("announcement accepted"), std::string::npos);
+}
+
+// Opt-in external Unity Editor acceptance. The outer harness owns the editor and its preference guard.
+TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
+    const auto root = qgetenv("FROST_TEST_UNITY_PROJECT").toStdString();
+    const auto exchange = qgetenv("FROST_TEST_UNITY_EXCHANGE");
+    if (root.empty() || exchange.isEmpty())
+        GTEST_SKIP() << "isolated Unity project and exchange directory required";
+    WorkDir dir("unity-live-controls");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(root));
+    ASSERT_TRUE(rig.workbench->openExternalProject(root));
+    auto physical = frost::app::externalProjectRoot(root);
+    ASSERT_TRUE(physical);
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*physical));
+    ASSERT_TRUE(owner);
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *physical, std::move(*owner));
+    ASSERT_TRUE(broker.start());
+    rig.window->toolWindows().show("unityControls");
+    auto* panel = rig.window->toolWindows().content("unityControls");
+    ASSERT_NE(panel, nullptr);
+    const auto file = [&](const char* name) { return QString::fromUtf8(exchange) + QLatin1Char('/') + name; };
+    const auto put = [&](const char* name, const QByteArray& data) {
+        QFile f(file(name));
+        return f.open(QIODevice::WriteOnly | QIODevice::Truncate) && f.write(data) == data.size() && f.flush();
+    };
+    const auto status = [&](const QString& expected) {
+        for (auto* label : panel->findChildren<QLabel*>())
+            if (label->text().contains(expected))
+                return true;
+        return false;
+    };
+    const auto record = [&](const char* name) {
+        QFile f(file("workbench-assertions.jsonl"));
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Append))
+            return false;
+        const QByteArray line = QByteArray("{\"checkpoint\":\"") + name + "\"}\n";
+        if (f.write(line) != line.size() || !f.flush())
+            return false;
+#ifdef _WIN32
+        return _commit(f.handle()) == 0;
+#else
+        return fsync(f.handle()) == 0;
+#endif
+    };
+    const auto click = [&](const QString& name) {
+        for (auto* button : panel->findChildren<QPushButton*>())
+            if (button->text() == name) {
+                button->click();
+                return true;
+            }
+        return false;
+    };
+    const auto observe = [&](const char* name) -> std::optional<frost::lang::Json> {
+        const QByteArray request = QByteArray("observe-request-") + name;
+        if (!put(request.constData(), {})) {
+            ADD_FAILURE() << "could not publish observer request for " << name;
+            return {};
+        }
+        const QString response = file(name);
+        std::optional<frost::lang::Json> result;
+        std::string problem = "response not present";
+        const bool observed = waitFor(
+            [&] {
+                if (result)
+                    return true;
+                QFile f(response);
+                if (!f.exists())
+                    return false;
+                if (!f.open(QIODevice::ReadOnly)) {
+                    problem = "open: " + f.errorString().toStdString();
+                    return false;
+                }
+                const QByteArray data = f.readAll();
+                if (f.error() != QFileDevice::NoError) {
+                    problem = "read: " + f.errorString().toStdString();
+                    return false;
+                }
+                auto parsed = frost::lang::parseJson(data.toStdString());
+                if (!parsed) {
+                    problem = "invalid JSON";
+                    return false;
+                }
+                if (parsed->stringAt("checkpoint") != name) {
+                    problem = "checkpoint mismatch";
+                    return false;
+                }
+                result = *parsed;
+                return true;
+            },
+            20s);
+        if (!observed)
+            ADD_FAILURE() << "observer " << name << " timed out: " << problem;
+        return result;
+    };
+    ASSERT_TRUE(put("broker-ready", "ready"));
+    ASSERT_TRUE(waitFor([&] { return status(QStringLiteral("Unity stopped")); }, 120s));
+    auto initial = observe("initial");
+    ASSERT_TRUE(initial);
+    ASSERT_FALSE(initial->boolAt("playing").value_or(true));
+    ASSERT_TRUE(record("initial"));
+    ASSERT_TRUE(click(QStringLiteral("Play")));
+    ASSERT_TRUE(waitFor([&] { return status(QStringLiteral("Unity playing")); }, 60s));
+    auto playing = observe("playing");
+    ASSERT_TRUE(playing);
+    ASSERT_TRUE(playing->boolAt("playing").value_or(false));
+    ASSERT_GT(playing->integerAt("generation").value_or(0), initial->integerAt("generation").value_or(0));
+    ASSERT_TRUE(record("playing"));
+    ASSERT_TRUE(click(QStringLiteral("Pause")));
+    ASSERT_TRUE(waitFor([&] { return status(QStringLiteral("Unity paused")); }, 30s));
+    auto paused = observe("paused");
+    ASSERT_TRUE(paused);
+    ASSERT_TRUE(paused->boolAt("paused").value_or(false));
+    ASSERT_TRUE(record("paused"));
+    ASSERT_TRUE(click(QStringLiteral("Step")));
+    ASSERT_TRUE(waitFor([&] { return status(QStringLiteral("Unity paused")); }, 30s));
+    auto stepped = observe("stepped");
+    ASSERT_TRUE(stepped);
+    ASSERT_GT(stepped->integerAt("frame").value_or(-1), paused->integerAt("frame").value_or(-1));
+    ASSERT_TRUE(record("stepped"));
+    ASSERT_TRUE(click(QStringLiteral("Resume")));
+    ASSERT_TRUE(waitFor([&] { return status(QStringLiteral("Unity playing")); }, 30s));
+    auto resumed = observe("resumed");
+    ASSERT_TRUE(resumed);
+    ASSERT_FALSE(resumed->boolAt("paused").value_or(true));
+    ASSERT_TRUE(record("resumed"));
+    QElapsedTimer stopClock;
+    stopClock.start();
+    for (auto* combo : panel->findChildren<QComboBox*>())
+        std::cout << "Stop selected editor: " << combo->currentText().toStdString() << std::endl;
+    ASSERT_TRUE(click(QStringLiteral("Stop")));
+    const auto panelStatus = [&] {
+        QStringList values;
+        for (auto* label : panel->findChildren<QLabel*>())
+            values.append(label->text());
+        return values.join(QStringLiteral(" | "));
+    };
+    QString lastStatus = panelStatus();
+    std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << lastStatus.toStdString() << std::endl;
+    const bool stoppedStatus = waitFor(
+        [&] {
+            const QString current = panelStatus();
+            if (current != lastStatus) {
+                lastStatus = current;
+                std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << current.toStdString()
+                          << std::endl;
+            }
+            return status(QStringLiteral("Unity stopped"));
+        },
+        60s);
+    if (!stoppedStatus) {
+        auto diagnostic = observe("stoptimeout");
+        if (diagnostic)
+            std::cout << "Stop timeout observer: " << diagnostic->dump() << std::endl;
+    }
+    ASSERT_TRUE(stoppedStatus);
+    auto stopped = observe("stopped");
+    ASSERT_TRUE(stopped);
+    ASSERT_FALSE(stopped->boolAt("playing").value_or(true));
+    ASSERT_TRUE(record("stopped"));
+    ASSERT_TRUE(rig.trust->untrust(root));
+    ASSERT_TRUE(click(QStringLiteral("Play")));
+    ASSERT_TRUE(waitFor([&] { return status(QStringLiteral("Trust the Unity project first")); }, 10s));
+    auto revoked = observe("revoked");
+    ASSERT_TRUE(revoked);
+    ASSERT_FALSE(revoked->boolAt("playing").value_or(true));
+    ASSERT_TRUE(record("revoked"));
 }
 
 TEST(ProjectOpenProcess, UnityEditorBridgeReusesDirtyScriptAtLocation) {

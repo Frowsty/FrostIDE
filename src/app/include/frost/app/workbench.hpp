@@ -79,6 +79,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/diagnostics.hpp"
+#include "frost/lang/json.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/workspace_edit.hpp"
@@ -146,6 +147,7 @@ namespace frost::app {
 class LanguageBridge;
 class CMakeIntegration;
 class EngineIntegration;
+class UnityControlIntegration;
 class GitIntegration;
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
@@ -316,6 +318,8 @@ public:
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
     // Canonical directory of the current project, empty when none is open.
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
+    // Accept an authenticated broker announcement only for this trusted project.
+    [[nodiscard]] Result<void> announceUnity(const lang::Json& message);
     // The open solution, or nullptr (no project, or a folder project).
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const { return m_solution; }
 
@@ -373,6 +377,7 @@ protected:
 private:
     friend class LanguageBridge;
     friend class EngineIntegration;
+    friend class UnityControlIntegration;
     friend class GitIntegration;
 
     // IDocumentEditorListener.
@@ -478,6 +483,7 @@ private:
     std::unique_ptr<ui::BuildController> m_build;
     std::unique_ptr<build::BuildService> m_buildService;
     std::unique_ptr<EngineIntegration> m_engine;
+    std::unique_ptr<UnityControlIntegration> m_unity;
     std::unique_ptr<GitIntegration> m_git;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     std::unique_ptr<CMakeIntegration> m_cmake;

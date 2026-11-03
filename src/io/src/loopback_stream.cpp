@@ -138,8 +138,9 @@ Result<std::unique_ptr<LoopbackStream>> LoopbackStream::connect(std::uint16_t po
     return std::unique_ptr<LoopbackStream>(new LoopbackStream(std::move(impl)));
 }
 
-Result<std::string> LoopbackStream::exchange(std::string_view line) {
-    if (line.size() > kMaxLine || line.find('\n') != std::string_view::npos)
+Result<std::string> LoopbackStream::exchange(std::string_view line, std::size_t maxReplyBytes) {
+    if (line.size() > kMaxLine || maxReplyBytes == 0 || maxReplyBytes > kMaxLine ||
+        line.find('\n') != std::string_view::npos)
         return fail(ErrorCode::InvalidArgument, "invalid loopback message");
     std::string wire(line);
     wire.push_back('\n');
@@ -161,13 +162,13 @@ Result<std::string> LoopbackStream::exchange(std::string_view line) {
     for (;;) {
         const auto newline = m_impl->buffered.find('\n');
         if (newline != std::string::npos) {
-            if (newline > kMaxLine)
+            if (newline > maxReplyBytes)
                 return fail(ErrorCode::OutOfRange, "loopback response exceeds limit");
             std::string response = m_impl->buffered.substr(0, newline);
             m_impl->buffered.erase(0, newline + 1);
             return response;
         }
-        if (m_impl->buffered.size() > kMaxLine)
+        if (m_impl->buffered.size() > maxReplyBytes)
             return fail(ErrorCode::OutOfRange, "loopback response exceeds limit");
         if (auto ready = m_impl->ready(false); !ready)
             return std::unexpected(std::move(ready.error()));

@@ -5,6 +5,7 @@
 #include "frost/core/error.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stop_token>
@@ -23,9 +24,9 @@ public:
     ~LoopbackStream();
     LoopbackStream(const LoopbackStream&) = delete;
     LoopbackStream& operator=(const LoopbackStream&) = delete;
-    // Sends one line and reads one line without its newline. Both are bounded to 16 MiB;
-    // embedded newlines in the outgoing message are refused.
-    [[nodiscard]] Result<std::string> exchange(std::string_view line);
+    // Sends one line and reads one line without its newline. The caller may impose a smaller
+    // reply bound; both directions are capped at 16 MiB. Embedded outgoing newlines are refused.
+    [[nodiscard]] Result<std::string> exchange(std::string_view line, std::size_t maxReplyBytes = 16 * 1024 * 1024);
     struct Impl;
 
 private:

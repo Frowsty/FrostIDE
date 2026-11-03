@@ -1,0 +1,14 @@
+﻿<!-- SPDX-License-Identifier: Apache-2.0
+     Standalone functional test for safe Unity broker diagnostics. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../integrations/unity/com.frostide.editor/Editor/SafeControlFile.cs" />
+    <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityBrokerClient.cs" />
+    <Compile Include="UnityBrokerDiagnosticProbe.cs" />
+  </ItemGroup>
+</Project>
