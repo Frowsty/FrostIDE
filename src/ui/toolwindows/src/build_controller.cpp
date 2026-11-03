@@ -345,6 +345,9 @@ void BuildController::applyActiveConfiguration(const project::SolutionConfigurat
         return;
     }
     const auto index = static_cast<std::size_t>(it - m_configurations.begin());
+    // A queued service notification can predate a newer synchronous selection.
+    if (m_backend && m_backend->activeConfigurationIndex() != index)
+        return;
     if (m_active != index) {
         m_active = index;
         emit activeConfigurationChanged(static_cast<int>(index));

@@ -15,6 +15,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QScrollBar>
 #include <QTimer>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -221,6 +222,7 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     m_tree->setUniformRowHeights(true);
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tree->installEventFilter(this);
+    m_tree->viewport()->installEventFilter(this);
     m_search->installEventFilter(this);
     m_empty->setObjectName(QStringLiteral("fileSystemEmpty"));
     m_empty->setWordWrap(true);
@@ -231,8 +233,18 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     m_tree->hide();
     connect(m_tree, &QTreeView::expanded, this,
             [this](const QModelIndex& index) { m_expanded.insert(toUtf8(index.data(kPathRole).toString())); });
-    connect(m_tree, &QTreeView::collapsed, this,
-            [this](const QModelIndex& index) { m_expanded.erase(toUtf8(index.data(kPathRole).toString())); });
+    connect(m_tree, &QTreeView::collapsed, this, [this](const QModelIndex& index) {
+        const auto path = toUtf8(index.data(kPathRole).toString());
+        m_expanded.erase(path);
+        if (m_filterState) {
+            for (auto& pending : m_filterState->restore)
+                pending.erase(path);
+        }
+    });
+    for (auto* bar : {m_tree->verticalScrollBar(), m_tree->horizontalScrollBar()}) {
+        connect(bar, &QScrollBar::actionTriggered, this, [this] { m_restoreScroll.reset(); });
+        connect(bar, &QScrollBar::sliderPressed, this, [this] { m_restoreScroll.reset(); });
+    }
     connect(m_tree, &QTreeView::activated, this, [this](const QModelIndex& index) { activate(index); });
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString& value) {
         if (m_filterState) {
@@ -381,8 +393,18 @@ void FileSystemView::pollFilter() {
         m_expanded.insert(std::move(entry.value()));
         ++restored;
     }
+    restoreScrollPosition();
     if (!state.job && !state.ready && state.restore.empty())
         state.timer.stop();
+}
+
+void FileSystemView::restoreScrollPosition() {
+    if (!m_restoreScroll)
+        return;
+    m_tree->horizontalScrollBar()->setValue(m_restoreScroll->x());
+    m_tree->verticalScrollBar()->setValue(m_restoreScroll->y());
+    if (!m_filterState || m_filterState->restore.empty())
+        m_restoreScroll.reset();
 }
 
 void FileSystemView::publishFilteredFiles() {
@@ -407,6 +429,12 @@ void FileSystemView::publishFilteredFiles() {
 }
 
 void FileSystemView::setFiles(std::shared_ptr<const nav::ProjectFiles> files) {
+    const bool sameRoot = files && m_model->files() && files->root() == m_model->files()->root();
+    if (!sameRoot)
+        m_restoreScroll.reset();
+    const auto scroll = sameRoot ? std::optional(m_restoreScroll.value_or(QPoint(m_tree->horizontalScrollBar()->value(),
+                                                                                 m_tree->verticalScrollBar()->value())))
+                                 : std::nullopt;
     if (m_filterState) {
         if (files && !files->root().empty() && !m_search->text().isEmpty()) {
             // A root can be closed and reopened under the same path while a job is pending.
@@ -429,11 +457,12 @@ void FileSystemView::setFiles(std::shared_ptr<const nav::ProjectFiles> files) {
         queueExpansionRestore(files ? files->root() : std::string());
     else
         expanded = std::move(m_expanded);
-    const std::string selected = m_displayCurrent ? selectedPath() : std::string();
+    const std::string selected = sameRoot && m_displayCurrent ? selectedPath() : std::string();
     const bool hasRoot = files && !files->root().empty() && !files->nodes().empty();
     auto oldSnapshot = m_model->files();
     auto oldFilter = m_model->filterSnapshot();
     m_model->setFiles(std::move(files));
+    m_restoreScroll = scroll;
     if (oldSnapshot && m_filterState) {
         m_filterState->scheduler
             ->spawn(sched::Lane::Background, retireFilteredSnapshot(std::move(oldSnapshot), std::move(oldFilter)))
@@ -442,16 +471,22 @@ void FileSystemView::setFiles(std::shared_ptr<const nav::ProjectFiles> files) {
     m_displayCurrent = true;
     m_tree->setVisible(hasRoot);
     m_empty->setVisible(!hasRoot);
-    if (!hasRoot)
+    if (!hasRoot) {
+        m_restoreScroll.reset();
         return;
-    m_tree->expand(m_model->index(0, 0));
+    }
+    if (!sameRoot)
+        m_tree->expand(m_model->index(0, 0));
     for (const auto& path : expanded) {
         const QModelIndex index = m_model->indexForPath(path);
         if (index.isValid())
             m_tree->expand(index);
     }
-    if (!selected.empty())
-        static_cast<void>(select(selected));
+    if (!selected.empty()) {
+        // Restoring selection must not reveal a child the user deliberately collapsed.
+        m_tree->selectionModel()->setCurrentIndex(m_model->indexForPath(selected), QItemSelectionModel::ClearAndSelect);
+    }
+    restoreScrollPosition();
     if (!m_search->text().isEmpty())
         setSpeedSearch(m_search->text());
 }
@@ -518,6 +553,7 @@ bool FileSystemView::select(const std::string& path) {
     const QModelIndex found = m_model->indexForPath(path);
     if (!found.isValid())
         return false;
+    m_restoreScroll.reset(); // Explicit navigation wins over passive refresh restoration.
     for (QModelIndex parent = found.parent(); parent.isValid(); parent = parent.parent()) {
         m_tree->expand(parent);
     }
@@ -546,6 +582,9 @@ void FileSystemView::activate(const QModelIndex& index) {
 }
 
 bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::Wheel ||
+        event->type() == QEvent::KeyPress)
+        m_restoreScroll.reset(); // User navigation wins over a pending batched restore.
     if (event->type() != QEvent::KeyPress) {
         return QWidget::eventFilter(watched, event);
     }

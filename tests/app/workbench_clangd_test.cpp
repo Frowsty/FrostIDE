@@ -319,13 +319,18 @@ TEST(WorkbenchClangd, ConfigurationChangeRejectsHeldEvaluation) {
     ASSERT_TRUE(rig.workbench->build().setActiveConfiguration(1));
     auto* explorer = rig.window->findChild<frost::ui::SolutionExplorer*>();
     ASSERT_NE(explorer, nullptr);
-    ASSERT_TRUE(waitFor(
+    const bool refreshed = waitFor(
         [&] {
             return launcher.launches().size() == 4 && explorer->solution() &&
                    explorer->solution()->findFileNode("C:\\fixture\\new-config.cpp") &&
                    !explorer->solution()->findFileNode("C:\\fixture\\old-config.cpp");
         },
-        10s));
+        10s);
+    ASSERT_TRUE(refreshed)
+        << "launches=" << launcher.launches().size() << " pending=" << launcher.pendingScripts()
+        << " model=" << static_cast<bool>(explorer->solution())
+        << " new=" << (explorer->solution() && explorer->solution()->findFileNode("C:\\fixture\\new-config.cpp"))
+        << " old=" << (explorer->solution() && explorer->solution()->findFileNode("C:\\fixture\\old-config.cpp"));
     EXPECT_TRUE(launcher.launches()[1].terminated);
     ASSERT_TRUE(rig.workbench->closeProject());
     ASSERT_TRUE(waitFor([&] { return launcher.launches().back().terminated; }, 10s));

@@ -3,6 +3,48 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-04: Beta 3 File System tree refresh fix
+
+- User reported beta 2 repeatedly undoing scroll/collapse in the File System pane
+  after opening D:/dev/FrostEngine-AI-Claude as a CMake project. Reproduced equivalent
+  watcher-driven resets in a synthetic project: ignored log writes reset the model,
+  re-expanded a collapsed selected-file ancestor and moved scroll position 30 to 2.
+  A second regression reproduced queued restoration undoing a fresh collapse.
+- Compare completed file-tree snapshots on the background scan worker and retain
+  snapshot identity when visible nodes/search candidates are unchanged. Real updates
+  preserve selection without revealing collapsed ancestors and preserve scroll through
+  batched expansion. User collapse, scrolling and explicit navigation override pending
+  restoration. Snapshot ownership remains immutable and retires on the worker.
+- Astra reviewed the five-file source change, including coroutine lifetime and root
+  switching. All 33 focused WorkbenchTest cases passed, including new asynchronous
+  unchanged/changed scan and navigation-during-restoration regressions. The four new
+  cases also passed on a private native Windows desktop. Original project files were
+  not modified.
+- Watcher traffic still triggers background scans; this fix prevents needless model
+  resets and navigation rollback. Scan scheduling optimization is outside this change.
+- Verification exposed stale queued configuration notifications: a full-run diagnostic
+  recorded six evaluations where four were expected. A deterministic BuildController
+  regression proved that an old callback replayed a superseded selection. Reject callbacks
+  that disagree with the backend's current selection; keep valid service-side changes.
+  Astra approved this three-line guard and regression. All 22 related focused cases passed.
+  Preserve both earlier full Windows failures and the separate transient Structure restart
+  timeout; no shared root cause is claimed for that timeout. Both cases passed in the
+  final combined Windows gate.
+- Two new test counters now use local QObject contexts to disconnect before teardown.
+  The configuration test retains its original condition/timeout and adds failure details.
+- Final combined verification of tree `7b0d72086296c44e594329a8950cad7de27e3203`
+  passed: Windows 3083/3109 (26 skipped, one disabled), Linux 2901/2952 (51 skipped),
+  zero failures. Windows format/lint/licence/feature checks and Linux licence check passed.
+  Astra approved the tree fix, test lifetime/diagnostic follow-up, and configuration guard.
+- Portable beta: `E:/FrostBuilds/beta/FrostIDE-2026.11.03-beta.3/frost.exe`.
+  Restaged after the configuration guard; private-desktop packaged startup passed.
+  Application DLL SHA-256: `FCC02DD0E8DCF9933F08748AC6E0A2CD609BF188A62CB643A87EEBCABF9CB31E`.
+  Source archive, final full logs and earlier failure evidence are retained under
+  `E:/FrostBuilds/orchestration/beta3-*`; package `build-info.json` records provenance.
+- Next: user testing of beta 3. Beta 1 save limitations remain; New Project and New File
+  remain unimplemented. No SDK changes or original-project edits. Feature-first deferrals
+  (sanitizers, fuzz/stress, performance gates and goldens) remain unchanged.
+
 ## 2026-11-03: Disk cleanup and File/Edit click fix
 
 - User requested removal of obsolete FrostIDE files. Inventoried the repository,

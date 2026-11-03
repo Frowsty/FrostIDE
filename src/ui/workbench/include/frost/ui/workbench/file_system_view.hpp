@@ -9,6 +9,7 @@
 #include "frost/ui/nav/project_files.hpp"
 
 #include <QColor>
+#include <QPoint>
 #include <QString>
 #include <QWidget>
 
@@ -82,12 +83,14 @@ private:
     void pollFilter();
     void publishFilteredFiles();
     void queueExpansionRestore(const std::string& root);
+    void restoreScrollPosition();
     // Applies the speed search to `parent`'s subtree; returns whether any row in it matches.
     bool filter(const QModelIndex& parent, const std::string& query, int& matches, QModelIndex& first);
 
     struct FilterState;
     std::unique_ptr<FilterState> m_filterState;
     std::set<std::string> m_expanded;
+    std::optional<QPoint> m_restoreScroll;
     bool m_displayCurrent = true;
     FileColorProvider m_fileColors;
     QTreeView* m_tree;

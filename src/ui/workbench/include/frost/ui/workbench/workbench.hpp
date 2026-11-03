@@ -252,7 +252,7 @@ private:
     void addToolWindow();
     [[nodiscard]] Result<void> openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles);
     void setRoot(std::string root, std::vector<std::string> solutionFiles);
-    void applyScan(Result<nav::ProjectFiles> scan);
+    void applyScan(Result<std::shared_ptr<const nav::ProjectFiles>> scan);
     void pollScan();
     void startInitialFiles();
     void pollInitialFiles();
@@ -283,7 +283,7 @@ private:
     input::FindActionModel m_findActions;
     std::string m_root;
     std::string m_solution;
-    std::shared_ptr<nav::ProjectFiles> m_files = std::make_shared<nav::ProjectFiles>();
+    std::shared_ptr<const nav::ProjectFiles> m_files = std::make_shared<nav::ProjectFiles>();
     nav::NavigationHistory m_history;
     nav::RecentFiles m_recentFiles;
     nav::RecentLocations m_recentLocations;
@@ -299,7 +299,7 @@ private:
     std::uint64_t m_projectGeneration = 0;
     std::uint64_t m_scanGeneration = 0;
     // A background scan.
-    std::optional<sched::JoinHandle<Result<nav::ProjectFiles>>> m_scan;
+    std::optional<sched::JoinHandle<Result<std::shared_ptr<const nav::ProjectFiles>>>> m_scan;
     std::stop_source m_scanStop;
     std::optional<sched::JoinHandle<nav::ProjectFiles>> m_initialFiles;
     std::stop_source m_initialStop;

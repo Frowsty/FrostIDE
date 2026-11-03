@@ -80,6 +80,27 @@ TEST(BuildController, DeliversServiceCallbacksOnTheGuiThread) {
     EXPECT_EQ(controller.currentOutput().size(), 100U); // Kept for tool windows opened later.
 }
 
+TEST(BuildController, QueuedConfigurationCannotUndoANewerChoice) {
+    FakeBuildBackend backend;
+    backend.configs = {{"Debug", "x64"}, {"Release", "x64"}};
+    backend.active = 0;
+    BuildController controller;
+    controller.setBackend(&backend);
+    test::SignalLog changes(&controller, &BuildController::activeConfigurationChanged);
+    const auto callbacks = controller.serviceCallbacks();
+    callbacks.onActiveConfigurationChanged(backend.configs[0]);
+    ASSERT_TRUE(controller.setActiveConfiguration(1));
+    callbacks.onActiveConfigurationChanged(backend.configs[1]);
+    runPostedEvents();
+    EXPECT_EQ(controller.activeConfigurationIndex(), 1u);
+    EXPECT_EQ(changes.count(), 1);
+    backend.active = 0;
+    callbacks.onActiveConfigurationChanged(backend.configs[0]);
+    runPostedEvents();
+    EXPECT_EQ(controller.activeConfigurationIndex(), 0u);
+    EXPECT_EQ(changes.count(), 2);
+}
+
 TEST(BuildController, SupersededFencedOutputIsDroppedAfterGuiQueueing) {
     FakeBuildBackend backend;
     BuildController controller;

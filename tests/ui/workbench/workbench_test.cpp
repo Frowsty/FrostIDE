@@ -38,7 +38,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QObject>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QStandardItemModel>
 #include <QTimer>
 #include <QTreeView>
@@ -254,6 +256,120 @@ TEST_F(WorkbenchTest, FileSystemViewListsSpeedSearchesOpensAndRefreshes) {
     batch.changes.push_back(io::FileChange{io::FileChangeKind::Created, "/proj/notes.txt", {}, io::FileType::Regular});
     app.workbench->applyFileChanges(batch);
     EXPECT_TRUE(view->visibleNames().contains(QStringLiteral("notes.txt")));
+}
+
+TEST_F(WorkbenchTest, UnchangedWatcherScansDoNotResetProjectNavigation) {
+    for (int i = 0; i < 100; ++i)
+        file("/proj/file" + std::to_string(i) + ".cpp", "");
+    Ide& app = ide();
+    openProject(app);
+    app.window->toolWindows().show(kFileSystemToolWindow, false);
+    auto* view = app.workbench->fileSystemView();
+    ASSERT_NE(view, nullptr);
+    view->resize(320, 200);
+    view->show();
+    QApplication::processEvents();
+    ASSERT_TRUE(view->select("/proj/src/main.cpp"));
+    view->tree()->collapse(view->indexOfPath("/proj/src"));
+    view->tree()->verticalScrollBar()->setValue(30);
+    const int scroll = view->tree()->verticalScrollBar()->value();
+    ASSERT_GT(scroll, 0);
+    int resets = 0;
+    QObject counterLifetime;
+    QObject::connect(view->tree()->model(), &QAbstractItemModel::modelReset, &counterLifetime, [&] { ++resets; });
+    for (int i = 0; i < 3; ++i) {
+        writeExternally("/proj/debug.log", std::to_string(i));
+        app.workbench->applyFileChanges(modified("/proj/debug.log"));
+    }
+    EXPECT_EQ(resets, 0);
+    EXPECT_FALSE(view->tree()->isExpanded(view->indexOfPath("/proj/src")));
+    EXPECT_EQ(view->tree()->verticalScrollBar()->value(), scroll);
+    file("/proj/added.cpp", "");
+    app.workbench->applyFileChanges({{{io::FileChangeKind::Created, "/proj/added.cpp", {}, io::FileType::Regular}}});
+    EXPECT_EQ(resets, 1);
+    EXPECT_TRUE(view->indexOfPath("/proj/added.cpp").isValid());
+    EXPECT_FALSE(view->tree()->isExpanded(view->indexOfPath("/proj/src")));
+    EXPECT_EQ(view->tree()->verticalScrollBar()->value(), scroll);
+}
+
+TEST_F(WorkbenchTest, UserCollapseOverridesPendingExpansionRestore) {
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan);
+    auto files = std::make_shared<nav::ProjectFiles>("/proj");
+    files->setScan(*scan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(files);
+    ASSERT_TRUE(view.select("/proj/src/main.cpp"));
+    view.setFiles(files);
+    const auto src = view.indexOfPath("/proj/src");
+    view.tree()->expand(src);
+    view.tree()->collapse(src);
+    auto* timer = view.findChild<QTimer*>(QStringLiteral("projectFilterTimer"));
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_FALSE(view.tree()->isExpanded(src));
+}
+
+TEST_F(WorkbenchTest, UserNavigationOverridesPendingScrollRestore) {
+    for (int i = 0; i < 150; ++i)
+        file("/proj/d" + std::to_string(i) + "/leaf", "");
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan);
+    auto files = std::make_shared<nav::ProjectFiles>("/proj");
+    files->setScan(*scan);
+    FileSystemView view(nullptr, &sim);
+    view.resize(320, 200);
+    view.setFiles(files);
+    view.show();
+    QApplication::processEvents();
+    auto* timer = view.findChild<QTimer*>(QStringLiteral("projectFilterTimer"));
+    ASSERT_NE(timer, nullptr);
+    auto* scroll = view.tree()->verticalScrollBar();
+    for (bool explicitSelection : {true, false}) {
+        for (int i = 0; i < 150; ++i)
+            ASSERT_TRUE(view.select("/proj/d" + std::to_string(i) + "/leaf"));
+        scroll->setValue(100);
+        ASSERT_EQ(scroll->value(), 100);
+        view.setFiles(files);
+        ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+        if (explicitSelection)
+            ASSERT_TRUE(view.select("/proj/d0/leaf"));
+        else
+            scroll->triggerAction(QAbstractSlider::SliderToMinimum);
+        const auto chosen = scroll->value();
+        ASSERT_LT(chosen, 100);
+        for (int i = 0; i < 3; ++i)
+            ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+        EXPECT_EQ(scroll->value(), chosen);
+    }
+}
+
+TEST_F(WorkbenchTest, UnchangedBackgroundScanKeepsTheDisplayedModel) {
+    sched::SimExecutor sim;
+    Ide app(fs, clock, io::PathStyle::Posix, nullptr, nullptr, {}, &sim);
+    openProject(app);
+    app.window->toolWindows().show(kFileSystemToolWindow, false);
+    auto* timer = app.workbench->findChild<QTimer*>(QStringLiteral("projectScanTimer"));
+    ASSERT_NE(timer, nullptr);
+    sim.runUntilIdle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    auto* view = app.workbench->fileSystemView();
+    ASSERT_NE(view, nullptr);
+    int resets = 0;
+    QObject counterLifetime;
+    QObject::connect(view->tree()->model(), &QAbstractItemModel::modelReset, &counterLifetime, [&] { ++resets; });
+    app.workbench->applyFileChanges(modified("/proj/debug.log"));
+    sim.runUntilIdle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(resets, 0);
+    file("/proj/added.cpp", "");
+    app.workbench->applyFileChanges({{{io::FileChangeKind::Created, "/proj/added.cpp", {}, io::FileType::Regular}}});
+    sim.runUntilIdle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(resets, 1);
+    EXPECT_TRUE(view->indexOfPath("/proj/added.cpp").isValid());
 }
 
 TEST_F(WorkbenchTest, OldScanIsDiscardedAfterReopeningTheSameRoot) {
