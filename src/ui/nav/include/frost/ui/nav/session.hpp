@@ -10,9 +10,9 @@
  * 64-bit hash of the canonical project root: {"version": 1, "root": ..., "tabs": [{"path", "pinned",
  * "line", "column", "top"}], "active": <index or -1>, "toolWindows": [{"id", "visible", "size"}],
  * "recentFiles": [...], "recentLocations": [{"path", "line", "column"}], and optional
- * "cmakeTargets": [{"profile", "target"}]}. Unknown keys are ignored;
- * a newer version or malformed JSON is Corrupt or Unsupported, and the shell then starts empty.
- * Writes go through IFileSystem::writeFileAtomic. Thread safety: none (the UI thread).
+ * "cmakeTargets": [{"profile", "target"}], "cmakeArguments": [{"profile", "target", "arguments"}]}. Unknown keys are
+ * ignored; a newer version or malformed JSON is Corrupt or Unsupported, and the shell then starts empty. Writes go
+ * through IFileSystem::writeFileAtomic. Thread safety: none (the UI thread).
  */
 #pragma once
 
@@ -51,6 +51,13 @@ struct SessionToolWindow {
     friend bool operator==(const SessionToolWindow&, const SessionToolWindow&) = default;
 };
 
+struct SessionCMakeArguments {
+    std::string profile;
+    std::string target;
+    std::string arguments;
+    friend bool operator==(const SessionCMakeArguments&, const SessionCMakeArguments&) = default;
+};
+
 struct SessionState {
     std::string root; // The canonical project root the state belongs to.
     std::vector<SessionTab> tabs;
@@ -62,6 +69,7 @@ struct SessionState {
     std::vector<Place> recentLocations;
     // CMake configure profile name to executable target name, scoped to this root.
     std::vector<std::pair<std::string, std::string>> cmakeTargets;
+    std::vector<SessionCMakeArguments> cmakeArguments;
     friend bool operator==(const SessionState&, const SessionState&) = default;
 };
 

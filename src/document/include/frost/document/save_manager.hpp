@@ -141,6 +141,7 @@ struct SaveAllResult {
     std::vector<FileDocument*> saved;
     std::vector<SkippedDocument> skipped;
     std::vector<FailedSave> failed;
+    std::vector<FailedSave> warnings; // Saved, with a warning requiring user attention.
 };
 
 // One replacement of a closed-file rewrite (rewriteClosedFile): bytes `range` of the decoded UTF-8

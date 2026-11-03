@@ -430,6 +430,10 @@ void Workbench::createRunService() {
     debugOptions.launcher = &m_services.launcher;
     debugOptions.adapterFactory = m_options.debugAdapterFactory;
     debugOptions.lldbDapSetting = [this] { return m_services.settings.snapshot()->get(key::toolsLldbDapPath); };
+    debugOptions.sourceMapSetting = [this] {
+        const auto snapshot = m_services.settings.snapshot();
+        return std::pair{snapshot->get(key::debugSourceMapFrom), snapshot->get(key::debugSourceMapTo)};
+    };
     ui::DebugControllerHooks debugHooks;
     debugHooks.currentEditor = [this]() -> ui::EditorView* {
         auto* view = currentView();
@@ -1268,6 +1272,11 @@ void Workbench::shutdown() {
         const document::SaveAllResult saved = m_documents->saveAll(document::SaveReason::Autosave);
         for (document::FileDocument* document : saved.saved) {
             m_documentRegistry->notifyChanged(document->path());
+        }
+        for (const document::FailedSave& warning : saved.warnings) {
+            log::warn(kLog, "after saving {} during shutdown: {}", warning.document->path(), warning.error.describe());
+            notify(text("Saved %1 with a warning").arg(qs(warning.document->path())), qs(warning.error.describe()),
+                   ui::NotificationKind::Warning);
         }
     }
     if (auto closed = m_documents->closeJournal(); !closed) {

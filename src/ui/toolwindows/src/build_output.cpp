@@ -131,6 +131,8 @@ BuildOutputPane::BuildOutputPane(QWidget* parent)
     setObjectName(QStringLiteral("buildOutput"));
     m_editor->setObjectName(QStringLiteral("buildOutputText"));
     m_editor->setReadOnly(true);
+    m_editor->setPlaceholderText(
+        tr("Build output appears here. Move the cursor to a diagnostic and press Enter or F4 to open its source."));
     m_editor->setUndoRedoEnabled(false);
     m_editor->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_editor->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
@@ -148,6 +150,7 @@ BuildOutputPane::BuildOutputPane(QWidget* parent)
     m_clear->setToolTip(tr("Clear All"));
     m_clear->setIcon(icons.get(icons::kActionsRemove));
     m_clear->setAutoRaise(true);
+    m_clear->setEnabled(false);
     connect(m_clear, &QToolButton::clicked, this, &BuildOutputPane::clear);
 
     auto* toolbar = new QHBoxLayout;
@@ -250,6 +253,7 @@ void BuildOutputPane::scrollToEndIfFollowing() {
 
 void BuildOutputPane::appendLine(build::BuildOutputKind kind, const QString& text) {
     m_appending = true;
+    m_clear->setEnabled(true);
     const std::size_t index = m_log.append(kind, toUtf8(text));
     insertLine(m_log.line(index));
     scrollToEndIfFollowing();
@@ -266,6 +270,7 @@ void BuildOutputPane::addDiagnostic(const build::BuildDiagnostic& diagnostic) {
 
 void BuildOutputPane::appendSummary(const build::BuildOutcome& outcome) {
     m_appending = true;
+    m_clear->setEnabled(true);
     const std::size_t index = m_log.appendSummary(outcome);
     insertLine(m_log.line(index));
     scrollToEndIfFollowing();
@@ -276,6 +281,7 @@ void BuildOutputPane::clear() {
     m_appending = true;
     m_log.clear();
     m_editor->clear();
+    m_clear->setEnabled(false);
     m_follow = true;
     m_appending = false;
 }

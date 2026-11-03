@@ -23,6 +23,7 @@
 
 #include "workbench_util.hpp"
 #include <QApplication>
+#include <QCloseEvent>
 #include <QEvent>
 #include <QMouseEvent>
 #include <QTimer>
@@ -446,6 +447,7 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     m_recentFiles.clear();
     m_recentLocations.clear();
     m_cmakeTargets.clear();
+    m_cmakeArguments.clear();
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
@@ -982,6 +984,7 @@ nav::SessionState Workbench::captureSession() const {
     nav::SessionState state;
     state.root = m_root;
     state.cmakeTargets = m_cmakeTargets;
+    state.cmakeArguments = m_cmakeArguments;
     const EditorTabs& tabs = m_shell.tabs();
     state.editorLayout = tabs.saveLayout();
     const auto groups = tabs.groups();
@@ -1012,6 +1015,7 @@ nav::SessionState Workbench::captureSession() const {
 void Workbench::applySession(const nav::SessionState& state) {
     m_restoring = true;
     m_cmakeTargets = state.cmakeTargets;
+    m_cmakeArguments = state.cmakeArguments;
     EditorTabs& tabs = m_shell.tabs();
     if (!tabs.restoreLayout(state.editorLayout))
         (void)tabs.restoreLayout(R"({"group":0})");
@@ -1360,6 +1364,9 @@ void Workbench::overwriteDisk(const std::string& path) {
     options.overwriteExternalChanges = true;
     if (auto saved = m_services.saveManager.save(*document, options); !saved) {
         notifyError(text("Cannot save %1").arg(nativePath(path)), saved.error());
+    } else {
+        for (const Error& warning : saved->warnings)
+            notifySaveWarning(path, warning);
     }
     m_services.editors.refreshBanners(path);
     m_services.documents.notifyChanged(path);
@@ -1372,6 +1379,9 @@ void Workbench::reportSaveAll(const document::SaveAllResult& result, bool quiet)
     }
     for (const document::FailedSave& failed : result.failed) {
         notifyError(text("Cannot save %1").arg(nativePath(failed.document->path())), failed.error);
+    }
+    for (const document::FailedSave& warning : result.warnings) {
+        notifySaveWarning(warning.document->path(), warning.error);
     }
     if (quiet) {
         return;
@@ -1438,6 +1448,8 @@ Result<void> Workbench::saveDocument() {
         notifyError(text("Cannot save %1").arg(nativePath(document->path())), saved.error());
         return std::unexpected(std::move(saved.error()));
     }
+    for (const Error& warning : saved->warnings)
+        notifySaveWarning(document->path(), warning);
     return {};
 }
 
@@ -1474,6 +1486,15 @@ void Workbench::notifyError(const QString& title, const Error& error) {
     m_shell.notifications().notify({title, fromUtf8(error.message()), NotificationKind::Error, std::nullopt, {}});
 }
 
+void Workbench::notifySaveWarning(const std::string& path, const Error& warning) {
+    m_saveWarningNeedsReview = true;
+    m_shell.notifications().notify({text("Saved %1 with a warning").arg(nativePath(path)),
+                                    QString::fromStdString(warning.describe()),
+                                    NotificationKind::Warning,
+                                    std::nullopt,
+                                    {}});
+}
+
 // --- Autosave and events ---
 
 void Workbench::pollAutosave() {
@@ -1496,6 +1517,21 @@ void Workbench::pollAutosave() {
 }
 
 bool Workbench::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == &m_shell && event->type() == QEvent::Close) {
+        // Save while the window and its notification center can still tell the user about warnings.
+        frameDeactivated();
+        if (m_saveWarningNeedsReview) {
+            m_saveWarningNeedsReview = false;
+            m_shell.notifications().notify({text("Review save warnings before closing"),
+                                            text("Files were saved, but follow-up work needs attention. "
+                                                 "Review the save warnings in Notifications, then close again."),
+                                            NotificationKind::Warning,
+                                            true,
+                                            {}});
+            static_cast<QCloseEvent*>(event)->ignore();
+            return true;
+        }
+    }
     switch (event->type()) {
     case QEvent::KeyPress:
     case QEvent::MouseButtonPress:

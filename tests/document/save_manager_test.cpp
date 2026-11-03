@@ -5,6 +5,7 @@
 // leaves the original intact, Save As for untitled buffers, Save All, local-history snapshots and
 // pruning, validation of settings files on save, the policies from settings and the stale temp sweep.
 
+#include "frost/document/autosave.hpp"
 #include "frost/document/policies.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/settings/registry.hpp"
@@ -297,4 +298,78 @@ TEST_F(SaveManagerTest, OpeningSweepsStaleTempFiles) {
 }
 
 } // namespace
+// Simulates an OS save that committed bytes but needs post-publication recovery.
+class CommittedWarningFs final : public io::IFileSystem {
+public:
+    explicit CommittedWarningFs(io::MemFs& fs) : m_fs(fs) {}
+    Result<std::string> readFile(std::string_view p) override { return m_fs.readFile(p); }
+    Result<void> writeFileAtomic(std::string_view p, std::string_view d) override { return m_fs.writeFileAtomic(p, d); }
+    Result<io::FileStatus> status(std::string_view p) override { return m_fs.status(p); }
+    Result<std::vector<io::DirEntry>> listDirectory(std::string_view p) override { return m_fs.listDirectory(p); }
+    Result<io::DirListing> listDirectoryWithDiagnostics(std::string_view p) override {
+        return m_fs.listDirectoryWithDiagnostics(p);
+    }
+    Result<void> createDirectories(std::string_view p) override { return m_fs.createDirectories(p); }
+    Result<void> removeFile(std::string_view p) override { return m_fs.removeFile(p); }
+    Result<void> removeDirectory(std::string_view p) override { return m_fs.removeDirectory(p); }
+    Result<bool> exists(std::string_view p) override { return m_fs.exists(p); }
+    Result<std::string> canonicalPath(std::string_view p) override { return m_fs.canonicalPath(p); }
+    Result<io::SafeWriteResult> safeWrite(std::string_view p, std::string_view d,
+                                          const io::SafeWriteOptions& options) override {
+        auto result = m_fs.safeWrite(p, d, options);
+        if (result)
+            result->warning = Error(ErrorCode::IoError, "saved; recovery record needs attention");
+        return result;
+    }
+
+private:
+    io::MemFs& m_fs;
+};
+
+TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
+    policies.hotExit = false;
+    policies.localHistory = false;
+    policies.autosave.onFrameDeactivation = true;
+    ASSERT_TRUE(fs.writeFileAtomic(path("warning.txt"), "old"));
+    CommittedWarningFs warningFs(fs);
+    SaveManagerServices warningServices{};
+    warningServices.fs = &warningFs;
+    warningServices.clock = &clock;
+    SaveManager warningManager(warningServices, options, policies);
+    auto opened = warningManager.open(path("warning.txt"));
+    ASSERT_TRUE(opened);
+    FileDocument& doc = **opened;
+    edit(doc, 0, 3, "one");
+    auto one = warningManager.save(doc);
+    ASSERT_TRUE(one);
+    ASSERT_EQ(one->warnings.size(), 1u);
+    EXPECT_EQ(one->warnings[0].message(), "saved; recovery record needs attention");
+    EXPECT_FALSE(doc.dirty());
+    EXPECT_EQ(read("warning.txt"), "one");
+    edit(doc, 0, 3, "two");
+    auto all = warningManager.saveAll();
+    ASSERT_EQ(all.saved.size(), 1u);
+    ASSERT_EQ(all.warnings.size(), 1u);
+    EXPECT_EQ(all.warnings[0].document, &doc);
+    EXPECT_FALSE(doc.dirty());
+    EXPECT_EQ(read("warning.txt"), "two");
+    edit(doc, 0, 3, "end");
+    AutosaveController autosave(warningManager, clock);
+    auto automatic = autosave.frameDeactivated();
+    ASSERT_TRUE(automatic);
+    ASSERT_EQ(automatic->saved.size(), 1u);
+    ASSERT_EQ(automatic->warnings.size(), 1u);
+    EXPECT_EQ(automatic->warnings[0].document, &doc);
+    EXPECT_FALSE(doc.dirty());
+    EXPECT_EQ(read("warning.txt"), "end");
+    ASSERT_TRUE(fs.writeFileAtomic(path("closed.txt"), "old"));
+    const auto replace = [](const text::Snapshot&) -> Result<std::vector<RewriteEdit>> {
+        return std::vector<RewriteEdit>{{text::ByteRange{ByteOffset{0}, ByteOffset{3}}, "new"}};
+    };
+    auto rewritten = warningManager.rewriteClosedFile(path("closed.txt"), replace, "test");
+    ASSERT_TRUE(rewritten);
+    ASSERT_EQ(rewritten->warnings.size(), 1u);
+    EXPECT_NE(rewritten->warnings[0].describe().find("/work/closed.txt"), std::string::npos);
+    EXPECT_EQ(read("closed.txt"), "new");
+}
 } // namespace frost::document::test

@@ -7,7 +7,9 @@
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "toolwindows/toolwindow_test_util.hpp"
+#include <QLabel>
 #include <QLineEdit>
+#include <QStackedWidget>
 #include <QToolButton>
 #include <QTreeView>
 #include <gtest/gtest.h>
@@ -22,6 +24,30 @@ using build::Severity;
 using test::diagnostic;
 using test::FakeBuildBackend;
 using test::runPostedEvents;
+
+TEST(ProblemsView, EmptyStateDistinguishesNoDiagnosticsFromFilteredDiagnostics) {
+    ProblemsView view;
+    auto* empty = view.findChild<QLabel*>(QStringLiteral("problemsEmpty"));
+    ASSERT_NE(empty, nullptr);
+    auto* stack = qobject_cast<QStackedWidget*>(empty->parentWidget());
+    ASSERT_NE(stack, nullptr);
+    EXPECT_EQ(stack->currentWidget(), empty);
+    EXPECT_EQ(empty->text(), QStringLiteral("No problems reported"));
+
+    view.model()->add(diagnostic(Severity::Error, "C2065", "unknown name", "", 7, 2));
+    EXPECT_EQ(stack->currentWidget(), view.view());
+    view.searchField()->setText(QStringLiteral("not a matching diagnostic"));
+    EXPECT_EQ(stack->currentWidget(), empty);
+    EXPECT_EQ(empty->text(), QStringLiteral("No problems match the current filters"));
+    view.searchField()->clear();
+    EXPECT_EQ(stack->currentWidget(), view.view());
+    view.severityButton(Severity::Error)->setChecked(false);
+    EXPECT_EQ(stack->currentWidget(), empty);
+    EXPECT_EQ(empty->text(), QStringLiteral("No problems match the current filters"));
+    view.model()->clear(DiagnosticSource::Build);
+    EXPECT_EQ(stack->currentWidget(), empty);
+    EXPECT_EQ(empty->text(), QStringLiteral("No problems reported"));
+}
 
 // Normalised absolute paths, as the build service resolves them.
 #ifdef _WIN32

@@ -293,6 +293,10 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                 if (m_nav)
                     m_nav->setCMakeTargets(targets);
             });
+            m_cmake->setArgumentPreferences(m_nav->cmakeArguments(), [this](const auto& arguments) {
+                if (m_nav)
+                    m_nav->setCMakeArguments(arguments);
+            });
         }
     }
     const std::string_view name = io::fileName(path);

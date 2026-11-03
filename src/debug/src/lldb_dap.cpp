@@ -9,6 +9,7 @@
 #include "frost/project/trust_store.hpp"
 #include "frost/project/vcxproj.hpp"
 
+#include <algorithm>
 #include <format>
 
 #ifndef FROST_PINNED_LLDB_VERSION
@@ -25,6 +26,26 @@ constexpr std::string_view kLldbDapName = "lldb-dap";
 #endif
 
 } // namespace
+
+Result<SourceMap> makeSourceMap(io::IFileSystem& fs, const project::TrustStore& trust, std::string_view from,
+                                std::string_view to, const std::vector<std::string>& debugRoots) {
+    auto source = io::normalizePath(from);
+    auto destination = fs.canonicalPath(to);
+    if (!source || !destination)
+        return fail(ErrorCode::InvalidArgument, "source mapping requires absolute paths and an existing destination");
+    auto destinationStatus = fs.status(*destination);
+    if (!destinationStatus || destinationStatus->type != io::FileType::Directory || *source == *destination)
+        return fail(ErrorCode::InvalidArgument, "source mapping destination must be a distinct existing directory");
+    bool matchesRoot = false;
+    for (const auto& root : debugRoots) {
+        auto canonical = fs.canonicalPath(root);
+        if (canonical && *canonical == *destination && trust.isTrusted(root))
+            matchesRoot = true;
+    }
+    if (!matchesRoot || !trust.isTrusted(*destination))
+        return fail(ErrorCode::Untrusted, "source mapping destination must be a trusted debug project root");
+    return SourceMap(std::move(*source), std::move(*destination));
+}
 
 std::string_view pinnedLldbVersion() noexcept { return FROST_PINNED_LLDB_VERSION; }
 
@@ -125,6 +146,10 @@ rpc::Json lldbDapLaunchArguments(const DebugTarget& target) {
     if (!cwd.empty()) {
         launch.set("cwd", cwd);
     }
+    if (target.sourceMap) {
+        launch.set("sourceMap", rpc::Json::array({rpc::Json::array(
+                                    {rpc::Json(target.sourceMap->from()), rpc::Json(target.sourceMap->to())})}));
+    }
     if (!target.inheritEnvironment) {
         launch.set("initCommands", rpc::Json::array({rpc::Json("settings set target.inherit-env false")}));
     }
@@ -160,6 +185,9 @@ Result<void> checkDebugTrust(const project::TrustStore& trust, const DebugTarget
                                     root));
         }
     }
+    if (target.sourceMap &&
+        (!trust.isTrusted(target.sourceMap->to()) || std::ranges::find(roots, target.sourceMap->to()) == roots.end()))
+        return fail(ErrorCode::Untrusted, "source mapping destination is no longer a trusted debug root");
     return {};
 }
 } // namespace

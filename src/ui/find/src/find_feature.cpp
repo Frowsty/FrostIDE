@@ -253,9 +253,17 @@ Result<search::ReplaceSummary> FindFeature::replace(FindPopup& popup, bool all) 
     }
     notifications.notify(Notification{label("Replace in Files"),
                                       summaryText(*summary),
-                                      summary->skipped.empty() ? NotificationKind::Info : NotificationKind::Warning,
+                                      summary->skipped.empty() && summary->warnings.empty() ? NotificationKind::Info
+                                                                                            : NotificationKind::Warning,
                                       std::nullopt,
                                       {}});
+    for (const Error& warning : summary->warnings) {
+        notifications.notify(Notification{label("Replacement saved with a warning"),
+                                          fromUtf8(warning.describe()),
+                                          NotificationKind::Warning,
+                                          std::nullopt,
+                                          {}});
+    }
     m_last = popup.settings();
     if (all) {
         popup.closePopup(Popup::CloseReason::Accepted);

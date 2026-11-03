@@ -210,6 +210,8 @@ Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::strin
     outcome.written = true;
     outcome.target = std::move(written->target);
     outcome.method = written->method;
+    if (written->warning)
+        outcome.warnings.push_back(std::move(*written->warning));
     outcome.bytes = bytes->size();
 
     storage::DiskBase base;
@@ -294,6 +296,8 @@ SaveAllResult SaveManager::saveAll(SaveReason reason) {
         options.reason = reason;
         if (auto saved = save(document, options); saved) {
             result.saved.push_back(&document);
+            for (auto& warning : saved->warnings)
+                result.warnings.push_back(FailedSave{&document, std::move(warning)});
         } else {
             result.failed.push_back(FailedSave{&document, std::move(saved.error())});
         }

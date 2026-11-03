@@ -96,6 +96,7 @@ inline constexpr Key<std::int64_t> buildMsbuildMaxCpuCount{"build.msbuild.maxCpu
 
 // CMake profiles (frost::build's cmakeProfileRecords reads the records).
 inline constexpr Key<RecordList> cmakeProfiles{"cmake.profiles"};
+inline constexpr Key<RecordList> cmakeBuildWrappers{"cmake.buildWrappers"};
 
 // Tool paths: Application-only `executes` keys; empty means "detect" or "bundled".
 inline constexpr Key<std::string> toolsMsbuildPath{"tools.msbuild.path"};
@@ -112,6 +113,8 @@ inline constexpr Key<std::string> toolsClangTidyPath{"tools.clangTidy.path"};
 inline constexpr Key<StringList> toolsClangTidyPlugins{"tools.clangTidy.plugins"};
 inline constexpr Key<std::string> toolsDebuggerPath{"tools.debugger.path"};
 inline constexpr Key<std::string> toolsLldbDapPath{"tools.lldbDap.path"};
+inline constexpr Key<std::string> debugSourceMapFrom{"debug.sourceMap.from"};
+inline constexpr Key<std::string> debugSourceMapTo{"debug.sourceMap.to"};
 
 // Terminal (frost::term, ADR 0051). terminal.shell is an Application-only `executes` key.
 inline constexpr Key<std::string> terminalShell{"terminal.shell"};

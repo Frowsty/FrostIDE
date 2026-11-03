@@ -36,6 +36,7 @@
 #include <QTreeView>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -105,7 +106,12 @@ protected:
                 return editor ? editor->view.get() : nullptr;
             },
             .currentEditor = [this]() -> EditorView* { return editor ? editor->view.get() : nullptr; },
-            .notify = [this](const QString&, const QString& text, bool error) { notes.emplace_back(text, error); },
+            .notify =
+                [this](const QString&, const QString& text, bool error) {
+                    notes.emplace_back(text, error);
+                    if (onNotify)
+                        onNotify();
+                },
             .showToolWindow = [this] { ++shown; }};
         return std::make_unique<DebugController>(manager, std::move(options), std::move(hooks));
     }
@@ -146,10 +152,35 @@ protected:
     std::unique_ptr<test::EditorHarness> editor;
     std::vector<std::pair<QString, int>> opened;
     std::vector<std::pair<QString, bool>> notes;
+    std::function<void()> onNotify;
     int shown = 0;
     int factoryCalls = 0;
     std::unique_ptr<DebugController> controller;
 };
+
+TEST_F(DebugUiTest, ConfiguredSourceMapIsValidatedBeforeLaunchingTheAdapter) {
+    std::pair<std::string, std::string> mapping{"relative", workPath("Trusted")};
+    DebugControllerOptions options{
+        .trust = trust.get(),
+        .fs = &fs,
+        .sourceMapSetting = [&] { return mapping; },
+        .adapterFactory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+            ++factoryCalls;
+            return debug::makeDapClient(adapter.transport(), std::move(handlers));
+        }};
+    controller = std::make_unique<DebugController>(breakpoints, std::move(options));
+    EXPECT_FALSE(controller->startTarget(target()));
+    EXPECT_EQ(factoryCalls, 0);
+    mapping.first = workPath("FormerBuildRoot"); // A build-time path need not exist on this machine.
+    debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
+    ASSERT_TRUE(controller->startTarget(target()));
+    ASSERT_TRUE(spinUntil([&] { return !adapter.argumentsOf("launch").empty(); }));
+    const auto launch = adapter.argumentsOf("launch").front();
+    ASSERT_NE(launch.find("sourceMap"), nullptr);
+    EXPECT_EQ(launch.find("sourceMap")->dump(),
+              rpc::Json::array({rpc::Json::array({rpc::Json(mapping.first), rpc::Json(mapping.second)})}).dump());
+    stopSession();
+}
 
 TEST_F(DebugUiTest, AttachingUsesTheSuppliedAdapterAndKeepsTheHostAlive) {
     RunConsole console;
@@ -176,6 +207,52 @@ TEST_F(DebugUiTest, AttachingUsesTheSuppliedAdapterAndKeepsTheHostAlive) {
     const auto disconnects = adapter.argumentsOf("disconnect");
     ASSERT_EQ(disconnects.size(), 1U);
     EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+}
+
+TEST_F(DebugUiTest, FailedAttachStopSurfacesUnconfirmedDisconnect) {
+    debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
+    adapter.on("attach", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}};
+    });
+    adapter.on("disconnect", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.success = false, .message = "detach refused"};
+    });
+    auto factory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    ASSERT_TRUE(controller->attachTarget(target(), std::move(factory), rpc::Json::object()));
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    stopSession();
+    EXPECT_TRUE(std::ranges::any_of(notes, [](const auto& note) {
+        return note.second && note.first.contains(QStringLiteral("disconnect was not confirmed"));
+    }));
+}
+
+TEST_F(DebugUiTest, FailedStopNotificationCanReentrantlyShutDown) {
+    debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
+    adapter.on("attach", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}};
+    });
+    adapter.on("disconnect", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.success = false, .message = "detach refused"};
+    });
+    auto factory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        return debug::makeDapClient(adapter.transport(), std::move(handlers));
+    };
+    ASSERT_TRUE(controller->attachTarget(target(), std::move(factory), rpc::Json::object()));
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    bool notified = false;
+    int legacyCompletions = 0;
+    QObject::connect(controller.get(), &DebugController::sessionEnded, controller.get(),
+                     [&](const QString&) { ++legacyCompletions; });
+    onNotify = [&] {
+        notified = true;
+        controller->shutdown();
+    };
+    controller->stop();
+    ASSERT_TRUE(spinUntil([&] { return notified; }));
+    EXPECT_FALSE(controller->debugging());
+    EXPECT_EQ(legacyCompletions, 0);
 }
 
 TEST_F(DebugUiTest, ManagedAttachUsesMonoIdentityAndVerifiedBreakpointSet) {

@@ -152,6 +152,8 @@ TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     state.recentFiles = {"/proj/b.cpp", "/proj/a.cpp"};
     state.recentLocations = {Place{"/proj/a.cpp", 12, 3}};
     state.cmakeTargets = {{"Debug", "tests"}, {"Release", "editor"}};
+    state.cmakeArguments = {{"Debug", "tests", "-ts=Core -tc=HMAC-SHA256*"},
+                            {"Release", "editor", "--example \"two words\""}};
     ASSERT_TRUE(store.save(state).has_value());
     const auto loaded = store.load("/proj");
     ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
@@ -171,6 +173,7 @@ TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     EXPECT_EQ(loaded->toolWindows[0].size, 280);
     EXPECT_EQ(loaded->recentFiles, state.recentFiles);
     EXPECT_EQ(loaded->cmakeTargets, state.cmakeTargets);
+    EXPECT_EQ(loaded->cmakeArguments, state.cmakeArguments);
     ASSERT_EQ(loaded->recentLocations.size(), 1U);
     EXPECT_EQ(loaded->recentLocations[0].line, 12);
     EXPECT_EQ(store.lastProject().value_or(""), "/proj");

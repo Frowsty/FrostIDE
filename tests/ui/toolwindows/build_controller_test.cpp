@@ -80,6 +80,26 @@ TEST(BuildController, DeliversServiceCallbacksOnTheGuiThread) {
     EXPECT_EQ(controller.currentOutput().size(), 100U); // Kept for tool windows opened later.
 }
 
+TEST(BuildController, SupersededFencedOutputIsDroppedAfterGuiQueueing) {
+    FakeBuildBackend backend;
+    BuildController controller;
+    controller.setBackend(&backend);
+    std::vector<QString> lines;
+    QObject::connect(&controller, &BuildController::outputLine, &controller,
+                     [&](build::BuildOutputKind, const QString& line) { lines.push_back(line); });
+    const auto callbacks = controller.serviceCallbacks();
+    std::atomic<bool> current{true};
+    callbacks.onOutputFenced(build::BuildOutputKind::Stdout, "old", [&] { return current.load(); });
+    test::SignalLog finished(&controller, &BuildController::buildFinished);
+    callbacks.onFinishedFenced(build::BuildOutcome{}, [&] { return current.load(); });
+    current.store(false);
+    callbacks.onOutputFenced(build::BuildOutputKind::Stdout, "new", [] { return true; });
+    runPostedEvents();
+    ASSERT_EQ(lines.size(), 1u);
+    EXPECT_EQ(lines.front(), QStringLiteral("new"));
+    EXPECT_EQ(finished.count(), 0);
+}
+
 TEST(BuildController, RunsTheSaveAllHookOnTheGuiThread) {
     FakeBuildBackend backend;
     BuildController controller;

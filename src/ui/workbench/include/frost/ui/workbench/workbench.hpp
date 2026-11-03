@@ -178,6 +178,12 @@ public:
     void setCMakeTargets(std::vector<std::pair<std::string, std::string>> targets) {
         m_cmakeTargets = std::move(targets);
     }
+    [[nodiscard]] const std::vector<nav::SessionCMakeArguments>& cmakeArguments() const noexcept {
+        return m_cmakeArguments;
+    }
+    void setCMakeArguments(std::vector<nav::SessionCMakeArguments> arguments) {
+        m_cmakeArguments = std::move(arguments);
+    }
     // Reopens the tabs (order, pinned, active, caret and scroll), the tool-window layout and the
     // recents. Files that fail to open are skipped (each notified).
     void applySession(const nav::SessionState& state);
@@ -257,6 +263,7 @@ private:
     void openSettingsFile(const std::string& path);
     [[nodiscard]] std::optional<std::string> projectSettingsFile(bool personal) const;
     void notifyError(const QString& title, const Error& error);
+    void notifySaveWarning(const std::string& path, const Error& warning);
     void armAutosave();
     void pollAutosave();
     [[nodiscard]] QString shortcutText(std::string_view actionId) const;
@@ -270,7 +277,9 @@ private:
 
     ShellWindow& m_shell;
     WorkbenchServices m_services;
+    bool m_saveWarningNeedsReview = false;
     std::vector<std::pair<std::string, std::string>> m_cmakeTargets;
+    std::vector<nav::SessionCMakeArguments> m_cmakeArguments;
     input::FindActionModel m_findActions;
     std::string m_root;
     std::string m_solution;

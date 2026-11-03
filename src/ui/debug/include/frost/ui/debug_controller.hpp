@@ -88,6 +88,7 @@ struct DebugControllerOptions {
     io::IFileSystem* fs = nullptr;                 // For lldb-dap discovery and workspace.json.
     io::IProcessLauncher* launcher = nullptr;      // Starts lldb-dap.
     std::function<std::string()> lldbDapSetting{}; // tools.lldbDap.path; empty: "".
+    std::function<std::pair<std::string, std::string>()> sourceMapSetting{};
     // Overrides lldb-dap (tests: the fake-dap double). Empty: lldb-dap through `launcher`.
     debug::AdapterFactory adapterFactory{};
 };
@@ -241,7 +242,7 @@ private:
     void onFrameSelected(std::int64_t threadId, const debug::DebugFrame& frame);
     void onOutput(const std::string& category, const std::string& text);
     void onBreakpoints(const std::vector<debug::BreakpointResult>& results);
-    void onEnded(const debug::DebugOutcome& outcome);
+    void onEnded(std::uint64_t generation, const debug::DebugOutcome& outcome);
     void onRunFinished(const build::RunOutcome& outcome, const std::optional<build::DebugLaunch>& launch);
 
     // Breakpoints.

@@ -174,6 +174,31 @@ protected:
     int factoryCalls = 0;
 };
 
+TEST_F(DebugTrust, SourceMapRequiresAbsolutePrefixAndTrustedExistingDebugRoot) {
+    ASSERT_TRUE(fs.createDirectories(workPath("Original")).has_value());
+    const std::vector<std::string> roots{workPath("Trusted")};
+    auto mapping = makeSourceMap(fs, *trust, workPath("Original"), workPath("Trusted"), roots);
+    ASSERT_TRUE(mapping) << mapping.error().describe();
+    DebugTarget target{.program = workPath("Trusted/x64/Debug/App.exe"), .trustRoots = roots};
+    target.sourceMap = *mapping;
+    const auto launch = lldbDapLaunchArguments(target);
+    ASSERT_NE(launch.find("sourceMap"), nullptr);
+    EXPECT_EQ(
+        launch.find("sourceMap")->dump(),
+        rpc::Json::array({rpc::Json::array({rpc::Json(workPath("Original")), rpc::Json(workPath("Trusted"))})}).dump());
+    EXPECT_FALSE(makeSourceMap(fs, *trust, "relative", workPath("Trusted"), roots));
+    EXPECT_TRUE(makeSourceMap(fs, *trust, workPath("missing"), workPath("Trusted"), roots));
+    EXPECT_FALSE(makeSourceMap(fs, *trust, workPath("Trusted"), workPath("Trusted"), roots));
+    EXPECT_FALSE(makeSourceMap(fs, *trust, workPath("Original"), workPath("Untrusted"), roots));
+    target.trustRoots = {workPath("Untrusted")};
+    EXPECT_FALSE(startDebugSession(*trust, target, countingFactory(), {}, {}));
+    EXPECT_EQ(factoryCalls, 0);
+    target.trustRoots = roots;
+    ASSERT_TRUE(trust->untrust(workPath("Trusted")));
+    EXPECT_FALSE(startDebugSession(*trust, target, countingFactory(), {}, {}));
+    EXPECT_EQ(factoryCalls, 0);
+}
+
 TEST_F(DebugTrust, AnUntrustedRootIsRefusedBeforeAnyAdapterStarts) {
     io::ScriptedProcessLauncher launcher;
     DebugTarget target{.program = workPath("Untrusted/x64/Debug/App.exe")};

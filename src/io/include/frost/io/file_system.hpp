@@ -101,6 +101,7 @@ struct SafeWriteOptions {
 struct SafeWriteResult {
     std::string target{}; // The file written: `path` normalised, or the file a symlink at `path` resolves to.
     SafeWriteMethod method = SafeWriteMethod::Replaced;
+    std::optional<Error> warning = std::nullopt; // Bytes committed, but post-publication recovery work remains.
 };
 
 class IFileSystem {
@@ -176,13 +177,12 @@ public:
 
     /*
      * The editor's save primitive (SaveManager, ADR 0028): writes `data` as the new content of the
-     * file at `path` so that a crash, a full disk or a refused replace never leaves a partial or
-     * mixed file, and keeps what identifies the file:
+     * file at `path` with the platform guarantees and beta limitations in ADR 0076:
      *   - a symlink at `path` stays a link: the file it resolves to is written (result.target);
      *   - a file with one link gets a temp file beside it (writeFileAtomic's name and flush), swapped
-     *     in with ReplaceFileW on Windows, which keeps its attributes, ACL, alternate streams and
-     *     creation time, or with rename on POSIX after the owner, mode and access ACL were copied as
-     *     writeFileAtomic does;
+     *     in after metadata copying on fixed local NTFS, or with rename on POSIX after the owner,
+     *     mode and access ACL were copied as writeFileAtomic does. Other Windows filesystems retain
+     *     the legacy ReplaceFileW path, including its interrupted-replacement limitation;
      *   - a file with several hard links is rewritten in place, so every link keeps seeing it: the
      *     space is reserved first, so a full disk fails before any byte changes (a crash during the
      *     rewrite itself can still leave a mixture; the SaveManager's journal keeps the buffer);
@@ -192,6 +192,10 @@ public:
      * writable first (the saved file stays writable; on failure the attribute or mode is put back).
      * A file another program holds open without sharing fails with Busy after three short retries,
      * and is left as it was. Thread safety as the other members; blocking. O(size).
+     * A successful result may contain warning: the new bytes were committed, but a subsequent
+     * metadata repair or recovery-record cleanup needs attention. Callers must surface it.
+     * This beta refuses existing local NTFS files with object IDs or EFS encryption before
+     * mutation; callers can retain the edits for copying to a new unencrypted file.
      * Errors: as writeFileAtomic, plus PermissionDenied (read-only), Busy (in use), NotFound (a
      * dangling symlink). The default implementation, for test doubles, is exists() then
      * writeFileAtomic() with result.target = `path`.

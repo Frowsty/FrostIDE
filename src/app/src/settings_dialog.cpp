@@ -59,6 +59,8 @@ constexpr std::array kEntries{
     Entry{settings::key::toolsGitPath.name, 4},
     Entry{settings::key::toolsClangdPath.name, 4},
     Entry{settings::key::toolsMsbuildPath.name, 4},
+    Entry{settings::key::debugSourceMapFrom.name, 4},
+    Entry{settings::key::debugSourceMapTo.name, 4},
     Entry{settings::key::networkOffline.name, 5},
     Entry{settings::key::updateChannel.name, 5},
 };

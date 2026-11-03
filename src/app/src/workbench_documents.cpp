@@ -219,6 +219,8 @@ Result<void> Workbench::saveQuietly(document::FileDocument& document) {
     }
     for (const Error& warning : outcome->warnings) {
         log::warn(kLog, "after saving {}: {}", document.path(), warning.describe());
+        notify(text("Saved %1 with a warning").arg(displayName(document.path())), qs(warning.describe()),
+               ui::NotificationKind::Warning);
     }
     m_tabs->refreshBanners(document.path());
     m_documentRegistry->notifyChanged(document.path());
@@ -241,6 +243,10 @@ document::SaveAllResult Workbench::saveAllDocuments() {
     document::SaveAllResult result = m_documents->saveAll(document::SaveReason::SaveAll);
     for (document::FileDocument* document : result.saved) {
         m_documentRegistry->notifyChanged(document->path());
+    }
+    for (const document::FailedSave& warning : result.warnings) {
+        notify(text("Saved %1 with a warning").arg(displayName(warning.document->path())), qs(warning.error.describe()),
+               ui::NotificationKind::Warning);
     }
     return result;
 }

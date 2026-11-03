@@ -3,6 +3,222 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Limited beta with the new GUI
+
+- The user explicitly requested the minimum work to deliver a usable beta with the
+  new GUI after discussing the interrupted-save risk and unsupported-file refusal.
+  ADR 0076 records the limited save profile. Hybrid metadata research and unfinished
+  Rename/CMake/Unity integrations remain excluded; no additional feature work is required
+  for this beta. Earlier isolated prototypes and failed evidence remain preserved.
+- Verified candidate `c263164b` joins the reviewed `97fda560` GUI/workflow source with
+  the tested copy-and-alias recovery implementation and actionable local NTFS object-ID/EFS
+  refusals. The original file and edited buffer remain available; users can copy edits
+  into a new unencrypted file. Save As is not exposed in this beta UI. Network/non-NTFS saves,
+  in-place hardlink interruption and the timestamped atomic-write API retain their stated
+  legacy limitations; this is not an expanded filesystem or power-loss guarantee.
+- Combined Windows and Linux verification passed in
+  `build/verify-beta-c263-windows-r1.log` and `build/verify-beta-c263-native-r1.log`.
+  Windows: 3078/3103 (25 skipped, one disabled); Linux: 2895/2946 (51 skipped), no failures.
+  Windows format/lint/licence/feature checks and native licence check passed. The original
+  interrupted-save regression passed. Full CTest evidence is archived under
+  `E:/FrostBuilds/orchestration/beta-c263-{windows,native}-ctest.log`.
+- Final compiled candidate `472b24f1` changes only unsupported-save error wording,
+  its two exact-string assertions and documentation from the fully verified candidate;
+  it removes an unavailable Save As UI promise. The final Windows rebuild passed;
+  focused SafeWrite coverage passed 21 tests with one symlink-privilege skip.
+- Portable Windows beta: `E:/FrostBuilds/beta/FrostIDE-2026.11.03-beta.1/frost.exe`.
+  Staging passed (141 files, 323.5 MB before README/build-info); the packaged private-desktop
+  startup selftest passed and closed normally in 1.44 seconds. The package includes Qt
+  source and dependency notices. README.txt records the limited save profile and excluded
+  prototypes; build-info.json records exact source, binary hashes and verification scope.
+  DLL SHA-256: `42D430460FCE5DE16DC10C1FD0BD2EBF99CE2805324E3A9BF08F4E58F3D5F57A`.
+  Final build/save/stage/startup logs and the source archive are preserved under
+  `E:/FrostBuilds/orchestration/beta-472b-*`. The earlier actual GUI/engine acceptance
+  remains applicable to the unchanged GUI/workflow code; final packaged startup is fresh.
+- Astra approved the final limited-beta source/runtime/package review for D23 promotion:
+  all 2529 archived source blobs match `472b24f1`; executable/DLL hashes match both the
+  package metadata and root build outputs. No blocking findings. Approval is bounded to
+  the documented beta profile, not broader filesystem, power-loss or parity acceptance.
+- Feature expansion remains held. No installer, full parity or expanded crash/power-loss
+  guarantee is claimed. Next: user beta feedback, then prioritize only reported blockers.
+
+## 2026-11-03: Native workflow candidate and Windows save-safety blocker
+
+- Usage-limit triage: the user reports nearing the weekly allowance without resets
+  and asks for beta status. A daily-use beta is not ready: the staged preview retains
+  the known Windows interrupted-save implementation. New feature, provider, Rename,
+  CMake and debugger expansion is held; save research is being consolidated rather
+  than continuing open-ended experiments. No new main commit, promotion or release.
+  The already-running isolated managed `9b12010` build may finish and writes
+  `E:/FrostBuilds/unity-mono-spike/root-aggregate-9b120-build-r1-result.json` automatically;
+  no Unity launch or follow-on fixture is authorized by this triage.
+- Reviewed project/Mono checkpoint `14f5367` was merged to main and pushed under D23.
+  Its accepted development preview is `E:/FrostBuilds/preview/codex-20261103-f639-candidate`;
+  it remains a preview, not daily-work beta or full parity.
+- Combined source `132dd7d1` joins manual LLDB source mapping, per-target Run/Debug
+  arguments, explicit personal CMake build wrappers, disconnect outcome handling and
+  queued build-event identity checks. Astra reviewed the source and final formatting.
+  The earlier production-equivalent `886f1e0f` passed 91 focused workflow tests and six
+  BuildController tests on both platforms. The final source adds a private-completion
+  assertion and formatting; its full Linux gate passed 2884/2935 with 51 skips and
+  licence check 102 packages/zero violations. Log: `build/verify-workflow-full-native-r1.log`;
+  exact CTest archive: `E:/FrostBuilds/orchestration/workflow-132-native-full-ctest.log`.
+- Windows full CTest on `132dd7d1` has one failure: `RealDiskTest.KillDuringSavesLeavesAWholeFile`
+  could not find the target after terminating the saving child. A direct 30-run replay
+  reproduced the missing target once; this is not dismissed as flaky. SaveManager's
+  existing Windows `safeWrite` replacement path is under investigation. No file-system
+  production code changed in this candidate. Preserve `build/verify-workflow-full-windows-r1.log`,
+  `build/verify-save-kill-132-replay-r1.log` and
+  `E:/FrostBuilds/orchestration/workflow-132-windows-full-ctest.log`. The candidate is not
+  approved for promotion. Final Windows result is 3049/3076, 26 skips, one failure
+  and one additional disabled test; format, frost-lint, licence and feature checks pass.
+  The earlier preview shares this unchanged save implementation and is also affected
+  by the interrupted-save defect. An isolated repair and explicit committed-save warning
+  propagation are being implemented and reviewed; no replacement algorithm is accepted yet.
+- Candidate `E:/FrostBuilds/preview/codex-20261103-132-workflow` staged 141 files and
+  passed its private-desktop self-test. DLL SHA256 is
+  `D4D2E721460253B7E8B2ADD809EC4DBDFF6C54889FFAD4BE68834D18FB1FE463`.
+  Source archive `E:/FrostBuilds/orchestration/root-132-workflow-source.tar` records
+  exact compiled inputs. Astra verified 14/14 wrapper-setup evidence hashes: project/profile
+  binding, whole-argument target template, bounded HMAC arguments and source-map persistence.
+  Earlier gutter evidence established only an unbound breakpoint. The later actual
+  mapped debugger acceptance below supersedes that limited preparation result.
+- The first GUI wrapper Build launched the intended Python/Build.py argument vector,
+  but inherited a different cache environment from the prior authoritative build and
+  began a cold rebuild. IDE Cancel stopped it at about 106/3654 after 102.8 seconds,
+  with no final link and no owned processes remaining. Source and prior executable/PDB
+  hashes remained unchanged. The corrected GUI retry inherited the three supported cache
+  variables from the earlier successful Build.py invocation and succeeded in 20m38.7s,
+  with zero errors/warnings: 3354 cache hits, two misses and 220 uncacheable operations.
+  Its final FrostTests link took 2m49.3s, with a fresh 14.53 GiB pre-link free-memory
+  observation and other heavy builds held. The new executable/PDB pair is recorded below.
+- Independent Astra review accepted actual GUI Build plus two mapped Debug scenarios
+  against `FrostTests`: breakpoint at owned TestMain.cpp:19, Locals and watch `argc = 3`,
+  Step Over to line 22, then Stop and clean debugger/debuggee exit. The second run resumed
+  and showed process exit code zero. Process snapshots prove bounded runtime arguments
+  `-ts=Core` and `-tc=HMAC-SHA256*`. The new executable SHA256 is
+  `65144C2CFA6948AB66DCFE69AC238EA5304ED88D22592FBDBC3312C590578B8F`;
+  paired PDB SHA256 is `F63BB11F2AD0638EBA93C01746CD3F7B45DB6734FFB26924EC0E8FFCBA251142`.
+  PDB TestMain source checksum matches the owned file through the configured map.
+  All 57 hashes in `E:/FrostBuilds/cpp-preview-acceptance-20261103/beta-engine-mapped-debug-132-r1/acceptance-manifest.json`
+  were independently verified. Both IDE runs exited zero, owned process pairs are gone,
+  probe-created metadata was reversibly archived and fixture Git status is clean.
+  This is bounded actual engine acceptance: no physical keyboard input, debug-console
+  case count, full engine suite or beta promotion is claimed. Debug-run build-wrapper
+  output was not captured; the separate GUI Build establishes the materialized wrapper command.
+- Isolated CMake Linux host/recovery checkpoint `ea764c50` (tree `fb33f645`) has independent
+  bounded approval and 37 focused passes, including guarded roll-forward after a killed
+  writer. Workbench lifecycle integration and unresolved preparation cases remain open.
+  Rename now leads a shared application lifecycle interface for CMake, Rename and managed
+  owners; reviewed unwired components are not a completed application flow. Lua captured-source
+  breakpoint and Unity owned-launch work remain isolated prototypes. No Unity Editor has
+  launched. The old blanket preference-restoration prerequisite was an internal experiment
+  restriction, not a user requirement; it was retired without running old restore code.
+- Save warning plumbing and normal-close visibility are joined in frozen tree `8160c0ef`.
+  Astra verified the GUI files match approved `0f1851` exactly and the Windows native
+  save implementation is unchanged. Single-save, Save All, autosave and rewrite retain
+  committed success while carrying warnings; normal Close stays open once for review.
+  Disabled frame-autosave policy has separate app/UI regressions. Focused Windows
+  Windows built 218 steps and Linux 212 steps, then both passed all nine focused tests.
+  Logs: `build/verify-save-warnings-8160-build-r1.log`,
+  `build/verify-save-warnings-8160-tests-r1.log`,
+  `build/verify-save-warnings-8160-native-r1.log` and
+  `build/verify-save-warnings-8160-native-tests-r2.log`. The first native invocation
+  omitted Debug configuration and found zero tests; that failed runner result is retained.
+  Astra verified all 11 evidence artifact hashes and all 13 changed source hashes against
+  both workspace and native mirror in `E:/FrostBuilds/orchestration/save-warnings-8160-evidence.json`.
+  Bounded warning plumbing and normal-close functional acceptance is approved.
+  Exact tree archive `E:/FrostBuilds/orchestration/root-8160-save-warning-source.tar`
+  has SHA256 `F2A8475FF5054466713E6B0DC553F05A0E94BA7EF3D1D676AFCC3C6D39B27D95`.
+  Forced termination and direct-exit warning visibility are not claimed.
+- The isolated shadow-replacement save prototype passed its original whole-file kill
+  replay but failed the stronger crash/reopen/edit/save regression at iteration 4/10
+  (`E:/FrostBuilds/windows-save-next-session-49ac-r1.log`). Recovery can encounter a
+  distinct payload holding metadata displaced from the original file during preparation.
+  These artifacts and the failing regression are preserved; the full transaction remains
+  unapproved. A copy-then-rename alternative is under investigation, without silently
+  dropping metadata guarantees or weakening tests. Independent review verified the
+  alternative's r4 scratch evidence: 40 kill/reopen/next-save cases and selected NTFS
+  metadata fixtures, with explicit pre-mutation refusal for object IDs/custom short names.
+  That same revision lost compression on a successful save; later scratch revisions
+  address compression and checked cleanup but have not established a production fix.
+  Actual isolated copy implementation `ea7fa` then built all 135 steps, passed 11
+  SafeWrite cases with one symlink-privilege skip, and retained two failing successful-save
+  contract tests for object IDs and short names. The original kill test and stronger
+  next-session test passed; ten replay runs covered 100 killed-save/reopen/save sessions
+  without failure. Astra verified this bounded evidence. Short-name journal recovery is
+  under review, including refusal before creating a file through a missing short alias;
+  object-ID/EFS compatibility, non-NTFS paths and writeFileAtomicWithMtime remain unresolved.
+  Alias successor `fef891` subsequently passed 19 product cases with one privilege skip
+  and the retained object-ID contract failure. Forty controlled alias helper crash cases
+  passed with independently checked compiler/header provenance; synthetic missing-alias
+  cases are distinguished from natural retained-alias behavior. Object-ID hybrid r7 is
+  still scratch research, with interrupted transfer, artifact cleanup, multi-editor
+  stale-base fencing and complete production recovery unresolved. It is not beta-ready.
+- Lua engine source `71e57` built through all 260 steps with an admitted final link;
+  its focused runtime run failed. Review found non-monotonic request IDs in the new
+  tests, including the apparently passing isolation case, whose disconnect could mask
+  the intended assertion. Neither original case establishes acceptance. Corrected successor
+  `7037` passed three focused cases/28 assertions, including live-connection isolation and
+  separate invalid-wire disconnect behavior. Astra verified 35 joint ancestry hashes and
+  both 6,085-file source archives. Formatted successor `a23d` built and passed all 63
+  FrostLuaDebugTests cases/4,805 assertions; Astra verified 18 evidence hashes and exact
+  source provenance. Windows privilege prevented the symlink test body from running.
+  The matching FrostEditor then built in seven steps. Actual private-desktop IDE/engine
+  test `75ec` passed captured revision/line 5 hit, clear acknowledgement, owned Stop/Edit
+  and graceful engine close. Astra verified 29 evidence hashes plus source/build ancestry
+  in `E:/FrostBuilds/lua-debug/real-captured-breakpoint-r1-evidence-20261103` and its
+  command/integrity supplements. The owned copied fixture was used; original project files
+  match the archived engine inputs. This does not establish post-clear execution, physical
+  input or workspace-file breakpoint binding; a stronger marker test is running separately.
+  That stronger test exposed a real Running Stop defect. Production `15fd` fixes idle
+  owner-thread and running Lua-hook stop handling; test-only `83e6` corrects the request
+  timing of an existing module-order assertion. Matching full suite passed 65/65 and
+  4,907 assertions, and the unchanged failed `6d3` real-host scenario now passes marker
+  progress, Running Stop to Edit and graceful close. Astra verified 43 evidence hashes
+  in `E:/FrostBuilds/lua-debug/accepted-engine-83e6-running-stop-20261103` and
+  `E:/FrostBuilds/lua-debug/accepted-real-captured-clear-running-stop-20261103`.
+  Blocked native calls, coroutine-created sessions and workspace binding remain outside
+  this acceptance; these isolated changes have not been joined into the root preview.
+  The independent IDE component has 39 debugger and 28 UI passes, but no live engine/UI
+  vertical acceptance is claimed. CMake owner/trust component `86a0b560` passed 18 owner,
+  12 service and 31 host cases. Selected-source guard `989d50` then built in 12 steps
+  and passed 30 focused cases; Astra verified its evidence and 2,495-file source comparison.
+  The isolated retirement successor `619bfc` additionally built and passed 9 focused plus
+  43 broader journal/owner cases, including actual repeated Add/Remove and guarded writer
+  crash recovery. Astra accepted this bounded evidence; it is not a whole-app restart test,
+  and the broader filter did not include DocumentFenceTest. Actual UI/startup wiring remains open.
+- The next root source `97fda560` adds reviewed Build output guidance/Clear-button state
+  and Problems empty states distinguishing absent diagnostics from filtered-out diagnostics.
+  All five changed paths match their approved component sources; warning plumbing is unchanged.
+  Windows built 38 steps and both platforms passed all 11 focused toolwindow tests. Astra
+  verified ten artifact and five source hashes in `E:/FrostBuilds/orchestration/gui-empty-97fd-evidence.json`.
+  Stage `E:/FrostBuilds/preview/codex-20261103-97fd-gui` contains 141 files and passed its
+  private-desktop self-test; app DLL SHA256 is
+  `77B0270DD573124378022E3A2B07022A5D6F9A509869BC66DE7D305BF62240DF`.
+  Actual owned Tiny-project GUI probe r2 displayed Build guidance/disabled Clear, initial
+  no-problems message, a real compiler diagnostic at main.c:2, the filtered-out message,
+  and the restored diagnostic after clearing the filter. IDE exited zero; fixture inputs
+  are unchanged. Astra verified all 19 artifacts and three fixture hashes in
+  `E:/FrostBuilds/gui-build-empty-acceptance/tiny-97fda-r2/manifest.json`.
+  Failed r1 pane-toggle and terminated optional r3 probes are retained and unclaimed;
+  actual diagnostic navigation or physical keyboard input is not claimed.
+- Managed aggregate-owner component `286f835` compiled and passed 12 coordinator,
+  53 managed/owned-child and 14 Unity-control tests, with one reparse-privilege skip.
+  Astra verified 2,551 source files and 13 artifact hashes. Main application/real Editor
+  integration remains unfinished; no Unity Editor has launched. Rename root semantic join
+  `3adefe5e` is now compiling in isolation, with positive mutation still disabled.
+  Its reviewed mutex-initialization correction `99d1d47b` built and passed storage 50,
+  document 39, text 2, build admission 3 and app 37 cases, with three fixture-only skips.
+  Real-helper `d11c` failed before Ready because scratch and production commit flags were
+  both sent; source-reviewed `f0534845` fixes that request but remains unbuilt/unrun.
+  Windows CMake `3fb35` passed project 14 and build-service 12 cases, but app results are
+  47 passes/four skips/two failures. Diagnostic `b861` identifies a still-present job
+  process after CMake root exit; no process-drain fix is accepted. All of this remains isolated.
+- Next: fix and independently verify Windows save safety, rerun required combined gates, and integrate
+  the project-edit/debugger verticals. No new commit, merge, beta promotion or release is
+  claimed for this candidate. No user decision is currently required.
+
 ## 2026-11-03: Project, target persistence and Mono integration verification
 
 - Corrected combined tree `f6391d0a` passed both full quick gates: Windows 3034/3059

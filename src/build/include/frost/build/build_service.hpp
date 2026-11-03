@@ -159,6 +159,10 @@ struct BuildServiceCallbacks {
     std::function<void(const BuildProgress& progress)> onProgress{};
     std::function<void(const BuildOutcome& outcome)> onFinished{}; // Before the state returns to Idle.
     std::function<void(const project::SolutionConfiguration& configuration)> onActiveConfigurationChanged{};
+    // Optional per-event GUI marshalling fence; the producer supplies the originating job identity.
+    std::function<void(BuildOutputKind, std::string_view, std::function<bool()>)> onOutputFenced{};
+    std::function<void(const BuildDiagnostic&, std::function<bool()>)> onDiagnosticFenced{};
+    std::function<void(const BuildOutcome&, std::function<bool()>)> onFinishedFenced{};
 };
 
 struct BuildServiceOptions {

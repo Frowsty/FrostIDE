@@ -108,6 +108,8 @@ TEST(BuildOutputPane, StreamsABuildFromServiceCallbacksAndJumpsToDiagnostics) {
     controller.setBackend(&backend);
     BuildOutputPane pane;
     pane.setController(&controller);
+    EXPECT_TRUE(pane.editor()->placeholderText().contains(QStringLiteral("Enter or F4")));
+    EXPECT_FALSE(pane.clearButton()->isEnabled());
     test::SignalLog jumps(&pane, &BuildOutputPane::openLocation);
 
     // The service calls back on its own thread; the controller marshals to this one.
@@ -125,6 +127,7 @@ TEST(BuildOutputPane, StreamsABuildFromServiceCallbacksAndJumpsToDiagnostics) {
     runPostedEvents();
 
     ASSERT_EQ(pane.log().size(), 3U);
+    EXPECT_TRUE(pane.clearButton()->isEnabled());
     EXPECT_EQ(pane.editor()->document()->blockCount(), 3);
     EXPECT_EQ(pane.editor()->document()->findBlockByNumber(1).text().toStdString(), errorLine());
     EXPECT_EQ(pane.editor()->document()->findBlockByNumber(2).text(), QStringLiteral("Build failed in 4.2 s"));
@@ -146,6 +149,7 @@ TEST(BuildOutputPane, StreamsABuildFromServiceCallbacksAndJumpsToDiagnostics) {
     runPostedEvents();
     EXPECT_EQ(pane.log().size(), 0U);
     EXPECT_TRUE(pane.editor()->toPlainText().isEmpty());
+    EXPECT_FALSE(pane.clearButton()->isEnabled());
 }
 
 TEST(BuildOutputPane, AClickOnADiagnosticLineJumps) {

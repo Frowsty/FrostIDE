@@ -133,9 +133,10 @@ using VariableList = std::vector<dap::Variable>;
 
 // How a session ended.
 struct DebugOutcome {
-    std::optional<int> exitCode; // The exited event's code.
-    std::optional<Error> error;  // The adapter failed to start or launch, or vanished.
-    bool stopped = false;        // stop() or kill() ended it.
+    std::optional<int> exitCode;      // The exited event's code.
+    std::optional<Error> error;       // The adapter failed to start or launch, or vanished.
+    bool stopped = false;             // stop() or kill() ended it.
+    bool disconnectConfirmed = false; // A disconnect request completed successfully.
 };
 
 // Every callback is optional (header comment for threads).

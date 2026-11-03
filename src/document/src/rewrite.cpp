@@ -124,6 +124,8 @@ Result<RewriteOutcome> SaveManager::rewriteClosedFile(std::string_view path, Rew
     }
     outcome.written = true;
     outcome.target = std::move(written->target);
+    if (written->warning)
+        outcome.warnings.push_back(std::move(*written->warning).withContext("while rewriting " + file));
     outcome.bytes = bytes->size();
     outcome.edits = edits->size();
     if (history) {

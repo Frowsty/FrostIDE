@@ -334,6 +334,227 @@ TEST_F(CMakeServiceTest, NothingRunsBeforeTrust) {
     EXPECT_FALSE(tree.fs.exists(buildDir(".cmake/api/v1/query/client-frostide/query.json")).value_or(false));
 }
 
+TEST_F(CMakeServiceTest, PersonalWrapperRunsOnlyAfterTrustAndSaveWithSeparateArguments) {
+    installReply();
+    auto opts = options();
+    const std::string python = MemTree::path("sdk/" + exe("python"));
+    opts.buildWrappers.push_back({.root = folder(),
+                                  .profile = "Debug",
+                                  .executable = python,
+                                  .defaultTarget = "FrostTests",
+                                  .buildArguments = {"Scripts/Build.py", "--target", "{target}", "--preset",
+                                                     "{profile}", "a b;$(not-a-shell)"}});
+    start(opts);
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    EXPECT_TRUE(launcher.launches().empty());
+    int saves = 0;
+    service->setSaveAllHook([&](SaveAllCompletion done) {
+        ++saves;
+        done({});
+    });
+    ASSERT_TRUE(service->build(BuildAction::Build));
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(launcher.launches().empty());
+    launcher.expect({.expectExecutable = python, .stdoutBytes = "wrapper output\n"});
+    ASSERT_TRUE(service->trust(folder()));
+    waitIdle();
+    ASSERT_EQ(saves, 1);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1u);
+    EXPECT_EQ(launches[0].spec.arguments, (std::vector<std::string>{"Scripts/Build.py", "--target", "FrostTests",
+                                                                    "--preset", "Debug", "a b;$(not-a-shell)"}));
+    EXPECT_EQ(launches[0].spec.workingDirectory, folder());
+    ASSERT_TRUE(service->lastOutcome());
+    EXPECT_TRUE(service->lastOutcome()->succeeded());
+    {
+        LockGuard lock(events.mutex);
+        EXPECT_NE(std::ranges::find(events.buildLines, "wrapper output"), events.buildLines.end());
+    }
+    const auto model = service->model();
+    ASSERT_TRUE(model);
+    const auto found = std::ranges::find(model->targets, "core", &project::CMakeTarget::name);
+    ASSERT_NE(found, model->targets.end());
+    const auto selected = static_cast<std::size_t>(found - model->targets.begin());
+    launcher.expect({.expectExecutable = python});
+    ASSERT_TRUE(service->build(BuildAction::Build, selected, {}, model));
+    waitIdle();
+    const auto targetLaunches = launcher.launches();
+    ASSERT_EQ(targetLaunches.size(), 2u);
+    EXPECT_EQ(targetLaunches.back().spec.arguments[2], "core");
+    EXPECT_EQ(service->build(BuildAction::Clean).error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(launcher.launches().size(), 2u);
+}
+
+TEST_F(CMakeServiceTest, WrapperRequiresAnExistingConfiguredModel) {
+    auto opts = options();
+    opts.buildWrappers.push_back({.root = folder(),
+                                  .profile = "Debug",
+                                  .executable = MemTree::path("sdk/python"),
+                                  .buildArguments = {"Scripts/Build.py"}});
+    start(opts);
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    auto result = service->build(BuildAction::Build);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+class GatedSuccessProcess final : public io::IProcess {
+public:
+    GatedSuccessProcess(std::unique_ptr<io::IProcess> inner, std::atomic<bool>& release)
+        : m_inner(std::move(inner)), m_release(release) {}
+    io::ProcessId pid() const noexcept override { return m_inner->pid(); }
+    Result<void> writeStdin(std::string_view bytes) override { return m_inner->writeStdin(bytes); }
+    void closeStdin() noexcept override { m_inner->closeStdin(); }
+    Result<std::size_t> readStdout(std::span<char> bytes) override { return m_inner->readStdout(bytes); }
+    Result<std::size_t> readStderr(std::span<char> bytes) override { return m_inner->readStderr(bytes); }
+    Result<io::ExitStatus> wait(std::optional<IClock::Duration> timeout) override {
+        if (!m_release.load() && !m_terminated.load()) {
+            std::this_thread::sleep_for(5ms);
+            return fail(ErrorCode::Timeout, "held by test");
+        }
+        return m_inner->wait(timeout);
+    }
+    Result<void> terminate() override {
+        m_terminated.store(true);
+        return m_inner->terminate();
+    }
+    Result<io::ProcessResult> communicate(std::string_view bytes, IClock::Duration timeout) override {
+        return m_inner->communicate(bytes, timeout);
+    }
+    void abandonOutput() noexcept override { m_inner->abandonOutput(); }
+
+private:
+    std::unique_ptr<io::IProcess> m_inner;
+    std::atomic<bool>& m_release;
+    std::atomic<bool> m_terminated{false};
+};
+
+class GatedSuccessLauncher final : public io::IProcessLauncher {
+public:
+    io::ScriptedProcessLauncher scripted;
+    std::atomic<bool> release{false};
+    Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+        auto result = scripted.launch(spec);
+        if (!result)
+            return result;
+        return std::unique_ptr<io::IProcess>(new GatedSuccessProcess(std::move(*result), release));
+    }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                           const io::AsyncContext& context) override {
+        return scripted.launchAsync(spec, context);
+    }
+};
+
+TEST_F(CMakeServiceTest, WrapperTrustRevisionInvalidatesLateSuccess) {
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    auto opts = options();
+    const std::string python = MemTree::path("sdk/" + exe("python"));
+    opts.buildWrappers.push_back(
+        {.root = folder(), .profile = "Debug", .executable = python, .buildArguments = {"Scripts/Build.py"}});
+    GatedSuccessLauncher gated;
+    service = CMakeService::create(tree.fs, gated, *trustStore, std::move(opts), events.callbacks());
+    struct Cleanup {
+        std::unique_ptr<CMakeService>& service;
+        ~Cleanup() { service.reset(); }
+    } cleanup{service};
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    gated.scripted.expect({.expectExecutable = python, .exitCode = 0});
+    auto completions = std::make_shared<std::atomic<int>>(0);
+    ASSERT_TRUE(
+        service->build(BuildAction::Build, std::nullopt, [completions](const CMakeBuildOutcome&) { ++*completions; }));
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (std::chrono::steady_clock::now() < deadline && gated.scripted.launches().empty())
+        std::this_thread::sleep_for(10ms);
+    ASSERT_FALSE(gated.scripted.launches().empty());
+    ASSERT_TRUE(trustStore->untrust(folder()));
+    ASSERT_TRUE(trustStore->trust(folder()));
+    gated.release.store(true);
+    waitIdle();
+    ASSERT_TRUE(service->lastOutcome());
+    EXPECT_FALSE(service->lastOutcome()->succeeded());
+    EXPECT_EQ(service->lastOutcome()->error->code(), ErrorCode::Cancelled);
+    EXPECT_EQ(service->lastOutcome()->result.exitCode, 0);
+    EXPECT_FALSE(service->lastOutcome()->result.cancelled);
+    EXPECT_EQ(completions->load(), 1);
+    {
+        LockGuard lock(events.mutex);
+        EXPECT_TRUE(events.builds.empty()); // Legacy public completion is fenced as well.
+    }
+}
+
+TEST_F(CMakeServiceTest, WrapperCancellationTerminatesChild) {
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    auto opts = options();
+    const std::string python = MemTree::path("sdk/" + exe("python"));
+    opts.buildWrappers.push_back(
+        {.root = folder(), .profile = "Debug", .executable = python, .buildArguments = {"Scripts/Build.py"}});
+    start(opts);
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    launcher.expect({.expectExecutable = python, .neverExits = true});
+    ASSERT_TRUE(service->build(BuildAction::Build));
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (std::chrono::steady_clock::now() < deadline && launcher.launches().empty())
+        std::this_thread::sleep_for(10ms);
+    ASSERT_FALSE(launcher.launches().empty());
+    service->cancel();
+    waitIdle();
+    ASSERT_TRUE(service->lastOutcome());
+    EXPECT_FALSE(service->lastOutcome()->succeeded());
+    EXPECT_TRUE(launcher.launches().front().terminated);
+}
+
+TEST_F(CMakeServiceTest, WrapperOutputFenceSurvivesCompletionButNotSupersession) {
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    auto opts = options();
+    const std::string python = MemTree::path("sdk/" + exe("python"));
+    opts.buildWrappers.push_back(
+        {.root = folder(), .profile = "Debug", .executable = python, .buildArguments = {"Scripts/Build.py"}});
+    Mutex fencesMutex;
+    std::vector<std::function<bool()>> fences;
+    auto callbacks = events.callbacks();
+    callbacks.onOutputFenced = [&](BuildOutputKind kind, std::string_view, std::function<bool()> fence) {
+        if (kind != BuildOutputKind::Stdout)
+            return;
+        LockGuard lock(fencesMutex);
+        fences.push_back(std::move(fence));
+    };
+    service = CMakeService::create(tree.fs, launcher, *trustStore, std::move(opts), std::move(callbacks));
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    launcher.expect({.expectExecutable = python, .stdoutBytes = "first output\n"});
+    ASSERT_TRUE(service->build(BuildAction::Build));
+    waitIdle();
+    std::function<bool()> first;
+    {
+        LockGuard lock(fencesMutex);
+        ASSERT_EQ(fences.size(), 1u);
+        first = fences.front();
+    }
+    ASSERT_TRUE(first()); // A finished job's queued GUI output is still current.
+    launcher.expect({.expectExecutable = python, .stdoutBytes = "second output\n"});
+    ASSERT_TRUE(service->build(BuildAction::Build));
+    waitIdle();
+    EXPECT_FALSE(first());
+    std::function<bool()> second;
+    {
+        LockGuard lock(fencesMutex);
+        ASSERT_EQ(fences.size(), 2u);
+        second = fences.back();
+    }
+    EXPECT_TRUE(second());
+    ASSERT_TRUE(service->closeFolder());
+    ASSERT_TRUE(service->openFolder(folder()));
+    EXPECT_FALSE(second()); // Reopening the same root is a new profile generation.
+}
+
 TEST_F(CMakeServiceTest, ConfiguresOnceTrusted) {
     start();
     ASSERT_TRUE(service->openFolder(folder()).has_value());

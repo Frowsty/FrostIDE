@@ -9,6 +9,9 @@
 #include "frost/io/utf.hpp"
 
 #include "internal.hpp"
+#include "save_alias_journal_win.hpp"
+#include "save_metadata_win.hpp"
+#include "save_reservation_win.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -20,6 +23,8 @@
 #include <vector>
 
 #include <windows.h>
+
+#include <aclapi.h>
 
 namespace frost::io {
 namespace {
@@ -285,7 +290,7 @@ Result<void> replaceWithTemp(const std::string& target, const std::wstring& wide
     if (!temp) {
         return std::unexpected(std::move(temp.error()));
     }
-    const auto abandon = [&](Error error) -> Result<void> {
+    const auto abandon = [&](Error error) -> std::unexpected<Error> {
         temp->handle.reset();
         DeleteFileW(temp->widePath.c_str());
         return std::unexpected(std::move(error));
@@ -337,6 +342,206 @@ Result<void> replaceWithTemp(const std::string& target, const std::wstring& wide
         default: return abandon(win32Error(error, "safeWrite: replace", path));
         }
     }
+}
+
+// Candidate local-NTFS save path: all metadata work is done on an owned temp
+// before a single same-volume handle rename. Unsupported identity metadata is
+// refused before the target or any temp is changed.
+Result<std::optional<Error>> replaceWithCopy(const std::string& target, const std::wstring& wideTarget,
+                                             const detail::SaveFileIdentity& identity, std::string_view data,
+                                             std::string_view path) {
+    UniqueHandle original;
+    for (int attempt = 0;; ++attempt) {
+        original.reset(CreateFileW(wideTarget.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                                   OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        if (original.valid())
+            break;
+        const DWORD error = GetLastError();
+        const bool busy =
+            error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_USER_MAPPED_FILE;
+        if (busy && attempt < kBusyRetries) {
+            Sleep(kBusyRetryMs);
+            continue;
+        }
+        if (busy)
+            return fail(ErrorCode::Busy,
+                        std::format("safeWrite '{}': the file is in use and was left unchanged", path));
+        return std::unexpected(win32Error(error, "safeWrite: open source", path));
+    }
+    detail::SaveFileIdentity opened{};
+    if (!detail::saveFileIdentity(original.get(), opened) || !(opened == identity))
+        return fail(ErrorCode::Busy, std::format("safeWrite '{}': the file changed while saving", path));
+    save_metadata::Metadata metadata;
+    if (const DWORD error = save_metadata::queryMetadata(original.get(), wideTarget, metadata); error != ERROR_SUCCESS)
+        return std::unexpected(win32Error(error, "safeWrite: inspect metadata for", path));
+    if (metadata.hasObjectId)
+        return fail(ErrorCode::IoError,
+                    std::format("safeWrite '{}': files with an NTFS object ID are not supported in "
+                                "this beta; the file was left unchanged. Copy your edits to a new, unencrypted file",
+                                path));
+
+    const DWORD attributes = GetFileAttributesW(wideTarget.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES)
+        return std::unexpected(lastWin32Error("safeWrite: read attributes of", path));
+    if ((attributes & FILE_ATTRIBUTE_ENCRYPTED) != 0)
+        return fail(ErrorCode::IoError,
+                    std::format("safeWrite '{}': encrypted files are not supported in this beta; "
+                                "the file was left unchanged. Copy your edits to a new, unencrypted file",
+                                path));
+    FILETIME creation{};
+    if (!GetFileTime(original.get(), &creation, nullptr, nullptr))
+        return std::unexpected(lastWin32Error("safeWrite: read creation time of", path));
+    DWORD securitySize = 0;
+    GetFileSecurityW(wideTarget.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &securitySize);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        return std::unexpected(lastWin32Error("safeWrite: size security of", path));
+    std::vector<unsigned char> security(securitySize);
+    if (!GetFileSecurityW(wideTarget.c_str(), DACL_SECURITY_INFORMATION, security.data(), securitySize, &securitySize))
+        return std::unexpected(lastWin32Error("safeWrite: read security of", path));
+    USHORT compression = COMPRESSION_FORMAT_NONE;
+    DWORD compressionBytes = 0;
+    if ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0 &&
+        (!DeviceIoControl(original.get(), FSCTL_GET_COMPRESSION, nullptr, 0, &compression, sizeof(compression),
+                          &compressionBytes, nullptr) ||
+         compressionBytes != sizeof(compression)))
+        return std::unexpected(lastWin32Error("safeWrite: read compression of", path));
+    auto temp = createTempFile(parentPath(target, PathStyle::Windows), fileName(target, PathStyle::Windows),
+                               "safeWrite: create temp file for", path);
+    if (!temp)
+        return std::unexpected(std::move(temp.error()));
+    const auto abandon = [&](Error error) -> std::unexpected<Error> {
+        temp->handle.reset();
+        const DWORD attrs = GetFileAttributesW(temp->widePath.c_str());
+        DWORD cleanup = ERROR_SUCCESS;
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0 &&
+            !SetFileAttributesW(temp->widePath.c_str(), attrs & ~DWORD{FILE_ATTRIBUTE_READONLY}))
+            cleanup = GetLastError();
+        if (cleanup == ERROR_SUCCESS && !DeleteFileW(temp->widePath.c_str())) {
+            cleanup = GetLastError();
+            if (cleanup == ERROR_FILE_NOT_FOUND)
+                cleanup = ERROR_SUCCESS;
+        }
+        if (cleanup != ERROR_SUCCESS)
+            return fail(ErrorCode::IoError, std::format("{}; private temp '{}' was retained (Win32 error {})",
+                                                        error.describe(), temp->path, cleanup));
+        return std::unexpected(std::move(error));
+    };
+    temp->handle.reset();
+    if (!CopyFileExW(wideTarget.c_str(), temp->widePath.c_str(), nullptr, nullptr, nullptr, 0))
+        return abandon(lastWin32Error("safeWrite: copy metadata for", path));
+    temp->handle.reset(CreateFileW(temp->widePath.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE | WRITE_DAC, kShareAll,
+                                   nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!temp->handle.valid())
+        return abandon(lastWin32Error("safeWrite: open copied temp for", path));
+    PSID originalOwner = nullptr, originalGroup = nullptr, copiedOwner = nullptr, copiedGroup = nullptr;
+    PSECURITY_DESCRIPTOR originalDescriptor = nullptr, copiedDescriptor = nullptr;
+    const DWORD oldSecurity =
+        GetSecurityInfo(original.get(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+                        &originalOwner, &originalGroup, nullptr, nullptr, &originalDescriptor);
+    const DWORD newSecurity =
+        GetSecurityInfo(temp->handle.get(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+                        &copiedOwner, &copiedGroup, nullptr, nullptr, &copiedDescriptor);
+    const bool sameOwner = oldSecurity == ERROR_SUCCESS && newSecurity == ERROR_SUCCESS &&
+                           EqualSid(originalOwner, copiedOwner) && EqualSid(originalGroup, copiedGroup);
+    if (originalDescriptor)
+        LocalFree(originalDescriptor);
+    if (copiedDescriptor)
+        LocalFree(copiedDescriptor);
+    if (!sameOwner)
+        return abandon(Error(
+            ErrorCode::IoError,
+            std::format("safeWrite '{}': owner or group cannot be preserved; the file was left unchanged", path)));
+    if ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0) {
+        DWORD returned = 0;
+        if (!DeviceIoControl(temp->handle.get(), FSCTL_SET_COMPRESSION, &compression, sizeof(compression), nullptr, 0,
+                             &returned, nullptr))
+            return abandon(lastWin32Error("safeWrite: preserve compression for", path));
+    }
+    LARGE_INTEGER zero{};
+    if (!SetFilePointerEx(temp->handle.get(), zero, nullptr, FILE_BEGIN) || !SetEndOfFile(temp->handle.get()))
+        return abandon(lastWin32Error("safeWrite: truncate copied temp for", path));
+    if (const DWORD error = writeAll(temp->handle.get(), data); error != ERROR_SUCCESS)
+        return abandon(win32Error(error, "safeWrite: write copied temp for", path));
+    if (!SetFileTime(temp->handle.get(), &creation, nullptr, nullptr))
+        return abandon(lastWin32Error("safeWrite: preserve creation time for", path));
+    auto sameDacl = [&]() {
+        DWORD size = 0;
+        GetFileSecurityW(temp->widePath.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &size);
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+            return false;
+        std::vector<unsigned char> actual(size);
+        return GetFileSecurityW(temp->widePath.c_str(), DACL_SECURITY_INFORMATION, actual.data(), size, &size) &&
+               actual == security;
+    };
+    if (!sameDacl()) {
+        auto* descriptor = reinterpret_cast<PSECURITY_DESCRIPTOR>(security.data());
+        SECURITY_DESCRIPTOR_CONTROL control{};
+        DWORD revision = 0;
+        BOOL present = FALSE, defaulted = FALSE;
+        PACL dacl = nullptr;
+        if (!GetSecurityDescriptorControl(descriptor, &control, &revision) ||
+            !GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted))
+            return abandon(lastWin32Error("safeWrite: inspect DACL for", path));
+        const SECURITY_INFORMATION protection =
+            (control & SE_DACL_PROTECTED) != 0 ? PROTECTED_DACL_SECURITY_INFORMATION : 0;
+        if (const DWORD error =
+                SetSecurityInfo(temp->handle.get(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | protection, nullptr,
+                                nullptr, present ? dacl : nullptr, nullptr);
+            error != ERROR_SUCCESS)
+            return abandon(win32Error(error, "safeWrite: preserve DACL for", path));
+        if (!sameDacl())
+            return abandon(
+                Error(ErrorCode::IoError,
+                      std::format("safeWrite '{}': DACL cannot be preserved; the file was left unchanged", path)));
+    }
+    const DWORD copiedAttributes = attributes & kSettableAttributes;
+    if (!SetFileAttributesW(temp->widePath.c_str(), copiedAttributes ? copiedAttributes : FILE_ATTRIBUTE_NORMAL))
+        return abandon(lastWin32Error("safeWrite: preserve attributes for", path));
+    if (!FlushFileBuffers(temp->handle.get()))
+        return abandon(lastWin32Error("safeWrite: flush copied temp for", path));
+    detail::SaveFileIdentity current{};
+    UniqueHandle named(
+        CreateFileW(wideTarget.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING, 0, nullptr));
+    if (!named.valid() || !detail::saveFileIdentity(named.get(), current) || !(current == identity))
+        return abandon(Error(ErrorCode::Busy, std::format("safeWrite '{}': target changed while saving", path)));
+    const std::wstring journalPath = detail::aliasJournalPath(wideTarget);
+    if (journalPath.empty())
+        return abandon(Error(ErrorCode::IoError, "safeWrite: cannot name alias recovery record"));
+    detail::SaveFileIdentity prepared{};
+    if (!detail::saveFileIdentity(temp->handle.get(), prepared))
+        return abandon(lastWin32Error("safeWrite: identify copied temp for", path));
+    detail::SaveFileReservation preparedReservation(prepared);
+    if (!preparedReservation.valid())
+        return abandon(win32Error(preparedReservation.error(), "safeWrite: reserve copied temp for", path));
+    if (!metadata.shortName.empty()) {
+        detail::AliasRecord record;
+        record.target = wideTarget;
+        record.temp = temp->widePath;
+        record.alias = metadata.shortName;
+        record.header.original = identity;
+        record.header.prepared = prepared;
+        if (const DWORD error = detail::writeAliasRecord(journalPath, record); error != ERROR_SUCCESS)
+            return abandon(
+                Error(ErrorCode::IoError,
+                      std::format("safeWrite '{}': cannot create alias recovery record '{}' (Win32 error {})", path,
+                                  lossyUtf8(journalPath), error)));
+    }
+    if (const DWORD error = detail::publishCopy(temp->handle.get(), wideTarget); error != ERROR_SUCCESS)
+        return abandon(win32Error(error, "safeWrite: publish copied temp for", path));
+    if (!metadata.shortName.empty()) {
+        if (const DWORD error = save_metadata::restoreShortName(temp->handle.get(), metadata.shortName);
+            error != ERROR_SUCCESS)
+            return std::optional<Error>{Error(
+                ErrorCode::IoError,
+                std::format("'{}' was saved, but its short name needs recovery (Win32 error {}); record '{}' retained",
+                            path, error, lossyUtf8(journalPath)))};
+        if (!DeleteFileW(journalPath.c_str()))
+            return std::optional<Error>{Error(
+                ErrorCode::IoError,
+                std::format("'{}' was saved, but alias recovery record '{}' could not be removed (Win32 error {})",
+                            path, lossyUtf8(journalPath), GetLastError()))};
+    }
+    return std::optional<Error>{};
 }
 
 /*
@@ -458,7 +663,7 @@ public:
         UniqueHandle& file = temp->handle;
 
         // From here on every failure removes the temp file.
-        const auto abandon = [&](Error error) -> Result<void> {
+        const auto abandon = [&](Error error) -> std::unexpected<Error> {
             file.reset();
             DeleteFileW(wideTemp.c_str());
             return std::unexpected(std::move(error));
@@ -539,12 +744,62 @@ public:
             result.target = std::move(*resolved);
             wideTarget = std::move(*wideResolved);
         }
+        std::string canonicalTarget = result.target;
+        // One spelling and one path lock across aliases through junctions/symlinks.
+        if (auto canonical = finalPathOf(wideTarget, path)) {
+            canonicalTarget = *canonical;
+            auto converted = toWin32Path(*canonical);
+            if (!converted)
+                return std::unexpected(std::move(converted.error()));
+            wideTarget = std::move(*converted);
+        } else if (canonical.error().code() != ErrorCode::NotFound) {
+            return std::unexpected(std::move(canonical.error()));
+        }
+        detail::SavePathReservation pathReservation(wideTarget);
+        if (!pathReservation.valid())
+            return std::unexpected(win32Error(pathReservation.error(), "safeWrite: reserve path", path));
         UniqueHandle probe(CreateFileW(wideTarget.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
                                        FILE_FLAG_BACKUP_SEMANTICS, nullptr));
         if (!probe.valid()) {
             const DWORD error = GetLastError();
             if (errorCodeFromWin32(error) != ErrorCode::NotFound) {
                 return std::unexpected(win32Error(error, "safeWrite", path));
+            }
+            // A missing target with an alias journal is ambiguous, never a new file.
+            const std::wstring aliasJournal = detail::aliasJournalPath(wideTarget);
+            if (aliasJournal.empty())
+                return fail(ErrorCode::IoError, "safeWrite: cannot name alias recovery record");
+            if (GetFileAttributesW(aliasJournal.c_str()) != INVALID_FILE_ATTRIBUTES)
+                return fail(ErrorCode::IoError,
+                            std::format("safeWrite '{}': alias recovery record '{}' needs attention", path,
+                                        lossyUtf8(aliasJournal)));
+            const DWORD markerError = GetLastError();
+            if (markerError != ERROR_FILE_NOT_FOUND && markerError != ERROR_PATH_NOT_FOUND)
+                return std::unexpected(win32Error(markerError, "safeWrite: inspect alias recovery record for", path));
+            // The missing name may be an old short alias whose long-name file
+            // was published immediately before a crash. Never create a split file.
+            auto parent = toWin32Path(parentPath(result.target, PathStyle::Windows));
+            if (!parent)
+                return std::unexpected(std::move(parent.error()));
+            if (auto canonicalParent = finalPathOf(*parent, path)) {
+                auto parentWide = toWin32Path(*canonicalParent);
+                if (!parentWide)
+                    return std::unexpected(std::move(parentWide.error()));
+                const auto slash = wideTarget.find_last_of(L"\\/");
+                if (slash == std::wstring::npos)
+                    return fail(ErrorCode::IoError, "safeWrite: cannot inspect missing name");
+                std::wstring conflict;
+                const DWORD scan = detail::findMissingAliasRecord(
+                    *parentWide, std::wstring_view(wideTarget).substr(slash + 1), conflict);
+                if (scan != ERROR_SUCCESS)
+                    return std::unexpected(win32Error(scan, "safeWrite: inspect alias recovery records for", path));
+                if (!conflict.empty())
+                    return fail(
+                        ErrorCode::IoError,
+                        std::format("safeWrite '{}': this name needs alias recovery from '{}' before creating a file",
+                                    path, lossyUtf8(conflict)));
+            } else if (canonicalParent.error().code() != ErrorCode::NotFound) {
+                return std::unexpected(std::move(canonicalParent.error()));
             }
             // A new file (a missing parent directory fails in writeFileAtomic with NotFound).
             if (auto written = writeFileAtomic(result.target, data); !written) {
@@ -557,9 +812,54 @@ public:
         if (GetFileInformationByHandle(probe.get(), &info) == FALSE) {
             return std::unexpected(lastWin32Error("safeWrite", path));
         }
+        detail::SaveFileIdentity identity{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
+        detail::SaveFileReservation fileReservation(identity);
+        if (!fileReservation.valid())
+            return std::unexpected(win32Error(fileReservation.error(), "safeWrite: reserve file", path));
+        UniqueHandle current(CreateFileW(wideTarget.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                         FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        detail::SaveFileIdentity currentIdentity{};
+        if (!current.valid() || !detail::saveFileIdentity(current.get(), currentIdentity) ||
+            !(currentIdentity == identity))
+            return fail(ErrorCode::Busy, std::format("safeWrite '{}': the target changed while saving", path));
+        if (const DWORD recovery = detail::recoverAliasRecord(wideTarget, identity); recovery != ERROR_SUCCESS)
+            return fail(ErrorCode::IoError,
+                        std::format("safeWrite '{}': alias recovery record '{}' needs attention (Win32 error {})", path,
+                                    lossyUtf8(detail::aliasJournalPath(wideTarget)), recovery));
+        if (!GetFileInformationByHandle(current.get(), &info))
+            return std::unexpected(lastWin32Error("safeWrite: refresh file identity", path));
         probe.reset();
         if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             return std::unexpected(detail::isADirectoryError("safeWrite", path));
+        }
+        const bool linked = info.nNumberOfLinks > 1;
+        bool localNtfs = false;
+        {
+            wchar_t volumeRoot[MAX_PATH]{}, filesystem[64]{};
+            if (!GetVolumePathNameW(wideTarget.c_str(), volumeRoot, MAX_PATH) ||
+                !GetVolumeInformationByHandleW(current.get(), nullptr, 0, nullptr, nullptr, nullptr, filesystem, 64))
+                return std::unexpected(lastWin32Error("safeWrite: identify target filesystem for", path));
+            const UINT driveType = GetDriveTypeW(volumeRoot);
+            if (driveType == DRIVE_UNKNOWN || driveType == DRIVE_NO_ROOT_DIR)
+                return fail(ErrorCode::IoError, std::format("safeWrite '{}': cannot identify target drive", path));
+            localNtfs = driveType == DRIVE_FIXED && _wcsicmp(filesystem, L"NTFS") == 0;
+        }
+        if (localNtfs) {
+            save_metadata::Metadata metadata;
+            if (const DWORD error = save_metadata::queryMetadata(current.get(), wideTarget, metadata);
+                error != ERROR_SUCCESS)
+                return std::unexpected(win32Error(error, "safeWrite: inspect metadata for", path));
+            if (metadata.hasObjectId)
+                return fail(ErrorCode::IoError,
+                            std::format("safeWrite '{}': files with an NTFS object ID are not supported in this beta; "
+                                        "the file was left unchanged. Copy your edits to a new, unencrypted file",
+                                        path));
+
+            if ((info.dwFileAttributes & FILE_ATTRIBUTE_ENCRYPTED) != 0)
+                return fail(ErrorCode::IoError,
+                            std::format("safeWrite '{}': encrypted files are not supported in this "
+                                        "beta; the file was left unchanged. Copy your edits to a new, unencrypted file",
+                                        path));
         }
         const DWORD attributes = info.dwFileAttributes & kSettableAttributes;
         const bool readOnly = (attributes & FILE_ATTRIBUTE_READONLY) != 0;
@@ -573,9 +873,17 @@ public:
                 return std::unexpected(lastWin32Error("safeWrite: clear the read-only attribute of", path));
             }
         }
-        const bool linked = info.nNumberOfLinks > 1;
-        auto written =
-            linked ? rewriteInPlace(wideTarget, data, path) : replaceWithTemp(result.target, wideTarget, data, path);
+        Result<void> written;
+        if (linked)
+            written = rewriteInPlace(wideTarget, data, path);
+        else if (localNtfs) {
+            auto copied = replaceWithCopy(canonicalTarget, wideTarget, identity, data, path);
+            if (!copied)
+                written = std::unexpected(std::move(copied.error()));
+            else
+                result.warning = std::move(*copied);
+        } else
+            written = replaceWithTemp(result.target, wideTarget, data, path);
         if (!written) {
             if (readOnly) {
                 SetFileAttributesW(wideTarget.c_str(), attributes); // Best effort: as it was.

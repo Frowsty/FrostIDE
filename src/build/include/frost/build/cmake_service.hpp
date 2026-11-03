@@ -117,6 +117,20 @@ struct CMakeBuildRequest {
     std::string profile{};               // The profile's name.
 };
 
+// An explicitly configured personal command for one project root and profile.
+struct CMakeBuildWrapper {
+    std::string root{};
+    std::string profile{};
+    std::string executable{};
+    std::string defaultTarget{};
+    std::vector<std::string> buildArguments{};
+    std::vector<std::string> cleanArguments{};
+    std::vector<std::string> rebuildArguments{};
+};
+
+// Decodes personal settings records; malformed records are retained for validation at use.
+[[nodiscard]] std::vector<CMakeBuildWrapper> cmakeBuildWrappers(const settings::RecordList& records);
+
 struct CMakeConfigureOutcome {
     std::string profile{};
     BuildResult result{};         // cmake's run; success = false when it did not start.
@@ -134,6 +148,8 @@ struct CMakeBuildOutcome {
     DiagnosticCounts counts{};    // Over the job's diagnostics.
     // The model at completion, for resolving this build's target even after a profile switch.
     std::shared_ptr<const project::CMakeProject> model{};
+    std::string sourceDirectory{};
+    std::uint64_t trustRevision = 0;
 
     [[nodiscard]] bool succeeded() const noexcept { return result.success && !error; }
 };
@@ -158,6 +174,9 @@ struct CMakeServiceCallbacks {
     std::function<void(const std::vector<project::CMakeProfile>& profiles, std::optional<std::size_t> active)>
         onProfilesChanged{};
     std::function<void(const CMakeBuildOutcome& outcome)> onFinished{}; // A build job ended.
+    std::function<void(BuildOutputKind, std::string_view, std::function<bool()>)> onOutputFenced{};
+    std::function<void(const BuildDiagnostic&, std::function<bool()>)> onDiagnosticFenced{};
+    std::function<void(const CMakeBuildOutcome&, std::function<bool()>)> onFinishedFenced{};
 };
 
 struct CMakeServiceOptions {
@@ -178,6 +197,7 @@ struct CMakeServiceOptions {
     std::string stateFilePath{};      // The persisted active profiles (absolute); "" persists nothing.
     // The `cmake.profiles` setting's records (cmakeProfileRecords) and the scope they came from.
     std::vector<project::CMakeProfileRecord> profileRecords{};
+    std::vector<CMakeBuildWrapper> buildWrappers{};
     project::CMakeProfileSource profileRecordSource = project::CMakeProfileSource::ApplicationSettings;
     bool configureOnOpen = true; // Configure in the background when a trusted folder opens or becomes trusted.
     std::chrono::milliseconds reloadDebounce{500};
@@ -256,6 +276,8 @@ public:
 
     // The UI's Save All before builds (BuildService::setSaveAllHook).
     void setSaveAllHook(SaveAllHook hook);
+    // Replaces personal wrappers while idle; an active job keeps its admitted command.
+    [[nodiscard]] Result<void> setBuildWrappers(std::vector<CMakeBuildWrapper> wrappers);
     /*
      * Starts `action` for target `target` (index into model()->targets) or for the profile's default
      * targets. On acceptance, `done` receives this job's outcome and completion-time model once on

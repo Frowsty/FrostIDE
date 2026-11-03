@@ -9,13 +9,19 @@
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/toolwindows/build_output.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "workbench_rig.hpp"
+#include <QAction>
+#include <QApplication>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 
@@ -62,6 +68,39 @@ TEST(WorkbenchCMake, ReloadOffersTrustBeforeConfiguring) {
     rig.workbench->cmakeService()->cancel();
 }
 
+TEST(WorkbenchCMake, PersonalBuildWrapperDialogPersistsTypedArguments) {
+    WorkDir dir("cmake-wrapper-settings");
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nproject(Example C)\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    auto* action = rig.window->findChild<QAction*>(QStringLiteral("cmakeBuildWrapperAction"));
+    ASSERT_NE(action, nullptr);
+    const std::string executable = dir.join("python.exe");
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        ASSERT_NE(dialog, nullptr);
+        QTimer::singleShot(2000, dialog, &QDialog::reject);
+        auto* program = dialog->findChild<QLineEdit*>(QStringLiteral("cmakeWrapperExecutable"));
+        auto* target = dialog->findChild<QLineEdit*>(QStringLiteral("cmakeWrapperDefaultTarget"));
+        auto* args = dialog->findChild<QPlainTextEdit*>(QStringLiteral("cmakeWrapperBuildArguments"));
+        ASSERT_NE(program, nullptr);
+        ASSERT_NE(target, nullptr);
+        ASSERT_NE(args, nullptr);
+        program->setText(QString::fromStdString(executable));
+        target->setText(QStringLiteral("FrostTests"));
+        args->setPlainText(QStringLiteral("Scripts/Build.py\n--target\n{target}\na b;$(literal)"));
+        dialog->accept();
+    });
+    action->trigger();
+    const auto records = rig.settings->snapshot()->get(frost::settings::key::cmakeBuildWrappers);
+    const auto wrappers = frost::build::cmakeBuildWrappers(records);
+    ASSERT_EQ(wrappers.size(), 1u);
+    EXPECT_EQ(wrappers.front().root, dir.path());
+    EXPECT_EQ(wrappers.front().profile, "Debug");
+    EXPECT_EQ(wrappers.front().executable, executable);
+    EXPECT_EQ(wrappers.front().buildArguments.back(), "a b;$(literal)");
+}
+
 TEST(WorkbenchCMake, TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved) {
     WorkDir dir("cmake-target-session");
     std::string compiler = FROST_TEST_C_COMPILER;
@@ -84,13 +123,20 @@ TEST(WorkbenchCMake, TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved) {
         combo->setCurrentIndex(combo->findText(QStringLiteral("second")));
         emit combo->activated(combo->currentIndex());
         ASSERT_EQ(combo->currentText(), QStringLiteral("second"));
+        auto* arguments = rig.window->findChild<QLineEdit*>(QStringLiteral("cmakeRunArguments"));
+        ASSERT_NE(arguments, nullptr);
+        ASSERT_TRUE(arguments->isEnabled());
+        arguments->setText(QStringLiteral("-ts=Core -tc=HMAC-SHA256*"));
         auto* service = rig.workbench->cmakeService();
         ASSERT_TRUE(service->configure());
         ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
         ASSERT_TRUE(service->setActiveProfile(1));
         ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
+        EXPECT_TRUE(arguments->text().isEmpty());
+        arguments->setText(QStringLiteral("--release"));
         ASSERT_TRUE(service->setActiveProfile(0));
         ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
+        EXPECT_EQ(arguments->text(), QStringLiteral("-ts=Core -tc=HMAC-SHA256*"));
         // The service switches synchronously, while its new model is still queued for the UI.
         // Selecting the old tree during that gap must not overwrite Release's preference.
         auto* tree = rig.window->findChild<QTreeView*>(QStringLiteral("cmakeTargets"));
@@ -127,6 +173,9 @@ TEST(WorkbenchCMake, TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved) {
         WorkbenchRig rig(dir);
         ASSERT_TRUE(rig.workbench->openPath(dir.path()));
         ASSERT_TRUE(displayedTarget(rig, QStringLiteral("second")));
+        auto* arguments = rig.window->findChild<QLineEdit*>(QStringLiteral("cmakeRunArguments"));
+        ASSERT_NE(arguments, nullptr);
+        EXPECT_EQ(arguments->text(), QStringLiteral("-ts=Core -tc=HMAC-SHA256*"));
         dir.write("CMakeLists.txt", prefix + "add_executable(first main.c)\n");
         ASSERT_TRUE(rig.workbench->cmakeService()->configure());
         ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
@@ -138,6 +187,28 @@ TEST(WorkbenchCMake, TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved) {
         ASSERT_TRUE(displayedTarget(rig, QStringLiteral("first")));
         EXPECT_TRUE(rig.workbench->closeProject());
     }
+}
+
+TEST(WorkbenchCMake, RunPassesSelectedTargetArgumentsWithoutAShell) {
+    WorkDir dir("cmake-run-arguments");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nproject(Arguments C)\nadd_executable(args main.c)\n");
+    dir.write("main.c", "#include <stdio.h>\nint main(int argc, char** argv) { "
+                        "for (int i=1;i<argc;++i) printf(\"ARG[%s]\\n\",argv[i]); return 0; }\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("args")));
+    auto* arguments = rig.window->findChild<QLineEdit*>(QStringLiteral("cmakeRunArguments"));
+    ASSERT_NE(arguments, nullptr);
+    arguments->setText(QStringLiteral("--first \"two words\""));
+    ASSERT_TRUE(rig.workbench->runController()->run());
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->runController()->running(); }, 240s));
+    EXPECT_TRUE(rig.workbench->runConsole()->text().contains(QStringLiteral("ARG[--first]")));
+    EXPECT_TRUE(rig.workbench->runConsole()->text().contains(QStringLiteral("ARG[two words]")));
 }
 
 TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
@@ -332,6 +403,54 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     EXPECT_EQ(refused.error().code(), frost::ErrorCode::Cancelled);
 }
 
+TEST(WorkbenchCMake, DebugUsesConfiguredWrapperAndRetainedTarget) {
+    auto& fs = frost::io::realFileSystem();
+    const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
+    if (!lldb)
+        GTEST_SKIP() << "pinned lldb-dap is unavailable";
+    WorkDir dir("cmake-wrapper-debug");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nset(CMAKE_BUILD_TYPE Debug CACHE STRING \"\" FORCE)\n"
+                  "project(WrapperDebug C)\nadd_executable(debuggee main.c)\n");
+    dir.write("main.c", "int main(void) {\n  int value = 41;\n  return value == 41 ? 0 : 1;\n}\n");
+    RigOptions options;
+    options.workbench.debugAdapterFactory =
+        frost::debug::lldbDapAdapterFactory(frost::io::realProcessLauncher(), *lldb);
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("debuggee")));
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_TRUE(service->build(frost::build::BuildAction::Build));
+    ASSERT_TRUE(waitFor(
+        [&] { return service->state() == frost::build::BuildState::Idle && service->lastOutcome().has_value(); }, 60s));
+    ASSERT_TRUE(service->lastOutcome());
+    ASSERT_TRUE(service->lastOutcome()->succeeded());
+    const auto profile = service->activeProfile();
+    ASSERT_TRUE(profile);
+    frost::build::CMakeBuildWrapper wrapper{.root = dir.path(),
+                                            .profile = profile->name,
+                                            .executable = FROST_TEST_CMAKE,
+                                            .buildArguments = {"-E", "echo", "WRAPPER_DEBUG_TARGET", "{target}"}};
+    ASSERT_TRUE(service->setBuildWrappers({wrapper}));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.c")));
+    auto* debug = rig.workbench->debugController();
+    ASSERT_NE(debug, nullptr);
+    debug->toggleBreakpoint(dir.join("main.c"), 2);
+    ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return debug->paused() && debug->selectedFrame().has_value(); }, 30s))
+        << "build output: " << rig.workbench->buildOutput()->editor()->toPlainText().toStdString()
+        << " run output: " << rig.workbench->runConsole()->text().toStdString();
+    ASSERT_NE(rig.workbench->buildOutput(), nullptr);
+    EXPECT_TRUE(rig.workbench->buildOutput()->editor()->toPlainText().contains("WRAPPER_DEBUG_TARGET debuggee"));
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, 60s));
+}
+
 TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
@@ -344,7 +463,8 @@ TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
               "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
                   "\" CACHE FILEPATH \"\" FORCE)\nset(CMAKE_BUILD_TYPE Debug CACHE STRING \"\" FORCE)\n"
                   "project(DebugApp C)\nadd_executable(debuggee main.c)\n");
-    dir.write("main.c", "int main(void) {\n  int value = 41;\n  value += 1;\n  return value == 42 ? 0 : 1;\n}\n");
+    dir.write("main.c", "int main(int argc, char** argv) {\n  int value = 41;\n  value += 1;\n  return value == 42 && "
+                        "argc > 0 && argv ? 0 : 1;\n}\n");
     int adaptersStarted = 0;
     auto factory = frost::debug::lldbDapAdapterFactory(frost::io::realProcessLauncher(), *lldb);
     RigOptions options;
@@ -367,6 +487,9 @@ TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->runController()->running(); }, 240s));
     EXPECT_FALSE(debug->debugging());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("main.c")).has_value());
+    auto* arguments = rig.window->findChild<QLineEdit*>(QStringLiteral("cmakeRunArguments"));
+    ASSERT_NE(arguments, nullptr);
+    arguments->setText(QStringLiteral("--first \"two words\""));
     ASSERT_TRUE(rig.view()->editor().typeText("// saved before debug\n"));
     debug->toggleBreakpoint(dir.join("main.c"), 3);
     ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
@@ -381,6 +504,12 @@ TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
     ASSERT_TRUE(waitFor([&] { return value->has_value(); }, 60s));
     ASSERT_TRUE(value->value().has_value());
     EXPECT_EQ(value->value()->value, "41");
+    auto argc = std::make_shared<std::optional<frost::Result<frost::debug::dap::Variable>>>();
+    debug->evaluate(QStringLiteral("argc"), QStringLiteral("watch"),
+                    [argc](auto result) { *argc = std::move(result); });
+    ASSERT_TRUE(waitFor([&] { return argc->has_value(); }, 60s));
+    ASSERT_TRUE(argc->value().has_value());
+    EXPECT_EQ(argc->value()->value, "3");
     ASSERT_TRUE(debug->stepOver());
     ASSERT_TRUE(
         waitFor([&] { return debug->paused() && debug->selectedFrame() && debug->selectedFrame()->line == 5; }, 60s));

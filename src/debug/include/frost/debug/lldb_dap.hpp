@@ -72,6 +72,26 @@ inline constexpr std::array<std::string_view, 3> kStrippedAdapterEnvironment{"_N
 // the environment of the header comment, contained (killOnClose) so Stop ends the debuggee too.
 [[nodiscard]] io::ProcessSpec lldbDapProcessSpec(std::string executable);
 
+// A mapping can only be created after validating its source prefix and trusted target root.
+class SourceMap {
+public:
+    [[nodiscard]] const std::string& from() const noexcept { return m_from; }
+    [[nodiscard]] const std::string& to() const noexcept { return m_to; }
+
+private:
+    SourceMap(std::string from, std::string to) : m_from(std::move(from)), m_to(std::move(to)) {}
+    std::string m_from;
+    std::string m_to;
+    friend Result<SourceMap> makeSourceMap(io::IFileSystem&, const project::TrustStore&, std::string_view,
+                                           std::string_view, const std::vector<std::string>&);
+};
+
+// The source is an absolute build-time prefix and need not exist locally; destination must be an
+// existing directory and an explicitly trusted debug root. This does not verify source contents.
+[[nodiscard]] Result<SourceMap> makeSourceMap(io::IFileSystem& fs, const project::TrustStore& trust,
+                                              std::string_view from, std::string_view to,
+                                              const std::vector<std::string>& debugRoots);
+
 // The program to debug, as a Debug run resolved it.
 struct DebugTarget {
     std::string name{};                   // For the Debug tool window ("App [Debug|x64]").
@@ -81,6 +101,7 @@ struct DebugTarget {
     std::vector<std::pair<std::string, std::string>> environment{}; // Set over the inherited one.
     bool inheritEnvironment = true;                                 // false: the program sees `environment` only.
     std::vector<std::string> trustRoots{}; // Folders that must be trusted; empty: the program's folder.
+    std::optional<SourceMap> sourceMap{};
 };
 
 // lldb-dap's launch request arguments for `target`: program, args, cwd, env ("NAME=VALUE"),

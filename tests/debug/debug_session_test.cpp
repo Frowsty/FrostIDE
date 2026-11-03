@@ -525,6 +525,78 @@ TEST_F(DebugSessionTest, AttachedSessionDisconnectsWithoutTerminatingTheHost) {
     ASSERT_EQ(disconnects.size(), 1U);
     EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
     EXPECT_TRUE(adapter.argumentsOf("launch").empty());
+    ASSERT_TRUE(session->outcome());
+    EXPECT_TRUE(session->outcome()->disconnectConfirmed);
+}
+
+TEST_F(DebugSessionTest, FailedAttachedDisconnectReportsUnconfirmedCleanup) {
+    scriptProgram(adapter, FakeProgram{.runsForever = true});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}}; });
+    adapter.on("disconnect",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.success = false, .message = "detach refused"}; });
+    session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, recorder.callbacks(), false,
+                                  DebugTargetMode::Attach);
+    ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
+    session->stop();
+    ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
+    const auto outcome = session->outcome();
+    ASSERT_TRUE(outcome);
+    ASSERT_TRUE(outcome->error);
+    EXPECT_TRUE(outcome->stopped);
+    EXPECT_FALSE(outcome->disconnectConfirmed);
+    EXPECT_NE(outcome->error->message().find("disconnect was not confirmed"), std::string::npos);
+    const auto disconnects = adapter.argumentsOf("disconnect");
+    ASSERT_EQ(disconnects.size(), 1U);
+    EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
+}
+
+TEST_F(DebugSessionTest, ClosedBeforeDisconnectAnswerReportsUnconfirmedCleanup) {
+    scriptProgram(adapter, FakeProgram{.runsForever = true});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}}; });
+    adapter.on("disconnect", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.respond = false}; });
+    session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, recorder.callbacks(), false,
+                                  DebugTargetMode::Attach);
+    ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
+    session->stop();
+    ASSERT_TRUE(adapter.waitForRequest("disconnect"));
+    adapter.crash(3);
+    ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
+    const auto outcome = session->outcome();
+    ASSERT_TRUE(outcome);
+    ASSERT_TRUE(outcome->error);
+    EXPECT_NE(outcome->error->message().find("disconnect was not confirmed"), std::string::npos);
+}
+
+TEST_F(DebugSessionTest, FailedAttachAndDisconnectPreserveBothErrors) {
+    scriptProgram(adapter, FakeProgram{});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.success = false, .message = "attach refused"}; });
+    adapter.on("disconnect",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.success = false, .message = "detach refused"}; });
+    session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, recorder.callbacks(), false,
+                                  DebugTargetMode::Attach);
+    ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
+    const auto outcome = session->outcome();
+    ASSERT_TRUE(outcome);
+    ASSERT_TRUE(outcome->error);
+    EXPECT_NE(outcome->error->message().find("attach refused"), std::string::npos);
+    EXPECT_NE(outcome->error->message().find("disconnect was not confirmed"), std::string::npos);
+}
+
+TEST_F(DebugSessionTest, ForcedCloseDoesNotConfirmDisconnect) {
+    scriptProgram(adapter, FakeProgram{.runsForever = true});
+    adapter.on("attach",
+               [](const rpc::Json&) { return FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}}; });
+    session = DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {}, recorder.callbacks(), false,
+                                  DebugTargetMode::Attach);
+    ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
+    session->kill();
+    ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
+    ASSERT_TRUE(session->outcome());
+    EXPECT_TRUE(session->outcome()->stopped);
+    EXPECT_FALSE(session->outcome()->disconnectConfirmed);
 }
 
 TEST_F(DebugSessionTest, FailedAttachDoesNotTerminateTheHost) {

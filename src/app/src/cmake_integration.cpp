@@ -3,8 +3,10 @@
 
 #include "cmake_integration.hpp"
 
+#include "frost/build/run_target.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/settings/store.hpp"
@@ -16,11 +18,18 @@
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "cmake_build_backend.hpp"
+#include <QAction>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
+#include <QPlainTextEdit>
 #include <QSignalBlocker>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -56,7 +65,7 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
                                    std::function<void()> runStateChanged,
                                    std::function<void(const std::string&)> openFile, std::function<void()> modelChanged)
     : m_build(buildController), m_sharedAdmission(sharedAdmission), m_window(window), m_launcher(launcher),
-      m_trust(trust), m_console(console), m_runStateChanged(std::move(runStateChanged)),
+      m_trust(trust), m_settings(settingsStore), m_console(console), m_runStateChanged(std::move(runStateChanged)),
       m_controller(std::make_unique<ui::cmake::CMakeController>()), m_runRelay(std::make_shared<RunRelay>()) {
     {
         LockGuard lock(m_runRelay->mutex);
@@ -76,6 +85,7 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     options.cmakePath = snapshot->get(settings::key::toolsCmakePath);
     options.ninjaPath = snapshot->get(settings::key::toolsNinjaPath);
     options.profileRecords = build::cmakeProfileRecords(snapshot->get(settings::key::cmakeProfiles));
+    options.buildWrappers = build::cmakeBuildWrappers(snapshot->get(settings::key::cmakeBuildWrappers));
     m_service = build::CMakeService::create(
         fs, launcher, trust, std::move(options),
         cmakeBuildCallbacks(
@@ -116,6 +126,10 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     m_targets->setToolTip(tr("CMake Run/Debug target"));
     m_targets->setPlaceholderText(tr("No executable target"));
     m_targetAction = toolbar.insertWidget(before, m_targets);
+    m_wrapperAction = new QAction(tr("Build Wrapper…"), &toolbar);
+    m_wrapperAction->setObjectName(QStringLiteral("cmakeBuildWrapperAction"));
+    toolbar.insertAction(before, m_wrapperAction);
+    connect(m_wrapperAction, &QAction::triggered, this, [this] { editBuildWrapper(); });
     connect(m_profiles, &QComboBox::activated, this, [this](int index) { m_controller->selectProfile(index); });
     connect(m_targets, &QComboBox::activated, this, [this](int index) {
         if (!targetsCurrent() || m_displayProfileGeneration != m_service->profileGeneration())
@@ -165,8 +179,39 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     m_guidanceLabel->setContentsMargins(6, 4, 6, 4);
     targetsLayout->addWidget(m_guidanceLabel);
     targetsLayout->addWidget(m_targetLabel);
+    auto* argumentsLabel = new QLabel(tr("Run/Debug arguments"), targets);
+    m_arguments = new QLineEdit(targets);
+    m_arguments->setObjectName(QStringLiteral("cmakeRunArguments"));
+    m_arguments->setMaxLength(4096); // At most 16384 UTF-8 bytes in the session file.
+    m_arguments->setToolTip(tr("Arguments for the selected target, using Windows command-line quoting; no shell."));
+    argumentsLabel->setBuddy(m_arguments);
+    targetsLayout->addWidget(argumentsLabel);
+    targetsLayout->addWidget(m_arguments);
     targetsLayout->addWidget(tree, 1);
+    connect(m_arguments, &QLineEdit::textChanged, this, [this](const QString& text) {
+        const auto model = m_controller->model();
+        const auto profile = m_service->activeProfile();
+        if (!profile || !model || !targetsCurrent() || m_displayProfileGeneration != m_service->profileGeneration())
+            return;
+        const auto index = runTarget(*model);
+        if (!index)
+            return;
+        ++m_targetGeneration;
+        const auto& target = model->targets[*index].name;
+        auto entry = std::ranges::find_if(m_argumentPreferences, [&](const auto& item) {
+            return item.profile == profile->name && item.target == target;
+        });
+        if (entry == m_argumentPreferences.end()) {
+            m_argumentPreferences.push_back({profile->name, target, text.toUtf8().toStdString()});
+        } else {
+            entry->arguments = text.toUtf8().toStdString();
+        }
+        if (m_argumentPreferencesChanged)
+            m_argumentPreferencesChanged(m_argumentPreferences);
+    });
     connect(tree->selectionModel(), &QItemSelectionModel::currentChanged, this, [this] {
+        if (!m_restoringTarget && m_tree && m_tree->currentIndex().isValid())
+            ++m_targetGeneration;
         rememberTreeTarget();
         refreshRunTarget();
     });
@@ -253,7 +298,10 @@ CMakeIntegration::~CMakeIntegration() {
         toolbar.removeAction(m_profileAction);
     if (m_targetAction)
         toolbar.removeAction(m_targetAction);
+    if (m_wrapperAction)
+        toolbar.removeAction(m_wrapperAction);
     delete m_profileAction.data();
+    delete m_wrapperAction.data();
     delete m_targetAction.data();
     if (m_solutionAction)
         m_solutionAction->setVisible(m_solutionActionVisible);
@@ -341,6 +389,18 @@ void CMakeIntegration::refreshRunTarget() {
                                ? tr("Run/Debug: %1").arg(QString::fromStdString(model->targets[*target].name))
                                : tr("Run/Debug: configure an executable target"));
     m_targetLabel->setToolTip(tr("Select an executable in the CMake targets tree to change the Run/Debug target."));
+    const auto profile = m_service->activeProfile();
+    const auto entry = profile && target && model
+                           ? std::ranges::find_if(m_argumentPreferences,
+                                                  [&](const auto& item) {
+                                                      return item.profile == profile->name &&
+                                                             item.target == model->targets[*target].name;
+                                                  })
+                           : m_argumentPreferences.end();
+    const QSignalBlocker argumentsBlocker(m_arguments);
+    m_arguments->setEnabled(profile && target && model && targetsCurrent() &&
+                            m_displayProfileGeneration == m_service->profileGeneration());
+    m_arguments->setText(entry == m_argumentPreferences.end() ? QString() : QString::fromStdString(entry->arguments));
 }
 
 void CMakeIntegration::rememberTreeTarget() {
@@ -385,6 +445,14 @@ void CMakeIntegration::setTargetPreferences(
     refreshRunTarget();
 }
 
+void CMakeIntegration::setArgumentPreferences(
+    std::vector<ui::nav::SessionCMakeArguments> preferences,
+    std::function<void(const std::vector<ui::nav::SessionCMakeArguments>&)> changed) {
+    m_argumentPreferences = std::move(preferences);
+    m_argumentPreferencesChanged = std::move(changed);
+    refreshRunTarget();
+}
+
 void CMakeIntegration::restoreRunTarget() {
     if (!m_tree || !targetsCurrent() || m_displayProfileGeneration != m_service->profileGeneration())
         return;
@@ -408,6 +476,131 @@ void CMakeIntegration::refreshProfiles() {
     m_profiles->setEnabled(m_profiles->count() > 1 && !m_controller->busy());
 }
 
+void CMakeIntegration::editBuildWrapper() {
+    const QPointer<CMakeIntegration> self(this);
+    const auto profile = m_service->activeProfile();
+    const std::string root = m_service->sourceDirectory();
+    if (!profile || root.empty())
+        return;
+    auto document = m_settings.readScopeDocument(settings::Scope::Application);
+    const auto* spec = m_settings.registry().find(settings::key::cmakeBuildWrappers.name);
+    if (!document || !spec) {
+        QMessageBox::warning(&m_window, tr("Build Wrapper"), tr("Cannot read personal build wrapper settings."));
+        return;
+    }
+    const auto* member = document->find(settings::key::cmakeBuildWrappers.name);
+    const std::optional<std::string> expected =
+        member ? std::optional<std::string>(document->rawValue(*member)) : std::nullopt;
+    auto value = document->value(spec->key, spec->schema);
+    if (member && !value) {
+        QMessageBox::warning(&m_window, tr("Build Wrapper"), tr("The existing build wrapper settings are invalid."));
+        return;
+    }
+    const auto oldRecords = value ? std::get<settings::RecordList>(*value) : settings::RecordList{};
+    const auto oldWrappers = build::cmakeBuildWrappers(oldRecords);
+    build::CMakeBuildWrapper current;
+    for (const auto& wrapper : oldWrappers)
+        if (lang::documentKey(wrapper.root) == lang::documentKey(root) && wrapper.profile == profile->name) {
+            current = wrapper;
+            break;
+        }
+    QDialog dialog(&m_window);
+    dialog.setObjectName(QStringLiteral("cmakeBuildWrapperDialog"));
+    dialog.setWindowTitle(tr("CMake Build Wrapper"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* note = new QLabel(tr("Personal settings for %1 / %2. A trusted project is required. "
+                               "Enter one argument per line; {target} and {profile} are replaced as whole arguments.")
+                                .arg(QString::fromStdString(root), QString::fromStdString(profile->name)),
+                            &dialog);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+    auto* form = new QFormLayout();
+    auto* executable = new QLineEdit(QString::fromStdString(current.executable), &dialog);
+    auto* target = new QLineEdit(QString::fromStdString(current.defaultTarget), &dialog);
+    auto lines = [](const std::vector<std::string>& values) {
+        QStringList out;
+        for (const auto& value : values)
+            out.push_back(QString::fromStdString(value));
+        return out.join(QLatin1Char('\n'));
+    };
+    auto* buildArgs = new QPlainTextEdit(lines(current.buildArguments), &dialog);
+    auto* cleanArgs = new QPlainTextEdit(lines(current.cleanArguments), &dialog);
+    auto* rebuildArgs = new QPlainTextEdit(lines(current.rebuildArguments), &dialog);
+    executable->setObjectName(QStringLiteral("cmakeWrapperExecutable"));
+    target->setObjectName(QStringLiteral("cmakeWrapperDefaultTarget"));
+    buildArgs->setObjectName(QStringLiteral("cmakeWrapperBuildArguments"));
+    cleanArgs->setObjectName(QStringLiteral("cmakeWrapperCleanArguments"));
+    rebuildArgs->setObjectName(QStringLiteral("cmakeWrapperRebuildArguments"));
+    for (auto* edit : {buildArgs, cleanArgs, rebuildArgs})
+        edit->setMaximumHeight(90);
+    form->addRow(tr("Executable (absolute path)"), executable);
+    form->addRow(tr("Default target"), target);
+    form->addRow(tr("Build arguments"), buildArgs);
+    form->addRow(tr("Clean arguments"), cleanArgs);
+    form->addRow(tr("Rebuild arguments"), rebuildArgs);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    const auto trustRevision = m_trust.snapshot(root).revision;
+    if (dialog.exec() != QDialog::Accepted || !self)
+        return;
+    const auto active = m_service->activeProfile();
+    if (m_service->sourceDirectory() != root || !active || active->name != profile->name ||
+        m_trust.snapshot(root).revision != trustRevision) {
+        QMessageBox::warning(&m_window, tr("Build Wrapper"),
+                             tr("The project, profile or trust changed; reopen this dialog."));
+        return;
+    }
+    const std::string program = executable->text().toUtf8().toStdString();
+    if (!program.empty() && !io::isAbsolutePath(program)) {
+        QMessageBox::warning(&m_window, tr("Build Wrapper"), tr("The executable path must be absolute."));
+        return;
+    }
+    auto values = [](const QPlainTextEdit* edit) {
+        std::vector<std::string> out;
+        for (const QString& line : edit->toPlainText().split(QLatin1Char('\n')))
+            if (!line.isEmpty())
+                out.push_back(line.toUtf8().toStdString());
+        return out;
+    };
+    auto records = oldRecords;
+    std::erase_if(records, [&](const settings::Record& record) {
+        const auto decoded = build::cmakeBuildWrappers({record});
+        return !decoded.empty() && lang::documentKey(decoded.front().root) == lang::documentKey(root) &&
+               decoded.front().profile == profile->name;
+    });
+    if (!program.empty()) {
+        records.push_back(settings::makeRecord({{"root", root},
+                                                {"profile", profile->name},
+                                                {"executable", program},
+                                                {"defaultTarget", target->text().toUtf8().toStdString()},
+                                                {"buildArguments", values(buildArgs)},
+                                                {"cleanArguments", values(cleanArgs)},
+                                                {"rebuildArguments", values(rebuildArgs)}}));
+    }
+    auto reserved = m_sharedAdmission.reserveRun();
+    if (!reserved) {
+        QMessageBox::warning(&m_window, tr("Build Wrapper"), QString::fromStdString(reserved.error().message()));
+        return;
+    }
+    struct Release {
+        build::BuildService& service;
+        ~Release() { service.releaseRun(); }
+    } release{m_sharedAdmission};
+    if (auto changed = m_service->setBuildWrappers(build::cmakeBuildWrappers(records)); !changed) {
+        QMessageBox::warning(&m_window, tr("Build Wrapper"), QString::fromStdString(changed.error().message()));
+        return;
+    }
+    const settings::ConditionalSettingEdit edit{std::string(settings::key::cmakeBuildWrappers.name), expected,
+                                                settings::Value(records)};
+    if (auto saved = m_settings.applyConditional(settings::Scope::Application, std::span(&edit, 1)); !saved) {
+        (void)m_service->setBuildWrappers(oldWrappers);
+        QMessageBox::warning(&m_window, tr("Build Wrapper"), QString::fromStdString(saved.error().message()));
+    }
+}
+
 Result<build::RunId> CMakeIntegration::run() {
     if (!m_build.buildAdmitted())
         return fail(ErrorCode::Busy, "a Lua debug launch is pending");
@@ -427,6 +620,17 @@ Result<build::RunId> CMakeIntegration::run() {
     m_runAdmission = std::shared_ptr<void>(
         &m_sharedAdmission, [](void* service) { static_cast<build::BuildService*>(service)->releaseRun(); });
     m_runTarget = model->targets[*target].id;
+    const auto profile = m_service->activeProfile();
+    const auto arguments = profile ? std::ranges::find_if(m_argumentPreferences,
+                                                          [&](const auto& item) {
+                                                              return item.profile == profile->name &&
+                                                                     item.target == model->targets[*target].name;
+                                                          })
+                                   : m_argumentPreferences.end();
+    m_runArguments = arguments == m_argumentPreferences.end() ? std::vector<std::string>{}
+                                                              : build::splitWindowsArguments(arguments->arguments);
+    m_runTargetGeneration = m_targetGeneration;
+    m_runRoot = m_service->sourceDirectory();
     m_profileGeneration = m_service->profileGeneration();
     const std::uint64_t generation = ++m_runGeneration;
     m_pending = true;
@@ -490,6 +694,19 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         m_runStateChanged();
         return;
     }
+    const auto currentModel = m_controller->model();
+    const auto currentTarget = currentModel ? runTarget(*currentModel) : std::nullopt;
+    const auto trust = m_trust.snapshot(m_runRoot);
+    if (m_targetGeneration != m_runTargetGeneration || m_service->sourceDirectory() != m_runRoot ||
+        outcome.sourceDirectory != m_runRoot || !trust.trusted || trust.revision != outcome.trustRevision ||
+        !currentTarget || currentModel != outcome.model || m_service->model() != outcome.model ||
+        currentModel->targets[*currentTarget].id != m_runTarget) {
+        failed.error = Error(ErrorCode::Cancelled, "the project, trust or target changed while building");
+        failDebug(*failed.error);
+        m_console.finish(failed);
+        m_runStateChanged();
+        return;
+    }
     const auto& model = outcome.model;
     const project::CMakeTarget* target = nullptr;
     if (model) {
@@ -537,6 +754,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         debugTarget.name = target->name;
         debugTarget.program = spec.executable;
         debugTarget.workingDirectory = spec.workingDirectory;
+        debugTarget.arguments = m_runArguments;
         debugTarget.trustRoots = {m_service->sourceDirectory()};
         auto done = std::move(m_debugDone);
         m_debugDone = {};
@@ -545,6 +763,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         return;
     }
     spec.stdinMode = io::Stdio::Pipe;
+    spec.arguments = m_runArguments;
     auto relay = m_runRelay;
     build::RunSessionCallbacks callbacks;
     callbacks.onOutput = [relay](build::RunStream stream, std::string_view text) {

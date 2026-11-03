@@ -31,6 +31,8 @@
 #include <vector>
 
 class QLineEdit;
+class QLabel;
+class QStackedWidget;
 class QToolButton;
 class QTreeView;
 
@@ -145,11 +147,14 @@ protected:
 
 private:
     void updateCounts();
+    void updateEmptyState();
 
     ProblemsModel* m_model = nullptr;
     ProblemsFilterModel* m_filter = nullptr;
     QTreeView* m_view = nullptr;
     QLineEdit* m_search = nullptr;
+    QLabel* m_empty = nullptr;
+    QStackedWidget* m_results = nullptr;
     std::array<QToolButton*, 3> m_buttons{}; // By build::Severity.
     BuildController* m_controller = nullptr;
     std::vector<QMetaObject::Connection> m_connections;

@@ -108,12 +108,30 @@ build::BuildServiceCallbacks BuildController::serviceCallbacks(std::function<boo
     callbacks.onDiagnostic = [post](const build::BuildDiagnostic& diagnostic) {
         post([diagnostic](BuildController& c) { c.applyDiagnostic(diagnostic); });
     };
+    callbacks.onOutputFenced = [post](build::BuildOutputKind kind, std::string_view line, std::function<bool()> fence) {
+        post([kind, text = std::string(line), fence = std::move(fence)](BuildController& c) {
+            if (!fence || fence())
+                c.applyOutput(kind, text);
+        });
+    };
+    callbacks.onDiagnosticFenced = [post](const build::BuildDiagnostic& diagnostic, std::function<bool()> fence) {
+        post([diagnostic, fence = std::move(fence)](BuildController& c) {
+            if (!fence || fence())
+                c.applyDiagnostic(diagnostic);
+        });
+    };
     callbacks.onDiagnosticsCleared = [post] { post([](BuildController& c) { c.applyDiagnosticsCleared(); }); };
     callbacks.onProgress = [post](const build::BuildProgress& progress) {
         post([progress](BuildController& c) { c.applyProgress(progress); });
     };
     callbacks.onFinished = [post](const build::BuildOutcome& outcome) {
         post([outcome](BuildController& c) { c.applyFinished(outcome); });
+    };
+    callbacks.onFinishedFenced = [post](const build::BuildOutcome& outcome, std::function<bool()> fence) {
+        post([outcome, fence = std::move(fence)](BuildController& c) {
+            if (!fence || fence())
+                c.applyFinished(outcome);
+        });
     };
     callbacks.onActiveConfigurationChanged = [post](const project::SolutionConfiguration& configuration) {
         post([configuration](BuildController& c) { c.applyActiveConfiguration(configuration); });

@@ -160,7 +160,7 @@ frost_add_test(app_workbench_cmake_tests QT
     LABELS integration cmake clangd)
 target_include_directories(app_workbench_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_definitions}
-    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}")
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CMAKE="${CMAKE_COMMAND}")
 
 frost_add_test(app_project_open_tests QT
     SOURCES project_open_process_test.cpp

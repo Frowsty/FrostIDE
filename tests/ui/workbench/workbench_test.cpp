@@ -71,7 +71,10 @@ public:
     }
     Result<io::SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
                                           const io::SafeWriteOptions& options) override {
-        return m_inner.safeWrite(path, data, options);
+        auto result = m_inner.safeWrite(path, data, options);
+        if (result && warnOnSave)
+            result->warning = Error(ErrorCode::IoError, "recovery metadata needs attention");
+        return result;
     }
     Result<io::FileStatus> status(std::string_view path) override {
         auto status = m_inner.status(path);
@@ -93,6 +96,7 @@ public:
     Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
 
     std::set<std::string> huge;
+    bool warnOnSave = false;
 
 private:
     io::MemFs& m_inner;
@@ -885,6 +889,94 @@ TEST_F(WorkbenchTest, FocusLossAutosavesAndSaveAllSaves) {
     EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "B A # proj\n");
     // Save All is Ctrl+S.
     EXPECT_EQ(app.window->invoke(workbench_actions::kSaveAll), input::InvokeResult::Ran);
+}
+
+TEST_F(WorkbenchTest, CommittedSaveWarningsAreVisibleForExplicitSaveAllAndAutosave) {
+    Ide& app = ide();
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/README.md"));
+    auto* document = app.documents->find("/proj/README.md");
+    ASSERT_NE(document, nullptr);
+    fs.warnOnSave = true;
+    const auto checkWarning = [&] {
+        const auto* warning = app.lastNotificationTitled(QStringLiteral("Saved"));
+        ASSERT_NE(warning, nullptr);
+        EXPECT_EQ(warning->kind, NotificationKind::Warning);
+        EXPECT_TRUE(warning->text.contains(QStringLiteral("recovery metadata needs attention")));
+        EXPECT_FALSE(document->dirty());
+    };
+    edit(*document, 0, 0, "manual ");
+    ASSERT_TRUE(app.workbench->saveDocument());
+    EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "manual # proj\n");
+    checkWarning();
+    const int afterManual = app.notificationsTitled(QStringLiteral("Saved"));
+    edit(*document, 0, 0, "all ");
+    const auto saved = app.workbench->saveAll();
+    ASSERT_TRUE(saved.failed.empty());
+    ASSERT_EQ(saved.saved.size(), 1U);
+    ASSERT_EQ(saved.warnings.size(), 1U);
+    EXPECT_EQ(app.notificationsTitled(QStringLiteral("Saved")), afterManual + 1);
+    checkWarning();
+    edit(*document, 0, 0, "auto ");
+    QEvent deactivate(QEvent::WindowDeactivate);
+    QApplication::sendEvent(app.window.get(), &deactivate);
+    EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "auto all manual # proj\n");
+    EXPECT_EQ(app.notificationsTitled(QStringLiteral("Saved")), afterManual + 2);
+    checkWarning();
+}
+
+TEST_F(WorkbenchTest, CloseKeepsWindowOpenToReviewAutosaveWarning) {
+    Ide& app = ide();
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/README.md"));
+    auto* document = app.documents->find("/proj/README.md");
+    ASSERT_NE(document, nullptr);
+    edit(*document, 0, 0, "closing ");
+    fs.warnOnSave = true;
+    app.window->show();
+    EXPECT_FALSE(app.window->close());
+    EXPECT_TRUE(app.window->isVisible());
+    EXPECT_FALSE(document->dirty());
+    EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "closing # proj\n");
+    const auto* warning = app.lastNotificationTitled(QStringLiteral("Saved"));
+    ASSERT_NE(warning, nullptr);
+    EXPECT_TRUE(warning->text.contains(QStringLiteral("recovery metadata needs attention")));
+    const auto* review = app.lastNotificationTitled(QStringLiteral("Review save warnings"));
+    ASSERT_NE(review, nullptr);
+    EXPECT_TRUE(review->sticky.value_or(false));
+    EXPECT_TRUE(app.window->close());
+}
+
+TEST_F(WorkbenchTest, CloseWithoutSaveWarningsProceedsNormally) {
+    Ide& app = ide();
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/README.md"));
+    auto* document = app.documents->find("/proj/README.md");
+    ASSERT_NE(document, nullptr);
+    edit(*document, 0, 0, "closing ");
+    app.window->show();
+    EXPECT_TRUE(app.window->close());
+    EXPECT_FALSE(document->dirty());
+    EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "closing # proj\n");
+    EXPECT_EQ(app.notificationsTitled(QStringLiteral("Review save warnings")), 0);
+}
+
+TEST_F(WorkbenchTest, CloseDoesNotAutosaveWhenFrameAutosaveIsDisabled) {
+    Ide& app = ide();
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/README.md"));
+    auto* document = app.documents->find("/proj/README.md");
+    ASSERT_NE(document, nullptr);
+    auto policies = app.manager->policies();
+    policies.autosave.onFrameDeactivation = false;
+    app.manager->setPolicies(policies);
+    edit(*document, 0, 0, "unsaved ");
+    fs.warnOnSave = true;
+    app.window->show();
+    EXPECT_TRUE(app.window->close());
+    EXPECT_TRUE(document->dirty());
+    EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "# proj\n");
+    EXPECT_EQ(app.notificationsTitled(QStringLiteral("Saved")), 0);
 }
 
 #ifdef _WIN32

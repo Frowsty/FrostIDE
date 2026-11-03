@@ -52,6 +52,37 @@
 
 namespace {
 
+class SaveWarningFs final : public frost::io::IFileSystem {
+public:
+    frost::Result<std::string> readFile(std::string_view path) override { return inner.readFile(path); }
+    frost::Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return inner.writeFileAtomic(path, data);
+    }
+    frost::Result<frost::io::SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                                        const frost::io::SafeWriteOptions& options) override {
+        auto result = inner.safeWrite(path, data, options);
+        if (result && warn)
+            result->warning = frost::Error(frost::ErrorCode::IoError, "recovery metadata needs attention");
+        return result;
+    }
+    frost::Result<frost::io::FileStatus> status(std::string_view path) override { return inner.status(path); }
+    frost::Result<std::vector<frost::io::DirEntry>> listDirectory(std::string_view path) override {
+        return inner.listDirectory(path);
+    }
+    frost::Result<frost::io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        return inner.listDirectoryWithDiagnostics(path);
+    }
+    frost::Result<void> createDirectories(std::string_view path) override { return inner.createDirectories(path); }
+    frost::Result<void> removeFile(std::string_view path) override { return inner.removeFile(path); }
+    frost::Result<void> removeDirectory(std::string_view path) override { return inner.removeDirectory(path); }
+    frost::Result<bool> exists(std::string_view path) override { return inner.exists(path); }
+    frost::Result<std::string> canonicalPath(std::string_view path) override { return inner.canonicalPath(path); }
+    bool warn = false;
+
+private:
+    frost::io::IFileSystem& inner = frost::io::realFileSystem();
+};
+
 using frost::app::DocumentEditorView;
 using frost::app::IWorkbenchPrompts;
 using frost::app::test::RigOptions;
@@ -62,6 +93,65 @@ using frost::app::test::WorkDir;
 namespace tool_windows = frost::ui::tool_windows;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
+
+TEST(Workbench, ExplicitEditorSaveReportsCommittedWarning) {
+    WorkDir dir("save-warning");
+    dir.write("main.cpp", "int value;\n");
+    SaveWarningFs fs;
+    RigOptions options;
+    options.fileSystem = &fs;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    ASSERT_TRUE(rig.view()->editor().typeText("// edit\n"));
+    fs.warn = true;
+    ASSERT_TRUE(rig.workbench->save(*rig.view()));
+    EXPECT_FALSE(rig.view()->document().dirty());
+    EXPECT_TRUE(dir.read("main.cpp").contains("// edit"));
+    const auto& log = rig.window->notifications().log();
+    ASSERT_FALSE(log.empty());
+    EXPECT_EQ(log.back().notification.kind, frost::ui::NotificationKind::Warning);
+    EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("recovery metadata needs attention")));
+}
+
+TEST(Workbench, DirtyTabCloseReportsCommittedWarningWithoutDiscardPrompt) {
+    WorkDir dir("close-save-warning");
+    dir.write("main.cpp", "int value;\n");
+    SaveWarningFs fs;
+    RigOptions options;
+    options.fileSystem = &fs;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    ASSERT_TRUE(rig.view()->editor().typeText("// edit\n"));
+    fs.warn = true;
+    ASSERT_TRUE(rig.window->tabs().close(0));
+    EXPECT_EQ(rig.window->tabs().count(), 0);
+    EXPECT_EQ(rig.prompts.discardCalls, 0);
+    EXPECT_TRUE(dir.read("main.cpp").contains("// edit"));
+    const auto& log = rig.window->notifications().log();
+    ASSERT_FALSE(log.empty());
+    EXPECT_EQ(log.back().notification.kind, frost::ui::NotificationKind::Warning);
+    EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("recovery metadata needs attention")));
+}
+
+TEST(Workbench, ShutdownDoesNotAutosaveWhenFrameAutosaveIsDisabled) {
+    WorkDir dir("shutdown-autosave-disabled");
+    dir.write("main.cpp", "int value;\n");
+    SaveWarningFs fs;
+    RigOptions options;
+    options.fileSystem = &fs;
+    options.autosave = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    ASSERT_TRUE(rig.view()->editor().typeText("// unsaved\n"));
+    fs.warn = true;
+    rig.workbench->shutdown();
+    EXPECT_EQ(dir.read("main.cpp"), "int value;\n");
+    for (const auto& entry : rig.window->notifications().log())
+        EXPECT_FALSE(entry.notification.title.contains(QStringLiteral("Saved")));
+}
 
 TEST(Workbench, NavigationBarUsesSolutionAndFolderModels) {
     WorkDir dir("navigation-bar", "tiny_sln");

@@ -137,6 +137,15 @@ std::string encodeSession(const SessionState& state) {
         yyjson_mut_arr_append(targets, entry);
     }
     yyjson_mut_obj_add_val(doc.get(), root, "cmakeTargets", targets);
+    yyjson_mut_val* arguments = yyjson_mut_arr(doc.get());
+    for (const auto& entry : state.cmakeArguments) {
+        yyjson_mut_val* item = yyjson_mut_obj(doc.get());
+        addString(doc.get(), item, "profile", entry.profile);
+        addString(doc.get(), item, "target", entry.target);
+        addString(doc.get(), item, "arguments", entry.arguments);
+        yyjson_mut_arr_append(arguments, item);
+    }
+    yyjson_mut_obj_add_val(doc.get(), root, "cmakeArguments", arguments);
     return writeJson(doc.get());
 }
 
@@ -170,6 +179,15 @@ Result<SessionState> decodeSession(std::string_view json) {
             std::string target = stringOf(yyjson_obj_get(item, "target"));
             if (!profile.empty() && !target.empty())
                 state.cmakeTargets.emplace_back(std::move(profile), std::move(target));
+        }
+    }
+    if (yyjson_val* arguments = yyjson_obj_get(root, "cmakeArguments"); yyjson_is_arr(arguments)) {
+        yyjson_arr_foreach(arguments, index, count, item) {
+            SessionCMakeArguments entry{stringOf(yyjson_obj_get(item, "profile")),
+                                        stringOf(yyjson_obj_get(item, "target")),
+                                        stringOf(yyjson_obj_get(item, "arguments"))};
+            if (!entry.profile.empty() && !entry.target.empty() && entry.arguments.size() <= 16384)
+                state.cmakeArguments.push_back(std::move(entry));
         }
     }
     if (yyjson_val* tabs = yyjson_obj_get(root, "tabs"); yyjson_is_arr(tabs)) {
@@ -256,7 +274,7 @@ Result<SessionState> SessionStore::load(std::string_view root) const {
     }
     auto state = decodeSession(*bytes);
     if (state && state->root.empty()) {
-        if (!state->cmakeTargets.empty())
+        if (!state->cmakeTargets.empty() || !state->cmakeArguments.empty())
             return fail(ErrorCode::Corrupt, "session: CMake target preferences have no project root");
         state->root = std::string(root);
     } else if (state && state->root != root) {

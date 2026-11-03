@@ -8,6 +8,7 @@
 #include "frost/core/log.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/path.hpp"
+#include "frost/project/trust_store.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/run_console.hpp"
 
@@ -283,14 +284,37 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
     if (m_options.trust == nullptr) {
         return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     }
+    auto resolvedTarget = target;
+    if (m_options.sourceMapSetting) {
+        const auto [from, to] = m_options.sourceMapSetting();
+        if (!from.empty() || !to.empty()) {
+            if (!m_options.fs || from.empty() || to.empty())
+                return fail(ErrorCode::InvalidArgument, "set both debug source mapping roots");
+            auto roots = target.trustRoots;
+            if (roots.empty())
+                roots.emplace_back(io::parentPath(target.program));
+            for (auto& root : roots) {
+                auto canonical = m_options.fs->canonicalPath(root);
+                if (!canonical || !m_options.trust->isTrusted(root))
+                    return fail(ErrorCode::Untrusted, "debug project root is not trusted or does not exist");
+                root = std::move(*canonical);
+            }
+            auto mapping = debug::makeSourceMap(*m_options.fs, *m_options.trust, from, to, roots);
+            if (!mapping)
+                return std::unexpected(std::move(mapping.error()));
+            resolvedTarget.trustRoots = std::move(roots);
+            resolvedTarget.sourceMap = std::move(*mapping);
+        }
+    }
     auto factory = adapterFactory();
     if (!factory)
         return std::unexpected(std::move(factory.error()));
     auto started = startSession(
-        target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, "lldb-dap",
-        [this, target, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
-            return debug::startDebugSession(*m_options.trust, target, std::move(factory), m_breakpoints.sessionLines(),
-                                            std::move(callbacks));
+        resolvedTarget.name.empty() ? std::string(io::fileName(resolvedTarget.program)) : resolvedTarget.name,
+        resolvedTarget.program, "lldb-dap",
+        [this, resolvedTarget, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
+            return debug::startDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
+                                            m_breakpoints.sessionLines(), std::move(callbacks));
         });
     if (started)
         m_lastCoreClrSession = false;
@@ -439,7 +463,8 @@ Result<void> DebugController::startSession(std::string title, std::string progra
         .onExited = {},
         .onEnded =
             [relay, generation](const debug::DebugOutcome& outcome) {
-                relay->post(generation, [outcome](DebugController* self) { self->onEnded(outcome); });
+                relay->post(generation,
+                            [generation, outcome](DebugController* self) { self->onEnded(generation, outcome); });
             },
         .onTerminated =
             [relay, generation] {
@@ -606,7 +631,7 @@ void DebugController::onBreakpoints(const std::vector<debug::BreakpointResult>& 
     }
 }
 
-void DebugController::onEnded(const debug::DebugOutcome& outcome) {
+void DebugController::onEnded(std::uint64_t endingGeneration, const debug::DebugOutcome& outcome) {
     build::RunOutcome finished;
     finished.exitCode = outcome.exitCode;
     finished.stopped = outcome.stopped;
@@ -616,18 +641,23 @@ void DebugController::onEnded(const debug::DebugOutcome& outcome) {
     if (!finished.exitCode && !finished.error && !finished.stopped) {
         finished.error = Error(ErrorCode::IoError, "the debug session ended");
     }
-    const QString summary =
-        finished.stopped && !finished.exitCode ? QStringLiteral("Process stopped") : runFinishedLine(finished);
+    const QString summary = outcome.error ? QStringLiteral("Debug session ended with an error")
+                            : finished.stopped && !finished.exitCode ? QStringLiteral("Process stopped")
+                                                                     : runFinishedLine(finished);
     if (m_console) {
         m_console->finish(finished, summary);
         if (m_coreClrSession || !m_rerunAllowed)
             m_console->rerunButton()->setEnabled(false);
     }
-    if (outcome.error && !outcome.stopped && m_hooks.notify) {
+    if (outcome.error && m_hooks.notify) {
         m_hooks.notify(QStringLiteral("Debug"), QString::fromStdString(outcome.error->message()), true);
     }
-    endSession();
-    emit sessionEnded(summary);
+    const bool endedHere = m_generation == endingGeneration;
+    if (endedHere)
+        endSession();
+    // The legacy untagged summary must not overwrite a reentrantly started session's UI.
+    if (endedHere && m_generation == endingGeneration + 1)
+        emit sessionEnded(summary);
 }
 
 void DebugController::endSession() {

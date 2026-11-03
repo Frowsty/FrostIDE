@@ -45,6 +45,37 @@ namespace {
 
 using search::test::Tree;
 
+class WarningFs final : public io::IFileSystem {
+public:
+    Result<std::string> readFile(std::string_view path) override { return inner.readFile(path); }
+    Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return inner.writeFileAtomic(path, data);
+    }
+    Result<io::SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                          const io::SafeWriteOptions& options) override {
+        auto result = inner.safeWrite(path, data, options);
+        if (result && warn)
+            result->warning = Error(ErrorCode::IoError, "recovery metadata needs attention");
+        return result;
+    }
+    Result<io::FileStatus> status(std::string_view path) override { return inner.status(path); }
+    Result<std::vector<io::DirEntry>> listDirectory(std::string_view path) override {
+        return inner.listDirectory(path);
+    }
+    Result<io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        return inner.listDirectoryWithDiagnostics(path);
+    }
+    Result<void> createDirectories(std::string_view path) override { return inner.createDirectories(path); }
+    Result<void> removeFile(std::string_view path) override { return inner.removeFile(path); }
+    Result<void> removeDirectory(std::string_view path) override { return inner.removeDirectory(path); }
+    Result<bool> exists(std::string_view path) override { return inner.exists(path); }
+    Result<std::string> canonicalPath(std::string_view path) override { return inner.canonicalPath(path); }
+    bool warn = false;
+
+private:
+    io::IFileSystem& inner = io::realFileSystem();
+};
+
 void sendKey(QWidget* target, int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     QKeyEvent press(QEvent::KeyPress, key, modifiers);
     QApplication::sendEvent(target, &press);
@@ -58,7 +89,7 @@ protected:
         b = tree.write("include/b.h", "#pragma once\n    void needle();\n");
         tree.write("c.txt", "nothing here\n");
         document::SaveManagerServices services;
-        services.fs = &io::realFileSystem();
+        services.fs = &fs;
         services.clock = &systemClock();
         document::SaveManagerOptions options;
         options.load = search::test::loadOptions();
@@ -93,6 +124,7 @@ protected:
 
     // Declared first, destroyed last: sessions join their searches before the pool goes.
     Tree tree{"find-ui"};
+    WarningFs fs;
     std::unique_ptr<sched::ThreadPool> pool;
     std::unique_ptr<document::SaveManager> manager;
     std::string a;
@@ -311,6 +343,37 @@ TEST_F(FindUi, ReplaceAllPostsTheSummaryAndKeepsUncheckedMatches) {
     const Notification& posted = window.notifications().log().back().notification;
     EXPECT_EQ(posted.text, QStringLiteral("2 replacements in 1 files, 0 skipped"));
     EXPECT_EQ(posted.kind, NotificationKind::Info);
+}
+
+TEST_F(FindUi, ReplaceAllReportsCommittedRecoveryWarnings) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    FindFeature feature(window, featureServices());
+    ASSERT_TRUE(feature.install());
+    selection = QStringLiteral("needle");
+    FindPopup* popup = feature.showPopup(true);
+    ASSERT_NE(popup, nullptr);
+    popup->replacementField()->setText(QStringLiteral("pin"));
+    popup->searchNow();
+    popup->session()->wait();
+    for (int row = 0; row < popup->resultList()->count(); ++row) {
+        auto* item = popup->resultList()->item(row);
+        if (item->data(kFindDetailRole).toString().startsWith(QStringLiteral("b.h")))
+            item->setCheckState(Qt::Unchecked);
+    }
+    fs.warn = true;
+    const auto summary = feature.replace(*popup, true);
+    ASSERT_TRUE(summary);
+    EXPECT_EQ(summary->replacements, 2U);
+    EXPECT_TRUE(summary->skipped.empty());
+    ASSERT_EQ(summary->warnings.size(), 1U);
+    EXPECT_EQ(tree.read(a), "int pin = 1;\n// context\nreturn pin;\n");
+    const auto& log = window.notifications().log();
+    ASSERT_GE(log.size(), 2U);
+    EXPECT_EQ(log[log.size() - 2].notification.kind, NotificationKind::Warning);
+    EXPECT_EQ(log.back().notification.kind, NotificationKind::Warning);
+    EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("recovery metadata needs attention")));
+    EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("a.cpp")));
 }
 
 TEST_F(FindUi, WithoutAnOpenLocationCallbackTheMatchOpensInATab) {

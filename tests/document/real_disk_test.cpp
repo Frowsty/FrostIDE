@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -151,5 +152,25 @@ TEST_F(RealDiskTest, KillDuringSavesLeavesAWholeFile) {
     }
 }
 
+TEST_F(RealDiskTest, RepeatedKilledSavesAllowNextSessionToSave) {
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        SCOPED_TRACE(iteration);
+        const std::string file = write(std::format("victim-{}.txt", iteration), killInitialContent());
+        auto child = storage::test::StorageChild::start({"save-loop", file});
+        ASSERT_NE(child, nullptr);
+        ASSERT_TRUE(child->waitFor("saved ", 3).has_value());
+        std::this_thread::sleep_for(std::chrono::milliseconds(7));
+        child->kill();
+        SaveManager next(services, {}, policies);
+        auto reopened = next.open(file);
+        ASSERT_TRUE(reopened) << reopened.error().describe();
+        auto& document = (*reopened)->document();
+        const text::ByteRange all{ByteOffset{0}, document.committedText().size()};
+        ASSERT_TRUE(document.replace(all, "next session", {}));
+        auto saved = next.save(**reopened);
+        ASSERT_TRUE(saved) << saved.error().describe();
+        EXPECT_EQ(read(file), "next session");
+    }
+}
 } // namespace
 } // namespace frost::document::test

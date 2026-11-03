@@ -12,7 +12,9 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
+#include <QStackedWidget>
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -286,12 +288,26 @@ ProblemsView::ProblemsView(QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addLayout(toolbar);
-    layout->addWidget(m_view);
+    m_empty = new QLabel(this);
+    m_empty->setObjectName(QStringLiteral("problemsEmpty"));
+    m_empty->setAlignment(Qt::AlignCenter);
+    m_empty->setWordWrap(true);
+    m_results = new QStackedWidget(this);
+    m_results->addWidget(m_view);
+    m_results->addWidget(m_empty);
+    layout->addWidget(m_results);
 
     connect(m_model, &QAbstractItemModel::rowsInserted, this, &ProblemsView::updateCounts);
     connect(m_model, &QAbstractItemModel::rowsRemoved, this, &ProblemsView::updateCounts);
     connect(m_model, &QAbstractItemModel::modelReset, this, &ProblemsView::updateCounts);
+    connect(m_model, &QAbstractItemModel::rowsInserted, this, &ProblemsView::updateEmptyState);
+    connect(m_model, &QAbstractItemModel::rowsRemoved, this, &ProblemsView::updateEmptyState);
+    connect(m_model, &QAbstractItemModel::modelReset, this, &ProblemsView::updateEmptyState);
+    connect(m_filter, &QAbstractItemModel::rowsInserted, this, &ProblemsView::updateEmptyState);
+    connect(m_filter, &QAbstractItemModel::rowsRemoved, this, &ProblemsView::updateEmptyState);
+    connect(m_filter, &QAbstractItemModel::modelReset, this, &ProblemsView::updateEmptyState);
     updateCounts();
+    updateEmptyState();
 }
 
 ProblemsView::~ProblemsView() = default;
@@ -347,6 +363,13 @@ void ProblemsView::updateCounts() {
     m_buttons[slot(build::Severity::Error)]->setText(countText(counts.errors, build::Severity::Error));
     m_buttons[slot(build::Severity::Warning)]->setText(countText(counts.warnings, build::Severity::Warning));
     m_buttons[slot(build::Severity::Message)]->setText(countText(counts.messages, build::Severity::Message));
+}
+
+void ProblemsView::updateEmptyState() {
+    const bool hasVisibleProblems = m_filter->rowCount() > 0;
+    m_empty->setText(m_model->rowCount() == 0 ? tr("No problems reported")
+                                              : tr("No problems match the current filters"));
+    m_results->setCurrentWidget(hasVisibleProblems ? static_cast<QWidget*>(m_view) : m_empty);
 }
 
 } // namespace frost::ui

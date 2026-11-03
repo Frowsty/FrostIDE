@@ -121,6 +121,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     bool configured FROST_GUARDED_BY(mutex) = false;
     bool stopRequested FROST_GUARDED_BY(mutex) = false;
     bool disconnectSent FROST_GUARDED_BY(mutex) = false;
+    bool disconnectConfirmed FROST_GUARDED_BY(mutex) = false;
     bool terminatedSeen FROST_GUARDED_BY(mutex) = false;
     std::optional<StopInfo> stop FROST_GUARDED_BY(mutex);
     std::vector<DebugThread> threads FROST_GUARDED_BY(mutex);
@@ -688,8 +689,22 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
             disconnectSent = true;
         }
         send("disconnect", rpc::Json::object().set("terminateDebuggee", terminateDebuggee).set("restart", false),
-             [weak = weak()](Result<rpc::Json>) {
+             [weak = weak()](Result<rpc::Json> response) {
                  if (const auto self = weak.lock()) {
+                     {
+                         LockGuard lock(self->mutex);
+                         if (response && self->state != DebugState::Ended)
+                             self->disconnectConfirmed = true;
+                         if (!response && self->state != DebugState::Ended) {
+                             const auto detail =
+                                 std::format("Debugger disconnect was not confirmed: {}", response.error().message());
+                             if (self->fatalError)
+                                 self->fatalError = Error(self->fatalError->code(),
+                                                          std::format("{}; {}", self->fatalError->message(), detail));
+                             else
+                                 self->fatalError = Error(ErrorCode::IoError, detail);
+                         }
+                     }
                      if (IDebugAdapterClient* const client = self->adapter.load()) {
                          client->close();
                      }
@@ -718,6 +733,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
             state = DebugState::Ended;
             result.exitCode = exitCode;
             result.stopped = stopRequested;
+            result.disconnectConfirmed = disconnectConfirmed;
             if (fatalError) {
                 result.error = fatalError;
             } else if (!stopRequested && !terminatedSeen && !disconnectSent) {

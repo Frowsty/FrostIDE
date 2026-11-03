@@ -182,6 +182,19 @@ std::vector<project::CMakeProfileRecord> cmakeProfileRecords(const settings::Rec
     return out;
 }
 
+std::vector<CMakeBuildWrapper> cmakeBuildWrappers(const settings::RecordList& records) {
+    std::vector<CMakeBuildWrapper> out;
+    for (const auto& record : records)
+        out.push_back({.root = fieldString(record, "root"),
+                       .profile = fieldString(record, "profile"),
+                       .executable = fieldString(record, "executable"),
+                       .defaultTarget = fieldString(record, "defaultTarget"),
+                       .buildArguments = fieldList(record, "buildArguments"),
+                       .cleanArguments = fieldList(record, "cleanArguments"),
+                       .rebuildArguments = fieldList(record, "rebuildArguments")});
+    return out;
+}
+
 struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     enum class JobKind : std::uint8_t { Configure, Build };
 
@@ -208,6 +221,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         BuildResult lastResult{};
         CMakeBuildCompletion done{};
         std::shared_ptr<AdmissionLease> admission;
+        std::optional<CMakeBuildWrapper> wrapper{};
+        std::uint64_t trustRevision = 0;
     };
 
     State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,
@@ -215,6 +230,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         : fs(fileSystem), launcher(processLauncher), trustStore(store), options(std::move(serviceOptions)),
           callbacks(std::move(serviceCallbacks)), msvcCache(fileSystem, processLauncher, options.msvcCacheDirectory) {
         records = options.profileRecords;
+        wrappers = options.buildWrappers;
         recordSource = options.profileRecordSource;
     }
 
@@ -230,6 +246,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     std::optional<project::CMakePresets> presets FROST_GUARDED_BY(mutex);
     std::optional<std::string> presetsProblem FROST_GUARDED_BY(mutex);
     std::vector<project::CMakeProfileRecord> records FROST_GUARDED_BY(mutex);
+    std::vector<CMakeBuildWrapper> wrappers FROST_GUARDED_BY(mutex);
     project::CMakeProfileSource recordSource FROST_GUARDED_BY(mutex) = project::CMakeProfileSource::ApplicationSettings;
     std::vector<project::CMakeProfile> profiles FROST_GUARDED_BY(mutex);
     std::optional<std::size_t> active FROST_GUARDED_BY(mutex);
@@ -370,6 +387,41 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
 
     bool isCurrentLocked(std::uint64_t id) const FROST_REQUIRES(mutex) { return job && job->id == id; }
 
+    bool wrapperTrustCurrentLocked() const FROST_REQUIRES(mutex) {
+        if (!job || !job->wrapper)
+            return true;
+        const auto trust = trustStore.snapshot(job->sourceDir);
+        return trust.trusted && trust.revision == job->trustRevision;
+    }
+
+    std::function<bool()> outputFenceLocked(std::uint64_t id) FROST_REQUIRES(mutex) {
+        const auto root = job->sourceDir;
+        const auto revision = job->trustRevision;
+        const auto generation = profileGeneration;
+        std::weak_ptr<State> weak = weak_from_this();
+        return [weak, id, root, revision, generation] {
+            auto state = weak.lock();
+            if (!state)
+                return false;
+            LockGuard lock(state->mutex);
+            const auto trust = state->trustStore.snapshot(root);
+            return state->lastJobId == id && state->sourceDir == root && state->profileGeneration == generation &&
+                   trust.trusted && trust.revision == revision;
+        };
+    }
+
+    void emitWrapperOutputLocked(BuildOutputKind kind, std::string line) FROST_REQUIRES(mutex) {
+        auto fence = outputFenceLocked(job->id);
+        emit([this, kind, line = std::move(line), fence = std::move(fence)] {
+            if (!fence())
+                return;
+            if (callbacks.onOutputFenced)
+                callbacks.onOutputFenced(kind, line, fence);
+            else if (callbacks.onOutput)
+                callbacks.onOutput(kind, line);
+        });
+    }
+
     std::optional<project::CMakeProfile> activeProfileLocked() const FROST_REQUIRES(mutex) {
         if (!active || *active >= profiles.size()) {
             return std::nullopt;
@@ -503,9 +555,42 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             return fail(ErrorCode::InvalidArgument,
                         std::format("profile {} cannot be used: {}", profile->name, profile->problem));
         }
+        if (kind == JobKind::Configure) {
+            const std::string folder = sourceDir;
+            const bool wrapped = std::ranges::any_of(wrappers, [&](const CMakeBuildWrapper& candidate) {
+                return documentKey(candidate.root) == documentKey(folder) && candidate.profile == profile->name;
+            });
+            if (wrapped && automatic)
+                return {};
+        }
         const bool trusted = folderTrustedLocked();
         if (automatic && !trusted) {
             return {}; // Nothing runs before trust, and nothing asks for it unprompted.
+        }
+        std::optional<CMakeBuildWrapper> wrapper;
+        if (kind == JobKind::Build) {
+            for (const auto& candidate : wrappers) {
+                if (documentKey(candidate.root) != documentKey(sourceDir) || candidate.profile != profile->name)
+                    continue;
+                if (wrapper)
+                    return fail(ErrorCode::InvalidArgument, "multiple build wrappers match this root and profile");
+                wrapper = candidate;
+            }
+            if (wrapper) {
+                if (!model)
+                    return fail(ErrorCode::InvalidArgument,
+                                "configure the selected profile before using its build wrapper");
+                if (!io::isAbsolutePath(wrapper->root) || !io::isAbsolutePath(wrapper->executable))
+                    return fail(ErrorCode::InvalidArgument, "build wrapper root and executable must be absolute");
+                const auto& arguments = request.action == BuildAction::Build   ? wrapper->buildArguments
+                                        : request.action == BuildAction::Clean ? wrapper->cleanArguments
+                                                                               : wrapper->rebuildArguments;
+                if (arguments.empty())
+                    return fail(ErrorCode::Unsupported, "the selected build wrapper does not define this action");
+                if (!request.targetName.empty() && std::ranges::find(arguments, "{target}") == arguments.end())
+                    return fail(ErrorCode::InvalidArgument, "the wrapper does not forward the selected target");
+                steps = {request.action == BuildAction::Clean ? CMakeStep::Clean : CMakeStep::Build};
+            }
         }
         bool admissionReserved = false;
         std::uint64_t admissionChild = 0;
@@ -573,7 +658,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                   .msvc = {},
                   .lastResult = {},
                   .done = std::move(done),
-                  .admission = std::move(admission)};
+                  .admission = std::move(admission),
+                  .wrapper = std::move(wrapper),
+                  .trustRevision = 0};
         if (!trusted) {
             job->untrusted = {sourceDir};
             setStateLocked(BuildState::NeedsTrust);
@@ -590,6 +677,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
 
     void afterTrustLocked() FROST_REQUIRES(mutex) {
         job->untrusted.clear();
+        job->trustRevision = trustStore.snapshot(job->sourceDir).revision;
         const std::uint64_t id = job->id;
         if (job->kind == JobKind::Build) {
             setStateLocked(BuildState::SavingDocuments);
@@ -646,6 +734,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         std::optional<CMakeTools> cachedTools;
         std::optional<std::vector<VsInstance>> cachedInstances;
         std::string announced;
+        bool wrapperJob = false;
         std::shared_ptr<AdmissionLease> admission;
         {
             LockGuard lock(mutex);
@@ -654,9 +743,16 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             }
             admission = job->admission;
             profile = job->profile;
+            wrapperJob = job->wrapper.has_value();
             cachedTools = tools;
             cachedInstances = instances;
             announced = announcedEnvironment;
+        }
+        if (wrapperJob) {
+            LockGuard lock(mutex);
+            if (isCurrentLocked(id))
+                runNextStepLocked();
+            return;
         }
         // Blocking work runs without the lock; cancel() may end the job meanwhile.
         if (!cachedInstances) {
@@ -788,6 +884,13 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     }
 
     void runNextStepLocked() FROST_REQUIRES(mutex) {
+        if (job->wrapper) {
+            const auto trust = trustStore.snapshot(job->sourceDir);
+            if (!trust.trusted || trust.revision != job->trustRevision) {
+                finishJobLocked(Error(ErrorCode::Cancelled, "project trust changed before wrapper execution"));
+                return;
+            }
+        }
         if (job->steps.empty()) {
             finishJobLocked(std::nullopt);
             return;
@@ -824,6 +927,29 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             emitOutput(true, BuildOutputKind::Status,
                        std::format("Configure started: profile {}, build directory {}", job->profile.name,
                                    job->profile.buildDirectory));
+        } else if (job->wrapper) {
+            const auto& wrapper = *job->wrapper;
+            spec.executable = wrapper.executable;
+            spec.workingDirectory = job->sourceDir;
+            const auto& configured = job->request.action == BuildAction::Build   ? wrapper.buildArguments
+                                     : job->request.action == BuildAction::Clean ? wrapper.cleanArguments
+                                                                                 : wrapper.rebuildArguments;
+            const std::string target =
+                job->request.targetName.empty() ? wrapper.defaultTarget : job->request.targetName;
+            for (const auto& argument : configured) {
+                if (argument == "{target}") {
+                    if (target.empty()) {
+                        finishJobLocked(Error(ErrorCode::InvalidArgument, "the wrapper needs a target"));
+                        return;
+                    }
+                    spec.arguments.push_back(target);
+                } else if (argument == "{profile}")
+                    spec.arguments.push_back(job->profile.name);
+                else
+                    spec.arguments.push_back(argument);
+            }
+            emitWrapperOutputLocked(BuildOutputKind::Status,
+                                    std::format("{} started with the configured wrapper", toString(step)));
         } else {
             std::vector<std::string> targets;
             if (!job->request.targetName.empty()) {
@@ -838,33 +964,51 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             emitOutput(false, BuildOutputKind::Status,
                        std::format("{} started: {}, profile {}", toString(step), what, job->profile.name));
         }
-        emitOutput(configure, BuildOutputKind::Status, commandLine(spec.executable, spec.arguments));
+        if (job->wrapper)
+            emitWrapperOutputLocked(BuildOutputKind::Status, commandLine(spec.executable, spec.arguments));
+        else
+            emitOutput(configure, BuildOutputKind::Status, commandLine(spec.executable, spec.arguments));
 
         const std::uint64_t id = job->id;
-        const std::string base = configure ? job->sourceDir : job->profile.buildDirectory;
+        const std::string base = (configure || job->wrapper) ? job->sourceDir : job->profile.buildDirectory;
         auto resolver = std::make_shared<DiagnosticResolver>(fs, base);
         BuildCallbacks sessionCallbacks{
             .onLine =
                 [this, id, configure](OutputStream stream, std::string_view line) {
                     LockGuard lock(mutex);
-                    if (isCurrentLocked(id)) {
-                        emitOutput(configure,
-                                   stream == OutputStream::Stdout ? BuildOutputKind::Stdout : BuildOutputKind::Stderr,
-                                   std::string(line));
+                    if (isCurrentLocked(id) && wrapperTrustCurrentLocked()) {
+                        const auto kind =
+                            stream == OutputStream::Stdout ? BuildOutputKind::Stdout : BuildOutputKind::Stderr;
+                        if (job->wrapper) {
+                            auto fence = outputFenceLocked(id);
+                            emit([this, kind, text = std::string(line), fence = std::move(fence)] {
+                                if (!fence())
+                                    return;
+                                if (callbacks.onOutputFenced)
+                                    callbacks.onOutputFenced(kind, text, fence);
+                                else if (callbacks.onOutput)
+                                    callbacks.onOutput(kind, text);
+                            });
+                        } else
+                            emitOutput(configure, kind, std::string(line));
                     }
                 },
             .onDiagnostic =
                 [this, id, resolver, base](const Diagnostic& diagnostic) {
                     BuildDiagnostic resolved = resolver->resolve(withCMakePath(diagnostic, base));
                     LockGuard lock(mutex);
-                    if (!isCurrentLocked(id)) {
+                    if (!isCurrentLocked(id) || !wrapperTrustCurrentLocked()) {
                         return;
                     }
                     diagnostics.add(resolved);
-                    emit([this, resolved = std::move(resolved)] {
-                        if (callbacks.onDiagnostic) {
+                    auto fence = job->wrapper ? outputFenceLocked(id) : std::function<bool()>{};
+                    emit([this, fence = std::move(fence), resolved = std::move(resolved)] {
+                        if (fence && !fence())
+                            return;
+                        if (fence && callbacks.onDiagnosticFenced)
+                            callbacks.onDiagnosticFenced(resolved, fence);
+                        else if (callbacks.onDiagnostic)
                             callbacks.onDiagnostic(resolved);
-                        }
                     });
                 },
             .onFinished = [this,
@@ -911,6 +1055,15 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         LockGuard lock(mutex);
         if (!isCurrentLocked(id)) {
             return;
+        }
+        if (!wrapperTrustCurrentLocked()) {
+            finishJobLocked(Error(ErrorCode::Cancelled, "project trust changed during wrapper execution"));
+            return;
+        }
+        if (job->wrapper && result.success) {
+            stale = true;
+            emitWrapperOutputLocked(BuildOutputKind::Status,
+                                    "Build wrapper completed; reload the CMake project to refresh its targets.");
         }
         if (job->current == CMakeStep::Configure) {
             CMakeConfigureOutcome outcome{.profile = job->profile.name,
@@ -976,7 +1129,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                                       .result = current.lastResult,
                                       .error = std::move(error),
                                       .counts = diagnostics.counts(),
-                                      .model = model};
+                                      .model = model,
+                                      .sourceDirectory = current.sourceDir,
+                                      .trustRevision = current.trustRevision};
             std::string line;
             const std::string_view action = toString(outcome.request.action);
             if (outcome.error) {
@@ -988,11 +1143,18 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                                    plural(outcome.counts.errors, "error"), plural(outcome.counts.warnings, "warning"),
                                    seconds(outcome.result.duration));
             }
-            emitOutput(false, BuildOutputKind::Status, std::move(line));
+            auto fence = current.wrapper ? outputFenceLocked(current.id) : std::function<bool()>{};
+            if (current.wrapper)
+                emitWrapperOutputLocked(BuildOutputKind::Status, std::move(line));
+            else
+                emitOutput(false, BuildOutputKind::Status, std::move(line));
             lastBuild = outcome;
-            emit([this, outcome = std::move(outcome), done = std::move(current.done)] {
-                if (callbacks.onFinished) {
-                    callbacks.onFinished(outcome);
+            emit([this, outcome = std::move(outcome), done = std::move(current.done), fence = std::move(fence)] {
+                if (!fence || fence()) {
+                    if (fence && callbacks.onFinishedFenced)
+                        callbacks.onFinishedFenced(outcome, fence);
+                    else if (callbacks.onFinished)
+                        callbacks.onFinished(outcome);
                 }
                 if (done) {
                     done(outcome);
@@ -1392,6 +1554,14 @@ std::optional<CMakeConfigureOutcome> CMakeService::lastConfigure() const {
 void CMakeService::setSaveAllHook(SaveAllHook hook) {
     LockGuard lock(m_state->mutex);
     m_state->saveAll = std::move(hook);
+}
+
+Result<void> CMakeService::setBuildWrappers(std::vector<CMakeBuildWrapper> wrappers) {
+    LockGuard lock(m_state->mutex);
+    if (m_state->state != BuildState::Idle)
+        return fail(ErrorCode::Busy, "cannot change build wrappers while a CMake job is active");
+    m_state->wrappers = std::move(wrappers);
+    return {};
 }
 
 Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target, CMakeBuildCompletion done,

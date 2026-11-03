@@ -51,6 +51,8 @@ inline build::CMakeServiceCallbacks cmakeBuildCallbacks(build::CMakeServiceCallb
     cmake.onNeedsTrust = std::move(forwardBuild.onNeedsTrust);
     cmake.onOutput = std::move(forwardBuild.onOutput);
     cmake.onDiagnostic = std::move(forwardBuild.onDiagnostic);
+    cmake.onOutputFenced = std::move(forwardBuild.onOutputFenced);
+    cmake.onDiagnosticFenced = std::move(forwardBuild.onDiagnosticFenced);
     cmake.onDiagnosticsCleared = std::move(forwardBuild.onDiagnosticsCleared);
     cmake.onFinished = [forward = std::move(forwardBuild.onFinished)](const build::CMakeBuildOutcome& outcome) {
         if (forward) {
@@ -63,6 +65,19 @@ inline build::CMakeServiceCallbacks cmakeBuildCallbacks(build::CMakeServiceCallb
             forward(translated);
         }
     };
+    if (forwardBuild.onFinishedFenced)
+        cmake.onFinishedFenced = [forward = std::move(forwardBuild.onFinishedFenced)](
+                                     const build::CMakeBuildOutcome& outcome, std::function<bool()> fence) {
+            if (forward) {
+                build::BuildOutcome translated;
+                translated.target.action = outcome.request.action;
+                translated.target.projectName = outcome.request.targetName;
+                translated.result = outcome.result;
+                translated.error = outcome.error;
+                translated.counts = outcome.counts;
+                forward(translated, std::move(fence));
+            }
+        };
     return cmake;
 }
 

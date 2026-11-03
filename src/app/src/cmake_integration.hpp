@@ -8,6 +8,7 @@
 #include "frost/core/error.hpp"
 #include "frost/debug/lldb_dap.hpp"
 #include "frost/ui/cmake/cmake_controller.hpp"
+#include "frost/ui/nav/session.hpp"
 
 #include <QObject>
 #include <QPointer>
@@ -23,6 +24,7 @@ class QTreeView;
 class QLabel;
 class QAction;
 class QComboBox;
+class QLineEdit;
 
 namespace frost::ui {
 class BuildController;
@@ -49,6 +51,8 @@ public:
     Result<void> open(const std::string& folder);
     void setTargetPreferences(std::vector<std::pair<std::string, std::string>> preferences,
                               std::function<void(const std::vector<std::pair<std::string, std::string>>&)> changed);
+    void setArgumentPreferences(std::vector<ui::nav::SessionCMakeArguments> preferences,
+                                std::function<void(const std::vector<ui::nav::SessionCMakeArguments>&)> changed);
     [[nodiscard]] build::CMakeService& service() const { return *m_service; }
     [[nodiscard]] std::shared_ptr<build::CMakeService> sharedService() const { return m_service; }
     [[nodiscard]] bool targetsCurrent() const {
@@ -70,6 +74,7 @@ private:
     ui::ShellWindow& m_window;
     io::IProcessLauncher& m_launcher;
     project::TrustStore& m_trust;
+    settings::SettingsStore& m_settings;
     ui::RunConsole& m_console;
     std::function<void()> m_runStateChanged;
     std::unique_ptr<ui::cmake::CMakeController> m_controller;
@@ -81,21 +86,27 @@ private:
     QPointer<QLabel> m_guidanceLabel;
     QPointer<QComboBox> m_profiles;
     QPointer<QComboBox> m_targets;
+    QPointer<QLineEdit> m_arguments;
     QPointer<QAction> m_solutionAction;
     QPointer<QAction> m_runAction;
     QPointer<QAction> m_profileAction;
     QPointer<QAction> m_targetAction;
+    QPointer<QAction> m_wrapperAction;
     bool m_solutionActionVisible = false;
     bool m_runActionVisible = false;
     QStringList m_expandedKeys;
     std::vector<std::pair<std::string, std::string>> m_targetPreferences;
     std::function<void(const std::vector<std::pair<std::string, std::string>>&)> m_targetPreferencesChanged;
+    std::vector<ui::nav::SessionCMakeArguments> m_argumentPreferences;
+    std::function<void(const std::vector<ui::nav::SessionCMakeArguments>&)> m_argumentPreferencesChanged;
     bool m_restoringTarget = false;
     std::uint64_t m_displayProfileGeneration = 0;
     struct RunRelay;
     std::shared_ptr<RunRelay> m_runRelay;
     std::unique_ptr<build::RunSession> m_session;
     std::string m_runTarget;
+    std::vector<std::string> m_runArguments;
+    std::string m_runRoot;
     std::function<void(Result<debug::DebugTarget>)> m_debugDone;
     bool m_pending = false;
     bool m_running = false;
@@ -103,6 +114,8 @@ private:
     bool m_stopRequested = false;
     bool m_shutdown = false;
     std::uint64_t m_runGeneration = 0;
+    std::uint64_t m_targetGeneration = 0;
+    std::uint64_t m_runTargetGeneration = 0;
     std::uint64_t m_profileGeneration = 0;
     void buildFinished(std::uint64_t generation, const build::CMakeBuildOutcome& outcome);
     void maybeRerun();
@@ -111,5 +124,6 @@ private:
     void restoreRunTarget();
     void rememberTreeTarget();
     void refreshProfiles();
+    void editBuildWrapper();
 };
 } // namespace frost::app
