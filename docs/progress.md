@@ -3,6 +3,51 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Verified project-tree preparation and publication checkpoint
+
+- Folding checkpoint `a968580` is committed and pushed. Project-index worker tree
+  `742005482b029f537d5468bc5fb851e518d5c902`, relative to baseline
+  `de5eccf27e4adad18b7933308f3c45cb38df7736`, received Astra approval and applied cleanly on top.
+  Combined tested tree is `e79e7d50ce8541f8013cc20c4e84298d2249ee3f`; its 1167 changed source/ADR
+  lines exactly match the approved delta, excluding patch context and progress. Astra also checked the
+  join with existing folding/display-column changes. Subsequent changes are documentation only.
+- Project files and initial solution candidates are prepared in worker jobs, then published through a lazy
+  Qt model. Active search uses cancellable snapshot/query generations. Review corrections prevent Enter
+  or forwarded navigation from activating a stale hidden selection, restore expansion in bounded batches,
+  and retire replaced/unpublished snapshots off the GUI thread. Windows focused tests pass 26/26.
+  ADR 0072 retains limits around individual sorts, very wide Qt expansion, initial solution enumeration
+  and the explicitly synchronous count API; this is not completion of all navigation responsiveness.
+- Combined Windows passed 2748/2767 (19 skipped, one additional disabled); native ext4 Linux passed
+  2621/2645 (24 skipped). Format, frost-lint (2377 files), licence checks (103 Windows / 99 Linux packages)
+  and feature consistency passed. Logs: `build/verify-main-integration-20261103-020714.log`,
+  `build/verify-index-windows-20261103-tests.log`, `build/verify-index-native-20261103-tests.log`.
+- Stage `E:\FrostBuilds\preview\codex-20261103-project-index` passed startup, actual Direct3D 11
+  rendering and bundled ConPTY input. Built/staged DLL SHA-256 matches
+  `6c9a035c8d984c936efcb1e1699cbbdf80f3447ea2e0faa74ad714dda37bb594`.
+  The private-desktop staged-window probe opened the existing Unity scratch project/source, persisted one
+  tab at line 3/display column 39 for requested UTF-16 column 40, preserved source/meta and exited 0.
+  It launched no Unity Editor. All 75 WM_NULL samples responded during the 15-second observation after
+  first frame, with no freeze reports; neither scan completion nor numerical B5 is inferred. Evidence:
+  `E:\FrostBuilds\project-index-window-20261103\result.json`, `outer-output.log` and profile logs.
+- Unity controls candidate `910417e8805660db4e83e5d4940636b841412590` is source/evidence approved
+  by Astra, awaiting integration and combined gates. A real Windows Editor passed all seven production
+  Workbench broker/panel test-rig checkpoints, including Play-entry domain reload, pause frame 107 to
+  step frame 108, resume/stop and trust revocation. The exact typed preference baseline was restored
+  (nine changed values, zero differences); source/meta remained unchanged. Actual evidence is under
+  `E:\FrostBuilds\unity-controls-scratch-20261103\run-1793667916039553200`.
+  The earlier checkpoint-read failure remains a failed run with unconfirmed cause; bounded complete-read
+  retries preserve all original assertions. Astra independently checked both runs and the recovery.
+  Native focused controls/broker/loopback tests pass 6/1/3, with two unavailable Unity fixtures skipped;
+  portable C# probes pass separately. Logs: `astra-native-focused.log` and `astra-native-csharp.log` in
+  the same scratch root. No Linux Editor, full staged-window controls or separate transient disconnect
+  acceptance is claimed.
+- Lua engine regression compilation continues in its isolated engine checkout; IDE source-reference
+  navigation refusal is being built and tested. A managed-debugging Terra worker has verified direct
+  .NET 10 adapter behavior on Windows/Linux, but dependency selection remains unaudited. It is researching
+  pinned, licensed Roslyn/dbgshim replacements and a reproducible source build; no managed debugger is
+  accepted. Next: commit/push this index checkpoint, integrate reviewed Unity controls, continue Lua and
+  managed debugging and the remaining whole-project inventory. No user answer is needed.
+
 ## 2026-11-03: Verified folding, IME and Unicode restoration checkpoint
 
 - Astra approved folding/Unicode navigation candidate `96fc0f4dbb02c98cbeccffe51ff32f046506d7b7`

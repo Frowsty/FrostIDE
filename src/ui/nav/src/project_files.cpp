@@ -55,7 +55,9 @@ ProjectFiles::ProjectFiles(std::string root) : m_root(std::move(root)) {
     m_byPath.emplace_back(m_root, 0);
 }
 
-void ProjectFiles::setScan(const io::TreeScan& scan) {
+void ProjectFiles::setScan(const io::TreeScan& scan) { static_cast<void>(setScanCancellable(scan, {})); }
+
+bool ProjectFiles::setScanCancellable(const io::TreeScan& scan, std::stop_token token) {
     m_nodes.clear();
     m_byPath.clear();
     m_nodes.push_back(Node{std::string(baseName(m_root)), m_root, {}, true, std::nullopt, {}});
@@ -63,6 +65,8 @@ void ProjectFiles::setScan(const io::TreeScan& scan) {
     byRelative.emplace("", 0);
     m_fileCount = 0;
     for (const io::ScanEntry& entry : scan.entries) {
+        if (token.stop_requested())
+            return false;
         if (entry.type == io::FileType::Other || entry.ignored) {
             continue;
         }
@@ -81,28 +85,44 @@ void ProjectFiles::setScan(const io::TreeScan& scan) {
             ++m_fileCount;
         }
     }
+    std::vector<std::string> foldedNames;
+    foldedNames.reserve(m_nodes.size());
+    for (const Node& node : m_nodes) {
+        if (token.stop_requested())
+            return false;
+        foldedNames.push_back(folded(node.name));
+    }
     for (Node& node : m_nodes) {
-        std::ranges::sort(node.children, [this](std::size_t a, std::size_t b) {
+        if (token.stop_requested())
+            return false;
+        std::ranges::sort(node.children, [this, &foldedNames](std::size_t a, std::size_t b) {
             const Node& left = m_nodes[a];
             const Node& right = m_nodes[b];
             if (left.directory != right.directory) {
                 return left.directory;
             }
-            const std::string l = folded(left.name);
-            const std::string r = folded(right.name);
-            return l != r ? l < r : left.name < right.name;
+            return foldedNames[a] != foldedNames[b] ? foldedNames[a] < foldedNames[b] : left.name < right.name;
         });
+    }
+    for (const Node& node : m_nodes) {
+        for (std::size_t row = 0; row < node.children.size(); ++row) {
+            m_nodes[node.children[row]].row = row;
+        }
     }
     for (std::size_t i = 0; i < m_nodes.size(); ++i) {
         m_byPath.emplace_back(m_nodes[i].path, i);
     }
     std::ranges::sort(m_byPath);
-    rebuildCandidates();
+    return rebuildCandidates(token);
 }
 
 void ProjectFiles::setSolutionFiles(std::vector<std::string> files) {
+    static_cast<void>(setSolutionFilesCancellable(std::move(files), {}));
+}
+
+bool ProjectFiles::setSolutionFilesCancellable(std::vector<std::string> files, std::stop_token token) {
     m_solutionFiles = std::move(files);
-    rebuildCandidates();
+    return rebuildCandidates(token);
 }
 
 std::optional<std::size_t> ProjectFiles::find(std::string_view path) const {
@@ -114,7 +134,7 @@ std::optional<std::size_t> ProjectFiles::find(std::string_view path) const {
     return it->second;
 }
 
-void ProjectFiles::rebuildCandidates() {
+bool ProjectFiles::rebuildCandidates(std::stop_token token) {
     m_candidates.clear();
     m_display.clear();
     const bool foldCase = styleOf(m_root) == io::PathStyle::Windows;
@@ -128,13 +148,18 @@ void ProjectFiles::rebuildCandidates() {
         m_display.push_back(relativeTo(m_root, path));
     };
     for (const Node& node : m_nodes) {
+        if (token.stop_requested())
+            return false;
         if (!node.directory) {
             add(node.path);
         }
     }
     for (const std::string& path : m_solutionFiles) {
+        if (token.stop_requested())
+            return false;
         add(path);
     }
+    return !token.stop_requested();
 }
 
 } // namespace frost::ui::nav

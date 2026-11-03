@@ -13,18 +13,21 @@
 #include <QWidget>
 
 #include <functional>
+#include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 
 class QLabel;
 class QLineEdit;
 class QModelIndex;
-class QStandardItem;
-class QStandardItemModel;
+
 class QTreeView;
 
 namespace frost::ui {
+
+class ProjectTreeModel;
 
 /*
  * The tree is rebuilt by setFiles() (after every scan); expansion and the selection survive a
@@ -36,10 +39,11 @@ class FileSystemView final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit FileSystemView(QWidget* parent = nullptr);
+    explicit FileSystemView(QWidget* parent = nullptr, sched::IScheduler* scheduler = nullptr);
+    ~FileSystemView() override;
 
     // Shows `files` (empty root: the "no folder" message).
-    void setFiles(const nav::ProjectFiles& files);
+    void setFiles(std::shared_ptr<const nav::ProjectFiles> files);
 
     // Speed search: sets the query (empty ends it), selects the first match and returns the number
     // of matching files and folders.
@@ -68,14 +72,22 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    void addChildren(QStandardItem* parent, const nav::ProjectFiles& files, std::size_t node);
     void activate(const QModelIndex& index);
+    void scheduleFilteredFiles(std::shared_ptr<const nav::ProjectFiles> files);
+    void startFilter();
+    void pollFilter();
+    void publishFilteredFiles();
+    void queueExpansionRestore(const std::string& root);
     // Applies the speed search to `parent`'s subtree; returns whether any row in it matches.
-    bool filter(QStandardItem* parent, const std::string& query, int& matches, QModelIndex& first);
+    bool filter(const QModelIndex& parent, const std::string& query, int& matches, QModelIndex& first);
 
+    struct FilterState;
+    std::unique_ptr<FilterState> m_filterState;
+    std::set<std::string> m_expanded;
+    bool m_displayCurrent = true;
     FileColorProvider m_fileColors;
     QTreeView* m_tree;
-    QStandardItemModel* m_model;
+    ProjectTreeModel* m_model;
     QLineEdit* m_search;
     QLabel* m_empty;
 };

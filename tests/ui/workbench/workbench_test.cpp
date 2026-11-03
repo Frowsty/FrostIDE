@@ -17,6 +17,7 @@
 #include "frost/document/save_manager.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/mem_fs.hpp"
+#include "frost/sched/sim_executor.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/ui/nav/document_registry.hpp"
 #include "frost/ui/nav/session.hpp"
@@ -29,12 +30,18 @@
 #include "frost/ui/workbench/merge_view.hpp"
 #include "frost/ui/workbench/workbench.hpp"
 
+#include "../../../src/ui/workbench/src/file_tree_filter.hpp"
 #include "shell/shell_rig.hpp"
 #include "support/scratch_dir.hpp"
 #include <QApplication>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QStandardItemModel>
+#include <QTimer>
+#include <QTreeView>
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -94,7 +101,8 @@ private:
 // One IDE instance: shell, documents and workbench over a shared file system.
 struct Ide {
     Ide(io::IFileSystem& fs, ManualClock& clock, io::PathStyle style, nav::SessionStore* sessions,
-        storage::HotExitJournal* journal = nullptr, document::SaveManagerOptions options = {}) {
+        storage::HotExitJournal* journal = nullptr, document::SaveManagerOptions options = {},
+        sched::IScheduler* scheduler = nullptr) {
         document::SaveManagerServices services;
         services.fs = &fs;
         services.clock = &clock;
@@ -108,6 +116,7 @@ struct Ide {
         window = std::make_unique<ShellWindow>(environment);
         autosave = std::make_unique<document::AutosaveController>(*manager, clock);
         WorkbenchServices workbenchServices{fs, *manager, *documents, *editors, clock};
+        workbenchServices.scheduler = scheduler;
         workbenchServices.sessions = sessions;
         workbenchServices.autosave = autosave.get();
         workbench = std::make_unique<Workbench>(*window, std::move(workbenchServices));
@@ -226,6 +235,7 @@ TEST_F(WorkbenchTest, FileSystemViewListsSpeedSearchesOpensAndRefreshes) {
     app.window->toolWindows().show(kFileSystemToolWindow, false);
     FileSystemView* view = app.workbench->fileSystemView();
     ASSERT_NE(view, nullptr);
+    EXPECT_EQ(qobject_cast<QStandardItemModel*>(view->tree()->model()), nullptr);
     // .gitignore'd debug.log, the default-excluded build/ and the skipped .git/ are not listed.
     EXPECT_EQ(view->visibleNames(), (QStringList{"proj", "src", ".gitignore", "README.md"}));
     EXPECT_EQ(view->setSpeedSearch(QStringLiteral("util")), 1);
@@ -240,6 +250,255 @@ TEST_F(WorkbenchTest, FileSystemViewListsSpeedSearchesOpensAndRefreshes) {
     batch.changes.push_back(io::FileChange{io::FileChangeKind::Created, "/proj/notes.txt", {}, io::FileType::Regular});
     app.workbench->applyFileChanges(batch);
     EXPECT_TRUE(view->visibleNames().contains(QStringLiteral("notes.txt")));
+}
+
+TEST_F(WorkbenchTest, OldScanIsDiscardedAfterReopeningTheSameRoot) {
+    sched::SimExecutor sim;
+    Ide app(fs, clock, io::PathStyle::Posix, nullptr, nullptr, {}, &sim);
+    openProject(app);
+    sim.runUntilIdle(); // The first scan has completed, but its GUI timer has not published it.
+    ASSERT_TRUE(app.workbench->closeProject());
+    file("/proj/new.cpp", "new");
+    openProject(app);
+    QTimer* timer = app.workbench->findChild<QTimer*>(QStringLiteral("projectScanTimer"));
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(app.workbench->projectFiles().fileCount(), 0U);
+    sim.runUntilIdle(); // The queued scan belongs to the new project generation.
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_TRUE(app.workbench->projectFiles().find("/proj/new.cpp").has_value());
+}
+
+TEST_F(WorkbenchTest, SolutionOnlyCandidatesArriveBeforeTheScanFinishes) {
+    const bool windows = io::kNativePathStyle == io::PathStyle::Windows;
+    const std::string root = windows ? "C:\\proj" : "/proj";
+    const std::string solution = root + (windows ? "\\demo.sln" : "/demo.sln");
+    const std::string outside = windows ? "C:\\outside\\shared.h" : "/outside/shared.h";
+    io::MemFs nativeFs(clock, io::kNativePathStyle);
+    HugeFileFs wrapped(nativeFs);
+    ASSERT_TRUE(nativeFs.createDirectories(root).has_value());
+    ASSERT_TRUE(
+        nativeFs
+            .writeFileAtomic(solution,
+                             "Microsoft Visual Studio Solution File, Format Version 12.00\n"
+                             "Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"Items\", \"Items\", "
+                             "\"{00000000-0000-4000-8000-000000000001}\"\n"
+                             "ProjectSection(SolutionItems) = preProject\n../outside/shared.h = ../outside/shared.h\n"
+                             "EndProjectSection\nEndProject\nGlobal\nEndGlobal\n")
+            .has_value());
+    sched::SimExecutor sim(sched::SimOptions{.seed = 1});
+    Ide app(wrapped, clock, io::kNativePathStyle, nullptr, nullptr, {}, &sim);
+    auto opened = app.workbench->openProject(solution);
+    ASSERT_TRUE(opened.has_value()) << opened.error().describe();
+    EXPECT_TRUE(app.workbench->projectFiles().candidates().empty());
+    QTimer* timer = app.workbench->findChild<QTimer*>(QStringLiteral("projectScanTimer"));
+    ASSERT_NE(timer, nullptr);
+    for (int i = 0; i < 100 && app.workbench->projectFiles().candidates().empty(); ++i) {
+        ASSERT_TRUE(sim.step());
+        ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    }
+    const auto& candidates = app.workbench->projectFiles().candidates();
+    EXPECT_NE(std::find(candidates.begin(), candidates.end(), outside), candidates.end());
+    EXPECT_TRUE(app.workbench->scanPending());
+    sim.runUntilIdle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_NE(std::find(app.workbench->projectFiles().candidates().begin(),
+                        app.workbench->projectFiles().candidates().end(), outside),
+              app.workbench->projectFiles().candidates().end());
+}
+
+TEST_F(WorkbenchTest, FileTreeFilterKeepsMatchingAncestorsAndSortedRows) {
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan.has_value());
+    nav::ProjectFiles files("/proj");
+    files.setScan(*scan);
+    auto filter = workbench_detail::filterFileTree(files, "util", {});
+    ASSERT_TRUE(filter.has_value());
+    EXPECT_EQ(filter->matches, 1);
+    const auto util = files.find("/proj/src/util.cpp");
+    const auto src = files.find("/proj/src");
+    ASSERT_TRUE(util.has_value());
+    ASSERT_TRUE(src.has_value());
+    EXPECT_TRUE(filter->visible[0]);
+    EXPECT_TRUE(filter->visible[*src]);
+    EXPECT_TRUE(filter->visible[*util]);
+    EXPECT_EQ(filter->first, *util);
+    EXPECT_EQ(filter->rows[*util], 0U);
+    std::stop_source stop;
+    stop.request_stop();
+    EXPECT_FALSE(workbench_detail::filterFileTree(files, "util", stop.get_token()).has_value());
+}
+
+TEST_F(WorkbenchTest, TypingQueuesSearchAndPublishesItsResult) {
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan.has_value());
+    auto files = std::make_shared<nav::ProjectFiles>("/proj");
+    files->setScan(*scan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(files);
+    view.searchField()->setText(QStringLiteral("util"));
+    EXPECT_GT(sim.readyCount(), 0U);
+    EXPECT_TRUE(view.tree()->isHidden());
+    sim.runUntilIdle();
+    QTimer* timer = view.findChild<QTimer*>(QStringLiteral("projectFilterTimer"));
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(view.selectedPath(), "/proj/src/util.cpp");
+    EXPECT_EQ(view.visibleNames(), (QStringList{"proj", "src", "util.cpp"}));
+}
+
+TEST_F(WorkbenchTest, PendingQueryAndProjectCannotActivateOrNavigateOldSelection) {
+    file("/other/main.cpp", "other");
+    sched::SimExecutor sim;
+    auto oldScan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    auto newScan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/other")).join();
+    ASSERT_TRUE(oldScan && newScan);
+    auto oldFiles = std::make_shared<nav::ProjectFiles>("/proj");
+    auto newFiles = std::make_shared<nav::ProjectFiles>("/other");
+    oldFiles->setScan(*oldScan);
+    newFiles->setScan(*newScan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(oldFiles);
+    ASSERT_TRUE(view.select("/proj/src/main.cpp"));
+    int activations = 0;
+    QObject::connect(&view, &FileSystemView::fileActivated, &view, [&](const QString&) { ++activations; });
+    view.searchField()->setText(QStringLiteral("util"));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(view.searchField(), &enter);
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+    QCoreApplication::sendEvent(view.searchField(), &down);
+    EXPECT_EQ(activations, 0);
+    EXPECT_EQ(view.selectedPath(), "/proj/src/main.cpp");
+    view.setFiles(newFiles);
+    QCoreApplication::sendEvent(view.searchField(), &enter);
+    EXPECT_EQ(activations, 0);
+}
+
+TEST_F(WorkbenchTest, ExpansionRestorationIsBatched) {
+    for (int i = 0; i < 150; ++i)
+        file("/proj/d" + std::to_string(i) + "/leaf", "");
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan.has_value());
+    auto files = std::make_shared<nav::ProjectFiles>("/proj");
+    files->setScan(*scan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(files);
+    for (int i = 0; i < 150; ++i)
+        ASSERT_TRUE(view.select("/proj/d" + std::to_string(i) + "/leaf"));
+    view.setFiles(files);
+    EXPECT_LT(view.visibleNames().count(QStringLiteral("leaf")), 150);
+    QTimer* timer = view.findChild<QTimer*>(QStringLiteral("projectFilterTimer"));
+    ASSERT_NE(timer, nullptr);
+    const auto before = view.visibleNames().count(QStringLiteral("leaf"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_LE(view.visibleNames().count(QStringLiteral("leaf")) - before, 64);
+    for (int i = 0; i < 3; ++i)
+        ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(view.visibleNames().count(QStringLiteral("leaf")), 150);
+}
+
+TEST_F(WorkbenchTest, ReplacedUnpublishedSnapshotIsRetiredOnTheScheduler) {
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan.has_value());
+    auto base = std::make_shared<nav::ProjectFiles>("/proj");
+    base->setScan(*scan);
+    bool retired = false;
+    auto unpublished =
+        std::shared_ptr<nav::ProjectFiles>(new nav::ProjectFiles("/proj"), [&](nav::ProjectFiles* files) {
+            retired = true;
+            delete files;
+        });
+    unpublished->setScan(*scan);
+    auto replacement = std::make_shared<nav::ProjectFiles>("/proj");
+    replacement->setScan(*scan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(base);
+    view.searchField()->setText(QStringLiteral("main"));
+    view.setFiles(unpublished);
+    unpublished.reset();
+    view.setFiles(replacement);
+    EXPECT_FALSE(retired);
+    sim.runUntilIdle();
+    EXPECT_TRUE(retired);
+}
+
+TEST_F(WorkbenchTest, FilteredPublicationDiscardsAnObsoleteQuery) {
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan.has_value());
+    auto files = std::make_shared<nav::ProjectFiles>("/proj");
+    files->setScan(*scan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(files);
+    EXPECT_EQ(view.setSpeedSearch(QStringLiteral("util")), 1);
+    sim.runUntilIdle();
+    EXPECT_EQ(view.setSpeedSearch(QStringLiteral("main")), 1);
+    QTimer* timer = view.findChild<QTimer*>(QStringLiteral("projectFilterTimer"));
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    sim.runUntilIdle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(view.selectedPath(), "/proj/src/main.cpp");
+    EXPECT_EQ(view.visibleNames(), (QStringList{"proj", "src", "main.cpp"}));
+    view.setSpeedSearch(QString());
+    EXPECT_EQ(view.selectedPath(), "/proj/src/main.cpp");
+}
+
+TEST_F(WorkbenchTest, FilteredPublicationDropsOldProjectAndClose) {
+    file("/other/main.cpp", "other");
+    sched::SimExecutor sim;
+    auto oldScan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    auto newScan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/other")).join();
+    ASSERT_TRUE(oldScan.has_value());
+    ASSERT_TRUE(newScan.has_value());
+    auto oldFiles = std::make_shared<nav::ProjectFiles>("/proj");
+    auto newFiles = std::make_shared<nav::ProjectFiles>("/other");
+    oldFiles->setScan(*oldScan);
+    newFiles->setScan(*newScan);
+    FileSystemView view(nullptr, &sim);
+    view.setFiles(oldFiles);
+    EXPECT_EQ(view.setSpeedSearch(QStringLiteral("main")), 1);
+    sim.runUntilIdle(); // Old query is complete but not yet published.
+    view.setFiles(newFiles);
+    EXPECT_TRUE(view.tree()->isHidden());
+    QTimer* timer = view.findChild<QTimer*>(QStringLiteral("projectFilterTimer"));
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    sim.runUntilIdle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    EXPECT_EQ(view.selectedPath(), "/other/main.cpp");
+    view.setFiles(oldFiles);
+    sim.runUntilIdle();
+    view.setFiles(std::make_shared<nav::ProjectFiles>());
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
+    sim.runUntilIdle();
+    ASSERT_TRUE(view.visibleNames().isEmpty());
+    EXPECT_TRUE(view.tree()->isHidden());
+}
+
+TEST_F(WorkbenchTest, FileTreePublicationDoesNotColorEveryNode) {
+    for (int i = 0; i < 300; ++i) {
+        file("/proj/hidden/file" + std::to_string(i) + ".cpp", "");
+    }
+    sched::SimExecutor sim;
+    auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(fs, sim, "/proj")).join();
+    ASSERT_TRUE(scan.has_value());
+    auto files = std::make_shared<nav::ProjectFiles>("/proj");
+    files->setScan(*scan);
+    FileSystemView view;
+    int colorQueries = 0;
+    view.setFileColorProvider([&](std::string_view) -> std::optional<QColor> {
+        ++colorQueries;
+        return std::nullopt;
+    });
+    view.setFiles(files);
+    EXPECT_LT(colorQueries, 300);
+    EXPECT_TRUE(view.select("/proj/hidden/file299.cpp"));
+    EXPECT_EQ(view.selectedPath(), "/proj/hidden/file299.cpp");
 }
 
 TEST_F(WorkbenchTest, FindActionFindsRunsShowsShortcutsAndGreysDisabledActions) {

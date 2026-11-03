@@ -101,6 +101,66 @@ struct WatchMailbox {
 
 namespace {
 
+// The scheduler owns the final reference so large old trees are freed away from the GUI.
+sched::Task<void> retireProjectFiles(std::shared_ptr<const nav::ProjectFiles> files) {
+    files.reset();
+    co_return;
+}
+
+void retireSnapshot(sched::IScheduler* scheduler, std::shared_ptr<const nav::ProjectFiles> files) {
+    if (scheduler && files) {
+        scheduler->spawn(sched::Lane::Background, retireProjectFiles(std::move(files))).detach();
+    }
+}
+
+sched::Task<void> retireSolutionFiles(std::shared_ptr<const std::vector<std::string>> files) {
+    files.reset();
+    co_return;
+}
+
+void retireSolutionSnapshot(sched::IScheduler* scheduler, std::shared_ptr<const std::vector<std::string>> files) {
+    if (scheduler && files) {
+        scheduler->spawn(sched::Lane::Background, retireSolutionFiles(std::move(files))).detach();
+    }
+}
+
+sched::Task<nav::ProjectFiles> prepareInitialFiles(std::string root,
+                                                   std::shared_ptr<const std::vector<std::string>> solutionFiles,
+                                                   std::stop_token token) {
+    nav::ProjectFiles files(std::move(root));
+    if (token.stop_requested() || !files.setSolutionFilesCancellable(*solutionFiles, token))
+        files = nav::ProjectFiles();
+    solutionFiles.reset();
+    co_return files;
+}
+
+// Enumeration and all path/index preparation run on the background lane.
+sched::Task<Result<nav::ProjectFiles>>
+prepareProjectFiles(io::IFileSystem& fs, sched::IScheduler& scheduler, std::string root,
+                    std::shared_ptr<const std::vector<std::string>> solutionFiles, std::stop_token token) {
+    nav::ProjectFiles files(root);
+    if (!files.setSolutionFilesCancellable(*solutionFiles, token)) {
+        files = nav::ProjectFiles();
+        solutionFiles.reset();
+        co_return fail(ErrorCode::Cancelled, "project scan cancelled");
+    }
+    solutionFiles.reset();
+    {
+        auto scan = co_await nav::scanProject(fs, scheduler, std::move(root), token);
+        if (!scan) {
+            files = nav::ProjectFiles();
+            co_return std::unexpected(std::move(scan.error()));
+        }
+        if (token.stop_requested() || !files.setScanCancellable(*scan, token)) {
+            files = nav::ProjectFiles();
+            scan = fail(ErrorCode::Cancelled, "project scan cancelled");
+            co_return std::unexpected(std::move(scan.error()));
+        }
+        // Drop the raw scan on this worker before the result reaches the GUI.
+    }
+    co_return files;
+}
+
 sched::Task<Result<void>> pumpWatch(io::IFileWatcher& watcher, std::string root, std::shared_ptr<WatchMailbox> mailbox,
                                     std::stop_token token) {
     auto watch = co_await watcher.watch(std::move(root), io::WatchOptions{}, token);
@@ -128,6 +188,7 @@ Workbench::Workbench(ShellWindow& shell, WorkbenchServices services)
     : m_shell(shell), m_services(std::move(services)), m_findActions(shell.environment().registry) {
     setObjectName(QStringLiteral("workbench"));
     m_scanTimer = new QTimer(this);
+    m_scanTimer->setObjectName(QStringLiteral("projectScanTimer"));
     m_scanTimer->setInterval(25);
     connect(m_scanTimer, &QTimer::timeout, this, [this] { pollScan(); });
     addToolWindow();
@@ -163,11 +224,25 @@ Workbench::~Workbench() {
     m_shell.removeEventFilter(this);
     static_cast<void>(saveSession());
     stopWatching();
+    if (m_initialFiles) {
+        m_initialStop.request_stop();
+        auto files = m_initialFiles->join();
+        m_initialFiles.reset();
+        retireSnapshot(m_services.scheduler, std::make_shared<nav::ProjectFiles>(std::move(files)));
+    }
     if (m_scan) {
         m_scanStop.request_stop();
-        static_cast<void>(m_scan->join());
+        auto result = m_scan->join();
         m_scan.reset();
+        if (result) {
+            retireSnapshot(m_services.scheduler, std::make_shared<nav::ProjectFiles>(std::move(*result)));
+        }
     }
+    if (m_fileSystem != nullptr) {
+        m_fileSystem->setFiles({});
+    }
+    retireSnapshot(m_services.scheduler, std::move(m_files));
+    retireSolutionSnapshot(m_services.scheduler, std::move(m_solutionFiles));
     m_services.saveManager.setExternalChangeListener({});
     m_services.editors.setActions({});
     // Each view's destroyed() erases its entry: take the map first.
@@ -265,7 +340,7 @@ void Workbench::registerActions() {
 }
 
 void Workbench::addToolWindow() {
-    auto* view = new FileSystemView(&m_shell);
+    auto* view = new FileSystemView(&m_shell, m_services.scheduler);
     view->hide();
     m_fileSystem = view;
     connect(view, &FileSystemView::fileActivated, this,
@@ -340,17 +415,29 @@ Result<void> Workbench::openRoot(std::string root, std::string solution, std::ve
 
 void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles) {
     stopWatching();
+    ++m_projectGeneration;
+    m_scanStop.request_stop();
+    m_initialStop.request_stop();
+    m_scanPublished = false;
     m_root = std::move(root);
-    m_files = nav::ProjectFiles(m_root);
-    m_files.setSolutionFiles(std::move(solutionFiles));
+    auto oldSolutionFiles = std::move(m_solutionFiles);
+    m_solutionFiles = std::make_shared<const std::vector<std::string>>(std::move(solutionFiles));
+    auto oldFiles = m_files;
+    auto files = std::make_shared<nav::ProjectFiles>(m_root);
+    if (!m_services.scheduler)
+        files->setSolutionFiles(*m_solutionFiles);
+    m_files = std::move(files);
     m_history.clear();
     m_recentFiles.clear();
     m_recentLocations.clear();
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
+    retireSnapshot(m_services.scheduler, std::move(oldFiles));
+    retireSolutionSnapshot(m_services.scheduler, std::move(oldSolutionFiles));
     const std::string_view name = m_solution.empty() ? nav::baseName(m_root) : nav::baseName(m_solution);
     m_shell.setProject(fromUtf8(name));
+    startInitialFiles();
     refresh();
     startWatching();
 }
@@ -362,12 +449,21 @@ bool Workbench::closeProject() {
         return false; // A tab whose save failed was kept by the user; so is the project.
     }
     stopWatching();
+    ++m_projectGeneration;
+    m_scanStop.request_stop();
+    m_initialStop.request_stop();
+    m_scanPublished = false;
     m_root.clear();
     m_solution.clear();
-    m_files = nav::ProjectFiles();
+    auto oldSolutionFiles = std::move(m_solutionFiles);
+    m_solutionFiles = std::make_shared<const std::vector<std::string>>();
+    auto oldFiles = std::move(m_files);
+    m_files = std::make_shared<nav::ProjectFiles>();
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
+    retireSnapshot(m_services.scheduler, std::move(oldFiles));
+    retireSolutionSnapshot(m_services.scheduler, std::move(oldSolutionFiles));
     m_shell.setProject({});
     return true;
 }
@@ -378,7 +474,9 @@ void Workbench::refresh() {
     }
     if (m_services.scheduler == nullptr) {
         sched::SimExecutor sim;
-        auto scan = sim.spawn(sched::Lane::Background, nav::scanProject(m_services.fs, sim, m_root)).join();
+        auto scan =
+            sim.spawn(sched::Lane::Background, prepareProjectFiles(m_services.fs, sim, m_root, m_solutionFiles, {}))
+                .join();
         applyScan(std::move(scan));
         return;
     }
@@ -387,42 +485,79 @@ void Workbench::refresh() {
         return;
     }
     m_scanStop = std::stop_source();
-    m_scanRoot = m_root;
-    m_scan.emplace(
-        m_services.scheduler->spawn(sched::Lane::Background, nav::scanProject(m_services.fs, *m_services.scheduler,
-                                                                              m_root, m_scanStop.get_token())));
+    m_scanGeneration = m_projectGeneration;
+    m_scan.emplace(m_services.scheduler->spawn(
+        sched::Lane::Background,
+        prepareProjectFiles(m_services.fs, *m_services.scheduler, m_root, m_solutionFiles, m_scanStop.get_token())));
     m_scanPending = true;
     m_scanTimer->start();
 }
 
-void Workbench::pollScan() {
-    if (!m_scan || !m_scan->ready()) {
+void Workbench::startInitialFiles() {
+    if (!m_services.scheduler || m_initialFiles || m_root.empty() || m_solutionFiles->empty() || m_scanPublished)
         return;
-    }
-    auto scan = m_scan->join();
-    m_scan.reset();
-    m_scanPending = false;
-    m_scanTimer->stop();
-    if (m_scanRoot == m_root) {
-        applyScan(std::move(scan));
-    } else {
-        m_rescanQueued = true;
-    }
-    if (m_rescanQueued) {
-        m_rescanQueued = false;
-        refresh();
-    }
+    m_initialStop = std::stop_source();
+    m_initialGeneration = m_projectGeneration;
+    m_initialFiles.emplace(m_services.scheduler->spawn(
+        sched::Lane::Background, prepareInitialFiles(m_root, m_solutionFiles, m_initialStop.get_token())));
+    m_scanTimer->start();
 }
 
-void Workbench::applyScan(Result<io::TreeScan> scan) {
+void Workbench::pollInitialFiles() {
+    if (!m_initialFiles || !m_initialFiles->ready())
+        return;
+    auto files = m_initialFiles->join();
+    m_initialFiles.reset();
+    if (m_initialGeneration == m_projectGeneration && !m_scanPublished && !m_initialStop.stop_requested()) {
+        auto old = std::move(m_files);
+        m_files = std::make_shared<nav::ProjectFiles>(std::move(files));
+        if (m_fileSystem)
+            m_fileSystem->setFiles(m_files);
+        retireSnapshot(m_services.scheduler, std::move(old));
+    } else {
+        retireSnapshot(m_services.scheduler, std::make_shared<nav::ProjectFiles>(std::move(files)));
+    }
+    if (m_initialGeneration != m_projectGeneration)
+        startInitialFiles();
+}
+
+void Workbench::pollScan() {
+    if (m_scan && m_scan->ready()) {
+        auto scan = m_scan->join();
+        m_scan.reset();
+        m_scanPending = false;
+        if (m_scanGeneration == m_projectGeneration) {
+            if (scan) {
+                m_scanPublished = true;
+                m_initialStop.request_stop();
+            }
+            applyScan(std::move(scan));
+        } else {
+            if (scan)
+                retireSnapshot(m_services.scheduler, std::make_shared<nav::ProjectFiles>(std::move(*scan)));
+            m_rescanQueued = true;
+        }
+        if (m_rescanQueued) {
+            m_rescanQueued = false;
+            refresh();
+        }
+    }
+    pollInitialFiles();
+    if (!m_scan && !m_initialFiles)
+        m_scanTimer->stop();
+}
+
+void Workbench::applyScan(Result<nav::ProjectFiles> scan) {
     if (!scan) {
         notifyError(text("Cannot list %1").arg(nativePath(m_root)), scan.error());
         return;
     }
-    m_files.setScan(*scan);
+    auto oldFiles = std::move(m_files);
+    m_files = std::make_shared<nav::ProjectFiles>(std::move(*scan));
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
+    retireSnapshot(m_services.scheduler, std::move(oldFiles));
 }
 
 void Workbench::startWatching() {
@@ -561,8 +696,8 @@ void Workbench::closeOpenPopup() {
 
 std::vector<ListPopupItem> Workbench::fileItems(const std::string& pattern, std::size_t limit) const {
     // The project's candidates, then recent files outside it (opened from elsewhere).
-    std::vector<std::string> absolute = m_files.candidates();
-    std::vector<std::string> display = m_files.displayCandidates();
+    std::vector<std::string> absolute = m_files->candidates();
+    std::vector<std::string> display = m_files->displayCandidates();
     const std::set<std::string, std::less<>> known(absolute.begin(), absolute.end());
     for (const std::string& recent : m_recentFiles.paths()) {
         if (!known.contains(recent)) {

@@ -52,6 +52,7 @@ public:
         bool directory = false;
         std::optional<std::size_t> parent;
         std::vector<std::size_t> children;
+        std::size_t row = 0; // Position among the parent's sorted children.
     };
 
     ProjectFiles() = default;
@@ -60,8 +61,12 @@ public:
 
     // Replaces the tree with `scan` (whose root is this root). O(n log n).
     void setScan(const io::TreeScan& scan);
+    // Like setScan, but can abandon preparation when stopped; the value is unspecified on cancellation.
+    bool setScanCancellable(const io::TreeScan& scan, std::stop_token token);
     // Replaces the solution's files (absolute paths). O(n log n).
     void setSolutionFiles(std::vector<std::string> files);
+    // Returns false if stopped; the value is unspecified on cancellation.
+    bool setSolutionFilesCancellable(std::vector<std::string> files, std::stop_token token);
 
     [[nodiscard]] const std::string& root() const noexcept { return m_root; }
     [[nodiscard]] const std::vector<Node>& nodes() const noexcept { return m_nodes; }
@@ -75,7 +80,7 @@ public:
     [[nodiscard]] std::size_t fileCount() const noexcept { return m_fileCount; }
 
 private:
-    void rebuildCandidates();
+    bool rebuildCandidates(std::stop_token token = {});
 
     std::string m_root;
     std::vector<Node> m_nodes;

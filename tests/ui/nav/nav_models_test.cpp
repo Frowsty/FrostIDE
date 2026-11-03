@@ -214,6 +214,13 @@ TEST_F(NavFsTest, ProjectTreeHonoursIgnoresAndFeedsGoToFile) {
     EXPECT_EQ(files.node(root.children[0]).name, "src");
     EXPECT_EQ(files.node(root.children[1]).name, ".gitignore");
     EXPECT_EQ(files.node(root.children[2]).name, "README.md");
+    for (std::size_t row = 0; row < root.children.size(); ++row) {
+        EXPECT_EQ(files.node(root.children[row]).row, row);
+    }
+    std::stop_source stopped;
+    stopped.request_stop();
+    ProjectFiles cancelled("/proj");
+    EXPECT_FALSE(cancelled.setScanCancellable(*scan, stopped.get_token()));
     EXPECT_EQ(files.fileCount(), 4U);
     EXPECT_EQ(files.candidates(), (std::vector<std::string>{"/proj/.gitignore", "/proj/README.md", "/proj/src/main.cpp",
                                                             "/proj/src/util.cpp", "/elsewhere/shared.h"}));

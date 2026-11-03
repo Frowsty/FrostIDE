@@ -137,7 +137,7 @@ public:
      */
     bool closeProject();
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_root; }
-    [[nodiscard]] const nav::ProjectFiles& projectFiles() const noexcept { return m_files; }
+    [[nodiscard]] const nav::ProjectFiles& projectFiles() const noexcept { return *m_files; }
     // Rescans the project folder (on the scheduler when set, else now).
     void refresh();
     // True while a background scan runs.
@@ -235,8 +235,10 @@ private:
     void addToolWindow();
     [[nodiscard]] Result<void> openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles);
     void setRoot(std::string root, std::vector<std::string> solutionFiles);
-    void applyScan(Result<io::TreeScan> scan);
+    void applyScan(Result<nav::ProjectFiles> scan);
     void pollScan();
+    void startInitialFiles();
+    void pollInitialFiles();
     void startWatching();
     void stopWatching();
     void onEditorStatus(IEditorView* editor);
@@ -260,7 +262,7 @@ private:
     input::FindActionModel m_findActions;
     std::string m_root;
     std::string m_solution;
-    nav::ProjectFiles m_files;
+    std::shared_ptr<nav::ProjectFiles> m_files = std::make_shared<nav::ProjectFiles>();
     nav::NavigationHistory m_history;
     nav::RecentFiles m_recentFiles;
     nav::RecentLocations m_recentLocations;
@@ -271,10 +273,17 @@ private:
     // The caret of every open document at its last status (by path), for big-move detection.
     std::map<std::string, nav::Place, std::less<>> m_lastPlaces;
     std::string m_activePath;
-    std::string m_scanRoot;
+    std::shared_ptr<const std::vector<std::string>> m_solutionFiles =
+        std::make_shared<const std::vector<std::string>>();
+    std::uint64_t m_projectGeneration = 0;
+    std::uint64_t m_scanGeneration = 0;
     // A background scan.
-    std::optional<sched::JoinHandle<Result<io::TreeScan>>> m_scan;
+    std::optional<sched::JoinHandle<Result<nav::ProjectFiles>>> m_scan;
     std::stop_source m_scanStop;
+    std::optional<sched::JoinHandle<nav::ProjectFiles>> m_initialFiles;
+    std::stop_source m_initialStop;
+    std::uint64_t m_initialGeneration = 0;
+    bool m_scanPublished = false;
     QTimer* m_scanTimer = nullptr;
     bool m_scanPending = false;
     bool m_rescanQueued = false;
