@@ -34,6 +34,7 @@ if(NOT FROST_FUZZ)
     add_subdirectory(vcs)
     # frost::term (ADR 0051): libvterm is vendored, but terminal settings need frost::settings (yyjson).
     add_subdirectory(term)
+    add_subdirectory(update)
 endif()
 if(NOT FROST_FUZZ)
     # Crash reports and logging need crashpad, cpptrace and spdlog, which fuzz trees do not install.

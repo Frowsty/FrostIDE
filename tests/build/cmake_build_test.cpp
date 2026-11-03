@@ -29,6 +29,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -351,13 +352,35 @@ TEST(CMakeRealBuild, PlansNestedMembershipAndRefreshesTheActualModel) {
     options.msvcCacheDirectory = scratch.join("msvc");
     options.profileRecords = {project::CMakeProfileRecord{
         .name = "Debug", .cacheVariables = {std::string("CMAKE_C_COMPILER:FILEPATH=") + FROST_TEST_C_COMPILER}}};
-    auto service = CMakeService::create(fs, io::realProcessLauncher(), **trust, options);
+    std::mutex outputMutex;
+    std::string capturedOutput;
+    CMakeServiceCallbacks callbacks;
+    auto capture = [&](BuildOutputKind, std::string_view line) {
+        std::lock_guard lock(outputMutex);
+        constexpr std::size_t limit = 64 * 1024;
+        if (capturedOutput.size() < limit) {
+            capturedOutput.append(line.substr(0, limit - capturedOutput.size()));
+            if (capturedOutput.size() < limit)
+                capturedOutput.push_back('\n');
+        }
+    };
+    callbacks.onOutput = capture;
+    callbacks.onConfigureOutput = capture;
+    auto service = CMakeService::create(fs, io::realProcessLauncher(), **trust, options, callbacks);
+    const auto failureDetails = [&] {
+        const auto outcome = service->lastOutcome();
+        const auto diagnostics = describeDiagnostics(*service);
+        std::lock_guard lock(outputMutex);
+        return std::format("\nexit: {} error: {}\n{}{}", outcome ? std::to_string(outcome->result.exitCode) : "missing",
+                           outcome && outcome->error ? outcome->error->describe() : "none", diagnostics,
+                           capturedOutput);
+    };
     ASSERT_TRUE(service->openFolder(root).has_value());
     ASSERT_TRUE(service->waitForIdle(240s));
     ASSERT_TRUE(service->lastConfigure().has_value() && service->lastConfigure()->succeeded());
     ASSERT_TRUE(service->build(BuildAction::Build).has_value());
     ASSERT_TRUE(service->waitForIdle(240s));
-    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded()) << failureDetails();
 
     const auto snapshots = [&](const project::CMakeProject& model) -> Result<std::vector<project::CMakeInputSnapshot>> {
         std::vector<project::CMakeInputSnapshot> result;
@@ -401,7 +424,7 @@ TEST(CMakeRealBuild, PlansNestedMembershipAndRefreshesTheActualModel) {
               core->sources.end());
     ASSERT_TRUE(service->build(BuildAction::Build).has_value());
     ASSERT_TRUE(service->waitForIdle(240s));
-    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded()) << failureDetails();
 
     inputs = snapshots(*model);
     ASSERT_TRUE(inputs.has_value());
@@ -425,7 +448,7 @@ TEST(CMakeRealBuild, PlansNestedMembershipAndRefreshesTheActualModel) {
     EXPECT_EQ(fs.readFile(removed).value(), "int extra(void) { return 2; }\n");
     ASSERT_TRUE(service->build(BuildAction::Build).has_value());
     ASSERT_TRUE(service->waitForIdle(240s));
-    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded()) << failureDetails();
 }
 
 } // namespace

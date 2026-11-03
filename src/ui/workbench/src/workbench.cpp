@@ -567,6 +567,7 @@ void Workbench::applyScan(Result<nav::ProjectFiles> scan) {
         notifyError(text("Cannot list %1").arg(nativePath(m_root)), scan.error());
         return;
     }
+    m_scanPublished = true;
     auto oldFiles = std::move(m_files);
     m_files = std::make_shared<nav::ProjectFiles>(std::move(*scan));
     if (m_fileSystem != nullptr) {

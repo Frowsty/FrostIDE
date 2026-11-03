@@ -134,12 +134,21 @@ class EnvCacheRedirectionTest(TempDirTestCase):
 # A stand-in for windeployqt.exe: it writes a Qt core DLL and the Windows platform plugin into the
 # directory after --dir, as the real tool does for a debug frost_app.dll.
 _FAKE_WINDEPLOYQT = r"""@echo off
+set "NO_PLUGINS="
+set "NO_SVG="
 :loop
 if "%~1"=="" goto done
 if "%~1"=="--dir" set "DEST=%~2"
+if "%~1"=="--no-plugins" set "NO_PLUGINS=1"
+if "%~1"=="--no-svg" set "NO_SVG=1"
 shift
 goto loop
 :done
+if defined NO_PLUGINS goto runtime
+if not exist "%DEST%\generic" mkdir "%DEST%\generic"
+echo plugin>"%DEST%\generic\qtuiotouchplugind.dll"
+:runtime
+if not defined NO_SVG echo qt>"%DEST%\Qt6Svgd.dll"
 if not exist "%DEST%\platforms" mkdir "%DEST%\platforms"
 echo qt>"%DEST%\Qt6Cored.dll"
 echo plugin>"%DEST%\platforms\qwindowsd.dll"
@@ -154,6 +163,15 @@ class StageScriptTest(TempDirTestCase):
         build = self.tmp / "build"
         bin_dir = build / "src" / "app" / "Debug"
         (bin_dir / "platforms").mkdir(parents=True, exist_ok=True)
+        installed = self.tmp / "installed"
+        notice = installed / "x64-fixture/share/libsodium/copyright"
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        notice.write_bytes(b"Upstream ISC copyright fixture\n")
+        (build / "CMakeCache.txt").write_text(
+            f"VCPKG_INSTALLED_DIR:PATH={installed.as_posix()}\nVCPKG_TARGET_TRIPLET:STRING=x64-fixture\n",
+            encoding="utf-8")
+        (bin_dir / "tls").mkdir(parents=True, exist_ok=True)
+        (bin_dir / "tls" / "qschannelbackendd.dll").write_bytes(b"MZ-TLS-fixture")
         (bin_dir / "resources" / "themes").mkdir(parents=True, exist_ok=True)
         (bin_dir / "project-host").mkdir(parents=True, exist_ok=True)
         (bin_dir / "project-host" / "ProjectHostVsProbe.exe").write_bytes(b"MZ")
@@ -180,9 +198,39 @@ class StageScriptTest(TempDirTestCase):
         self.assertIn("stage: ok", result.stdout)
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",
                      "platforms/qwindowsd.dll", "platforms/qoffscreend.dll", "resources/themes/dark.json",
+                     "tls/qschannelbackendd.dll",
                      "project-host/ProjectHostVsProbe.exe", "project-host/ProjectHostVsProbe.exe.config",
                      "LICENSE", "NOTICE", "licenses/tree-sitter-LICENSE"):
             self.assertTrue((destination / name).is_file(), name)
+        self.assertEqual((destination / "tls/qschannelbackendd.dll").read_bytes(), b"MZ-TLS-fixture")
+        self.assertFalse((destination / "generic").exists(), "optional Qt plugins must not be deployed")
+        self.assertFalse((destination / "Qt6Svgd.dll").exists(), "SVG belongs to the icon baker only")
+        self.assertEqual((destination / "licenses/libsodium-copyright.txt").read_bytes(),
+                         b"Upstream ISC copyright fixture\n")
+
+    def test_missing_upstream_sodium_notice_fails(self) -> None:
+        build = self._fake_build()
+        (self.tmp / "installed/x64-fixture/share/libsodium/copyright").unlink()
+        result = self._stage(build, self.tmp / "missing-notice")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("missing upstream libsodium copyright notice", result.stdout)
+
+    def test_missing_https_backend_fails(self) -> None:
+        build = self._fake_build()
+        (build / "src/app/Debug/tls/qschannelbackendd.dll").unlink()
+        result = self._stage(build, self.tmp / "missing-tls")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no HTTPS backend", result.stdout)
+
+    def test_build_helper_wrappers_are_not_in_the_payload(self) -> None:
+        build = self._fake_build()
+        wrapper = build / "vcpkg_installed/x64-windows-clangcl/share/vcpkg-make/wrappers/compile"
+        wrapper.parent.mkdir(parents=True)
+        wrapper.write_bytes(b"BUILD-ONLY-HELPER")
+        destination = self.tmp / "no-build-tools"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any(p.name in ("vcpkg-make", "wrappers", "compile") for p in destination.rglob("*")))
 
     def test_a_non_empty_destination_needs_force(self) -> None:
         build = self._fake_build()

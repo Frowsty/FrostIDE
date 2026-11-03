@@ -715,13 +715,15 @@ TEST(FrostProcess, LateLoadOfADllBesideTheExeWorksFromALongPlainPath) {
      * modules, loaded later by bare name. From a long plain start, the default search would
      * combine the plain install directory with the name and fail (win32 error 206); the
      * launcher made the \\?\ install directory the process default, so it loads in \\?\ form.
-     * Qt6Network embeds RT_MANIFEST 2 like Qt's other DLLs. 300 units, plain; a \\?\ start if
+     * Qt6Xml embeds RT_MANIFEST 2 like Qt's other DLLs. Qt6Network is now a startup
+     * dependency for the updater (ADR 0075), so Xml remains the optional late-load fixture.
+     * 300 units, plain; a \\?\ start if
      * this process's long paths are ineffective, because a plain one would then be refused.
      */
     const ScratchDir scratch("app-process-lateload");
     const std::string dir = cellDirectory(longFormOf(scratch), 300);
     const std::string exe = copyFrostTo(dir);
-    copyInto(sdkFile(FROST_QT_BIN_DIR, qtDll("Qt6Network")), dir, qtDll("Qt6Network"));
+    copyInto(sdkFile(FROST_QT_BIN_DIR, qtDll("Qt6Xml")), dir, qtDll("Qt6Xml"));
     const auto form = parentLongPathsEffective() ? ImagePathForm::Plain : ImagePathForm::Extended;
     const auto result = runFrost(exe, {"--selftest"}, ownPluginsOnly(), form, 30s);
     EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
@@ -729,7 +731,7 @@ TEST(FrostProcess, LateLoadOfADllBesideTheExeWorksFromALongPlainPath) {
     const std::string_view lateLoad = lateLoadLine(result.output);
     ASSERT_FALSE(lateLoad.empty()) << result.output;
     EXPECT_TRUE(lateLoad.contains("conpty.dll (\\\\?\\ form)")) << result.output;
-    EXPECT_TRUE(lateLoad.contains(std::format("{} (\\\\?\\ form)", qtDll("Qt6Network")))) << result.output;
+    EXPECT_TRUE(lateLoad.contains(std::format("{} (\\\\?\\ form)", qtDll("Qt6Xml")))) << result.output;
 }
 
 TEST(FrostProcess, PreloadsOtherPluginsFromALongPath) {
@@ -1697,6 +1699,10 @@ bool allowedAppImport(std::string_view name) {
     if (std::ranges::find(kSystem, name) != std::end(kSystem)) {
         return true;
     }
+    // ADR 0075 admits Qt Network for explicit update requests; no other module is added.
+    if (name == "qt6network.dll" || name == "qt6networkd.dll") {
+        return true;
+    }
     // The C and C++ runtimes (release or debug), the ASan runtime in the ASan tree, and Qt.
     for (const std::string_view prefix : {"api-ms-win-crt-", "ucrtbase", "vcruntime140", "msvcp140",
                                           "clang_rt.asan_dynamic-x86_64", "qt6core", "qt6gui", "qt6widgets"}) {
@@ -1711,8 +1717,9 @@ TEST(FrostProcess, AppDllImportsOnlyAllowedDlls) {
     /*
      * frost::diag (crashpad, cpptrace, spdlog; ADR 0022) adds only bcrypt.dll, a System32 DLL,
      * to frost_app.dll's static imports: no dbghelp.dll (the cpptrace overlay resolves nothing
-     * in process), no networking DLL (nothing is uploaded, D26), and nothing delay-loaded that
+     * in process), and nothing delay-loaded that
      * could change how the launcher's restart rules apply (ADR 0012).
+     * The application separately imports Qt Network for the consent-gated updater (ADR 0075).
      *
      * The one delay import allowed is ws2_32.dll, which every binary that links frost_io
      * delay-loads (src/io/CMakeLists.txt, ADR 0020): frost_app.dll links frost_io for the crash

@@ -17,7 +17,8 @@
  * profile unusable (CMakeProfile::problem), so a repository cannot aim configure or build output
  * at an arbitrary directory.
  *
- * Command lines (cmakeConfigureArguments): -S <source> -B <build> [-G <generator>] [-T <toolset>]
+ * Command lines (cmakeConfigureArguments): -S <source> -B <build> [-G <generator>]
+ * [-T <toolset>, unless the strategy is external]
  * [-A <architecture>, unless the strategy is external] [-DCMAKE_BUILD_TYPE=<type>]
  * [-DCMAKE_TOOLCHAIN_FILE=...] [-DCMAKE_INSTALL_PREFIX=...] [-DCMAKE_MAKE_PROGRAM=<ninja>]
  * -D<cache variables>... -DCMAKE_EXPORT_COMPILE_COMMANDS=ON (always last, so it wins). The
@@ -64,6 +65,7 @@ struct CMakeProfile {
     std::string toolchainFile{};
     std::string installDir{};
     std::string toolset{};
+    bool toolsetExternal = false; // The environment selects the toolset, not CMake's generator.
     std::string architecture{};
     bool architectureExternal = false; // The IDE sets up the architecture (MSVC's vcvars on Windows).
 

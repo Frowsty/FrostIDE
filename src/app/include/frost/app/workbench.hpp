@@ -110,6 +110,7 @@
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/workbench/document_editor.hpp"
 #include "frost/ui/workbench/workbench.hpp"
+#include "frost/update/manifest.hpp"
 
 #include <QObject>
 #include <QPointer>
@@ -144,6 +145,8 @@ class TerminalIntegration;
 namespace frost::ui::lang {
 class LanguageController;
 } // namespace frost::ui::lang
+
+class QTemporaryFile;
 
 namespace frost::app {
 class ManagedDebugPreparation;
@@ -386,6 +389,10 @@ public:
     [[nodiscard]] ui::nav::SessionStore* sessions() noexcept { return m_sessions.get(); }
     // The window's parts (null before attach()).
     [[nodiscard]] ui::Workbench* navigation() const noexcept { return m_nav.get(); }
+    // Called after startup project/session/editor restoration has completed.
+    void markInteractiveStartupComplete();
+    // Live UI, navigation and current-project scan readiness; GUI thread only.
+    [[nodiscard]] bool interactiveReady() const;
     [[nodiscard]] ui::lang::LanguageController* language() const noexcept { return m_language.get(); }
     [[nodiscard]] ui::RunController* runController() const noexcept { return m_runController.get(); }
     [[nodiscard]] ui::RunConsole* runConsole() const noexcept { return m_runConsole.data(); }
@@ -446,6 +453,7 @@ private:
     void refreshRecent();
     void showOpenRecent();
     void showSettings();
+    void showUpdateCheck();
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
     [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
 
@@ -580,6 +588,10 @@ private:
     std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;
+    bool m_interactiveStartupComplete = false;
+    bool m_updateChecking = false;
+    std::unique_ptr<QTemporaryFile> m_verifiedUpdate;
+    std::optional<update::AuthenticatedRelease> m_verifiedRelease;
     QPointer<ui::SolutionExplorer> m_explorer;
     QPointer<ui::ProblemsView> m_problems;
     QPointer<ui::BuildOutputPane> m_output;

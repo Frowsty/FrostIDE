@@ -140,6 +140,13 @@ struct Entry {
                              {"cr", "Classic Mac OS (CR)"}})),
          text("system"), editorConfig},
 
+        // Outbound requests require explicit per-check consent even while online.
+        {"network.offline", "Work offline", "Disables outbound update checks and downloads.",
+         "Appearance & Behavior/Updates", boolSchema(), Value(false), kApplicationOnly},
+        {"updates.channel", "Update channel", "Selects stable, EAP, or nightly releases from Frowsty/FrostIDE.",
+         "Appearance & Behavior/Updates",
+         enumSchema(options({{"stable", "Stable"}, {"eap", "EAP"}, {"nightly", "Nightly"}})), text("stable"),
+         kApplicationOnly},
         // Appearance.
         {"ui.theme", "Theme",
          "The IDE theme, or sync-with-os to follow the system's light, dark and high-contrast mode.",

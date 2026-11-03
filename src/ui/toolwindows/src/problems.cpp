@@ -266,6 +266,7 @@ ProblemsView::ProblemsView(QWidget* parent)
     toolbar->addWidget(m_search, 1);
 
     m_view->setObjectName(QStringLiteral("problemsTable"));
+    m_view->setAccessibleDescription(tr("Press Enter or F4 on a diagnostic to open its source."));
     m_view->setModel(m_filter);
     m_view->setRootIsDecorated(false);
     m_view->setUniformRowHeights(true);
@@ -332,7 +333,7 @@ bool ProblemsView::activate(const QModelIndex& index) {
 bool ProblemsView::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_view && event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
-        if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+        if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter || key->key() == Qt::Key_F4) &&
             (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier) {
             activate(m_view->currentIndex());
             return true;

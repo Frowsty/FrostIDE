@@ -90,12 +90,25 @@ set(_frost_workbench_definitions
     FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
-    SOURCES workbench_test.cpp workbench_terminal_test.cpp workbench_engine_test.cpp workbench_find_test.cpp project_edit_process_test.cpp
-    DEPS frost::app frost::build frost::io frost::ui_find)
+    SOURCES workbench_test.cpp workbench_terminal_test.cpp workbench_engine_test.cpp workbench_find_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
+    DEPS frost::app frost::build frost::io frost::ui_find
+    THIRD_PARTY Qt6::Network unofficial-sodium::sodium)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
 target_compile_definitions(app_workbench_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
 add_dependencies(app_workbench_tests engine_discovery_stall_child)
+# Exercise the release floor across independent processes, including a stale reader.
+if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
+    set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
+endif()
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+add_test(NAME UpdateState.IndependentProcessesPreserveHigherFloor
+    COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/update_state_process.py"
+            "$<TARGET_FILE:app_workbench_tests>")
+set_tests_properties(UpdateState.IndependentProcessesPreserveHigherFloor PROPERTIES
+    LABELS integration
+    RESOURCE_LOCK frost_desktop
+    TIMEOUT 45)
 # Real isolated scratch Git repositories, never the user's project or remotes.
 file(TO_CMAKE_PATH "${FROST_GIT_EXECUTABLE}" _frost_app_git)
 frost_add_test(app_workbench_git_tests QT

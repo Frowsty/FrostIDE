@@ -6,6 +6,7 @@
 #include "frost/settings/keys.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "settings_keymap_page.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -58,8 +59,12 @@ constexpr std::array kEntries{
     Entry{settings::key::toolsGitPath.name, 4},
     Entry{settings::key::toolsClangdPath.name, 4},
     Entry{settings::key::toolsMsbuildPath.name, 4},
+    Entry{settings::key::networkOffline.name, 5},
+    Entry{settings::key::updateChannel.name, 5},
 };
-constexpr std::array<std::string_view, 5> kPages{"Appearance", "Editor", "Code Style", "Files", "Tools"};
+constexpr std::array<std::string_view, 7> kPages{"Appearance", "Editor",  "Code Style", "Files",
+                                                 "Tools",      "Updates", "Keymap"};
+constexpr std::size_t kKeymapPage = 6;
 
 settings::Value controlValue(const QWidget* control, const settings::Schema& schema) {
     using settings::ValueType;
@@ -122,7 +127,9 @@ struct SettingsDialog::Row {
     bool dirty = false;
 };
 
-SettingsDialog::SettingsDialog(settings::SettingsStore& store, QWidget* parent) : QDialog(parent), m_store(store) {
+SettingsDialog::SettingsDialog(settings::SettingsStore& store, const input::ActionRegistry& registry,
+                               input::KeymapService& keymap, QWidget* parent)
+    : QDialog(parent), m_store(store), m_registry(registry), m_keymap(keymap) {
     setObjectName(QStringLiteral("settingsDialog"));
     setWindowTitle(text("Settings"));
     resize(920, 680);
@@ -173,6 +180,14 @@ void SettingsDialog::build() {
         scroll->setWidget(page);
         m_pages->addWidget(scroll);
     }
+    m_keymapPage = new SettingsKeymapPage(
+        m_registry, m_keymap,
+        [this] {
+            m_apply->setEnabled(m_keymapPage->dirty() ||
+                                std::ranges::any_of(m_rows, [](const auto& row) { return row->dirty; }));
+        },
+        this);
+    layouts[kKeymapPage]->addWidget(m_keymapPage);
     auto* noResults = new QLabel(text("No settings found"), m_pages);
     noResults->setObjectName(QStringLiteral("settingsNoResults"));
     noResults->setAlignment(Qt::AlignCenter);
@@ -306,6 +321,7 @@ void SettingsDialog::reload() {
         }
         row->source->setText(note);
     }
+    m_keymapPage->load(*document, m_store.registry());
     m_loading = false;
     m_loaded = true;
     m_pages->setEnabled(true);
@@ -320,7 +336,8 @@ void SettingsDialog::changed(std::size_t index) {
     row.reset = false;
     row.dirty = controlValue(row.control, row.spec->schema) != row.initial;
     row.title->setText(text(row.spec->title) + (row.dirty ? QStringLiteral(" *") : QString()));
-    m_apply->setEnabled(std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
+    m_apply->setEnabled(m_keymapPage->dirty() ||
+                        std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
 }
 void SettingsDialog::resetRow(std::size_t index) {
     auto& row = *m_rows[index];
@@ -330,7 +347,8 @@ void SettingsDialog::resetRow(std::size_t index) {
     row.reset = true;
     row.dirty = row.expectedRaw.has_value();
     row.title->setText(text(row.spec->title) + (row.dirty ? QStringLiteral(" *") : QString()));
-    m_apply->setEnabled(std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
+    m_apply->setEnabled(m_keymapPage->dirty() ||
+                        std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
 }
 void SettingsDialog::refreshSearch() {
     const QString query = m_search->text().trimmed();
@@ -342,6 +360,8 @@ void SettingsDialog::refreshSearch() {
         row->container->setVisible(match);
         matches[static_cast<std::size_t>(row->page)] |= match;
     }
+    matches[kKeymapPage] = m_keymapPage->matches(query);
+    m_keymapPage->filter(query);
     int first = -1;
     for (std::size_t i = 0; i < matches.size(); ++i) {
         m_categories->item(static_cast<int>(i))->setHidden(!matches[i]);
@@ -374,6 +394,8 @@ bool SettingsDialog::apply() {
         }
         edits.push_back({row->spec->key, row->expectedRaw, std::move(value)});
     }
+    if (auto keymapEdit = m_keymapPage->edit())
+        edits.push_back(std::move(*keymapEdit));
     if (auto written = m_store.applyConditional(settings::Scope::Application, edits); !written) {
         m_status->setText(text("Cannot apply settings: %1. Reload to discard your changes and read the current file.")
                               .arg(str(written.error().describe())));

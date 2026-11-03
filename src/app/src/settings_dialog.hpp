@@ -2,6 +2,7 @@
 // Application-scoped Settings dialog over the typed registry and SettingsStore.
 #pragma once
 
+#include "frost/input/keymap_service.hpp"
 #include "frost/settings/store.hpp"
 
 #include <QDialog>
@@ -17,12 +18,14 @@ class QStackedWidget;
 class QWidget;
 
 namespace frost::app {
+class SettingsKeymapPage;
 
 // GUI thread only. The store outlives this dialog. Apply writes only modified keys;
 // Cancel discards edits made since the last successful Apply.
 class SettingsDialog final : public QDialog {
 public:
-    explicit SettingsDialog(settings::SettingsStore& store, QWidget* parent = nullptr);
+    SettingsDialog(settings::SettingsStore& store, const input::ActionRegistry& registry, input::KeymapService& keymap,
+                   QWidget* parent = nullptr);
     ~SettingsDialog() override;
 
 private:
@@ -34,6 +37,9 @@ private:
     void resetRow(std::size_t index);
     bool apply();
     settings::SettingsStore& m_store;
+    const input::ActionRegistry& m_registry;
+    input::KeymapService& m_keymap;
+    SettingsKeymapPage* m_keymapPage = nullptr;
     QLineEdit* m_search = nullptr;
     QListWidget* m_categories = nullptr;
     QStackedWidget* m_pages = nullptr;

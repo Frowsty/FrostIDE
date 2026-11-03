@@ -180,6 +180,37 @@ TEST(BuildOutputPane, AClickOnADiagnosticLineJumps) {
     pane.hide();
 }
 
+TEST(BuildOutputPane, KeyboardOpensTheDiagnosticAtTheCursorOnlyWhenLinked) {
+    BuildOutputPane pane;
+    pane.appendLine(BuildOutputKind::Stdout, QStringLiteral("  main.cpp"));
+    pane.appendLine(BuildOutputKind::Stdout, QString::fromStdString(errorLine()));
+    test::SignalLog jumps(&pane, &BuildOutputPane::openLocation);
+    auto* editor = pane.editor();
+    editor->setTextCursor(QTextCursor(editor->document()->findBlockByNumber(1)));
+    test::pressKey(editor, Qt::Key_Return); // Output may arrive before the diagnostic.
+    EXPECT_EQ(jumps.count(), 0);
+    pane.addDiagnostic(errorDiagnostic());
+    test::pressKey(editor, Qt::Key_Return);
+    test::pressKey(editor, Qt::Key_F4);
+    ASSERT_EQ(jumps.count(), 2);
+    EXPECT_EQ(jumps.at(0).at(0).toString().toStdString(), std::string(kMain));
+    EXPECT_EQ(jumps.at(1).at(1).toInt(), 7);
+    EXPECT_EQ(jumps.at(1).at(2).toInt(), 27);
+    test::pressKey(editor, Qt::Key_F4, {}, Qt::ControlModifier);
+    EXPECT_EQ(jumps.count(), 2);
+    QTextCursor selection(editor->document()->findBlockByNumber(1));
+    selection.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+    editor->setTextCursor(selection);
+    test::pressKey(editor, Qt::Key_F4);
+    EXPECT_EQ(jumps.count(), 2); // Keep ordinary text selection behavior.
+    editor->setTextCursor(QTextCursor(editor->document()->findBlockByNumber(0)));
+    test::pressKey(editor, Qt::Key_F4);
+    EXPECT_EQ(jumps.count(), 2); // Plain output has no location.
+    pane.clear();
+    test::pressKey(editor, Qt::Key_Return);
+    EXPECT_EQ(jumps.count(), 2);
+}
+
 TEST(BuildOutputPane, FollowsTheTailUnlessScrolledUpAndClears) {
     BuildOutputPane pane;
     pane.resize(600, 200);

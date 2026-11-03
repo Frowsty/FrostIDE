@@ -9,6 +9,7 @@
 
 #include "frost/app/welcome_screen.hpp"
 #include "frost/core/assert.hpp"
+#include "frost/core/build_info.hpp"
 #include "frost/core/log.hpp"
 #include "frost/input/keymap.hpp"
 #include "frost/input/simulated_keyboard.hpp"
@@ -46,8 +47,12 @@
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
 #include "unity_control.hpp"
+#include "update_check.hpp"
+#include "update_download.hpp"
+#include "update_state.hpp"
 #include <QAction>
 #include <QApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QEvent>
 #include <QFileDialog>
@@ -56,13 +61,18 @@
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QProgressDialog>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleHints>
+#include <QTemporaryFile>
 #include <QTimer>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <utility>
 
 namespace frost::app {
@@ -257,8 +267,22 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_luaTrustWatch.start();
 
     // Settings changes may be published on any thread; they are applied on this one.
-    m_settingsSubscription = m_services.settings.subscribe([this](const settings::SettingsChange&) {
-        QMetaObject::invokeMethod(this, [this] { onSettingsChanged(); }, Qt::QueuedConnection);
+    m_settingsSubscription = m_services.settings.subscribe([this](const settings::SettingsChange& change) {
+        const bool keymapChanged = std::ranges::any_of(change.keys, [](const std::string& key) {
+            return key == settings::key::keymapId.name || key == settings::key::keymapOverrides.name ||
+                   key == settings::key::keymapDoubleTapIntervalMs.name;
+        });
+        QMetaObject::invokeMethod(
+            this,
+            [this, keymapChanged] {
+                if (keymapChanged) {
+                    m_keymap->reloadPreferences();
+                    if (m_window)
+                        m_window->refreshActions();
+                }
+                onSettingsChanged();
+            },
+            Qt::QueuedConnection);
     });
 }
 
@@ -503,6 +527,15 @@ void Workbench::registerActions() {
             log::warn(kLog, "action {}: {}", id, added.error().describe());
         }
     };
+    input::ActionSpec checkUpdate;
+    checkUpdate.id = "help.checkForUpdates";
+    checkUpdate.name = "Check for Updates...";
+    checkUpdate.group = "Help";
+    checkUpdate.requiredLevel = input::AvailabilityLevel::L1;
+    checkUpdate.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
+    checkUpdate.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { showUpdateCheck(); };
+    if (auto added = m_registry.add(std::move(checkUpdate)); !added)
+        log::warn(kLog, "update action: {}", added.error().describe());
     // Save All, Save, Reload All from Disk and Close Project are the navigation workbench's.
     add(wa::kOpenFolder, "Open Folder...", [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
     add("file.settings", "Settings...", [this] { showSettings(); }, [this] { return m_window != nullptr; });
@@ -551,6 +584,28 @@ Result<void> Workbench::announceUnity(const lang::Json& message) {
 }
 
 // --- The window ---
+
+bool Workbench::interactiveReady() const {
+    if (!m_interactiveStartupComplete || !m_window || !m_window->isVisible() || !m_nav)
+        return false;
+    if (m_projectRoot.empty())
+        return m_nav->projectRoot().empty();
+    return m_nav->projectRoot() == m_projectRoot && m_nav->initialScanReady() && !m_nav->scanPending();
+}
+
+void Workbench::markInteractiveStartupComplete() {
+    if (m_interactiveStartupComplete)
+        return;
+    m_interactiveStartupComplete = true;
+    auto* timer = new QTimer(this);
+    timer->setInterval(100);
+    connect(timer, &QTimer::timeout, this, [this] {
+        if (m_window)
+            m_window->setAvailabilityLevel(interactiveReady() ? input::AvailabilityLevel::L1
+                                                              : input::AvailabilityLevel::L0);
+    });
+    timer->start();
+}
 
 void Workbench::attach(ui::ShellWindow& window) {
     FROST_PRE(m_window == nullptr);
@@ -945,6 +1000,190 @@ void Workbench::showOpenRecent() {
     popup->showCentered(m_window, 0.2);
 }
 
+void Workbench::showUpdateCheck() {
+    const QPointer<Workbench> guard(this);
+    if (!m_window || !interactiveReady() || m_updateChecking)
+        return;
+    auto snapshot = m_services.settings.snapshot();
+    if (snapshot->get(key::networkOffline)) {
+        QMessageBox::information(m_window, tr("Updates"),
+                                 tr("FrostIDE is working offline. Change this in Settings > Updates."));
+        return;
+    }
+    const QByteArray configuredKey(FROST_UPDATE_PUBLIC_KEY_HEX);
+    const QByteArray decoded = QByteArray::fromHex(configuredKey);
+    if (configuredKey.size() != 64 || decoded.size() != 32) {
+        QMessageBox::information(m_window, tr("Updates unavailable"),
+                                 tr("This build does not include an official update verification key."));
+        return;
+    }
+    const auto consent = QMessageBox::question(
+        m_window, tr("Check for updates"),
+        tr("Connect to GitHub to check Frowsty/FrostIDE releases? GitHub will receive your network address."));
+    if (!guard || consent != QMessageBox::Yes || !interactiveReady() ||
+        m_services.settings.snapshot()->get(key::networkOffline))
+        return;
+    frost::update::PublicKey publicKey{};
+    std::memcpy(publicKey.data(), decoded.constData(), publicKey.size());
+    bool buildOk = false;
+    const auto installedBuild = QByteArray(FROST_UPDATE_BUILD_NUMBER).toULongLong(&buildOk);
+    if (!buildOk) {
+        QMessageBox::warning(m_window, tr("Updates unavailable"), tr("This build has an invalid update build number."));
+        return;
+    }
+    const auto localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (localData.isEmpty())
+        return;
+    const auto stateDirectory = localData + QStringLiteral("/updates");
+    auto floor = readUpdateFloor(stateDirectory);
+    if (!floor) {
+        QMessageBox::warning(m_window, tr("Updates unavailable"), QString::fromStdString(floor.error().message()));
+        return;
+    }
+#ifdef _WIN32
+    constexpr std::string_view platform = "windows";
+#else
+    constexpr std::string_view platform = "linux";
+#endif
+    const auto channel = m_services.settings.snapshot()->get(key::updateChannel);
+    update::ReleasePolicy policy{channel,
+                                 platform,
+                                 "x64",
+                                 static_cast<std::uint64_t>(QDateTime::currentSecsSinceEpoch()),
+                                 installedBuild,
+                                 floor->build,
+                                 build_info::kVersion,
+                                 floor->version,
+                                 floor->digest};
+    auto revalidate = [stateDirectory, publicKey, installedBuild, channel,
+                       platform](const update::AuthenticatedRelease& envelope) {
+        update::ReleasePolicy fresh{channel,
+                                    platform,
+                                    "x64",
+                                    static_cast<std::uint64_t>(QDateTime::currentSecsSinceEpoch()),
+                                    installedBuild,
+                                    0,
+                                    build_info::kVersion,
+                                    "",
+                                    ""};
+        return acceptUpdate(stateDirectory, envelope, publicKey, fresh);
+    };
+    auto cancelled = std::make_shared<bool>(false);
+    auto ready = [self = guard, channel, cancelled] {
+        return !*cancelled && self && self->interactiveReady() &&
+               !self->m_services.settings.snapshot()->get(key::networkOffline) &&
+               self->m_services.settings.snapshot()->get(key::updateChannel) == channel;
+    };
+    m_updateChecking = true;
+    const QPointer<QProgressDialog> progress =
+        new QProgressDialog(tr("Checking signed GitHub releases…"), tr("Cancel"), 0, 0, m_window);
+    progress->setWindowTitle(tr("Check for updates"));
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    connect(progress, &QProgressDialog::canceled, progress, [cancelled] { *cancelled = true; });
+    progress->show();
+    if (!guard)
+        return;
+    auto* manager = new QNetworkAccessManager(m_window);
+    auto* check = new UpdateCheck(
+        *manager, publicKey, policy, ready,
+        [] { return static_cast<std::uint64_t>(QDateTime::currentSecsSinceEpoch()); },
+        [self = guard, manager, ready, revalidate, progress, cancelled](Result<update::AuthenticatedRelease> result) {
+            manager->deleteLater();
+            if (progress)
+                progress->deleteLater();
+            if (!self)
+                return;
+            self->m_updateChecking = false;
+            if (!self->m_window)
+                return;
+            if (*cancelled)
+                return;
+            if (!result) {
+                QMessageBox::information(self->m_window, tr("Update check"),
+                                         QString::fromUtf8(result.error().message().c_str()));
+                return;
+            }
+            if (!ready())
+                return;
+            auto accepted = revalidate(*result);
+            if (!accepted) {
+                QMessageBox::warning(self->m_window, tr("Update check"),
+                                     QString::fromStdString(accepted.error().message()));
+                return;
+            }
+            result->release = std::move(*accepted);
+            const auto answer =
+                QMessageBox::question(self->m_window, tr("Update available"),
+                                      tr("A signed FrostIDE update is available: %1 (build %2). Download it now?")
+                                          .arg(QString::fromStdString(result->release.version))
+                                          .arg(result->release.build));
+            if (answer != QMessageBox::Yes || !ready())
+                return;
+            // A different instance may have advanced the floor during the dialog.
+            accepted = revalidate(*result);
+            if (!accepted) {
+                QMessageBox::warning(self->m_window, tr("Update download"),
+                                     QString::fromStdString(accepted.error().message()));
+                return;
+            }
+            result->release = std::move(*accepted);
+            self->m_updateChecking = true;
+            auto envelope = std::make_shared<update::AuthenticatedRelease>(std::move(*result));
+            auto downloadCancelled = std::make_shared<bool>(false);
+            auto downloadReady = [ready, downloadCancelled] { return !*downloadCancelled && ready(); };
+            const QPointer<QProgressDialog> downloadProgress =
+                new QProgressDialog(tr("Downloading and verifying update…"), tr("Cancel"), 0, 0, self->m_window);
+            downloadProgress->setWindowTitle(tr("Download update"));
+            downloadProgress->setMinimumDuration(0);
+            downloadProgress->setAutoClose(false);
+            connect(downloadProgress, &QProgressDialog::canceled, downloadProgress,
+                    [downloadCancelled] { *downloadCancelled = true; });
+            downloadProgress->show();
+            if (!self)
+                return;
+            auto* downloadManager = new QNetworkAccessManager(self->m_window);
+            auto* download = new UpdateDownload(
+                *downloadManager, envelope->release, downloadReady,
+                [self, downloadManager, envelope, downloadReady, revalidate, downloadProgress,
+                 downloadCancelled](Result<std::unique_ptr<QTemporaryFile>> payload) {
+                    downloadManager->deleteLater();
+                    if (downloadProgress)
+                        downloadProgress->deleteLater();
+                    if (!self)
+                        return;
+                    self->m_updateChecking = false;
+                    if (!self->m_window)
+                        return;
+                    if (*downloadCancelled)
+                        return;
+                    if (!payload) {
+                        QMessageBox::warning(self->m_window, tr("Update download"),
+                                             QString::fromUtf8(payload.error().message().c_str()));
+                        return;
+                    }
+                    if (!downloadReady())
+                        return;
+                    auto current = revalidate(*envelope);
+                    if (!current) {
+                        QMessageBox::warning(self->m_window, tr("Update download"),
+                                             QString::fromStdString(current.error().message()));
+                        return;
+                    }
+                    envelope->release = std::move(*current);
+                    self->m_verifiedUpdate = std::move(*payload);
+                    self->m_verifiedRelease = std::move(*envelope);
+                    QMessageBox::information(
+                        self->m_window, tr("Update verified"),
+                        tr("The update download was verified. Installation is pending installer support."));
+                },
+                downloadManager);
+            download->start();
+        },
+        manager);
+    check->start();
+}
+
 void Workbench::showSettings() {
     if (!m_window)
         return;
@@ -953,7 +1192,7 @@ void Workbench::showSettings() {
         m_settingsDialog->activateWindow();
         return;
     }
-    auto* dialog = new SettingsDialog(m_services.settings, m_window);
+    auto* dialog = new SettingsDialog(m_services.settings, m_registry, *m_keymap, m_window);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     m_settingsDialog = dialog;
     dialog->open();

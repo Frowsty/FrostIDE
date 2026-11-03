@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QFontDatabase>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QScrollBar>
@@ -138,6 +139,8 @@ BuildOutputPane::BuildOutputPane(QWidget* parent)
     m_editor->setFont(font);
     m_editor->viewport()->setMouseTracking(true);
     m_editor->viewport()->installEventFilter(this);
+    m_editor->installEventFilter(this);
+    m_editor->setAccessibleDescription(tr("Move the cursor to a diagnostic and press Enter or F4 to open its source."));
 
     detail::IconCache icons;
     m_clear->setObjectName(QStringLiteral("clearOutput"));
@@ -304,6 +307,15 @@ std::optional<std::size_t> BuildOutputPane::lineAt(QPoint viewportPosition) cons
 }
 
 bool BuildOutputPane::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_editor && event->type() == QEvent::KeyPress) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter || key->key() == Qt::Key_F4) &&
+            (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier && !m_editor->textCursor().hasSelection()) {
+            const int block = m_editor->textCursor().blockNumber();
+            if (block >= 0 && activateLine(static_cast<std::size_t>(block)))
+                return true;
+        }
+    }
     if (watched != m_editor->viewport()) {
         return QWidget::eventFilter(watched, event);
     }

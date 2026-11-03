@@ -425,7 +425,8 @@ TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {
     std::ranges::replace(compiler, '\\', '/');
     dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
                                     "\" CACHE FILEPATH \"\" FORCE)\nproject(Stop C)\nadd_executable(stop main.c)\n");
-    dir.write("main.c", "#include <stdio.h>\nint main(void) { puts(\"started\"); fflush(stdout); getchar(); }\n");
+    dir.write("main.c", "#include <stdio.h>\nint main(void) { puts(\"shutdown-target-ready\"); fflush(stdout); "
+                        "getchar(); }\n");
     WorkbenchRig rig(dir);
     ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
@@ -435,7 +436,15 @@ TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {
     ASSERT_TRUE(displayedTarget(rig, QStringLiteral("stop")));
     ASSERT_TRUE(rig.workbench->runController()->run().has_value());
     EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch()); // Pending build and handoff.
-    ASSERT_TRUE(waitFor([&] { return rig.workbench->runConsole()->text().contains(QStringLiteral("started")); }, 240s));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return rig.workbench->runConsole()->text().contains(QStringLiteral("shutdown-target-ready")) ||
+                   !rig.workbench->runController()->running();
+        },
+        240s));
+    ASSERT_TRUE(rig.workbench->runConsole()->text().contains(QStringLiteral("shutdown-target-ready")))
+        << "run=" << rig.workbench->runConsole()->text().toStdString()
+        << " build=" << rig.workbench->buildOutput()->editor()->toPlainText().toStdString();
     EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch()); // Live target process.
     ASSERT_TRUE(rig.workbench->runController()->running());
     rig.workbench->shutdown();

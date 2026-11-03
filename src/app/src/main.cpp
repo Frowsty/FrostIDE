@@ -686,6 +686,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                                              std::move(reserved));
         QObject::connect(&workbench, &frost::app::Workbench::projectChanged, &broker,
                          [&broker](const QString&) { broker.projectChanged(); });
+        workbench.markInteractiveStartupComplete();
         window.show();
         frost::app::afterFirstFrame(window, [&app, &window, &workbench, &broker, restartedFrom] {
             if (auto started = broker.start(); !started)

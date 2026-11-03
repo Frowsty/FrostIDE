@@ -29,6 +29,7 @@
 #include "../../src/app/src/language_bridge.hpp"
 #include "workbench_rig.hpp"
 #include <QAction>
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -725,6 +726,124 @@ TEST(Workbench, SettingsDialogAppliesResetsAndDetectsExternalChanges) {
     tabSize->setValue(9);
     buttons->button(QDialogButtonBox::Cancel)->click();
     EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTabSize), 4);
+}
+
+TEST(Workbench, KeymapSettingsStagesAppliesAndInvokesShortcut) {
+    WorkDir dir("settings-keymap");
+    WorkbenchRig rig(dir);
+    int invocations = 0;
+    frost::input::ActionSpec spec;
+    spec.id = "test.fixtureShortcut";
+    spec.name = "Fixture Shortcut";
+    spec.group = "Tests";
+    spec.handler = [&](const frost::input::ActionContext&, const frost::input::InvokeInfo&) { ++invocations; };
+    const auto action = rig.workbench->registry().add(std::move(spec));
+    ASSERT_TRUE(action);
+    rig.show();
+    rig.window->refreshActions();
+    auto* gear = rig.window->mainToolbar().button(frost::ui::MainToolbar::kSettings);
+    ASSERT_NE(gear, nullptr);
+    gear->click();
+    auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto* search = dialog->findChild<QLineEdit*>(QStringLiteral("settingsSearch"));
+    auto* actions = dialog->findChild<QTreeWidget*>(QStringLiteral("keymapActions"));
+    auto* shortcut = dialog->findChild<QLineEdit*>(QStringLiteral("keymapShortcut"));
+    auto* set = dialog->findChild<QPushButton*>(QStringLiteral("keymapSet"));
+    auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("keymapRemove"));
+    auto* reset = dialog->findChild<QPushButton*>(QStringLiteral("keymapReset"));
+    auto* message = dialog->findChild<QLabel*>(QStringLiteral("keymapMessage"));
+    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+    ASSERT_TRUE(search && actions && shortcut && set && remove && reset && message && buttons);
+    auto* offline = dialog->findChild<QCheckBox*>(QStringLiteral("setting.network.offline"));
+    ASSERT_NE(offline, nullptr);
+    search->setText(QStringLiteral("Work offline"));
+    ASSERT_TRUE(offline->isVisible());
+    search->setText(QStringLiteral("no such action"));
+    search->setText(QStringLiteral("Fixture Shortcut"));
+    QTreeWidgetItem* fixture = nullptr;
+    for (int i = 0; i < actions->topLevelItemCount(); ++i)
+        if (actions->topLevelItem(i)->text(0) == QStringLiteral("Fixture Shortcut"))
+            fixture = actions->topLevelItem(i);
+    ASSERT_NE(fixture, nullptr);
+    EXPECT_FALSE(fixture->isHidden());
+    EXPECT_EQ(actions->currentItem(), fixture);
+    actions->setCurrentItem(fixture);
+    shortcut->setText(QStringLiteral("a"));
+    set->click();
+    EXPECT_TRUE(message->text().contains(QStringLiteral("valid")));
+    EXPECT_FALSE(buttons->button(QDialogButtonBox::Apply)->isEnabled());
+    shortcut->setText(QStringLiteral("Ctrl+S"));
+    set->click();
+    EXPECT_TRUE(message->text().contains(QStringLiteral("Conflicts")));
+    shortcut->setText(QStringLiteral("Ctrl+Alt+F12"));
+    set->click();
+    EXPECT_TRUE(buttons->button(QDialogButtonBox::Apply)->isEnabled());
+    offline->setChecked(true);
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::uiZoom, std::int64_t{125}));
+    buttons->button(QDialogButtonBox::Apply)->click();
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::uiZoom), 125);
+    EXPECT_TRUE(rig.settings->snapshot()->get(frost::settings::key::networkOffline));
+    ASSERT_TRUE(waitFor([&] {
+        const auto shortcuts = rig.workbench->keymap().shortcutsFor(*action);
+        return !shortcuts.empty() && frost::input::formatSequence(shortcuts.front()) == "Ctrl+Alt+F12";
+    }));
+    remove->click();
+    buttons->button(QDialogButtonBox::Cancel)->click();
+    QApplication::processEvents();
+    sendKey(rig.window.get(), Qt::Key_F12, Qt::ControlModifier | Qt::AltModifier);
+    EXPECT_EQ(invocations, 1);
+    const auto shortcuts = rig.workbench->keymap().shortcutsFor(*action);
+    ASSERT_EQ(shortcuts.size(), 1U);
+    EXPECT_EQ(frost::input::formatSequence(shortcuts.front()), "Ctrl+Alt+F12");
+}
+
+TEST(Workbench, KeymapSettingsRejectsConcurrentOverrideChangesAndRestoresDefaults) {
+    WorkDir dir("settings-keymap-conflict");
+    WorkbenchRig rig(dir);
+    rig.show();
+    rig.window->refreshActions();
+    rig.window->mainToolbar().button(frost::ui::MainToolbar::kSettings)->click();
+    auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto* actions = dialog->findChild<QTreeWidget*>(QStringLiteral("keymapActions"));
+    auto* search = dialog->findChild<QLineEdit*>(QStringLiteral("settingsSearch"));
+    auto* shortcut = dialog->findChild<QLineEdit*>(QStringLiteral("keymapShortcut"));
+    auto* set = dialog->findChild<QPushButton*>(QStringLiteral("keymapSet"));
+    auto* reset = dialog->findChild<QPushButton*>(QStringLiteral("keymapReset"));
+    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+    auto* status = dialog->findChild<QLabel*>(QStringLiteral("settingsStatus"));
+    ASSERT_TRUE(actions && search && shortcut && set && reset && buttons && status);
+    search->setText(QStringLiteral("Save All"));
+    QTreeWidgetItem* save = nullptr;
+    for (int i = 0; i < actions->topLevelItemCount(); ++i)
+        if (actions->topLevelItem(i)->data(0, Qt::UserRole).toString() == QStringLiteral("file.saveAll"))
+            save = actions->topLevelItem(i);
+    ASSERT_NE(save, nullptr);
+    actions->setCurrentItem(save);
+    shortcut->setText(QStringLiteral("Ctrl+Alt+F12"));
+    set->click();
+    frost::settings::RecordList external{frost::settings::makeRecord(
+        {{"action", frost::settings::FieldValue(std::string("file.saveAll"))},
+         {"shortcuts", frost::settings::FieldValue(frost::settings::StringList{"Ctrl+Alt+F11"})}})};
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::keymapOverrides, external));
+    buttons->button(QDialogButtonBox::Apply)->click();
+    EXPECT_TRUE(status->text().contains(QStringLiteral("changed"), Qt::CaseInsensitive));
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::keymapOverrides), external);
+    QPushButton* reload = nullptr;
+    for (auto* button : buttons->findChildren<QPushButton*>())
+        if (button->text() == QStringLiteral("Reload"))
+            reload = button;
+    ASSERT_NE(reload, nullptr);
+    reload->click();
+    for (int i = 0; i < actions->topLevelItemCount(); ++i)
+        if (actions->topLevelItem(i)->data(0, Qt::UserRole).toString() == QStringLiteral("file.saveAll"))
+            actions->setCurrentItem(actions->topLevelItem(i));
+    reset->click();
+    buttons->button(QDialogButtonBox::Apply)->click();
+    EXPECT_TRUE(rig.settings->snapshot()->get(frost::settings::key::keymapOverrides).empty());
 }
 
 TEST(Workbench, WelcomeScreenListsRecentProjectsAndOpensOne) {

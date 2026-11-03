@@ -144,6 +144,8 @@ public:
     void refresh();
     // True while a background scan runs.
     [[nodiscard]] bool scanPending() const noexcept { return m_scanPending; }
+    // True once a full scan for the current project has been published.
+    [[nodiscard]] bool initialScanReady() const noexcept { return !m_root.empty() && m_scanPublished; }
 
     // --- Opening and navigation ---
 

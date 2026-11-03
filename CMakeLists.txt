@@ -30,6 +30,18 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # sccache as the compiler launcher (FROST_SCCACHE); must come before the first target.
 include(FrostCompilerCache)
 
+set(FROST_UPDATE_PUBLIC_KEY_HEX "" CACHE STRING "Ed25519 public key for official signed updates (64 lowercase hex characters)")
+if(FROST_UPDATE_PUBLIC_KEY_HEX AND NOT FROST_UPDATE_PUBLIC_KEY_HEX MATCHES "^[0-9a-f][0-9a-f]+$")
+    message(FATAL_ERROR "FROST_UPDATE_PUBLIC_KEY_HEX must be lowercase hex")
+endif()
+string(LENGTH "${FROST_UPDATE_PUBLIC_KEY_HEX}" _frost_update_key_length)
+if(_frost_update_key_length AND NOT _frost_update_key_length EQUAL 64)
+    message(FATAL_ERROR "FROST_UPDATE_PUBLIC_KEY_HEX must contain 64 hexadecimal characters")
+endif()
+set(FROST_UPDATE_BUILD_NUMBER "0" CACHE STRING "Monotonically increasing official release build number")
+if(NOT FROST_UPDATE_BUILD_NUMBER MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "FROST_UPDATE_BUILD_NUMBER must be an unsigned integer")
+endif()
 option(FROST_BUILD_TESTS "Build the test suites" ON)
 option(FROST_BUILD_UI "Build Qt-based targets (src/ui, src/app)" ON)
 set(FROST_SANITIZE "" CACHE STRING "Sanitizers to enable: address;undefined, thread or memory")
@@ -128,7 +140,7 @@ if(FROST_SANITIZE)
 endif()
 
 if(FROST_BUILD_UI)
-    find_package(Qt6 ${FROST_QT_VERSION} EXACT REQUIRED COMPONENTS Core Gui Widgets)
+    find_package(Qt6 ${FROST_QT_VERSION} EXACT REQUIRED COMPONENTS Core Gui Widgets Network)
     # Qt's plugin directory, used by tests to load the offscreen platform plugin, and its
     # DLL directory, from which frost_process_tests takes DLLs frost does not deploy.
     get_target_property(_frost_qmake Qt6::qmake IMPORTED_LOCATION)
@@ -150,6 +162,7 @@ if(NOT FROST_FUZZ)
     find_package(pugixml CONFIG REQUIRED)
     # yyjson (MIT; frost::settings' JSON scope files, ADR 0021), found here for the same reason.
     find_package(yyjson CONFIG REQUIRED)
+    find_package(unofficial-sodium CONFIG REQUIRED)
 endif()
 # asio::asio (header-only, BSL-1.0; frost::io's reactor, ADR 0020), found here for the same reason.
 # Fuzz trees install no vcpkg ports (VCPKG_MANIFEST_INSTALL=OFF) but share the normal tree's

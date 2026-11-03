@@ -33,6 +33,12 @@ frost_add_library(app LAYER app
         src/cmake_integration.cpp
         src/engine_integration.cpp
         src/engine_integration.hpp
+        src/update_check.cpp
+        src/update_state.cpp
+        src/update_state.hpp
+        src/update_check.hpp
+        src/update_download.cpp
+        src/update_download.hpp
         src/unity_control.cpp
         src/unity_control.hpp
         src/git_integration.cpp
@@ -47,6 +53,8 @@ frost_add_library(app LAYER app
         src/selftest.cpp
         src/settings_dialog.cpp
         src/settings_dialog.hpp
+        src/settings_keymap_page.cpp
+        src/settings_keymap_page.hpp
         src/settings_adapters.cpp
         src/startup.cpp
         src/welcome_screen.cpp
@@ -70,8 +78,11 @@ frost_add_library(app LAYER app
         ${frost_startup_core_sources}
     DEPS frost::ui_vcs frost::vcs frost::ui_find frost::ui_debug frost::debug frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
          frost::ui_shell frost::ui frost::lang frost::build frost::document frost::project frost::settings
-         frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
-    THIRD_PARTY Qt6::Widgets)
+         frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
+    THIRD_PARTY Qt6::Widgets Qt6::Network)
+target_compile_definitions(frost_app PRIVATE
+    FROST_UPDATE_PUBLIC_KEY_HEX="${FROST_UPDATE_PUBLIC_KEY_HEX}"
+    FROST_UPDATE_BUILD_NUMBER="${FROST_UPDATE_BUILD_NUMBER}")
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
     # The DPI-awareness APIs in selftest.cpp and the dialog guard in startup.cpp (user32).
@@ -155,4 +166,8 @@ add_custom_command(TARGET frost POST_BUILD
             ${FROST_QT_PLUGIN_DIR}/platforms/qwindows$<$<CONFIG:Debug>:d>.dll
             ${FROST_QT_PLUGIN_DIR}/platforms/qoffscreen$<$<CONFIG:Debug>:d>.dll
             $<TARGET_FILE_DIR:frost>/platforms
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:frost>/tls
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${FROST_QT_PLUGIN_DIR}/tls/qschannelbackend$<$<CONFIG:Debug>:d>.dll
+            $<TARGET_FILE_DIR:frost>/tls
     VERBATIM)

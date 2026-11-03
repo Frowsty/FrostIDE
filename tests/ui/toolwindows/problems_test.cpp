@@ -154,6 +154,26 @@ TEST(ProblemsView, DoubleClickAndEnterOpenTheLocation) {
     EXPECT_EQ(jumps.count(), 3);
 }
 
+TEST(ProblemsView, F4OpensTheSelectedFilteredDiagnostic) {
+    ProblemsView view;
+    for (const auto& diagnostic : sample())
+        view.model()->add(diagnostic);
+    test::SignalLog jumps(&view, &ProblemsView::openLocation);
+    view.searchField()->setText(QStringLiteral("argc"));
+    auto* shown = view.view()->model();
+    ASSERT_EQ(shown->rowCount(), 1);
+    view.view()->setCurrentIndex(shown->index(0, ProblemsModel::DescriptionColumn));
+    test::pressKey(view.view(), Qt::Key_F4, {}, Qt::ControlModifier);
+    EXPECT_EQ(jumps.count(), 0);
+    test::pressKey(view.view(), Qt::Key_F4);
+    ASSERT_EQ(jumps.count(), 1);
+    EXPECT_EQ(jumps.at(0).at(1).toInt(), 3);
+    view.searchField()->setText(QStringLiteral("lib.lib"));
+    view.view()->setCurrentIndex(shown->index(0, 0));
+    test::pressKey(view.view(), Qt::Key_F4);
+    EXPECT_EQ(jumps.count(), 1); // A linker diagnostic has no source location.
+}
+
 TEST(ProblemsView, FollowsTheControllersBuildDiagnostics) {
     FakeBuildBackend backend;
     backend.diagnosticList = {sample()[0]};

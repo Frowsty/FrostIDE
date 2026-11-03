@@ -195,6 +195,7 @@ constexpr std::array kWindowMenu{
 constexpr std::array kHelpMenu{
     act("search.findAction"),
     sep(),
+    act("help.checkForUpdates"),
     act(a::kAbout),
 };
 

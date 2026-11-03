@@ -110,6 +110,39 @@ class NegativeFixtureTest(TempDirTestCase):
         with mock.patch.object(licensecheck, "ADR_EXCEPTIONS", {"gplport": ("GPL-2.0-only", "docs/adr/x.md")}):
             self.assertEqual(len(licensecheck.run(repo, roots, [], None).violations), 1)
 
+    def test_build_helper_exception_is_versioned_and_share_only(self) -> None:
+        root = self.tmp / "installed"
+        triplet = "x64-fixture"
+        adr = self.tmp / "docs/adr/0075-signed-update-verification.md"
+        _write(adr, "Build-only fixture approval\n")
+        spdx = root / triplet / "share/vcpkg-make/vcpkg.spdx.json"
+        listing = root / "vcpkg/info/vcpkg-make_2026-07-09_x64-fixture.list"
+        package = {"SPDXID": "SPDXRef-port", "versionInfo": "2026-07-09#1",
+                   "licenseConcluded": "LicenseRef-vcpkg-null"}
+
+        def check() -> licensecheck.Report:
+            _write(spdx, json.dumps({"packages": [package]}))
+            report = licensecheck.Report()
+            licensecheck.check_vcpkg(self.tmp, [root], report)
+            return report
+
+        _write(listing, f"{triplet}/\n{triplet}/share/\n{triplet}/share/vcpkg-make/wrappers/compile\n")
+        accepted = check()
+        self.assertEqual(accepted.violations, [])
+        self.assertEqual(accepted.packages[0].declared, "LicenseRef-vcpkg-null")
+        self.assertIn("not distributed", accepted.packages[0].comment)
+        for version, declaration in (("2026-07-09#2", "LicenseRef-vcpkg-null"),
+                                     ("2026-07-09#1", "GPL-2.0-or-later")):
+            package.update(versionInfo=version, licenseConcluded=declaration)
+            self.assertTrue(check().violations)
+        package.update(versionInfo="2026-07-09#1", licenseConcluded="LicenseRef-vcpkg-null")
+        for entry in (f"{triplet}/bin/helper.exe", f"{triplet}/lib/helper.lib",
+                      f"{triplet}/share/vcpkg-make/../../lib/helper.lib"):
+            _write(listing, entry + "\n")
+            self.assertTrue(check().violations)
+        listing.unlink()
+        self.assertTrue(check().violations)
+
 
 class QtUsageTest(TempDirTestCase):
     def setUp(self) -> None:
@@ -128,10 +161,10 @@ class QtUsageTest(TempDirTestCase):
 
     def test_module_outside_the_runtime_allowlist_fails(self) -> None:
         _write(self.repo / "src" / "CMakeLists.txt",
-               "# Uses Qt Network, which PLAN.md bans.\ntarget_link_libraries(a PRIVATE Qt6::Network)\n")
+               "# Sql remains outside the runtime policy.\ntarget_link_libraries(a PRIVATE Qt6::Sql)\n")
         messages = self._messages()
         self.assertEqual(len(messages), 1)
-        self.assertIn("src/CMakeLists.txt:2: Qt module Network is not on the", messages[0])
+        self.assertIn("src/CMakeLists.txt:2: Qt module Sql is not on the", messages[0])
 
     def test_test_and_svg_modules_only_in_their_contexts(self) -> None:
         _write(self.repo / "src" / "CMakeLists.txt",
@@ -190,6 +223,9 @@ class QtUsageTest(TempDirTestCase):
             _write(build / rel, b"MZ")
         self.assertEqual(self._messages([build]), [])
         _write(build / "src/app/Debug/Qt6Networkd.dll", b"MZ")
+        _write(build / "src/app/Debug/tls/qschannelbackendd.dll", b"MZ")
+        self.assertEqual(self._messages([build]), [])
+        _write(build / "src/app/Debug/Qt6Sqld.dll", b"MZ")
         _write(build / "src/app/Debug/Qt6DBusd.dll", b"MZ")
         _write(build / "src/app/Debug/platforms/qminimald.dll", b"MZ")
         messages = self._messages([build])
@@ -204,10 +240,12 @@ class QtUsageTest(TempDirTestCase):
         self.assertEqual(licensecheck.elf_needed(build / "src/app/frost"),
                          ["libQt6Widgets.so.6", "libQt6DBus.so.6", "libc.so.6"])
         self.assertEqual(self._messages([build]), [])
-        _write(build / "src/app/helper", _elf(["libQt6Network.so.6"]))
+        _write(build / "src/app/network", _elf(["libQt6Network.so.6"]))
+        self.assertEqual(self._messages([build]), [])
+        _write(build / "src/app/helper", _elf(["libQt6Sql.so.6"]))
         messages = self._messages([build])
         self.assertEqual(len(messages), 1)
-        self.assertIn("Qt module Network is not on the linux runtime allowlist", messages[0])
+        self.assertIn("Qt module Sql is not on the linux runtime allowlist", messages[0])
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are unavailable on this platform")
     def test_build_scan_skips_fifos_and_still_scans_symlinked_elf(self) -> None:

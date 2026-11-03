@@ -192,5 +192,36 @@ TEST(CMakeProfiles, CommandLines) {
     EXPECT_EQ(collapseCMakePath("relative"), "");
 }
 
+TEST(CMakeProfiles, InheritedExternalToolsetAndArchitectureAreNotPassedToCMake) {
+    MemTree tree;
+    tree.write("CMakePresets.json", R"({"version": 6, "configurePresets": [
+      {"name":"base", "hidden":true, "generator":"Ninja",
+       "toolset":{"value":"host=x64", "strategy":"external"},
+       "architecture":{"value":"x64", "strategy":"external"}},
+      {"name":"debug", "inherits":"base"},
+      {"name":"vs", "generator":"Visual Studio 17 2022", "toolset":"v143", "architecture":"x64"}
+    ]})");
+    CMakePresetsContext context;
+    context.hostSystemName = "Windows";
+    context.environment = [](std::string_view) -> std::optional<std::string> { return std::nullopt; };
+    auto loaded = loadCMakePresets(tree.fs, MemTree::root(), context);
+    ASSERT_TRUE(loaded.has_value());
+    ASSERT_TRUE(loaded->has_value());
+    const auto* preset = (*loaded)->findConfigurePreset("debug");
+    ASSERT_NE(preset, nullptr);
+    EXPECT_TRUE(preset->toolsetExternal);
+    EXPECT_TRUE(preset->architectureExternal);
+    const auto profile = cmakeProfileFromPreset(MemTree::root(), *preset, nullptr);
+    const auto arguments = cmakeConfigureArguments(profile, MemTree::root(), {}).value();
+    EXPECT_EQ(std::ranges::find(arguments, "-T"), arguments.end());
+    EXPECT_EQ(std::ranges::find(arguments, "-A"), arguments.end());
+    const auto* vs = (*loaded)->findConfigurePreset("vs");
+    ASSERT_NE(vs, nullptr);
+    const auto vsArguments =
+        cmakeConfigureArguments(cmakeProfileFromPreset(MemTree::root(), *vs, nullptr), MemTree::root(), {}).value();
+    EXPECT_NE(std::ranges::find(vsArguments, "-T"), vsArguments.end());
+    EXPECT_NE(std::ranges::find(vsArguments, "-A"), vsArguments.end());
+}
+
 } // namespace
 } // namespace frost::project

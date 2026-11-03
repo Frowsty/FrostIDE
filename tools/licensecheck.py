@@ -95,18 +95,25 @@ QT_ALLOWLIST = ALLOWLIST | {"LGPL-3.0-only"}
 # changes the expression fails again until the ADR is revisited. Empty in M0.
 ADR_EXCEPTIONS: dict[str, tuple[str, str]] = {}
 
+# ADR 0075: locally installed build scripts only, never linked or redistributed.
+# Keep the upstream declaration in the SBOM; this is not a GPL runtime allowance.
+BUILD_TOOL_EXCEPTIONS = {
+    "vcpkg-make": ("2026-07-09#1", "LicenseRef-vcpkg-null",
+                   "docs/adr/0075-signed-update-verification.md"),
+}
+
 # Qt modules allowed at runtime, per platform (PLAN.md 2 "GUI toolkit"): Core, Gui,
 # Widgets and the platform plugin; Linux adds DBus, XcbQpa, WaylandClient and the IBus
 # input-context plugin. EntryPoint is Qt's static WinMain shim (BSD-3-Clause), linked
 # implicitly into Windows GUI executables.
 QT_RUNTIME_MODULES = {
-    "windows": frozenset({"Core", "Gui", "Widgets", "EntryPoint"}),
-    "linux": frozenset({"Core", "Gui", "Widgets", "DBus", "XcbQpa", "WaylandClient"}),
+    "windows": frozenset({"Core", "Gui", "Widgets", "Network", "EntryPoint"}),
+    "linux": frozenset({"Core", "Gui", "Widgets", "Network", "DBus", "XcbQpa", "WaylandClient"}),
 }
 # Plugins allowed at runtime, as "<plugin dir>/<file stem>". The offscreen platform
 # plugin ships next to frost because `frost --selftest` uses it (PLAN.md M0).
 QT_RUNTIME_PLUGINS = {
-    "windows": frozenset({"platforms/qwindows", "platforms/qoffscreen"}),
+    "windows": frozenset({"platforms/qwindows", "platforms/qoffscreen", "tls/qschannelbackend"}),
     "linux": frozenset({"platforms/qxcb", "platforms/qwayland", "platforms/qoffscreen",
                         "platforminputcontexts/ibusplatforminputcontextplugin"}),
 }
@@ -136,6 +143,7 @@ QT_MODULE_LICENCES: dict[str, str] = {
 QT_PLUGIN_TARGETS: dict[str, str] = {
     "platforms/qwindows": "QWindowsIntegrationPlugin",
     "platforms/qoffscreen": "QOffscreenIntegrationPlugin",
+    "tls/qschannelbackend": "QSchannelBackendPlugin",
     "platforms/qminimal": "QMinimalIntegrationPlugin",
     "platforms/qdirect2d": "QWindowsDirect2DIntegrationPlugin",
     "platforms/qxcb": "QXcbIntegrationPlugin",
@@ -379,6 +387,28 @@ def check_vcpkg(repo: Path, roots: list[Path], report: Report) -> None:
             exception = ADR_EXCEPTIONS.get(port)
             if exception and exception[0] == expression:
                 report.notes.append(f"vcpkg port {port}: '{expression}' approved by {exception[1]}")
+                continue
+            build_tool = BUILD_TOOL_EXCEPTIONS.get(port)
+            if build_tool and (version, expression) == build_tool[:2]:
+                # The installed manifest must contain only this helper's share tree.
+                # Missing metadata or include/lib/bin artifacts fail closed.
+                list_path = root / "vcpkg" / "info" / f"{port}_{version.split('#')[0]}_{triplet}.list"
+                try:
+                    entries = list_path.read_text(encoding="utf-8").splitlines()
+                except (OSError, UnicodeError):
+                    entries = []
+                prefix = f"{triplet}/share/{port}/"
+                safe = bool(entries) and any(e.startswith(prefix) and not e.endswith('/') for e in entries)
+                safe = safe and all(
+                    e in (f"{triplet}/", f"{triplet}/share/") or
+                    (e.startswith(prefix) and not any(p in (".", "..") for p in e.split('/')) and '\\' not in e)
+                    for e in entries)
+                if safe and (repo / build_tool[2]).is_file():
+                    report.packages[-1].comment += "; build-only MIT scripts and GPL-2.0-or-later Automake wrappers; not distributed"
+                    report.notes.append(f"vcpkg port {port} {version}: local build-tool metadata approved by {build_tool[2]}")
+                    continue
+                report.violations.append(Violation(shown, 1,
+                    f"vcpkg port {port}: build-tool exception requires its ADR and a share-only installed manifest"))
                 continue
             try:
                 allowed = expression_allowed(expression, ALLOWLIST)
@@ -681,8 +711,8 @@ def check_qt(repo: Path, uses: list[QtUse], qt_root: Path | None, report: Report
             where = "/".join(use.platforms)
             report.violations.append(Violation(
                 use.path, use.line,
-                f"{label} is not on the {where} {use.context} allowlist (PLAN.md 2, GUI toolkit: Core, Gui, "
-                f"Widgets and the platform plugin; Linux adds DBus, XcbQpa, WaylandClient and the IBus plugin; "
+                f"{label} is not on the {where} {use.context} allowlist (PLAN.md 2 and ADR 0075: Core, Gui, "
+                f"Widgets, Network and the platform plugin; Linux adds DBus, XcbQpa, WaylandClient and the IBus plugin; "
                 f"Svg only in the icon baker, Test only in tests); changing it needs an ADR"))
 
 
@@ -776,12 +806,12 @@ def font_names(data: bytes) -> dict[int, list[str]]:
 
 # The years at the start of a copyright statement: "2016", "2013-present", "2019, 2020". Each is
 # exactly four digits followed by a word boundary, so a holder such as "3M" keeps its digits.
-_COPYRIGHT_YEARS = re.compile(r"^(?:\d{4}(?:\s*[-–]\s*(?:\d{4}|present))?\b[\s,]*)+", re.IGNORECASE)
+_COPYRIGHT_YEARS = re.compile(r"^(?:\d{4}(?:\s*[-Ã¢â‚¬â€œ]\s*(?:\d{4}|present))?\b[\s,]*)+", re.IGNORECASE)
 
 
 def copyright_holder(line: str) -> str:
     """The holder in a copyright line: "Copyright (c) 2016 The X Authors (https://...)" -> "The X Authors"."""
-    holder = re.sub(r"^\s*Copyright\s*(\(c\)|©)?\s*", "", line, flags=re.IGNORECASE)
+    holder = re.sub(r"^\s*Copyright\s*(\(c\)|\u00a9)?\s*", "", line, flags=re.IGNORECASE)
     holder = _COPYRIGHT_YEARS.sub("", holder)
     holder = re.sub(r"\s*\([^)]*\)\s*$", "", holder)
     return holder.strip().rstrip(".")

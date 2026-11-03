@@ -10,6 +10,7 @@
     { "name": "cpptrace", "version>=": "1.0.4" },
     { "name": "crashpad" },
     { "name": "curl", "default-features": false, "platform": "linux" },
+    { "name": "libsodium", "version>=": "1.0.22#1" },
     { "name": "gtest", "version>=": "1.18.0" },
     { "name": "pugixml", "version>=": "1.16" },
     { "name": "re2", "version>=": "2025-11-05" },

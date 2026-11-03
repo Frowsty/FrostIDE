@@ -175,6 +175,7 @@ CMakeProfile cmakeProfileFromPreset(std::string_view sourceDir, const CMakeConfi
     profile.toolchainFile = preset.toolchainFile;
     profile.installDir = preset.installDir;
     profile.toolset = preset.toolset;
+    profile.toolsetExternal = preset.toolsetExternal;
     profile.architecture = preset.architecture;
     profile.architectureExternal = preset.architectureExternal;
     profile.environment = preset.environment;
@@ -295,7 +296,7 @@ Result<std::vector<std::string>> cmakeConfigureArguments(const CMakeProfile& pro
     if (!profile.generator.empty()) {
         arguments.insert(arguments.end(), {"-G", profile.generator});
     }
-    if (!profile.toolset.empty()) {
+    if (!profile.toolset.empty() && !profile.toolsetExternal) {
         arguments.insert(arguments.end(), {"-T", profile.toolset});
     }
     if (!profile.architecture.empty() && !profile.architectureExternal) {

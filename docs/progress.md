@@ -3,6 +3,137 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Restart resumed; combined gates and real engine configure fixes
+
+- Later integration checkpoint: reviewed Keymap/Updates join and upstream sodium notice
+  form `c499bea1`. Full Windows quick gate passed: 2963/2988 active tests, 25 skips,
+  one additional disabled test; format, frost-lint, licence and feature checks pass.
+  Log `build/verify-resume-combined-windows-r3.log`; exact CTest archive
+  `E:/FrostBuilds/orchestration/resume-windows-c499-ctest.log`. No merge or release yet.
+  Reviewed test-only shutdown diagnostic forms `e3e6680c`; matching Linux gate passed
+  2810/2849 with 39 skips and licence check passing. Its Windows target rebuilt and
+  passed 1/1. Logs `build/verify-resume-combined-native-r3.log` and
+  `build/shutdown-diagnostic-windows-r1.log`; full native CTest archive is
+  `E:/FrostBuilds/orchestration/resume-native-e3e668-r3-ctest.log`.
+- Earlier `09733bff` Windows tests passed 2961/2986 with 25 skips, but its format gate
+  failed on the profile test; formatting was corrected before the c499 gate. Linux had
+  2806/2847, 39 skips and two failures. Replays exposed future-dated CMake inputs and
+  Ninja's 100-regeneration refusal. Observer evidence is retained in
+  `build/cmake-regen-diagnostics-r3/run-32.json`; native timesync logs show clock steps
+  of roughly 8-11 seconds. The ambiguous shutdown marker also matched "not started";
+  the reviewed unique child marker retains live-process assertions and adds diagnostics.
+  Matching native focused replay passed ten times. Initial synchronization alone does
+  not prevent later host/guest conflicts. After the gate, disabled guest
+  `systemd-timesyncd` to use Hyper-V host time, following Ubuntu's documented 24.04 WSL
+  guidance. Before/after logs are `build/native-timesync-*`; no WSL restart or Windows
+  time-service change was made. The local native wrapper checks host-clock mode.
+  Subsequent samples still show guest/host drift; the environment issue is not claimed
+  fully resolved, and no timing/performance acceptance is inferred from functional gates.
+- Real private-desktop engine checks on candidate `09733bff` now cover trust/configure,
+  target presentation, menu-driven header navigation and engine completion suggestions.
+  Source restoration and evidence hashes were reviewed. Actual target selection was
+  lost on reopen; a reviewed isolated persistence successor is building, not integrated.
+  These observations do not establish physical typing, completion insertion or full beta workflow.
+- Lua engine correction `356df01` passed 55/55 focused cases and 4648 assertions;
+  its source/binary/evidence archive is `E:/FrostBuilds/lua-debug/accepted-356df-focused-20261103`.
+  Reviewed provenance successor `7e2be3f` is building serially. Full Lua debugging remains open.
+  Project evaluation parser/search/precedence `21f735b` passed independent source/runtime
+  review and is preparing a semantic join; CMake, Rename and Mono production integration
+  remain in their isolated worktrees with explicitly bounded acceptance.
+- Isolated local packaging command `75df2f9` passed five tests and independent artifact
+  review: 65 hashes, 21 installed dependency notices/metadata, matching pinned Qtbase
+  source archive, original Qt/font/icon licence texts and the 104-package SPDX inventory.
+  Candidate `E:/FrostBuilds/preview/codex-20261103-c499-packaging-candidate` is not an
+  accepted release. Automatic stage wiring, complete correspondence/notice coverage,
+  installer delivery and signing remain unfinished. Stage-wiring successor `c0162ca`
+  now requires the source archive for Release/RelWithDebInfo; 12 staging tests pass,
+  one skips. Actual script-produced `codex-20261103-c499-source-package` has 141 files
+  and passes its private-desktop self-test. Main accepted preview is still e703.
+- Read and deleted the user's `continue.txt`, followed the restart guide and all twelve
+  handoffs, and restored eight Terra implementers and four Astra reviewers. Root and updater
+  snapshots matched all 91 recorded file hashes; worker trees and alternate-index snapshots
+  were checked before resuming. Preserved recovery patches were not reapplied over worktrees.
+- Integrated the reviewed updater parent/payload, build-helper licence and Schannel deployment
+  successor with the diagnostic keyboard slice. Combined tree `91c819c4` built on both platforms.
+  Windows verification had 2958 passes, 25 skips, one disabled test and two failures out of
+  2985 active tests. Linux had 2805 passes, 39 skips and two failures out of 2846. Neither gate
+  passed. Original logs and CTest evidence are retained under `build/verify-resume-combined-*`
+  and `E:/FrostBuilds/orchestration/resume-*-91c819-ctest.log`.
+- Reviewed successor `09733bff` corrects the Windows import expectation for the already-authorized
+  Qt Network dependency, changes the optional long-path DLL fixture to Qt Xml, and restores
+  the FIFO scanner fixture's matching Network input/expectations. All 41 licence tests now pass
+  on Linux. The real nested-CMake build failure lacked compiler output; bounded failure logging
+  was added without changing its assertions, and a matching replay remains required.
+- Actual packaged engine observation found that inherited `toolset.strategy=external` was
+  incorrectly emitted as `-T host=x64` for Ninja. The reviewed profile correction preserves
+  external strategy and omits that generator argument; five focused tests pass on each platform.
+  Actual configure retry through the fresh-profile trust prompt is pending the integrated build.
+  This does not establish arbitrary external toolset environment selection or engine beta acceptance.
+- Staged HTTPS used only staged Qt/Schannel modules and validated transport/certificates, returning
+  HTTP 404 from the selected GitHub repository. This proves transport, not release discovery.
+  The actual payload scan exposed optional Qt plugins and Svg outside the runtime allowlist.
+  Explicit platform/Schannel deployment with `--no-plugins --no-svg` passes the package scan
+  (104 packages, zero violations), startup self-test and staging tests (10 passes, one skip).
+  Runtime notices, the distributed SBOM and Qt source-delivery materials remain packaging work;
+  no installer, signing key, public release or replacement accepted preview was produced.
+- Worker successors remain isolated: evaluated-project validation, Keymap, CMake coordinator and
+  platform join, Rename journal ownership/migration, Lua ancestry/breakpoint provenance and Mono
+  lifecycle/attach integration. Source reviews and component tests are not full feature acceptance.
+  Compiles were temporarily held to reserve at least 13 GiB for the owned Lua engine final link.
+- Next: finish the frozen engine provenance build, integrate the reviewed project evaluation and
+  target-persistence slices plus packaging, and run their combined gates. Continue actual engine
+  workflow and CMake/Rename/Mono production integration. Accepted runnable preview remains
+  `e703fa6` / `codex-20261103-lua-stop`; full scope is unchanged.
+
+## 2026-11-03: Paused for the user's PC restart
+
+- Durable resume guide: `E:/FrostBuilds/restart-checkpoint-20261103/RESUME.txt`.
+  Read `root.txt` and all twelve named agent handoffs there before continuing.
+  Worktrees are preserved, with binary patches, source archives, index backups,
+  Git snapshot refs, evidence and exact restart commands. Do not apply recovery
+  patches over existing changes without comparing their recorded status first.
+- All twelve subagents saved their state and became idle. Root's updater Windows
+  verifier was stopped during tests at the user's request; its dependency install
+  and debug build had completed, but no full gate pass is claimed. Interrupted
+  worker builds and partial logs are documented in their respective checkpoints.
+- The accepted main commit and preview remain `e703fa6` / `codex-20261103-lua-stop`.
+  Pending updater, CMake, evaluated project, Rename, GUI, Lua and Mono changes are
+  not promoted by this backup. Resume the complete goal after the user returns.
+
+## 2026-11-03: Workers resumed; daily-work beta acceptance prioritized
+
+- Retried all eight existing Terra workers after the user resolved the usage limit;
+  live agent state confirms they resumed. Four Astra reviewers remain assigned to
+  review their changes. The earlier quota error is historical, not a current blocker.
+- Accepted product remains `e703fa6` and preview `codex-20261103-lua-stop`.
+  A Windows C/C++ daily-work beta is the next delivery target while the complete
+  Rider, Lua, Unity and FrostEngine scope remains unchanged. No beta acceptance is
+  claimed. The rough 1–2 week planning estimate is low-confidence, not a deadline.
+- Astra's beta audit requires an owned FrostEngine copy with the documented MSVC
+  environment and build-script behavior: open/trust/configure, keyboard editing and
+  language assistance, save/build/error navigation/rebuild, breakpoint/step/values/
+  Stop, dirty-file and external-change handling, project switching and close/reopen.
+  Small fixtures and test totals do not establish this daily engine workflow.
+  Canonical engine files and the user's live GUI must remain untouched.
+- Root updater join `b37ffa5b` completed native build/testing with 2801 passes,
+  38 skips and one licence-gate failure out of 2840 tests. The failed package is
+  the local build helper `vcpkg-make`, whose metadata declares a null licence.
+  Windows dependency installation succeeded; the combined Windows gate remains
+  running. Neither gate is reported as passed.
+- Isolated updater payload/parent checks passed 10 tests with one helper skip
+  (`updater-core/build/updater-payload-ctest-r1.log`). These establish component
+  behavior only. Astra requires an occupied-ancestor reparse test and corrected
+  invalidation documentation before payload-guard approval. Installer handoff,
+  actual MSI compatibility, installation and production signing remain unfinished.
+- Isolated updater deployment now includes the Schannel plugin and a narrowly
+  versioned build-helper metadata exception under existing build-tool policy.
+  Licence tests pass 39 with two platform skips after preserving negative runtime
+  tests using Sql and repairing an existing corrupted copyright pattern. Original
+  failures remain recorded. Exact review, real HTTPS smoke and combined gates remain.
+- Next: integrate reviewed project-model, file-operation and GUI slices; execute
+  the daily-work acceptance sequence; complete updater packaging and installation.
+  No new user decision is required for the current work.
+
 ## 2026-11-03: Experimental Lua ownership and paused-main Stop verified
 
 - Behavioral source tree `61929ebf` integrates authenticated Lua discovery/session startup,

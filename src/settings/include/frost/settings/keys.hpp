@@ -80,6 +80,10 @@ inline constexpr Key<std::int64_t> localHistoryMaxAgeDays{"localHistory.maxAgeDa
 inline constexpr Key<std::int64_t> localHistoryMaxTotalMiB{"localHistory.maxTotalMiB"};
 inline constexpr Key<bool> localHistoryKeepNewestPerPath{"localHistory.keepNewestPerPath"};
 
+// Network and update checks (application scope only).
+inline constexpr Key<bool> networkOffline{"network.offline"};
+inline constexpr Key<std::string> updateChannel{"updates.channel"};
+
 // General behaviour.
 inline constexpr Key<bool> generalReopenLastProject{"general.reopenLastProject"};
 inline constexpr Key<bool> generalConfirmExit{"general.confirmExit"};

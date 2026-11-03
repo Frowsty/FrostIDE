@@ -56,9 +56,11 @@ system_phase() {
     # libstdc++-14-dev: the C++ standard library floor for clang.
     # zstd, xz-utils: decompressors for the pinned archives.
     # libarchive-tools: bsdtar, which tools/qt-fetch.py uses to extract Qt's .7z archives.
+    # Autotools: the pinned libsodium vcpkg port regenerates its configure script.
     # libxcb*, libxkbcommon*, libfontconfig, libgl/egl: Qt's xcb and offscreen platform plugins.
     apt-get install -y -q --no-install-recommends \
         g++-14 libstdc++-14-dev zstd xz-utils libarchive-tools zip unzip rsync gdb python3-venv pkg-config make \
+        autoconf autoconf-archive automake libtool \
         libgl-dev libegl-dev libglib2.0-0t64 libdbus-1-3 libfontconfig1 libfreetype6 \
         libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb1 libxcb-cursor0 libxcb-icccm4 \
         libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \

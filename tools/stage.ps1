@@ -120,7 +120,8 @@ Copy-Item -LiteralPath $unityPackage -Destination $unityDestination -Recurse
 # 4. The Qt runtime for frost_app.dll, then the build's platform plugins (offscreen for --selftest).
 $mode = if ($Config -eq 'Debug') { '--debug' } else { '--release' }
 $deployArgs = @($mode, '--no-translations', '--no-compiler-runtime', '--no-system-d3d-compiler',
-    '--no-system-dxc-compiler', '--no-opengl-sw', '--no-ffmpeg', '--dir', $Destination,
+    '--no-system-dxc-compiler', '--no-opengl-sw', '--no-ffmpeg',
+    '--no-plugins', '--no-svg', '--dir', $Destination,
     (Join-Path $Destination 'frost_app.dll'))
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
@@ -133,6 +134,14 @@ if (Test-Path -LiteralPath $platforms) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'platforms') | Out-Null
     Copy-Item -Path (Join-Path $platforms '*') -Destination (Join-Path $Destination 'platforms') -Force
 }
+# Qt's default plugin selection adds optional image formats, styles and network
+# backends. Plugins are disabled above; copy only the reviewed platform and system
+# TLS backends from our build output.
+$tlsPlugin = if ($Config -eq 'Debug') { 'qschannelbackendd.dll' } else { 'qschannelbackend.dll' }
+$tlsSource = Join-Path (Join-Path $binDir 'tls') $tlsPlugin
+if (-not (Test-Path -LiteralPath $tlsSource)) { Fail "the build has no HTTPS backend: $tlsSource" }
+New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'tls') | Out-Null
+Copy-Item -LiteralPath $tlsSource -Destination (Join-Path $Destination 'tls') -Force
 
 # 5. Licences: FrostIDE's, and the vendored sources' (NOTICE names them).
 foreach ($name in @('LICENSE', 'NOTICE')) {
@@ -140,6 +149,25 @@ foreach ($name in @('LICENSE', 'NOTICE')) {
 }
 $licenses = Join-Path $Destination 'licenses'
 New-Item -ItemType Directory -Force -Path $licenses | Out-Null
+# The overlay's Microsoft MIT notice covers the port recipe, not the linked sodium
+# library. Preserve the actual upstream ISC notice from this build's installed prefix.
+$cachePath = Join-Path $BuildDir 'CMakeCache.txt'
+if (-not (Test-Path -LiteralPath $cachePath)) { Fail 'no CMake cache for dependency notice provenance' }
+$cacheText = Get-Content -Raw -LiteralPath $cachePath
+$installedMatch = [regex]::Match($cacheText, '(?m)^VCPKG_INSTALLED_DIR:[^=]+=([^\r\n]+)')
+$tripletMatch = [regex]::Match($cacheText, '(?m)^VCPKG_TARGET_TRIPLET:[^=]+=([a-zA-Z0-9_-]+)\r?$')
+if (-not $installedMatch.Success -or -not $tripletMatch.Success -or
+    -not [System.IO.Path]::IsPathRooted($installedMatch.Groups[1].Value)) {
+    Fail 'no absolute installed prefix and target triplet for dependency notices'
+}
+$sodiumNotice = Join-Path $installedMatch.Groups[1].Value ($tripletMatch.Groups[1].Value + '/share/libsodium/copyright')
+if (-not (Test-Path -LiteralPath $sodiumNotice -PathType Leaf)) { Fail 'missing upstream libsodium copyright notice' }
+$stagedSodiumNotice = Join-Path $licenses 'libsodium-copyright.txt'
+Copy-Item -LiteralPath $sodiumNotice -Destination $stagedSodiumNotice
+if ((Get-FileHash -LiteralPath $sodiumNotice -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath $stagedSodiumNotice -Algorithm SHA256).Hash) {
+    Fail 'the staged libsodium notice differs from the installed upstream notice'
+}
 $thirdParty = Join-Path $repoRoot 'third_party'
 foreach ($file in @(Get-ChildItem -LiteralPath $thirdParty -Recurse -File -Filter 'LICENSE*')) {
     $relative = $file.DirectoryName.Substring($thirdParty.Length).TrimStart('\') -replace '\\', '-'
@@ -151,6 +179,10 @@ foreach ($file in @(Get-ChildItem -LiteralPath $thirdParty -Recurse -File -Filte
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }
 foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
     if (-not (Test-Path -LiteralPath (Join-Path $Destination $name))) { Fail "the staged folder has no $name" }
+}
+if ((Get-FileHash -LiteralPath $tlsSource -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath (Join-Path (Join-Path $Destination 'tls') $tlsPlugin) -Algorithm SHA256).Hash) {
+    Fail 'the staged HTTPS backend differs from the build output'
 }
 # The staged ConPTY pair must be byte-identical to the pair the build deployed.
 foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {
