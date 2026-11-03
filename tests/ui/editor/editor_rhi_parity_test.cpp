@@ -265,6 +265,22 @@ TEST(RhiParity, TheAllKindsFrameHoldsEveryKindAndEveryKindGivesQuads) {
     }
 }
 
+TEST(RhiParity, FoldPlaceholderUsesTheSameProjectedFrameInBothRenderers) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("before {\nsecret\n}\nafter\n");
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{8}, ByteOffset{17}}}));
+    const auto list = h.view->buildDisplayList();
+    ASSERT_NE(list.findText(QStringLiteral("...")), nullptr);
+    EXPECT_EQ(list.findText(QStringLiteral("secret")), nullptr);
+    TestRhi rhi;
+    const RhiFrame gpu = renderWithRhi(rhi, list, 1.0);
+    EXPECT_EQ(gpu.stats.droppedGlyphs, 0U);
+    EXPECT_GT(gpu.stats.quadsOf(DisplayElementKind::Text), 0U);
+    if (gpu.image.isNull())
+        GTEST_SKIP() << "no Direct3D 11 device (" << gpu.backend << "): projected quads verified";
+    expectSameInk(renderWithRaster(list, 1.0), gpu.image, {}, 20);
+}
+
 TEST(RhiParity, TheAllKindsFrameMatchesRasterPerRowWholeAndInCrops) {
     FROST_REQUIRE_OFFSCREEN();
     const AllKinds frame;

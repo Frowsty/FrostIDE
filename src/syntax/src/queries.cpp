@@ -29,17 +29,26 @@ constexpr unsigned char kCppHighlights[] = {
 constexpr unsigned char kCppOutline[] = {
 #include "queries_cpp_outline_scm.inc"
 };
+constexpr unsigned char kCppFolds[] = {
+#include "queries_cpp_folds_scm.inc"
+};
 constexpr unsigned char kCSharpHighlights[] = {
 #include "queries_csharp_highlights_scm.inc"
 };
 constexpr unsigned char kCSharpOutline[] = {
 #include "queries_csharp_outline_scm.inc"
 };
+constexpr unsigned char kCSharpFolds[] = {
+#include "queries_csharp_folds_scm.inc"
+};
 constexpr unsigned char kCMakeHighlights[] = {
 #include "queries_cmake_highlights_scm.inc"
 };
 constexpr unsigned char kCMakeOutline[] = {
 #include "queries_cmake_outline_scm.inc"
+};
+constexpr unsigned char kCMakeFolds[] = {
+#include "queries_cmake_folds_scm.inc"
 };
 constexpr unsigned char kXmlHighlights[] = {
 #include "queries_xml_highlights_scm.inc"
@@ -270,7 +279,15 @@ template<std::size_t N>
 
 std::string_view querySource(LanguageId language, QueryKind kind) noexcept {
     if (kind == QueryKind::Folds) {
-        return language == LanguageId::Lua ? view(kLuaFolds) : std::string_view{};
+        if (language == LanguageId::Lua)
+            return view(kLuaFolds);
+        if (language == LanguageId::Cpp)
+            return view(kCppFolds);
+        if (language == LanguageId::CSharp)
+            return view(kCSharpFolds);
+        if (language == LanguageId::CMake)
+            return view(kCMakeFolds);
+        return {};
     }
     const bool highlights = kind == QueryKind::Highlights;
     switch (language) {

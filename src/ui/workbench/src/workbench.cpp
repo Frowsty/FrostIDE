@@ -462,14 +462,17 @@ nav::Place Workbench::currentPlace() const {
     return nav::Place{editor->path(), status.line, status.column};
 }
 
-Result<int> Workbench::openFile(const std::string& path, std::optional<LinePosition> at) {
+Result<int> Workbench::openFile(const std::string& path, std::optional<LinePosition> at, bool statusColumn) {
     const nav::Place from = currentPlace();
     m_navigating = true;
     Result<int> opened = m_shell.openFile(path);
     if (opened) {
         IEditorView* editor = m_shell.tabs().editor(*opened);
         if (at) {
-            editor->goToLine(at->line, at->column);
+            if (statusColumn)
+                editor->goToStatusPosition(at->line, at->column);
+            else
+                editor->goToLine(at->line, at->column);
         }
         const EditorStatus status = editor->status();
         const nav::Place to{editor->path(), status.line, status.column};
@@ -492,7 +495,7 @@ bool Workbench::openPlace(const nav::Place& place) {
     Result<int> opened = m_shell.openFile(place.path);
     if (opened) {
         IEditorView* editor = m_shell.tabs().editor(*opened);
-        editor->goToLine(place.line, place.column);
+        editor->goToStatusPosition(place.line, place.column);
         m_lastPlaces[editor->path()] = place;
         m_activePath = editor->path();
         m_recentFiles.touch(editor->path());
@@ -650,7 +653,7 @@ void Workbench::acceptItem(const QVariant& data, const input::ActionContext& cap
     if (kind == QStringLiteral("place")) {
         const nav::Place place{toUtf8(map.value(QStringLiteral("path")).toString()),
                                map.value(QStringLiteral("line")).toInt(), map.value(QStringLiteral("column")).toInt()};
-        static_cast<void>(openFile(place.path, LinePosition{place.line, place.column}));
+        static_cast<void>(openFile(place.path, LinePosition{place.line, place.column}, true));
         return;
     }
     if (kind == QStringLiteral("action")) {
@@ -830,7 +833,8 @@ nav::SessionState Workbench::captureSession() const {
     for (int i = 0; i < tabs.count(); ++i) {
         const IEditorView* editor = tabs.editor(i);
         const EditorViewState view = editor->viewState();
-        state.tabs.push_back(nav::SessionTab{editor->path(), tabs.isPinned(i), view.line, view.column, view.topLine});
+        state.tabs.push_back(nav::SessionTab{editor->path(), tabs.isPinned(i), view.line, view.column, view.topLine,
+                                             view.foldTextHash, view.folds});
     }
     state.active = tabs.currentIndex();
     ToolWindowManager& windows = m_shell.toolWindows();
@@ -855,7 +859,7 @@ void Workbench::applySession(const nav::SessionState& state) {
             continue;
         }
         IEditorView* editor = tabs.editor(*opened);
-        editor->restoreViewState(EditorViewState{tab.line, tab.column, tab.top});
+        editor->restoreViewState(EditorViewState{tab.line, tab.column, tab.top, tab.foldTextHash, tab.folds});
         m_lastPlaces[editor->path()] = nav::Place{editor->path(), tab.line, tab.column};
         if (tab.pinned) {
             tabs.setPinned(tabs.indexOf(editor->path()), true);

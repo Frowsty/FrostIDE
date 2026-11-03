@@ -76,6 +76,11 @@ constexpr std::array kActions{
     EditorActionInfo{"navigate.previousMember", "Previous Member", A::PreviousMember, false},
     EditorActionInfo{"navigate.nextError", "Next Highlighted Error", A::NextError, false},
     EditorActionInfo{"navigate.previousError", "Previous Highlighted Error", A::PreviousError, false},
+    EditorActionInfo{"editor.foldCollapse", "Fold", A::Fold, false},
+    EditorActionInfo{"editor.foldExpand", "Unfold", A::Unfold, false},
+    EditorActionInfo{"editor.foldCollapseAll", "Fold All", A::FoldAll, false},
+    EditorActionInfo{"editor.foldExpandAll", "Unfold All", A::UnfoldAll, false},
+    EditorActionInfo{"editor.foldSelection", "Fold Selection", A::FoldSelection, false},
 };
 // clang-format on
 

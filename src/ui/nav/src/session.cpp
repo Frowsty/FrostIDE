@@ -90,6 +90,17 @@ std::string encodeSession(const SessionState& state) {
         yyjson_mut_obj_add_int(doc.get(), item, "line", tab.line);
         yyjson_mut_obj_add_int(doc.get(), item, "column", tab.column);
         yyjson_mut_obj_add_int(doc.get(), item, "top", tab.top);
+        if (!tab.folds.empty()) {
+            yyjson_mut_obj_add_uint(doc.get(), item, "foldTextHash", tab.foldTextHash);
+            yyjson_mut_val* folds = yyjson_mut_arr(doc.get());
+            for (const auto& [begin, end] : tab.folds) {
+                yyjson_mut_val* pair = yyjson_mut_arr(doc.get());
+                yyjson_mut_arr_add_uint(doc.get(), pair, begin);
+                yyjson_mut_arr_add_uint(doc.get(), pair, end);
+                yyjson_mut_arr_append(folds, pair);
+            }
+            yyjson_mut_obj_add_val(doc.get(), item, "folds", folds);
+        }
         yyjson_mut_arr_append(tabs, item);
     }
     yyjson_mut_obj_add_val(doc.get(), root, "tabs", tabs);
@@ -148,6 +159,24 @@ Result<SessionState> decodeSession(std::string_view json) {
             tab.line = std::max(1, intOf(yyjson_obj_get(item, "line"), 1));
             tab.column = std::max(1, intOf(yyjson_obj_get(item, "column"), 1));
             tab.top = std::max(0, intOf(yyjson_obj_get(item, "top"), 0));
+            yyjson_val* hash = yyjson_obj_get(item, "foldTextHash");
+            yyjson_val* folds = yyjson_obj_get(item, "folds");
+            if (yyjson_is_uint(hash) && yyjson_is_arr(folds) && yyjson_arr_size(folds) <= 100'000) {
+                tab.foldTextHash = yyjson_get_uint(hash);
+                std::size_t foldIndex = 0, foldCount = 0;
+                yyjson_val* pair = nullptr;
+                yyjson_arr_foreach(folds, foldIndex, foldCount, pair) {
+                    yyjson_val* begin = yyjson_arr_get(pair, 0);
+                    yyjson_val* end = yyjson_arr_get(pair, 1);
+                    if (!yyjson_is_arr(pair) || yyjson_arr_size(pair) != 2 || !yyjson_is_uint(begin) ||
+                        !yyjson_is_uint(end) || yyjson_get_uint(begin) >= yyjson_get_uint(end)) {
+                        tab.folds.clear();
+                        tab.foldTextHash = 0;
+                        break;
+                    }
+                    tab.folds.emplace_back(yyjson_get_uint(begin), yyjson_get_uint(end));
+                }
+            }
             if (!tab.path.empty()) {
                 state.tabs.push_back(std::move(tab));
             }

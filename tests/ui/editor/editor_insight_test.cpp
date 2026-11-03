@@ -347,6 +347,19 @@ TEST(EditorInsight, InspectionWidgetCountsArrowsAndStates) {
     EXPECT_GE(changed, 3);
 }
 
+TEST(EditorInsight, NextProblemRevealsAFoldedDiagnostic) {
+    FROST_REQUIRE_OFFSCREEN();
+    constexpr std::string_view source = "a\nhidden\nz\n";
+    EditorHarness h(source);
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{1}, ByteOffset{9}}}));
+    h.view->setDiagnostics(EditorDiagnosticSource::Live,
+                           {problem(InsightSeverity::Error, find(source, "hidden"), "hidden error")});
+    ASSERT_TRUE(h.view->gotoNextProblem(true));
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+    EXPECT_EQ(h.caret(), find(source, "hidden").begin.value());
+    EXPECT_NE(h.view->buildDisplayList().findText(QStringLiteral("hidden")), nullptr);
+}
+
 TEST(EditorInsight, F2GoesToTheNextErrorWithABalloon) {
     FROST_REQUIRE_OFFSCREEN();
     constexpr std::string_view text = "int w = 0;\nint a = x;\nint b = y;\n";

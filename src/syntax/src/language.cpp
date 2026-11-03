@@ -166,10 +166,11 @@ Result<void> LanguageRegistry::prepare(LanguageId id) const noexcept {
             language.m_error.emplace(std::move(outline.error()));
             return;
         }
-        if (language.id == LanguageId::Lua) {
+        if (language.id == LanguageId::Lua || language.id == LanguageId::Cpp || language.id == LanguageId::CSharp ||
+            language.id == LanguageId::CMake) {
             Result<detail::CompiledQuery> folds =
                 detail::compileQuery(language.grammar, detail::querySource(language.id, detail::QueryKind::Folds),
-                                     detail::QueryKind::Folds, "folds.scm (lua)");
+                                     detail::QueryKind::Folds, std::format("folds.scm ({})", name));
             if (!folds) {
                 language.m_error.emplace(std::move(folds.error()));
                 return;

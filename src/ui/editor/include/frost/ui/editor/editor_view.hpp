@@ -60,6 +60,7 @@ class EditorFindBar;
 class EditorKeyRouting;
 class GoToLinePopup;
 class RhiEditorViewport;
+struct FoldQueryJob;
 
 // A gutter marker: an error or warning on buffer line `line` (W1's error list fills these).
 struct LineMarker {
@@ -246,8 +247,17 @@ public:
     [[nodiscard]] Result<void> followExternalChange(const text::ChangeSet& change);
     // Moves the primary caret to 1-based `line` and `column` (clamped) as one caret.
     void goToLine(int line, int column);
+    // Inverse of status().column, for persisted status positions; goToLine uses byte columns.
+    void goToStatusPosition(int line, int column);
     // Replaces the selections (a click elsewhere, a navigation target) and scrolls to the caret.
     void setState(text::EditorState state);
+    // Collapsed ranges are view state; setting them does not change the document or undo history.
+    [[nodiscard]] const std::vector<text::ByteRange>& collapsedFolds() const noexcept {
+        return m_editor->display().folds();
+    }
+    [[nodiscard]] bool setCollapsedFolds(std::vector<text::ByteRange> ranges);
+    // Reveals every collapsed ancestor containing this target.
+    void revealFoldAt(ByteOffset target);
     // The last model error a command hit (Busy while composing, ...), for diagnostics.
     [[nodiscard]] const std::optional<Error>& lastError() const noexcept { return m_lastError; }
 
@@ -460,6 +470,13 @@ protected:
     bool viewportEvent(QEvent* event) override;
 
 private:
+    bool changeFold(bool collapse, bool all);
+    bool toggleFoldOnLine(LineIndex line);
+    bool addCollapsedFold(text::ByteRange range);
+    bool removeCollapsedFold(text::FoldId id);
+    [[nodiscard]] std::optional<LineIndex> foldLineAt(QPointF at) const;
+    void collectFoldQuery();
+    [[nodiscard]] std::optional<text::ByteRange> foldCandidateAt(ByteOffset offset) const noexcept;
     // How a mouse drag extends: by character, word or line (single, double, triple click).
     enum class Granularity : std::uint8_t { Character, Word, Line };
 
@@ -515,6 +532,7 @@ private:
 
     // IME.
     void finishComposition(const std::string& commit);
+    [[nodiscard]] bool finishCompositionBeforeFold();
     // Follows a Document change made outside the Editor (the IME's), then places a caret.
     void followDocument(Result<text::ChangeSet> change, std::optional<ByteOffset> caret);
     // Marks the start of an input event for the InputToPaint marker.
@@ -618,6 +636,11 @@ private:
         bool valid = false;
     };
     HighlightCache m_highlights;
+    std::vector<text::ByteRange> m_foldCandidates;
+    std::vector<std::uint64_t> m_foldCandidateMaxEnd;
+    std::shared_ptr<FoldQueryJob> m_foldJob;
+    std::vector<sched::JoinHandle<void>> m_foldTasks;
+    QTimer m_foldTimer;
 
     // Search state.
     EditorFindBar* m_findBar = nullptr;

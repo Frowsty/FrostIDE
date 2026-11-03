@@ -27,6 +27,7 @@ namespace {
 constexpr double kTextPadding = 6.0;
 constexpr double kNumberPadding = 8.0;
 constexpr double kMarkerColumn = 14.0;
+constexpr double kFoldColumn = 14.0;
 constexpr double kCaretWidth = 2.0;
 // The VCS change stripe (ADR 0048): its width, its inset into the numbers' right padding, the
 // deletion mark's height, and the click slack around it.
@@ -60,9 +61,20 @@ void appendCodePoint(QString& out, char32_t cp) {
 
 // --- geometry ---
 
+std::optional<LineIndex> EditorView::foldLineAt(QPointF at) const {
+    if (at.x() < gutterWidth() - kFoldColumn * zoomFactor() || at.x() >= gutterWidth() || at.y() < 0.0)
+        return std::nullopt;
+    const auto row = static_cast<std::uint64_t>(at.y() / m_lineHeight) + firstVisibleRow();
+    if (row >= m_editor->display().rowCount())
+        return std::nullopt;
+    const auto info = m_editor->display().rowInfo(text::DisplayRow{static_cast<std::uint32_t>(row)});
+    return info.kind == text::RowKind::Text && info.startsLine ? std::optional(info.line) : std::nullopt;
+}
+
 std::optional<LineIndex> EditorView::breakpointLineAt(QPointF at) const {
     const double gutter = gutterWidth();
-    const double right = m_settings.lineNumbers ? gutter - kMarkerColumn * zoomFactor() : gutter;
+    const double right = m_settings.lineNumbers ? gutter - (kMarkerColumn + kFoldColumn) * zoomFactor()
+                                                : gutter - kFoldColumn * zoomFactor();
     if (at.x() < 0.0 || at.x() >= right || at.y() < 0.0) {
         return std::nullopt;
     }
@@ -76,7 +88,7 @@ std::optional<LineIndex> EditorView::breakpointLineAt(QPointF at) const {
 
 double EditorView::gutterWidth() const noexcept {
     const double zoom = zoomFactor();
-    double width = kMarkerColumn * zoom;
+    double width = (kMarkerColumn + kFoldColumn) * zoom;
     if (m_settings.lineNumbers) {
         const std::uint32_t digits = std::max<std::uint32_t>(2, digitCount(m_editor->text().lineCount()));
         width += static_cast<double>(digits) * toPixels(m_shaper->cellWidth()) + 2.0 * kNumberPadding * zoom;
@@ -88,9 +100,9 @@ QRectF EditorView::changeStripeColumn() const noexcept {
     const double zoom = zoomFactor();
     // In the padding between the line numbers and the marker column, or at the gutter's left edge
     // without line numbers.
-    const double x = m_settings.lineNumbers
-                         ? gutterWidth() - kMarkerColumn * zoom - kNumberPadding * zoom + kChangeStripeInset * zoom
-                         : zoom;
+    const double x = m_settings.lineNumbers ? gutterWidth() - (kMarkerColumn + kFoldColumn) * zoom -
+                                                  kNumberPadding * zoom + kChangeStripeInset * zoom
+                                            : zoom;
     return QRectF(x, 0.0, kChangeStripeWidth * zoom, static_cast<double>(viewport()->height()));
 }
 
@@ -316,7 +328,7 @@ EditorDisplayList EditorView::buildDisplayList() {
 
     const std::vector<text::ByteRange>& matches = searchMatches();
     const std::optional<text::ByteRange> composition = m_document->compositionRange();
-    const double numbersRight = gutter - kMarkerColumn * zoom - kNumberPadding * zoom;
+    const double numbersRight = gutter - (kMarkerColumn + kFoldColumn) * zoom - kNumberPadding * zoom;
     const TokenFormat plain{m_colors.foreground, false};
     bool widened = false;
 
@@ -329,8 +341,20 @@ EditorDisplayList EditorView::buildDisplayList() {
         }
         const std::uint32_t line = row.line.value();
         const auto xOf = [&](ByteOffset at) {
-            const text::DisplayColumn column{static_cast<std::uint32_t>(at - row.buffer.begin)};
-            return origin + toPixels(map.xAt(text::DisplayPoint{row.row, column}));
+            std::uint32_t column = 0;
+            for (const text::RowSegment& segment : row.segments) {
+                column = segment.column.value();
+                if (at <= segment.buffer.begin)
+                    break;
+                if (segment.kind == text::SegmentKind::Text) {
+                    column += static_cast<std::uint32_t>(std::min(at, segment.buffer.end) - segment.buffer.begin);
+                } else if (at >= segment.buffer.end) {
+                    column += static_cast<std::uint32_t>(segment.text.size());
+                }
+                if (at <= segment.buffer.end)
+                    break;
+            }
+            return origin + toPixels(map.xAt(text::DisplayPoint{row.row, text::DisplayColumn{column}}));
         };
 
         if (caretLines.contains(line)) {
@@ -372,70 +396,87 @@ EditorDisplayList EditorView::buildDisplayList() {
         // nothing; each non-ASCII cluster is a run of its own at the shaper's x, so wide and
         // fallback glyphs land where the display map puts carets. Past kLongLineCapBytes of a row
         // nothing is shaped or painted. Budget: B5.
-        text::ByteRange shown = row.buffer;
-        if (shown.size() > text::kLongLineCapBytes) {
-            shown.end = snapshot.clip(shown.begin + text::kLongLineCapBytes);
-        }
-        const std::string bytes = snapshot.text(shown);
-        const std::string_view view(bytes);
         text::TextWidth x = 0;
-        std::size_t at = 0;
-        QString run;
-        double runX = 0.0;
-        ByteOffset runBegin = shown.begin;
-        std::optional<syntax::HighlightKind> runKind;
-        std::size_t runSemantic = kNoSemantic;
-        bool runInactive = false;
-        bool runAscii = true;
-        const auto flush = [&](ByteOffset end) {
-            if (run.isEmpty()) {
-                return;
+        std::uint64_t paintedBytes = 0;
+        for (const text::RowSegment& segment : row.segments) {
+            if (paintedBytes >= text::kLongLineCapBytes)
+                break;
+            if (segment.kind != text::SegmentKind::Text) {
+                const QString placeholder =
+                    QString::fromUtf8(segment.text.data(), static_cast<qsizetype>(segment.text.size()));
+                list.text.push_back(DisplayText{QPointF(origin + toPixels(x), baseline), placeholder,
+                                                m_colors.foreground, false, std::nullopt, segment.buffer, std::nullopt,
+                                                false});
+                for (const char c : segment.text)
+                    x += m_shaper->advance(static_cast<unsigned char>(c), x);
+                paintedBytes += segment.text.size();
+                continue;
             }
-            // Inactive code is dimmed over everything; a semantic token wins over tree-sitter.
-            TokenFormat format = runKind ? m_colors.format(*runKind) : plain;
-            std::optional<SemanticKind> semantic;
-            if (runSemantic != kNoSemantic) {
-                const SemanticSpan& span = m_semantic[runSemantic];
-                semantic = span.kind;
-                format = m_colors.semanticFormat(span.kind, span.modifiers);
+            text::ByteRange shown = segment.buffer;
+            if (shown.size() > text::kLongLineCapBytes - paintedBytes) {
+                shown.end = snapshot.clip(shown.begin + text::kLongLineCapBytes - paintedBytes);
             }
-            if (runInactive) {
-                format = TokenFormat{m_colors.inactiveCode, false};
-            }
-            list.text.push_back(DisplayText{QPointF(origin + runX, baseline), run, format.color, format.italic, runKind,
-                                            text::ByteRange{runBegin, end}, semantic, runInactive});
-            run.clear();
-        };
-        while (at < view.size()) {
-            const text::DecodedChar ch = text::decodeUtf8(view.substr(at));
-            const ByteOffset offset = shown.begin + at;
-            const bool ascii = ch.cp < 0x80;
-            if (ch.cp == U'\t' || isControl(ch.cp)) {
-                flush(offset);
-            } else if (!ascii && !run.isEmpty() && text::charWidth(ch.cp) == text::CharWidth::Zero) {
-                appendCodePoint(run, ch.cp); // A combining mark or joiner stays with its cluster.
-            } else {
-                const std::optional<syntax::HighlightKind> kind = kindAt(offset);
-                const std::size_t semantic = semanticAt(offset);
-                const bool inactive = inactiveAt(offset);
-                if (!run.isEmpty() &&
-                    (kind != runKind || semantic != runSemantic || inactive != runInactive || !ascii || !runAscii)) {
-                    flush(offset);
-                }
+            const std::string bytes = snapshot.text(shown);
+            const std::string_view view(bytes);
+            std::size_t at = 0;
+            QString run;
+            double runX = 0.0;
+            ByteOffset runBegin = shown.begin;
+            std::optional<syntax::HighlightKind> runKind;
+            std::size_t runSemantic = kNoSemantic;
+            bool runInactive = false;
+            bool runAscii = true;
+            const auto flush = [&](ByteOffset end) {
                 if (run.isEmpty()) {
-                    runX = toPixels(x);
-                    runBegin = offset;
-                    runKind = kind;
-                    runSemantic = semantic;
-                    runInactive = inactive;
-                    runAscii = ascii;
+                    return;
                 }
-                appendCodePoint(run, ch.cp);
+                // Inactive code is dimmed over everything; a semantic token wins over tree-sitter.
+                TokenFormat format = runKind ? m_colors.format(*runKind) : plain;
+                std::optional<SemanticKind> semantic;
+                if (runSemantic != kNoSemantic) {
+                    const SemanticSpan& span = m_semantic[runSemantic];
+                    semantic = span.kind;
+                    format = m_colors.semanticFormat(span.kind, span.modifiers);
+                }
+                if (runInactive) {
+                    format = TokenFormat{m_colors.inactiveCode, false};
+                }
+                list.text.push_back(DisplayText{QPointF(origin + runX, baseline), run, format.color, format.italic,
+                                                runKind, text::ByteRange{runBegin, end}, semantic, runInactive});
+                run.clear();
+            };
+            while (at < view.size()) {
+                const text::DecodedChar ch = text::decodeUtf8(view.substr(at));
+                const ByteOffset offset = shown.begin + at;
+                const bool ascii = ch.cp < 0x80;
+                if (ch.cp == U'\t' || isControl(ch.cp)) {
+                    flush(offset);
+                } else if (!ascii && !run.isEmpty() && text::charWidth(ch.cp) == text::CharWidth::Zero) {
+                    appendCodePoint(run, ch.cp); // A combining mark or joiner stays with its cluster.
+                } else {
+                    const std::optional<syntax::HighlightKind> kind = kindAt(offset);
+                    const std::size_t semantic = semanticAt(offset);
+                    const bool inactive = inactiveAt(offset);
+                    if (!run.isEmpty() && (kind != runKind || semantic != runSemantic || inactive != runInactive ||
+                                           !ascii || !runAscii)) {
+                        flush(offset);
+                    }
+                    if (run.isEmpty()) {
+                        runX = toPixels(x);
+                        runBegin = offset;
+                        runKind = kind;
+                        runSemantic = semantic;
+                        runInactive = inactive;
+                        runAscii = ascii;
+                    }
+                    appendCodePoint(run, ch.cp);
+                }
+                x += m_shaper->advance(ch.cp, x);
+                at += ch.bytes;
             }
-            x += m_shaper->advance(ch.cp, x);
-            at += ch.bytes;
+            flush(shown.begin + at);
+            paintedBytes += shown.size();
         }
-        flush(shown.begin + at);
         if (map.wrap().mode == text::WrapMode::Off && toPixels(x) > m_maxRowWidth) {
             m_maxRowWidth = toPixels(x);
             widened = true;
@@ -503,13 +544,29 @@ EditorDisplayList EditorView::buildDisplayList() {
         if (!row.startsLine) {
             continue;
         }
+        const auto lineInfo = snapshot.lineInfo(row.line);
+        const auto startsOnLine = [&](const auto& ranges) {
+            if (!lineInfo)
+                return false;
+            const auto it = std::ranges::lower_bound(ranges, lineInfo->content.begin, {}, &text::ByteRange::begin);
+            return it != ranges.end() && it->begin <= lineInfo->content.end;
+        };
+        const bool collapsed = lineInfo && map.foldStartsIn(lineInfo->content);
+        const bool foldable = collapsed || startsOnLine(m_foldCandidates);
+        if (foldable) {
+            list.gutterText.push_back(DisplayText{QPointF(gutter - kFoldColumn * zoom + 3.0 * zoom, baseline),
+                                                  collapsed ? QStringLiteral("+") : QStringLiteral("−"),
+                                                  m_colors.lineNumber, false, std::nullopt, row.buffer, std::nullopt,
+                                                  false});
+        }
         const auto breakpoint = std::ranges::lower_bound(m_breakpoints, row.line, {}, &BreakpointMarker::line);
         const bool hasBreakpoint = breakpoint != m_breakpoints.end() && breakpoint->line == row.line;
         const bool isExecution = m_executionPoint && *m_executionPoint == row.line;
         if (hasBreakpoint || isExecution) {
             // In place of the number (IntelliJ's new UI), or in the marker column without numbers.
-            const double areaRight = m_settings.lineNumbers ? gutter - kMarkerColumn * zoom : gutter;
-            const double areaLeft = m_settings.lineNumbers ? 0.0 : gutter - kMarkerColumn * zoom;
+            const double areaRight =
+                m_settings.lineNumbers ? gutter - (kMarkerColumn + kFoldColumn) * zoom : gutter - kFoldColumn * zoom;
+            const double areaLeft = m_settings.lineNumbers ? 0.0 : gutter - (kMarkerColumn + kFoldColumn) * zoom;
             const double size = std::min(m_lineHeight, kMarkerColumn * zoom) * 0.75;
             const double cx = (areaLeft + areaRight) / 2.0;
             const double cy = top + m_lineHeight / 2.0;
@@ -540,7 +597,7 @@ EditorDisplayList EditorView::buildDisplayList() {
                 severity = std::min(severity, it->severity);
             }
             const double size = std::min(m_lineHeight, kMarkerColumn * zoom) * 0.6;
-            const double cx = gutter - kMarkerColumn * zoom / 2.0;
+            const double cx = gutter - kFoldColumn * zoom - kMarkerColumn * zoom / 2.0;
             const double cy = top + m_lineHeight / 2.0;
             const QColor color = severity == MarkerSeverity::Error ? m_colors.errorMarker : m_colors.warningMarker;
             list.markers.push_back(

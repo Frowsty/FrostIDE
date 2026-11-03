@@ -200,6 +200,17 @@ TEST(EditorHighlight, EveryKindHasAThemeKeyAndPlainTextUsesTheForeground) {
     EXPECT_EQ(run->color, h.view->colors().foreground);
 }
 
+TEST(EditorFind, FindRevealsHiddenMatch) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("a\nhidden\nz\n");
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{1}, ByteOffset{9}}}));
+    h.view->openFind(false);
+    h.view->findBar()->findField()->setText(QStringLiteral("hidden"));
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+    EXPECT_EQ(h.view->editor().state().primary().range(), (text::ByteRange{ByteOffset{2}, ByteOffset{8}}));
+    EXPECT_NE(h.view->buildDisplayList().findText(QStringLiteral("hidden")), nullptr);
+}
+
 TEST(EditorFind, FindBarFindsCountsAndReplaces) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("foo bar Foo baz foo");

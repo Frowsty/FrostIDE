@@ -147,6 +147,47 @@ TEST(SyntaxHighlight, Cpp) {
                                  });
 }
 
+TEST(SyntaxHighlight, CppNestedFoldRanges) {
+    constexpr std::string_view source = "namespace sample {\nvoid f() {\n  if (true) {\n    f();\n  }\n}\n}\n";
+    const SyntaxTree tree = parseNow(LanguageId::Cpp, source);
+    ASSERT_FALSE(tree.empty());
+    ASSERT_FALSE(tree.hasError());
+    const auto folds = tree.foldRanges(frost::syntax::testing::unlimited());
+    ASSERT_TRUE(folds.complete);
+    ASSERT_GE(folds.ranges.size(), 3U);
+    EXPECT_LT(folds.ranges[0].begin, folds.ranges[1].begin);
+    EXPECT_GT(folds.ranges[0].end, folds.ranges[1].end);
+    EXPECT_LT(folds.ranges[1].begin, folds.ranges[2].begin);
+    EXPECT_GT(folds.ranges[1].end, folds.ranges[2].end);
+}
+
+TEST(SyntaxHighlight, CSharpAndCMakeFoldRanges) {
+    const auto csharp = parseNow(LanguageId::CSharp, "class C {\n void M() {\n  if (true) {\n   M();\n  }\n }\n}\n");
+    ASSERT_FALSE(csharp.empty());
+    ASSERT_FALSE(csharp.hasError());
+    const auto managed = csharp.foldRanges(frost::syntax::testing::unlimited());
+    ASSERT_TRUE(managed.complete);
+    EXPECT_GE(managed.ranges.size(), 3U);
+    const auto cmake = parseNow(LanguageId::CMake, "function(f)\n if(TRUE)\n  message(x)\n endif()\nendfunction()\n");
+    ASSERT_FALSE(cmake.empty());
+    ASSERT_FALSE(cmake.hasError());
+    const auto build = cmake.foldRanges(frost::syntax::testing::unlimited());
+    ASSERT_TRUE(build.complete);
+    EXPECT_GE(build.ranges.size(), 2U);
+}
+
+TEST(SyntaxHighlight, CancelledFoldQueryIsIncomplete) {
+    const auto tree = parseNow(LanguageId::Lua, "function f()\n return 1\nend\n");
+    ASSERT_FALSE(tree.empty());
+    std::stop_source stop;
+    stop.request_stop();
+    auto limits = frost::syntax::testing::unlimited();
+    limits.stop = stop.get_token();
+    const auto result = tree.foldRanges(limits);
+    EXPECT_FALSE(result.complete);
+    EXPECT_TRUE(result.ranges.empty());
+}
+
 TEST(SyntaxHighlight, CSharp) {
     expectKinds(LanguageId::CSharp, {
                                         {"using", "keyword"},

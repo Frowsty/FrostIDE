@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The four layers behind DisplayMap (private header; frost/text/display_map.hpp, ADR 0026): the fold
-// layer (an identity until M15), the soft-wrap layer, the inlay layer (an identity until M15) and the
+// layer, the soft-wrap layer, the inlay layer (an identity until M15) and the
 // block-decoration layer, with the line and row patches that carry an edit up the stack.
 /*
  * Each layer maps its input to its output coordinates in O(B log n) and turns a patch of its input
  * into a patch of its output:
  *   buffer lines --FoldLayer--> fold lines --WrapLayer--> wrap rows --InlayLayer--> inlay rows
  *   (= wrap rows) --BlockLayer--> display rows.
- * Fold coordinates are byte offsets into the folded text and fold line numbers; with the identity
- * fold layer they equal buffer offsets and lines, and the conversions are spelled out anyway so
- * that M15 only fills the fold layer. Design from PLAN.md section 2 ("Editor rendering"); no GPL or
+ * Fold coordinates are byte offsets into the projected text and fold line numbers. Design from
+ * PLAN.md section 2 ("Editor rendering"); no GPL or
  * proprietary editor source was consulted (CLAUDE.md, clean room).
  */
 #pragma once
@@ -25,7 +24,9 @@
 #include "frost/text/sum_tree.hpp"
 #include "frost/text/text_buffer.hpp"
 #include "frost/text/text_shaper.hpp"
+#include "frost/text/text_summary.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <span>
@@ -64,38 +65,155 @@ struct FoldLine {
     std::uint64_t end = 0;
 };
 
+// A run covers buffer bytes. A folded run projects to a three-byte placeholder; an identity
+// run projects its original bytes. Summaries are cached so tree combination never reads a snapshot.
+struct FoldRun {
+    TextSummary buffer;
+    TextSummary projected;
+    std::uint64_t foldId = 0; // Zero denotes an identity run.
+};
+struct FoldRunSummary {
+    TextSummary buffer;
+    TextSummary projected;
+    std::uint64_t folds = 0;
+    friend constexpr bool operator==(const FoldRunSummary&, const FoldRunSummary&) noexcept = default;
+};
+struct FoldRunTraits {
+    using Item = FoldRun;
+    using Summary = FoldRunSummary;
+    [[nodiscard]] static Summary summary(const Item& item) noexcept {
+        return {item.buffer, item.projected, item.foldId == 0 ? 0U : 1U};
+    }
+    [[nodiscard]] static Summary combine(const Summary& a, const Summary& b) noexcept {
+        return {text::combine(a.buffer, b.buffer), text::combine(a.projected, b.projected), a.folds + b.folds};
+    }
+};
+using FoldRunTree = SumTree<FoldRunTraits>;
+
+// Endpoint events are ordered by buffer position. Their gaps make suffix shifts representable
+// without storing absolute offsets; depth summaries support nested-range queries.
+struct FoldEvent {
+    std::uint64_t gap = 0;
+    std::uint64_t id = 0;
+    bool open = false;
+};
+struct FoldEventSummary {
+    std::uint64_t bytes = 0;
+    std::int64_t depth = 0;
+    std::int64_t minDepth = 0;
+    std::uint64_t count = 0;
+    std::uint64_t opens = 0;
+    bool lastOpen = false;
+    friend constexpr bool operator==(const FoldEventSummary&, const FoldEventSummary&) noexcept = default;
+};
+struct FoldEventTraits {
+    using Item = FoldEvent;
+    using Summary = FoldEventSummary;
+    [[nodiscard]] static constexpr Summary summary(const Item& item) noexcept {
+        const std::int64_t depth = item.open ? 1 : -1;
+        return {item.gap, depth, depth, 1, item.open ? 1U : 0U, item.open};
+    }
+    [[nodiscard]] static constexpr Summary combine(const Summary& a, const Summary& b) noexcept {
+        if (a.count == 0)
+            return b;
+        if (b.count == 0)
+            return a;
+        return {a.bytes + b.bytes, a.depth + b.depth, std::min(a.minDepth, a.depth + b.minDepth),
+                a.count + b.count, a.opens + b.opens, b.lastOpen};
+    }
+};
+using FoldEventTree = SumTree<FoldEventTraits>;
+
+struct FoldRecord {
+    std::uint64_t id = 0;
+    AnchorId begin;
+    AnchorId end;
+};
+struct FoldRecordSummary {
+    std::uint64_t count = 0;
+    std::uint64_t maxId = 0;
+    friend constexpr bool operator==(const FoldRecordSummary&, const FoldRecordSummary&) noexcept = default;
+};
+struct FoldRecordTraits {
+    using Item = FoldRecord;
+    using Summary = FoldRecordSummary;
+    [[nodiscard]] static constexpr Summary summary(const Item& item) noexcept { return {1, item.id}; }
+    [[nodiscard]] static constexpr Summary combine(const Summary& a, const Summary& b) noexcept {
+        return {a.count + b.count, std::max(a.maxId, b.maxId)};
+    }
+};
+using FoldRecordTree = SumTree<FoldRecordTraits>;
+
 /*
- * The folded text over a buffer snapshot. An identity layer until M15: fold lines are buffer lines
- * and fold offsets are buffer offsets. M15 adds the folds (anchored ranges replaced by a
- * placeholder) behind the same queries; the wrap layer reads only these. An immutable value.
+ * The folded text over a buffer snapshot. Outermost collapsed ranges project to placeholders;
+ * nested ranges remain registered. The wrap layer reads only these queries. An immutable value.
  */
 class FoldLayer {
 public:
     FoldLayer() noexcept = default;
-    explicit FoldLayer(Snapshot text) noexcept : m_text(std::move(text)) {}
+    explicit FoldLayer(Snapshot text, std::vector<ByteRange> folds = {}, std::vector<std::uint64_t> ids = {},
+                       std::uint64_t nextId = 1) noexcept;
 
     [[nodiscard]] const Snapshot& buffer() const noexcept { return m_text; }
     // The folded text's size in bytes and its line count (at least 1). O(1).
-    [[nodiscard]] std::uint64_t size() const noexcept { return m_text.size().value(); }
-    [[nodiscard]] std::uint32_t lineCount() const noexcept { return m_text.lineCount(); }
+    [[nodiscard]] std::uint64_t size() const noexcept { return m_size; }
+    [[nodiscard]] std::uint32_t lineCount() const noexcept { return m_lineCount; }
+    [[nodiscard]] std::uint64_t nextFoldId() const noexcept { return m_nextFoldId; }
+    [[nodiscard]] const std::vector<ByteRange>& folds() const noexcept;
+    [[nodiscard]] bool intersects(ByteRange range) const noexcept;
+    [[nodiscard]] std::vector<ByteRange> containing(ByteOffset offset) const noexcept;
+    [[nodiscard]] std::vector<FoldInfo> containingInfos(ByteOffset offset) const noexcept;
+    [[nodiscard]] std::vector<FoldInfo> intersectingInfos(ByteRange range) const noexcept;
+    [[nodiscard]] std::vector<FoldInfo> boundaryInfos(ByteRange range) const noexcept;
+    [[nodiscard]] bool hasStart(ByteRange range) const noexcept;
+    [[nodiscard]] bool hasBoundary(ByteOffset offset, bool start) const noexcept;
+    [[nodiscard]] FoldUpdateStats updateStats() const noexcept { return m_stats; }
+    [[nodiscard]] Result<std::pair<FoldLayer, FoldId>> adding(ByteRange range,
+                                                              std::optional<FoldId> existing = {}) const noexcept;
+    [[nodiscard]] Result<FoldLayer> removing(FoldId id) const noexcept;
+    [[nodiscard]] std::optional<FoldInfo> firstStarting(ByteRange range) const noexcept;
+    [[nodiscard]] std::optional<FoldInfo> atBoundary(ByteOffset offset, bool start) const noexcept;
+    [[nodiscard]] Result<FoldInfo> info(FoldId id) const noexcept;
+    [[nodiscard]] bool sameProjection(const FoldLayer& other) const noexcept {
+        return m_runs.sharesRootWith(other.m_runs);
+    }
+    [[nodiscard]] Result<void> checkInvariants() const noexcept;
     // Fold line `line`. Precondition: line < lineCount(). O(B log n + P).
     [[nodiscard]] FoldLine line(std::uint32_t line) const noexcept;
     // The fold line holding fold offset `offset` (<= size()); CRLF-interior reports the CR's line.
     [[nodiscard]] std::uint32_t lineAt(std::uint64_t offset) const noexcept;
     // `offset` (<= size()) floored to a character boundary.
     [[nodiscard]] std::uint64_t clip(std::uint64_t offset) const noexcept;
-    // Buffer -> fold and back. `bias` picks a side of a fold (M15); identities until then.
+    // Buffer -> fold and back. `bias` picks a side of a fold.
     [[nodiscard]] std::uint64_t toFold(ByteOffset offset, Bias bias) const noexcept;
     [[nodiscard]] ByteOffset toBuffer(std::uint64_t offset, Bias bias) const noexcept;
+    // The nearest buffer endpoint for a point inside a placeholder.
+    [[nodiscard]] ByteOffset hitToBuffer(std::uint64_t offset) const noexcept;
     // The buffer line where fold line `line` starts.
-    [[nodiscard]] LineIndex bufferLine(std::uint32_t line) const noexcept { return LineIndex{line}; }
+    [[nodiscard]] LineIndex bufferLine(std::uint32_t line) const noexcept;
 
     // Calls fn(std::string_view chunk, SegmentKind kind) over the folded text [begin, end) (char
     // boundaries) in order: Text chunks, and FoldPlaceholder chunks from M15 on.
     template<class F>
     void forEachChunk(std::uint64_t begin, std::uint64_t end, F&& fn) const noexcept {
-        for (const std::string_view chunk : m_text.chunks(ByteRange{ByteOffset{begin}, ByteOffset{end}})) {
-            fn(chunk, SegmentKind::Text);
+        auto cursor = m_runs.seek([begin](const FoldRunSummary& sum) { return sum.projected.bytes > begin; });
+        while (const FoldRun* run = cursor.item()) {
+            const auto prefix = cursor.prefix();
+            const auto start = prefix.projected.bytes;
+            if (start >= end)
+                break;
+            const auto first = std::max(begin, start) - start;
+            const auto last = std::min(end, start + run->projected.bytes) - start;
+            if (run->foldId != 0) {
+                fn(std::string_view("...").substr(static_cast<std::size_t>(first),
+                                                  static_cast<std::size_t>(last - first)),
+                   SegmentKind::FoldPlaceholder);
+            } else {
+                for (const auto chunk :
+                     m_text.chunks({ByteOffset{prefix.buffer.bytes + first}, ByteOffset{prefix.buffer.bytes + last}}))
+                    fn(chunk, SegmentKind::Text);
+            }
+            cursor.next();
         }
     }
 
@@ -103,23 +221,46 @@ public:
     // Precondition: first < end <= lineCount(). O(B log n + bytes of the lines).
     template<class F>
     void forEachLine(std::uint32_t first, std::uint32_t end, F&& fn) const noexcept {
-        Result<LineCursor> cursor = m_text.linesFrom(LineIndex{first});
-        FROST_ASSERT(cursor.has_value());
-        LineInfo info;
-        for (std::uint32_t line = first; line < end && cursor->next(info); ++line) {
-            fn(line, toFoldLine(info));
+        if (m_runs.summary().folds == 0) {
+            auto cursor = m_text.linesFrom(LineIndex{first});
+            FROST_ASSERT(cursor.has_value());
+            LineInfo info;
+            for (std::uint32_t i = first; i < end && cursor->next(info); ++i)
+                fn(i, toFoldLine(info));
+            return;
         }
+        for (std::uint32_t i = first; i < end; ++i)
+            fn(i, line(i));
     }
 
     // The fold layer over `newText` (the result of `changes`), with the fold-line patch appended
     // to `patch`. Identity: the buffer-line patch.
-    [[nodiscard]] FoldLayer updated(std::span<const TextChange> changes, Snapshot newText,
-                                    std::vector<SpanEdit>& patch) const noexcept;
+    [[nodiscard]] FoldLayer updated(std::span<const TextChange> changes, std::span<const RawEdit> edits,
+                                    Snapshot newText, std::vector<SpanEdit>& patch) const noexcept;
+
+    void appendSegments(std::uint64_t begin, std::uint64_t end, std::vector<RowSegment>& out) const noexcept;
 
 private:
     [[nodiscard]] static FoldLine toFoldLine(const LineInfo& info) noexcept;
 
+    [[nodiscard]] const FoldRecord& record(std::uint64_t id) const noexcept;
+    [[nodiscard]] const FoldRecord* findRecord(std::uint64_t id) const noexcept;
+    [[nodiscard]] FoldEventTree changeEventsAt(std::uint64_t at, std::optional<FoldEvent> add,
+                                               std::optional<FoldEvent> remove) const noexcept;
+    [[nodiscard]] FoldEventTree removeEventsAt(std::uint64_t at, std::span<const std::uint64_t> ids,
+                                               std::uint64_t& scanned) const noexcept;
+    [[nodiscard]] std::uint32_t sourceLine(std::uint32_t line) const noexcept;
+
     Snapshot m_text;
+    mutable std::shared_ptr<const std::vector<ByteRange>> m_folds;
+    FoldRecordTree m_foldRecords;
+    std::uint64_t m_nextFoldId = 1;
+    AnchorSet m_foldAnchors;
+    FoldRunTree m_runs;
+    FoldEventTree m_events;
+    mutable FoldUpdateStats m_stats;
+    std::uint64_t m_size = 0;
+    std::uint32_t m_lineCount = 1;
 };
 
 // --- Soft-wrap layer ----------------------------------------------------------------------------

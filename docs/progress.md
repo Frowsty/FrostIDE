@@ -3,6 +3,62 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Verified folding, IME and Unicode restoration checkpoint
+
+- Astra approved folding/Unicode navigation candidate `96fc0f4dbb02c98cbeccffe51ff32f046506d7b7`
+  against inherited baseline `a671d05418f450da59cccb86830409d47db42c07`. Its source/ADR delta applied
+  cleanly to main, preserving the accepted Git and Unity bridge. Product source snapshot before this log
+  entry is `aa6df3e88e39b8a4c7d20189d01ca428a9fc8432`; the tested staged tree including that entry is
+  `18c2fa2ea7e803eb57ce9a0d78909ac064332147`. Root compared the changed-line payload against the
+  approved worker delta exactly, excluding progress and patch-location metadata. Combined gates passed;
+  subsequent changes are documentation only.
+- The reviewed implementation provides nested persistent folds, local projection updates, gutter/actions,
+  previews, C++/Lua/C#/CMake syntax ranges, navigation reveal and session restoration. It fixes persisted
+  grapheme/display columns being restored through the byte-column API while preserving external byte callers.
+- Review found an IME folding blocker. Its correction also fixed synchronous syntax updates not scheduling
+  fold queries and programmatic composition commits leaving keyboard routing in preedit mode. Both platforms
+  pass six focused IME cases, including actual gutter input, direct folding, exact text/caret, keyboard Ctrl+Z,
+  selection replacement and commit-plus-new-preedit. Each platform passes three app restoration/history cases.
+  Earlier focused text/editor tests and Windows WARP folded-frame parity passed; Astra independently replayed
+  10 Windows tests and checked the final native/app logs. Numerical B5 remains unmeasured under feature-first
+  rules; defensive coordinate-limit recovery can still discard fold state near the representable limit.
+- Combined Windows: 2738/2757 passed (19 skipped, one additional disabled); native ext4 Linux:
+  2611/2635 passed (24 skipped). The extra Linux skip is the new Windows-only folded renderer parity
+  case. Format, frost-lint (2375 files), licence checks (103 Windows / 99 Linux packages), and feature-matrix
+  consistency passed. Logs: `build/verify-main-integration-20261103-013323.log`,
+  `build/verify-folding-windows-20261103-tests.log`, `build/verify-folding-native-20261103-tests.log`.
+- Fresh stage `E:\FrostBuilds\preview\codex-20261103-editor-folding` passed startup, actual Windows
+  QRhi/Direct3D 11 rendering and bundled ConPTY input (1/1) on a private desktop; logs are in its sibling
+  `-smoke` directory. Built/staged `frost_app.dll` SHA-256 matches:
+  `c68adff8ef795c3f2e683c8ac89ddd0e19e74b8c38677b16ad42bbc649190fa3`.
+  Launcher SHA-256: `cc83ccb69086032bddfc99a7d1d9ddd3164b836a76e584037b13f96795dbb885`.
+  All 13 staged Unity package files match source. Language servers remain external developer tooling;
+  this is a tested Debug preview, not a finished release package.
+- The project-tree worker has begun the queued scan-publication fix in `codex-project-index`, baseline
+  `de5eccf27e4adad18b7933308f3c45cb38df7736`. Its draft has 21 focused Windows passes and is adding
+  asynchronous active-query and initial-solution preparation; latest changes still need rebuild/review.
+  Lua's engine transport/hook tests now pass six cases/119 assertions including authenticated socket pause,
+  continue/disconnect, reconnect generations and active-debug watchdog/coverage. A usable end-to-end Lua
+  debugger is still incomplete. Astra found terminal adapter reads could leave a paused engine connected,
+  and output saturation could lose state changes. Both have source fixes; IDE focused tests pass 5/5,
+  while the engine's matching slotted build and regression tests remain pending. Scene-host propagation,
+  source revisions and the usable end-to-end protocol adapter remain development work.
+- Revised Unity controls passed portable replay/4100-connection tests and Windows reload/trust tests. Astra
+  found a transient same-generation reconnection bug and two native-transport bounds/deadline issues;
+  candidate `d5dc0dc1b24eaaf692eb19ef1927e23993eb0b1b` contains corrections and passed Astra source review.
+  Unity Mono's unimplemented `WindowsIdentity.User.Value` path was replaced by native Win32 identity and
+  pipe operations. A real Editor probe against prior candidate `5563a240` completed control assertions
+  through a synthetic broker/client, including play/pause/step/resume/stop and reload identity. The harness
+  exited 1 on preference cleanup and withheld its success JSON; per-step/frame values were not durably
+  recorded. Subsequent guarded recovery restored five exact typed GameView geometry values, with no
+  conflicts and full-key equality to this run's durable baseline. Evidence is under
+  `E:\FrostBuilds\unity-controls-scratch-20261103\prefs-1793666567872552200-recovery-*`.
+  This does not recover the earlier lost value below. Actual Workbench-to-Editor control acceptance,
+  final acceptance-evidence review and native/combined gates remain outstanding.
+- Next: commit/push this reviewed folding checkpoint, finish and review the active Unity, Lua debugger and
+  project-index slices, then continue the remaining parity inventory. The entire project goal remains active;
+  no user answer is currently needed.
+
 ## 2026-11-03: Unity-controls probe preference preservation issue
 
 - The accepted staged-window bridge evidence below remains valid. A subsequent, separate Unity-controls

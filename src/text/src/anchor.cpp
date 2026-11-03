@@ -9,6 +9,8 @@
 
 #include "batch_mapper.hpp"
 
+#include <algorithm>
+
 namespace frost::text {
 namespace {
 
@@ -90,6 +92,22 @@ BatchMapper::BatchMapper(std::span<const RawEdit> batch) noexcept {
             step.rightAtEnd = next.end > next.begin ? next.endFinal : next.rightAtEnd;
         }
     }
+}
+
+std::uint64_t BatchMapper::mapRandom(std::uint64_t x, Bias bias) const noexcept {
+    const auto it = std::lower_bound(m_steps.begin(), m_steps.end(), x,
+                                     [](const Step& step, std::uint64_t value) { return step.end < value; });
+    if (it == m_steps.end()) {
+        if (m_steps.empty())
+            return x;
+        const Step& last = m_steps.back();
+        return last.endFinal + (x - last.end);
+    }
+    if (it->begin > x)
+        return it->startFinal - (it->begin - x);
+    if (bias == Bias::Left)
+        return it->leftTarget;
+    return x < it->end ? it->endFinal : it->rightAtEnd;
 }
 
 std::uint64_t BatchMapper::map(std::uint64_t x, Bias bias) noexcept {

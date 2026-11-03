@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace frost::text {
@@ -107,6 +108,12 @@ public:
     std::vector<RowEdit> setWrap(WrapSettings wrap) noexcept;
     // Measures with `shaper` from now on (DisplayMap::setShaper).
     std::vector<RowEdit> setShaper(const ITextShaper& shaper) noexcept;
+    // Replaces the collapsed ranges in this view's display map.
+    [[nodiscard]] Result<std::vector<RowEdit>> setFolds(std::vector<ByteRange> ranges) noexcept {
+        return m_display.setFolds(std::move(ranges));
+    }
+    [[nodiscard]] Result<FoldId> addFold(ByteRange range) noexcept { return m_display.addFold(range); }
+    [[nodiscard]] Result<void> removeFold(FoldId id) noexcept { return m_display.removeFold(id); }
 
 private:
     // Follows a history step: display map, then the step's selections (else the mapped ones).

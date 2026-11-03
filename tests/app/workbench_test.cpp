@@ -135,6 +135,55 @@ TEST(Workbench, OneTabPerFileWhateverThePathSpelling) {
     EXPECT_GT(rig.window->notifications().log().size(), before);
 }
 
+TEST(Workbench, SessionAndHistoryRestoreUnicodeStatusColumns) {
+    WorkDir dir("unicode-positions");
+    dir.write("a.cpp", "A\xF0\x9F\x98\x80"
+                       "e\xCC\x81"
+                       "\xC3\xA9\tZ\n");
+    dir.write("b.cpp", "other\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    rig.view()->editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{11}));
+    const auto saved = rig.view()->viewState();
+    EXPECT_EQ(saved.column, 6);
+    rig.view()->editor().goToLine(1, 1);
+    rig.view()->restoreViewState(saved);
+    EXPECT_EQ(rig.view()->editor().editor().state().primary().head, frost::ByteOffset{11});
+    ASSERT_TRUE(rig.nav().openFile(dir.join("b.cpp")));
+    ASSERT_TRUE(rig.nav().goBack());
+    ASSERT_NE(rig.view(), nullptr);
+    EXPECT_EQ(rig.view()->editor().editor().state().primary().head, frost::ByteOffset{11});
+}
+
+TEST(Workbench, FoldStateIsIgnoredWhenDocumentContentChanges) {
+    WorkDir dir("fold-state");
+    dir.write("a.cpp", "one\ntwo\nthree\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    auto& editor = rig.view()->editor();
+    ASSERT_TRUE(editor.setCollapsedFolds({{frost::ByteOffset{3}, frost::ByteOffset{8}}}));
+    const auto saved = rig.view()->viewState();
+    ASSERT_TRUE(editor.setCollapsedFolds({}));
+    ASSERT_TRUE(editor.typeText("x"));
+    rig.view()->restoreViewState(saved);
+    EXPECT_TRUE(editor.collapsedFolds().empty());
+}
+
+TEST(Workbench, ClosedDocumentRestoresFoldsWhenReopened) {
+    WorkDir dir("fold-reopen");
+    dir.write("a.cpp", "one\ntwo\nthree\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    ASSERT_TRUE(rig.view()->editor().setCollapsedFolds({{frost::ByteOffset{3}, frost::ByteOffset{8}}}));
+    ASSERT_TRUE(rig.window->tabs().close(0));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.cpp")));
+    ASSERT_NE(rig.view(), nullptr);
+    EXPECT_EQ(rig.view()->editor().collapsedFolds().size(), 1U);
+}
+
 TEST(Workbench, TypingMarksTheTabDirtyAndCtrlSWritesTheExactBytes) {
     WorkDir dir("type");
     dir.write("src/a.cpp", "// a\r\nint main() { return 0; }\r\n");
@@ -567,7 +616,8 @@ TEST(Workbench, AFolderProjectShowsTheFileSystemView) {
  */
 TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
     WorkDir dir("session");
-    dir.write("proj/main.cpp", "int main() {}\n");
+    const std::string source = "int main() {\n  return 0;\n}\n";
+    dir.write("proj/main.cpp", source);
     const std::string project = dir.join("proj");
     RigOptions options;
     options.workbench.watchFiles = true;
@@ -575,6 +625,9 @@ TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
         WorkbenchRig first(dir, options);
         ASSERT_TRUE(first.workbench->openPath(project).has_value());
         ASSERT_TRUE(first.workbench->openPath(dir.join("proj/main.cpp")).has_value());
+        ASSERT_NE(first.view(), nullptr);
+        ASSERT_TRUE(first.view()->editor().setCollapsedFolds(
+            {{frost::ByteOffset{source.find('\n')}, frost::ByteOffset{source.find('}')}}}));
         QApplication::processEvents();
     }
     {
@@ -584,6 +637,9 @@ TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
         ASSERT_EQ(second.window->tabs().count(), 1);
         EXPECT_TRUE(second.window->tabs().editor(0)->path().ends_with("main.cpp"))
             << second.window->tabs().editor(0)->path();
+        ASSERT_NE(second.view(), nullptr);
+        ASSERT_EQ(second.view()->editor().collapsedFolds().size(), 1U);
+        EXPECT_EQ(second.view()->editor().collapsedFolds().front().begin, frost::ByteOffset{source.find('\n')});
         // No journal was left behind by the first run's clean exit.
         auto scan =
             frost::storage::findRecoverableJournals(dir.join("data/hot-exit"), std::chrono::milliseconds(500), {});

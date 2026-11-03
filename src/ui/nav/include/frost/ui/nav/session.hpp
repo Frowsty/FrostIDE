@@ -19,9 +19,11 @@
 #include "frost/io/file_system.hpp"
 #include "frost/ui/nav/navigation_history.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace frost::ui::nav {
@@ -33,6 +35,8 @@ struct SessionTab {
     int line = 1;
     int column = 1;
     int top = 0; // The first visible line, 0-based.
+    std::uint64_t foldTextHash = 0;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> folds{};
     friend bool operator==(const SessionTab&, const SessionTab&) = default;
 };
 

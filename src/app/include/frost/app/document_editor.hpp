@@ -36,7 +36,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,6 +81,7 @@ public:
     [[nodiscard]] const std::string& path() const override { return m_path; }
     [[nodiscard]] ui::EditorStatus status() const override;
     void goToLine(int line, int column) override;
+    void goToStatusPosition(int line, int column) override;
     [[nodiscard]] input::ContextKeys contextKeys() const override;
     [[nodiscard]] bool requestClose() override;
     // The caret and the first visible row (session restore).
@@ -104,6 +107,9 @@ public:
     Followed followDocument();
 
 private:
+    [[nodiscard]] std::uint64_t foldTextHash() const;
+    mutable std::optional<text::Snapshot> m_foldHashSnapshot;
+    mutable std::uint64_t m_foldHash = 0;
     document::FileDocument* m_document;
     std::string m_path;
     std::unique_ptr<ui::EditorView> m_editor;
@@ -150,6 +156,8 @@ private:
     settings::SettingsStore* m_store = nullptr;
     io::IFileSystem* m_fs = nullptr;
     std::vector<DocumentEditorView*> m_views;
+    // Fold state of recently closed views, keyed by canonical document identity.
+    std::map<std::string, ui::EditorViewState, std::less<>> m_closedFolds;
 };
 
 // The status-bar encoding token of `document` ("UTF-8", "UTF-8 BOM") and its line separator ("LF").

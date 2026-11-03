@@ -69,5 +69,6 @@ set(_frost_syntax_queries "")
 foreach(language IN ITEMS c cpp csharp cmake xml json markdown lua)
     list(APPEND _frost_syntax_queries queries/${language}/highlights.scm queries/${language}/outline.scm)
 endforeach()
-list(APPEND _frost_syntax_queries queries/lua/folds.scm)
+list(APPEND _frost_syntax_queries queries/lua/folds.scm queries/cpp/folds.scm
+    queries/csharp/folds.scm queries/cmake/folds.scm)
 frost_embed_files(frost_syntax FILES ${_frost_syntax_queries})

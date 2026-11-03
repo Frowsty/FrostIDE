@@ -7,6 +7,7 @@
 
 #include "frost/ui/editor/editor_view.hpp"
 
+#include "frost/sched/task.hpp"
 #include "frost/syntax/syntax_tree.hpp"
 #include "frost/text/editor/unicode.hpp"
 #include "frost/ui/appearance_manager.hpp"
@@ -23,9 +24,19 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <utility>
 
 namespace frost::ui {
+
+struct FoldQueryJob {
+    std::mutex mutex;
+    std::stop_source stop;
+    syntax::SyntaxTree tree;
+    std::optional<std::vector<text::ByteRange>> ranges;
+    std::vector<std::uint64_t> maxEnd;
+    bool done = false;
+};
 
 namespace {
 
@@ -35,6 +46,105 @@ using text::Movement;
 // The MIME type that marks a clipboard line copy (copy or cut with no selection), so paste puts
 // it above the caret's line as IntelliJ does.
 constexpr const char* kLineCopyMime = "application/x-frostide-line-copy";
+
+bool candidateLess(text::ByteRange a, text::ByteRange b) noexcept {
+    return a.begin < b.begin || (a.begin == b.begin && a.end > b.end);
+}
+
+// Keep cancellation responsive even when a generated file contains many candidate regions.
+bool orderCandidates(std::vector<text::ByteRange>& ranges, std::stop_token stop) {
+    constexpr std::size_t chunk = 64;
+    for (std::size_t first = 0; first < ranges.size(); first += chunk) {
+        if (stop.stop_requested())
+            return false;
+        const auto end = std::min(first + chunk, ranges.size());
+        std::sort(ranges.begin() + static_cast<std::ptrdiff_t>(first),
+                  ranges.begin() + static_cast<std::ptrdiff_t>(end), candidateLess);
+    }
+    std::vector<text::ByteRange> scratch(ranges.size());
+    for (std::size_t width = chunk; width < ranges.size(); width *= 2) {
+        for (std::size_t first = 0; first < ranges.size(); first += width * 2) {
+            const auto mid = std::min(first + width, ranges.size());
+            const auto end = std::min(mid + width, ranges.size());
+            auto left = first;
+            auto right = mid;
+            for (auto out = first; out < end; ++out) {
+                if ((out % chunk) == 0 && stop.stop_requested())
+                    return false;
+                scratch[out] = right == end || (left < mid && !candidateLess(ranges[right], ranges[left]))
+                                   ? ranges[left++]
+                                   : ranges[right++];
+            }
+        }
+        ranges.swap(scratch);
+    }
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < ranges.size(); ++i) {
+        if ((i % chunk) == 0 && stop.stop_requested())
+            return false;
+        if (kept == 0 || ranges[i] != ranges[kept - 1])
+            ranges[kept++] = ranges[i];
+    }
+    ranges.resize(kept);
+    return !stop.stop_requested();
+}
+
+std::uint64_t buildCandidateMax(const std::vector<text::ByteRange>& ranges, std::vector<std::uint64_t>& tree,
+                                std::size_t node, std::size_t first, std::size_t end, std::stop_token stop) {
+    if (stop.stop_requested())
+        return 0;
+    if (end - first == 1)
+        return tree[node] = ranges[first].end.value();
+    const auto mid = first + (end - first) / 2;
+    return tree[node] = std::max(buildCandidateMax(ranges, tree, node * 2, first, mid, stop),
+                                 buildCandidateMax(ranges, tree, node * 2 + 1, mid, end, stop));
+}
+
+std::optional<std::size_t> findCandidate(const std::vector<std::uint64_t>& tree, std::size_t node, std::size_t first,
+                                         std::size_t end, std::size_t limit, std::uint64_t offset) noexcept {
+    if (first >= limit || tree[node] < offset)
+        return std::nullopt;
+    if (end - first == 1)
+        return first;
+    const auto mid = first + (end - first) / 2;
+    if (auto right = findCandidate(tree, node * 2 + 1, mid, end, limit, offset))
+        return right;
+    return findCandidate(tree, node * 2, first, mid, limit, offset);
+}
+
+sched::Task<void> queryFolds(std::shared_ptr<FoldQueryJob> job) {
+    syntax::QueryLimits limits;
+    limits.budget = std::chrono::seconds(2);
+    limits.stop = job->stop.get_token();
+    const auto result = job->tree.foldRanges(limits);
+    std::vector<text::ByteRange> candidates;
+    if (result.complete) {
+        const auto snapshot = job->tree.text();
+        for (const auto range : result.ranges) {
+            if (limits.stop.stop_requested())
+                break;
+            const auto first = snapshot.lineInfo(snapshot.lineAt(range.begin));
+            const auto last = snapshot.lineInfo(snapshot.lineAt(range.end));
+            if (first && last && first->content.end < last->content.begin)
+                candidates.push_back({first->content.end, last->content.begin});
+        }
+        (void)orderCandidates(candidates, limits.stop);
+    }
+    std::vector<std::uint64_t> maxEnd;
+    if (!candidates.empty() && !limits.stop.stop_requested()) {
+        maxEnd.resize(candidates.size() * 4);
+        (void)buildCandidateMax(candidates, maxEnd, 1, 0, candidates.size(), limits.stop);
+    }
+    {
+        const std::lock_guard lock(job->mutex);
+        if (result.complete && !limits.stop.stop_requested()) {
+            job->ranges = std::move(candidates);
+            job->maxEnd = std::move(maxEnd);
+        }
+        job->done = true;
+    }
+    co_return;
+}
 
 // The syntax session's wake-up, called on a worker (or the SimExecutor's owner) after a parse or a
 // query compilation: it only queues pollSyntax() on the view's thread. The session detaches the
@@ -137,6 +247,8 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     config.settings = modelSettings(m_settings);
     config.language = m_language;
     m_editor = std::make_unique<text::Editor>(document, *m_shaper, config);
+    m_foldTimer.setInterval(20);
+    connect(&m_foldTimer, &QTimer::timeout, this, [this] { collectFoldQuery(); });
     m_renderer = std::make_unique<RasterEditorRenderer>(m_shaper->font());
     updateMetrics();
 
@@ -199,6 +311,10 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
 }
 
 EditorView::~EditorView() {
+    if (m_foldJob)
+        m_foldJob->stop.request_stop();
+    for (auto& task : m_foldTasks)
+        task.join();
     // The session's hook points at this view: stop it before anything else goes.
     m_outline.reset();
     m_syntax.reset();
@@ -326,6 +442,11 @@ void EditorView::setFileInfo(const EditorFileInfo& info) {
     const bool largeChanged = info.largeFile != m_fileInfo.largeFile;
     m_fileInfo = info;
     if (largeChanged && m_syntax) {
+        m_foldCandidates.clear();
+        m_foldCandidateMaxEnd.clear();
+        if (m_foldJob)
+            m_foldJob->stop.request_stop();
+        m_foldJob.reset();
         m_syntaxLanguage = m_fileInfo.largeFile ? syntax::LanguageId::None : syntax::languageForFileName(m_path);
         m_syntax->open(m_syntaxLanguage, m_editor->text());
         m_highlights.valid = false;
@@ -364,16 +485,89 @@ bool EditorView::apply(const text::CommandResult& result) {
     if (result.changesText() && isReadOnly()) {
         return false;
     }
+    if (result.changesText() && std::ranges::any_of(result.edits, [&](const auto& edit) {
+            return m_editor->display().intersectsFold(edit.range);
+        })) {
+        std::vector<text::FoldInfo> folds;
+        for (const auto& edit : result.edits) {
+            auto affected = m_editor->display().foldInfosIntersecting(edit.range);
+            folds.insert(folds.end(), affected.begin(), affected.end());
+        }
+        std::ranges::sort(folds, [](const auto& a, const auto& b) {
+            return a.range.begin > b.range.begin || (a.range.begin == b.range.begin && a.range.end < b.range.end);
+        });
+        folds.erase(std::unique(folds.begin(), folds.end(), [](const auto& a, const auto& b) { return a.id == b.id; }),
+                    folds.end());
+        for (const auto& fold : folds)
+            (void)removeCollapsedFold(fold.id);
+    }
     return applyUpdate(m_editor->apply(result));
 }
 
 void EditorView::afterChange(const text::EditorUpdate& update) {
     if (update.change) {
+        // Grapheme boundaries can change anywhere on an edited line (for example regional
+        // indicator parity), even when the edit did not touch the stored endpoint itself.
+        const auto& snapshot = m_editor->text();
+        std::vector<text::ByteRange> affectedLines;
+        std::int64_t delta = 0;
+        for (const auto& edit : update.change->edits) {
+            const auto position =
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(edit.range.begin.value()) + delta);
+            const ByteOffset begin{position};
+            const ByteOffset end{position + edit.newBytes};
+            const auto first = snapshot.lineInfo(snapshot.lineAt(begin));
+            const auto last = snapshot.lineInfo(snapshot.lineAt(end));
+            if (first && last) {
+                const text::ByteRange lines{first->content.begin, last->content.end};
+                if (!affectedLines.empty() && lines.begin <= affectedLines.back().end)
+                    affectedLines.back().end = std::max(affectedLines.back().end, lines.end);
+                else
+                    affectedLines.push_back(lines);
+            }
+            delta += static_cast<std::int64_t>(edit.newBytes) - static_cast<std::int64_t>(edit.range.size());
+        }
+        std::vector<text::FoldInfo> candidates;
+        for (const auto lines : affectedLines) {
+            auto nearby = m_editor->display().foldInfosWithBoundaryIn(lines);
+            candidates.insert(candidates.end(), nearby.begin(), nearby.end());
+        }
+        std::ranges::sort(candidates, [](const auto& a, const auto& b) {
+            return a.range.begin > b.range.begin || (a.range.begin == b.range.begin && a.range.end < b.range.end);
+        });
+        candidates.erase(std::unique(candidates.begin(), candidates.end(),
+                                     [](const auto& a, const auto& b) { return a.id == b.id; }),
+                         candidates.end());
+        for (const auto& fold : candidates) {
+            if (!text::isGraphemeBoundary(snapshot, fold.range.begin) ||
+                !text::isGraphemeBoundary(snapshot, fold.range.end))
+                (void)removeCollapsedFold(fold.id);
+        }
         if (m_syntax) {
             m_syntax->apply(*update.change, m_editor->text());
         }
         m_highlights.valid = false;
+        m_foldCandidates.clear();
+        m_foldCandidateMaxEnd.clear();
+        if (m_foldJob)
+            m_foldJob->stop.request_stop();
+        m_foldJob.reset();
+        if (m_syntax) {
+            const auto tree = m_syntax->tree();
+            if (!tree.empty() && !tree.stale() && tree.version() == m_editor->text().version()) {
+                m_foldJob = std::make_shared<FoldQueryJob>();
+                m_foldJob->tree = tree;
+                m_foldTasks.push_back(m_services.scheduler->spawn(sched::Lane::UserVisible, queryFolds(m_foldJob),
+                                                                  m_foldJob->stop.get_token()));
+                m_foldTimer.start();
+            }
+        }
         followInsight(*update.change);
+    }
+    const auto selections = m_editor->state().selections;
+    for (const auto& selection : selections.all()) {
+        revealFoldAt(selection.anchor);
+        revealFoldAt(selection.head);
     }
     if (m_balloon && m_editor->state().primary().head != m_balloon->caret) {
         m_balloon.reset(); // The F2 balloon goes with the caret.
@@ -407,6 +601,163 @@ void EditorView::setState(text::EditorState state) {
     afterChange(text::EditorUpdate{});
 }
 
+bool EditorView::setCollapsedFolds(std::vector<text::ByteRange> ranges) {
+    const auto& snapshot = m_editor->text();
+    for (const auto range : ranges) {
+        if (range.begin > range.end || range.end > snapshot.size() || !snapshot.isCharBoundary(range.begin) ||
+            !snapshot.isCharBoundary(range.end) || !text::isGraphemeBoundary(snapshot, range.begin) ||
+            !text::isGraphemeBoundary(snapshot, range.end)) {
+            m_lastError = Error(ErrorCode::InvalidArgument, "fold boundaries must be grapheme boundaries");
+            return false;
+        }
+    }
+    auto changed = m_editor->setFolds(std::move(ranges));
+    if (!changed) {
+        m_lastError = changed.error();
+        return false;
+    }
+    const auto& state = m_editor->state();
+    std::vector<text::Selection> selections(state.selections.all().begin(), state.selections.all().end());
+    bool moved = false;
+    for (auto& selection : selections) {
+        for (const auto& fold : collapsedFolds()) {
+            if (fold.begin < selection.anchor && selection.anchor < fold.end) {
+                selection.anchor = fold.begin;
+                moved = true;
+            }
+            if (fold.begin < selection.head && selection.head < fold.end) {
+                selection.head = fold.begin;
+                moved = true;
+            }
+        }
+    }
+    if (moved) {
+        m_editor->setState(
+            text::EditorState::from(text::SelectionSet::fromSelections(selections, state.selections.primaryIndex())));
+    }
+    updateScrollBars();
+    ensureCaretVisible();
+    viewport()->update();
+    emitStatus();
+    return true;
+}
+
+void EditorView::revealFoldAt(ByteOffset target) {
+    const auto folds = m_editor->display().foldInfosContaining(target);
+    for (const auto& fold : folds)
+        (void)removeCollapsedFold(fold.id);
+}
+
+bool EditorView::addCollapsedFold(text::ByteRange range) {
+    const auto& snapshot = m_editor->text();
+    if (range.begin >= range.end || range.end > snapshot.size() || !snapshot.isCharBoundary(range.begin) ||
+        !snapshot.isCharBoundary(range.end) || !text::isGraphemeBoundary(snapshot, range.begin) ||
+        !text::isGraphemeBoundary(snapshot, range.end))
+        return false;
+    auto added = m_editor->addFold(range);
+    if (!added) {
+        m_lastError = added.error();
+        return false;
+    }
+    const auto& state = m_editor->state();
+    std::vector<text::Selection> selections(state.selections.all().begin(), state.selections.all().end());
+    bool moved = false;
+    for (auto& selection : selections) {
+        if (range.begin < selection.anchor && selection.anchor < range.end) {
+            selection.anchor = range.begin;
+            moved = true;
+        }
+        if (range.begin < selection.head && selection.head < range.end) {
+            selection.head = range.begin;
+            moved = true;
+        }
+    }
+    if (moved)
+        m_editor->setState(
+            text::EditorState::from(text::SelectionSet::fromSelections(selections, state.selections.primaryIndex())));
+    updateScrollBars();
+    ensureCaretVisible();
+    viewport()->update();
+    emitStatus();
+    return true;
+}
+
+bool EditorView::removeCollapsedFold(text::FoldId id) {
+    const auto removed = m_editor->removeFold(id);
+    if (!removed) {
+        m_lastError = removed.error();
+        return false;
+    }
+    updateScrollBars();
+    viewport()->update();
+    return true;
+}
+
+bool EditorView::changeFold(bool collapse, bool all) {
+    if (!finishCompositionBeforeFold())
+        return false;
+    if (all && !collapse)
+        return setCollapsedFolds({});
+    const auto selection = m_editor->state().primary().range();
+    if (collapse && !all && !selection.empty()) {
+        if (!addCollapsedFold(selection))
+            return false;
+        setState(text::EditorState::caretAt(selection.begin));
+        return true;
+    }
+    if (collapse && all) {
+        return setCollapsedFolds(m_foldCandidates);
+    }
+    const auto at = m_editor->state().primary().head;
+    if (!collapse) {
+        const auto containing = m_editor->display().foldInfosContaining(at);
+        if (!containing.empty())
+            return removeCollapsedFold(containing.front().id);
+        auto found = m_editor->display().foldAtBoundary(at, true);
+        if (!found)
+            found = m_editor->display().foldAtBoundary(at, false);
+        if (!found) {
+            const auto line = m_editor->text().lineInfo(m_editor->text().lineAt(at));
+            if (line)
+                found = m_editor->display().firstFoldStartingIn(line->content);
+        }
+        return found && removeCollapsedFold(found->id);
+    }
+    std::optional<text::ByteRange> candidate;
+    const auto line = m_editor->text().lineAt(at);
+    const auto info = m_editor->text().lineInfo(line);
+    if (info) {
+        const auto first = std::ranges::lower_bound(m_foldCandidates, info->content.begin, {}, &text::ByteRange::begin);
+        if (first != m_foldCandidates.end() && first->begin <= info->content.end)
+            candidate = *first;
+    }
+    if (!candidate)
+        candidate = foldCandidateAt(at);
+    return candidate && addCollapsedFold(*candidate);
+}
+
+std::optional<text::ByteRange> EditorView::foldCandidateAt(ByteOffset offset) const noexcept {
+    if (m_foldCandidates.empty())
+        return std::nullopt;
+    const auto limit = static_cast<std::size_t>(
+        std::ranges::upper_bound(m_foldCandidates, offset, {}, &text::ByteRange::begin) - m_foldCandidates.begin());
+    const auto found = findCandidate(m_foldCandidateMaxEnd, 1, 0, m_foldCandidates.size(), limit, offset.value());
+    return found ? std::optional(m_foldCandidates[*found]) : std::nullopt;
+}
+
+bool EditorView::toggleFoldOnLine(LineIndex line) {
+    const auto& snapshot = m_editor->text();
+    const auto info = snapshot.lineInfo(line);
+    if (!info)
+        return false;
+    if (const auto found = m_editor->display().firstFoldStartingIn(info->content))
+        return removeCollapsedFold(found->id);
+    const auto candidate = std::ranges::lower_bound(m_foldCandidates, info->content.begin, {}, &text::ByteRange::begin);
+    if (candidate == m_foldCandidates.end() || candidate->begin > info->content.end)
+        return false;
+    return addCollapsedFold(*candidate);
+}
+
 bool EditorView::typeText(std::string_view text) {
     if (text.empty() || isReadOnly() || m_composing) {
         return false;
@@ -420,6 +771,29 @@ void EditorView::goToLine(int line, int column) {
     (void)apply(commands::goToLine(commandInput(), target));
 }
 
+void EditorView::goToStatusPosition(int line, int column) {
+    const auto& snapshot = m_editor->text();
+    const auto index =
+        std::min<std::uint32_t>(static_cast<std::uint32_t>(std::max(line, 1) - 1), snapshot.lineCount() - 1);
+    const auto info = snapshot.lineInfo(LineIndex{index});
+    FROST_ASSERT(info);
+    const int wanted = std::max(column, 1);
+    ByteOffset at = info->content.begin;
+    for (int current = 1; current < wanted && at < info->content.end; ++current)
+        at = text::nextGraphemeBoundary(snapshot, at);
+    // status() switches to Unicode scalar counts on lines past its 4096-byte work limit.
+    if (at.value() - info->content.begin.value() > 4096) {
+        at = info->content.begin;
+        for (int current = 1; current < wanted && at < info->content.end; ++current) {
+            auto next = at + 1;
+            while (next < info->content.end && snapshot.clip(next) == at)
+                next = next + 1;
+            at = next;
+        }
+    }
+    setState(text::EditorState::caretAt(at));
+}
+
 bool EditorView::move(Movement movement, bool extend) {
     return apply(commands::move(commandInput(), movement, extend));
 }
@@ -430,6 +804,16 @@ bool EditorView::perform(EditorAction action) {
     const EditorActionInfo& info = editorActionInfo(action);
     if (info.edits && isReadOnly()) {
         return false;
+    }
+    if ((action == EditorAction::Backspace || action == EditorAction::Delete) && m_editor->state().primary().empty()) {
+        const auto caret = m_editor->state().primary().head;
+        if (m_editor->display().hasFoldBoundary(caret, action == EditorAction::Delete)) {
+            while (const auto fold = m_editor->display().foldAtBoundary(caret, action == EditorAction::Delete)) {
+                if (!removeCollapsedFold(fold->id))
+                    return false;
+            }
+            return true;
+        }
     }
     const int page = static_cast<int>(m_editor->config().pageRows);
     class IndentContext final : public text::IIndentContext {
@@ -516,6 +900,11 @@ bool EditorView::perform(EditorAction action) {
         return m_outline != nullptr && apply(commands::previousMember(commandInput(), *m_outline, false));
     case A::NextError: return gotoNextProblem(true);
     case A::PreviousError: return gotoNextProblem(false);
+    case A::Fold: return changeFold(true, false);
+    case A::Unfold: return changeFold(false, false);
+    case A::FoldAll: return changeFold(true, true);
+    case A::UnfoldAll: return changeFold(false, true);
+    case A::FoldSelection: return changeFold(true, false);
     }
     return false;
 }
@@ -840,6 +1229,11 @@ void EditorView::setLineChanges(std::vector<LineChangeMarker> changes) {
 }
 
 void EditorView::reloadFromDocument() {
+    m_foldCandidates.clear();
+    m_foldCandidateMaxEnd.clear();
+    if (m_foldJob)
+        m_foldJob->stop.request_stop();
+    m_foldJob.reset();
     const ByteOffset caret = m_editor->state().primary().head;
     text::EditorConfig config = m_editor->config();
     config.wrap = m_editor->display().wrap();
@@ -971,12 +1365,47 @@ void EditorView::emitStatus() {
 // --- syntax ---
 
 bool EditorView::pollSyntax() {
+    collectFoldQuery();
     if (!m_syntax || !m_syntax->poll()) {
         return false;
     }
     m_highlights.valid = false;
+    const syntax::SyntaxTree tree = m_syntax->tree();
+    if (!tree.empty() && !tree.stale() && tree.version() == m_editor->text().version()) {
+        if (m_foldJob)
+            m_foldJob->stop.request_stop();
+        m_foldJob = std::make_shared<FoldQueryJob>();
+        m_foldJob->tree = tree;
+        m_foldTasks.push_back(
+            m_services.scheduler->spawn(sched::Lane::UserVisible, queryFolds(m_foldJob), m_foldJob->stop.get_token()));
+        m_foldTimer.start();
+    }
     viewport()->update();
     return true;
+}
+
+void EditorView::collectFoldQuery() {
+    std::erase_if(m_foldTasks, [](const auto& task) { return task.ready(); });
+    if (!m_foldJob) {
+        m_foldTimer.stop();
+        return;
+    }
+    const auto job = m_foldJob;
+    std::optional<std::vector<text::ByteRange>> ranges;
+    {
+        const std::lock_guard lock(job->mutex);
+        if (!job->done)
+            return;
+        ranges = std::move(job->ranges);
+    }
+    m_foldJob.reset();
+    m_foldTimer.stop();
+    if (ranges && job->tree.version() == m_editor->text().version() &&
+        job->tree.text().sharesStorageWith(m_editor->text())) {
+        m_foldCandidates = std::move(*ranges);
+        m_foldCandidateMaxEnd = std::move(job->maxEnd);
+        viewport()->update();
+    }
 }
 
 std::vector<syntax::HighlightSpan> EditorView::highlightsFor(text::ByteRange range) {

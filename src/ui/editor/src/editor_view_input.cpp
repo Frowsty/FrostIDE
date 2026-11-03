@@ -23,6 +23,7 @@
 #include <QToolTip>
 
 #include <algorithm>
+#include <utility>
 
 namespace frost::ui {
 
@@ -219,6 +220,10 @@ void EditorView::finishComposition(const std::string& commit) {
         return;
     }
     m_composing = false;
+    if (m_services.keys != nullptr) {
+        QInputMethodEvent finished;
+        m_services.keys->observe(finished);
+    }
     const ByteOffset start = m_compositionBase.begin;
     const ByteOffset caret = start + commit.size();
     const text::EditContext context{text::EditKind::Typing, m_compositionSelections, text::SelectionSet::caret(caret)};
@@ -234,6 +239,31 @@ void EditorView::finishComposition(const std::string& commit) {
         return;
     }
     followDocument(std::move(change), caret);
+}
+
+bool EditorView::finishCompositionBeforeFold() {
+    if (!m_composing)
+        return true;
+    const auto range = m_document->compositionRange();
+    if (!range)
+        return false;
+    const auto preedit = m_document->text().text(*range);
+    const bool unchanged = m_compositionBase.empty();
+    auto candidates = unchanged ? std::move(m_foldCandidates) : std::vector<text::ByteRange>{};
+    auto maxEnd = unchanged ? std::move(m_foldCandidateMaxEnd) : std::vector<std::uint64_t>{};
+    const auto beforeSize = m_document->text().size();
+    finishComposition(preedit);
+    // Committing an insertion without replacing a selection leaves the displayed bytes unchanged.
+    // Keep the already computed fold candidates while the new syntax snapshot is prepared.
+    const bool stable = unchanged && !m_composing && m_document->text().size() == beforeSize &&
+                        range->end <= m_document->text().size() && m_document->text().text(*range) == preedit;
+    if (stable) {
+        m_foldCandidates = std::move(candidates);
+        m_foldCandidateMaxEnd = std::move(maxEnd);
+    }
+    // A replaced selection can change line positions and syntax ranges. The commit still succeeds;
+    // wait for the new syntax snapshot before applying the fold command.
+    return stable;
 }
 
 void EditorView::inputMethodEvent(QInputMethodEvent* event) {
@@ -261,6 +291,9 @@ void EditorView::inputMethodEvent(QInputMethodEvent* event) {
         finishComposition(commit);
     }
     if (!preedit.empty()) {
+        // A commit may have ended the previous composition while this same event starts another.
+        if (m_services.keys != nullptr)
+            m_services.keys->observe(*event);
         if (!m_composing) {
             // A composition replaces the primary selection on commit and shows at its start.
             const text::Selection primary = m_editor->state().primary();
@@ -400,6 +433,12 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton) {
         QAbstractScrollArea::mousePressEvent(event);
         return;
+    }
+    if (const auto line = foldLineAt(event->position())) {
+        if (!finishCompositionBeforeFold() || toggleFoldOnLine(*line)) {
+            event->accept();
+            return;
+        }
     }
     if (m_breakpointGutter) {
         if (const std::optional<LineIndex> line = breakpointLineAt(event->position())) {

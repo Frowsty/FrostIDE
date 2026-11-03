@@ -13,6 +13,7 @@
 #include <QMouseEvent>
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -72,6 +73,130 @@ TEST(EditorView, TypingAppearsInTheDocumentAndRepaints) {
     EXPECT_NE(h.text(), "ab c");
     h.press(Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
     EXPECT_EQ(h.text(), "ab c");
+}
+
+TEST(EditorView, FoldedTextIsPaintedAndNavigationRevealsIt) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("before {\nsecret\n}\nafter\n");
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{8}, ByteOffset{17}}, {ByteOffset{9}, ByteOffset{15}}}));
+    const auto list = h.view->buildDisplayList();
+    EXPECT_NE(list.findText(QStringLiteral("...")), nullptr);
+    EXPECT_EQ(list.findText(QStringLiteral("secret")), nullptr);
+    EXPECT_TRUE(h.view->toolTipAt(cellPoint(*h.view, 0, 9)).contains(QStringLiteral("secret")));
+    EXPECT_FALSE(h.view->status().dirty);
+    h.view->goToLine(2, 2);
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+    EXPECT_NE(h.view->buildDisplayList().findText(QStringLiteral("secret")), nullptr);
+}
+
+TEST(EditorView, KeyboardSelectionFoldAndDeleteReveal) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("hello world");
+    const std::array selections{text::Selection{ByteOffset{0}, ByteOffset{5}}};
+    h.view->setState(text::EditorState::from(text::SelectionSet::fromSelections(selections, 0)));
+    h.press(Qt::Key_Period, Qt::ControlModifier);
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.caret(), 0U);
+    h.press(Qt::Key_Delete);
+    EXPECT_EQ(h.text(), "hello world");
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+    h.press(Qt::Key_Delete);
+    EXPECT_EQ(h.text(), "ello world");
+}
+
+TEST(EditorView, FoldRejectsSplitGraphemesAtomically) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("a\xCC\x81 xyz");
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{0}, ByteOffset{3}}}));
+    EXPECT_FALSE(h.view->setCollapsedFolds({{ByteOffset{1}, ByteOffset{3}}}));
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.view->collapsedFolds().front().begin, ByteOffset{0});
+    EXPECT_EQ(h.view->collapsedFolds().front().end, ByteOffset{3});
+}
+
+TEST(EditorView, CombiningInsertionAtFoldEndRevalidatesGraphemeBoundary) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("a b");
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{0}, ByteOffset{1}}}));
+    const std::array selections{text::Selection{ByteOffset{1}, ByteOffset{1}}};
+    h.view->setState(text::EditorState::from(text::SelectionSet::fromSelections(selections, 0)));
+    h.press(0, Qt::NoModifier, QString(QChar(0x0301)));
+    EXPECT_EQ(h.text(), "a\xCC\x81 b");
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+}
+
+TEST(EditorView, EditingOutsideFoldAndUndoKeepFoldAttached) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("top\n{\ninside\n}\nend\n");
+    ASSERT_TRUE(h.view->setCollapsedFolds({{ByteOffset{5}, ByteOffset{14}}}));
+    h.type("x");
+    EXPECT_TRUE(h.view->status().dirty);
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.view->collapsedFolds().front().begin, ByteOffset{6});
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), "top\n{\ninside\n}\nend\n");
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.view->collapsedFolds().front().begin, ByteOffset{5});
+}
+
+TEST(EditorView, SyntaxFoldGutterTogglesNestedCode) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "test.cpp";
+    options.syntax = true;
+    EditorHarness h("int main() {\n  if (true) {\n    return 1;\n  }\n}\n", options);
+    h.settle();
+    const auto gutterRight = h.view->buildDisplayList().textArea.left();
+    click(*h.view, QPointF(gutterRight - 7.0, h.view->lineHeight() / 2.0));
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.view->buildDisplayList().findText(QStringLiteral("return 1;")), nullptr);
+    click(*h.view, QPointF(gutterRight - 7.0, h.view->lineHeight() / 2.0));
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+}
+
+TEST(EditorView, FoldAllOrdersCandidatesAcrossWorkerChunks) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "test.cpp";
+    options.syntax = true;
+    std::string source;
+    for (int i = 0; i < 150; ++i)
+        source += "void f" + std::to_string(i) + "() {\n}\n";
+    EditorHarness h(source, options);
+    h.settle();
+    ASSERT_TRUE(h.view->perform(EditorAction::FoldAll));
+    ASSERT_EQ(h.view->collapsedFolds().size(), 150U);
+    EXPECT_TRUE(std::ranges::is_sorted(h.view->collapsedFolds(), {}, &text::ByteRange::begin));
+}
+
+TEST(EditorView, StatusPositionsRestoreGraphemesWithoutChangingByteNavigation) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("A\xF0\x9F\x98\x80"
+                    "e\xCC\x81"
+                    "\xC3\xA9\tZ");
+    const std::array<std::uint64_t, 7> offsets{0, 1, 5, 8, 10, 11, 12};
+    for (std::size_t i = 0; i < offsets.size(); ++i) {
+        h.view->setState(text::EditorState::caretAt(ByteOffset{offsets[i]}));
+        const auto saved = h.view->status();
+        EXPECT_EQ(saved.column, static_cast<int>(i + 1));
+        h.view->goToStatusPosition(saved.line, saved.column);
+        EXPECT_EQ(h.caret(), offsets[i]);
+    }
+    h.view->goToLine(1, 9); // External navigation still supplies a byte column.
+    EXPECT_EQ(h.caret(), 8U);
+}
+
+TEST(EditorView, LongLineStatusPositionRestoresScalarCount) {
+    FROST_REQUIRE_OFFSCREEN();
+    std::string source(4095, 'x');
+    source += "e\xCC\x81"
+              "\xF0\x9F\x98\x80Z";
+    EditorHarness h(source);
+    const auto target = static_cast<std::uint64_t>(source.size() - 1);
+    h.view->setState(text::EditorState::caretAt(ByteOffset{target}));
+    const auto saved = h.view->status();
+    h.view->goToStatusPosition(saved.line, saved.column);
+    EXPECT_EQ(h.caret(), target);
 }
 
 TEST(EditorView, CaretMovesWithTheNavigationKeys) {
@@ -319,6 +444,138 @@ TEST(EditorView, BreakpointsAndTheExecutionPointInTheGutter) {
     EXPECT_FALSE(list.executionPoint.has_value());
     EXPECT_EQ(lineFills(list), 0);
     EXPECT_NE(list.findLineNumber(1), nullptr);
+}
+
+TEST(EditorView, FoldGutterCommitsImeBeforeCollapsing) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "test.cpp";
+    options.syntax = true;
+    constexpr std::string_view source = "int main() {\n  return 1;\n}\n";
+    EditorHarness h(source, options);
+    QInputMethodEvent preedit(QStringLiteral(" "), {});
+    QCoreApplication::sendEvent(h.view.get(), &preedit);
+    ASSERT_TRUE(h.document.compositionRange());
+    h.settle();
+    h.settle();
+    ASSERT_TRUE(std::ranges::any_of(h.view->buildDisplayList().gutterText, [](const DisplayText& run) {
+        return run.text == QString(QChar(0x2212));
+    })) << "no syntax fold candidate before the fold action";
+    const auto gutterRight = h.view->buildDisplayList().textArea.left();
+    click(*h.view, QPointF(gutterRight - 7.0, h.view->lineHeight() / 2.0));
+    EXPECT_FALSE(h.document.compositionRange());
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.text(), " " + std::string(source));
+    EXPECT_EQ(h.caret(), 1U);
+    h.view->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(h.view->hasFocus());
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), source);
+    EXPECT_EQ(h.caret(), 0U);
+    EXPECT_FALSE(h.document.compositionRange());
+}
+
+TEST(EditorView, FoldActionsCommitImeBeforeChangingFolds) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "test.cpp";
+    options.syntax = true;
+    constexpr std::string_view source = "int main() {\n  return 1;\n}\n";
+    EditorHarness h(source, options);
+    QInputMethodEvent preedit(QStringLiteral(" "), {});
+    QCoreApplication::sendEvent(h.view.get(), &preedit);
+    ASSERT_TRUE(h.document.compositionRange());
+    h.settle();
+    h.settle();
+    ASSERT_TRUE(std::ranges::any_of(h.view->buildDisplayList().gutterText, [](const DisplayText& run) {
+        return run.text == QString(QChar(0x2212));
+    })) << "no syntax fold candidate before the fold action";
+    ASSERT_TRUE(h.view->perform(EditorAction::FoldAll));
+    EXPECT_FALSE(h.document.compositionRange());
+    ASSERT_EQ(h.view->collapsedFolds().size(), 1U);
+    EXPECT_EQ(h.text(), " " + std::string(source));
+    EXPECT_EQ(h.caret(), 1U);
+    h.view->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(h.view->hasFocus());
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), source);
+    EXPECT_EQ(h.caret(), 0U);
+    EXPECT_FALSE(h.document.compositionRange());
+}
+
+TEST(EditorView, FoldGutterConsumesClickWhenImeChangesSyntax) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "test.cpp";
+    options.syntax = true;
+    constexpr std::string_view source = "int main() {\n  return 1;\n}\n";
+    EditorHarness h(source, options);
+    const std::array selections{text::Selection{ByteOffset{0}, ByteOffset{3}}};
+    h.view->setState(text::EditorState::from(text::SelectionSet::fromSelections(selections, 0)));
+    QInputMethodEvent preedit(QStringLiteral("x"), {});
+    QCoreApplication::sendEvent(h.view.get(), &preedit);
+    h.settle();
+    h.settle();
+    const auto gutterRight = h.view->buildDisplayList().textArea.left();
+    click(*h.view, QPointF(gutterRight - 7.0, h.view->lineHeight() / 2.0));
+    EXPECT_FALSE(h.document.compositionRange());
+    EXPECT_EQ(h.text(), "x main() {\n  return 1;\n}\n");
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+    EXPECT_EQ(h.caret(), 1U);
+    h.view->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(h.view->hasFocus());
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), source);
+    EXPECT_EQ(h.caret(), 3U);
+}
+
+TEST(EditorView, FoldActionWaitsForSyntaxAfterImeReplacesSelection) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "test.cpp";
+    options.syntax = true;
+    constexpr std::string_view source = "int main() {\n  return 1;\n}\n";
+    EditorHarness h(source, options);
+    const std::array selections{text::Selection{ByteOffset{0}, ByteOffset{3}}};
+    h.view->setState(text::EditorState::from(text::SelectionSet::fromSelections(selections, 0)));
+    QInputMethodEvent preedit(QStringLiteral("x"), {});
+    QCoreApplication::sendEvent(h.view.get(), &preedit);
+    ASSERT_TRUE(h.document.compositionRange());
+    EXPECT_FALSE(h.view->perform(EditorAction::FoldAll));
+    EXPECT_FALSE(h.document.compositionRange());
+    EXPECT_EQ(h.text(), "x main() {\n  return 1;\n}\n");
+    EXPECT_TRUE(h.view->collapsedFolds().empty());
+    h.view->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(h.view->hasFocus());
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), source);
+    EXPECT_EQ(h.caret(), 3U);
+}
+
+TEST(EditorView, ImeCommitAndNewPreeditKeepsShortcutSuppression) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("");
+    QInputMethodEvent first(QStringLiteral("a"), {});
+    QCoreApplication::sendEvent(h.view.get(), &first);
+    QInputMethodEvent continued(QStringLiteral("b"), {});
+    continued.setCommitString(QStringLiteral("a"));
+    QCoreApplication::sendEvent(h.view.get(), &continued);
+    ASSERT_TRUE(h.document.compositionRange());
+    ASSERT_EQ(h.text(), "ab");
+    h.view->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(h.view->hasFocus());
+    h.press(Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(h.text(), "ab");
+    EXPECT_TRUE(h.document.compositionRange());
+    QInputMethodEvent commit(QString(), {});
+    commit.setCommitString(QStringLiteral("b"));
+    QCoreApplication::sendEvent(h.view.get(), &commit);
+    EXPECT_FALSE(h.document.compositionRange());
 }
 
 TEST(EditorView, ImeCompositionAndCommit) {

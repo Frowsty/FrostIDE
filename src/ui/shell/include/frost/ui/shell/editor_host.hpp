@@ -9,8 +9,11 @@
 #include "frost/core/error.hpp"
 #include "frost/input/action.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 class QWidget;
 
@@ -47,6 +50,8 @@ struct EditorViewState {
     int line = 1;
     int column = 1;
     int topLine = 0;
+    std::uint64_t foldTextHash = 0;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> folds{};
     friend bool operator==(const EditorViewState&, const EditorViewState&) = default;
 };
 
@@ -85,8 +90,10 @@ public:
     // The document's path (absolute, UTF-8, the form the factory was given).
     [[nodiscard]] virtual const std::string& path() const = 0;
     [[nodiscard]] virtual EditorStatus status() const = 0;
-    // Moves the caret to 1-based `line` and `column`, clamped to the document.
+    // Moves to a 1-based line and UTF-8 byte column, clamped to the document.
     virtual void goToLine(int line, int column) = 0;
+    // Restores the 1-based status column (grapheme count), as stored in sessions and history.
+    virtual void goToStatusPosition(int line, int column) { goToLine(line, column); }
     // Context keys the editor adds while it has focus (EditorReadOnly, EditorHasSelection,
     // LookupActive); EditorFocus itself is set by the shell.
     [[nodiscard]] virtual input::ContextKeys contextKeys() const { return {}; }
@@ -100,7 +107,7 @@ public:
     }
     // Restores a position from viewState(), clamped to the document. The default moves the caret
     // with goToLine and ignores the scroll position.
-    virtual void restoreViewState(const EditorViewState& state) { goToLine(state.line, state.column); }
+    virtual void restoreViewState(const EditorViewState& state) { goToStatusPosition(state.line, state.column); }
 };
 
 /*

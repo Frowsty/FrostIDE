@@ -147,7 +147,8 @@ public:
 
     // Opens `path` in a tab (through ShellWindow::openFile), moves to `at` when given, and records
     // the place left as a jump plus the recent file. Errors: the shell's (already notified).
-    Result<int> openFile(const std::string& path, std::optional<LinePosition> at = std::nullopt);
+    Result<int> openFile(const std::string& path, std::optional<LinePosition> at = std::nullopt,
+                         bool statusColumn = false);
     // The active editor's place, or an empty place.
     [[nodiscard]] nav::Place currentPlace() const;
     bool goBack();

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <format>
+#include <limits>
 #include <utility>
 
 namespace frost::text {
@@ -33,6 +34,29 @@ constexpr char32_t kZeroWidthJoiner = 0x200D;
     case WrapMode::Width: return std::max<TextWidth>(settings.width, 1);
     }
     return 0;
+}
+
+// A fold toggle changes only the display lines intersecting its source range. Blocks keep their
+// anchors and are placed again in that region, including anchors in the hidden text.
+void replaceFoldProjection(DisplayLayers& layers, detail::FoldLayer next, ByteRange range) noexcept {
+    if (layers.fold.sameProjection(next)) {
+        layers.fold = std::move(next);
+        return;
+    }
+    const SpanEdit lineEdit{layers.fold.lineAt(layers.fold.toFold(range.begin, Bias::Left)),
+                            layers.fold.lineAt(layers.fold.toFold(range.end, Bias::Right)) + 1,
+                            next.lineAt(next.toFold(range.begin, Bias::Left)),
+                            next.lineAt(next.toFold(range.end, Bias::Right)) + 1};
+    std::vector<SpanEdit> rows;
+    auto wrap = layers.wrap.updated(layers.fold, next, std::span(&lineEdit, 1), *layers.shaper, rows);
+    std::vector<SpanEdit> inlayRows;
+    auto inlay = layers.inlay.updated(rows, inlayRows);
+    const detail::RegionEdit region{lineEdit, inlayRows.front()};
+    std::vector<RowEdit> ignored;
+    layers.block.apply({}, next.buffer().version(), std::span(&region, 1), next, wrap, ignored);
+    layers.fold = std::move(next);
+    layers.wrap = std::move(wrap);
+    layers.inlay = inlay;
 }
 
 // Calls fn(char32_t cp, std::uint32_t column) for the code points of text row `row` in display
@@ -127,10 +151,32 @@ Result<std::vector<RowEdit>> DisplayMap::apply(const ChangeSet& changes, const S
     if (changes.version == changes.baseVersion) {
         return std::vector<RowEdit>{};
     }
+    if (changes.edits.empty()) {
+        return fail(ErrorCode::InvalidArgument, "a version-changing display update requires raw edits");
+    }
 
     // Up the stack: buffer lines -> fold lines -> wrap rows -> inlay rows -> display rows.
     std::vector<SpanEdit> lines;
-    detail::FoldLayer fold = layers.fold.updated(changes.changes, text, lines);
+    detail::FoldLayer fold = layers.fold.updated(changes.changes, changes.edits, text, lines);
+    // A raw edit can split or form CRLF: the first affected line may then move to the
+    // preceding line on only one side. Widen starts until the unchanged prefixes align.
+    std::vector<SpanEdit> aligned;
+    std::int64_t shift = 0;
+    for (SpanEdit edit : lines) {
+        const auto expected = static_cast<std::int64_t>(edit.oldFirst) + shift;
+        if (static_cast<std::int64_t>(edit.newFirst) > expected)
+            edit.newFirst = static_cast<std::uint32_t>(expected);
+        else if (static_cast<std::int64_t>(edit.newFirst) < expected)
+            edit.oldFirst -= static_cast<std::uint32_t>(expected - edit.newFirst);
+        if (!aligned.empty() && (edit.oldFirst < aligned.back().oldEnd || edit.newFirst < aligned.back().newEnd)) {
+            aligned.back().oldEnd = std::max(aligned.back().oldEnd, edit.oldEnd);
+            aligned.back().newEnd = std::max(aligned.back().newEnd, edit.newEnd);
+        } else {
+            aligned.push_back(edit);
+        }
+        shift = static_cast<std::int64_t>(aligned.back().newEnd) - aligned.back().oldEnd;
+    }
+    lines = std::move(aligned);
     std::int64_t lineCount = layers.fold.lineCount();
     for (const SpanEdit& edit : lines) {
         lineCount += (std::int64_t{edit.newEnd} - edit.newFirst) - (std::int64_t{edit.oldEnd} - edit.oldFirst);
@@ -157,7 +203,8 @@ Result<std::vector<RowEdit>> DisplayMap::apply(const ChangeSet& changes, const S
 std::vector<RowEdit> DisplayMap::reset(Snapshot text) noexcept {
     DisplayLayers& layers = *m_layers;
     const std::uint32_t oldRows = rowCount();
-    layers.fold = detail::FoldLayer(std::move(text));
+    const auto nextFoldId = layers.fold.nextFoldId();
+    layers.fold = detail::FoldLayer(std::move(text), {}, {}, nextFoldId);
     layers.wrap = detail::WrapLayer(layers.fold, *layers.shaper, effectiveWidth(layers.settings, *layers.shaper));
     layers.inlay = detail::InlayLayer();
     layers.block = detail::BlockLayer(layers.fold.buffer(), layers.wrap.rowCount());
@@ -176,6 +223,94 @@ std::vector<RowEdit> DisplayMap::setWrap(WrapSettings wrap) noexcept {
 std::vector<RowEdit> DisplayMap::setShaper(const ITextShaper& shaper) noexcept {
     m_layers->shaper = &shaper;
     return setWrap(m_layers->settings);
+}
+
+Result<std::vector<RowEdit>> DisplayMap::setFolds(std::vector<ByteRange> ranges) noexcept {
+    const Snapshot& source = text();
+    std::ranges::sort(ranges, [](const ByteRange& a, const ByteRange& b) {
+        return a.begin < b.begin || (a.begin == b.begin && a.end > b.end);
+    });
+    ranges.erase(std::unique(ranges.begin(), ranges.end()), ranges.end());
+    std::vector<ByteRange> parents;
+    std::int64_t projectedSize = static_cast<std::int64_t>(source.size().value());
+    for (const ByteRange range : ranges) {
+        if (range.begin >= range.end || range.end > source.size())
+            return fail(ErrorCode::InvalidArgument, "fold range is empty or outside the buffer");
+        const auto splitsCrLf = [&source](ByteOffset p) {
+            return p.value() > 0 && p < source.size() && source.byteAt(p - 1) == '\r' && source.byteAt(p) == '\n';
+        };
+        if (!source.isCharBoundary(range.begin) || !source.isCharBoundary(range.end) || splitsCrLf(range.begin) ||
+            splitsCrLf(range.end))
+            return fail(ErrorCode::InvalidArgument, "fold splits UTF-8 or CRLF");
+        while (!parents.empty() && range.begin >= parents.back().end)
+            parents.pop_back();
+        if (!parents.empty() && range.end > parents.back().end)
+            return fail(ErrorCode::InvalidArgument, "fold ranges overlap without nesting");
+        if (parents.empty())
+            projectedSize += 3 - static_cast<std::int64_t>(range.size());
+        parents.push_back(range);
+    }
+    if (projectedSize > 0xFFFF'FFFE)
+        return fail(ErrorCode::OutOfRange, "folded text is too large for display coordinates");
+    if (ranges.size() > std::numeric_limits<std::uint64_t>::max() - m_layers->fold.nextFoldId())
+        return fail(ErrorCode::OutOfRange, "fold identity space exhausted");
+    const auto oldRows = rowCount();
+    DisplayLayers& layers = *m_layers;
+    layers.fold = detail::FoldLayer(source, std::move(ranges), {}, layers.fold.nextFoldId());
+    layers.wrap = detail::WrapLayer(layers.fold, *layers.shaper, effectiveWidth(layers.settings, *layers.shaper));
+    layers.block.rebuild(layers.fold, layers.wrap);
+    return wholeEdit(oldRows);
+}
+
+const std::vector<ByteRange>& DisplayMap::folds() const noexcept { return m_layers->fold.folds(); }
+bool DisplayMap::intersectsFold(ByteRange range) const noexcept { return m_layers->fold.intersects(range); }
+std::vector<ByteRange> DisplayMap::foldsContaining(ByteOffset offset) const noexcept {
+    FROST_PRE(offset <= text().size());
+    return m_layers->fold.containing(offset);
+}
+std::vector<FoldInfo> DisplayMap::foldInfosContaining(ByteOffset offset) const noexcept {
+    FROST_PRE(offset <= text().size());
+    return m_layers->fold.containingInfos(offset);
+}
+std::vector<FoldInfo> DisplayMap::foldInfosIntersecting(ByteRange range) const noexcept {
+    FROST_PRE(range.begin <= range.end && range.end <= text().size());
+    return m_layers->fold.intersectingInfos(range);
+}
+std::vector<FoldInfo> DisplayMap::foldInfosWithBoundaryIn(ByteRange range) const noexcept {
+    FROST_PRE(range.begin <= range.end && range.end <= text().size());
+    return m_layers->fold.boundaryInfos(range);
+}
+bool DisplayMap::foldStartsIn(ByteRange range) const noexcept { return m_layers->fold.hasStart(range); }
+bool DisplayMap::hasFoldBoundary(ByteOffset offset, bool start) const noexcept {
+    return m_layers->fold.hasBoundary(offset, start);
+}
+FoldUpdateStats DisplayMap::foldUpdateStatsForTesting() const noexcept { return m_layers->fold.updateStats(); }
+
+Result<FoldId> DisplayMap::addFold(ByteRange range) noexcept {
+    auto added = m_layers->fold.adding(range);
+    if (!added)
+        return std::unexpected(added.error());
+    const FoldId id = added->second;
+    replaceFoldProjection(*m_layers, std::move(added->first), range);
+    return id;
+}
+
+Result<void> DisplayMap::removeFold(FoldId id) noexcept {
+    auto old = m_layers->fold.info(id);
+    if (!old)
+        return std::unexpected(old.error());
+    auto removed = m_layers->fold.removing(id);
+    if (!removed)
+        return std::unexpected(removed.error());
+    replaceFoldProjection(*m_layers, std::move(*removed), old->range);
+    return {};
+}
+
+std::optional<FoldInfo> DisplayMap::firstFoldStartingIn(ByteRange range) const noexcept {
+    return m_layers->fold.firstStarting(range);
+}
+std::optional<FoldInfo> DisplayMap::foldAtBoundary(ByteOffset offset, bool start) const noexcept {
+    return m_layers->fold.atBoundary(offset, start);
 }
 
 Result<BlockId> DisplayMap::addBlock(const BlockDecoration& block) noexcept {
@@ -228,7 +363,7 @@ ByteOffset DisplayMap::toOffset(DisplayPoint point) const noexcept {
     const WrapRow wrapped = layers.wrap.row(ref.inputRow, layers.fold);
     const std::uint32_t column = layers.inlay.toWrapColumn(ref.inputRow, point.column.value(), Bias::Left);
     const std::uint64_t folded = layers.fold.clip(std::min<std::uint64_t>(wrapped.start + column, wrapped.end));
-    return layers.fold.toBuffer(folded, Bias::Left);
+    return layers.fold.hitToBuffer(folded);
 }
 
 Point DisplayMap::toPoint(DisplayPoint point) const noexcept { return text().pointAt(toOffset(point)); }
@@ -270,7 +405,10 @@ void DisplayMap::rowInfo(DisplayRow row, DisplayRowInfo& out) const noexcept {
     out.blockRow = 0;
     out.placement = BlockPlacement::Below;
     out.tag = 0;
-    layers.inlay.appendSegments(ref.inputRow, out.buffer, out.segments);
+    layers.fold.appendSegments(wrapped.start, wrapped.end, out.segments);
+    if (!out.segments.empty()) {
+        out.buffer = {out.segments.front().buffer.begin, out.segments.back().buffer.end};
+    }
 }
 
 DisplayRowCursor DisplayMap::rows(DisplayRow first) const noexcept {
@@ -365,6 +503,9 @@ VerticalMove DisplayMap::moveVertically(ByteOffset from, Bias bias, std::optiona
 
 Result<void> DisplayMap::checkInvariants() const noexcept {
     const DisplayLayers& layers = *m_layers;
+    if (Result<void> fold = layers.fold.checkInvariants(); !fold) {
+        return fold;
+    }
     if (Result<void> wrap = layers.wrap.checkInvariants(layers.fold); !wrap) {
         return wrap;
     }

@@ -31,6 +31,9 @@ public:
     // previous call's x (any bias). Amortised O(1).
     [[nodiscard]] std::uint64_t map(std::uint64_t x, Bias bias) noexcept;
 
+    // Map an arbitrary offset in O(log m), without changing the sweep cursor.
+    [[nodiscard]] std::uint64_t mapRandom(std::uint64_t x, Bias bias) const noexcept;
+
     // The batch's size change, Σ (newBytes - |range|). O(1).
     [[nodiscard]] std::int64_t totalDelta() const noexcept { return m_totalDelta; }
     // True when the batch has no step that changes anything.

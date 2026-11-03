@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,8 @@ struct QueryLimits {
     std::uint32_t maxResults = 100'000;
     // The deepest outline nesting kept (depth 0 is top level); deeper items are dropped.
     std::uint32_t maxDepth = 64;
+    // Optional cooperative cancellation; a stopped query is incomplete.
+    std::stop_token stop{};
 };
 
 // Fold ranges may nest; ordered by start, outer before inner.
@@ -92,7 +95,7 @@ public:
     // empty() or the queries are not prepared. O(c log c). Call from a UserVisible task for big files.
     [[nodiscard]] Outline outline(const QueryLimits& limits = {}) const noexcept;
 
-    // Multiline foldable ranges. Lua supplies a query; other languages return no ranges.
+    // Multiline foldable ranges. Lua, C++, C# and CMake supply queries; other languages return no ranges.
     // Incomplete means no prepared tree or a query limit was reached. O(c log c).
     [[nodiscard]] FoldResult foldRanges(const QueryLimits& limits = {}) const noexcept;
 

@@ -9,8 +9,8 @@
  * Layers, in their final order: folds -> soft wraps -> inlays -> block decorations. Each layer has
  * its own sum tree (or none) and maps its input coordinates to its output coordinates in
  * O(log n); an edit travels up the stack as a patch of replaced line or row ranges.
- *   - Fold layer: buffer text -> folded text. An identity layer until M15 fills it (folding moved
- *     there in ADR 0029); its interface, which the wrap layer consumes, is final.
+ *   - Fold layer: buffer text -> folded text. Collapsed ranges are replaced by placeholders;
+ *     nested collapsed ranges remain registered while their ancestor is collapsed.
  *   - Soft-wrap layer: folded lines -> wrap rows. Greedy wrapping at a width (by column or in
  *     shaper units), measured with an ITextShaper (text_shaper.hpp).
  *   - Inlay layer: inline text inside wrap rows; it never adds rows. An identity layer until M15.
@@ -197,6 +197,25 @@ struct VerticalMove {
     DisplayPoint point;
 };
 
+// Structural counters for the most recent folded update; used by deterministic tests.
+struct FoldUpdateStats {
+    std::uint64_t replacedRuns = 0;
+    std::uint64_t visitedFolds = 0;
+    std::uint64_t materializedFoldLists = 0;
+    std::uint64_t eventIntervalsRewritten = 0;
+    std::uint64_t eventItemsScanned = 0;
+};
+
+// Stable identity while a collapsed range remains registered in one display map.
+struct FoldId {
+    std::uint64_t value = 0;
+    friend constexpr auto operator<=>(FoldId, FoldId) noexcept = default;
+};
+struct FoldInfo {
+    FoldId id;
+    ByteRange range;
+};
+
 class DisplayMap;
 
 // A forward cursor over display rows (DisplayMap::rows). It borrows the map: valid until the map
@@ -252,11 +271,10 @@ public:
 
     /*
      * Applies `changes` (a Document ChangeSet) whose result is `text`. Errors, in order:
-     * InvalidArgument if changes.baseVersion != version(), InvalidArgument if text.version() !=
-     * changes.version. On error nothing changes. Returns the display rows that changed. Lines
-     * outside the changed lines keep their rows (they are not shaped again); blocks follow their
-     * anchors. O(m B log n + the changed lines' bytes + k) for m changes and k blocks on the
-     * changed lines. Budget: B5.
+     * InvalidArgument if changes.baseVersion != version(), if text.version() != changes.version,
+     * or if a version-changing set has no raw edits. On error nothing changes. Returns the display rows that changed.
+     * Lines outside the changed lines keep their rows (they are not shaped again); blocks follow their anchors. O(m B
+     * log n + the changed lines' bytes + k) for m changes and k blocks on the changed lines. Budget: B5.
      */
     [[nodiscard]] Result<std::vector<RowEdit>> apply(const ChangeSet& changes, const Snapshot& text) noexcept;
     // Rebuilds the map over unrelated `text` and drops every block. Returns one edit over all rows.
@@ -266,6 +284,34 @@ public:
     std::vector<RowEdit> setWrap(WrapSettings wrap) noexcept;
     // Measures with `shaper` from now on and wraps again (a font or zoom change). Same cost.
     std::vector<RowEdit> setShaper(const ITextShaper& shaper) noexcept;
+
+    // Replaces collapsed ranges, retaining nested ranges even while their parent is collapsed.
+    // Ranges must be nonempty, character-aligned, nested or disjoint, and must not split CRLF.
+    // The placeholder is "...". Errors leave the map unchanged. On success invalidates all FoldIds.
+    // Rebuilds wrapping and blocks;
+    // O(f log f + f line lookups + blocks), plus the text shaped when wrapping, for f ranges.
+    [[nodiscard]] Result<std::vector<RowEdit>> setFolds(std::vector<ByteRange> ranges) noexcept;
+    [[nodiscard]] const std::vector<ByteRange>& folds() const noexcept;
+    // True when the range intersects visible hidden text, or an empty range lies strictly inside it.
+    // Precondition: range.begin <= range.end <= text().size(). O(log f).
+    [[nodiscard]] bool intersectsFold(ByteRange range) const noexcept;
+    // Collapsed ranges strictly containing offset, innermost first. O(log f + affected paths).
+    [[nodiscard]] std::vector<ByteRange> foldsContaining(ByteOffset offset) const noexcept;
+    [[nodiscard]] std::vector<FoldInfo> foldInfosContaining(ByteOffset offset) const noexcept;
+    [[nodiscard]] std::vector<FoldInfo> foldInfosIntersecting(ByteRange range) const noexcept;
+    // One entry per fold endpoint in the inclusive byte range; a fold may appear twice.
+    [[nodiscard]] std::vector<FoldInfo> foldInfosWithBoundaryIn(ByteRange range) const noexcept;
+    // Whether a collapsed range starts in the closed buffer range; O(log f + endpoints in range).
+    [[nodiscard]] bool foldStartsIn(ByteRange range) const noexcept;
+    // Whether a collapsed range starts or ends at offset; O(log f + endpoints at offset).
+    [[nodiscard]] bool hasFoldBoundary(ByteOffset offset, bool start) const noexcept;
+    [[nodiscard]] FoldUpdateStats foldUpdateStatsForTesting() const noexcept;
+    // Incremental registration/removal. Invalid, crossing, duplicate or non-boundary ranges fail.
+    [[nodiscard]] Result<FoldId> addFold(ByteRange range) noexcept;
+    [[nodiscard]] Result<void> removeFold(FoldId id) noexcept;
+    // The first registered fold starting in a closed range, or none.
+    [[nodiscard]] std::optional<FoldInfo> firstFoldStartingIn(ByteRange range) const noexcept;
+    [[nodiscard]] std::optional<FoldInfo> foldAtBoundary(ByteOffset offset, bool start) const noexcept;
 
     // Block decorations.
 

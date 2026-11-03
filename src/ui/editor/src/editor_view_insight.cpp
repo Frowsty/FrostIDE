@@ -558,7 +558,17 @@ QString EditorView::toolTipAt(QPointF at) const {
         }
         return QString::fromStdString(describe(insightSummary()));
     }
-    const ByteOffset offset = hitAt(at).offset;
+    const auto hit = hitAt(at);
+    const auto row = m_editor->display().rowInfo(hit.point.row);
+    for (const auto& segment : row.segments) {
+        const auto column = hit.point.column.value();
+        if (segment.kind == text::SegmentKind::FoldPlaceholder && column >= segment.column.value() &&
+            column <= segment.column.value() + segment.text.size()) {
+            const auto end = std::min(segment.buffer.end, segment.buffer.begin + 2048);
+            return QString::fromStdString(m_editor->text().text({segment.buffer.begin, m_editor->text().clip(end)}));
+        }
+    }
+    const ByteOffset offset = hit.offset;
     QStringList messages;
     for (const ActiveDiagnostic& diagnostic : diagnostics()) {
         if (touches(diagnostic.range, offset)) {

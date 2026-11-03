@@ -151,6 +151,10 @@ public:
             m_inner->goToLine(line, column);
         }
     }
+    void goToStatusPosition(int line, int column) override {
+        if (m_inner != nullptr)
+            m_inner->goToStatusPosition(line, column);
+    }
     [[nodiscard]] input::ContextKeys contextKeys() const override {
         return m_inner != nullptr ? m_inner->contextKeys() : input::ContextKeys{};
     }

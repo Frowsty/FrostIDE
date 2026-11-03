@@ -110,12 +110,23 @@ protected:
     frost::io::MemFs fs;
 };
 
+TEST(Session, MalformedFoldEntryDiscardsTheEntireFoldState) {
+    const auto loaded = frost::ui::nav::decodeSession(
+        R"({"version":1,"root":"/proj","tabs":[{"path":"/proj/a.cpp","foldTextHash":42,"folds":[[1,4],[9,2],[12,15]]}]})");
+    ASSERT_TRUE(loaded);
+    ASSERT_EQ(loaded->tabs.size(), 1U);
+    EXPECT_TRUE(loaded->tabs[0].folds.empty());
+    EXPECT_EQ(loaded->tabs[0].foldTextHash, 0U);
+}
+
 TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     SessionStore store(fs, "/data/sessions");
     EXPECT_EQ(store.load("/proj").error().code(), ErrorCode::NotFound);
     SessionState state;
     state.root = "/proj";
     state.tabs = {{"/proj/a.cpp", false, 12, 3, 5}, {"/proj/b.cpp", true, 1, 1, 0}};
+    state.tabs[0].foldTextHash = 0xfedcba9876543210ULL;
+    state.tabs[0].folds = {{12, 80}, {24, 50}};
     state.active = 1;
     state.toolWindows = {{"fileSystem", true, 280}, {"problems", false, 200}};
     state.recentFiles = {"/proj/b.cpp", "/proj/a.cpp"};
@@ -129,6 +140,8 @@ TEST_F(NavFsTest, SessionRoundTripsThroughTheStore) {
     EXPECT_EQ(loaded->tabs[0].line, 12);
     EXPECT_EQ(loaded->tabs[0].column, 3);
     EXPECT_EQ(loaded->tabs[0].top, 5);
+    EXPECT_EQ(loaded->tabs[0].foldTextHash, state.tabs[0].foldTextHash);
+    EXPECT_EQ(loaded->tabs[0].folds, state.tabs[0].folds);
     EXPECT_TRUE(loaded->tabs[1].pinned);
     EXPECT_EQ(loaded->active, 1);
     ASSERT_EQ(loaded->toolWindows.size(), 2U);

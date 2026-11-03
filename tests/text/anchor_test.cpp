@@ -105,6 +105,8 @@ TEST(TextAnchor, BatchClosedFormMatchesSequential) {
                 const std::uint64_t expected = oracleMapBatch(x, bias, batch);
                 ASSERT_EQ(map(x, bias, batch), expected) << "round " << round << " x " << x;
                 ASSERT_EQ(mapper.map(x, bias), expected) << "mapper, round " << round << " x " << x;
+                ASSERT_EQ(mapper.mapRandom(size - x, bias), oracleMapBatch(size - x, bias, batch))
+                    << "random access mapper, round " << round << " x " << (size - x);
             }
         }
         std::int64_t delta = 0;

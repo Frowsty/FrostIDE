@@ -96,12 +96,13 @@ namespace {
 struct QueryProgress {
     const IClock* clock = nullptr;
     IClock::SteadyTime deadline{};
+    std::stop_token stop;
     bool halted = false;
 };
 
 bool onQueryProgress(TSQueryCursorState* state) noexcept {
     auto& progress = *static_cast<QueryProgress*>(state->payload);
-    if (progress.clock->steadyNow() >= progress.deadline) {
+    if (progress.stop.stop_requested() || (progress.clock && progress.clock->steadyNow() >= progress.deadline)) {
         progress.halted = true;
         return true;
     }
@@ -121,9 +122,12 @@ public:
             ts_query_cursor_set_byte_range(m_cursor.get(), static_cast<std::uint32_t>(begin),
                                            static_cast<std::uint32_t>(end));
         }
+        m_progress.stop = limits.stop;
         if (limits.budget > IClock::Duration::zero()) {
             m_progress.clock = limits.clock != nullptr ? limits.clock : &systemClock();
             m_progress.deadline = m_progress.clock->steadyNow() + limits.budget;
+        }
+        if (m_progress.clock || m_progress.stop.stop_possible()) {
             m_options.payload = &m_progress;
             m_options.progress_callback = &onQueryProgress;
         }
@@ -133,10 +137,17 @@ public:
     QueryRun(const QueryRun&) = delete ("the cursor points at m_options and m_progress");
     QueryRun& operator=(const QueryRun&) = delete ("the cursor points at m_options and m_progress");
 
-    [[nodiscard]] bool next(TSQueryMatch& match) noexcept { return ts_query_cursor_next_match(m_cursor.get(), &match); }
+    [[nodiscard]] bool next(TSQueryMatch& match) noexcept {
+        if (m_progress.stop.stop_requested()) {
+            m_progress.halted = true;
+            return false;
+        }
+        return ts_query_cursor_next_match(m_cursor.get(), &match);
+    }
     // True when the deadline or the match limit cut the run short.
     [[nodiscard]] bool limited() const noexcept {
-        return m_progress.halted || ts_query_cursor_did_exceed_match_limit(m_cursor.get());
+        return m_progress.halted || m_progress.stop.stop_requested() ||
+               ts_query_cursor_did_exceed_match_limit(m_cursor.get());
     }
 
 private:
@@ -370,7 +381,8 @@ FoldResult SyntaxTree::foldRanges(const QueryLimits& limits) const noexcept {
         result.complete = false;
         return result;
     }
-    if (m_state->language->id != LanguageId::Lua) {
+    if (m_state->language->id != LanguageId::Lua && m_state->language->id != LanguageId::Cpp &&
+        m_state->language->id != LanguageId::CSharp && m_state->language->id != LanguageId::CMake) {
         return result;
     }
     const auto& state = *m_state;

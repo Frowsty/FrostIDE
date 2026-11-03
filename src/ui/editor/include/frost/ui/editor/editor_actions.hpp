@@ -77,6 +77,11 @@ enum class EditorAction : std::uint8_t {
     PreviousMember,
     NextError,     // F2 (ADR 0047).
     PreviousError, // Shift+F2.
+    Fold,
+    Unfold,
+    FoldAll,
+    UnfoldAll,
+    FoldSelection,
 };
 
 // One row of the action table.

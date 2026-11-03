@@ -17,6 +17,19 @@
 
 namespace frost::app {
 
+namespace {
+std::uint64_t hashFoldText(const text::Snapshot& snapshot) {
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    for (const auto chunk : snapshot.chunks({ByteOffset{0}, snapshot.size()})) {
+        for (const char c : chunk) {
+            hash ^= static_cast<unsigned char>(c);
+            hash *= 0x100000001b3ULL;
+        }
+    }
+    return hash;
+}
+} // namespace
+
 std::string encodingToken(const document::FileDocument& document) {
     const text::TextFileFormat& format = document.encoding().format;
     std::string token(text::encodingName(format.encoding));
@@ -81,17 +94,45 @@ void DocumentEditorView::goToLine(int line, int column) {
     m_host.editorStatusChanged(*this);
 }
 
+void DocumentEditorView::goToStatusPosition(int line, int column) {
+    m_editor->goToStatusPosition(line, column);
+    m_host.editorStatusChanged(*this);
+}
+
 input::ContextKeys DocumentEditorView::contextKeys() const { return m_editor->contextKeys(); }
 
 bool DocumentEditorView::requestClose() { return m_listener.editorCloseRequested(*this); }
 
+std::uint64_t DocumentEditorView::foldTextHash() const {
+    const auto& snapshot = m_editor->editor().text();
+    if (!m_foldHashSnapshot || !snapshot.sharesStorageWith(*m_foldHashSnapshot) ||
+        snapshot.version() != m_foldHashSnapshot->version()) {
+        m_foldHash = hashFoldText(snapshot);
+        m_foldHashSnapshot = snapshot;
+    }
+    return m_foldHash;
+}
+
 ui::EditorViewState DocumentEditorView::viewState() const {
     const ui::EditorViewStatus status = m_editor->status();
-    return ui::EditorViewState{status.line, status.column, static_cast<int>(m_editor->firstVisibleRow())};
+    ui::EditorViewState state{status.line, status.column, static_cast<int>(m_editor->firstVisibleRow())};
+    if (!m_editor->collapsedFolds().empty()) {
+        state.foldTextHash = foldTextHash();
+        for (const auto range : m_editor->collapsedFolds())
+            state.folds.emplace_back(range.begin.value(), range.end.value());
+    }
+    return state;
 }
 
 void DocumentEditorView::restoreViewState(const ui::EditorViewState& state) {
-    m_editor->goToLine(state.line, state.column);
+    m_editor->goToStatusPosition(state.line, state.column);
+    if (!state.folds.empty() && state.foldTextHash == foldTextHash()) {
+        std::vector<text::ByteRange> folds;
+        for (const auto& [begin, end] : state.folds)
+            folds.push_back({ByteOffset{begin}, ByteOffset{end}});
+        (void)m_editor->setCollapsedFolds(std::move(folds));
+        m_editor->revealFoldAt(m_editor->editor().state().primary().head);
+    }
     m_editor->verticalScrollBar()->setValue(state.topLine);
     m_host.editorStatusChanged(*this);
 }
@@ -150,6 +191,12 @@ Result<std::unique_ptr<ui::IEditorView>> DocumentEditorFactory::open(const std::
         new ui::EditorSettingsBinding(*m_store, *m_fs, document.path(), *editor, editor.get());
     }
     auto view = std::make_unique<DocumentEditorView>(document, std::move(editor), host, m_listener, this);
+    if (const auto saved = m_closedFolds.find(lang::documentKey(view->path())); saved != m_closedFolds.end()) {
+        ui::EditorViewState state;
+        state.foldTextHash = saved->second.foldTextHash;
+        state.folds = saved->second.folds;
+        view->restoreViewState(state);
+    }
     m_views.push_back(view.get());
     m_listener.editorOpened(*view);
     return std::unique_ptr<ui::IEditorView>(std::move(view));
@@ -168,6 +215,14 @@ DocumentEditorView* DocumentEditorFactory::find(std::string_view path) const {
     return it == m_views.end() ? nullptr : *it;
 }
 
-void DocumentEditorFactory::forget(DocumentEditorView& view) noexcept { std::erase(m_views, &view); }
+void DocumentEditorFactory::forget(DocumentEditorView& view) noexcept {
+    const std::string key = lang::documentKey(view.path());
+    auto state = view.viewState();
+    if (state.folds.empty())
+        m_closedFolds.erase(key);
+    else
+        m_closedFolds.insert_or_assign(key, std::move(state));
+    std::erase(m_views, &view);
+}
 
 } // namespace frost::app
