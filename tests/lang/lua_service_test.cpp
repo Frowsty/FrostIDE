@@ -129,6 +129,8 @@ TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
         EXPECT_TRUE(launcher.launches().empty());
     }
     options.trusted = true;
+    int lifecycle = 0;
+    options.onLifecycle = [&] { ++lifecycle; };
     launcher.expect(frost::io::ScriptedProcess{
         .stdoutBytes = frame(R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":2}}})"),
         .neverExits = true,
@@ -141,6 +143,8 @@ TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
     ASSERT_TRUE(service.start().has_value());
     sim.runFor(5ms);
     ASSERT_EQ(service.state(), frost::lang::LuaState::Running);
+    EXPECT_EQ(lifecycle, 1);
+    EXPECT_EQ(service.encoding(), frost::lang::PositionEncoding::Utf16);
     auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 1U);
     EXPECT_TRUE(launches[0].spec.arguments.empty());
@@ -156,6 +160,8 @@ TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
     sim.runFor(1s);
     EXPECT_EQ(service.state(), frost::lang::LuaState::Running);
     EXPECT_EQ(service.restarts(), 1U);
+    EXPECT_EQ(lifecycle, 3);
+    EXPECT_EQ(service.encoding(), frost::lang::PositionEncoding::Utf16);
     auto oldResult = sim.spawn(frost::sched::Lane::UserVisible, std::move(oldRequest)).join();
     EXPECT_FALSE(oldResult.has_value());
     launches = launcher.launches();

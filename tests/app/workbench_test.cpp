@@ -29,6 +29,7 @@
 #include <QAction>
 #include <QListWidget>
 #include <QPushButton>
+#include <QTreeWidget>
 
 #include <algorithm>
 #include <atomic>
@@ -76,6 +77,32 @@ TEST(Workbench, FindUsagesToolWindowHasDistinctLabel) {
     const auto* button = rig.window->toolWindows().stripeButton(frost::app::kFindUsagesToolWindow);
     ASSERT_NE(button, nullptr);
     EXPECT_EQ(button->text(), QStringLiteral("Find Usages"));
+}
+
+TEST(Workbench, StructureToolWindowOpensAndHidesThroughAction) {
+    WorkDir dir("structure-window");
+    WorkbenchRig rig(dir);
+    rig.show();
+    EXPECT_FALSE(rig.window->toolWindows().isVisible("structure"));
+    ASSERT_EQ(rig.window->invoke("window.structure"), frost::input::InvokeResult::Ran);
+    EXPECT_TRUE(rig.window->toolWindows().isVisible("structure"));
+    ASSERT_NE(rig.window->toolWindows().content("structure"), nullptr);
+    ASSERT_EQ(rig.window->invoke("window.structure"), frost::input::InvokeResult::Ran);
+    EXPECT_FALSE(rig.window->toolWindows().isVisible("structure"));
+}
+
+TEST(Workbench, ReloadImmediatelyInvalidatesStructureRows) {
+    WorkDir dir("structure-reload");
+    dir.write("a.cpp", "int before;\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("a.cpp")));
+    rig.window->toolWindows().show("structure");
+    auto* tree = rig.window->findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    new QTreeWidgetItem(tree, QStringList{QStringLiteral("stale")});
+    dir.write("a.cpp", "int after;\n");
+    rig.workbench->checkExternalChanges();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
 }
 
 TEST(Workbench, SwitchingFromCMakeRestoresSolutionToolbar) {

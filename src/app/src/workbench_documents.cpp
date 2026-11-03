@@ -121,6 +121,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
         (void)m_managed->changeDocument(view.path(), change, view.document().document().text());
     if (m_lua && isLuaSource(view.path()))
         (void)m_lua->changeDocument(view.path(), change, view.document().document().text());
+    if (currentView() == &view)
+        m_language->structureChanged();
     // What the user typed, now in the document and with clangd: completion and parameter info.
     if (!m_typed.empty()) {
         const std::string typed = std::exchange(m_typed, {});
@@ -160,6 +162,8 @@ void Workbench::documentChanged(const std::string& path) {
         syncClangdDocument(*view);
         syncLuaDocument(*view);
         syncManagedDocument(*view);
+        if (currentView() == view)
+            m_language->structureChanged();
         if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>()) {
             binding->refreshSemanticTokens();
         }

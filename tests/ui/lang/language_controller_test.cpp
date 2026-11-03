@@ -18,7 +18,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QScopeGuard>
+#include <QShortcut>
 #include <QThread>
+#include <QTreeWidget>
 #include <QWidget>
 #include <gtest/gtest.h>
 
@@ -83,6 +85,11 @@ public:
     std::string documentPath() const override { return m_path; }
     std::optional<frost::text::Snapshot> snapshot() const override { return m_buffer.current(); }
     std::int64_t documentVersion() const override { return m_version; }
+    std::string structureIdentity() const override { return std::to_string(identity); }
+    void reopenSamePath() {
+        ++identity;
+        m_version = 1;
+    }
     ByteOffset caretOffset() const override { return m_caret; }
     std::optional<frost::text::ByteRange> selection() const override { return selectionRange; }
     frost::ui::lang::FormattingSettings formattingOptions() const override { return formatOptions; }
@@ -125,6 +132,7 @@ public:
     std::optional<frost::text::ByteRange> selectionRange;
     frost::ui::lang::FormattingSettings formatOptions;
     int undoSteps = 0;
+    int identity = 1;
     std::string lastLabel;
 
 private:
@@ -398,6 +406,154 @@ TEST(LanguageControllerNavigation, FileStructurePopupOpensTheSymbol) {
     popup.activateCurrent();
     ASSERT_EQ(host.opened.size(), 1u);
     EXPECT_EQ(host.opened[0].second, (fl::LspPosition{0, 4}));
+}
+
+TEST(LanguageControllerNavigation, StructureRejectsOldRepliesAndRefreshesAfterEditAndReopen) {
+    FeatureServer server;
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    std::atomic<int> requests = 0;
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        const int n = ++requests;
+        if (n == 1)
+            gate.wait_for(std::chrono::seconds(5));
+        return Json::array({Json::object()
+                                .set("name", n == 1 ? "old" : "current")
+                                .set("kind", 12)
+                                .set("range", rangeJson(0, 0, 20))
+                                .set("selectionRange", rangeJson(0, 4, 8))});
+    });
+    bool released = false;
+    const auto unblock = qScopeGuard([&] {
+        if (!released)
+            release.set_value();
+    });
+    FakeHost host("int main() {}\n");
+    Rig rig(server, host);
+    auto* tree = rig.controller.structurePanel().findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 1; }));
+    host.type("x");
+    rig.controller.structureChanged();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    release.set_value();
+    released = true;
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("current"));
+    emit tree->itemActivated(tree->topLevelItem(0), 0);
+    ASSERT_EQ(host.opened.size(), 1u);
+    EXPECT_EQ(host.opened.front().second, (fl::LspPosition{0, 4}));
+    ++host.identity; // Same path and version, different document/server generation.
+    emit tree->itemActivated(tree->topLevelItem(0), 0);
+    EXPECT_EQ(host.opened.size(), 1u);
+    rig.controller.editorChanged();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    rig.controller.setStructureVisible(false);
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+}
+
+TEST(LanguageControllerNavigation, StructureFilterAndPopupUseIndependentRequests) {
+    FeatureServer server;
+    server.on("textDocument/documentSymbol", [](const Json&) {
+        return Json::array({Json::object()
+                                .set("name", "Widget")
+                                .set("kind", 5)
+                                .set("range", rangeJson(0, 0, 20))
+                                .set("selectionRange", rangeJson(0, 0, 6))
+                                .set("children", Json::array({Json::object()
+                                                                  .set("name", "draw")
+                                                                  .set("kind", 6)
+                                                                  .set("range", rangeJson(1, 0, 10))
+                                                                  .set("selectionRange", rangeJson(1, 2, 6))}))});
+    });
+    FakeHost host("class Widget {};\n");
+    Rig rig(server, host);
+    auto& panel = rig.controller.structurePanel();
+    auto* tree = panel.findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    auto* search = panel.findChild<QLineEdit*>(QStringLiteral("structureSearch"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_NE(search, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+    search->setText(QStringLiteral("draw"));
+    ASSERT_EQ(tree->topLevelItemCount(), 1);
+    ASSERT_EQ(tree->topLevelItem(0)->childCount(), 1);
+    EXPECT_EQ(tree->topLevelItem(0)->child(0)->text(0), QStringLiteral("draw"));
+    auto* shortcut = panel.findChild<QShortcut*>();
+    ASSERT_NE(shortcut, nullptr);
+    EXPECT_EQ(shortcut->key(), QKeySequence(Qt::Key_F4));
+    tree->setCurrentItem(tree->topLevelItem(0)->child(0));
+    emit shortcut->activated();
+    ASSERT_EQ(host.opened.size(), 1u);
+    EXPECT_EQ(host.opened[0].second, (fl::LspPosition{1, 2}));
+    rig.controller.showFileStructure();
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.symbolPopup().isVisible(); }));
+    EXPECT_EQ(tree->topLevelItemCount(), 1);
+    search->setText(QStringLiteral("missing"));
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+}
+
+TEST(LanguageControllerNavigation, StructureDropsReplyFromClosedAndReopenedDocument) {
+    FeatureServer server;
+    std::atomic<int> requests = 0;
+    std::atomic<bool> release = false;
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        const int request = ++requests;
+        if (request == 1) {
+            while (!release.load())
+                std::this_thread::yield();
+        }
+        return Json::array({Json::object()
+                                .set("name", request == 1 ? "old instance" : "new instance")
+                                .set("kind", 12)
+                                .set("range", rangeJson(0, 0, 12))
+                                .set("selectionRange", rangeJson(0, 0, 4))});
+    });
+    const auto unblock = qScopeGuard([&] { release.store(true); });
+    FakeHost host("int main() {}\n");
+    Rig rig(server, host);
+    auto* tree = rig.controller.structurePanel().findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 1; }));
+    host.reopenSamePath();
+    rig.controller.editorChanged();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    release.store(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("new instance"));
+}
+
+TEST(LanguageControllerNavigation, PopupDoesNotCancelPendingStructureRequest) {
+    FeatureServer server;
+    std::atomic<int> requests = 0;
+    std::atomic<bool> release = false;
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        const int request = ++requests;
+        if (request == 1) {
+            while (!release.load())
+                std::this_thread::yield();
+        }
+        return Json::array({Json::object()
+                                .set("name", "main")
+                                .set("kind", 12)
+                                .set("range", rangeJson(0, 0, 12))
+                                .set("selectionRange", rangeJson(0, 0, 4))});
+    });
+    const auto unblock = qScopeGuard([&] { release.store(true); });
+    FakeHost host("int main() {}\n");
+    Rig rig(server, host);
+    auto* tree = rig.controller.structurePanel().findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 1; }));
+    rig.controller.showFileStructure();
+    release.store(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1 && rig.controller.symbolPopup().isVisible(); }));
+    EXPECT_GE(requests.load(), 2);
 }
 
 TEST(LanguageControllerRefactoring, RenameAndQuickFixGoThroughTheApplier) {

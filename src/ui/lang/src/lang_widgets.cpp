@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QScreen>
+#include <QShortcut>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QTextDocument>
@@ -538,6 +539,87 @@ void FindUsagesPanel::onActivated(QTreeWidgetItem* item) {
         const QPoint at = target.toPoint();
         activate(static_cast<std::size_t>(at.x()), static_cast<std::size_t>(at.y()));
     }
+}
+
+// --- StructurePanel ---
+
+StructurePanel::StructurePanel(QWidget* parent) : QWidget(parent) {
+    setObjectName(QStringLiteral("structurePanel"));
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(4, 4, 4, 4);
+    m_search = new QLineEdit(this);
+    m_search->setObjectName(QStringLiteral("structureSearch"));
+    m_search->setPlaceholderText(QStringLiteral("Filter symbols"));
+    m_search->setClearButtonEnabled(true);
+    m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("structureStatus"));
+    m_status->setWordWrap(true);
+    m_tree = new QTreeWidget(this);
+    m_tree->setObjectName(QStringLiteral("structureTree"));
+    m_tree->setHeaderHidden(true);
+    m_tree->setColumnCount(2);
+    m_tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    layout->addWidget(m_search);
+    layout->addWidget(m_status);
+    layout->addWidget(m_tree, 1);
+    connect(m_search, &QLineEdit::textChanged, this, [this] { rebuild(); });
+    connect(m_tree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item, int) {
+        const QPoint pos = item->data(0, kTargetRole).toPoint();
+        emit activated(qs(m_path),
+                       fl::LspPosition{static_cast<std::uint32_t>(pos.x()), static_cast<std::uint32_t>(pos.y())});
+    });
+    auto* navigate = new QShortcut(QKeySequence(Qt::Key_F4), this);
+    navigate->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(navigate, &QShortcut::activated, this, [this] {
+        if (auto* item = m_tree->currentItem())
+            emit m_tree->itemActivated(item, 0);
+    });
+    setFocusProxy(m_search);
+    setStatus(QStringLiteral("Open a file to view its structure."));
+}
+
+void StructurePanel::setStatus(const QString& status) {
+    m_path.clear();
+    m_symbols.clear();
+    m_tree->clear();
+    m_status->setText(status);
+    m_status->show();
+}
+
+void StructurePanel::setSymbols(std::string path, std::vector<fl::DocumentSymbol> symbols) {
+    m_path = std::move(path);
+    m_symbols = std::move(symbols);
+    m_status->setText(m_symbols.empty() ? QStringLiteral("No symbols in this file.") : QString());
+    m_status->setVisible(m_symbols.empty());
+    rebuild();
+}
+
+void StructurePanel::rebuild() {
+    m_tree->clear();
+    const auto shown = fl::filterSymbols(m_symbols, m_search->text().trimmed().toStdString());
+    if (!m_path.empty()) {
+        const bool empty = shown.empty();
+        m_status->setText(m_symbols.empty() ? QStringLiteral("No symbols in this file.")
+                                            : QStringLiteral("No matching symbols."));
+        m_status->setVisible(empty);
+    }
+    const auto add = [&](auto& self, const fl::DocumentSymbol& symbol, QTreeWidgetItem* parent) -> void {
+        auto* row = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(m_tree);
+        row->setIcon(0, kindIcon(symbol.kind));
+        row->setText(0, qs(symbol.name));
+        row->setText(1, qs(symbol.detail));
+        row->setData(0, kTargetRole,
+                     QPoint(static_cast<int>(symbol.selectionRange.start.line),
+                            static_cast<int>(symbol.selectionRange.start.character)));
+        for (const auto& child : symbol.children)
+            self(self, child, row);
+    };
+    for (const auto& symbol : shown)
+        add(add, symbol, nullptr);
+    m_tree->expandAll();
+    if (m_tree->topLevelItemCount() > 0)
+        m_tree->setCurrentItem(m_tree->topLevelItem(0));
 }
 
 // --- SymbolPopup ---

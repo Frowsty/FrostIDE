@@ -82,6 +82,9 @@ public:
     void setRemoveProjectFileHandler(std::function<void(const QString&, const QString&)> handler) {
         m_removeProjectFileHandler = std::move(handler);
     }
+    void setAddProjectFileHandler(std::function<void(const QString&)> handler) {
+        m_addProjectFileHandler = std::move(handler);
+    }
     // Recovery is offered for a project when the caller reports a pending journal.
     void setRecoverProjectHandler(std::function<bool(const QString&)> available,
                                   std::function<void(const QString&)> handler) {
@@ -148,6 +151,7 @@ private:
     io::IProcessLauncher* m_launcher = nullptr;
     std::function<void(project::ProjectId)> m_startupHandler;
     std::function<void(const QString&, const QString&)> m_removeProjectFileHandler;
+    std::function<void(const QString&)> m_addProjectFileHandler;
     std::function<bool(const QString&)> m_recoveryAvailable;
     std::function<void(const QString&)> m_recoverProjectHandler;
     std::function<void(const QString&)> m_terminalHandler;

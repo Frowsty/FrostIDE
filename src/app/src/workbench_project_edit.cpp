@@ -16,6 +16,7 @@
 #include "project_edit_process.hpp"
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
@@ -31,15 +32,21 @@ std::string utf8(const QString& text) {
 }
 } // namespace
 
-void Workbench::removeProjectFile(const QString& projectName, const QString& sourceName) {
-    const auto failEdit = [this](const QString& reason) {
-        notify(ui::qtr("frost::app::Workbench", "Remove from Project"), reason, ui::NotificationKind::Error);
-    };
+void Workbench::removeProjectFile(const QString& projectName, const QString& sourceName, bool adding) {
+    const QString title = adding ? QStringLiteral("Add Existing Source") : QStringLiteral("Remove from Project");
+    const auto failEdit = [this, title](const QString& reason) { notify(title, reason, ui::NotificationKind::Error); };
 #ifndef _WIN32
     failEdit(QStringLiteral("Project-definition removal is currently available on Windows only."));
     return;
 #endif
-    const std::string projectPath = utf8(projectName), sourcePath = utf8(sourceName);
+    const std::string projectPath = utf8(projectName);
+    std::string sourcePath = utf8(sourceName);
+#ifdef _WIN32
+    // QFileDialog returns forward slashes on Windows, while the filesystem's canonical
+    // spelling uses backslashes. Change separators only: preserve dot components so
+    // the canonical comparison still refuses aliases and parent traversal.
+    std::ranges::replace(sourcePath, '/', '\\');
+#endif
     const auto solution = m_solution;
     const std::string root = m_projectRoot;
     const auto managedIdle = [this] {
@@ -61,10 +68,24 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
     const auto item = std::ranges::find_if(projectIt->vcxproj->items, [&](const auto& entry) {
         return lang::documentKey(entry.path) == lang::documentKey(sourcePath);
     });
-    if (!sourceName.isEmpty() &&
+    if (!adding && !sourceName.isEmpty() &&
         (item == projectIt->vcxproj->items.end() || item->type != project::ItemType::ClCompile || item->fromWildcard)) {
         failEdit(QStringLiteral("Only directly included C++ source items are supported."));
         return;
+    }
+    if (adding) {
+        const auto canonicalSource = m_services.fs.canonicalPath(sourcePath);
+        const auto canonicalProject = m_services.fs.canonicalPath(projectPath);
+        const auto sourceStatus = m_services.fs.status(sourcePath);
+        const auto projectDirectory = std::string(io::parentPath(projectPath));
+        if (!canonicalSource || !canonicalProject || !sourceStatus || sourceStatus->type != io::FileType::Regular ||
+            *canonicalSource != sourcePath || *canonicalProject != projectPath ||
+            !sourcePath.starts_with(projectDirectory) || sourcePath.size() <= projectDirectory.size() ||
+            (sourcePath[projectDirectory.size()] != '/' && sourcePath[projectDirectory.size()] != '\\') ||
+            !m_services.trust.isTrusted(sourcePath)) {
+            failEdit(QStringLiteral("Choose an existing file inside the trusted project directory without aliases."));
+            return;
+        }
     }
     const auto active = m_build->activeConfigurationIndex();
     if (!sourceName.isEmpty() &&
@@ -235,9 +256,11 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
                         {"Trusted", "true"},
                         {"Configuration", q(configuration.configuration)},
                         {"Platform", q(configuration.platform)},
-                        {"Remove", q(item->include)},
                         {"Commit", "true"},
                         {"TransactionId", q(id)}};
+    request.insert(adding ? "Add" : "Remove",
+                   adding ? QDir(QFileInfo(projectName).absolutePath()).relativeFilePath(sourceName).replace('/', '\\')
+                          : q(item->include));
     QJsonObject lineage{{"Root", q(root)}, {"Project", projectName}, {"TransactionId", q(id)}};
     io::ProcessSpec spec;
     spec.executable = executable;
@@ -272,14 +295,14 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
         }
         return true;
     };
-    const auto complete = [this, solution, root, markerPath](bool success, bool accepted, const std::string& error) {
+    const auto complete = [this, solution, root, markerPath, title](bool success, bool accepted,
+                                                                    const std::string& error) {
         if (success || !accepted)
             static_cast<void>(m_services.fs.removeFile(markerPath));
         if (!success) {
             if (!accepted)
                 m_buildService->cancelProjectEdit();
-            notify(QStringLiteral("Remove from Project"),
-                   q(error + (accepted ? " Recovery information was retained at " + markerPath : "")),
+            notify(title, q(error + (accepted ? " Recovery information was retained at " + markerPath : "")),
                    ui::NotificationKind::Error);
             return;
         }
@@ -288,18 +311,18 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
         }
         auto loaded = project::SolutionModel::load(m_services.fs, solution->path());
         if (!loaded) {
-            notify(QStringLiteral("Remove from Project"), q(loaded.error().message()), ui::NotificationKind::Error);
+            notify(title, q(loaded.error().message()), ui::NotificationKind::Error);
             return;
         }
         auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
         if (auto updated = m_buildService->finishProjectEdit(refreshed); !updated) {
-            notify(QStringLiteral("Remove from Project"), q(updated.error().message()), ui::NotificationKind::Error);
+            notify(title, q(updated.error().message()), ui::NotificationKind::Error);
             return;
         }
         m_solution = refreshed;
         m_build->projectEditPublished();
         if (auto updated = m_runService->openSolution(refreshed); !updated)
-            notify(QStringLiteral("Remove from Project"), q(updated.error().message()), ui::NotificationKind::Warning);
+            notify(title, q(updated.error().message()), ui::NotificationKind::Warning);
         if (m_nav)
             static_cast<void>(m_nav->refreshSolution(*refreshed));
     };

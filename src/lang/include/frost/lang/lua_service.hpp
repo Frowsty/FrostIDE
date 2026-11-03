@@ -39,6 +39,8 @@ struct LuaServiceOptions {
     IClock::Duration initializeTimeout = std::chrono::seconds(60);
     IClock::Duration shutdownTimeout = std::chrono::seconds(5);
     std::size_t historyPerDocument = 32;
+    // Called on a worker after a server becomes ready or its connection ends.
+    std::function<void()> onLifecycle;
 };
 
 // Thread-safe; launcher, reactor and scheduler outlive stop(). Call stop before shutting them down.

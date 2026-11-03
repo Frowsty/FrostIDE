@@ -104,6 +104,10 @@ public:
     // --- Editor hooks ---
     // Cancel requests and dismiss document-specific UI when the active editor changes.
     void editorChanged();
+    // Invalidate locations immediately on every active-document edit or server replacement.
+    void structureChanged();
+    void setStructureVisible(bool visible);
+    [[nodiscard]] StructurePanel& structurePanel();
     // A key press in the editor; true when the language features consumed it (lookup
     // navigation, commit, Esc, snippet Tab). Call before the editor handles the key.
     bool keyPress(int key, Qt::KeyboardModifiers modifiers);
@@ -155,6 +159,7 @@ private:
     void applyWorkspaceEdit(const ::frost::lang::WorkspaceEdit& edit, const QString& label);
     void findUsagesAt(std::string path, ::frost::lang::LspPosition position);
     void gotoDeclarationAtPosition(::frost::lang::LspPosition position);
+    void requestStructure();
     bool nextTabStop();
 
     LanguageServices m_services;
@@ -163,10 +168,20 @@ private:
     std::unique_ptr<QuickDocPopup> m_quickDoc;
     std::unique_ptr<FindUsagesPanel> m_usages;
     std::unique_ptr<SymbolPopup> m_symbols;
+    std::unique_ptr<StructurePanel> m_structure;
     std::unique_ptr<RenameInput> m_rename;
     std::unique_ptr<ChoicePopup> m_choice;
     QTimer m_highlightTimer;
     QTimer m_symbolQueryTimer;
+    QTimer m_structureTimer;
+    sched::LatestWins m_structureSlot;
+    std::uint64_t m_structureGeneration = 0;
+    std::string m_structurePath;
+    std::string m_structureIdentity;
+    std::int64_t m_structureVersion = 0;
+    std::uint64_t m_structureRevision = 0;
+    ::frost::lang::PositionEncoding m_structureEncoding = ::frost::lang::PositionEncoding::Utf16;
+    bool m_structureVisible = false;
 
     sched::LatestWins m_completionSlot;
     sched::LatestWins m_resolveSlot;

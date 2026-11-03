@@ -61,6 +61,10 @@ QSize StripeButton::sizeHint() const {
     if (m_side == ToolWindowSide::Bottom) {
         return QToolButton::sizeHint();
     }
+    if (!icon().isNull()) {
+        const int extent = std::max(iconSize().width(), iconSize().height()) + 14;
+        return {extent, extent};
+    }
     const QFontMetrics metrics(font());
     const int iconExtent = icon().isNull() ? 0 : iconSize().width() + 4;
     const int length = metrics.horizontalAdvance(text()) + iconExtent + 16;
@@ -76,6 +80,13 @@ void StripeButton::paintEvent(QPaintEvent* event) {
     QStylePainter painter(this);
     QStyleOptionToolButton option;
     initStyleOption(&option);
+    if (!icon().isNull()) {
+        // The side rail uses upright icons. Its accessible name and tooltip retain the title.
+        option.text.clear();
+        option.toolButtonStyle = Qt::ToolButtonIconOnly;
+        painter.drawComplexControl(QStyle::CC_ToolButton, option);
+        return;
+    }
     // The panel (hover, checked) unrotated; then the icon and text rotated.
     option.text.clear();
     option.icon = QIcon();
@@ -111,6 +122,9 @@ ToolWindowManager::ToolWindowManager(QWidget& host, QWidget& center, IShellSetti
     m_vertical->setObjectName(QStringLiteral("toolWindowVerticalSplitter"));
     m_horizontal->setChildrenCollapsible(false);
     m_vertical->setChildrenCollapsible(false);
+    // Leave a visible gutter between islands while retaining a generous resize target.
+    m_horizontal->setHandleWidth(6);
+    m_vertical->setHandleWidth(6);
     for (const ToolWindowSide which : {ToolWindowSide::Left, ToolWindowSide::Right, ToolWindowSide::Bottom}) {
         buildSide(which);
     }
@@ -177,7 +191,7 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
         }
     });
     auto* header = new QHBoxLayout();
-    header->setContentsMargins(8, 4, 4, 4);
+    header->setContentsMargins(10, 3, 6, 3);
     header->addWidget(s.title, 1);
     header->addWidget(hideButton);
     s.stack = new QStackedWidget(panel);
@@ -191,8 +205,8 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
     s.stripe->setObjectName(QStringLiteral("toolWindowStripe.") + name);
     QBoxLayout* stripeLayout = which == ToolWindowSide::Bottom ? static_cast<QBoxLayout*>(new QHBoxLayout(s.stripe))
                                                                : static_cast<QBoxLayout*>(new QVBoxLayout(s.stripe));
-    stripeLayout->setContentsMargins(2, 2, 2, 2);
-    stripeLayout->setSpacing(2);
+    stripeLayout->setContentsMargins(3, 3, 3, 3);
+    stripeLayout->setSpacing(4);
     stripeLayout->addStretch(1);
 }
 
@@ -207,6 +221,7 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     auto* button = new StripeButton(spec.side, s.stripe);
     button->setObjectName(QStringLiteral("stripeButton.") + shell_detail::fromUtf8(spec.id));
     button->setText(spec.title);
+    button->setAccessibleName(spec.title);
     if (!spec.iconId.empty()) {
         button->setIcon(shell_detail::themedIcon(spec.iconId));
     }

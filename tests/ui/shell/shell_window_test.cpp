@@ -75,11 +75,19 @@ TEST(ShellWindow, BuildsTheRiderLayout) {
     EXPECT_TRUE(window.mainToolbar().button(frost::ui::MainToolbar::kBuild)->isEnabled());
     window.mainToolbar().button(frost::ui::MainToolbar::kBuild)->click();
     EXPECT_EQ(builds, 1);
+    // Separators group the configuration, build, execution and utility controls without
+    // replacing their actions.
+    int separators = 0;
+    for (const QAction* action : window.mainToolbar().actions()) {
+        separators += action->isSeparator() ? 1 : 0;
+    }
+    EXPECT_GE(separators, 3);
     // The default tool windows with their stripe buttons.
     for (const std::string_view id : {tool_windows::kProject, tool_windows::kCommit, tool_windows::kRun,
                                       tool_windows::kProblems, tool_windows::kNotifications}) {
         EXPECT_TRUE(window.toolWindows().contains(id)) << id;
-        EXPECT_NE(window.toolWindows().stripeButton(id), nullptr) << id;
+        ASSERT_NE(window.toolWindows().stripeButton(id), nullptr) << id;
+        EXPECT_FALSE(window.toolWindows().stripeButton(id)->accessibleName().isEmpty()) << id;
         EXPECT_FALSE(window.toolWindows().isVisible(id)) << id;
     }
 }

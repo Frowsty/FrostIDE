@@ -31,6 +31,10 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     m_project->setAutoRaise(true);
     m_project->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_project->setIcon(shell_detail::themedIcon(icons::kNodesFolder));
+    m_project->setToolTip(text("Current project"));
+    QFont projectFont = m_project->font();
+    projectFont.setBold(true);
+    m_project->setFont(projectFont);
     setProjectName({});
     addWidget(m_project);
 
@@ -51,10 +55,16 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     connect(m_configurations->model(), &QAbstractItemModel::rowsRemoved, this, updateCombo);
     connect(m_configurations->model(), &QAbstractItemModel::modelReset, this, updateCombo);
 
+    addSeparator();
     addSlot(kBuild, icons::kBuildBuild, "Build");
+    addSeparator();
     addSlot(kRun, icons::kRunRun, "Run");
     addSlot(kDebug, icons::kRunDebug, "Debug");
     addSlot(kStop, icons::kRunStop, "Stop");
+    auto* utilitySpacer = new QWidget(this);
+    utilitySpacer->setObjectName(QStringLiteral("toolbarUtilitySpacer"));
+    utilitySpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    addWidget(utilitySpacer);
     addSeparator();
     addSlot(kSearch, icons::kActionsSearch, "Search");
     addSlot(kSettings, icons::kActionsSettings, "Settings");

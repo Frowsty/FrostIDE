@@ -173,6 +173,8 @@ struct ClangdServiceOptions {
     IClock::Duration shutdownTimeout = std::chrono::seconds(5);
     Json initializationOptions;          // Passed through (clangd: fallbackFlags, clangdFileStatus).
     std::size_t historyPerDocument = 32; // Snapshots kept per document for mapping older publishes.
+    // Called on a worker after a server becomes ready or its connection ends.
+    std::function<void()> onLifecycle;
     // Called for each $/progress notification, on a reactor or worker thread (marshal to the GUI
     // yourself); null: ignored. Must stay callable until stop() finished.
     std::function<void(const ClangdProgress&)> onProgress;

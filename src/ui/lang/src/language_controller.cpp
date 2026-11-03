@@ -98,7 +98,8 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
     : QObject(parent), m_services(std::move(services)), m_completion(std::make_unique<CompletionPopup>()),
       m_parameterInfo(std::make_unique<ParameterInfoPopup>()), m_quickDoc(std::make_unique<QuickDocPopup>()),
       m_usages(std::make_unique<FindUsagesPanel>()), m_symbols(std::make_unique<SymbolPopup>()),
-      m_rename(std::make_unique<RenameInput>()), m_choice(std::make_unique<ChoicePopup>()) {
+      m_structure(std::make_unique<StructurePanel>()), m_rename(std::make_unique<RenameInput>()),
+      m_choice(std::make_unique<ChoicePopup>()) {
     m_highlightTimer.setSingleShot(true);
     m_highlightTimer.setInterval(300);
     connect(&m_highlightTimer, &QTimer::timeout, this, &LanguageController::highlightUsages);
@@ -106,6 +107,21 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
     m_symbolQueryTimer.setInterval(150);
     connect(&m_symbolQueryTimer, &QTimer::timeout, this,
             [this] { requestWorkspaceSymbols(m_symbols->query().trimmed()); });
+    m_structureTimer.setSingleShot(true);
+    m_structureTimer.setInterval(150);
+    connect(&m_structureTimer, &QTimer::timeout, this, &LanguageController::requestStructure);
+    connect(m_structure.get(), &StructurePanel::activated, this, [this](const QString& path, fl::LspPosition position) {
+        const auto snapshot = m_services.host.snapshot();
+        if (m_structureVisible && !m_structurePath.empty() && path.toStdString() == m_structurePath &&
+            m_services.host.documentPath() == m_structurePath &&
+            m_services.host.documentVersion() == m_structureVersion && snapshot &&
+            snapshot->version() == m_structureRevision && m_services.host.structureIdentity() == m_structureIdentity &&
+            m_services.server.encoding() == m_structureEncoding) {
+            // Opening can synchronously change editor state and invalidate m_structurePath.
+            const std::string targetPath = m_structurePath;
+            m_services.host.openLocation(targetPath, position);
+        }
+    });
 
     connect(m_completion.get(), &CompletionPopup::commitRequested, this, &LanguageController::commitCompletion);
     connect(m_completion.get(), &CompletionPopup::cancelled, this, &LanguageController::closeLookup);
@@ -151,6 +167,7 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
 }
 
 LanguageController::~LanguageController() {
+    m_structureSlot.cancel();
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
           &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot}) {
@@ -159,6 +176,7 @@ LanguageController::~LanguageController() {
 }
 
 void LanguageController::editorChanged() {
+    structureChanged();
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
           &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot}) {
@@ -173,6 +191,67 @@ void LanguageController::editorChanged() {
     m_choice->hide();
     m_tabStops.clear();
     m_renamePath.clear();
+}
+
+StructurePanel& LanguageController::structurePanel() { return *m_structure; }
+
+void LanguageController::setStructureVisible(bool visible) {
+    m_structureVisible = visible;
+    structureChanged();
+}
+
+void LanguageController::structureChanged() {
+    ++m_structureGeneration;
+    m_structureSlot.cancel();
+    m_structureTimer.stop();
+    m_structurePath.clear();
+    if (!m_structureVisible) {
+        m_structure->setStatus(QStringLiteral("Open Structure to view symbols."));
+        return;
+    }
+    if (!hasDocument()) {
+        m_structure->setStatus(QStringLiteral("Open a file to view its structure."));
+        return;
+    }
+    m_structure->setStatus(QStringLiteral("Loading structure..."));
+    m_structureTimer.start();
+}
+
+void LanguageController::requestStructure() {
+    if (!m_structureVisible || !hasDocument())
+        return;
+    const auto generation = m_structureGeneration;
+    const std::string path = m_services.host.documentPath();
+    const auto version = m_services.host.documentVersion();
+    const auto snapshot = m_services.host.snapshot();
+    if (!snapshot)
+        return;
+    const auto revision = snapshot->version();
+    const auto identity = m_services.host.structureIdentity();
+    const auto encoding = m_services.server.encoding();
+    start<std::vector<fl::DocumentSymbol>>(
+        m_structureSlot,
+        [&server = m_services.server, path](std::stop_token token) {
+            return fl::requestDocumentSymbols(server, path, std::move(token));
+        },
+        [this, generation, path, version, revision, identity,
+         encoding](Result<std::vector<fl::DocumentSymbol>> symbols) {
+            const auto current = m_services.host.snapshot();
+            if (!m_structureVisible || generation != m_structureGeneration || m_services.host.documentPath() != path ||
+                m_services.host.documentVersion() != version || m_services.host.structureIdentity() != identity ||
+                !current || current->version() != revision || m_services.server.encoding() != encoding)
+                return;
+            if (!symbols) {
+                m_structure->setStatus(QStringLiteral("Cannot load structure: %1").arg(qs(symbols.error().message())));
+                return;
+            }
+            m_structurePath = path;
+            m_structureVersion = version;
+            m_structureRevision = revision;
+            m_structureIdentity = identity;
+            m_structureEncoding = encoding;
+            m_structure->setSymbols(path, std::move(*symbols));
+        });
 }
 
 Result<void> LanguageController::registerActions(input::ActionRegistry& registry) {

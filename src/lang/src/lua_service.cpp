@@ -283,6 +283,8 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
                     self->replayDocuments(*client);
                 }
             }
+            if (!roundError && self->options.onLifecycle)
+                self->options.onLifecycle();
             if (stop.stop_requested()) {
                 co_return; // stop() shuts the round down.
             }
@@ -309,6 +311,8 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
                 self->process.reset();
                 self->capabilities.reset();
             }
+            if (self->options.onLifecycle)
+                self->options.onLifecycle();
             if (scheduler.clock().steadyNow() - startedAt >= self->options.restart.stableAfter) {
                 consecutive = 0;
             }

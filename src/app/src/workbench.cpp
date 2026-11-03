@@ -477,6 +477,10 @@ void Workbench::registerActions() {
     };
     // Save All, Save, Reload All from Disk and Close Project are the navigation workbench's.
     add(wa::kOpenFolder, "Open Folder...", [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
+    add("window.structure", "Structure", [this] {
+        if (m_window)
+            m_window->toolWindows().activate("structure");
+    });
     add(
         wa::kOpenRecent, "Open Recent...", [this] { showOpenRecent(); },
         [this] { return !recentProjects(*m_services.settings.snapshot()).empty(); });
@@ -647,6 +651,9 @@ void Workbench::detach() {
         ui::lang::FindUsagesPanel& panel = m_language->usagesPanel();
         panel.hide();
         panel.setParent(nullptr);
+        auto& structure = m_language->structurePanel();
+        structure.hide();
+        structure.setParent(nullptr);
     }
     if (m_runController) {
         m_runController->bindStartupCombo(nullptr);
@@ -668,6 +675,15 @@ void Workbench::attachToolWindows() {
     explorer->setProcessLauncher(&m_services.launcher);
     explorer->setRemoveProjectFileHandler(
         [this](const QString& project, const QString& source) { removeProjectFile(project, source); });
+    explorer->setAddProjectFileHandler([this](const QString& project) {
+        const auto source = m_options.selectExistingProjectSource
+                                ? m_options.selectExistingProjectSource(project)
+                                : QFileDialog::getOpenFileName(m_window, QStringLiteral("Add Existing C/C++ Source"),
+                                                               QFileInfo(project).absolutePath(),
+                                                               QStringLiteral("C/C++ files (*.c *.cpp *.h *.hpp)"));
+        if (!source.isEmpty())
+            removeProjectFile(project, source, true);
+    });
     explorer->setRecoverProjectHandler(
         [this](const QString&) {
             const auto journal = io::joinPath(m_projectRoot, ".frost-project-edit-journal");
@@ -737,6 +753,21 @@ void Workbench::attachRun() {
 }
 
 void Workbench::attachLanguage() {
+    auto& windows = m_window->toolWindows();
+    connect(&windows, &ui::ToolWindowManager::visibilityChanged, this, [this](const QString& id, bool visible) {
+        if (id == QStringLiteral("structure"))
+            m_language->setStructureVisible(visible);
+    });
+    ui::ToolWindowSpec structure;
+    structure.id = "structure";
+    structure.title = text("Structure");
+    structure.side = ui::ToolWindowSide::Left;
+    structure.iconId = std::string(ui::icons::kToolwindowStructure);
+    const QPointer<QWidget> structureContent(&m_language->structurePanel());
+    structure.createContent = [structureContent]() -> QWidget* { return structureContent.data(); };
+    if (auto added = windows.add(std::move(structure)); !added)
+        log::warn(kLog, "structure tool window: {}", added.error().describe());
+    m_language->setStructureVisible(windows.isVisible("structure"));
     ui::lang::FindUsagesPanel* panel = &m_language->usagesPanel();
     ui::ToolWindowSpec spec;
     spec.id = std::string(kFindUsagesToolWindow);
@@ -849,6 +880,8 @@ void Workbench::shutdown() {
     m_shutDown = true;
     if (m_projectEdit)
         m_projectEdit->stop();
+    if (m_language)
+        m_language->setStructureVisible(false);
     invalidateManagedDebug();
     m_luaTrustWatch.stop();
     cancelFind();

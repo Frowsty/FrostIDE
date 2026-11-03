@@ -18,6 +18,7 @@ sealed class RemovalPlan
     public string Sha256 { get; set; }
     public int Offset { get; set; }
     public int Length { get; set; }
+    public string Insert { get; set; }
 }
 
 static class VsProbe
@@ -69,7 +70,19 @@ static class VsProbe
                 {
                 string remove;
                 request.TryGetValue("Remove", out remove);
-                byte[] snapshot = remove == null ? null : File.ReadAllBytes(path);
+                string add;
+                request.TryGetValue("Add", out add);
+                if (remove != null && add != null) throw new InvalidOperationException("Choose one edit operation");
+                if (add != null && (Path.IsPathRooted(add) || add.IndexOfAny(new[] {'*', '?', '$', '@', '%', ';', ':', '\0', '\r', '\n'}) >= 0 ||
+                    add.Split(new[] {'/', '\\'}).Any(s => s == "" || s == "." || s == "..") ||
+                    !new[] {".c", ".cpp", ".h", ".hpp"}.Contains(Path.GetExtension(add), StringComparer.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("Choose a literal C/C++ source or header inside the project directory");
+                string itemType = add != null && new[] {".h", ".hpp"}.Contains(Path.GetExtension(add), StringComparer.OrdinalIgnoreCase)
+                    ? "ClInclude" : "ClCompile";
+                using (var sourceFence = add == null ? null : TransactionProbe.FenceEvaluation(rootPath, Path.Combine(Path.GetDirectoryName(path), add)))
+                {
+                string selected = add ?? remove;
+                byte[] snapshot = selected == null ? null : File.ReadAllBytes(path);
                 string environment = EnvironmentFingerprint.Current();
                 var globals = new Dictionary<string, string> {
                     ["Configuration"] = request["Configuration"], ["Platform"] = request["Platform"]
@@ -87,10 +100,7 @@ static class VsProbe
                     {
                         if (!snapshot.SequenceEqual(File.ReadAllBytes(path)))
                             throw new InvalidOperationException("Project changed during evaluation");
-                        var candidates = project.GetItems("ClCompile").Where(i => i.EvaluatedInclude == remove).ToArray();
-                        if (candidates.Length != 1 || candidates[0].UnevaluatedInclude != remove ||
-                            !String.Equals(candidates[0].Xml.ContainingProject.FullPath, path, StringComparison.OrdinalIgnoreCase))
-                            throw new InvalidOperationException("Source ownership is ambiguous in this configuration");
+                        CheckOwnership(project, path, selected, add != null);
                         var definition = XDocument.Parse(new UTF8Encoding(false, true).GetString(snapshot).TrimStart('\ufeff'));
                         var declarations = definition.Descendants().Where(e => e.Name.LocalName == "ProjectConfiguration").ToArray();
                         if (declarations.Any(e => e.Parent == null || e.Parent.Name.LocalName != "ItemGroup" ||
@@ -132,10 +142,7 @@ static class VsProbe
                                         throw new InvalidOperationException("Import changed during evaluation: " + importPath);
                                     inputs[importPath] = hash;
                                 }
-                                var matches = configProject.GetItems("ClCompile").Where(i => i.EvaluatedInclude == remove).ToArray();
-                                if (matches.Length != 1 || matches[0].UnevaluatedInclude != remove ||
-                                    !String.Equals(matches[0].Xml.ContainingProject.FullPath, path, StringComparison.OrdinalIgnoreCase))
-                                    throw new InvalidOperationException("Source ownership differs in " + configuration);
+                                CheckOwnership(configProject, path, selected, add != null);
                             }
                         }
                         if (!snapshot.SequenceEqual(File.ReadAllBytes(path)))
@@ -161,22 +168,19 @@ static class VsProbe
                                         throw new InvalidOperationException("Imported inputs changed during evaluation");
                                     verifiedInputs.Add(importPath);
                                 }
-                                var matching = again.GetItems("ClCompile").Where(i => i.EvaluatedInclude == remove).ToArray();
-                                if (matching.Length != 1 || matching[0].UnevaluatedInclude != remove ||
-                                    !String.Equals(matching[0].Xml.ContainingProject.FullPath, path, StringComparison.OrdinalIgnoreCase))
-                                    throw new InvalidOperationException("Source ownership changed during evaluation");
+                                CheckOwnership(again, path, selected, add != null);
                             }
                         }
                         if (verifiedInputs.Count != inputs.Count || environment != EnvironmentFingerprint.Current())
                             throw new InvalidOperationException("Evaluation inputs changed");
-                        var projectPlan = RemovePlan(snapshot, remove, false);
+                        var projectPlan = add == null ? RemovePlan(snapshot, remove, false) : AddPlan(snapshot, add, itemType, path);
                         string filtersPath = path + ".filters";
                         RemovalPlan filtersPlan = null;
                         byte[] filters = null;
                         if (File.Exists(filtersPath))
                         {
                             filters = File.ReadAllBytes(filtersPath);
-                            filtersPlan = RemovePlan(filters, remove, true);
+                            filtersPlan = add == null ? RemovePlan(filters, remove, true) : AddPlan(filters, add, itemType, path);
                         }
                         string commit;
                         if (request.TryGetValue("Commit", out commit) && commit == "true")
@@ -205,6 +209,7 @@ static class VsProbe
                     Console.WriteLine(json.Serialize(new { Items = items, Edit = edit, Error = (string)null }));
                 }
                 }
+                }
             }
             catch (Exception e)
             {
@@ -229,12 +234,98 @@ static class VsProbe
     // This plan represents only the selected evaluation; it is not a production-safe commit.
     static TransactionEntry Entry(string path, byte[] original, RemovalPlan plan)
     {
-        var output = new byte[original.Length - plan.Length];
+        byte[] insert = Encoding.UTF8.GetBytes(plan.Insert ?? "");
+        var output = new byte[original.Length - plan.Length + insert.Length];
         Buffer.BlockCopy(original, 0, output, 0, plan.Offset);
-        Buffer.BlockCopy(original, plan.Offset + plan.Length, output, plan.Offset,
+        Buffer.BlockCopy(insert, 0, output, plan.Offset, insert.Length);
+        Buffer.BlockCopy(original, plan.Offset + plan.Length, output, plan.Offset + insert.Length,
                          original.Length - plan.Offset - plan.Length);
         return new TransactionEntry { Path = path, Before = Convert.ToBase64String(original),
                                       After = Convert.ToBase64String(output) };
+    }
+
+    static void CheckOwnership(Project project, string projectPath, string include, bool adding)
+    {
+        if (adding)
+        {
+            foreach (var definition in new[] { project.Xml }.Concat(project.Imports.Select(i => i.ImportedProject)))
+                foreach (var item in definition.Items.Where(i => (i.ItemType.Equals("ClCompile", StringComparison.OrdinalIgnoreCase) ||
+                    i.ItemType.Equals("ClInclude", StringComparison.OrdinalIgnoreCase)) &&
+                    !(i.Parent.Parent is Microsoft.Build.Construction.ProjectTargetElement)))
+                    if (!String.IsNullOrEmpty(item.Remove) || !String.IsNullOrEmpty(item.Update) ||
+                        (item.Include ?? "").IndexOfAny(new[] {'*', '?', '$', '@', '%', ';'}) >= 0)
+                        throw new InvalidOperationException("Dynamic source items or source removals are unsupported");
+            string expected = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projectPath), include));
+            foreach (var item in project.GetItems("ClCompile").Concat(project.GetItems("ClInclude")))
+            {
+                string actual = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projectPath), item.EvaluatedInclude));
+                if (String.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Source is already included in a configuration");
+            }
+            return;
+        }
+        var matches = project.GetItems("ClCompile").Where(i => i.EvaluatedInclude == include).ToArray();
+        if (matches.Length != 1 || matches[0].UnevaluatedInclude != include ||
+            !String.Equals(matches[0].Xml.ContainingProject.FullPath, projectPath, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Source ownership is ambiguous or differs across configurations");
+    }
+
+    static RemovalPlan AddPlan(byte[] bytes, string include, string itemType, string projectPath)
+    {
+        string xml = new UTF8Encoding(false, true).GetString(bytes);
+        int bom = xml.Length != 0 && xml[0] == '\ufeff' ? 3 : 0;
+        if (bom != 0) xml = xml.Substring(1);
+        var doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+        string expected = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projectPath), include));
+        foreach (var item in doc.Descendants().Where(e => (e.Name.LocalName == "ClCompile" || e.Name.LocalName == "ClInclude") &&
+                                                           e.Parent != null && e.Parent.Name.LocalName == "ItemGroup"))
+        {
+            var candidate = item.Attribute("Include");
+            if (candidate == null || candidate.Value.IndexOfAny(new[] {'*', '?', '$', '@', '%', ';'}) >= 0)
+                throw new InvalidOperationException("Dynamic source items are unsupported");
+            string actual = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projectPath), candidate.Value));
+            if (String.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Source already has a project or filters entry");
+        }
+        var nodes = doc.Descendants().Where(e => e.Name.LocalName == itemType && e.Parent != null &&
+                                                   e.Parent.Name.LocalName == "ItemGroup").ToArray();
+        if (nodes.Any(e => e.AncestorsAndSelf().Any(a => a.Attributes().Any(x =>
+            x.Name.LocalName.Equals("Condition", StringComparison.OrdinalIgnoreCase))) ||
+            e.Attributes().Any(a => a.Name.LocalName != "Include") || e.Attribute("Include") == null ||
+            ((string)e.Attribute("Include")).IndexOfAny(new[] {'*', '?', '$', '@', '%', ';'}) >= 0))
+            throw new InvalidOperationException("Source items must be unconditional and literal");
+        string insertion = "<" + itemType + " " + new XAttribute("Include", include).ToString() + " />";
+        if (nodes.Length == 0)
+        {
+            var ends = Regex.Matches(xml, @"</Project\s*>");
+            if (ends.Count == 0) throw new InvalidOperationException("Project closing element is missing");
+            int at = ends[ends.Count - 1].Index;
+            string group = "<ItemGroup>" + insertion + "</ItemGroup>";
+            doc.Root.Add(new XElement(doc.Root.Name.Namespace + "ItemGroup",
+                new XElement(doc.Root.Name.Namespace + itemType, new XAttribute("Include", include))));
+            var inserted = XDocument.Parse(xml.Insert(at, group), LoadOptions.PreserveWhitespace);
+            if (ComparableXml(doc) != ComparableXml(inserted)) throw new InvalidOperationException("Invalid insertion point");
+            string emptyHash;
+            using (var sha = SHA256.Create()) emptyHash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
+            return new RemovalPlan { Sha256 = emptyHash, Offset = bom + Encoding.UTF8.GetByteCount(xml.Substring(0, at)),
+                                     Length = 0, Insert = group };
+        }
+        var anchor = nodes[0];
+        if (anchor.Parent == null || anchor.Parent.Name.LocalName != "ItemGroup" || anchor.Parent.Parent != doc.Root ||
+            nodes.Any(e => e.Parent != anchor.Parent))
+            throw new InvalidOperationException("Source items must share one direct item group");
+        string existing = (string)anchor.Attribute("Include");
+        var matches = Regex.Matches(xml, "<" + itemType + "\\s+Include=(['\"])" + Regex.Escape(existing) + "\\1");
+        if (matches.Count != 1) throw new InvalidOperationException("Source insertion point is ambiguous");
+        var match = matches[0];
+        anchor.AddBeforeSelf(new XElement(anchor.Name, new XAttribute("Include", include)));
+        var edited = XDocument.Parse(xml.Insert(match.Index, insertion), LoadOptions.PreserveWhitespace);
+        if (ComparableXml(doc) != ComparableXml(edited))
+            throw new InvalidOperationException("Source insertion point does not match XML");
+        string hash;
+        using (var sha = SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
+        return new RemovalPlan { Sha256 = hash, Offset = bom + Encoding.UTF8.GetByteCount(xml.Substring(0, match.Index)),
+                                 Length = 0, Insert = insertion };
     }
 
     static RemovalPlan RemovePlan(byte[] bytes, string include, bool filters)

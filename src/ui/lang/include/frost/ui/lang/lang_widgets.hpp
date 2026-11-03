@@ -169,6 +169,24 @@ private:
  * workspace symbols the controller fetches for each query (queryChanged). Enter or a
  * double-click emits activated with the target; Esc closes.
  */
+class StructurePanel final : public QWidget {
+    Q_OBJECT
+public:
+    explicit StructurePanel(QWidget* parent = nullptr);
+    void setStatus(const QString& status);
+    void setSymbols(std::string path, std::vector<::frost::lang::DocumentSymbol> symbols);
+signals:
+    void activated(QString path, ::frost::lang::LspPosition position);
+
+private:
+    void rebuild();
+    QLabel* m_status = nullptr;
+    QLineEdit* m_search = nullptr;
+    QTreeWidget* m_tree = nullptr;
+    std::string m_path;
+    std::vector<::frost::lang::DocumentSymbol> m_symbols;
+};
+
 class SymbolPopup final : public QFrame {
     Q_OBJECT
 

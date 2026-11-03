@@ -13,6 +13,7 @@
 #include "language_bridge.hpp"
 
 #include <algorithm>
+#include <format>
 #include <utility>
 
 namespace frost::app {
@@ -98,6 +99,22 @@ std::int64_t LanguageBridge::documentVersion() const {
         return 0;
     }
     return clangd->documentVersion(path).value_or(0);
+}
+
+std::string LanguageBridge::structureIdentity() const {
+    const auto* view = m_workbench.currentView();
+    const std::string path = documentPath();
+    const auto key = reinterpret_cast<std::uintptr_t>(view);
+    if (isManagedSource(path) && m_workbench.m_managed)
+        return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_managed.get()),
+                           m_workbench.m_managed->restarts(), static_cast<int>(m_workbench.m_managed->state()));
+    if (isLuaSource(path) && m_workbench.m_lua)
+        return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_lua.get()),
+                           m_workbench.m_lua->restarts(), static_cast<int>(m_workbench.m_lua->state()));
+    if (isCFamilySource(path) && m_workbench.m_clangd)
+        return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_clangd.get()),
+                           m_workbench.m_clangd->restarts(), static_cast<int>(m_workbench.m_clangd->state()));
+    return std::format("{}:none", key);
 }
 
 ByteOffset LanguageBridge::caretOffset() const {

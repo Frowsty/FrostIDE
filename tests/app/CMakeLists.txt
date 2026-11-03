@@ -129,6 +129,11 @@ frost_add_test(app_workbench_lua_tests QT
     LABELS integration)
 target_include_directories(app_workbench_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_lua_tests PRIVATE ${_frost_workbench_definitions})
+add_executable(structure_lsp_fixture structure_lsp_fixture.cpp)
+frost_apply_compile_options(structure_lsp_fixture TEST)
+target_link_libraries(structure_lsp_fixture PRIVATE frost::lang)
+target_compile_definitions(app_workbench_lua_tests PRIVATE FROST_STRUCTURE_LSP="$<TARGET_FILE:structure_lsp_fixture>")
+add_dependencies(app_workbench_lua_tests structure_lsp_fixture)
 
 frost_add_test(app_workbench_cmake_tests QT
     SOURCES workbench_cmake_test.cpp

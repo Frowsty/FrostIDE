@@ -202,6 +202,104 @@ def main():
         assert not journal.exists()
         project.write_bytes(before_project)
         filters.write_bytes(before_filters)
+        added_source = project.parent / "added.cpp"
+        added_source.write_bytes(b"int added() { return 7; }\n")
+        add_request = {"Project": str(project), "Configuration": "Debug", "Platform": "x64", "Add": "added.cpp",
+                       "Trusted": "true", "Root": str(root), "Commit": "true", "TransactionId": str(uuid.uuid4())}
+        add_decision = {"Accept": "true", "TransactionId": add_request["TransactionId"]}
+        for invalid in ("../added.cpp", "nested/../added.cpp", "C:\\outside.cpp"):
+            refused = subprocess.run([str(host), str(msbuild_dir)],
+                                     input=json.dumps(dict(add_request, Add=invalid), ensure_ascii=False) + "\n",
+                                     text=True, encoding="utf-8", capture_output=True, check=True)
+            assert json.loads(refused.stdout)["Error"], refused.stdout
+            assert project.read_bytes() == before_project and filters.read_bytes() == before_filters and not journal.exists()
+        stale_filters = before_filters.replace(b"</ItemGroup>",
+            b'<ClInclude Include=".\\ADDED.cpp"><Filter>Other</Filter></ClInclude></ItemGroup>', 1)
+        filters.write_bytes(stale_filters)
+        refused = subprocess.run([str(host), str(msbuild_dir)], input=json.dumps(add_request, ensure_ascii=False) + "\n",
+                                 text=True, encoding="utf-8", capture_output=True, check=True)
+        assert "already has" in json.loads(refused.stdout)["Error"], refused.stdout
+        assert project.read_bytes() == before_project and filters.read_bytes() == stale_filters
+        assert added_source.read_bytes() == b"int added() { return 7; }\n" and not journal.exists()
+        filters.write_bytes(before_filters)
+        conditional_add = (b'<ItemGroup Condition="\'$(Configuration)\' == \'Release\'">'
+                           b'<ClCompile Include="added.cpp" /></ItemGroup>')
+        boundary = before_project.rfind(b"</Project>")
+        other_config = before_project[:boundary] + conditional_add + before_project[boundary:]
+        project.write_bytes(other_config)
+        refused = subprocess.run([str(host), str(msbuild_dir)], input=json.dumps(add_request, ensure_ascii=False) + "\n",
+                                 text=True, encoding="utf-8", capture_output=True, check=True)
+        assert "already included" in json.loads(refused.stdout)["Error"], refused.stdout
+        assert project.read_bytes() == other_config and filters.read_bytes() == before_filters and not journal.exists()
+        project.write_bytes(before_project)
+        imported_before_add = imported.read_bytes()
+        for item in (b'<ClCompile Include="*.cpp" />', b'<ClCompile Remove="added.cpp" />',
+                     b'<ClCompile Update="added.cpp" />'):
+            imported.write_bytes(b'<Project><ItemGroup>' + item + b'</ItemGroup></Project>')
+            refused = subprocess.run([str(host), str(msbuild_dir)],
+                                     input=json.dumps(add_request, ensure_ascii=False) + "\n",
+                                     text=True, encoding="utf-8", capture_output=True, check=True)
+            assert "unsupported" in json.loads(refused.stdout)["Error"], refused.stdout
+            assert project.read_bytes() == before_project and filters.read_bytes() == before_filters and not journal.exists()
+        imported.write_bytes(imported_before_add)
+        response = subprocess.run([str(host), str(msbuild_dir)],
+                                  input=json.dumps(add_request, ensure_ascii=False) + "\n" + json.dumps(add_decision) + "\n",
+                                  text=True, encoding="utf-8", capture_output=True, check=True)
+        assert len(response.stdout.splitlines()) == 2, response.stdout
+        assert not json.loads(response.stdout.splitlines()[-1])["Error"], response.stdout
+        insertion = b'<ClCompile Include="added.cpp" />'
+        assert project.read_bytes() == before_project.replace(marker, insertion + marker, 1)
+        filter_anchor = b'<ClCompile Include="extra.cpp"'
+        assert filters.read_bytes() == before_filters.replace(filter_anchor, insertion + filter_anchor, 1)
+        assert added_source.read_bytes() == b"int added() { return 7; }\n"
+        assert not journal.exists()
+        response = subprocess.run([str(host), str(msbuild_dir)], input=json.dumps(add_request) + "\n",
+                                  text=True, encoding="utf-8", capture_output=True, check=True)
+        assert json.loads(response.stdout)["Error"]
+        project.write_bytes(before_project)
+        filters.write_bytes(before_filters)
+        nested = project.parent / "includes å 😀"
+        nested.mkdir()
+        header = nested / "first header.hpp"
+        header.write_bytes(b"#pragma once\n")
+        header_include = "includes å 😀\\first header.hpp"
+        header_request = dict(add_request, Add=header_include, TransactionId=str(uuid.uuid4()))
+        decision = {"Accept": "true", "TransactionId": header_request["TransactionId"]}
+        response = subprocess.run([str(host), str(msbuild_dir)],
+                                  input=json.dumps(header_request, ensure_ascii=False) + "\n" + json.dumps(decision) + "\n",
+                                  text=True, encoding="utf-8", capture_output=True, check=True)
+        assert len(response.stdout.splitlines()) == 2, response.stdout
+        assert not json.loads(response.stdout.splitlines()[-1])["Error"], response.stdout
+        group = ('<ItemGroup><ClInclude Include="' + header_include + '" /></ItemGroup>').encode("utf-8")
+        assert project.read_bytes() == before_project[:before_project.rfind(b"</Project>")] + group + before_project[before_project.rfind(b"</Project>"):]
+        assert filters.read_bytes() == before_filters[:before_filters.rfind(b"</Project>")] + group + before_filters[before_filters.rfind(b"</Project>"):]
+        assert header.read_bytes() == b"#pragma once\n"
+        check_header = dict(header_request)
+        check_header.pop("Commit")
+        check_header.pop("Add")
+        response = subprocess.run([str(host), str(msbuild_dir)], input=json.dumps(check_header, ensure_ascii=False) + "\n",
+                                  text=True, encoding="utf-8", capture_output=True, check=True)
+        assert any(item["Type"] == "ClInclude" and item["EvaluatedInclude"] == header_include
+                   for item in json.loads(response.stdout)["Items"])
+        project.write_bytes(before_project)
+        filters.write_bytes(before_filters)
+        empty_sources = before_project.replace(marker, b"").replace(b'<ClCompile Include="extra.cpp" />', b"")
+        empty_filters = before_filters.replace(
+            b'<ClCompile Include="extra.cpp"><Filter>Source Files</Filter></ClCompile>', b"")
+        project.write_bytes(empty_sources)
+        filters.write_bytes(empty_filters)
+        first_request = dict(add_request, TransactionId=str(uuid.uuid4()))
+        decision = {"Accept": "true", "TransactionId": first_request["TransactionId"]}
+        response = subprocess.run([str(host), str(msbuild_dir)],
+                                  input=json.dumps(first_request, ensure_ascii=False) + "\n" + json.dumps(decision) + "\n",
+                                  text=True, encoding="utf-8", capture_output=True, check=True)
+        assert len(response.stdout.splitlines()) == 2, response.stdout
+        assert not json.loads(response.stdout.splitlines()[-1])["Error"], response.stdout
+        first_group = b'<ItemGroup><ClCompile Include="added.cpp" /></ItemGroup>'
+        assert project.read_bytes() == empty_sources[:empty_sources.rfind(b"</Project>")] + first_group + empty_sources[empty_sources.rfind(b"</Project>"):]
+        assert filters.read_bytes() == empty_filters[:empty_filters.rfind(b"</Project>")] + first_group + empty_filters[empty_filters.rfind(b"</Project>"):]
+        project.write_bytes(before_project)
+        filters.write_bytes(before_filters)
         host_commit = dict(request, Commit="true", Trusted="false", Root=str(root), TransactionId=str(uuid.uuid4()))
         response = subprocess.run([str(host), str(msbuild_dir)], input=json.dumps(host_commit, ensure_ascii=False) + "\n",
                                   text=True, encoding="utf-8", capture_output=True, check=True)

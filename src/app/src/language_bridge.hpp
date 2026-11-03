@@ -67,6 +67,7 @@ public:
     [[nodiscard]] std::string documentPath() const override;
     [[nodiscard]] std::optional<text::Snapshot> snapshot() const override;
     [[nodiscard]] std::int64_t documentVersion() const override;
+    [[nodiscard]] std::string structureIdentity() const override;
     [[nodiscard]] ByteOffset caretOffset() const override;
     [[nodiscard]] std::optional<text::ByteRange> selection() const override;
     [[nodiscard]] ui::lang::FormattingSettings formattingOptions() const override;

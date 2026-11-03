@@ -156,6 +156,139 @@ void writeInPlace(const std::string& path, const std::string& bytes) {
     ASSERT_TRUE(ok);
 }
 
+TEST(WorkbenchProjectEdit, AddsExistingSourceThroughProjectMenu) {
+    auto& fs = frost::io::realFileSystem();
+    auto found = frost::build::findMsBuild(frost::io::realProcessLauncher(), fs);
+    if (!found)
+        GTEST_SKIP() << found.error().describe();
+    WorkDir dir("add source", "tiny_sln");
+    WorkDir privateData("add source state");
+    const auto source = dir.join("App/nested å 😀/extra source.cpp");
+    const auto header = dir.join("App/nested å 😀/first header.hpp");
+    dir.write("App/nested å 😀/extra source.cpp", "int extra() { return 1; }\n");
+    dir.write("App/nested å 😀/first header.hpp", "#pragma once\n");
+    dir.write("App/App.vcxproj.filters", "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">"
+                                         "<!-- preserve --><ItemGroup><ClCompile Include=\"main.cpp\" />"
+                                         "</ItemGroup></Project>");
+    const auto beforeProject = dir.read("App/App.vcxproj");
+    const auto beforeFilters = dir.read("App/App.vcxproj.filters");
+    RigOptions options;
+    options.workbench.msbuildPath = found->msbuildPath;
+    options.workbench.projectEditHostPath = FROST_PROJECT_HOST;
+    options.workbench.projectEditStateDirectory = privateData.join("project-edits");
+    std::string selected = source;
+    // QFileDialog returns forward-slash paths on Windows, even though WorkDir uses native separators.
+    options.workbench.selectExistingProjectSource = [&](const QString&) {
+        return QString::fromStdString(selected).replace('\\', '/');
+    };
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto* explorer = rig.workbench->solutionExplorer();
+    auto projectId = rig.workbench->solution()->findProjectByPath(dir.join("App/App.vcxproj"));
+    ASSERT_TRUE(projectId);
+    const auto modelProject = rig.workbench->solution()->project(*projectId).path;
+    EXPECT_EQ(fs.canonicalPath(source).value_or(""), source);
+    EXPECT_EQ(fs.canonicalPath(modelProject).value_or(""), modelProject);
+    EXPECT_TRUE(rig.trust->isTrusted(source));
+    EXPECT_EQ(QString::fromStdString(source).toUtf8().toStdString(), source);
+    EXPECT_TRUE(source.starts_with(frost::io::parentPath(modelProject)));
+    ASSERT_TRUE(fs.status(source));
+    EXPECT_EQ(fs.status(source)->type, frost::io::FileType::Regular);
+    const auto index = explorer->filterModel()->mapFromSource(
+        explorer->model()->indexOf(rig.workbench->solution()->project(*projectId).node));
+    ASSERT_TRUE(index.isValid());
+    std::unique_ptr<QMenu> menu(explorer->createContextMenu(index));
+    const auto actions = menu->actions();
+    const auto add = std::ranges::find_if(
+        actions, [](QAction* action) { return action->objectName() == QStringLiteral("addExistingProjectFile"); });
+    ASSERT_NE(add, actions.end());
+    const auto notifications = rig.window->notifications().log().size();
+    (*add)->trigger();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return explorer->model()->indexOfPath(source).isValid() ||
+                   rig.window->notifications().log().size() > notifications;
+        },
+        120s));
+    if (!explorer->model()->indexOfPath(source).isValid()) {
+        const auto& last = rig.window->notifications().log().back().notification;
+        FAIL() << last.title.toStdString() << ": " << last.text.toStdString();
+    }
+    const std::string insertion = "<ClCompile Include=\"nested å 😀\\extra source.cpp\" />";
+    auto expectedProject = beforeProject;
+    expectedProject.insert(expectedProject.find("<ClCompile Include=\"main.cpp\""), insertion);
+    auto expectedFilters = beforeFilters;
+    expectedFilters.insert(expectedFilters.find("<ClCompile Include=\"main.cpp\""), insertion);
+    EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
+    EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
+    EXPECT_EQ(dir.read("App/nested å 😀/extra source.cpp"), "int extra() { return 1; }\n");
+    selected = header;
+    projectId = rig.workbench->solution()->findProjectByPath(dir.join("App/App.vcxproj"));
+    ASSERT_TRUE(projectId);
+    const auto projectIndex = explorer->filterModel()->mapFromSource(
+        explorer->model()->indexOf(rig.workbench->solution()->project(*projectId).node));
+    ASSERT_TRUE(projectIndex.isValid());
+    std::unique_ptr<QMenu> headerMenu(explorer->createContextMenu(projectIndex));
+    const auto headerActions = headerMenu->actions();
+    const auto addHeader = std::ranges::find_if(headerActions, [](QAction* action) {
+        return action->objectName() == QStringLiteral("addExistingProjectFile");
+    });
+    ASSERT_NE(addHeader, headerActions.end());
+    const auto beforeHeaderNotifications = rig.window->notifications().log().size();
+    (*addHeader)->trigger();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return explorer->model()->indexOfPath(header).isValid() ||
+                   rig.window->notifications().log().size() > beforeHeaderNotifications;
+        },
+        120s));
+    if (!explorer->model()->indexOfPath(header).isValid()) {
+        const auto& last = rig.window->notifications().log().back().notification;
+        FAIL() << last.title.toStdString() << ": " << last.text.toStdString();
+    }
+    const std::string headerGroup = "<ItemGroup><ClInclude Include=\"nested å 😀\\first header.hpp\" /></ItemGroup>";
+    expectedProject.insert(expectedProject.rfind("</Project>"), headerGroup);
+    expectedFilters.insert(expectedFilters.rfind("</Project>"), headerGroup);
+    EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
+    EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
+    EXPECT_EQ(dir.read("App/nested å 😀/first header.hpp"), "#pragma once\n");
+    dir.write("AppSibling/evil.cpp", "int untouched;\n");
+    selected = dir.join("AppSibling/evil.cpp");
+    projectId = rig.workbench->solution()->findProjectByPath(dir.join("App/App.vcxproj"));
+    ASSERT_TRUE(projectId);
+    const auto siblingProjectIndex = explorer->filterModel()->mapFromSource(
+        explorer->model()->indexOf(rig.workbench->solution()->project(*projectId).node));
+    ASSERT_TRUE(siblingProjectIndex.isValid());
+    std::unique_ptr<QMenu> siblingMenu(explorer->createContextMenu(siblingProjectIndex));
+    const auto siblingActions = siblingMenu->actions();
+    const auto siblingAdd = std::ranges::find_if(siblingActions, [](QAction* action) {
+        return action->objectName() == QStringLiteral("addExistingProjectFile");
+    });
+    ASSERT_NE(siblingAdd, siblingActions.end());
+    const auto beforeSiblingNotifications = rig.window->notifications().log().size();
+    (*siblingAdd)->trigger();
+    ASSERT_GT(rig.window->notifications().log().size(), beforeSiblingNotifications);
+    EXPECT_TRUE(rig.window->notifications().log().back().notification.text.contains("inside the trusted project"));
+    EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
+    EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
+    EXPECT_EQ(dir.read("AppSibling/evil.cpp"), "int untouched;\n");
+    selected = dir.join("App/nested å 😀") + "\\..\\nested å 😀\\extra source.cpp";
+    const auto beforeAliasNotifications = rig.window->notifications().log().size();
+    (*siblingAdd)->trigger();
+    ASSERT_GT(rig.window->notifications().log().size(), beforeAliasNotifications);
+    EXPECT_TRUE(rig.window->notifications().log().back().notification.text.contains("without aliases"));
+    EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
+    EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
+    frost::io::ProcessSpec spec;
+    spec.executable = found->msbuildPath;
+    spec.arguments = {dir.join("App/App.vcxproj"), "/t:Build", "/p:Configuration=Debug", "/p:Platform=x64", "/m:1"};
+    spec.workingDirectory = dir.path();
+    const auto built = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 120s);
+    ASSERT_TRUE(built);
+    EXPECT_EQ(built->exitCode, 0);
+}
+
 TEST(WorkbenchProjectEdit, ManagedPreparationBlocksRemovalUntilWorkspaceReopened) {
     WorkDir dir("managed preparation edit", "tiny_sln");
     WorkDir privateData("managed preparation edit state");

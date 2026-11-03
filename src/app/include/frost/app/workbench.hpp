@@ -267,6 +267,7 @@ struct WorkbenchOptions {
     debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
     std::string managedPdbGuardPath;             // Test override; normally resolved beside the application.
     std::function<std::optional<ManagedDebugSelection>(std::string_view)> selectManagedDebug; // Test seam.
+    std::function<QString(const QString&)> selectExistingProjectSource;                       // Test seam.
     // Replaces MSBuild (tests); empty runs MSBuild.
     build::BuildStarter startBuild;
     // Starts clangd for an opened project when it is found (tools.clangd.path, then the SDK, PATH).
@@ -435,7 +436,7 @@ private:
 
     // Projects.
     Result<void> openSolution(const std::string& path);
-    void removeProjectFile(const QString& project, const QString& source);
+    void removeProjectFile(const QString& project, const QString& source, bool adding = false);
     Result<void> openFolder(const std::string& path, bool discoverSolution = true, std::string recentPath = {});
     void setProject(std::string root, QString name, std::string recentPath);
     // Closes the open project before another opens; false when a tab refused (nothing changed).

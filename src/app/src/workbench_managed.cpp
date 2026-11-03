@@ -278,6 +278,16 @@ void Workbench::startManaged(const std::string& root) {
     }
     if (!cliHome.isEmpty())
         options.environment.emplace_back("DOTNET_CLI_HOME", cliHome.toUtf8().toStdString());
+    options.onLifecycle = [self = QPointer<Workbench>(this)] {
+        if (self)
+            QMetaObject::invokeMethod(
+                self.data(),
+                [self] {
+                    if (self && self->m_language)
+                        self->m_language->structureChanged();
+                },
+                Qt::QueuedConnection);
+    };
     m_managed = std::make_shared<lang::ManagedService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},
                                                        std::move(options));
     m_managedListener = m_managed->diagnostics().addListener([this](const lang::FileDiagnostics& data) {
@@ -292,6 +302,7 @@ void Workbench::startManaged(const std::string& root) {
     for (auto* view : m_editors->views())
         syncManagedDocument(*view);
     updateLanguageTarget();
+    m_language->structureChanged();
 }
 void Workbench::stopManaged() {
     if (m_managedTrustDialog) {

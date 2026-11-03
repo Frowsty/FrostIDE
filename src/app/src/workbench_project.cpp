@@ -16,6 +16,7 @@
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
+#include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
@@ -325,6 +326,7 @@ bool Workbench::closeForOpen() {
                ui::NotificationKind::Warning);
         return false;
     }
+    m_language->structureChanged();
     invalidateManagedDebug();
     if (m_engine)
         m_engine->cancel();
@@ -521,6 +523,18 @@ void Workbench::startClangd(const std::string& root) {
     options.workspaceRoot = root;
     options.launch.jobs = m_options.clangdJobs;
     options.compileCommands = m_compileCommands;
+    // The owned server supervisors are joined before Workbench's QObject base is destroyed;
+    // this worker callback only posts, and the queued GUI callback rechecks the controller.
+    options.onLifecycle = [self = QPointer<Workbench>(this)] {
+        if (self)
+            QMetaObject::invokeMethod(
+                self.data(),
+                [self] {
+                    if (self && self->m_language)
+                        self->m_language->structureChanged();
+                },
+                Qt::QueuedConnection);
+    };
     // Called on clangd's threads; the queued calls die with this object.
     options.onProgress = [this](const lang::ClangdProgress& progress) {
         QMetaObject::invokeMethod(this, [this, progress] { onClangdProgress(progress); }, Qt::QueuedConnection);
@@ -544,6 +558,7 @@ void Workbench::startClangd(const std::string& root) {
             binding->attach(*m_clangd);
         }
     }
+    m_language->structureChanged();
 }
 
 void Workbench::restartClangd() {
@@ -558,6 +573,7 @@ void Workbench::stopClangd() {
     if (!m_clangd) {
         return;
     }
+    m_language->structureChanged();
     for (DocumentEditorView* view : m_editors->views()) {
         if (isCFamilySource(view->path()))
             delete view->editor().findChild<ui::lang::EditorInsightBinding*>();

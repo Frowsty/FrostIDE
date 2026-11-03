@@ -50,6 +50,8 @@ public:
     [[nodiscard]] virtual std::optional<text::Snapshot> snapshot() const = 0;
     // The LSP version of snapshot() (the version last sent to the server).
     [[nodiscard]] virtual std::int64_t documentVersion() const = 0;
+    // Identity of the document instance and active language-server generation, UI thread only.
+    [[nodiscard]] virtual std::string structureIdentity() const { return documentPath(); }
     [[nodiscard]] virtual ByteOffset caretOffset() const = 0;
     // The selection, when one is non-empty.
     [[nodiscard]] virtual std::optional<text::ByteRange> selection() const = 0;

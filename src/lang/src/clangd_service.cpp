@@ -385,6 +385,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                     self->replayDocuments(*client);
                 }
             }
+            if (!roundError && self->options.onLifecycle)
+                self->options.onLifecycle();
             if (stop.stop_requested()) {
                 co_return; // stop() shuts the round down.
             }
@@ -411,6 +413,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 self->process.reset();
                 self->capabilities.reset();
             }
+            if (self->options.onLifecycle)
+                self->options.onLifecycle();
             if (scheduler.clock().steadyNow() - startedAt >= self->options.restart.stableAfter) {
                 consecutive = 0;
             }

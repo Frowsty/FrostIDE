@@ -445,6 +445,16 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
                 }
             });
         }
+        if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive) &&
+            m_addProjectFileHandler) {
+            const auto solution = m_model->solution();
+            QAction* add = menu->addAction(tr("Add Existing C/C++ Source"));
+            add->setObjectName(QStringLiteral("addExistingProjectFile"));
+            connect(add, &QAction::triggered, this, [this, solution, path] {
+                if (m_model->solution() == solution && m_addProjectFileHandler)
+                    m_addProjectFileHandler(path);
+            });
+        }
         if (kind == NodeKind::Project && m_recoveryAvailable && m_recoverProjectHandler && m_recoveryAvailable(path)) {
             const auto solution = m_model->solution();
             QAction* recover = menu->addAction(tr("Recover Project Edit"));

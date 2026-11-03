@@ -3,6 +3,72 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: GUI and Add Existing checkpoint verified
+
+- Fresh preview `E:\FrostBuilds\preview\codex-20261103-gui-preview` contains persistent Structure,
+  upright tool-window icons, regrouped toolbar controls and the native-dialog Add Existing path fix.
+  GUI DLL rebuilt today at 08:38 local; the unchanged launcher retains its Nov 2 timestamp.
+  `build-info.json` records source trees, binary hashes and acceptance limits.
+- Astra approved integrated product tree `c59233c1` and fixture-only correction `722f4dca`.
+  Native full verification passed 2674/2700 with 26 skipped. Windows build passed; the first focused
+  run failed because the controlled LSP fixture held its name file open during a delayed response.
+  Closing that stream retains the captured old response and permits Windows atomic replacement.
+  Resulting tree `42d73a73` passed all 49 focused shell, language, Structure and project-edit cases.
+  Logs: `build/verify-gui-c592-native.log`, `build/gui-c592-windows-tests.log` and
+  `build/gui-fixture-fixed-windows-{build,tests}.log`. The corrected common fixture also rebuilt and
+  passed 12/12 focused native cases in `build/gui-fixture-fixed-native.log`.
+- Frozen tree `edbc895f` passed the full serial Windows quick gate: 2807/2828 tests, 21 skipped,
+  one additional disabled, formatting, lint (2445 files), licences (103 packages) and feature checks.
+  Logs: `build/verify-gui-serial-windows.log` and `build/verify-managed-main-20261103-092152.log`.
+  The earlier two-job gate failed the managed C# debugger's third launch after source-edit
+  invalidation, waiting for a paused frame. That unchanged test passed its isolated rerun in 16.46 s
+  and the serial full run. Its cause remains unproven; no timeout or assertion was relaxed.
+  The failure is retained in `build/verify-gui-combined-windows.log`; the focused passing rerun is
+  `build/gui-managed-recheck-tests.log`. The separately copied file named
+  `build/gui-combined-windows-failed-ctest.log` actually contains that passing isolated rerun,
+  not the original failure; its filename must not be used as evidence of its contents.
+- Staged startup, D3D11 and ConPTY checks passed. Actual private-desktop native-dialog Add selected
+  nested Unicode/spaced source and header paths for both `.sln` and `.slnx`. Both projects built the
+  added source and reopened with both nodes. Astra independently reconstructed the expected XML
+  insertions and rehashed the original files: only the intended project/filter definitions changed.
+  Normal and minimum-width (899 x 700) screenshots show unobstructed toolbar controls and upright
+  rails. Real staged clangd populated Structure with `main` and its signature; activation navigated
+  to `main.cpp:16:5`, and hide/show restored the symbols. Source bytes were unchanged and the owned
+  processes exited cleanly. Astra audited these workflows and exact binary/tool hashes in
+  `E:\FrostBuilds\cpp-preview-acceptance-20261103`. The staged app DLL still matches the verified build:
+  `366fc3a0ef5f04cbbdfff5eacc07af101be7aa962b1594de44f42381418c8918`.
+- The prior `codex-20261103-cpp-add` stage failed real native-dialog Add despite automated checks;
+  it is not an accepted Add preview. The reviewed separator-only correction preserves strict path
+  containment and alias refusal. Rename, CMake membership editing, full Lua Stop and production Unity
+  debugging remain unfinished parallel work. This preview does not establish Rider parity or U1.
+- Next GUI work adds real toolbar keyboard traversal and model-backed navigation breadcrumbs;
+  its separate candidate is building and is not included in this preview. The separate CMake planner
+  passes native repository tests (17 unit cases and one actual configure/edit-plan/reconfigure/build
+  fixture), but no application writer is shipped. A separate fresh MSBuild evaluation correction has
+  11 Windows cases and a reproduced stale-cache failure; B23 streaming/performance acceptance and
+  generated-output lifetime remain open. Standalone Mono verifies loaded assembly/PDB bytes and
+  debugger operations; its C++ protocol components pass 66 native tests, with the actual C++ transport
+  and Unity Editor path still unfinished. Lua pending-launch integration and full Stop remain open.
+
+## 2026-11-03: Add Existing integrated for combined verification
+
+- The verified Windows removal checkpoint is committed and pushed as `1ad75f8`; its staged preview
+  remains `E:\FrostBuilds\preview\codex-20261103-cpp-edit`.
+- Root imported the independently reviewed Add Existing join without changing its product delta.
+  Tree `cdcb52fe` built successfully and passed all eight focused Windows cases in the full environment:
+  the label-registry test and seven Workbench project-edit cases, including Add with a real MSBuild
+  build, removal, recovery and both managed-admission guards. Logs are
+  `build/cpp-add-integrated-{build,tests}.log`. Full combined gates and staged Add acceptance are next;
+  the delivered removal preview does not yet contain Add.
+- Rename now has a reviewed recovery design and a bounded Windows no-replace primitive probe.
+  Earlier wrong-name and sharing failures remain recorded; product transaction and dirty-buffer
+  relocation are not implemented. A separate CMake membership-editing stream is beginning with
+  configured backtrace ownership and a lossless syntax plan. These remain required product work.
+- Structure is compiling on native Linux after review of actual Workbench lifecycle fixtures.
+  Lua reservation handoff has focused IDE evidence while the matching engine build continues.
+  Expanded standalone Mono debugging is diagnosing runtime protocol differences; failed breakpoint
+  and frame assertions are preserved, and no Unity Editor debugging acceptance is claimed.
+
 ## 2026-11-03: C++ removal verified through the staged application
 
 - Corrected tree `e414a17b` passed the full Windows quick gate: 2797/2819 tests, 22 skipped,

@@ -102,6 +102,16 @@ void Workbench::startLua(const std::string& root) {
     options.trusted = true;
     // The engine's .luarc.json has priority and names its generated definitions.
     options.configuration = lang::luaDefaults(m_luaRuntimeVersion, false);
+    options.onLifecycle = [self = QPointer<Workbench>(this)] {
+        if (self)
+            QMetaObject::invokeMethod(
+                self.data(),
+                [self] {
+                    if (self && self->m_language)
+                        self->m_language->structureChanged();
+                },
+                Qt::QueuedConnection);
+    };
     m_lua = std::make_shared<lang::LuaService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},
                                                std::move(options));
     m_luaListener = m_lua->diagnostics().addListener([this](const lang::FileDiagnostics& data) {
@@ -116,6 +126,7 @@ void Workbench::startLua(const std::string& root) {
     for (auto* view : m_editors->views())
         syncLuaDocument(*view);
     updateLanguageTarget();
+    m_language->structureChanged();
 }
 void Workbench::stopLua() {
     if (m_luaTrustDialog) {

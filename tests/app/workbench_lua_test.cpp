@@ -5,14 +5,18 @@
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/shell/editor_tabs.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "workbench_rig.hpp"
 #include <QByteArray>
+#include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QTreeWidget>
 
 #include <algorithm>
 #include <chrono>
@@ -22,6 +26,80 @@ using namespace std::chrono_literals;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
+
+TEST(WorkbenchLua, StructureRejectsReplyAfterSamePathReopen) {
+    WorkDir dir("structure-reopen-lua");
+    dir.write("main.lua", "-- \xf0\x9f\x98\x80 target\n");
+    dir.write("structure-name", "old\n");
+    dir.write("structure-hold", "hold\n");
+    frost::app::test::RigOptions options;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  std::string(FROST_STRUCTURE_LSP)));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    rig.window->toolWindows().show("structure");
+    auto* tree = rig.window->findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(QString::fromStdString(dir.join("structure-requested"))); }, 20s));
+    ASSERT_TRUE(rig.window->tabs().close(0));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    dir.write("structure-name", "new\n");
+    ASSERT_TRUE(QFile::remove(QString::fromStdString(dir.join("structure-hold"))));
+    ASSERT_TRUE(waitFor([&] { return tree->topLevelItemCount() == 1; }, 20s));
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("new"));
+    emit tree->itemActivated(tree->topLevelItem(0), 0);
+    EXPECT_EQ(rig.workbench->currentView()->editor().editor().state().primary().head, frost::ByteOffset{8});
+}
+
+TEST(WorkbenchStructure, ClangdRestartChangesEncodingAndRefreshes) {
+    WorkDir dir("structure-restart-lua");
+    dir.write("main.cpp", "-- \xf0\x9f\x98\x80 target\n");
+    dir.write("structure-name", "old\n");
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsClangdPath,
+                                  std::string(FROST_STRUCTURE_LSP)));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    rig.window->toolWindows().show("structure");
+    auto* tree = rig.window->findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_TRUE(waitFor([&] { return tree->topLevelItemCount() == 1; }, 20s));
+    auto* service = rig.workbench->clangd();
+    ASSERT_NE(service, nullptr);
+    EXPECT_EQ(service->encoding(), frost::lang::PositionEncoding::Utf16);
+    dir.write("structure-name", "reloaded\n");
+    dir.write("main.cpp", "-- \xf0\x9f\x98\x80 target -- reloaded\n");
+    rig.workbench->checkExternalChanges();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    ASSERT_TRUE(
+        waitFor([&] { return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->text(0) == "reloaded"; }, 20s));
+    dir.write("structure-name", "new\n");
+    dir.write("structure-utf8", "utf8\n");
+    dir.write("structure-hold", "hold\n");
+    QFile::remove(QString::fromStdString(dir.join("structure-requested")));
+    ASSERT_TRUE(service->killServerForTesting());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return service->restarts() == 1 && service->state() == frost::lang::ClangdState::Running &&
+                   service->encoding() == frost::lang::PositionEncoding::Utf8;
+        },
+        20s));
+    EXPECT_EQ(rig.workbench->clangd(), service);
+    EXPECT_EQ(service->encoding(), frost::lang::PositionEncoding::Utf8);
+    ASSERT_TRUE(waitFor([&] { return QFile::exists(QString::fromStdString(dir.join("structure-requested"))); }, 20s));
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    ASSERT_TRUE(QFile::remove(QString::fromStdString(dir.join("structure-hold"))));
+    ASSERT_TRUE(
+        waitFor([&] { return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->text(0) == "new"; }, 20s));
+    emit tree->itemActivated(tree->topLevelItem(0), 0);
+    EXPECT_EQ(rig.workbench->currentView()->editor().editor().state().primary().head, frost::ByteOffset{8});
+}
 
 TEST(WorkbenchLua, FrostProjectIdentitySurvivesRecentAndSessionReopen) {
     WorkDir dir("frost-identity", "tiny_sln");
