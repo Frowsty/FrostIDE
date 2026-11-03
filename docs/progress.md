@@ -3,6 +3,21 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-03: Unity-controls probe preference preservation issue
+
+- The accepted staged-window bridge evidence below remains valid. A subsequent, separate Unity-controls
+  worktree probe failed before announcing its session; it sent no control command and is not acceptance.
+- That later probe detected one global EditorPrefs value outside its six-value restoration list:
+  `UnityConnectUrlConfiguration_h3045770047`. Its exact typed prelaunch value was retained only in the
+  exited Python process, so it cannot now be restored reliably. Older exports are not an exact baseline and
+  were not applied. The current value is retained locally under current-user DPAPI encryption, without printing
+  its contents. The user was informed. Do not claim all preferences from this controls probe were restored.
+- Further live Unity probes are on hold pending review of the new harness's durable encrypted full-key
+  snapshots and conservative restoration. It fsyncs the typed baseline before launch, preserves unrecognized
+  or concurrently changed values, and checks the complete key afterward. A no-Unity DPAPI self-test passed.
+  Harness: `E:\FrostBuilds\unity-controls-scratch-20261103\run-control-durable.py`.
+  This does not recover the missing earlier value. Source work and builds continue; the full goal stays active.
+
 ## 2026-11-03: Staged Unity receiving-window acceptance and follow-up findings
 
 - Verified Git/Unity checkpoint `c7231b7` was committed and pushed to `origin/main`. The whole project goal
