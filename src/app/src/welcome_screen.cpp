@@ -4,6 +4,7 @@
 
 #include "frost/app/welcome_screen.hpp"
 
+#include "frost/core/build_info.hpp"
 #include "frost/ui/glacial_logo.hpp"
 #include "frost/ui/tr.hpp"
 
@@ -236,7 +237,7 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     titleFont.setPointSizeF(titleFont.pointSizeF() * 1.35);
     titleFont.setBold(true);
     title->setFont(titleFont);
-    auto* versionLabel = new QLabel(text("2026.11 • C++ / C# / .NET"), sidebar);
+    auto* versionLabel = new QLabel(QString::fromUtf8(build_info::kMajorVersion), sidebar);
     versionLabel->setObjectName(QStringLiteral("welcomeVersion"));
     QFont verFont = versionLabel->font();
     if (verFont.pointSizeF() > 8.0) {
@@ -264,7 +265,8 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     sidebarLayout->addWidget(m_navList);
     sidebarLayout->addStretch(1);
 
-    m_updateStatus = new QLabel(text("FrostIDE 2026.11 • Ready"), sidebar);
+    m_updateStatus =
+        new QLabel(text("FrostIDE %1 • Ready").arg(QString::fromUtf8(build_info::kVersion)), sidebar);
     m_updateStatus->setObjectName(QStringLiteral("welcomeUpdateStatus"));
     m_updateStatus->setWordWrap(true);
     m_updateStatus->setFont(verFont);

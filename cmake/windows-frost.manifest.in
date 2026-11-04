@@ -9,7 +9,7 @@
   product. The linker's own manifest generation is disabled for these targets.
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="FrostIDE.frost" version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.0" processorArchitecture="amd64"/>
+  <assemblyIdentity type="win32" name="FrostIDE.frost" version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@.@FROST_VERSION_TWEAK@" processorArchitecture="amd64"/>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <!-- Windows 10 and Windows 11 share this GUID. -->

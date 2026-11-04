@@ -40,16 +40,25 @@ bool unsignedInteger(yyjson_val* v, std::uint64_t& out) {
     return true;
 }
 bool semver(std::string_view v) {
-    // SemVer core plus optional prerelease/build identifiers, including the no-leading-zero rule.
+    // SemVer core (3 or 4 numeric parts) plus optional prerelease/build identifiers,
+    // including the no-leading-zero rule.
     std::size_t pos = 0;
-    for (int part = 0; part < 3; ++part) {
+    for (int part = 0; part < 4; ++part) {
         const auto begin = pos;
         while (pos < v.size() && v[pos] >= '0' && v[pos] <= '9')
             ++pos;
         if (begin == pos || (pos - begin > 1 && v[begin] == '0'))
             return false;
-        if (part < 2 && (pos == v.size() || v[pos++] != '.'))
-            return false;
+        if (part < 2) {
+            if (pos == v.size() || v[pos++] != '.')
+                return false;
+        } else if (part == 2) {
+            if (pos < v.size() && v[pos] == '.') {
+                ++pos;
+            } else {
+                break;
+            }
+        }
     }
     for (char marker : {'-', '+'}) {
         if (pos < v.size() && v[pos] == marker) {
@@ -87,9 +96,10 @@ int compareVersion(std::string_view a, std::string_view b) {
         return core;
     };
     auto ac = releasePart(a), bc = releasePart(b);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         auto ad = ac.find('.'), bd = bc.find('.');
-        auto av = ac.substr(0, ad), bv = bc.substr(0, bd);
+        auto av = ac.empty() ? std::string_view("0") : ac.substr(0, ad);
+        auto bv = bc.empty() ? std::string_view("0") : bc.substr(0, bd);
         if (int c = compareNumeric(av, bv); c != 0)
             return c;
         ac = ad == std::string_view::npos ? std::string_view{} : ac.substr(ad + 1);

@@ -8,8 +8,10 @@
 
 namespace frost::build_info {
 
-// Product version from the root CMakeLists.txt project() call.
-inline constexpr std::string_view kVersion = "@PROJECT_VERSION@";
+// Detailed product version from version.json (e.g. "2026.11.0.9-beta" or "2026.11.0.1").
+inline constexpr std::string_view kVersion = "@FROST_FULL_VERSION@";
+// Major product version (year.month, e.g. "2026.11").
+inline constexpr std::string_view kMajorVersion = "@FROST_MAJOR_VERSION@";
 // Compiler that built this binary, e.g. "Clang 23.1.4".
 inline constexpr std::string_view kCompiler = "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@";
 // Target operating system name from CMake ("Windows" or "Linux").

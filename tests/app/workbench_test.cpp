@@ -11,6 +11,7 @@
 
 #include "frost/app/welcome_screen.hpp"
 #include "frost/build/build_session.hpp"
+#include "frost/core/build_info.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/ui/run_console.hpp"
@@ -1835,6 +1836,11 @@ TEST(Workbench, WelcomeScreenTwoPaneLayoutAndLiveProjectSearch) {
     ASSERT_NE(welcome->checkForUpdatesButton(), nullptr);
     ASSERT_NE(welcome->updateStatusLabel(), nullptr);
     EXPECT_FALSE(welcome->updateStatus().isEmpty());
+    EXPECT_TRUE(welcome->updateStatus().contains(QString::fromUtf8(frost::build_info::kVersion)))
+        << welcome->updateStatus().toStdString();
+    auto* topVersionLabel = welcome->findChild<QLabel*>(QStringLiteral("welcomeVersion"));
+    ASSERT_NE(topVersionLabel, nullptr);
+    EXPECT_EQ(topVersionLabel->text(), QString::fromUtf8(frost::build_info::kMajorVersion));
     welcome->setUpdateStatus(QStringLiteral("FrostIDE 2026.11 • Update available"));
     EXPECT_EQ(welcome->updateStatus(), QStringLiteral("FrostIDE 2026.11 • Update available"));
 

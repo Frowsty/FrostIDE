@@ -9,8 +9,8 @@
 1 ICON "@FROST_APP_ICON_PATH@"
 
 1 VERSIONINFO
-FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
-PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@FROST_VERSION_TWEAK@
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@FROST_VERSION_TWEAK@
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -20,12 +20,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "FrostIDE"
             VALUE "FileDescription", "FrostIDE"
-            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "FileVersion", "@FROST_FULL_VERSION@"
             VALUE "InternalName", "frost"
             VALUE "LegalCopyright", "Copyright 2026 The FrostIDE authors. Apache-2.0."
             VALUE "OriginalFilename", "frost.exe"
             VALUE "ProductName", "FrostIDE"
-            VALUE "ProductVersion", "@PROJECT_VERSION@"
+            VALUE "ProductVersion", "@FROST_FULL_VERSION@"
         END
     END
     BLOCK "VarFileInfo"

@@ -26,6 +26,7 @@
 // Processes are started through frost::io's production IProcessLauncher, on Windows on a
 // private desktop each and with hard-error boxes off (runFrost).
 
+#include "frost/core/build_info.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
@@ -195,7 +196,8 @@ std::string copyFrostTo(const std::string& dir, [[maybe_unused]] Plugins plugins
 TEST(FrostProcess, VersionPrintsProductCompilerAndQt) {
     const auto result = runFrost(frostExe(), {"--version"});
     ASSERT_EQ(result.exitCode, 0) << result.startError << result.output;
-    EXPECT_NE(result.output.find("FrostIDE 0.0.1"), std::string::npos) << result.output;
+    EXPECT_NE(result.output.find(std::format("FrostIDE {}", frost::build_info::kVersion)), std::string::npos)
+        << result.output;
     EXPECT_NE(result.output.find("Clang"), std::string::npos) << result.output;
     EXPECT_NE(result.output.find("Qt 6."), std::string::npos) << result.output;
 }
@@ -955,7 +957,7 @@ TEST(FrostProcess, OtherModesStartInPlaceFromALongPath) {
         std::string expected;
     };
     const std::vector<Case> cases{
-        {{"--version"}, 0, "FrostIDE 0.0.1"},
+        {{"--version"}, 0, std::format("FrostIDE {}", frost::build_info::kVersion)},
         {{"--help"}, 0, "Usage: frost"},
         {{"--no-such-option"}, 2, "unknown option --no-such-option"},
         {{"--selftest"}, 0, std::format("image-path: {}, 300 UTF-16 units", reportedForm(form))}};
