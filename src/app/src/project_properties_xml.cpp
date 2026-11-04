@@ -926,4 +926,238 @@ Result<std::size_t> removeFilesFromVcxproj(io::IFileSystem& fs, std::string_view
     return removedCount;
 }
 
+namespace {
+
+void upsertSlnNestedProject(QString& slnText, const QString& childGuid, const QString& parentFolderGuid) {
+    const QRegularExpression existingLineRe(
+        QStringLiteral("[ \\t]*%1\\s*=\\s*\\{[^\\}]+\\}\\r?\\n?").arg(QRegularExpression::escape(childGuid)),
+        QRegularExpression::CaseInsensitiveOption);
+    slnText.remove(existingLineRe);
+    if (parentFolderGuid.isEmpty()) {
+        return;
+    }
+    const QString entryLine = QStringLiteral("\t\t%1 = %2\r\n").arg(childGuid, parentFolderGuid);
+    const QRegularExpression sectionRe(
+        QStringLiteral("(GlobalSection\\(NestedProjects\\)\\s*=\\s*preSolution\\r?\\n)"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = sectionRe.match(slnText); m.hasMatch()) {
+        slnText.insert(m.capturedEnd(1), entryLine);
+        return;
+    }
+    const QString newSection = QStringLiteral("\tGlobalSection(NestedProjects) = preSolution\r\n%1\tEndGlobalSection\r\n")
+                                   .arg(entryLine);
+    const qsizetype endGlobal = slnText.lastIndexOf(QStringLiteral("EndGlobal"), -1, Qt::CaseInsensitive);
+    if (endGlobal >= 0) {
+        slnText.insert(endGlobal, newSection);
+    } else {
+        slnText.append(QStringLiteral("Global\r\n%1EndGlobal\r\n").arg(newSection));
+    }
+}
+
+} // namespace
+
+Result<std::string> addSolutionFolderToSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                    std::string_view parentFolderId, std::string_view folderName) {
+    const QString cleanName = toQs(folderName).trimmed();
+    if (cleanName.isEmpty()) {
+        return fail(ErrorCode::InvalidArgument, "solution folder name cannot be empty");
+    }
+    auto read = fs.readFile(solutionPath);
+    if (!read) {
+        return std::unexpected(read.error());
+    }
+    QString text = toQs(*read);
+
+    if (toQs(solutionPath).endsWith(QStringLiteral(".slnx"), Qt::CaseInsensitive)) {
+        QString parentPrefix = toQs(parentFolderId).trimmed();
+        parentPrefix.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (parentPrefix.isEmpty()) {
+            parentPrefix = QStringLiteral("/");
+        } else {
+            if (!parentPrefix.startsWith(QLatin1Char('/'))) {
+                parentPrefix.prepend(QLatin1Char('/'));
+            }
+            if (!parentPrefix.endsWith(QLatin1Char('/'))) {
+                parentPrefix.append(QLatin1Char('/'));
+            }
+        }
+        const QString fullPath = parentPrefix + cleanName + QLatin1Char('/');
+        const qsizetype closeSln = text.lastIndexOf(QStringLiteral("</Solution>"), -1, Qt::CaseInsensitive);
+        if (closeSln < 0) {
+            return fail(ErrorCode::Corrupt, "missing </Solution> tag in .slnx");
+        }
+        text.insert(closeSln, QStringLiteral("  <Folder Name=\"%1\" />\n").arg(xmlEscape(fullPath)));
+        if (auto w = fs.safeWrite(solutionPath, text.toStdString(), {}); !w) {
+            return std::unexpected(w.error());
+        }
+        return fullPath.toStdString();
+    }
+
+    const QString folderGuid = QUuid::createUuid().toString(QUuid::WithBraces).toUpper();
+    const QString projEntry =
+        QStringLiteral("Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"%1\", \"%1\", \"%2\"\r\nEndProject\r\n")
+            .arg(cleanName, folderGuid);
+    const qsizetype globalPos = text.indexOf(QStringLiteral("Global"), 0, Qt::CaseInsensitive);
+    if (globalPos >= 0) {
+        text.insert(globalPos, projEntry);
+    } else {
+        text.append(projEntry);
+    }
+    if (!parentFolderId.empty()) {
+        upsertSlnNestedProject(text, folderGuid, toQs(parentFolderId));
+    }
+    if (auto w = fs.safeWrite(solutionPath, text.toStdString(), {}); !w) {
+        return std::unexpected(w.error());
+    }
+    return folderGuid.toStdString();
+}
+
+Result<void> renameSolutionFolderInSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                std::string_view folderId, std::string_view newName) {
+    const QString targetName = toQs(newName).trimmed();
+    if (targetName.isEmpty() || folderId.empty()) {
+        return fail(ErrorCode::InvalidArgument, "solution folder name cannot be empty");
+    }
+    auto read = fs.readFile(solutionPath);
+    if (!read) {
+        return std::unexpected(read.error());
+    }
+    QString text = toQs(*read);
+    const QString idQs = toQs(folderId);
+
+    if (toQs(solutionPath).endsWith(QStringLiteral(".slnx"), Qt::CaseInsensitive)) {
+        QString normOld = idQs;
+        normOld.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (!normOld.startsWith(QLatin1Char('/'))) {
+            normOld.prepend(QLatin1Char('/'));
+        }
+        if (!normOld.endsWith(QLatin1Char('/'))) {
+            normOld.append(QLatin1Char('/'));
+        }
+        QStringList segments = normOld.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        if (segments.isEmpty()) {
+            return {};
+        }
+        segments.back() = targetName;
+        const QString normNew = QLatin1Char('/') + segments.join(QLatin1Char('/')) + QLatin1Char('/');
+        text.replace(QStringLiteral("Name=\"%1").arg(xmlEscape(normOld)),
+                     QStringLiteral("Name=\"%1").arg(xmlEscape(normNew)), Qt::CaseInsensitive);
+        return fs.writeFileAtomic(solutionPath, text.toStdString());
+    }
+
+    const QRegularExpression folderRe(
+        QStringLiteral("(Project\\(\"\\{2150E333-8FDC-42A3-9474-1A3956D46DE8\\}\"\\)\\s*=\\s*\")[^\"]+(\",\\s*\")"
+                       "[^\"]+(\",\\s*\"%1\")")
+            .arg(QRegularExpression::escape(idQs)),
+        QRegularExpression::CaseInsensitiveOption);
+    text.replace(folderRe, QStringLiteral("\\1%1\\2%1\\3").arg(targetName));
+    return fs.writeFileAtomic(solutionPath, text.toStdString());
+}
+
+Result<void> removeSolutionFolderFromSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                  std::string_view folderId) {
+    if (folderId.empty()) {
+        return {};
+    }
+    auto read = fs.readFile(solutionPath);
+    if (!read) {
+        return std::unexpected(read.error());
+    }
+    QString text = toQs(*read);
+    const QString idQs = toQs(folderId);
+
+    if (toQs(solutionPath).endsWith(QStringLiteral(".slnx"), Qt::CaseInsensitive)) {
+        const QRegularExpression selfCloseRe(
+            QStringLiteral("[ \\t]*<Folder\\s+Name=\"%1\"\\s*/>\\r?\\n?")
+                .arg(QRegularExpression::escape(xmlEscape(idQs))),
+            QRegularExpression::CaseInsensitiveOption);
+        text.remove(selfCloseRe);
+        const QRegularExpression openTagRe(
+            QStringLiteral("[ \\t]*<Folder\\s+Name=\"%1\"\\s*>([\\s\\S]*?)</Folder>\\r?\\n?")
+                .arg(QRegularExpression::escape(xmlEscape(idQs))),
+            QRegularExpression::CaseInsensitiveOption);
+        text.replace(openTagRe, QStringLiteral("\\1"));
+        return fs.writeFileAtomic(solutionPath, text.toStdString());
+    }
+
+    const QRegularExpression folderBlockRe(
+        QStringLiteral("Project\\(\"\\{2150E333-8FDC-42A3-9474-1A3956D46DE8\\}\"\\)\\s*=\\s*\"[^\"]+\",\\s*\"[^\"]+\","
+                       "\\s*\"%1\"[\\s\\S]*?EndProject\\r?\\n?")
+            .arg(QRegularExpression::escape(idQs)),
+        QRegularExpression::CaseInsensitiveOption);
+    text.remove(folderBlockRe);
+
+    const QRegularExpression nestedLineRe(
+        QStringLiteral("[ \\t]*(?:%1\\s*=\\s*\\{[^\\}]+\\}|\\{[^\\}]+\\}\\s*=\\s*%1)\\r?\\n?")
+            .arg(QRegularExpression::escape(idQs)),
+        QRegularExpression::CaseInsensitiveOption);
+    text.remove(nestedLineRe);
+    return fs.writeFileAtomic(solutionPath, text.toStdString());
+}
+
+Result<void> moveProjectToSolutionFolderInSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                       std::string_view projectPath,
+                                                       std::string_view targetFolderId) {
+    auto read = fs.readFile(solutionPath);
+    if (!read) {
+        return std::unexpected(read.error());
+    }
+    QString text = toQs(*read);
+    const QFileInfo slnInfo(toQs(solutionPath));
+    const QFileInfo projInfo(toQs(projectPath));
+    const QString relNative = QDir::toNativeSeparators(slnInfo.dir().relativeFilePath(projInfo.absoluteFilePath()));
+    QString relSlash = relNative;
+    relSlash.replace(QLatin1Char('\\'), QLatin1Char('/'));
+
+    if (toQs(solutionPath).endsWith(QStringLiteral(".slnx"), Qt::CaseInsensitive)) {
+        const QRegularExpression projRe(
+            QStringLiteral("[ \\t]*<Project\\s+Path=\"(?:%1|%2)\"[^>]*(?:/>|>[\\s\\S]*?</Project>)\\r?\\n?")
+                .arg(QRegularExpression::escape(relNative), QRegularExpression::escape(relSlash)),
+            QRegularExpression::CaseInsensitiveOption);
+        text.remove(projRe);
+
+        if (targetFolderId.empty()) {
+            const qsizetype closeSln = text.lastIndexOf(QStringLiteral("</Solution>"), -1, Qt::CaseInsensitive);
+            if (closeSln >= 0) {
+                text.insert(closeSln, QStringLiteral("  <Project Path=\"%1\" />\n").arg(xmlEscape(relSlash)));
+            }
+            return fs.writeFileAtomic(solutionPath, text.toStdString());
+        }
+
+        const QString folderQs = toQs(targetFolderId);
+        const QRegularExpression selfCloseFolderRe(
+            QStringLiteral("([ \\t]*)<Folder\\s+Name=\"%1\"\\s*/>")
+                .arg(QRegularExpression::escape(xmlEscape(folderQs))),
+            QRegularExpression::CaseInsensitiveOption);
+        if (const auto m = selfCloseFolderRe.match(text); m.hasMatch()) {
+            const QString indent = m.captured(1);
+            const QString expanded =
+                QStringLiteral("%1<Folder Name=\"%2\">\n%1  <Project Path=\"%3\" />\n%1</Folder>")
+                    .arg(indent, xmlEscape(folderQs), xmlEscape(relSlash));
+            text.replace(m.capturedStart(0), m.capturedLength(0), expanded);
+            return fs.writeFileAtomic(solutionPath, text.toStdString());
+        }
+        const QRegularExpression openFolderRe(
+            QStringLiteral("<Folder\\s+Name=\"%1\"\\s*>").arg(QRegularExpression::escape(xmlEscape(folderQs))),
+            QRegularExpression::CaseInsensitiveOption);
+        if (const auto m = openFolderRe.match(text); m.hasMatch()) {
+            text.insert(m.capturedEnd(0), QStringLiteral("\n    <Project Path=\"%1\" />").arg(xmlEscape(relSlash)));
+            return fs.writeFileAtomic(solutionPath, text.toStdString());
+        }
+        return fs.writeFileAtomic(solutionPath, text.toStdString());
+    }
+
+    const QRegularExpression projGuidRe(
+        QStringLiteral("Project\\(\"[^\"]+\"\\)\\s*=\\s*\"[^\"]+\",\\s*\"(?:%1|%2)\",\\s*\"(\\{[^\\}]+\\})\"")
+            .arg(QRegularExpression::escape(relNative), QRegularExpression::escape(relSlash)),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto m = projGuidRe.match(text);
+    if (!m.hasMatch()) {
+        return fail(ErrorCode::NotFound, "project entry not found in .sln");
+    }
+    const QString projGuid = m.captured(1);
+    upsertSlnNestedProject(text, projGuid, toQs(targetFolderId));
+    return fs.writeFileAtomic(solutionPath, text.toStdString());
+}
+
 } // namespace frost::app

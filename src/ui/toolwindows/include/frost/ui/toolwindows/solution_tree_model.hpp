@@ -108,6 +108,9 @@ public:
 signals:
     void filesDroppedOnFilter(const QString& projectPath, const QStringList& filePaths,
                               const QString& targetFilterPath);
+    void physicalFilesDroppedOnDirectory(const QString& projectPath, const QStringList& filePaths,
+                                         const QString& targetDirectoryPath);
+    void projectDroppedOnSolutionFolder(const QString& projectPath, const QString& targetFolderId);
 
 private:
     std::shared_ptr<const project::SolutionModel> m_solution;

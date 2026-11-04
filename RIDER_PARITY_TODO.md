@@ -36,19 +36,6 @@ This file tracks all remaining features required for complete 1:1 JetBrains Ride
 
 ---
 
-## 5. Solution Explorer & File System Quality-of-Life Parity
-- **5.1 Copy / Cut / Paste / Duplicate (`Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+D`)**:
-  - Support `Copy`, `Cut`, `Paste`, and `Duplicate...` for files and folders in both `SolutionExplorer` and `FileSystemView` (via keyboard shortcuts and context menu).
-  - Copy/move physical files and directories on disk, rebind open editor tabs on cut-paste, and automatically add pasted/duplicated files to the target `.vcxproj` / `.csproj` project when performed in `SolutionExplorer`.
-- **5.2 Drag-and-Drop Physical File & Folder Move**:
-  - Support dragging and dropping files/folders between directories in `FileSystemView` and in `SolutionExplorer` (`Folder Structure` mode), moving them on disk, updating `.vcxproj` relative paths, and rebinding open documents.
-- **5.3 Solution Folders (`.sln` & `.slnx`)**:
-  - Support `Add > New Solution Folder...`, `Rename Solution Folder...`, `Remove Solution Folder`, and moving projects into Solution Folders (via `Move to Solution Folder` menu and drag-and-drop), persisted to `.sln` (`2150E333-8FDC-42A3-9474-1A3956D46DE8` + `NestedProjects`) and `.slnx` (`<Folder>`).
-- **5.4 Unload Project / Reload Project**:
-  - Support right-clicking a project in `SolutionExplorer` to **Unload Project** and **Reload Project**, marking unloaded projects as `(unloaded)` in the solution tree and persisting the unloaded state.
-
----
-
 ## 6. Decompiler / Metadata-as-Source for External .NET Assemblies & C++ Symbols
 - **External Symbol Decompilation / Metadata-as-Source**:
   - When invoking `Go to Declaration` (`Ctrl+B` / `F12`) on a compiled .NET type (`System.*`, `UnityEngine.*`, NuGet package types) without local source, generate/decompile a readable C# source view (`ilspycmd` / Roslyn metadata projection) in a read-only `[Decompiled]` tab.

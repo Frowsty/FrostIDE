@@ -716,9 +716,21 @@ private:
     QPointer<LauncherWindow> m_launcherWindow;
     bool m_launcherModeEnabled = false;
     project::CppHierarchyMode m_cppHierarchyMode = project::CppHierarchyMode::FiltersAndFolders;
+    std::vector<std::string> m_unloadedProjectPaths;
+    std::vector<std::string> m_clipboardPaths;
+    bool m_clipboardIsCut = false;
     void transitionLauncherToMainWindow();
     void wireWelcomeScreen(WelcomeScreen* welcome);
     void addPathsToActiveProject(const std::vector<std::string>& paths, std::string_view targetFilterPath = {});
+    void copyPathsToClipboard(const std::vector<std::string>& paths);
+    void cutPathsToClipboard(const std::vector<std::string>& paths);
+    [[nodiscard]] bool canPastePaths() const noexcept { return !m_clipboardPaths.empty(); }
+    void pasteClipboardIntoDirectory(const std::string& targetDirectory, const std::string& targetProjectPath = {},
+                                     const std::string& targetFilterPath = {});
+    void duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory,
+                                 const std::string& projectPath = {}, const std::string& filterPath = {});
+    void movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths,
+                                      const std::string& targetDirectory, const std::string& projectPath = {});
     [[nodiscard]] QWidget* activeTopWindow() const noexcept;
     ui::TrustPrompter* m_trustPrompter = nullptr; // Child of this.
 

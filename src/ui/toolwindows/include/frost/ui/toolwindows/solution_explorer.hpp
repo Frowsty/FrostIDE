@@ -130,6 +130,8 @@ public:
 
     // Installs the terminal handler; an empty function removes its context-menu action.
     void setOpenTerminalHandler(std::function<void(const QString&)> handler) { m_terminalHandler = std::move(handler); }
+    void setCanPasteProvider(std::function<bool()> provider) { m_canPasteProvider = std::move(provider); }
+    [[nodiscard]] QStringList selectedPhysicalPaths() const;
     // Builds the context menu for `index`, an index of view()->model(); the caller owns the menu.
     // An invalid index gives an empty menu.
     [[nodiscard]] QMenu* createContextMenu(const QModelIndex& index, QWidget* parent = nullptr);
@@ -144,6 +146,21 @@ signals:
     void openFile(const QString& absolutePath);
     void renameRequested(const QString& path, bool isDirectory);
     void deleteRequested(const QString& path, bool isDirectory);
+    void copyPathsRequested(const QStringList& paths);
+    void cutPathsRequested(const QStringList& paths);
+    void pasteIntoDirectoryRequested(const QString& targetDirectory, const QString& targetProjectPath,
+                                     const QString& targetFilterPath);
+    void duplicatePathRequested(const QString& path, bool isDirectory, const QString& projectPath,
+                                const QString& filterPath);
+    void movePhysicalPathsRequested(const QStringList& sourcePaths, const QString& targetDirectory,
+                                    const QString& projectPath);
+    void addSolutionFolderRequested(const QString& parentFolderId);
+    void renameSolutionFolderRequested(const QString& folderId, const QString& currentName);
+    void removeSolutionFolderRequested(const QString& folderId);
+    void moveProjectToSolutionFolderRequested(const QString& projectPath, const QString& targetFolderId);
+    void moveProjectToNewSolutionFolderRequested(const QString& projectPath);
+    void unloadProjectRequested(const QString& projectPath);
+    void reloadProjectRequested(const QString& projectPath);
     void solutionPropertiesRequested();
     void configurationManagerRequested();
     void projectPropertiesRequested(const QString& projectPath);
@@ -196,6 +213,7 @@ private:
     std::function<bool(const QString&)> m_recoveryAvailable;
     std::function<void(const QString&)> m_recoverProjectHandler;
     std::function<void(const QString&)> m_terminalHandler;
+    std::function<bool()> m_canPasteProvider;
     QMetaObject::Connection m_solutionConnection;
 
     bool m_searchActive = false;

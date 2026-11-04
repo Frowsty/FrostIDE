@@ -277,7 +277,16 @@ std::string_view toString(ProjectKind kind) noexcept {
 // Builds a SolutionModel from a SolutionFile; a friend of SolutionModel.
 class SolutionModelBuilder {
 public:
-    SolutionModelBuilder(io::IFileSystem& fs, SolutionModel& model) : m_fs(fs), m_model(model) {}
+    SolutionModelBuilder(io::IFileSystem& fs, SolutionModel& model, const SolutionLoadOptions& options = {})
+        : m_fs(fs), m_model(model) {
+        for (const std::string& p : options.unloadedProjectPaths) {
+            if (auto norm = detail::normalizeAbsolute(p)) {
+                m_unloadedKeys.insert(detail::pathKey(*norm));
+            } else if (!p.empty()) {
+                m_unloadedKeys.insert(detail::pathKey(p));
+            }
+        }
+    }
 
     void build(SolutionFile file) {
         m_model.m_format = file.format;
@@ -362,7 +371,7 @@ private:
                                        .key = std::move(key),
                                        .project = std::nullopt,
                                        .itemType = ItemType::None,
-                                       .filterPath = {}});
+                                       .filterPath = folder.id});
             nodes.push_back(id);
             m_folderNodes.emplace(folder.id, id);
         }
@@ -418,6 +427,9 @@ private:
             info.nodeKind = NodeKind::UnavailableProject;
             info.error = Error(ErrorCode::InvalidArgument,
                                std::format("the project path '{}' cannot be resolved", entry.relativePath));
+        } else if (m_unloadedKeys.contains(detail::pathKey(entry.path))) {
+            info.nodeKind = NodeKind::UnavailableProject;
+            info.error = Error(ErrorCode::Cancelled, "unloaded");
         } else if (info.kind == ProjectKind::Cpp) {
             auto project = readVcxproj(m_fs, entry.path, VcxprojOptions{.solutionDirectory = m_model.m_directory});
             if (project) {
@@ -885,6 +897,7 @@ private:
 
     io::IFileSystem& m_fs;
     SolutionModel& m_model;
+    std::unordered_set<std::string> m_unloadedKeys;
     std::unordered_map<std::string, NodeId> m_folderNodes; // Folder id -> node.
     std::unordered_map<std::uint32_t, std::vector<ProjectReference>> m_csprojReferences;
 };
@@ -897,7 +910,7 @@ Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view 
     }
     SolutionModel model;
     model.m_cppHierarchy = options.cppHierarchy;
-    SolutionModelBuilder(fs, model).build(std::move(*file));
+    SolutionModelBuilder(fs, model, options).build(std::move(*file));
     return model;
 }
 

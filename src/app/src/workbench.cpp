@@ -1321,6 +1321,39 @@ void Workbench::attach(ui::ShellWindow& window) {
                     }
                     addPathsToActiveProject({QDir::toNativeSeparators(chosen).toStdString()});
                 });
+        fsView->setCanPasteProvider([this] { return canPastePaths(); });
+        connect(fsView, &ui::FileSystemView::copyPathsRequested, this, [this](const QStringList& paths) {
+            std::vector<std::string> stdPaths;
+            stdPaths.reserve(static_cast<std::size_t>(paths.size()));
+            for (const QString& p : paths) {
+                stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+            }
+            copyPathsToClipboard(stdPaths);
+        });
+        connect(fsView, &ui::FileSystemView::cutPathsRequested, this, [this](const QStringList& paths) {
+            std::vector<std::string> stdPaths;
+            stdPaths.reserve(static_cast<std::size_t>(paths.size()));
+            for (const QString& p : paths) {
+                stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+            }
+            cutPathsToClipboard(stdPaths);
+        });
+        connect(fsView, &ui::FileSystemView::pasteIntoDirectoryRequested, this, [this](const QString& targetDir) {
+            pasteClipboardIntoDirectory(QDir::toNativeSeparators(targetDir).toStdString());
+        });
+        connect(fsView, &ui::FileSystemView::duplicatePathRequested, this,
+                [this](const QString& path, bool isDirectory) {
+                    duplicatePathInExplorer(QDir::toNativeSeparators(path).toStdString(), isDirectory);
+                });
+        connect(fsView, &ui::FileSystemView::movePathsToDirectoryRequested, this,
+                [this](const QStringList& sourcePaths, const QString& targetDirectory) {
+                    std::vector<std::string> stdPaths;
+                    stdPaths.reserve(static_cast<std::size_t>(sourcePaths.size()));
+                    for (const QString& p : sourcePaths) {
+                        stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+                    }
+                    movePhysicalPathsToDirectory(stdPaths, QDir::toNativeSeparators(targetDirectory).toStdString());
+                });
     }
 
     attachToolWindows();
@@ -1801,6 +1834,156 @@ void Workbench::attachToolWindows() {
                     restartClangd();
                 }
             });
+    explorer->setCanPasteProvider([this] { return canPastePaths(); });
+    connect(explorer, &ui::SolutionExplorer::copyPathsRequested, this, [this](const QStringList& paths) {
+        std::vector<std::string> stdPaths;
+        stdPaths.reserve(static_cast<std::size_t>(paths.size()));
+        for (const QString& p : paths) {
+            stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+        }
+        copyPathsToClipboard(stdPaths);
+    });
+    connect(explorer, &ui::SolutionExplorer::cutPathsRequested, this, [this](const QStringList& paths) {
+        std::vector<std::string> stdPaths;
+        stdPaths.reserve(static_cast<std::size_t>(paths.size()));
+        for (const QString& p : paths) {
+            stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+        }
+        cutPathsToClipboard(stdPaths);
+    });
+    connect(explorer, &ui::SolutionExplorer::pasteIntoDirectoryRequested, this,
+            [this](const QString& targetDirectory, const QString& targetProjectPath, const QString& targetFilterPath) {
+                pasteClipboardIntoDirectory(QDir::toNativeSeparators(targetDirectory).toStdString(),
+                                            QDir::toNativeSeparators(targetProjectPath).toStdString(),
+                                            targetFilterPath.toStdString());
+            });
+    connect(explorer, &ui::SolutionExplorer::duplicatePathRequested, this,
+            [this](const QString& path, bool isDirectory, const QString& projectPath, const QString& filterPath) {
+                duplicatePathInExplorer(QDir::toNativeSeparators(path).toStdString(), isDirectory,
+                                        QDir::toNativeSeparators(projectPath).toStdString(), filterPath.toStdString());
+            });
+    connect(explorer, &ui::SolutionExplorer::movePhysicalPathsRequested, this,
+            [this](const QStringList& sourcePaths, const QString& targetDirectory, const QString& projectPath) {
+                std::vector<std::string> stdPaths;
+                stdPaths.reserve(static_cast<std::size_t>(sourcePaths.size()));
+                for (const QString& p : sourcePaths) {
+                    stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+                }
+                movePhysicalPathsToDirectory(stdPaths, QDir::toNativeSeparators(targetDirectory).toStdString(),
+                                             QDir::toNativeSeparators(projectPath).toStdString());
+            });
+    connect(explorer, &ui::SolutionExplorer::addSolutionFolderRequested, this, [this](const QString& parentFolderId) {
+        if (!m_window || !m_solution)
+            return;
+        bool ok = false;
+        const QString name =
+            QInputDialog::getText(m_window, text("New Solution Folder"), text("Solution folder name:"),
+                                  QLineEdit::Normal, QString(), &ok)
+                .trimmed();
+        if (!ok || name.isEmpty())
+            return;
+        if (auto res = addSolutionFolderToSolutionFile(m_services.fs, m_solution->path(), parentFolderId.toStdString(),
+                                                       name.toStdString());
+            !res) {
+            notify(text("Add Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        refreshSolutionExplorerForFsChange();
+    });
+    connect(explorer, &ui::SolutionExplorer::renameSolutionFolderRequested, this,
+            [this](const QString& folderId, const QString& currentName) {
+                if (!m_window || !m_solution || folderId.isEmpty())
+                    return;
+                bool ok = false;
+                const QString newName =
+                    QInputDialog::getText(m_window, text("Rename Solution Folder"), text("New solution folder name:"),
+                                          QLineEdit::Normal, currentName, &ok)
+                        .trimmed();
+                if (!ok || newName.isEmpty() || newName == currentName)
+                    return;
+                if (auto res = renameSolutionFolderInSolutionFile(m_services.fs, m_solution->path(),
+                                                                  folderId.toStdString(), newName.toStdString());
+                    !res) {
+                    notify(text("Rename Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::removeSolutionFolderRequested, this, [this](const QString& folderId) {
+        if (!m_window || !m_solution || folderId.isEmpty())
+            return;
+        if (auto res = removeSolutionFolderFromSolutionFile(m_services.fs, m_solution->path(), folderId.toStdString());
+            !res) {
+            notify(text("Remove Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        refreshSolutionExplorerForFsChange();
+    });
+    connect(explorer, &ui::SolutionExplorer::moveProjectToSolutionFolderRequested, this,
+            [this](const QString& projectPath, const QString& targetFolderId) {
+                if (!m_solution || projectPath.isEmpty())
+                    return;
+                if (auto res = moveProjectToSolutionFolderInSolutionFile(
+                        m_services.fs, m_solution->path(), projectPath.toStdString(), targetFolderId.toStdString());
+                    !res) {
+                    notify(text("Move to Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::moveProjectToNewSolutionFolderRequested, this,
+            [this](const QString& projectPath) {
+                if (!m_window || !m_solution || projectPath.isEmpty())
+                    return;
+                bool ok = false;
+                const QString name =
+                    QInputDialog::getText(m_window, text("Move to New Solution Folder"),
+                                          text("Solution folder name:"), QLineEdit::Normal, QString(), &ok)
+                        .trimmed();
+                if (!ok || name.isEmpty())
+                    return;
+                auto created =
+                    addSolutionFolderToSolutionFile(m_services.fs, m_solution->path(), {}, name.toStdString());
+                if (!created) {
+                    notify(text("Move to Solution Folder"), qs(created.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                if (auto moved = moveProjectToSolutionFolderInSolutionFile(m_services.fs, m_solution->path(),
+                                                                           projectPath.toStdString(), *created);
+                    !moved) {
+                    notify(text("Move to Solution Folder"), qs(moved.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::unloadProjectRequested, this, [this](const QString& projectPath) {
+        if (!m_solution || projectPath.isEmpty())
+            return;
+        const std::string stdPath = QDir::toNativeSeparators(projectPath).toStdString();
+        const std::string key = lang::documentKey(stdPath);
+        const bool already = std::ranges::any_of(m_unloadedProjectPaths,
+                                                 [&](const std::string& p) { return lang::documentKey(p) == key; });
+        if (!already) {
+            m_unloadedProjectPaths.push_back(stdPath);
+        }
+        refreshSolutionExplorerForFsChange();
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+    });
+    connect(explorer, &ui::SolutionExplorer::reloadProjectRequested, this, [this](const QString& projectPath) {
+        if (!m_solution || projectPath.isEmpty())
+            return;
+        const std::string stdPath = QDir::toNativeSeparators(projectPath).toStdString();
+        const std::string key = lang::documentKey(stdPath);
+        std::erase_if(m_unloadedProjectPaths, [&](const std::string& p) { return lang::documentKey(p) == key; });
+        refreshSolutionExplorerForFsChange();
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+    });
 
     auto* problems = new ui::ProblemsView();
     problems->setController(m_build.get());
@@ -1887,28 +2070,29 @@ void Workbench::attachToolbar() {
         }
         if (m_solution && m_runService && m_runService->startupProject()) {
             const project::ProjectId startupId = *m_runService->startupProject();
-            if (const project::ProjectEntry* entry = m_solution->findProject(startupId); entry != nullptr) {
+            if (startupId.value() < m_solution->projects().size()) {
+                const project::ProjectInfo& entry = m_solution->project(startupId);
                 menu.addSeparator();
-                const QString projName = qs(entry->name);
+                const QString projName = qs(entry.name);
                 QAction* buildStartup = menu.addAction(text("Build '%1'").arg(projName));
-                buildStartup->setEnabled(m_build && !m_build->isBuilding());
+                buildStartup->setEnabled(m_build && m_build->canBuild());
                 connect(buildStartup, &QAction::triggered, this, [this, startupId] {
                     if (m_build) {
-                        (void)m_build->buildProject(startupId);
+                        (void)m_build->build(build::BuildAction::Build, startupId);
                     }
                 });
                 QAction* rebuildStartup = menu.addAction(text("Rebuild '%1'").arg(projName));
-                rebuildStartup->setEnabled(m_build && !m_build->isBuilding());
+                rebuildStartup->setEnabled(m_build && m_build->canBuild());
                 connect(rebuildStartup, &QAction::triggered, this, [this, startupId] {
                     if (m_build) {
-                        (void)m_build->rebuildProject(startupId);
+                        (void)m_build->build(build::BuildAction::Rebuild, startupId);
                     }
                 });
                 QAction* cleanStartup = menu.addAction(text("Clean '%1'").arg(projName));
-                cleanStartup->setEnabled(m_build && !m_build->isBuilding());
+                cleanStartup->setEnabled(m_build && m_build->canBuild());
                 connect(cleanStartup, &QAction::triggered, this, [this, startupId] {
                     if (m_build) {
-                        (void)m_build->cleanProject(startupId);
+                        (void)m_build->build(build::BuildAction::Clean, startupId);
                     }
                 });
             }
@@ -1951,13 +2135,12 @@ void Workbench::attachRun() {
         if (!m_window || !m_solution || !m_runService)
             return;
         std::string projPath;
-        if (const auto startupId = m_runService->startupProject()) {
-            if (const project::ProjectEntry* entry = m_solution->findProject(*startupId)) {
-                projPath = entry->filePath;
-            }
+        if (const auto startupId = m_runService->startupProject();
+            startupId && startupId->value() < m_solution->projects().size()) {
+            projPath = m_solution->project(*startupId).path;
         }
         if (projPath.empty() && !m_solution->projects().empty()) {
-            projPath = m_solution->projects().front().filePath;
+            projPath = m_solution->projects().front().path;
         }
         std::string activeCfg = "Debug|x64";
         if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())

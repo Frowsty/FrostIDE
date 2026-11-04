@@ -90,6 +90,7 @@ enum class CppHierarchyMode : unsigned char {
 
 struct SolutionLoadOptions {
     CppHierarchyMode cppHierarchy = CppHierarchyMode::Filters;
+    std::vector<std::string> unloadedProjectPaths = {};
 };
 
 // "C++", "C#", "Visual Basic", "F#", "shared items", "unknown".

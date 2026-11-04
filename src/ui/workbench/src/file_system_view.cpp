@@ -14,15 +14,22 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QDataStream>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
+#include <QIODevice>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMimeData>
 #include <QScrollBar>
 #include <QTimer>
 #include <QTreeView>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -153,11 +160,88 @@ public:
         return createIndex(static_cast<int>(m_filter ? m_filter->rows[*node] : m_files->node(*node).row), 0,
                            quintptr(*node + 1));
     }
+    Qt::ItemFlags flags(const QModelIndex& index) const override {
+        if (!index.isValid() || !m_files)
+            return Qt::NoItemFlags;
+        const auto nodeIdx = index.internalId() - 1;
+        const auto& node = m_files->node(nodeIdx);
+        Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+        if (nodeIdx != 0)
+            result |= Qt::ItemIsDragEnabled;
+        if (node.directory)
+            result |= Qt::ItemIsDropEnabled;
+        else
+            result |= Qt::ItemNeverHasChildren;
+        return result;
+    }
+    Qt::DropActions supportedDropActions() const override { return Qt::MoveAction | Qt::CopyAction; }
+    QStringList mimeTypes() const override {
+        return {QStringLiteral("application/x-frostide-fs-paths"), QStringLiteral("text/uri-list")};
+    }
+    QMimeData* mimeData(const QModelIndexList& indexes) const override {
+        if (!m_files)
+            return nullptr;
+        QStringList paths;
+        QList<QUrl> urls;
+        for (const QModelIndex& idx : indexes) {
+            if (!idx.isValid())
+                continue;
+            const auto nodeIdx = idx.internalId() - 1;
+            if (nodeIdx == 0)
+                continue;
+            const QString p = fromUtf8(m_files->node(nodeIdx).path);
+            if (!p.isEmpty() && !paths.contains(p)) {
+                paths.push_back(p);
+                urls.push_back(QUrl::fromLocalFile(p));
+            }
+        }
+        if (paths.isEmpty())
+            return nullptr;
+        auto* mime = new QMimeData();
+        QByteArray payload;
+        QDataStream stream(&payload, QIODevice::WriteOnly);
+        stream << paths;
+        mime->setData(QStringLiteral("application/x-frostide-fs-paths"), payload);
+        mime->setUrls(urls);
+        return mime;
+    }
+    bool canDropMimeData(const QMimeData* data, Qt::DropAction, int, int, const QModelIndex& parent) const override {
+        if (!m_files || !data || !parent.isValid())
+            return false;
+        return data->hasFormat(QStringLiteral("application/x-frostide-fs-paths")) || data->hasUrls();
+    }
+    bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                      const QModelIndex& parent) override {
+        if (!canDropMimeData(data, action, row, column, parent))
+            return false;
+        const auto nodeIdx = parent.internalId() - 1;
+        const auto& targetNode = m_files->node(nodeIdx);
+        const QString targetDir =
+            targetNode.directory ? fromUtf8(targetNode.path) : fromUtf8(nav::parentOf(targetNode.path));
+        QStringList sourcePaths;
+        if (data->hasFormat(QStringLiteral("application/x-frostide-fs-paths"))) {
+            QByteArray payload = data->data(QStringLiteral("application/x-frostide-fs-paths"));
+            QDataStream stream(&payload, QIODevice::ReadOnly);
+            stream >> sourcePaths;
+        } else if (data->hasUrls()) {
+            for (const QUrl& url : data->urls()) {
+                if (url.isLocalFile())
+                    sourcePaths.push_back(url.toLocalFile());
+            }
+        }
+        if (sourcePaths.isEmpty() || targetDir.isEmpty())
+            return false;
+        if (m_dropCallback)
+            m_dropCallback(sourcePaths, targetDir);
+        return true;
+    }
+    void setDropCallback(std::function<void(const QStringList&, const QString&)> cb) { m_dropCallback = std::move(cb); }
 
 private:
     std::shared_ptr<const nav::ProjectFiles> m_files;
     std::shared_ptr<const workbench_detail::FileTreeFilter> m_filter;
     FileSystemView::FileColorProvider m_colors;
+    std::function<void(const QStringList&, const QString&)> m_dropCallback;
 };
 
 namespace {
@@ -227,6 +311,14 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     m_tree->setUniformRowHeights(true);
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_tree->setDragEnabled(true);
+    m_tree->setAcceptDrops(true);
+    m_tree->setDropIndicatorShown(true);
+    m_tree->setDragDropMode(QAbstractItemView::DragDrop);
+    m_tree->setDefaultDropAction(Qt::MoveAction);
+    m_model->setDropCallback([this](const QStringList& srcPaths, const QString& dstDir) {
+        emit movePathsToDirectoryRequested(srcPaths, dstDir);
+    });
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tree->installEventFilter(this);
     m_tree->viewport()->installEventFilter(this);
@@ -695,6 +787,22 @@ QMenu* FileSystemView::createContextMenu(const QModelIndex& index, QWidget* pare
             [this, directory] { emit addExistingFolderToProjectRequested(directory); });
     if (index.isValid() && toUtf8(targetPath) != m_model->files()->root()) {
         menu->addSeparator();
+        QAction* cutAct = menu->addAction(text("Cut"));
+        cutAct->setObjectName(QStringLiteral("cutItems"));
+        connect(cutAct, &QAction::triggered, this, [this, selPaths] { emit cutPathsRequested(selPaths); });
+        QAction* copyAct = menu->addAction(text("Copy"));
+        copyAct->setObjectName(QStringLiteral("copyItems"));
+        connect(copyAct, &QAction::triggered, this, [this, selPaths] { emit copyPathsRequested(selPaths); });
+        QAction* pasteAct = menu->addAction(text("Paste"));
+        pasteAct->setObjectName(QStringLiteral("pasteItems"));
+        pasteAct->setEnabled(!m_canPaste || m_canPaste());
+        connect(pasteAct, &QAction::triggered, this,
+                [this, directory] { emit pasteIntoDirectoryRequested(directory); });
+        QAction* dupAct = menu->addAction(text("Duplicate..."));
+        dupAct->setObjectName(QStringLiteral("duplicateItem"));
+        connect(dupAct, &QAction::triggered, this,
+                [this, targetPath, isDirectory] { emit duplicatePathRequested(targetPath, isDirectory); });
+        menu->addSeparator();
         QAction* renameAct = menu->addAction(text("Rename..."));
         renameAct->setObjectName(QStringLiteral("renameItem"));
         connect(renameAct, &QAction::triggered, this,
@@ -703,6 +811,13 @@ QMenu* FileSystemView::createContextMenu(const QModelIndex& index, QWidget* pare
         deleteAct->setObjectName(QStringLiteral("deleteItem"));
         connect(deleteAct, &QAction::triggered, this,
                 [this, targetPath, isDirectory] { emit deleteRequested(targetPath, isDirectory); });
+    } else {
+        menu->addSeparator();
+        QAction* pasteAct = menu->addAction(text("Paste"));
+        pasteAct->setObjectName(QStringLiteral("pasteItems"));
+        pasteAct->setEnabled(!m_canPaste || m_canPaste());
+        connect(pasteAct, &QAction::triggered, this,
+                [this, directory] { emit pasteIntoDirectoryRequested(directory); });
     }
     menu->addSeparator();
     QAction* copy = menu->addAction(text("Copy Path"));
@@ -741,12 +856,34 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::Wheel ||
         event->type() == QEvent::KeyPress)
         m_restoreScroll.reset(); // User navigation wins over a pending batched restore.
+    if (watched == m_tree->viewport()) {
+        if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
+            auto* dragEvent = static_cast<QDropEvent*>(event);
+            const QModelIndex targetIdx = m_tree->indexAt(dragEvent->position().toPoint());
+            if (targetIdx.isValid() && m_model->canDropMimeData(dragEvent->mimeData(), Qt::MoveAction, -1, -1, targetIdx)) {
+                dragEvent->setDropAction(Qt::MoveAction);
+                dragEvent->accept();
+                return true;
+            }
+        } else if (event->type() == QEvent::Drop) {
+            auto* dropEvent = static_cast<QDropEvent*>(event);
+            const QModelIndex targetIdx = m_tree->indexAt(dropEvent->position().toPoint());
+            if (targetIdx.isValid() && m_model->dropMimeData(dropEvent->mimeData(), Qt::MoveAction, -1, -1, targetIdx)) {
+                dropEvent->setDropAction(Qt::MoveAction);
+                dropEvent->accept();
+                return true;
+            }
+        }
+    }
     if (watched == m_tree && event->type() == QEvent::ShortcutOverride && m_search->isHidden()) {
         const auto* key = static_cast<QKeyEvent*>(event);
         const Qt::KeyboardModifiers mods = key->modifiers() & ~Qt::KeypadModifier;
         if ((key->key() == Qt::Key_F2 && mods == Qt::NoModifier) ||
             (key->key() == Qt::Key_F6 && mods == Qt::ShiftModifier) ||
-            (key->key() == Qt::Key_Delete && mods == Qt::NoModifier)) {
+            (key->key() == Qt::Key_Delete && mods == Qt::NoModifier) ||
+            (mods == Qt::ControlModifier &&
+             (key->key() == Qt::Key_C || key->key() == Qt::Key_X || key->key() == Qt::Key_V ||
+              key->key() == Qt::Key_D))) {
             event->accept();
             return true;
         }
@@ -790,6 +927,35 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
                     emit deleteRequested(idx.data(kPathRole).toString(), idx.data(kDirectoryRole).toBool());
                 }
                 return true;
+            }
+            if (mods == Qt::ControlModifier) {
+                if (key->key() == Qt::Key_C) {
+                    const QStringList sel = selectedPaths();
+                    if (!sel.isEmpty())
+                        emit copyPathsRequested(sel);
+                    return true;
+                }
+                if (key->key() == Qt::Key_X) {
+                    const QStringList sel = selectedPaths();
+                    if (!sel.isEmpty())
+                        emit cutPathsRequested(sel);
+                    return true;
+                }
+                if (key->key() == Qt::Key_V) {
+                    const std::string dir = selectedDirectory();
+                    if (!dir.empty())
+                        emit pasteIntoDirectoryRequested(fromUtf8(dir));
+                    return true;
+                }
+                if (key->key() == Qt::Key_D) {
+                    const QModelIndex idx = m_tree->currentIndex();
+                    if (idx.isValid() && m_model->files() &&
+                        toUtf8(idx.data(kPathRole).toString()) != m_model->files()->root()) {
+                        emit duplicatePathRequested(idx.data(kPathRole).toString(),
+                                                    idx.data(kDirectoryRole).toBool());
+                    }
+                    return true;
+                }
             }
         }
         if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && m_search->isHidden()) {

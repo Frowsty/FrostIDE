@@ -75,6 +75,7 @@ public:
     using FileColorProvider = std::function<std::optional<QColor>(std::string_view)>;
     void setFileColorProvider(FileColorProvider provider);
     void refreshFileColors();
+    void setCanPasteProvider(std::function<bool()> provider) { m_canPaste = std::move(provider); }
 
     [[nodiscard]] QTreeView* tree() const noexcept { return m_tree; }
     // Index in the displayed tree, invalid when absent or filtered out. GUI thread only.
@@ -87,6 +88,11 @@ signals:
     void newFolderRequested(const QString& directory);
     void renameRequested(const QString& path, bool isDirectory);
     void deleteRequested(const QString& path, bool isDirectory);
+    void copyPathsRequested(const QStringList& paths);
+    void cutPathsRequested(const QStringList& paths);
+    void pasteIntoDirectoryRequested(const QString& targetDirectory);
+    void duplicatePathRequested(const QString& path, bool isDirectory);
+    void movePathsToDirectoryRequested(const QStringList& sourcePaths, const QString& targetDirectory);
     void openContainingFolderRequested(const QString& path);
     void openInTerminalRequested(const QString& directoryPath);
     void addPathsToProjectRequested(const QStringList& paths);
@@ -114,6 +120,7 @@ private:
     std::string m_pendingSelectPath;
     bool m_displayCurrent = true;
     FileColorProvider m_fileColors;
+    std::function<bool()> m_canPaste;
     QTreeView* m_tree;
     ProjectTreeModel* m_model;
     QLineEdit* m_search;

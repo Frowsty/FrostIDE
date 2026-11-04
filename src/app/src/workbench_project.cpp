@@ -34,10 +34,14 @@
 #include "project_edit_process.hpp"
 #include "project_properties_dialog.hpp"
 #include "unity_control.hpp"
+#include <QClipboard>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QInputDialog>
+#include <QMimeData>
 #include <QStandardPaths>
+#include <QUrl>
 
 #include <algorithm>
 #include <array>
@@ -477,8 +481,8 @@ Result<void> Workbench::openSolution(const std::string& path) {
         transitionLauncherToMainWindow();
         return {}; // Already the project.
     }
-    Result<project::SolutionModel> loaded =
-        project::SolutionModel::load(m_services.fs, path, {.cppHierarchy = m_cppHierarchyMode});
+    Result<project::SolutionModel> loaded = project::SolutionModel::load(
+        m_services.fs, path, {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths});
     if (!loaded) {
         notify(text("Cannot open %1").arg(qs(path)), qs(loaded.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(loaded.error()));
@@ -715,6 +719,7 @@ bool Workbench::closeForOpen() {
         }
     }
     m_solution.reset();
+    m_unloadedProjectPaths.clear();
     m_closingSolution = false;
     if (m_debug)
         (void)m_debug->setWorkspaceRoot({});
@@ -1252,8 +1257,9 @@ Result<std::string> Workbench::createNewFile(std::string_view directory, std::st
         std::ranges::any_of(m_solution->projects(), [](const project::ProjectInfo& p) {
             return p.kind == project::ProjectKind::CSharp && p.nodeKind == project::NodeKind::Project;
         })) {
-        if (auto loaded =
-                project::SolutionModel::load(m_services.fs, m_solution->path(), {.cppHierarchy = m_cppHierarchyMode})) {
+        if (auto loaded = project::SolutionModel::load(
+                m_services.fs, m_solution->path(),
+                {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths})) {
             auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
             m_solution = refreshed;
             if (m_explorer) {
@@ -1279,8 +1285,9 @@ Result<std::string> Workbench::createNewFolder(std::string_view directory, std::
         std::ranges::any_of(m_solution->projects(), [](const project::ProjectInfo& p) {
             return p.kind == project::ProjectKind::CSharp && p.nodeKind == project::NodeKind::Project;
         })) {
-        if (auto loaded =
-                project::SolutionModel::load(m_services.fs, m_solution->path(), {.cppHierarchy = m_cppHierarchyMode})) {
+        if (auto loaded = project::SolutionModel::load(
+                m_services.fs, m_solution->path(),
+                {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths})) {
             auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
             m_solution = refreshed;
             if (m_explorer) {
@@ -1510,8 +1517,9 @@ void Workbench::refreshSolutionExplorerForFsChange(std::string_view selectPath) 
     if (!m_solution || m_buildService->state() != build::BuildState::Idle || m_buildService->projectEditInProgress()) {
         return;
     }
-    if (auto loaded =
-            project::SolutionModel::load(m_services.fs, m_solution->path(), {.cppHierarchy = m_cppHierarchyMode})) {
+    if (auto loaded = project::SolutionModel::load(
+            m_services.fs, m_solution->path(),
+            {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths})) {
         auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
         if (m_buildService->beginProjectEdit()) {
             (void)m_buildService->finishProjectEdit(refreshed);
@@ -2095,6 +2103,335 @@ void Workbench::promptAndDeleteItem(std::string_view path) {
         return;
     }
     (void)deleteItem(canonical);
+}
+
+namespace {
+
+Result<void> copyFileOrDirectoryRecursiveFs(io::IFileSystem& fs, const std::string& srcPath,
+                                            const std::string& dstPath) {
+    auto st = fs.status(srcPath);
+    if (!st) {
+        return std::unexpected(st.error());
+    }
+    if (st->type == io::FileType::Regular) {
+        auto bytes = fs.readFile(srcPath);
+        if (!bytes) {
+            return std::unexpected(bytes.error());
+        }
+        return fs.writeFileAtomic(dstPath, *bytes);
+    }
+    if (st->type == io::FileType::Directory) {
+        if (auto created = fs.createDirectories(dstPath); !created) {
+            return std::unexpected(created.error());
+        }
+        auto entries = fs.listDirectory(srcPath);
+        if (!entries) {
+            return std::unexpected(entries.error());
+        }
+        for (const io::DirEntry& entry : *entries) {
+            auto childSrc = io::joinPath(srcPath, entry.name);
+            auto childDst = io::joinPath(dstPath, entry.name);
+            if (!childSrc || !childDst) {
+                continue;
+            }
+            if (auto copied = copyFileOrDirectoryRecursiveFs(fs, *childSrc, *childDst); !copied) {
+                return std::unexpected(copied.error());
+            }
+        }
+        return {};
+    }
+    return {};
+}
+
+std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& targetDirectory,
+                                     std::string_view fileName, bool isDirectory) {
+    if (auto direct = io::joinPath(targetDirectory, fileName);
+        direct && !fs.exists(*direct).value_or(false)) {
+        return *direct;
+    }
+    std::string stem(fileName);
+    std::string ext;
+    if (!isDirectory) {
+        if (const std::size_t dot = stem.find_last_of('.'); dot != std::string::npos && dot > 0) {
+            ext = stem.substr(dot);
+            stem = stem.substr(0, dot);
+        }
+    }
+    for (int idx = 1; idx < 1000; ++idx) {
+        const std::string candidateName =
+            idx == 1 ? std::format("{}_copy{}", stem, ext) : std::format("{}_copy{}{}", stem, idx, ext);
+        if (auto joined = io::joinPath(targetDirectory, candidateName);
+            joined && !fs.exists(*joined).value_or(false)) {
+            return *joined;
+        }
+    }
+    return {};
+}
+
+} // namespace
+
+void Workbench::copyPathsToClipboard(const std::vector<std::string>& paths) {
+    m_clipboardPaths.clear();
+    QList<QUrl> urls;
+    QStringList textLines;
+    for (const std::string& p : paths) {
+        if (p.empty()) {
+            continue;
+        }
+        const std::string canonical = m_documentRegistry->canonicalize(p);
+        m_clipboardPaths.push_back(canonical);
+        const QString qpath = qs(canonical);
+        urls.push_back(QUrl::fromLocalFile(qpath));
+        textLines.push_back(QDir::toNativeSeparators(qpath));
+    }
+    m_clipboardIsCut = false;
+    if (!urls.isEmpty() && QGuiApplication::clipboard() != nullptr) {
+        auto* mime = new QMimeData();
+        mime->setUrls(urls);
+        mime->setText(textLines.join(QLatin1Char('\n')));
+        QGuiApplication::clipboard()->setMimeData(mime);
+    }
+}
+
+void Workbench::cutPathsToClipboard(const std::vector<std::string>& paths) {
+    copyPathsToClipboard(paths);
+    m_clipboardIsCut = !m_clipboardPaths.empty();
+}
+
+void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths,
+                                             const std::string& targetDirectory,
+                                             const std::string& projectPath) {
+    if (sourcePaths.empty() || targetDirectory.empty()) {
+        return;
+    }
+    const std::string canonicalTargetDir = m_documentRegistry->canonicalize(targetDirectory);
+    auto dirSt = m_services.fs.status(canonicalTargetDir);
+    if (!dirSt || dirSt->type != io::FileType::Directory) {
+        return;
+    }
+    std::string lastMoved;
+    std::vector<std::string> movedFiles;
+    std::vector<std::string> oldParents;
+
+    for (const std::string& rawSrc : sourcePaths) {
+        const std::string canonicalOld = m_documentRegistry->canonicalize(rawSrc);
+        if (canonicalOld.empty()) {
+            continue;
+        }
+        if (!m_projectRoot.empty() && lang::documentKey(canonicalOld) == lang::documentKey(m_projectRoot)) {
+            continue;
+        }
+        auto st = m_services.fs.status(canonicalOld);
+        if (!st) {
+            continue;
+        }
+        const bool isDir = st->type == io::FileType::Directory;
+        const std::string oldParent(io::parentPath(canonicalOld));
+        if (lang::documentKey(oldParent) == lang::documentKey(canonicalTargetDir)) {
+            continue;
+        }
+        if (isDir) {
+            const std::string oldKey = lang::documentKey(canonicalOld);
+            const std::string targetKey = lang::documentKey(canonicalTargetDir);
+            if (targetKey == oldKey ||
+                (targetKey.starts_with(oldKey) && targetKey.size() > oldKey.size() &&
+                 (canonicalTargetDir[canonicalOld.size()] == '/' ||
+                  canonicalTargetDir[canonicalOld.size()] == '\\'))) {
+                notify(text("Cannot move folder"), text("Cannot move a folder into itself."),
+                       ui::NotificationKind::Warning);
+                continue;
+            }
+        }
+        auto targetJoined = io::joinPath(canonicalTargetDir, io::fileName(canonicalOld));
+        if (!targetJoined) {
+            continue;
+        }
+        if (m_services.fs.exists(*targetJoined).value_or(false)) {
+            notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))),
+                   text("'%1' already exists in the destination folder.").arg(qs(io::fileName(canonicalOld))),
+                   ui::NotificationKind::Warning);
+            continue;
+        }
+        if (auto renamed = m_services.fs.rename(canonicalOld, *targetJoined); !renamed) {
+            notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
+                   ui::NotificationKind::Error);
+            continue;
+        }
+        const std::string canonicalNew = m_documentRegistry->canonicalize(*targetJoined);
+        oldParents.push_back(oldParent);
+        lastMoved = canonicalNew;
+        movedFiles.push_back(canonicalNew);
+
+        if (!isDir) {
+            rebindRenamedDocument(canonicalOld, canonicalNew);
+        } else {
+            const std::string oldDirKey = lang::documentKey(canonicalOld);
+            std::vector<std::pair<std::string, std::string>> docRenames;
+            for (const auto& doc : m_documents->documents()) {
+                if (doc->untitled()) {
+                    continue;
+                }
+                const std::string docKey = lang::documentKey(doc->path());
+                if (docKey.starts_with(oldDirKey) && docKey.size() > oldDirKey.size() &&
+                    (doc->path()[canonicalOld.size()] == '/' || doc->path()[canonicalOld.size()] == '\\')) {
+                    const std::string suffix = doc->path().substr(canonicalOld.size() + 1);
+                    if (auto joined = io::joinPath(canonicalNew, suffix); joined) {
+                        docRenames.emplace_back(doc->path(), m_documentRegistry->canonicalize(*joined));
+                    }
+                }
+            }
+            for (const auto& [oldDoc, newDoc] : docRenames) {
+                rebindRenamedDocument(oldDoc, newDoc);
+            }
+            if (m_nav) {
+                m_nav->notifyPathRenamed(canonicalOld, canonicalNew);
+            }
+        }
+
+        renameSourceInCMakeLists(canonicalOld, canonicalNew, isDir);
+        updatePathInVcxproj(canonicalOld, canonicalNew, isDir, false);
+    }
+
+    if (movedFiles.empty()) {
+        return;
+    }
+    if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
+        (void)addExistingFilesToVcxproj(m_services.fs, projectPath, movedFiles);
+    }
+    if (m_nav) {
+        m_nav->refresh();
+        if (m_nav->fileSystemView()) {
+            m_nav->fileSystemView()->selectWhenAvailable(lastMoved);
+        }
+    }
+    refreshSolutionExplorerForFsChange(lastMoved);
+    if (m_solution) {
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+    }
+}
+
+void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, const std::string& targetProjectPath,
+                                            const std::string& targetFilterPath) {
+    if (m_clipboardPaths.empty() || targetDirectory.empty()) {
+        return;
+    }
+    if (m_clipboardIsCut) {
+        const std::vector<std::string> toMove = m_clipboardPaths;
+        m_clipboardPaths.clear();
+        m_clipboardIsCut = false;
+        movePhysicalPathsToDirectory(toMove, targetDirectory, targetProjectPath);
+        return;
+    }
+
+    const std::string canonicalTargetDir = m_documentRegistry->canonicalize(targetDirectory);
+    std::vector<std::string> createdPaths;
+    for (const std::string& src : m_clipboardPaths) {
+        auto st = m_services.fs.status(src);
+        if (!st) {
+            continue;
+        }
+        const bool isDir = st->type == io::FileType::Directory;
+        const std::string dst =
+            findNonCollidingCopyPath(m_services.fs, canonicalTargetDir, io::fileName(src), isDir);
+        if (dst.empty()) {
+            continue;
+        }
+        if (auto copied = copyFileOrDirectoryRecursiveFs(m_services.fs, src, dst); !copied) {
+            notify(text("Cannot paste %1").arg(qs(io::fileName(src))), qs(copied.error().message()),
+                   ui::NotificationKind::Error);
+            continue;
+        }
+        createdPaths.push_back(m_documentRegistry->canonicalize(dst));
+    }
+
+    if (createdPaths.empty()) {
+        return;
+    }
+    if (!targetProjectPath.empty() && targetProjectPath.ends_with(".vcxproj")) {
+        (void)addExistingFilesToVcxproj(m_services.fs, targetProjectPath, createdPaths, targetFilterPath);
+    }
+    if (m_nav) {
+        m_nav->refresh();
+        if (m_nav->fileSystemView()) {
+            m_nav->fileSystemView()->selectWhenAvailable(createdPaths.front());
+        }
+    }
+    refreshSolutionExplorerForFsChange(createdPaths.front());
+    if (m_solution) {
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+    }
+}
+
+void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory,
+                                        const std::string& projectPath, const std::string& filterPath) {
+    if (sourcePath.empty()) {
+        return;
+    }
+    const std::string canonicalSrc = m_documentRegistry->canonicalize(sourcePath);
+    auto st = m_services.fs.status(canonicalSrc);
+    if (!st) {
+        notify(text("Cannot duplicate"), qs(st.error().message()), ui::NotificationKind::Error);
+        return;
+    }
+    const std::string parentDir(io::parentPath(canonicalSrc));
+    const std::string suggestedFull =
+        findNonCollidingCopyPath(m_services.fs, parentDir, io::fileName(canonicalSrc), isDirectory);
+    const std::string suggestedName =
+        suggestedFull.empty() ? std::string(io::fileName(canonicalSrc)) : std::string(io::fileName(suggestedFull));
+
+    std::string chosenName;
+    if (m_window) {
+        bool ok = false;
+        const QString entered =
+            QInputDialog::getText(m_window, isDirectory ? text("Duplicate Folder") : text("Duplicate File"),
+                                  text("New name:"), QLineEdit::Normal, qs(suggestedName), &ok)
+                .trimmed();
+        if (!ok || entered.isEmpty()) {
+            return;
+        }
+        chosenName = entered.toStdString();
+    } else {
+        chosenName = suggestedName;
+    }
+
+    if (auto valid = validateProjectNameComponent(chosenName); !valid) {
+        notify(text("Cannot duplicate"), qs(valid.error().message()), ui::NotificationKind::Error);
+        return;
+    }
+    auto dstJoined = io::joinPath(parentDir, chosenName);
+    if (!dstJoined) {
+        return;
+    }
+    if (m_services.fs.exists(*dstJoined).value_or(false)) {
+        notify(text("Cannot duplicate"), text("'%1' already exists.").arg(qs(chosenName)),
+               ui::NotificationKind::Error);
+        return;
+    }
+    if (auto copied = copyFileOrDirectoryRecursiveFs(m_services.fs, canonicalSrc, *dstJoined); !copied) {
+        notify(text("Cannot duplicate"), qs(copied.error().message()), ui::NotificationKind::Error);
+        return;
+    }
+    const std::string canonicalDst = m_documentRegistry->canonicalize(*dstJoined);
+    if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
+        const std::array<std::string, 1> added{canonicalDst};
+        (void)addExistingFilesToVcxproj(m_services.fs, projectPath, added, filterPath);
+    }
+    if (m_nav) {
+        m_nav->refresh();
+        if (m_nav->fileSystemView()) {
+            m_nav->fileSystemView()->selectWhenAvailable(canonicalDst);
+        }
+    }
+    refreshSolutionExplorerForFsChange(canonicalDst);
+    if (!isDirectory) {
+        (void)openPath(canonicalDst);
+    }
 }
 
 // --- clangd ---

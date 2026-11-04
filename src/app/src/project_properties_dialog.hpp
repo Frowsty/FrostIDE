@@ -69,6 +69,18 @@ struct NuGetPackageEntry {
 [[nodiscard]] Result<void> removeProjectFromSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
                                                          std::string_view projectPath);
 
+// Solution Folder management in `.sln` and `.slnx` solution files on disk.
+[[nodiscard]] Result<std::string> addSolutionFolderToSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                                  std::string_view parentFolderId,
+                                                                  std::string_view folderName);
+[[nodiscard]] Result<void> renameSolutionFolderInSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                              std::string_view folderId, std::string_view newName);
+[[nodiscard]] Result<void> removeSolutionFolderFromSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                                std::string_view folderId);
+[[nodiscard]] Result<void> moveProjectToSolutionFolderInSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
+                                                                     std::string_view projectPath,
+                                                                     std::string_view targetFolderId);
+
 // C++ (.vcxproj / .vcxproj.filters) filter management and batch file/folder operations.
 [[nodiscard]] Result<void> addFilterToVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
                                                      std::string_view filterPath);
