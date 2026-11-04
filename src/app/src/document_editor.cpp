@@ -51,7 +51,8 @@ DocumentEditorView::DocumentEditorView(document::FileDocument& document, std::un
     : m_document(&document), m_path(document.path()), m_editor(std::move(editor)), m_host(host), m_listener(listener),
       m_factory(factory) {
     m_editor->setFileInfo(ui::EditorFileInfo{encodingToken(document), lineSeparatorToken(document),
-                                             document.readOnly() != document::ReadOnlyReason::None,
+                                             document.readOnly() != document::ReadOnlyReason::None ||
+                                                 m_path.find("[Decompiled]") != std::string::npos,
                                              document.readOnly() == document::ReadOnlyReason::LongLine});
     QObject::connect(m_editor.get(), &ui::EditorView::statusChanged, m_editor.get(),
                      [this] { m_host.editorStatusChanged(*this); });
@@ -139,7 +140,8 @@ void DocumentEditorView::restoreViewState(const ui::EditorViewState& state) {
 
 void DocumentEditorView::refresh() {
     m_editor->setFileInfo(ui::EditorFileInfo{encodingToken(*m_document), lineSeparatorToken(*m_document),
-                                             m_document->readOnly() != document::ReadOnlyReason::None,
+                                             m_document->readOnly() != document::ReadOnlyReason::None ||
+                                                 m_path.find("[Decompiled]") != std::string::npos,
                                              m_document->readOnly() == document::ReadOnlyReason::LongLine});
     m_host.editorStatusChanged(*this);
 }

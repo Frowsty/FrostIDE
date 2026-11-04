@@ -63,7 +63,8 @@ std::string uriOf(const std::string& path) { return fl::pathToUri(path).value();
 // The active editor: one document in a TextBuffer.
 class FakeHost final : public frost::ui::lang::IEditorLanguageHost {
 public:
-    explicit FakeHost(std::string text) : m_buffer(frost::text::TextBuffer::fromUtf8(std::move(text)).value()) {}
+    explicit FakeHost(std::string text, std::string path = workPath("main.cpp"))
+        : m_path(std::move(path)), m_buffer(frost::text::TextBuffer::fromUtf8(std::move(text)).value()) {}
 
     // Puts the caret just after the first occurrence of `marker`.
     void caretAfter(std::string_view marker) {
@@ -879,6 +880,57 @@ TEST(LanguageControllerNavigation, StructurePreservesCollapsedHierarchyOnJumpAnd
     ASSERT_TRUE(pumpUntil([&] { return requests.load() == 2; }));
     ASSERT_EQ(tree->topLevelItemCount(), 1);
     EXPECT_FALSE(tree->topLevelItem(0)->isExpanded());
+}
+
+TEST(LanguageControllerNavigation, GotoDeclarationDecompilesExternalDotNetAndCppSymbolsWhenNoLocalSource) {
+    FeatureServer server;
+    server.on("textDocument/definition", [](const Json&) {
+        return Json::array({Json::object()
+                                .set("uri", "csharp:/metadata/projects/App/assemblies/System.Console/symbols/Console.cs")
+                                .set("range", rangeJson(10, 4, 13))});
+    });
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/references", [](const Json&) { return Json::array(); });
+    server.on("csharp/metadata", [](const Json&) {
+        return Json::object().set(
+            "source",
+            "namespace System\n{\n    public static class Console\n    {\n        public static void WriteLine(string? value);\n    }\n}\n");
+    });
+
+    FakeHost csHost("using System;\nclass Program {\n    static void Main() {\n        System.Console.WriteLine(\"hi\");\n    }\n}\n",
+                    workPath("Program.cs"));
+    csHost.caretAfter("System.Console.Write");
+    Rig csRig(server, csHost);
+    csRig.controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return csHost.opened.size() == 1; }));
+    EXPECT_TRUE(csHost.opened[0].first.contains("[Decompiled] WriteLine.cs"));
+    const auto decompiledCs = csRig.fs.readFile(csHost.opened[0].first);
+    ASSERT_TRUE(decompiledCs.has_value());
+    EXPECT_TRUE(decompiledCs->contains("[Decompiled] External Symbol Metadata-as-Source"));
+    EXPECT_TRUE(decompiledCs->contains("public static void WriteLine(string? value);"));
+
+    // Also test hover-based metadata projection when csharp/metadata is not available (e.g. C++ external symbol).
+    FeatureServer cppServer;
+    cppServer.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    cppServer.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    cppServer.on("textDocument/references", [](const Json&) { return Json::array(); });
+    cppServer.on("textDocument/hover", [](const Json&) {
+        return Json::object().set(
+            "contents",
+            Json::object()
+                .set("kind", "markdown")
+                .set("value", "```cpp\ntemplate <class T> class vector\n```\n---\nSequence container encapsulating dynamic size arrays."));
+    });
+    FakeHost cppHost("#include <vector>\nint main() {\n    std::vector<int> items;\n}\n", workPath("main.cpp"));
+    cppHost.caretAfter("std::vec");
+    Rig cppRig(cppServer, cppHost);
+    cppRig.controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return cppHost.opened.size() == 1; }));
+    EXPECT_TRUE(cppHost.opened[0].first.contains("[Decompiled] vector.hpp"));
+    const auto decompiledCpp = cppRig.fs.readFile(cppHost.opened[0].first);
+    ASSERT_TRUE(decompiledCpp.has_value());
+    EXPECT_TRUE(decompiledCpp->contains("Sequence container encapsulating dynamic size arrays."));
+    EXPECT_TRUE(decompiledCpp->contains("template <class T> class vector;"));
 }
 
 } // namespace

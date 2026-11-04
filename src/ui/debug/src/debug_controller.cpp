@@ -328,16 +328,20 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
     const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
     if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "another run or debug launch is already pending");
+    const std::string_view typeView = attachArguments.isObject() ? attachArguments.stringAt("type") : std::string_view{};
+    const std::string adapterId = !typeView.empty() ? std::string(typeView) : std::string("lldb-dap");
+    const std::string displayAdapter =
+        adapterId == "coreclr" ? "CoreCLR" : (!typeView.empty() ? adapterId : std::string("Lua"));
     auto started = startSession(
-        target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, "Lua",
-        [this, target, factory = std::move(factory),
-         arguments = std::move(attachArguments)](debug::DebugSessionCallbacks callbacks) mutable {
+        target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, displayAdapter,
+        [this, target, factory = std::move(factory), arguments = std::move(attachArguments),
+         adapterId](debug::DebugSessionCallbacks callbacks) mutable {
             return debug::attachDebugSession(*m_options.trust, target, std::move(factory), std::move(arguments),
-                                             m_breakpoints.sessionLines(), std::move(callbacks));
+                                             m_breakpoints.sessionLines(), std::move(callbacks), std::move(adapterId));
         },
         true);
     if (started)
-        m_lastCoreClrSession = false;
+        m_lastCoreClrSession = (adapterId == "coreclr");
     return started;
 }
 

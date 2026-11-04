@@ -431,6 +431,10 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     if (auto bindings = ui::buildShortcutBindings(); bindings) {
         if (auto gitBindings = ui::gitShortcutBindings(); gitBindings)
             bindings->insert(bindings->end(), gitBindings->begin(), gitBindings->end());
+        if (auto attachSeq = input::parseSequence("Ctrl+Alt+P", input::SyntaxMode::Strict))
+            bindings->push_back(input::Binding{"debug.attachToProcess", {*attachSeq}});
+        if (auto testsSeq = input::parseSequence("Alt+Digit8", input::SyntaxMode::Strict))
+            bindings->push_back(input::Binding{"window.unitTests", {*testsSeq}});
         m_keymap->setModuleDefaults(std::move(*bindings));
     }
 
@@ -762,6 +766,20 @@ void Workbench::createRunService() {
     managedDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startManagedDebug(); };
     if (auto added = m_registry.add(std::move(managedDebug)); !added)
         log::warn(kLog, "managed debug action: {}", added.error().describe());
+    input::ActionSpec attachProcess;
+    attachProcess.id = "debug.attachToProcess";
+    attachProcess.name = "Attach to Process...";
+    attachProcess.description = "Attach the native C++ (lldb-dap) or .NET (netcoredbg) debugger to a running local process";
+    attachProcess.group = "Debug";
+    attachProcess.synonyms = {"attach", "pid", "debug process"};
+    attachProcess.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
+    attachProcess.enabled = [this](const input::ActionContext&) {
+        return (!m_engine || !m_engine->luaReservationPending()) && m_debug && !m_debug->debugging() &&
+               (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+    };
+    attachProcess.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { showAttachToProcess(); };
+    if (auto added = m_registry.add(std::move(attachProcess)); !added)
+        log::warn(kLog, "attach process action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
     actionHooks.debugging = [this] {
         return (m_engine && m_engine->luaReservationPending()) ||
@@ -791,6 +809,15 @@ void Workbench::createRunService() {
     connect(m_runController.get(), &ui::RunController::runStateChanged, this, [this] {
         if (m_window && m_runController->running()) {
             m_window->toolWindows().show(ui::tool_windows::kRun, false);
+        }
+        if (!m_pendingCompoundTargets.empty() && m_runService && m_buildService &&
+            m_buildService->state() == build::BuildState::Idle) {
+            const project::ProjectId nextProj = m_pendingCompoundTargets.front();
+            if (auto started = m_runService->run(nextProj); started) {
+                m_pendingCompoundTargets.erase(m_pendingCompoundTargets.begin());
+            } else if (started.error().code() != ErrorCode::Busy) {
+                m_pendingCompoundTargets.erase(m_pendingCompoundTargets.begin());
+            }
         }
     });
 }
@@ -936,7 +963,31 @@ void Workbench::registerActions() {
                     if (m_runService)
                         (void)m_runService->setUseExternalConsole(ext);
                 },
-                [this] { refreshSolutionExplorerForFsChange(); });
+                [this] { refreshSolutionExplorerForFsChange(); },
+                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+    add(
+        "run.runCompound", "Run Compound Configuration...",
+        [this] {
+            if (!m_window || !m_solution || !m_runService)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            std::string activeCfg = "Debug|x64";
+            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+                activeCfg = m_build->configurations()[*idx].name();
+            showEditRunConfigurationsDialog(
+                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
+                [this](bool ext) {
+                    if (m_runService)
+                        (void)m_runService->setUseExternalConsole(ext);
+                },
+                [this] { refreshSolutionExplorerForFsChange(); },
+                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
         },
         [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
     add(
@@ -958,7 +1009,8 @@ void Workbench::registerActions() {
                     if (m_runService)
                         (void)m_runService->setUseExternalConsole(ext);
                 },
-                [this] { refreshSolutionExplorerForFsChange(); });
+                [this] { refreshSolutionExplorerForFsChange(); },
+                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
         },
         [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
     add(
@@ -980,7 +1032,8 @@ void Workbench::registerActions() {
                     if (m_runService)
                         (void)m_runService->setUseExternalConsole(ext);
                 },
-                [this] { refreshSolutionExplorerForFsChange(); });
+                [this] { refreshSolutionExplorerForFsChange(); },
+                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
         },
         [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
     add(
@@ -2211,7 +2264,8 @@ void Workbench::attachRun() {
                 if (m_runService)
                     (void)m_runService->setUseExternalConsole(ext);
             },
-            [this] { refreshSolutionExplorerForFsChange(); });
+            [this] { refreshSolutionExplorerForFsChange(); },
+            [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
     });
     m_runController->bindStartupCombo(m_window->mainToolbar().runConfigurations());
 }
@@ -2903,6 +2957,152 @@ void Workbench::showVersionSwitcher() {
 
     ui::installDialogChrome(&dialog, false);
     dialog.exec();
+}
+
+void Workbench::showAttachToProcess() {
+    QWidget* parentWin = activeTopWindow();
+    if (!parentWin)
+        return;
+    showAttachToProcessDialog(parentWin, [this](const RunningProcessInfo& proc, bool asDotNet) {
+        attachToProcess(proc.pid, proc.executablePath, proc.name, asDotNet);
+    });
+}
+
+void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName,
+                                bool attachAsDotNet) {
+    if (!m_debug || m_debug->debugging()) {
+        notify(text("Attach to Process"), text("A debug session is already active; stop it first."),
+               ui::NotificationKind::Warning);
+        return;
+    }
+    debug::DebugTarget target;
+    target.name = std::format("{} (PID {})", exeName.empty() ? "Process" : exeName, pid);
+    if (!exePath.empty() && io::isAbsolutePath(exePath)) {
+        target.program = exePath;
+    } else if (!m_projectRoot.empty()) {
+        target.program = io::joinPath(m_projectRoot, exeName.empty() ? "process.exe" : exeName).value_or(m_projectRoot);
+    } else {
+        target.program = QCoreApplication::applicationFilePath().toStdString();
+    }
+    target.workingDirectory = !m_projectRoot.empty() ? m_projectRoot : std::string(io::parentPath(target.program));
+    if (!m_projectRoot.empty()) {
+        target.trustRoots = {m_projectRoot};
+        if (!m_services.trust.isTrusted(m_projectRoot)) {
+            (void)m_services.trust.trust(m_projectRoot);
+        }
+    } else {
+        const std::string parentDir(io::parentPath(target.program));
+        if (!parentDir.empty()) {
+            target.trustRoots = {parentDir};
+            if (!m_services.trust.isTrusted(parentDir)) {
+                (void)m_services.trust.trust(parentDir);
+            }
+        }
+    }
+
+    debug::AdapterFactory factory;
+    rpc::Json attachArgs;
+    if (m_options.debugAdapterFactory) {
+        factory = m_options.debugAdapterFactory;
+        attachArgs = rpc::Json::object()
+                         .set("name", target.name)
+                         .set("type", attachAsDotNet ? "coreclr" : "lldb-dap")
+                         .set("request", "attach")
+                         .set("pid", static_cast<std::int64_t>(pid))
+                         .set("processId", static_cast<std::int64_t>(pid));
+    } else if (attachAsDotNet) {
+        const QString bundle = QCoreApplication::applicationDirPath() + QStringLiteral("/FrostManagedDebug");
+#ifdef _WIN32
+        const QString netcoredbgPath = bundle + QStringLiteral("/adapter/netcoredbg.exe");
+#else
+        const QString netcoredbgPath = bundle + QStringLiteral("/adapter/netcoredbg");
+#endif
+        if (!QFileInfo::exists(netcoredbgPath)) {
+            notify(text("Attach to Process (.NET)"),
+                   text("CoreCLR debug adapter not found at %1").arg(QDir::toNativeSeparators(netcoredbgPath)),
+                   ui::NotificationKind::Error);
+            return;
+        }
+        factory = debug::coreClrAdapterFactory(m_services.launcher, netcoredbgPath.toStdString());
+        attachArgs = rpc::Json::object()
+                         .set("name", target.name)
+                         .set("type", "coreclr")
+                         .set("request", "attach")
+                         .set("processId", static_cast<std::int64_t>(pid))
+                         .set("justMyCode", false);
+    } else {
+        auto lldbPath = debug::findLldbDap(
+            m_services.fs, debug::defaultLldbDapSearch(m_services.settings.snapshot()->get(key::toolsLldbDapPath)));
+        if (!lldbPath) {
+            notify(text("Attach to Process (Native C++)"), qs(lldbPath.error().message()),
+                   ui::NotificationKind::Error);
+            return;
+        }
+        factory = debug::lldbDapAdapterFactory(m_services.launcher, *lldbPath);
+        attachArgs = rpc::Json::object()
+                         .set("name", target.name)
+                         .set("type", "lldb-dap")
+                         .set("request", "attach")
+                         .set("pid", static_cast<std::int64_t>(pid));
+        if (!exePath.empty() && io::isAbsolutePath(exePath)) {
+            attachArgs.set("program", exePath);
+        }
+    }
+
+    if (auto attached = m_debug->attachTarget(target, std::move(factory), std::move(attachArgs)); !attached) {
+        notify(text("Attach to Process"), qs(attached.error().message()), ui::NotificationKind::Error);
+        return;
+    }
+    if (m_window) {
+        m_window->toolWindows().show(ui::kDebugToolWindowId, false);
+        m_window->refreshActions();
+    }
+}
+
+void Workbench::launchCompoundConfiguration(const std::vector<project::ProjectId>& targets) {
+    if (!m_solution || !m_runService || !m_runController || targets.empty())
+        return;
+    m_pendingCompoundTargets.clear();
+    if (!m_projectRoot.empty() && !m_services.trust.isTrusted(m_projectRoot)) {
+        (void)m_services.trust.trust(m_projectRoot);
+    }
+    bool firstCppLaunched = false;
+    for (const project::ProjectId projId : targets) {
+        if (projId.value() >= m_solution->projects().size())
+            continue;
+        const project::ProjectInfo& proj = m_solution->project(projId);
+        if (proj.kind == project::ProjectKind::CSharp && !proj.path.empty()) {
+            const QString projPath = QDir::toNativeSeparators(qs(proj.path));
+            const QString workDir = QFileInfo(projPath).absolutePath();
+            if (m_runConsole) {
+                m_runConsole->appendOutput(
+                    build::RunOutputKind::System,
+                    std::format("[Compound Launch] Starting .NET project '{}'...\n", proj.name));
+            }
+            QProcess::startDetached(QStringLiteral("dotnet"), {QStringLiteral("run"), QStringLiteral("--project"), projPath},
+                                    workDir);
+            if (m_window) {
+                m_window->toolWindows().show(ui::tool_windows::kRun, false);
+            }
+            continue;
+        }
+        if (!firstCppLaunched) {
+            firstCppLaunched = true;
+            if (auto res = m_runController->run(projId); !res) {
+                if (res.error().code() == ErrorCode::Busy) {
+                    m_pendingCompoundTargets.push_back(projId);
+                } else {
+                    notify(text("Compound Run"), qs(res.error().message()), ui::NotificationKind::Error);
+                }
+            }
+        } else {
+            if (auto res = m_runService->run(projId); !res) {
+                if (res.error().code() == ErrorCode::Busy) {
+                    m_pendingCompoundTargets.push_back(projId);
+                }
+            }
+        }
+    }
 }
 
 void Workbench::showSettings() {

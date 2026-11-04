@@ -42,6 +42,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTableWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -1971,6 +1972,27 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
                                                           dir.join("Extra/Extra.vcxproj"))
                     .has_value());
     EXPECT_FALSE(dir.read("Tiny.sln").contains("Extra.vcxproj"));
+
+    // 5. Attach to Process enumeration & dialog and Compound Run Configuration launch.
+    EXPECT_TRUE(rig.workbench->registry().find("debug.attachToProcess").has_value());
+    EXPECT_TRUE(rig.workbench->registry().find("run.runCompound").has_value());
+    const auto procs = frost::app::enumerateRunningProcesses();
+    EXPECT_FALSE(procs.empty());
+
+    std::uint32_t attachedPid = 0;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("attachToProcessDialog"));
+        ASSERT_NE(dlg, nullptr);
+        auto* filter = dlg->findChild<QLineEdit*>(QStringLiteral("attachProcessFilterEdit"));
+        EXPECT_NE(filter, nullptr);
+        auto* table = dlg->findChild<QTableWidget*>(QStringLiteral("attachProcessTable"));
+        ASSERT_NE(table, nullptr);
+        EXPECT_GT(table->rowCount(), 0);
+        dlg->accept();
+    });
+    frost::app::showAttachToProcessDialog(
+        rig.window.get(), [&](const frost::app::RunningProcessInfo& proc, bool) { attachedPid = proc.pid; });
+    EXPECT_GT(attachedPid, 0U);
 }
 
 } // namespace

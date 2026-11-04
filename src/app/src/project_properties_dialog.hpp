@@ -111,10 +111,24 @@ void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const 
                                     int activeConfigurationIndex, std::function<void(int)> onActiveConfigurationChanged,
                                     std::function<void()> onSolutionFileModified);
 
-void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
-                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
-                                     std::function<void()> onSaved);
+struct RunningProcessInfo {
+    std::uint32_t pid = 0;
+    std::string name;
+    std::string executablePath;
+    std::string windowTitle;
+    bool isDotNet = false;
+};
+
+[[nodiscard]] std::vector<RunningProcessInfo> enumerateRunningProcesses();
+
+void showAttachToProcessDialog(QWidget* parent,
+                               std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach);
+
+void showEditRunConfigurationsDialog(
+    QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
+    const std::string& preferredProjectPath, const std::string& activeConfigPlatform, bool externalConsole,
+    std::function<void(bool)> onExternalConsoleChanged, std::function<void()> onSaved,
+    std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound = {});
 
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                    const std::string& projectPath, std::function<void()> onSaved);

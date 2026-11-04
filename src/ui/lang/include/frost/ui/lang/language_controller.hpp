@@ -136,6 +136,7 @@ public:
     void typeHierarchy();
     void gotoSuperMethod();
     void gotoTypeDeclaration();
+    void decompileExternalSymbol();
 
     // --- Editor hooks ---
     // Cancel requests and dismiss document-specific UI when the active editor changes.
