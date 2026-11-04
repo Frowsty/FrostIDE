@@ -5,12 +5,15 @@
 
 #include "frost/app/workbench.hpp"
 #include "frost/lang/document_sync.hpp"
+#include "frost/lang/symbols.hpp"
 #include "frost/text/editor/commands.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 
 #include "language_bridge.hpp"
+#include <QCoreApplication>
+#include <QMetaObject>
 
 #include <algorithm>
 #include <format>
@@ -254,6 +257,56 @@ Result<void> LanguageBridge::applyEdits(std::string_view path, std::span<const l
         return fail(ErrorCode::NotFound, std::string(path) + " is not open");
     }
     return applyTo(view->editor(), edits, std::nullopt);
+}
+
+void Workbench::queryWorkspaceSymbols(std::string_view query, bool classesOnly,
+                                      std::function<void(std::vector<ui::WorkbenchSymbol>)> done) {
+    if (query.empty() || !m_bridge || !m_pool || m_shutDown) {
+        done({});
+        return;
+    }
+    const sched::LatestWins::Ticket ticket = m_searchSymbolsSlot.next();
+    const QPointer<Workbench> self(this);
+    m_pool
+        ->spawn(sched::Lane::Interactive,
+                [self, server = m_bridge.get(), q = std::string(query), classesOnly, ticket,
+                 done = std::move(done)]() -> sched::Task<void> {
+                    auto result = co_await lang::requestWorkspaceSymbols(*server, q, ticket.token);
+                    QCoreApplication* app = QCoreApplication::instance();
+                    if (app == nullptr) {
+                        co_return;
+                    }
+                    std::vector<ui::WorkbenchSymbol> out;
+                    if (result) {
+                        for (const lang::WorkspaceSymbol& sym : *result) {
+                            const bool isClass =
+                                sym.kind == lang::SymbolKind::Class || sym.kind == lang::SymbolKind::Struct ||
+                                sym.kind == lang::SymbolKind::Interface || sym.kind == lang::SymbolKind::Enum ||
+                                sym.kind == lang::SymbolKind::Namespace;
+                            if (classesOnly && !isClass) {
+                                continue;
+                            }
+                            out.push_back(ui::WorkbenchSymbol{
+                                .name = sym.name,
+                                .container = sym.containerName,
+                                .path = sym.location.path,
+                                .line = static_cast<int>(sym.location.range.start.line) + 1,
+                                .column = static_cast<int>(sym.location.range.start.character) + 1,
+                                .isClassLike = isClass,
+                            });
+                        }
+                    }
+                    QMetaObject::invokeMethod(
+                        app,
+                        [self, ticket, done = std::move(done), out = std::move(out)]() mutable {
+                            if (!self || !self->m_searchSymbolsSlot.isCurrent(ticket)) {
+                                return;
+                            }
+                            done(std::move(out));
+                        },
+                        Qt::QueuedConnection);
+                }())
+        .detach();
 }
 
 } // namespace frost::app

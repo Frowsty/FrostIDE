@@ -60,6 +60,8 @@ public:
     [[nodiscard]] std::span<const Place> forwardStack() const noexcept { return m_forward; }
     // Drops every place in `path` (the file was deleted or the project closed).
     void forget(std::string_view path);
+    // Updates every place in `oldPath` to `newPath`.
+    void renamePath(std::string_view oldPath, std::string_view newPath);
     void clear() noexcept;
 
 private:
@@ -79,6 +81,7 @@ public:
 
     void touch(std::string path);
     void remove(std::string_view path);
+    void renamePath(std::string_view oldPath, std::string_view newPath);
     void assign(std::vector<std::string> paths);
     [[nodiscard]] std::span<const std::string> paths() const noexcept { return m_paths; }
     void clear() noexcept { m_paths.clear(); }
@@ -97,6 +100,7 @@ public:
 
     void touch(Place place);
     void forget(std::string_view path);
+    void renamePath(std::string_view oldPath, std::string_view newPath);
     void assign(std::vector<Place> places);
     [[nodiscard]] std::span<const Place> places() const noexcept { return m_places; }
     void clear() noexcept { m_places.clear(); }

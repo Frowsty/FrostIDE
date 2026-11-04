@@ -1096,6 +1096,21 @@ public:
         return {};
     }
 
+    Result<void> rename(std::string_view from, std::string_view to) override {
+        auto wideFrom = toWin32Path(from);
+        if (!wideFrom) {
+            return std::unexpected(std::move(wideFrom.error()));
+        }
+        auto wideTo = toWin32Path(to);
+        if (!wideTo) {
+            return std::unexpected(std::move(wideTo.error()));
+        }
+        if (MoveFileExW(wideFrom->c_str(), wideTo->c_str(), MOVEFILE_COPY_ALLOWED) == FALSE) {
+            return std::unexpected(lastWin32Error("rename", from));
+        }
+        return {};
+    }
+
     /*
      * One spelling per file (ADR 0042, ADR 0044): the real case of every component. The fast path
      * is GetFinalPathNameByHandleW, used when its answer differs from the normalised input in ASCII

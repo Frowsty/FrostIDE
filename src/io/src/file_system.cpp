@@ -42,6 +42,51 @@ Result<void> IFileSystem::writeFileAtomicWithMtime(std::string_view, std::string
     return fail(ErrorCode::Unsupported, "Atomic timestamped writes are not supported by this file system");
 }
 
+Result<void> IFileSystem::rename(std::string_view, std::string_view) {
+    return fail(ErrorCode::Unsupported, "Rename is not supported by this file system");
+}
+
+Result<void> IFileSystem::remove(std::string_view path) {
+    auto info = status(path);
+    if (!info) {
+        return std::unexpected(std::move(info.error()));
+    }
+    if (info->type == FileType::Directory) {
+        return removeDirectory(path);
+    }
+    return removeFile(path);
+}
+
+Result<void> IFileSystem::removeAll(std::string_view path) {
+    auto info = status(path);
+    if (!info) {
+        return std::unexpected(std::move(info.error()));
+    }
+    if (info->type != FileType::Directory) {
+        return removeFile(path);
+    }
+    auto entries = listDirectory(path);
+    if (!entries) {
+        return std::unexpected(std::move(entries.error()));
+    }
+    for (const DirEntry& entry : *entries) {
+        auto child = joinPath(path, entry.name);
+        if (!child) {
+            return std::unexpected(std::move(child.error()));
+        }
+        if (entry.type == FileType::Directory) {
+            if (auto removed = removeAll(*child); !removed) {
+                return removed;
+            }
+        } else {
+            if (auto removed = removeFile(*child); !removed) {
+                return removed;
+            }
+        }
+    }
+    return removeDirectory(path);
+}
+
 Result<std::string> IFileSystem::canonicalPath(std::string_view path) {
     auto normalized = normalizePath(path);
     if (!normalized) {

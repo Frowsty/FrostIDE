@@ -330,6 +330,21 @@ EditorDisplayList EditorView::buildDisplayList() {
     const std::optional<text::ByteRange> composition = m_document->compositionRange();
     const double numbersRight = gutter - (kMarkerColumn + kFoldColumn) * zoom - kNumberPadding * zoom;
     const TokenFormat plain{m_colors.foreground, false};
+    const bool showAllWhitespace = m_settings.showWhitespace == "all";
+    const bool showSelectionWhitespace = m_settings.showWhitespace == "selection";
+    QColor whitespaceColor = m_colors.lineNumber;
+    whitespaceColor.setAlpha(128);
+    const auto isSelectedOffset = [&](ByteOffset offset) noexcept {
+        for (const text::Selection& sel : state.selections.all()) {
+            if (!sel.empty()) {
+                const text::ByteRange range = sel.range();
+                if (range.begin <= offset && offset < range.end) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
     bool widened = false;
 
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -449,6 +464,17 @@ EditorDisplayList EditorView::buildDisplayList() {
                 const text::DecodedChar ch = text::decodeUtf8(view.substr(at));
                 const ByteOffset offset = shown.begin + at;
                 const bool ascii = ch.cp < 0x80;
+                if ((ch.cp == U' ' || ch.cp == U'\t') &&
+                    (showAllWhitespace || (showSelectionWhitespace && isSelectedOffset(offset)))) {
+                    flush(offset);
+                    const QString glyph = ch.cp == U' ' ? QString(QChar(0x00B7)) : QString(QChar(0x2192));
+                    list.text.push_back(DisplayText{QPointF(origin + toPixels(x), baseline), glyph, whitespaceColor,
+                                                    false, std::nullopt, text::ByteRange{offset, offset + ch.bytes},
+                                                    std::nullopt, false});
+                    x += m_shaper->advance(ch.cp, x);
+                    at += ch.bytes;
+                    continue;
+                }
                 if (ch.cp == U'\t' || isControl(ch.cp)) {
                     flush(offset);
                 } else if (!ascii && !run.isEmpty() && text::charWidth(ch.cp) == text::CharWidth::Zero) {
@@ -545,6 +571,34 @@ EditorDisplayList EditorView::buildDisplayList() {
             continue;
         }
         const auto lineInfo = snapshot.lineInfo(row.line);
+        if (m_settings.indentGuides && !m_fileInfo.largeFile && lineInfo && !lineInfo->content.empty()) {
+            const std::uint32_t indentStep = std::max<std::uint32_t>(m_settings.indentSize, 1);
+            const std::uint32_t tabSize = std::max<std::uint32_t>(m_settings.tabSize, 1);
+            std::uint32_t indentCols = 0;
+            for (const std::string_view chunk : snapshot.chunks(lineInfo->content)) {
+                bool done = false;
+                for (const char c : chunk) {
+                    if (c == ' ') {
+                        ++indentCols;
+                    } else if (c == '\t') {
+                        indentCols = (indentCols / tabSize + 1) * tabSize;
+                    } else {
+                        done = true;
+                        break;
+                    }
+                }
+                if (done) {
+                    break;
+                }
+            }
+            for (std::uint32_t col = indentStep; col <= indentCols; col += indentStep) {
+                const double gx = origin + static_cast<double>(col) * cell;
+                if (gx > gutter && gx < area.width()) {
+                    list.underlines.push_back(
+                        DisplayLine{QLineF(gx, top, gx, top + m_lineHeight), m_colors.rightMargin, 1.0});
+                }
+            }
+        }
         const auto startsOnLine = [&](const auto& ranges) {
             if (!lineInfo)
                 return false;
@@ -589,17 +643,25 @@ EditorDisplayList EditorView::buildDisplayList() {
             list.gutterText.push_back(DisplayText{QPointF(numbersRight - width, baseline), number, color, false,
                                                   std::nullopt, row.buffer, std::nullopt, false});
         }
-        // The most severe marker of the line (Error sorts before Warning).
+        // The most severe marker of the line (Error sorts before Warning, which sorts before Bookmark).
         const auto marker = std::ranges::lower_bound(m_markers, row.line, {}, &LineMarker::line);
-        if (marker != m_markers.end() && marker->line == row.line) {
-            MarkerSeverity severity = marker->severity;
-            for (auto it = marker; it != m_markers.end() && it->line == row.line; ++it) {
-                severity = std::min(severity, it->severity);
+        const bool hasLineMarker = marker != m_markers.end() && marker->line == row.line;
+        const bool hasBookmark = std::ranges::binary_search(m_bookmarks, row.line);
+        if (hasLineMarker || hasBookmark) {
+            MarkerSeverity severity = MarkerSeverity::Bookmark;
+            if (hasLineMarker) {
+                severity = marker->severity;
+                for (auto it = marker; it != m_markers.end() && it->line == row.line; ++it) {
+                    severity = std::min(severity, it->severity);
+                }
             }
             const double size = std::min(m_lineHeight, kMarkerColumn * zoom) * 0.6;
             const double cx = gutter - kFoldColumn * zoom - kMarkerColumn * zoom / 2.0;
             const double cy = top + m_lineHeight / 2.0;
-            const QColor color = severity == MarkerSeverity::Error ? m_colors.errorMarker : m_colors.warningMarker;
+            const QColor color =
+                severity == MarkerSeverity::Error
+                    ? m_colors.errorMarker
+                    : (severity == MarkerSeverity::Warning ? m_colors.warningMarker : m_colors.markerBookmark);
             list.markers.push_back(
                 DisplayMarker{QRectF(cx - size / 2.0, cy - size / 2.0, size, size), color, severity, row.line});
         }

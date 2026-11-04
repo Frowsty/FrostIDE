@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -108,6 +109,8 @@ public:
     // Restores a position from viewState(), clamped to the document. The default moves the caret
     // with goToLine and ignores the scroll position.
     virtual void restoreViewState(const EditorViewState& state) { goToStatusPosition(state.line, state.column); }
+    // Updates the 1-based bookmarked lines shown in the editor gutter.
+    virtual void setBookmarks(std::span<const int> /*oneBasedLines*/) {}
 };
 
 /*

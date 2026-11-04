@@ -220,11 +220,32 @@ namespace commands {
 [[nodiscard]] CommandResult deleteWordBackward(const CommandInput& in) noexcept;
 // Ctrl+Delete: deletes forward to nextWordBoundary (or the selection). Kind DeleteForward.
 [[nodiscard]] CommandResult deleteWordForward(const CommandInput& in) noexcept;
+// Ctrl+Shift+U: toggles the case of every selection (or the word under an empty caret): if any
+// code point is lowercase, converts all to uppercase; otherwise converts all to lowercase. Kind
+// Other.
+[[nodiscard]] CommandResult toggleCase(const CommandInput& in) noexcept;
 
 // Movement and selection.
 
 // Moves every caret by `movement`; with `extend` the selection's anchor stays and the head moves.
 [[nodiscard]] CommandResult move(const CommandInput& in, Movement movement, bool extend) noexcept;
+// Clones every caret one display row (or buffer line) up or down, keeping goalX.
+[[nodiscard]] CommandResult addCaretAbove(const CommandInput& in) noexcept;
+[[nodiscard]] CommandResult addCaretBelow(const CommandInput& in) noexcept;
+// Smallest semantic/lexical range strictly enclosing `cur`, given optional AST ranges.
+[[nodiscard]] ByteRange extendSelectionRange(const Snapshot& text, ByteRange cur,
+                                             std::span<const ByteRange> astRanges = {}) noexcept;
+// Extends every selection to the smallest strictly enclosing range.
+[[nodiscard]] CommandResult extendSelection(const CommandInput& in, std::span<const ByteRange> astRanges = {}) noexcept;
+// Alt+J: selects the word or token under an empty primary caret, else adds the next case-sensitive
+// occurrence of the primary selection's text (wrapping around) and makes it primary.
+[[nodiscard]] CommandResult selectNextOccurrence(const CommandInput& in) noexcept;
+// Alt+Shift+J: removes the primary selection when there are multiple selections, or collapses a
+// single non-empty selection to a caret at its head.
+[[nodiscard]] CommandResult unselectOccurrence(const CommandInput& in) noexcept;
+// Ctrl+Alt+Shift+J: selects every occurrence of the primary selection (or every whole-word
+// occurrence of the word under an empty caret).
+[[nodiscard]] CommandResult selectAllOccurrences(const CommandInput& in) noexcept;
 // Selects the whole text (the caret at the end).
 [[nodiscard]] CommandResult selectAll(const CommandInput& in) noexcept;
 // One caret at `target` (0-based; a line past the end goes to the last line, a column past the line

@@ -33,6 +33,7 @@
 #include "frost/ui/terminal/terminal_tool_window.hpp"
 #include "frost/ui/toolwindows/build_actions.hpp"
 #include "frost/ui/toolwindows/build_output.hpp"
+#include "frost/ui/toolwindows/file_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
@@ -172,6 +173,63 @@ std::string DialogWorkbenchPrompts::chooseNewItemName(QWidget* parent, const std
     if (dialog.exec() != QDialog::Accepted)
         return {};
     return edit->text().trimmed().toStdString();
+}
+
+std::string DialogWorkbenchPrompts::chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) {
+    QDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("renameItemDialog"));
+    dialog.setWindowTitle(folder ? text("Rename Folder") : text("Rename File"));
+    dialog.setModal(true);
+    dialog.setMinimumWidth(440);
+
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(10);
+
+    const std::string_view currentName = io::fileName(currentPath);
+    auto* label = new QLabel(text("Rename '%1' to:").arg(qs(currentName)), &dialog);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+
+    auto* edit = new QLineEdit(qs(currentName), &dialog);
+    edit->setObjectName(QStringLiteral("renameItemNameEdit"));
+    if (!folder) {
+        const QString initial = edit->text();
+        const qsizetype dot = initial.lastIndexOf(u'.');
+        if (dot > 0) {
+            edit->setSelection(0, static_cast<int>(dot));
+        } else {
+            edit->selectAll();
+        }
+    } else {
+        edit->selectAll();
+    }
+    layout->addWidget(edit);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+    if (ok) {
+        ok->setText(text("Rename"));
+    }
+    QObject::connect(edit, &QLineEdit::textChanged, &dialog, [ok](const QString& value) {
+        if (ok)
+            ok->setEnabled(!value.trimmed().isEmpty());
+    });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    edit->setFocus();
+    if (dialog.exec() != QDialog::Accepted)
+        return {};
+    return edit->text().trimmed().toStdString();
+}
+
+bool DialogWorkbenchPrompts::confirmDelete(QWidget* parent, const QString& name, bool folder) {
+    const QString prompt =
+        folder ? text("Delete folder '%1' and all of its contents?").arg(name) : text("Delete file '%1'?").arg(name);
+    return QMessageBox::question(parent, folder ? text("Delete Folder") : text("Delete File"), prompt,
+                                 QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes;
 }
 
 std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* parent,
@@ -438,6 +496,9 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                        else if (isCFamilySource(path) && m_clangd)
                                            set = m_clangd->diagnostics().forFile(path);
                                        return set ? set->diagnostics : std::vector<lang::LiveDiagnostic>{};
+                                   },
+                                   [this]() -> std::vector<std::string> {
+                                       return m_nav ? m_nav->projectFiles().candidates() : std::vector<std::string>{};
                                    }});
     if (auto registered = m_language->registerActions(m_registry); !registered) {
         log::warn(kLog, "language actions: {}", registered.error().describe());
@@ -516,6 +577,7 @@ Workbench::~Workbench() {
         if (stopped.valid())
             stopped.join();
     m_retiredProjectEvaluations.clear();
+    m_searchSymbolsSlot.cancel();
     m_language.reset();
     // The prompter and the actions refer to the controller; the services' threads post to them.
     delete m_trustPrompter;
@@ -861,6 +923,18 @@ void Workbench::attach(ui::ShellWindow& window) {
     nav.defaultNewItemDirectory = [this] { return defaultNewItemDirectory(); };
     nav.fileCreated = [this](const std::string& path) { onNewFileCreated(path); };
     nav.saveAsHook = [this] { showSaveAsDialog(); };
+    nav.promptRename = [this](const std::string& path, bool folder) {
+        return m_services.prompts.chooseRenameName(m_window, path, folder);
+    };
+    nav.confirmDelete = [this](const std::string& path, bool folder) {
+        return m_services.prompts.confirmDelete(m_window, qs(io::fileName(path)), folder);
+    };
+    nav.renamePathHook = [this](const std::string& path) { promptAndRenameItem(path); };
+    nav.deletePathHook = [this](const std::string& path) { promptAndDeleteItem(path); };
+    nav.queryWorkspaceSymbols = [this](std::string_view query, bool classesOnly,
+                                       std::function<void(std::vector<ui::WorkbenchSymbol>)> done) {
+        queryWorkspaceSymbols(query, classesOnly, std::move(done));
+    };
     nav.filesChanged = [this](const io::FileChangeBatch& batch) {
         if (m_cmake)
             m_cmake->filesChanged(batch);
@@ -868,6 +942,21 @@ void Workbench::attach(ui::ShellWindow& window) {
             m_git->filesChanged(batch);
     };
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
+    if (ui::FileSystemView* fsView = m_nav->fileSystemView()) {
+        connect(fsView, &ui::FileSystemView::openContainingFolderRequested, this, [this](const QString& path) {
+            const std::string stdPath = path.toStdString();
+            const auto st = m_services.fs.status(stdPath);
+            const bool isDirectory = st && st->type == io::FileType::Directory;
+            if (auto revealed = ui::revealInFileManager(m_services.launcher, stdPath, isDirectory); !revealed) {
+                notify(text("Open Containing Folder"), qs(revealed.error().message()), ui::NotificationKind::Error);
+            }
+        });
+        connect(fsView, &ui::FileSystemView::openInTerminalRequested, this, [this](const QString& dir) {
+            if (m_terminal) {
+                (void)m_terminal->openInTerminal(dir.toStdString());
+            }
+        });
+    }
 
     attachToolWindows();
     attachNavigationBar();
@@ -1043,6 +1132,10 @@ void Workbench::attachToolWindows() {
     windows.setContent(ui::tool_windows::kProject, explorer);
     m_explorer = explorer;
     connect(explorer, &ui::SolutionExplorer::openFile, this, [this](const QString& path) { openLocation(path, 0, 0); });
+    connect(explorer, &ui::SolutionExplorer::renameRequested, this,
+            [this](const QString& path, bool) { promptAndRenameItem(path.toStdString()); });
+    connect(explorer, &ui::SolutionExplorer::deleteRequested, this,
+            [this](const QString& path, bool) { promptAndDeleteItem(path.toStdString()); });
     connect(explorer, &ui::SolutionExplorer::commandFailed, this, [this](const QString& message) {
         notify(text("Solution Explorer"), message, ui::NotificationKind::Error);
     });

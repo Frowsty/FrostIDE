@@ -121,6 +121,8 @@ signals:
     void itemAccepted(int index, const QVariant& data);
     // The filter text changed (both modes; in External mode the owner re-ranks).
     void filterTextChanged(const QString& text);
+    // Tab or Shift+Tab was pressed in the popup (Search Everywhere category cycling).
+    void tabPressed(bool backward);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

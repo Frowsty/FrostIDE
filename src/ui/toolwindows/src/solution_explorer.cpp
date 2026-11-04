@@ -265,6 +265,16 @@ void SolutionExplorer::activate(const QModelIndex& index, bool fromKeyboard) {
 }
 
 bool SolutionExplorer::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_view && event->type() == QEvent::ShortcutOverride && !m_searchActive) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        const Qt::KeyboardModifiers mods = key->modifiers() & ~Qt::KeypadModifier;
+        if ((key->key() == Qt::Key_F2 && mods == Qt::NoModifier) ||
+            (key->key() == Qt::Key_F6 && mods == Qt::ShiftModifier) ||
+            (key->key() == Qt::Key_Delete && mods == Qt::NoModifier)) {
+            event->accept();
+            return true;
+        }
+    }
     if (watched == m_view && event->type() == QEvent::KeyPress) {
         return handleKey(*static_cast<QKeyEvent*>(event));
     }
@@ -328,6 +338,30 @@ bool SolutionExplorer::handleKey(QKeyEvent& event) {
     }
     if (enter && modifiers == Qt::NoModifier) {
         activate(m_view->currentIndex(), true);
+        return true;
+    }
+    const Qt::KeyboardModifiers rawMods = event.modifiers() & ~Qt::KeypadModifier;
+    if ((event.key() == Qt::Key_F2 && rawMods == Qt::NoModifier) ||
+        (event.key() == Qt::Key_F6 && rawMods == Qt::ShiftModifier)) {
+        const QModelIndex idx = m_view->currentIndex();
+        if (idx.isValid()) {
+            const auto kind = static_cast<NodeKind>(idx.data(SolutionTreeModel::KindRole).toInt());
+            const QString path = idx.data(SolutionTreeModel::PathRole).toString();
+            if ((kind == NodeKind::File || kind == NodeKind::Filter) && !path.isEmpty()) {
+                emit renameRequested(path, kind == NodeKind::Filter);
+            }
+        }
+        return true;
+    }
+    if (event.key() == Qt::Key_Delete && rawMods == Qt::NoModifier) {
+        const QModelIndex idx = m_view->currentIndex();
+        if (idx.isValid()) {
+            const auto kind = static_cast<NodeKind>(idx.data(SolutionTreeModel::KindRole).toInt());
+            const QString path = idx.data(SolutionTreeModel::PathRole).toString();
+            if ((kind == NodeKind::File || kind == NodeKind::Filter) && !path.isEmpty()) {
+                emit deleteRequested(path, kind == NodeKind::Filter);
+            }
+        }
         return true;
     }
     return false;
@@ -559,6 +593,17 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
             }
             menu->addSeparator();
         }
+    }
+
+    if ((kind == NodeKind::File || kind == NodeKind::Filter) && !path.isEmpty()) {
+        const bool isDir = kind == NodeKind::Filter;
+        QAction* renameAct = menu->addAction(tr("Rename..."));
+        renameAct->setObjectName(QStringLiteral("renameItem"));
+        connect(renameAct, &QAction::triggered, this, [this, path, isDir] { emit renameRequested(path, isDir); });
+        QAction* deleteAct = menu->addAction(tr("Delete..."));
+        deleteAct->setObjectName(QStringLiteral("deleteItem"));
+        connect(deleteAct, &QAction::triggered, this, [this, path, isDir] { emit deleteRequested(path, isDir); });
+        menu->addSeparator();
     }
 
     if (m_terminalHandler && !path.isEmpty()) {

@@ -30,6 +30,7 @@
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
 
+#include <QListWidget>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -53,26 +54,52 @@ namespace frost::ui {
 namespace workbench_actions {
 inline constexpr std::string_view kNewFile = "file.new";
 inline constexpr std::string_view kNewFolder = "file.newFolder";
+inline constexpr std::string_view kRename = "file.rename";
+inline constexpr std::string_view kDelete = "file.delete";
 inline constexpr std::string_view kFindAction = "search.findAction";
 inline constexpr std::string_view kSearchEverywhere = "search.everywhere";
 inline constexpr std::string_view kGoToFile = "navigate.gotoFile";
 inline constexpr std::string_view kRecentFiles = "navigate.recentFiles";
 inline constexpr std::string_view kRecentLocations = "navigate.recentLocations";
+inline constexpr std::string_view kLastEditLocation = "navigate.lastEditLocation";
 inline constexpr std::string_view kBack = "navigate.back";
 inline constexpr std::string_view kForward = "navigate.forward";
+inline constexpr std::string_view kToggleBookmark = "bookmarks.toggle";
+inline constexpr std::string_view kShowBookmarks = "bookmarks.show";
+inline constexpr std::string_view kNextBookmark = "bookmarks.next";
+inline constexpr std::string_view kPreviousBookmark = "bookmarks.previous";
 inline constexpr std::string_view kSaveAll = "file.saveAll";
 inline constexpr std::string_view kSaveDocument = "file.saveDocument";
 inline constexpr std::string_view kSaveAs = "file.saveAs";
 inline constexpr std::string_view kReloadFromDisk = "file.reloadFromDisk";
 inline constexpr std::string_view kCloseProject = "file.closeProject";
 inline constexpr std::string_view kFileSystemWindow = "fileSystem.show";
+inline constexpr std::string_view kTodoWindow = "window.todo";
 inline constexpr std::string_view kOpenApplicationSettings = "settings.openApplicationFile";
 inline constexpr std::string_view kOpenProjectSettings = "settings.openProjectFile";
 inline constexpr std::string_view kOpenPersonalProjectSettings = "settings.openPersonalProjectFile";
 } // namespace workbench_actions
 
-// The File System tool window's id.
+// The File System and TODO tool windows' ids.
 inline constexpr std::string_view kFileSystemToolWindow = "fileSystem";
+inline constexpr std::string_view kTodoToolWindow = "todo";
+
+enum class SearchEverywhereCategory {
+    All = 0,
+    Classes = 1,
+    Files = 2,
+    Symbols = 3,
+    Actions = 4,
+};
+
+struct WorkbenchSymbol {
+    std::string name;
+    std::string container;
+    std::string path;
+    int line = 1;
+    int column = 1;
+    bool isClassLike = false;
+};
 
 /*
  * What the workbench works with. References outlive the workbench; pointers may be null.
@@ -112,6 +139,17 @@ struct WorkbenchServices {
     std::function<std::string(const std::string& currentPath)> promptSaveAsPath{};
     // Optional composition-root override for Save As (runs LSP/editor rebinding too).
     std::function<void()> saveAsHook{};
+    // Prompts for a new name when renaming `path`; "" cancels.
+    std::function<std::string(const std::string& path, bool folder)> promptRename{};
+    // Prompts for confirmation when deleting `path`; false cancels.
+    std::function<bool(const std::string& path, bool folder)> confirmDelete{};
+    // Optional composition-root overrides for Rename / Delete (also update CMakeLists/vcxproj/csproj and LSP).
+    std::function<void(const std::string& path)> renamePathHook{};
+    std::function<void(const std::string& path)> deletePathHook{};
+    // Async workspace symbol provider for Search Everywhere (Classes / Symbols / All tabs).
+    std::function<void(std::string_view query, bool classesOnly,
+                       std::function<void(std::vector<WorkbenchSymbol>)> done)>
+        queryWorkspaceSymbols{};
 };
 
 /*
@@ -178,9 +216,27 @@ public:
     // The popups; each returns the open popup (owned by the shell) or nullptr when it does not apply.
     ListPopup* showFindAction(const QString& query = {});
     ListPopup* showGoToFile(const QString& query = {});
-    ListPopup* showSearchEverywhere(const QString& query = {});
+    ListPopup* showSearchEverywhere(const QString& query = {},
+                                    SearchEverywhereCategory category = SearchEverywhereCategory::All);
     ListPopup* showRecentFiles();
     ListPopup* showRecentLocations();
+
+    // Last Edit Location (Ctrl+Shift+Backspace).
+    void recordEditLocation(const std::string& path, int line, int column);
+    bool goToLastEditLocation();
+    [[nodiscard]] std::optional<nav::Place> lastEditLocation() const noexcept { return m_lastEditPlace; }
+
+    // Bookmarks (F11 / Shift+F11).
+    bool toggleBookmark();
+    bool toggleBookmarkAt(const std::string& path, int line);
+    bool goToNextBookmark();
+    bool goToPreviousBookmark();
+    ListPopup* showBookmarksPopup();
+    [[nodiscard]] std::vector<nav::Place> bookmarks() const;
+
+    // Task comment list tool window.
+    void refreshTodoItems();
+    [[nodiscard]] QListWidget* todoListWidget() const noexcept { return m_todoList; }
 
     // --- Sessions ---
 
@@ -250,10 +306,12 @@ public:
     [[nodiscard]] Result<void> saveDocument();
     // Saves the active editor's document to `targetPath` and updates its tab/registry identity.
     [[nodiscard]] Result<void> saveDocumentAs(std::string_view targetPath);
-    // Updates navigation state (active path, recent files, places, and folder scan) after Save As.
+    // Updates navigation state (active path, recent files, places, and folder scan) after Save As or Rename.
     void notifyPathRenamed(const std::string& oldPath, const std::string& newPath);
+    // Purges navigation state (recent files, places, bookmarks, history) and refreshes after Delete.
+    void notifyPathDeleted(const std::string& deletedPath, bool directory);
 
-    // --- File and folder creation ---
+    // --- File and folder creation, rename, and deletion ---
 
     // Default directory for New File / New Folder (selected tree directory, active file's parent, or root).
     [[nodiscard]] std::string defaultNewItemDirectory() const;
@@ -264,6 +322,13 @@ public:
     // Prompts for a name and creates a new file or folder in `directory` (empty: defaultNewItemDirectory()).
     void promptAndCreateNewFile(std::string_view directory = {});
     void promptAndCreateNewFolder(std::string_view directory = {});
+    // Renames `oldPath` to `newRelativeName` in the same parent folder and rebinds open documents/navigation.
+    [[nodiscard]] Result<std::string> renamePath(std::string_view oldPath, std::string_view newRelativeName);
+    // Deletes `path` (file or folder) on disk, closes any open tabs under it, and updates navigation.
+    [[nodiscard]] Result<void> deletePath(std::string_view path);
+    // Prompts and renames/deletes `path` (empty: currently selected File System path or active editor path).
+    void promptAndRenamePath(std::string_view path = {});
+    void promptAndDeletePath(std::string_view path = {});
 
     [[nodiscard]] FileSystemView* fileSystemView() const noexcept { return m_fileSystem; }
     [[nodiscard]] QTimer* autosaveTimer() const noexcept { return m_autosaveTimer; }
@@ -279,6 +344,9 @@ private:
     void addAction(std::string_view id, std::string_view name, std::string_view group, std::function<void()> run,
                    std::function<bool()> enabled = {}, std::vector<std::string> synonyms = {});
     void addToolWindow();
+    void addTodoToolWindow();
+    void syncEditorBookmarks(const std::string& path);
+    [[nodiscard]] std::string defaultTargetPathForModify() const;
     [[nodiscard]] Result<void> openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles);
     void setRoot(std::string root, std::vector<std::string> solutionFiles);
     void applyScan(Result<std::shared_ptr<const nav::ProjectFiles>> scan);
@@ -316,7 +384,10 @@ private:
     nav::NavigationHistory m_history;
     nav::RecentFiles m_recentFiles;
     nav::RecentLocations m_recentLocations;
+    std::optional<nav::Place> m_lastEditPlace;
+    std::map<std::string, std::set<int>, std::less<>> m_bookmarks;
     QPointer<FileSystemView> m_fileSystem;
+    QPointer<QListWidget> m_todoList;
     std::map<std::string, QPointer<MergeView>, std::less<>> m_merges;
     std::optional<storage::RecoveryScan> m_recovery;
     std::uint64_t m_recoveryNotification = 0;

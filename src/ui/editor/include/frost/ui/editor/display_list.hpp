@@ -32,7 +32,7 @@
 namespace frost::ui {
 
 // How serious a gutter marker is (the error list fills them; W1).
-enum class MarkerSeverity : std::uint8_t { Error, Warning };
+enum class MarkerSeverity : std::uint8_t { Error, Warning, Bookmark };
 
 // A filled rectangle (current line, selection, search match, gutter background).
 struct DisplayFill {

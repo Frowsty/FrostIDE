@@ -55,6 +55,7 @@ struct EditorColors {
     QColor rightMargin;
     QColor errorMarker;
     QColor warningMarker;
+    QColor markerBookmark{0x38, 0x8A, 0xFF};
     QColor breakpoint;
     QColor breakpointUnverified;
     QColor executionPoint;

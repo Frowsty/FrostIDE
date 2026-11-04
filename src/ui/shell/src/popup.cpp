@@ -220,6 +220,13 @@ void ListPopup::acceptCurrent() {
 
 bool ListPopup::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_filter || watched == m_list) {
+        if (event->type() == QEvent::ShortcutOverride) {
+            const auto* keyEvent = static_cast<QKeyEvent*>(event);
+            if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab) {
+                event->accept();
+                return true;
+            }
+        }
         if (event->type() == QEvent::KeyPress) {
             return handleKey(*static_cast<QKeyEvent*>(event));
         }
@@ -239,6 +246,8 @@ bool ListPopup::handleKey(QKeyEvent& event) {
     case Qt::Key_Up: moveSelection(-1); return true;
     case Qt::Key_PageDown: moveSelection(page); return true;
     case Qt::Key_PageUp: moveSelection(-page); return true;
+    case Qt::Key_Tab: emit tabPressed((event.modifiers() & Qt::ShiftModifier) != 0); return true;
+    case Qt::Key_Backtab: emit tabPressed(true); return true;
     case Qt::Key_Return:
     case Qt::Key_Enter: acceptCurrent(); return true;
     case Qt::Key_Escape: closePopup(CloseReason::Cancelled); return true;

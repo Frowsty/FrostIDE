@@ -729,10 +729,10 @@ TEST(LanguageControllerActions, RegistersTheIntelliJIdsAndRunsThem) {
     Rig rig(server, host);
     frost::input::ActionRegistry registry;
     ASSERT_TRUE(rig.controller.registerActions(registry).has_value());
-    for (const char* id :
-         {"code.completion", "code.parameterInfo", "code.quickDocumentation", "navigate.declaration",
-          "navigate.implementation", "navigate.relatedFiles", "navigate.findUsages", "navigate.highlightUsages",
-          "navigate.fileStructure", "navigate.gotoSymbol", "refactor.rename", "code.showIntentions", "code.reformat"}) {
+    for (const char* id : {"code.completion", "code.parameterInfo", "code.quickDocumentation", "navigate.declaration",
+                           "navigate.implementation", "navigate.relatedFiles", "navigate.findUsages",
+                           "navigate.highlightUsages", "navigate.fileStructure", "navigate.gotoSymbol",
+                           "navigate.gotoClass", "refactor.rename", "code.showIntentions", "code.reformat"}) {
         EXPECT_TRUE(registry.find(id).has_value()) << id;
     }
     // Registering twice is refused (another slice owning an id gets the same answer).
@@ -747,6 +747,66 @@ TEST(LanguageControllerActions, RegistersTheIntelliJIdsAndRunsThem) {
     ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
     EXPECT_EQ(fl::documentKey(host.opened[0].first), fl::documentKey(header));
     EXPECT_TRUE(registry.isEnabled(*registry.find("navigate.gotoSymbol"), outside));
+    EXPECT_TRUE(registry.isEnabled(*registry.find("navigate.gotoClass"), outside));
+}
+
+TEST(LanguageControllerNavigation, GotoClassFiltersToClassLikeSymbolsAndGotoSymbolKeepsAll) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("workspace/symbol", [&](const Json&) {
+        return Json::array({
+            Json::object()
+                .set("name", "PlayerController")
+                .set("kind", 5) // Class
+                .set("location", Json::object().set("uri", uriOf(path)).set("range", rangeJson(2, 0, 16))),
+            Json::object()
+                .set("name", "PlayerState")
+                .set("kind", 23) // Struct
+                .set("location", Json::object().set("uri", uriOf(path)).set("range", rangeJson(6, 0, 11))),
+            Json::object()
+                .set("name", "playSound")
+                .set("kind", 12) // Function
+                .set("location", Json::object().set("uri", uriOf(path)).set("range", rangeJson(10, 0, 9))),
+        });
+    });
+    FakeHost host("class PlayerController {};\n");
+    Rig rig(server, host);
+
+    rig.controller.gotoClass();
+    auto& popup = rig.controller.symbolPopup();
+    ASSERT_TRUE(pumpUntil([&] { return popup.isVisible(); }));
+    popup.setQuery(QStringLiteral("Play"));
+    ASSERT_TRUE(pumpUntil([&] { return popup.visibleRowCount() == 2; }));
+    popup.activateCurrent();
+    ASSERT_EQ(host.opened.size(), 1u);
+    EXPECT_EQ(host.opened[0].second, (fl::LspPosition{6, 0})); // Shorter match "PlayerState" ranks first.
+
+    rig.controller.gotoSymbol();
+    ASSERT_TRUE(pumpUntil([&] { return popup.isVisible(); }));
+    popup.setQuery(QStringLiteral("Play"));
+    ASSERT_TRUE(pumpUntil([&] { return popup.visibleRowCount() == 3; }));
+}
+
+TEST(LanguageControllerNavigation, RelatedFilesFallsBackToProjectFilesWhenServerReturnsEmpty) {
+    FeatureServer server;
+    server.on("textDocument/switchSourceHeader", [](const Json&) { return Json(""); });
+    FakeHost host("int main() {}\n");
+    const std::string matchingHeader = workPath("include/main.hpp");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    LanguageController controller(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = host,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .projectFiles =
+            [matchingHeader] { return std::vector<std::string>{workPath("src/other.hpp"), matchingHeader}; },
+    });
+    controller.gotoRelatedFile();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
+    EXPECT_EQ(fl::documentKey(host.opened[0].first), fl::documentKey(matchingHeader));
 }
 
 } // namespace

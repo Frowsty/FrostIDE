@@ -45,6 +45,10 @@ struct EditorViewSettings {
     std::string themeId = "glacier-dark";
     // editor.renderer: "auto", "raster" or "rhi" (editor_backend.hpp; ADR 0043).
     std::string renderer = "auto";
+    // editor.showWhitespace: "none", "selection" or "all".
+    std::string showWhitespace = "none";
+    // editor.indentGuides: vertical guide lines at each indent level.
+    bool indentGuides = true;
 
     friend bool operator==(const EditorViewSettings&, const EditorViewSettings&) = default;
 };

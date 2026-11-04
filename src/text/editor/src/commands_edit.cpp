@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include <utf8proc.h>
+
 namespace frost::text::commands {
 
 namespace {
@@ -718,6 +720,117 @@ CommandResult deleteWordForward(const CommandInput& in) noexcept {
         ranges.push_back(range.empty() ? ByteRange{range.begin, nextWordBoundary(in.text, range.begin)} : range);
     }
     return deleteRanges(in, ranges, EditKind::DeleteForward);
+}
+
+CommandResult toggleCase(const CommandInput& in) noexcept {
+    const Snapshot& text = in.text;
+    const std::vector<Selection> selections = detail::selectionsOf(in.state);
+
+    const auto wordUnderCaret = [&](ByteOffset at) noexcept -> ByteRange {
+        at = text.clip(at);
+        const std::optional<DecodedChar> right = charAt(text, at);
+        const std::optional<DecodedChar> left = charBefore(text, at);
+        const bool rightWord = right && charClass(right->cp) == CharClass::Word;
+        const bool leftWord = left && charClass(left->cp) == CharClass::Word;
+        if (!rightWord && !leftWord) {
+            return ByteRange{at, at};
+        }
+        ByteOffset begin = at;
+        {
+            detail::BackwardChars back(text, at);
+            ByteOffset where;
+            DecodedChar c;
+            while (back.next(where, c) && charClass(c.cp) == CharClass::Word) {
+                begin = where;
+                if (where == ByteOffset{0}) {
+                    break;
+                }
+            }
+        }
+        ByteOffset end = at;
+        {
+            detail::ForwardChars fwd(text, at);
+            ByteOffset where;
+            DecodedChar c;
+            while (fwd.next(where, c) && charClass(c.cp) == CharClass::Word) {
+                end = where + c.bytes;
+            }
+        }
+        return ByteRange{begin, end};
+    };
+
+    struct Plan {
+        bool wasEmpty = false;
+        bool reversed = false;
+        ByteOffset originalCaret{0};
+        std::optional<std::size_t> editId;
+        std::uint64_t convertedSize = 0;
+    };
+    std::vector<Plan> plans;
+    plans.reserve(selections.size());
+    BatchBuilder batch;
+
+    for (const Selection& selection : selections) {
+        Plan plan;
+        plan.wasEmpty = selection.empty();
+        plan.reversed = selection.reversed();
+        plan.originalCaret = selection.head;
+        const ByteRange target = selection.empty() ? wordUnderCaret(selection.head) : selection.range();
+        if (target.empty()) {
+            plans.push_back(plan);
+            continue;
+        }
+        const std::string original = text.text(target);
+        bool hasLower = false;
+        for (std::string_view rem = original; !rem.empty();) {
+            const DecodedChar c = decodeUtf8(rem);
+            if (utf8proc_islower(static_cast<utf8proc_int32_t>(c.cp)) != 0) {
+                hasLower = true;
+                break;
+            }
+            rem.remove_prefix(c.bytes);
+        }
+        std::string converted;
+        converted.reserve(original.size());
+        for (std::string_view rem = original; !rem.empty();) {
+            const DecodedChar c = decodeUtf8(rem);
+            const utf8proc_int32_t cp = static_cast<utf8proc_int32_t>(c.cp);
+            const utf8proc_int32_t mapped = hasLower ? utf8proc_toupper(cp) : utf8proc_tolower(cp);
+            utf8proc_uint8_t buf[4]{};
+            const utf8proc_ssize_t len = utf8proc_encode_char(mapped, buf);
+            if (len > 0) {
+                converted.append(reinterpret_cast<const char*>(buf), static_cast<std::size_t>(len));
+            } else {
+                converted.append(rem.data(), c.bytes);
+            }
+            rem.remove_prefix(c.bytes);
+        }
+        plan.convertedSize = converted.size();
+        plan.editId = batch.add(target, std::move(converted));
+        plans.push_back(plan);
+    }
+
+    batch.finish();
+    std::vector<Selection> after;
+    after.reserve(plans.size());
+    for (const Plan& plan : plans) {
+        if (!plan.editId) {
+            after.push_back(Selection::caret(batch.map(plan.originalCaret, Bias::Right)));
+        } else if (plan.wasEmpty) {
+            after.push_back(Selection::caret(batch.map(plan.originalCaret, Bias::Right)));
+        } else {
+            const ByteOffset start = batch.post(*plan.editId, 0);
+            const ByteOffset end = batch.post(*plan.editId, plan.convertedSize);
+            after.push_back(plan.reversed ? Selection{end, start} : Selection{start, end});
+        }
+    }
+
+    CommandResult result;
+    result.state = detail::makeState(after, {}, detail::primaryOf(in.state));
+    result.edits = batch.take();
+    result.kind = EditKind::Other;
+    result.breakCoalescing = true;
+    return result;
 }
 
 } // namespace frost::text::commands

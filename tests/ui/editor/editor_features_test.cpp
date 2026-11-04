@@ -21,6 +21,7 @@
 #include "support/appearance_fixture.hpp"
 #include <QLineEdit>
 #include <QToolButton>
+#include <QWheelEvent>
 
 #include <set>
 #include <string>
@@ -475,6 +476,190 @@ TEST(EditorFindBar, EnterUpDownAndRiderShortcutsInFindBarNeverMutateSelectedEdit
     sendKey(findField, Qt::Key_R, Qt::ControlModifier);
     EXPECT_TRUE(bar.replaceVisible());
     EXPECT_EQ(h.text(), "alpha beta\nalpha gamma\nalpha delta\n");
+}
+
+TEST(EditorSelection, ExtendAndShrinkSelectionFollowStructuralAndSyntaxHierarchy) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("int f() {\n    return (foo + \"hello world\");\n}\n", cpp());
+    h.settle();
+    const std::string doc = h.text();
+    const std::size_t helloPos = doc.find("hello");
+    ASSERT_NE(helloPos, std::string::npos);
+
+    // Place caret inside "hello"
+    h.view->setState(text::EditorState::caretAt(ByteOffset{helloPos + 2}));
+    const ByteOffset initialCaret{helloPos + 2};
+
+    // 1st Ctrl+W: selects word "hello"
+    h.press(Qt::Key_W, Qt::ControlModifier);
+    const text::ByteRange wordRange = h.view->editor().state().primary().range();
+    EXPECT_EQ(h.document.text().text(wordRange), "hello");
+
+    // 2nd Ctrl+W: selects interior of string "hello world"
+    h.press(Qt::Key_W, Qt::ControlModifier);
+    const text::ByteRange innerQuoteRange = h.view->editor().state().primary().range();
+    EXPECT_EQ(h.document.text().text(innerQuoteRange), "hello world");
+
+    // 3rd Ctrl+W: selects quoted string "\"hello world\""
+    h.press(Qt::Key_W, Qt::ControlModifier);
+    const text::ByteRange outerQuoteRange = h.view->editor().state().primary().range();
+    EXPECT_EQ(h.document.text().text(outerQuoteRange), "\"hello world\"");
+
+    // 4th Ctrl+W: selects interior of parentheses "foo + \"hello world\""
+    h.press(Qt::Key_W, Qt::ControlModifier);
+    const text::ByteRange innerParenRange = h.view->editor().state().primary().range();
+    EXPECT_EQ(h.document.text().text(innerParenRange), "foo + \"hello world\"");
+
+    // 5th Ctrl+W: selects parenthesized expression "(foo + \"hello world\")"
+    h.press(Qt::Key_W, Qt::ControlModifier);
+    const text::ByteRange outerParenRange = h.view->editor().state().primary().range();
+    EXPECT_EQ(h.document.text().text(outerParenRange), "(foo + \"hello world\")");
+
+    // Shrink selection (Ctrl+Shift+W) unwinds the exact history stack back to the caret.
+    h.press(Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.view->editor().state().primary().range(), innerParenRange);
+    h.press(Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.view->editor().state().primary().range(), outerQuoteRange);
+    h.press(Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.view->editor().state().primary().range(), innerQuoteRange);
+    h.press(Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.view->editor().state().primary().range(), wordRange);
+    h.press(Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_TRUE(h.view->editor().state().primary().empty());
+    EXPECT_EQ(h.caret(), initialCaret.value());
+}
+
+TEST(EditorOccurrences, SelectNextUnselectAndSelectAllOccurrences) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("alpha beta alpha gamma alpha");
+    h.view->setState(text::EditorState::caretAt(ByteOffset{1}));
+
+    // 1st Alt+J selects word "alpha" at [0..5]
+    h.press(Qt::Key_J, Qt::AltModifier);
+    EXPECT_EQ(h.view->editor().state().selections.size(), 1U);
+    EXPECT_EQ(h.view->editor().state().primary().range(), (text::ByteRange{ByteOffset{0}, ByteOffset{5}}));
+
+    // 2nd Alt+J adds second "alpha" at [11..16]
+    h.press(Qt::Key_J, Qt::AltModifier);
+    EXPECT_EQ(h.view->editor().state().selections.size(), 2U);
+    EXPECT_EQ(h.view->editor().state().primary().range(), (text::ByteRange{ByteOffset{11}, ByteOffset{16}}));
+
+    // Alt+Shift+J unselects the second occurrence, leaving the first
+    h.press(Qt::Key_J, Qt::AltModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.view->editor().state().selections.size(), 1U);
+    EXPECT_EQ(h.view->editor().state().primary().range(), (text::ByteRange{ByteOffset{0}, ByteOffset{5}}));
+
+    // Ctrl+Alt+Shift+J selects all 3 occurrences of "alpha"
+    h.press(Qt::Key_J, Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.view->editor().state().selections.size(), 3U);
+}
+
+TEST(EditorEdit, ToggleCaseConvertsSelectionAndWordUnderCaret) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("hello World");
+    // Caret on "hello" with no selection toggles "hello" -> "HELLO"
+    h.view->setState(text::EditorState::caretAt(ByteOffset{2}));
+    h.press(Qt::Key_U, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.text(), "HELLO World");
+    // Second toggle converts "HELLO" -> "hello"
+    h.press(Qt::Key_U, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.text(), "hello World");
+
+    // Selection over mixed-case "World" converts to "WORLD", then "world"
+    const text::Selection sel{ByteOffset{6}, ByteOffset{11}};
+    h.view->setState(text::EditorState{.selections = text::SelectionSet::fromSelections({&sel, 1}, 0), .carets = {}});
+    h.press(Qt::Key_U, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.text(), "hello WORLD");
+    EXPECT_EQ(h.view->editor().state().primary().range(), (text::ByteRange{ByteOffset{6}, ByteOffset{11}}));
+    h.press(Qt::Key_U, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(h.text(), "hello world");
+}
+
+TEST(EditorColumnMode, ColumnModeClonesCaretsAndSupportsRectangularDrag) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("abcd\nefgh\nijkl\n");
+    EXPECT_FALSE(h.view->columnMode());
+    EXPECT_FALSE(h.view->status().columnMode);
+
+    // Toggle column mode via action (Alt+Shift+Insert)
+    EXPECT_TRUE(h.view->perform(EditorAction::ToggleColumnMode));
+    EXPECT_TRUE(h.view->columnMode());
+    EXPECT_TRUE(h.view->status().columnMode);
+
+    // Place caret at column 1 of line 0 and invoke MoveDownWithSelection twice to clone carets down
+    h.view->setState(text::EditorState::caretAt(ByteOffset{1}));
+    EXPECT_TRUE(h.view->perform(EditorAction::MoveDownWithSelection));
+    EXPECT_EQ(h.view->editor().state().selections.size(), 2U);
+    EXPECT_TRUE(h.view->perform(EditorAction::MoveDownWithSelection));
+    ASSERT_EQ(h.view->editor().state().selections.size(), 3U);
+    EXPECT_EQ(h.view->editor().state().selections.all()[0].head, ByteOffset{1});
+    EXPECT_EQ(h.view->editor().state().selections.all()[1].head, ByteOffset{6});
+    EXPECT_EQ(h.view->editor().state().selections.all()[2].head, ByteOffset{11});
+
+    // Alt+Drag rectangular selection from row 0 col 1 to row 2 col 3
+    h.view->setColumnMode(false);
+    const QRectF startRect = h.view->globalCaretRect(ByteOffset{1});
+    (void)startRect;
+    const double originX = h.view->buildDisplayList().textArea.left() + 6.0;
+    const double cellW = static_cast<double>(h.view->shaper().cellWidth()) / 64.0;
+    const double lineH = h.view->lineHeight();
+    const QPointF p0(originX + 1.0 * cellW, 0.5 * lineH);
+    const QPointF p1(originX + 3.0 * cellW, 2.5 * lineH);
+
+    QMouseEvent press(QEvent::MouseButtonPress, p0, h.view->viewport()->mapToGlobal(p0.toPoint()), Qt::LeftButton,
+                      Qt::LeftButton, Qt::AltModifier);
+    QCoreApplication::sendEvent(h.view->viewport(), &press);
+    QMouseEvent move(QEvent::MouseMove, p1, h.view->viewport()->mapToGlobal(p1.toPoint()), Qt::NoButton, Qt::LeftButton,
+                     Qt::AltModifier);
+    QCoreApplication::sendEvent(h.view->viewport(), &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, p1, h.view->viewport()->mapToGlobal(p1.toPoint()), Qt::LeftButton,
+                        Qt::NoButton, Qt::AltModifier);
+    QCoreApplication::sendEvent(h.view->viewport(), &release);
+
+    ASSERT_EQ(h.view->editor().state().selections.size(), 3U);
+    EXPECT_EQ(h.view->editor().state().selections.all()[0].range(), (text::ByteRange{ByteOffset{1}, ByteOffset{3}}));
+    EXPECT_EQ(h.view->editor().state().selections.all()[1].range(), (text::ByteRange{ByteOffset{6}, ByteOffset{8}}));
+    EXPECT_EQ(h.view->editor().state().selections.all()[2].range(), (text::ByteRange{ByteOffset{11}, ByteOffset{13}}));
+}
+
+TEST(EditorViewFeatures, CtrlWheelZoomIndentGuidesWhitespaceAndBookmarks) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("    \tint x = 1;\n        return x;\n");
+
+    // 1. Ctrl+Wheel font zoom and resetFontZoom
+    const double initialSize = h.view->effectiveFontSize();
+    {
+        QWheelEvent wheelUp(QPointF(20.0, 20.0), QPointF(20.0, 20.0), QPoint(0, 0), QPoint(0, 240), Qt::NoButton,
+                            Qt::ControlModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(h.view->viewport(), &wheelUp);
+    }
+    EXPECT_DOUBLE_EQ(h.view->effectiveFontSize(), initialSize + 2.0);
+    h.view->resetFontZoom();
+    EXPECT_DOUBLE_EQ(h.view->effectiveFontSize(), initialSize);
+
+    // 2. Indent guides and visible whitespace in buildDisplayList
+    EditorViewSettings settings = h.view->settings();
+    settings.indentGuides = true;
+    settings.showWhitespace = "all";
+    settings.showRightMargin = false;
+    h.view->applySettings(settings);
+
+    const EditorDisplayList list = h.view->buildDisplayList();
+    // Line 0 has 8 cols of indent (2 guides), line 1 has 8 cols of indent (2 guides)
+    EXPECT_GE(list.underlines.size(), 4U);
+    // Visible whitespace emits '·' (U+00B7) for spaces and '→' (U+2192) for tabs
+    EXPECT_NE(list.findText(QString(QChar(0x00B7))), nullptr);
+    EXPECT_NE(list.findText(QString(QChar(0x2192))), nullptr);
+
+    // 3. Bookmarks in gutter markers
+    h.view->setBookmarks({LineIndex{1}});
+    ASSERT_EQ(h.view->bookmarks().size(), 1U);
+    EXPECT_EQ(h.view->bookmarks()[0], LineIndex{1});
+    const EditorDisplayList withBookmarks = h.view->buildDisplayList();
+    ASSERT_EQ(withBookmarks.markers.size(), 1U);
+    EXPECT_EQ(withBookmarks.markers[0].line, LineIndex{1});
+    EXPECT_EQ(withBookmarks.markers[0].severity, MarkerSeverity::Bookmark);
+    EXPECT_EQ(withBookmarks.markers[0].color, h.view->colors().markerBookmark);
 }
 
 } // namespace

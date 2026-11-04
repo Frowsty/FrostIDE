@@ -42,6 +42,8 @@ template<class Source>
     out.lineSeparator = source.get(key::filesLineSeparator);
     out.themeId = source.get(key::uiTheme);
     out.renderer = source.get(key::editorRenderer);
+    out.showWhitespace = source.get(key::editorShowWhitespace);
+    out.indentGuides = source.get(key::editorIndentGuides);
     return out;
 }
 

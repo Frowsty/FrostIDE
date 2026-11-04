@@ -155,7 +155,22 @@ void DocumentEditorView::setPath(std::string path) {
     if (auto* binding = m_editor->findChild<ui::EditorSettingsBinding*>()) {
         binding->setPath(m_path);
     }
-    markSaved();
+    if (!m_document->dirty()) {
+        markSaved();
+    } else {
+        refresh();
+    }
+}
+
+void DocumentEditorView::setBookmarks(std::span<const int> oneBasedLines) {
+    std::vector<LineIndex> lines;
+    lines.reserve(oneBasedLines.size());
+    for (const int line : oneBasedLines) {
+        if (line >= 1) {
+            lines.push_back(LineIndex{static_cast<std::uint32_t>(line - 1)});
+        }
+    }
+    m_editor->setBookmarks(std::move(lines));
 }
 
 void DocumentEditorView::reloadFromDocument() {
@@ -232,6 +247,23 @@ DocumentEditorView* DocumentEditorFactory::find(std::string_view path) const {
     const auto it =
         std::ranges::find_if(m_views, [&](DocumentEditorView* view) { return lang::documentKey(view->path()) == key; });
     return it == m_views.end() ? nullptr : *it;
+}
+
+void DocumentEditorFactory::renamePath(std::string_view oldPath, std::string_view newPath) {
+    const std::string oldKey = lang::documentKey(oldPath);
+    const std::string newKey = lang::documentKey(newPath);
+    if (oldKey != newKey) {
+        if (const auto it = m_closedFolds.find(oldKey); it != m_closedFolds.end()) {
+            ui::EditorViewState state = std::move(it->second);
+            m_closedFolds.erase(it);
+            m_closedFolds.insert_or_assign(newKey, std::move(state));
+        }
+    }
+    for (DocumentEditorView* view : m_views) {
+        if (lang::documentKey(view->path()) == oldKey) {
+            view->setPath(std::string(newPath));
+        }
+    }
 }
 
 void DocumentEditorFactory::forget(DocumentEditorView& view) noexcept {

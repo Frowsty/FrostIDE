@@ -3,6 +3,55 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-04: Rider 1:1 parity vertical slice (Editor selection/occurrences/column mode/zoom/guides, Explorer Rename & Delete, and Navigation/Search Everywhere/Bookmarks/TODO)
+
+- Completed a three-track Rider 1:1 parity vertical slice across Editor (`EDIT-01`, `EDIT-02`, rows 38, 39,
+  251, 253), Project/File Explorer (`continue.txt` #5, `CPP-03`, rows 6, 31), and Navigation/Tool Windows
+  (`NAV-01`, `NAV-02`, `SHELL-02`, rows 76, 77, 82, 92, 93, 115):
+  - **Track A — 1:1 Rider Editor Features**:
+    - Implemented `Extend Selection` (`editor.extendSelection`, `Ctrl+W`) and `Shrink Selection`
+      (`editor.shrinkSelection`, `Ctrl+Shift+W`) with syntactic/lexical expansion (`SyntaxTree::enclosingRanges`,
+      word, quote/bracket interior & exterior, line, and full document) and per-editor shrink history stack.
+    - Implemented multi-caret occurrence selection: `Select Next Occurrence` (`editor.selectNextOccurrence`,
+      `Alt+J`), `Unselect Occurrence` (`editor.unselectOccurrence`, `Alt+Shift+J`), and `Select All Occurrences`
+      (`editor.selectAllOccurrences`, `Ctrl+Alt+Shift+J`).
+    - Implemented `Toggle Case` (`editor.toggleCase`, `Ctrl+Shift+U`) using `utf8proc` Unicode case mapping.
+    - Implemented `Column Selection Mode` (`editor.toggleColumnMode`, `Alt+Shift+Insert`) and `Alt+Drag`
+      rectangular box selection, plus `COL` indicator in the status bar.
+    - Added `Ctrl+Wheel` editor font zoom (`resetFontZoom`), vertical indent guides
+      (`editor.showIndentGuides`), visible whitespace markers (`editor.showWhitespace`), and
+      `MarkerSeverity::Bookmark` gutter markers.
+  - **Track B — Explorer File/Folder Rename, Delete & Context Menu Parity**:
+    - Added `Rename...` (`file.rename`, `F2` / `Shift+F6` / context menu) and `Delete...` (`file.delete`,
+      `Delete` / context menu) across `FileSystemView`, `SolutionExplorer`, `ui::Workbench`, and
+      `app::Workbench`, plus `Open Containing Folder` and `Open in Terminal` in `FileSystemView`.
+    - Added `SaveManager::renameDocument` and `IFileSystem::rename` / `remove` / `removeAll` so renaming a
+      file or folder rebinds open editor tabs, `DocumentRegistry`, `SaveManager` (preserving unsaved dirty
+      buffer state), `SessionStore`, `RecentFiles`, `RecentLocations`, `NavigationHistory`, `Bookmarks`,
+      `lastEditLocation` (including closed files inside a renamed directory), and LSP (`didClose` old URI /
+      `didOpen` new URI), while deleting an open dirty file or folder closes affected tabs cleanly without a
+      save prompt.
+    - Automatically updates `CMakeLists.txt` target source lists, `.vcxproj` / `.vcxproj.filters`, and
+      `.csproj` / `SolutionModel` on file or folder rename and delete.
+  - **Track C — 1:1 Rider Navigation, Search Everywhere Tabs, Go to Class, Switch Header/Source, Last Edit Location, Bookmarks & TODO Tool Window**:
+    - Added category tabs (`All`, `Classes`, `Files`, `Symbols`, `Actions` cycled via `Tab` / `Shift+Tab`)
+      and workspace symbol integration to `Search Everywhere` (`search.everywhere`, `Double Shift` / `Ctrl+T`).
+    - Added `Go to Class...` (`navigate.gotoClass`, `Ctrl+N`) in `LanguageController` filtering workspace
+      symbols to class-like types (`Class`, `Struct`, `Interface`, `Enum`, `Namespace`).
+    - Added `Switch Header/Source` (`navigate.relatedFiles`, `Alt+O` / `Ctrl+Alt+Home` / `Ctrl+K, Ctrl+O`) to
+      the `Navigate` menu and `kVisualStudioKeymap`, with a UTF-8 project-files and sibling-file fallback when
+      LSP is unavailable or returns empty.
+    - Implemented `Last Edit Location` (`navigate.lastEditLocation`, `Ctrl+Shift+Backspace`), `Bookmarks`
+      (`bookmarks.toggle` `F11`, `bookmarks.show` `Shift+F11`, `bookmarks.next`, `bookmarks.previous` with
+      gutter markers), and the `TODO` Tool Window (`window.todo`, scanning project files for `TODO` and
+      `FIXME` comments and navigating on activation).
+- Independent review by subagent `488bfa07-6049-4ba7-a9b1-28522f938263` inspected the full diff against `main`;
+  all four findings (pure UTF-8 `splitPathParts` in `findRelatedProjectFile`, `pos = tagStart` and `.csproj`
+  support in `updatePathInVcxproj`, directory-child path remapping in `notifyPathRenamed`, and header cleanup)
+  were resolved and covered by tests.
+- Combined verification (`tools/verify.ps1`) passed on both platforms:
+  `Verified: win debug 3098/3133 (35 skipped, 1 disabled), wsl debug 2914/2976 (62 skipped), wsl tsan-quick not-run (off by default), wsl tidy not-run (off by default), wsl licensecheck ok, format ok, frost_lint ok, licensecheck ok, featurecheck ok, tidy not-run (off by default)`
+
 ## 2026-11-04: Beta 4 C# `.slnx`/`.sln` solution hierarchy, bundled LSPs & debuggers, and 1:1 Rider Find/Replace bar keyboard behavior
 
 - Resolved three user-reported Beta 4 issues across C# solution hierarchy, bundled language

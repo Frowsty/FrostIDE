@@ -81,6 +81,13 @@ constexpr std::array kActions{
     EditorActionInfo{"editor.foldCollapseAll", "Fold All", A::FoldAll, false},
     EditorActionInfo{"editor.foldExpandAll", "Unfold All", A::UnfoldAll, false},
     EditorActionInfo{"editor.foldSelection", "Fold Selection", A::FoldSelection, false},
+    EditorActionInfo{"editor.extendSelection", "Extend Selection", A::ExtendSelection, false},
+    EditorActionInfo{"editor.shrinkSelection", "Shrink Selection", A::ShrinkSelection, false},
+    EditorActionInfo{"editor.selectNextOccurrence", "Add Selection for Next Occurrence", A::SelectNextOccurrence, false},
+    EditorActionInfo{"editor.unselectOccurrence", "Unselect Occurrence", A::UnselectOccurrence, false},
+    EditorActionInfo{"editor.selectAllOccurrences", "Select All Occurrences", A::SelectAllOccurrences, false},
+    EditorActionInfo{"editor.toggleCase", "Toggle Case", A::ToggleCase, true},
+    EditorActionInfo{"editor.toggleColumnMode", "Column Selection Mode", A::ToggleColumnMode, false},
 };
 // clang-format on
 

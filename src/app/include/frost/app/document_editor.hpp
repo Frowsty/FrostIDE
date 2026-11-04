@@ -89,6 +89,7 @@ public:
     // The caret and the first visible row (session restore).
     [[nodiscard]] ui::EditorViewState viewState() const override;
     void restoreViewState(const ui::EditorViewState& state) override;
+    void setBookmarks(std::span<const int> oneBasedLines) override;
 
     [[nodiscard]] ui::EditorView& editor() noexcept { return *m_editor; }
     [[nodiscard]] document::FileDocument& document() noexcept { return *m_document; }
@@ -149,6 +150,8 @@ public:
     [[nodiscard]] DocumentEditorView* find(const document::FileDocument& document) const noexcept;
     // The view whose path has `path`'s document key (lang::documentKey), or nullptr.
     [[nodiscard]] DocumentEditorView* find(std::string_view path) const;
+    // Updates open views and cached fold state from `oldPath` to `newPath`.
+    void renamePath(std::string_view oldPath, std::string_view newPath);
 
 private:
     friend class DocumentEditorView;

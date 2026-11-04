@@ -16,6 +16,7 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <map>
 #include <utility>
@@ -35,6 +36,112 @@ std::string fileName(std::string_view path) {
 
 bool allIdentifierBytes(std::string_view text) {
     return !text.empty() && std::ranges::all_of(text, [](char c) { return fl::isIdentifierByte(c); });
+}
+
+std::string lowerAscii(std::string_view text) {
+    std::string out(text);
+    for (char& ch : out) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return out;
+}
+
+bool isHeaderExt(std::string_view ext) {
+    return ext == ".h" || ext == ".hpp" || ext == ".hh" || ext == ".hxx" || ext == ".inl" || ext == ".ipp";
+}
+
+bool isSourceExt(std::string_view ext) {
+    return ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx" || ext == ".m" || ext == ".mm";
+}
+
+bool isClassLikeSymbol(fl::SymbolKind kind) {
+    return kind == fl::SymbolKind::Class || kind == fl::SymbolKind::Struct || kind == fl::SymbolKind::Interface ||
+           kind == fl::SymbolKind::Enum || kind == fl::SymbolKind::Namespace;
+}
+
+struct SplitPathParts {
+    std::string dir;
+    std::string stem;
+    std::string ext;
+    std::string prefixWithoutExt;
+};
+
+SplitPathParts splitPathParts(std::string_view path) {
+    SplitPathParts out;
+    const std::size_t slash = path.find_last_of("/\\");
+    const std::string_view dirView = slash == std::string_view::npos ? std::string_view{} : path.substr(0, slash);
+    const std::string_view baseView = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    out.dir = lowerAscii(dirView);
+    std::ranges::replace(out.dir, '\\', '/');
+    const std::size_t dot = baseView.rfind('.');
+    if (dot == std::string_view::npos || dot == 0) {
+        out.stem = lowerAscii(baseView);
+        out.prefixWithoutExt = std::string(path);
+    } else {
+        out.stem = lowerAscii(baseView.substr(0, dot));
+        out.ext = lowerAscii(baseView.substr(dot));
+        const std::size_t baseOffset = slash == std::string_view::npos ? 0 : slash + 1;
+        out.prefixWithoutExt = std::string(path.substr(0, baseOffset + dot));
+    }
+    return out;
+}
+
+std::optional<std::string> findRelatedProjectFile(std::string_view currentPath,
+                                                  const std::function<std::vector<std::string>()>& projectFiles,
+                                                  io::IFileSystem& fs) {
+    const SplitPathParts current = splitPathParts(currentPath);
+    const bool wantSource = isHeaderExt(current.ext);
+    const bool wantHeader = isSourceExt(current.ext);
+    if ((!wantSource && !wantHeader) || current.stem.empty()) {
+        return std::nullopt;
+    }
+
+    if (projectFiles) {
+        std::optional<std::string> best;
+        int bestScore = -1;
+        for (const std::string& candidateStr : projectFiles()) {
+            if (fl::documentKey(candidateStr) == fl::documentKey(currentPath)) {
+                continue;
+            }
+            const SplitPathParts candidate = splitPathParts(candidateStr);
+            if (candidate.stem != current.stem) {
+                continue;
+            }
+            if ((wantSource && !isSourceExt(candidate.ext)) || (wantHeader && !isHeaderExt(candidate.ext))) {
+                continue;
+            }
+            int score = 1;
+            if (candidate.dir == current.dir) {
+                score = 100;
+            } else {
+                const std::size_t limit = std::min(candidate.dir.size(), current.dir.size());
+                std::size_t prefix = 0;
+                while (prefix < limit && candidate.dir[prefix] == current.dir[prefix]) {
+                    ++prefix;
+                }
+                score = 10 + static_cast<int>(prefix);
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidateStr;
+            }
+        }
+        if (best) {
+            return best;
+        }
+    }
+
+    static constexpr std::string_view kSourceExts[] = {".cpp", ".cc", ".cxx", ".c", ".mm", ".m"};
+    static constexpr std::string_view kHeaderExts[] = {".hpp", ".h", ".hh", ".hxx", ".inl", ".ipp"};
+    const std::span<const std::string_view> exts =
+        wantSource ? std::span<const std::string_view>(kSourceExts) : std::span<const std::string_view>(kHeaderExts);
+    for (std::string_view targetExt : exts) {
+        const std::string siblingStr = current.prefixWithoutExt + std::string(targetExt);
+        if (fs.exists(siblingStr) == true) {
+            return siblingStr;
+        }
+    }
+    return std::nullopt;
 }
 
 // Awaits `task` on the scheduler and posts `done(result)` to the UI thread, where it runs only
@@ -273,6 +380,7 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         {"navigate.highlightUsages", "Highlight Usages in File", "Navigate", &LanguageController::highlightUsages,
          true},
         {"navigate.fileStructure", "File Structure", "Navigate", &LanguageController::showFileStructure, true},
+        {"navigate.gotoClass", "Go to Class...", "Navigate", &LanguageController::gotoClass, false},
         {"navigate.gotoSymbol", "Go to Symbol", "Navigate", &LanguageController::gotoSymbol, false},
         {"refactor.rename", "Rename", "Refactor", &LanguageController::rename, true},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
@@ -694,21 +802,26 @@ void LanguageController::gotoRelatedFile() {
     if (!hasDocument()) {
         return;
     }
+    const std::string currentPath = m_services.host.documentPath();
     start<std::optional<std::string>>(
         m_navigationSlot,
-        [&server = m_services.server, path = m_services.host.documentPath()](std::stop_token token) {
+        [&server = m_services.server, path = currentPath](std::stop_token token) {
             return fl::requestSwitchSourceHeader(server, path, std::move(token));
         },
-        [this](Result<std::optional<std::string>> related) {
+        [this, currentPath](Result<std::optional<std::string>> related) {
+            if (related && *related && !(*related)->empty()) {
+                m_services.host.openLocation(**related, fl::LspPosition{});
+                return;
+            }
+            if (const auto fallback = findRelatedProjectFile(currentPath, m_services.projectFiles, m_services.fs)) {
+                m_services.host.openLocation(*fallback, fl::LspPosition{});
+                return;
+            }
             if (!related) {
                 report(related.error(), "Go to related files");
                 return;
             }
-            if (!*related) {
-                emit statusMessage(QStringLiteral("No related file found"));
-                return;
-            }
-            m_services.host.openLocation(**related, fl::LspPosition{});
+            emit statusMessage(QStringLiteral("No related file found"));
         });
 }
 
@@ -799,7 +912,17 @@ void LanguageController::showFileStructure() {
         });
 }
 
+void LanguageController::gotoClass() {
+    m_symbolClassesOnly = true;
+    m_symbolSlot.cancel();
+    m_symbols->setWorkspaceSymbols(QStringLiteral("Go to Class"), {});
+    m_symbols->setQuery(QString());
+    m_symbolQueryTimer.stop();
+    m_symbols->popup(m_services.host.editorWidget());
+}
+
 void LanguageController::gotoSymbol() {
+    m_symbolClassesOnly = false;
     m_symbolSlot.cancel();
     m_symbols->setWorkspaceSymbols(QStringLiteral("Go to Symbol"), {});
     m_symbols->setQuery(QString());
@@ -811,23 +934,29 @@ void LanguageController::requestWorkspaceSymbols(const QString& query) {
     if (m_symbols->structureMode()) {
         return;
     }
+    const QString title = m_symbolClassesOnly ? QStringLiteral("Go to Class") : QStringLiteral("Go to Symbol");
     if (query.isEmpty()) {
         m_symbolSlot.cancel();
-        m_symbols->setWorkspaceSymbols(QStringLiteral("Go to Symbol"), {});
+        m_symbols->setWorkspaceSymbols(title, {});
         return;
     }
+    const bool classesOnly = m_symbolClassesOnly;
     start<std::vector<fl::WorkspaceSymbol>>(
         m_symbolSlot,
         [&server = m_services.server, query = query.toStdString()](std::stop_token token) {
             return fl::requestWorkspaceSymbols(server, query, std::move(token));
         },
-        [this](Result<std::vector<fl::WorkspaceSymbol>> symbols) {
+        [this, classesOnly, title](Result<std::vector<fl::WorkspaceSymbol>> symbols) {
             if (!symbols) {
-                report(symbols.error(), "Go to symbol");
+                report(symbols.error(), classesOnly ? "Go to class" : "Go to symbol");
                 return;
             }
             if (m_symbols->isVisible() && !m_symbols->structureMode()) {
-                m_symbols->setWorkspaceSymbols(QStringLiteral("Go to Symbol"), std::move(*symbols));
+                std::vector<fl::WorkspaceSymbol> filtered = std::move(*symbols);
+                if (classesOnly) {
+                    std::erase_if(filtered, [](const fl::WorkspaceSymbol& s) { return !isClassLikeSymbol(s.kind); });
+                }
+                m_symbols->setWorkspaceSymbols(title, std::move(filtered));
             }
         });
 }

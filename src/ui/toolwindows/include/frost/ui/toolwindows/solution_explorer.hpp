@@ -136,6 +136,8 @@ public:
 signals:
     // A file was activated (double-click, Enter, or Open in the context menu).
     void openFile(const QString& absolutePath);
+    void renameRequested(const QString& path, bool isDirectory);
+    void deleteRequested(const QString& path, bool isDirectory);
     void commandFailed(const QString& message);
 
 protected:

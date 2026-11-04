@@ -125,6 +125,10 @@ void Workbench::editorClosed(DocumentEditorView& view) {
 }
 
 void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) {
+    if (m_nav && !change.edits.empty()) {
+        const ui::EditorViewStatus st = view.editor().status();
+        m_nav->recordEditLocation(view.path(), st.line, st.column);
+    }
     for (DocumentEditorView* peer : m_editors->views()) {
         if (peer == &view || &peer->document() != &view.document())
             continue;
@@ -154,6 +158,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
 }
 
 bool Workbench::editorCloseRequested(DocumentEditorView& view) {
+    if (std::ranges::contains(m_discarded, view.path()))
+        return true;
     if (m_documentRegistry->viewCount(view.path()) > 1)
         return true;
     if (!view.document().dirty()) {
@@ -338,6 +344,120 @@ void Workbench::showSaveAsDialog() {
         return;
     }
     (void)saveAs(*view, chosen);
+}
+
+void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::string& newPath) {
+    document::FileDocument* doc = m_documents->find(oldPath);
+    if (doc == nullptr) {
+        if (m_nav) {
+            m_nav->notifyPathRenamed(oldPath, newPath);
+        }
+        return;
+    }
+
+    if (m_clangd && isCFamilySource(oldPath))
+        (void)m_clangd->closeDocument(oldPath);
+    if (m_managed && isManagedSource(oldPath))
+        (void)m_managed->closeDocument(oldPath);
+    if (m_lua && isLuaSource(oldPath))
+        (void)m_lua->closeDocument(oldPath);
+    m_liveMarkers.erase(lang::documentKey(oldPath));
+    std::erase(m_discarded, oldPath);
+
+    (void)m_documents->renameDocument(*doc, newPath);
+    m_editors->renamePath(oldPath, newPath);
+
+    for (DocumentEditorView* peer : m_editors->views()) {
+        if (&peer->document() != doc)
+            continue;
+        delete peer->editor().findChild<ui::EditorChangeMarkers*>();
+        if (m_git)
+            m_git->attachEditor(*peer);
+        delete peer->editor().findChild<ui::lang::EditorInsightBinding*>();
+        if (m_clangd && isCFamilySource(newPath) && peer == currentView()) {
+            auto* binding = new ui::lang::EditorInsightBinding(peer->editor(), {*m_bridge, *m_pool});
+            binding->attach(*m_clangd);
+        }
+        refreshMarkers(*peer);
+    }
+
+    m_documentRegistry->renamePath(oldPath, newPath);
+    m_tabs->renamePath(oldPath, newPath);
+    if (m_nav) {
+        m_nav->notifyPathRenamed(oldPath, newPath);
+    }
+
+    if (DocumentEditorView* updated = m_editors->find(newPath); updated != nullptr) {
+        syncClangdDocument(*updated);
+        syncLuaDocument(*updated);
+        syncManagedDocument(*updated);
+    }
+    if (isManagedSource(newPath) && !m_managed)
+        offerManagedTrust();
+    if (isLuaSource(newPath) && !m_lua)
+        offerLuaTrust();
+
+    m_documentRegistry->notifyChanged(newPath);
+    if (m_language) {
+        m_language->editorChanged();
+    }
+    updateLanguageTarget();
+}
+
+void Workbench::closeDeletedDocuments(const std::string& deletedPath, bool directory) {
+    const std::string targetKey = lang::documentKey(deletedPath);
+    const auto matches = [&](std::string_view p) {
+        if (lang::documentKey(p) == targetKey)
+            return true;
+        if (!directory || p.size() <= deletedPath.size())
+            return false;
+        const std::string pKey = lang::documentKey(p);
+        if (!pKey.starts_with(targetKey) || pKey.size() <= targetKey.size())
+            return false;
+        const char sep = pKey[targetKey.size()];
+        return sep == '/' || sep == '\\' || targetKey.back() == '/' || targetKey.back() == '\\';
+    };
+
+    std::vector<std::string> affected;
+    for (DocumentEditorView* view : m_editors->views()) {
+        if (matches(view->path()) && !std::ranges::contains(affected, view->path())) {
+            affected.push_back(view->path());
+        }
+    }
+    for (const auto& doc : m_documents->documents()) {
+        if (!doc->untitled() && matches(doc->path()) && !std::ranges::contains(affected, doc->path())) {
+            affected.push_back(doc->path());
+        }
+    }
+
+    for (const std::string& p : affected) {
+        if (!std::ranges::contains(m_discarded, p)) {
+            m_discarded.push_back(p);
+        }
+        if (m_window) {
+            for (ui::EditorTabGroup* group : m_window->tabs().groups()) {
+                for (int idx = group->indexOf(p); idx >= 0; idx = group->indexOf(p)) {
+                    if (!group->close(idx))
+                        break;
+                }
+            }
+        }
+        while (m_documentRegistry->viewCount(p) > 0) {
+            m_documentRegistry->release(p);
+        }
+        if (document::FileDocument* doc = m_documents->find(p); doc != nullptr) {
+            (void)m_documents->close(*doc);
+        }
+        std::erase(m_discarded, p);
+    }
+
+    if (m_nav) {
+        m_nav->notifyPathDeleted(deletedPath, directory);
+    }
+    if (m_language) {
+        m_language->editorChanged();
+    }
+    updateLanguageTarget();
 }
 
 document::SaveAllResult Workbench::saveAllDocuments() {

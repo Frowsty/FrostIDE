@@ -75,6 +75,22 @@ void NavigationHistory::forget(std::string_view path) {
     std::erase_if(m_forward, [path](const Place& place) { return place.path == path; });
 }
 
+void NavigationHistory::renamePath(std::string_view oldPath, std::string_view newPath) {
+    if (oldPath.empty() || newPath.empty() || oldPath == newPath) {
+        return;
+    }
+    for (Place& place : m_back) {
+        if (place.path == oldPath) {
+            place.path = std::string(newPath);
+        }
+    }
+    for (Place& place : m_forward) {
+        if (place.path == oldPath) {
+            place.path = std::string(newPath);
+        }
+    }
+}
+
 void NavigationHistory::clear() noexcept {
     m_back.clear();
     m_forward.clear();
@@ -93,6 +109,17 @@ void RecentFiles::touch(std::string path) {
 
 void RecentFiles::remove(std::string_view path) {
     std::erase_if(m_paths, [path](const std::string& entry) { return entry == path; });
+}
+
+void RecentFiles::renamePath(std::string_view oldPath, std::string_view newPath) {
+    if (oldPath.empty() || newPath.empty() || oldPath == newPath) {
+        return;
+    }
+    for (std::string& entry : m_paths) {
+        if (entry == oldPath) {
+            entry = std::string(newPath);
+        }
+    }
 }
 
 void RecentFiles::assign(std::vector<std::string> paths) {
@@ -119,6 +146,17 @@ void RecentLocations::touch(Place place) {
 
 void RecentLocations::forget(std::string_view path) {
     std::erase_if(m_places, [path](const Place& place) { return place.path == path; });
+}
+
+void RecentLocations::renamePath(std::string_view oldPath, std::string_view newPath) {
+    if (oldPath.empty() || newPath.empty() || oldPath == newPath) {
+        return;
+    }
+    for (Place& place : m_places) {
+        if (place.path == oldPath) {
+            place.path = std::string(newPath);
+        }
+    }
 }
 
 void RecentLocations::assign(std::vector<Place> places) {

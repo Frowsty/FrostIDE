@@ -241,6 +241,16 @@ public:
     // directory), IoError (not empty), PermissionDenied, Busy.
     [[nodiscard]] virtual Result<void> removeDirectory(std::string_view path) = 0;
 
+    // Renames or moves a file or directory from `from` to `to`.
+    // Errors: NotFound, AlreadyExists, InvalidArgument, PermissionDenied, Busy, IoError.
+    [[nodiscard]] virtual Result<void> rename(std::string_view from, std::string_view to);
+
+    // Removes a file, symlink, or empty directory based on status(path).
+    [[nodiscard]] virtual Result<void> remove(std::string_view path);
+
+    // Recursively removes a file, symlink, or directory tree (symlinks are not followed).
+    [[nodiscard]] virtual Result<void> removeAll(std::string_view path);
+
     // Whether status(path) would succeed. NotFound yields false; other failures
     // (e.g. PermissionDenied on a parent) are returned as errors.
     [[nodiscard]] virtual Result<bool> exists(std::string_view path) = 0;
