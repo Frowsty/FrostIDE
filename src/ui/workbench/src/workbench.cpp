@@ -13,6 +13,7 @@
 #include "frost/search/fuzzy_path.hpp"
 #include "frost/settings/project_layout.hpp"
 #include "frost/settings/store.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/nav/paths.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
@@ -179,6 +180,7 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
     edit->setFocus();
     if (dialog.exec() != QDialog::Accepted) {
         return {};
@@ -214,6 +216,7 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
     edit->setFocus();
     if (dialog.exec() != QDialog::Accepted) {
         return {};

@@ -8,6 +8,7 @@
 
 #include "frost/input/keymap.hpp"
 #include "frost/ui/frost_style.hpp"
+#include "frost/ui/glacial_logo.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 
@@ -126,28 +127,12 @@ protected:
             painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0), radius, radius);
         }
 
-        // 1. FrostIDE geometric app badge on the left (22x22 rounded tile).
+        // 1. FrostIDE Glacial Crystal logo badge on the left (22x22 rounded tile).
         const int badgeSize = scaledPx(22);
         const int badgeX = scaledPx(6);
         const int badgeY = (height() - badgeSize) / 2;
         const QRectF badgeRect(badgeX, badgeY, badgeSize, badgeSize);
-
-        QLinearGradient grad(badgeRect.topLeft(), badgeRect.bottomRight());
-        grad.setColorAt(0.0, QColor(0x35, 0x74, 0xF0));
-        grad.setColorAt(0.55, QColor(0x6B, 0x4D, 0xFF));
-        grad.setColorAt(1.0, QColor(0x00, 0xB4, 0xD8));
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(grad);
-        const qreal badgeRadius = scaledPx(6);
-        painter.drawRoundedRect(badgeRect, badgeRadius, badgeRadius);
-
-        // Crisp white "F" monogram inside the app badge.
-        QFont badgeFont = font();
-        badgeFont.setBold(true);
-        badgeFont.setPixelSize(scaledPx(12));
-        painter.setFont(badgeFont);
-        painter.setPen(QColor(255, 255, 255));
-        painter.drawText(badgeRect, Qt::AlignCenter, QStringLiteral("F"));
+        paintGlacialLogo(painter, badgeRect);
 
         // 2. Rider 3-bar hamburger menu glyph to the right of the badge.
         const QColor fg = themeColor(ColorKey::LabelForeground, QColor(220, 223, 228));

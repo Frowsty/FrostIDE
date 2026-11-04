@@ -11,6 +11,7 @@
 #include "frost/settings/keys.hpp"
 #include "frost/settings/store.hpp"
 #include "frost/ui/cmake/cmake_tool_window.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
@@ -543,6 +544,7 @@ void CMakeIntegration::editBuildWrapper() {
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    ui::installDialogChrome(&dialog, true);
     const auto trustRevision = m_trust.snapshot(root).revision;
     if (dialog.exec() != QDialog::Accepted || !self)
         return;

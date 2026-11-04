@@ -133,11 +133,12 @@ target_link_options(frost_app_shared PRIVATE /MANIFEST:NO)
 target_link_libraries(frost_app_shared PRIVATE shell32 user32)
 
 # frost.exe, the launcher. The version resource carries the project version; the manifest
-# comes from the root CMakeLists.txt.
+# comes from the root CMakeLists.txt, and the application icon comes from resources/icons/frost.
+set(FROST_APP_ICON_PATH "${CMAKE_SOURCE_DIR}/resources/icons/frost/frost.ico")
 configure_file(resources/windows/frost.rc.in ${CMAKE_CURRENT_BINARY_DIR}/frost.rc @ONLY)
-# The manifest is pulled in by a resource statement, which rc depfiles do not list.
+# The manifest and icon are pulled in by resource statements, which rc depfiles do not list.
 set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/frost.rc PROPERTIES
-    OBJECT_DEPENDS ${FROST_MANIFEST_PATH})
+    OBJECT_DEPENDS "${FROST_MANIFEST_PATH};${FROST_APP_ICON_PATH}")
 frost_add_executable(frost LAYER app WIN32 NO_SANITIZE
     SOURCES src/launcher.cpp ${frost_startup_core_sources} ${CMAKE_CURRENT_BINARY_DIR}/frost.rc)
 target_include_directories(frost PRIVATE include)

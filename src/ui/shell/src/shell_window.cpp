@@ -9,6 +9,7 @@
 #include "frost/input/keymap.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/frost_style.hpp"
+#include "frost/ui/glacial_logo.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/island_frame.hpp"
 #include "frost/ui/shell/background_tasks.hpp"
@@ -145,6 +146,7 @@ ShellWindow::ShellWindow(ShellEnvironment environment, QWidget* parent)
       m_tasks(new BackgroundTaskManager(this)) {
     setObjectName(QStringLiteral("FrostMainWindow"));
     setWindowTitle(QStringLiteral("FrostIDE"));
+    setWindowIcon(glacialLogoIcon());
     resize(1280, 800);
 
 #ifdef _WIN32

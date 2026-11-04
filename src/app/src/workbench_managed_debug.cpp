@@ -6,6 +6,7 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
 
@@ -168,6 +169,7 @@ void Workbench::showManagedDebugSource(const std::string& path, int line) {
         auto* view = new QPlainTextEdit(dialog);
         view->setReadOnly(true);
         layout->addWidget(view);
+        ui::installDialogChrome(dialog, true);
         dialog->resize(850, 600);
         m_managedSourceDialog = dialog;
         m_managedSourceView = view;
@@ -271,6 +273,7 @@ void Workbench::startManagedDebug() {
     QObject::connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addRow(&buttons);
+    ui::installDialogChrome(&dialog, false);
     if (!selected && dialog.exec() != QDialog::Accepted)
         return;
     // The project picker and options dialog run nested event loops: any competing operation,

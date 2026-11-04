@@ -7,6 +7,7 @@
 #include "frost/core/assert.hpp"
 #include "frost/io/path.hpp"
 #include "frost/ui/frost_style.hpp"
+#include "frost/ui/glacial_logo.hpp"
 #include "frost/ui/model/theme_blob.hpp"
 
 #include <QApplication>
@@ -112,6 +113,7 @@ Result<InstallReport> AppearanceManager::install(QApplication& app) {
 
     // 6-7. Commit: from here on the application changes.
     m_app = &app;
+    app.setWindowIcon(glacialLogoIcon());
     m_theme = std::make_shared<const Theme>(std::move(*theme));
     m_icons = std::move(*icons);
     m_scale = scale;

@@ -6,7 +6,9 @@
 // border.
 
 #include "frost/io/path.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/frost_style.hpp"
+#include "frost/ui/glacial_logo.hpp"
 #include "frost/ui/island_frame.hpp"
 #include "frost/ui/model/contrast.hpp"
 #include "frost/ui/model/theme_blob.hpp"
@@ -15,12 +17,14 @@
 #include "support/golden.hpp"
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
 #include <QElapsedTimer>
 #include <QMenu>
 #include <QPainter>
 #include <QPushButton>
 #include <QStyleFactory>
 #include <QStyleOption>
+#include <QToolButton>
 #include <QTreeView>
 #include <gtest/gtest.h>
 
@@ -515,6 +519,49 @@ TEST(IslandFrame, InactiveWindowFadesTheBorder) {
     }
     ASSERT_TRUE(frame.isActiveWindow());
     EXPECT_TRUE(closeTo(topEdge(), over(border, island))) << "active: the full border";
+}
+
+TEST(GlacialLogo, RendersHighContrastCrystalEmblemAndMultiSizeIcon) {
+    for (const int size : {16, 24, 32, 40, 64}) {
+        const QPixmap pix = glacialLogoPixmap(size, 1.0);
+        ASSERT_FALSE(pix.isNull());
+        EXPECT_EQ(pix.width(), size);
+        EXPECT_EQ(pix.height(), size);
+        const QImage img = pix.toImage();
+        // Center of the vertical spine shard (around x=0.35, y=0.50) is bright icy cyan/white.
+        const QColor spinePixel = img.pixelColor(static_cast<int>(size * 0.35), static_cast<int>(size * 0.50));
+        EXPECT_GT(spinePixel.alpha(), 200);
+        EXPECT_GT(spinePixel.blue(), 180);
+    }
+    const QIcon icon = glacialLogoIcon();
+    EXPECT_FALSE(icon.isNull());
+    EXPECT_FALSE(icon.pixmap(32, 32).isNull());
+}
+
+TEST(DialogChrome, InstallsFramelessThemedTitleBarAndCaptionButtons) {
+    AppearanceSettings settings;
+    settings.theme = "glacier-dark";
+    const auto installed = test::install(settings);
+    ASSERT_TRUE(installed);
+
+    QDialog dialog;
+    dialog.setWindowTitle(QStringLiteral("Settings"));
+    dialog.resize(480, 320);
+    DialogTitleBar* titleBar = installDialogChrome(&dialog, true);
+    ASSERT_NE(titleBar, nullptr);
+    EXPECT_EQ(installDialogChrome(&dialog, true), titleBar) << "idempotent on repeated calls";
+    EXPECT_TRUE((dialog.windowFlags() & Qt::FramelessWindowHint) != 0);
+    EXPECT_NE(titleBar->maximizeButton(), nullptr);
+    EXPECT_NE(titleBar->closeButton(), nullptr);
+    EXPECT_GT(dialog.contentsMargins().top(), 24);
+
+    dialog.show();
+    QApplication::processEvents();
+    const QImage rendered = test::renderAt(*titleBar, 1.0);
+    ASSERT_FALSE(rendered.isNull());
+
+    titleBar->closeButton()->click();
+    EXPECT_EQ(dialog.result(), QDialog::Rejected);
 }
 
 } // namespace

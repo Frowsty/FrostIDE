@@ -4,6 +4,7 @@
 
 #include "frost/app/welcome_screen.hpp"
 
+#include "frost/ui/glacial_logo.hpp"
 #include "frost/ui/tr.hpp"
 
 #include <QAction>
@@ -89,24 +90,7 @@ QIcon makeProjectAvatarIcon(const QString& name) {
     return QIcon(pix);
 }
 
-QPixmap makeFrostBrandBadge() {
-    QPixmap pix(36, 36);
-    pix.fill(Qt::transparent);
-    QPainter p(&pix);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    QLinearGradient grad(2.0, 2.0, 34.0, 34.0);
-    grad.setColorAt(0.0, QColor(0x35, 0x74, 0xF0));
-    grad.setColorAt(1.0, QColor(0x83, 0x4D, 0xF0));
-    p.setBrush(grad);
-    p.drawRoundedRect(QRectF(2.0, 2.0, 32.0, 32.0), 8.0, 8.0);
-    p.setPen(QPen(QColor(0xFF, 0xFF, 0xFF), 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    p.drawLine(QPointF(12.0, 10.0), QPointF(24.0, 10.0));
-    p.drawLine(QPointF(12.0, 10.0), QPointF(12.0, 26.0));
-    p.drawLine(QPointF(12.0, 18.0), QPointF(21.0, 18.0));
-    p.end();
-    return pix;
-}
+QPixmap makeFrostBrandBadge() { return ui::glacialLogoPixmap(40, 2.0); }
 
 class RecentProjectItemDelegate final : public QStyledItemDelegate {
 public:
@@ -198,7 +182,7 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     brandRow->setSpacing(10);
     auto* brandIcon = new QLabel(sidebar);
     brandIcon->setPixmap(makeFrostBrandBadge());
-    brandIcon->setFixedSize(36, 36);
+    brandIcon->setFixedSize(40, 40);
     brandRow->addWidget(brandIcon);
 
     auto* brandTextLayout = new QVBoxLayout();

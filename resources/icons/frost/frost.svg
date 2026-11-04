@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="baseGrad" x1="8%" y1="4%" x2="92%" y2="96%">
+      <stop offset="0%" stop-color="#06101E"/>
+      <stop offset="52%" stop-color="#0B1F3A"/>
+      <stop offset="100%" stop-color="#13335C"/>
+    </linearGradient>
+    <radialGradient id="auroraGrad" cx="76%" cy="22%" r="62%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.26"/>
+      <stop offset="55%" stop-color="#2563EB" stop-opacity="0.11"/>
+      <stop offset="100%" stop-color="#0B1F3A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="leftFacet" x1="18%" y1="14%" x2="50%" y2="86%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.31"/>
+      <stop offset="100%" stop-color="#0284C7" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="rightFacet" x1="50%" y1="14%" x2="82%" y2="86%">
+      <stop offset="0%" stop-color="#2563EB" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#4F46E5" stop-opacity="0.20"/>
+    </linearGradient>
+    <linearGradient id="crownFacet" x1="50%" y1="10%" x2="50%" y2="45%">
+      <stop offset="0%" stop-color="#BAE6FD" stop-opacity="0.36"/>
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0.10"/>
+    </linearGradient>
+    <linearGradient id="spineGrad" x1="26%" y1="18%" x2="42%" y2="86%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="48%" stop-color="#BAE6FD"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="topWingGrad" x1="34%" y1="18%" x2="77%" y2="31%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="60%" stop-color="#E0F2FE"/>
+      <stop offset="100%" stop-color="#7DD3FC"/>
+    </linearGradient>
+    <linearGradient id="midBarGrad" x1="42%" y1="44%" x2="68%" y2="57%">
+      <stop offset="0%" stop-color="#E0F2FE"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="starGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="50%" stop-color="#7DD3FC"/>
+      <stop offset="100%" stop-color="#00E5FF"/>
+    </linearGradient>
+    <linearGradient id="rimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7DD3FC" stop-opacity="0.72"/>
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.47"/>
+      <stop offset="100%" stop-color="#2563EB" stop-opacity="0.45"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#baseGrad)"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#auroraGrad)"/>
+  <polygon points="128,25.6 46.1,74.2 46.1,181.8 128,230.4 128,128" fill="url(#leftFacet)"/>
+  <polygon points="128,25.6 209.9,74.2 209.9,181.8 128,230.4 128,128" fill="url(#rightFacet)"/>
+  <polygon points="128,25.6 209.9,74.2 128,115.2 46.1,74.2" fill="url(#crownFacet)"/>
+  <polygon points="128,25.6 209.9,74.2 209.9,181.8 128,230.4 46.1,181.8 46.1,74.2" fill="none" stroke="#7DD3FC" stroke-opacity="0.28" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="66.6,66.6 87.0,46.1 107.5,46.1 107.5,197.1 84.5,220.2 66.6,202.2" fill="url(#spineGrad)"/>
+  <polygon points="87.0,46.1 197.1,46.1 174.1,79.4 107.5,79.4" fill="url(#topWingGrad)"/>
+  <polygon points="107.5,112.6 174.1,112.6 153.6,145.9 107.5,145.9" fill="url(#midBarGrad)"/>
+  <polygon points="163.8,153.6 170.2,172.8 189.4,179.2 170.2,185.6 163.8,204.8 157.4,185.6 138.2,179.2 157.4,172.8" fill="url(#starGrad)"/>
+  <rect x="11" y="11" width="234" height="234" rx="53" fill="none" stroke="url(#rimGrad)" stroke-width="6"/>
+</svg>

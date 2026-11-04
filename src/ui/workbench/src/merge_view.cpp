@@ -5,6 +5,7 @@
 #include "frost/ui/workbench/merge_view.hpp"
 
 #include "frost/diff/merge.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 
 #include "workbench_util.hpp"
 #include <QFontDatabase>
@@ -155,6 +156,7 @@ MergeView::MergeView(document::SaveManager& manager, document::FileDocument& doc
     decisions->addWidget(disk);
     decisions->addWidget(m_apply);
     layout->addLayout(decisions);
+    installDialogChrome(this, true);
     resize(1100, 640);
 }
 

@@ -4,6 +4,7 @@
 
 #include "frost/core/assert.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/tr.hpp"
 
 #include "settings_keymap_page.hpp"
@@ -137,18 +138,15 @@ SettingsDialog::SettingsDialog(settings::SettingsStore& store, const input::Acti
     setWindowTitle(text("Settings"));
     resize(920, 680);
     build();
+    ui::installDialogChrome(this, true);
     reload();
 }
 SettingsDialog::~SettingsDialog() = default;
 
 void SettingsDialog::build() {
     auto* outer = new QVBoxLayout(this);
-    auto* title = new QLabel(text("Settings"), this);
-    QFont titleFont = title->font();
-    titleFont.setBold(true);
-    titleFont.setPointSize(titleFont.pointSize() + 3);
-    title->setFont(titleFont);
-    outer->addWidget(title);
+    outer->setContentsMargins(14, 12, 14, 14);
+    outer->setSpacing(10);
     auto* scope = new QLabel(
         text("Application settings apply to all projects. Project or file settings can override them."), this);
     scope->setWordWrap(true);
