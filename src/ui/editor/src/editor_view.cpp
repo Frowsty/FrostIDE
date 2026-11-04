@@ -365,6 +365,20 @@ double EditorView::zoomFactor() const noexcept {
     return 1.0;
 }
 
+double EditorView::effectiveFontSize() const noexcept { return m_zoomedFontSize.value_or(m_settings.fontSize); }
+
+void EditorView::resetFontZoom() {
+    if (!m_zoomedFontSize.has_value()) {
+        return;
+    }
+    m_zoomedFontSize.reset();
+    rebuildFont();
+    updateWrap();
+    updateScrollBars();
+    ensureCaretVisible();
+    viewport()->update();
+}
+
 void EditorView::followAppearance() {
     std::shared_ptr<const Theme> theme;
     if (m_services.appearance != nullptr) {
@@ -375,7 +389,7 @@ void EditorView::followAppearance() {
     if (theme != m_theme) {
         setTheme(std::move(theme));
     }
-    if (m_shaper && std::abs(m_shaper->font().pointSizeF() - m_settings.fontSize * zoomFactor()) > 0.01) {
+    if (m_shaper && std::abs(m_shaper->font().pointSizeF() - effectiveFontSize() * zoomFactor()) > 0.01) {
         rebuildFont();
     }
 }
@@ -390,7 +404,7 @@ void EditorView::rebuildFont() {
     QFont font(QString::fromStdString(m_settings.fontFamily));
     font.setStyleHint(QFont::TypeWriter, QFont::PreferDefault);
     font.setFixedPitch(true);
-    font.setPointSizeF(std::max(1.0, m_settings.fontSize * zoomFactor()));
+    font.setPointSizeF(std::max(1.0, effectiveFontSize() * zoomFactor()));
     font.setKerning(false);
     if (!m_settings.ligatures) {
         font.setFeature(QFont::Tag("calt"), 0);
@@ -420,7 +434,11 @@ void EditorView::updateMetrics() {
 }
 
 void EditorView::applySettings(const EditorViewSettings& settings) {
-    const bool fontChanged = settings.fontFamily != m_settings.fontFamily || settings.fontSize != m_settings.fontSize ||
+    const bool fontSizeSettingChanged = settings.fontSize != m_settings.fontSize;
+    if (fontSizeSettingChanged) {
+        m_zoomedFontSize.reset();
+    }
+    const bool fontChanged = settings.fontFamily != m_settings.fontFamily || fontSizeSettingChanged ||
                              settings.lineSpacing != m_settings.lineSpacing ||
                              settings.ligatures != m_settings.ligatures || settings.tabSize != m_settings.tabSize;
     const bool rendererChanged = settings.renderer != m_settings.renderer;
@@ -591,6 +609,12 @@ void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextCh
             }
         }
         followInsight(*update.change);
+    }
+    if (!m_applyingExtendShrink) {
+        if (update.change || m_editor->text().version() != m_selectionHistoryDocVersion ||
+            !(m_editor->state().selections == m_lastExtendedSelection)) {
+            m_selectionHistory.clear();
+        }
     }
     const auto selections = m_editor->state().selections;
     for (const auto& selection : selections.all()) {
@@ -826,6 +850,59 @@ bool EditorView::move(Movement movement, bool extend) {
     return apply(commands::move(commandInput(), movement, extend));
 }
 
+bool EditorView::extendSelection() {
+    const text::Snapshot& snapshot = m_editor->text();
+    const text::SelectionSet before = m_editor->state().selections;
+    if (m_selectionHistoryDocVersion != snapshot.version() ||
+        (!m_selectionHistory.empty() && !(before == m_lastExtendedSelection))) {
+        m_selectionHistory.clear();
+    }
+    const syntax::SyntaxTree tree = m_syntax ? m_syntax->tree() : syntax::SyntaxTree{};
+    const bool validTree = !tree.empty() && tree.version() == snapshot.version();
+    const std::span<const text::Selection> current = before.all();
+    std::vector<text::Selection> after;
+    after.reserve(current.size());
+    bool changed = false;
+    for (const text::Selection& sel : current) {
+        const text::ByteRange cur = sel.range();
+        const std::vector<text::ByteRange> astRanges =
+            validTree ? tree.enclosingRanges(cur) : std::vector<text::ByteRange>{};
+        const text::ByteRange extended = commands::extendSelectionRange(snapshot, cur, astRanges);
+        if (extended != cur) {
+            changed = true;
+        }
+        after.push_back(text::Selection{extended.begin, extended.end});
+    }
+    if (!changed) {
+        return false;
+    }
+    m_selectionHistory.push_back(before);
+    m_selectionHistoryDocVersion = snapshot.version();
+    text::EditorState nextState =
+        text::EditorState::from(text::SelectionSet::fromSelections(after, before.primaryIndex()));
+    m_lastExtendedSelection = nextState.selections;
+    m_applyingExtendShrink = true;
+    setState(std::move(nextState));
+    m_applyingExtendShrink = false;
+    return true;
+}
+
+bool EditorView::shrinkSelection() {
+    const text::Snapshot& snapshot = m_editor->text();
+    if (m_selectionHistory.empty() || m_selectionHistoryDocVersion != snapshot.version() ||
+        !(m_editor->state().selections == m_lastExtendedSelection)) {
+        m_selectionHistory.clear();
+        return false;
+    }
+    text::SelectionSet previous = std::move(m_selectionHistory.back());
+    m_selectionHistory.pop_back();
+    m_lastExtendedSelection = previous;
+    m_applyingExtendShrink = true;
+    setState(text::EditorState::from(std::move(previous)));
+    m_applyingExtendShrink = false;
+    return true;
+}
+
 void EditorView::scrollRows(int rows) { verticalScrollBar()->setValue(verticalScrollBar()->value() + rows); }
 
 bool EditorView::perform(EditorAction action) {
@@ -876,8 +953,10 @@ bool EditorView::perform(EditorAction action) {
     case A::MoveDown: return move(Movement::LineDown, false);
     case A::MoveLeftWithSelection: return move(Movement::CharLeft, true);
     case A::MoveRightWithSelection: return move(Movement::CharRight, true);
-    case A::MoveUpWithSelection: return move(Movement::LineUp, true);
-    case A::MoveDownWithSelection: return move(Movement::LineDown, true);
+    case A::MoveUpWithSelection:
+        return m_columnMode ? apply(commands::addCaretAbove(commandInput())) : move(Movement::LineUp, true);
+    case A::MoveDownWithSelection:
+        return m_columnMode ? apply(commands::addCaretBelow(commandInput())) : move(Movement::LineDown, true);
     case A::WordLeft: return move(Movement::WordLeft, false);
     case A::WordRight: return move(Movement::WordRight, false);
     case A::WordLeftWithSelection: return move(Movement::WordLeft, true);
@@ -933,6 +1012,13 @@ bool EditorView::perform(EditorAction action) {
     case A::FoldAll: return changeFold(true, true);
     case A::UnfoldAll: return changeFold(false, true);
     case A::FoldSelection: return changeFold(true, false);
+    case A::ExtendSelection: return extendSelection();
+    case A::ShrinkSelection: return shrinkSelection();
+    case A::SelectNextOccurrence: return apply(commands::selectNextOccurrence(commandInput()));
+    case A::UnselectOccurrence: return apply(commands::unselectOccurrence(commandInput()));
+    case A::SelectAllOccurrences: return apply(commands::selectAllOccurrences(commandInput()));
+    case A::ToggleCase: return apply(commands::toggleCase(commandInput()));
+    case A::ToggleColumnMode: setColumnMode(!m_columnMode); return true;
     }
     return false;
 }
@@ -1232,6 +1318,14 @@ input::ContextKeys EditorView::contextKeys() const noexcept {
     return keys;
 }
 
+void EditorView::setColumnMode(bool enabled) {
+    if (m_columnMode == enabled) {
+        return;
+    }
+    m_columnMode = enabled;
+    emitStatus();
+}
+
 void EditorView::markSaved() {
     m_savedStateId = m_document->undoState().stateId;
     emitStatus();
@@ -1240,6 +1334,16 @@ void EditorView::markSaved() {
 void EditorView::setLineMarkers(std::vector<LineMarker> markers) {
     std::ranges::stable_sort(markers, {}, &LineMarker::line);
     m_markers = std::move(markers);
+    viewport()->update();
+}
+
+void EditorView::setBookmarks(std::vector<LineIndex> lines) {
+    std::ranges::sort(lines);
+    lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
+    if (lines == m_bookmarks) {
+        return;
+    }
+    m_bookmarks = std::move(lines);
     viewport()->update();
 }
 
@@ -1357,6 +1461,7 @@ EditorViewStatus EditorView::status() const {
     out.indentSize = static_cast<int>(m_settings.insertSpaces ? m_settings.indentSize : m_settings.tabSize);
     out.readOnly = m_fileInfo.readOnly;
     out.dirty = m_document->undoState().stateId != m_savedStateId;
+    out.columnMode = m_columnMode;
     return out;
 }
 
@@ -1386,6 +1491,9 @@ void EditorView::emitStatus() {
     }
     if (now.dirty != before.dirty) {
         emit modifiedChanged(now.dirty);
+    }
+    if (now.columnMode != before.columnMode) {
+        emit columnModeChanged(now.columnMode);
     }
     emit statusChanged();
 }

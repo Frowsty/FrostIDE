@@ -569,6 +569,11 @@ std::string FileSystemView::selectedPath() const {
     return index.isValid() ? toUtf8(index.data(kPathRole).toString()) : std::string();
 }
 
+bool FileSystemView::selectedIsDirectory() const {
+    const QModelIndex index = m_tree->currentIndex();
+    return index.isValid() && index.data(kDirectoryRole).toBool();
+}
+
 std::string FileSystemView::selectedDirectory() const {
     const QModelIndex index = m_tree->currentIndex();
     if (index.isValid()) {
@@ -640,11 +645,28 @@ QMenu* FileSystemView::createContextMenu(const QModelIndex& index, QWidget* pare
     QAction* newFolder = menu->addAction(text("New Folder..."));
     newFolder->setObjectName(QStringLiteral("newFolder"));
     connect(newFolder, &QAction::triggered, this, [this, directory] { emit newFolderRequested(directory); });
+    if (index.isValid() && toUtf8(targetPath) != m_model->files()->root()) {
+        menu->addSeparator();
+        QAction* renameAct = menu->addAction(text("Rename..."));
+        renameAct->setObjectName(QStringLiteral("renameItem"));
+        connect(renameAct, &QAction::triggered, this,
+                [this, targetPath, isDirectory] { emit renameRequested(targetPath, isDirectory); });
+        QAction* deleteAct = menu->addAction(text("Delete..."));
+        deleteAct->setObjectName(QStringLiteral("deleteItem"));
+        connect(deleteAct, &QAction::triggered, this,
+                [this, targetPath, isDirectory] { emit deleteRequested(targetPath, isDirectory); });
+    }
     menu->addSeparator();
     QAction* copy = menu->addAction(text("Copy Path"));
     copy->setObjectName(QStringLiteral("copyPath"));
     connect(copy, &QAction::triggered, this,
             [targetPath] { QApplication::clipboard()->setText(QDir::toNativeSeparators(targetPath)); });
+    QAction* reveal = menu->addAction(text("Open Containing Folder"));
+    reveal->setObjectName(QStringLiteral("openContainingFolder"));
+    connect(reveal, &QAction::triggered, this, [this, targetPath] { emit openContainingFolderRequested(targetPath); });
+    QAction* terminal = menu->addAction(text("Open in Terminal"));
+    terminal->setObjectName(QStringLiteral("openInTerminal"));
+    connect(terminal, &QAction::triggered, this, [this, directory] { emit openInTerminalRequested(directory); });
     return menu;
 }
 
@@ -671,6 +693,16 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::Wheel ||
         event->type() == QEvent::KeyPress)
         m_restoreScroll.reset(); // User navigation wins over a pending batched restore.
+    if (watched == m_tree && event->type() == QEvent::ShortcutOverride && m_search->isHidden()) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        const Qt::KeyboardModifiers mods = key->modifiers() & ~Qt::KeypadModifier;
+        if ((key->key() == Qt::Key_F2 && mods == Qt::NoModifier) ||
+            (key->key() == Qt::Key_F6 && mods == Qt::ShiftModifier) ||
+            (key->key() == Qt::Key_Delete && mods == Qt::NoModifier)) {
+            event->accept();
+            return true;
+        }
+    }
     if (event->type() != QEvent::KeyPress) {
         return QWidget::eventFilter(watched, event);
     }
@@ -692,6 +724,26 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
         return false;
     }
     if (watched == m_tree) {
+        if (m_search->isHidden()) {
+            const Qt::KeyboardModifiers mods = key->modifiers() & ~Qt::KeypadModifier;
+            if ((key->key() == Qt::Key_F2 && mods == Qt::NoModifier) ||
+                (key->key() == Qt::Key_F6 && mods == Qt::ShiftModifier)) {
+                const QModelIndex idx = m_tree->currentIndex();
+                if (idx.isValid() && m_model->files() &&
+                    toUtf8(idx.data(kPathRole).toString()) != m_model->files()->root()) {
+                    emit renameRequested(idx.data(kPathRole).toString(), idx.data(kDirectoryRole).toBool());
+                }
+                return true;
+            }
+            if (key->key() == Qt::Key_Delete && mods == Qt::NoModifier) {
+                const QModelIndex idx = m_tree->currentIndex();
+                if (idx.isValid() && m_model->files() &&
+                    toUtf8(idx.data(kPathRole).toString()) != m_model->files()->root()) {
+                    emit deleteRequested(idx.data(kPathRole).toString(), idx.data(kDirectoryRole).toBool());
+                }
+                return true;
+            }
+        }
         if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && m_search->isHidden()) {
             activateSelected();
             return true;

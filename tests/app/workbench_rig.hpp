@@ -169,6 +169,18 @@ public:
         ++recoveryCalls;
         return recover;
     }
+    [[nodiscard]] std::string chooseRenameName(QWidget*, const std::string& currentPath, bool folder) override {
+        ++renamePrompts;
+        lastRenameCurrentPath = currentPath;
+        lastRenameFolder = folder;
+        return renameName;
+    }
+    [[nodiscard]] bool confirmDelete(QWidget*, const QString& name, bool folder) override {
+        ++deletePrompts;
+        lastDeleteTargetPath = name.toStdString();
+        lastDeleteFolder = folder;
+        return confirmDeleteAnswer;
+    }
 
     std::string openPath;
     OpenKind lastOpenKind = OpenKind::SolutionOrFile;
@@ -180,6 +192,14 @@ public:
     std::string lastNewItemDirectory;
     bool lastNewItemFolder = false;
     std::size_t newItemPrompts = 0;
+    std::string renameName;
+    std::string lastRenameCurrentPath;
+    bool lastRenameFolder = false;
+    std::size_t renamePrompts = 0;
+    bool confirmDeleteAnswer = false;
+    std::string lastDeleteTargetPath;
+    bool lastDeleteFolder = false;
+    std::size_t deletePrompts = 0;
     std::optional<NewProjectSpec> newProject;
     std::string lastNewProjectDefaultLocation;
     std::size_t newProjectPrompts = 0;

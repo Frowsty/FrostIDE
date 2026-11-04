@@ -55,6 +55,8 @@ public:
     [[nodiscard]] QString speedSearch() const;
     // The path of the selected row, or empty.
     [[nodiscard]] std::string selectedPath() const;
+    // True when the selected row is a directory.
+    [[nodiscard]] bool selectedIsDirectory() const;
     // The directory of the selected row (its own path for a folder, parent for a file), else root.
     [[nodiscard]] std::string selectedDirectory() const;
     // Selects the row of `path` (expanding its parents); false when the tree does not have it.
@@ -81,6 +83,10 @@ signals:
     void fileActivated(const QString& path);
     void newFileRequested(const QString& directory);
     void newFolderRequested(const QString& directory);
+    void renameRequested(const QString& path, bool isDirectory);
+    void deleteRequested(const QString& path, bool isDirectory);
+    void openContainingFolderRequested(const QString& path);
+    void openInTerminalRequested(const QString& directoryPath);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

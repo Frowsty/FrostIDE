@@ -492,7 +492,7 @@ input::ActionContext ShellWindow::actionContext() const {
     if (const std::string window = m_toolWindows != nullptr ? m_toolWindows->focusedWindow() : std::string();
         !window.empty()) {
         keys.set(input::ContextKey::ToolWindowFocus);
-        keys.set(input::ContextKey::ProjectViewFocus, window == tool_windows::kProject);
+        keys.set(input::ContextKey::ProjectViewFocus, window == tool_windows::kProject || window == "fileSystem");
         keys.set(input::ContextKey::CommitViewFocus, window == tool_windows::kCommit);
         keys.set(input::ContextKey::DiffViewFocus, window == "gitDiff");
         keys.set(input::ContextKey::TerminalFocus, window == tool_windows::kTerminal);

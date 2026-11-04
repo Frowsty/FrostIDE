@@ -253,6 +253,9 @@ public:
     // AlreadyExists (another open document has that path).
     [[nodiscard]] Result<SaveOutcome> saveAs(FileDocument& document, std::string_view path,
                                              const SaveOptions& options = {});
+    // Rebinds `document`'s path and key to `newPath` after an on-disk rename without writing or clearing
+    // dirty state. Errors: InvalidArgument, AlreadyExists (another open document has that path).
+    [[nodiscard]] Result<void> renameDocument(FileDocument& document, std::string_view newPath);
     // Saves every dirty document that can be saved without asking (Save All; autosave uses it).
     SaveAllResult saveAll(SaveReason reason = SaveReason::SaveAll);
     // Whether saveAll() would pass `document` over, and why. O(1).

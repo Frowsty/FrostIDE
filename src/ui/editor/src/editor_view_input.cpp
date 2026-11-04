@@ -21,8 +21,10 @@
 #include <QStringList>
 #include <QStyleHints>
 #include <QToolTip>
+#include <QWheelEvent>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace frost::ui {
@@ -448,6 +450,37 @@ void EditorView::dragTo(const text::DisplayHit& hit) {
     }
 }
 
+void EditorView::boxDragTo(QPointF pos) {
+    const text::DisplayMap& map = m_editor->display();
+    if (map.rowCount() == 0) {
+        return;
+    }
+    const auto rowAtY = [&](double y) -> std::uint32_t {
+        const double rowOffset = std::floor(y / m_lineHeight);
+        const double clamped = std::clamp(static_cast<double>(firstVisibleRow()) + rowOffset, 0.0,
+                                          static_cast<double>(map.rowCount() - 1));
+        return static_cast<std::uint32_t>(clamped);
+    };
+    const std::uint32_t anchorRow = rowAtY(m_boxAnchorPos.y());
+    const std::uint32_t targetRow = rowAtY(pos.y());
+    const text::TextWidth anchorX = toShaperUnits(std::max(0.0, m_boxAnchorPos.x() - textOriginX()));
+    const text::TextWidth targetX = toShaperUnits(std::max(0.0, pos.x() - textOriginX()));
+    const std::uint32_t firstRow = std::min(anchorRow, targetRow);
+    const std::uint32_t lastRow = std::max(anchorRow, targetRow);
+    std::vector<text::Selection> selections;
+    selections.reserve(static_cast<std::size_t>(lastRow - firstRow + 1));
+    std::size_t primaryIdx = 0;
+    for (std::uint32_t r = firstRow; r <= lastRow; ++r) {
+        const text::DisplayHit aHit = map.hitTest(text::DisplayRow{r}, anchorX);
+        const text::DisplayHit tHit = map.hitTest(text::DisplayRow{r}, targetX);
+        if (r == targetRow) {
+            primaryIdx = selections.size();
+        }
+        selections.push_back(text::Selection{aHit.offset, tHit.offset});
+    }
+    setState(text::EditorState::from(text::SelectionSet::fromSelections(selections, primaryIdx)));
+}
+
 void EditorView::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton) {
         QAbstractScrollArea::mousePressEvent(event);
@@ -495,6 +528,7 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
     const bool triple = now - m_lastDoubleClick < interval && QLineF(pos, m_lastDoubleClickPos).length() < 6.0;
     const Qt::KeyboardModifiers modifiers = event->modifiers();
     m_dragging = true;
+    m_boxDragging = false;
     if (triple || pos.x() < gutterWidth()) {
         // A triple click, or a click in the gutter, selects the whole line (break included).
         m_granularity = Granularity::Line;
@@ -507,6 +541,13 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
                                          m_editor->state().selections.all().end());
         all.push_back(text::Selection::caret(hit.offset));
         setState(text::EditorState::from(text::SelectionSet::fromSelections(all, all.size() - 1)));
+    } else if (modifiers == Qt::AltModifier || (m_columnMode && modifiers == Qt::NoModifier)) {
+        // Rectangular box selection via Alt+Drag or normal drag in Column Selection Mode.
+        m_granularity = Granularity::Character;
+        m_boxDragging = true;
+        m_boxAnchorPos = pos;
+        m_dragOrigin = text::ByteRange{hit.offset, hit.offset};
+        select(text::Selection::caret(hit.offset), hit.bias);
     } else if ((modifiers & Qt::ShiftModifier) != 0) {
         // Shift+click extends the primary selection from its anchor.
         m_granularity = Granularity::Character;
@@ -545,6 +586,7 @@ void EditorView::mouseDoubleClickEvent(QMouseEvent* event) {
     m_granularity = Granularity::Word;
     m_dragOrigin = wordAt(hit.offset);
     m_dragging = true;
+    m_boxDragging = false;
     m_lastDoubleClick = std::chrono::steady_clock::now();
     m_lastDoubleClickPos = pos;
     select(text::Selection{m_dragOrigin.begin, m_dragOrigin.end}, text::Bias::Right);
@@ -557,17 +599,43 @@ void EditorView::mouseMoveEvent(QMouseEvent* event) {
         QAbstractScrollArea::mouseMoveEvent(event);
         return;
     }
-    dragTo(hitAt(event->position()));
+    if (m_boxDragging) {
+        boxDragTo(event->position());
+    } else {
+        dragTo(hitAt(event->position()));
+    }
     event->accept();
 }
 
 void EditorView::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         m_dragging = false;
+        m_boxDragging = false;
         event->accept();
         return;
     }
     QAbstractScrollArea::mouseReleaseEvent(event);
+}
+
+void EditorView::wheelEvent(QWheelEvent* event) {
+    if ((event->modifiers() & Qt::ControlModifier) != 0) {
+        const int deltaY = event->angleDelta().y();
+        if (deltaY != 0) {
+            const double steps = static_cast<double>(deltaY) / 120.0;
+            const double next = std::clamp(effectiveFontSize() + steps, 4.0, 96.0);
+            if (std::abs(next - effectiveFontSize()) > 1e-4) {
+                m_zoomedFontSize = next;
+                rebuildFont();
+                updateWrap();
+                updateScrollBars();
+                ensureCaretVisible();
+                viewport()->update();
+            }
+            event->accept();
+            return;
+        }
+    }
+    QAbstractScrollArea::wheelEvent(event);
 }
 
 } // namespace frost::ui

@@ -82,6 +82,13 @@ enum class EditorAction : std::uint8_t {
     FoldAll,
     UnfoldAll,
     FoldSelection,
+    ExtendSelection,
+    ShrinkSelection,
+    SelectNextOccurrence,
+    UnselectOccurrence,
+    SelectAllOccurrences,
+    ToggleCase,
+    ToggleColumnMode,
 };
 
 // One row of the action table.

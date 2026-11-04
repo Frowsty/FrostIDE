@@ -86,6 +86,7 @@
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/sched/latest_wins.hpp"
 #include "frost/sched/thread_pool.hpp"
 #include "frost/settings/store.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
@@ -228,6 +229,20 @@ public:
         (void)folder;
         return {};
     }
+    // The new relative name chosen when renaming `currentPath`; "" when cancelled.
+    [[nodiscard]] virtual std::string chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) {
+        (void)parent;
+        (void)currentPath;
+        (void)folder;
+        return {};
+    }
+    // Confirm deleting `name` (file or folder) from disk: true deletes it.
+    [[nodiscard]] virtual bool confirmDelete(QWidget* parent, const QString& name, bool folder) {
+        (void)parent;
+        (void)name;
+        (void)folder;
+        return false;
+    }
     // The specification chosen in File > New Project; nullopt when cancelled.
     [[nodiscard]] virtual std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
                                                                          const std::string& defaultLocation) {
@@ -255,6 +270,8 @@ public:
     [[nodiscard]] std::string chooseOpenPath(QWidget* parent, OpenKind kind) override;
     [[nodiscard]] std::string chooseSaveAsPath(QWidget* parent, const std::string& currentPath) override;
     [[nodiscard]] std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) override;
+    [[nodiscard]] std::string chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) override;
+    [[nodiscard]] bool confirmDelete(QWidget* parent, const QString& name, bool folder) override;
     [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
                                                                  const std::string& defaultLocation) override;
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
@@ -399,6 +416,14 @@ public:
     // Creates a new file or folder in `directory` (empty: active tree/editor/project directory).
     [[nodiscard]] Result<std::string> createNewFile(std::string_view directory, std::string_view relativeName);
     [[nodiscard]] Result<std::string> createNewFolder(std::string_view directory, std::string_view relativeName);
+    // Renames a file or folder on disk and updates open tabs, project files (CMakeLists.txt/.vcxproj/.csproj), and LSP.
+    [[nodiscard]] Result<std::string> renameItem(std::string_view oldPath, std::string_view newRelativeName);
+    // Deletes a file or folder on disk, closes open tabs under it, and updates project files and LSP.
+    [[nodiscard]] Result<void> deleteItem(std::string_view path);
+    // Prompts for a new name and renames `path` (empty: active tree selection or editor path).
+    void promptAndRenameItem(std::string_view path = {});
+    // Prompts for confirmation and deletes `path` (empty: active tree selection or editor path).
+    void promptAndDeleteItem(std::string_view path = {});
     // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and adds it to the .vcxproj.
     [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
                                                              std::string_view relativeName);
@@ -566,6 +591,15 @@ private:
     void documentChanged(const std::string& path);
     void onNewFileCreated(const std::string& path);
     [[nodiscard]] std::string defaultNewItemDirectory() const;
+    [[nodiscard]] std::string defaultTargetPathForModify() const;
+    void rebindRenamedDocument(const std::string& oldPath, const std::string& newPath);
+    void closeDeletedDocuments(const std::string& deletedPath, bool directory);
+    void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
+    void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
+    void removeSourceFromCMakeLists(const std::string& deletedPath, bool directory);
+    void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
+    void queryWorkspaceSymbols(std::string_view query, bool classesOnly,
+                               std::function<void(std::vector<ui::WorkbenchSymbol>)> done);
     void openLocation(const QString& path, int line, int column);
     void notify(const QString& title, const QString& text, ui::NotificationKind kind);
     // Saves without notifying (the close path shows the error in its prompt).
@@ -654,6 +688,7 @@ private:
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
     std::string m_indexToken;
+    sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
     std::unique_ptr<ui::lang::LanguageController> m_language;
     // Text the user typed into the current editor during this key press (for textTyped).

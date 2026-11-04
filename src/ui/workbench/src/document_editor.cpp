@@ -171,6 +171,11 @@ public:
             m_inner->restoreViewState(state);
         }
     }
+    void setBookmarks(std::span<const int> oneBasedLines) override {
+        if (m_inner != nullptr) {
+            m_inner->setBookmarks(oneBasedLines);
+        }
+    }
 
     // Rebuilds the banners from the document's state.
     void refreshBanners() {
@@ -284,6 +289,15 @@ void DocumentEditorFactory::renamePath(const std::string& oldPath, const std::st
     for (DocumentEditorView* view : views) {
         if (view->path() == oldPath) {
             view->setPath(newPath);
+        }
+    }
+}
+
+void DocumentEditorFactory::setBookmarks(const std::string& path, std::span<const int> oneBasedLines) {
+    const std::vector<DocumentEditorView*> views = m_views;
+    for (DocumentEditorView* view : views) {
+        if (view->path() == path) {
+            view->setBookmarks(oneBasedLines);
         }
     }
 }

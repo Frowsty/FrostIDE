@@ -154,6 +154,33 @@ Result<SaveOutcome> SaveManager::saveAs(FileDocument& document, std::string_view
     return saveTo(document, *normalized, options, *normalized != document.path());
 }
 
+Result<void> SaveManager::renameDocument(FileDocument& document, std::string_view newPath) {
+    auto normalized = normalize(newPath);
+    if (!normalized) {
+        return std::unexpected(std::move(normalized.error()));
+    }
+    if (FileDocument* other = find(*normalized); other != nullptr && other != &document) {
+        return fail(ErrorCode::AlreadyExists, std::format("'{}' is already open in another editor", *normalized));
+    }
+    const std::string oldKey = document.m_key;
+    document.m_path = *normalized;
+    document.m_key = *normalized;
+    if (document.m_disk.has_value()) {
+        if (auto status = m_services.fs->status(*normalized)) {
+            document.m_disk->mtime = status->mtime;
+        }
+    }
+    if (m_services.journal != nullptr && document.m_journaledGeneration != 0) {
+        (void)m_services.journal->forget(oldKey);
+        document.m_journaledGeneration = 0;
+        if (document.dirty()) {
+            std::vector<Error> ignored;
+            putJournal(document, ignored);
+        }
+    }
+    return {};
+}
+
 Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::string& path, const SaveOptions& options,
                                         bool saveAs) {
     const auto context = [&](Error error) {

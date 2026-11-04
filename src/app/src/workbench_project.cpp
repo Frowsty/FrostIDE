@@ -1452,6 +1452,508 @@ Result<void> Workbench::addSourceToCMakeLists(std::string_view sourcePath, std::
     return {};
 }
 
+std::string Workbench::defaultTargetPathForModify() const {
+    const bool filesVisible = m_window && m_window->toolWindows().isVisible(ui::kFileSystemToolWindow);
+    const bool projectVisible = m_window && m_window->toolWindows().isVisible(ui::tool_windows::kProject);
+    if (m_solution && m_explorer && (projectVisible || !filesVisible)) {
+        if (const auto nodeId = m_explorer->currentNode()) {
+            const auto& node = m_solution->node(*nodeId);
+            if ((node.kind == project::NodeKind::File || node.kind == project::NodeKind::Filter) &&
+                !node.path.empty()) {
+                return node.path;
+            }
+        }
+    }
+    if (m_nav && m_nav->fileSystemView()) {
+        const std::string selected = m_nav->fileSystemView()->selectedPath();
+        if (!selected.empty() && selected != m_projectRoot) {
+            return selected;
+        }
+    }
+    if (m_solution && m_explorer) {
+        if (const auto nodeId = m_explorer->currentNode()) {
+            const auto& node = m_solution->node(*nodeId);
+            if ((node.kind == project::NodeKind::File || node.kind == project::NodeKind::Filter) &&
+                !node.path.empty()) {
+                return node.path;
+            }
+        }
+    }
+    if (const DocumentEditorView* active = currentView(); active != nullptr && !active->path().empty()) {
+        return active->path();
+    }
+    return {};
+}
+
+void Workbench::refreshSolutionExplorerForFsChange(std::string_view selectPath) {
+    if (!m_solution || m_buildService->state() != build::BuildState::Idle || m_buildService->projectEditInProgress()) {
+        return;
+    }
+    if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
+        auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+        m_solution = refreshed;
+        if (m_explorer) {
+            m_explorer->setSolution(refreshed, true);
+            if (!selectPath.empty()) {
+                (void)m_explorer->selectPath(selectPath);
+            }
+        }
+        if (m_nav) {
+            (void)m_nav->refreshSolution(*refreshed);
+        }
+    }
+}
+
+void Workbench::renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory) {
+    if (m_projectRoot.empty()) {
+        return;
+    }
+    const auto listsPath = io::joinPath(m_projectRoot, "CMakeLists.txt");
+    if (!listsPath) {
+        return;
+    }
+    const std::string canonicalLists = m_documentRegistry->canonicalize(*listsPath);
+    if (!m_services.fs.exists(canonicalLists).value_or(false)) {
+        return;
+    }
+    if (const document::FileDocument* openLists = m_documentRegistry->find(canonicalLists);
+        openLists != nullptr && openLists->dirty()) {
+        return;
+    }
+    const std::string canonicalRoot = m_documentRegistry->canonicalize(m_projectRoot);
+    const auto relOld = cmakeRelativeSourcePath(canonicalRoot, oldPath);
+    const auto relNew = cmakeRelativeSourcePath(canonicalRoot, newPath);
+    if (!relOld || !relNew) {
+        return;
+    }
+    const auto content = m_services.fs.readFile(canonicalLists);
+    if (!content) {
+        return;
+    }
+    const auto commands = project::scanCMakeSyntax(*content);
+    if (!commands) {
+        return;
+    }
+    struct Replacement {
+        std::size_t begin;
+        std::size_t end;
+        std::string text;
+    };
+    std::vector<Replacement> edits;
+    const std::string oldPrefix = *relOld + "/";
+    const std::string newPrefix = *relNew + "/";
+    for (const project::CMakeSyntaxCommand& cmd : *commands) {
+        if (cmd.name != "add_executable" && cmd.name != "add_library" && cmd.name != "target_sources") {
+            continue;
+        }
+        for (std::size_t i = 1; i < cmd.arguments.size(); ++i) {
+            const auto& arg = cmd.arguments[i];
+            if (!arg.isLiteral) {
+                continue;
+            }
+            if (!directory && arg.literal == *relOld) {
+                const bool quoted = (*content)[arg.begin] == '"';
+                edits.push_back(Replacement{arg.begin, arg.end, quoted ? "\"" + *relNew + "\"" : *relNew});
+            } else if (directory && arg.literal.starts_with(oldPrefix)) {
+                const std::string replaced = newPrefix + arg.literal.substr(oldPrefix.size());
+                const bool quoted = (*content)[arg.begin] == '"';
+                edits.push_back(Replacement{arg.begin, arg.end, quoted ? "\"" + replaced + "\"" : replaced});
+            }
+        }
+    }
+    if (edits.empty()) {
+        return;
+    }
+    std::string updated = *content;
+    for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
+        updated.replace(it->begin, it->end - it->begin, it->text);
+    }
+    if (!project::scanCMakeSyntax(updated)) {
+        return;
+    }
+    if (m_services.fs.safeWrite(canonicalLists, updated, {})) {
+        if (document::FileDocument* openLists = m_documents->find(canonicalLists); openLists != nullptr) {
+            (void)m_documents->checkDisk(*openLists);
+            m_documentRegistry->notifyChanged(canonicalLists);
+        }
+    }
+}
+
+void Workbench::removeSourceFromCMakeLists(const std::string& deletedPath, bool directory) {
+    if (m_projectRoot.empty()) {
+        return;
+    }
+    const auto listsPath = io::joinPath(m_projectRoot, "CMakeLists.txt");
+    if (!listsPath) {
+        return;
+    }
+    const std::string canonicalLists = m_documentRegistry->canonicalize(*listsPath);
+    if (!m_services.fs.exists(canonicalLists).value_or(false)) {
+        return;
+    }
+    if (const document::FileDocument* openLists = m_documentRegistry->find(canonicalLists);
+        openLists != nullptr && openLists->dirty()) {
+        return;
+    }
+    const std::string canonicalRoot = m_documentRegistry->canonicalize(m_projectRoot);
+    const auto relDeleted = cmakeRelativeSourcePath(canonicalRoot, deletedPath);
+    if (!relDeleted) {
+        return;
+    }
+    const auto content = m_services.fs.readFile(canonicalLists);
+    if (!content) {
+        return;
+    }
+    const auto commands = project::scanCMakeSyntax(*content);
+    if (!commands) {
+        return;
+    }
+    std::vector<std::pair<std::size_t, std::size_t>> spans;
+    const std::string prefix = *relDeleted + "/";
+    for (const project::CMakeSyntaxCommand& cmd : *commands) {
+        if (cmd.name != "add_executable" && cmd.name != "add_library" && cmd.name != "target_sources") {
+            continue;
+        }
+        for (std::size_t i = 1; i < cmd.arguments.size(); ++i) {
+            const auto& arg = cmd.arguments[i];
+            if (!arg.isLiteral) {
+                continue;
+            }
+            if ((!directory && arg.literal == *relDeleted) || (directory && arg.literal.starts_with(prefix))) {
+                std::size_t b = arg.begin;
+                std::size_t e = arg.end;
+                while (b > 0 && ((*content)[b - 1] == ' ' || (*content)[b - 1] == '\t')) {
+                    --b;
+                }
+                if (b > 0 && (*content)[b - 1] == '\n' && e < content->size() &&
+                    ((*content)[e] == '\n' ||
+                     ((*content)[e] == '\r' && e + 1 < content->size() && (*content)[e + 1] == '\n'))) {
+                    e += ((*content)[e] == '\r') ? 2 : 1;
+                }
+                spans.emplace_back(b, e);
+            }
+        }
+    }
+    if (spans.empty()) {
+        return;
+    }
+    std::string updated = *content;
+    for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
+        updated.erase(it->first, it->second - it->first);
+    }
+    if (!project::scanCMakeSyntax(updated)) {
+        return;
+    }
+    if (m_services.fs.safeWrite(canonicalLists, updated, {})) {
+        if (document::FileDocument* openLists = m_documents->find(canonicalLists); openLists != nullptr) {
+            (void)m_documents->checkDisk(*openLists);
+            m_documentRegistry->notifyChanged(canonicalLists);
+        }
+    }
+}
+
+void Workbench::updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory,
+                                    bool deleted) {
+    if (!m_solution) {
+        return;
+    }
+    const auto updateXmlFile = [&](const std::string& xmlFile, const std::string& projDir) {
+        if (!m_services.fs.exists(xmlFile).value_or(false)) {
+            return;
+        }
+        if (const document::FileDocument* openXml = m_documentRegistry->find(xmlFile);
+            openXml != nullptr && openXml->dirty()) {
+            return;
+        }
+        auto content = m_services.fs.readFile(xmlFile);
+        if (!content) {
+            return;
+        }
+        const auto relToProj = [&](const std::string& p) -> std::optional<std::string> {
+            const std::string projKey = lang::documentKey(projDir);
+            const std::string pKey = lang::documentKey(p);
+            if (!pKey.starts_with(projKey) || pKey.size() <= projKey.size()) {
+                return std::nullopt;
+            }
+            const char sep = p[projDir.size()];
+            if (sep != '/' && sep != '\\') {
+                return std::nullopt;
+            }
+            std::string rel = p.substr(projDir.size() + 1);
+            while (!rel.empty() && (rel.front() == '/' || rel.front() == '\\')) {
+                rel.erase(rel.begin());
+            }
+            return rel;
+        };
+        const auto relOld = relToProj(oldPath);
+        if (!relOld || relOld->empty()) {
+            return;
+        }
+        std::string relOldBack = *relOld;
+        std::ranges::replace(relOldBack, '/', '\\');
+        std::string relOldFwd = *relOld;
+        std::ranges::replace(relOldFwd, '\\', '/');
+
+        std::string updated = *content;
+        bool changed = false;
+        if (!deleted) {
+            const auto relNew = relToProj(newPath);
+            if (!relNew || relNew->empty()) {
+                return;
+            }
+            std::string relNewBack = *relNew;
+            std::ranges::replace(relNewBack, '/', '\\');
+            std::string relNewFwd = *relNew;
+            std::ranges::replace(relNewFwd, '\\', '/');
+            const auto replaceAll = [&](const std::string& from, const std::string& to) {
+                std::size_t pos = 0;
+                while ((pos = updated.find(from, pos)) != std::string::npos) {
+                    updated.replace(pos, from.size(), to);
+                    pos += to.size();
+                    changed = true;
+                }
+            };
+            if (!directory) {
+                replaceAll("Include=\"" + escapeXml(relOldBack) + "\"", "Include=\"" + escapeXml(relNewBack) + "\"");
+                replaceAll("Include=\"" + escapeXml(relOldFwd) + "\"", "Include=\"" + escapeXml(relNewFwd) + "\"");
+            } else {
+                replaceAll("Include=\"" + escapeXml(relOldBack) + "\\", "Include=\"" + escapeXml(relNewBack) + "\\");
+                replaceAll("Include=\"" + escapeXml(relOldFwd) + "/", "Include=\"" + escapeXml(relNewFwd) + "/");
+            }
+        } else {
+            const auto removeMatchingAttr = [&](const std::string& attrPattern, bool prefixMatch) {
+                std::size_t pos = 0;
+                while ((pos = updated.find(attrPattern, pos)) != std::string::npos) {
+                    if (!prefixMatch) {
+                        const std::size_t after = pos + attrPattern.size();
+                        if (after >= updated.size() || updated[after] != '"') {
+                            pos += attrPattern.size();
+                            continue;
+                        }
+                    }
+                    std::size_t tagStart = updated.rfind('<', pos);
+                    if (tagStart == std::string::npos) {
+                        break;
+                    }
+                    const std::size_t tagClose = updated.find('>', pos);
+                    if (tagClose == std::string::npos) {
+                        break;
+                    }
+                    std::size_t eraseEnd = tagClose + 1;
+                    if (tagClose > 0 && updated[tagClose - 1] != '/') {
+                        const std::size_t nameEnd = updated.find_first_of(" \t\r\n>", tagStart + 1);
+                        if (nameEnd != std::string::npos) {
+                            const std::string closeTag =
+                                "</" + updated.substr(tagStart + 1, nameEnd - (tagStart + 1)) + ">";
+                            if (const std::size_t closePos = updated.find(closeTag, tagClose + 1);
+                                closePos != std::string::npos) {
+                                eraseEnd = closePos + closeTag.size();
+                            }
+                        }
+                    }
+                    while (tagStart > 0 && (updated[tagStart - 1] == ' ' || updated[tagStart - 1] == '\t')) {
+                        --tagStart;
+                    }
+                    if (eraseEnd < updated.size() && updated[eraseEnd] == '\r') {
+                        ++eraseEnd;
+                    }
+                    if (eraseEnd < updated.size() && updated[eraseEnd] == '\n') {
+                        ++eraseEnd;
+                    }
+                    updated.erase(tagStart, eraseEnd - tagStart);
+                    pos = tagStart;
+                    changed = true;
+                }
+            };
+            if (!directory) {
+                removeMatchingAttr("Include=\"" + escapeXml(relOldBack), false);
+                removeMatchingAttr("Include=\"" + escapeXml(relOldFwd), false);
+            } else {
+                removeMatchingAttr("Include=\"" + escapeXml(relOldBack) + "\\", true);
+                removeMatchingAttr("Include=\"" + escapeXml(relOldFwd) + "/", true);
+            }
+        }
+        if (changed) {
+            if (m_services.fs.safeWrite(xmlFile, updated, {})) {
+                if (document::FileDocument* openXml = m_documents->find(xmlFile); openXml != nullptr) {
+                    (void)m_documents->checkDisk(*openXml);
+                    m_documentRegistry->notifyChanged(xmlFile);
+                }
+            }
+        }
+    };
+
+    for (const project::ProjectInfo& proj : m_solution->projects()) {
+        if ((proj.kind != project::ProjectKind::Cpp && proj.kind != project::ProjectKind::CSharp) ||
+            proj.nodeKind != project::NodeKind::Project || proj.path.empty()) {
+            continue;
+        }
+        const std::string projDir(io::parentPath(proj.path));
+        updateXmlFile(proj.path, projDir);
+        if (proj.kind == project::ProjectKind::Cpp) {
+            updateXmlFile(proj.path + ".filters", projDir);
+        }
+    }
+}
+
+Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_view newRelativeName) {
+    if (oldPath.empty()) {
+        return fail(ErrorCode::InvalidArgument, "select a file or folder to rename");
+    }
+    if (Result<void> validName = validateProjectNameComponent(newRelativeName); !validName) {
+        notify(text("Cannot rename"), qs(validName.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(validName.error()));
+    }
+    const std::string canonicalOld = m_documentRegistry->canonicalize(oldPath);
+    if (!m_projectRoot.empty() && lang::documentKey(canonicalOld) == lang::documentKey(m_projectRoot)) {
+        Error err(ErrorCode::InvalidArgument, "cannot rename the project root folder");
+        notify(text("Cannot rename"), qs(err.message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
+    auto status = m_services.fs.status(canonicalOld);
+    if (!status) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(status.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(status.error()));
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    if (io::fileName(canonicalOld) == newRelativeName) {
+        return canonicalOld;
+    }
+    const std::string parentDir(io::parentPath(canonicalOld));
+    auto targetJoined = io::joinPath(parentDir, newRelativeName);
+    if (!targetJoined) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(targetJoined.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(targetJoined.error()));
+    }
+    if (m_services.fs.exists(*targetJoined).value_or(false)) {
+        Error err(ErrorCode::AlreadyExists, "'" + std::string(newRelativeName) + "' already exists");
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(err.message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
+    if (auto renamed = m_services.fs.rename(canonicalOld, *targetJoined); !renamed) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(renamed.error()));
+    }
+    const std::string canonicalNew = m_documentRegistry->canonicalize(*targetJoined);
+
+    if (!isDir) {
+        rebindRenamedDocument(canonicalOld, canonicalNew);
+    } else {
+        const std::string oldDirKey = lang::documentKey(canonicalOld);
+        std::vector<std::pair<std::string, std::string>> docRenames;
+        for (const auto& doc : m_documents->documents()) {
+            if (doc->untitled()) {
+                continue;
+            }
+            const std::string docKey = lang::documentKey(doc->path());
+            if (docKey.starts_with(oldDirKey) && docKey.size() > oldDirKey.size() &&
+                (doc->path()[canonicalOld.size()] == '/' || doc->path()[canonicalOld.size()] == '\\')) {
+                const std::string suffix = doc->path().substr(canonicalOld.size() + 1);
+                if (auto joined = io::joinPath(canonicalNew, suffix); joined) {
+                    docRenames.emplace_back(doc->path(), m_documentRegistry->canonicalize(*joined));
+                }
+            }
+        }
+        for (const auto& [oldDoc, newDoc] : docRenames) {
+            rebindRenamedDocument(oldDoc, newDoc);
+        }
+        if (m_nav) {
+            m_nav->notifyPathRenamed(canonicalOld, canonicalNew);
+        }
+    }
+
+    renameSourceInCMakeLists(canonicalOld, canonicalNew, isDir);
+    updatePathInVcxproj(canonicalOld, canonicalNew, isDir, false);
+    refreshSolutionExplorerForFsChange(isDir ? std::string_view{} : std::string_view(canonicalNew));
+    return canonicalNew;
+}
+
+Result<void> Workbench::deleteItem(std::string_view path) {
+    if (path.empty()) {
+        return fail(ErrorCode::InvalidArgument, "select a file or folder to delete");
+    }
+    const std::string canonical = m_documentRegistry->canonicalize(path);
+    if (!m_projectRoot.empty() && lang::documentKey(canonical) == lang::documentKey(m_projectRoot)) {
+        Error err(ErrorCode::InvalidArgument, "cannot delete the project root folder");
+        notify(text("Cannot delete"), qs(err.message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
+    if (m_solution && lang::documentKey(canonical) == lang::documentKey(m_solution->path())) {
+        Error err(ErrorCode::InvalidArgument, "cannot delete the open solution file");
+        notify(text("Cannot delete"), qs(err.message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
+    auto status = m_services.fs.status(canonical);
+    if (!status) {
+        notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(status.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(status.error()));
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    if (isDir) {
+        if (auto removed = m_services.fs.removeAll(canonical); !removed) {
+            notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(removed.error().message()),
+                   ui::NotificationKind::Error);
+            return std::unexpected(std::move(removed.error()));
+        }
+    } else {
+        if (auto removed = m_services.fs.remove(canonical); !removed) {
+            notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(removed.error().message()),
+                   ui::NotificationKind::Error);
+            return std::unexpected(std::move(removed.error()));
+        }
+    }
+
+    closeDeletedDocuments(canonical, isDir);
+    removeSourceFromCMakeLists(canonical, isDir);
+    updatePathInVcxproj(canonical, {}, isDir, true);
+    refreshSolutionExplorerForFsChange();
+    return {};
+}
+
+void Workbench::promptAndRenameItem(std::string_view path) {
+    const std::string target = path.empty() ? defaultTargetPathForModify() : std::string(path);
+    if (target.empty()) {
+        return;
+    }
+    const std::string canonical = m_documentRegistry->canonicalize(target);
+    auto status = m_services.fs.status(canonical);
+    if (!status) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonical))), qs(status.error().message()),
+               ui::NotificationKind::Error);
+        return;
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    const std::string newName = m_services.prompts.chooseRenameName(m_window, canonical, isDir);
+    if (newName.empty() || newName == io::fileName(canonical)) {
+        return;
+    }
+    (void)renameItem(canonical, newName);
+}
+
+void Workbench::promptAndDeleteItem(std::string_view path) {
+    const std::string target = path.empty() ? defaultTargetPathForModify() : std::string(path);
+    if (target.empty()) {
+        return;
+    }
+    const std::string canonical = m_documentRegistry->canonicalize(target);
+    auto status = m_services.fs.status(canonical);
+    if (!status) {
+        notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(status.error().message()),
+               ui::NotificationKind::Error);
+        return;
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    if (!m_services.prompts.confirmDelete(m_window, qs(io::fileName(canonical)), isDir)) {
+        return;
+    }
+    (void)deleteItem(canonical);
+}
+
 // --- clangd ---
 
 void Workbench::stopProjectEvaluation() {

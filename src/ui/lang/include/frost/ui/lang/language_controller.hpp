@@ -69,6 +69,8 @@ struct LanguageServices {
     io::IFileSystem& fs;                           // Line previews of files that are not open.
     // The live diagnostics of a file (ClangdService::diagnostics()), for quick fixes.
     std::function<std::vector<::frost::lang::LiveDiagnostic>(std::string_view path)> diagnostics;
+    // Known project/workspace files for header/source switching when LSP cannot resolve it.
+    std::function<std::vector<std::string>()> projectFiles{};
 };
 
 class LanguageController final : public QObject {
@@ -96,6 +98,7 @@ public:
     void findUsages();
     void highlightUsages();
     void showFileStructure();
+    void gotoClass();
     void gotoSymbol();
     void rename();
     void showIntentions();
@@ -208,6 +211,7 @@ private:
     ::frost::lang::LspPosition m_renamePosition;
     // The document and version a reformat was requested for.
     std::int64_t m_formatVersion = 0;
+    bool m_symbolClassesOnly = false;
 };
 
 } // namespace frost::ui::lang

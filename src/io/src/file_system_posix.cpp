@@ -663,6 +663,21 @@ public:
         return {};
     }
 
+    Result<void> rename(std::string_view from, std::string_view to) override {
+        auto normFrom = normalizePath(from, PathStyle::Posix);
+        if (!normFrom) {
+            return std::unexpected(std::move(normFrom.error()));
+        }
+        auto normTo = normalizePath(to, PathStyle::Posix);
+        if (!normTo) {
+            return std::unexpected(std::move(normTo.error()));
+        }
+        if (::rename(normFrom->c_str(), normTo->c_str()) != 0) {
+            return std::unexpected(errnoError(errno, "rename", from));
+        }
+        return {};
+    }
+
     Result<bool> exists(std::string_view path) override {
         auto result = status(path);
         if (result) {

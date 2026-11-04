@@ -82,6 +82,8 @@ public:
     void refreshBanners(const std::string& path);
     // Updates the canonical path of every open view of `oldPath` to `newPath` and refreshes banners.
     void renamePath(const std::string& oldPath, const std::string& newPath);
+    // Updates the 1-based bookmarked lines on every open view of `path`.
+    void setBookmarks(const std::string& path, std::span<const int> oneBasedLines);
     // The banners the view of `path` shows now (empty when it is not open).
     [[nodiscard]] std::vector<EditorBanner*> banners(const std::string& path) const;
     [[nodiscard]] nav::DocumentRegistry& documents() const noexcept { return *m_documents; }

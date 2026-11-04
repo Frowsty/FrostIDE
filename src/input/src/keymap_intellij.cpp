@@ -482,7 +482,7 @@ navigate.highlightUsages = Ctrl+Shift+F7
 navigate.callHierarchy = Ctrl+K, Ctrl+T | Ctrl+Alt+H
 navigate.typeHierarchy = Ctrl+E, Ctrl+H
 navigate.quickDefinition = Alt+F12 | Ctrl+Shift+I
-navigate.relatedFiles = Ctrl+Alt+Home
+navigate.relatedFiles = Ctrl+K, Ctrl+O | Alt+O | Ctrl+Alt+Home
 navigate.navigationBar = Alt+Home
 
 # Code.

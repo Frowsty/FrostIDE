@@ -167,7 +167,7 @@ public:
      * destination directory is not empty), injected faults (FsOp::Rename, matched on `from`).
      * O(k log n) for k entries below `from`.
      */
-    [[nodiscard]] Result<void> rename(std::string_view from, std::string_view to);
+    [[nodiscard]] Result<void> rename(std::string_view from, std::string_view to) override;
 
     // Truncates and rewrites `path` in place (open with O_TRUNC, write), creating it if missing, so the
     // file's identity is kept. Errors as writeFileAtomic's (faults: FsOp::Write).

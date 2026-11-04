@@ -1726,4 +1726,95 @@ TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
     }
 }
 
+TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
+    WorkDir dir("rename-delete-project-items");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    // 1. CMake project: rename dirty main.cpp -> entry.cpp updates CMakeLists.txt and preserves dirty tab.
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "CMakeRenameDemo",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::CMakeExecutable,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        const std::string mainCpp = dir.join("CMakeRenameDemo/main.cpp");
+        const std::string entryCpp = dir.join("CMakeRenameDemo/entry.cpp");
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), mainCpp);
+        ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// dirty edit\n"));
+        EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
+
+        auto renamed = rig.workbench->renameItem(mainCpp, "entry.cpp");
+        ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+        EXPECT_EQ(*renamed, entryCpp);
+        EXPECT_FALSE(frost::io::realFileSystem().exists(mainCpp).value_or(true));
+        EXPECT_TRUE(frost::io::realFileSystem().exists(entryCpp).value_or(false));
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), entryCpp);
+        EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
+        EXPECT_TRUE(
+            rig.workbench->currentView()->document().document().committedText().text().starts_with("// dirty edit\n"));
+        const std::string cmakeLists = dir.read("CMakeRenameDemo/CMakeLists.txt");
+        EXPECT_TRUE(cmakeLists.contains("entry.cpp")) << cmakeLists;
+        EXPECT_FALSE(cmakeLists.contains("main.cpp")) << cmakeLists;
+
+        // Add a second file, add to CMakeLists.txt, then delete it: closes tab without discard prompt and removes from
+        // CMakeLists.txt.
+        auto helper = rig.workbench->createNewFile("", "helper.cpp");
+        ASSERT_TRUE(helper.has_value()) << helper.error().describe();
+        ASSERT_TRUE(rig.workbench->addSourceToCMakeLists(*helper).has_value());
+        EXPECT_TRUE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
+        ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// unsaved helper\n"));
+        const int discardBefore = rig.prompts.discardCalls;
+        auto deleted = rig.workbench->deleteItem(*helper);
+        ASSERT_TRUE(deleted.has_value()) << deleted.error().describe();
+        EXPECT_EQ(rig.prompts.discardCalls, discardBefore);
+        EXPECT_FALSE(frost::io::realFileSystem().exists(*helper).value_or(true));
+        EXPECT_FALSE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
+        // Save entry.cpp so the project can close cleanly for the next subtest.
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        ASSERT_TRUE(rig.workbench->documents().save(rig.workbench->currentView()->document()).has_value());
+    }
+
+    // 2. Visual Studio C++ project (.sln + .vcxproj): rename main.cpp -> app.cpp updates .vcxproj and .vcxproj.filters.
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "VsRenameDemo",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::VsCppConsole,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        const std::string mainCpp = dir.join("VsRenameDemo/main.cpp");
+        const std::string appCpp = dir.join("VsRenameDemo/app.cpp");
+        auto renamed = rig.workbench->renameItem(mainCpp, "app.cpp");
+        ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+        EXPECT_EQ(*renamed, appCpp);
+        const std::string vcxproj = dir.read("VsRenameDemo/VsRenameDemo.vcxproj");
+        const std::string filters = dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters");
+        EXPECT_TRUE(vcxproj.contains("Include=\"app.cpp\"")) << vcxproj;
+        EXPECT_FALSE(vcxproj.contains("Include=\"main.cpp\"")) << vcxproj;
+        EXPECT_TRUE(filters.contains("Include=\"app.cpp\"")) << filters;
+    }
+
+    // 3. C# .slnx/.csproj project: rename Program.cs -> Startup.cs updates SolutionModel hierarchy.
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "CsRenameDemo",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::DotNetConsole,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        const std::string programCs = dir.join("CsRenameDemo/Program.cs");
+        const std::string startupCs = dir.join("CsRenameDemo/Startup.cs");
+        auto renamed = rig.workbench->renameItem(programCs, "Startup.cs");
+        ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+        EXPECT_EQ(*renamed, startupCs);
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_FALSE(rig.workbench->solution()->findFileNode(programCs).has_value());
+        EXPECT_TRUE(rig.workbench->solution()->findFileNode(startupCs).has_value());
+    }
+}
+
 } // namespace

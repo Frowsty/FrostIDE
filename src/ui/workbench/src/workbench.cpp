@@ -31,6 +31,8 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -184,6 +186,74 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
     return toUtf8(edit->text());
 }
 
+[[nodiscard]] std::string showRenameItemDialog(QWidget* parent, const std::string& currentPath, bool folder) {
+    QDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("renameItemDialog"));
+    dialog.setWindowTitle(folder ? text("Rename Folder") : text("Rename File"));
+    auto* layout = new QVBoxLayout(&dialog);
+    const std::string_view currentName = nav::baseName(currentPath);
+    auto* info = new QLabel(text("Rename '%1' to:").arg(fromUtf8(currentName)), &dialog);
+    info->setWordWrap(true);
+    layout->addWidget(info);
+    auto* edit = new QLineEdit(&dialog);
+    edit->setObjectName(QStringLiteral("renameItemNameEdit"));
+    const QString initial = fromUtf8(currentName);
+    edit->setText(initial);
+    if (!folder) {
+        const qsizetype dot = initial.lastIndexOf(u'.');
+        if (dot > 0) {
+            edit->setSelection(0, static_cast<int>(dot));
+        } else {
+            edit->selectAll();
+        }
+    } else {
+        edit->selectAll();
+    }
+    layout->addWidget(edit);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    edit->setFocus();
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+    return toUtf8(edit->text().trimmed());
+}
+
+[[nodiscard]] bool showDeleteConfirmationDialog(QWidget* parent, const std::string& path, bool folder) {
+    const QString name = fromUtf8(nav::baseName(path));
+    const QString prompt =
+        folder ? text("Delete folder '%1' and all of its contents?").arg(name) : text("Delete file '%1'?").arg(name);
+    return QMessageBox::question(parent, folder ? text("Delete Folder") : text("Delete File"), prompt,
+                                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+}
+
+[[nodiscard]] std::optional<std::pair<std::size_t, std::string_view>> findTodoTag(std::string_view line) {
+    static constexpr std::string_view kTags[] = {"TODO", "FIXME"};
+    const auto isWordChar = [](char c) {
+        const auto uc = static_cast<unsigned char>(c);
+        return std::isalnum(uc) != 0 || c == '_';
+    };
+    std::optional<std::pair<std::size_t, std::string_view>> best;
+    for (std::string_view tag : kTags) {
+        std::size_t pos = 0;
+        while ((pos = line.find(tag, pos)) != std::string_view::npos) {
+            const bool leftOk = (pos == 0) || !isWordChar(line[pos - 1]);
+            const std::size_t end = pos + tag.size();
+            const bool rightOk = (end >= line.size()) || !isWordChar(line[end]);
+            if (leftOk && rightOk) {
+                if (!best || pos < best->first) {
+                    best = std::pair<std::size_t, std::string_view>{pos, tag};
+                }
+                break;
+            }
+            pos += tag.size();
+        }
+    }
+    return best;
+}
+
 [[nodiscard]] QVariant fileData(const std::string& path, std::optional<int> line = std::nullopt,
                                 std::optional<int> column = std::nullopt) {
     QVariantMap map;
@@ -331,7 +401,17 @@ Workbench::Workbench(ShellWindow& shell, WorkbenchServices services)
     m_scanTimer->setInterval(25);
     connect(m_scanTimer, &QTimer::timeout, this, [this] { pollScan(); });
     addToolWindow();
+    addTodoToolWindow();
     registerActions();
+    {
+        std::vector<input::Binding> defaults(m_shell.environment().keymap.moduleDefaults().begin(),
+                                             m_shell.environment().keymap.moduleDefaults().end());
+        defaults.push_back({std::string(workbench_actions::kToggleBookmark),
+                            {*input::parseSequence("F11", input::SyntaxMode::Strict)}});
+        defaults.push_back({std::string(workbench_actions::kShowBookmarks),
+                            {*input::parseSequence("Shift+F11", input::SyntaxMode::Strict)}});
+        m_shell.environment().keymap.setModuleDefaults(std::move(defaults));
+    }
     m_services.editors.setActions(BannerActions{
         [this](const std::string& path) { reloadFromDisk(path); },
         [this](const std::string& path) { overwriteDisk(path); },
@@ -424,10 +504,15 @@ void Workbench::registerActions() {
     const auto hasEditor = [this] { return m_shell.tabs().currentEditor() != nullptr; };
     const auto hasProject = [this] { return !m_root.empty(); };
     const auto canCreateItem = [this] { return !defaultNewItemDirectory().empty(); };
+    const auto canModifyItem = [this] { return !defaultTargetPathForModify().empty(); };
     addAction(a::kNewFile, "New File...", "File", [this] { promptAndCreateNewFile(); }, canCreateItem,
               {"create file", "add file"});
     addAction(a::kNewFolder, "New Folder...", "File", [this] { promptAndCreateNewFolder(); }, canCreateItem,
               {"create folder", "new directory"});
+    addAction(a::kRename, "Rename...", "File", [this] { promptAndRenamePath(); }, canModifyItem,
+              {"rename file", "rename folder"});
+    addAction(a::kDelete, "Delete...", "File", [this] { promptAndDeletePath(); }, canModifyItem,
+              {"delete file", "delete folder", "remove file"});
     addAction(a::kFindAction, "Find Action...", "Help", [this] { showFindAction(); }, {}, {"command", "action"});
     addAction(a::kSearchEverywhere, "Search Everywhere", "Navigate", [this] { showSearchEverywhere(); }, {},
               {"find", "search"});
@@ -435,8 +520,21 @@ void Workbench::registerActions() {
     addAction(a::kRecentFiles, "Recent Files", "Navigate", [this] { showRecentFiles(); }, {}, {"switch file"});
     addAction(a::kRecentLocations, "Recent Locations", "Navigate", [this] { showRecentLocations(); }, {},
               {"recent places"});
+    addAction(
+        a::kLastEditLocation, "Last Edit Location", "Navigate", [this] { static_cast<void>(goToLastEditLocation()); },
+        [this] { return m_lastEditPlace.has_value(); }, {"last edit", "previous edit"});
     addAction(a::kBack, "Back", "Navigate", [this] { goBack(); }, [this] { return m_history.canGoBack(); });
     addAction(a::kForward, "Forward", "Navigate", [this] { goForward(); }, [this] { return m_history.canGoForward(); });
+    addAction(a::kToggleBookmark, "Toggle Bookmark", "Navigate", [this] { static_cast<void>(toggleBookmark()); },
+              hasEditor, {"bookmark"});
+    addAction(a::kShowBookmarks, "Show Bookmarks", "Navigate", [this] { static_cast<void>(showBookmarksPopup()); }, {},
+              {"bookmarks", "list bookmarks"});
+    addAction(
+        a::kNextBookmark, "Next Bookmark", "Navigate", [this] { static_cast<void>(goToNextBookmark()); },
+        [this] { return !m_bookmarks.empty(); }, {"next bookmark"});
+    addAction(
+        a::kPreviousBookmark, "Previous Bookmark", "Navigate", [this] { static_cast<void>(goToPreviousBookmark()); },
+        [this] { return !m_bookmarks.empty(); }, {"previous bookmark"});
     addAction(a::kSaveAll, "Save All", "File", [this] { saveAll(); }, {}, {"save"});
     addAction(a::kSaveDocument, "Save Document", "File", [this] { static_cast<void>(saveDocument()); }, hasEditor,
               {"save file"});
@@ -474,6 +572,12 @@ void Workbench::registerActions() {
         hasProject);
     addAction(a::kFileSystemWindow, "File System", "View",
               [this] { m_shell.toolWindows().show(kFileSystemToolWindow); }, {}, {"files", "folder", "tree"});
+    addAction(a::kTodoWindow, "TODO", "View",
+              [this] {
+                  refreshTodoItems();
+                  m_shell.toolWindows().show(kTodoToolWindow);
+              },
+              {}, {"todo", "fixme", "tasks"});
     // The settings files' stand-in actions, described by frost::settings (settingsActions()).
     for (const settings::SettingsActionInfo& info : settings::settingsActions()) {
         const settings::Scope scope = info.scope;
@@ -512,6 +616,10 @@ void Workbench::addToolWindow() {
             [this](const QString& directory) { promptAndCreateNewFile(toUtf8(directory)); });
     connect(view, &FileSystemView::newFolderRequested, this,
             [this](const QString& directory) { promptAndCreateNewFolder(toUtf8(directory)); });
+    connect(view, &FileSystemView::renameRequested, this,
+            [this](const QString& path) { promptAndRenamePath(toUtf8(path)); });
+    connect(view, &FileSystemView::deleteRequested, this,
+            [this](const QString& path) { promptAndDeletePath(toUtf8(path)); });
     ToolWindowSpec spec;
     spec.id = std::string(kFileSystemToolWindow);
     spec.title = text("File System");
@@ -522,6 +630,37 @@ void Workbench::addToolWindow() {
     spec.createContent = [content]() -> QWidget* { return content.data(); };
     if (auto added = m_shell.toolWindows().add(std::move(spec)); !added) {
         log::warn("ui", "File System tool window: {}", added.error().message());
+    }
+}
+
+void Workbench::addTodoToolWindow() {
+    auto* list = new QListWidget(&m_shell);
+    list->setObjectName(QStringLiteral("todoToolWindowList"));
+    list->hide();
+    m_todoList = list;
+    connect(list, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
+        if (item == nullptr) {
+            return;
+        }
+        const QVariantMap map = item->data(Qt::UserRole).toMap();
+        const QString path = map.value(QStringLiteral("path")).toString();
+        if (path.isEmpty()) {
+            return;
+        }
+        const int line = map.value(QStringLiteral("line"), 1).toInt();
+        const int column = map.value(QStringLiteral("column"), 1).toInt();
+        static_cast<void>(openFile(toUtf8(path), LinePosition{line, column}));
+    });
+    ToolWindowSpec spec;
+    spec.id = std::string(kTodoToolWindow);
+    spec.title = text("TODO");
+    spec.side = ToolWindowSide::Bottom;
+    spec.iconId = std::string(icons::kStatusInfo);
+    spec.shortcutText = shortcutText(workbench_actions::kTodoWindow);
+    const QPointer<QListWidget> content(list);
+    spec.createContent = [content]() -> QWidget* { return content.data(); };
+    if (auto added = m_shell.toolWindows().add(std::move(spec)); !added) {
+        log::warn("ui", "TODO tool window: {}", added.error().message());
     }
 }
 
@@ -612,10 +751,15 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     m_history.clear();
     m_recentFiles.clear();
     m_recentLocations.clear();
+    m_lastEditPlace.reset();
+    m_bookmarks.clear();
     m_cmakeTargets.clear();
     m_cmakeArguments.clear();
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
+    }
+    if (m_todoList != nullptr) {
+        m_todoList->clear();
     }
     retireSnapshot(m_services.scheduler, std::move(oldFiles));
     retireSolutionSnapshot(m_services.scheduler, std::move(oldSolutionFiles));
@@ -639,12 +783,17 @@ bool Workbench::closeProject() {
     m_scanPublished = false;
     m_root.clear();
     m_solution.clear();
+    m_lastEditPlace.reset();
+    m_bookmarks.clear();
     auto oldSolutionFiles = std::move(m_solutionFiles);
     m_solutionFiles = std::make_shared<const std::vector<std::string>>();
     auto oldFiles = std::move(m_files);
     m_files = std::make_shared<nav::ProjectFiles>();
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
+    }
+    if (m_todoList != nullptr) {
+        m_todoList->clear();
     }
     retireSnapshot(m_services.scheduler, std::move(oldFiles));
     retireSolutionSnapshot(m_services.scheduler, std::move(oldSolutionFiles));
@@ -744,6 +893,9 @@ void Workbench::applyScan(Result<std::shared_ptr<const nav::ProjectFiles>> scan)
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
+    if (m_todoList != nullptr && m_shell.toolWindows().isVisible(kTodoToolWindow)) {
+        refreshTodoItems();
+    }
     retireSnapshot(m_services.scheduler, std::move(oldFiles));
 }
 
@@ -806,6 +958,7 @@ Result<int> Workbench::openFile(const std::string& path, std::optional<LinePosit
         m_recentFiles.touch(editor->path());
         m_lastPlaces[editor->path()] = to;
         m_activePath = editor->path();
+        syncEditorBookmarks(editor->path());
         m_shell.focusEditor();
     }
     m_navigating = false;
@@ -821,6 +974,7 @@ bool Workbench::openPlace(const nav::Place& place) {
         m_lastPlaces[editor->path()] = place;
         m_activePath = editor->path();
         m_recentFiles.touch(editor->path());
+        syncEditorBookmarks(editor->path());
         m_shell.focusEditor();
     } else {
         m_history.forget(place.path);
@@ -1043,41 +1197,123 @@ ListPopup* Workbench::showGoToFile(const QString& query) {
     return popup;
 }
 
-ListPopup* Workbench::showSearchEverywhere(const QString& query) {
+ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywhereCategory category) {
     closeOpenPopup();
     const input::ActionContext captured = m_shell.actionContext();
-    auto* popup = new ListPopup(&m_shell, text("Search Everywhere"), true);
+    const auto categoryTitle = [](SearchEverywhereCategory cat) -> QString {
+        switch (cat) {
+        case SearchEverywhereCategory::All:
+            return text("Search Everywhere  [All]  Classes  Files  Symbols  Actions  (Tab)");
+        case SearchEverywhereCategory::Classes:
+            return text("Search Everywhere  All  [Classes]  Files  Symbols  Actions  (Tab)");
+        case SearchEverywhereCategory::Files:
+            return text("Search Everywhere  All  Classes  [Files]  Symbols  Actions  (Tab)");
+        case SearchEverywhereCategory::Symbols:
+            return text("Search Everywhere  All  Classes  Files  [Symbols]  Actions  (Tab)");
+        case SearchEverywhereCategory::Actions:
+            return text("Search Everywhere  All  Classes  Files  Symbols  [Actions]  (Tab)");
+        }
+        return text("Search Everywhere");
+    };
+    auto* popup = new ListPopup(&m_shell, categoryTitle(category), true);
     popup->setObjectName(QStringLiteral("searchEverywherePopup"));
     popup->setFilterMode(ListPopup::FilterMode::External);
-    const auto update = [this, popup, captured](const QString& value) {
-        const std::string utf8 = toUtf8(value.trimmed());
-        const search::LocationQuery location = search::parseLocationQuery(utf8);
+    auto currentCategory = std::make_shared<SearchEverywhereCategory>(category);
+    auto queryGen = std::make_shared<std::uint64_t>(0);
+    const auto buildSyncItems = [this, captured](const search::LocationQuery& location, const std::string& utf8,
+                                                 SearchEverywhereCategory cat,
+                                                 const std::vector<WorkbenchSymbol>* symbols) {
         std::vector<ListPopupItem> items;
-        std::vector<ListPopupItem> files = fileItems(location.pattern, 8);
-        if (!files.empty()) {
+        if (symbols != nullptr && !symbols->empty() &&
+            (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Classes ||
+             cat == SearchEverywhereCategory::Symbols)) {
             ListPopupItem header;
-            header.text = text("Files");
+            header.text = cat == SearchEverywhereCategory::Classes ? text("Classes") : text("Symbols");
             header.header = true;
             items.push_back(std::move(header));
-            for (ListPopupItem& item : files) {
-                if (location.line) {
-                    item.data = fileData(toUtf8(item.data.toMap().value(QStringLiteral("path")).toString()),
-                                         location.line, location.column);
-                }
+            const std::size_t limit = cat == SearchEverywhereCategory::All ? 8 : 50;
+            for (std::size_t i = 0; i < symbols->size() && i < limit; ++i) {
+                const WorkbenchSymbol& sym = (*symbols)[i];
+                ListPopupItem item;
+                item.text = fromUtf8(sym.name);
+                const QString fileRel = nativePath(m_root.empty() ? sym.path : nav::relativeTo(m_root, sym.path));
+                item.detail =
+                    sym.container.empty() ? fileRel : fromUtf8(sym.container) + QStringLiteral("  ") + fileRel;
+                item.icon = fileIcon(nav::baseName(sym.path));
+                QVariantMap data;
+                data.insert(QStringLiteral("kind"), QStringLiteral("place"));
+                data.insert(QStringLiteral("path"), fromUtf8(sym.path));
+                data.insert(QStringLiteral("line"), sym.line);
+                data.insert(QStringLiteral("column"), sym.column);
+                item.data = data;
                 items.push_back(std::move(item));
             }
         }
-        std::vector<ListPopupItem> actions = actionItems(utf8, captured, 8);
-        if (!actions.empty()) {
-            ListPopupItem header;
-            header.text = text("Actions");
-            header.header = true;
-            items.push_back(std::move(header));
-            std::ranges::move(actions, std::back_inserter(items));
+        if (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Files) {
+            const std::size_t limit = cat == SearchEverywhereCategory::Files ? 50 : 8;
+            std::vector<ListPopupItem> files = fileItems(location.pattern, limit);
+            if (!files.empty()) {
+                ListPopupItem header;
+                header.text = text("Files");
+                header.header = true;
+                items.push_back(std::move(header));
+                for (ListPopupItem& item : files) {
+                    if (location.line) {
+                        item.data = fileData(toUtf8(item.data.toMap().value(QStringLiteral("path")).toString()),
+                                             location.line, location.column);
+                    }
+                    items.push_back(std::move(item));
+                }
+            }
         }
-        popup->setItems(std::move(items));
+        if (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Actions) {
+            const std::size_t limit = cat == SearchEverywhereCategory::Actions ? 50 : 8;
+            std::vector<ListPopupItem> actions = actionItems(utf8, captured, limit);
+            if (!actions.empty()) {
+                ListPopupItem header;
+                header.text = text("Actions");
+                header.header = true;
+                items.push_back(std::move(header));
+                std::ranges::move(actions, std::back_inserter(items));
+            }
+        }
+        return items;
+    };
+    const auto update = [this, popup, currentCategory, queryGen, buildSyncItems](const QString& value) {
+        const std::uint64_t gen = ++(*queryGen);
+        const std::string utf8 = toUtf8(value.trimmed());
+        const search::LocationQuery location = search::parseLocationQuery(utf8);
+        const SearchEverywhereCategory cat = *currentCategory;
+        popup->setItems(buildSyncItems(location, utf8, cat, nullptr));
+        const bool wantsSymbols = (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Classes ||
+                                   cat == SearchEverywhereCategory::Symbols) &&
+                                  !location.pattern.empty() && static_cast<bool>(m_services.queryWorkspaceSymbols);
+        if (wantsSymbols) {
+            const QPointer<ListPopup> safePopup(popup);
+            const bool classesOnly = (cat == SearchEverywhereCategory::Classes);
+            m_services.queryWorkspaceSymbols(
+                location.pattern, classesOnly,
+                [safePopup, queryGen, gen, location, utf8, cat, classesOnly,
+                 buildSyncItems](std::vector<WorkbenchSymbol> symbols) {
+                    if (safePopup == nullptr || *queryGen != gen) {
+                        return;
+                    }
+                    if (classesOnly) {
+                        std::erase_if(symbols, [](const WorkbenchSymbol& s) { return !s.isClassLike; });
+                    }
+                    safePopup->setItems(buildSyncItems(location, utf8, cat, &symbols));
+                });
+        }
     };
     connect(popup, &ListPopup::filterTextChanged, popup, update);
+    connect(popup, &ListPopup::tabPressed, popup, [popup, currentCategory, categoryTitle, update](bool backward) {
+        const int count = 5;
+        const int cur = static_cast<int>(*currentCategory);
+        const int next = backward ? (cur + count - 1) % count : (cur + 1) % count;
+        *currentCategory = static_cast<SearchEverywhereCategory>(next);
+        popup->setTitle(categoryTitle(*currentCategory));
+        update(popup->filterField() != nullptr ? popup->filterField()->text() : QString());
+    });
     connect(popup, &ListPopup::itemAccepted, this,
             [this, captured](int, const QVariant& data) { acceptItem(data, captured); });
     update(QString());
@@ -1144,6 +1380,186 @@ ListPopup* Workbench::showRecentLocations() {
             [this, captured](int, const QVariant& data) { acceptItem(data, captured); });
     m_shell.openPopup(popup);
     return popup;
+}
+
+void Workbench::recordEditLocation(const std::string& path, int line, int column) {
+    if (path.empty()) {
+        return;
+    }
+    m_lastEditPlace = nav::Place{m_services.documents.canonicalize(path), std::max(1, line), std::max(1, column)};
+    m_shell.refreshActions();
+}
+
+bool Workbench::goToLastEditLocation() {
+    if (!m_lastEditPlace || m_lastEditPlace->path.empty()) {
+        return false;
+    }
+    return openFile(m_lastEditPlace->path, LinePosition{m_lastEditPlace->line, m_lastEditPlace->column}, true)
+        .has_value();
+}
+
+void Workbench::syncEditorBookmarks(const std::string& path) {
+    std::vector<int> lines;
+    if (const auto it = m_bookmarks.find(path); it != m_bookmarks.end()) {
+        lines.assign(it->second.begin(), it->second.end());
+    }
+    m_services.editors.setBookmarks(path, lines);
+    for (EditorTabGroup* group : m_shell.tabs().groups()) {
+        for (int i = 0; i < group->count(); ++i) {
+            if (IEditorView* editor = group->editor(i); editor != nullptr && editor->path() == path) {
+                editor->setBookmarks(lines);
+            }
+        }
+    }
+}
+
+bool Workbench::toggleBookmark() {
+    const IEditorView* editor = m_shell.tabs().currentEditor();
+    if (editor == nullptr || editor->path().empty()) {
+        return false;
+    }
+    return toggleBookmarkAt(editor->path(), editor->status().line);
+}
+
+bool Workbench::toggleBookmarkAt(const std::string& path, int line) {
+    if (path.empty() || line < 1) {
+        return false;
+    }
+    const std::string canonical = m_services.documents.canonicalize(path);
+    auto& lines = m_bookmarks[canonical];
+    if (lines.contains(line)) {
+        lines.erase(line);
+        if (lines.empty()) {
+            m_bookmarks.erase(canonical);
+        }
+    } else {
+        lines.insert(line);
+    }
+    syncEditorBookmarks(canonical);
+    m_shell.refreshActions();
+    return true;
+}
+
+std::vector<nav::Place> Workbench::bookmarks() const {
+    std::vector<nav::Place> all;
+    for (const auto& [path, lines] : m_bookmarks) {
+        for (const int line : lines) {
+            all.push_back(nav::Place{path, line, 1});
+        }
+    }
+    return all;
+}
+
+bool Workbench::goToNextBookmark() {
+    const std::vector<nav::Place> all = bookmarks();
+    if (all.empty()) {
+        return false;
+    }
+    const nav::Place cur = currentPlace();
+    for (const nav::Place& bm : all) {
+        if (bm.path > cur.path || (bm.path == cur.path && bm.line > cur.line)) {
+            return openFile(bm.path, LinePosition{bm.line, bm.column}).has_value();
+        }
+    }
+    return openFile(all.front().path, LinePosition{all.front().line, all.front().column}).has_value();
+}
+
+bool Workbench::goToPreviousBookmark() {
+    const std::vector<nav::Place> all = bookmarks();
+    if (all.empty()) {
+        return false;
+    }
+    const nav::Place cur = currentPlace();
+    for (auto it = all.rbegin(); it != all.rend(); ++it) {
+        if (it->path < cur.path || (it->path == cur.path && it->line < cur.line)) {
+            return openFile(it->path, LinePosition{it->line, it->column}).has_value();
+        }
+    }
+    return openFile(all.back().path, LinePosition{all.back().line, all.back().column}).has_value();
+}
+
+ListPopup* Workbench::showBookmarksPopup() {
+    closeOpenPopup();
+    const std::vector<nav::Place> all = bookmarks();
+    const input::ActionContext captured = m_shell.actionContext();
+    auto* popup = new ListPopup(&m_shell, text("Bookmarks"), true);
+    popup->setObjectName(QStringLiteral("bookmarksPopup"));
+    std::vector<ListPopupItem> items;
+    for (const nav::Place& place : all) {
+        ListPopupItem item;
+        item.text = QStringLiteral("%1:%2").arg(fromUtf8(nav::baseName(place.path))).arg(place.line);
+        item.detail = nativePath(nav::parentOf(m_root.empty() ? place.path : nav::relativeTo(m_root, place.path)));
+        item.icon = fileIcon(nav::baseName(place.path));
+        QVariantMap data;
+        data.insert(QStringLiteral("kind"), QStringLiteral("place"));
+        data.insert(QStringLiteral("path"), fromUtf8(place.path));
+        data.insert(QStringLiteral("line"), place.line);
+        data.insert(QStringLiteral("column"), place.column);
+        item.data = data;
+        items.push_back(std::move(item));
+    }
+    popup->setItems(std::move(items));
+    connect(popup, &ListPopup::itemAccepted, this,
+            [this, captured](int, const QVariant& data) { acceptItem(data, captured); });
+    m_shell.openPopup(popup);
+    return popup;
+}
+
+void Workbench::refreshTodoItems() {
+    if (m_todoList == nullptr) {
+        return;
+    }
+    m_todoList->clear();
+    if (!m_files) {
+        return;
+    }
+    for (const std::string& path : m_files->candidates()) {
+        std::string content;
+        if (const document::FileDocument* doc = m_services.documents.find(path); doc != nullptr) {
+            content = doc->document().committedText().text();
+        } else {
+            auto status = m_services.fs.status(path);
+            if (!status || status->type != io::FileType::Regular || status->size > 512ULL * 1024ULL) {
+                continue;
+            }
+            auto read = m_services.fs.readFile(path);
+            if (!read) {
+                continue;
+            }
+            content = std::move(*read);
+        }
+        if (content.find("TODO") == std::string::npos && content.find("FIXME") == std::string::npos) {
+            continue;
+        }
+        std::size_t pos = 0;
+        int lineNum = 1;
+        while (pos <= content.size()) {
+            const std::size_t nl = content.find('\n', pos);
+            std::string_view line = nl == std::string::npos ? std::string_view(content).substr(pos)
+                                                            : std::string_view(content).substr(pos, nl - pos);
+            if (!line.empty() && line.back() == '\r') {
+                line.remove_suffix(1);
+            }
+            if (const auto match = findTodoTag(line)) {
+                const std::string_view snippet = line.substr(match->first);
+                const std::string rel = m_root.empty() ? path : nav::relativeTo(m_root, path);
+                auto* item = new QListWidgetItem(
+                    QStringLiteral("%1:%2  %3").arg(nativePath(rel)).arg(lineNum).arg(fromUtf8(snippet).trimmed()));
+                item->setIcon(fileIcon(nav::baseName(path)));
+                QVariantMap data;
+                data.insert(QStringLiteral("path"), fromUtf8(path));
+                data.insert(QStringLiteral("line"), lineNum);
+                data.insert(QStringLiteral("column"), static_cast<int>(match->first) + 1);
+                item->setData(Qt::UserRole, data);
+                m_todoList->addItem(item);
+            }
+            if (nl == std::string::npos) {
+                break;
+            }
+            pos = nl + 1;
+            ++lineNum;
+        }
+    }
 }
 
 // --- Sessions ---
@@ -1677,22 +2093,125 @@ void Workbench::notifyPathRenamed(const std::string& oldPath, const std::string&
     if (oldPath == newPath) {
         return;
     }
-    if (const auto it = m_lastPlaces.find(oldPath); it != m_lastPlaces.end()) {
-        nav::Place place = it->second;
-        place.path = newPath;
-        m_lastPlaces.erase(it);
-        m_lastPlaces[newPath] = std::move(place);
+    const auto remap = [&](const std::string& p) -> std::optional<std::string> {
+        if (p == oldPath) {
+            return newPath;
+        }
+        if (p.size() > oldPath.size() && isUnder(oldPath, p)) {
+            const std::string rel = nav::relativeTo(oldPath, p);
+            if (auto joined = io::joinPath(newPath, rel, nav::styleOf(newPath)); joined) {
+                return m_services.documents.canonicalize(*joined);
+            }
+        }
+        return std::nullopt;
+    };
+
+    std::vector<std::pair<std::string, std::string>> toRename;
+    const auto collect = [&](const std::string& p) {
+        if (auto mapped = remap(p)) {
+            if (!std::ranges::any_of(toRename, [&](const auto& pair) { return pair.first == p; })) {
+                toRename.emplace_back(p, std::move(*mapped));
+            }
+        }
+    };
+    collect(oldPath);
+    for (const auto& [p, _] : m_lastPlaces) {
+        collect(p);
     }
-    if (m_activePath == oldPath) {
-        m_activePath = newPath;
+    for (const auto& [p, _] : m_bookmarks) {
+        collect(p);
     }
-    m_recentFiles.touch(newPath);
+    for (const std::string& p : m_recentFiles.paths()) {
+        collect(p);
+    }
+    for (const nav::Place& pl : m_recentLocations.places()) {
+        collect(pl.path);
+    }
+    for (const nav::Place& pl : m_history.backStack()) {
+        collect(pl.path);
+    }
+    for (const nav::Place& pl : m_history.forwardStack()) {
+        collect(pl.path);
+    }
+
+    for (const auto& [fromPath, toPath] : toRename) {
+        if (const auto it = m_lastPlaces.find(fromPath); it != m_lastPlaces.end()) {
+            nav::Place place = it->second;
+            place.path = toPath;
+            m_lastPlaces.erase(it);
+            m_lastPlaces[toPath] = std::move(place);
+        }
+        if (const auto bmIt = m_bookmarks.find(fromPath); bmIt != m_bookmarks.end()) {
+            std::set<int> lines = std::move(bmIt->second);
+            m_bookmarks.erase(bmIt);
+            m_bookmarks[toPath] = std::move(lines);
+            syncEditorBookmarks(toPath);
+        }
+        m_history.renamePath(fromPath, toPath);
+        m_recentFiles.renamePath(fromPath, toPath);
+        m_recentLocations.renamePath(fromPath, toPath);
+    }
+
+    if (auto mappedActive = remap(m_activePath)) {
+        m_activePath = std::move(*mappedActive);
+    }
+    if (m_lastEditPlace) {
+        if (auto mappedEdit = remap(m_lastEditPlace->path)) {
+            m_lastEditPlace->path = std::move(*mappedEdit);
+        }
+    }
     if (!m_root.empty() && (isUnder(m_root, newPath) || isUnder(m_root, oldPath))) {
         if (m_fileSystem != nullptr && isUnder(m_root, newPath)) {
             m_fileSystem->selectWhenAvailable(newPath);
         }
         refresh();
     }
+}
+
+void Workbench::notifyPathDeleted(const std::string& deletedPath, bool directory) {
+    const auto matches = [&](std::string_view p) { return p == deletedPath || (directory && isUnder(deletedPath, p)); };
+    std::vector<std::string> affected;
+    for (const auto& [path, _] : m_lastPlaces) {
+        if (matches(path)) {
+            affected.push_back(path);
+        }
+    }
+    for (const std::string& p : m_recentFiles.paths()) {
+        if (matches(p) && !std::ranges::contains(affected, p)) {
+            affected.push_back(p);
+        }
+    }
+    for (const nav::Place& pl : m_recentLocations.places()) {
+        if (matches(pl.path) && !std::ranges::contains(affected, pl.path)) {
+            affected.push_back(pl.path);
+        }
+    }
+    for (const auto& [path, _] : m_bookmarks) {
+        if (matches(path) && !std::ranges::contains(affected, path)) {
+            affected.push_back(path);
+        }
+    }
+    if (!std::ranges::contains(affected, deletedPath)) {
+        affected.push_back(deletedPath);
+    }
+    for (const std::string& p : affected) {
+        m_lastPlaces.erase(p);
+        m_bookmarks.erase(p);
+        m_history.forget(p);
+        m_recentFiles.remove(p);
+        m_recentLocations.forget(p);
+    }
+    if (m_lastEditPlace && matches(m_lastEditPlace->path)) {
+        m_lastEditPlace.reset();
+    }
+    if (!m_activePath.empty() && matches(m_activePath)) {
+        const IEditorView* cur = m_shell.tabs().currentEditor();
+        m_activePath = cur != nullptr ? cur->path() : std::string();
+    }
+    if (!m_root.empty() && (isUnder(m_root, deletedPath) || deletedPath == m_root)) {
+        refresh();
+    }
+    m_shell.refreshActions();
 }
 
 std::string Workbench::defaultNewItemDirectory() const {
@@ -1811,6 +2330,191 @@ void Workbench::promptAndCreateNewFolder(std::string_view directory) {
         return;
     }
     static_cast<void>(createNewFolder(targetDir, name));
+}
+
+std::string Workbench::defaultTargetPathForModify() const {
+    if (m_fileSystem != nullptr) {
+        if (const std::string selected = m_fileSystem->selectedPath(); !selected.empty() && selected != m_root) {
+            return selected;
+        }
+    }
+    if (const IEditorView* editor = m_shell.tabs().currentEditor(); editor != nullptr && !editor->path().empty()) {
+        return editor->path();
+    }
+    return {};
+}
+
+Result<std::string> Workbench::renamePath(std::string_view oldPath, std::string_view newRelativeName) {
+    if (oldPath.empty()) {
+        return fail(ErrorCode::InvalidArgument, "No item is selected to rename.");
+    }
+    const std::string canonicalOld = m_services.documents.canonicalize(oldPath);
+    if (!m_root.empty() && canonicalOld == m_root) {
+        Error err(ErrorCode::InvalidArgument, "Cannot rename the project root folder.");
+        notifyError(text("Cannot rename"), err);
+        return std::unexpected(std::move(err));
+    }
+    auto status = m_services.fs.status(canonicalOld);
+    if (!status) {
+        notifyError(text("Cannot rename %1").arg(nativePath(canonicalOld)), status.error());
+        return std::unexpected(std::move(status.error()));
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    if (newRelativeName == nav::baseName(canonicalOld)) {
+        return canonicalOld;
+    }
+    const std::string parentDir(nav::parentOf(canonicalOld));
+    auto validated = validateNewItemTarget(m_services.fs, m_services.documents, parentDir, newRelativeName);
+    if (!validated) {
+        notifyError(text("Cannot rename %1").arg(nativePath(canonicalOld)), validated.error());
+        return std::unexpected(std::move(validated.error()));
+    }
+    const std::string target = std::move(*validated);
+    if (auto renamed = m_services.fs.rename(canonicalOld, target); !renamed) {
+        notifyError(text("Cannot rename %1").arg(nativePath(canonicalOld)), renamed.error());
+        return std::unexpected(std::move(renamed.error()));
+    }
+    const std::string canonicalNew = m_services.documents.canonicalize(target);
+    if (!isDir) {
+        if (document::FileDocument* doc = m_services.documents.find(canonicalOld); doc != nullptr) {
+            (void)m_services.saveManager.renameDocument(*doc, canonicalNew);
+            m_services.documents.renamePath(canonicalOld, canonicalNew);
+            m_services.editors.renamePath(canonicalOld, canonicalNew);
+            m_services.documents.notifyChanged(canonicalNew);
+        }
+        notifyPathRenamed(canonicalOld, canonicalNew);
+    } else {
+        std::vector<std::pair<std::string, std::string>> docRenames;
+        for (const auto& doc : m_services.saveManager.documents()) {
+            if (!doc->untitled() && isUnder(canonicalOld, doc->path())) {
+                const std::string rel = nav::relativeTo(canonicalOld, doc->path());
+                if (auto joined = io::joinPath(canonicalNew, rel, nav::styleOf(canonicalNew)); joined) {
+                    docRenames.emplace_back(doc->path(), m_services.documents.canonicalize(*joined));
+                }
+            }
+        }
+        for (const auto& [oldDocPath, newDocPath] : docRenames) {
+            if (document::FileDocument* doc = m_services.documents.find(oldDocPath); doc != nullptr) {
+                (void)m_services.saveManager.renameDocument(*doc, newDocPath);
+                m_services.documents.renamePath(oldDocPath, newDocPath);
+                m_services.editors.renamePath(oldDocPath, newDocPath);
+                m_services.documents.notifyChanged(newDocPath);
+            }
+        }
+        notifyPathRenamed(canonicalOld, canonicalNew);
+    }
+    return canonicalNew;
+}
+
+Result<void> Workbench::deletePath(std::string_view path) {
+    if (path.empty()) {
+        return fail(ErrorCode::InvalidArgument, "No item is selected to delete.");
+    }
+    const std::string canonical = m_services.documents.canonicalize(path);
+    if (!m_root.empty() && canonical == m_root) {
+        Error err(ErrorCode::InvalidArgument, "Cannot delete the project root folder.");
+        notifyError(text("Cannot delete"), err);
+        return std::unexpected(std::move(err));
+    }
+    auto status = m_services.fs.status(canonical);
+    if (!status) {
+        notifyError(text("Cannot delete %1").arg(nativePath(canonical)), status.error());
+        return std::unexpected(std::move(status.error()));
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    if (isDir) {
+        if (auto removed = m_services.fs.removeAll(canonical); !removed) {
+            notifyError(text("Cannot delete %1").arg(nativePath(canonical)), removed.error());
+            return std::unexpected(std::move(removed.error()));
+        }
+    } else {
+        if (auto removed = m_services.fs.remove(canonical); !removed) {
+            notifyError(text("Cannot delete %1").arg(nativePath(canonical)), removed.error());
+            return std::unexpected(std::move(removed.error()));
+        }
+    }
+    std::vector<std::string> openToClose;
+    for (EditorTabGroup* group : m_shell.tabs().groups()) {
+        for (int i = 0; i < group->count(); ++i) {
+            if (const IEditorView* ed = group->editor(i); ed != nullptr) {
+                const std::string& p = ed->path();
+                if ((p == canonical || (isDir && isUnder(canonical, p))) && !std::ranges::contains(openToClose, p)) {
+                    openToClose.push_back(p);
+                }
+            }
+        }
+    }
+    for (const auto& doc : m_services.saveManager.documents()) {
+        if (!doc->untitled()) {
+            const std::string& p = doc->path();
+            if ((p == canonical || (isDir && isUnder(canonical, p))) && !std::ranges::contains(openToClose, p)) {
+                openToClose.push_back(p);
+            }
+        }
+    }
+    for (const std::string& p : openToClose) {
+        for (EditorTabGroup* group : m_shell.tabs().groups()) {
+            for (;;) {
+                const int idx = group->indexOf(p);
+                if (idx < 0 || !group->close(idx)) {
+                    break;
+                }
+            }
+        }
+        if (document::FileDocument* doc = m_services.documents.find(p); doc != nullptr) {
+            (void)m_services.saveManager.close(*doc);
+        }
+    }
+    notifyPathDeleted(canonical, isDir);
+    return {};
+}
+
+void Workbench::promptAndRenamePath(std::string_view path) {
+    const std::string target = path.empty() ? defaultTargetPathForModify() : std::string(path);
+    if (target.empty()) {
+        return;
+    }
+    if (m_services.renamePathHook) {
+        m_services.renamePathHook(target);
+        return;
+    }
+    const std::string canonical = m_services.documents.canonicalize(target);
+    auto status = m_services.fs.status(canonical);
+    if (!status) {
+        notifyError(text("Cannot rename %1").arg(nativePath(canonical)), status.error());
+        return;
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    const std::string newName = m_services.promptRename ? m_services.promptRename(canonical, isDir)
+                                                        : showRenameItemDialog(&m_shell, canonical, isDir);
+    if (newName.empty() || newName == nav::baseName(canonical)) {
+        return;
+    }
+    static_cast<void>(renamePath(canonical, newName));
+}
+
+void Workbench::promptAndDeletePath(std::string_view path) {
+    const std::string target = path.empty() ? defaultTargetPathForModify() : std::string(path);
+    if (target.empty()) {
+        return;
+    }
+    if (m_services.deletePathHook) {
+        m_services.deletePathHook(target);
+        return;
+    }
+    const std::string canonical = m_services.documents.canonicalize(target);
+    auto status = m_services.fs.status(canonical);
+    if (!status) {
+        notifyError(text("Cannot delete %1").arg(nativePath(canonical)), status.error());
+        return;
+    }
+    const bool isDir = status->type == io::FileType::Directory;
+    const bool confirmed = m_services.confirmDelete ? m_services.confirmDelete(canonical, isDir)
+                                                    : showDeleteConfirmationDialog(&m_shell, canonical, isDir);
+    if (!confirmed) {
+        return;
+    }
+    static_cast<void>(deletePath(canonical));
 }
 
 void Workbench::openSettingsFile(const std::string& path) {

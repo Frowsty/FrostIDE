@@ -47,6 +47,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -127,6 +128,7 @@ struct EditorViewStatus {
     int indentSize = 4;
     bool readOnly = false;
     bool dirty = false;
+    bool columnMode = false;
 
     friend bool operator==(const EditorViewStatus&, const EditorViewStatus&) = default;
 };
@@ -271,12 +273,16 @@ public:
     [[nodiscard]] const QFont& editorFont() const noexcept { return m_shaper->font(); }
     [[nodiscard]] const QtTextShaper& shaper() const noexcept { return *m_shaper; }
     [[nodiscard]] double lineHeight() const noexcept { return m_lineHeight; }
+    [[nodiscard]] double effectiveFontSize() const noexcept;
+    void resetFontZoom();
 
     // File facts and status.
     void setFileInfo(const EditorFileInfo& info);
     [[nodiscard]] const EditorFileInfo& fileInfo() const noexcept { return m_fileInfo; }
     [[nodiscard]] bool isReadOnly() const noexcept { return m_fileInfo.readOnly; }
     [[nodiscard]] bool hasSelection() const noexcept;
+    [[nodiscard]] bool columnMode() const noexcept { return m_columnMode; }
+    void setColumnMode(bool enabled);
     // Records the current undo state as the saved one (the dirty flag clears).
     void markSaved();
     [[nodiscard]] EditorViewStatus status() const;
@@ -286,6 +292,8 @@ public:
     // Gutter markers (sorted by line on the way in; replaces the previous set).
     void setLineMarkers(std::vector<LineMarker> markers);
     [[nodiscard]] const std::vector<LineMarker>& lineMarkers() const noexcept { return m_markers; }
+    void setBookmarks(std::vector<LineIndex> lines);
+    [[nodiscard]] std::span<const LineIndex> bookmarks() const noexcept { return m_bookmarks; }
     // The messages of the markers on the line at viewport point `at` when it is in the gutter, one per
     // line (the gutter tooltip); empty elsewhere.
     [[nodiscard]] QString lineMarkerToolTip(QPointF at) const;
@@ -430,6 +438,7 @@ signals:
     void readOnlyChanged(bool readOnly);
     void indentStyleChanged(bool useTabs, int size);
     void modifiedChanged(bool modified);
+    void columnModeChanged(bool enabled);
     // Any status() field changed.
     void statusChanged();
     // The renderer backend changed (rendererState().active); viewport() is a new widget.
@@ -463,6 +472,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
     void focusInEvent(QFocusEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
     void changeEvent(QEvent* event) override;
@@ -530,6 +540,9 @@ private:
     void select(text::Selection selection, text::Bias bias);
     // The selection a drag from m_dragOrigin to the unit under `hit` covers.
     void dragTo(const text::DisplayHit& hit);
+    void boxDragTo(QPointF pos);
+    bool extendSelection();
+    bool shrinkSelection();
 
     // IME.
     void finishComposition(const std::string& commit);
@@ -652,10 +665,19 @@ private:
     GoToLinePopup* m_goToLine = nullptr;
 
     std::vector<LineMarker> m_markers;
+    std::vector<LineIndex> m_bookmarks;
     std::vector<BreakpointMarker> m_breakpoints;
     std::optional<LineIndex> m_executionPoint;
     bool m_breakpointGutter = false;
     std::vector<LineChangeMarker> m_lineChanges;
+    std::optional<double> m_zoomedFontSize;
+    bool m_columnMode = false;
+    bool m_boxDragging = false;
+    QPointF m_boxAnchorPos;
+    std::vector<text::SelectionSet> m_selectionHistory;
+    text::SelectionSet m_lastExtendedSelection;
+    std::uint64_t m_selectionHistoryDocVersion = 0;
+    bool m_applyingExtendShrink = false;
 
     // Insight (ADR 0047): every range is in the current text.
     std::vector<SemanticSpan> m_semantic;

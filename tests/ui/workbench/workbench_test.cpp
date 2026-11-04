@@ -95,6 +95,7 @@ public:
     Result<void> createDirectories(std::string_view path) override { return m_inner.createDirectories(path); }
     Result<void> removeFile(std::string_view path) override { return m_inner.removeFile(path); }
     Result<void> removeDirectory(std::string_view path) override { return m_inner.removeDirectory(path); }
+    Result<void> rename(std::string_view from, std::string_view to) override { return m_inner.rename(from, to); }
     Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
     Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
 
@@ -1190,6 +1191,132 @@ TEST_F(WorkbenchTest, SaveDocumentAsUpdatesIdentityWithoutDuplicateTab) {
     EXPECT_EQ(memFs.readFile("/proj/src/renamed_main.cpp").value_or(""),
               "// saved-as\nint a;\nint b;\nint c;\nint d;\n");
     EXPECT_EQ(app.workbench->recentFiles().paths().front(), "/proj/src/renamed_main.cpp");
+}
+
+TEST_F(WorkbenchTest, SearchEverywhereCategoryTabsCycleAndFilterWorkspaceSymbols) {
+    Ide& app = ide();
+    openProject(app);
+    ListPopup* popup = app.workbench->showSearchEverywhere(QStringLiteral("main"));
+    ASSERT_NE(popup, nullptr);
+
+    // Initially on [All]: shows both Files and Actions.
+    EXPECT_GE(itemIndex(*popup, QStringLiteral("Files")), 0);
+    EXPECT_GE(itemIndex(*popup, QStringLiteral("main.cpp")), 0);
+
+    // Tab cycles All -> Classes -> Files -> Symbols -> Actions -> All.
+    QKeyEvent tabDown(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(popup->filterField(), &tabDown); // Classes
+    QCoreApplication::sendEvent(popup->filterField(), &tabDown); // Files
+    EXPECT_GE(itemIndex(*popup, QStringLiteral("Files")), 0);
+    EXPECT_EQ(itemIndex(*popup, QStringLiteral("Actions")), -1);
+
+    QCoreApplication::sendEvent(popup->filterField(), &tabDown); // Symbols
+    QCoreApplication::sendEvent(popup->filterField(), &tabDown); // Actions
+    popup->setFilterText(QStringLiteral("save"));
+    EXPECT_EQ(itemIndex(*popup, QStringLiteral("Files")), -1);
+    EXPECT_GE(itemIndex(*popup, QStringLiteral("Actions")), 0);
+    EXPECT_GE(itemIndex(*popup, QStringLiteral("Save All")), 0);
+
+    // Shift+Tab cycles backward from Actions -> Symbols -> Files -> Classes -> All.
+    QKeyEvent shiftTab(QEvent::KeyPress, Qt::Key_Backtab, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(popup->filterField(), &shiftTab); // Symbols
+    QCoreApplication::sendEvent(popup->filterField(), &shiftTab); // Files
+    QCoreApplication::sendEvent(popup->filterField(), &shiftTab); // Classes
+    QCoreApplication::sendEvent(popup->filterField(), &shiftTab); // All
+    popup->setFilterText(QStringLiteral("main"));
+    EXPECT_GE(itemIndex(*popup, QStringLiteral("Files")), 0);
+}
+
+TEST_F(WorkbenchTest, LastEditLocationBookmarksAndTodoToolWindow) {
+    file("/proj/src/todo_sample.cpp", "// TODO: implement fast path\nint x = 0;\n// FIXME: handle edge case\n");
+    Ide& app = ide();
+    openProject(app);
+
+    // 1. Last Edit Location
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/main.cpp", LinePosition{2, 3}).has_value());
+    app.workbench->recordEditLocation("/proj/src/main.cpp", 2, 3);
+    ASSERT_TRUE(app.workbench->openFile("/proj/README.md").has_value());
+    EXPECT_EQ(app.activePath(), "/proj/README.md");
+    EXPECT_TRUE(app.workbench->goToLastEditLocation());
+    EXPECT_EQ(app.activePath(), "/proj/src/main.cpp");
+
+    // 2. Bookmarks: toggle, next/previous navigation, and popup
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/main.cpp", LinePosition{1, 1}).has_value());
+    app.workbench->toggleBookmark();
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/util.cpp", LinePosition{1, 1}).has_value());
+    app.workbench->toggleBookmark();
+    ASSERT_EQ(app.workbench->bookmarks().size(), 2U);
+
+    EXPECT_TRUE(app.workbench->goToPreviousBookmark());
+    EXPECT_EQ(app.activePath(), "/proj/src/main.cpp");
+    EXPECT_TRUE(app.workbench->goToNextBookmark());
+    EXPECT_EQ(app.activePath(), "/proj/src/util.cpp");
+
+    ListPopup* bmPopup = app.workbench->showBookmarksPopup();
+    ASSERT_NE(bmPopup, nullptr);
+    EXPECT_EQ(bmPopup->items().size(), 2U);
+    bmPopup->setCurrentItem(0);
+    bmPopup->acceptCurrent();
+    EXPECT_EQ(app.activePath(), "/proj/src/main.cpp");
+
+    // Toggling again on the same line removes the bookmark.
+    app.workbench->toggleBookmark();
+    EXPECT_EQ(app.workbench->bookmarks().size(), 1U);
+
+    // 3. TODO tool window scans project files for TODO / FIXME and navigates on activation.
+    app.workbench->refreshTodoItems();
+    auto* todoList = app.window->findChild<QListWidget*>(QStringLiteral("todoToolWindowList"));
+    ASSERT_NE(todoList, nullptr);
+    ASSERT_EQ(todoList->count(), 2);
+    EXPECT_TRUE(todoList->item(0)->text().contains(QStringLiteral("TODO")));
+    EXPECT_TRUE(todoList->item(1)->text().contains(QStringLiteral("FIXME")));
+    emit todoList->itemActivated(todoList->item(1));
+    EXPECT_EQ(app.activePath(), "/proj/src/todo_sample.cpp");
+    EXPECT_EQ(app.window->tabs().currentEditor()->status().line, 3);
+}
+
+TEST_F(WorkbenchTest, RenameAndDeletePathRebindTabsDirtyDocumentsAndRecentFiles) {
+    Ide& app = ide();
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/main.cpp").has_value());
+    document::FileDocument* doc = app.documents->find("/proj/src/main.cpp");
+    ASSERT_NE(doc, nullptr);
+    edit(*doc, 0, 0, "// dirty buffer\n");
+    ASSERT_TRUE(doc->dirty());
+
+    // Rename dirty open file /proj/src/main.cpp -> /proj/src/app_main.cpp:
+    // renames on disk, rebinds tab and SaveManager document without losing dirty buffer state.
+    auto renamed = app.workbench->renamePath("/proj/src/main.cpp", "app_main.cpp");
+    ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+    EXPECT_EQ(*renamed, "/proj/src/app_main.cpp");
+    EXPECT_FALSE(memFs.exists("/proj/src/main.cpp").value_or(true));
+    EXPECT_TRUE(memFs.exists("/proj/src/app_main.cpp").value_or(false));
+    EXPECT_EQ(app.activePath(), "/proj/src/app_main.cpp");
+    EXPECT_EQ(doc->path(), "/proj/src/app_main.cpp");
+    EXPECT_TRUE(doc->dirty());
+    EXPECT_EQ(doc->document().committedText().text(), "// dirty buffer\nint a;\nint b;\nint c;\nint d;\n");
+    EXPECT_EQ(app.workbench->recentFiles().paths().front(), "/proj/src/app_main.cpp");
+
+    // Delete dirty open file /proj/src/app_main.cpp:
+    // removes from disk, closes tab without save prompt, and removes from recent files.
+    auto deleted = app.workbench->deletePath("/proj/src/app_main.cpp");
+    ASSERT_TRUE(deleted.has_value()) << deleted.error().describe();
+    EXPECT_FALSE(memFs.exists("/proj/src/app_main.cpp").value_or(true));
+    EXPECT_EQ(app.window->tabs().count(), 0);
+    EXPECT_EQ(app.documents->find("/proj/src/app_main.cpp"), nullptr);
+    EXPECT_TRUE(app.workbench->recentFiles().paths().empty());
+
+    // Open and bookmark /proj/src/util.cpp, then close its tab and rename folder /proj/src -> /proj/source:
+    // closed child files in recentFiles and bookmarks are remapped to /proj/source/util.cpp.
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/util.cpp").has_value());
+    app.workbench->toggleBookmark();
+    ASSERT_TRUE(app.window->tabs().close(app.window->tabs().indexOf("/proj/src/util.cpp")));
+    auto renamedFolder = app.workbench->renamePath("/proj/src", "source");
+    ASSERT_TRUE(renamedFolder.has_value()) << renamedFolder.error().describe();
+    EXPECT_EQ(*renamedFolder, "/proj/source");
+    EXPECT_EQ(app.workbench->recentFiles().paths().front(), "/proj/source/util.cpp");
+    ASSERT_EQ(app.workbench->bookmarks().size(), 1U);
+    EXPECT_EQ(app.workbench->bookmarks().front().path, "/proj/source/util.cpp");
 }
 
 #ifdef _WIN32
