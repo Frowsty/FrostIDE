@@ -1782,23 +1782,28 @@ void Workbench::showOpenRecent() {
 
 void Workbench::showUpdateCheck() {
     const QPointer<Workbench> guard(this);
-    if (!m_window || !interactiveReady() || m_updateChecking)
+    QWidget* parentWin = activeTopWindow();
+    if (!parentWin || !interactiveReady() || m_updateChecking)
         return;
     auto snapshot = m_services.settings.snapshot();
     if (snapshot->get(key::networkOffline)) {
-        QMessageBox::information(m_window, tr("Updates"),
+        QMessageBox::information(parentWin, tr("Updates"),
                                  tr("FrostIDE is working offline. Change this in Settings > Updates."));
         return;
     }
-    const QByteArray configuredKey(FROST_UPDATE_PUBLIC_KEY_HEX);
+    QByteArray configuredKey(FROST_UPDATE_PUBLIC_KEY_HEX);
+    if (configuredKey.isEmpty()) {
+        // Default Ed25519 release verification public key when not overridden via CMake.
+        configuredKey = QByteArrayLiteral("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+    }
     const QByteArray decoded = QByteArray::fromHex(configuredKey);
     if (configuredKey.size() != 64 || decoded.size() != 32) {
-        QMessageBox::information(m_window, tr("Updates unavailable"),
+        QMessageBox::information(parentWin, tr("Updates unavailable"),
                                  tr("This build does not include an official update verification key."));
         return;
     }
     const auto consent = QMessageBox::question(
-        m_window, tr("Check for updates"),
+        parentWin, tr("Check for updates"),
         tr("Connect to GitHub to check Frowsty/FrostIDE releases? GitHub will receive your network address."));
     if (!guard || consent != QMessageBox::Yes || !interactiveReady() ||
         m_services.settings.snapshot()->get(key::networkOffline))
@@ -1808,7 +1813,8 @@ void Workbench::showUpdateCheck() {
     bool buildOk = false;
     const auto installedBuild = QByteArray(FROST_UPDATE_BUILD_NUMBER).toULongLong(&buildOk);
     if (!buildOk) {
-        QMessageBox::warning(m_window, tr("Updates unavailable"), tr("This build has an invalid update build number."));
+        QMessageBox::warning(parentWin, tr("Updates unavailable"),
+                             tr("This build has an invalid update build number."));
         return;
     }
     const auto localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
@@ -1817,7 +1823,7 @@ void Workbench::showUpdateCheck() {
     const auto stateDirectory = localData + QStringLiteral("/updates");
     auto floor = readUpdateFloor(stateDirectory);
     if (!floor) {
-        QMessageBox::warning(m_window, tr("Updates unavailable"), QString::fromStdString(floor.error().message()));
+        QMessageBox::warning(parentWin, tr("Updates unavailable"), QString::fromStdString(floor.error().message()));
         return;
     }
 #ifdef _WIN32
@@ -1856,7 +1862,7 @@ void Workbench::showUpdateCheck() {
     };
     m_updateChecking = true;
     const QPointer<QProgressDialog> progress =
-        new QProgressDialog(tr("Checking signed GitHub releases…"), tr("Cancel"), 0, 0, m_window);
+        new QProgressDialog(tr("Checking signed GitHub releases…"), tr("Cancel"), 0, 0, parentWin);
     progress->setWindowTitle(tr("Check for updates"));
     progress->setMinimumDuration(0);
     progress->setAutoClose(false);
@@ -1868,33 +1874,49 @@ void Workbench::showUpdateCheck() {
     auto* check = new UpdateCheck(
         *manager, publicKey, policy, ready,
         [] { return static_cast<std::uint64_t>(QDateTime::currentSecsSinceEpoch()); },
-        [self = guard, manager, ready, revalidate, progress, cancelled](Result<update::AuthenticatedRelease> result) {
+        [self = guard, manager, ready, revalidate, progress, cancelled,
+         channel](Result<update::AuthenticatedRelease> result) {
             manager->deleteLater();
             if (progress)
                 progress->deleteLater();
             if (!self)
                 return;
             self->m_updateChecking = false;
-            if (!self->m_window)
+            QWidget* activeWin = self->activeTopWindow();
+            if (!activeWin)
                 return;
             if (*cancelled)
                 return;
             if (!result) {
-                QMessageBox::information(self->m_window, tr("Update check"),
-                                         QString::fromUtf8(result.error().message().c_str()));
+                if (result.error().code() == ErrorCode::NotFound) {
+                    const QString statusMsg =
+                        tr("FrostIDE %1 • Channel: %2 (Up to date — checked just now)")
+                            .arg(qs(build_info::kVersion), QString::fromStdString(channel));
+                    if (self->m_welcome)
+                        self->m_welcome->setUpdateStatus(statusMsg);
+                    if (self->m_launcherWindow && self->m_launcherWindow->welcomeScreen())
+                        self->m_launcherWindow->welcomeScreen()->setUpdateStatus(statusMsg);
+                    QMessageBox::information(
+                        activeWin, tr("Check for Updates"),
+                        tr("You already have the latest version of FrostIDE (%1, channel: %2).")
+                            .arg(qs(build_info::kVersion), QString::fromStdString(channel)));
+                } else {
+                    QMessageBox::information(activeWin, tr("Update check"),
+                                             QString::fromUtf8(result.error().message().c_str()));
+                }
                 return;
             }
             if (!ready())
                 return;
             auto accepted = revalidate(*result);
             if (!accepted) {
-                QMessageBox::warning(self->m_window, tr("Update check"),
+                QMessageBox::warning(activeWin, tr("Update check"),
                                      QString::fromStdString(accepted.error().message()));
                 return;
             }
             result->release = std::move(*accepted);
             const auto answer =
-                QMessageBox::question(self->m_window, tr("Update available"),
+                QMessageBox::question(activeWin, tr("Update available"),
                                       tr("A signed FrostIDE update is available: %1 (build %2). Download it now?")
                                           .arg(QString::fromStdString(result->release.version))
                                           .arg(result->release.build));
@@ -1903,7 +1925,7 @@ void Workbench::showUpdateCheck() {
             // A different instance may have advanced the floor during the dialog.
             accepted = revalidate(*result);
             if (!accepted) {
-                QMessageBox::warning(self->m_window, tr("Update download"),
+                QMessageBox::warning(activeWin, tr("Update download"),
                                      QString::fromStdString(accepted.error().message()));
                 return;
             }
@@ -1913,7 +1935,7 @@ void Workbench::showUpdateCheck() {
             auto downloadCancelled = std::make_shared<bool>(false);
             auto downloadReady = [ready, downloadCancelled] { return !*downloadCancelled && ready(); };
             const QPointer<QProgressDialog> downloadProgress =
-                new QProgressDialog(tr("Downloading and verifying update…"), tr("Cancel"), 0, 0, self->m_window);
+                new QProgressDialog(tr("Downloading and verifying update…"), tr("Cancel"), 0, 0, activeWin);
             downloadProgress->setWindowTitle(tr("Download update"));
             downloadProgress->setMinimumDuration(0);
             downloadProgress->setAutoClose(false);
@@ -1933,12 +1955,13 @@ void Workbench::showUpdateCheck() {
                     if (!self)
                         return;
                     self->m_updateChecking = false;
-                    if (!self->m_window)
+                    QWidget* dlWin = self->activeTopWindow();
+                    if (!dlWin)
                         return;
                     if (*downloadCancelled)
                         return;
                     if (!payload) {
-                        QMessageBox::warning(self->m_window, tr("Update download"),
+                        QMessageBox::warning(dlWin, tr("Update download"),
                                              QString::fromUtf8(payload.error().message().c_str()));
                         return;
                     }
@@ -1946,7 +1969,7 @@ void Workbench::showUpdateCheck() {
                         return;
                     auto current = revalidate(*envelope);
                     if (!current) {
-                        QMessageBox::warning(self->m_window, tr("Update download"),
+                        QMessageBox::warning(dlWin, tr("Update download"),
                                              QString::fromStdString(current.error().message()));
                         return;
                     }
@@ -1954,7 +1977,7 @@ void Workbench::showUpdateCheck() {
                     self->m_verifiedUpdate = std::move(*payload);
                     self->m_verifiedRelease = std::move(*envelope);
                     QMessageBox::information(
-                        self->m_window, tr("Update verified"),
+                        dlWin, tr("Update verified"),
                         tr("The update download was verified. Installation is pending installer support."));
                 },
                 downloadManager);
