@@ -60,6 +60,7 @@ inline constexpr std::string_view kLog = "vcs.log";
 inline constexpr std::string_view kStash = "vcs.stash";
 inline constexpr std::string_view kUnstash = "vcs.unstash";
 inline constexpr std::string_view kAnnotate = "vcs.annotate";
+inline constexpr std::string_view kResolveConflicts = "vcs.resolveConflicts";
 inline constexpr std::string_view kNextChange = "diff.nextChange";
 inline constexpr std::string_view kPreviousChange = "diff.previousChange";
 // The Find Action category.
@@ -72,7 +73,7 @@ struct GitShortcutDefault {
     std::string_view shortcut; // Strict sequence syntax.
 };
 
-inline constexpr std::array<GitShortcutDefault, 13> kGitShortcutDefaults{{
+inline constexpr std::array<GitShortcutDefault, 14> kGitShortcutDefaults{{
     {git_actions::kShowDiff, "Ctrl+D"},
     {git_actions::kNextChange, "F7"},
     {git_actions::kPreviousChange, "Shift+F7"},
@@ -86,6 +87,7 @@ inline constexpr std::array<GitShortcutDefault, 13> kGitShortcutDefaults{{
     {git_actions::kStash, ""},
     {git_actions::kUnstash, ""},
     {git_actions::kAnnotate, ""},
+    {git_actions::kResolveConflicts, ""},
 }};
 
 // kGitShortcutDefaults as bindings for KeymapService::setModuleDefaults (unbound ones left out).
@@ -109,6 +111,7 @@ struct GitActionTargets {
     std::function<void()> stashChanges;                    // Stash Changes... dialog/action.
     std::function<void()> unstashChanges;                  // Unstash Changes... dialog/action.
     std::function<void(const std::string& path)> annotate; // Annotate with Git Blame.
+    std::function<void()> resolveConflicts;                // Resolve Conflicts... dialog.
 };
 
 /*

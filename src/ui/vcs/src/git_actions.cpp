@@ -126,6 +126,18 @@ void appendRemoteAndCommitSpecs(std::vector<GitActionSpec>& specs, const std::fu
                      original->rollback({path});
              }
          }});
+    specs.push_back({git_actions::kResolveConflicts,
+                     "Resolve Conflicts...",
+                     "Resolve Git merge or rebase conflicts",
+                     {"conflicts", "merge conflicts", "3-way merge"},
+                     kAnywhere,
+                     false,
+                     [shared] { return static_cast<bool>(shared->resolveConflicts); },
+                     [shared] {
+                         if (shared->resolveConflicts) {
+                             shared->resolveConflicts();
+                         }
+                     }});
 }
 
 void appendViewAndHistorySpecs(std::vector<GitActionSpec>& specs, const std::function<GitController*()>& git,

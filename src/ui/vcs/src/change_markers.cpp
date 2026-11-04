@@ -9,7 +9,9 @@
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/shell/popup.hpp"
 
+#include <QClipboard>
 #include <QFontDatabase>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -140,6 +142,47 @@ bool EditorChangeMarkers::rollback(std::size_t index) {
     return true;
 }
 
+bool EditorChangeMarkers::goToChange(std::size_t index) {
+    if (!m_view || index >= m_changes.size()) {
+        return false;
+    }
+    const bool reopenPopup = m_popup && m_popup->isOpen();
+    const QPoint fallbackPos = m_popup ? m_popup->pos() : QPoint(0, 0);
+    const vcs::LineChange& target = m_changes[index];
+    m_view->goToLine(static_cast<int>(target.current.begin.value() + 1), 1);
+    if (reopenPopup) {
+        const QRect caret = m_view->globalCaretRect(m_view->editor().state().primary().head);
+        showChangePopup(index, caret.isEmpty() ? fallbackPos : caret.bottomLeft());
+    }
+    return true;
+}
+
+bool EditorChangeMarkers::goToNextChange() {
+    if (!m_view || m_changes.empty()) {
+        return false;
+    }
+    const auto currentLine = static_cast<std::uint32_t>(std::max(0, m_view->status().line - 1));
+    for (std::size_t i = 0; i < m_changes.size(); ++i) {
+        if (m_changes[i].current.begin.value() > currentLine) {
+            return goToChange(i);
+        }
+    }
+    return goToChange(0);
+}
+
+bool EditorChangeMarkers::goToPreviousChange() {
+    if (!m_view || m_changes.empty()) {
+        return false;
+    }
+    const auto currentLine = static_cast<std::uint32_t>(std::max(0, m_view->status().line - 1));
+    for (std::size_t i = m_changes.size(); i > 0; --i) {
+        if (m_changes[i - 1].current.begin.value() < currentLine) {
+            return goToChange(i - 1);
+        }
+    }
+    return goToChange(m_changes.size() - 1);
+}
+
 void EditorChangeMarkers::showChangePopup(std::size_t index, QPoint globalPos) {
     if (!m_view || index >= m_changes.size()) {
         return;
@@ -180,8 +223,20 @@ void EditorChangeMarkers::showChangePopup(std::size_t index, QPoint globalPos) {
         layout->addWidget(text);
     }
     auto* row = new QHBoxLayout;
+    auto* prevButton = new QPushButton(tr("Previous Change"), popup);
+    prevButton->setObjectName(QStringLiteral("changePopupPrev"));
+    prevButton->setEnabled(index > 0);
+    auto* nextButton = new QPushButton(tr("Next Change"), popup);
+    nextButton->setObjectName(QStringLiteral("changePopupNext"));
+    nextButton->setEnabled(index + 1 < m_changes.size());
+    auto* copyButton = new QPushButton(tr("Copy Original Text"), popup);
+    copyButton->setObjectName(QStringLiteral("changePopupCopy"));
+    copyButton->setEnabled(!old.empty());
     auto* rollbackButton = new QPushButton(tr("Rollback Lines"), popup);
     rollbackButton->setEnabled(!m_view->isReadOnly() && !m_basePending && !m_debounce.isActive());
+    row->addWidget(prevButton);
+    row->addWidget(nextButton);
+    row->addWidget(copyButton);
     row->addStretch(1);
     row->addWidget(rollbackButton);
     layout->addLayout(row);
@@ -189,6 +244,25 @@ void EditorChangeMarkers::showChangePopup(std::size_t index, QPoint globalPos) {
     const auto version = m_view->document().version();
     const auto request = m_request;
     const auto generation = m_diffGeneration;
+    connect(prevButton, &QPushButton::clicked, popup, [self, index, version, request, generation] {
+        if (self && self->m_view && self->m_view->document().version() == version && self->m_request == request &&
+            self->m_diffGeneration == generation && !self->m_changes.empty()) {
+            self->goToChange(index > 0 ? index - 1 : self->m_changes.size() - 1);
+        }
+    });
+    connect(nextButton, &QPushButton::clicked, popup, [self, index, version, request, generation] {
+        if (self && self->m_view && self->m_view->document().version() == version && self->m_request == request &&
+            self->m_diffGeneration == generation && !self->m_changes.empty()) {
+            self->goToChange((index + 1) % self->m_changes.size());
+        }
+    });
+    connect(copyButton, &QPushButton::clicked, popup, [self, index] {
+        if (self) {
+            if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+                clipboard->setText(QString::fromStdString(self->baseText(index)));
+            }
+        }
+    });
     connect(rollbackButton, &QPushButton::clicked, popup, [self, popup, index, version, request, generation] {
         if (self && self->m_view && self->m_view->document().version() == version && self->m_request == request &&
             self->m_diffGeneration == generation) {
@@ -197,6 +271,9 @@ void EditorChangeMarkers::showChangePopup(std::size_t index, QPoint globalPos) {
         popup->closePopup(Popup::CloseReason::Accepted);
     });
     m_popup = popup;
+    m_popupPrev = prevButton;
+    m_popupNext = nextButton;
+    m_popupCopy = copyButton;
     m_popupRollback = rollbackButton;
     popup->showAt(globalPos);
 }

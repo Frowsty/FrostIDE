@@ -38,6 +38,8 @@ public:
     explicit BranchStatusWidget(GitController& controller, QWidget* parent = nullptr);
     ~BranchStatusWidget() override;
 
+    // The full badge text (branch name or short commit + ahead/behind indicators).
+    [[nodiscard]] QString branchName() const { return text(); }
     // Opens the Branches popup below the widget (the click does this) and returns it.
     ListPopup* openPopup();
     [[nodiscard]] ListPopup* popup() const noexcept { return m_popup; }

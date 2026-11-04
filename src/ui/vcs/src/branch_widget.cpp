@@ -88,11 +88,15 @@ void BranchStatusWidget::refresh() {
         return;
     }
     const vcs::GitBranchStatus& branch = m_controller->snapshot()->status.branch;
-    if (branch.detached()) {
-        setText(branch.oid.size() > 8 ? qs(branch.oid).left(8) : qs(branch.oid));
-    } else {
-        setText(qs(branch.head));
+    QString badge = branch.detached() ? (branch.oid.size() > 8 ? qs(branch.oid).left(8) : qs(branch.oid))
+                                      : qs(branch.head);
+    if (branch.ahead > 0) {
+        badge += QStringLiteral(" \u2191%1").arg(branch.ahead);
     }
+    if (branch.behind > 0) {
+        badge += QStringLiteral(" \u2193%1").arg(branch.behind);
+    }
+    setText(badge);
     QString tip = branch.detached() ? tr("Detached HEAD") : tr("Git branch: %1").arg(qs(branch.head));
     if (branch.upstream) {
         tip +=

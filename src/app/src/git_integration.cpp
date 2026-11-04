@@ -4,9 +4,12 @@
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
+#include "frost/diff/merge.hpp"
 #include "frost/document/load_service.hpp"
 #include "frost/io/path.hpp"
+#include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/nav/merge_layout.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/notifications.hpp"
@@ -24,15 +27,23 @@
 #include "frost/ui/vcs/git_log_window.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
+#include "frost/ui/workbench/merge_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFontDatabase>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QScrollBar>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -134,6 +145,10 @@ GitIntegration::GitIntegration(Workbench& wb) : QObject(&wb), m_workbench(wb) {
     targets.annotate = [self](const std::string& path) {
         if (self)
             self->showBlame(path);
+    };
+    targets.resolveConflicts = [self] {
+        if (self)
+            self->showResolveConflictsDialog();
     };
     if (auto registered = ui::registerGitActions(
             wb.m_registry, [self] { return self ? self->controller() : nullptr; }, std::move(targets));
@@ -309,6 +324,8 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     }
     connect(m_commit, &ui::CommitToolWindow::diffRequested, this,
             [this](const QString& path) { showDiff(path.toUtf8().toStdString()); });
+    connect(m_commit, &ui::CommitToolWindow::resolveConflictsRequested, this,
+            &GitIntegration::showResolveConflictsDialog);
     window.toolWindows().setContent(kCommit, m_commit);
     m_diff = new ui::DiffViewer();
     window.toolWindows().setContent(kDiff, m_diff);
@@ -326,7 +343,7 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     window.statusBar()->addPermanentWidget(m_branch);
     const QPointer<GitIntegration> self(this);
     m_controller->readBranches();
-    window.mainToolbar().setVcsBranchName(m_branch->text());
+    window.mainToolbar().setVcsBranchName(m_branch->branchName());
     window.mainToolbar().setVcsMenuBuilder([self](QMenu& menu) {
         if (self && self->m_branch) {
             if (self->m_controller) {
@@ -363,7 +380,7 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
         if (!m_workbench.m_window)
             return;
         if (m_branch)
-            m_workbench.m_window->mainToolbar().setVcsBranchName(m_branch->text());
+            m_workbench.m_window->mainToolbar().setVcsBranchName(m_branch->branchName());
         m_workbench.m_window->tabs().refreshTitleColors();
         if (m_workbench.m_nav && m_workbench.m_nav->fileSystemView())
             m_workbench.m_nav->fileSystemView()->refreshFileColors();
@@ -622,5 +639,457 @@ void GitIntegration::showBlame(const std::string& path) {
             ui::installDialogChrome(&dialog);
             dialog.exec();
         });
+}
+
+void GitIntegration::showResolveConflictsDialog() {
+    if (!m_controller || !m_workbench.m_window)
+        return;
+
+    struct ConflictSides {
+        std::string base;
+        std::string ours;
+        std::string theirs;
+        bool hadMarkers = false;
+    };
+
+    const auto startsWithMarker = [](std::string_view line, char ch) {
+        if (line.size() < 7)
+            return false;
+        std::size_t count = 0;
+        while (count < line.size() && line[count] == ch)
+            ++count;
+        if (count < 7)
+            return false;
+        if (count == line.size())
+            return true;
+        const char next = line[count];
+        return next == ' ' || next == '\r' || next == '\n';
+    };
+
+    const auto parseMarkers = [&](std::string_view text) -> ConflictSides {
+        ConflictSides sides;
+        enum class Section : std::uint8_t { Normal, Ours, Base, Theirs };
+        Section section = Section::Normal;
+        std::string blockOurs;
+        std::string blockBase;
+        std::string blockTheirs;
+        bool hasBaseSection = false;
+        std::size_t pos = 0;
+        while (pos < text.size()) {
+            const std::size_t nl = text.find('\n', pos);
+            const std::size_t end = nl == std::string_view::npos ? text.size() : nl + 1;
+            const std::string_view line = text.substr(pos, end - pos);
+            pos = end;
+
+            if (section == Section::Normal && startsWithMarker(line, '<')) {
+                sides.hadMarkers = true;
+                section = Section::Ours;
+                blockOurs.clear();
+                blockBase.clear();
+                blockTheirs.clear();
+                hasBaseSection = false;
+                continue;
+            }
+            if (section == Section::Ours && startsWithMarker(line, '|')) {
+                hasBaseSection = true;
+                section = Section::Base;
+                continue;
+            }
+            if ((section == Section::Ours || section == Section::Base) && startsWithMarker(line, '=')) {
+                section = Section::Theirs;
+                continue;
+            }
+            if (section == Section::Theirs && startsWithMarker(line, '>')) {
+                sides.ours += blockOurs;
+                sides.theirs += blockTheirs;
+                if (hasBaseSection) {
+                    sides.base += blockBase;
+                } else if (blockOurs.empty() || blockTheirs.empty() || blockOurs == blockTheirs) {
+                    sides.base += "<<<conflict-base>>>\n";
+                }
+                section = Section::Normal;
+                continue;
+            }
+
+            switch (section) {
+            case Section::Normal:
+                sides.base.append(line);
+                sides.ours.append(line);
+                sides.theirs.append(line);
+                break;
+            case Section::Ours:
+                blockOurs.append(line);
+                break;
+            case Section::Base:
+                blockBase.append(line);
+                break;
+            case Section::Theirs:
+                blockTheirs.append(line);
+                break;
+            }
+        }
+        if (section != Section::Normal) {
+            sides.ours += blockOurs;
+            sides.theirs += blockTheirs;
+            if (hasBaseSection)
+                sides.base += blockBase;
+        }
+        return sides;
+    };
+
+    const auto readStageBlob = [this](int stage, const std::string& relPath) -> std::optional<std::string> {
+        if (!m_controller)
+            return std::nullopt;
+        vcs::GitInvocation inv;
+        inv.arguments = {"cat-file", "blob", ":" + std::to_string(stage) + ":" + relPath};
+        inv.workingDirectory = m_controller->info().workTree;
+        inv.background = true;
+        auto out = m_controller->service().repository().runner().run(inv);
+        if (out && out->succeeded())
+            return out->stdoutBytes;
+        return std::nullopt;
+    };
+
+    const auto extractSides = [&](const std::string& absPath, const std::string& relPath) -> ConflictSides {
+        std::string raw;
+        if (auto disk = m_workbench.m_services.fs.readFile(absPath); disk)
+            raw = std::move(*disk);
+        ConflictSides sides = parseMarkers(raw);
+        if (!sides.hadMarkers) {
+            if (auto stage2 = readStageBlob(2, relPath))
+                sides.ours = std::move(*stage2);
+            if (auto stage3 = readStageBlob(3, relPath))
+                sides.theirs = std::move(*stage3);
+            if (auto stage1 = readStageBlob(1, relPath))
+                sides.base = std::move(*stage1);
+        }
+        return sides;
+    };
+
+    const auto applyResolved = [this](const std::string& absPath, const std::string& relPath,
+                                      const std::string& resolvedText) -> bool {
+        if (auto written = m_workbench.m_services.fs.safeWrite(absPath, resolvedText, {}); !written)
+            return false;
+        if (m_trusted && m_controller && !relPath.empty()) {
+            vcs::GitInvocation addInv;
+            addInv.arguments = {"add", "--", relPath};
+            addInv.workingDirectory = m_controller->info().workTree;
+            addInv.requiresTrust = true;
+            static_cast<void>(m_controller->service().repository().runner().run(addInv));
+        }
+        m_workbench.checkExternalChanges();
+        const auto key = fileKey(m_workbench.m_services.fs, absPath);
+        for (const auto& doc : m_workbench.m_documents->documents()) {
+            if (!doc->untitled() && fileKey(m_workbench.m_services.fs, doc->path()) == key) {
+                if (doc->pendingMerge() != nullptr) {
+                    static_cast<void>(
+                        m_workbench.m_documents->resolveExternalChange(*doc, document::MergeDecision::TakeDisk));
+                }
+                if (auto* view = m_workbench.m_editors->find(*doc))
+                    view->reloadFromDocument();
+            }
+        }
+        if (m_controller)
+            m_controller->refreshStatus();
+        return true;
+    };
+
+    QDialog dialog(m_workbench.m_window);
+    dialog.setObjectName(QStringLiteral("gitResolveConflictsDialog"));
+    dialog.setWindowTitle(tr("Resolve Conflicts"));
+    dialog.resize(760, 480);
+
+    auto* mainLayout = new QVBoxLayout(&dialog);
+    auto* headerLabel = new QLabel(tr("Files with merge or rebase conflicts:"), &dialog);
+    mainLayout->addWidget(headerLabel);
+
+    auto* bodyLayout = new QHBoxLayout();
+    auto* list = new QListWidget(&dialog);
+    list->setObjectName(QStringLiteral("conflictedFilesList"));
+    bodyLayout->addWidget(list, 1);
+
+    auto* actionColumn = new QVBoxLayout();
+    auto* acceptYoursBtn = new QPushButton(tr("Accept Yours"), &dialog);
+    acceptYoursBtn->setObjectName(QStringLiteral("acceptYoursButton"));
+    auto* acceptTheirsBtn = new QPushButton(tr("Accept Theirs"), &dialog);
+    acceptTheirsBtn->setObjectName(QStringLiteral("acceptTheirsButton"));
+    auto* mergeBtn = new QPushButton(tr("Merge..."), &dialog);
+    mergeBtn->setObjectName(QStringLiteral("mergeConflictsButton"));
+    actionColumn->addWidget(acceptYoursBtn);
+    actionColumn->addWidget(acceptTheirsBtn);
+    actionColumn->addWidget(mergeBtn);
+    actionColumn->addStretch(1);
+    bodyLayout->addLayout(actionColumn);
+    mainLayout->addLayout(bodyLayout, 1);
+
+    auto* emptyLabel = new QLabel(tr("No conflicted files in the working tree."), &dialog);
+    emptyLabel->setObjectName(QStringLiteral("noConflictsLabel"));
+    mainLayout->addWidget(emptyLabel);
+
+    auto* buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    mainLayout->addWidget(buttonBox);
+
+    if (m_controller->snapshot()) {
+        const std::string& workTree = m_controller->info().workTree;
+        for (const vcs::GitStatusEntry& entry : m_controller->snapshot()->status.entries) {
+            if (entry.fileStatus() != vcs::VcsFileStatus::Conflicted)
+                continue;
+            const std::string absPath = vcs::absoluteGitPath(workTree, entry.path);
+            auto* item = new QListWidgetItem(
+                QString::fromUtf8(entry.path.data(), static_cast<qsizetype>(entry.path.size())), list);
+            item->setData(Qt::UserRole, QString::fromStdString(absPath));
+            item->setData(Qt::UserRole + 1, QString::fromStdString(entry.path));
+        }
+    }
+    if (list->count() > 0)
+        list->setCurrentRow(0);
+
+    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, emptyLabel] {
+        const bool hasSelection = list->currentItem() != nullptr;
+        acceptYoursBtn->setEnabled(hasSelection);
+        acceptTheirsBtn->setEnabled(hasSelection);
+        mergeBtn->setEnabled(hasSelection);
+        emptyLabel->setVisible(list->count() == 0);
+    };
+    connect(list, &QListWidget::currentRowChanged, &dialog, [updateDialogState](int) { updateDialogState(); });
+    updateDialogState();
+
+    connect(acceptYoursBtn, &QPushButton::clicked, &dialog, [&] {
+        QListWidgetItem* item = list->currentItem();
+        if (item == nullptr)
+            return;
+        const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
+        const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
+        const ConflictSides sides = extractSides(absPath, relPath);
+        if (applyResolved(absPath, relPath, sides.ours)) {
+            delete list->takeItem(list->row(item));
+            updateDialogState();
+        }
+    });
+
+    connect(acceptTheirsBtn, &QPushButton::clicked, &dialog, [&] {
+        QListWidgetItem* item = list->currentItem();
+        if (item == nullptr)
+            return;
+        const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
+        const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
+        const ConflictSides sides = extractSides(absPath, relPath);
+        if (applyResolved(absPath, relPath, sides.theirs)) {
+            delete list->takeItem(list->row(item));
+            updateDialogState();
+        }
+    });
+
+    const auto openThreeWayMerge = [&](QListWidgetItem* item) {
+        if (item == nullptr)
+            return;
+        const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
+        const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
+        const ConflictSides sides = extractSides(absPath, relPath);
+
+        auto baseSeq = diff::LineSequence::fromBytes(sides.base, diff::LineSplit::Lsp);
+        auto oursSeq = diff::LineSequence::fromBytes(sides.ours, diff::LineSplit::Lsp);
+        auto theirsSeq = diff::LineSequence::fromBytes(sides.theirs, diff::LineSplit::Lsp);
+        if (!baseSeq || !oursSeq || !theirsSeq)
+            return;
+        auto modelRes = diff::MergeModel::create(std::move(*baseSeq), std::move(*oursSeq), std::move(*theirsSeq));
+        if (!modelRes)
+            return;
+        diff::MergeModel model = std::move(*modelRes);
+        text::MonospaceTextShaper shaper;
+        auto panesRes = ui::nav::MergePanes::create(model, shaper);
+        if (!panesRes)
+            return;
+        ui::nav::MergePanes panes = std::move(*panesRes);
+
+        QDialog mergeDialog(&dialog);
+        mergeDialog.setObjectName(QStringLiteral("gitThreeWayMergeDialog"));
+        mergeDialog.setWindowTitle(tr("Merge Conflicts — %1").arg(QString::fromStdString(relPath)));
+        mergeDialog.resize(1100, 680);
+
+        auto* mLayout = new QVBoxLayout(&mergeDialog);
+        auto* headers = new QHBoxLayout();
+        headers->addWidget(new QLabel(tr("Local (Yours)"), &mergeDialog), 1);
+        headers->addWidget(new QLabel(tr("Merged Result"), &mergeDialog), 1);
+        headers->addWidget(new QLabel(tr("Remote (Theirs)"), &mergeDialog), 1);
+        mLayout->addLayout(headers);
+
+        const QFont fixedFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        auto* splitter = new QSplitter(Qt::Horizontal, &mergeDialog);
+        auto* yoursPane = new QPlainTextEdit(splitter);
+        yoursPane->setObjectName(QStringLiteral("mergeYours"));
+        yoursPane->setReadOnly(true);
+        yoursPane->setLineWrapMode(QPlainTextEdit::NoWrap);
+        yoursPane->setFont(fixedFont);
+
+        auto* resultPane = new QPlainTextEdit(splitter);
+        resultPane->setObjectName(QStringLiteral("mergeResult"));
+        resultPane->setLineWrapMode(QPlainTextEdit::NoWrap);
+        resultPane->setFont(fixedFont);
+
+        auto* theirsPane = new QPlainTextEdit(splitter);
+        theirsPane->setObjectName(QStringLiteral("mergeTheirs"));
+        theirsPane->setReadOnly(true);
+        theirsPane->setLineWrapMode(QPlainTextEdit::NoWrap);
+        theirsPane->setFont(fixedFont);
+        mLayout->addWidget(splitter, 1);
+
+        const auto mapToText = [](const text::DisplayMap& map) {
+            QStringList rows;
+            const text::Snapshot& snap = map.text();
+            for (std::uint32_t r = 0; r < map.rowCount(); ++r) {
+                const text::DisplayRowInfo info = map.rowInfo(text::DisplayRow{r});
+                if (info.kind == text::RowKind::Text) {
+                    const std::string rowText = snap.text(info.buffer);
+                    rows.push_back(QString::fromUtf8(rowText.data(), static_cast<qsizetype>(rowText.size())));
+                } else {
+                    rows.push_back(QString());
+                }
+            }
+            return rows.join(QLatin1Char('\n'));
+        };
+        yoursPane->setPlainText(mapToText(panes.map(ui::nav::MergePane::Yours)));
+        theirsPane->setPlainText(mapToText(panes.map(ui::nav::MergePane::Disk)));
+
+        bool syncingScroll = false;
+        const auto syncScroll = [&](int val) {
+            if (syncingScroll)
+                return;
+            syncingScroll = true;
+            yoursPane->verticalScrollBar()->setValue(val);
+            resultPane->verticalScrollBar()->setValue(val);
+            theirsPane->verticalScrollBar()->setValue(val);
+            syncingScroll = false;
+        };
+        connect(yoursPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
+        connect(resultPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
+        connect(theirsPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
+
+        std::vector<std::size_t> changedChunks;
+        for (std::size_t c = 0; c < panes.chunkCount(); ++c) {
+            if (panes.chunk(c).kind != diff::ChunkKind::Stable)
+                changedChunks.push_back(c);
+        }
+
+        auto* chunkList = new QListWidget(&mergeDialog);
+        chunkList->setObjectName(QStringLiteral("mergeChunks"));
+        chunkList->setMaximumHeight(130);
+        mLayout->addWidget(chunkList);
+
+        auto* chunkBtns = new QHBoxLayout();
+        auto* acceptLeftBtn = new QPushButton(tr("Accept Left (Yours)"), &mergeDialog);
+        acceptLeftBtn->setObjectName(QStringLiteral("acceptLeft"));
+        auto* acceptRightBtn = new QPushButton(tr("Accept Right (Theirs)"), &mergeDialog);
+        acceptRightBtn->setObjectName(QStringLiteral("acceptRight"));
+        auto* acceptAllLeftBtn = new QPushButton(tr("Accept All Yours"), &mergeDialog);
+        acceptAllLeftBtn->setObjectName(QStringLiteral("acceptAllLeft"));
+        auto* acceptAllRightBtn = new QPushButton(tr("Accept All Theirs"), &mergeDialog);
+        acceptAllRightBtn->setObjectName(QStringLiteral("acceptAllRight"));
+        chunkBtns->addWidget(acceptLeftBtn);
+        chunkBtns->addWidget(acceptRightBtn);
+        chunkBtns->addWidget(acceptAllLeftBtn);
+        chunkBtns->addWidget(acceptAllRightBtn);
+        chunkBtns->addStretch(1);
+        mLayout->addLayout(chunkBtns);
+
+        auto* statusLabel = new QLabel(&mergeDialog);
+        statusLabel->setObjectName(QStringLiteral("mergeStatus"));
+        mLayout->addWidget(statusLabel);
+
+        auto* bottomBtns = new QHBoxLayout();
+        auto* applyBtn = new QPushButton(tr("Apply & Mark Resolved"), &mergeDialog);
+        applyBtn->setObjectName(QStringLiteral("applyMergeButton"));
+        applyBtn->setDefault(true);
+        auto* cancelBtn = new QPushButton(tr("Cancel"), &mergeDialog);
+        cancelBtn->setObjectName(QStringLiteral("cancelMergeButton"));
+        bottomBtns->addStretch(1);
+        bottomBtns->addWidget(cancelBtn);
+        bottomBtns->addWidget(applyBtn);
+        mLayout->addLayout(bottomBtns);
+
+        const auto refreshMergeState = [&] {
+            const int curRow = chunkList->currentRow();
+            chunkList->clear();
+            for (const std::size_t c : changedChunks) {
+                const diff::MergeChunk& chunk = panes.chunk(c);
+                const auto fmtRange = [](const diff::LineRange& r) {
+                    return r.empty() ? QStringLiteral("-")
+                                     : QStringLiteral("%1-%2").arg(r.begin.value() + 1).arg(r.end.value());
+                };
+                QString takeStr;
+                switch (model.take(c)) {
+                case diff::Take::Unresolved: takeStr = tr("unresolved"); break;
+                case diff::Take::Ours: takeStr = tr("yours"); break;
+                case diff::Take::Theirs: takeStr = tr("theirs"); break;
+                case diff::Take::Base: takeStr = tr("base"); break;
+                case diff::Take::OursThenTheirs: takeStr = tr("yours, then theirs"); break;
+                case diff::Take::TheirsThenOurs: takeStr = tr("theirs, then yours"); break;
+                case diff::Take::Custom: takeStr = tr("edited"); break;
+                }
+                chunkList->addItem(
+                    tr("Yours %1 | Theirs %2 (%3)").arg(fmtRange(chunk.ours), fmtRange(chunk.theirs), takeStr));
+            }
+            if (chunkList->count() > 0)
+                chunkList->setCurrentRow(std::clamp(curRow, 0, chunkList->count() - 1));
+
+            if (auto resolved = model.resolvedText()) {
+                resultPane->setPlainText(QString::fromStdString(resolved->text));
+            } else if (auto marked = model.renderWithMarkers()) {
+                resultPane->setPlainText(QString::fromStdString(marked->text));
+            } else {
+                resultPane->setPlainText(QString::fromStdString(sides.ours));
+            }
+
+            const std::uint32_t unresolved = model.unresolvedCount();
+            statusLabel->setText(unresolved == 0 ? tr("All conflicts resolved.")
+                                                 : tr("%1 conflict(s) unresolved.").arg(unresolved));
+        };
+        refreshMergeState();
+
+        connect(acceptLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
+            const int row = chunkList->currentRow();
+            if (row >= 0 && static_cast<std::size_t>(row) < changedChunks.size()) {
+                static_cast<void>(model.resolve(changedChunks[static_cast<std::size_t>(row)], diff::Take::Ours));
+                refreshMergeState();
+            }
+        });
+        connect(acceptRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
+            const int row = chunkList->currentRow();
+            if (row >= 0 && static_cast<std::size_t>(row) < changedChunks.size()) {
+                static_cast<void>(model.resolve(changedChunks[static_cast<std::size_t>(row)], diff::Take::Theirs));
+                refreshMergeState();
+            }
+        });
+        connect(acceptAllLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
+            for (const std::size_t c : changedChunks)
+                static_cast<void>(model.resolve(c, diff::Take::Ours));
+            refreshMergeState();
+        });
+        connect(acceptAllRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
+            for (const std::size_t c : changedChunks)
+                static_cast<void>(model.resolve(c, diff::Take::Theirs));
+            refreshMergeState();
+        });
+        connect(applyBtn, &QPushButton::clicked, &mergeDialog, [&] {
+            const std::string mergedText = resultPane->toPlainText().toStdString();
+            if (applyResolved(absPath, relPath, mergedText)) {
+                mergeDialog.accept();
+            }
+        });
+        connect(cancelBtn, &QPushButton::clicked, &mergeDialog, &QDialog::reject);
+
+        ui::installDialogChrome(&mergeDialog, true);
+        if (mergeDialog.exec() == QDialog::Accepted) {
+            delete list->takeItem(list->row(item));
+            updateDialogState();
+        }
+    };
+
+    connect(mergeBtn, &QPushButton::clicked, &dialog, [&] { openThreeWayMerge(list->currentItem()); });
+    connect(list, &QListWidget::itemDoubleClicked, &dialog, openThreeWayMerge);
+
+    ui::installDialogChrome(&dialog, true);
+    dialog.exec();
 }
 } // namespace frost::app

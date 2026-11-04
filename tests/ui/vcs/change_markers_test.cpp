@@ -8,8 +8,10 @@
 #include "frost/ui/vcs/change_markers.hpp"
 
 #include "editor/editor_harness.hpp"
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -220,6 +222,36 @@ TEST(EditorChangeMarkers, AFileWithoutABaseHasNoMarkersAndReadOnlyEditorsCannotR
     ASSERT_NE(readOnly.popupRollbackButton(), nullptr);
     EXPECT_FALSE(readOnly.popupRollbackButton()->isEnabled());
     readOnly.popup()->closePopup(Popup::CloseReason::Cancelled);
+}
+
+TEST(EditorChangeMarkers, PopupSupportsPreviousNextChangeNavigationAndCopyOriginalText) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\nTWO\nthree\nFOUR\n");
+    FakeBase base{std::string(kBase)};
+    EditorChangeMarkers markers(*h.view, base.provider());
+    ASSERT_EQ(markers.changes().size(), 2U);
+
+    markers.showChangePopup(0, QPoint(10, 10));
+    ASSERT_NE(markers.popup(), nullptr);
+    ASSERT_NE(markers.popupPreviousButton(), nullptr);
+    ASSERT_NE(markers.popupNextButton(), nullptr);
+    ASSERT_NE(markers.popupCopyButton(), nullptr);
+    EXPECT_FALSE(markers.popupPreviousButton()->isEnabled());
+    EXPECT_TRUE(markers.popupNextButton()->isEnabled());
+    EXPECT_TRUE(markers.popupCopyButton()->isEnabled());
+
+    markers.popupCopyButton()->click();
+    EXPECT_EQ(QGuiApplication::clipboard()->text(), QStringLiteral("two\n"));
+
+    markers.popupNextButton()->click();
+    EXPECT_EQ(h.view->status().line, 4);
+    ASSERT_NE(markers.popup(), nullptr);
+    EXPECT_TRUE(markers.popupPreviousButton()->isEnabled());
+    EXPECT_FALSE(markers.popupNextButton()->isEnabled());
+
+    markers.popupPreviousButton()->click();
+    EXPECT_EQ(h.view->status().line, 2);
+    markers.popup()->closePopup(Popup::CloseReason::Cancelled);
 }
 
 } // namespace

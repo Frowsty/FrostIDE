@@ -103,6 +103,7 @@ public:
     [[nodiscard]] QPushButton* commitButton() const noexcept { return m_commit; }
     [[nodiscard]] QPushButton* commitAndPushButton() const noexcept { return m_commitAndPush; }
     [[nodiscard]] QPushButton* rollbackButton() const noexcept { return m_rollback; }
+    [[nodiscard]] QPushButton* resolveConflictsButton() const noexcept { return m_resolveConflictsButton; }
     [[nodiscard]] QToolButton* historyButton() const noexcept { return m_historyButton; }
     // The result line under the buttons (an error, or "Committed ...").
     [[nodiscard]] QLabel* resultLabel() const noexcept { return m_result; }
@@ -130,6 +131,8 @@ public:
 signals:
     // Show the diff of this file (HEAD against the working copy).
     void diffRequested(const QString& absolutePath);
+    // Open the 3-way conflict resolver dialog.
+    void resolveConflictsRequested();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -151,6 +154,7 @@ private:
     QPushButton* m_commit;
     QPushButton* m_commitAndPush;
     QPushButton* m_rollback;
+    QPushButton* m_resolveConflictsButton = nullptr;
     QLabel* m_result;
     QLabel* m_statusInfo;
     ConfirmHandler m_confirm;

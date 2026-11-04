@@ -220,7 +220,9 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
       m_message(new QPlainTextEdit(this)), m_historyButton(new QToolButton(this)),
       m_amend(new QCheckBox(tr("Amend"), this)), m_commit(new QPushButton(tr("Commit"), this)),
       m_commitAndPush(new QPushButton(tr("Commit and Push..."), this)),
-      m_rollback(new QPushButton(tr("Rollback"), this)), m_result(new QLabel(this)), m_statusInfo(new QLabel(this)) {
+      m_rollback(new QPushButton(tr("Rollback"), this)),
+      m_resolveConflictsButton(new QPushButton(tr("Resolve Conflicts..."), this)),
+      m_result(new QLabel(this)), m_statusInfo(new QLabel(this)) {
     setObjectName(QStringLiteral("commitToolWindow"));
     m_tree->setModel(m_model);
     m_tree->setHeaderHidden(true);
@@ -232,6 +234,8 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     m_message->setMaximumHeight(140);
     m_historyButton->setText(tr("History"));
     m_historyButton->setToolTip(tr("Recent commit messages"));
+    m_resolveConflictsButton->setObjectName(QStringLiteral("resolveConflictsButton"));
+    m_resolveConflictsButton->hide();
     m_statusInfo->setObjectName(QStringLiteral("gitRestrictedStatusInfo"));
     m_statusInfo->setWordWrap(true);
     m_statusInfo->hide();
@@ -242,6 +246,7 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     auto* messageRow = new QHBoxLayout;
     messageRow->addWidget(m_amend);
     messageRow->addStretch(1);
+    messageRow->addWidget(m_resolveConflictsButton);
     messageRow->addWidget(m_historyButton);
     auto* buttons = new QHBoxLayout;
     buttons->addWidget(m_commit);
@@ -260,6 +265,7 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     connect(m_commit, &QPushButton::clicked, this, [this] { commit(); });
     connect(m_commitAndPush, &QPushButton::clicked, this, [this] { commitAndPush(); });
     connect(m_rollback, &QPushButton::clicked, this, [this] { rollbackSelected(); });
+    connect(m_resolveConflictsButton, &QPushButton::clicked, this, &CommitToolWindow::resolveConflictsRequested);
     connect(m_amend, &QCheckBox::toggled, this, &CommitToolWindow::onAmendToggled);
     connect(m_historyButton, &QToolButton::clicked, this, &CommitToolWindow::showHistoryMenu);
     connect(m_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex& index) {
@@ -407,6 +413,28 @@ void CommitToolWindow::updateButtons() {
     m_commit->setEnabled(idle);
     m_commitAndPush->setEnabled(idle);
     m_rollback->setEnabled(idle && hasFiles);
+    bool hasConflicts = false;
+    if (m_controller && m_controller->snapshot()) {
+        for (const vcs::GitStatusEntry& entry : m_controller->snapshot()->status.entries) {
+            if (entry.fileStatus() == vcs::VcsFileStatus::Conflicted) {
+                hasConflicts = true;
+                break;
+            }
+        }
+    }
+    if (!hasConflicts && m_model->changesGroup() != nullptr) {
+        for (int row = 0; row < m_model->changesGroup()->rowCount(); ++row) {
+            if (m_model->changesGroup()->child(row, 0)->data(CommitChangesModel::StatusRole).toInt() ==
+                static_cast<int>(vcs::VcsFileStatus::Conflicted)) {
+                hasConflicts = true;
+                break;
+            }
+        }
+    }
+    if (m_resolveConflictsButton != nullptr) {
+        m_resolveConflictsButton->setVisible(hasConflicts);
+        m_resolveConflictsButton->setEnabled(idle && hasConflicts);
+    }
 }
 
 void CommitToolWindow::onAmendToggled(bool on) {

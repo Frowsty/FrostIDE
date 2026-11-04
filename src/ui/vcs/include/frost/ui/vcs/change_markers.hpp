@@ -64,11 +64,19 @@ public:
     [[nodiscard]] std::string baseText(std::size_t index) const;
     // Rolls change `index` back in the buffer; false for an invalid index or a read-only editor.
     bool rollback(std::size_t index);
+    // Moves the editor caret to change `index` (and reopens the popup there when it was open).
+    bool goToChange(std::size_t index);
+    // Moves the editor caret to the next or previous change relative to the current caret line.
+    bool goToNextChange();
+    bool goToPreviousChange();
 
     // Opens the change popup for change `index` at `globalPos` (a stripe click does this).
     void showChangePopup(std::size_t index, QPoint globalPos);
-    // The open popup, or nullptr; its Rollback Lines button.
+    // The open popup, or nullptr; its action buttons.
     [[nodiscard]] Popup* popup() const noexcept { return m_popup; }
+    [[nodiscard]] QPushButton* popupPreviousButton() const noexcept { return m_popupPrev; }
+    [[nodiscard]] QPushButton* popupNextButton() const noexcept { return m_popupNext; }
+    [[nodiscard]] QPushButton* popupCopyButton() const noexcept { return m_popupCopy; }
     [[nodiscard]] QPushButton* popupRollbackButton() const noexcept { return m_popupRollback; }
 
 signals:
@@ -88,6 +96,9 @@ private:
     std::uint64_t m_diffGeneration = 0;
     bool m_basePending = false;
     QPointer<Popup> m_popup;
+    QPointer<QPushButton> m_popupPrev;
+    QPointer<QPushButton> m_popupNext;
+    QPointer<QPushButton> m_popupCopy;
     QPointer<QPushButton> m_popupRollback;
 };
 

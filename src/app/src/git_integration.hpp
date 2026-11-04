@@ -39,6 +39,7 @@ public:
     void documentChanged();
     void editorChanged();
     void filesChanged(const io::FileChangeBatch& batch);
+    void showResolveConflictsDialog();
     [[nodiscard]] ui::GitController* controller() const noexcept { return m_controller.get(); }
 
 private:
