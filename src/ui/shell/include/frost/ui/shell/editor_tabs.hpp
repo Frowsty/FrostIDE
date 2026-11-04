@@ -45,6 +45,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     int m_middlePressed = -1;
@@ -90,6 +91,9 @@ public:
     void closeAll();
     // Closes every unpinned tab.
     void closeAllButPinned();
+    // Closes every unpinned tab to the left or right of `index`.
+    void closeTabsToLeft(int index);
+    void closeTabsToRight(int index);
 
     // Pins or unpins a tab; pinned tabs move to the front, keep no close button and survive
     // closeOthers and closeAllButPinned.
@@ -195,6 +199,8 @@ public:
     void closeOthers(int index);
     void closeAll();
     void closeAllButPinned();
+    void closeTabsToLeft(int index);
+    void closeTabsToRight(int index);
     void setPinned(int index, bool pinned);
     [[nodiscard]] bool isPinned(int index) const;
     [[nodiscard]] bool isDirty(int index) const;

@@ -23,6 +23,7 @@
 #include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
 #include <QPainter>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -204,10 +205,41 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
     QFont bold = s.title->font();
     bold.setBold(true);
     s.title->setFont(bold);
+
+    auto* optionsButton = new QToolButton(panel);
+    optionsButton->setObjectName(QStringLiteral("toolWindowOptions"));
+    optionsButton->setAutoRaise(true);
+    optionsButton->setFocusPolicy(Qt::NoFocus);
+    optionsButton->setToolTip(text("Options"));
+    optionsButton->setText(QStringLiteral("⋮"));
+    optionsButton->setPopupMode(QToolButton::InstantPopup);
+    auto* optionsMenu = new QMenu(optionsButton);
+    optionsMenu->setObjectName(QStringLiteral("toolWindowOptionsMenu"));
+    connect(optionsMenu, &QMenu::aboutToShow, this, [this, which, optionsMenu] {
+        optionsMenu->clear();
+        const std::string shown = side(which).shown;
+        if (shown.empty()) {
+            return;
+        }
+        connect(optionsMenu->addAction(text("Expand Size (+60 px)")), &QAction::triggered, this,
+                [this, shown] { setSize(shown, size(shown) + 60); });
+        connect(optionsMenu->addAction(text("Shrink Size (-60 px)")), &QAction::triggered, this,
+                [this, shown] { setSize(shown, std::max(120, size(shown) - 60)); });
+        connect(optionsMenu->addAction(text("Reset Default Size")), &QAction::triggered, this,
+                [this, which, shown] { setSize(shown, which == ToolWindowSide::Bottom ? 220 : 280); });
+        optionsMenu->addSeparator();
+        connect(optionsMenu->addAction(text("Hide\tShift+Esc")), &QAction::triggered, this,
+                [this, shown] { hide(shown); });
+        connect(optionsMenu->addAction(text("Hide All Tool Windows\tCtrl+Shift+F12")), &QAction::triggered, this,
+                [this] { hideAll(); });
+    });
+    optionsButton->setMenu(optionsMenu);
+
     auto* hideButton = new QToolButton(panel);
     hideButton->setObjectName(QStringLiteral("toolWindowHide"));
     hideButton->setAutoRaise(true);
-    hideButton->setToolTip(text("Hide"));
+    hideButton->setFocusPolicy(Qt::NoFocus);
+    hideButton->setToolTip(text("Hide (Shift+Esc)"));
     const QIcon minimize = shell_detail::themedIcon(icons::kWindowMinimize);
     if (minimize.isNull()) {
         hideButton->setText(QStringLiteral("–"));
@@ -221,7 +253,9 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
     });
     auto* header = new QHBoxLayout();
     header->setContentsMargins(10, 4, 6, 4);
+    header->setSpacing(2);
     header->addWidget(s.title, 1);
+    header->addWidget(optionsButton);
     header->addWidget(hideButton);
     auto* separator = new QFrame(panel);
     separator->setObjectName(QStringLiteral("toolWindowHeaderSeparator"));

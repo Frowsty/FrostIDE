@@ -19,6 +19,8 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
@@ -71,6 +73,31 @@ void EditorTabBar::contextMenuEvent(QContextMenuEvent* event) {
     if (index >= 0) {
         emit contextMenuRequested(index, event->globalPos());
         event->accept();
+    }
+}
+
+void EditorTabBar::paintEvent(QPaintEvent* event) {
+    QTabBar::paintEvent(event);
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QColor border = palette().color(QPalette::Mid);
+    border.setAlpha(75);
+    painter.setPen(QPen(border, 1.0));
+    painter.drawLine(0, height() - 1, width(), height() - 1);
+
+    const int current = currentIndex();
+    if (current >= 0 && current < count()) {
+        const QRect activeRect = tabRect(current);
+        QColor underline = palette().color(QPalette::Highlight);
+        if (!underline.isValid() || underline.alpha() == 0) {
+            underline = QColor(0x35, 0x74, 0xF0);
+        }
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(underline);
+        painter.drawRoundedRect(
+            QRectF(activeRect.left() + 2.0, activeRect.bottom() - 2.0, std::max(4.0, activeRect.width() - 4.0), 3.0),
+            1.5, 1.5);
     }
 }
 
@@ -291,6 +318,36 @@ void EditorTabGroup::closeAllButPinned() {
     }
 }
 
+void EditorTabGroup::closeTabsToLeft(int index) {
+    if (index <= 0 || index >= count()) {
+        return;
+    }
+    IEditorView* keep = editor(index);
+    for (int i = index - 1; i >= 0; --i) {
+        if (!isPinned(i)) {
+            static_cast<void>(close(i));
+        }
+    }
+    if (keep != nullptr) {
+        activate(indexOfEditor(keep));
+    }
+}
+
+void EditorTabGroup::closeTabsToRight(int index) {
+    if (index < 0 || index >= count() - 1) {
+        return;
+    }
+    IEditorView* keep = editor(index);
+    for (int i = count() - 1; i > index; --i) {
+        if (!isPinned(i)) {
+            static_cast<void>(close(i));
+        }
+    }
+    if (keep != nullptr) {
+        activate(indexOfEditor(keep));
+    }
+}
+
 void EditorTabGroup::setPinned(int index, bool pinned) {
     if (index < 0 || index >= count() || isPinned(index) == pinned) {
         return;
@@ -444,6 +501,12 @@ void EditorTabGroup::showContextMenu(int index, QPoint globalPos) {
     connect(menu.addAction(text("Close Other Tabs")), &QAction::triggered, this, [this, at] { closeOthers(at()); });
     connect(menu.addAction(text("Close All Tabs")), &QAction::triggered, this, [this] { closeAll(); });
     connect(menu.addAction(text("Close All but Pinned")), &QAction::triggered, this, [this] { closeAllButPinned(); });
+    QAction* closeLeft = menu.addAction(text("Close Tabs to the Left"));
+    closeLeft->setEnabled(index > 0);
+    connect(closeLeft, &QAction::triggered, this, [this, at] { closeTabsToLeft(at()); });
+    QAction* closeRight = menu.addAction(text("Close Tabs to the Right"));
+    closeRight->setEnabled(index + 1 < count());
+    connect(closeRight, &QAction::triggered, this, [this, at] { closeTabsToRight(at()); });
     menu.addSeparator();
     connect(menu.addAction(text("Split Right")), &QAction::triggered, this, [this, at] {
         activate(at());
@@ -459,8 +522,14 @@ void EditorTabGroup::showContextMenu(int index, QPoint globalPos) {
     const bool pinned = isPinned(index);
     connect(menu.addAction(pinned ? text("Unpin Tab") : text("Pin Tab")), &QAction::triggered, this,
             [this, at, pinned] { setPinned(at(), !pinned); });
+    menu.addSeparator();
     connect(menu.addAction(text("Copy Path")), &QAction::triggered, this,
             [view] { QApplication::clipboard()->setText(QDir::toNativeSeparators(fromUtf8(view->path()))); });
+    connect(menu.addAction(text("Copy File Name")), &QAction::triggered, this,
+            [view] { QApplication::clipboard()->setText(QFileInfo(fromUtf8(view->path())).fileName()); });
+    menu.addSeparator();
+    connect(menu.addAction(text("Select Next Tab")), &QAction::triggered, this, [this] { activateNext(); });
+    connect(menu.addAction(text("Select Previous Tab")), &QAction::triggered, this, [this] { activatePrevious(); });
     menu.exec(globalPos);
 }
 
@@ -754,6 +823,8 @@ void EditorTabs::closeAll() {
         group->closeAll();
 }
 void EditorTabs::closeAllButPinned() { m_active->closeAllButPinned(); }
+void EditorTabs::closeTabsToLeft(int index) { m_active->closeTabsToLeft(index); }
+void EditorTabs::closeTabsToRight(int index) { m_active->closeTabsToRight(index); }
 void EditorTabs::setPinned(int index, bool pinned) { m_active->setPinned(index, pinned); }
 bool EditorTabs::isPinned(int index) const { return m_active->isPinned(index); }
 bool EditorTabs::isDirty(int index) const { return m_active->isDirty(index); }

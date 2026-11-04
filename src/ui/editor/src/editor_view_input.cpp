@@ -665,6 +665,11 @@ QMenu* EditorView::createContextMenu(QWidget* parent) {
     connect(reformatAction, &QAction::triggered, this,
             [this] { emit contextActionRequested(QStringLiteral("code.reformat")); });
 
+    QAction* toggleBpAction = menu->addAction(QStringLiteral("Toggle Line Breakpoint"));
+    toggleBpAction->setObjectName(QStringLiteral("contextToggleBreakpoint"));
+    connect(toggleBpAction, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("debug.toggleBreakpoint")); });
+
     menu->addSeparator();
 
     QAction* cutAction = menu->addAction(QStringLiteral("Cut"));

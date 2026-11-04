@@ -8,17 +8,140 @@
 
 #include "shell_util.hpp"
 #include <QFont>
+#include <QFrame>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
+#include <QStyledItemDelegate>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <utility>
 
 namespace frost::ui {
+
+namespace {
+
+constexpr int kPrimaryTextRole = Qt::UserRole + 1;
+constexpr int kDetailTextRole = Qt::UserRole + 2;
+constexpr int kHeaderRole = Qt::UserRole + 3;
+constexpr int kEnabledRole = Qt::UserRole + 4;
+
+class ListPopupItemDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        const bool isHeader = index.data(kHeaderRole).toBool();
+        const int h = std::max(isHeader ? 26 : 28, option.fontMetrics.height() + (isHeader ? 8 : 10));
+        return QSize(option.rect.width(), h);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+
+        const QRect rect = option.rect.adjusted(4, 1, -4, -1);
+        const bool isHeader = index.data(kHeaderRole).toBool();
+        const QVariant enabledVar = index.data(kEnabledRole);
+        const bool isEnabled = !enabledVar.isValid() || enabledVar.toBool();
+        QString primary = index.data(kPrimaryTextRole).toString();
+        const QString detail = index.data(kDetailTextRole).toString();
+        if (primary.isEmpty()) {
+            primary = index.data(Qt::DisplayRole).toString();
+        }
+
+        if (isHeader) {
+            QFont headerFont = option.font;
+            headerFont.setBold(true);
+            if (headerFont.pointSizeF() > 8.0) {
+                headerFont.setPointSizeF(headerFont.pointSizeF() * 0.9);
+            }
+            painter->setFont(headerFont);
+            QColor muted = option.palette.color(QPalette::PlaceholderText);
+            if (!muted.isValid() || muted.alpha() == 0) {
+                muted = option.palette.color(QPalette::Text);
+                muted.setAlpha(155);
+            }
+            painter->setPen(muted);
+            const QFontMetrics fm(headerFont);
+            const int textWidth = fm.horizontalAdvance(primary);
+            const QRect textRect(rect.left() + 6, rect.top(), textWidth + 6, rect.height());
+            painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, primary);
+
+            QColor lineColor = option.palette.color(QPalette::Mid);
+            lineColor.setAlpha(85);
+            painter->setPen(QPen(lineColor, 1.0));
+            const int lineY = rect.center().y();
+            const int lineLeft = textRect.right() + 8;
+            if (lineLeft < rect.right() - 6) {
+                painter->drawLine(lineLeft, lineY, rect.right() - 6, lineY);
+            }
+            painter->restore();
+            return;
+        }
+
+        const bool selected = (option.state & QStyle::State_Selected) != 0;
+        const bool hovered = (option.state & QStyle::State_MouseOver) != 0;
+        if (selected || hovered) {
+            QColor fill = option.palette.color(QPalette::Highlight);
+            fill.setAlpha(selected ? 65 : 28);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(fill);
+            painter->drawRoundedRect(rect, 5.0, 5.0);
+        }
+
+        int leftX = rect.left() + 8;
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        if (!icon.isNull()) {
+            const QRect iconRect(leftX, rect.top() + (rect.height() - 16) / 2, 16, 16);
+            icon.paint(painter, iconRect, Qt::AlignCenter, isEnabled ? QIcon::Normal : QIcon::Disabled);
+            leftX = iconRect.right() + 8;
+        }
+
+        int rightLimit = rect.right() - 8;
+        if (!detail.isEmpty()) {
+            QFont detailFont = option.font;
+            if (detailFont.pointSizeF() > 8.0) {
+                detailFont.setPointSizeF(detailFont.pointSizeF() * 0.92);
+            }
+            painter->setFont(detailFont);
+            QColor detailColor = option.palette.color(QPalette::PlaceholderText);
+            if (!detailColor.isValid() || detailColor.alpha() == 0) {
+                detailColor = option.palette.color(QPalette::Text);
+                detailColor.setAlpha(isEnabled ? 150 : 95);
+            } else if (!isEnabled) {
+                detailColor.setAlpha(95);
+            }
+            painter->setPen(detailColor);
+            const QFontMetrics detailFm(detailFont);
+            const int maxDetailWidth = std::max(60, rect.width() / 2);
+            const QString elidedDetail = detailFm.elidedText(detail, Qt::ElideMiddle, maxDetailWidth);
+            const int detailWidth = detailFm.horizontalAdvance(elidedDetail);
+            const QRect detailRect(rightLimit - detailWidth, rect.top(), detailWidth, rect.height());
+            painter->drawText(detailRect, Qt::AlignRight | Qt::AlignVCenter, elidedDetail);
+            rightLimit = detailRect.left() - 12;
+        }
+
+        painter->setFont(option.font);
+        QColor textColor = option.palette.color(isEnabled ? QPalette::Active : QPalette::Disabled, QPalette::Text);
+        if (!isEnabled && textColor == option.palette.color(QPalette::Active, QPalette::Text)) {
+            textColor.setAlpha(115);
+        }
+        painter->setPen(textColor);
+        const int availWidth = std::max(24, rightLimit - leftX);
+        const QFontMetrics mainFm(option.font);
+        const QRect mainRect(leftX, rect.top(), availWidth, rect.height());
+        painter->drawText(mainRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          mainFm.elidedText(primary, Qt::ElideRight, availWidth));
+
+        painter->restore();
+    }
+};
+
+} // namespace
 
 Popup::Popup(QWidget* owner) : QFrame(owner, Qt::Popup | Qt::FramelessWindowHint) {
     setObjectName(QStringLiteral("frostPopup"));
@@ -100,20 +223,43 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     : Popup(owner), m_title(new QLabel(title, this)), m_filter(new QLineEdit(this)), m_list(new QListWidget(this)) {
     setObjectName(QStringLiteral("listPopup"));
     m_title->setObjectName(QStringLiteral("popupTitle"));
+    QFont titleFont = m_title->font();
+    titleFont.setBold(true);
+    m_title->setFont(titleFont);
     m_title->setVisible(!title.isEmpty());
     m_filter->setObjectName(QStringLiteral("popupFilter"));
     m_filter->setVisible(filterable);
+    m_filter->setClearButtonEnabled(true);
+    m_filter->setMinimumHeight(28);
     m_filter->setPlaceholderText(shell_detail::text("Type to filter"));
     m_list->setObjectName(QStringLiteral("popupList"));
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setFrameShape(QFrame::NoFrame);
-    m_list->setUniformItemSizes(true);
+    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_list->setItemDelegate(new ListPopupItemDelegate(m_list));
+    m_list->viewport()->setAttribute(Qt::WA_Hover, true);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(6, 6, 6, 6);
-    layout->setSpacing(4);
+    layout->setContentsMargins(8, 8, 8, 6);
+    layout->setSpacing(6);
     layout->addWidget(m_title);
     layout->addWidget(m_filter);
+    auto* topDivider = new QFrame(this);
+    topDivider->setFrameShape(QFrame::HLine);
+    topDivider->setFrameShadow(QFrame::Plain);
+    layout->addWidget(topDivider);
     layout->addWidget(m_list, 1);
+    auto* footer = new QLabel(
+        filterable
+            ? shell_detail::text("Enter to accept  •  Up/Down to navigate  •  Tab to switch scope  •  Esc to close")
+            : shell_detail::text("Enter to switch  •  Up/Down to navigate  •  Esc to cancel"),
+        this);
+    footer->setObjectName(QStringLiteral("popupFooter"));
+    QFont footerFont = footer->font();
+    if (footerFont.pointSizeF() > 8.0) {
+        footerFont.setPointSizeF(footerFont.pointSizeF() * 0.88);
+    }
+    footer->setFont(footerFont);
+    layout->addWidget(footer);
     setFocusProxy(filterable ? static_cast<QWidget*>(m_filter) : m_list);
     m_filter->installEventFilter(this);
     m_list->installEventFilter(this);
@@ -122,7 +268,7 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
         emit filterTextChanged(value);
     });
     connect(m_list, &QListWidget::itemActivated, this, [this] { acceptCurrent(); });
-    resize(480, 320);
+    resize(580, 380);
 }
 
 void ListPopup::setFilterMode(FilterMode mode) {
@@ -146,6 +292,10 @@ void ListPopup::setItems(std::vector<ListPopupItem> items) {
         }
         auto* row = new QListWidgetItem(item.icon, label, m_list);
         row->setData(Qt::UserRole, static_cast<int>(i));
+        row->setData(kPrimaryTextRole, item.text);
+        row->setData(kDetailTextRole, item.detail);
+        row->setData(kHeaderRole, item.header);
+        row->setData(kEnabledRole, item.enabled);
         if (item.header) {
             row->setFlags(Qt::NoItemFlags);
             QFont font = row->font();

@@ -97,6 +97,7 @@ constexpr std::array kViewMenu{
     act(a::kCommitWindow),
     act("window.find"),
     act(a::kRunWindow),
+    act("window.debug"),
     act(a::kProblemsWindow),
     act("window.todo"),
     act("window.structure"),
@@ -176,6 +177,10 @@ constexpr std::array kCodeMenu{
     act("editor.foldCollapseAll"),
 };
 
+constexpr std::array kRefactorMenu{
+    act("refactor.rename"),
+};
+
 // The build tool windows' actions (frost/ui/toolwindows/build_actions.hpp, ADR 0039).
 constexpr std::array kBuildMenu{
     act("build.buildSolution"), act("build.rebuildSolution"), act("build.cleanSolution"), sep(),
@@ -189,6 +194,16 @@ constexpr std::array kRunMenu{
     sep(),
     act("run.selectConfiguration"),
     act("run.selectDebugConfiguration"),
+    sep(),
+    act("debug.resume"),
+    act("debug.pause"),
+    act("debug.stepOver"),
+    act("debug.stepInto"),
+    act("debug.stepOut"),
+    act("debug.runToCursor"),
+    act("debug.evaluate"),
+    sep(),
+    act("debug.toggleBreakpoint"),
 };
 
 constexpr std::array kGitMenu{
@@ -215,11 +230,12 @@ constexpr std::array kHelpMenu{
 };
 
 constexpr std::array kDefaultMenus{
-    MenuDefinition{"&File", kFileMenu},     MenuDefinition{"&Edit", kEditMenu},
-    MenuDefinition{"&View", kViewMenu},     MenuDefinition{"&Navigate", kNavigateMenu},
-    MenuDefinition{"&Code", kCodeMenu},     MenuDefinition{"&Build", kBuildMenu},
-    MenuDefinition{"&Run", kRunMenu},       MenuDefinition{"&Git", kGitMenu},
-    MenuDefinition{"&Window", kWindowMenu}, MenuDefinition{"&Help", kHelpMenu},
+    MenuDefinition{"&File", kFileMenu},   MenuDefinition{"&Edit", kEditMenu},
+    MenuDefinition{"&View", kViewMenu},   MenuDefinition{"&Navigate", kNavigateMenu},
+    MenuDefinition{"&Code", kCodeMenu},   MenuDefinition{"&Refactor", kRefactorMenu},
+    MenuDefinition{"&Build", kBuildMenu}, MenuDefinition{"&Run", kRunMenu},
+    MenuDefinition{"&Git", kGitMenu},     MenuDefinition{"&Window", kWindowMenu},
+    MenuDefinition{"&Help", kHelpMenu},
 };
 
 // True when `menu` shows any item that is not a separator.
