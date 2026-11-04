@@ -107,8 +107,8 @@ BUILD_TOOL_EXCEPTIONS = {
 # input-context plugin. EntryPoint is Qt's static WinMain shim (BSD-3-Clause), linked
 # implicitly into Windows GUI executables.
 QT_RUNTIME_MODULES = {
-    "windows": frozenset({"Core", "Gui", "Widgets", "Network", "EntryPoint"}),
-    "linux": frozenset({"Core", "Gui", "Widgets", "Network", "DBus", "XcbQpa", "WaylandClient"}),
+    "windows": frozenset({"Core", "Gui", "Widgets", "Network", "Svg", "EntryPoint"}),
+    "linux": frozenset({"Core", "Gui", "Widgets", "Network", "Svg", "DBus", "XcbQpa", "WaylandClient"}),
 }
 # Plugins allowed at runtime, as "<plugin dir>/<file stem>". The offscreen platform
 # plugin ships next to frost because `frost --selftest` uses it (PLAN.md M0).

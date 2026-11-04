@@ -174,7 +174,7 @@ if ($Config -ne 'Debug' -or $BundleTools) {
 $mode = if ($Config -eq 'Debug') { '--debug' } else { '--release' }
 $deployArgs = @($mode, '--no-translations', '--no-compiler-runtime', '--no-system-d3d-compiler',
     '--no-system-dxc-compiler', '--no-opengl-sw', '--no-ffmpeg',
-    '--no-plugins', '--no-svg', '--dir', $Destination,
+    '--no-plugins', '--dir', $Destination,
     (Join-Path $Destination 'frost_app.dll'))
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
