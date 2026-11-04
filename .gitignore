@@ -9,9 +9,12 @@
 /.idea/
 /.vscode/
 /.cache/
-# Claude Code agent worktrees and local settings.
-/.claude/worktrees/
-/.claude/settings.local.json
+# Local assistant files and directories.
+/CLAUDE.md
+/AGENTS.md
+/CODEX.md
+/.claude/
+/.codex/
 /continue.txt
 CMakeUserPresets.json
 # ...except the CMake presets fixture's user file, which the tests read (ADR 0046).
