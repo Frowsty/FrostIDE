@@ -40,6 +40,7 @@
 #include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #ifdef _WIN32
@@ -737,59 +738,107 @@ void ShellWindow::hideEvent(QHideEvent* event) {
 
 void ShellWindow::changeEvent(QEvent* event) {
     QMainWindow::changeEvent(event);
-    if (event != nullptr && event->type() == QEvent::WindowStateChange && m_toolbar != nullptr) {
-        if (QToolButton* maxBtn = m_toolbar->maximizeButton(); maxBtn != nullptr) {
-            maxBtn->update();
+    if (event != nullptr && event->type() == QEvent::WindowStateChange) {
+        syncNativeWindowFrame();
+        if (m_toolbar != nullptr) {
+            if (QToolButton* maxBtn = m_toolbar->maximizeButton(); maxBtn != nullptr) {
+                maxBtn->update();
+            }
         }
     }
 }
 
 bool ShellWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
 #ifdef _WIN32
-    if ((windowFlags() & Qt::FramelessWindowHint) != 0 && !isMaximized() && !isFullScreen() &&
-        eventType == "windows_generic_MSG" && message != nullptr && result != nullptr) {
+    if ((windowFlags() & Qt::FramelessWindowHint) != 0 && eventType == "windows_generic_MSG" && message != nullptr &&
+        result != nullptr) {
         const auto* msg = static_cast<const MSG*>(message);
+        if (msg->message == WM_NCCALCSIZE && msg->wParam == TRUE) {
+            if (IsZoomed(msg->hwnd) != FALSE) {
+                auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+                const int frameX = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                const int frameY = GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                params->rgrc[0].left += frameX;
+                params->rgrc[0].top += frameY;
+                params->rgrc[0].right -= frameX;
+                params->rgrc[0].bottom -= frameY;
+            }
+            *result = 0;
+            return true;
+        }
         if (msg->message == WM_NCHITTEST && msg->hwnd == reinterpret_cast<HWND>(winId())) {
-            RECT winRect{};
-            if (GetWindowRect(msg->hwnd, &winRect) != FALSE) {
-                const LONG x = static_cast<short>(LOWORD(msg->lParam));
-                const LONG y = static_cast<short>(HIWORD(msg->lParam));
-                constexpr LONG kResizeBorder = 6;
-                const bool left = x >= winRect.left && x < winRect.left + kResizeBorder;
-                const bool right = x <= winRect.right && x > winRect.right - kResizeBorder;
-                const bool top = y >= winRect.top && y < winRect.top + kResizeBorder;
-                const bool bottom = y <= winRect.bottom && y > winRect.bottom - kResizeBorder;
-                if (top && left) {
-                    *result = HTTOPLEFT;
-                    return true;
+            const LONG x = static_cast<short>(LOWORD(msg->lParam));
+            const LONG y = static_cast<short>(HIWORD(msg->lParam));
+            if (!isMaximized() && !isFullScreen()) {
+                RECT winRect{};
+                if (GetWindowRect(msg->hwnd, &winRect) != FALSE) {
+                    constexpr LONG kResizeBorder = 6;
+                    const bool left = x >= winRect.left && x < winRect.left + kResizeBorder;
+                    const bool right = x <= winRect.right && x > winRect.right - kResizeBorder;
+                    const bool top = y >= winRect.top && y < winRect.top + kResizeBorder;
+                    const bool bottom = y <= winRect.bottom && y > winRect.bottom - kResizeBorder;
+                    if (top && left) {
+                        *result = HTTOPLEFT;
+                        return true;
+                    }
+                    if (top && right) {
+                        *result = HTTOPRIGHT;
+                        return true;
+                    }
+                    if (bottom && left) {
+                        *result = HTBOTTOMLEFT;
+                        return true;
+                    }
+                    if (bottom && right) {
+                        *result = HTBOTTOMRIGHT;
+                        return true;
+                    }
+                    if (left) {
+                        *result = HTLEFT;
+                        return true;
+                    }
+                    if (right) {
+                        *result = HTRIGHT;
+                        return true;
+                    }
+                    if (top) {
+                        *result = HTTOP;
+                        return true;
+                    }
+                    if (bottom) {
+                        *result = HTBOTTOM;
+                        return true;
+                    }
                 }
-                if (top && right) {
-                    *result = HTTOPRIGHT;
-                    return true;
-                }
-                if (bottom && left) {
-                    *result = HTBOTTOMLEFT;
-                    return true;
-                }
-                if (bottom && right) {
-                    *result = HTBOTTOMRIGHT;
-                    return true;
-                }
-                if (left) {
-                    *result = HTLEFT;
-                    return true;
-                }
-                if (right) {
-                    *result = HTRIGHT;
-                    return true;
-                }
-                if (top) {
-                    *result = HTTOP;
-                    return true;
-                }
-                if (bottom) {
-                    *result = HTBOTTOM;
-                    return true;
+            }
+            if (m_toolbar != nullptr && m_toolbar->isVisible()) {
+                POINT pt{x, y};
+                if (ScreenToClient(msg->hwnd, &pt) != FALSE) {
+                    const qreal dpr = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
+                    const QPoint winPos(qRound(pt.x / dpr), qRound(pt.y / dpr));
+                    const QPoint toolbarPos = m_toolbar->mapFrom(this, winPos);
+                    if (m_toolbar->rect().contains(toolbarPos)) {
+                        QWidget* child = m_toolbar->childAt(toolbarPos);
+                        bool interactive = false;
+                        for (QWidget* w = child; w != nullptr && w != m_toolbar; w = w->parentWidget()) {
+                            if (const auto* btn = qobject_cast<const QToolButton*>(w)) {
+                                if (btn->isEnabled() && (btn != m_toolbar->projectButton() || btn->menu() != nullptr)) {
+                                    interactive = true;
+                                }
+                                break;
+                            }
+                            if (const auto* combo = qobject_cast<const QComboBox*>(w)) {
+                                if (combo->isEnabled()) {
+                                    interactive = true;
+                                }
+                                break;
+                            }
+                        }
+                        if (!interactive) {
+                            *result = HTCAPTION;
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -807,15 +856,40 @@ void ShellWindow::syncNativeWindowFrame() {
     if (hwnd == nullptr) {
         return;
     }
-    using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
-    static const DwmSetWindowAttributeFn setAttr = []() -> DwmSetWindowAttributeFn {
-        HMODULE dwm = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (dwm == nullptr) {
-            return nullptr;
+    if ((windowFlags() & Qt::FramelessWindowHint) != 0) {
+        // Restore WS_THICKFRAME | WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU while
+        // WM_NCCALCSIZE removes the standard frame so Windows Aero Snap / Windows 11 Snap Docking,
+        // Win+Arrow shortcuts, and drag-from-maximized restore work natively.
+        const LONG_PTR currentStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        const LONG_PTR desiredStyle = (currentStyle & ~static_cast<LONG_PTR>(WS_POPUP)) | WS_OVERLAPPED |
+                                      WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+        if (currentStyle != desiredStyle) {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, desiredStyle);
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         }
-        return reinterpret_cast<DwmSetWindowAttributeFn>(
-            reinterpret_cast<void*>(GetProcAddress(dwm, "DwmSetWindowAttribute")));
-    }();
+    }
+    struct NativeMargins {
+        int leftWidth;
+        int rightWidth;
+        int topHeight;
+        int bottomHeight;
+    };
+    using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    using DwmExtendFrameIntoClientAreaFn = HRESULT(WINAPI*)(HWND, const NativeMargins*);
+    static const HMODULE dwmModule = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    static const DwmSetWindowAttributeFn setAttr =
+        dwmModule == nullptr ? nullptr
+                             : reinterpret_cast<DwmSetWindowAttributeFn>(
+                                   reinterpret_cast<void*>(GetProcAddress(dwmModule, "DwmSetWindowAttribute")));
+    static const DwmExtendFrameIntoClientAreaFn extendFrame =
+        dwmModule == nullptr ? nullptr
+                             : reinterpret_cast<DwmExtendFrameIntoClientAreaFn>(
+                                   reinterpret_cast<void*>(GetProcAddress(dwmModule, "DwmExtendFrameIntoClientArea")));
+    if (extendFrame != nullptr && (windowFlags() & Qt::FramelessWindowHint) != 0) {
+        const NativeMargins margins{0, 0, 1, 0};
+        extendFrame(hwnd, &margins);
+    }
     if (setAttr == nullptr) {
         return;
     }
