@@ -662,6 +662,23 @@ TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
     auto* popup = qobject_cast<frost::ui::ListPopup*>(window.activePopup());
     ASSERT_NE(popup, nullptr);
     EXPECT_EQ(popup->visibleCount(), 15);
+    EXPECT_NE(popup->findChild<QLabel*>(QStringLiteral("popupFooter")), nullptr);
+
+    // Refactor and Run/Debug actions are wired in ShellMenus.
+    EXPECT_NE(window.menus().menu("&Refactor"), nullptr);
+    EXPECT_NE(window.menus().action("refactor.rename"), nullptr);
+    EXPECT_NE(window.menus().action("debug.toggleBreakpoint"), nullptr);
+    EXPECT_NE(window.menus().action("debug.stepOver"), nullptr);
+
+    // Tool window headers expose Rider's Options (⋮) menu alongside Hide.
+    window.toolWindows().show(tool_windows::kProject, false);
+    auto* leftPanel = window.findChild<QWidget*>(QStringLiteral("toolWindowPanel.left"));
+    ASSERT_NE(leftPanel, nullptr);
+    auto* optionsBtn = leftPanel->findChild<QToolButton*>(QStringLiteral("toolWindowOptions"));
+    ASSERT_NE(optionsBtn, nullptr);
+    ASSERT_NE(optionsBtn->menu(), nullptr);
+    QMetaObject::invokeMethod(optionsBtn->menu(), "aboutToShow", Qt::DirectConnection);
+    EXPECT_GE(optionsBtn->menu()->actions().size(), 4);
 }
 
 } // namespace

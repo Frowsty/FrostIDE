@@ -997,6 +997,12 @@ void Workbench::attach(ui::ShellWindow& window) {
         }
         refreshRecent();
     });
+    connect(welcome, &WelcomeScreen::quickSwitchThemeRequested, this, [this] {
+        if (m_window) {
+            (void)m_window->showQuickSwitchTheme();
+        }
+    });
+    connect(welcome, &WelcomeScreen::settingsRequested, this, [this] { showSettings(); });
     refreshRecent();
 
     // Build: auto-show rules (ADR 0044) and gutter markers.

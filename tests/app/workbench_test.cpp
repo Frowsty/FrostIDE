@@ -1817,4 +1817,32 @@ TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
     }
 }
 
+TEST(Workbench, WelcomeScreenTwoPaneLayoutAndLiveProjectSearch) {
+    WorkDir dir("welcome-two-pane");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    auto* welcome = rig.workbench->welcomeScreen();
+    ASSERT_NE(welcome, nullptr);
+    ASSERT_NE(welcome->navigationList(), nullptr);
+    EXPECT_EQ(welcome->navigationList()->count(), 3);
+    ASSERT_NE(welcome->searchField(), nullptr);
+
+    welcome->setRecentProjects({dir.join("AlphaEngine"), dir.join("BetaGame"), dir.join("GammaTools")});
+    ASSERT_EQ(welcome->recentList()->count(), 3);
+    EXPECT_FALSE(welcome->recentList()->item(0)->isHidden());
+    EXPECT_FALSE(welcome->recentList()->item(1)->isHidden());
+    EXPECT_FALSE(welcome->recentList()->item(2)->isHidden());
+
+    welcome->searchField()->setText(QStringLiteral("Beta"));
+    EXPECT_TRUE(welcome->recentList()->item(0)->isHidden());
+    EXPECT_FALSE(welcome->recentList()->item(1)->isHidden());
+    EXPECT_TRUE(welcome->recentList()->item(2)->isHidden());
+
+    welcome->searchField()->clear();
+    EXPECT_FALSE(welcome->recentList()->item(0)->isHidden());
+    EXPECT_FALSE(welcome->recentList()->item(1)->isHidden());
+    EXPECT_FALSE(welcome->recentList()->item(2)->isHidden());
+}
+
 } // namespace

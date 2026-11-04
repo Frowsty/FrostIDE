@@ -15,9 +15,11 @@
 #include <string>
 #include <vector>
 
+class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
+class QStackedWidget;
 
 namespace frost::app {
 
@@ -34,6 +36,8 @@ public:
     [[nodiscard]] std::vector<std::string> recentProjects() const;
 
     [[nodiscard]] QListWidget* recentList() const noexcept { return m_recent; }
+    [[nodiscard]] QLineEdit* searchField() const noexcept { return m_search; }
+    [[nodiscard]] QListWidget* navigationList() const noexcept { return m_navList; }
     [[nodiscard]] QPushButton* newProjectButton() const noexcept { return m_newProject; }
     [[nodiscard]] QPushButton* openButton() const noexcept { return m_open; }
     [[nodiscard]] QPushButton* openFolderButton() const noexcept { return m_openFolder; }
@@ -49,13 +53,19 @@ signals:
     void openFolderRequested();
     void openRecent(const QString& path);
     void removeRecent(const QString& path);
+    void quickSwitchThemeRequested();
+    void settingsRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void showContextMenu(const QPoint& position);
+    void filterRecentProjects(const QString& query);
 
+    QListWidget* m_navList = nullptr;
+    QStackedWidget* m_pages = nullptr;
+    QLineEdit* m_search = nullptr;
     QPushButton* m_newProject = nullptr;
     QPushButton* m_open = nullptr;
     QPushButton* m_openFolder = nullptr;

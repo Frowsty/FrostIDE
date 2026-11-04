@@ -304,4 +304,27 @@ TEST(EditorTabs, TabListShowsEveryTabWhenOverflowing) {
     EXPECT_EQ(tabs.currentIndex(), 0);
 }
 
+TEST(EditorTabs, CloseTabsToLeftAndRightPreservePinnedTabs) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    for (const char* path : {"/a.cpp", "/b.cpp", "/c.cpp", "/d.cpp", "/e.cpp"}) {
+        ASSERT_TRUE(tabs.open(path).has_value());
+    }
+    tabs.setPinned(tabs.indexOf("/a.cpp"), true);
+    // Order is now: /a.cpp (pinned), /b.cpp, /c.cpp, /d.cpp, /e.cpp.
+    tabs.closeTabsToLeft(tabs.indexOf("/d.cpp"));
+    EXPECT_EQ(tabs.count(), 3);
+    EXPECT_NE(tabs.indexOf("/a.cpp"), -1);
+    EXPECT_EQ(tabs.indexOf("/b.cpp"), -1);
+    EXPECT_EQ(tabs.indexOf("/c.cpp"), -1);
+    EXPECT_NE(tabs.indexOf("/d.cpp"), -1);
+    EXPECT_NE(tabs.indexOf("/e.cpp"), -1);
+
+    tabs.closeTabsToRight(tabs.indexOf("/d.cpp"));
+    EXPECT_EQ(tabs.count(), 2);
+    EXPECT_NE(tabs.indexOf("/a.cpp"), -1);
+    EXPECT_NE(tabs.indexOf("/d.cpp"), -1);
+    EXPECT_EQ(tabs.indexOf("/e.cpp"), -1);
+}
+
 } // namespace
