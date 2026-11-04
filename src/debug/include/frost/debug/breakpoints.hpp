@@ -61,6 +61,10 @@ struct LineBreakpoint {
     std::int64_t line = 0; // 1-based.
     BreakpointStatus status = BreakpointStatus::Unknown;
     std::string message; // The adapter's reason when Unverified.
+    bool enabled = true;
+    std::string condition{};
+    std::string hitCondition{};
+    std::string logMessage{};
 
     friend bool operator==(const LineBreakpoint&, const LineBreakpoint&) = default;
 };
@@ -83,10 +87,17 @@ public:
     // Removes every breakpoint.
     void clear();
 
+    bool setEnabled(BreakpointId id, bool enabled);
+    bool setProperties(BreakpointId id, std::string condition, std::string hitCondition, std::string logMessage);
+    [[nodiscard]] bool muted() const noexcept { return m_muted; }
+    void setMuted(bool muted);
+
     [[nodiscard]] std::optional<LineBreakpoint> find(BreakpointId id) const;
     [[nodiscard]] std::optional<LineBreakpoint> at(std::string_view path, std::int64_t line) const;
     // The breakpoints of `path`, by line.
     [[nodiscard]] std::vector<LineBreakpoint> inFile(std::string_view path) const;
+    // All breakpoints across all files, ordered by file and line.
+    [[nodiscard]] std::vector<LineBreakpoint> all() const;
     // Every file with breakpoints (each as first given), sorted.
     [[nodiscard]] std::vector<std::string> files() const;
     [[nodiscard]] std::size_t size() const noexcept { return m_byId.size(); }
@@ -130,7 +141,10 @@ private:
     std::map<std::string, std::string, std::less<>> m_displayPath; // key -> path as first given.
     std::uint64_t m_nextToken = 1;
     std::map<std::uint64_t, Listener> m_listeners;
+    bool m_muted = false;
 };
+
+using BreakpointStore = BreakpointManager;
 
 // Keeps the breakpoints of one open document on their lines through its edits (header comment).
 // Borrows both; destroy it before either. Not thread-safe.

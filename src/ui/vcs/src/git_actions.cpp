@@ -34,42 +34,10 @@ constexpr input::ContextRule kAnywhere{{}, {input::ContextKey::DialogFocus}};
 constexpr input::ContextRule kCommitView{{input::ContextKey::CommitViewFocus}, {input::ContextKey::DialogFocus}};
 constexpr input::ContextRule kDiffView{{input::ContextKey::DiffViewFocus}, {input::ContextKey::DialogFocus}};
 
-} // namespace
-
-Result<std::vector<input::Binding>> gitShortcutBindings() {
-    std::vector<input::Binding> bindings;
-    for (const GitShortcutDefault& entry : kGitShortcutDefaults) {
-        if (entry.shortcut.empty()) {
-            continue;
-        }
-        auto sequence = input::parseSequence(entry.shortcut, input::SyntaxMode::Strict);
-        if (!sequence) {
-            return fail(ErrorCode::InvalidArgument,
-                        std::format("the default shortcut '{}' of {} does not parse: {}", entry.shortcut,
-                                    entry.actionId, sequence.error().message()));
-        }
-        bindings.push_back(input::Binding{std::string(entry.actionId), {*sequence}});
-    }
-    return bindings;
-}
-
-Result<void> registerGitActions(input::ActionRegistry& registry, GitController& controller, GitActionTargets targets) {
-    const QPointer<GitController> fixed(&controller);
-    return registerGitActions(registry, [fixed] { return fixed.data(); }, std::move(targets));
-}
-
-Result<void> registerGitActions(input::ActionRegistry& registry, std::function<GitController*()> git,
-                                GitActionTargets targets) {
-    const auto shared = std::make_shared<const GitActionTargets>(std::move(targets));
-    const auto confirm = [shared](const QString& title, const QString& question) {
-        return shared->confirm && shared->confirm(title, question);
-    };
-    const auto file = [shared]() { return shared->currentFile ? shared->currentFile() : std::string(); };
-    const auto viewer = [shared]() -> DiffViewer* {
-        return shared->activeDiffViewer ? shared->activeDiffViewer() : nullptr;
-    };
-
-    std::vector<GitActionSpec> specs;
+void appendRemoteAndCommitSpecs(std::vector<GitActionSpec>& specs, const std::function<GitController*()>& git,
+                                const std::shared_ptr<const GitActionTargets>& shared,
+                                const std::function<bool(const QString&, const QString&)>& confirm,
+                                const std::function<std::string()>& file) {
     specs.push_back({git_actions::kTrustRepository,
                      "Trust Git Repository...",
                      "Review trust for this repository",
@@ -158,6 +126,11 @@ Result<void> registerGitActions(input::ActionRegistry& registry, std::function<G
                      original->rollback({path});
              }
          }});
+}
+
+void appendViewAndHistorySpecs(std::vector<GitActionSpec>& specs, const std::function<GitController*()>& git,
+                               const std::shared_ptr<const GitActionTargets>& shared,
+                               const std::function<std::string()>& file, const std::function<DiffViewer*()>& viewer) {
     specs.push_back({git_actions::kShowDiff,
                      "Show Diff",
                      "Show the diff of the selected change",
@@ -190,6 +163,61 @@ Result<void> registerGitActions(input::ActionRegistry& registry, std::function<G
                      false,
                      [shared] { return static_cast<bool>(shared->showBranches); },
                      [shared] { shared->showBranches(); }});
+    specs.push_back({git_actions::kLog,
+                     "Show Git Log",
+                     "Open the Git commit history log",
+                     {"git log", "history", "commits"},
+                     kAnywhere,
+                     false,
+                     {},
+                     [shared] {
+                         if (shared->showLog) {
+                             shared->showLog();
+                         }
+                     }});
+    specs.push_back({git_actions::kStash,
+                     "Stash Changes...",
+                     "Save uncommitted local changes to a new Git stash entry",
+                     {"git stash", "shelve"},
+                     kAnywhere,
+                     true,
+                     {},
+                     [git, shared] {
+                         if (shared->stashChanges) {
+                             shared->stashChanges();
+                         } else {
+                             git()->stashPush();
+                         }
+                     }});
+    specs.push_back({git_actions::kUnstash,
+                     "Unstash Changes...",
+                     "Apply or pop stashed changes back to the working tree",
+                     {"git stash pop", "unshelve"},
+                     kAnywhere,
+                     true,
+                     {},
+                     [git, shared] {
+                         if (shared->unstashChanges) {
+                             shared->unstashChanges();
+                         } else {
+                             git()->stashApply(0, true);
+                         }
+                     }});
+    specs.push_back({git_actions::kAnnotate,
+                     "Annotate with Git Blame",
+                     "Show line-by-line Git blame annotations for the current file",
+                     {"git blame", "annotate"},
+                     kAnywhere,
+                     false,
+                     [shared, file] { return !file().empty() || static_cast<bool>(shared->annotate); },
+                     [git, shared, file] {
+                         const std::string path = file();
+                         if (shared->annotate) {
+                             shared->annotate(path);
+                         } else if (!path.empty()) {
+                             git()->readBlame(QString::fromStdString(path), [](auto) {});
+                         }
+                     }});
     specs.push_back({git_actions::kNextChange,
                      "Next Change",
                      "Go to the next change in the diff",
@@ -206,6 +234,46 @@ Result<void> registerGitActions(input::ActionRegistry& registry, std::function<G
                      false,
                      [viewer] { return viewer() != nullptr; },
                      [viewer] { viewer()->previousChange(); }});
+}
+
+} // namespace
+
+Result<std::vector<input::Binding>> gitShortcutBindings() {
+    std::vector<input::Binding> bindings;
+    for (const GitShortcutDefault& entry : kGitShortcutDefaults) {
+        if (entry.shortcut.empty()) {
+            continue;
+        }
+        auto sequence = input::parseSequence(entry.shortcut, input::SyntaxMode::Strict);
+        if (!sequence) {
+            return fail(ErrorCode::InvalidArgument,
+                        std::format("the default shortcut '{}' of {} does not parse: {}", entry.shortcut,
+                                    entry.actionId, sequence.error().message()));
+        }
+        bindings.push_back(input::Binding{std::string(entry.actionId), {*sequence}});
+    }
+    return bindings;
+}
+
+Result<void> registerGitActions(input::ActionRegistry& registry, GitController& controller, GitActionTargets targets) {
+    const QPointer<GitController> fixed(&controller);
+    return registerGitActions(registry, [fixed] { return fixed.data(); }, std::move(targets));
+}
+
+Result<void> registerGitActions(input::ActionRegistry& registry, std::function<GitController*()> git,
+                                GitActionTargets targets) {
+    const auto shared = std::make_shared<const GitActionTargets>(std::move(targets));
+    const auto confirm = [shared](const QString& title, const QString& question) {
+        return shared->confirm && shared->confirm(title, question);
+    };
+    const auto file = [shared]() { return shared->currentFile ? shared->currentFile() : std::string(); };
+    const auto viewer = [shared]() -> DiffViewer* {
+        return shared->activeDiffViewer ? shared->activeDiffViewer() : nullptr;
+    };
+
+    std::vector<GitActionSpec> specs;
+    appendRemoteAndCommitSpecs(specs, git, shared, confirm, file);
+    appendViewAndHistorySpecs(specs, git, shared, file, viewer);
 
     for (GitActionSpec& entry : specs) {
         input::ActionSpec spec;

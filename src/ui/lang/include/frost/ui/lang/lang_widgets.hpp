@@ -30,11 +30,15 @@
 #include <string>
 #include <vector>
 
+class QCheckBox;
 class QKeyEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QPlainTextEdit;
+class QSplitter;
 class QTextBrowser;
+class QToolButton;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -145,9 +149,17 @@ class FindUsagesPanel final : public QWidget {
 public:
     explicit FindUsagesPanel(QWidget* parent = nullptr);
     void setUsages(const QString& title, std::vector<::frost::lang::UsageGroup> groups);
+    void setLineReader(::frost::lang::LineSource reader);
     [[nodiscard]] QString title() const;
     [[nodiscard]] QTreeWidget* tree() const noexcept { return m_tree; }
+    [[nodiscard]] QPlainTextEdit* preview() const noexcept { return m_preview; }
     [[nodiscard]] std::size_t usageCount() const noexcept { return m_count; }
+    void setGroupByDirectory(bool enabled);
+    [[nodiscard]] bool groupByDirectory() const noexcept;
+    void setShowReadAccess(bool show);
+    [[nodiscard]] bool showReadAccess() const noexcept;
+    void setShowWriteAccess(bool show);
+    [[nodiscard]] bool showWriteAccess() const noexcept;
     // Opens the usage at `index` of `group` (the same as double-clicking it).
     void activate(std::size_t group, std::size_t index);
 
@@ -155,10 +167,19 @@ signals:
     void openRequested(QString path, ::frost::lang::LspPosition position);
 
 private:
+    void rebuildTree();
+    void updatePreview(QTreeWidgetItem* current);
     void onActivated(QTreeWidgetItem* item);
 
+    QString m_baseTitle;
     QLabel* m_title = nullptr;
+    QToolButton* m_groupByDirButton = nullptr;
+    QToolButton* m_showReadButton = nullptr;
+    QToolButton* m_showWriteButton = nullptr;
+    QSplitter* m_splitter = nullptr;
     QTreeWidget* m_tree = nullptr;
+    QPlainTextEdit* m_preview = nullptr;
+    ::frost::lang::LineSource m_lineReader;
     std::vector<::frost::lang::UsageGroup> m_groups;
     std::size_t m_count = 0;
 };
@@ -175,6 +196,17 @@ public:
     explicit StructurePanel(QWidget* parent = nullptr);
     void setStatus(const QString& status);
     void setSymbols(std::string path, std::vector<::frost::lang::DocumentSymbol> symbols);
+    // Selects the deepest symbol enclosing `line` (0-based LSP line) without emitting `activated`.
+    void highlightLine(int line);
+    void setSortAlphabetically(bool enabled);
+    [[nodiscard]] bool sortAlphabetically() const noexcept;
+    void setShowFields(bool show);
+    [[nodiscard]] bool showFields() const noexcept;
+    void setShowFunctions(bool show);
+    [[nodiscard]] bool showFunctions() const noexcept;
+    void setAutoScrollToSource(bool enabled);
+    [[nodiscard]] bool autoScrollToSource() const noexcept;
+
 signals:
     void activated(QString path, ::frost::lang::LspPosition position);
 
@@ -182,9 +214,14 @@ private:
     void rebuild();
     QLabel* m_status = nullptr;
     QLineEdit* m_search = nullptr;
+    QToolButton* m_sortAlphaButton = nullptr;
+    QToolButton* m_showFieldsButton = nullptr;
+    QToolButton* m_showFunctionsButton = nullptr;
+    QToolButton* m_autoScrollButton = nullptr;
     QTreeWidget* m_tree = nullptr;
     std::string m_path;
     std::vector<::frost::lang::DocumentSymbol> m_symbols;
+    int m_lastHighlightedLine = -1;
 };
 
 class SymbolPopup final : public QFrame {
@@ -233,7 +270,13 @@ class RenameInput final : public QFrame {
 public:
     explicit RenameInput(QWidget* parent = nullptr);
     void start(const QString& currentName, const QRect& anchor);
+    void startWithPrompt(const QString& promptLabel, const QString& currentName, const QRect& anchor,
+                         bool showRenameOptions = false);
     [[nodiscard]] QLineEdit* field() const noexcept { return m_field; }
+    [[nodiscard]] bool searchInCommentsAndStrings() const noexcept;
+    [[nodiscard]] bool previewUsages() const noexcept;
+    [[nodiscard]] QCheckBox* searchCommentsCheckbox() const noexcept { return m_searchComments; }
+    [[nodiscard]] QCheckBox* previewUsagesCheckbox() const noexcept { return m_previewUsages; }
 
 signals:
     void accepted(QString newName);
@@ -243,7 +286,10 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    QLabel* m_label = nullptr;
     QLineEdit* m_field = nullptr;
+    QCheckBox* m_searchComments = nullptr;
+    QCheckBox* m_previewUsages = nullptr;
     bool m_done = false;
 };
 
@@ -269,6 +315,68 @@ private:
     QLabel* m_title = nullptr;
     QListWidget* m_list = nullptr;
     bool m_done = false;
+};
+
+// Quick Definition peek popup (Alt+F12 / Ctrl+Shift+I): shows file header, line numbers and code
+// snippet; Enter or F4 jumps to the full file, Esc closes.
+class QuickDefinitionPopup final : public QFrame {
+    Q_OBJECT
+
+public:
+    explicit QuickDefinitionPopup(QWidget* parent = nullptr);
+    void showDefinition(const QString& filePath, ::frost::lang::LspPosition targetPos, const QString& snippetText,
+                        const QRect& anchor);
+    [[nodiscard]] QPlainTextEdit* editor() const noexcept { return m_editor; }
+    [[nodiscard]] QString headerText() const;
+
+signals:
+    void openRequested(QString path, ::frost::lang::LspPosition position);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    QLabel* m_header = nullptr;
+    QPlainTextEdit* m_editor = nullptr;
+    QString m_targetPath;
+    ::frost::lang::LspPosition m_targetPosition{};
+};
+
+// Call Hierarchy (Ctrl+Alt+H) and Type Hierarchy (Ctrl+H) interactive tree popup.
+class HierarchyPopup final : public QFrame {
+    Q_OBJECT
+
+public:
+    struct Entry {
+        QString label;
+        QString detail;
+        ::frost::lang::SymbolKind kind = ::frost::lang::SymbolKind::Function;
+        std::string path;
+        ::frost::lang::LspPosition position{};
+        std::vector<Entry> children;
+    };
+
+    explicit HierarchyPopup(QWidget* parent = nullptr);
+    void configureModes(const QString& primaryModeLabel, const QString& secondaryModeLabel, bool secondaryActive);
+    void setEntries(const QString& title, std::vector<Entry> entries);
+    void popup(QWidget* over);
+    [[nodiscard]] QTreeWidget* tree() const noexcept { return m_tree; }
+    [[nodiscard]] bool isSecondaryMode() const noexcept;
+
+signals:
+    void modeChanged(bool secondaryMode);
+    void activated(QString path, ::frost::lang::LspPosition position);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    void activateCurrent();
+
+    QLabel* m_title = nullptr;
+    QToolButton* m_primaryBtn = nullptr;
+    QToolButton* m_secondaryBtn = nullptr;
+    QTreeWidget* m_tree = nullptr;
 };
 
 } // namespace frost::ui::lang

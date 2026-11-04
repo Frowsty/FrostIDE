@@ -48,6 +48,17 @@ std::string_view toString(GitOperationKind kind) noexcept {
     case GitOperationKind::Fetch: return "Fetch";
     case GitOperationKind::Pull: return "Pull";
     case GitOperationKind::Push: return "Push";
+    case GitOperationKind::CherryPick: return "Cherry-Pick";
+    case GitOperationKind::Revert: return "Revert";
+    case GitOperationKind::Reset: return "Reset";
+    case GitOperationKind::Tag: return "Create Tag";
+    case GitOperationKind::Merge: return "Merge";
+    case GitOperationKind::Rebase: return "Rebase";
+    case GitOperationKind::DeleteBranch: return "Delete Branch";
+    case GitOperationKind::RenameBranch: return "Rename Branch";
+    case GitOperationKind::Stash: return "Stash";
+    case GitOperationKind::Unstash: return "Unstash";
+    case GitOperationKind::DropStash: return "Drop Stash";
     }
     return "Commit";
 }
@@ -326,6 +337,162 @@ void GitService::push(PushOptions options) {
     state->operations.post([state, options](std::stop_token stop) { state->pushNow(options, stop); });
 }
 
+void GitService::cherryPick(std::string commitHash) {
+    State* state = m_state.get();
+    std::string target = commitHash;
+    state->operation(GitOperationKind::CherryPick, std::move(target),
+                     [state, hash = std::move(commitHash)](std::stop_token stop, GitOperationResult& result) {
+                         auto out = state->repository.cherryPick(hash, state->control(stop));
+                         if (out) {
+                             result.output = out->stdoutBytes + out->stderrBytes;
+                         } else {
+                             result.error = std::move(out.error());
+                         }
+                     });
+}
+
+void GitService::revertCommit(std::string commitHash) {
+    State* state = m_state.get();
+    std::string target = commitHash;
+    state->operation(GitOperationKind::Revert, std::move(target),
+                     [state, hash = std::move(commitHash)](std::stop_token stop, GitOperationResult& result) {
+                         auto out = state->repository.revertCommit(hash, state->control(stop));
+                         if (out) {
+                             result.output = out->stdoutBytes + out->stderrBytes;
+                         } else {
+                             result.error = std::move(out.error());
+                         }
+                     });
+}
+
+void GitService::resetBranch(std::string commitHash, std::string mode) {
+    State* state = m_state.get();
+    std::string target = commitHash;
+    state->operation(GitOperationKind::Reset, std::move(target),
+                     [state, hash = std::move(commitHash), mode = std::move(mode)](std::stop_token stop,
+                                                                                   GitOperationResult& result) {
+                         auto out = state->repository.resetBranch(hash, mode, state->control(stop));
+                         if (out) {
+                             result.output = out->stdoutBytes + out->stderrBytes;
+                         } else {
+                             result.error = std::move(out.error());
+                         }
+                     });
+}
+
+void GitService::createTag(std::string tagName, std::string commitHash) {
+    State* state = m_state.get();
+    std::string target = tagName;
+    state->operation(GitOperationKind::Tag, std::move(target),
+                     [state, tag = std::move(tagName), hash = std::move(commitHash)](std::stop_token stop,
+                                                                                     GitOperationResult& result) {
+                         if (auto done = state->repository.createTag(tag, hash, state->control(stop)); !done) {
+                             result.error = std::move(done.error());
+                         }
+                     });
+}
+
+void GitService::createBranchAt(std::string name, std::string startPoint) {
+    State* state = m_state.get();
+    std::string target = name;
+    state->operation(GitOperationKind::CreateBranch, std::move(target),
+                     [state, name = std::move(name), start = std::move(startPoint)](std::stop_token stop,
+                                                                                    GitOperationResult& result) {
+                         if (auto done = state->repository.createBranchAt(name, start, state->control(stop)); !done) {
+                             result.error = std::move(done.error());
+                         }
+                     });
+}
+
+void GitService::mergeBranch(std::string branch) {
+    State* state = m_state.get();
+    std::string target = branch;
+    state->operation(GitOperationKind::Merge, std::move(target),
+                     [state, branch = std::move(branch)](std::stop_token stop, GitOperationResult& result) {
+                         auto out = state->repository.mergeBranch(branch, state->control(stop));
+                         if (out) {
+                             result.output = out->stdoutBytes + out->stderrBytes;
+                         } else {
+                             result.error = std::move(out.error());
+                         }
+                     });
+}
+
+void GitService::rebaseBranch(std::string ontoBranch) {
+    State* state = m_state.get();
+    std::string target = ontoBranch;
+    state->operation(GitOperationKind::Rebase, std::move(target),
+                     [state, onto = std::move(ontoBranch)](std::stop_token stop, GitOperationResult& result) {
+                         auto out = state->repository.rebaseBranch(onto, state->control(stop));
+                         if (out) {
+                             result.output = out->stdoutBytes + out->stderrBytes;
+                         } else {
+                             result.error = std::move(out.error());
+                         }
+                     });
+}
+
+void GitService::deleteBranch(std::string branch, bool force) {
+    State* state = m_state.get();
+    std::string target = branch;
+    state->operation(GitOperationKind::DeleteBranch, std::move(target),
+                     [state, branch = std::move(branch), force](std::stop_token stop, GitOperationResult& result) {
+                         if (auto done = state->repository.deleteBranch(branch, force, state->control(stop)); !done) {
+                             result.error = std::move(done.error());
+                         }
+                     });
+}
+
+void GitService::renameBranch(std::string oldName, std::string newName) {
+    State* state = m_state.get();
+    std::string target = newName;
+    state->operation(GitOperationKind::RenameBranch, std::move(target),
+                     [state, oldName = std::move(oldName), newName = std::move(newName)](std::stop_token stop,
+                                                                                         GitOperationResult& result) {
+                         if (auto done = state->repository.renameBranch(oldName, newName, state->control(stop));
+                             !done) {
+                             result.error = std::move(done.error());
+                         }
+                     });
+}
+
+void GitService::stashPush(std::string message, bool includeUntracked) {
+    State* state = m_state.get();
+    state->operation(
+        GitOperationKind::Stash, {},
+        [state, msg = std::move(message), includeUntracked](std::stop_token stop, GitOperationResult& result) {
+            auto out = state->repository.stashPush(msg, includeUntracked, state->control(stop));
+            if (out) {
+                result.output = out->stdoutBytes + out->stderrBytes;
+            } else {
+                result.error = std::move(out.error());
+            }
+        });
+}
+
+void GitService::stashApply(int index, bool pop) {
+    State* state = m_state.get();
+    state->operation(GitOperationKind::Unstash, std::to_string(index),
+                     [state, index, pop](std::stop_token stop, GitOperationResult& result) {
+                         auto out = state->repository.stashApply(index, pop, state->control(stop));
+                         if (out) {
+                             result.output = out->stdoutBytes + out->stderrBytes;
+                         } else {
+                             result.error = std::move(out.error());
+                         }
+                     });
+}
+
+void GitService::stashDrop(int index) {
+    State* state = m_state.get();
+    state->operation(GitOperationKind::DropStash, std::to_string(index),
+                     [state, index](std::stop_token stop, GitOperationResult& result) {
+                         if (auto done = state->repository.stashDrop(index, state->control(stop)); !done) {
+                             result.error = std::move(done.error());
+                         }
+                     });
+}
+
 void GitService::cancelOperation() { m_state->operations.cancelRunning(); }
 
 bool GitService::operationBusy() const { return m_state->operations.busy(); }
@@ -363,6 +530,37 @@ void GitService::readRecentCommitMessages(std::size_t count,
     State* state = m_state.get();
     state->reads.post([state, count, done = std::move(done)](std::stop_token stop) {
         done(state->repository.recentCommitMessages(count, stop));
+    });
+}
+
+void GitService::readLog(std::size_t maxCount, std::string branchFilter, std::string searchFilter,
+                         std::function<void(Result<std::vector<GitCommitEntry>>)> done) {
+    State* state = m_state.get();
+    state->reads.post([state, maxCount, branch = std::move(branchFilter), search = std::move(searchFilter),
+                       done = std::move(done)](std::stop_token stop) {
+        done(state->repository.log(maxCount, branch, search, stop));
+    });
+}
+
+void GitService::readCommitFiles(std::string commitHash,
+                                 std::function<void(Result<std::vector<GitCommitFileChange>>)> done) {
+    State* state = m_state.get();
+    state->reads.post([state, hash = std::move(commitHash), done = std::move(done)](std::stop_token stop) {
+        done(state->repository.commitFiles(hash, stop));
+    });
+}
+
+void GitService::readStashes(std::function<void(Result<std::vector<GitStashEntry>>)> done) {
+    State* state = m_state.get();
+    state->reads.post(
+        [state, done = std::move(done)](std::stop_token stop) { done(state->repository.stashList(stop)); });
+}
+
+void GitService::readBlame(std::string relativeOrAbsolutePath,
+                           std::function<void(Result<std::vector<GitBlameLine>>)> done) {
+    State* state = m_state.get();
+    state->reads.post([state, path = std::move(relativeOrAbsolutePath), done = std::move(done)](std::stop_token stop) {
+        done(state->repository.blame(path, stop));
     });
 }
 

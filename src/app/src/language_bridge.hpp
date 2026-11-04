@@ -62,6 +62,7 @@ public:
                                                           std::stop_token token = {}) override;
     [[nodiscard]] lang::PositionEncoding encoding() const override;
     [[nodiscard]] std::optional<lang::ServerCapabilities> serverCapabilities() const override;
+    void setApplyEditHandler(ApplyEditHandler handler) override { m_server.setApplyEditHandler(std::move(handler)); }
 
     // IEditorLanguageHost: the active editor.
     [[nodiscard]] std::string documentPath() const override;

@@ -184,6 +184,8 @@ public:
     bool stepOut();
     // Runs to the current editor's caret line (hooks.currentEditor).
     bool runToCursor();
+    // Jumps execution to the current editor's caret line via DAP gotoTargets + goto.
+    bool setNextStatement();
     // Ends the session (header comment). Idempotent.
     void stop();
 
@@ -196,6 +198,12 @@ public:
     void toggleBreakpoint(const std::string& path, int line);
     // Toggles one on the current editor's caret line.
     bool toggleBreakpointAtCaret();
+    // Mutes or unmutes all breakpoints without deleting them.
+    void setMutedBreakpoints(bool muted);
+    void toggleMuteBreakpoints();
+    [[nodiscard]] bool breakpointsMuted() const noexcept { return m_breakpoints.muted(); }
+    // Edits the breakpoint on the current editor's caret line, or opens the Breakpoints tab.
+    void requestEditBreakpoint();
     // Asks for Evaluate Expression (evaluateRequested) with the current editor's selection.
     void requestEvaluate();
     // Connects `view` (header comment); it detaches itself when destroyed.
@@ -207,10 +215,18 @@ public:
     using VariablesDone = std::function<void(Result<debug::VariableList>)>;
     using ScopesDone = std::function<void(Result<debug::ScopeList>)>;
     using EvaluateDone = std::function<void(Result<debug::dap::Variable>)>;
+    using DisassembleDone = std::function<void(Result<std::vector<debug::dap::DisassembledInstruction>>)>;
+    using ReadMemoryDone = std::function<void(Result<debug::dap::ReadMemoryResult>)>;
     void scopes(std::int64_t frameId, ScopesDone done);
     void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
     // Evaluates in the selected frame.
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
+    void submitConsoleInput(const QString& line);
+    void setVariableValue(std::int64_t variablesReference, const QString& name, const QString& value,
+                          EvaluateDone done = {});
+    void setExceptionBreakpoints(const std::vector<std::string>& filters);
+    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done);
+    void readMemory(const QString& memoryReference, int count, ReadMemoryDone done);
 
 signals:
     // Adapter-confirmed termination, tagged with the session that emitted it.
@@ -229,6 +245,8 @@ signals:
     void sessionEnded(const QString& summary);
     // Evaluate Expression (Alt+F8) was asked for, with the editor's selection as the expression.
     void evaluateRequested(const QString& expression);
+    void breakpointsChanged();
+    void editBreakpointRequested(debug::BreakpointId id);
 
 private:
     struct Relay;

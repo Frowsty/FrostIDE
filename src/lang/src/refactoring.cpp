@@ -91,19 +91,44 @@ std::vector<CodeActionItem> parseCodeActions(const Json& json) {
         if (!item.isObject() || item.find("title") == nullptr) {
             continue;
         }
-        const Json* edit = item.find("edit");
-        if (edit == nullptr) {
-            continue; // A Command, or a command-only CodeAction (see the header comment).
+        WorkspaceEdit parsedEdit;
+        if (const Json* edit = item.find("edit"); edit != nullptr && !edit->isNull()) {
+            auto parsed = parseWorkspaceEdit(*edit);
+            if (!parsed) {
+                log::warn(kLogCategory, "skipped code action '{}': {}", item.stringAt("title"),
+                          parsed.error().describe());
+                continue;
+            }
+            parsedEdit = std::move(*parsed);
         }
-        auto parsed = parseWorkspaceEdit(*edit);
-        if (!parsed) {
-            log::warn(kLogCategory, "skipped code action '{}': {}", item.stringAt("title"), parsed.error().describe());
+        std::string commandName;
+        std::vector<Json> commandArguments;
+        if (const Json* cmd = item.find("command"); cmd != nullptr) {
+            if (const std::string* name = cmd->asString()) {
+                commandName = *name;
+                if (const Json* args = item.find("arguments"); args != nullptr && args->isArray()) {
+                    for (const Json& arg : args->items()) {
+                        commandArguments.push_back(arg);
+                    }
+                }
+            } else if (cmd->isObject()) {
+                commandName = std::string(cmd->stringAt("command"));
+                if (const Json* args = cmd->find("arguments"); args != nullptr && args->isArray()) {
+                    for (const Json& arg : args->items()) {
+                        commandArguments.push_back(arg);
+                    }
+                }
+            }
+        }
+        if (parsedEdit.empty() && commandName.empty()) {
             continue;
         }
         out.push_back(CodeActionItem{.title = std::string(item.stringAt("title")),
                                      .kind = std::string(item.stringAt("kind")),
                                      .preferred = item.boolAt("isPreferred").value_or(false),
-                                     .edit = std::move(*parsed)});
+                                     .edit = std::move(parsedEdit),
+                                     .commandName = std::move(commandName),
+                                     .commandArguments = std::move(commandArguments)});
     }
     std::ranges::stable_sort(out, [](const CodeActionItem& a, const CodeActionItem& b) {
         const auto rank = [](const CodeActionItem& action) {
@@ -115,6 +140,25 @@ std::vector<CodeActionItem> parseCodeActions(const Json& json) {
         return rank(a) < rank(b);
     });
     return out;
+}
+
+namespace {
+sched::Task<Result<Json>> invalidExecuteCommand() {
+    co_return fail(ErrorCode::InvalidArgument, "the command name is empty");
+}
+} // namespace
+
+sched::Task<Result<Json>> requestExecuteCommand(LspRequestSender& server, std::string_view command,
+                                                const std::vector<Json>& arguments, std::stop_token token) {
+    if (command.empty()) {
+        return invalidExecuteCommand();
+    }
+    Json args = Json::array();
+    for (const Json& arg : arguments) {
+        args.push(arg);
+    }
+    Json params = Json::object().set("command", command).set("arguments", std::move(args));
+    return server.request("workspace/executeCommand", std::move(params), std::move(token));
 }
 
 sched::Task<Result<std::vector<CodeActionItem>>> requestCodeActions(ILspRequester& server, std::string path,

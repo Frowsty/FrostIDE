@@ -22,6 +22,7 @@ class GitController;
 class BranchStatusWidget;
 class CommitToolWindow;
 class DiffViewer;
+class GitLogToolWindow;
 class TrustDialog;
 } // namespace frost::ui
 namespace frost::app {
@@ -48,6 +49,7 @@ private:
     using ContentDone = std::function<void(Result<std::optional<std::string>>)>;
     void readBaseText(const std::string& path, bool index, ContentDone done);
     void showDiff(const std::string& path, bool index = false);
+    void showBlame(const std::string& path);
     void requestTrust();
     [[nodiscard]] Result<void> allow(vcs::GitOperationKind kind, const std::vector<std::string>& paths);
     [[nodiscard]] Result<void> allowWrite(std::string_view path) const;
@@ -62,6 +64,7 @@ private:
     QPointer<ui::BranchStatusWidget> m_branch;
     QPointer<ui::CommitToolWindow> m_commit;
     QPointer<ui::DiffViewer> m_diff;
+    QPointer<ui::GitLogToolWindow> m_log;
     QPointer<ui::TrustDialog> m_trustDialog;
     QTimer m_poll;
     QTimer m_diffRefresh;

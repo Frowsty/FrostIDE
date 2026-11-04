@@ -1491,7 +1491,16 @@ void Workbench::refreshSolutionExplorerForFsChange(std::string_view selectPath) 
     }
     if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
         auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+        if (m_buildService->beginProjectEdit()) {
+            (void)m_buildService->finishProjectEdit(refreshed);
+        }
         m_solution = refreshed;
+        if (m_build) {
+            m_build->projectEditPublished();
+        }
+        if (m_runService) {
+            (void)m_runService->openSolution(refreshed);
+        }
         if (m_explorer) {
             m_explorer->setSolution(refreshed, true);
             if (!selectPath.empty()) {
@@ -2263,6 +2272,10 @@ void Workbench::refreshLiveProblems() {
     if (m_lua) {
         auto lua = m_lua->diagnostics().problems();
         live.insert(live.end(), lua.begin(), lua.end());
+    }
+    if (m_managed) {
+        auto managed = m_managed->diagnostics().problems();
+        live.insert(live.end(), managed.begin(), managed.end());
     }
     for (const lang::LiveDiagnostic& d : live) {
         build::BuildDiagnostic row;

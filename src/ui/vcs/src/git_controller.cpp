@@ -29,6 +29,17 @@ QString taskTitle(vcs::GitOperationKind kind) {
     case K::Fetch: return QCoreApplication::translate("GitController", "Fetching");
     case K::Pull: return QCoreApplication::translate("GitController", "Updating the project");
     case K::Push: return QCoreApplication::translate("GitController", "Pushing");
+    case K::CherryPick: return QCoreApplication::translate("GitController", "Cherry-picking");
+    case K::Revert: return QCoreApplication::translate("GitController", "Reverting commit");
+    case K::Reset: return QCoreApplication::translate("GitController", "Resetting branch");
+    case K::Tag: return QCoreApplication::translate("GitController", "Creating tag");
+    case K::Merge: return QCoreApplication::translate("GitController", "Merging branch");
+    case K::Rebase: return QCoreApplication::translate("GitController", "Rebasing branch");
+    case K::DeleteBranch: return QCoreApplication::translate("GitController", "Deleting branch");
+    case K::RenameBranch: return QCoreApplication::translate("GitController", "Renaming branch");
+    case K::Stash: return QCoreApplication::translate("GitController", "Stashing changes");
+    case K::Unstash: return QCoreApplication::translate("GitController", "Unstashing changes");
+    case K::DropStash: return QCoreApplication::translate("GitController", "Dropping stash");
     }
     return QCoreApplication::translate("GitController", "Running git");
 }
@@ -157,6 +168,66 @@ void GitController::push(bool forceWithLease, bool confirmed) {
     m_service->push(vcs::PushOptions{.forceWithLease = forceWithLease, .confirmed = confirmed});
 }
 
+void GitController::cherryPick(const QString& commitHash) {
+    if (allow(vcs::GitOperationKind::CherryPick))
+        m_service->cherryPick(commitHash.trimmed().toStdString());
+}
+
+void GitController::revertCommit(const QString& commitHash) {
+    if (allow(vcs::GitOperationKind::Revert))
+        m_service->revertCommit(commitHash.trimmed().toStdString());
+}
+
+void GitController::resetBranch(const QString& commitHash, const QString& mode) {
+    if (allow(vcs::GitOperationKind::Reset))
+        m_service->resetBranch(commitHash.trimmed().toStdString(), mode.trimmed().toStdString());
+}
+
+void GitController::createTag(const QString& tagName, const QString& commitHash) {
+    if (allow(vcs::GitOperationKind::Tag))
+        m_service->createTag(tagName.trimmed().toStdString(), commitHash.trimmed().toStdString());
+}
+
+void GitController::createBranchAt(const QString& name, const QString& startPoint) {
+    if (allow(vcs::GitOperationKind::CreateBranch))
+        m_service->createBranchAt(name.trimmed().toStdString(), startPoint.trimmed().toStdString());
+}
+
+void GitController::mergeBranch(const QString& branch) {
+    if (allow(vcs::GitOperationKind::Merge))
+        m_service->mergeBranch(branch.trimmed().toStdString());
+}
+
+void GitController::rebaseBranch(const QString& ontoBranch) {
+    if (allow(vcs::GitOperationKind::Rebase))
+        m_service->rebaseBranch(ontoBranch.trimmed().toStdString());
+}
+
+void GitController::deleteBranch(const QString& branch, bool force) {
+    if (allow(vcs::GitOperationKind::DeleteBranch))
+        m_service->deleteBranch(branch.trimmed().toStdString(), force);
+}
+
+void GitController::renameBranch(const QString& oldName, const QString& newName) {
+    if (allow(vcs::GitOperationKind::RenameBranch))
+        m_service->renameBranch(oldName.trimmed().toStdString(), newName.trimmed().toStdString());
+}
+
+void GitController::stashPush(const QString& message, bool includeUntracked) {
+    if (allow(vcs::GitOperationKind::Stash))
+        m_service->stashPush(message.trimmed().toStdString(), includeUntracked);
+}
+
+void GitController::stashApply(int index, bool pop) {
+    if (allow(vcs::GitOperationKind::Unstash))
+        m_service->stashApply(index, pop);
+}
+
+void GitController::stashDrop(int index) {
+    if (allow(vcs::GitOperationKind::DropStash))
+        m_service->stashDrop(index);
+}
+
 void GitController::cancelOperation() { m_service->cancelOperation(); }
 
 void GitController::refreshStatus() { m_service->refreshStatus(); }
@@ -193,6 +264,42 @@ void GitController::readBranches() {
                 emit branchesChanged();
             },
             Qt::QueuedConnection);
+    });
+}
+
+void GitController::readLog(std::size_t maxCount, const QString& branchFilter, const QString& searchFilter,
+                            std::function<void(Result<std::vector<vcs::GitCommitEntry>>)> done) {
+    m_service->readLog(maxCount, branchFilter.trimmed().toStdString(), searchFilter.trimmed().toStdString(),
+                       [this, done = std::move(done)](Result<std::vector<vcs::GitCommitEntry>> commits) {
+                           QMetaObject::invokeMethod(
+                               this, [done, result = std::move(commits)]() mutable { done(std::move(result)); },
+                               Qt::QueuedConnection);
+                       });
+}
+
+void GitController::readCommitFiles(const QString& commitHash,
+                                    std::function<void(Result<std::vector<vcs::GitCommitFileChange>>)> done) {
+    m_service->readCommitFiles(commitHash.trimmed().toStdString(),
+                               [this, done = std::move(done)](Result<std::vector<vcs::GitCommitFileChange>> files) {
+                                   QMetaObject::invokeMethod(
+                                       this, [done, result = std::move(files)]() mutable { done(std::move(result)); },
+                                       Qt::QueuedConnection);
+                               });
+}
+
+void GitController::readStashes(std::function<void(Result<std::vector<vcs::GitStashEntry>>)> done) {
+    m_service->readStashes([this, done = std::move(done)](Result<std::vector<vcs::GitStashEntry>> stashes) {
+        QMetaObject::invokeMethod(
+            this, [done, result = std::move(stashes)]() mutable { done(std::move(result)); }, Qt::QueuedConnection);
+    });
+}
+
+void GitController::readBlame(const QString& relativeOrAbsolutePath,
+                              std::function<void(Result<std::vector<vcs::GitBlameLine>>)> done) {
+    m_service->readBlame(relativeOrAbsolutePath.toStdString(), [this, done = std::move(done)](
+                                                                   Result<std::vector<vcs::GitBlameLine>> lines) {
+        QMetaObject::invokeMethod(
+            this, [done, result = std::move(lines)]() mutable { done(std::move(result)); }, Qt::QueuedConnection);
     });
 }
 
@@ -241,7 +348,9 @@ void GitController::onFinished(const vcs::GitOperationResult& result) {
     if (result.kind == K::Commit)
         m_pushAfterCommit = false;
     if (result.kind == K::Checkout || result.kind == K::CreateBranch || result.kind == K::Fetch ||
-        result.kind == K::Pull || result.kind == K::Push) {
+        result.kind == K::Pull || result.kind == K::Push || result.kind == K::DeleteBranch ||
+        result.kind == K::RenameBranch || result.kind == K::Merge || result.kind == K::Rebase ||
+        result.kind == K::Reset || result.kind == K::Tag) {
         readBranches();
     }
     const QString message = result.error ? qs(result.error->message()) : QString();

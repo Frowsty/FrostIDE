@@ -188,6 +188,161 @@ rpc::Json setBreakpointsArguments(std::string_view path, const std::vector<std::
         .set("sourceModified", false);
 }
 
+rpc::Json setBreakpointsArguments(std::string_view path, const std::vector<SourceBreakpoint>& breakpoints, bool muted) {
+    rpc::Json list = rpc::Json::array();
+    if (!muted) {
+        for (const SourceBreakpoint& bp : breakpoints) {
+            if (!bp.enabled) {
+                continue;
+            }
+            rpc::Json entry = rpc::Json::object().set("line", bp.line);
+            if (!bp.condition.empty()) {
+                entry.set("condition", bp.condition);
+            }
+            if (!bp.hitCondition.empty()) {
+                entry.set("hitCondition", bp.hitCondition);
+            }
+            if (!bp.logMessage.empty()) {
+                entry.set("logMessage", bp.logMessage);
+            }
+            list.push(std::move(entry));
+        }
+    }
+    return rpc::Json::object()
+        .set("source", rpc::Json::object().set("path", path))
+        .set("breakpoints", std::move(list))
+        .set("sourceModified", false);
+}
+
+namespace {
+
+std::string decodeBase64(std::string_view encoded) {
+    std::string out;
+    out.reserve((encoded.size() * 3) / 4);
+    int val = 0;
+    int valb = -8;
+    for (const char ch : encoded) {
+        const auto c = static_cast<unsigned char>(ch);
+        int digit = -1;
+        if (c >= 'A' && c <= 'Z') {
+            digit = c - 'A';
+        } else if (c >= 'a' && c <= 'z') {
+            digit = c - 'a' + 26;
+        } else if (c >= '0' && c <= '9') {
+            digit = c - '0' + 52;
+        } else if (c == '+') {
+            digit = 62;
+        } else if (c == '/') {
+            digit = 63;
+        } else if (c == '=') {
+            break;
+        } else {
+            continue;
+        }
+        val = (val << 6) + digit;
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<DisassembledInstruction> parseDisassembleResponse(const rpc::Json& body) {
+    std::vector<DisassembledInstruction> list;
+    const rpc::Json* instructions = body.find("instructions");
+    if (instructions == nullptr || !instructions->isArray()) {
+        return list;
+    }
+    for (const rpc::Json& item : instructions->items()) {
+        DisassembledInstruction inst;
+        inst.address = text(item, "address");
+        inst.instructionBytes = text(item, "instructionBytes");
+        inst.instruction = text(item, "instruction");
+        inst.symbol = text(item, "symbol");
+        if (const rpc::Json* loc = item.find("location"); loc != nullptr && loc->isObject()) {
+            inst.location = parseSource(*loc);
+        }
+        inst.line = integer(item, "line");
+        list.push_back(std::move(inst));
+    }
+    return list;
+}
+
+ReadMemoryResult parseReadMemoryResponse(const rpc::Json& body) {
+    ReadMemoryResult result;
+    result.address = text(body, "address");
+    result.unreadableBytes = integer(body, "unreadableBytes");
+    result.data = text(body, "data");
+    result.decodedBytes = decodeBase64(result.data);
+    return result;
+}
+
+std::vector<GotoTarget> parseGotoTargetsResponse(const rpc::Json& body) {
+    std::vector<GotoTarget> list;
+    const rpc::Json* targets = body.find("targets");
+    if (targets == nullptr || !targets->isArray()) {
+        return list;
+    }
+    for (const rpc::Json& item : targets->items()) {
+        GotoTarget target;
+        target.id = integer(item, "id");
+        target.label = text(item, "label");
+        target.line = integer(item, "line");
+        target.column = integer(item, "column");
+        list.push_back(std::move(target));
+    }
+    return list;
+}
+
+rpc::Json setVariableArguments(std::int64_t variablesReference, std::string_view name, std::string_view value) {
+    return rpc::Json::object().set("variablesReference", variablesReference).set("name", name).set("value", value);
+}
+
+Variable parseSetVariableResponse(const rpc::Json& body, std::string_view name) {
+    return Variable{
+        .name = std::string(name),
+        .value = text(body, "value"),
+        .type = text(body, "type"),
+        .evaluateName = std::string(name),
+        .variablesReference = integer(body, "variablesReference"),
+        .namedVariables = integer(body, "namedVariables"),
+        .indexedVariables = integer(body, "indexedVariables"),
+    };
+}
+
+rpc::Json setExceptionBreakpointsArguments(const std::vector<std::string>& filters) {
+    rpc::Json arr = rpc::Json::array();
+    for (const std::string& filter : filters) {
+        arr.push(rpc::Json(filter));
+    }
+    return rpc::Json::object().set("filters", std::move(arr));
+}
+
+rpc::Json disassembleArguments(std::string_view memoryReference, std::int64_t instructionCount,
+                               std::int64_t instructionOffset) {
+    return rpc::Json::object()
+        .set("memoryReference", memoryReference)
+        .set("instructionOffset", instructionOffset)
+        .set("instructionCount", instructionCount)
+        .set("resolveSymbols", true);
+}
+
+rpc::Json readMemoryArguments(std::string_view memoryReference, std::int64_t count, std::int64_t offset) {
+    return rpc::Json::object().set("memoryReference", memoryReference).set("offset", offset).set("count", count);
+}
+
+rpc::Json gotoTargetsArguments(std::string_view path, std::int64_t line) {
+    return rpc::Json::object().set("source", rpc::Json::object().set("path", path)).set("line", line);
+}
+
+rpc::Json gotoArguments(std::int64_t threadId, std::int64_t targetId) {
+    return rpc::Json::object().set("threadId", threadId).set("targetId", targetId);
+}
+
 Error responseError(std::string_view command, std::string_view message, const rpc::Json& body) {
     ErrorCode code = ErrorCode::IoError;
     if (message == "cancelled") {

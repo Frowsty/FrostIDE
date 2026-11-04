@@ -47,6 +47,9 @@ frost_add_library(app LAYER app
         src/engine_request_helper.hpp
         src/project_open_broker.cpp
         src/project_open_broker.hpp
+        src/project_properties_dialog.cpp
+        src/project_properties_dialog.hpp
+        src/project_properties_xml.cpp
         src/diagnostics_qt.cpp
         src/document_editor.cpp
         src/main_window.cpp

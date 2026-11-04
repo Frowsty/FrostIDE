@@ -367,7 +367,7 @@ void TerminalView::paintEvent(QPaintEvent* /*event*/) {
     });
 
     std::optional<std::pair<ScreenPos, ScreenPos>> selection;
-    if (m_selection && m_selection->anchor != m_selection->end) {
+    if (m_selection && (!m_selecting || m_selection->anchor != m_selection->end)) {
         selection = std::minmax(m_selection->anchor, m_selection->end);
     }
     const auto selected = [&selection](int row, int column) {
@@ -492,11 +492,16 @@ bool TerminalView::focusNextPrevChild(bool /*next*/) { return false; }
 
 void TerminalView::keyPressEvent(QKeyEvent* event) {
     const int key = event->key();
+    const KeyMods mods = modsOf(*event);
+    if (mods.ctrl && !mods.alt && !mods.shift && key == Qt::Key_F) {
+        emit findRequested();
+        event->accept();
+        return;
+    }
     if (!m_session) {
         event->ignore();
         return;
     }
-    const KeyMods mods = modsOf(*event);
     const QString text = event->text();
     // The terminal's own copy and paste.
     if (mods.ctrl && !mods.alt && key == Qt::Key_C && (mods.shift || hasSelection())) {
@@ -812,6 +817,82 @@ void TerminalView::pasteClipboard() {
         m_session->paste(toUtf8(text));
         scrollToBottom();
     }
+}
+
+void appendRowMatches(int row, const std::vector<term::Cell>& cells, const QString& query,
+                      std::vector<std::pair<ScreenPos, ScreenPos>>& found) {
+    QString rowText;
+    std::vector<int> charToCol;
+    rowText.reserve(static_cast<qsizetype>(cells.size()));
+    charToCol.reserve(cells.size());
+    for (std::size_t col = 0; col < cells.size(); ++col) {
+        if (cells[col].width == 0) {
+            continue;
+        }
+        const QString cellStr = cells[col].text.empty() ? QStringLiteral(" ") : fromUtf8(cells[col].text);
+        rowText.append(cellStr);
+        for (qsizetype k = 0; k < cellStr.size(); ++k) {
+            charToCol.push_back(static_cast<int>(col));
+        }
+    }
+    qsizetype searchFrom = 0;
+    while (searchFrom <= rowText.size() - query.size()) {
+        const qsizetype hit = rowText.indexOf(query, searchFrom, Qt::CaseInsensitive);
+        if (hit < 0) {
+            break;
+        }
+        const int startCol = charToCol[static_cast<std::size_t>(hit)];
+        const int endCol = charToCol[static_cast<std::size_t>(hit + query.size() - 1)];
+        found.emplace_back(ScreenPos{row, startCol}, ScreenPos{row, endCol});
+        searchFrom = hit + 1;
+    }
+}
+
+bool TerminalView::findText(const QString& query, bool forward, bool stayAtCurrent) {
+    if (!m_session || query.isEmpty()) {
+        clearSelection();
+        return false;
+    }
+    const auto matches = m_session->read([&query](const term::VtScreen& screen) {
+        std::vector<std::pair<ScreenPos, ScreenPos>> found;
+        const int firstRow = -static_cast<int>(screen.scrollbackSize());
+        const int lastRow = screen.rows() - 1;
+        for (int row = firstRow; row <= lastRow; ++row) {
+            appendRowMatches(row, screen.line(row), query, found);
+        }
+        return found;
+    });
+    if (matches.empty()) {
+        clearSelection();
+        return false;
+    }
+
+    std::size_t chosen = forward ? 0 : matches.size() - 1;
+    if (m_selection) {
+        const ScreenPos curStart = std::min(m_selection->anchor, m_selection->end);
+        if (forward) {
+            for (std::size_t i = 0; i < matches.size(); ++i) {
+                if (stayAtCurrent ? !(matches[i].first < curStart) : (curStart < matches[i].first)) {
+                    chosen = i;
+                    break;
+                }
+            }
+        } else {
+            for (std::size_t i = matches.size(); i > 0; --i) {
+                if (matches[i - 1].first < curStart) {
+                    chosen = i - 1;
+                    break;
+                }
+            }
+        }
+    }
+    const auto& [matchStart, matchEnd] = matches[chosen];
+    select(matchStart, matchEnd);
+    const int visibleRow = matchStart.row + m_scrollOffset;
+    if (visibleRow < 0 || visibleRow >= static_cast<int>(m_grid.rows)) {
+        setScrollOffset((static_cast<int>(m_grid.rows) / 2) - matchStart.row);
+    }
+    return true;
 }
 
 } // namespace frost::ui

@@ -16,15 +16,31 @@ public:
     void setServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
         m_server = std::move(server);
+        if (m_server && m_applyEditHandler)
+            m_server->setApplyEditHandler(m_applyEditHandler);
     }
 
     void setLuaServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
         m_lua = std::move(server);
+        if (m_lua && m_applyEditHandler)
+            m_lua->setApplyEditHandler(m_applyEditHandler);
     }
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
         m_managed = std::move(server);
+        if (m_managed && m_applyEditHandler)
+            m_managed->setApplyEditHandler(m_applyEditHandler);
+    }
+    void setApplyEditHandler(ApplyEditHandler handler) override {
+        LockGuard lock(m_mutex);
+        m_applyEditHandler = std::move(handler);
+        if (m_server)
+            m_server->setApplyEditHandler(m_applyEditHandler);
+        if (m_lua)
+            m_lua->setApplyEditHandler(m_applyEditHandler);
+        if (m_managed)
+            m_managed->setApplyEditHandler(m_applyEditHandler);
     }
     void setActivePath(std::string_view path) {
         LockGuard lock(m_mutex);
@@ -109,6 +125,7 @@ private:
     std::shared_ptr<lang::ILspRequester> m_server FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_lua FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_managed FROST_GUARDED_BY(m_mutex);
+    ApplyEditHandler m_applyEditHandler FROST_GUARDED_BY(m_mutex);
     bool m_activeManaged FROST_GUARDED_BY(m_mutex) = false;
     bool m_activeLua FROST_GUARDED_BY(m_mutex) = false;
     bool m_hasActive FROST_GUARDED_BY(m_mutex) = true;

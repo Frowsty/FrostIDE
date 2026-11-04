@@ -27,6 +27,7 @@
 #include "frost/ui/workbench/merge_view.hpp"
 
 #include "../../src/app/src/language_bridge.hpp"
+#include "../../src/app/src/project_properties_dialog.hpp"
 #include "workbench_rig.hpp"
 #include <QAction>
 #include <QCheckBox>
@@ -1830,6 +1831,12 @@ TEST(Workbench, WelcomeScreenTwoPaneLayoutAndLiveProjectSearch) {
     ASSERT_NE(welcome->navigationList(), nullptr);
     EXPECT_EQ(welcome->navigationList()->count(), 3);
     ASSERT_NE(welcome->searchField(), nullptr);
+    ASSERT_NE(welcome->cloneRepositoryButton(), nullptr);
+    ASSERT_NE(welcome->checkForUpdatesButton(), nullptr);
+    ASSERT_NE(welcome->updateStatusLabel(), nullptr);
+    EXPECT_FALSE(welcome->updateStatus().isEmpty());
+    welcome->setUpdateStatus(QStringLiteral("FrostIDE 2026.11 • Update available"));
+    EXPECT_EQ(welcome->updateStatus(), QStringLiteral("FrostIDE 2026.11 • Update available"));
 
     welcome->setRecentProjects({dir.join("AlphaEngine"), dir.join("BetaGame"), dir.join("GammaTools")});
     ASSERT_EQ(welcome->recentList()->count(), 3);
@@ -1846,6 +1853,100 @@ TEST(Workbench, WelcomeScreenTwoPaneLayoutAndLiveProjectSearch) {
     EXPECT_FALSE(welcome->recentList()->item(0)->isHidden());
     EXPECT_FALSE(welcome->recentList()->item(1)->isHidden());
     EXPECT_FALSE(welcome->recentList()->item(2)->isHidden());
+}
+
+TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
+    WorkDir dir("project-properties-roundtrip", "tiny_sln");
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    ASSERT_NE(rig.workbench->solution(), nullptr);
+
+    // 1. Vcxproj compiler, linker, directories, and build events round-trip for Debug|x64.
+    const std::string appVcxprojPath = dir.join("App/App.vcxproj");
+    const std::string initialXml = dir.read("App/App.vcxproj");
+    auto parsed = frost::app::parseVcxprojPropertiesForConfig(initialXml, "Debug|x64");
+    parsed["ClCompile.LanguageStandard"] = "stdcpp23";
+    parsed["ClCompile.Optimization"] = "MaxSpeed";
+    parsed["ClCompile.AdditionalIncludeDirectories"] = "include;../third_party/include";
+    parsed["ClCompile.PreprocessorDefinitions"] = "_DEBUG;FROST_FEATURE=1;%(PreprocessorDefinitions)";
+    parsed["Link.AdditionalDependencies"] = "user32.lib;gdi32.lib;opengl32.lib";
+    parsed["Link.AdditionalLibraryDirectories"] = "../third_party/lib/x64";
+    parsed["Link.SubSystem"] = "Windows";
+    parsed["PostBuildEvent.Command"] = "echo PostBuildDone";
+
+    const std::string updatedXml = frost::app::applyVcxprojPropertiesForConfig(initialXml, "Debug|x64", parsed);
+    auto reparsed = frost::app::parseVcxprojPropertiesForConfig(updatedXml, "Debug|x64");
+    EXPECT_EQ(reparsed["ClCompile.LanguageStandard"], "stdcpp23");
+    EXPECT_EQ(reparsed["ClCompile.Optimization"], "MaxSpeed");
+    EXPECT_EQ(reparsed["ClCompile.AdditionalIncludeDirectories"], "include;../third_party/include");
+    EXPECT_EQ(reparsed["ClCompile.PreprocessorDefinitions"], "_DEBUG;FROST_FEATURE=1;%(PreprocessorDefinitions)");
+    EXPECT_EQ(reparsed["Link.AdditionalDependencies"], "user32.lib;gdi32.lib;opengl32.lib");
+    EXPECT_EQ(reparsed["Link.AdditionalLibraryDirectories"], "../third_party/lib/x64");
+    EXPECT_EQ(reparsed["Link.SubSystem"], "Windows");
+    EXPECT_EQ(reparsed["PostBuildEvent.Command"], "echo PostBuildDone");
+
+    // 2. Project properties dialog opens, modifies linker AdditionalDependencies, and saves to disk.
+    bool savedCalled = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("projectPropertiesDialog"));
+        ASSERT_NE(dlg, nullptr);
+        auto* depsEdit = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Link.AdditionalDependencies"));
+        EXPECT_NE(depsEdit, nullptr);
+        if (depsEdit != nullptr)
+            depsEdit->setText(QStringLiteral("ws2_32.lib;advapi32.lib"));
+        dlg->accept();
+    });
+    frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), appVcxprojPath, "Debug|x64",
+                                            [&] { savedCalled = true; });
+    EXPECT_TRUE(savedCalled);
+    auto onDiskAfterDlg = frost::app::parseVcxprojPropertiesForConfig(dir.read("App/App.vcxproj"), "Debug|x64");
+    EXPECT_EQ(onDiskAfterDlg["Link.AdditionalDependencies"], "ws2_32.lib;advapi32.lib");
+
+    // 3. C# .csproj properties & NuGet PackageReference round-trip.
+    const std::string sampleCsproj = "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+                                     "  <PropertyGroup>\n"
+                                     "    <OutputType>Exe</OutputType>\n"
+                                     "    <TargetFramework>net10.0</TargetFramework>\n"
+                                     "  </PropertyGroup>\n"
+                                     "</Project>\n";
+    auto csProps = frost::app::parseCsprojProperties(sampleCsproj);
+    EXPECT_EQ(csProps["Prop.OutputType"], "Exe");
+    EXPECT_EQ(csProps["Prop.TargetFramework"], "net10.0");
+    csProps["Prop.AllowUnsafeBlocks"] = "true";
+    csProps["Prop.Nullable"] = "enable";
+    csProps["Prop.PackageId"] = "Frost.Sample";
+    csProps["Prop.Version"] = "2.1.0";
+    const std::string updatedCsproj = frost::app::applyCsprojProperties(sampleCsproj, csProps);
+    auto reparsedCs = frost::app::parseCsprojProperties(updatedCsproj);
+    EXPECT_EQ(reparsedCs["Prop.AllowUnsafeBlocks"], "true");
+    EXPECT_EQ(reparsedCs["Prop.Nullable"], "enable");
+    EXPECT_EQ(reparsedCs["Prop.PackageId"], "Frost.Sample");
+    EXPECT_EQ(reparsedCs["Prop.Version"], "2.1.0");
+
+    const std::string withPkg = frost::app::upsertCsprojNuGetPackage(updatedCsproj, "Newtonsoft.Json", "13.0.3");
+    const auto pkgs = frost::app::parseCsprojNuGetPackages(withPkg);
+    ASSERT_EQ(pkgs.size(), 1U);
+    EXPECT_EQ(pkgs[0].id, "Newtonsoft.Json");
+    EXPECT_EQ(pkgs[0].version, "13.0.3");
+    const std::string withoutPkg = frost::app::removeCsprojNuGetPackage(withPkg, "Newtonsoft.Json");
+    EXPECT_TRUE(frost::app::parseCsprojNuGetPackages(withoutPkg).empty());
+
+    // 4. Add/Remove ProjectReference & Add/Remove Project in Solution.
+    const std::string withRef = frost::app::addProjectReferenceXml(updatedCsproj, "../Lib/Lib.csproj", "");
+    EXPECT_TRUE(withRef.contains("<ProjectReference Include=\"../Lib/Lib.csproj\""));
+    const std::string withoutRef = frost::app::removeProjectReferenceXml(withRef, "../Lib/Lib.csproj");
+    EXPECT_FALSE(withoutRef.contains("Lib.csproj"));
+
+    dir.write("Extra/Extra.vcxproj", initialXml);
+    ASSERT_TRUE(frost::app::addExistingProjectToSolutionFile(frost::io::realFileSystem(), dir.join("Tiny.sln"),
+                                                             dir.join("Extra/Extra.vcxproj"))
+                    .has_value());
+    EXPECT_TRUE(dir.read("Tiny.sln").contains("Extra.vcxproj"));
+    ASSERT_TRUE(frost::app::removeProjectFromSolutionFile(frost::io::realFileSystem(), dir.join("Tiny.sln"),
+                                                          dir.join("Extra/Extra.vcxproj"))
+                    .has_value());
+    EXPECT_FALSE(dir.read("Tiny.sln").contains("Extra.vcxproj"));
 }
 
 } // namespace

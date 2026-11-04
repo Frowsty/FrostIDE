@@ -104,6 +104,39 @@ public:
     void showIntentions();
     void reformat();
 
+    // --- Refactorings (Milestone 2) ---
+    void refactorThis();
+    void extractVariable();
+    void extractConstant();
+    void extractField();
+    void extractParameter();
+    void extractMethod();
+    void inlineSymbol();
+    void changeSignature();
+    void safeDelete();
+    void moveSymbol();
+
+    // --- Code Generation & Editing Assistance (Milestone 2) ---
+    void generateCode();
+    void generateConstructor();
+    void generateGettersSetters();
+    void overrideMethods();
+    void implementMethods();
+    void generateEqualityMembers();
+    void generateFormattingMembers();
+    void surroundWith();
+    void completeStatement();
+    void optimizeImports();
+    void insertLiveTemplate();
+
+    // --- Navigation, Hierarchies & Peek (Milestone 2) ---
+    void quickDefinition();
+    void showUsagesPopup();
+    void callHierarchy();
+    void typeHierarchy();
+    void gotoSuperMethod();
+    void gotoTypeDeclaration();
+
     // --- Editor hooks ---
     // Cancel requests and dismiss document-specific UI when the active editor changes.
     void editorChanged();
@@ -130,6 +163,8 @@ public:
     [[nodiscard]] SymbolPopup& symbolPopup();
     [[nodiscard]] RenameInput& renameInput();
     [[nodiscard]] ChoicePopup& choicePopup();
+    [[nodiscard]] QuickDefinitionPopup& quickDefinitionPopup();
+    [[nodiscard]] HierarchyPopup& hierarchyPopup();
 
 signals:
     // A message for the status bar ("No implementations found", a rename refusal, ...).
@@ -160,10 +195,20 @@ private:
     void requestSignatureHelp(std::optional<char> trigger);
     void requestWorkspaceSymbols(const QString& query);
     void applyWorkspaceEdit(const ::frost::lang::WorkspaceEdit& edit, const QString& label);
+    void executeServerCommand(std::string commandName, std::vector<::frost::lang::Json> arguments,
+                              const QString& label);
+    void initServiceHooks();
+    void onRenameAccepted(const QString& name);
     void findUsagesAt(std::string path, ::frost::lang::LspPosition position);
     void gotoDeclarationAtPosition(::frost::lang::LspPosition position);
     void requestStructure();
     bool nextTabStop();
+    bool tryExpandPostfixCompletion();
+    void insertSnippetAt(text::ByteRange replaceRange, std::string_view rawSnippet, std::string_view undoLabel);
+    void extractWithKind(std::string_view lspKindPrefix, const QString& promptLabel, const QString& defaultName,
+                         int mode);
+    void refreshCallHierarchy(bool outgoing);
+    void refreshTypeHierarchy(bool subtypes);
 
     LanguageServices m_services;
     std::unique_ptr<CompletionPopup> m_completion;
@@ -174,6 +219,8 @@ private:
     std::unique_ptr<StructurePanel> m_structure;
     std::unique_ptr<RenameInput> m_rename;
     std::unique_ptr<ChoicePopup> m_choice;
+    std::unique_ptr<QuickDefinitionPopup> m_quickDef;
+    std::unique_ptr<HierarchyPopup> m_hierarchy;
     QTimer m_highlightTimer;
     QTimer m_symbolQueryTimer;
     QTimer m_structureTimer;
@@ -197,6 +244,7 @@ private:
     sched::LatestWins m_renameSlot;
     sched::LatestWins m_actionSlot;
     sched::LatestWins m_formatSlot;
+    sched::LatestWins m_hierarchySlot;
 
     // The open lookup: the document and where its identifier starts.
     std::string m_lookupPath;
@@ -206,9 +254,15 @@ private:
     // Snippet tab stops still to visit after a commit, and the document size they assume.
     std::vector<text::ByteRange> m_tabStops;
     std::uint64_t m_tabStopsDocumentSize = 0;
-    // The rename in progress.
+    // The rename in progress, or a custom prompt callback for extract refactorings.
     std::string m_renamePath;
+    std::string m_renameOldName;
     ::frost::lang::LspPosition m_renamePosition;
+    std::function<void(const QString&)> m_customRenameCallback;
+    // Active hierarchy root.
+    std::string m_hierarchyPath;
+    ::frost::lang::LspPosition m_hierarchyPosition{};
+    bool m_hierarchyIsType = false;
     // The document and version a reformat was requested for.
     std::int64_t m_formatVersion = 0;
     bool m_symbolClassesOnly = false;

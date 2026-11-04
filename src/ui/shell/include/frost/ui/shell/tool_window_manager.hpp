@@ -62,6 +62,11 @@ public:
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override { return sizeHint(); }
+    void setSide(ToolWindowSide side) noexcept {
+        m_side = side;
+        updateGeometry();
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -120,6 +125,8 @@ public:
     [[nodiscard]] int size(std::string_view id) const;
     // Sets the remembered size (clamped to kMinimumSize) and applies it when the window is visible.
     void setSize(std::string_view id, int size);
+    // Moves a tool window to another dock side (Left, Right, Bottom).
+    void moveToSide(std::string_view id, ToolWindowSide newSide);
     // Reads the splitters' current sizes into the visible windows' remembered sizes (the splitters
     // call it after a drag) and stores the layout.
     void syncSizesFromSplitters();

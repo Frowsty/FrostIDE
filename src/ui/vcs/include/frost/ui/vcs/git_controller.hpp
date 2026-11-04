@@ -88,6 +88,18 @@ public:
     void pull(vcs::PullStrategy strategy = vcs::PullStrategy::Merge);
     // `forceWithLease` needs `confirmed` (the UI's confirmation), or the push fails at once.
     void push(bool forceWithLease = false, bool confirmed = false);
+    void cherryPick(const QString& commitHash);
+    void revertCommit(const QString& commitHash);
+    void resetBranch(const QString& commitHash, const QString& mode = QStringLiteral("mixed"));
+    void createTag(const QString& tagName, const QString& commitHash = {});
+    void createBranchAt(const QString& name, const QString& startPoint);
+    void mergeBranch(const QString& branch);
+    void rebaseBranch(const QString& ontoBranch);
+    void deleteBranch(const QString& branch, bool force = false);
+    void renameBranch(const QString& oldName, const QString& newName);
+    void stashPush(const QString& message = {}, bool includeUntracked = true);
+    void stashApply(int index = 0, bool pop = true);
+    void stashDrop(int index = 0);
     void cancelOperation();
     void refreshStatus();
     // Owner-thread gate applied to every mutating operation, including direct widget calls.
@@ -101,6 +113,13 @@ public:
     void readLastCommitMessage(std::function<void(Result<std::string>)> done);
     // Refreshes branches() and emits branchesChanged.
     void readBranches();
+    void readLog(std::size_t maxCount, const QString& branchFilter, const QString& searchFilter,
+                 std::function<void(Result<std::vector<vcs::GitCommitEntry>>)> done);
+    void readCommitFiles(const QString& commitHash,
+                         std::function<void(Result<std::vector<vcs::GitCommitFileChange>>)> done);
+    void readStashes(std::function<void(Result<std::vector<vcs::GitStashEntry>>)> done);
+    void readBlame(const QString& relativeOrAbsolutePath,
+                   std::function<void(Result<std::vector<vcs::GitBlameLine>>)> done);
 
     // Tests: waits until the service is idle, then delivers the queued signals. False on timeout.
     [[nodiscard]] bool waitForIdle(std::chrono::milliseconds timeout);

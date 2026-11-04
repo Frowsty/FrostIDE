@@ -6,6 +6,7 @@
 #include "frost/core/log.hpp"
 #include "frost/document/load_service.hpp"
 #include "frost/io/path.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -19,15 +20,21 @@
 #include "frost/ui/vcs/git_actions.hpp"
 #include "frost/ui/vcs/git_console.hpp"
 #include "frost/ui/vcs/git_controller.hpp"
+#include "frost/ui/vcs/git_log_window.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
 #include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QHeaderView>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QStatusBar>
+#include <QTreeWidget>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <utility>
@@ -36,6 +43,7 @@ namespace frost::app {
 namespace {
 constexpr auto kCommit = "commit";
 constexpr auto kDiff = "gitDiff";
+constexpr auto kLog = "gitLog";
 constexpr auto kConsole = "gitConsole";
 
 // Documents and Git can use different case or symlink spellings for the same file.
@@ -60,8 +68,8 @@ std::string containingGitRoot(io::IFileSystem& fs, std::string path) {
 
 GitIntegration::GitIntegration(Workbench& wb) : QObject(&wb), m_workbench(wb) {
     auto& window = *wb.m_window;
-    for (auto [id, title] :
-         {std::pair{kCommit, "Commit"}, std::pair{kDiff, "Diff"}, std::pair{kConsole, "Git Console"}}) {
+    for (auto [id, title] : {std::pair{kCommit, "Commit"}, std::pair{kDiff, "Diff"}, std::pair{kLog, "Git Log"},
+                             std::pair{kConsole, "Git Console"}}) {
         if (window.toolWindows().contains(id))
             continue;
         ui::ToolWindowSpec spec;
@@ -106,6 +114,25 @@ GitIntegration::GitIntegration(Workbench& wb) : QObject(&wb), m_workbench(wb) {
     targets.activeDiffViewer = [self] { return self ? self->m_diff.data() : nullptr; };
     targets.confirm = [self](const QString& title, const QString& text) {
         return self && QMessageBox::question(self->m_workbench.m_window, title, text) == QMessageBox::Yes;
+    };
+    targets.showLog = [self] {
+        if (self) {
+            self->m_workbench.m_window->toolWindows().show(kLog);
+            if (self->m_log)
+                self->m_log->refresh();
+        }
+    };
+    targets.stashChanges = [self] {
+        if (self && self->m_branch)
+            self->m_branch->promptStashChanges();
+    };
+    targets.unstashChanges = [self] {
+        if (self && self->m_branch)
+            self->m_branch->promptUnstashChanges();
+    };
+    targets.annotate = [self](const std::string& path) {
+        if (self)
+            self->showBlame(path);
     };
     if (auto registered = ui::registerGitActions(
             wb.m_registry, [self] { return self ? self->controller() : nullptr; }, std::move(targets));
@@ -214,7 +241,7 @@ void GitIntegration::clearRepository() {
             m_workbench.m_nav->fileSystemView()->setFileColorProvider({});
         if (m_workbench.m_explorer)
             m_workbench.m_explorer->model()->setFileColorProvider({});
-        for (const char* id : {kCommit, kDiff, kConsole})
+        for (const char* id : {kCommit, kDiff, kLog, kConsole})
             window->toolWindows().setContent(id, new QLabel(tr("No Git repository is open.")));
     }
     for (auto* view : m_workbench.m_editors->views()) {
@@ -228,6 +255,7 @@ void GitIntegration::clearRepository() {
         delete m_branch.data();
     m_commit = nullptr;
     m_diff = nullptr;
+    m_log = nullptr;
     m_diffRefresh.stop();
     m_diffPath.clear();
     m_dirtyPaths.clear();
@@ -281,6 +309,15 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     window.toolWindows().setContent(kCommit, m_commit);
     m_diff = new ui::DiffViewer();
     window.toolWindows().setContent(kDiff, m_diff);
+    m_log = new ui::GitLogToolWindow(m_controller.get());
+    connect(m_log, &ui::GitLogToolWindow::openCommitFileRequested, this,
+            [this](const QString&, const QString& relPath) {
+                if (!m_controller)
+                    return;
+                if (auto joined = io::joinPath(m_controller->info().workTree, relPath.toUtf8().toStdString()))
+                    showDiff(*joined);
+            });
+    window.toolWindows().setContent(kLog, m_log);
     window.toolWindows().setContent(kConsole, new ui::GitConsoleView(*m_controller));
     m_branch = new ui::BranchStatusWidget(*m_controller, window.statusBar());
     window.statusBar()->addPermanentWidget(m_branch);
@@ -532,5 +569,43 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
                                          QObject::tr("Working copy"));
                  });
     m_workbench.m_window->toolWindows().show(kDiff);
+}
+
+void GitIntegration::showBlame(const std::string& path) {
+    if (!m_controller || path.empty())
+        return;
+    const QPointer<GitIntegration> self(this);
+    m_controller->readBlame(
+        QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size())),
+        [self, path](Result<std::vector<vcs::GitBlameLine>> result) {
+            if (!self || !self->m_workbench.m_window || !result)
+                return;
+            QDialog dialog(self->m_workbench.m_window);
+            dialog.setObjectName(QStringLiteral("gitBlameDialog"));
+            dialog.setWindowTitle(QObject::tr("Git Annotate — %1")
+                                      .arg(QString::fromUtf8(path.data(), static_cast<qsizetype>(path.size()))));
+            dialog.resize(840, 560);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* tree = new QTreeWidget(&dialog);
+            tree->setRootIsDecorated(false);
+            tree->setColumnCount(5);
+            tree->setHeaderLabels({QObject::tr("Line"), QObject::tr("Commit"), QObject::tr("Author"),
+                                   QObject::tr("Date"), QObject::tr("Summary")});
+            tree->header()->setStretchLastSection(true);
+            for (const auto& entry : *result) {
+                auto* item = new QTreeWidgetItem(tree);
+                item->setText(0, QString::number(entry.line));
+                item->setText(1, QString::fromStdString(entry.shortHash));
+                item->setText(2, QString::fromStdString(entry.author));
+                item->setText(3, QString::fromStdString(entry.dateShort));
+                item->setText(4, QString::fromStdString(entry.summary));
+            }
+            layout->addWidget(tree, 1);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            layout->addWidget(buttons);
+            ui::installDialogChrome(&dialog);
+            dialog.exec();
+        });
 }
 } // namespace frost::app

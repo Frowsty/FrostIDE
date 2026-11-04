@@ -244,6 +244,7 @@ public:
     [[nodiscard]] PositionEncoding encoding() const override;
     // ILspRequester: capabilities().
     [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override { return capabilities(); }
+    void setApplyEditHandler(ApplyEditHandler handler) override;
 
     // Kills the current clangd as a crash would (tests of the restart path). Errors: NotFound.
     [[nodiscard]] Result<void> killServerForTesting();

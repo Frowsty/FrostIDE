@@ -41,9 +41,21 @@ struct Source {
     std::string path;
     std::int64_t sourceReference = 0;
     std::string presentationHint; // "normal", "emphasize", "deemphasize".
+
+    friend bool operator==(const Source&, const Source&) = default;
 };
 
 [[nodiscard]] Source parseSource(const rpc::Json& json);
+
+struct SourceBreakpoint {
+    std::int64_t line = 0;
+    bool enabled = true;
+    std::string condition{};
+    std::string hitCondition{};
+    std::string logMessage{};
+
+    friend bool operator==(const SourceBreakpoint&, const SourceBreakpoint&) = default;
+};
 
 // A breakpoint as the adapter reports it (setBreakpoints' answer, the breakpoint event).
 struct Breakpoint {
@@ -136,6 +148,50 @@ struct BreakpointEvent {
 
 // {"source": {"path": path}, "breakpoints": [{"line": l}, ...]} for setBreakpoints.
 [[nodiscard]] rpc::Json setBreakpointsArguments(std::string_view path, const std::vector<std::int64_t>& lines);
+[[nodiscard]] rpc::Json setBreakpointsArguments(std::string_view path, const std::vector<SourceBreakpoint>& breakpoints,
+                                                bool muted = false);
+
+struct DisassembledInstruction {
+    std::string address;
+    std::string instructionBytes;
+    std::string instruction;
+    std::string symbol;
+    std::optional<Source> location;
+    std::int64_t line = 0;
+
+    friend bool operator==(const DisassembledInstruction&, const DisassembledInstruction&) = default;
+};
+
+[[nodiscard]] std::vector<DisassembledInstruction> parseDisassembleResponse(const rpc::Json& body);
+
+struct ReadMemoryResult {
+    std::string address;
+    std::int64_t unreadableBytes = 0;
+    std::string data;         // Raw base64 payload from DAP.
+    std::string decodedBytes; // Decoded binary bytes.
+};
+
+[[nodiscard]] ReadMemoryResult parseReadMemoryResponse(const rpc::Json& body);
+
+struct GotoTarget {
+    std::int64_t id = 0;
+    std::string label;
+    std::int64_t line = 0;
+    std::int64_t column = 0;
+};
+
+[[nodiscard]] std::vector<GotoTarget> parseGotoTargetsResponse(const rpc::Json& body);
+
+[[nodiscard]] rpc::Json setVariableArguments(std::int64_t variablesReference, std::string_view name,
+                                             std::string_view value);
+[[nodiscard]] Variable parseSetVariableResponse(const rpc::Json& body, std::string_view name);
+[[nodiscard]] rpc::Json setExceptionBreakpointsArguments(const std::vector<std::string>& filters);
+[[nodiscard]] rpc::Json disassembleArguments(std::string_view memoryReference, std::int64_t instructionCount,
+                                             std::int64_t instructionOffset = 0);
+[[nodiscard]] rpc::Json readMemoryArguments(std::string_view memoryReference, std::int64_t count,
+                                            std::int64_t offset = 0);
+[[nodiscard]] rpc::Json gotoTargetsArguments(std::string_view path, std::int64_t line);
+[[nodiscard]] rpc::Json gotoArguments(std::int64_t threadId, std::int64_t targetId);
 
 /*
  * The error a failed response stands for: "cancelled" -> Cancelled, "notStopped" -> Busy, anything

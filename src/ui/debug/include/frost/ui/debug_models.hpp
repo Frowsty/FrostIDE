@@ -80,6 +80,11 @@ public:
     [[nodiscard]] bool isLoadMoreRow(const QModelIndex& index) const;
     // The value shown at `index` (Copy Value).
     [[nodiscard]] QString valueAt(const QModelIndex& index) const;
+    [[nodiscard]] QString nameAt(const QModelIndex& index) const;
+    [[nodiscard]] std::int64_t parentReferenceAt(const QModelIndex& index) const;
+    [[nodiscard]] bool isVariableRow(const QModelIndex& index) const;
+    [[nodiscard]] bool isWatchRoot(const QModelIndex& index) const;
+    void updateValueAt(const QModelIndex& index, const QString& value, const QString& type = {});
     // Requests still out (tests wait for 0).
     [[nodiscard]] int pendingRequests() const noexcept { return m_pending; }
 

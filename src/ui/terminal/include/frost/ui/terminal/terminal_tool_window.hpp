@@ -19,8 +19,11 @@
 #include <string_view>
 #include <vector>
 
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
+class QMenu;
+class QSplitter;
 class QStackedWidget;
 class QTabBar;
 class QToolButton;
@@ -64,6 +67,8 @@ inline constexpr std::string_view kNewTab = "terminal.newTab";
 inline constexpr std::string_view kCloseTab = "terminal.closeTab";
 inline constexpr std::string_view kRenameTab = "terminal.renameTab";
 inline constexpr std::string_view kOpenInTerminal = "terminal.openInTerminal";
+inline constexpr std::string_view kSplitRight = "terminal.splitRight";
+inline constexpr std::string_view kFind = "terminal.find";
 } // namespace terminal_actions
 
 /*
@@ -87,6 +92,10 @@ public:
      * Returns its index. Errors: those of planning and starting; the message is also shown.
      */
     [[nodiscard]] Result<int> newTab(const std::string& workingDirectory = {});
+    [[nodiscard]] Result<int> newTabWithShell(const std::string& shellExecutable,
+                                              const std::string& workingDirectory = {});
+    [[nodiscard]] Result<TerminalView*> splitTab(int index, const std::string& workingDirectory = {});
+    [[nodiscard]] Result<TerminalView*> splitCurrentTab(const std::string& workingDirectory = {});
     // Closes tab `index` (ending its shell's tree). Out of range: nothing.
     void closeTab(int index);
     // Closes every tab.
@@ -98,11 +107,19 @@ public:
     // Starts renaming the current tab in place (Enter applies, Escape cancels).
     void beginRename();
 
+    // Inline terminal find bar (Ctrl+F).
+    void showFindBar();
+    void hideFindBar();
+    [[nodiscard]] bool isFindBarVisible() const noexcept;
+    bool findNext();
+    bool findPrevious();
+
     [[nodiscard]] int count() const;
     [[nodiscard]] int currentIndex() const;
     void setCurrentIndex(int index);
     [[nodiscard]] TerminalView* view(int index) const;
     [[nodiscard]] TerminalView* currentView() const;
+    [[nodiscard]] int paneCount(int index) const;
     [[nodiscard]] QString tabName(int index) const;
     [[nodiscard]] QTabBar* tabBar() const noexcept { return m_tabs; }
     // The message shown when there is no tab ("" when none).
@@ -113,14 +130,24 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     struct Tab {
+        QPointer<QSplitter> splitter;
         QPointer<TerminalView> view;
+        std::vector<QPointer<TerminalView>> panes;
         QString defaultName;
         QString customName;
     };
+    void setupHeaderBar(QHBoxLayout& header);
+    void setupFindBar();
+    [[nodiscard]] Result<TerminalView*> createAndStartView(QWidget* parentWidget, const std::string& shellOverride,
+                                                           const std::string& workingDirectory);
+    void attachPaneSignals(TerminalView* pane);
+    void onPaneExited(TerminalView* pane);
+    bool runFind(bool forward, bool stayAtCurrent);
     void applyAppearance(TerminalView& view) const;
     void refreshTab(int index);
     void showMessage(const QString& text);
@@ -130,6 +157,15 @@ private:
     TerminalEnvironment m_env;
     QTabBar* m_tabs = nullptr;
     QToolButton* m_newTab = nullptr;
+    QToolButton* m_shellSelector = nullptr;
+    QMenu* m_shellMenu = nullptr;
+    QToolButton* m_splitRight = nullptr;
+    QWidget* m_findBar = nullptr;
+    QLineEdit* m_findInput = nullptr;
+    QToolButton* m_findPrev = nullptr;
+    QToolButton* m_findNext = nullptr;
+    QLabel* m_findStatus = nullptr;
+    QToolButton* m_findClose = nullptr;
     QStackedWidget* m_stack = nullptr;
     QLabel* m_message = nullptr;
     QLineEdit* m_renameEditor = nullptr;

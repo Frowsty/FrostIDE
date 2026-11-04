@@ -39,7 +39,7 @@ using shell_detail::text;
 EditorTabBar::EditorTabBar(QWidget* parent) : QTabBar(parent) {
     setObjectName(QStringLiteral("editorTabBar"));
     setTabsClosable(true);
-    setMovable(false);
+    setMovable(true);
     setUsesScrollButtons(true);
     setElideMode(Qt::ElideNone);
     setExpanding(false);
@@ -152,6 +152,11 @@ EditorTabGroup::EditorTabGroup(IEditorFactory& factory, QWidget* parent)
     m_bar->hide();
 
     connect(m_bar, &QTabBar::currentChanged, this, &EditorTabGroup::onBarCurrentChanged);
+    connect(m_bar, &QTabBar::tabMoved, this, [this](int from, int to) {
+        if (!m_syncing) {
+            moveTab(from, to);
+        }
+    });
     connect(m_bar, &QTabBar::tabCloseRequested, this, [this](int index) { static_cast<void>(close(index)); });
     connect(m_bar, &EditorTabBar::contextMenuRequested, this, &EditorTabGroup::showContextMenu);
 }
@@ -501,6 +506,13 @@ void EditorTabGroup::showContextMenu(int index, QPoint globalPos) {
     connect(menu.addAction(text("Close Other Tabs")), &QAction::triggered, this, [this, at] { closeOthers(at()); });
     connect(menu.addAction(text("Close All Tabs")), &QAction::triggered, this, [this] { closeAll(); });
     connect(menu.addAction(text("Close All but Pinned")), &QAction::triggered, this, [this] { closeAllButPinned(); });
+    connect(menu.addAction(text("Close Unmodified")), &QAction::triggered, this, [this] {
+        for (int i = count() - 1; i >= 0; --i) {
+            if (!isPinned(i) && !isDirty(i)) {
+                static_cast<void>(close(i));
+            }
+        }
+    });
     QAction* closeLeft = menu.addAction(text("Close Tabs to the Left"));
     closeLeft->setEnabled(index > 0);
     connect(closeLeft, &QAction::triggered, this, [this, at] { closeTabsToLeft(at()); });

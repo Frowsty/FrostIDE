@@ -57,6 +57,8 @@ struct CodeActionItem {
     std::string kind; // "quickfix", "refactor.rewrite", ... or "".
     bool preferred = false;
     WorkspaceEdit edit;
+    std::string commandName;
+    std::vector<Json> commandArguments;
 };
 
 // A diagnostic as LSP sends it (range, severity, code, source, message), for codeAction's context.
@@ -70,6 +72,12 @@ struct CodeActionItem {
 [[nodiscard]] sched::Task<Result<std::vector<CodeActionItem>>>
 requestCodeActions(ILspRequester& server, std::string path, LspRange range, std::vector<LiveDiagnostic> diagnostics,
                    std::stop_token token = {});
+
+// workspace/executeCommand for `command` with `arguments`. Errors: InvalidArgument (empty command),
+// request's.
+[[nodiscard]] sched::Task<Result<Json>> requestExecuteCommand(LspRequestSender& server, std::string_view command,
+                                                              const std::vector<Json>& arguments = {},
+                                                              std::stop_token token = {});
 
 // The diagnostics of `all` whose LSP range overlaps or touches `range`.
 [[nodiscard]] std::vector<LiveDiagnostic> diagnosticsAt(std::span<const LiveDiagnostic> all, LspRange range);

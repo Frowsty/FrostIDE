@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <format>
 #include <map>
@@ -912,6 +913,457 @@ Result<GitOutput> GitRepository::push(const PushOptions& options, const RunContr
         return std::unexpected(gitFailure("Push", *output));
     }
     return output;
+}
+
+namespace {
+
+std::vector<std::string_view> splitChar(std::string_view text, char delimiter) {
+    std::vector<std::string_view> fields;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t end = std::min(text.find(delimiter, start), text.size());
+        fields.push_back(text.substr(start, end - start));
+        start = end + 1;
+    }
+    return fields;
+}
+
+std::vector<std::string> parseRefsDecoration(std::string_view raw) {
+    std::vector<std::string> refs;
+    std::string_view text = trimGitText(raw);
+    if (text.size() >= 2 && text.front() == '(' && text.back() == ')') {
+        text = text.substr(1, text.size() - 2);
+    }
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::size_t end = comma == std::string_view::npos ? text.size() : comma;
+        const std::string_view token = trimGitText(text.substr(start, end - start));
+        if (!token.empty()) {
+            refs.emplace_back(token);
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return refs;
+}
+
+std::string formatUnixDateShort(std::string_view unixTimestampText) {
+    std::int64_t seconds = 0;
+    const std::string_view trimmed = trimGitText(unixTimestampText);
+    const auto [ptr, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), seconds);
+    if (ec != std::errc{}) {
+        return {};
+    }
+    const auto tp = std::chrono::sys_seconds{std::chrono::seconds{seconds}};
+    const std::chrono::year_month_day ymd{std::chrono::floor<std::chrono::days>(tp)};
+    return std::format("{:04d}-{:02d}-{:02d}", static_cast<int>(ymd.year()), static_cast<unsigned>(ymd.month()),
+                       static_cast<unsigned>(ymd.day()));
+}
+
+} // namespace
+
+Result<std::vector<GitCommitEntry>> GitRepository::log(std::size_t maxCount, std::string_view branchFilter,
+                                                       std::string_view searchFilter, std::stop_token stop) const {
+    if (maxCount == 0) {
+        return std::vector<GitCommitEntry>{};
+    }
+    std::vector<std::string> arguments = {
+        "log",
+        "--topo-order",
+        "--decorate=short",
+        "-n",
+        std::to_string(maxCount),
+        "--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%d%x1f%s",
+        "--date=iso-strict",
+    };
+    if (!searchFilter.empty()) {
+        arguments.push_back(std::format("--grep={}", searchFilter));
+        arguments.emplace_back("-i");
+    }
+    if (!branchFilter.empty()) {
+        arguments.emplace_back(branchFilter);
+    } else {
+        arguments.emplace_back("--all");
+    }
+    auto output = git(std::move(arguments), RunControl{stop, {}}, kLocalTimeout, true);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        if (contains(output->stderrBytes, "does not have any commits yet") ||
+            contains(output->stderrBytes, "bad default revision") || output->stdoutBytes.empty()) {
+            return std::vector<GitCommitEntry>{};
+        }
+        return std::unexpected(gitFailure("git log", *output));
+    }
+    std::vector<GitCommitEntry> entries;
+    for (const std::string_view line : splitLines(output->stdoutBytes)) {
+        const std::vector<std::string_view> fields = splitChar(line, '\x1f');
+        if (fields.size() < 8) {
+            continue;
+        }
+        GitCommitEntry entry;
+        entry.hash = std::string(fields[0]);
+        entry.shortHash = std::string(fields[1]);
+        for (const std::string_view parent : splitChar(fields[2], ' ')) {
+            if (!parent.empty()) {
+                entry.parents.emplace_back(parent);
+            }
+        }
+        entry.author = std::string(fields[3]);
+        entry.email = std::string(fields[4]);
+        entry.dateIso = std::string(fields[5]);
+        entry.refs = parseRefsDecoration(fields[6]);
+        entry.subject = std::string(fields[7]);
+        entries.push_back(std::move(entry));
+    }
+    return entries;
+}
+
+Result<std::vector<GitCommitFileChange>> GitRepository::commitFiles(std::string_view commitHash,
+                                                                    std::stop_token stop) const {
+    if (commitHash.empty()) {
+        return fail(ErrorCode::InvalidArgument, "commit hash is empty");
+    }
+    auto output =
+        git({"show", "--name-status", "--format=", std::string(commitHash)}, RunControl{stop, {}}, kLocalTimeout, true);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure("git show", *output));
+    }
+    std::vector<GitCommitFileChange> files;
+    for (const std::string_view line : splitLines(output->stdoutBytes)) {
+        const std::size_t tab = line.find('\t');
+        if (tab == std::string_view::npos) {
+            continue;
+        }
+        GitCommitFileChange change;
+        change.status = std::string(trimGitText(line.substr(0, tab)));
+        std::string_view rest = trimGitText(line.substr(tab + 1));
+        if (const std::size_t secondTab = rest.rfind('\t'); secondTab != std::string_view::npos) {
+            rest = trimGitText(rest.substr(secondTab + 1));
+        }
+        change.path = std::string(rest);
+        if (!change.path.empty()) {
+            files.push_back(std::move(change));
+        }
+    }
+    return files;
+}
+
+Result<GitOutput> GitRepository::cherryPick(std::string_view commitHash, const RunControl& control) const {
+    if (auto trusted = requireTrust("Cherry-pick"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (commitHash.empty()) {
+        return fail(ErrorCode::InvalidArgument, "commit hash is empty");
+    }
+    auto output = git({"cherry-pick", std::string(commitHash)}, control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure("Cherry-pick", *output));
+    }
+    return output;
+}
+
+Result<GitOutput> GitRepository::revertCommit(std::string_view commitHash, const RunControl& control) const {
+    if (auto trusted = requireTrust("Revert"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (commitHash.empty()) {
+        return fail(ErrorCode::InvalidArgument, "commit hash is empty");
+    }
+    auto output = git({"revert", "--no-edit", std::string(commitHash)}, control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure("Revert", *output));
+    }
+    return output;
+}
+
+Result<GitOutput> GitRepository::resetBranch(std::string_view commitHash, std::string_view mode,
+                                             const RunControl& control) const {
+    if (auto trusted = requireTrust("Reset"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (commitHash.empty()) {
+        return fail(ErrorCode::InvalidArgument, "commit hash is empty");
+    }
+    std::string modeFlag = "--mixed";
+    if (mode == "soft" || mode == "--soft") {
+        modeFlag = "--soft";
+    } else if (mode == "hard" || mode == "--hard") {
+        modeFlag = "--hard";
+    } else if (mode == "mixed" || mode == "--mixed" || mode.empty()) {
+        modeFlag = "--mixed";
+    } else {
+        return fail(ErrorCode::InvalidArgument, std::format("unsupported reset mode '{}'", mode));
+    }
+    auto output = git({"reset", std::move(modeFlag), std::string(commitHash)}, control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure("Reset", *output));
+    }
+    return output;
+}
+
+Result<void> GitRepository::createTag(std::string_view tagName, std::string_view commitHash,
+                                      const RunControl& control) const {
+    if (auto trusted = requireTrust("Create tag"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (tagName.empty() || tagName.front() == '-') {
+        return fail(ErrorCode::InvalidArgument, "invalid tag name");
+    }
+    std::vector<std::string> arguments = {"tag", std::string(tagName)};
+    if (!commitHash.empty()) {
+        arguments.emplace_back(commitHash);
+    }
+    auto output = git(std::move(arguments), control, kLocalTimeout);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure("Create tag", *output));
+    }
+    return {};
+}
+
+Result<void> GitRepository::createBranchAt(std::string_view name, std::string_view startPoint,
+                                           const RunControl& control) const {
+    if (auto trusted = requireTrust("Creating a branch"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (name.empty() || name.front() == '-') {
+        return fail(ErrorCode::InvalidArgument, std::format("'{}' is not a valid branch name", name));
+    }
+    std::vector<std::string> arguments = {"switch", "-c", std::string(name)};
+    if (!startPoint.empty()) {
+        arguments.emplace_back(startPoint);
+    }
+    auto output = git(std::move(arguments), control, kHookTimeout);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure(std::format("Creating the branch '{}'", name), *output));
+    }
+    return {};
+}
+
+Result<GitOutput> GitRepository::mergeBranch(std::string_view branch, const RunControl& control) const {
+    if (auto trusted = requireTrust("Merge"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (branch.empty()) {
+        return fail(ErrorCode::InvalidArgument, "branch name is empty");
+    }
+    auto output = git({"merge", std::string(branch)}, control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure(std::format("Merge '{}'", branch), *output));
+    }
+    return output;
+}
+
+Result<GitOutput> GitRepository::rebaseBranch(std::string_view ontoBranch, const RunControl& control) const {
+    if (auto trusted = requireTrust("Rebase"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (ontoBranch.empty()) {
+        return fail(ErrorCode::InvalidArgument, "target branch name is empty");
+    }
+    auto output = git({"rebase", std::string(ontoBranch)}, control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure(std::format("Rebase onto '{}'", ontoBranch), *output));
+    }
+    return output;
+}
+
+Result<void> GitRepository::deleteBranch(std::string_view branch, bool force, const RunControl& control) const {
+    if (auto trusted = requireTrust("Delete branch"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (branch.empty() || branch.front() == '-') {
+        return fail(ErrorCode::InvalidArgument, "invalid branch name");
+    }
+    auto output = git({"branch", force ? "-D" : "-d", std::string(branch)}, control, kLocalTimeout);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure(std::format("Delete branch '{}'", branch), *output));
+    }
+    return {};
+}
+
+Result<void> GitRepository::renameBranch(std::string_view oldName, std::string_view newName,
+                                         const RunControl& control) const {
+    if (auto trusted = requireTrust("Rename branch"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (oldName.empty() || newName.empty() || newName.front() == '-') {
+        return fail(ErrorCode::InvalidArgument, "invalid branch name");
+    }
+    auto output = git({"branch", "-m", std::string(oldName), std::string(newName)}, control, kLocalTimeout);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure(std::format("Rename branch '{}' to '{}'", oldName, newName), *output));
+    }
+    return {};
+}
+
+Result<GitOutput> GitRepository::stashPush(std::string_view message, bool includeUntracked,
+                                           const RunControl& control) const {
+    if (auto trusted = requireTrust("Stash"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    std::vector<std::string> arguments = {"stash", "push"};
+    if (includeUntracked) {
+        arguments.emplace_back("-u");
+    }
+    if (!trimGitText(message).empty()) {
+        arguments.emplace_back("-m");
+        arguments.emplace_back(trimGitText(message));
+    }
+    auto output = git(std::move(arguments), control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure("Stash", *output));
+    }
+    return output;
+}
+
+Result<std::vector<GitStashEntry>> GitRepository::stashList(std::stop_token stop) const {
+    auto output = git({"stash", "list"}, RunControl{stop, {}}, kLocalTimeout, true);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure("git stash list", *output));
+    }
+    std::vector<GitStashEntry> stashes;
+    int fallbackIndex = 0;
+    for (const std::string_view line : splitLines(output->stdoutBytes)) {
+        GitStashEntry entry;
+        entry.index = fallbackIndex++;
+        const std::size_t colon = line.find(':');
+        if (colon != std::string_view::npos) {
+            entry.ref = std::string(trimGitText(line.substr(0, colon)));
+            entry.message = std::string(trimGitText(line.substr(colon + 1)));
+            const std::size_t openBrace = entry.ref.find('{');
+            const std::size_t closeBrace = entry.ref.find('}', openBrace == std::string::npos ? 0 : openBrace);
+            if (openBrace != std::string::npos && closeBrace != std::string::npos && closeBrace > openBrace + 1) {
+                int parsedIndex = 0;
+                const char* begin = entry.ref.data() + openBrace + 1;
+                const char* end = entry.ref.data() + closeBrace;
+                if (std::from_chars(begin, end, parsedIndex).ec == std::errc{}) {
+                    entry.index = parsedIndex;
+                }
+            }
+        } else {
+            entry.ref = std::format("stash@{{{}}}", entry.index);
+            entry.message = std::string(trimGitText(line));
+        }
+        stashes.push_back(std::move(entry));
+    }
+    return stashes;
+}
+
+Result<GitOutput> GitRepository::stashApply(int index, bool pop, const RunControl& control) const {
+    if (auto trusted = requireTrust(pop ? "Unstash (pop)" : "Unstash (apply)"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (index < 0) {
+        return fail(ErrorCode::InvalidArgument, "stash index cannot be negative");
+    }
+    const std::string stashRef = std::format("stash@{{{}}}", index);
+    auto output = git({"stash", pop ? "pop" : "apply", stashRef}, control, kHookTimeout);
+    if (output && !output->succeeded()) {
+        return std::unexpected(gitFailure(pop ? "git stash pop" : "git stash apply", *output));
+    }
+    return output;
+}
+
+Result<void> GitRepository::stashDrop(int index, const RunControl& control) const {
+    if (auto trusted = requireTrust("Drop stash"); !trusted) {
+        return std::unexpected(std::move(trusted.error()));
+    }
+    if (index < 0) {
+        return fail(ErrorCode::InvalidArgument, "stash index cannot be negative");
+    }
+    const std::string stashRef = std::format("stash@{{{}}}", index);
+    auto output = git({"stash", "drop", stashRef}, control, kLocalTimeout);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure("git stash drop", *output));
+    }
+    return {};
+}
+
+Result<std::vector<GitBlameLine>> GitRepository::blame(std::string_view relativeOrAbsolutePath,
+                                                       std::stop_token stop) const {
+    if (relativeOrAbsolutePath.empty()) {
+        return fail(ErrorCode::InvalidArgument, "path is empty");
+    }
+    std::string targetPath(relativeOrAbsolutePath);
+    if (auto rel = relativeGitPath(m_info.workTree, relativeOrAbsolutePath)) {
+        targetPath = std::move(*rel);
+    }
+    auto output = git({"blame", "--porcelain", "--", targetPath}, RunControl{stop, {}}, kLocalTimeout, true);
+    if (!output) {
+        return std::unexpected(std::move(output.error()));
+    }
+    if (!output->succeeded()) {
+        return std::unexpected(gitFailure("git blame", *output));
+    }
+    struct CommitMeta {
+        std::string author;
+        std::string dateShort;
+        std::string summary;
+    };
+    std::map<std::string, CommitMeta> cache;
+    std::vector<GitBlameLine> result;
+    std::string currentHash;
+    int currentFinalLine = 0;
+    for (const std::string_view line : splitLines(output->stdoutBytes)) {
+        if (!line.empty() && line.front() == '\t') {
+            if (!currentHash.empty() && currentFinalLine > 0) {
+                const CommitMeta& meta = cache[currentHash];
+                GitBlameLine blameLine;
+                blameLine.line = currentFinalLine;
+                blameLine.shortHash = currentHash.substr(0, std::min<std::size_t>(8, currentHash.size()));
+                blameLine.author = meta.author;
+                blameLine.dateShort = meta.dateShort;
+                blameLine.summary = meta.summary;
+                result.push_back(std::move(blameLine));
+            }
+            currentHash.clear();
+            currentFinalLine = 0;
+            continue;
+        }
+        if (currentHash.empty()) {
+            const std::vector<std::string_view> tokens = splitChar(line, ' ');
+            if (tokens.size() >= 3 && tokens[0].size() >= 8) {
+                currentHash = std::string(tokens[0]);
+                std::from_chars(tokens[2].data(), tokens[2].data() + tokens[2].size(), currentFinalLine);
+            }
+            continue;
+        }
+        CommitMeta& meta = cache[currentHash];
+        if (line.starts_with("author ")) {
+            meta.author = std::string(line.substr(7));
+        } else if (line.starts_with("author-time ")) {
+            meta.dateShort = formatUnixDateShort(line.substr(12));
+        } else if (line.starts_with("summary ")) {
+            meta.summary = std::string(line.substr(8));
+        }
+    }
+    return result;
 }
 
 } // namespace frost::vcs

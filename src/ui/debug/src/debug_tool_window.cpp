@@ -5,6 +5,7 @@
 
 #include "frost/ui/debug_tool_window.hpp"
 
+#include "frost/io/path.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_models.hpp"
 #include "frost/ui/dialog_chrome.hpp"
@@ -12,9 +13,12 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFontDatabase>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeySequence>
@@ -24,6 +28,7 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
@@ -31,14 +36,54 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeView>
+#include <QTreeWidget>
 #include <QVBoxLayout>
+
+#include <charconv>
+#include <format>
 
 namespace frost::ui {
 
 namespace {
 
-// A tree view for variables: three columns, lazy children, Copy Value in the context menu.
-QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model) {
+constexpr int kRoleBreakpointId = Qt::UserRole;
+
+QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
+
+QString formatHexDump(const debug::dap::ReadMemoryResult& mem) {
+    std::uint64_t baseAddr = 0;
+    std::string_view addrStr = mem.address;
+    if (addrStr.starts_with("0x") || addrStr.starts_with("0X")) {
+        addrStr.remove_prefix(2);
+    }
+    std::from_chars(addrStr.data(), addrStr.data() + addrStr.size(), baseAddr, 16);
+
+    const std::string& bytes = mem.decodedBytes;
+    if (bytes.empty()) {
+        return QStringLiteral("(0 bytes read at %1)").arg(qs(mem.address));
+    }
+    std::string out;
+    for (std::size_t offset = 0; offset < bytes.size(); offset += 16) {
+        out += std::format("0x{:016X} | ", baseAddr + offset);
+        std::string ascii;
+        for (std::size_t i = 0; i < 16; ++i) {
+            if (offset + i < bytes.size()) {
+                const auto b = static_cast<unsigned char>(bytes[offset + i]);
+                out += std::format("{:02X} ", b);
+                ascii.push_back((b >= 0x20U && b <= 0x7EU) ? static_cast<char>(b) : '.');
+            } else {
+                out += "   ";
+                ascii.push_back(' ');
+            }
+        }
+        out += std::format("| {}\n", ascii);
+    }
+    return qs(out);
+}
+
+// A tree view for variables: three columns, lazy children, Copy Value / Set Value / Remove Watch in context menu.
+QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWindow* owner = nullptr,
+                             bool isWatchesView = false) {
     auto* view = new QTreeView(parent);
     view->setModel(model);
     view->setUniformRowHeights(true);
@@ -58,16 +103,49 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model) {
             model->loadMore(index);
         }
     });
-    QObject::connect(view, &QWidget::customContextMenuRequested, view, [view, model](const QPoint& at) {
-        const QModelIndex index = view->indexAt(at);
-        if (!index.isValid()) {
-            return;
-        }
-        const QString value = model->valueAt(index.siblingAtColumn(1));
-        QMenu menu(view);
-        menu.addAction(QStringLiteral("Copy Value"), view, [value] { QApplication::clipboard()->setText(value); });
-        menu.exec(view->viewport()->mapToGlobal(at));
-    });
+    QObject::connect(
+        view, &QWidget::customContextMenuRequested, view, [view, model, owner, isWatchesView](const QPoint& at) {
+            const QModelIndex index = view->indexAt(at);
+            if (!index.isValid()) {
+                return;
+            }
+            const QString value = model->valueAt(index.siblingAtColumn(1));
+            QMenu menu(view);
+            menu.addAction(QStringLiteral("Copy Value"), view, [value] { QApplication::clipboard()->setText(value); });
+            if (owner != nullptr && model->parentReferenceAt(index) > 0 && model->isVariableRow(index)) {
+                QAction* setVal = menu.addAction(QStringLiteral("Set Value..."));
+                setVal->setShortcut(QKeySequence(Qt::Key_F2));
+                QObject::connect(setVal, &QAction::triggered, owner,
+                                 [owner, view, model, index] { owner->promptSetVariableValue(view, model, index); });
+            }
+            if (isWatchesView && model->isWatchRoot(index)) {
+                const int row = index.row();
+                QAction* rmWatch = menu.addAction(QStringLiteral("Remove Watch"));
+                rmWatch->setShortcut(QKeySequence(Qt::Key_Delete));
+                QObject::connect(rmWatch, &QAction::triggered, model, [model, row] { model->removeWatch(row); });
+            }
+            menu.exec(view->viewport()->mapToGlobal(at));
+        });
+    if (owner != nullptr) {
+        auto* f2Shortcut = new QShortcut(QKeySequence(Qt::Key_F2), view);
+        f2Shortcut->setContext(Qt::WidgetShortcut);
+        QObject::connect(f2Shortcut, &QShortcut::activated, owner, [owner, view, model] {
+            const QModelIndex current = view->currentIndex();
+            if (current.isValid() && model->parentReferenceAt(current) > 0 && model->isVariableRow(current)) {
+                owner->promptSetVariableValue(view, model, current);
+            }
+        });
+    }
+    if (isWatchesView) {
+        auto* delShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), view);
+        delShortcut->setContext(Qt::WidgetShortcut);
+        QObject::connect(delShortcut, &QShortcut::activated, model, [view, model] {
+            const QModelIndex current = view->currentIndex();
+            if (current.isValid() && model->isWatchRoot(current)) {
+                model->removeWatch(current.row());
+            }
+        });
+    }
     return view;
 }
 
@@ -80,7 +158,34 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // The toolbar: the commands with the keymap's default shortcuts in their tooltips.
+    buildToolbar(layout);
+
+    m_reason = new QLabel(this);
+    m_reason->setObjectName(QStringLiteral("debugReason"));
+    m_reason->setContentsMargins(8, 2, 8, 2);
+    m_reason->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(m_reason);
+
+    m_tabs = new QTabWidget(this);
+    m_tabs->setDocumentMode(true);
+    layout->addWidget(m_tabs, 1);
+
+    buildThreadsAndVariablesTab();
+
+    m_console = new RunConsole(m_tabs);
+    m_tabs->addTab(m_console, QStringLiteral("Console"));
+    m_controller.setConsole(m_console);
+
+    buildBreakpointsTab();
+    buildMemoryAndDisassemblyTab();
+    wireControllerSignals();
+    updateBreakpointsList();
+    updateActions();
+}
+
+DebugToolWindow::~DebugToolWindow() = default;
+
+void DebugToolWindow::buildToolbar(QVBoxLayout* layout) {
     m_toolbar = new QToolBar(this);
     m_toolbar->setIconSize(QSize(16, 16));
     const auto add = [this](const QString& text, const QString& shortcut, auto slot) {
@@ -101,18 +206,9 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     m_toolbar->addSeparator();
     m_evaluate = add(QStringLiteral("Evaluate Expression"), QStringLiteral("Alt+F8"), [this] { openEvaluate(); });
     layout->addWidget(m_toolbar);
+}
 
-    m_reason = new QLabel(this);
-    m_reason->setObjectName(QStringLiteral("debugReason"));
-    m_reason->setContentsMargins(8, 2, 8, 2);
-    m_reason->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(m_reason);
-
-    m_tabs = new QTabWidget(this);
-    m_tabs->setDocumentMode(true);
-    layout->addWidget(m_tabs, 1);
-
-    // "Threads & Variables": frames on the left, variables and watches on the right.
+void DebugToolWindow::buildThreadsAndVariablesTab() {
     auto* splitter = new QSplitter(Qt::Horizontal, m_tabs);
     auto* framesPane = new QWidget(splitter);
     auto* framesLayout = new QVBoxLayout(framesPane);
@@ -135,7 +231,7 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     framesLayout->addWidget(m_loadedSource, 2);
 
     m_variables = new VariablesModel(m_controller, VariablesModel::Mode::Scopes, this);
-    m_variablesView = makeVariablesView(splitter, m_variables);
+    m_variablesView = makeVariablesView(splitter, m_variables, this, false);
 
     auto* watchesPane = new QWidget(splitter);
     auto* watchesLayout = new QVBoxLayout(watchesPane);
@@ -150,16 +246,12 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     watchRow->addWidget(removeWatch);
     watchesLayout->addLayout(watchRow);
     m_watches = new VariablesModel(m_controller, VariablesModel::Mode::Watches, this);
-    m_watchesView = makeVariablesView(watchesPane, m_watches);
+    m_watchesView = makeVariablesView(watchesPane, m_watches, this, true);
     watchesLayout->addWidget(m_watchesView, 1);
     splitter->setStretchFactor(0, 2);
     splitter->setStretchFactor(1, 3);
     splitter->setStretchFactor(2, 2);
     m_tabs->addTab(splitter, QStringLiteral("Threads && Variables"));
-
-    m_console = new RunConsole(m_tabs);
-    m_tabs->addTab(m_console, QStringLiteral("Console"));
-    m_controller.setConsole(m_console);
 
     connect(m_watchInput, &QLineEdit::returnPressed, this, [this] {
         m_watches->addWatch(m_watchInput->text());
@@ -180,7 +272,134 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
             m_controller.selectThread(m_threads->itemData(index).toLongLong());
         }
     });
+}
 
+void DebugToolWindow::buildBreakpointsTab() {
+    auto* bpPane = new QWidget(m_tabs);
+    auto* bpLayout = new QVBoxLayout(bpPane);
+    bpLayout->setContentsMargins(6, 6, 6, 6);
+    bpLayout->setSpacing(6);
+
+    auto* bpControls = new QHBoxLayout();
+    m_muteBreakpointsButton = new QPushButton(QStringLiteral("Mute All Breakpoints"), bpPane);
+    m_muteBreakpointsButton->setObjectName(QStringLiteral("debugMuteBreakpointsButton"));
+    m_muteBreakpointsButton->setCheckable(true);
+    m_muteBreakpointsButton->setChecked(m_controller.breakpointsMuted());
+
+    m_breakOnExceptionsCheck = new QCheckBox(QStringLiteral("Break on Exceptions"), bpPane);
+    m_exceptionFilterCombo = new QComboBox(bpPane);
+    m_exceptionFilterCombo->addItem(QStringLiteral("Uncaught Exceptions"), QStringLiteral("uncaught"));
+    m_exceptionFilterCombo->addItem(QStringLiteral("All Exceptions"), QStringLiteral("all"));
+
+    m_editBreakpointButton = new QPushButton(QStringLiteral("Edit Breakpoint..."), bpPane);
+    m_editBreakpointButton->setObjectName(QStringLiteral("debugEditBreakpointButton"));
+    m_removeBreakpointButton = new QPushButton(QStringLiteral("Remove Breakpoint"), bpPane);
+    m_removeBreakpointButton->setObjectName(QStringLiteral("debugRemoveBreakpointButton"));
+
+    bpControls->addWidget(m_muteBreakpointsButton);
+    bpControls->addWidget(m_breakOnExceptionsCheck);
+    bpControls->addWidget(m_exceptionFilterCombo);
+    bpControls->addStretch(1);
+    bpControls->addWidget(m_editBreakpointButton);
+    bpControls->addWidget(m_removeBreakpointButton);
+    bpLayout->addLayout(bpControls);
+
+    m_breakpointsTree = new QTreeWidget(bpPane);
+    m_breakpointsTree->setObjectName(QStringLiteral("debugBreakpointsTree"));
+    m_breakpointsTree->setRootIsDecorated(false);
+    m_breakpointsTree->setUniformRowHeights(true);
+    m_breakpointsTree->setAlternatingRowColors(true);
+    m_breakpointsTree->setHeaderLabels({QStringLiteral("Enabled"), QStringLiteral("File:Line"),
+                                        QStringLiteral("Condition"), QStringLiteral("Hit Count"),
+                                        QStringLiteral("Log Message (Tracepoint)")});
+    m_breakpointsTree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_breakpointsTree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_breakpointsTree->header()->setSectionResizeMode(2, QHeaderView::Interactive);
+    m_breakpointsTree->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_breakpointsTree->header()->setSectionResizeMode(4, QHeaderView::Stretch);
+    bpLayout->addWidget(m_breakpointsTree, 1);
+
+    m_tabs->addTab(bpPane, QStringLiteral("Breakpoints"));
+
+    connect(m_muteBreakpointsButton, &QPushButton::toggled, this,
+            [this](bool checked) { m_controller.setMutedBreakpoints(checked); });
+    connect(m_breakOnExceptionsCheck, &QCheckBox::toggled, this, [this] { updateExceptionBreakpoints(); });
+    connect(m_exceptionFilterCombo, &QComboBox::currentIndexChanged, this, [this] { updateExceptionBreakpoints(); });
+    connect(m_editBreakpointButton, &QPushButton::clicked, this, [this] { openEditBreakpoint(0); });
+    connect(m_removeBreakpointButton, &QPushButton::clicked, this, [this] {
+        if (QTreeWidgetItem* current = m_breakpointsTree->currentItem()) {
+            const auto id = static_cast<debug::BreakpointId>(current->data(0, kRoleBreakpointId).toULongLong());
+            m_controller.breakpoints().remove(id);
+        }
+    });
+    connect(m_breakpointsTree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
+        if (m_fillingBreakpoints || item == nullptr || column != 0) {
+            return;
+        }
+        const auto id = static_cast<debug::BreakpointId>(item->data(0, kRoleBreakpointId).toULongLong());
+        m_controller.breakpoints().setEnabled(id, item->checkState(0) == Qt::Checked);
+    });
+    connect(m_breakpointsTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
+        if (item != nullptr) {
+            openEditBreakpoint(static_cast<debug::BreakpointId>(item->data(0, kRoleBreakpointId).toULongLong()));
+        }
+    });
+}
+
+void DebugToolWindow::buildMemoryAndDisassemblyTab() {
+    auto* lowPane = new QWidget(m_tabs);
+    auto* lowLayout = new QVBoxLayout(lowPane);
+    lowLayout->setContentsMargins(6, 6, 6, 6);
+    lowLayout->setSpacing(6);
+
+    auto* topBar = new QHBoxLayout();
+    m_memoryAddressInput = new QLineEdit(lowPane);
+    m_memoryAddressInput->setObjectName(QStringLiteral("debugMemoryAddressInput"));
+    m_memoryAddressInput->setPlaceholderText(QStringLiteral("0x... or symbol/expression"));
+    m_disassembleButton = new QPushButton(QStringLiteral("Disassemble"), lowPane);
+    m_disassembleButton->setObjectName(QStringLiteral("debugDisassembleButton"));
+    m_readMemoryButton = new QPushButton(QStringLiteral("Read Memory (Hex)"), lowPane);
+    m_readMemoryButton->setObjectName(QStringLiteral("debugReadMemoryButton"));
+    topBar->addWidget(new QLabel(QStringLiteral("Address / Symbol:"), lowPane));
+    topBar->addWidget(m_memoryAddressInput, 1);
+    topBar->addWidget(m_disassembleButton);
+    topBar->addWidget(m_readMemoryButton);
+    lowLayout->addLayout(topBar);
+
+    auto* lowSplitter = new QSplitter(Qt::Horizontal, lowPane);
+    m_disassemblyTree = new QTreeWidget(lowSplitter);
+    m_disassemblyTree->setObjectName(QStringLiteral("debugDisassemblyTree"));
+    m_disassemblyTree->setRootIsDecorated(false);
+    m_disassemblyTree->setUniformRowHeights(true);
+    m_disassemblyTree->setAlternatingRowColors(true);
+    m_disassemblyTree->setHeaderLabels(
+        {QStringLiteral("Address"), QStringLiteral("Bytes"), QStringLiteral("Instruction")});
+    m_disassemblyTree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_disassemblyTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_disassemblyTree->header()->setSectionResizeMode(2, QHeaderView::Stretch);
+
+    m_memoryView = new QPlainTextEdit(lowSplitter);
+    m_memoryView->setObjectName(QStringLiteral("debugMemoryView"));
+    m_memoryView->setReadOnly(true);
+    m_memoryView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+    lowSplitter->addWidget(m_disassemblyTree);
+    lowSplitter->addWidget(m_memoryView);
+    lowSplitter->setStretchFactor(0, 1);
+    lowSplitter->setStretchFactor(1, 1);
+    lowLayout->addWidget(lowSplitter, 1);
+
+    m_tabs->addTab(lowPane, QStringLiteral("Memory && Disassembly"));
+
+    connect(m_disassembleButton, &QPushButton::clicked, this, &DebugToolWindow::requestDisassembly);
+    connect(m_readMemoryButton, &QPushButton::clicked, this, &DebugToolWindow::requestMemoryDump);
+    connect(m_memoryAddressInput, &QLineEdit::returnPressed, this, [this] {
+        requestDisassembly();
+        requestMemoryDump();
+    });
+}
+
+void DebugToolWindow::wireControllerSignals() {
     connect(&m_controller, &DebugController::loadedSourceChanged, this,
             [this](const QString& name, const QString& content, int line) {
                 const bool available = !name.isEmpty();
@@ -204,6 +423,9 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
             });
     connect(&m_controller, &DebugController::stateChanged, this, &DebugToolWindow::updateActions);
     connect(&m_controller, &DebugController::threadsChanged, this, &DebugToolWindow::updateThreads);
+    connect(&m_controller, &DebugController::breakpointsChanged, this, &DebugToolWindow::updateBreakpointsList);
+    connect(&m_controller, &DebugController::editBreakpointRequested, this,
+            [this](debug::BreakpointId id) { openEditBreakpoint(id); });
     connect(&m_controller, &DebugController::frameSelected, this, [this] {
         const int row = m_frames->selectedRow();
         if (row >= 0) {
@@ -222,16 +444,12 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     });
     connect(&m_controller, &DebugController::evaluateRequested, this,
             [this](const QString& expression) { openEvaluate(expression); });
-    // The first scope (Locals) opens by itself, as in Rider.
     connect(m_variables, &QAbstractItemModel::rowsInserted, this, [this](const QModelIndex& parent, int first, int) {
         if (!parent.isValid() && first == 0) {
             m_variablesView->expand(m_variables->index(0, 0));
         }
     });
-    updateActions();
 }
-
-DebugToolWindow::~DebugToolWindow() = default;
 
 void DebugToolWindow::updateActions() {
     const bool live = m_controller.debugging();
@@ -244,6 +462,12 @@ void DebugToolWindow::updateActions() {
     m_stepOut->setEnabled(paused);
     m_runToCursor->setEnabled(paused);
     m_evaluate->setEnabled(paused);
+    if (m_disassembleButton != nullptr) {
+        m_disassembleButton->setEnabled(paused);
+    }
+    if (m_readMemoryButton != nullptr) {
+        m_readMemoryButton->setEnabled(paused);
+    }
     if (live && !paused) {
         m_reason->setText(m_controller.statusText());
         m_reason->setStyleSheet(QString());
@@ -267,6 +491,171 @@ void DebugToolWindow::updateThreads() {
         m_threads->setCurrentIndex(current);
     }
     m_fillingThreads = false;
+}
+
+void DebugToolWindow::updateBreakpointsList() {
+    if (m_breakpointsTree == nullptr) {
+        return;
+    }
+    m_fillingBreakpoints = true;
+    if (m_muteBreakpointsButton != nullptr) {
+        const QSignalBlocker blocker(m_muteBreakpointsButton);
+        m_muteBreakpointsButton->setChecked(m_controller.breakpointsMuted());
+    }
+    m_breakpointsTree->clear();
+    for (const debug::LineBreakpoint& bp : m_controller.breakpoints().all()) {
+        auto* item = new QTreeWidgetItem(m_breakpointsTree);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(0, bp.enabled ? Qt::Checked : Qt::Unchecked);
+        item->setData(0, kRoleBreakpointId, QVariant::fromValue<qulonglong>(bp.id));
+        const std::string_view fileName = io::fileName(bp.path);
+        const QString displayPath = fileName.empty() ? qs(bp.path) : qs(fileName);
+        item->setText(1, QStringLiteral("%1:%2").arg(displayPath).arg(bp.line));
+        item->setToolTip(1, QStringLiteral("%1:%2").arg(qs(bp.path)).arg(bp.line));
+        item->setText(2, qs(bp.condition));
+        item->setText(3, qs(bp.hitCondition));
+        item->setText(4, qs(bp.logMessage));
+    }
+    m_fillingBreakpoints = false;
+}
+
+void DebugToolWindow::updateExceptionBreakpoints() {
+    std::vector<std::string> filters;
+    if (m_breakOnExceptionsCheck != nullptr && m_breakOnExceptionsCheck->isChecked() &&
+        m_exceptionFilterCombo != nullptr) {
+        filters.push_back(m_exceptionFilterCombo->currentData().toString().toStdString());
+        if (filters.front() == "all") {
+            filters.emplace_back("uncaught");
+        }
+    }
+    m_controller.setExceptionBreakpoints(filters);
+}
+
+void DebugToolWindow::requestDisassembly() {
+    if (!m_controller.paused() || m_memoryAddressInput == nullptr) {
+        return;
+    }
+    const QString ref = m_memoryAddressInput->text().trimmed();
+    if (ref.isEmpty()) {
+        return;
+    }
+    QPointer<DebugToolWindow> self(this);
+    m_controller.disassemble(ref, 64, [self](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
+        if (!self || self->m_disassemblyTree == nullptr) {
+            return;
+        }
+        self->m_disassemblyTree->clear();
+        if (!res) {
+            auto* errItem = new QTreeWidgetItem(self->m_disassemblyTree);
+            errItem->setText(2, qs(res.error().message()));
+            return;
+        }
+        for (const debug::dap::DisassembledInstruction& inst : *res) {
+            auto* item = new QTreeWidgetItem(self->m_disassemblyTree);
+            item->setText(0, qs(inst.address));
+            item->setText(1, qs(inst.instructionBytes));
+            item->setText(2, inst.symbol.empty()
+                                 ? qs(inst.instruction)
+                                 : QStringLiteral("<%1> %2").arg(qs(inst.symbol), qs(inst.instruction)));
+        }
+    });
+}
+
+void DebugToolWindow::requestMemoryDump() {
+    if (!m_controller.paused() || m_memoryAddressInput == nullptr) {
+        return;
+    }
+    const QString ref = m_memoryAddressInput->text().trimmed();
+    if (ref.isEmpty()) {
+        return;
+    }
+    QPointer<DebugToolWindow> self(this);
+    m_controller.readMemory(ref, 256, [self](Result<debug::dap::ReadMemoryResult> res) {
+        if (!self || self->m_memoryView == nullptr) {
+            return;
+        }
+        if (!res) {
+            self->m_memoryView->setPlainText(qs(res.error().message()));
+            return;
+        }
+        self->m_memoryView->setPlainText(formatHexDump(*res));
+    });
+}
+
+void DebugToolWindow::promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index) {
+    if (!m_controller.paused() || model == nullptr || !index.isValid()) {
+        return;
+    }
+    const std::int64_t parentRef = model->parentReferenceAt(index);
+    const QString name = model->nameAt(index);
+    const QString currentVal = model->valueAt(index);
+    if (parentRef <= 0 || name.isEmpty()) {
+        return;
+    }
+    QDialog dialog(view != nullptr ? view->window() : window());
+    dialog.setWindowTitle(QStringLiteral("Set Value: %1").arg(name));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    auto* valueEdit = new QLineEdit(currentVal, &dialog);
+    form->addRow(QStringLiteral("New value:"), valueEdit);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
+    valueEdit->selectAll();
+    valueEdit->setFocus();
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const QString newValue = valueEdit->text();
+    QPointer<VariablesModel> safeModel(model);
+    m_controller.setVariableValue(parentRef, name, newValue, [safeModel, index](Result<debug::dap::Variable> updated) {
+        if (safeModel && updated) {
+            safeModel->updateValueAt(index, qs(updated->value), qs(updated->type));
+        }
+    });
+}
+
+void DebugToolWindow::openEditBreakpoint(debug::BreakpointId id) {
+    if (m_tabs != nullptr && m_breakpointsTree != nullptr) {
+        m_tabs->setCurrentIndex(2);
+    }
+    if (id == 0 && m_breakpointsTree != nullptr && m_breakpointsTree->currentItem() != nullptr) {
+        id = static_cast<debug::BreakpointId>(
+            m_breakpointsTree->currentItem()->data(0, kRoleBreakpointId).toULongLong());
+    }
+    const auto bp = m_controller.breakpoints().find(id);
+    if (!bp) {
+        return;
+    }
+    QDialog dialog(window());
+    dialog.setWindowTitle(QStringLiteral("Edit Breakpoint (%1:%2)").arg(qs(io::fileName(bp->path))).arg(bp->line));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    auto* conditionEdit = new QLineEdit(qs(bp->condition), &dialog);
+    conditionEdit->setPlaceholderText(QStringLiteral("e.g. i == 42 && ptr != nullptr"));
+    auto* hitCountEdit = new QLineEdit(qs(bp->hitCondition), &dialog);
+    hitCountEdit->setPlaceholderText(QStringLiteral("e.g. >= 10"));
+    auto* logMessageEdit = new QLineEdit(qs(bp->logMessage), &dialog);
+    logMessageEdit->setPlaceholderText(QStringLiteral("e.g. Value of x is {x} (Tracepoint)"));
+    form->addRow(QStringLiteral("Condition:"), conditionEdit);
+    form->addRow(QStringLiteral("Hit Count:"), hitCountEdit);
+    form->addRow(QStringLiteral("Log Message:"), logMessageEdit);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
+    conditionEdit->setFocus();
+    if (dialog.exec() == QDialog::Accepted) {
+        m_controller.breakpoints().setProperties(id, conditionEdit->text().trimmed().toStdString(),
+                                                 hitCountEdit->text().trimmed().toStdString(),
+                                                 logMessageEdit->text().trimmed().toStdString());
+        updateBreakpointsList();
+    }
 }
 
 void DebugToolWindow::onFrameActivated(int row) {

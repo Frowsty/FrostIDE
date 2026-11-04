@@ -509,5 +509,97 @@ TEST(SolutionExplorer, CSharpSolutionShowsSubfoldersAndCodeIconsWithoutNotSuppor
     EXPECT_EQ(explorer.currentDirectory().toStdString(), project::test::MemTree::path("Client/Systems"));
 }
 
+TEST(SolutionExplorer, ContextMenuOffersProjectAndSolutionPropertiesAndCppFilterActions) {
+    SolutionExplorer explorer;
+    explorer.setSolution(loadSdk());
+
+    QString addedExistingTarget;
+    QString addedNewTarget;
+    explorer.setAddProjectFileHandler([&](const QString& project) { addedExistingTarget = project; });
+    explorer.setAddNewProjectFileHandler([&](const QString& project) { addedNewTarget = project; });
+
+    test::SignalLog slnProps(&explorer, &SolutionExplorer::solutionPropertiesRequested);
+    test::SignalLog cfgMgr(&explorer, &SolutionExplorer::configurationManagerRequested);
+    test::SignalLog projProps(&explorer, &SolutionExplorer::projectPropertiesRequested);
+    test::SignalLog runCfg(&explorer, &SolutionExplorer::editRunConfigurationsRequested);
+    test::SignalLog addRef(&explorer, &SolutionExplorer::addProjectReferenceRequested);
+    test::SignalLog addExistingProj(&explorer, &SolutionExplorer::addExistingProjectRequested);
+    test::SignalLog removeProj(&explorer, &SolutionExplorer::removeProjectFromSolutionRequested);
+    test::SignalLog openedFile(&explorer, &SolutionExplorer::openFile);
+
+    // 1. Solution node context menu & Alt+Enter
+    const QModelIndex slnIdx = explorer.filterModel()->index(0, 0);
+    ASSERT_TRUE(slnIdx.isValid());
+    {
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(slnIdx));
+        ASSERT_NE(menu, nullptr);
+        ASSERT_NE(findAction(*menu, "solutionProperties"), nullptr);
+        ASSERT_NE(findAction(*menu, "configurationManager"), nullptr);
+        ASSERT_NE(findAction(*menu, "editRunConfigurations"), nullptr);
+        ASSERT_NE(findAction(*menu, "addExistingProject"), nullptr);
+
+        findAction(*menu, "solutionProperties")->trigger();
+        EXPECT_EQ(slnProps.count(), 1);
+        findAction(*menu, "configurationManager")->trigger();
+        EXPECT_EQ(cfgMgr.count(), 1);
+        findAction(*menu, "addExistingProject")->trigger();
+        EXPECT_EQ(addExistingProj.count(), 1);
+    }
+    explorer.view()->setCurrentIndex(slnIdx);
+    pressKey(explorer.view(), Qt::Key_Return, {}, Qt::AltModifier);
+    EXPECT_EQ(slnProps.count(), 2);
+
+    // 2. Project node context menu & Alt+Enter
+    const NodeId appNode = nodeAt(*explorer.solution(), {"App"});
+    const QModelIndex appIdx = explorer.filterModel()->mapFromSource(explorer.model()->indexOf(appNode));
+    ASSERT_TRUE(appIdx.isValid());
+    {
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(appIdx));
+        ASSERT_NE(menu, nullptr);
+        ASSERT_NE(findAction(*menu, "projectProperties"), nullptr);
+        ASSERT_NE(findAction(*menu, "editProjectFile"), nullptr);
+        ASSERT_NE(findAction(*menu, "addProjectReference"), nullptr);
+        ASSERT_NE(findAction(*menu, "editRunConfigurations"), nullptr);
+        ASSERT_NE(findAction(*menu, "removeProjectFromSolution"), nullptr);
+
+        findAction(*menu, "projectProperties")->trigger();
+        ASSERT_EQ(projProps.count(), 1);
+        EXPECT_EQ(projProps.at(0).at(0).toString().toStdString(), project::test::sdk("App/App.vcxproj"));
+
+        findAction(*menu, "editProjectFile")->trigger();
+        ASSERT_EQ(openedFile.count(), 1);
+        EXPECT_EQ(openedFile.at(0).at(0).toString().toStdString(), project::test::sdk("App/App.vcxproj"));
+
+        findAction(*menu, "addProjectReference")->trigger();
+        EXPECT_EQ(addRef.count(), 1);
+        findAction(*menu, "editRunConfigurations")->trigger();
+        EXPECT_EQ(runCfg.count(), 1);
+        findAction(*menu, "removeProjectFromSolution")->trigger();
+        EXPECT_EQ(removeProj.count(), 1);
+    }
+    explorer.view()->setCurrentIndex(appIdx);
+    pressKey(explorer.view(), Qt::Key_Return, {}, Qt::AltModifier);
+    EXPECT_EQ(projProps.count(), 2);
+
+    // 3. C++ virtual filter node ("Source Files" under App, where node.path is empty)
+    const NodeId srcFilterNode = nodeAt(*explorer.solution(), {"App", "Source Files"});
+    const QModelIndex srcFilterIdx = explorer.filterModel()->mapFromSource(explorer.model()->indexOf(srcFilterNode));
+    ASSERT_TRUE(srcFilterIdx.isValid());
+    {
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(srcFilterIdx));
+        ASSERT_NE(menu, nullptr);
+        ASSERT_NE(findAction(*menu, "addNewProjectFile"), nullptr);
+        ASSERT_NE(findAction(*menu, "addExistingProjectFile"), nullptr);
+        ASSERT_NE(findAction(*menu, "projectProperties"), nullptr);
+
+        findAction(*menu, "addNewProjectFile")->trigger();
+        EXPECT_EQ(addedNewTarget.toStdString(), project::test::sdk("App/App.vcxproj"));
+        findAction(*menu, "addExistingProjectFile")->trigger();
+        EXPECT_EQ(addedExistingTarget.toStdString(), project::test::sdk("App/App.vcxproj"));
+        findAction(*menu, "projectProperties")->trigger();
+        EXPECT_EQ(projProps.count(), 3);
+    }
+}
+
 } // namespace
 } // namespace frost::ui

@@ -11,19 +11,26 @@
  */
 #pragma once
 
+#include "frost/debug/breakpoints.hpp"
+
 #include <QDialog>
 #include <QString>
 #include <QWidget>
 
 class QAction;
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListView;
 class QPlainTextEdit;
+class QPushButton;
 class QTabWidget;
 class QToolBar;
 class QTreeView;
+class QTreeWidget;
+class QTreeWidgetItem;
+class QVBoxLayout;
 
 namespace frost::ui {
 
@@ -61,15 +68,33 @@ public:
     [[nodiscard]] VariablesModel* watchesModel() const noexcept { return m_watches; }
     [[nodiscard]] RunConsole* console() const noexcept { return m_console; }
     [[nodiscard]] QTabWidget* tabs() const noexcept { return m_tabs; }
+    [[nodiscard]] QTreeWidget* breakpointsView() const noexcept { return m_breakpointsTree; }
+    [[nodiscard]] QPushButton* muteBreakpointsButton() const noexcept { return m_muteBreakpointsButton; }
+    [[nodiscard]] QLineEdit* memoryAddressInput() const noexcept { return m_memoryAddressInput; }
+    [[nodiscard]] QTreeWidget* disassemblyView() const noexcept { return m_disassemblyTree; }
+    [[nodiscard]] QPlainTextEdit* memoryView() const noexcept { return m_memoryView; }
 
     // Copies the value of the Variables or Watches row with focus to the clipboard.
     void copySelectedValue();
+    // Prompts to modify the value of the selected variable row.
+    void promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index);
+    // Opens the Edit Breakpoint dialog for `id` (or the selected row in the Breakpoints tab when 0).
+    void openEditBreakpoint(debug::BreakpointId id = 0);
     // Opens the Evaluate Expression dialog with `expression` (non-modal; it deletes itself).
     void openEvaluate(const QString& expression = {});
 
 private:
+    void buildToolbar(QVBoxLayout* layout);
+    void buildThreadsAndVariablesTab();
+    void buildBreakpointsTab();
+    void buildMemoryAndDisassemblyTab();
+    void wireControllerSignals();
     void updateActions();
     void updateThreads();
+    void updateBreakpointsList();
+    void updateExceptionBreakpoints();
+    void requestDisassembly();
+    void requestMemoryDump();
     void onFrameActivated(int row);
 
     DebugController& m_controller;
@@ -95,7 +120,19 @@ private:
     VariablesModel* m_variables = nullptr;
     VariablesModel* m_watches = nullptr;
     RunConsole* m_console = nullptr;
+    QTreeWidget* m_breakpointsTree = nullptr;
+    QPushButton* m_muteBreakpointsButton = nullptr;
+    QCheckBox* m_breakOnExceptionsCheck = nullptr;
+    QComboBox* m_exceptionFilterCombo = nullptr;
+    QPushButton* m_editBreakpointButton = nullptr;
+    QPushButton* m_removeBreakpointButton = nullptr;
+    QLineEdit* m_memoryAddressInput = nullptr;
+    QPushButton* m_disassembleButton = nullptr;
+    QPushButton* m_readMemoryButton = nullptr;
+    QTreeWidget* m_disassemblyTree = nullptr;
+    QPlainTextEdit* m_memoryView = nullptr;
     bool m_fillingThreads = false;
+    bool m_fillingBreakpoints = false;
 };
 
 // Evaluate Expression (Alt+F8): an expression line and the result as an expandable tree.

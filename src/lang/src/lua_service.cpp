@@ -85,6 +85,7 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
     std::optional<Error> lastError FROST_GUARDED_BY(mutex);
     std::deque<std::string> stderrLines FROST_GUARDED_BY(mutex);
     std::map<std::string, OpenDocument> documents FROST_GUARDED_BY(mutex); // documentKey -> document.
+    ApplyEditHandler applyEditHandler FROST_GUARDED_BY(mutex);
     void setState(LuaState next) {
         LockGuard lock(mutex);
         state = next;
@@ -199,6 +200,19 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
             log::write(level, kLogCategory, "{}", message);
         };
         out.onProtocolError = [](const Error& problem) { log::warn(kLogCategory, "protocol: {}", problem.describe()); };
+        out.onApplyEdit = [weak](const Json& params) {
+            if (auto self = weak.lock()) {
+                ApplyEditHandler handler;
+                {
+                    LockGuard lock(self->mutex);
+                    handler = self->applyEditHandler;
+                }
+                if (handler) {
+                    return handler(params);
+                }
+            }
+            return false;
+        };
         return out;
     }
 
@@ -587,6 +601,11 @@ sched::Task<Result<Json>> LuaService::request(std::string method, Json params, s
 PositionEncoding LuaService::encoding() const {
     LockGuard lock(m_shared->mutex);
     return m_shared->capabilities ? m_shared->capabilities->positionEncoding : PositionEncoding::Utf16;
+}
+
+void LuaService::setApplyEditHandler(ApplyEditHandler handler) {
+    LockGuard lock(m_shared->mutex);
+    m_shared->applyEditHandler = std::move(handler);
 }
 
 Result<void> LuaService::killServerForTesting() {

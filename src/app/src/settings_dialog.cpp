@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -41,30 +42,60 @@ constexpr std::array kEntries{
     Entry{settings::key::uiTheme.name, 0},
     Entry{settings::key::uiCompactMode.name, 0},
     Entry{settings::key::uiZoom.name, 0},
+    Entry{settings::key::uiToolbarVisible.name, 0},
+    Entry{settings::key::uiStatusBarVisible.name, 0},
+    Entry{settings::key::generalReopenLastProject.name, 0},
+    Entry{settings::key::generalConfirmExit.name, 0},
     Entry{settings::key::editorFontFamily.name, 1},
     Entry{settings::key::editorFontSize.name, 1},
     Entry{settings::key::editorLineSpacing.name, 1},
     Entry{settings::key::editorFontLigatures.name, 1},
     Entry{settings::key::editorSoftWrap.name, 1},
     Entry{settings::key::editorLineNumbers.name, 1},
+    Entry{settings::key::editorShowWhitespace.name, 1},
+    Entry{settings::key::editorIndentGuides.name, 1},
+    Entry{settings::key::editorRightMargin.name, 1},
+    Entry{settings::key::editorShowRightMargin.name, 1},
+    Entry{settings::key::editorCaretBlinking.name, 1},
     Entry{settings::key::editorTabSize.name, 2},
     Entry{settings::key::editorIndentSize.name, 2},
     Entry{settings::key::editorInsertSpaces.name, 2},
+    Entry{settings::key::editorDetectIndentation.name, 2},
+    Entry{settings::key::editorTrimTrailingWhitespace.name, 2},
     Entry{settings::key::editorEditorConfig.name, 2},
     Entry{settings::key::filesEncoding.name, 3},
     Entry{settings::key::filesUtf8Bom.name, 3},
     Entry{settings::key::filesLineSeparator.name, 3},
     Entry{settings::key::editorInsertFinalNewline.name, 3},
+    Entry{settings::key::saveAutosaveOnFrameDeactivation.name, 3},
+    Entry{settings::key::saveAutosaveOnIdle.name, 3},
+    Entry{settings::key::saveAutosaveIdleSeconds.name, 3},
+    Entry{settings::key::saveHotExit.name, 3},
+    Entry{settings::key::localHistoryEnabled.name, 3},
+    Entry{settings::key::localHistoryMaxAgeDays.name, 3},
+    Entry{settings::key::localHistoryMaxTotalMiB.name, 3},
+    Entry{settings::key::buildSaveAllBeforeBuild.name, 4},
+    Entry{settings::key::buildMsbuildMaxCpuCount.name, 4},
     Entry{settings::key::toolsCmakePath.name, 4},
     Entry{settings::key::toolsNinjaPath.name, 4},
     Entry{settings::key::toolsGitPath.name, 4},
     Entry{settings::key::toolsClangdPath.name, 4},
+    Entry{settings::key::toolsClangFormatPath.name, 4},
+    Entry{settings::key::toolsClangTidyPath.name, 4},
     Entry{settings::key::toolsMsbuildPath.name, 4},
+    Entry{settings::key::toolsLldbDapPath.name, 4},
+    Entry{settings::key::toolsManagedDotnetPath.name, 4},
+    Entry{settings::key::toolsManagedServerPath.name, 4},
+    Entry{settings::key::toolsLuaLanguageServerPath.name, 4},
+    Entry{settings::key::luaRuntimeVersion.name, 4},
     Entry{settings::key::debugSourceMapFrom.name, 4},
     Entry{settings::key::debugSourceMapTo.name, 4},
+    Entry{settings::key::terminalShell.name, 4},
+    Entry{settings::key::terminalScrollbackLines.name, 4},
     Entry{settings::key::networkOffline.name, 5},
     Entry{settings::key::updateChannel.name, 5},
     Entry{settings::key::keymapId.name, 6},
+    Entry{settings::key::keymapDoubleTapIntervalMs.name, 6},
 };
 constexpr std::array<std::string_view, 7> kPages{"Appearance", "Editor",  "Code Style", "Files",
                                                  "Tools",      "Updates", "Keymap"};
@@ -238,6 +269,18 @@ void SettingsDialog::build() {
         row->control->setMinimumWidth(200);
         label->setBuddy(row->control);
         line->addWidget(row->control);
+        if (auto* edit = qobject_cast<QLineEdit*>(row->control);
+            edit != nullptr && (spec->schema.hint == settings::StringHint::Executable ||
+                                spec->schema.hint == settings::StringHint::Path)) {
+            auto* browse = new QPushButton(text("Browse..."), row->container);
+            browse->setObjectName(QStringLiteral("browse.") + str(spec->key));
+            connect(browse, &QPushButton::clicked, this, [this, edit, title = text(spec->title)] {
+                const QString chosen = QFileDialog::getOpenFileName(this, title, edit->text());
+                if (!chosen.isEmpty())
+                    edit->setText(chosen);
+            });
+            line->addWidget(browse);
+        }
         auto* reset = new QPushButton(text("Reset"), row->container);
         reset->setObjectName(QStringLiteral("reset.") + str(spec->key));
         reset->setAccessibleName(text("Reset %1").arg(text(spec->title)));

@@ -85,6 +85,8 @@ public:
     bool copySelection();
     // Pastes the clipboard's text into the terminal.
     void pasteClipboard();
+    // Searches scrollback and visible screen for `query`, selecting and scrolling to the match.
+    bool findText(const QString& query, bool forward = true, bool stayAtCurrent = false);
 
     // --- Scrollback ---
 
@@ -104,6 +106,7 @@ signals:
     void bellRang();
     // The shell exited with `exitCode`.
     void exited(int exitCode);
+    void findRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;

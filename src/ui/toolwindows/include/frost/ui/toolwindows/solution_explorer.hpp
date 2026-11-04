@@ -138,6 +138,14 @@ signals:
     void openFile(const QString& absolutePath);
     void renameRequested(const QString& path, bool isDirectory);
     void deleteRequested(const QString& path, bool isDirectory);
+    void solutionPropertiesRequested();
+    void configurationManagerRequested();
+    void projectPropertiesRequested(const QString& projectPath);
+    void editRunConfigurationsRequested(const QString& projectPath);
+    void addExistingProjectRequested(const QString& solutionPath);
+    void removeProjectFromSolutionRequested(const QString& projectPath);
+    void addProjectReferenceRequested(const QString& projectPath);
+    void manageNuGetPackagesRequested(const QString& projectPath);
     void commandFailed(const QString& message);
 
 protected:

@@ -12,6 +12,9 @@ frost_add_library(ui_lang LAYER ui
         src/editor_insight_binding.cpp
         src/lang_widgets.cpp
         src/language_controller.cpp
+        src/language_controller_codegen.cpp
+        src/language_controller_hierarchy.cpp
+        src/language_controller_refactor.cpp
     DEPS frost::ui_editor frost::lang frost::build frost::input frost::text frost::sched frost::io frost::core
     THIRD_PARTY Qt6::Widgets)
 # The Q_OBJECT classes live in public headers; moc runs on them through AUTOMOC.

@@ -120,6 +120,50 @@ void BreakpointManager::clear() {
     }
 }
 
+bool BreakpointManager::setEnabled(BreakpointId id, bool enabled) {
+    const auto it = m_byId.find(id);
+    if (it == m_byId.end()) {
+        return false;
+    }
+    if (it->second.enabled == enabled) {
+        return true;
+    }
+    it->second.enabled = enabled;
+    if (!enabled) {
+        it->second.status = BreakpointStatus::Unknown;
+        it->second.message.clear();
+    }
+    notify(it->second.path, Change::Lines);
+    return true;
+}
+
+bool BreakpointManager::setProperties(BreakpointId id, std::string condition, std::string hitCondition,
+                                      std::string logMessage) {
+    const auto it = m_byId.find(id);
+    if (it == m_byId.end()) {
+        return false;
+    }
+    if (it->second.condition == condition && it->second.hitCondition == hitCondition &&
+        it->second.logMessage == logMessage) {
+        return true;
+    }
+    it->second.condition = std::move(condition);
+    it->second.hitCondition = std::move(hitCondition);
+    it->second.logMessage = std::move(logMessage);
+    notify(it->second.path, Change::Lines);
+    return true;
+}
+
+void BreakpointManager::setMuted(bool muted) {
+    if (m_muted == muted) {
+        return;
+    }
+    m_muted = muted;
+    for (const std::string& path : files()) {
+        notify(path, Change::Lines);
+    }
+}
+
 std::optional<LineBreakpoint> BreakpointManager::find(BreakpointId id) const {
     const auto it = m_byId.find(id);
     return it == m_byId.end() ? std::nullopt : std::optional<LineBreakpoint>(it->second);
@@ -147,6 +191,16 @@ std::vector<LineBreakpoint> BreakpointManager::inFile(std::string_view path) con
     return out;
 }
 
+std::vector<LineBreakpoint> BreakpointManager::all() const {
+    std::vector<LineBreakpoint> out;
+    for (const std::string& path : files()) {
+        for (LineBreakpoint& bp : inFile(path)) {
+            out.push_back(std::move(bp));
+        }
+    }
+    return out;
+}
+
 std::vector<std::string> BreakpointManager::files() const {
     std::set<std::string> keys;
     std::vector<std::string> out;
@@ -169,8 +223,21 @@ std::map<std::string, std::vector<BreakpointLine>> BreakpointManager::sessionLin
 
 std::vector<BreakpointLine> BreakpointManager::sessionLines(std::string_view path) const {
     std::vector<BreakpointLine> out;
+    if (m_muted) {
+        return out;
+    }
     for (const LineBreakpoint& breakpoint : inFile(path)) {
-        out.push_back(BreakpointLine{breakpoint.id, breakpoint.line});
+        if (!breakpoint.enabled) {
+            continue;
+        }
+        out.push_back(BreakpointLine{
+            .id = breakpoint.id,
+            .line = breakpoint.line,
+            .enabled = breakpoint.enabled,
+            .condition = breakpoint.condition,
+            .hitCondition = breakpoint.hitCondition,
+            .logMessage = breakpoint.logMessage,
+        });
     }
     return out;
 }
@@ -249,7 +316,15 @@ Result<void> BreakpointManager::load(io::IFileSystem& fs, std::string_view root)
     if (!layout) {
         return std::unexpected(std::move(layout.error()));
     }
-    std::vector<std::pair<std::string, std::int64_t>> entries;
+    struct StoredEntry {
+        std::string path;
+        std::int64_t line = 0;
+        bool enabled = true;
+        std::string condition;
+        std::string hitCondition;
+        std::string logMessage;
+    };
+    std::vector<StoredEntry> entries;
     auto exists = fs.exists(layout->personalSettings);
     if (!exists) {
         return std::unexpected(std::move(exists.error()));
@@ -282,15 +357,31 @@ Result<void> BreakpointManager::load(io::IFileSystem& fs, std::string_view root)
                         }
                         path = std::move(*joined);
                     }
-                    entries.emplace_back(std::move(path), *line);
+                    StoredEntry stored;
+                    stored.path = std::move(path);
+                    stored.line = *line;
+                    stored.enabled = entry.boolAt("enabled").value_or(true);
+                    stored.condition = std::string(entry.stringAt("condition"));
+                    stored.hitCondition = std::string(entry.stringAt("hitCondition"));
+                    stored.logMessage = std::string(entry.stringAt("logMessage"));
+                    entries.push_back(std::move(stored));
                 }
             }
         }
     }
     clear();
-    for (const auto& [path, line] : entries) {
-        if (auto added = add(path, line); !added) {
-            log::warn("debug", "a stored breakpoint at {}:{} was skipped: {}", path, line, added.error().message());
+    for (const StoredEntry& item : entries) {
+        auto added = add(item.path, item.line);
+        if (!added) {
+            log::warn("debug", "a stored breakpoint at {}:{} was skipped: {}", item.path, item.line,
+                      added.error().message());
+            continue;
+        }
+        if (!item.enabled) {
+            setEnabled(*added, false);
+        }
+        if (!item.condition.empty() || !item.hitCondition.empty() || !item.logMessage.empty()) {
+            setProperties(*added, item.condition, item.hitCondition, item.logMessage);
         }
     }
     return {};
@@ -320,13 +411,8 @@ Result<void> BreakpointManager::save(io::IFileSystem& fs, std::string_view root)
         return {}; // Nothing to remember and no file to touch.
     }
 
-    std::vector<LineBreakpoint> all;
-    for (const std::string& path : files()) {
-        for (LineBreakpoint& breakpoint : inFile(path)) {
-            all.push_back(std::move(breakpoint));
-        }
-    }
-    if (all.empty()) {
+    const std::vector<LineBreakpoint> allBreakpoints = all();
+    if (allBreakpoints.empty()) {
         auto removed = document.remove(kMember);
         if (!removed) {
             return std::unexpected(std::move(removed.error()));
@@ -336,10 +422,24 @@ Result<void> BreakpointManager::save(io::IFileSystem& fs, std::string_view root)
         }
     } else {
         std::string json = "[";
-        for (std::size_t i = 0; i < all.size(); ++i) {
-            const std::string file = relativeTo(layout->root, all[i].path, m_style).value_or(all[i].path);
-            json +=
-                std::format("{}\n    {{\"file\": {}, \"line\": {}}}", i == 0 ? "" : ",", jsonString(file), all[i].line);
+        for (std::size_t i = 0; i < allBreakpoints.size(); ++i) {
+            const LineBreakpoint& bp = allBreakpoints[i];
+            const std::string file = relativeTo(layout->root, bp.path, m_style).value_or(bp.path);
+            std::string extras;
+            if (!bp.enabled) {
+                extras += ", \"enabled\": false";
+            }
+            if (!bp.condition.empty()) {
+                extras += std::format(", \"condition\": {}", jsonString(bp.condition));
+            }
+            if (!bp.hitCondition.empty()) {
+                extras += std::format(", \"hitCondition\": {}", jsonString(bp.hitCondition));
+            }
+            if (!bp.logMessage.empty()) {
+                extras += std::format(", \"logMessage\": {}", jsonString(bp.logMessage));
+            }
+            json += std::format("{}\n    {{\"file\": {}, \"line\": {}{}}}", i == 0 ? "" : ",", jsonString(file),
+                                bp.line, extras);
         }
         json += "\n  ]";
         if (auto set = document.setRaw(kMember, json); !set) {

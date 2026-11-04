@@ -664,8 +664,9 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 else
                     static_cast<void>(workbench.openPath(path));
             }
-            if (projects.empty())
-                static_cast<void>(workbench.restoreLastProject());
+            // When launched without project/file arguments, FrostIDE opens on the Rider-style
+            // Startup Project Launcher (WelcomeScreen) so the user can pick from Recent Projects,
+            // create/clone a solution, or check for updates.
         }
         for (const std::string& path : files) {
             auto opened =

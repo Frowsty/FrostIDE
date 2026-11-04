@@ -9,11 +9,15 @@
 #include "frost/io/file_system.hpp"
 #include "frost/lang/code_assist.hpp"
 #include "frost/lang/navigation.hpp"
+#include "frost/lang/snippet.hpp"
 #include "frost/lang/symbols.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/text/text_buffer.hpp"
 
+#include "language_controller_internal.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
+#include <QThread>
 
 #include <algorithm>
 #include <cctype>
@@ -27,23 +31,12 @@ namespace fl = ::frost::lang;
 
 namespace {
 
-QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
-
-std::string fileName(std::string_view path) {
-    const std::size_t slash = path.find_last_of("/\\");
-    return std::string(slash == std::string_view::npos ? path : path.substr(slash + 1));
-}
+using detail::fileName;
+using detail::lowerAscii;
+using detail::qs;
 
 bool allIdentifierBytes(std::string_view text) {
     return !text.empty() && std::ranges::all_of(text, [](char c) { return fl::isIdentifierByte(c); });
-}
-
-std::string lowerAscii(std::string_view text) {
-    std::string out(text);
-    for (char& ch : out) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return out;
 }
 
 bool isHeaderExt(std::string_view ext) {
@@ -144,69 +137,15 @@ std::optional<std::string> findRelatedProjectFile(std::string_view currentPath,
     return std::nullopt;
 }
 
-// Awaits `task` on the scheduler and posts `done(result)` to the UI thread, where it runs only
-// while the controller is alive and `ticket` is still the slot's latest.
-template<class T>
-sched::Task<void> deliver(sched::Task<Result<T>> task, QPointer<LanguageController> self, sched::LatestWins* slot,
-                          sched::LatestWins::Ticket ticket, std::function<void(Result<T>)> done) {
-    auto result = std::make_shared<Result<T>>(co_await std::move(task));
-    QCoreApplication* app = QCoreApplication::instance();
-    if (app == nullptr) {
-        co_return;
-    }
-    QMetaObject::invokeMethod(
-        app,
-        [self, slot, ticket, done = std::move(done), result]() {
-            if (!self || !slot->isCurrent(ticket)) {
-                return;
-            }
-            done(std::move(*result));
-            if (self) {
-                emit self->requestFinished();
-            }
-        },
-        Qt::QueuedConnection);
-}
-
-// Find usages off the UI thread: the references, then their line previews from the open
-// documents (`open`) or the disk.
-sched::Task<Result<std::vector<fl::UsageGroup>>>
-findUsagesTask(fl::ILspRequester& server, io::IFileSystem& fs, std::vector<std::pair<std::string, text::Snapshot>> open,
-               std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::stop_token token) {
-    auto references = co_await fl::requestReferences(server, path, position, true, token);
-    if (!references) {
-        co_return std::unexpected(std::move(references.error()));
-    }
-    std::map<std::string, text::Snapshot, std::less<>> byKey;
-    for (auto& [openPath, snapshot] : open) {
-        byKey.insert_or_assign(fl::documentKey(openPath), std::move(snapshot));
-    }
-    fl::FileLineSource lines(fs, [&byKey](std::string_view file) -> std::optional<text::Snapshot> {
-        auto it = byKey.find(fl::documentKey(file));
-        return it != byKey.end() ? std::optional<text::Snapshot>(it->second) : std::nullopt;
-    });
-    co_return fl::groupUsages(*references, lines.source(), encoding);
-}
-
 } // namespace
-
-template<class T>
-void LanguageController::start(sched::LatestWins& slot, std::function<sched::Task<Result<T>>(std::stop_token)> make,
-                               std::function<void(Result<T>)> done) {
-    const sched::LatestWins::Ticket ticket = slot.next();
-    sched::Task<Result<T>> task = make(ticket.token);
-    m_services.scheduler
-        .spawn(sched::Lane::Interactive,
-               deliver<T>(std::move(task), QPointer<LanguageController>(this), &slot, ticket, std::move(done)))
-        .detach();
-}
 
 LanguageController::LanguageController(LanguageServices services, QObject* parent)
     : QObject(parent), m_services(std::move(services)), m_completion(std::make_unique<CompletionPopup>()),
       m_parameterInfo(std::make_unique<ParameterInfoPopup>()), m_quickDoc(std::make_unique<QuickDocPopup>()),
       m_usages(std::make_unique<FindUsagesPanel>()), m_symbols(std::make_unique<SymbolPopup>()),
       m_structure(std::make_unique<StructurePanel>()), m_rename(std::make_unique<RenameInput>()),
-      m_choice(std::make_unique<ChoicePopup>()) {
+      m_choice(std::make_unique<ChoicePopup>()), m_quickDef(std::make_unique<QuickDefinitionPopup>()),
+      m_hierarchy(std::make_unique<HierarchyPopup>()) {
     m_highlightTimer.setSingleShot(true);
     m_highlightTimer.setInterval(300);
     connect(&m_highlightTimer, &QTimer::timeout, this, &LanguageController::highlightUsages);
@@ -217,18 +156,7 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
     m_structureTimer.setSingleShot(true);
     m_structureTimer.setInterval(150);
     connect(&m_structureTimer, &QTimer::timeout, this, &LanguageController::requestStructure);
-    connect(m_structure.get(), &StructurePanel::activated, this, [this](const QString& path, fl::LspPosition position) {
-        const auto snapshot = m_services.host.snapshot();
-        if (m_structureVisible && !m_structurePath.empty() && path.toStdString() == m_structurePath &&
-            m_services.host.documentPath() == m_structurePath &&
-            m_services.host.documentVersion() == m_structureVersion && snapshot &&
-            snapshot->version() == m_structureRevision && m_services.host.structureIdentity() == m_structureIdentity &&
-            m_services.server.encoding() == m_structureEncoding) {
-            // Opening can synchronously change editor state and invalidate m_structurePath.
-            const std::string targetPath = m_structurePath;
-            m_services.host.openLocation(targetPath, position);
-        }
-    });
+    initServiceHooks();
 
     connect(m_completion.get(), &CompletionPopup::commitRequested, this, &LanguageController::commitCompletion);
     connect(m_completion.get(), &CompletionPopup::cancelled, this, &LanguageController::closeLookup);
@@ -241,6 +169,20 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
         m_services.host.openLocation(path.toStdString(), position);
     });
     connect(m_symbols.get(), &SymbolPopup::queryChanged, this, [this](const QString&) { m_symbolQueryTimer.start(); });
+    connect(m_quickDef.get(), &QuickDefinitionPopup::openRequested, this,
+            [this](const QString& path, fl::LspPosition position) {
+                m_services.host.openLocation(path.toStdString(), position);
+            });
+    connect(m_hierarchy.get(), &HierarchyPopup::activated, this, [this](const QString& path, fl::LspPosition position) {
+        m_services.host.openLocation(path.toStdString(), position);
+    });
+    connect(m_hierarchy.get(), &HierarchyPopup::modeChanged, this, [this](bool secondary) {
+        if (m_hierarchyIsType) {
+            refreshTypeHierarchy(secondary);
+        } else {
+            refreshCallHierarchy(secondary);
+        }
+    });
     connect(m_choice.get(), &ChoicePopup::chosen, this, [this](std::size_t index) {
         std::vector<std::function<void()>> actions = std::move(m_choiceActions);
         m_choiceActions.clear();
@@ -249,27 +191,68 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
         }
     });
     connect(m_choice.get(), &ChoicePopup::cancelled, this, [this] { m_choiceActions.clear(); });
-    connect(m_rename.get(), &RenameInput::accepted, this, [this](const QString& name) {
-        if (name.isEmpty() || m_renamePath.empty()) {
-            return;
+    connect(m_rename.get(), &RenameInput::cancelled, this, [this] { m_customRenameCallback = nullptr; });
+    connect(m_rename.get(), &RenameInput::accepted, this, &LanguageController::onRenameAccepted);
+}
+
+void LanguageController::initServiceHooks() {
+    connect(m_structure.get(), &StructurePanel::activated, this, [this](const QString& path, fl::LspPosition position) {
+        const auto snapshot = m_services.host.snapshot();
+        if (m_structureVisible && !m_structurePath.empty() && path.toStdString() == m_structurePath &&
+            m_services.host.documentPath() == m_structurePath &&
+            m_services.host.documentVersion() == m_structureVersion && snapshot &&
+            snapshot->version() == m_structureRevision && m_services.host.structureIdentity() == m_structureIdentity &&
+            m_services.server.encoding() == m_structureEncoding) {
+            const std::string targetPath = m_structurePath;
+            m_services.host.openLocation(targetPath, position);
         }
-        start<fl::WorkspaceEdit>(
-            m_renameSlot,
-            [&server = m_services.server, path = m_renamePath, position = m_renamePosition,
-             newName = name.toStdString()](std::stop_token token) {
-                return fl::requestRename(server, path, position, newName, std::move(token));
-            },
-            [this](Result<fl::WorkspaceEdit> edit) {
-                if (!edit) {
-                    report(edit.error(), "Rename failed");
-                    return;
+    });
+    m_usages->setLineReader([this](std::string_view file, std::uint32_t lineIndex) -> std::optional<std::string> {
+        for (const auto& [openPath, snap] : m_services.host.openDocuments()) {
+            if (fl::documentKey(openPath) == fl::documentKey(file)) {
+                if (auto info = snap.lineInfo(LineIndex{lineIndex})) {
+                    return snap.text(info->content);
                 }
-                if (edit->empty()) {
-                    emit statusMessage(QStringLiteral("Nothing to rename"));
-                    return;
+                return std::nullopt;
+            }
+        }
+        if (auto content = m_services.fs.readFile(file)) {
+            if (auto buf = text::TextBuffer::fromUtf8(std::move(*content))) {
+                const auto snap = buf->snapshot();
+                if (auto info = snap.lineInfo(LineIndex{lineIndex})) {
+                    return snap.text(info->content);
                 }
-                applyWorkspaceEdit(*edit, QStringLiteral("Rename"));
-            });
+            }
+        }
+        return std::nullopt;
+    });
+    m_services.server.setApplyEditHandler([self = QPointer<LanguageController>(this)](const fl::Json& params) -> bool {
+        if (!self) {
+            return false;
+        }
+        const fl::Json* editJson = params.find("edit");
+        auto parsed = fl::parseWorkspaceEdit(editJson != nullptr ? *editJson : params);
+        if (!parsed || parsed->empty()) {
+            return false;
+        }
+        const QString label =
+            params.find("label") != nullptr ? qs(params.stringAt("label")) : QStringLiteral("Apply Server Edit");
+        if (QThread::currentThread() == self->thread()) {
+            self->applyWorkspaceEdit(*parsed, label);
+            return true;
+        }
+        if (QCoreApplication* app = QCoreApplication::instance()) {
+            QMetaObject::invokeMethod(
+                app,
+                [self, edit = std::move(*parsed), label]() {
+                    if (self) {
+                        self->applyWorkspaceEdit(edit, label);
+                    }
+                },
+                Qt::QueuedConnection);
+            return true;
+        }
+        return false;
     });
 }
 
@@ -277,7 +260,7 @@ LanguageController::~LanguageController() {
     m_structureSlot.cancel();
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
-          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot}) {
+          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot}) {
         slot->cancel();
     }
 }
@@ -286,7 +269,7 @@ void LanguageController::editorChanged() {
     structureChanged();
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
-          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot}) {
+          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot}) {
         slot->cancel();
     }
     m_highlightTimer.stop();
@@ -296,8 +279,12 @@ void LanguageController::editorChanged() {
     m_quickDoc->hide();
     m_rename->hide();
     m_choice->hide();
+    m_quickDef->hide();
+    m_hierarchy->hide();
     m_tabStops.clear();
     m_renamePath.clear();
+    m_renameOldName.clear();
+    m_customRenameCallback = nullptr;
 }
 
 StructurePanel& LanguageController::structurePanel() { return *m_structure; }
@@ -382,9 +369,33 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         {"navigate.fileStructure", "File Structure", "Navigate", &LanguageController::showFileStructure, true},
         {"navigate.gotoClass", "Go to Class...", "Navigate", &LanguageController::gotoClass, false},
         {"navigate.gotoSymbol", "Go to Symbol", "Navigate", &LanguageController::gotoSymbol, false},
+        {"navigate.quickDefinition", "Quick Definition", "Navigate", &LanguageController::quickDefinition, true},
+        {"navigate.showUsages", "Show Usages", "Navigate", &LanguageController::showUsagesPopup, true},
+        {"navigate.callHierarchy", "Call Hierarchy", "Navigate", &LanguageController::callHierarchy, true},
+        {"navigate.typeHierarchy", "Type Hierarchy", "Navigate", &LanguageController::typeHierarchy, true},
+        {"navigate.superMethod", "Go to Super Method / Base", "Navigate", &LanguageController::gotoSuperMethod, true},
+        {"navigate.typeDeclaration", "Go to Type Declaration", "Navigate", &LanguageController::gotoTypeDeclaration,
+         true},
         {"refactor.rename", "Rename", "Refactor", &LanguageController::rename, true},
+        {"refactor.this", "Refactor This...", "Refactor", &LanguageController::refactorThis, true},
+        {"refactor.extractVariable", "Extract Variable...", "Refactor", &LanguageController::extractVariable, true},
+        {"refactor.extractConstant", "Extract Constant...", "Refactor", &LanguageController::extractConstant, true},
+        {"refactor.extractField", "Extract Field...", "Refactor", &LanguageController::extractField, true},
+        {"refactor.extractParameter", "Extract Parameter...", "Refactor", &LanguageController::extractParameter, true},
+        {"refactor.extractMethod", "Extract Method...", "Refactor", &LanguageController::extractMethod, true},
+        {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true},
+        {"refactor.changeSignature", "Change Signature...", "Refactor", &LanguageController::changeSignature, true},
+        {"refactor.safeDelete", "Safe Delete...", "Refactor", &LanguageController::safeDelete, true},
+        {"refactor.move", "Move...", "Refactor", &LanguageController::moveSymbol, true},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
         {"code.reformat", "Reformat Code", "Code", &LanguageController::reformat, true},
+        {"code.generate", "Generate...", "Code", &LanguageController::generateCode, true},
+        {"code.overrideMethods", "Override Methods...", "Code", &LanguageController::overrideMethods, true},
+        {"code.implementMethods", "Implement Methods...", "Code", &LanguageController::implementMethods, true},
+        {"code.surroundWith", "Surround With...", "Code", &LanguageController::surroundWith, true},
+        {"code.completeStatement", "Complete Current Statement", "Code", &LanguageController::completeStatement, true},
+        {"code.optimizeImports", "Optimize Imports / Includes", "Code", &LanguageController::optimizeImports, true},
+        {"code.insertLiveTemplate", "Insert Live Template...", "Code", &LanguageController::insertLiveTemplate, true},
     };
     for (const Entry& entry : entries) {
         input::ActionSpec spec;
@@ -459,7 +470,12 @@ void LanguageController::openTargets(std::vector<fl::Location> locations, const 
 
 // --- Completion ---
 
-void LanguageController::completeCode() { requestCompletion(fl::CompletionTrigger{}); }
+void LanguageController::completeCode() {
+    if (tryExpandPostfixCompletion()) {
+        return;
+    }
+    requestCompletion(fl::CompletionTrigger{});
+}
 
 void LanguageController::requestCompletion(fl::CompletionTrigger trigger) {
     if (!hasDocument()) {
@@ -618,7 +634,8 @@ bool LanguageController::keyPress(int key, Qt::KeyboardModifiers modifiers) {
         (modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier | Qt::ShiftModifier)) == 0;
     if (key == Qt::Key_Escape) {
         bool consumed = false;
-        for (QWidget* popup : {static_cast<QWidget*>(m_parameterInfo.get()), static_cast<QWidget*>(m_quickDoc.get())}) {
+        for (QWidget* popup : {static_cast<QWidget*>(m_parameterInfo.get()), static_cast<QWidget*>(m_quickDoc.get()),
+                               static_cast<QWidget*>(m_quickDef.get()), static_cast<QWidget*>(m_hierarchy.get())}) {
             if (popup->isVisible()) {
                 popup->hide();
                 consumed = true;
@@ -632,6 +649,9 @@ bool LanguageController::keyPress(int key, Qt::KeyboardModifiers modifiers) {
     }
     if (key == Qt::Key_Tab && plain && !m_tabStops.empty()) {
         return nextTabStop();
+    }
+    if (key == Qt::Key_Tab && plain && tryExpandPostfixCompletion()) {
+        return true;
     }
     return false;
 }
@@ -681,6 +701,9 @@ void LanguageController::caretMoved() {
     }
     if (m_parameterInfo->isVisible()) {
         requestSignatureHelp(std::nullopt); // The server answers null once the caret leaves the call.
+    }
+    if (m_structureVisible && hasDocument()) {
+        m_structure->highlightLine(static_cast<int>(caretPosition().line));
     }
     m_highlightTimer.start();
 }
@@ -849,7 +872,7 @@ void LanguageController::findUsagesAt(std::string path, fl::LspPosition position
         m_usagesSlot,
         [&server = m_services.server, &fs = m_services.fs, open = m_services.host.openDocuments(), path, position,
          encoding = m_services.server.encoding()](std::stop_token token) {
-            return findUsagesTask(server, fs, open, path, position, encoding, std::move(token));
+            return detail::runFindUsagesTask(server, fs, open, path, position, encoding, std::move(token));
         },
         [this, name](Result<std::vector<fl::UsageGroup>> groups) {
             if (!groups) {
@@ -993,7 +1016,9 @@ void LanguageController::rename() {
                     current = qs(snapshot->text(text::ByteRange{.begin = *begin, .end = *end}));
                 }
             }
+            m_customRenameCallback = nullptr;
             m_renamePath = path;
+            m_renameOldName = current.toStdString();
             m_renamePosition = position;
             m_rename->start(current, m_services.host.caretScreenRect());
         });
@@ -1002,6 +1027,53 @@ void LanguageController::rename() {
 void LanguageController::applyWorkspaceEdit(const fl::WorkspaceEdit& edit, const QString& label) {
     if (auto applied = m_services.applier.apply(edit, label.toStdString()); !applied) {
         emit statusMessage(QStringLiteral("%1: %2").arg(label, qs(applied.error().message())));
+    }
+}
+
+void LanguageController::executeServerCommand(std::string commandName, std::vector<fl::Json> arguments,
+                                              const QString& label) {
+    if (commandName.empty()) {
+        return;
+    }
+    start<fl::Json>(
+        m_actionSlot,
+        [&server = m_services.server, cmd = std::move(commandName), args = std::move(arguments)](
+            std::stop_token token) { return fl::requestExecuteCommand(server, cmd, args, std::move(token)); },
+        [this, label](Result<fl::Json> result) {
+            if (!result) {
+                report(result.error(), label.toStdString());
+            }
+        });
+}
+
+void LanguageController::insertSnippetAt(text::ByteRange replaceRange, std::string_view rawSnippet,
+                                         std::string_view undoLabel) {
+    const std::optional<text::Snapshot> snapshot = m_services.host.snapshot();
+    if (!snapshot) {
+        return;
+    }
+    const fl::ParsedSnippet parsed = fl::parseSnippet(rawSnippet);
+    const ByteOffset base = replaceRange.begin;
+    const fl::ByteEdit edit{.range = replaceRange, .text = parsed.text};
+    const ByteOffset caret{base.value() + parsed.caret()};
+    if (auto applied = m_services.host.applyEdits(std::span<const fl::ByteEdit>(&edit, 1), undoLabel, caret);
+        !applied) {
+        report(applied.error(), undoLabel);
+        return;
+    }
+    m_tabStops.clear();
+    for (const fl::SnippetTabStop& stop : parsed.tabStops) {
+        m_tabStops.push_back(text::ByteRange{.begin = ByteOffset{base.value() + stop.begin},
+                                             .end = ByteOffset{base.value() + stop.end}});
+    }
+    if (!m_tabStops.empty()) {
+        const std::optional<text::Snapshot> after = m_services.host.snapshot();
+        m_tabStopsDocumentSize = after ? after->size().value() : 0;
+        if (m_tabStops.size() == 1 && m_tabStops.front().empty()) {
+            m_tabStops.clear();
+        } else {
+            static_cast<void>(nextTabStop());
+        }
     }
 }
 
@@ -1036,8 +1108,15 @@ void LanguageController::showIntentions() {
                 for (fl::CodeActionItem& action : *actions) {
                     titles.push_back(qs(action.title));
                     preferred.push_back(action.preferred);
-                    m_choiceActions.emplace_back([this, title = qs(action.title), edit = std::move(action.edit)] {
-                        applyWorkspaceEdit(edit, title);
+                    m_choiceActions.emplace_back([this, title = qs(action.title), edit = std::move(action.edit),
+                                                  cmd = std::move(action.commandName),
+                                                  args = std::move(action.commandArguments)]() mutable {
+                        if (!edit.empty()) {
+                            applyWorkspaceEdit(edit, title);
+                        }
+                        if (!cmd.empty()) {
+                            executeServerCommand(std::move(cmd), std::move(args), title);
+                        }
                     });
                 }
             }
@@ -1115,5 +1194,7 @@ FindUsagesPanel& LanguageController::usagesPanel() { return *m_usages; }
 SymbolPopup& LanguageController::symbolPopup() { return *m_symbols; }
 RenameInput& LanguageController::renameInput() { return *m_rename; }
 ChoicePopup& LanguageController::choicePopup() { return *m_choice; }
+QuickDefinitionPopup& LanguageController::quickDefinitionPopup() { return *m_quickDef; }
+HierarchyPopup& LanguageController::hierarchyPopup() { return *m_hierarchy; }
 
 } // namespace frost::ui::lang

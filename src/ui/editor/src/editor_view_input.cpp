@@ -623,53 +623,37 @@ QMenu* EditorView::createContextMenu(QWidget* parent) {
     auto* menu = new QMenu(parent != nullptr ? parent : this);
     menu->setObjectName(QStringLiteral("editorContextMenu"));
     const bool editable = !isReadOnly();
+    const auto addRouted = [&](const QString& label, const QString& objName, const QString& actionId,
+                               bool requiresEditable = false) {
+        QAction* act = menu->addAction(label);
+        act->setObjectName(objName);
+        if (requiresEditable) {
+            act->setEnabled(editable);
+        }
+        connect(act, &QAction::triggered, this, [this, actionId] { emit contextActionRequested(actionId); });
+        return act;
+    };
 
-    QAction* intentions = menu->addAction(QStringLiteral("Show Context Actions"));
-    intentions->setObjectName(QStringLiteral("contextShowIntentions"));
-    connect(intentions, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("code.showIntentions")); });
-
+    addRouted(QStringLiteral("Show Context Actions"), QStringLiteral("contextShowIntentions"),
+              QStringLiteral("code.showIntentions"));
     menu->addSeparator();
-
-    QAction* gotoDecl = menu->addAction(QStringLiteral("Go to Declaration or Usages"));
-    gotoDecl->setObjectName(QStringLiteral("contextGotoDeclaration"));
-    connect(gotoDecl, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("navigate.declaration")); });
-
-    QAction* gotoImpl = menu->addAction(QStringLiteral("Go to Implementation"));
-    gotoImpl->setObjectName(QStringLiteral("contextGotoImplementation"));
-    connect(gotoImpl, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("navigate.implementation")); });
-
-    QAction* findUsages = menu->addAction(QStringLiteral("Find Usages"));
-    findUsages->setObjectName(QStringLiteral("contextFindUsages"));
-    connect(findUsages, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("navigate.findUsages")); });
-
-    QAction* relatedFiles = menu->addAction(QStringLiteral("Go to Related Files"));
-    relatedFiles->setObjectName(QStringLiteral("contextRelatedFiles"));
-    connect(relatedFiles, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("navigate.relatedFiles")); });
-
+    addRouted(QStringLiteral("Go to Declaration or Usages"), QStringLiteral("contextGotoDeclaration"),
+              QStringLiteral("navigate.declaration"));
+    addRouted(QStringLiteral("Go to Implementation"), QStringLiteral("contextGotoImplementation"),
+              QStringLiteral("navigate.implementation"));
+    addRouted(QStringLiteral("Find Usages"), QStringLiteral("contextFindUsages"),
+              QStringLiteral("navigate.findUsages"));
+    addRouted(QStringLiteral("Go to Related Files"), QStringLiteral("contextRelatedFiles"),
+              QStringLiteral("navigate.relatedFiles"));
     menu->addSeparator();
-
-    QAction* renameAction = menu->addAction(QStringLiteral("Rename..."));
-    renameAction->setObjectName(QStringLiteral("contextRename"));
-    renameAction->setEnabled(editable);
-    connect(renameAction, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("refactor.rename")); });
-
-    QAction* reformatAction = menu->addAction(QStringLiteral("Reformat Code"));
-    reformatAction->setObjectName(QStringLiteral("contextReformat"));
-    reformatAction->setEnabled(editable);
-    connect(reformatAction, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("code.reformat")); });
-
-    QAction* toggleBpAction = menu->addAction(QStringLiteral("Toggle Line Breakpoint"));
-    toggleBpAction->setObjectName(QStringLiteral("contextToggleBreakpoint"));
-    connect(toggleBpAction, &QAction::triggered, this,
-            [this] { emit contextActionRequested(QStringLiteral("debug.toggleBreakpoint")); });
-
+    addRouted(QStringLiteral("Refactor This..."), QStringLiteral("contextRefactorThis"),
+              QStringLiteral("refactor.this"), true);
+    addRouted(QStringLiteral("Rename..."), QStringLiteral("contextRename"), QStringLiteral("refactor.rename"), true);
+    addRouted(QStringLiteral("Generate..."), QStringLiteral("contextGenerate"), QStringLiteral("code.generate"), true);
+    addRouted(QStringLiteral("Reformat Code"), QStringLiteral("contextReformat"), QStringLiteral("code.reformat"),
+              true);
+    addRouted(QStringLiteral("Toggle Line Breakpoint"), QStringLiteral("contextToggleBreakpoint"),
+              QStringLiteral("debug.toggleBreakpoint"));
     menu->addSeparator();
 
     QAction* cutAction = menu->addAction(QStringLiteral("Cut"));

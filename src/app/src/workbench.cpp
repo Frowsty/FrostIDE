@@ -48,6 +48,7 @@
 #include "language_bridge.hpp"
 #include "managed_debug_preparation.hpp"
 #include "project_edit_process.hpp"
+#include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
 #include "unity_control.hpp"
 #include "update_check.hpp"
@@ -72,6 +73,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
+#include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -840,6 +842,197 @@ void Workbench::registerActions() {
     add(
         wa::kOpenRecent, "Open Recent...", [this] { showOpenRecent(); },
         [this] { return !recentProjects(*m_services.settings.snapshot()).empty(); });
+    add(
+        "file.projectStructure", "Project Properties...",
+        [this] {
+            if (!m_window || !m_solution)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            if (projPath.empty()) {
+                for (const auto& p : m_solution->projects()) {
+                    if (p.nodeKind == project::NodeKind::Project && !p.path.empty()) {
+                        projPath = p.path;
+                        break;
+                    }
+                }
+            }
+            if (projPath.empty()) {
+                showSolutionPropertiesDialog(
+                    m_window, m_services.fs, *m_solution, m_runService ? m_runService->startupProject() : std::nullopt,
+                    [this](project::ProjectId id) {
+                        if (m_runController)
+                            (void)m_runController->setStartupProject(id);
+                    },
+                    [this] { refreshSolutionExplorerForFsChange(); });
+                return;
+            }
+            std::string activeCfg = "Debug|x64";
+            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+                activeCfg = m_build->configurations()[*idx].name();
+            showProjectPropertiesDialog(m_window, m_services.fs, projPath, activeCfg, [this] {
+                refreshSolutionExplorerForFsChange();
+                startProjectEvaluation(m_projectRoot);
+                if (m_clangd)
+                    restartClangd();
+            });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr; });
+    add(
+        "file.solutionProperties", "Solution Properties...",
+        [this] {
+            if (!m_window || !m_solution)
+                return;
+            showSolutionPropertiesDialog(
+                m_window, m_services.fs, *m_solution, m_runService ? m_runService->startupProject() : std::nullopt,
+                [this](project::ProjectId id) {
+                    if (m_runController)
+                        (void)m_runController->setStartupProject(id);
+                },
+                [this] { refreshSolutionExplorerForFsChange(); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr; });
+    add(
+        "build.configurationManager", "Configuration Manager...",
+        [this] {
+            if (!m_window || !m_solution)
+                return;
+            showConfigurationManagerDialog(
+                m_window, m_services.fs, *m_solution, static_cast<int>(m_build->activeConfigurationIndex().value_or(0)),
+                [this](int idx) {
+                    if (idx >= 0)
+                        (void)m_build->setActiveConfiguration(static_cast<std::size_t>(idx));
+                },
+                [this] {
+                    refreshSolutionExplorerForFsChange();
+                    startProjectEvaluation(m_projectRoot);
+                    if (m_clangd)
+                        restartClangd();
+                });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr; });
+    add(
+        "run.editConfigurations", "Edit Run/Debug Configurations...",
+        [this] {
+            if (!m_window || !m_solution || !m_runService)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            std::string activeCfg = "Debug|x64";
+            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+                activeCfg = m_build->configurations()[*idx].name();
+            showEditRunConfigurationsDialog(
+                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
+                [this](bool ext) {
+                    if (m_runService)
+                        (void)m_runService->setUseExternalConsole(ext);
+                },
+                [this] { refreshSolutionExplorerForFsChange(); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+    add(
+        "run.selectConfiguration", "Select Run Configuration...",
+        [this] {
+            if (!m_window || !m_solution || !m_runService)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            std::string activeCfg = "Debug|x64";
+            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+                activeCfg = m_build->configurations()[*idx].name();
+            showEditRunConfigurationsDialog(
+                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
+                [this](bool ext) {
+                    if (m_runService)
+                        (void)m_runService->setUseExternalConsole(ext);
+                },
+                [this] { refreshSolutionExplorerForFsChange(); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+    add(
+        "run.selectDebugConfiguration", "Select Debug Configuration...",
+        [this] {
+            if (!m_window || !m_solution || !m_runService)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            std::string activeCfg = "Debug|x64";
+            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+                activeCfg = m_build->configurations()[*idx].name();
+            showEditRunConfigurationsDialog(
+                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
+                [this](bool ext) {
+                    if (m_runService)
+                        (void)m_runService->setUseExternalConsole(ext);
+                },
+                [this] { refreshSolutionExplorerForFsChange(); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+    add(
+        "project.manageNuGetPackages", "Manage NuGet Packages...",
+        [this] {
+            if (!m_window || !m_solution)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            if (projPath.empty()) {
+                for (const auto& p : m_solution->projects()) {
+                    if (p.kind == project::ProjectKind::CSharp && !p.path.empty()) {
+                        projPath = p.path;
+                        break;
+                    }
+                }
+            }
+            if (!projPath.empty())
+                showNuGetPackageManagerDialog(m_window, m_services.fs, projPath,
+                                              [this] { refreshSolutionExplorerForFsChange(); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr; });
+    add(
+        "project.addProjectReference", "Add Project Reference...",
+        [this] {
+            if (!m_window || !m_solution)
+                return;
+            std::string projPath;
+            if (m_explorer) {
+                if (const auto projId = m_explorer->currentProject())
+                    projPath = m_solution->project(*projId).path;
+            }
+            if (!projPath.empty())
+                showAddProjectReferenceDialog(m_window, m_services.fs, *m_solution, projPath,
+                                              [this] { refreshSolutionExplorerForFsChange(); });
+        },
+        [this] { return m_window != nullptr && m_solution != nullptr; });
+    add(
+        "vcs.showLocalHistory", "Show Local History...",
+        [this] {
+            DocumentEditorView* view = currentView();
+            if (!m_window || !m_history || !view || view->path().empty())
+                return;
+            const std::string currentText = view->editor().editor().text().text();
+            showLocalHistoryDialog(
+                m_window, *m_history, view->path(), currentText, [this, view](const std::string& restored) {
+                    const text::Snapshot snap = view->editor().editor().text();
+                    const lang::ByteEdit edit{text::ByteRange{ByteOffset{0}, snap.size()}, restored};
+                    (void)m_bridge->applyEdits(std::span(&edit, 1), "Restore Local History", ByteOffset{0});
+                });
+        },
+        [this] { return m_window != nullptr && m_history.has_value() && currentView() != nullptr; });
 }
 
 Result<ui::InstallReport> Workbench::installAppearance(QApplication& app, std::string resourceDir) {
@@ -987,6 +1180,53 @@ void Workbench::attach(ui::ShellWindow& window) {
     connect(welcome, &WelcomeScreen::newProjectRequested, this, [this] { showNewProjectDialog(); });
     connect(welcome, &WelcomeScreen::openRequested, this,
             [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::SolutionOrFile); });
+    connect(welcome, &WelcomeScreen::cloneRepositoryRequested, this, [this] {
+        if (!m_window)
+            return;
+        QDialog dialog(m_window);
+        dialog.setObjectName(QStringLiteral("cloneRepositoryDialog"));
+        dialog.setWindowTitle(text("Get from Version Control — Clone Repository"));
+        dialog.resize(580, 220);
+        auto* root = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout();
+        auto* urlEdit = new QLineEdit(&dialog);
+        urlEdit->setObjectName(QStringLiteral("cloneRepoUrlEdit"));
+        urlEdit->setPlaceholderText(QStringLiteral("https://github.com/owner/repository.git"));
+        auto* dirRow = new QWidget(&dialog);
+        auto* dirLayout = new QHBoxLayout(dirRow);
+        dirLayout->setContentsMargins(0, 0, 0, 0);
+        auto* dirEdit = new QLineEdit(QDir::toNativeSeparators(QDir::homePath()), dirRow);
+        dirEdit->setObjectName(QStringLiteral("cloneRepoDirEdit"));
+        auto* browseBtn = new QPushButton(text("Browse..."), dirRow);
+        QObject::connect(browseBtn, &QPushButton::clicked, &dialog, [&dialog, dirEdit] {
+            const QString chosen =
+                QFileDialog::getExistingDirectory(&dialog, text("Select Clone Directory"), dirEdit->text());
+            if (!chosen.isEmpty())
+                dirEdit->setText(QDir::toNativeSeparators(chosen));
+        });
+        dirLayout->addWidget(dirEdit, 1);
+        dirLayout->addWidget(browseBtn);
+        form->addRow(text("Repository URL:"), urlEdit);
+        form->addRow(text("Directory:"), dirRow);
+        root->addLayout(form);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->button(QDialogButtonBox::Ok)->setText(text("Clone"));
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        root->addWidget(buttons);
+        ui::installDialogChrome(&dialog, false);
+        if (dialog.exec() == QDialog::Accepted) {
+            const QString url = urlEdit->text().trimmed();
+            const QString targetDir = dirEdit->text().trimmed();
+            if (!url.isEmpty() && !targetDir.isEmpty()) {
+                if (QProcess::execute(QStringLiteral("git"), {QStringLiteral("clone"), url, targetDir}) == 0)
+                    (void)openPath(targetDir.toStdString());
+                else
+                    notify(text("Git Clone"), text("Failed to clone repository from %1").arg(url),
+                           ui::NotificationKind::Warning);
+            }
+        }
+    });
     connect(welcome, &WelcomeScreen::openFolderRequested, this,
             [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
     connect(welcome, &WelcomeScreen::openRecent, this, [this](const QString& path) {
@@ -1007,6 +1247,15 @@ void Workbench::attach(ui::ShellWindow& window) {
         }
     });
     connect(welcome, &WelcomeScreen::settingsRequested, this, [this] { showSettings(); });
+    connect(welcome, &WelcomeScreen::checkForUpdatesRequested, this, [this] { showUpdateCheck(); });
+    {
+        const auto snap = m_services.settings.snapshot();
+        const QString ch = qs(snap->get(key::updateChannel));
+        const bool offline = snap->get(key::networkOffline);
+        welcome->setUpdateStatus(
+            offline ? text("FrostIDE %1 • Offline (%2)").arg(qs(build_info::kVersion), ch)
+                    : text("FrostIDE %1 • Channel: %2 (Up to date)").arg(qs(build_info::kVersion), ch));
+    }
     refreshRecent();
 
     // Build: auto-show rules (ADR 0044) and gutter markers.
@@ -1148,6 +1397,108 @@ void Workbench::attachToolWindows() {
             [this](const QString& path, bool) { promptAndDeleteItem(path.toStdString()); });
     connect(explorer, &ui::SolutionExplorer::commandFailed, this, [this](const QString& message) {
         notify(text("Solution Explorer"), message, ui::NotificationKind::Error);
+    });
+    connect(explorer, &ui::SolutionExplorer::projectPropertiesRequested, this, [this](const QString& projectPath) {
+        if (!m_window || !m_solution)
+            return;
+        std::string activeCfg = "Debug|x64";
+        if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+            activeCfg = m_build->configurations()[*idx].name();
+        showProjectPropertiesDialog(m_window, m_services.fs, projectPath.toStdString(), activeCfg, [this] {
+            refreshSolutionExplorerForFsChange();
+            startProjectEvaluation(m_projectRoot);
+            if (m_clangd)
+                restartClangd();
+        });
+    });
+    connect(explorer, &ui::SolutionExplorer::solutionPropertiesRequested, this, [this] {
+        if (!m_window || !m_solution)
+            return;
+        showSolutionPropertiesDialog(
+            m_window, m_services.fs, *m_solution, m_runService ? m_runService->startupProject() : std::nullopt,
+            [this](project::ProjectId id) {
+                if (m_runController)
+                    (void)m_runController->setStartupProject(id);
+            },
+            [this] { refreshSolutionExplorerForFsChange(); });
+    });
+    connect(explorer, &ui::SolutionExplorer::configurationManagerRequested, this, [this] {
+        if (!m_window || !m_solution)
+            return;
+        showConfigurationManagerDialog(
+            m_window, m_services.fs, *m_solution, static_cast<int>(m_build->activeConfigurationIndex().value_or(0)),
+            [this](int idx) {
+                if (idx >= 0)
+                    (void)m_build->setActiveConfiguration(static_cast<std::size_t>(idx));
+            },
+            [this] {
+                refreshSolutionExplorerForFsChange();
+                startProjectEvaluation(m_projectRoot);
+                if (m_clangd)
+                    restartClangd();
+            });
+    });
+    connect(explorer, &ui::SolutionExplorer::editRunConfigurationsRequested, this, [this](const QString& projectPath) {
+        if (!m_window || !m_solution || !m_runService)
+            return;
+        std::string activeCfg = "Debug|x64";
+        if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+            activeCfg = m_build->configurations()[*idx].name();
+        showEditRunConfigurationsDialog(
+            m_window, m_services.fs, m_solution.get(), projectPath.toStdString(), activeCfg,
+            m_runService->useExternalConsole(),
+            [this](bool ext) {
+                if (m_runService)
+                    (void)m_runService->setUseExternalConsole(ext);
+            },
+            [this] { refreshSolutionExplorerForFsChange(); });
+    });
+    connect(explorer, &ui::SolutionExplorer::addExistingProjectRequested, this, [this](const QString& solutionPath) {
+        if (!m_window || !m_solution)
+            return;
+        const QString chosen = QFileDialog::getOpenFileName(
+            m_window, text("Add Existing Project"), QFileInfo(solutionPath).absolutePath(),
+            text("Projects (*.vcxproj *.csproj *.fsproj *.vbproj);;C++ Projects (*.vcxproj);;C# Projects (*.csproj)"));
+        if (chosen.isEmpty())
+            return;
+        if (auto added =
+                addExistingProjectToSolutionFile(m_services.fs, solutionPath.toStdString(), chosen.toStdString());
+            !added) {
+            notify(text("Add Existing Project"), qs(added.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        refreshSolutionExplorerForFsChange();
+    });
+    connect(explorer, &ui::SolutionExplorer::removeProjectFromSolutionRequested, this,
+            [this](const QString& projectPath) {
+                if (!m_window || !m_solution)
+                    return;
+                const QString projName = QFileInfo(projectPath).completeBaseName();
+                if (QMessageBox::question(
+                        m_window, text("Remove Project from Solution"),
+                        text("Remove '%1' from the solution? (Project files on disk are not deleted)").arg(projName),
+                        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
+                    return;
+                }
+                const std::string slnPath = m_solution->path();
+                if (auto removed = removeProjectFromSolutionFile(m_services.fs, slnPath, projectPath.toStdString());
+                    !removed) {
+                    notify(text("Remove Project"), qs(removed.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::addProjectReferenceRequested, this, [this](const QString& projectPath) {
+        if (!m_window || !m_solution)
+            return;
+        showAddProjectReferenceDialog(m_window, m_services.fs, *m_solution, projectPath.toStdString(),
+                                      [this] { refreshSolutionExplorerForFsChange(); });
+    });
+    connect(explorer, &ui::SolutionExplorer::manageNuGetPackagesRequested, this, [this](const QString& projectPath) {
+        if (!m_window || !m_solution)
+            return;
+        showNuGetPackageManagerDialog(m_window, m_services.fs, projectPath.toStdString(),
+                                      [this] { refreshSolutionExplorerForFsChange(); });
     });
 
     auto* problems = new ui::ProblemsView();

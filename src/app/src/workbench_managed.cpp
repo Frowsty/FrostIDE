@@ -384,6 +384,7 @@ void Workbench::stopManaged() {
     for (auto* view : m_editors->views()) {
         if (!isManagedSource(view->path()))
             continue;
+        delete view->editor().findChild<ui::lang::EditorInsightBinding*>();
         view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, {});
         view->editor().setInsightEnabled(false);
         m_liveMarkers.erase(lang::documentKey(view->path()));

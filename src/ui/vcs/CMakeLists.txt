@@ -15,6 +15,7 @@ frost_add_library(ui_vcs LAYER ui
         src/git_actions.cpp
         src/git_console.cpp
         src/git_controller.cpp
+        src/git_log_window.cpp
         src/vcs_colors.cpp
     DEPS
         frost::ui_editor frost::ui_shell frost::ui frost::ui_model frost::vcs frost::diff frost::text_editor
@@ -27,5 +28,6 @@ target_sources(frost_ui_vcs PRIVATE
     include/frost/ui/vcs/commit_window.hpp
     include/frost/ui/vcs/diff_viewer.hpp
     include/frost/ui/vcs/git_console.hpp
-    include/frost/ui/vcs/git_controller.hpp)
+    include/frost/ui/vcs/git_controller.hpp
+    include/frost/ui/vcs/git_log_window.hpp)
 set_target_properties(frost_ui_vcs PROPERTIES AUTOMOC ON)

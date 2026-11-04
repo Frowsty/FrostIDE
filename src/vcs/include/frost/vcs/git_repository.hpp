@@ -77,6 +77,44 @@ struct GitBranch {
     friend bool operator==(const GitBranch&, const GitBranch&) = default;
 };
 
+struct GitCommitEntry {
+    std::string hash;
+    std::string shortHash;
+    std::vector<std::string> parents;
+    std::string author;
+    std::string email;
+    std::string dateIso;
+    std::string subject;
+    std::vector<std::string> refs;
+
+    friend bool operator==(const GitCommitEntry&, const GitCommitEntry&) = default;
+};
+
+struct GitCommitFileChange {
+    std::string status;
+    std::string path;
+
+    friend bool operator==(const GitCommitFileChange&, const GitCommitFileChange&) = default;
+};
+
+struct GitStashEntry {
+    int index = 0;
+    std::string ref;
+    std::string message;
+
+    friend bool operator==(const GitStashEntry&, const GitStashEntry&) = default;
+};
+
+struct GitBlameLine {
+    int line = 0;
+    std::string shortHash;
+    std::string author;
+    std::string dateShort;
+    std::string summary;
+
+    friend bool operator==(const GitBlameLine&, const GitBlameLine&) = default;
+};
+
 struct CommitRequest {
     std::vector<std::string> paths; // Absolute paths of the selected files (a rename: either path).
     std::string message;
@@ -168,6 +206,43 @@ public:
      * confirmation, a detached HEAD, no remote); IoError; run()'s.
      */
     [[nodiscard]] Result<GitOutput> push(const PushOptions& options, const RunControl& control = {}) const;
+
+    // Commit history (`git log --topo-order --decorate=short ...`) and per-commit file list (`git show --name-status`).
+    [[nodiscard]] Result<std::vector<GitCommitEntry>> log(std::size_t maxCount = 300,
+                                                          std::string_view branchFilter = {},
+                                                          std::string_view searchFilter = {},
+                                                          std::stop_token stop = {}) const;
+    [[nodiscard]] Result<std::vector<GitCommitFileChange>> commitFiles(std::string_view commitHash,
+                                                                       std::stop_token stop = {}) const;
+
+    // History operations (cherry-pick, revert, reset, tag, branch at revision).
+    [[nodiscard]] Result<GitOutput> cherryPick(std::string_view commitHash, const RunControl& control = {}) const;
+    [[nodiscard]] Result<GitOutput> revertCommit(std::string_view commitHash, const RunControl& control = {}) const;
+    [[nodiscard]] Result<GitOutput> resetBranch(std::string_view commitHash, std::string_view mode = "mixed",
+                                                const RunControl& control = {}) const;
+    [[nodiscard]] Result<void> createTag(std::string_view tagName, std::string_view commitHash = {},
+                                         const RunControl& control = {}) const;
+    [[nodiscard]] Result<void> createBranchAt(std::string_view name, std::string_view startPoint,
+                                              const RunControl& control = {}) const;
+
+    // Branch operations (merge, rebase, delete, rename).
+    [[nodiscard]] Result<GitOutput> mergeBranch(std::string_view branch, const RunControl& control = {}) const;
+    [[nodiscard]] Result<GitOutput> rebaseBranch(std::string_view ontoBranch, const RunControl& control = {}) const;
+    [[nodiscard]] Result<void> deleteBranch(std::string_view branch, bool force = false,
+                                            const RunControl& control = {}) const;
+    [[nodiscard]] Result<void> renameBranch(std::string_view oldName, std::string_view newName,
+                                            const RunControl& control = {}) const;
+
+    // Stash operations (`git stash push|list|pop|apply|drop`).
+    [[nodiscard]] Result<GitOutput> stashPush(std::string_view message = {}, bool includeUntracked = true,
+                                              const RunControl& control = {}) const;
+    [[nodiscard]] Result<std::vector<GitStashEntry>> stashList(std::stop_token stop = {}) const;
+    [[nodiscard]] Result<GitOutput> stashApply(int index = 0, bool pop = true, const RunControl& control = {}) const;
+    [[nodiscard]] Result<void> stashDrop(int index = 0, const RunControl& control = {}) const;
+
+    // Line-by-line blame (`git blame --porcelain <path>`).
+    [[nodiscard]] Result<std::vector<GitBlameLine>> blame(std::string_view relativePath,
+                                                          std::stop_token stop = {}) const;
 
 private:
     [[nodiscard]] Result<GitOutput> git(std::vector<std::string> arguments, const RunControl& control,

@@ -33,16 +33,24 @@ void Workbench::updateLanguageTarget() {
     DocumentEditorView* active = currentView();
     m_bridge->setActivePath(active ? std::string_view(active->path()) : std::string_view{});
     // The insight binding asks for capabilities and encoding as well as document requests. Keep
-    // it on the active C++ editor so those values always belong to the same document's server.
+    // it on the active editor so those values always belong to the same document's server.
     for (auto* view : m_editors->views()) {
-        if (!isCFamilySource(view->path()))
+        const bool isCpp = isCFamilySource(view->path());
+        const bool isCs = isManagedSource(view->path());
+        const bool isLua = isLuaSource(view->path());
+        if (!isCpp && !isCs && !isLua)
             continue;
         auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>();
         if (view != active && binding)
             delete binding;
-        else if (view == active && !binding && m_clangd) {
-            binding = new ui::lang::EditorInsightBinding(view->editor(), {*m_bridge, *m_pool});
-            binding->attach(*m_clangd);
+        else if (view == active && !binding) {
+            if (isCpp && m_clangd) {
+                binding = new ui::lang::EditorInsightBinding(view->editor(), {*m_bridge, *m_pool});
+                binding->attach(*m_clangd);
+            } else if ((isCs && m_managed) || (isLua && m_lua)) {
+                binding = new ui::lang::EditorInsightBinding(view->editor(), {*m_bridge, *m_pool});
+                binding->refreshSemanticTokens();
+            }
         }
     }
 }
@@ -142,6 +150,7 @@ void Workbench::stopLua() {
     for (auto* view : m_editors->views()) {
         if (!isLuaSource(view->path()))
             continue;
+        delete view->editor().findChild<ui::lang::EditorInsightBinding*>();
         view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, {});
         view->editor().setInsightEnabled(false);
         m_liveMarkers.erase(lang::documentKey(view->path()));

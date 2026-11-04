@@ -50,9 +50,28 @@ class IFileSystem;
 
 namespace frost::vcs {
 
-enum class GitOperationKind : std::uint8_t { Commit, Rollback, Checkout, CreateBranch, Fetch, Pull, Push };
+enum class GitOperationKind : std::uint8_t {
+    Commit,
+    Rollback,
+    Checkout,
+    CreateBranch,
+    Fetch,
+    Pull,
+    Push,
+    CherryPick,
+    Revert,
+    Reset,
+    Tag,
+    Merge,
+    Rebase,
+    DeleteBranch,
+    RenameBranch,
+    Stash,
+    Unstash,
+    DropStash,
+};
 
-// "Commit", "Rollback", "Checkout", "New Branch", "Fetch", "Pull", "Push" (English titles).
+// "Commit", "Rollback", "Checkout", "New Branch", "Fetch", "Pull", "Push", etc. (English titles).
 [[nodiscard]] std::string_view toString(GitOperationKind kind) noexcept;
 
 // How one operation ended.
@@ -127,6 +146,18 @@ public:
     void fetch();
     void pull(PullStrategy strategy = PullStrategy::Merge);
     void push(PushOptions options = {});
+    void cherryPick(std::string commitHash);
+    void revertCommit(std::string commitHash);
+    void resetBranch(std::string commitHash, std::string mode = "mixed");
+    void createTag(std::string tagName, std::string commitHash = {});
+    void createBranchAt(std::string name, std::string startPoint);
+    void mergeBranch(std::string branch);
+    void rebaseBranch(std::string ontoBranch);
+    void deleteBranch(std::string branch, bool force = false);
+    void renameBranch(std::string oldName, std::string newName);
+    void stashPush(std::string message = {}, bool includeUntracked = true);
+    void stashApply(int index = 0, bool pop = true);
+    void stashDrop(int index = 0);
     // Stops the running operation (its process tree ends; the result is Cancelled).
     void cancelOperation();
     // True while an operation runs or waits.
@@ -138,6 +169,11 @@ public:
     void readBranches(std::function<void(Result<std::vector<GitBranch>>)> done);
     void readLastCommitMessage(std::function<void(Result<std::string>)> done);
     void readRecentCommitMessages(std::size_t count, std::function<void(Result<std::vector<std::string>>)> done);
+    void readLog(std::size_t maxCount, std::string branchFilter, std::string searchFilter,
+                 std::function<void(Result<std::vector<GitCommitEntry>>)> done);
+    void readCommitFiles(std::string commitHash, std::function<void(Result<std::vector<GitCommitFileChange>>)> done);
+    void readStashes(std::function<void(Result<std::vector<GitStashEntry>>)> done);
+    void readBlame(std::string relativeOrAbsolutePath, std::function<void(Result<std::vector<GitBlameLine>>)> done);
 
     // Waits until both queues are idle and no refresh is pending, or `timeout` passes; returns
     // whether it got there. Not from a callback.

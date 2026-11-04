@@ -78,6 +78,11 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
         binding->attach(*m_clangd);
         refreshMarkers(view);
+    } else if (((m_managed && isManagedSource(view.path())) || (m_lua && isLuaSource(view.path()))) &&
+               currentView() == &view) {
+        auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
+        binding->refreshSemanticTokens();
+        refreshMarkers(view);
     }
     // The language features follow the caret of the active editor and its Ctrl+clicks.
     ui::EditorView* editor = &view.editor();

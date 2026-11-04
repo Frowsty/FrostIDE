@@ -76,6 +76,8 @@ struct ServerCapabilities {
     bool codeAction = false;
     bool formatting = false;
     bool rangeFormatting = false;
+    bool callHierarchy = false;
+    bool typeHierarchy = false;
     std::string serverName;    // serverInfo.name, e.g. "clangd".
     std::string serverVersion; // serverInfo.version.
     Json raw;
@@ -89,6 +91,8 @@ struct ServerCapabilities {
  */
 class ILspRequester {
 public:
+    using ApplyEditHandler = std::function<bool(const Json& params)>;
+
     virtual ~ILspRequester() = default;
     // Sends `method` with `params`; stopping `token` cancels it ($/cancelRequest). Errors: Busy
     // (no initialized server) and those of JsonRpcConnection::request.
@@ -98,12 +102,16 @@ public:
     [[nodiscard]] virtual PositionEncoding encoding() const = 0;
     // The server's capabilities while initialized, else nullopt.
     [[nodiscard]] virtual std::optional<ServerCapabilities> serverCapabilities() const = 0;
+    // Optional callback invoked when the server sends a `workspace/applyEdit` request.
+    virtual void setApplyEditHandler(ApplyEditHandler handler) { static_cast<void>(handler); }
 
 protected:
     ILspRequester() = default;
     ILspRequester(const ILspRequester&) = default;
     ILspRequester& operator=(const ILspRequester&) = default;
 };
+
+using LspRequestSender = ILspRequester;
 
 // Reads an InitializeResult. A server that answers with clangd's `offsetEncoding` instead of
 // `positionEncoding` gets that encoding. Unknown or "utf-32" encodings fall back to UTF-16.
@@ -138,6 +146,8 @@ public:
         std::function<void(const Json& params)> onDiagnostics;
         // window/logMessage and window/showMessage: LSP MessageType (1 error .. 4 log) and text.
         std::function<void(int type, std::string_view message)> onMessage;
+        // Server-initiated workspace/applyEdit request; returns true when applied.
+        ApplyEditHandler onApplyEdit;
         std::function<void(const Error& problem)> onProtocolError;
         std::function<void(const Error& why)> onClosed;
     };
@@ -177,6 +187,8 @@ public:
     [[nodiscard]] PositionEncoding encoding() const override;
     // ILspRequester: capabilities() while ready().
     [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override;
+    // Sets or replaces the handler for server-initiated workspace/applyEdit requests.
+    void setApplyEditHandler(ApplyEditHandler handler) override;
     // A notification. Errors: Busy (not initialized), IoError (closed).
     [[nodiscard]] Result<void> notify(std::string method, Json params);
 

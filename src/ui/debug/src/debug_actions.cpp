@@ -55,6 +55,15 @@ Result<void> registerDebugActions(input::ActionRegistry& registry, DebugControll
         if (id == "debug.runToCursor") {
             return {paused, [](DebugController& d) { d.runToCursor(); }};
         }
+        if (id == "debug.setNextStatement") {
+            return {paused, [](DebugController& d) { d.setNextStatement(); }};
+        }
+        if (id == "debug.muteBreakpoints") {
+            return {{}, [](DebugController& d) { d.toggleMuteBreakpoints(); }};
+        }
+        if (id == "debug.editBreakpoint") {
+            return {{}, [](DebugController& d) { d.requestEditBreakpoint(); }};
+        }
         return {paused, [](DebugController& d) { d.requestEvaluate(); }};
     };
     for (const DebugActionInfo& info : kDebugActions) {

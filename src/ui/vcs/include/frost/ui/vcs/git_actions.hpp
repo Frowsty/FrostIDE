@@ -56,6 +56,10 @@ inline constexpr std::string_view kFetch = "vcs.fetch";
 inline constexpr std::string_view kPull = "vcs.pull";
 inline constexpr std::string_view kPullRebase = "vcs.pullRebase";
 inline constexpr std::string_view kBranches = "vcs.branches";
+inline constexpr std::string_view kLog = "vcs.log";
+inline constexpr std::string_view kStash = "vcs.stash";
+inline constexpr std::string_view kUnstash = "vcs.unstash";
+inline constexpr std::string_view kAnnotate = "vcs.annotate";
 inline constexpr std::string_view kNextChange = "diff.nextChange";
 inline constexpr std::string_view kPreviousChange = "diff.previousChange";
 // The Find Action category.
@@ -68,7 +72,7 @@ struct GitShortcutDefault {
     std::string_view shortcut; // Strict sequence syntax.
 };
 
-inline constexpr std::array<GitShortcutDefault, 9> kGitShortcutDefaults{{
+inline constexpr std::array<GitShortcutDefault, 13> kGitShortcutDefaults{{
     {git_actions::kShowDiff, "Ctrl+D"},
     {git_actions::kNextChange, "F7"},
     {git_actions::kPreviousChange, "Shift+F7"},
@@ -78,6 +82,10 @@ inline constexpr std::array<GitShortcutDefault, 9> kGitShortcutDefaults{{
     {git_actions::kPullRebase, ""},
     {git_actions::kForcePush, ""},
     {git_actions::kBranches, ""},
+    {git_actions::kLog, ""},
+    {git_actions::kStash, ""},
+    {git_actions::kUnstash, ""},
+    {git_actions::kAnnotate, ""},
 }};
 
 // kGitShortcutDefaults as bindings for KeymapService::setModuleDefaults (unbound ones left out).
@@ -97,6 +105,10 @@ struct GitActionTargets {
     std::function<vcs::PullStrategy()> pullStrategy;               // Update Project's (unset: merge).
     // Rollback's and the force push's confirmation; empty answers no.
     std::function<bool(const QString& title, const QString& question)> confirm;
+    std::function<void()> showLog;                         // Show Git Log tool window.
+    std::function<void()> stashChanges;                    // Stash Changes... dialog/action.
+    std::function<void()> unstashChanges;                  // Unstash Changes... dialog/action.
+    std::function<void(const std::string& path)> annotate; // Annotate with Git Blame.
 };
 
 /*

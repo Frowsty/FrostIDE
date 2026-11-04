@@ -114,6 +114,10 @@ struct FrameList {
 struct BreakpointLine {
     std::uint64_t id = 0;
     std::int64_t line = 0; // 1-based.
+    bool enabled = true;
+    std::string condition{};
+    std::string hitCondition{};
+    std::string logMessage{};
 
     friend bool operator==(const BreakpointLine&, const BreakpointLine&) = default;
 };
@@ -214,6 +218,11 @@ public:
     using VariablesDone = std::function<void(Result<VariableList>)>;
     using EvaluateDone = std::function<void(Result<dap::Variable>)>;
     using SourceDone = std::function<void(Result<std::string>)>;
+    using SetVariableDone = std::function<void(Result<dap::Variable>)>;
+    using ExceptionBreakpointsDone = std::function<void(Result<void>)>;
+    using DisassembleDone = std::function<void(Result<std::vector<dap::DisassembledInstruction>>)>;
+    using ReadMemoryDone = std::function<void(Result<dap::ReadMemoryResult>)>;
+    using GotoLineDone = std::function<void(Result<void>)>;
     // Retrieves the adapter-owned bytes for a stopped source reference; stale stops return Cancelled.
     std::int64_t source(std::int64_t sourceReference, SourceDone done);
     // The scopes of frame `frameId`. Returns the request's seq (for cancel), 0 when not sent.
@@ -224,6 +233,19 @@ public:
     // "hover"); the result is a Variable named after the expression.
     std::int64_t evaluate(std::string expression, std::optional<std::int64_t> frameId, std::string context,
                           EvaluateDone done);
+    // Modifies variable `name` inside `variablesReference` via DAP `setVariable`.
+    std::int64_t setVariable(std::int64_t variablesReference, std::string_view name, std::string_view value,
+                             SetVariableDone done = {});
+    // Configures exception breakpoint filters ("all", "uncaught", etc.) via DAP `setExceptionBreakpoints`.
+    std::int64_t setExceptionBreakpoints(const std::vector<std::string>& filters, ExceptionBreakpointsDone done = {});
+    // Disassembles `instructionCount` instructions starting at `memoryReference`.
+    std::int64_t disassemble(std::string_view memoryReference, std::int64_t instructionCount, DisassembleDone done,
+                             std::int64_t instructionOffset = 0);
+    // Reads `count` bytes from `memoryReference` via DAP `readMemory`.
+    std::int64_t readMemory(std::string_view memoryReference, std::int64_t count, ReadMemoryDone done,
+                            std::int64_t offset = 0);
+    // Resolves `gotoTargets` for `path`:`line` and jumps `threadId` to the first target via DAP `goto`.
+    std::int64_t gotoLine(std::int64_t threadId, std::string_view path, std::int64_t line, GotoLineDone done = {});
     // Cancels a source, scopes, variables or evaluate request (its completion runs with Cancelled).
     void cancel(std::int64_t seq);
 

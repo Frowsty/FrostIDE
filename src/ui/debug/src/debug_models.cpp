@@ -435,6 +435,38 @@ QString VariablesModel::valueAt(const QModelIndex& index) const {
     return index.isValid() ? nodeFor(index)->value : QString();
 }
 
+QString VariablesModel::nameAt(const QModelIndex& index) const {
+    return index.isValid() ? nodeFor(index)->name : QString();
+}
+
+std::int64_t VariablesModel::parentReferenceAt(const QModelIndex& index) const {
+    if (!index.isValid()) {
+        return 0;
+    }
+    const Node* node = nodeFor(index);
+    return node->parent != nullptr ? node->parent->reference : 0;
+}
+
+bool VariablesModel::isVariableRow(const QModelIndex& index) const {
+    return index.isValid() && nodeFor(index)->kind == Node::Kind::Variable;
+}
+
+bool VariablesModel::isWatchRoot(const QModelIndex& index) const {
+    return index.isValid() && nodeFor(index)->kind == Node::Kind::Watch;
+}
+
+void VariablesModel::updateValueAt(const QModelIndex& index, const QString& value, const QString& type) {
+    if (!index.isValid()) {
+        return;
+    }
+    Node* node = nodeFor(index);
+    node->value = value;
+    if (!type.isEmpty()) {
+        node->type = type;
+    }
+    emit dataChanged(indexFor(node, 0), indexFor(node, 2));
+}
+
 QModelIndex VariablesModel::index(int row, int column, const QModelIndex& parent) const {
     const Node* node = nodeFor(parent);
     if (row < 0 || column < 0 || column >= 3 || row >= static_cast<int>(node->children.size())) {

@@ -354,15 +354,27 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                 }
             }
         }
-        std::vector<std::int64_t> numbers;
-        numbers.reserve(lines.size());
+        std::vector<BreakpointLine> activeLines;
+        std::vector<dap::SourceBreakpoint> sourceBreakpoints;
+        activeLines.reserve(lines.size());
+        sourceBreakpoints.reserve(lines.size());
         for (const BreakpointLine& line : lines) {
-            numbers.push_back(line.line);
+            if (!line.enabled) {
+                continue;
+            }
+            activeLines.push_back(line);
+            sourceBreakpoints.push_back(dap::SourceBreakpoint{
+                .line = line.line,
+                .enabled = line.enabled,
+                .condition = line.condition,
+                .hitCondition = line.hitCondition,
+                .logMessage = line.logMessage,
+            });
         }
-        send("setBreakpoints", dap::setBreakpointsArguments(path, numbers),
-             [weak = weak(), lines](Result<rpc::Json> body) {
+        send("setBreakpoints", dap::setBreakpointsArguments(path, sourceBreakpoints),
+             [weak = weak(), activeLines](Result<rpc::Json> body) {
                  if (const auto self = weak.lock()) {
-                     self->breakpointsAnswered(lines, std::move(body));
+                     self->breakpointsAnswered(activeLines, std::move(body));
                  }
              });
     }
@@ -1119,6 +1131,106 @@ std::int64_t DebugSession::evaluate(std::string expression, std::optional<std::i
                                  return;
                              }
                              done(dap::parseEvaluateResult(*body, expression));
+                         });
+}
+
+std::int64_t DebugSession::setVariable(std::int64_t variablesReference, std::string_view name, std::string_view value,
+                                       SetVariableDone done) {
+    std::string varName(name);
+    return m_state->send("setVariable", dap::setVariableArguments(variablesReference, name, value),
+                         [done = std::move(done), varName = std::move(varName)](Result<rpc::Json> body) {
+                             if (!done) {
+                                 return;
+                             }
+                             if (!body) {
+                                 done(std::unexpected(std::move(body.error())));
+                                 return;
+                             }
+                             done(dap::parseSetVariableResponse(*body, varName));
+                         });
+}
+
+std::int64_t DebugSession::setExceptionBreakpoints(const std::vector<std::string>& filters,
+                                                   ExceptionBreakpointsDone done) {
+    return m_state->send("setExceptionBreakpoints", dap::setExceptionBreakpointsArguments(filters),
+                         [done = std::move(done)](Result<rpc::Json> body) {
+                             if (!done) {
+                                 return;
+                             }
+                             if (!body) {
+                                 done(std::unexpected(std::move(body.error())));
+                                 return;
+                             }
+                             done({});
+                         });
+}
+
+std::int64_t DebugSession::disassemble(std::string_view memoryReference, std::int64_t instructionCount,
+                                       DisassembleDone done, std::int64_t instructionOffset) {
+    return m_state->send("disassemble", dap::disassembleArguments(memoryReference, instructionCount, instructionOffset),
+                         [done = std::move(done)](Result<rpc::Json> body) {
+                             if (!done) {
+                                 return;
+                             }
+                             if (!body) {
+                                 done(std::unexpected(std::move(body.error())));
+                                 return;
+                             }
+                             done(dap::parseDisassembleResponse(*body));
+                         });
+}
+
+std::int64_t DebugSession::readMemory(std::string_view memoryReference, std::int64_t count, ReadMemoryDone done,
+                                      std::int64_t offset) {
+    return m_state->send("readMemory", dap::readMemoryArguments(memoryReference, count, offset),
+                         [done = std::move(done)](Result<rpc::Json> body) {
+                             if (!done) {
+                                 return;
+                             }
+                             if (!body) {
+                                 done(std::unexpected(std::move(body.error())));
+                                 return;
+                             }
+                             done(dap::parseReadMemoryResponse(*body));
+                         });
+}
+
+std::int64_t DebugSession::gotoLine(std::int64_t threadId, std::string_view path, std::int64_t line,
+                                    GotoLineDone done) {
+    const std::weak_ptr<State> weak = m_state;
+    return m_state->send("gotoTargets", dap::gotoTargetsArguments(path, line),
+                         [weak, threadId, done = std::move(done)](Result<rpc::Json> body) mutable {
+                             const auto state = weak.lock();
+                             if (!state) {
+                                 if (done) {
+                                     done(fail(ErrorCode::Cancelled, "debug session ended"));
+                                 }
+                                 return;
+                             }
+                             if (!body) {
+                                 if (done) {
+                                     done(std::unexpected(std::move(body.error())));
+                                 }
+                                 return;
+                             }
+                             const std::vector<dap::GotoTarget> targets = dap::parseGotoTargetsResponse(*body);
+                             if (targets.empty()) {
+                                 if (done) {
+                                     done(fail(ErrorCode::NotFound, "No executable goto target found on that line"));
+                                 }
+                                 return;
+                             }
+                             state->send("goto", dap::gotoArguments(threadId, targets.front().id),
+                                         [done = std::move(done)](Result<rpc::Json> gotoRes) {
+                                             if (!done) {
+                                                 return;
+                                             }
+                                             if (!gotoRes) {
+                                                 done(std::unexpected(std::move(gotoRes.error())));
+                                                 return;
+                                             }
+                                             done({});
+                                         });
                          });
 }
 

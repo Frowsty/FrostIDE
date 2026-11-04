@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+class QLabel;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
@@ -35,12 +36,18 @@ public:
     // The paths shown, in order.
     [[nodiscard]] std::vector<std::string> recentProjects() const;
 
+    void setUpdateStatus(const QString& status);
+    [[nodiscard]] QString updateStatus() const;
+
     [[nodiscard]] QListWidget* recentList() const noexcept { return m_recent; }
     [[nodiscard]] QLineEdit* searchField() const noexcept { return m_search; }
     [[nodiscard]] QListWidget* navigationList() const noexcept { return m_navList; }
     [[nodiscard]] QPushButton* newProjectButton() const noexcept { return m_newProject; }
     [[nodiscard]] QPushButton* openButton() const noexcept { return m_open; }
+    [[nodiscard]] QPushButton* cloneRepositoryButton() const noexcept { return m_cloneRepo; }
     [[nodiscard]] QPushButton* openFolderButton() const noexcept { return m_openFolder; }
+    [[nodiscard]] QPushButton* checkForUpdatesButton() const noexcept { return m_checkUpdates; }
+    [[nodiscard]] QLabel* updateStatusLabel() const noexcept { return m_updateStatus; }
 
     // Emits openRecent for row `row` (no-op outside the list).
     void activateRow(int row);
@@ -50,11 +57,13 @@ public:
 signals:
     void newProjectRequested();
     void openRequested();
+    void cloneRepositoryRequested();
     void openFolderRequested();
     void openRecent(const QString& path);
     void removeRecent(const QString& path);
     void quickSwitchThemeRequested();
     void settingsRequested();
+    void checkForUpdatesRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -68,7 +77,10 @@ private:
     QLineEdit* m_search = nullptr;
     QPushButton* m_newProject = nullptr;
     QPushButton* m_open = nullptr;
+    QPushButton* m_cloneRepo = nullptr;
     QPushButton* m_openFolder = nullptr;
+    QPushButton* m_checkUpdates = nullptr;
+    QLabel* m_updateStatus = nullptr;
     QListWidget* m_recent = nullptr;
 };
 

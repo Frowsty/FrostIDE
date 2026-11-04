@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QColor>
+#include <QDesktopServices>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -29,6 +30,7 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace frost::app {
@@ -38,8 +40,24 @@ namespace {
 constexpr int kPathRole = Qt::UserRole + 1;
 constexpr int kTitleRole = Qt::UserRole + 2;
 constexpr int kSubtitleRole = Qt::UserRole + 3;
+constexpr int kBadgeRole = Qt::UserRole + 4;
 
 QString text(const char* source) { return ui::qtr("frost::app::WelcomeScreen", source); }
+
+QString projectTypeBadge(const QFileInfo& info) {
+    const QString suffix = info.suffix().toLower();
+    if (suffix == QStringLiteral("sln"))
+        return QStringLiteral("SLN");
+    if (suffix == QStringLiteral("slnx"))
+        return QStringLiteral("SLNX");
+    if (suffix == QStringLiteral("csproj"))
+        return QStringLiteral("C#");
+    if (suffix == QStringLiteral("vcxproj"))
+        return QStringLiteral("C++");
+    if (info.fileName().compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("CMake");
+    return QStringLiteral("PROJECT");
+}
 
 QString projectInitials(const QString& name) {
     QString letters;
@@ -130,7 +148,9 @@ public:
         }
 
         const int textLeft = iconRect.right() + 12;
-        const int textWidth = std::max(40, rect.right() - textLeft - 12);
+        const QString badge = index.data(kBadgeRole).toString();
+        const int badgeSpace = badge.isEmpty() ? 0 : 64;
+        const int textWidth = std::max(40, rect.right() - textLeft - 12 - badgeSpace);
         QFont titleFont = option.font;
         titleFont.setBold(true);
         painter->setFont(titleFont);
@@ -139,6 +159,25 @@ public:
         const QRect titleRect(textLeft, rect.top() + 6, textWidth, titleFm.height());
         painter->drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter,
                           titleFm.elidedText(title, Qt::ElideRight, textWidth));
+
+        if (!badge.isEmpty()) {
+            QFont badgeFont = option.font;
+            if (badgeFont.pointSizeF() > 7.5)
+                badgeFont.setPointSizeF(badgeFont.pointSizeF() * 0.82);
+            badgeFont.setBold(true);
+            painter->setFont(badgeFont);
+            const QFontMetrics badgeFm(badgeFont);
+            const int bw = std::max(36, badgeFm.horizontalAdvance(badge) + 14);
+            const int bh = std::max(18, badgeFm.height() + 4);
+            const QRect badgeRect(rect.right() - bw - 10, rect.top() + (rect.height() - bh) / 2, bw, bh);
+            QColor pillFill = option.palette.color(QPalette::Highlight);
+            pillFill.setAlpha(38);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(pillFill);
+            painter->drawRoundedRect(badgeRect, 4.0, 4.0);
+            painter->setPen(option.palette.color(QPalette::Text));
+            painter->drawText(badgeRect, Qt::AlignCenter, badge);
+        }
 
         if (!subtitle.isEmpty()) {
             QFont subFont = option.font;
@@ -221,6 +260,18 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     sidebarLayout->addWidget(m_navList);
     sidebarLayout->addStretch(1);
 
+    m_updateStatus = new QLabel(text("FrostIDE 2026.11 • Ready"), sidebar);
+    m_updateStatus->setObjectName(QStringLiteral("welcomeUpdateStatus"));
+    m_updateStatus->setWordWrap(true);
+    m_updateStatus->setFont(verFont);
+    sidebarLayout->addWidget(m_updateStatus);
+
+    m_checkUpdates = new QPushButton(text("Check for Updates..."), sidebar);
+    m_checkUpdates->setObjectName(QStringLiteral("welcomeCheckUpdatesButton"));
+    m_checkUpdates->setMinimumHeight(30);
+    connect(m_checkUpdates, &QPushButton::clicked, this, &WelcomeScreen::checkForUpdatesRequested);
+    sidebarLayout->addWidget(m_checkUpdates);
+
     auto* quickThemeBtn = new QPushButton(text("Switch Theme..."), sidebar);
     quickThemeBtn->setObjectName(QStringLiteral("welcomeThemeButton"));
     quickThemeBtn->setMinimumHeight(30);
@@ -268,12 +319,17 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     m_open->setObjectName(QStringLiteral("welcomeOpen"));
     m_open->setMinimumHeight(32);
     m_open->setToolTip(text("Open a solution (.sln, .slnx), project, CMakeLists.txt, or a file"));
+    m_cloneRepo = new QPushButton(text("Clone Repository..."), projectsPage);
+    m_cloneRepo->setObjectName(QStringLiteral("welcomeCloneRepo"));
+    m_cloneRepo->setMinimumHeight(32);
+    m_cloneRepo->setToolTip(text("Clone a Git repository from a URL and open it"));
     m_openFolder = new QPushButton(text("Open Folder..."), projectsPage);
     m_openFolder->setObjectName(QStringLiteral("welcomeOpenFolder"));
     m_openFolder->setMinimumHeight(32);
     m_openFolder->setToolTip(text("Open a project folder, including a CMake project"));
     headerRow->addWidget(m_newProject);
     headerRow->addWidget(m_open);
+    headerRow->addWidget(m_cloneRepo);
     headerRow->addWidget(m_openFolder);
     projectsLayout->addLayout(headerRow);
 
@@ -390,6 +446,7 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     connect(m_search, &QLineEdit::textChanged, this, &WelcomeScreen::filterRecentProjects);
     connect(m_newProject, &QPushButton::clicked, this, &WelcomeScreen::newProjectRequested);
     connect(m_open, &QPushButton::clicked, this, &WelcomeScreen::openRequested);
+    connect(m_cloneRepo, &QPushButton::clicked, this, &WelcomeScreen::cloneRepositoryRequested);
     connect(m_openFolder, &QPushButton::clicked, this, &WelcomeScreen::openFolderRequested);
     // Single click or Enter opens the recent project.
     connect(m_recent, &QListWidget::itemClicked, this,
@@ -413,12 +470,20 @@ void WelcomeScreen::setRecentProjects(const std::vector<std::string>& paths) {
         item->setData(kPathRole, QString::fromStdString(path));
         item->setData(kTitleRole, name);
         item->setData(kSubtitleRole, native);
+        item->setData(kBadgeRole, projectTypeBadge(info));
         item->setToolTip(native);
     }
     if (m_search != nullptr && !m_search->text().isEmpty()) {
         filterRecentProjects(m_search->text());
     }
 }
+
+void WelcomeScreen::setUpdateStatus(const QString& status) {
+    if (m_updateStatus != nullptr)
+        m_updateStatus->setText(status);
+}
+
+QString WelcomeScreen::updateStatus() const { return m_updateStatus != nullptr ? m_updateStatus->text() : QString(); }
 
 void WelcomeScreen::filterRecentProjects(const QString& query) {
     const QString trimmed = query.trimmed();
@@ -475,12 +540,19 @@ void WelcomeScreen::showContextMenu(const QPoint& position) {
     }
     QMenu menu(this);
     QAction* open = menu.addAction(text("Open"));
+    QAction* openFolder = menu.addAction(text("Open Containing Folder"));
     QAction* copyPath = menu.addAction(text("Copy Path"));
     menu.addSeparator();
     QAction* remove = menu.addAction(text("Remove from Recent Projects"));
     QAction* chosen = menu.exec(m_recent->viewport()->mapToGlobal(position));
     if (chosen == open) {
         activateRow(row);
+    } else if (chosen == openFolder) {
+        if (QListWidgetItem* item = m_recent->item(row); item != nullptr) {
+            const QFileInfo info(item->data(kPathRole).toString());
+            const QString folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+            QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+        }
     } else if (chosen == copyPath) {
         if (QListWidgetItem* item = m_recent->item(row); item != nullptr) {
             QApplication::clipboard()->setText(QDir::toNativeSeparators(item->data(kPathRole).toString()));

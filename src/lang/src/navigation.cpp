@@ -196,4 +196,219 @@ requestDocumentHighlights(ILspRequester& server, std::string path, LspPosition p
     co_return parseDocumentHighlights(*result);
 }
 
+namespace {
+
+[[nodiscard]] std::vector<LspRange> parseRangeArray(const Json* array) {
+    std::vector<LspRange> out;
+    if (array == nullptr || !array->isArray()) {
+        return out;
+    }
+    for (const Json& elem : array->items()) {
+        if (auto parsed = parseRange(elem)) {
+            out.push_back(*parsed);
+        }
+    }
+    return out;
+}
+
+template<typename Item>
+[[nodiscard]] Json hierarchyItemToJson(const Item& item) {
+    Json out = Json::object()
+                   .set("name", item.name)
+                   .set("kind", static_cast<int>(item.kind))
+                   .set("uri", item.uri)
+                   .set("range", toJson(item.range))
+                   .set("selectionRange", toJson(item.selectionRange));
+    if (!item.detail.empty()) {
+        out.set("detail", item.detail);
+    }
+    if (!item.data.isNull()) {
+        out.set("data", item.data);
+    }
+    return out;
+}
+
+template<typename Item>
+[[nodiscard]] std::optional<Item> parseHierarchyItemImpl(const Json& json) {
+    if (!json.isObject()) {
+        return std::nullopt;
+    }
+    const std::string_view name = json.stringAt("name");
+    const std::string_view uri = json.stringAt("uri");
+    const Json* range = json.find("range");
+    const Json* selectionRange = json.find("selectionRange");
+    if (name.empty() || uri.empty() || range == nullptr) {
+        return std::nullopt;
+    }
+    auto parsedPath = uriToPath(uri);
+    auto parsedRange = parseRange(*range);
+    if (!parsedPath || !parsedRange) {
+        return std::nullopt;
+    }
+    LspRange parsedSelection = *parsedRange;
+    if (selectionRange != nullptr) {
+        if (auto sel = parseRange(*selectionRange)) {
+            parsedSelection = *sel;
+        }
+    }
+    Item out;
+    out.name = std::string(name);
+    if (const Json* kind = json.find("kind")) {
+        out.kind = parseSymbolKind(*kind);
+    }
+    out.detail = std::string(json.stringAt("detail"));
+    out.path = std::move(*parsedPath);
+    out.uri = std::string(uri);
+    out.range = *parsedRange;
+    out.selectionRange = parsedSelection;
+    if (const Json* data = json.find("data")) {
+        out.data = *data;
+    }
+    return out;
+}
+
+} // namespace
+
+Json toJson(const CallHierarchyItem& item) { return hierarchyItemToJson(item); }
+
+Json toJson(const TypeHierarchyItem& item) { return hierarchyItemToJson(item); }
+
+std::optional<CallHierarchyItem> parseCallHierarchyItem(const Json& json) {
+    return parseHierarchyItemImpl<CallHierarchyItem>(json);
+}
+
+std::vector<CallHierarchyItem> parseCallHierarchyItems(const Json& json) {
+    std::vector<CallHierarchyItem> out;
+    if (json.isArray()) {
+        for (const Json& elem : json.items()) {
+            if (auto item = parseCallHierarchyItem(elem)) {
+                out.push_back(std::move(*item));
+            }
+        }
+    } else if (auto single = parseCallHierarchyItem(json)) {
+        out.push_back(std::move(*single));
+    }
+    return out;
+}
+
+std::vector<CallHierarchyIncomingCall> parseIncomingCalls(const Json& json) {
+    std::vector<CallHierarchyIncomingCall> out;
+    for (const Json& elem : json.items()) {
+        if (!elem.isObject()) {
+            continue;
+        }
+        const Json* from = elem.find("from");
+        if (from == nullptr) {
+            continue;
+        }
+        if (auto item = parseCallHierarchyItem(*from)) {
+            out.push_back(CallHierarchyIncomingCall{.from = std::move(*item),
+                                                    .fromRanges = parseRangeArray(elem.find("fromRanges"))});
+        }
+    }
+    return out;
+}
+
+std::vector<CallHierarchyOutgoingCall> parseOutgoingCalls(const Json& json) {
+    std::vector<CallHierarchyOutgoingCall> out;
+    for (const Json& elem : json.items()) {
+        if (!elem.isObject()) {
+            continue;
+        }
+        const Json* to = elem.find("to");
+        if (to == nullptr) {
+            continue;
+        }
+        if (auto item = parseCallHierarchyItem(*to)) {
+            out.push_back(CallHierarchyOutgoingCall{.to = std::move(*item),
+                                                    .fromRanges = parseRangeArray(elem.find("fromRanges"))});
+        }
+    }
+    return out;
+}
+
+std::optional<TypeHierarchyItem> parseTypeHierarchyItem(const Json& json) {
+    return parseHierarchyItemImpl<TypeHierarchyItem>(json);
+}
+
+std::vector<TypeHierarchyItem> parseTypeHierarchyItems(const Json& json) {
+    std::vector<TypeHierarchyItem> out;
+    if (json.isArray()) {
+        for (const Json& elem : json.items()) {
+            if (auto item = parseTypeHierarchyItem(elem)) {
+                out.push_back(std::move(*item));
+            }
+        }
+    } else if (auto single = parseTypeHierarchyItem(json)) {
+        out.push_back(std::move(*single));
+    }
+    return out;
+}
+
+sched::Task<Result<std::vector<CallHierarchyItem>>>
+requestPrepareCallHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token) {
+    auto params = textDocumentPosition(path, position);
+    if (!params) {
+        co_return std::unexpected(std::move(params.error()));
+    }
+    auto result = co_await server.request("textDocument/prepareCallHierarchy", std::move(*params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    co_return parseCallHierarchyItems(*result);
+}
+
+sched::Task<Result<std::vector<CallHierarchyIncomingCall>>>
+requestIncomingCalls(ILspRequester& server, CallHierarchyItem item, std::stop_token token) {
+    Json params = Json::object().set("item", toJson(item));
+    auto result = co_await server.request("callHierarchy/incomingCalls", std::move(params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    co_return parseIncomingCalls(*result);
+}
+
+sched::Task<Result<std::vector<CallHierarchyOutgoingCall>>>
+requestOutgoingCalls(ILspRequester& server, CallHierarchyItem item, std::stop_token token) {
+    Json params = Json::object().set("item", toJson(item));
+    auto result = co_await server.request("callHierarchy/outgoingCalls", std::move(params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    co_return parseOutgoingCalls(*result);
+}
+
+sched::Task<Result<std::vector<TypeHierarchyItem>>>
+requestPrepareTypeHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token) {
+    auto params = textDocumentPosition(path, position);
+    if (!params) {
+        co_return std::unexpected(std::move(params.error()));
+    }
+    auto result = co_await server.request("textDocument/prepareTypeHierarchy", std::move(*params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    co_return parseTypeHierarchyItems(*result);
+}
+
+sched::Task<Result<std::vector<TypeHierarchyItem>>> requestSupertypes(ILspRequester& server, TypeHierarchyItem item,
+                                                                      std::stop_token token) {
+    Json params = Json::object().set("item", toJson(item));
+    auto result = co_await server.request("typeHierarchy/supertypes", std::move(params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    co_return parseTypeHierarchyItems(*result);
+}
+
+sched::Task<Result<std::vector<TypeHierarchyItem>>> requestSubtypes(ILspRequester& server, TypeHierarchyItem item,
+                                                                    std::stop_token token) {
+    Json params = Json::object().set("item", toJson(item));
+    auto result = co_await server.request("typeHierarchy/subtypes", std::move(params), std::move(token));
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    co_return parseTypeHierarchyItems(*result);
+}
+
 } // namespace frost::lang

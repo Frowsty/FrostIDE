@@ -127,6 +127,8 @@ void DebugController::setConsole(RunConsole* console) {
     if (m_console) {
         connect(m_console, &RunConsole::stopRequested, this, [this] { stop(); });
         connect(m_console, &RunConsole::rerunRequested, this, [this] { rerun(); });
+        connect(m_console, &RunConsole::inputSubmitted, this,
+                [this](const QString& line) { submitConsoleInput(line); });
     }
 }
 
@@ -500,7 +502,7 @@ Result<void> DebugController::startSession(std::string title, std::string progra
         m_console->appendOutput(build::RunOutputKind::System,
                                 attach ? std::format("Attached debugger to {}\n", title)
                                        : std::format("Debugging {} with {}\n", program, adapterName));
-        m_console->setRunning(true, false);
+        m_console->setRunning(true, true);
         m_console->rerunButton()->setEnabled(!m_coreClrSession && m_rerunAllowed);
     }
     if (m_hooks.showToolWindow) {
@@ -772,6 +774,28 @@ bool DebugController::runToCursor() {
     return resumed;
 }
 
+bool DebugController::setNextStatement() {
+    EditorView* view = m_hooks.currentEditor ? m_hooks.currentEditor() : nullptr;
+    if (!m_session || !paused() || view == nullptr) {
+        return false;
+    }
+    const LineIndex line = view->editor().text().lineAt(view->editor().state().primary().head);
+    auto path = io::normalizePath(view->path());
+    if (!path) {
+        return false;
+    }
+    const std::int64_t threadId = m_thread.value_or(m_threads.empty() ? 1 : m_threads.front().id);
+    const std::int64_t targetLine = static_cast<std::int64_t>(line.value()) + 1;
+    const std::shared_ptr<Relay> relay = m_relay;
+    const std::uint64_t generation = m_generation;
+    m_session->gotoLine(threadId, *path, targetLine, [relay, generation](Result<void> res) {
+        relay->post(generation, [res = std::move(res)](DebugController* self) mutable {
+            static_cast<void>(self->report(std::move(res), QStringLiteral("Set Next Statement")));
+        });
+    });
+    return true;
+}
+
 void DebugController::shutdown() {
     if (m_shutdown)
         return;
@@ -909,6 +933,98 @@ void DebugController::evaluate(const QString& expression, const QString& context
                         });
 }
 
+void DebugController::submitConsoleInput(const QString& line) {
+    if (!m_session) {
+        return;
+    }
+    const QString trimmed = line.trimmed();
+    if (m_console) {
+        m_console->appendOutput(build::RunOutputKind::System, std::format("> {}\n", trimmed.toStdString()));
+    }
+    if (trimmed.isEmpty()) {
+        return;
+    }
+    evaluate(trimmed, QStringLiteral("repl"), [this](Result<debug::dap::Variable> res) {
+        if (!m_console) {
+            return;
+        }
+        if (res) {
+            if (!res->value.empty()) {
+                m_console->appendOutput(build::RunOutputKind::Stdout, res->value + "\n");
+            }
+        } else {
+            m_console->appendOutput(build::RunOutputKind::Stderr, res.error().message() + "\n");
+        }
+    });
+}
+
+void DebugController::setVariableValue(std::int64_t variablesReference, const QString& name, const QString& value,
+                                       EvaluateDone done) {
+    if (!m_session) {
+        return;
+    }
+    const std::shared_ptr<Relay> relay = m_relay;
+    const std::uint64_t generation = m_generation;
+    m_session->setVariable(
+        variablesReference, name.toStdString(), value.toStdString(),
+        [relay, generation, done = std::move(done)](Result<debug::dap::Variable> res) {
+            relay->post(generation, [done, res = std::move(res)](DebugController* self) mutable {
+                if (!res) {
+                    static_cast<void>(self->report(std::unexpected(res.error()), QStringLiteral("Set Variable Value")));
+                }
+                if (done) {
+                    done(std::move(res));
+                }
+            });
+        });
+}
+
+void DebugController::setExceptionBreakpoints(const std::vector<std::string>& filters) {
+    if (!m_session) {
+        return;
+    }
+    const std::shared_ptr<Relay> relay = m_relay;
+    const std::uint64_t generation = m_generation;
+    m_session->setExceptionBreakpoints(filters, [relay, generation](Result<void> res) {
+        relay->post(generation, [res = std::move(res)](DebugController* self) mutable {
+            static_cast<void>(self->report(std::move(res), QStringLiteral("Exception Breakpoints")));
+        });
+    });
+}
+
+void DebugController::disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done) {
+    if (!m_session) {
+        return;
+    }
+    const std::shared_ptr<Relay> relay = m_relay;
+    const std::uint64_t generation = m_generation;
+    m_session->disassemble(
+        memoryReference.trimmed().toStdString(), instructionCount,
+        [relay, generation, done = std::move(done)](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
+            relay->post(generation, [done, res = std::move(res)](DebugController*) mutable {
+                if (done) {
+                    done(std::move(res));
+                }
+            });
+        });
+}
+
+void DebugController::readMemory(const QString& memoryReference, int count, ReadMemoryDone done) {
+    if (!m_session) {
+        return;
+    }
+    const std::shared_ptr<Relay> relay = m_relay;
+    const std::uint64_t generation = m_generation;
+    m_session->readMemory(memoryReference.trimmed().toStdString(), count,
+                          [relay, generation, done = std::move(done)](Result<debug::dap::ReadMemoryResult> res) {
+                              relay->post(generation, [done, res = std::move(res)](DebugController*) mutable {
+                                  if (done) {
+                                      done(std::move(res));
+                                  }
+                              });
+                          });
+}
+
 // --- Breakpoints ---
 
 void DebugController::toggleBreakpoint(const std::string& path, int line) {
@@ -933,6 +1049,33 @@ bool DebugController::toggleBreakpointAtCaret() {
     const LineIndex line = view->editor().text().lineAt(view->editor().state().primary().head);
     toggleBreakpoint(view->path(), static_cast<int>(line.value()));
     return true;
+}
+
+void DebugController::setMutedBreakpoints(bool muted) { m_breakpoints.setMuted(muted); }
+
+void DebugController::toggleMuteBreakpoints() { m_breakpoints.setMuted(!m_breakpoints.muted()); }
+
+void DebugController::requestEditBreakpoint() {
+    debug::BreakpointId targetId = 0;
+    if (EditorView* view = m_hooks.currentEditor ? m_hooks.currentEditor() : nullptr) {
+        attachEditor(view);
+        if (const auto it = m_editors.find(view); it != m_editors.end() && it->second->tracker) {
+            it->second->tracker->sync();
+        }
+        const std::int64_t line =
+            static_cast<std::int64_t>(view->editor().text().lineAt(view->editor().state().primary().head).value()) + 1;
+        if (auto norm = io::normalizePath(view->path())) {
+            if (auto existing = m_breakpoints.at(*norm, line)) {
+                targetId = existing->id;
+            } else if (auto added = m_breakpoints.add(*norm, line)) {
+                targetId = *added;
+            }
+        }
+    }
+    if (m_hooks.showToolWindow) {
+        m_hooks.showToolWindow();
+    }
+    emit editBreakpointRequested(targetId);
 }
 
 void DebugController::requestEvaluate() {
@@ -1028,6 +1171,7 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
         }
         save();
     }
+    emit breakpointsChanged();
 }
 
 void DebugController::clearLoadedSource() {

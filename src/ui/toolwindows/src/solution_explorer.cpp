@@ -270,7 +270,8 @@ bool SolutionExplorer::eventFilter(QObject* watched, QEvent* event) {
         const Qt::KeyboardModifiers mods = key->modifiers() & ~Qt::KeypadModifier;
         if ((key->key() == Qt::Key_F2 && mods == Qt::NoModifier) ||
             (key->key() == Qt::Key_F6 && mods == Qt::ShiftModifier) ||
-            (key->key() == Qt::Key_Delete && mods == Qt::NoModifier)) {
+            (key->key() == Qt::Key_Delete && mods == Qt::NoModifier) ||
+            ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && mods == Qt::AltModifier)) {
             event->accept();
             return true;
         }
@@ -341,6 +342,21 @@ bool SolutionExplorer::handleKey(QKeyEvent& event) {
         return true;
     }
     const Qt::KeyboardModifiers rawMods = event.modifiers() & ~Qt::KeypadModifier;
+    if (enter && rawMods == Qt::AltModifier) {
+        const QModelIndex idx = m_view->currentIndex();
+        if (idx.isValid()) {
+            const auto kind = static_cast<NodeKind>(idx.data(SolutionTreeModel::KindRole).toInt());
+            const QString path = idx.data(SolutionTreeModel::PathRole).toString();
+            if (kind == NodeKind::Solution) {
+                emit solutionPropertiesRequested();
+                return true;
+            }
+            if (kind == NodeKind::Project && !path.isEmpty()) {
+                emit projectPropertiesRequested(path);
+                return true;
+            }
+        }
+    }
     if ((event.key() == Qt::Key_F2 && rawMods == Qt::NoModifier) ||
         (event.key() == Qt::Key_F6 && rawMods == Qt::ShiftModifier)) {
         const QModelIndex idx = m_view->currentIndex();
@@ -439,6 +455,187 @@ void SolutionExplorer::endSpeedSearch() {
 
 // ---- The context menu.
 
+namespace {
+
+void addSolutionAndProjectManagementActions(SolutionExplorer& explorer, QMenu& menu, NodeKind kind, const QString& path,
+                                            const QString& filterProjectPath) {
+    if (kind == NodeKind::Solution) {
+        QAction* addProj = menu.addAction(SolutionExplorer::tr("Add Existing Project..."));
+        addProj->setObjectName(QStringLiteral("addExistingProject"));
+        QObject::connect(addProj, &QAction::triggered, &explorer,
+                         [&explorer, path] { emit explorer.addExistingProjectRequested(path); });
+
+        QAction* cfgMgr = menu.addAction(SolutionExplorer::tr("Configuration Manager..."));
+        cfgMgr->setObjectName(QStringLiteral("configurationManager"));
+        QObject::connect(cfgMgr, &QAction::triggered, &explorer,
+                         [&explorer] { emit explorer.configurationManagerRequested(); });
+
+        QAction* runCfg = menu.addAction(SolutionExplorer::tr("Edit Run/Debug Configurations..."));
+        runCfg->setObjectName(QStringLiteral("editRunConfigurations"));
+        QObject::connect(runCfg, &QAction::triggered, &explorer,
+                         [&explorer] { emit explorer.editRunConfigurationsRequested(QString()); });
+
+        QAction* props = menu.addAction(SolutionExplorer::tr("Properties..."));
+        props->setObjectName(QStringLiteral("solutionProperties"));
+        QObject::connect(props, &QAction::triggered, &explorer,
+                         [&explorer] { emit explorer.solutionPropertiesRequested(); });
+        menu.addSeparator();
+        return;
+    }
+
+    if (kind == NodeKind::Project && !path.isEmpty()) {
+        QAction* editFile = menu.addAction(SolutionExplorer::tr("Edit Project File"));
+        editFile->setObjectName(QStringLiteral("editProjectFile"));
+        QObject::connect(editFile, &QAction::triggered, &explorer, [&explorer, path] { emit explorer.openFile(path); });
+
+        QAction* addRef = menu.addAction(SolutionExplorer::tr("Add Project Reference..."));
+        addRef->setObjectName(QStringLiteral("addProjectReference"));
+        QObject::connect(addRef, &QAction::triggered, &explorer,
+                         [&explorer, path] { emit explorer.addProjectReferenceRequested(path); });
+
+        if (path.endsWith(QStringLiteral(".csproj"), Qt::CaseInsensitive)) {
+            QAction* nuget = menu.addAction(SolutionExplorer::tr("Manage NuGet Packages..."));
+            nuget->setObjectName(QStringLiteral("manageNuGetPackages"));
+            QObject::connect(nuget, &QAction::triggered, &explorer,
+                             [&explorer, path] { emit explorer.manageNuGetPackagesRequested(path); });
+        }
+
+        QAction* runCfg = menu.addAction(SolutionExplorer::tr("Edit Run/Debug Configuration..."));
+        runCfg->setObjectName(QStringLiteral("editRunConfigurations"));
+        QObject::connect(runCfg, &QAction::triggered, &explorer,
+                         [&explorer, path] { emit explorer.editRunConfigurationsRequested(path); });
+
+        QAction* removeProj = menu.addAction(SolutionExplorer::tr("Remove from Solution"));
+        removeProj->setObjectName(QStringLiteral("removeProjectFromSolution"));
+        QObject::connect(removeProj, &QAction::triggered, &explorer,
+                         [&explorer, path] { emit explorer.removeProjectFromSolutionRequested(path); });
+
+        QAction* props = menu.addAction(SolutionExplorer::tr("Properties..."));
+        props->setObjectName(QStringLiteral("projectProperties"));
+        QObject::connect(props, &QAction::triggered, &explorer,
+                         [&explorer, path] { emit explorer.projectPropertiesRequested(path); });
+        menu.addSeparator();
+        return;
+    }
+
+    if (kind == NodeKind::Filter && !filterProjectPath.isEmpty()) {
+        QAction* props = menu.addAction(SolutionExplorer::tr("Project Properties..."));
+        props->setObjectName(QStringLiteral("projectProperties"));
+        QObject::connect(props, &QAction::triggered, &explorer, [&explorer, filterProjectPath] {
+            emit explorer.projectPropertiesRequested(filterProjectPath);
+        });
+        menu.addSeparator();
+    }
+}
+
+void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildController* controller, NodeKind kind,
+                              const QModelIndex& source, const QString& path, const QString& filterProjectPath,
+                              const std::shared_ptr<const project::SolutionModel>& solution,
+                              const std::function<void(project::ProjectId)>& startupHandler,
+                              const std::function<void(const QString&)>& addNewHandler,
+                              const std::function<void(const QString&)>& addExistingHandler,
+                              const std::function<bool(const QString&)>& recoveryAvailable,
+                              const std::function<void(const QString&)>& recoverHandler, detail::IconCache& icons) {
+    if (kind == NodeKind::Solution || isProjectKind(kind)) {
+        const bool solutionNode = kind == NodeKind::Solution;
+        const int projectValue = source.data(SolutionTreeModel::ProjectIdRole).toInt();
+        std::optional<project::ProjectId> projectId;
+        if (!solutionNode && projectValue >= 0)
+            projectId = project::ProjectId{static_cast<std::uint32_t>(projectValue)};
+        const bool enabled =
+            controller != nullptr && controller->canBuild() && (solutionNode || kind == NodeKind::Project);
+        struct Command {
+            build::BuildAction action;
+            QString text;
+            const char* name;
+        };
+        const Command commands[] = {
+            {build::BuildAction::Build,
+             solutionNode ? SolutionExplorer::tr("Build Solution") : SolutionExplorer::tr("Build"),
+             solutionNode ? "buildSolution" : "buildProject"},
+            {build::BuildAction::Rebuild,
+             solutionNode ? SolutionExplorer::tr("Rebuild Solution") : SolutionExplorer::tr("Rebuild"),
+             solutionNode ? "rebuildSolution" : "rebuildProject"},
+            {build::BuildAction::Clean,
+             solutionNode ? SolutionExplorer::tr("Clean Solution") : SolutionExplorer::tr("Clean"),
+             solutionNode ? "cleanSolution" : "cleanProject"},
+        };
+        for (const Command& command : commands) {
+            QAction* action = menu.addAction(command.text);
+            action->setObjectName(QString::fromLatin1(command.name));
+            action->setEnabled(enabled);
+            if (command.action == build::BuildAction::Build)
+                action->setIcon(icons.get(icons::kBuildBuild));
+            QObject::connect(action, &QAction::triggered, &explorer,
+                             [controller, kindAction = command.action, projectId] {
+                                 if (controller != nullptr)
+                                     static_cast<void>(controller->build(kindAction, projectId));
+                             });
+        }
+        if (!solutionNode && projectId && startupHandler) {
+            QAction* startup = menu.addAction(SolutionExplorer::tr("Set as Startup Project"));
+            startup->setObjectName(QStringLiteral("setStartupProject"));
+            startup->setEnabled(kind == NodeKind::Project);
+            QObject::connect(startup, &QAction::triggered, &explorer, [startupHandler, id = *projectId] {
+                if (startupHandler)
+                    startupHandler(id);
+            });
+        }
+        if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)) {
+            if (addNewHandler) {
+                QAction* addNew = menu.addAction(SolutionExplorer::tr("Add New C/C++ Source..."));
+                addNew->setObjectName(QStringLiteral("addNewProjectFile"));
+                QObject::connect(addNew, &QAction::triggered, &explorer, [&explorer, solution, path, addNewHandler] {
+                    if (explorer.solution() == solution && addNewHandler)
+                        addNewHandler(path);
+                });
+            }
+            if (addExistingHandler) {
+                QAction* add = menu.addAction(SolutionExplorer::tr("Add Existing C/C++ Source"));
+                add->setObjectName(QStringLiteral("addExistingProjectFile"));
+                QObject::connect(add, &QAction::triggered, &explorer, [&explorer, solution, path, addExistingHandler] {
+                    if (explorer.solution() == solution && addExistingHandler)
+                        addExistingHandler(path);
+                });
+            }
+        }
+        if (kind == NodeKind::Project && recoveryAvailable && recoverHandler && recoveryAvailable(path)) {
+            QAction* recover = menu.addAction(SolutionExplorer::tr("Recover Project Edit"));
+            recover->setObjectName(QStringLiteral("recoverProjectEdit"));
+            QObject::connect(recover, &QAction::triggered, &explorer,
+                             [&explorer, solution, path, recoveryAvailable, recoverHandler] {
+                                 if (explorer.solution() == solution && recoveryAvailable && recoverHandler &&
+                                     recoveryAvailable(path))
+                                     recoverHandler(path);
+                             });
+        }
+        menu.addSeparator();
+    } else if (kind == NodeKind::Filter &&
+               filterProjectPath.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)) {
+        if (addNewHandler) {
+            QAction* addNew = menu.addAction(SolutionExplorer::tr("Add New C/C++ Source..."));
+            addNew->setObjectName(QStringLiteral("addNewProjectFile"));
+            QObject::connect(addNew, &QAction::triggered, &explorer,
+                             [&explorer, solution, filterProjectPath, addNewHandler] {
+                                 if (explorer.solution() == solution && addNewHandler)
+                                     addNewHandler(filterProjectPath);
+                             });
+        }
+        if (addExistingHandler) {
+            QAction* add = menu.addAction(SolutionExplorer::tr("Add Existing C/C++ Source"));
+            add->setObjectName(QStringLiteral("addExistingProjectFile"));
+            QObject::connect(add, &QAction::triggered, &explorer,
+                             [&explorer, solution, filterProjectPath, addExistingHandler] {
+                                 if (explorer.solution() == solution && addExistingHandler)
+                                     addExistingHandler(filterProjectPath);
+                             });
+        }
+        menu.addSeparator();
+    }
+}
+
+} // namespace
+
 QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* parent) {
     auto* menu = new QMenu(parent);
     const QModelIndex source = m_filter->mapToSource(index);
@@ -449,12 +646,18 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
     const auto kind = static_cast<NodeKind>(source.data(SolutionTreeModel::KindRole).toInt());
     const QString path = source.data(SolutionTreeModel::PathRole).toString();
     detail::IconCache icons;
+    const auto solution = m_model->solution();
+    QString filterProjectPath;
+    if (solution && kind == NodeKind::Filter) {
+        const auto& item = solution->node(*node);
+        if (item.project)
+            filterProjectPath = QString::fromStdString(solution->project(*item.project).path);
+    }
 
     if (kind == NodeKind::File) {
         QAction* open = menu->addAction(tr("Open"));
         open->setObjectName(QStringLiteral("openFile"));
         connect(open, &QAction::triggered, this, [this, path] { emit openFile(path); });
-        const auto solution = m_model->solution();
         const auto& item = solution->node(*node);
         if (m_removeProjectFileHandler && item.project && !item.path.empty() &&
             solution->project(*item.project).kind == project::ProjectKind::Cpp) {
@@ -480,100 +683,23 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         menu->addSeparator();
     }
 
-    if (kind == NodeKind::Solution || isProjectKind(kind)) {
-        const bool solutionNode = kind == NodeKind::Solution;
-        const int projectValue = source.data(SolutionTreeModel::ProjectIdRole).toInt();
-        std::optional<project::ProjectId> projectId;
-        if (!solutionNode && projectValue >= 0) {
-            projectId = project::ProjectId{static_cast<std::uint32_t>(projectValue)};
-        }
-        const bool enabled =
-            m_controller != nullptr && m_controller->canBuild() && (solutionNode || kind == NodeKind::Project);
-        struct Command {
-            build::BuildAction action;
-            QString text;
-            const char* name;
-        };
-        const Command commands[] = {
-            {build::BuildAction::Build, solutionNode ? tr("Build Solution") : tr("Build"),
-             solutionNode ? "buildSolution" : "buildProject"},
-            {build::BuildAction::Rebuild, solutionNode ? tr("Rebuild Solution") : tr("Rebuild"),
-             solutionNode ? "rebuildSolution" : "rebuildProject"},
-            {build::BuildAction::Clean, solutionNode ? tr("Clean Solution") : tr("Clean"),
-             solutionNode ? "cleanSolution" : "cleanProject"},
-        };
-        for (const Command& command : commands) {
-            QAction* action = menu->addAction(command.text);
-            action->setObjectName(QString::fromLatin1(command.name));
-            action->setEnabled(enabled);
-            if (command.action == build::BuildAction::Build) {
-                action->setIcon(icons.get(icons::kBuildBuild));
-            }
-            connect(action, &QAction::triggered, this, [this, kindAction = command.action, projectId] {
-                if (m_controller != nullptr) {
-                    static_cast<void>(m_controller->build(kindAction, projectId)); // Failures: requestFailed().
-                }
-            });
-        }
-        if (!solutionNode && projectId && m_startupHandler) {
-            // Visual Studio's and Rider's Set as Startup Project (the run service decides what can run).
-            QAction* startup = menu->addAction(tr("Set as Startup Project"));
-            startup->setObjectName(QStringLiteral("setStartupProject"));
-            startup->setEnabled(kind == NodeKind::Project);
-            connect(startup, &QAction::triggered, this, [this, id = *projectId] {
-                if (m_startupHandler) {
-                    m_startupHandler(id);
-                }
-            });
-        }
-        if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive) &&
-            m_addNewProjectFileHandler) {
-            const auto solution = m_model->solution();
-            QAction* addNew = menu->addAction(tr("Add New C/C++ Source..."));
-            addNew->setObjectName(QStringLiteral("addNewProjectFile"));
-            connect(addNew, &QAction::triggered, this, [this, solution, path] {
-                if (m_model->solution() == solution && m_addNewProjectFileHandler)
-                    m_addNewProjectFileHandler(path);
-            });
-        }
-        if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive) &&
-            m_addProjectFileHandler) {
-            const auto solution = m_model->solution();
-            QAction* add = menu->addAction(tr("Add Existing C/C++ Source"));
-            add->setObjectName(QStringLiteral("addExistingProjectFile"));
-            connect(add, &QAction::triggered, this, [this, solution, path] {
-                if (m_model->solution() == solution && m_addProjectFileHandler)
-                    m_addProjectFileHandler(path);
-            });
-        }
-        if (kind == NodeKind::Project && m_recoveryAvailable && m_recoverProjectHandler && m_recoveryAvailable(path)) {
-            const auto solution = m_model->solution();
-            QAction* recover = menu->addAction(tr("Recover Project Edit"));
-            recover->setObjectName(QStringLiteral("recoverProjectEdit"));
-            connect(recover, &QAction::triggered, this, [this, solution, path] {
-                if (m_model->solution() == solution && m_recoveryAvailable && m_recoverProjectHandler &&
-                    m_recoveryAvailable(path))
-                    m_recoverProjectHandler(path);
-            });
-        }
-        menu->addSeparator();
-    }
+    addBuildAndSourceActions(*this, *menu, m_controller, kind, source, path, filterProjectPath, solution,
+                             m_startupHandler, m_addNewProjectFileHandler, m_addProjectFileHandler, m_recoveryAvailable,
+                             m_recoverProjectHandler, icons);
 
-    if ((m_newFileHandler || m_newFolderHandler) && m_model->solution()) {
-        const auto solution = m_model->solution();
+    if ((m_newFileHandler || m_newFolderHandler) && solution) {
         const auto& item = solution->node(*node);
         QString targetDir;
-        if (item.kind == NodeKind::Solution || item.kind == NodeKind::SolutionFolder) {
+        if (item.kind == NodeKind::Solution || item.kind == NodeKind::SolutionFolder)
             targetDir = QString::fromStdString(solution->directory());
-        } else if (item.kind == NodeKind::Filter && !item.path.empty()) {
+        else if (item.kind == NodeKind::Filter && !item.path.empty())
             targetDir = QString::fromStdString(item.path);
-        } else if (item.kind == NodeKind::File && !item.path.empty()) {
+        else if (item.kind == NodeKind::File && !item.path.empty())
             targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
-        } else if (item.project) {
+        else if (item.project)
             targetDir = QString::fromStdString(std::string(io::parentPath(solution->project(*item.project).path)));
-        } else if (!item.path.empty()) {
+        else if (!item.path.empty())
             targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
-        }
         if (!targetDir.isEmpty()) {
             if (m_newFileHandler) {
                 QAction* newFile = menu->addAction(tr("New File..."));
@@ -606,24 +732,27 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         menu->addSeparator();
     }
 
-    if (m_terminalHandler && !path.isEmpty()) {
+    addSolutionAndProjectManagementActions(*this, *menu, kind, path, filterProjectPath);
+
+    const QString effectivePath = !path.isEmpty() ? path : filterProjectPath;
+    if (m_terminalHandler && !effectivePath.isEmpty()) {
         QAction* terminal = menu->addAction(tr("Open in Terminal"));
         terminal->setObjectName(QStringLiteral("openInTerminal"));
-        connect(terminal, &QAction::triggered, this, [this, path] {
+        connect(terminal, &QAction::triggered, this, [this, effectivePath] {
             if (m_terminalHandler)
-                m_terminalHandler(path);
+                m_terminalHandler(effectivePath);
         });
     }
     QAction* reveal = menu->addAction(tr("Open Containing Folder"));
     reveal->setObjectName(QStringLiteral("openContainingFolder"));
-    reveal->setEnabled(m_launcher != nullptr && !path.isEmpty());
-    connect(reveal, &QAction::triggered, this, [this, path] { openContainingFolder(path); });
+    reveal->setEnabled(m_launcher != nullptr && !effectivePath.isEmpty());
+    connect(reveal, &QAction::triggered, this, [this, effectivePath] { openContainingFolder(effectivePath); });
 
     QAction* copy = menu->addAction(tr("Copy Path"));
     copy->setObjectName(QStringLiteral("copyPath"));
     copy->setIcon(icons.get(icons::kEditCopy));
-    copy->setEnabled(!path.isEmpty());
-    connect(copy, &QAction::triggered, this, [path] { QGuiApplication::clipboard()->setText(path); });
+    copy->setEnabled(!effectivePath.isEmpty());
+    connect(copy, &QAction::triggered, this, [effectivePath] { QGuiApplication::clipboard()->setText(effectivePath); });
     return menu;
 }
 

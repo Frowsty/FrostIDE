@@ -92,6 +92,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     std::map<std::string, InactiveRegions> inactive FROST_GUARDED_BY(mutex); // documentKey -> regions.
     std::map<std::uint64_t, ClangdService::InactiveRegionsListener> inactiveListeners FROST_GUARDED_BY(mutex);
     std::uint64_t nextInactiveListener FROST_GUARDED_BY(mutex) = 1;
+    ApplyEditHandler applyEditHandler FROST_GUARDED_BY(mutex);
 
     void setState(ClangdState next) {
         LockGuard lock(mutex);
@@ -292,6 +293,19 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             log::write(level, kLogCategory, "{}", message);
         };
         out.onProtocolError = [](const Error& problem) { log::warn(kLogCategory, "protocol: {}", problem.describe()); };
+        out.onApplyEdit = [weak](const Json& params) {
+            if (auto self = weak.lock()) {
+                ApplyEditHandler handler;
+                {
+                    LockGuard lock(self->mutex);
+                    handler = self->applyEditHandler;
+                }
+                if (handler) {
+                    return handler(params);
+                }
+            }
+            return false;
+        };
         return out;
     }
 
@@ -740,6 +754,11 @@ sched::Task<Result<Json>> ClangdService::request(std::string method, Json params
 PositionEncoding ClangdService::encoding() const {
     LockGuard lock(m_shared->mutex);
     return m_shared->capabilities ? m_shared->capabilities->positionEncoding : PositionEncoding::Utf16;
+}
+
+void ClangdService::setApplyEditHandler(ApplyEditHandler handler) {
+    LockGuard lock(m_shared->mutex);
+    m_shared->applyEditHandler = std::move(handler);
 }
 
 Result<void> ClangdService::killServerForTesting() {

@@ -228,6 +228,19 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
         connect(optionsMenu->addAction(text("Reset Default Size")), &QAction::triggered, this,
                 [this, which, shown] { setSize(shown, which == ToolWindowSide::Bottom ? 220 : 280); });
         optionsMenu->addSeparator();
+        if (which != ToolWindowSide::Left) {
+            connect(optionsMenu->addAction(text("Move to Left")), &QAction::triggered, this,
+                    [this, shown] { moveToSide(shown, ToolWindowSide::Left); });
+        }
+        if (which != ToolWindowSide::Right) {
+            connect(optionsMenu->addAction(text("Move to Right")), &QAction::triggered, this,
+                    [this, shown] { moveToSide(shown, ToolWindowSide::Right); });
+        }
+        if (which != ToolWindowSide::Bottom) {
+            connect(optionsMenu->addAction(text("Move to Bottom")), &QAction::triggered, this,
+                    [this, shown] { moveToSide(shown, ToolWindowSide::Bottom); });
+        }
+        optionsMenu->addSeparator();
         connect(optionsMenu->addAction(text("Hide\tShift+Esc")), &QAction::triggered, this,
                 [this, shown] { hide(shown); });
         connect(optionsMenu->addAction(text("Hide All Tool Windows\tCtrl+Shift+F12")), &QAction::triggered, this,
@@ -465,6 +478,42 @@ void ToolWindowManager::setSize(std::string_view id, int newSize) {
         applySizes();
     }
     storeLayout();
+}
+
+void ToolWindowManager::moveToSide(std::string_view id, ToolWindowSide newSide) {
+    Window* window = find(id);
+    if (window == nullptr || window->spec.side == newSide) {
+        return;
+    }
+    const ToolWindowSide oldSide = window->spec.side;
+    const bool wasVisible = window->visible;
+    if (wasVisible) {
+        setVisible(*window, false, false);
+    }
+    Side& from = side(oldSide);
+    Side& to = side(newSide);
+    if (window->content != nullptr) {
+        from.stack->removeWidget(window->content);
+        to.stack->addWidget(window->content);
+    }
+    if (window->button != nullptr) {
+        from.stripe->layout()->removeWidget(window->button);
+        window->button->setParent(to.stripe);
+        window->button->setSide(newSide);
+        auto* toStripeLayout = static_cast<QBoxLayout*>(to.stripe->layout());
+        toStripeLayout->insertWidget(toStripeLayout->count() - 1, window->button);
+        window->button->show();
+        to.stripe->show();
+    }
+    window->spec.side = newSide;
+    const bool oldHasAny =
+        std::ranges::any_of(m_windows, [oldSide](const Window& w) { return w.spec.side == oldSide; });
+    if (!oldHasAny) {
+        from.stripe->hide();
+    }
+    if (wasVisible) {
+        setVisible(*window, true, true);
+    }
 }
 
 void ToolWindowManager::syncSizesFromSplitters() {

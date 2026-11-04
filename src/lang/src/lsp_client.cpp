@@ -119,6 +119,8 @@ ServerCapabilities parseInitializeResult(const Json& result) {
     out.codeAction = hasProvider(*capabilities, "codeActionProvider");
     out.formatting = hasProvider(*capabilities, "documentFormattingProvider");
     out.rangeFormatting = hasProvider(*capabilities, "documentRangeFormattingProvider");
+    out.callHierarchy = hasProvider(*capabilities, "callHierarchyProvider");
+    out.typeHierarchy = hasProvider(*capabilities, "typeHierarchyProvider");
     if (const Json* info = result.find("serverInfo"); info != nullptr) {
         out.serverName = std::string(info->stringAt("name"));
         out.serverVersion = std::string(info->stringAt("version"));
@@ -199,6 +201,8 @@ Json clientCapabilities() {
             .set("formatting", Json::object().set("dynamicRegistration", false))
             .set("rangeFormatting", Json::object().set("dynamicRegistration", false))
             .set("rename", Json::object().set("dynamicRegistration", false).set("prepareSupport", true))
+            .set("callHierarchy", Json::object().set("dynamicRegistration", false))
+            .set("typeHierarchy", Json::object().set("dynamicRegistration", false))
             // Semantic highlighting and clangd's inactive regions (M3, ADR 0047).
             .set("semanticTokens", semanticTokensClientCapabilities())
             .set("inactiveRegionsCapabilities", inactiveRegionsClientCapabilities());
@@ -206,7 +210,8 @@ Json clientCapabilities() {
         Json::object()
             .set("configuration", true)
             .set("workspaceFolders", true)
-            .set("applyEdit", false)
+            .set("applyEdit", true)
+            .set("executeCommand", Json::object().set("dynamicRegistration", false))
             .set("symbol", Json::object().set("dynamicRegistration", false).set("symbolKind", symbolKinds()))
             .set("workspaceEdit", Json::object().set("documentChanges", true))
             .set("semanticTokens", Json::object().set("refreshSupport", false))
@@ -259,6 +264,7 @@ struct LspClient::Shared {
     mutable Mutex mutex;
     bool ready FROST_GUARDED_BY(mutex) = false;
     bool everReady FROST_GUARDED_BY(mutex) = false;
+    ApplyEditHandler applyEditHandler FROST_GUARDED_BY(mutex);
     ServerCapabilities capabilities; // Written once before `ready` is set, read-only afterwards.
 
     std::expected<Json, ResponseError> answer(std::string_view method, const Json& params) const {
@@ -277,6 +283,14 @@ struct LspClient::Shared {
             return Json();
         }
         if (method == "workspace/applyEdit") {
+            ApplyEditHandler handler;
+            {
+                LockGuard lock(mutex);
+                handler = applyEditHandler;
+            }
+            if (handler && handler(params)) {
+                return Json::object().set("applied", true);
+            }
             return Json::object().set("applied", false).set("failureReason", "FrostIDE does not apply edits yet");
         }
         return std::unexpected(ResponseError{
@@ -307,6 +321,7 @@ LspClient::LspClient(std::unique_ptr<IByteStream> stream, sched::IScheduler& sch
                      Handlers handlers)
     : m_shared(std::make_shared<Shared>()) {
     m_shared->options = std::move(options);
+    m_shared->applyEditHandler = handlers.onApplyEdit;
     m_shared->handlers = std::move(handlers);
     m_shared->scheduler = &scheduler;
     ConnectionHandlers connection;
@@ -397,6 +412,11 @@ PositionEncoding LspClient::encoding() const {
 
 std::optional<ServerCapabilities> LspClient::serverCapabilities() const {
     return ready() ? std::optional<ServerCapabilities>(m_shared->capabilities) : std::nullopt;
+}
+
+void LspClient::setApplyEditHandler(ApplyEditHandler handler) {
+    LockGuard lock(m_shared->mutex);
+    m_shared->applyEditHandler = std::move(handler);
 }
 
 sched::Task<Result<void>> LspClient::shutdown(IClock::Duration timeout) {

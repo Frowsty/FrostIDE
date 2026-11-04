@@ -82,6 +82,7 @@ public:
                                                     std::stop_token token = {}) override;
     [[nodiscard]] PositionEncoding encoding() const override;
     [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override { return capabilities(); }
+    void setApplyEditHandler(ApplyEditHandler handler) override;
     // Forces a supervised crash. Errors: NotFound when no child exists.
     [[nodiscard]] Result<void> killServerForTesting();
     struct Shared;

@@ -128,4 +128,65 @@ struct DocumentHighlight {
 [[nodiscard]] sched::Task<Result<std::vector<DocumentHighlight>>>
 requestDocumentHighlights(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
 
+// --- Call Hierarchy & Type Hierarchy (LSP 3.17) --------------------------------------------------
+
+struct CallHierarchyItem {
+    std::string name;
+    SymbolKind kind = SymbolKind::Function;
+    std::string detail;
+    std::string path;
+    std::string uri;
+    LspRange range;
+    LspRange selectionRange;
+    Json data;
+};
+
+struct CallHierarchyIncomingCall {
+    CallHierarchyItem from;
+    std::vector<LspRange> fromRanges;
+};
+
+struct CallHierarchyOutgoingCall {
+    CallHierarchyItem to;
+    std::vector<LspRange> fromRanges;
+};
+
+struct TypeHierarchyItem {
+    std::string name;
+    SymbolKind kind = SymbolKind::Class;
+    std::string detail;
+    std::string path;
+    std::string uri;
+    LspRange range;
+    LspRange selectionRange;
+    Json data;
+};
+
+[[nodiscard]] Json toJson(const CallHierarchyItem& item);
+[[nodiscard]] Json toJson(const TypeHierarchyItem& item);
+
+[[nodiscard]] std::optional<CallHierarchyItem> parseCallHierarchyItem(const Json& json);
+[[nodiscard]] std::vector<CallHierarchyItem> parseCallHierarchyItems(const Json& json);
+[[nodiscard]] std::vector<CallHierarchyIncomingCall> parseIncomingCalls(const Json& json);
+[[nodiscard]] std::vector<CallHierarchyOutgoingCall> parseOutgoingCalls(const Json& json);
+
+[[nodiscard]] std::optional<TypeHierarchyItem> parseTypeHierarchyItem(const Json& json);
+[[nodiscard]] std::vector<TypeHierarchyItem> parseTypeHierarchyItems(const Json& json);
+
+// textDocument/prepareCallHierarchy, callHierarchy/incomingCalls, callHierarchy/outgoingCalls.
+[[nodiscard]] sched::Task<Result<std::vector<CallHierarchyItem>>>
+requestPrepareCallHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
+[[nodiscard]] sched::Task<Result<std::vector<CallHierarchyIncomingCall>>>
+requestIncomingCalls(ILspRequester& server, CallHierarchyItem item, std::stop_token token = {});
+[[nodiscard]] sched::Task<Result<std::vector<CallHierarchyOutgoingCall>>>
+requestOutgoingCalls(ILspRequester& server, CallHierarchyItem item, std::stop_token token = {});
+
+// textDocument/prepareTypeHierarchy, typeHierarchy/supertypes, typeHierarchy/subtypes.
+[[nodiscard]] sched::Task<Result<std::vector<TypeHierarchyItem>>>
+requestPrepareTypeHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
+[[nodiscard]] sched::Task<Result<std::vector<TypeHierarchyItem>>>
+requestSupertypes(ILspRequester& server, TypeHierarchyItem item, std::stop_token token = {});
+[[nodiscard]] sched::Task<Result<std::vector<TypeHierarchyItem>>>
+requestSubtypes(ILspRequester& server, TypeHierarchyItem item, std::stop_token token = {});
+
 } // namespace frost::lang

@@ -331,10 +331,12 @@ TEST(RefactoringModel, QuickFixesSendDiagnosticsAndKeepEdits) {
     ASSERT_EQ(atCaret.size(), 1u);
     auto actions = server.run(frost::lang::requestCodeActions(server.client(), a, LspRange{{2, 4}, {2, 4}}, atCaret));
     ASSERT_TRUE(actions.has_value()) << actions.error().describe();
-    ASSERT_EQ(actions->size(), 2u); // The command-only tweak is dropped.
+    ASSERT_EQ(actions->size(), 3u); // Command-only tweaks are preserved for workspace/executeCommand.
     EXPECT_EQ((*actions)[0].title, "Insert ';'");
     EXPECT_TRUE((*actions)[0].preferred);
     EXPECT_EQ((*actions)[0].edit.editCount(), 1u);
+    EXPECT_EQ((*actions)[2].title, "Run tweak");
+    EXPECT_EQ((*actions)[2].commandName, "clangd.applyTweak");
     const auto sent = server.paramsOf("textDocument/codeAction");
     ASSERT_EQ(sent.size(), 1u);
     const Json* diagnostics = sent[0].find("context")->find("diagnostics");
