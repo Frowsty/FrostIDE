@@ -15,6 +15,7 @@
 
 #include "frost/ui/shell/tool_window_manager.hpp"
 
+#include "frost/ui/frost_style.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/island_frame.hpp"
 
@@ -54,30 +55,46 @@ StripeButton::StripeButton(ToolWindowSide side, QWidget* parent) : QToolButton(p
     setCheckable(true);
     setAutoRaise(true);
     setFocusPolicy(Qt::TabFocus);
+    setAttribute(Qt::WA_Hover, true);
     setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 }
 
 QSize StripeButton::sizeHint() const {
     if (m_side == ToolWindowSide::Bottom) {
-        return QToolButton::sizeHint();
+        QSize base = QToolButton::sizeHint();
+        base.setHeight(std::max(base.height(), 28));
+        return base;
     }
     if (!icon().isNull()) {
-        const int extent = std::max(iconSize().width(), iconSize().height()) + 14;
+        const int extent = std::max(iconSize().width(), iconSize().height()) + 16;
         return {extent, extent};
     }
     const QFontMetrics metrics(font());
     const int iconExtent = icon().isNull() ? 0 : iconSize().width() + 4;
     const int length = metrics.horizontalAdvance(text()) + iconExtent + 16;
-    const int thickness = std::max(metrics.height(), iconSize().height()) + 8;
+    const int thickness = std::max(metrics.height(), iconSize().height()) + 10;
     return {thickness, length};
 }
 
 void StripeButton::paintEvent(QPaintEvent* event) {
+    const FrostStyle* frost = FrostStyle::current();
+    const auto themeColor = [frost](ColorKey key, QColor fallback) {
+        return frost != nullptr ? QColor::fromRgba(frost->theme().color(key).argb) : fallback;
+    };
+
     if (m_side == ToolWindowSide::Bottom) {
         QToolButton::paintEvent(event);
+        if (isChecked()) {
+            QPainter accentPainter(this);
+            accentPainter.setRenderHint(QPainter::Antialiasing, true);
+            accentPainter.setPen(Qt::NoPen);
+            accentPainter.setBrush(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
+            accentPainter.drawRoundedRect(QRectF(6.0, height() - 3.0, std::max(8, width() - 12), 3.0), 1.5, 1.5);
+        }
         return;
     }
     QStylePainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
     QStyleOptionToolButton option;
     initStyleOption(&option);
     if (!icon().isNull()) {
@@ -85,12 +102,24 @@ void StripeButton::paintEvent(QPaintEvent* event) {
         option.text.clear();
         option.toolButtonStyle = Qt::ToolButtonIconOnly;
         painter.drawComplexControl(QStyle::CC_ToolButton, option);
+        if (isChecked()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
+            const qreal barX = m_side == ToolWindowSide::Left ? 0.0 : width() - 3.0;
+            painter.drawRoundedRect(QRectF(barX, 6.0, 3.0, std::max(8, height() - 12)), 1.5, 1.5);
+        }
         return;
     }
     // The panel (hover, checked) unrotated; then the icon and text rotated.
     option.text.clear();
     option.icon = QIcon();
     painter.drawComplexControl(QStyle::CC_ToolButton, option);
+    if (isChecked()) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
+        const qreal barX = m_side == ToolWindowSide::Left ? 0.0 : width() - 3.0;
+        painter.drawRoundedRect(QRectF(barX, 6.0, 3.0, std::max(8, height() - 12)), 1.5, 1.5);
+    }
     painter.save();
     if (m_side == ToolWindowSide::Left) {
         painter.translate(0, height());
@@ -191,14 +220,19 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
         }
     });
     auto* header = new QHBoxLayout();
-    header->setContentsMargins(10, 3, 6, 3);
+    header->setContentsMargins(10, 4, 6, 4);
     header->addWidget(s.title, 1);
     header->addWidget(hideButton);
+    auto* separator = new QFrame(panel);
+    separator->setObjectName(QStringLiteral("toolWindowHeaderSeparator"));
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFixedHeight(1);
     s.stack = new QStackedWidget(panel);
     auto* layout = new QVBoxLayout(panel);
     layout->setContentsMargins(1, 1, 1, 1);
     layout->setSpacing(0);
     layout->addLayout(header);
+    layout->addWidget(separator);
     layout->addWidget(s.stack, 1);
 
     s.stripe = new QWidget(&m_host);

@@ -1029,25 +1029,34 @@ void LanguageController::showIntentions() {
             return fl::requestCodeActions(server, path, range, here, std::move(token));
         },
         [this](Result<std::vector<fl::CodeActionItem>> actions) {
-            if (!actions) {
-                report(actions.error(), "Quick fixes");
-                return;
-            }
-            if (actions->empty()) {
-                emit statusMessage(QStringLiteral("No quick fixes here"));
-                return;
-            }
             std::vector<QString> titles;
             std::vector<bool> preferred;
             m_choiceActions.clear();
-            for (fl::CodeActionItem& action : *actions) {
-                titles.push_back(qs(action.title));
-                preferred.push_back(action.preferred);
-                m_choiceActions.emplace_back([this, title = qs(action.title), edit = std::move(action.edit)] {
-                    applyWorkspaceEdit(edit, title);
-                });
+            if (actions) {
+                for (fl::CodeActionItem& action : *actions) {
+                    titles.push_back(qs(action.title));
+                    preferred.push_back(action.preferred);
+                    m_choiceActions.emplace_back([this, title = qs(action.title), edit = std::move(action.edit)] {
+                        applyWorkspaceEdit(edit, title);
+                    });
+                }
             }
-            m_choice->start(QString(), titles, m_services.host.caretScreenRect(), std::move(preferred));
+            const auto addContextAction = [&](QString title, std::function<void()> run) {
+                titles.push_back(std::move(title));
+                preferred.push_back(false);
+                m_choiceActions.push_back(std::move(run));
+            };
+            addContextAction(QStringLiteral("Go to Declaration or Usages"), [this] { gotoDeclaration(); });
+            addContextAction(QStringLiteral("Go to Implementation"), [this] { gotoImplementation(); });
+            addContextAction(QStringLiteral("Find Usages"), [this] { findUsages(); });
+            addContextAction(QStringLiteral("Highlight Usages in File"), [this] { highlightUsages(); });
+            addContextAction(QStringLiteral("Go to Related Files"), [this] { gotoRelatedFile(); });
+            addContextAction(QStringLiteral("Rename..."), [this] { rename(); });
+            addContextAction(QStringLiteral("Quick Documentation"), [this] { showQuickDocumentation(); });
+            addContextAction(QStringLiteral("File Structure"), [this] { showFileStructure(); });
+            addContextAction(QStringLiteral("Reformat Code"), [this] { reformat(); });
+            m_choice->start(QStringLiteral("Context Actions"), titles, m_services.host.caretScreenRect(),
+                            std::move(preferred));
         });
 }
 

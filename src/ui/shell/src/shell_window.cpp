@@ -8,6 +8,7 @@
 #include "frost/core/build_info.hpp"
 #include "frost/input/keymap.hpp"
 #include "frost/ui/appearance_manager.hpp"
+#include "frost/ui/frost_style.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/island_frame.hpp"
 #include "frost/ui/shell/background_tasks.hpp"
@@ -99,8 +100,20 @@ struct ThemeChoice {
     std::string_view name;
 };
 constexpr std::array kThemes{
-    ThemeChoice{"glacier-dark", "Glacier Dark"},       ThemeChoice{"glacier-light", "Glacier Light"},
-    ThemeChoice{"glacier-classic", "Glacier Classic"}, ThemeChoice{"glacier-high-contrast", "Glacier High Contrast"},
+    ThemeChoice{"rider-dark", "Rider Dark"},
+    ThemeChoice{"rider-light", "Rider Light"},
+    ThemeChoice{"rider-islands-dark", "Rider Islands Dark"},
+    ThemeChoice{"darcula", "Darcula"},
+    ThemeChoice{"glacier-dark", "Glacier Dark"},
+    ThemeChoice{"glacier-light", "Glacier Light"},
+    ThemeChoice{"glacier-classic", "Glacier Classic"},
+    ThemeChoice{"glacier-high-contrast", "Glacier High Contrast"},
+    ThemeChoice{"monokai-pro", "Monokai Pro"},
+    ThemeChoice{"dracula", "Dracula"},
+    ThemeChoice{"nord", "Nord"},
+    ThemeChoice{"one-dark", "One Dark"},
+    ThemeChoice{"solarized-dark", "Solarized Dark"},
+    ThemeChoice{"solarized-light", "Solarized Light"},
     ThemeChoice{kSyncWithOs, "Sync with OS"},
 };
 
@@ -133,6 +146,14 @@ ShellWindow::ShellWindow(ShellEnvironment environment, QWidget* parent)
     setWindowTitle(QStringLiteral("FrostIDE"));
     resize(1280, 800);
 
+#ifdef _WIN32
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        // Use a custom themed Rider window header on desktop instead of the native OS titlebar.
+        setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::WindowSystemMenuHint |
+                       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+    }
+#endif
+
     buildCentral();
     registerActions();
     buildToolWindows();
@@ -158,6 +179,46 @@ ShellWindow::ShellWindow(ShellEnvironment environment, QWidget* parent)
                                                                     : std::string(tool_windows::kNotifications);
         m_menus->setChecked(id,
                             [this, window] { return m_toolWindows != nullptr && m_toolWindows->isVisible(window); });
+    }
+
+    // On desktop, collapse the separate horizontal menu bar row by default so the unified Rider
+    // header bar sits at the top of the window, while keeping all menu actions active and accessible
+    // through the header's Main Menu button.
+    if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+        menuBar()->setFixedHeight(0);
+    }
+    m_toolbar->setMainMenuBuilder([this](QMenu& popup) {
+        if (m_menus != nullptr) {
+            m_menus->refresh();
+        }
+        for (QAction* topAction : menuBar()->actions()) {
+            if (topAction != nullptr && topAction->isVisible()) {
+                popup.addAction(topAction);
+            }
+        }
+        popup.addSeparator();
+        QAction* toggleMenuBar = popup.addAction(text("Show Classic Menu Bar"));
+        toggleMenuBar->setCheckable(true);
+        toggleMenuBar->setChecked(m_classicMenuBarVisible);
+        connect(toggleMenuBar, &QAction::triggered, this, [this](bool checked) {
+            m_classicMenuBarVisible = checked;
+            if (checked) {
+                menuBar()->setMinimumHeight(0);
+                menuBar()->setMaximumHeight(QWIDGETSIZE_MAX);
+            } else {
+                menuBar()->setFixedHeight(0);
+            }
+        });
+    });
+
+    if (m_env.appearance != nullptr) {
+        connect(m_env.appearance, &AppearanceManager::appearanceChanged, this, [this] {
+            syncNativeWindowFrame();
+            if (m_toolbar != nullptr) {
+                m_toolbar->update();
+            }
+            update();
+        });
     }
 
     m_status = new ShellStatusBar(*statusBar(), *m_tasks, *m_notifications, this);
@@ -352,6 +413,7 @@ void ShellWindow::registerActions() {
     const auto hasAnyTabs = [this] { return m_tabs != nullptr && m_tabs->totalCount() > 0; };
     const auto hasEditor = [this] { return m_tabs != nullptr && m_tabs->currentEditor() != nullptr; };
     const auto hasAppearance = [this] { return m_env.appearance != nullptr && m_env.appearanceSettings != nullptr; };
+    const auto hasAppearanceSettings = [this] { return m_env.appearanceSettings != nullptr; };
 
     addShellAction(a::kOpenFile, "Open File...", "File", [this] {
         if (m_openFileHandler) {
@@ -444,7 +506,7 @@ void ShellWindow::registerActions() {
         a::kResetZoom, "Reset IDE Zoom", "View", [zoom] { zoom(&AppearanceManager::resetZoom); }, hasAppearance);
     addShellAction(
         a::kQuickSwitchTheme, "Quick Switch Theme...", "View", [this] { static_cast<void>(showQuickSwitchTheme()); },
-        hasAppearance);
+        hasAppearanceSettings);
 
     addShellAction(
         a::kGoToLine, "Go to Line:Column...", "Navigate", [this] { static_cast<void>(showGoToLine()); }, hasEditor);
@@ -617,7 +679,7 @@ InputPopup* ShellWindow::showGoToLine() {
 }
 
 ListPopup* ShellWindow::showQuickSwitchTheme() {
-    if (m_env.appearance == nullptr || m_env.appearanceSettings == nullptr) {
+    if (m_env.appearanceSettings == nullptr) {
         return nullptr;
     }
     auto* popup = new ListPopup(this, text("Theme"), false);
@@ -657,6 +719,7 @@ void ShellWindow::reportStartupWarnings(const std::vector<std::string>& warnings
 
 void ShellWindow::showEvent(QShowEvent* event) {
     QMainWindow::showEvent(event);
+    syncNativeWindowFrame();
     // Later slices register their actions after the window exists; pick them up.
     if (m_menus != nullptr) {
         m_menus->refresh();
@@ -670,6 +733,110 @@ void ShellWindow::hideEvent(QHideEvent* event) {
     if (m_refreshTimer != nullptr) {
         m_refreshTimer->stop();
     }
+}
+
+void ShellWindow::changeEvent(QEvent* event) {
+    QMainWindow::changeEvent(event);
+    if (event != nullptr && event->type() == QEvent::WindowStateChange && m_toolbar != nullptr) {
+        if (QToolButton* maxBtn = m_toolbar->maximizeButton(); maxBtn != nullptr) {
+            maxBtn->update();
+        }
+    }
+}
+
+bool ShellWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
+#ifdef _WIN32
+    if ((windowFlags() & Qt::FramelessWindowHint) != 0 && !isMaximized() && !isFullScreen() &&
+        eventType == "windows_generic_MSG" && message != nullptr && result != nullptr) {
+        const auto* msg = static_cast<const MSG*>(message);
+        if (msg->message == WM_NCHITTEST && msg->hwnd == reinterpret_cast<HWND>(winId())) {
+            RECT winRect{};
+            if (GetWindowRect(msg->hwnd, &winRect) != FALSE) {
+                const LONG x = static_cast<short>(LOWORD(msg->lParam));
+                const LONG y = static_cast<short>(HIWORD(msg->lParam));
+                constexpr LONG kResizeBorder = 6;
+                const bool left = x >= winRect.left && x < winRect.left + kResizeBorder;
+                const bool right = x <= winRect.right && x > winRect.right - kResizeBorder;
+                const bool top = y >= winRect.top && y < winRect.top + kResizeBorder;
+                const bool bottom = y <= winRect.bottom && y > winRect.bottom - kResizeBorder;
+                if (top && left) {
+                    *result = HTTOPLEFT;
+                    return true;
+                }
+                if (top && right) {
+                    *result = HTTOPRIGHT;
+                    return true;
+                }
+                if (bottom && left) {
+                    *result = HTBOTTOMLEFT;
+                    return true;
+                }
+                if (bottom && right) {
+                    *result = HTBOTTOMRIGHT;
+                    return true;
+                }
+                if (left) {
+                    *result = HTLEFT;
+                    return true;
+                }
+                if (right) {
+                    *result = HTRIGHT;
+                    return true;
+                }
+                if (top) {
+                    *result = HTTOP;
+                    return true;
+                }
+                if (bottom) {
+                    *result = HTBOTTOM;
+                    return true;
+                }
+            }
+        }
+    }
+#endif
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+void ShellWindow::syncNativeWindowFrame() {
+#ifdef _WIN32
+    if (QGuiApplication::platformName() != QStringLiteral("windows") || !isVisible()) {
+        return;
+    }
+    const auto hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd == nullptr) {
+        return;
+    }
+    using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    static const DwmSetWindowAttributeFn setAttr = []() -> DwmSetWindowAttributeFn {
+        HMODULE dwm = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (dwm == nullptr) {
+            return nullptr;
+        }
+        return reinterpret_cast<DwmSetWindowAttributeFn>(
+            reinterpret_cast<void*>(GetProcAddress(dwm, "DwmSetWindowAttribute")));
+    }();
+    if (setAttr == nullptr) {
+        return;
+    }
+    const FrostStyle* style = FrostStyle::current();
+    const BOOL dark = (style == nullptr || style->theme().isDark()) ? TRUE : FALSE;
+    constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+    constexpr DWORD kDwmwaWindowCornerPreference = 33;
+    constexpr DWORD kDwmwaBorderColor = 34;
+    constexpr DWORD kDwmwaCaptionColor = 35;
+    constexpr DWORD kDwmwcpRound = 2;
+    setAttr(hwnd, kDwmwaUseImmersiveDarkMode, &dark, sizeof(dark));
+    setAttr(hwnd, kDwmwaWindowCornerPreference, &kDwmwcpRound, sizeof(kDwmwcpRound));
+    if (style != nullptr) {
+        const Rgba bg = style->theme().color(ColorKey::MainWindowBackground);
+        const Rgba border = style->theme().color(ColorKey::SeparatorColor);
+        const COLORREF captionRef = RGB(bg.r(), bg.g(), bg.b());
+        const COLORREF borderRef = RGB(border.r(), border.g(), border.b());
+        setAttr(hwnd, kDwmwaCaptionColor, &captionRef, sizeof(captionRef));
+        setAttr(hwnd, kDwmwaBorderColor, &borderRef, sizeof(borderRef));
+    }
+#endif
 }
 
 void ShellWindow::onCurrentEditorChanged(IEditorView* editor) {

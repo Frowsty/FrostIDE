@@ -154,6 +154,8 @@ protected:
     void teardown();
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void changeEvent(QEvent* event) override;
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 
 private:
     void buildCentral();
@@ -168,6 +170,7 @@ private:
     void focusFirst(const std::vector<QWidget*>& widgets);
     void storeChromeVisibility();
     void storeAppearance(const std::function<void(AppearanceSettings&)>& change);
+    void syncNativeWindowFrame();
     [[nodiscard]] QString shortcutText(std::string_view actionId);
 
     ShellEnvironment m_env;
@@ -190,6 +193,7 @@ private:
     input::AvailabilityLevel m_level = input::AvailabilityLevel::L0;
     bool m_trusted = false;
     bool m_projectOpen = false;
+    bool m_classicMenuBarVisible = false;
     bool m_tornDown = false;
 };
 

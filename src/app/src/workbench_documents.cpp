@@ -91,6 +91,42 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             m_language->gotoDeclarationAt(offset);
         }
     });
+    connect(editor, &ui::EditorView::contextActionRequested, this, [this, editor](const QString& actionId) {
+        editor->setFocus();
+        if (DocumentEditorView* current = currentView(); current != nullptr && &current->editor() == editor) {
+            if (actionId == QStringLiteral("code.showIntentions")) {
+                m_language->showIntentions();
+                return;
+            }
+            if (actionId == QStringLiteral("navigate.declaration")) {
+                m_language->gotoDeclaration();
+                return;
+            }
+            if (actionId == QStringLiteral("navigate.implementation")) {
+                m_language->gotoImplementation();
+                return;
+            }
+            if (actionId == QStringLiteral("navigate.findUsages")) {
+                m_language->findUsages();
+                return;
+            }
+            if (actionId == QStringLiteral("navigate.relatedFiles")) {
+                m_language->gotoRelatedFile();
+                return;
+            }
+            if (actionId == QStringLiteral("refactor.rename")) {
+                m_language->rename();
+                return;
+            }
+            if (actionId == QStringLiteral("code.reformat")) {
+                m_language->reformat();
+                return;
+            }
+        }
+        if (m_window != nullptr) {
+            (void)m_window->invoke(actionId.toStdString());
+        }
+    });
 }
 
 void Workbench::editorClosing(DocumentEditorView& view) {

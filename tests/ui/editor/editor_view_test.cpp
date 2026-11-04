@@ -8,8 +8,10 @@
 #include "frost/ui/editor/display_list.hpp"
 
 #include "editor/editor_harness.hpp"
+#include <QAction>
 #include <QClipboard>
 #include <QInputMethodEvent>
+#include <QMenu>
 #include <QMouseEvent>
 
 #include <algorithm>
@@ -793,6 +795,36 @@ TEST(EditorView, RasterRendererCachesGlyphRuns) {
     const GlyphCacheStats second = raster->cacheStats();
     EXPECT_EQ(second.misses, first.misses); // Nothing changed: every run came from the cache.
     EXPECT_GT(second.hits, first.hits);
+}
+
+TEST(EditorView, RiderContextMenuExposesIntentionsNavigationAndEditActions) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("int value = 1;\n");
+    std::vector<QString> requested;
+    QObject::connect(h.view.get(), &EditorView::contextActionRequested,
+                     [&](const QString& actionId) { requested.push_back(actionId); });
+
+    std::unique_ptr<QMenu> menu(h.view->createContextMenu());
+    ASSERT_NE(menu, nullptr);
+    auto* intentions = menu->findChild<QAction*>(QStringLiteral("contextShowIntentions"));
+    auto* gotoDecl = menu->findChild<QAction*>(QStringLiteral("contextGotoDeclaration"));
+    auto* findUsages = menu->findChild<QAction*>(QStringLiteral("contextFindUsages"));
+    auto* renameAction = menu->findChild<QAction*>(QStringLiteral("contextRename"));
+    auto* duplicateAction = menu->findChild<QAction*>(QStringLiteral("contextDuplicate"));
+    ASSERT_NE(intentions, nullptr);
+    ASSERT_NE(gotoDecl, nullptr);
+    ASSERT_NE(findUsages, nullptr);
+    ASSERT_NE(renameAction, nullptr);
+    ASSERT_NE(duplicateAction, nullptr);
+
+    intentions->trigger();
+    gotoDecl->trigger();
+    ASSERT_EQ(requested.size(), 2U);
+    EXPECT_EQ(requested[0], QStringLiteral("code.showIntentions"));
+    EXPECT_EQ(requested[1], QStringLiteral("navigate.declaration"));
+
+    duplicateAction->trigger();
+    EXPECT_EQ(h.text(), "int value = 1;\nint value = 1;\n");
 }
 
 } // namespace
