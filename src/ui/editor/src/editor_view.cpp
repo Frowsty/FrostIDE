@@ -1403,6 +1403,17 @@ void EditorView::reloadFromDocument() {
     for (UsageHighlight& usage : m_usages) {
         clampRange(usage.range);
     }
+    for (EditorInlayHint& hint : m_inlayHints) {
+        hint.offset = std::min(hint.offset, size);
+    }
+    const std::uint32_t maxLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;
+    for (EditorCodeVisionLens& lens : m_codeVisionLenses) {
+        lens.symbolOffset = std::min(lens.symbolOffset, size);
+        lens.line = LineIndex{std::min(lens.line.value(), maxLine)};
+    }
+    for (EditorInlineValue& val : m_inlineDebuggerValues) {
+        val.line = LineIndex{std::min(val.line.value(), maxLine)};
+    }
     m_balloon.reset();
     afterChange(text::EditorUpdate{});
 }

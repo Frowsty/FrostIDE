@@ -267,6 +267,8 @@ private:
     void onBreakpointsChanged(std::string_view path, debug::BreakpointManager::Change change);
     void refreshMarkers(EditorView& view);
     void showExecutionPoint();
+    void refreshInlineDebuggerValues();
+    [[nodiscard]] QString debugHoverFor(std::string_view expression, LineIndex line);
     void clearLoadedSource();
     void save();
     bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
@@ -311,6 +313,8 @@ private:
     std::optional<std::int64_t> m_thread;
     debug::FrameList m_frames;
     std::optional<debug::DebugFrame> m_frame;
+    std::vector<debug::dap::Variable> m_currentFrameVariables;
+    std::map<std::string, std::string, std::less<>> m_hoverCache;
     QTimer m_killTimer;
 
     std::map<EditorView*, std::unique_ptr<Attached>> m_editors;

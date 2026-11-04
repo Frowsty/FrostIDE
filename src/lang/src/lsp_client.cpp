@@ -121,6 +121,8 @@ ServerCapabilities parseInitializeResult(const Json& result) {
     out.rangeFormatting = hasProvider(*capabilities, "documentRangeFormattingProvider");
     out.callHierarchy = hasProvider(*capabilities, "callHierarchyProvider");
     out.typeHierarchy = hasProvider(*capabilities, "typeHierarchyProvider");
+    out.inlayHint =
+        hasProvider(*capabilities, "inlayHintProvider") || hasProvider(*capabilities, "clangdInlayHintsProvider");
     if (const Json* info = result.find("serverInfo"); info != nullptr) {
         out.serverName = std::string(info->stringAt("name"));
         out.serverVersion = std::string(info->stringAt("version"));
@@ -203,6 +205,7 @@ Json clientCapabilities() {
             .set("rename", Json::object().set("dynamicRegistration", false).set("prepareSupport", true))
             .set("callHierarchy", Json::object().set("dynamicRegistration", false))
             .set("typeHierarchy", Json::object().set("dynamicRegistration", false))
+            .set("inlayHint", Json::object().set("dynamicRegistration", false))
             // Semantic highlighting and clangd's inactive regions (M3, ADR 0047).
             .set("semanticTokens", semanticTokensClientCapabilities())
             .set("inactiveRegionsCapabilities", inactiveRegionsClientCapabilities());
@@ -215,6 +218,7 @@ Json clientCapabilities() {
             .set("symbol", Json::object().set("dynamicRegistration", false).set("symbolKind", symbolKinds()))
             .set("workspaceEdit", Json::object().set("documentChanges", true))
             .set("semanticTokens", Json::object().set("refreshSupport", false))
+            .set("inlayHint", Json::object().set("refreshSupport", true))
             .set("didChangeConfiguration", Json::object().set("dynamicRegistration", false));
     return Json::object()
         .set("general", Json::object().set("positionEncodings", encodings))

@@ -338,6 +338,22 @@ public:
     // Replaces the highlighted usages (background boxes and stripe marks), in current-text offsets.
     void setUsageHighlights(std::vector<UsageHighlight> usages);
     [[nodiscard]] const std::vector<UsageHighlight>& usageHighlights() const noexcept { return m_usages; }
+    // Replaces the LSP inlay hints (parameter names and deduced types), mapped from `textVersion`.
+    bool setInlayHints(std::uint64_t textVersion, std::vector<EditorInlayHint> hints);
+    [[nodiscard]] const std::vector<EditorInlayHint>& inlayHints() const noexcept { return m_inlayHints; }
+    // Replaces the clickable Code Vision lenses shown on declarations.
+    void setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses);
+    [[nodiscard]] const std::vector<EditorCodeVisionLens>& codeVisionLenses() const noexcept {
+        return m_codeVisionLenses;
+    }
+    [[nodiscard]] std::optional<EditorCodeVisionLens> codeVisionLensAt(QPointF at) const;
+    // Replaces the inline debugger variable values shown at the end of executed lines while paused.
+    void setInlineDebuggerValues(std::vector<EditorInlineValue> values);
+    [[nodiscard]] const std::vector<EditorInlineValue>& inlineDebuggerValues() const noexcept {
+        return m_inlineDebuggerValues;
+    }
+    using DebugHoverProvider = std::function<QString(std::string_view expression, LineIndex line)>;
+    void setDebugHoverProvider(DebugHoverProvider provider);
     // Whether the analysis of the current text still runs (the inspection widget's spinner).
     void setAnalyzing(bool analyzing);
     // Shows the inspection widget without any diagnostics yet (any insight setter also does).
@@ -464,6 +480,8 @@ signals:
     void ctrlClicked(frost::ByteOffset offset);
     // A context-menu action routed to the workbench's language/navigation controller.
     void contextActionRequested(const QString& actionId);
+    // A click on a Code Vision lens badge.
+    void codeVisionClicked(const frost::ui::EditorCodeVisionLens& lens);
 
 public:
     // Builds the Rider editor right-click context menu for the current caret/selection state.
@@ -694,6 +712,10 @@ private:
     std::array<std::vector<ActiveDiagnostic>, 2> m_diagnostics; // By EditorDiagnosticSource.
     std::map<std::string, std::vector<EditorDecoration>, std::less<>> m_decorations;
     std::vector<UsageHighlight> m_usages;
+    std::vector<EditorInlayHint> m_inlayHints;
+    std::vector<EditorCodeVisionLens> m_codeVisionLenses;
+    std::vector<EditorInlineValue> m_inlineDebuggerValues;
+    DebugHoverProvider m_debugHoverProvider;
     std::deque<EditRecord> m_editHistory;
     bool m_analyzing = false;
     bool m_insightEnabled = false;

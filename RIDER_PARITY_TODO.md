@@ -16,17 +16,6 @@ This file tracks all remaining features required for complete 1:1 JetBrains Ride
 
 ---
 
-## 2. Editor Inlay Hints, Code Vision Lenses, & Inline Debugger Values
-- **LSP Inlay Hints (`textDocument/inlayHint`)**:
-  - Render inline parameter name hints (`foo(count: 42)`) and deduced type hints (`auto` -> `: const MyType&`, `var` -> `: List<string>`) from `clangd` and `csharp-ls` in `EditorView`.
-- **Code Vision Lenses**:
-  - Clickable inline lenses above classes/methods/structs showing **`N usages`**, **`M implementations`**, and **last Git author**.
-- **Inline Debugger Variable Values & Hover DataTips**:
-  - While paused at a breakpoint, render current local variable and parameter values in muted text at the end of executed source lines in `EditorView`.
-  - Rich debugger hover tooltip (`DataTip`) to inspect and expand variable members on mouse hover.
-
----
-
 ## 4. `Attach to Process...` (`Ctrl+Alt+P`) & Compound Launch Configurations
 - **Attach to Process Dialog (`Run > Attach to Process...`, `Ctrl+Alt+P`)**:
   - Live filterable list of running local processes (PID, executable name, window title, native vs. .NET runtime detection).
@@ -39,16 +28,6 @@ This file tracks all remaining features required for complete 1:1 JetBrains Ride
 ## 6. Decompiler / Metadata-as-Source for External .NET Assemblies & C++ Symbols
 - **External Symbol Decompilation / Metadata-as-Source**:
   - When invoking `Go to Declaration` (`Ctrl+B` / `F12`) on a compiled .NET type (`System.*`, `UnityEngine.*`, NuGet package types) without local source, generate/decompile a readable C# source view (`ilspycmd` / Roslyn metadata projection) in a read-only `[Decompiled]` tab.
-
----
-
-## 7. Git Gutter Hunk Popup, 3-Way Conflict Resolver Dialog, & Status Bar Branch Widget
-- **Interactive Gutter Change Markers**:
-  - Clicking a modified/added/deleted line marker in the editor gutter opens an inline diff popup with **Rollback Hunk**, **Copy Original Text**, and **Previous/Next Change** navigation.
-- **3-Way Merge Conflict Resolver Dialog (`VCS > Resolve Conflicts...`)**:
-  - Dialog listing conflicted files during merge/rebase/stash-pop with **Accept Yours**, **Accept Theirs**, and **Merge...** (opening the 3-way `MergeView`).
-- **Status Bar Git Branch & Ahead/Behind Widget**:
-  - Clickable Git branch badge in the bottom status bar showing current branch and ahead/behind counts (`↑N ↓M`) and opening the Branches/Fetch/Pull/Push popup.
 
 ---
 

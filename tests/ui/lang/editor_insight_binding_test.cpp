@@ -233,4 +233,84 @@ TEST(EditorInsightBinding, SemanticTokensDiagnosticsAndInactiveCodeReachTheView)
     EXPECT_FALSE(h.view->insightSummary().analyzing);
 }
 
+TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDisplayList) {
+    FROST_REQUIRE_OFFSCREEN();
+    Json caps = capabilities().set("inlayHintProvider", true).set("documentSymbolProvider", true);
+    FeatureServer server(std::move(caps));
+    const std::string path = workPath("hints.cpp");
+    constexpr std::string_view text = "class Widget {\n"
+                                      "  int compute(int count) {\n"
+                                      "    auto value = compute(42);\n"
+                                      "    return value;\n"
+                                      "  }\n"
+                                      "};\n";
+    server.on("textDocument/semanticTokens/full",
+              [&](const Json&) { return Json::object().set("resultId", "1").set("data", Json::array()); });
+    server.on("textDocument/inlayHint", [&](const Json&) {
+        return Json::array({
+            Json::object()
+                .set("position", Json::object().set("line", 2).set("character", 8))
+                .set("label", ": int")
+                .set("kind", 1)
+                .set("tooltip", "Deduced type int"),
+            Json::object()
+                .set("position", Json::object().set("line", 2).set("character", 25))
+                .set("label", "count:")
+                .set("kind", 2)
+                .set("tooltip", "Parameter count"),
+        });
+    });
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        return Json::array({
+            Json::object()
+                .set("name", "Widget")
+                .set("kind", 5)
+                .set("range", Json::object()
+                                  .set("start", Json::object().set("line", 0).set("character", 0))
+                                  .set("end", Json::object().set("line", 5).set("character", 2)))
+                .set("selectionRange", Json::object()
+                                           .set("start", Json::object().set("line", 0).set("character", 6))
+                                           .set("end", Json::object().set("line", 0).set("character", 12)))
+                .set("children",
+                     Json::array({
+                         Json::object()
+                             .set("name", "compute")
+                             .set("kind", 6)
+                             .set("range", Json::object()
+                                               .set("start", Json::object().set("line", 1).set("character", 2))
+                                               .set("end", Json::object().set("line", 4).set("character", 3)))
+                             .set("selectionRange",
+                                  Json::object()
+                                      .set("start", Json::object().set("line", 1).set("character", 6))
+                                      .set("end", Json::object().set("line", 1).set("character", 13))),
+                     })),
+        });
+    });
+
+    frost::ui::test::EditorHarness h(text, at(path));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    binding->setCodeVisionEnabled(true);
+    binding->setAuthorProvider([](int line) { return line == 1 ? std::string("Alice") : std::string(); });
+    binding->refreshSemanticTokens();
+
+    ASSERT_TRUE(pumpUntil([&] {
+        return h.view->inlayHints().size() == 2U && !h.view->codeVisionLenses().empty();
+    }));
+
+    h.view->setInlineDebuggerValues({
+        frost::ui::EditorInlineValue{frost::LineIndex{2}, "value = 42", "Debugger value"},
+    });
+    h.view->setDebugHoverProvider([](std::string_view expr, frost::LineIndex) {
+        return expr == "value" ? QStringLiteral("value (int) = 42") : QString();
+    });
+
+    const frost::ui::EditorDisplayList list = h.view->buildDisplayList();
+    EXPECT_NE(list.findText(QStringLiteral(": int")), nullptr);
+    EXPECT_NE(list.findText(QStringLiteral("count:")), nullptr);
+    EXPECT_NE(list.findText(QStringLiteral("1 usage")), nullptr);
+    EXPECT_NE(list.findText(QStringLiteral("implementations")), nullptr);
+    EXPECT_NE(list.findText(QStringLiteral("Alice")), nullptr);
+    EXPECT_NE(list.findText(QStringLiteral("value = 42")), nullptr);
+}
+
 } // namespace

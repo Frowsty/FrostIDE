@@ -76,11 +76,13 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         offerLuaTrust();
     if (m_clangd && isCFamilySource(view.path()) && currentView() == &view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
+        binding->setCodeVisionEnabled(true);
         binding->attach(*m_clangd);
         refreshMarkers(view);
     } else if (((m_managed && isManagedSource(view.path())) || (m_lua && isLuaSource(view.path()))) &&
                currentView() == &view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
+        binding->setCodeVisionEnabled(true);
         binding->refreshSemanticTokens();
         refreshMarkers(view);
     }
@@ -348,6 +350,7 @@ Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view target
         delete peer->editor().findChild<ui::lang::EditorInsightBinding*>();
         if (m_clangd && isCFamilySource(newPath) && peer == currentView()) {
             auto* binding = new ui::lang::EditorInsightBinding(peer->editor(), {*m_bridge, *m_pool});
+            binding->setCodeVisionEnabled(true);
             binding->attach(*m_clangd);
         }
         refreshMarkers(*peer);
@@ -418,6 +421,7 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
         delete peer->editor().findChild<ui::lang::EditorInsightBinding*>();
         if (m_clangd && isCFamilySource(newPath) && peer == currentView()) {
             auto* binding = new ui::lang::EditorInsightBinding(peer->editor(), {*m_bridge, *m_pool});
+            binding->setCodeVisionEnabled(true);
             binding->attach(*m_clangd);
         }
         refreshMarkers(*peer);

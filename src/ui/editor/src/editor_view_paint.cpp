@@ -133,6 +133,67 @@ std::optional<std::size_t> EditorView::lineChangeAt(QPointF at) const {
     return lineChangeOnLine(m_editor->text().lineAt(hitAt(at).offset));
 }
 
+std::optional<EditorCodeVisionLens> EditorView::codeVisionLensAt(QPointF at) const {
+    if (m_codeVisionLenses.empty() || at.x() < gutterWidth() || at.y() < 0.0) {
+        return std::nullopt;
+    }
+    const text::DisplayMap& map = m_editor->display();
+    const auto rowIdx = static_cast<std::uint64_t>(std::floor(at.y() / m_lineHeight)) + firstVisibleRow();
+    if (rowIdx >= map.rowCount()) {
+        return std::nullopt;
+    }
+    const text::DisplayRowInfo row = map.rowInfo(text::DisplayRow{static_cast<std::uint32_t>(rowIdx)});
+    if (row.kind == text::RowKind::Block || !row.endsLine) {
+        return std::nullopt;
+    }
+    const text::Snapshot& snapshot = m_editor->text();
+    const double zoom = zoomFactor();
+    const double cell = toPixels(m_shaper->cellWidth());
+    text::TextWidth x = 0;
+    for (const text::RowSegment& segment : row.segments) {
+        if (segment.kind != text::SegmentKind::Text) {
+            for (const char c : segment.text) {
+                x += m_shaper->advance(static_cast<unsigned char>(c), x);
+            }
+            continue;
+        }
+        const std::string bytes = snapshot.text(segment.buffer);
+        const std::string_view view(bytes);
+        std::size_t idx = 0;
+        while (idx < view.size()) {
+            const text::DecodedChar ch = text::decodeUtf8(view.substr(idx));
+            x += m_shaper->advance(ch.cp, x);
+            idx += ch.bytes;
+        }
+    }
+    double pillX = textOriginX() + toPixels(x) + 2.0 * cell;
+    const double pad = 4.0 * zoom;
+    for (const EditorInlayHint& hint : m_inlayHints) {
+        if (hint.offset < row.buffer.begin || hint.offset > row.buffer.end) {
+            continue;
+        }
+        const QString label = QString::fromStdString(hint.label);
+        if (!label.isEmpty()) {
+            pillX += static_cast<double>(label.size()) * cell + 2.0 * pad + 0.75 * cell;
+        }
+    }
+    for (const EditorCodeVisionLens& lens : m_codeVisionLenses) {
+        if (lens.line != row.line) {
+            continue;
+        }
+        const QString label = QString::fromStdString(lens.label);
+        if (label.isEmpty()) {
+            continue;
+        }
+        const double width = static_cast<double>(label.size()) * cell + 2.0 * pad;
+        if (at.x() >= pillX && at.x() <= pillX + width) {
+            return lens;
+        }
+        pillX += width + 0.75 * cell;
+    }
+    return std::nullopt;
+}
+
 double EditorView::textOriginX() const noexcept {
     return gutterWidth() + kTextPadding * zoomFactor() - static_cast<double>(horizontalScrollBar()->value());
 }
@@ -502,6 +563,68 @@ EditorDisplayList EditorView::buildDisplayList() {
             }
             flush(shown.begin + at);
             paintedBytes += shown.size();
+        }
+        if (row.endsLine && (!m_inlayHints.empty() || !m_codeVisionLenses.empty() || !m_inlineDebuggerValues.empty())) {
+            double pillX = origin + toPixels(x) + 2.0 * cell;
+            const double pad = 4.0 * zoom;
+            for (const EditorInlayHint& hint : m_inlayHints) {
+                if (hint.offset < row.buffer.begin || hint.offset > row.buffer.end) {
+                    continue;
+                }
+                const QString label = QString::fromStdString(hint.label);
+                if (label.isEmpty()) {
+                    continue;
+                }
+                const double textW = static_cast<double>(label.size()) * cell;
+                const QRectF pillRect(pillX, top + 1.0 * zoom, textW + 2.0 * pad, m_lineHeight - 2.0 * zoom);
+                QColor pillBg = m_colors.currentLine;
+                pillBg.setAlpha(185);
+                list.decorations.push_back(
+                    DisplayDecoration{pillRect, baseline, DecorationStyle::Background, pillBg, 1.0,
+                                      text::ByteRange{hint.offset, hint.offset}, std::nullopt,
+                                      QString::fromStdString(hint.tooltip)});
+                list.text.push_back(DisplayText{QPointF(pillX + pad, baseline), label, m_colors.lineNumber,
+                                                hint.kind == InlayHintKind::Type, std::nullopt,
+                                                text::ByteRange{hint.offset, hint.offset}, std::nullopt, false});
+                pillX += pillRect.width() + 0.75 * cell;
+            }
+            for (const EditorCodeVisionLens& lens : m_codeVisionLenses) {
+                if (lens.line != row.line) {
+                    continue;
+                }
+                const QString label = QString::fromStdString(lens.label);
+                if (label.isEmpty()) {
+                    continue;
+                }
+                const double textW = static_cast<double>(label.size()) * cell;
+                const QRectF lensRect(pillX, top + 1.0 * zoom, textW + 2.0 * pad, m_lineHeight - 2.0 * zoom);
+                QColor lensBg = m_colors.usage;
+                lensBg.setAlpha(55);
+                list.decorations.push_back(
+                    DisplayDecoration{lensRect, baseline, DecorationStyle::Background, lensBg, 1.0,
+                                      text::ByteRange{lens.symbolOffset, lens.symbolOffset}, std::nullopt,
+                                      QString::fromStdString(lens.tooltip)});
+                list.text.push_back(DisplayText{QPointF(pillX + pad, baseline), label, m_colors.lineNumberCurrent,
+                                                false, std::nullopt,
+                                                text::ByteRange{lens.symbolOffset, lens.symbolOffset}, std::nullopt,
+                                                false});
+                pillX += lensRect.width() + 0.75 * cell;
+            }
+            for (const EditorInlineValue& val : m_inlineDebuggerValues) {
+                if (val.line != row.line) {
+                    continue;
+                }
+                const QString valueText = QString::fromStdString(val.text);
+                if (valueText.isEmpty()) {
+                    continue;
+                }
+                QColor debugColor =
+                    m_colors.warningMarker.isValid() ? m_colors.warningMarker : m_colors.lineNumberCurrent;
+                debugColor.setAlpha(215);
+                list.text.push_back(DisplayText{QPointF(pillX, baseline), valueText, debugColor, true, std::nullopt,
+                                                text::ByteRange{row.buffer.end, row.buffer.end}, std::nullopt, false});
+                pillX += (static_cast<double>(valueText.size()) + 1.5) * cell;
+            }
         }
         if (map.wrap().mode == text::WrapMode::Off && toPixels(x) > m_maxRowWidth) {
             m_maxRowWidth = toPixels(x);

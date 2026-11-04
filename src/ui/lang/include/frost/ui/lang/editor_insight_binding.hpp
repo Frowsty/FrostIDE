@@ -32,6 +32,7 @@
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/navigation.hpp"
 #include "frost/lang/semantic_tokens.hpp"
+#include "frost/lang/symbols.hpp"
 #include "frost/sched/latest_wins.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/text/positions.hpp"
@@ -86,6 +87,15 @@ inactiveRangesFromTokens(std::span<const ::frost::lang::SemanticToken> tokens);
 [[nodiscard]] std::vector<UsageHighlight>
 toUsageHighlights(std::span<const ::frost::lang::DocumentHighlight> highlights, const text::Snapshot& snapshot,
                   ::frost::lang::PositionEncoding encoding);
+// LSP inlayHint results mapped to byte offsets of `snapshot`.
+[[nodiscard]] std::vector<EditorInlayHint>
+toEditorInlayHints(std::span<const ::frost::lang::LspInlayHint> hints, const text::Snapshot& snapshot,
+                   ::frost::lang::PositionEncoding encoding);
+// Code Vision lenses (usages, implementations, and optional Git author) for classes/structs/methods.
+[[nodiscard]] std::vector<EditorCodeVisionLens>
+toCodeVisionLenses(std::span<const ::frost::lang::DocumentSymbol> symbols, const text::Snapshot& snapshot,
+                   ::frost::lang::PositionEncoding encoding,
+                   const std::function<std::string(int line)>& authorForLine = {});
 
 // What the binding talks to (see the lifetime rules above).
 struct InsightServices {
@@ -121,6 +131,12 @@ public:
 
     // Requests semantic tokens now (cancels a pending debounce). No-op when the server offers none.
     void refreshSemanticTokens();
+    // Requests LSP inlay hints now for the document.
+    void refreshInlayHints();
+    // Requests document symbols and refreshes Code Vision lenses.
+    void refreshCodeVision();
+    void setCodeVisionEnabled(bool enabled);
+    void setAuthorProvider(std::function<std::string(int line)> provider);
     // The delay between the last edit and the token request (default 300 ms).
     void setDebounce(std::chrono::milliseconds delay);
     // The last result applied (its id is the next delta's base).
@@ -133,6 +149,8 @@ signals:
     void semanticTokensApplied();
     // A token request failed (the old tokens stay).
     void semanticTokensFailed(QString message);
+    void inlayHintsApplied();
+    void codeVisionApplied();
 
 private:
     void edited();
@@ -143,8 +161,12 @@ private:
     std::string m_path;
     QTimer m_debounce;
     sched::LatestWins m_tokensSlot;
+    sched::LatestWins m_inlaySlot;
+    sched::LatestWins m_codeVisionSlot;
     std::optional<::frost::lang::SemanticTokensData> m_previous;
     bool m_serverAvailable = true;
+    bool m_codeVisionEnabled = false;
+    std::function<std::string(int line)> m_authorProvider;
     bool m_haveInactiveRegions = false; // The extension's notification arrived for this file.
     bool m_inactiveFromTokens = false;  // The view's inactive ranges came from comment tokens.
     bool m_liveSeen = false;            // Live diagnostics arrived (a server that diagnoses).

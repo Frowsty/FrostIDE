@@ -524,6 +524,18 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (const std::optional<EditorCodeVisionLens> lens = codeVisionLensAt(pos)) {
+        m_dragging = false;
+        m_inputStart.reset();
+        const ByteOffset target = m_editor->text().clip(lens->symbolOffset);
+        select(text::Selection::caret(target), text::Bias::Right);
+        emit codeVisionClicked(*lens);
+        if (!lens->actionId.empty()) {
+            emit contextActionRequested(QString::fromStdString(lens->actionId));
+        }
+        event->accept();
+        return;
+    }
     const text::DisplayHit hit = hitAt(pos);
     const auto now = std::chrono::steady_clock::now();
     const auto interval = std::chrono::milliseconds(QGuiApplication::styleHints()->mouseDoubleClickInterval());

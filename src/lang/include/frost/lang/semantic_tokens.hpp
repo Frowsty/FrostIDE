@@ -233,4 +233,25 @@ inline constexpr std::string_view kInactiveRegionsMethod = "textDocument/inactiv
 // Fills `ranges` and `textVersion` from `snapshot`; ranges outside it are dropped. O(r × log n).
 void mapInactiveRegions(InactiveRegions& regions, const text::Snapshot& snapshot, PositionEncoding encoding);
 
+// --- Inlay Hints (LSP 3.17 textDocument/inlayHint & clangd/inlayHints) ---
+
+enum class LspInlayHintKind : std::uint8_t { Type = 1, Parameter = 2 };
+
+struct LspInlayHint {
+    LspPosition position;
+    std::string label;
+    LspInlayHintKind kind = LspInlayHintKind::Parameter;
+    std::string tooltip;
+    bool paddingLeft = false;
+    bool paddingRight = false;
+    friend bool operator==(const LspInlayHint&, const LspInlayHint&) = default;
+};
+
+// Parses an LSP 3.17 InlayHint[] or clangd's clangd/inlayHints result.
+[[nodiscard]] std::vector<LspInlayHint> parseInlayHints(const Json& json);
+
+// Requests textDocument/inlayHint over `range` (falling back to clangd/inlayHints when needed).
+[[nodiscard]] sched::Task<Result<std::vector<LspInlayHint>>>
+requestInlayHints(ILspRequester& server, std::string path, LspRange range, std::stop_token token = {});
+
 } // namespace frost::lang

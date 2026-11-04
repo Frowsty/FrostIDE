@@ -213,6 +213,121 @@ std::vector<UsageHighlight> toUsageHighlights(std::span<const fl::DocumentHighli
     return out;
 }
 
+std::vector<EditorInlayHint> toEditorInlayHints(std::span<const fl::LspInlayHint> hints,
+                                                const text::Snapshot& snapshot, fl::PositionEncoding encoding) {
+    std::vector<EditorInlayHint> out;
+    out.reserve(hints.size());
+    for (const fl::LspInlayHint& hint : hints) {
+        const Result<ByteOffset> offset = fl::fromLspPosition(snapshot, hint.position, encoding);
+        if (!offset || hint.label.empty()) {
+            continue;
+        }
+        out.push_back(EditorInlayHint{
+            .offset = *offset,
+            .label = hint.label,
+            .kind = hint.kind == fl::LspInlayHintKind::Type ? InlayHintKind::Type : InlayHintKind::Parameter,
+            .tooltip = hint.tooltip,
+        });
+    }
+    return out;
+}
+
+namespace {
+
+[[nodiscard]] bool isIdentByte(char c) noexcept {
+    const auto u = static_cast<unsigned char>(c);
+    return u >= 0x80 || (u >= '0' && u <= '9') || (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || c == '_';
+}
+
+[[nodiscard]] std::size_t countIdentifierOccurrences(std::string_view text, std::string_view name) noexcept {
+    if (name.empty() || text.size() < name.size()) {
+        return 0;
+    }
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while ((pos = text.find(name, pos)) != std::string_view::npos) {
+        const bool beforeOk = (pos == 0) || !isIdentByte(text[pos - 1]);
+        const bool afterOk = (pos + name.size() >= text.size()) || !isIdentByte(text[pos + name.size()]);
+        if (beforeOk && afterOk) {
+            ++count;
+        }
+        pos += name.size();
+    }
+    return count;
+}
+
+} // namespace
+
+std::vector<EditorCodeVisionLens> toCodeVisionLenses(std::span<const fl::DocumentSymbol> symbols,
+                                                     const text::Snapshot& snapshot, fl::PositionEncoding encoding,
+                                                     const std::function<std::string(int line)>& authorForLine) {
+    std::vector<EditorCodeVisionLens> out;
+    const std::string fullText = snapshot.text(text::ByteRange{ByteOffset{0}, snapshot.size()});
+    const std::vector<fl::DocumentSymbol> symbolList(symbols.begin(), symbols.end());
+    const std::vector<fl::SymbolRow> rows = fl::flattenSymbols(symbolList);
+    for (const fl::SymbolRow& row : rows) {
+        if (row.symbol == nullptr || row.depth > 1) {
+            continue;
+        }
+        const fl::DocumentSymbol& sym = *row.symbol;
+        const bool isType = sym.kind == fl::SymbolKind::Class || sym.kind == fl::SymbolKind::Struct ||
+                            sym.kind == fl::SymbolKind::Interface || sym.kind == fl::SymbolKind::Enum;
+        const bool isCallable = sym.kind == fl::SymbolKind::Function || sym.kind == fl::SymbolKind::Method ||
+                                sym.kind == fl::SymbolKind::Constructor;
+        if (!isType && !isCallable) {
+            continue;
+        }
+        const Result<ByteOffset> symOffset = fl::fromLspPosition(snapshot, sym.selectionRange.start, encoding);
+        if (!symOffset) {
+            continue;
+        }
+        const LineIndex declLine = snapshot.lineAt(*symOffset);
+        // Strip parameter list or scope qualification from symbol name for identifier counting.
+        std::string_view shortName = sym.name;
+        if (const std::size_t paren = shortName.find('('); paren != std::string_view::npos) {
+            shortName = shortName.substr(0, paren);
+        }
+        if (const std::size_t colons = shortName.rfind("::"); colons != std::string_view::npos) {
+            shortName = shortName.substr(colons + 2);
+        }
+        if (!shortName.empty()) {
+            const std::size_t totalHits = countIdentifierOccurrences(fullText, shortName);
+            const std::size_t usages = totalHits > 0 ? totalHits - 1 : 0;
+            const std::string usageLabel =
+                usages == 1 ? std::string("1 usage") : std::to_string(usages) + " usages";
+            out.push_back(EditorCodeVisionLens{
+                .line = declLine,
+                .symbolOffset = *symOffset,
+                .label = usageLabel,
+                .actionId = "navigate.findUsages",
+                .tooltip = "Find usages of " + std::string(shortName),
+            });
+        }
+        if (isType) {
+            out.push_back(EditorCodeVisionLens{
+                .line = declLine,
+                .symbolOffset = *symOffset,
+                .label = "implementations",
+                .actionId = "navigate.implementation",
+                .tooltip = "Go to implementations of " + sym.name,
+            });
+        }
+        if (authorForLine) {
+            const std::string author = authorForLine(static_cast<int>(declLine.value()) + 1);
+            if (!author.empty()) {
+                out.push_back(EditorCodeVisionLens{
+                    .line = declLine,
+                    .symbolOffset = *symOffset,
+                    .label = author,
+                    .actionId = "vcs.annotate",
+                    .tooltip = "Last modified by " + author + " (click to annotate)",
+                });
+            }
+        }
+    }
+    return out;
+}
+
 // --- the binding ---
 
 EditorInsightBinding::EditorInsightBinding(EditorView& view, InsightServices services, QObject* parent)
@@ -261,6 +376,8 @@ void EditorInsightBinding::attach(fl::ClangdService& clangd) {
 void EditorInsightBinding::detach() {
     m_debounce.stop();
     m_tokensSlot.cancel(); // Cancel in-flight work even if no clangd was attached.
+    m_inlaySlot.cancel();
+    m_codeVisionSlot.cancel();
     m_previous.reset();
     m_haveInactiveRegions = false;
     m_inactiveFromTokens = false;
@@ -305,10 +422,18 @@ void EditorInsightBinding::setServerAvailable(bool available) {
     if (!available) {
         m_debounce.stop();
         (void)m_tokensSlot.next(); // Drops the result of a request in flight.
+        (void)m_inlaySlot.next();
+        (void)m_codeVisionSlot.next();
         if (m_view) {
             m_view->setAnalyzing(false);
         }
     }
+}
+
+void EditorInsightBinding::setCodeVisionEnabled(bool enabled) { m_codeVisionEnabled = enabled; }
+
+void EditorInsightBinding::setAuthorProvider(std::function<std::string(int line)> provider) {
+    m_authorProvider = std::move(provider);
 }
 
 void EditorInsightBinding::setDebounce(std::chrono::milliseconds delay) {
@@ -337,6 +462,12 @@ void EditorInsightBinding::refreshSemanticTokens() {
             m_debounce.start();
         }
         return;
+    }
+    if (capabilities->inlayHint) {
+        refreshInlayHints();
+    }
+    if (m_codeVisionEnabled && capabilities->documentSymbol) {
+        refreshCodeVision();
     }
     const std::optional<fl::SemanticTokensSupport> support = fl::semanticTokensSupport(*capabilities);
     if (!support || !support->full) {
@@ -376,6 +507,75 @@ void EditorInsightBinding::refreshSemanticTokens() {
         });
     };
     m_services.scheduler.spawn(sched::Lane::Interactive, deliver(std::move(task), self, &m_tokensSlot, ticket, version))
+        .detach();
+}
+
+void EditorInsightBinding::refreshInlayHints() {
+    if (!m_view || !m_serverAvailable) {
+        return;
+    }
+    const text::Snapshot snapshot = m_view->editor().text();
+    const std::uint64_t version = snapshot.version();
+    const std::uint32_t lastLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;
+    const fl::LspRange fullRange{fl::LspPosition{0, 0}, fl::LspPosition{lastLine + 1, 0}};
+    const sched::LatestWins::Ticket ticket = m_inlaySlot.next();
+    const fl::PositionEncoding encoding = m_services.server.encoding();
+    auto work = fl::requestInlayHints(m_services.server, m_path, fullRange, ticket.token);
+    const QPointer<EditorInsightBinding> self(this);
+    auto deliver = [](sched::Task<Result<std::vector<fl::LspInlayHint>>> task, QPointer<EditorInsightBinding> binding,
+                      sched::LatestWins* slot, sched::LatestWins::Ticket current, text::Snapshot snap,
+                      fl::PositionEncoding enc, std::uint64_t textVersion) -> sched::Task<void> {
+        auto result = std::make_shared<Result<std::vector<fl::LspInlayHint>>>(co_await std::move(task));
+        if (!*result) {
+            co_return;
+        }
+        auto mapped = std::make_shared<std::vector<EditorInlayHint>>(toEditorInlayHints(**result, snap, enc));
+        post(binding, [slot, current, textVersion, mapped](EditorInsightBinding& target) {
+            if (!slot->isCurrent(current) || !target.m_view) {
+                return;
+            }
+            if (target.m_view->setInlayHints(textVersion, std::move(*mapped))) {
+                emit target.inlayHintsApplied();
+            }
+        });
+    };
+    m_services.scheduler
+        .spawn(sched::Lane::Interactive,
+               deliver(std::move(work), self, &m_inlaySlot, ticket, snapshot, encoding, version))
+        .detach();
+}
+
+void EditorInsightBinding::refreshCodeVision() {
+    if (!m_view || !m_serverAvailable) {
+        return;
+    }
+    const text::Snapshot snapshot = m_view->editor().text();
+    const sched::LatestWins::Ticket ticket = m_codeVisionSlot.next();
+    const fl::PositionEncoding encoding = m_services.server.encoding();
+    const auto authorFn = m_authorProvider;
+    auto work = fl::requestDocumentSymbols(m_services.server, m_path, ticket.token);
+    const QPointer<EditorInsightBinding> self(this);
+    auto deliver = [](sched::Task<Result<std::vector<fl::DocumentSymbol>>> task,
+                      QPointer<EditorInsightBinding> binding, sched::LatestWins* slot,
+                      sched::LatestWins::Ticket current, text::Snapshot snap, fl::PositionEncoding enc,
+                      std::function<std::string(int line)> authorProvider) -> sched::Task<void> {
+        auto result = std::make_shared<Result<std::vector<fl::DocumentSymbol>>>(co_await std::move(task));
+        if (!*result) {
+            co_return;
+        }
+        auto lenses =
+            std::make_shared<std::vector<EditorCodeVisionLens>>(toCodeVisionLenses(**result, snap, enc, authorProvider));
+        post(binding, [slot, current, lenses](EditorInsightBinding& target) {
+            if (!slot->isCurrent(current) || !target.m_view) {
+                return;
+            }
+            target.m_view->setCodeVisionLenses(std::move(*lenses));
+            emit target.codeVisionApplied();
+        });
+    };
+    m_services.scheduler
+        .spawn(sched::Lane::Interactive,
+               deliver(std::move(work), self, &m_codeVisionSlot, ticket, snapshot, encoding, authorFn))
         .detach();
 }
 

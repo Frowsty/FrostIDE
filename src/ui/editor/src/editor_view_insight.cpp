@@ -169,6 +169,14 @@ void EditorView::followInsight(const text::ChangeSet& change) {
         mapItems(set, edits, false);
     }
     mapItems(m_usages, edits, true);
+    for (EditorInlayHint& hint : m_inlayHints) {
+        hint.offset = text::mapOffset(hint.offset, text::Bias::Right, edits);
+    }
+    const text::Snapshot& snapshot = m_editor->text();
+    for (EditorCodeVisionLens& lens : m_codeVisionLenses) {
+        lens.symbolOffset = text::mapOffset(lens.symbolOffset, text::Bias::Right, edits);
+        lens.line = snapshot.lineAt(lens.symbolOffset);
+    }
     for (auto& [owner, set] : m_decorations) {
         mapItems(set, edits, true);
     }
@@ -312,6 +320,57 @@ void EditorView::setUsageHighlights(std::vector<UsageHighlight> usages) {
     m_usages = std::move(usages);
     viewport()->update();
 }
+
+bool EditorView::setInlayHints(std::uint64_t textVersion, std::vector<EditorInlayHint> hints) {
+    const std::optional<std::vector<const EditRecord*>> chain = editsSince(textVersion);
+    if (!chain) {
+        return false;
+    }
+    for (const EditRecord* record : *chain) {
+        for (EditorInlayHint& hint : hints) {
+            hint.offset = text::mapOffset(hint.offset, text::Bias::Right, record->edits);
+        }
+    }
+    const ByteOffset size = m_editor->text().size();
+    for (EditorInlayHint& hint : hints) {
+        hint.offset = m_editor->text().clip(std::min(hint.offset, size));
+    }
+    std::erase_if(hints, [](const EditorInlayHint& hint) { return hint.label.empty(); });
+    std::ranges::stable_sort(hints, {}, &EditorInlayHint::offset);
+    m_inlayHints = std::move(hints);
+    viewport()->update();
+    return true;
+}
+
+void EditorView::setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses) {
+    const text::Snapshot& snapshot = m_editor->text();
+    const ByteOffset size = snapshot.size();
+    const std::uint32_t maxLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;
+    for (EditorCodeVisionLens& lens : lenses) {
+        lens.symbolOffset = snapshot.clip(std::min(lens.symbolOffset, size));
+        lens.line = LineIndex{std::min(lens.line.value(), maxLine)};
+    }
+    std::erase_if(lenses, [](const EditorCodeVisionLens& lens) { return lens.label.empty(); });
+    std::ranges::stable_sort(lenses, {}, &EditorCodeVisionLens::line);
+    m_codeVisionLenses = std::move(lenses);
+    viewport()->update();
+}
+
+void EditorView::setInlineDebuggerValues(std::vector<EditorInlineValue> values) {
+    const std::uint32_t maxLine = m_editor->text().lineCount() > 0 ? m_editor->text().lineCount() - 1 : 0;
+    for (EditorInlineValue& val : values) {
+        val.line = LineIndex{std::min(val.line.value(), maxLine)};
+    }
+    std::erase_if(values, [](const EditorInlineValue& val) { return val.text.empty(); });
+    std::ranges::stable_sort(values, {}, &EditorInlineValue::line);
+    if (m_inlineDebuggerValues == values) {
+        return;
+    }
+    m_inlineDebuggerValues = std::move(values);
+    viewport()->update();
+}
+
+void EditorView::setDebugHoverProvider(DebugHoverProvider provider) { m_debugHoverProvider = std::move(provider); }
 
 void EditorView::setAnalyzing(bool analyzing) {
     m_analyzing = analyzing;
@@ -560,6 +619,12 @@ QString EditorView::toolTipAt(QPointF at) const {
     }
     const auto hit = hitAt(at);
     const auto row = m_editor->display().rowInfo(hit.point.row);
+    if (const std::optional<EditorCodeVisionLens> lens = codeVisionLensAt(at)) {
+        if (!lens->tooltip.empty()) {
+            return QString::fromStdString(lens->tooltip);
+        }
+        return QString::fromStdString(lens->label);
+    }
     for (const auto& segment : row.segments) {
         const auto column = hit.point.column.value();
         if (segment.kind == text::SegmentKind::FoldPlaceholder && column >= segment.column.value() &&
@@ -570,6 +635,28 @@ QString EditorView::toolTipAt(QPointF at) const {
     }
     const ByteOffset offset = hit.offset;
     QStringList messages;
+    if (m_debugHoverProvider) {
+        text::ByteRange exprRange = wordAt(offset);
+        const text::Selection primary = m_editor->state().primary();
+        if (!primary.empty() && primary.range().begin <= offset && offset <= primary.range().end &&
+            primary.range().size() <= 512) {
+            exprRange = primary.range();
+        }
+        if (!exprRange.empty() && exprRange.size() <= 512) {
+            const std::string expr = m_editor->text().text(exprRange);
+            if (!expr.empty()) {
+                const QString debugTip = m_debugHoverProvider(expr, m_editor->text().lineAt(offset));
+                if (!debugTip.isEmpty()) {
+                    messages.push_back(debugTip);
+                }
+            }
+        }
+    }
+    for (const EditorInlayHint& hint : m_inlayHints) {
+        if (!hint.tooltip.empty() && hint.offset == offset) {
+            messages.push_back(QString::fromStdString(hint.tooltip));
+        }
+    }
     for (const ActiveDiagnostic& diagnostic : diagnostics()) {
         if (touches(diagnostic.range, offset)) {
             messages.push_back(QString::fromStdString(diagnostic.message));

@@ -523,6 +523,8 @@ void DebugController::onState(debug::DebugState state) {
         m_stop.reset();
         m_frames = {};
         m_frame.reset();
+        m_currentFrameVariables.clear();
+        m_hoverCache.clear();
         clearLoadedSource();
         showExecutionPoint();
         emit framesChanged();
@@ -565,6 +567,8 @@ void DebugController::onFrames(std::int64_t threadId, debug::FrameList frames) {
 }
 
 void DebugController::onFrameSelected(std::int64_t threadId, const debug::DebugFrame& frame) {
+    m_currentFrameVariables.clear();
+    m_hoverCache.clear();
     if (m_coreClrFrameAllowed && !m_coreClrFrameAllowed(frame)) {
         m_frame.reset();
         showExecutionPoint();
@@ -671,6 +675,8 @@ void DebugController::endSession() {
     m_thread.reset();
     m_frames = {};
     m_frame.reset();
+    m_currentFrameVariables.clear();
+    m_hoverCache.clear();
     m_coreClrFrameAllowed = {};
     m_coreClrAllowedSources.clear();
     m_coreClrBreakpointValidator = {};
@@ -814,6 +820,8 @@ void DebugController::shutdown() {
     m_state = debug::DebugState::Ended;
     m_stop.reset();
     m_frame.reset();
+    m_currentFrameVariables.clear();
+    m_hoverCache.clear();
     clearLoadedSource();
     showExecutionPoint();
     emit stateChanged();
@@ -915,7 +923,24 @@ void DebugController::variables(std::int64_t reference, std::int64_t start, std:
     const std::uint64_t generation = m_generation;
     m_session->variables(reference, start, count,
                          [relay, generation, done = std::move(done)](Result<debug::VariableList> list) {
-                             relay->post(generation, [done, list = std::move(list)](DebugController*) { done(list); });
+                             relay->post(generation, [done, list = std::move(list)](DebugController* self) {
+                                 if (list && self->paused()) {
+                                     for (const debug::dap::Variable& var : *list) {
+                                         if (var.name.empty() || var.value.empty()) {
+                                             continue;
+                                         }
+                                         const auto existing = std::ranges::find(
+                                             self->m_currentFrameVariables, var.name, &debug::dap::Variable::name);
+                                         if (existing == self->m_currentFrameVariables.end()) {
+                                             self->m_currentFrameVariables.push_back(var);
+                                         } else {
+                                             *existing = var;
+                                         }
+                                     }
+                                     self->refreshInlineDebuggerValues();
+                                 }
+                                 done(list);
+                             });
                          });
 }
 
@@ -1115,6 +1140,8 @@ void DebugController::attachEditor(EditorView* view) {
     }));
     attached->connections.push_back(connect(view, &QObject::destroyed, this, [this, view] { m_editors.erase(view); }));
     view->setBreakpointGutterEnabled(true);
+    view->setDebugHoverProvider(
+        [this](std::string_view expr, LineIndex line) { return debugHoverFor(expr, line); });
     m_editors.emplace(view, std::move(attached));
     refreshMarkers(*view);
     showExecutionPoint();
@@ -1131,6 +1158,8 @@ void DebugController::detachEditor(EditorView* view) {
     if (it->second->view) {
         it->second->view->setBreakpointMarkers({});
         it->second->view->setExecutionPoint(std::nullopt);
+        it->second->view->setInlineDebuggerValues({});
+        it->second->view->setDebugHoverProvider({});
         it->second->view->setBreakpointGutterEnabled(false);
     }
     m_editors.erase(it);
@@ -1194,6 +1223,157 @@ void DebugController::showExecutionPoint() {
             attached->view->setExecutionPoint(std::nullopt);
         }
     }
+    refreshInlineDebuggerValues();
+}
+
+namespace {
+
+[[nodiscard]] bool isDebugIdentByte(char c) noexcept {
+    const auto u = static_cast<unsigned char>(c);
+    return u >= 0x80 || (u >= '0' && u <= '9') || (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || c == '_';
+}
+
+[[nodiscard]] bool lineContainsVariable(std::string_view lineText, std::string_view varName) noexcept {
+    if (varName.empty() || lineText.size() < varName.size()) {
+        return false;
+    }
+    std::size_t pos = 0;
+    while ((pos = lineText.find(varName, pos)) != std::string_view::npos) {
+        const bool beforeOk = (pos == 0) || !isDebugIdentByte(lineText[pos - 1]);
+        const bool afterOk =
+            (pos + varName.size() >= lineText.size()) || !isDebugIdentByte(lineText[pos + varName.size()]);
+        if (beforeOk && afterOk) {
+            return true;
+        }
+        pos += varName.size();
+    }
+    return false;
+}
+
+} // namespace
+
+void DebugController::refreshInlineDebuggerValues() {
+    const bool active = paused() && m_frame && m_frame->hasSource() && !m_currentFrameVariables.empty() &&
+                        (m_coreClrSession || m_frame->sourceReference == 0);
+    for (auto& [view, attached] : m_editors) {
+        if (!attached->view) {
+            continue;
+        }
+        if (!active || !m_breakpoints.samePath(attached->path, m_frame->path)) {
+            attached->view->setInlineDebuggerValues({});
+            continue;
+        }
+        const text::Snapshot& snapshot = attached->view->editor().text();
+        const std::uint32_t lineCount = snapshot.lineCount();
+        if (lineCount == 0) {
+            attached->view->setInlineDebuggerValues({});
+            continue;
+        }
+        const std::uint32_t stoppedLine =
+            std::min<std::uint32_t>(static_cast<std::uint32_t>(std::max<std::int64_t>(1, m_frame->line) - 1),
+                                    lineCount - 1);
+        const std::uint32_t firstLine = stoppedLine > 40 ? stoppedLine - 40 : 0;
+        const std::uint32_t lastLine = std::min<std::uint32_t>(stoppedLine + 2, lineCount - 1);
+        std::vector<EditorInlineValue> inlineValues;
+        bool stoppedLineHasValues = false;
+        for (std::uint32_t l = firstLine; l <= lastLine; ++l) {
+            const auto info = snapshot.lineInfo(LineIndex{l});
+            if (!info || info->content.empty()) {
+                continue;
+            }
+            const std::string lineText = snapshot.text(info->content);
+            std::string combined;
+            std::size_t countOnLine = 0;
+            for (const debug::dap::Variable& var : m_currentFrameVariables) {
+                if (lineContainsVariable(lineText, var.name)) {
+                    if (!combined.empty()) {
+                        combined += "  ";
+                    }
+                    std::string val = var.value;
+                    if (val.size() > 48) {
+                        val = val.substr(0, 45) + "...";
+                    }
+                    combined += var.name + " = " + val;
+                    if (++countOnLine >= 4) {
+                        break;
+                    }
+                }
+            }
+            if (!combined.empty()) {
+                if (l == stoppedLine) {
+                    stoppedLineHasValues = true;
+                }
+                inlineValues.push_back(EditorInlineValue{
+                    .line = LineIndex{l},
+                    .text = std::move(combined),
+                    .tooltip = "Inline debugger variable values",
+                });
+            }
+        }
+        if (!stoppedLineHasValues) {
+            std::string summary;
+            std::size_t count = 0;
+            for (const debug::dap::Variable& var : m_currentFrameVariables) {
+                if (!summary.empty()) {
+                    summary += "  ";
+                }
+                std::string val = var.value;
+                if (val.size() > 48) {
+                    val = val.substr(0, 45) + "...";
+                }
+                summary += var.name + " = " + val;
+                if (++count >= 3) {
+                    break;
+                }
+            }
+            if (!summary.empty()) {
+                inlineValues.push_back(EditorInlineValue{
+                    .line = LineIndex{stoppedLine},
+                    .text = std::move(summary),
+                    .tooltip = "Inline debugger variable values",
+                });
+            }
+        }
+        attached->view->setInlineDebuggerValues(std::move(inlineValues));
+    }
+}
+
+QString DebugController::debugHoverFor(std::string_view expression, LineIndex) {
+    if (!paused() || !m_session) {
+        return {};
+    }
+    while (!expression.empty() && (expression.front() == ' ' || expression.front() == '\t')) {
+        expression.remove_prefix(1);
+    }
+    while (!expression.empty() && (expression.back() == ' ' || expression.back() == '\t')) {
+        expression.remove_suffix(1);
+    }
+    if (expression.empty()) {
+        return {};
+    }
+    for (const debug::dap::Variable& var : m_currentFrameVariables) {
+        if (var.name == expression) {
+            if (!var.type.empty()) {
+                return QString::fromStdString(std::format("{} ({}) = {}", var.name, var.type, var.value));
+            }
+            return QString::fromStdString(std::format("{} = {}", var.name, var.value));
+        }
+    }
+    if (const auto it = m_hoverCache.find(expression); it != m_hoverCache.end()) {
+        return QString::fromStdString(it->second);
+    }
+    const std::string exprStr(expression);
+    evaluate(QString::fromStdString(exprStr), QStringLiteral("hover"),
+             [this, exprStr](Result<debug::dap::Variable> res) {
+                 if (!res || res->value.empty()) {
+                     return;
+                 }
+                 const std::string formatted =
+                     !res->type.empty() ? std::format("{} ({}) = {}", exprStr, res->type, res->value)
+                                        : std::format("{} = {}", exprStr, res->value);
+                 m_hoverCache[exprStr] = formatted;
+             });
+    return {};
 }
 
 } // namespace frost::ui

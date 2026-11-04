@@ -363,4 +363,95 @@ void mapInactiveRegions(InactiveRegions& regions, const text::Snapshot& snapshot
     regions.textVersion = snapshot.version();
 }
 
+std::vector<LspInlayHint> parseInlayHints(const Json& json) {
+    std::vector<LspInlayHint> out;
+    if (!json.isArray()) {
+        return out;
+    }
+    out.reserve(json.size());
+    for (const Json& item : json.items()) {
+        if (!item.isObject()) {
+            continue;
+        }
+        std::optional<LspPosition> pos;
+        if (const Json* p = item.find("position"); p != nullptr) {
+            pos = parsePosition(*p);
+        } else if (const Json* r = item.find("range"); r != nullptr) {
+            if (const auto range = parseRange(*r)) {
+                pos = range->start;
+            }
+        }
+        if (!pos) {
+            continue;
+        }
+        std::string label;
+        if (const Json* l = item.find("label"); l != nullptr) {
+            if (const std::string* s = l->asString()) {
+                label = *s;
+            } else if (l->isArray()) {
+                for (const Json& part : l->items()) {
+                    if (const std::string* ps = part.asString()) {
+                        label += *ps;
+                    } else if (part.isObject()) {
+                        label += part.stringAt("value");
+                    }
+                }
+            }
+        }
+        // Trim leading/trailing whitespace so pill badges stay compact.
+        while (!label.empty() && (label.front() == ' ' || label.front() == '\t')) {
+            label.erase(label.begin());
+        }
+        while (!label.empty() && (label.back() == ' ' || label.back() == '\t')) {
+            label.pop_back();
+        }
+        if (label.empty()) {
+            continue;
+        }
+        LspInlayHintKind kind = LspInlayHintKind::Parameter;
+        if (const Json* k = item.find("kind"); k != nullptr) {
+            if (const auto ki = k->asInteger()) {
+                kind = (*ki == 1) ? LspInlayHintKind::Type : LspInlayHintKind::Parameter;
+            } else if (const std::string* ks = k->asString()) {
+                if (*ks == "type" || *ks == "Type" || *ks == "deduced") {
+                    kind = LspInlayHintKind::Type;
+                }
+            }
+        } else if (label.starts_with(':') || label.starts_with("->")) {
+            kind = LspInlayHintKind::Type;
+        }
+        std::string tooltip;
+        if (const Json* tip = item.find("tooltip"); tip != nullptr) {
+            tooltip = parseMarkup(*tip).text;
+        }
+        out.push_back(LspInlayHint{
+            .position = *pos,
+            .label = std::move(label),
+            .kind = kind,
+            .tooltip = std::move(tooltip),
+            .paddingLeft = item.boolAt("paddingLeft").value_or(false),
+            .paddingRight = item.boolAt("paddingRight").value_or(false),
+        });
+    }
+    return out;
+}
+
+sched::Task<Result<std::vector<LspInlayHint>>>
+requestInlayHints(ILspRequester& server, std::string path, LspRange range, std::stop_token token) {
+    auto document = textDocumentIdentifier(path);
+    if (!document) {
+        co_return std::unexpected(std::move(document.error()));
+    }
+    Json params = Json::object().set("textDocument", *document).set("range", toJson(range));
+    auto answered = co_await server.request("textDocument/inlayHint", params, token);
+    if (!answered) {
+        auto fallback = co_await server.request("clangd/inlayHints", std::move(params), token);
+        if (!fallback) {
+            co_return std::unexpected(std::move(answered.error()));
+        }
+        co_return parseInlayHints(*fallback);
+    }
+    co_return parseInlayHints(*answered);
+}
+
 } // namespace frost::lang

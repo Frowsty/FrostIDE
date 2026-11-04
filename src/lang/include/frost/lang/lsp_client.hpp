@@ -78,6 +78,7 @@ struct ServerCapabilities {
     bool rangeFormatting = false;
     bool callHierarchy = false;
     bool typeHierarchy = false;
+    bool inlayHint = false;
     std::string serverName;    // serverInfo.name, e.g. "clangd".
     std::string serverVersion; // serverInfo.version.
     Json raw;

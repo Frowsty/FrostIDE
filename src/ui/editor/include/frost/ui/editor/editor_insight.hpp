@@ -139,6 +139,37 @@ struct UsageHighlight {
     friend bool operator==(const UsageHighlight&, const UsageHighlight&) = default;
 };
 
+// Kind of an inline editor hint (parameter name vs deduced type).
+enum class InlayHintKind : std::uint8_t { Parameter, Type };
+
+// An inline parameter-name (`foo(count: 42)`) or deduced-type (`auto` -> `: const MyType&`) hint.
+struct EditorInlayHint {
+    ByteOffset offset;
+    std::string label;
+    InlayHintKind kind = InlayHintKind::Parameter;
+    std::string tooltip;
+    friend bool operator==(const EditorInlayHint&, const EditorInlayHint&) = default;
+};
+
+// A clickable Code Vision lens on a class, struct, or method declaration ("3 usages",
+// "2 implementations", "last author").
+struct EditorCodeVisionLens {
+    LineIndex line;
+    ByteOffset symbolOffset;
+    std::string label;
+    std::string actionId; // e.g. "navigate.findUsages", "navigate.implementation", "vcs.annotate".
+    std::string tooltip;
+    friend bool operator==(const EditorCodeVisionLens&, const EditorCodeVisionLens&) = default;
+};
+
+// A muted debugger variable value shown at the end of an executed source line while paused.
+struct EditorInlineValue {
+    LineIndex line;
+    std::string text; // e.g. "count = 42, name = \"frost\""
+    std::string tooltip;
+    friend bool operator==(const EditorInlineValue&, const EditorInlineValue&) = default;
+};
+
 /*
  * What the inspection widget and the status-bar indicator show: problem counts per severity and
  * whether the analysis of the current text is still running. clean(): nothing to report and not
