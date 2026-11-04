@@ -36,8 +36,10 @@ namespace frost::ui {
 namespace {
 
 const std::filesystem::path kSourceDir(FROST_SOURCE_DIR);
-constexpr std::string_view kShippedThemes[] = {"glacier-dark", "glacier-light", "glacier-classic",
-                                               "glacier-high-contrast"};
+constexpr std::string_view kShippedThemes[] = {
+    "glacier-dark", "glacier-light",      "glacier-classic", "glacier-high-contrast", "rider-dark",
+    "rider-light",  "rider-islands-dark", "darcula",         "monokai-pro",           "dracula",
+    "nord",         "one-dark",           "solarized-dark",  "solarized-light"};
 
 std::string readFile(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -133,7 +135,8 @@ TEST(ThemeCompiler, ShippedThemesCompileStrict) {
             }
         }
         EXPECT_EQ(result.data->highContrast, id == "glacier-high-contrast") << id;
-        EXPECT_EQ(result.data->dark, id != "glacier-light") << id;
+        const bool isLight = (id == "glacier-light" || id == "rider-light" || id == "solarized-light");
+        EXPECT_EQ(result.data->dark, !isLight) << id;
         ASSERT_TRUE(compileThemeToBlob(id, test::asBytes(json))) << id;
     }
     // Glacier Classic is flat: no island arc or gap in either density.

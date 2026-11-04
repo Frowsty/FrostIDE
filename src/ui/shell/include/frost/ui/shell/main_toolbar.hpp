@@ -20,6 +20,8 @@
 class QComboBox;
 class QActionEvent;
 class QMenu;
+class QMouseEvent;
+class QPaintEvent;
 
 namespace frost::ui {
 
@@ -44,6 +46,10 @@ public:
 
     MainToolbar(Invoker invoke, QWidget* parent = nullptr);
 
+    // The unified Rider main-menu button on the far left of the header.
+    [[nodiscard]] QToolButton* mainMenuButton() const noexcept { return m_mainMenuButton; }
+    void setMainMenuBuilder(std::function<void(QMenu&)> builder);
+
     // The project widget ("No project" until a solution opens).
     [[nodiscard]] QToolButton* projectButton() const noexcept { return m_project; }
     void setProjectName(const QString& name);
@@ -52,6 +58,12 @@ public:
     void setProjectMenuBuilder(std::function<void(QMenu&)> builder);
     // The run/build configuration slot; disabled while it has no items.
     [[nodiscard]] QComboBox* runConfigurations() const noexcept { return m_configurations; }
+    // The Quick Switch Theme button in the header's utility area.
+    [[nodiscard]] QToolButton* themeButton() const noexcept { return m_themeButton; }
+    // The integrated window caption buttons on the far right of the header.
+    [[nodiscard]] QToolButton* minimizeButton() const noexcept { return m_minimizeButton; }
+    [[nodiscard]] QToolButton* maximizeButton() const noexcept { return m_maximizeButton; }
+    [[nodiscard]] QToolButton* closeButton() const noexcept { return m_closeButton; }
     // The button whose slot is `actionId` (one of the k* ids above) or that is bound to it now, or
     // nullptr.
     [[nodiscard]] QToolButton* button(std::string_view actionId) const;
@@ -68,6 +80,11 @@ public:
 
 protected:
     void actionEvent(QActionEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
     struct Slot {
@@ -80,11 +97,21 @@ private:
     void updateTabOrder();
 
     Invoker m_invoke;
-    QToolButton* m_project;
-    QMenu* m_projectMenu;
-    QComboBox* m_configurations;
+    QToolButton* m_mainMenuButton = nullptr;
+    QMenu* m_mainMenu = nullptr;
+    QToolButton* m_project = nullptr;
+    QMenu* m_projectMenu = nullptr;
+    QComboBox* m_configurations = nullptr;
+    QToolButton* m_themeButton = nullptr;
+    QToolButton* m_minimizeButton = nullptr;
+    QToolButton* m_maximizeButton = nullptr;
+    QToolButton* m_closeButton = nullptr;
     std::vector<Slot> m_slots;
+    std::function<void(QMenu&)> m_mainMenuBuilder;
     std::function<void(QMenu&)> m_projectMenuBuilder;
+    QPoint m_dragStartGlobal;
+    QPoint m_windowStartPos;
+    bool m_draggingWindow = false;
 };
 
 } // namespace frost::ui

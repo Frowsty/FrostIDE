@@ -628,4 +628,40 @@ TEST(ShellWindow, ActionContextUsesTextFieldFocusForChildLineEditInsideEditorSur
     EXPECT_FALSE(editorEnterCalled);
 }
 
+TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
+    ShellRig rig;
+    frost::ui::InMemoryAppearanceSettings appearanceSettings;
+    frost::ui::ShellEnvironment env = rig.environment();
+    env.appearanceSettings = &appearanceSettings;
+    ShellWindow window(env);
+    frost::ui::test::showAndWait(window);
+
+    auto& header = window.mainToolbar();
+    ASSERT_NE(header.mainMenuButton(), nullptr);
+    ASSERT_NE(header.projectButton(), nullptr);
+    ASSERT_NE(header.themeButton(), nullptr);
+    ASSERT_NE(header.minimizeButton(), nullptr);
+    ASSERT_NE(header.maximizeButton(), nullptr);
+    ASSERT_NE(header.closeButton(), nullptr);
+
+    // Header utility/caption controls keep Qt::NoFocus so Tab focus order stays on dynamic slots.
+    EXPECT_EQ(header.mainMenuButton()->focusPolicy(), Qt::NoFocus);
+    EXPECT_EQ(header.themeButton()->focusPolicy(), Qt::NoFocus);
+    EXPECT_EQ(header.minimizeButton()->focusPolicy(), Qt::NoFocus);
+    EXPECT_EQ(header.maximizeButton()->focusPolicy(), Qt::NoFocus);
+    EXPECT_EQ(header.closeButton()->focusPolicy(), Qt::NoFocus);
+
+    // Main Menu popup populates top-level menus and the Show Classic Menu Bar toggle.
+    QMenu* mainMenu = header.mainMenuButton()->menu();
+    ASSERT_NE(mainMenu, nullptr);
+    QMetaObject::invokeMethod(mainMenu, "aboutToShow", Qt::DirectConnection);
+    EXPECT_GE(mainMenu->actions().size(), 3);
+
+    // Clicking the header's Quick Switch Theme button opens the theme switcher popup with all 14 themes + Sync with OS.
+    header.themeButton()->click();
+    auto* popup = qobject_cast<frost::ui::ListPopup*>(window.activePopup());
+    ASSERT_NE(popup, nullptr);
+    EXPECT_EQ(popup->visibleCount(), 15);
+}
+
 } // namespace

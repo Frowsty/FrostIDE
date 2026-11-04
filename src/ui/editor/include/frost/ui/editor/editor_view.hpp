@@ -52,7 +52,9 @@
 #include <string_view>
 #include <vector>
 
+class QContextMenuEvent;
 class QInputMethodEvent;
+class QMenu;
 
 namespace frost::ui {
 
@@ -460,6 +462,12 @@ signals:
     void lineChangeClicked(int index, QPoint globalPos);
     // A Ctrl+click (Cmd+click on macOS) put the caret at `offset`: Rider's go to declaration.
     void ctrlClicked(frost::ByteOffset offset);
+    // A context-menu action routed to the workbench's language/navigation controller.
+    void contextActionRequested(const QString& actionId);
+
+public:
+    // Builds the Rider editor right-click context menu for the current caret/selection state.
+    [[nodiscard]] QMenu* createContextMenu(QWidget* parent = nullptr);
 
 protected:
     bool event(QEvent* event) override;
@@ -472,6 +480,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void focusInEvent(QFocusEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;

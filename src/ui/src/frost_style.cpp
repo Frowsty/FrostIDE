@@ -438,6 +438,62 @@ void FrostStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* opt
         strokeRounded(painter, QRectF(option->rect), 0.0, color(ColorKey::PopupBorderColor), deviceWidth(painter, 1.0));
         painter->restore();
         return;
+    case PE_PanelButtonTool: {
+        const bool enabled = (option->state & State_Enabled) != 0;
+        const bool pressed = enabled && (option->state & (State_Sunken | State_On)) != 0;
+        const bool hover = enabled && (option->state & State_MouseOver) != 0;
+        if (pressed || hover) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            const qreal radius = metricPx(MetricKey::ButtonArc);
+            fillRounded(painter, QRectF(option->rect).adjusted(1.0, 1.0, -1.0, -1.0), radius,
+                        color(pressed ? ColorKey::ButtonPressedBackground : ColorKey::ButtonHoverBackground));
+            painter->restore();
+        }
+        return;
+    }
+    case PE_IndicatorBranch: {
+        if ((option->state & State_Children) != 0) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            const bool selected = (option->state & State_Selected) != 0;
+            const bool open = (option->state & State_Open) != 0;
+            const QColor chevronColor =
+                color(selected ? ColorKey::TreeSelectionForeground : ColorKey::LabelSecondaryForeground);
+            painter->setPen(
+                QPen(chevronColor, std::max<qreal>(1.4, m_scale.px(1.5)), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->setBrush(Qt::NoBrush);
+            const QPointF center = QRectF(option->rect).center();
+            const qreal d = m_scale.px(3.5);
+            QPainterPath path;
+            if (open) {
+                path.moveTo(center.x() - d, center.y() - d * 0.45);
+                path.lineTo(center.x(), center.y() + d * 0.55);
+                path.lineTo(center.x() + d, center.y() - d * 0.45);
+            } else {
+                path.moveTo(center.x() - d * 0.45, center.y() - d);
+                path.lineTo(center.x() + d * 0.55, center.y());
+                path.lineTo(center.x() - d * 0.45, center.y() + d);
+            }
+            painter->drawPath(path);
+            painter->restore();
+        }
+        return;
+    }
+    case PE_IndicatorToolBarSeparator: {
+        painter->save();
+        const QRect r = option->rect;
+        const int pad = m_scale.px(6);
+        if ((option->state & State_Horizontal) != 0) {
+            painter->fillRect(QRect(r.center().x(), r.top() + pad, 1, std::max(2, r.height() - pad * 2)),
+                              color(ColorKey::SeparatorColor));
+        } else {
+            painter->fillRect(QRect(r.left() + pad, r.center().y(), std::max(2, r.width() - pad * 2), 1),
+                              color(ColorKey::SeparatorColor));
+        }
+        painter->restore();
+        return;
+    }
     default: QProxyStyle::drawPrimitive(element, option, painter, widget); return;
     }
 }

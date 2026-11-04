@@ -7,14 +7,18 @@
 #include "frost/ui/tr.hpp"
 
 #include <QAction>
+#include <QColor>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -25,6 +29,55 @@ namespace {
 constexpr int kPathRole = Qt::UserRole + 1;
 
 QString text(const char* source) { return ui::qtr("frost::app::WelcomeScreen", source); }
+
+QString projectInitials(const QString& name) {
+    QString letters;
+    for (int i = 0; i < name.size() && letters.size() < 2; ++i) {
+        const QChar ch = name.at(i);
+        if (ch.isLetterOrNumber() && (i == 0 || ch.isUpper() || !name.at(i - 1).isLetterOrNumber())) {
+            letters.append(ch.toUpper());
+        }
+    }
+    if (letters.size() < 2) {
+        for (int i = 0; i < name.size() && letters.size() < 2; ++i) {
+            if (name.at(i).isLetterOrNumber()) {
+                const QChar upper = name.at(i).toUpper();
+                if (!letters.contains(upper) || letters.isEmpty()) {
+                    letters.append(upper);
+                }
+            }
+        }
+    }
+    return letters.isEmpty() ? QStringLiteral("PR") : letters;
+}
+
+QIcon makeProjectAvatarIcon(const QString& name) {
+    static constexpr QColor kPalette[] = {
+        QColor(0x35, 0x74, 0xF0), QColor(0x83, 0x4D, 0xF0), QColor(0x20, 0x8A, 0x5B),
+        QColor(0xC9, 0x62, 0x2B), QColor(0x2A, 0x7B, 0x9B), QColor(0xB8, 0x3E, 0x65),
+    };
+    std::uint32_t hash = 2166136261U;
+    for (QChar ch : name) {
+        hash ^= static_cast<std::uint32_t>(ch.unicode());
+        hash *= 16777619U;
+    }
+    const QColor color = kPalette[hash % 6];
+    QPixmap pix(28, 28);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    p.drawRoundedRect(QRectF(2.0, 2.0, 24.0, 24.0), 6.0, 6.0);
+    p.setPen(QColor(0xFF, 0xFF, 0xFF));
+    QFont f = p.font();
+    f.setBold(true);
+    f.setPixelSize(11);
+    p.setFont(f);
+    p.drawText(QRectF(2.0, 2.0, 24.0, 24.0), Qt::AlignCenter, projectInitials(name));
+    p.end();
+    return QIcon(pix);
+}
 
 } // namespace
 
@@ -41,15 +94,24 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     title->setFont(titleFont);
     layout->addWidget(title);
 
+    auto* subtitle = new QLabel(text("Welcome to FrostIDE — C++, C#, and .NET Development Environment"), this);
+    subtitle->setObjectName(QStringLiteral("welcomeSubtitle"));
+    layout->addWidget(subtitle);
+
     auto* buttons = new QHBoxLayout();
-    m_newProject = new QPushButton(text("New Project..."), this);
+    buttons->setSpacing(10);
+    m_newProject = new QPushButton(text("New Solution / Project..."), this);
     m_newProject->setObjectName(QStringLiteral("welcomeNewProject"));
-    m_newProject->setToolTip(text("Create a new C++ CMake project or empty project folder"));
+    m_newProject->setDefault(true);
+    m_newProject->setMinimumHeight(32);
+    m_newProject->setToolTip(text("Create a new C++, CMake, or .NET / C# project or solution"));
     m_open = new QPushButton(text("Open..."), this);
     m_open->setObjectName(QStringLiteral("welcomeOpen"));
-    m_open->setToolTip(text("Open a solution (.sln, .slnx), CMakeLists.txt, or a file"));
+    m_open->setMinimumHeight(32);
+    m_open->setToolTip(text("Open a solution (.sln, .slnx), project, CMakeLists.txt, or a file"));
     m_openFolder = new QPushButton(text("Open Folder..."), this);
     m_openFolder->setObjectName(QStringLiteral("welcomeOpenFolder"));
+    m_openFolder->setMinimumHeight(32);
     m_openFolder->setToolTip(text("Open a project folder, including a CMake project"));
     buttons->addWidget(m_newProject);
     buttons->addWidget(m_open);
@@ -58,9 +120,14 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     layout->addLayout(buttons);
 
     auto* recentTitle = new QLabel(text("Recent Projects"), this);
+    QFont sectionFont = recentTitle->font();
+    sectionFont.setBold(true);
+    recentTitle->setFont(sectionFont);
     layout->addWidget(recentTitle);
     m_recent = new QListWidget(this);
     m_recent->setObjectName(QStringLiteral("welcomeRecent"));
+    m_recent->setIconSize(QSize(28, 28));
+    m_recent->setSpacing(3);
     m_recent->setContextMenuPolicy(Qt::CustomContextMenu);
     m_recent->setSelectionMode(QAbstractItemView::SingleSelection);
     m_recent->installEventFilter(this);
@@ -86,7 +153,8 @@ void WelcomeScreen::setRecentProjects(const std::vector<std::string>& paths) {
         if (name.isEmpty()) {
             name = native;
         }
-        auto* item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(name, native), m_recent);
+        auto* item =
+            new QListWidgetItem(makeProjectAvatarIcon(name), QStringLiteral("%1\n%2").arg(name, native), m_recent);
         item->setData(kPathRole, QString::fromStdString(path));
         item->setToolTip(native);
     }

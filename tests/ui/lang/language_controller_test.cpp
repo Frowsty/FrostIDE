@@ -605,8 +605,9 @@ TEST(LanguageControllerRefactoring, RenameAndQuickFixGoThroughTheApplier) {
     rig.controller.showIntentions();
     auto& choice = rig.controller.choicePopup();
     ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
-    ASSERT_EQ(choice.list()->count(), 1);
+    ASSERT_GE(choice.list()->count(), 10);
     EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Insert ';'"));
+    EXPECT_EQ(choice.list()->item(1)->text(), QStringLiteral("Go to Declaration or Usages"));
     const auto sentActions = server.paramsOf("textDocument/codeAction");
     ASSERT_EQ(sentActions.size(), 1u);
     const Json* sentDiagnostics = sentActions[0].find("context")->find("diagnostics");
@@ -615,6 +616,31 @@ TEST(LanguageControllerRefactoring, RenameAndQuickFixGoThroughTheApplier) {
     emit choice.chosen(0);
     ASSERT_EQ(status.size(), 1u);
     EXPECT_TRUE(status[0].contains(QStringLiteral("save or reload")));
+}
+
+TEST(LanguageControllerRefactoring, ShowIntentionsOpensRiderContextMenuAndNavigatesWithoutQuickFixes) {
+    FeatureServer server;
+    const std::string target = workPath("decl.hpp");
+    server.on("textDocument/codeAction", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [&](const Json&) {
+        return Json::array({Json::object().set("uri", uriOf(target)).set("range", rangeJson(4, 2, 8))});
+    });
+    FakeHost host("int value = 1;\n");
+    host.caretAfter("val");
+    Rig rig(server, host);
+
+    rig.controller.showIntentions();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_EQ(choice.list()->count(), 9);
+    EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Go to Declaration or Usages"));
+    EXPECT_EQ(choice.list()->item(1)->text(), QStringLiteral("Go to Implementation"));
+    EXPECT_EQ(choice.list()->item(2)->text(), QStringLiteral("Find Usages"));
+    EXPECT_EQ(choice.list()->item(5)->text(), QStringLiteral("Rename..."));
+    emit choice.chosen(0);
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
+    EXPECT_EQ(fl::documentKey(host.opened[0].first), fl::documentKey(target));
+    EXPECT_EQ(host.opened[0].second, (fl::LspPosition{4, 2}));
 }
 
 TEST(LanguageControllerRefactoring, ReformatAppliesTheServerEditsAsOneStep) {

@@ -11,12 +11,14 @@
 #include "frost/ui/editor/go_to_line.hpp"
 #include "frost/ui/editor/rhi_renderer.hpp"
 
+#include <QContextMenuEvent>
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QHelpEvent>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QLineF>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QStringList>
 #include <QStyleHints>
@@ -615,6 +617,102 @@ void EditorView::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
     QAbstractScrollArea::mouseReleaseEvent(event);
+}
+
+QMenu* EditorView::createContextMenu(QWidget* parent) {
+    auto* menu = new QMenu(parent != nullptr ? parent : this);
+    menu->setObjectName(QStringLiteral("editorContextMenu"));
+    const bool editable = !isReadOnly();
+
+    QAction* intentions = menu->addAction(QStringLiteral("Show Context Actions"));
+    intentions->setObjectName(QStringLiteral("contextShowIntentions"));
+    connect(intentions, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("code.showIntentions")); });
+
+    menu->addSeparator();
+
+    QAction* gotoDecl = menu->addAction(QStringLiteral("Go to Declaration or Usages"));
+    gotoDecl->setObjectName(QStringLiteral("contextGotoDeclaration"));
+    connect(gotoDecl, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("navigate.declaration")); });
+
+    QAction* gotoImpl = menu->addAction(QStringLiteral("Go to Implementation"));
+    gotoImpl->setObjectName(QStringLiteral("contextGotoImplementation"));
+    connect(gotoImpl, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("navigate.implementation")); });
+
+    QAction* findUsages = menu->addAction(QStringLiteral("Find Usages"));
+    findUsages->setObjectName(QStringLiteral("contextFindUsages"));
+    connect(findUsages, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("navigate.findUsages")); });
+
+    QAction* relatedFiles = menu->addAction(QStringLiteral("Go to Related Files"));
+    relatedFiles->setObjectName(QStringLiteral("contextRelatedFiles"));
+    connect(relatedFiles, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("navigate.relatedFiles")); });
+
+    menu->addSeparator();
+
+    QAction* renameAction = menu->addAction(QStringLiteral("Rename..."));
+    renameAction->setObjectName(QStringLiteral("contextRename"));
+    renameAction->setEnabled(editable);
+    connect(renameAction, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("refactor.rename")); });
+
+    QAction* reformatAction = menu->addAction(QStringLiteral("Reformat Code"));
+    reformatAction->setObjectName(QStringLiteral("contextReformat"));
+    reformatAction->setEnabled(editable);
+    connect(reformatAction, &QAction::triggered, this,
+            [this] { emit contextActionRequested(QStringLiteral("code.reformat")); });
+
+    menu->addSeparator();
+
+    QAction* cutAction = menu->addAction(QStringLiteral("Cut"));
+    cutAction->setObjectName(QStringLiteral("contextCut"));
+    cutAction->setEnabled(editable);
+    connect(cutAction, &QAction::triggered, this, [this] { (void)perform(EditorAction::Cut); });
+
+    QAction* copyAction = menu->addAction(QStringLiteral("Copy"));
+    copyAction->setObjectName(QStringLiteral("contextCopy"));
+    connect(copyAction, &QAction::triggered, this, [this] { (void)perform(EditorAction::Copy); });
+
+    QAction* pasteAction = menu->addAction(QStringLiteral("Paste"));
+    pasteAction->setObjectName(QStringLiteral("contextPaste"));
+    pasteAction->setEnabled(editable);
+    connect(pasteAction, &QAction::triggered, this, [this] { (void)perform(EditorAction::Paste); });
+
+    menu->addSeparator();
+
+    QAction* commentAction = menu->addAction(QStringLiteral("Comment with Line Comment"));
+    commentAction->setObjectName(QStringLiteral("contextCommentLine"));
+    commentAction->setEnabled(editable);
+    connect(commentAction, &QAction::triggered, this, [this] { (void)perform(EditorAction::CommentLine); });
+
+    QAction* duplicateAction = menu->addAction(QStringLiteral("Duplicate Line or Selection"));
+    duplicateAction->setObjectName(QStringLiteral("contextDuplicate"));
+    duplicateAction->setEnabled(editable);
+    connect(duplicateAction, &QAction::triggered, this, [this] { (void)perform(EditorAction::Duplicate); });
+
+    return menu;
+}
+
+void EditorView::contextMenuEvent(QContextMenuEvent* event) {
+    setFocus(Qt::MouseFocusReason);
+    if (event->reason() == QContextMenuEvent::Mouse) {
+        const QPointF pos(event->pos());
+        if (pos.x() >= gutterWidth() && !insightContains(pos)) {
+            const text::DisplayHit hit = hitAt(pos);
+            const text::Selection primary = m_editor->state().primary();
+            const text::ByteRange range = primary.range();
+            if (primary.empty() || hit.offset < range.begin || hit.offset > range.end) {
+                select(text::Selection::caret(hit.offset), hit.bias);
+            }
+        }
+    }
+    QMenu* menu = createContextMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->popup(event->globalPos());
+    event->accept();
 }
 
 void EditorView::wheelEvent(QWheelEvent* event) {

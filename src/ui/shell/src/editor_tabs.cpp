@@ -365,12 +365,13 @@ void EditorTabGroup::syncBar(int current) {
         m_bar->removeTab(m_bar->count() - 1);
     }
     const QIcon pin = shell_detail::themedIcon(icons::kActionsPin);
+    const QIcon codeIcon = shell_detail::themedIcon(icons::kNodesFileCode);
     for (int i = 0; i < count(); ++i) {
         m_bar->addTab(QString());
         updateTabText(i);
         const Tab& tab = m_tabs[static_cast<std::size_t>(i)];
         m_bar->setTabToolTip(i, QDir::toNativeSeparators(fromUtf8(tab.editor->path())));
-        m_bar->setTabIcon(i, tab.pinned ? pin : QIcon());
+        m_bar->setTabIcon(i, tab.pinned ? pin : codeIcon);
         for (const QTabBar::ButtonPosition side : {QTabBar::LeftSide, QTabBar::RightSide}) {
             if (QWidget* button = m_bar->tabButton(i, side); button != nullptr) {
                 button->setVisible(!tab.pinned);

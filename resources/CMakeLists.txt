@@ -23,7 +23,21 @@ set(_frost_res "${FROST_RESOURCE_OUTPUT_DIR}")
 set(_frost_outputs "")
 
 # Themes: one command per theme so an edit recompiles only that theme.
-set(_frost_themes glacier-dark glacier-light glacier-classic glacier-high-contrast)
+set(_frost_themes
+    glacier-dark
+    glacier-light
+    glacier-classic
+    glacier-high-contrast
+    rider-dark
+    rider-light
+    rider-islands-dark
+    darcula
+    monokai-pro
+    dracula
+    nord
+    one-dark
+    solarized-dark
+    solarized-light)
 foreach(theme IN LISTS _frost_themes)
     set(json "${CMAKE_CURRENT_SOURCE_DIR}/themes/${theme}.theme.json")
     set(out "${_frost_res}/themes/${theme}.ftheme")
