@@ -266,7 +266,17 @@ LanguageController::~LanguageController() {
 }
 
 void LanguageController::editorChanged() {
-    structureChanged();
+    const auto snapshot = m_services.host.snapshot();
+    const bool sameStructureDoc =
+        m_structureVisible && !m_structurePath.empty() &&
+        m_services.host.documentPath() == m_structurePath &&
+        m_services.host.documentVersion() == m_structureVersion && snapshot &&
+        snapshot->version() == m_structureRevision &&
+        m_services.host.structureIdentity() == m_structureIdentity &&
+        m_services.server.encoding() == m_structureEncoding;
+    if (!sameStructureDoc) {
+        structureChanged();
+    }
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
           &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot}) {
@@ -298,6 +308,11 @@ void LanguageController::structureChanged() {
     ++m_structureGeneration;
     m_structureSlot.cancel();
     m_structureTimer.stop();
+    const bool keepExistingTreeForSameIdentity =
+        m_structureVisible && hasDocument() && !m_structurePath.empty() &&
+        m_services.host.documentPath() == m_structurePath &&
+        m_services.host.structureIdentity() == m_structureIdentity &&
+        m_services.server.encoding() == m_structureEncoding;
     m_structurePath.clear();
     if (!m_structureVisible) {
         m_structure->setStatus(QStringLiteral("Open Structure to view symbols."));
@@ -307,7 +322,9 @@ void LanguageController::structureChanged() {
         m_structure->setStatus(QStringLiteral("Open a file to view its structure."));
         return;
     }
-    m_structure->setStatus(QStringLiteral("Loading structure..."));
+    if (!keepExistingTreeForSameIdentity) {
+        m_structure->setStatus(QStringLiteral("Loading structure..."));
+    }
     m_structureTimer.start();
 }
 

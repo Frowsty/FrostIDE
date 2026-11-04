@@ -22,6 +22,7 @@
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QScreen>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSplitter>
 #include <QStyledItemDelegate>
@@ -35,6 +36,7 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace frost::ui::lang {
@@ -836,15 +838,80 @@ void StructurePanel::setStatus(const QString& status) {
 }
 
 void StructurePanel::setSymbols(std::string path, std::vector<fl::DocumentSymbol> symbols) {
+    const auto sameStructure = [](auto& self, const std::vector<fl::DocumentSymbol>& a,
+                                  const std::vector<fl::DocumentSymbol>& b) -> bool {
+        if (a.size() != b.size())
+            return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (a[i].name != b[i].name || a[i].detail != b[i].detail || a[i].kind != b[i].kind ||
+                !self(self, a[i].children, b[i].children)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!m_path.empty() && m_path == path && sameStructure(sameStructure, m_symbols, symbols) &&
+        (m_tree->topLevelItemCount() > 0 || symbols.empty())) {
+        m_symbols = std::move(symbols);
+        const auto textFiltered = fl::filterSymbols(m_symbols, m_search->text().trimmed().toStdString());
+        const auto shown = filterAndSortStructureSymbols(textFiltered, m_showFieldsButton->isChecked(),
+                                                         m_showFunctionsButton->isChecked(),
+                                                         m_sortAlphaButton->isChecked());
+        if (m_tree->topLevelItemCount() == static_cast<int>(shown.size())) {
+            const auto updateInPlace = [&](auto& self, QTreeWidgetItem* item,
+                                           const fl::DocumentSymbol& sym) -> void {
+                if (!item || item->childCount() != static_cast<int>(sym.children.size()))
+                    return;
+                item->setData(0, kTargetRole,
+                              QPoint(static_cast<int>(sym.selectionRange.start.line),
+                                     static_cast<int>(sym.selectionRange.start.character)));
+                item->setData(0, kRangeStartRole, static_cast<int>(sym.range.start.line));
+                item->setData(0, kRangeEndRole, static_cast<int>(sym.range.end.line));
+                for (std::size_t i = 0; i < sym.children.size(); ++i)
+                    self(self, item->child(static_cast<int>(i)), sym.children[i]);
+            };
+            for (std::size_t i = 0; i < shown.size(); ++i)
+                updateInPlace(updateInPlace, m_tree->topLevelItem(static_cast<int>(i)), shown[i]);
+        }
+        return;
+    }
+
+    const bool sameFile = (!m_path.empty() && m_path == path);
     m_path = std::move(path);
     m_symbols = std::move(symbols);
-    m_lastHighlightedLine = -1;
+    if (!sameFile) {
+        m_lastHighlightedLine = -1;
+    }
     m_status->setText(m_symbols.empty() ? QStringLiteral("No symbols in this file.") : QString());
     m_status->setVisible(m_symbols.empty());
     rebuild();
 }
 
 void StructurePanel::rebuild() {
+    const auto itemKey = [](QTreeWidgetItem* item) -> QString {
+        QStringList parts;
+        for (QTreeWidgetItem* cur = item; cur != nullptr; cur = cur->parent()) {
+            parts.prepend(cur->text(0) + QLatin1Char('\x1f') + cur->text(1));
+        }
+        return parts.join(QLatin1Char('\x1e'));
+    };
+
+    const bool hadExistingTree = m_tree->topLevelItemCount() > 0;
+    std::set<QString> collapsedKeys;
+    QString selectedKey;
+    const int savedScroll = (m_tree->verticalScrollBar() != nullptr) ? m_tree->verticalScrollBar()->value() : 0;
+    if (hadExistingTree) {
+        if (QTreeWidgetItem* cur = m_tree->currentItem())
+            selectedKey = itemKey(cur);
+        for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+            QTreeWidgetItem* item = *it;
+            if (item->childCount() > 0 && !item->isExpanded()) {
+                collapsedKeys.insert(itemKey(item));
+            }
+        }
+    }
+
     m_tree->clear();
     const auto textFiltered = fl::filterSymbols(m_symbols, m_search->text().trimmed().toStdString());
     const auto shown =
@@ -872,10 +939,29 @@ void StructurePanel::rebuild() {
     for (const auto& symbol : shown)
         add(add, symbol, nullptr);
     m_tree->expandAll();
-    if (m_lastHighlightedLine >= 0) {
+    if (hadExistingTree && !collapsedKeys.empty()) {
+        for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+            QTreeWidgetItem* item = *it;
+            if (item->childCount() > 0 && collapsedKeys.contains(itemKey(item))) {
+                item->setExpanded(false);
+            }
+        }
+    }
+    if (hadExistingTree && !selectedKey.isEmpty()) {
+        for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+            if (itemKey(*it) == selectedKey) {
+                const QSignalBlocker blocker(m_tree);
+                m_tree->setCurrentItem(*it);
+                break;
+            }
+        }
+    } else if (m_lastHighlightedLine >= 0) {
         highlightLine(m_lastHighlightedLine);
     } else if (m_tree->topLevelItemCount() > 0) {
         m_tree->setCurrentItem(m_tree->topLevelItem(0));
+    }
+    if (hadExistingTree && m_tree->verticalScrollBar() != nullptr) {
+        m_tree->verticalScrollBar()->setValue(savedScroll);
     }
 }
 
@@ -899,9 +985,20 @@ void StructurePanel::highlightLine(int line) {
         }
     }
     if (best != nullptr) {
+        // Never force-expand a user-collapsed ancestor when highlighting the caret line.
+        for (QTreeWidgetItem* p = best->parent(); p != nullptr; p = p->parent()) {
+            if (!p->isExpanded()) {
+                best = p;
+            }
+        }
+        if (m_tree->currentItem() == best) {
+            return;
+        }
         const QSignalBlocker blocker(m_tree);
         m_tree->setCurrentItem(best);
-        m_tree->scrollToItem(best);
+        if (m_autoScrollButton && m_autoScrollButton->isChecked()) {
+            m_tree->scrollToItem(best);
+        }
     }
 }
 

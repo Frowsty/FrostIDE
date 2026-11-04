@@ -835,4 +835,50 @@ TEST(LanguageControllerNavigation, RelatedFilesFallsBackToProjectFilesWhenServer
     EXPECT_EQ(fl::documentKey(host.opened[0].first), fl::documentKey(matchingHeader));
 }
 
+TEST(LanguageControllerNavigation, StructurePreservesCollapsedHierarchyOnJumpAndUnchangedStructure) {
+    FeatureServer server;
+    std::atomic<int> requests = 0;
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        ++requests;
+        return Json::array({Json::object()
+                                .set("name", "BigClass")
+                                .set("kind", 5)
+                                .set("range", rangeJson(0, 0, 20))
+                                .set("selectionRange", rangeJson(0, 0, 8))
+                                .set("children", Json::array({Json::object()
+                                                                  .set("name", "memberFn")
+                                                                  .set("kind", 6)
+                                                                  .set("range", rangeJson(1, 0, 10))
+                                                                  .set("selectionRange", rangeJson(1, 2, 10))}))});
+    });
+    FakeHost host("class BigClass {\n  void memberFn() {}\n};\n");
+    Rig rig(server, host);
+    auto* tree = rig.controller.structurePanel().findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+    ASSERT_EQ(requests.load(), 1);
+
+    // User collapses BigClass in the Structure panel.
+    QTreeWidgetItem* rootItem = tree->topLevelItem(0);
+    rootItem->setExpanded(false);
+    ASSERT_FALSE(rootItem->isExpanded());
+
+    // Jumping to a signature in the same unchanged document fires editorChanged() and highlightLine(),
+    // which must not re-request symbols or force-expand the collapsed node.
+    rig.controller.editorChanged();
+    rig.controller.structurePanel().highlightLine(1);
+    EXPECT_EQ(requests.load(), 1);
+    ASSERT_EQ(tree->topLevelItemCount(), 1);
+    EXPECT_FALSE(tree->topLevelItem(0)->isExpanded());
+
+    // Editing the document triggers structureChanged(), and when the server returns the same symbol
+    // hierarchy, the collapsed state and tree items are preserved in-place.
+    host.type("\n");
+    rig.controller.structureChanged();
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 2; }));
+    ASSERT_EQ(tree->topLevelItemCount(), 1);
+    EXPECT_FALSE(tree->topLevelItem(0)->isExpanded());
+}
+
 } // namespace
