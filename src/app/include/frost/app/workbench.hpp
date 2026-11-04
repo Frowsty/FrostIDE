@@ -193,6 +193,8 @@ struct NewProjectSpec {
 // The ids of the Build output and Find Usages tool windows (bottom); Run is the shell's "run".
 inline constexpr std::string_view kBuildToolWindow = "build";
 inline constexpr std::string_view kFindUsagesToolWindow = "findUsages";
+inline constexpr std::string_view kNuGetToolWindow = "nuget";
+inline constexpr std::string_view kAsmViewerToolWindow = "asm_viewer";
 
 // A place in a file: 1-based line and column; line 0 leaves the caret where it is (a new document:
 // at the start), column 0 is column 1.
@@ -550,6 +552,8 @@ private:
     void showOpenRecent();
     void showSettings();
     void showUpdateCheck();
+    void showVersionSwitcher();
+    void applyVerifiedUpdate();
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
     [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
 

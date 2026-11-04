@@ -278,6 +278,13 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     connect(m_checkUpdates, &QPushButton::clicked, this, &WelcomeScreen::checkForUpdatesRequested);
     sidebarLayout->addWidget(m_checkUpdates);
 
+    m_switchVersion = new QPushButton(text("Switch IDE Version..."), sidebar);
+    m_switchVersion->setObjectName(QStringLiteral("welcomeSwitchVersionButton"));
+    m_switchVersion->setMinimumHeight(30);
+    m_switchVersion->setToolTip(text("Switch between installed FrostIDE builds or apply a downloaded update"));
+    connect(m_switchVersion, &QPushButton::clicked, this, &WelcomeScreen::switchVersionRequested);
+    sidebarLayout->addWidget(m_switchVersion);
+
     auto* quickThemeBtn = new QPushButton(text("Switch Theme..."), sidebar);
     quickThemeBtn->setObjectName(QStringLiteral("welcomeThemeButton"));
     quickThemeBtn->setMinimumHeight(30);

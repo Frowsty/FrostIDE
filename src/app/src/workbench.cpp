@@ -61,6 +61,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -1035,6 +1036,24 @@ void Workbench::registerActions() {
                 });
         },
         [this] { return m_window != nullptr && m_history.has_value() && currentView() != nullptr; });
+    add(
+        "window.nuget", "NuGet Package Manager",
+        [this] {
+            if (m_window)
+                m_window->toolWindows().toggle(kNuGetToolWindow);
+        },
+        [this] { return m_window != nullptr; });
+    add(
+        "window.asmViewer", "IL / Native Assembly Viewer",
+        [this] {
+            if (m_window)
+                m_window->toolWindows().toggle(kAsmViewerToolWindow);
+        },
+        [this] { return m_window != nullptr; });
+    add(
+        "application.switchVersion", "Switch IDE Version...",
+        [this] { showVersionSwitcher(); },
+        [this] { return activeTopWindow() != nullptr; });
 }
 
 Result<ui::InstallReport> Workbench::installAppearance(QApplication& app, std::string resourceDir) {
@@ -1203,6 +1222,7 @@ void Workbench::wireWelcomeScreen(WelcomeScreen* welcome) {
     });
     connect(welcome, &WelcomeScreen::settingsRequested, this, [this] { showSettings(); });
     connect(welcome, &WelcomeScreen::checkForUpdatesRequested, this, [this] { showUpdateCheck(); });
+    connect(welcome, &WelcomeScreen::switchVersionRequested, this, [this] { showVersionSwitcher(); });
     {
         const auto snap = m_services.settings.snapshot();
         const QString ch = qs(snap->get(key::updateChannel));
@@ -2007,6 +2027,46 @@ void Workbench::attachToolWindows() {
     }
     m_output = output;
     connect(output, &ui::BuildOutputPane::openLocation, this, &Workbench::openLocation);
+
+    ui::ToolWindowSpec nugetSpec;
+    nugetSpec.id = std::string(kNuGetToolWindow);
+    nugetSpec.title = text("NuGet");
+    nugetSpec.side = ui::ToolWindowSide::Bottom;
+    nugetSpec.iconId = std::string(ui::icons::kBuildPackage);
+    nugetSpec.createContent = [this]() -> QWidget* {
+        std::string initialProj;
+        if (m_explorer && m_solution) {
+            if (const auto projId = m_explorer->currentProject())
+                initialProj = m_solution->project(*projId).path;
+        }
+        return createNuGetToolWindowWidget(
+            m_window, m_services.fs,
+            [this]() -> const project::SolutionModel* { return m_solution.get(); },
+            std::move(initialProj),
+            [this] { refreshSolutionExplorerForFsChange(); });
+    };
+    if (auto added = windows.add(std::move(nugetSpec)); !added) {
+        log::warn(kLog, "nuget tool window: {}", added.error().describe());
+    }
+
+    ui::ToolWindowSpec asmSpec;
+    asmSpec.id = std::string(kAsmViewerToolWindow);
+    asmSpec.title = text("ASM / IL");
+    asmSpec.side = ui::ToolWindowSide::Right;
+    asmSpec.iconId = std::string(ui::icons::kNodesFileCode);
+    asmSpec.createContent = [this]() -> QWidget* {
+        return createAsmViewerToolWindowWidget(m_window, [this]() -> std::pair<std::string, int> {
+            if (DocumentEditorView* view = currentView()) {
+                const auto caretPos = view->editor().editor().text().pointAt(
+                    view->editor().editor().state().primary().head);
+                return {view->path(), static_cast<int>(caretPos.line.value()) + 1};
+            }
+            return {{}, 1};
+        });
+    };
+    if (auto added = windows.add(std::move(asmSpec)); !added) {
+        log::warn(kLog, "asm viewer tool window: {}", added.error().describe());
+    }
 }
 
 void Workbench::attachToolbar() {
@@ -2467,15 +2527,380 @@ void Workbench::showUpdateCheck() {
                     envelope->release = std::move(*current);
                     self->m_verifiedUpdate = std::move(*payload);
                     self->m_verifiedRelease = std::move(*envelope);
-                    QMessageBox::information(
-                        dlWin, tr("Update verified"),
-                        tr("The update download was verified. Installation is pending installer support."));
+                    const QString readyMsg =
+                        tr("Update %1 (build %2) verified & ready to install")
+                            .arg(QString::fromStdString(self->m_verifiedRelease->release.version))
+                            .arg(self->m_verifiedRelease->release.build);
+                    if (self->m_welcome)
+                        self->m_welcome->setUpdateStatus(readyMsg);
+                    if (self->m_launcherWindow && self->m_launcherWindow->welcomeScreen())
+                        self->m_launcherWindow->welcomeScreen()->setUpdateStatus(readyMsg);
+                    self->applyVerifiedUpdate();
                 },
                 downloadManager);
             download->start();
         },
         manager);
     check->start();
+}
+
+void Workbench::applyVerifiedUpdate() {
+    QWidget* parentWin = activeTopWindow();
+    if (!parentWin || !m_verifiedUpdate || !m_verifiedRelease)
+        return;
+
+    const QString versionStr = QString::fromStdString(m_verifiedRelease->release.version);
+    const std::uint64_t buildNum = m_verifiedRelease->release.build;
+    const QString zipPath = QDir::toNativeSeparators(m_verifiedUpdate->fileName());
+
+    QString defaultBaseDir = QStringLiteral("E:/FrostBuilds/beta");
+    if (!QDir(defaultBaseDir).exists()) {
+        QDir appParent(QCoreApplication::applicationDirPath());
+        appParent.cdUp();
+        defaultBaseDir = appParent.absolutePath();
+    }
+    const QString defaultSideBySideDir = QDir::toNativeSeparators(
+        defaultBaseDir + QStringLiteral("/FrostIDE-2026.11.04-beta.%1").arg(buildNum));
+
+    QDialog dialog(parentWin);
+    dialog.setObjectName(QStringLiteral("updateInstallerDialog"));
+    dialog.setWindowTitle(tr("Install Verified FrostIDE Update"));
+    dialog.resize(620, 290);
+
+    auto* root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(18, 16, 18, 16);
+    root->setSpacing(12);
+
+    auto* titleLabel = new QLabel(
+        tr("<b>FrostIDE %1 (Build %2)</b> — Ed25519 signature and SHA-256 payload verified.")
+            .arg(versionStr)
+            .arg(buildNum),
+        &dialog);
+    titleLabel->setWordWrap(true);
+    root->addWidget(titleLabel);
+
+    auto* descLabel = new QLabel(
+        tr("Choose how to install this update. Installing to a new side-by-side build folder preserves your previous "
+           "beta builds so you can switch between versions at any time."),
+        &dialog);
+    descLabel->setWordWrap(true);
+    descLabel->setStyleSheet(QStringLiteral("color: #9DA5B4;"));
+    root->addWidget(descLabel);
+
+    auto* dirForm = new QFormLayout();
+    auto* dirRow = new QWidget(&dialog);
+    auto* dirLayout = new QHBoxLayout(dirRow);
+    dirLayout->setContentsMargins(0, 0, 0, 0);
+    auto* destEdit = new QLineEdit(defaultSideBySideDir, dirRow);
+    destEdit->setObjectName(QStringLiteral("updateDestDirEdit"));
+    auto* browseBtn = new QPushButton(tr("Browse..."), dirRow);
+    QObject::connect(browseBtn, &QPushButton::clicked, &dialog, [&dialog, destEdit] {
+        const QString chosen =
+            QFileDialog::getExistingDirectory(&dialog, tr("Select Target Folder for New Build"), destEdit->text());
+        if (!chosen.isEmpty())
+            destEdit->setText(QDir::toNativeSeparators(chosen));
+    });
+    dirLayout->addWidget(destEdit, 1);
+    dirLayout->addWidget(browseBtn);
+    dirForm->addRow(tr("Side-by-Side Build Folder:"), dirRow);
+    root->addLayout(dirForm);
+
+    root->addStretch(1);
+
+    auto* btnRow = new QHBoxLayout();
+    auto* sideBySideBtn = new QPushButton(tr("Install to Build Folder && Restart"), &dialog);
+    sideBySideBtn->setObjectName(QStringLiteral("installSideBySideButton"));
+    sideBySideBtn->setDefault(true);
+    auto* inPlaceBtn = new QPushButton(tr("Update Current Folder In-Place && Restart"), &dialog);
+    inPlaceBtn->setObjectName(QStringLiteral("installInPlaceButton"));
+    auto* laterBtn = new QPushButton(tr("Later"), &dialog);
+    btnRow->addWidget(sideBySideBtn);
+    btnRow->addWidget(inPlaceBtn);
+    btnRow->addStretch(1);
+    btnRow->addWidget(laterBtn);
+    root->addLayout(btnRow);
+
+    int installMode = 0; // 1 = side-by-side, 2 = in-place
+    QObject::connect(sideBySideBtn, &QPushButton::clicked, &dialog, [&dialog, &installMode] {
+        installMode = 1;
+        dialog.accept();
+    });
+    QObject::connect(inPlaceBtn, &QPushButton::clicked, &dialog, [&dialog, &installMode] {
+        installMode = 2;
+        dialog.accept();
+    });
+    QObject::connect(laterBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+    ui::installDialogChrome(&dialog, false);
+    if (dialog.exec() != QDialog::Accepted || installMode == 0)
+        return;
+
+    if (installMode == 1) {
+        const QString targetDir = QDir::fromNativeSeparators(destEdit->text().trimmed());
+        if (targetDir.isEmpty())
+            return;
+        QDir().mkpath(targetDir);
+
+        QProgressDialog extractProgress(tr("Extracting FrostIDE %1 to %2…").arg(versionStr, QDir::toNativeSeparators(targetDir)),
+                                        QString(), 0, 0, parentWin);
+        extractProgress.setWindowTitle(tr("Installing Update"));
+        extractProgress.setMinimumDuration(0);
+        extractProgress.show();
+        QCoreApplication::processEvents();
+
+        QProcess proc;
+        QString psZip = zipPath;
+        psZip.replace(QLatin1Char('\''), QStringLiteral("''"));
+        QString psDest = QDir::toNativeSeparators(targetDir);
+        psDest.replace(QLatin1Char('\''), QStringLiteral("''"));
+        proc.start(QStringLiteral("powershell.exe"),
+                   {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                    QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"), QStringLiteral("-Command"),
+                    QStringLiteral("Expand-Archive -LiteralPath '%1' -DestinationPath '%2' -Force").arg(psZip, psDest)});
+        if (!proc.waitForFinished(120000) || proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+            const QString errOut = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"),
+                                 tr("Failed to extract update archive:\n%1").arg(errOut.isEmpty() ? proc.errorString() : errOut));
+            return;
+        }
+
+        QString newExe = QDir(targetDir).filePath(QStringLiteral("frost.exe"));
+        if (!QFileInfo::exists(newExe)) {
+            const QFileInfoList subDirs = QDir(targetDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+            for (const QFileInfo& sub : subDirs) {
+                const QString candidate = QDir(sub.absoluteFilePath()).filePath(QStringLiteral("frost.exe"));
+                if (QFileInfo::exists(candidate)) {
+                    newExe = candidate;
+                    break;
+                }
+            }
+        }
+        if (!QFileInfo::exists(newExe)) {
+            QMessageBox::warning(parentWin, tr("Update Installed"),
+                                 tr("Update extracted to %1, but frost.exe was not found at the root.")
+                                     .arg(QDir::toNativeSeparators(targetDir)));
+            return;
+        }
+        if (QProcess::startDetached(newExe, {}, QFileInfo(newExe).absolutePath())) {
+            if (m_window)
+                m_window->close();
+            QCoreApplication::quit();
+        }
+        return;
+    }
+
+    if (installMode == 2) {
+        const QString localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        if (localData.isEmpty())
+            return;
+        const QString updatesDir = localData + QStringLiteral("/updates");
+        QDir().mkpath(updatesDir);
+        const QString stagedZip = QDir::toNativeSeparators(updatesDir + QStringLiteral("/staged-build-%1.zip").arg(buildNum));
+        QFile::remove(stagedZip);
+        if (!QFile::copy(m_verifiedUpdate->fileName(), stagedZip)) {
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"),
+                                 tr("Could not stage update archive to %1.").arg(stagedZip));
+            return;
+        }
+        const QString scriptPath = QDir::toNativeSeparators(updatesDir + QStringLiteral("/apply-update.ps1"));
+        const QString appDir = QDir::toNativeSeparators(QCoreApplication::applicationDirPath());
+        const QString appExe = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+        const qint64 pid = QCoreApplication::applicationPid();
+
+        QFile scriptFile(scriptPath);
+        if (!scriptFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"),
+                                 tr("Could not write updater script to %1.").arg(scriptPath));
+            return;
+        }
+        QString psStagedZip = stagedZip;
+        psStagedZip.replace(QLatin1Char('\''), QStringLiteral("''"));
+        QString psAppDir = appDir;
+        psAppDir.replace(QLatin1Char('\''), QStringLiteral("''"));
+        QString psAppExe = appExe;
+        psAppExe.replace(QLatin1Char('\''), QStringLiteral("''"));
+
+        const QString scriptContent = QStringLiteral(
+            "$ErrorActionPreference = 'SilentlyContinue'\n"
+            "Wait-Process -Id %1 -Timeout 30\n"
+            "Start-Sleep -Milliseconds 600\n"
+            "Expand-Archive -LiteralPath '%2' -DestinationPath '%3' -Force\n"
+            "Start-Process -FilePath '%4' -WorkingDirectory '%3'\n")
+            .arg(pid)
+            .arg(psStagedZip, psAppDir, psAppExe);
+        scriptFile.write(scriptContent.toUtf8());
+        scriptFile.close();
+
+        if (QProcess::startDetached(
+                QStringLiteral("powershell.exe"),
+                {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                 QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+                 QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"),
+                 QStringLiteral("-File"), scriptPath})) {
+            if (m_window)
+                m_window->close();
+            QCoreApplication::quit();
+        }
+    }
+}
+
+void Workbench::showVersionSwitcher() {
+    QWidget* parentWin = activeTopWindow();
+    if (!parentWin)
+        return;
+
+    QDialog dialog(parentWin);
+    dialog.setObjectName(QStringLiteral("versionSwitcherDialog"));
+    dialog.setWindowTitle(tr("Switch FrostIDE Version / Manage Installations"));
+    dialog.resize(660, 400);
+
+    auto* root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(16, 14, 16, 14);
+    root->setSpacing(10);
+
+    auto* headerLabel = new QLabel(
+        tr("<b>Installed FrostIDE Builds</b> — Running: <b>%1</b> (<code>%2</code>)")
+            .arg(qs(build_info::kVersion), QDir::toNativeSeparators(QCoreApplication::applicationDirPath())),
+        &dialog);
+    headerLabel->setWordWrap(true);
+    root->addWidget(headerLabel);
+
+    auto* listWidget = new QListWidget(&dialog);
+    listWidget->setObjectName(QStringLiteral("installedVersionsList"));
+
+    const QString currentAppDir = QFileInfo(QCoreApplication::applicationDirPath()).canonicalFilePath();
+    QStringList scanRoots;
+    scanRoots.append(QStringLiteral("E:/FrostBuilds/beta"));
+    {
+        QDir parentDir(QCoreApplication::applicationDirPath());
+        if (parentDir.cdUp()) {
+            const QString parentPath = parentDir.absolutePath();
+            if (!scanRoots.contains(parentPath, Qt::CaseInsensitive))
+                scanRoots.append(parentPath);
+        }
+    }
+
+    struct InstalledBuildEntry {
+        QString name;
+        QString exePath;
+        QString dirPath;
+        QDateTime lastModified;
+        bool isCurrent = false;
+    };
+    std::vector<InstalledBuildEntry> builds;
+    QStringList seenCanonicalDirs;
+
+    auto addBuildIfValid = [&](const QString& dirPath) {
+        const QFileInfo exeInfo(QDir(dirPath).filePath(QStringLiteral("frost.exe")));
+        if (!exeInfo.exists() || !exeInfo.isFile())
+            return;
+        const QString canonicalDir = QFileInfo(dirPath).canonicalFilePath();
+        if (canonicalDir.isEmpty() || seenCanonicalDirs.contains(canonicalDir, Qt::CaseInsensitive))
+            return;
+        seenCanonicalDirs.append(canonicalDir);
+        InstalledBuildEntry entry;
+        entry.name = QFileInfo(dirPath).fileName();
+        entry.exePath = exeInfo.absoluteFilePath();
+        entry.dirPath = QDir::toNativeSeparators(QFileInfo(dirPath).absoluteFilePath());
+        entry.lastModified = exeInfo.lastModified();
+        entry.isCurrent = (canonicalDir.compare(currentAppDir, Qt::CaseInsensitive) == 0);
+        builds.push_back(std::move(entry));
+    };
+
+    addBuildIfValid(QCoreApplication::applicationDirPath());
+    for (const QString& scanRoot : scanRoots) {
+        QDir rootDir(scanRoot);
+        if (!rootDir.exists())
+            continue;
+        const QFileInfoList subDirs = rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed);
+        for (const QFileInfo& sub : subDirs) {
+            addBuildIfValid(sub.absoluteFilePath());
+        }
+    }
+
+    std::ranges::sort(builds, [](const InstalledBuildEntry& a, const InstalledBuildEntry& b) {
+        if (a.isCurrent != b.isCurrent)
+            return a.isCurrent;
+        return a.lastModified > b.lastModified;
+    });
+
+    for (const InstalledBuildEntry& b : builds) {
+        const QString label = b.isCurrent
+            ? tr("%1  [Current Running Build]\n%2  •  Built %3")
+                  .arg(b.name, b.dirPath, b.lastModified.toString(QStringLiteral("yyyy-MM-dd HH:mm")))
+            : tr("%1\n%2  •  Built %3")
+                  .arg(b.name, b.dirPath, b.lastModified.toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+        auto* item = new QListWidgetItem(label, listWidget);
+        item->setData(Qt::UserRole, b.exePath);
+        item->setData(Qt::UserRole + 1, b.dirPath);
+        item->setData(Qt::UserRole + 2, b.isCurrent);
+    }
+    if (listWidget->count() > 0)
+        listWidget->setCurrentRow(0);
+    root->addWidget(listWidget, 1);
+
+    auto* btnRow = new QHBoxLayout();
+    auto* switchBtn = new QPushButton(tr("Switch to Selected && Restart"), &dialog);
+    switchBtn->setObjectName(QStringLiteral("switchAndRestartButton"));
+    switchBtn->setDefault(true);
+    auto* sideBySideBtn = new QPushButton(tr("Launch Side-by-Side"), &dialog);
+    sideBySideBtn->setObjectName(QStringLiteral("launchSideBySideButton"));
+    auto* openFolderBtn = new QPushButton(tr("Reveal in Explorer"), &dialog);
+    auto* updateBtn = new QPushButton(
+        m_verifiedUpdate ? tr("Install Downloaded Update...") : tr("Check for Updates..."), &dialog);
+    auto* closeBtn = new QPushButton(tr("Close"), &dialog);
+
+    btnRow->addWidget(switchBtn);
+    btnRow->addWidget(sideBySideBtn);
+    btnRow->addWidget(openFolderBtn);
+    btnRow->addWidget(updateBtn);
+    btnRow->addStretch(1);
+    btnRow->addWidget(closeBtn);
+    root->addLayout(btnRow);
+
+    QObject::connect(switchBtn, &QPushButton::clicked, &dialog, [&dialog, listWidget, this] {
+        QListWidgetItem* cur = listWidget->currentItem();
+        if (!cur)
+            return;
+        const QString exePath = cur->data(Qt::UserRole).toString();
+        if (exePath.isEmpty() || !QFileInfo::exists(exePath))
+            return;
+        if (QProcess::startDetached(exePath, {}, QFileInfo(exePath).absolutePath())) {
+            dialog.accept();
+            if (m_window)
+                m_window->close();
+            QCoreApplication::quit();
+        }
+    });
+    QObject::connect(sideBySideBtn, &QPushButton::clicked, &dialog, [listWidget] {
+        QListWidgetItem* cur = listWidget->currentItem();
+        if (!cur)
+            return;
+        const QString exePath = cur->data(Qt::UserRole).toString();
+        if (!exePath.isEmpty() && QFileInfo::exists(exePath)) {
+            QProcess::startDetached(exePath, {}, QFileInfo(exePath).absolutePath());
+        }
+    });
+    QObject::connect(openFolderBtn, &QPushButton::clicked, &dialog, [listWidget, this] {
+        QListWidgetItem* cur = listWidget->currentItem();
+        if (!cur)
+            return;
+        const QString dirPath = cur->data(Qt::UserRole + 1).toString();
+        if (!dirPath.isEmpty()) {
+            (void)ui::revealInFileManager(m_services.launcher, dirPath.toStdString(), true);
+        }
+    });
+    QObject::connect(updateBtn, &QPushButton::clicked, &dialog, [&dialog, this] {
+        dialog.accept();
+        if (m_verifiedUpdate && m_verifiedRelease)
+            applyVerifiedUpdate();
+        else
+            showUpdateCheck();
+    });
+    QObject::connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+    ui::installDialogChrome(&dialog, false);
+    dialog.exec();
 }
 
 void Workbench::showSettings() {

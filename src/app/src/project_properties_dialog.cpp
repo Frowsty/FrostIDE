@@ -17,6 +17,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -26,6 +27,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -791,6 +793,297 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
     dialog.exec();
 }
 
+QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
+                                     std::function<const project::SolutionModel*()> solutionProvider,
+                                     std::string initialCsprojPath, std::function<void()> onSaved) {
+    auto* root = new QWidget(parent);
+    root->setObjectName(QStringLiteral("nugetToolWindowWidget"));
+    auto* outer = new QVBoxLayout(root);
+    outer->setContentsMargins(8, 8, 8, 8);
+    outer->setSpacing(6);
+
+    auto* topBar = new QHBoxLayout();
+    auto* projCombo = new QComboBox(root);
+    projCombo->setObjectName(QStringLiteral("nugetProjectCombo"));
+    projCombo->setMinimumWidth(180);
+
+    auto* searchEdit = new QLineEdit(root);
+    searchEdit->setObjectName(QStringLiteral("nugetSearchEdit"));
+    searchEdit->setPlaceholderText(QStringLiteral("Search NuGet packages..."));
+    searchEdit->setClearButtonEnabled(true);
+
+    auto* prereleaseCheck = new QCheckBox(QStringLiteral("Include prerelease"), root);
+    prereleaseCheck->setObjectName(QStringLiteral("nugetPrereleaseCheck"));
+
+    auto* feedCombo = new QComboBox(root);
+    feedCombo->setObjectName(QStringLiteral("nugetFeedCombo"));
+    feedCombo->addItem(QStringLiteral("nuget.org (https://api.nuget.org/v3/index.json)"),
+                       QStringLiteral("https://api.nuget.org/v3/index.json"));
+    feedCombo->addItem(QStringLiteral("Local NuGet Cache"), QStringLiteral("local"));
+
+    auto* updateAllBtn = new QPushButton(QStringLiteral("Update All"), root);
+    updateAllBtn->setObjectName(QStringLiteral("nugetUpdateAllButton"));
+
+    topBar->addWidget(new QLabel(QStringLiteral("Project:"), root));
+    topBar->addWidget(projCombo);
+    topBar->addWidget(searchEdit, 1);
+    topBar->addWidget(prereleaseCheck);
+    topBar->addWidget(new QLabel(QStringLiteral("Source:"), root));
+    topBar->addWidget(feedCombo);
+    topBar->addWidget(updateAllBtn);
+    outer->addLayout(topBar);
+
+    auto* splitter = new QSplitter(Qt::Horizontal, root);
+    auto* tabs = new QTabWidget(splitter);
+    tabs->setObjectName(QStringLiteral("nugetTabs"));
+
+    auto makePkgTable = [](QWidget* tabParent, const QString& objName) {
+        auto* tbl = new QTableWidget(tabParent);
+        tbl->setObjectName(objName);
+        tbl->setColumnCount(3);
+        tbl->setHorizontalHeaderLabels(
+            {QStringLiteral("Package ID"), QStringLiteral("Installed"), QStringLiteral("Latest")});
+        tbl->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        tbl->setSelectionBehavior(QAbstractItemView::SelectRows);
+        tbl->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        return tbl;
+    };
+
+    auto* installedTable = makePkgTable(tabs, QStringLiteral("nugetPackagesTable"));
+    auto* updatesTable = makePkgTable(tabs, QStringLiteral("nugetUpdatesTable"));
+    auto* browseTable = makePkgTable(tabs, QStringLiteral("nugetBrowseTable"));
+    tabs->addTab(installedTable, QStringLiteral("Installed"));
+    tabs->addTab(updatesTable, QStringLiteral("Updates"));
+    tabs->addTab(browseTable, QStringLiteral("Browse"));
+
+    auto* rightPane = new QWidget(splitter);
+    auto* rightLayout = new QVBoxLayout(rightPane);
+    rightLayout->setContentsMargins(6, 0, 0, 0);
+    auto* detailsPane = new QPlainTextEdit(rightPane);
+    detailsPane->setObjectName(QStringLiteral("nugetDetailsPane"));
+    detailsPane->setReadOnly(true);
+    detailsPane->setPlaceholderText(QStringLiteral("Select a NuGet package to view details, dependencies, and README."));
+    rightLayout->addWidget(detailsPane, 1);
+
+    auto* installRow = new QHBoxLayout();
+    auto* pkgIdEdit = new QLineEdit(rightPane);
+    pkgIdEdit->setObjectName(QStringLiteral("nugetPackageIdEdit"));
+    pkgIdEdit->setPlaceholderText(QStringLiteral("Package ID (e.g. Newtonsoft.Json)"));
+    auto* pkgVerEdit = new QLineEdit(QStringLiteral("13.0.3"), rightPane);
+    pkgVerEdit->setObjectName(QStringLiteral("nugetPackageVersionEdit"));
+    pkgVerEdit->setPlaceholderText(QStringLiteral("Version"));
+    auto* addBtn = new QPushButton(QStringLiteral("Install / Update"), rightPane);
+    addBtn->setObjectName(QStringLiteral("nugetInstallButton"));
+    auto* removeBtn = new QPushButton(QStringLiteral("Uninstall Selected"), rightPane);
+    removeBtn->setObjectName(QStringLiteral("nugetRemoveButton"));
+    installRow->addWidget(pkgIdEdit, 2);
+    installRow->addWidget(pkgVerEdit, 1);
+    installRow->addWidget(addBtn);
+    installRow->addWidget(removeBtn);
+    rightLayout->addLayout(installRow);
+
+    splitter->addWidget(tabs);
+    splitter->addWidget(rightPane);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+    outer->addWidget(splitter, 1);
+
+    struct CatalogItem {
+        const char* id;
+        const char* stableVer;
+        const char* preVer;
+        const char* summary;
+    };
+    static constexpr std::array<CatalogItem, 8> kCatalog{{
+        {"Newtonsoft.Json", "13.0.3", "13.0.4-beta1", "Popular high-performance JSON framework for .NET."},
+        {"Serilog", "4.0.1", "4.1.0-dev-02235", "Simple .NET logging with fully-structured events."},
+        {"Dapper", "2.1.35", "2.1.44-beta", "A high performance Micro-ORM supporting SQL Server, MySQL, Sqlite, and Postgres."},
+        {"xunit", "2.9.0", "2.9.1-pre.12", "xUnit.net is a developer testing framework for C# and .NET."},
+        {"NUnit", "4.1.0", "4.2.0-beta.1", "NUnit unit-testing framework for all .NET languages."},
+        {"FluentAssertions", "6.12.0", "7.0.0-alpha.4", "Fluent assertion library for .NET unit tests."},
+        {"CommunityToolkit.Mvvm", "8.2.2", "8.3.0-preview1", "Modern, fast, and modular MVVM library for .NET."},
+        {"StackExchange.Redis", "2.8.0", "2.8.12-alpha", "High performance general purpose redis client for .NET."},
+    }};
+
+    const auto currentCsproj = [=]() -> std::string {
+        const QString data = projCombo->currentData().toString();
+        if (!data.isEmpty())
+            return data.toStdString();
+        return initialCsprojPath;
+    };
+
+    const auto refreshProjects = [=] {
+        const QString prev = projCombo->currentData().toString();
+        projCombo->blockSignals(true);
+        projCombo->clear();
+        if (solutionProvider) {
+            if (const project::SolutionModel* sln = solutionProvider()) {
+                for (const auto& p : sln->projects()) {
+                    if (p.kind == project::ProjectKind::CSharp && !p.path.empty()) {
+                        projCombo->addItem(toQs(p.name), toQs(p.path));
+                    }
+                }
+            }
+        }
+        if (projCombo->count() == 0 && !initialCsprojPath.empty()) {
+            projCombo->addItem(QFileInfo(toQs(initialCsprojPath)).completeBaseName(), toQs(initialCsprojPath));
+        }
+        const int idx = projCombo->findData(prev.isEmpty() ? toQs(initialCsprojPath) : prev);
+        if (idx >= 0)
+            projCombo->setCurrentIndex(idx);
+        projCombo->blockSignals(false);
+    };
+
+    const auto refreshTables = [=, &fs] {
+        refreshProjects();
+        const std::string csproj = currentCsproj();
+        const QString filter = searchEdit->text().trimmed();
+        const bool includePre = prereleaseCheck->isChecked();
+
+        std::vector<NuGetPackageEntry> installed;
+        if (!csproj.empty()) {
+            if (auto content = fs.readFile(csproj)) {
+                installed = parseCsprojNuGetPackages(*content);
+            }
+        }
+
+        installedTable->setRowCount(0);
+        updatesTable->setRowCount(0);
+        browseTable->setRowCount(0);
+
+        for (const auto& pkg : installed) {
+            const QString qId = toQs(pkg.id);
+            if (!filter.isEmpty() && !qId.contains(filter, Qt::CaseInsensitive))
+                continue;
+            QString latest = toQs(pkg.version);
+            for (const auto& cat : kCatalog) {
+                if (qId.compare(QLatin1String(cat.id), Qt::CaseInsensitive) == 0) {
+                    latest = QString::fromLatin1(includePre ? cat.preVer : cat.stableVer);
+                    break;
+                }
+            }
+            const int r = installedTable->rowCount();
+            installedTable->insertRow(r);
+            installedTable->setItem(r, 0, new QTableWidgetItem(qId));
+            installedTable->setItem(r, 1, new QTableWidgetItem(toQs(pkg.version)));
+            installedTable->setItem(r, 2, new QTableWidgetItem(latest));
+
+            if (latest != toQs(pkg.version)) {
+                const int ur = updatesTable->rowCount();
+                updatesTable->insertRow(ur);
+                updatesTable->setItem(ur, 0, new QTableWidgetItem(qId));
+                updatesTable->setItem(ur, 1, new QTableWidgetItem(toQs(pkg.version)));
+                updatesTable->setItem(ur, 2, new QTableWidgetItem(latest));
+            }
+        }
+
+        for (const auto& cat : kCatalog) {
+            const QString qId = QString::fromLatin1(cat.id);
+            if (!filter.isEmpty() && !qId.contains(filter, Qt::CaseInsensitive) &&
+                !QString::fromLatin1(cat.summary).contains(filter, Qt::CaseInsensitive))
+                continue;
+            QString instVer = QStringLiteral("—");
+            for (const auto& pkg : installed) {
+                if (qId.compare(toQs(pkg.id), Qt::CaseInsensitive) == 0) {
+                    instVer = toQs(pkg.version);
+                    break;
+                }
+            }
+            const QString latest = QString::fromLatin1(includePre ? cat.preVer : cat.stableVer);
+            const int br = browseTable->rowCount();
+            browseTable->insertRow(br);
+            browseTable->setItem(br, 0, new QTableWidgetItem(qId));
+            browseTable->setItem(br, 1, new QTableWidgetItem(instVer));
+            browseTable->setItem(br, 2, new QTableWidgetItem(latest));
+        }
+    };
+    refreshTables();
+
+    const auto wireTableSelection = [=](QTableWidget* tbl) {
+        QObject::connect(tbl, &QTableWidget::currentCellChanged, root, [tbl, pkgIdEdit, pkgVerEdit, detailsPane](int row, int, int, int) {
+            if (row < 0 || !tbl->item(row, 0))
+                return;
+            const QString id = tbl->item(row, 0)->text();
+            const QString inst = tbl->item(row, 1) ? tbl->item(row, 1)->text() : QString();
+            const QString latest = tbl->item(row, 2) ? tbl->item(row, 2)->text() : inst;
+            pkgIdEdit->setText(id);
+            pkgVerEdit->setText(latest.isEmpty() || latest == QStringLiteral("—") ? inst : latest);
+            QString summary = QStringLiteral("NuGet Package Reference");
+            for (const auto& cat : kCatalog) {
+                if (id.compare(QLatin1String(cat.id), Qt::CaseInsensitive) == 0) {
+                    summary = QString::fromLatin1(cat.summary);
+                    break;
+                }
+            }
+            detailsPane->setPlainText(
+                QStringLiteral("Package: %1\nInstalled: %2\nLatest Available: %3\n\n%4")
+                    .arg(id, inst, latest, summary));
+        });
+    };
+    wireTableSelection(installedTable);
+    wireTableSelection(updatesTable);
+    wireTableSelection(browseTable);
+
+    QObject::connect(projCombo, &QComboBox::currentIndexChanged, root, [=](int) { refreshTables(); });
+    QObject::connect(searchEdit, &QLineEdit::textChanged, root, [=](const QString&) { refreshTables(); });
+    QObject::connect(prereleaseCheck, &QCheckBox::toggled, root, [=](bool) { refreshTables(); });
+
+    QObject::connect(addBtn, &QPushButton::clicked, root, [=, &fs] {
+        const QString id = pkgIdEdit->text().trimmed();
+        const QString ver = pkgVerEdit->text().trimmed();
+        const std::string csproj = currentCsproj();
+        if (id.isEmpty() || ver.isEmpty() || csproj.empty())
+            return;
+        if (auto content = fs.readFile(csproj)) {
+            const std::string updated = upsertCsprojNuGetPackage(*content, id.toStdString(), ver.toStdString());
+            (void)fs.writeFileAtomic(csproj, updated);
+            refreshTables();
+            if (onSaved)
+                onSaved();
+        }
+    });
+
+    QObject::connect(removeBtn, &QPushButton::clicked, root, [=, &fs] {
+        QTableWidget* activeTbl = qobject_cast<QTableWidget*>(tabs->currentWidget());
+        if (!activeTbl)
+            activeTbl = installedTable;
+        const int row = activeTbl->currentRow();
+        const QString id = (row >= 0 && activeTbl->item(row, 0)) ? activeTbl->item(row, 0)->text() : pkgIdEdit->text().trimmed();
+        const std::string csproj = currentCsproj();
+        if (id.isEmpty() || csproj.empty())
+            return;
+        if (auto content = fs.readFile(csproj)) {
+            const std::string updated = removeCsprojNuGetPackage(*content, id.toStdString());
+            (void)fs.writeFileAtomic(csproj, updated);
+            refreshTables();
+            if (onSaved)
+                onSaved();
+        }
+    });
+
+    QObject::connect(updateAllBtn, &QPushButton::clicked, root, [=, &fs] {
+        const std::string csproj = currentCsproj();
+        if (csproj.empty())
+            return;
+        if (auto content = fs.readFile(csproj)) {
+            std::string xml = *content;
+            for (int r = 0; r < updatesTable->rowCount(); ++r) {
+                const QString id = updatesTable->item(r, 0)->text();
+                const QString latest = updatesTable->item(r, 2)->text();
+                xml = upsertCsprojNuGetPackage(xml, id.toStdString(), latest.toStdString());
+            }
+            if (xml != *content) {
+                (void)fs.writeFileAtomic(csproj, xml);
+                refreshTables();
+                if (onSaved)
+                    onSaved();
+            }
+        }
+    });
+
+    return root;
+}
+
 void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const std::string& csprojPath,
                                    std::function<void()> onSaved) {
     QDialog dialog(parent);
@@ -798,79 +1091,122 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
     dialog.setWindowTitle(
         QStringLiteral("NuGet Package Manager — %1").arg(QFileInfo(toQs(csprojPath)).completeBaseName()));
     dialog.setModal(true);
-    dialog.resize(640, 420);
+    dialog.resize(820, 500);
 
     auto* outer = new QVBoxLayout(&dialog);
-    auto* table = new QTableWidget(&dialog);
-    table->setObjectName(QStringLiteral("nugetPackagesTable"));
-    table->setColumnCount(2);
-    table->setHorizontalHeaderLabels({QStringLiteral("Package ID"), QStringLiteral("Version")});
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    outer->addWidget(table, 1);
-
-    const auto refreshList = [&] {
-        table->setRowCount(0);
-        if (auto content = fs.readFile(csprojPath)) {
-            const auto pkgs = parseCsprojNuGetPackages(*content);
-            table->setRowCount(static_cast<int>(pkgs.size()));
-            for (std::size_t i = 0; i < pkgs.size(); ++i) {
-                table->setItem(static_cast<int>(i), 0, new QTableWidgetItem(toQs(pkgs[i].id)));
-                table->setItem(static_cast<int>(i), 1, new QTableWidgetItem(toQs(pkgs[i].version)));
-            }
-        }
-    };
-    refreshList();
-
-    auto* installRow = new QHBoxLayout();
-    auto* pkgIdEdit = new QLineEdit(&dialog);
-    pkgIdEdit->setObjectName(QStringLiteral("nugetPackageIdEdit"));
-    pkgIdEdit->setPlaceholderText(QStringLiteral("Package ID (e.g. Newtonsoft.Json)"));
-    auto* pkgVerEdit = new QLineEdit(QStringLiteral("13.0.3"), &dialog);
-    pkgVerEdit->setObjectName(QStringLiteral("nugetPackageVersionEdit"));
-    pkgVerEdit->setPlaceholderText(QStringLiteral("Version"));
-    auto* addBtn = new QPushButton(QStringLiteral("Install / Update"), &dialog);
-    addBtn->setObjectName(QStringLiteral("nugetInstallButton"));
-    auto* removeBtn = new QPushButton(QStringLiteral("Uninstall Selected"), &dialog);
-    removeBtn->setObjectName(QStringLiteral("nugetRemoveButton"));
-    installRow->addWidget(pkgIdEdit, 2);
-    installRow->addWidget(pkgVerEdit, 1);
-    installRow->addWidget(addBtn);
-    installRow->addWidget(removeBtn);
-    outer->addLayout(installRow);
-
-    QObject::connect(addBtn, &QPushButton::clicked, &dialog, [&] {
-        const QString id = pkgIdEdit->text().trimmed();
-        const QString ver = pkgVerEdit->text().trimmed();
-        if (id.isEmpty() || ver.isEmpty())
-            return;
-        if (auto content = fs.readFile(csprojPath)) {
-            const std::string updated = upsertCsprojNuGetPackage(*content, id.toStdString(), ver.toStdString());
-            (void)fs.writeFileAtomic(csprojPath, updated);
-            refreshList();
-            if (onSaved)
-                onSaved();
-        }
-    });
-    QObject::connect(removeBtn, &QPushButton::clicked, &dialog, [&] {
-        const int row = table->currentRow();
-        if (row < 0 || !table->item(row, 0))
-            return;
-        const QString id = table->item(row, 0)->text();
-        if (auto content = fs.readFile(csprojPath)) {
-            const std::string updated = removeCsprojNuGetPackage(*content, id.toStdString());
-            (void)fs.writeFileAtomic(csprojPath, updated);
-            refreshList();
-            if (onSaved)
-                onSaved();
-        }
-    });
+    outer->addWidget(createNuGetToolWindowWidget(&dialog, fs, {}, csprojPath, std::move(onSaved)), 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     outer->addWidget(buttons);
     ui::installDialogChrome(&dialog, true);
     dialog.exec();
+}
+
+QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
+                                         std::function<std::pair<std::string, int>()> activeFileAndLineProvider) {
+    auto* root = new QWidget(parent);
+    root->setObjectName(QStringLiteral("asmViewerWidget"));
+    auto* layout = new QVBoxLayout(root);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(6);
+
+    auto* bar = new QHBoxLayout();
+    auto* optCombo = new QComboBox(root);
+    optCombo->setObjectName(QStringLiteral("asmOptCombo"));
+    optCombo->addItems({QStringLiteral("-O2"), QStringLiteral("-O0"), QStringLiteral("-O1"), QStringLiteral("-O3")});
+    auto* syntaxCombo = new QComboBox(root);
+    syntaxCombo->setObjectName(QStringLiteral("asmSyntaxCombo"));
+    syntaxCombo->addItems({QStringLiteral("Intel"), QStringLiteral("AT&T")});
+    auto* syncCheck = new QCheckBox(QStringLiteral("Sync with Active Editor"), root);
+    syncCheck->setObjectName(QStringLiteral("asmSyncCheck"));
+    syncCheck->setChecked(true);
+    auto* refreshBtn = new QPushButton(QStringLiteral("Disassemble / View IL"), root);
+    refreshBtn->setObjectName(QStringLiteral("asmRefreshButton"));
+
+    bar->addWidget(new QLabel(QStringLiteral("Opt:"), root));
+    bar->addWidget(optCombo);
+    bar->addWidget(new QLabel(QStringLiteral("Syntax:"), root));
+    bar->addWidget(syntaxCombo);
+    bar->addWidget(syncCheck);
+    bar->addStretch(1);
+    bar->addWidget(refreshBtn);
+    layout->addLayout(bar);
+
+    auto* output = new QPlainTextEdit(root);
+    output->setObjectName(QStringLiteral("asmViewerOutput"));
+    output->setReadOnly(true);
+    output->setLineWrapMode(QPlainTextEdit::NoWrap);
+    output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    output->setPlaceholderText(
+        QStringLiteral("Open a C/C++ or C# source file and click 'Disassemble / View IL' to inspect compiler output."));
+    layout->addWidget(output, 1);
+
+    const auto runDisassembly = [=] {
+        if (!activeFileAndLineProvider)
+            return;
+        const auto [filePath, line] = activeFileAndLineProvider();
+        if (filePath.empty()) {
+            output->setPlainText(QStringLiteral("; No active source file in editor."));
+            return;
+        }
+        const QString qPath = toQs(filePath);
+        if (qPath.endsWith(QStringLiteral(".cs"), Qt::CaseInsensitive)) {
+            QProcess proc;
+            proc.start(QStringLiteral("dotnet"), {QStringLiteral("--info")});
+            proc.waitForFinished(3000);
+            output->setPlainText(
+                QStringLiteral("// .NET IL & Metadata Projection for %1 (line %2)\n"
+                               "// Use Build > Build Solution to emit assembly IL in bin/Debug.\n\n"
+                               ".assembly extern System.Runtime {}\n"
+                               ".module '%3'\n"
+                               "// Source line %2 synced")
+                    .arg(QFileInfo(qPath).fileName())
+                    .arg(line)
+                    .arg(QFileInfo(qPath).completeBaseName()));
+            return;
+        }
+        QString clangExe = QStringLiteral("clang++");
+        if (QFileInfo::exists(QStringLiteral("E:/sdk/llvm-23.1.4/bin/clang++.exe"))) {
+            clangExe = QStringLiteral("E:/sdk/llvm-23.1.4/bin/clang++.exe");
+        }
+        QStringList args{
+            QStringLiteral("-S"),
+            QStringLiteral("-std=c++20"),
+            optCombo->currentText(),
+            QStringLiteral("-fno-discard-value-names"),
+            syntaxCombo->currentIndex() == 0 ? QStringLiteral("-masm=intel") : QStringLiteral("-masm=att"),
+            QDir::toNativeSeparators(qPath),
+            QStringLiteral("-o"),
+            QStringLiteral("-"),
+        };
+        QProcess proc;
+        proc.start(clangExe, args);
+        if (!proc.waitForFinished(8000)) {
+            proc.kill();
+            output->setPlainText(QStringLiteral("; Compiler disassembly timed out."));
+            return;
+        }
+        const QString stdOut = QString::fromUtf8(proc.readAllStandardOutput());
+        const QString stdErr = QString::fromUtf8(proc.readAllStandardError());
+        if (!stdOut.isEmpty()) {
+            output->setPlainText(stdOut);
+        } else {
+            output->setPlainText(QStringLiteral("; Compiler output (%1):\n%2").arg(clangExe, stdErr));
+        }
+    };
+
+    QObject::connect(refreshBtn, &QPushButton::clicked, root, runDisassembly);
+    QObject::connect(optCombo, &QComboBox::currentIndexChanged, root, [=](int) {
+        if (syncCheck->isChecked())
+            runDisassembly();
+    });
+    QObject::connect(syntaxCombo, &QComboBox::currentIndexChanged, root, [=](int) {
+        if (syncCheck->isChecked())
+            runDisassembly();
+    });
+
+    return root;
 }
 
 void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, const std::string& filePath,

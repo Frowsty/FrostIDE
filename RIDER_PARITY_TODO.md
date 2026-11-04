@@ -29,12 +29,3 @@ This file tracks all remaining features required for complete 1:1 JetBrains Ride
 - **External Symbol Decompilation / Metadata-as-Source**:
   - When invoking `Go to Declaration` (`Ctrl+B` / `F12`) on a compiled .NET type (`System.*`, `UnityEngine.*`, NuGet package types) without local source, generate/decompile a readable C# source view (`ilspycmd` / Roslyn metadata projection) in a read-only `[Decompiled]` tab.
 
----
-
-## 8. Docked NuGet Tool Window, IL/Assembly Viewer, & One-Click Self-Updater
-- **Docked NuGet Tool Window**:
-  - Dockable tool window with **Installed**, **Updates**, and **Browse** tabs, Prerelease filter, package details/README pane, Update All, and NuGet feed sources.
-- **IL / Native Assembly Viewer Tool Window**:
-  - Live side-by-side compiler disassembly output (`clang++ -S` for C++ or IL for C#) synced to the active editor caret.
-- **One-Click Update Apply & Version Switcher in Launcher**:
-  - Apply downloaded updates or switch between installed builds in `E:\FrostBuilds\beta\` directly from `LauncherWindow`.

@@ -47,6 +47,7 @@ public:
     [[nodiscard]] QPushButton* cloneRepositoryButton() const noexcept { return m_cloneRepo; }
     [[nodiscard]] QPushButton* openFolderButton() const noexcept { return m_openFolder; }
     [[nodiscard]] QPushButton* checkForUpdatesButton() const noexcept { return m_checkUpdates; }
+    [[nodiscard]] QPushButton* switchVersionButton() const noexcept { return m_switchVersion; }
     [[nodiscard]] QLabel* updateStatusLabel() const noexcept { return m_updateStatus; }
 
     // Emits openRecent for row `row` (no-op outside the list).
@@ -64,6 +65,7 @@ signals:
     void quickSwitchThemeRequested();
     void settingsRequested();
     void checkForUpdatesRequested();
+    void switchVersionRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -80,6 +82,7 @@ private:
     QPushButton* m_cloneRepo = nullptr;
     QPushButton* m_openFolder = nullptr;
     QPushButton* m_checkUpdates = nullptr;
+    QPushButton* m_switchVersion = nullptr;
     QLabel* m_updateStatus = nullptr;
     QListWidget* m_recent = nullptr;
 };

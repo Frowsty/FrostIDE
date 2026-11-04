@@ -122,6 +122,14 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
 void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const std::string& csprojPath,
                                    std::function<void()> onSaved);
 
+[[nodiscard]] QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
+                                                   std::function<const project::SolutionModel*()> solutionProvider,
+                                                   std::string initialCsprojPath, std::function<void()> onSaved);
+
+[[nodiscard]] QWidget*
+createAsmViewerToolWindowWidget(QWidget* parent,
+                                std::function<std::pair<std::string, int>()> activeFileAndLineProvider);
+
 void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, const std::string& filePath,
                             const std::string& currentContent,
                             std::function<void(const std::string& restoredContent)> onRestore);
