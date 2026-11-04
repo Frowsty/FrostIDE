@@ -18,6 +18,7 @@
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -168,6 +169,7 @@ std::string DialogWorkbenchPrompts::chooseNewItemName(QWidget* parent, const std
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    ui::installDialogChrome(&dialog, false);
 
     edit->setFocus();
     if (dialog.exec() != QDialog::Accepted)
@@ -218,6 +220,7 @@ std::string DialogWorkbenchPrompts::chooseRenameName(QWidget* parent, const std:
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    ui::installDialogChrome(&dialog, false);
 
     edit->setFocus();
     if (dialog.exec() != QDialog::Accepted)
@@ -360,6 +363,7 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     outer->addWidget(buttons);
+    ui::installDialogChrome(&dialog, true);
 
     updateState();
     nameEdit->setFocus();

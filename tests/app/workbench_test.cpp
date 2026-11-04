@@ -815,6 +815,9 @@ TEST(Workbench, SettingsDialogAppliesResetsAndDetectsExternalChanges) {
     gear->click();
     auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
     ASSERT_NE(dialog, nullptr);
+    auto* dialogHeader = dialog->findChild<QWidget*>(QStringLiteral("dialogTitleBar"));
+    ASSERT_NE(dialogHeader, nullptr);
+    EXPECT_TRUE((dialog->windowFlags() & Qt::FramelessWindowHint) != 0);
     auto* tabSize = dialog->findChild<QSpinBox*>(QStringLiteral("setting.editor.tabSize"));
     auto* search = dialog->findChild<QLineEdit*>(QStringLiteral("settingsSearch"));
     auto* buttons = dialog->findChild<QDialogButtonBox*>();

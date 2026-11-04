@@ -7,6 +7,7 @@
 
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_models.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/run_console.hpp"
 
 #include <QAction>
@@ -321,6 +322,7 @@ EvaluateDialog::EvaluateDialog(DebugController& controller, const QString& expre
     connect(m_expression, &QLineEdit::returnPressed, this, &EvaluateDialog::evaluate);
     // A button box's Accept role would close the dialog; Evaluate keeps it open.
     disconnect(buttons, &QDialogButtonBox::accepted, this, nullptr);
+    installDialogChrome(this, true);
     resize(560, 360);
     if (!expression.trimmed().isEmpty()) {
         evaluate();

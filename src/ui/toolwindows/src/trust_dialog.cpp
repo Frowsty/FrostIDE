@@ -4,6 +4,7 @@
 
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 
@@ -88,6 +89,7 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
     layout->addWidget(m_list);
     layout->addWidget(m_error);
     layout->addWidget(buttons);
+    installDialogChrome(this, false);
     setRoots(roots);
 }
 
