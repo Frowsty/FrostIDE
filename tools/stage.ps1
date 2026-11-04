@@ -27,6 +27,9 @@ param(
     [string]$SdkRoot = 'E:\sdk',
     [string]$WinDeployQt = '',
     [string]$QtSourceArchive = '',
+    [string]$ManagedServerDir = 'E:\FrostBuilds\managed-server-0.28.0-reviewed',
+    [string]$ManagedDebugDir = 'E:\FrostBuilds\managed-debug\installed-app-v13\FrostManagedDebug',
+    [switch]$BundleTools,
     [switch]$SkipBuild,
     [switch]$Force
 )
@@ -51,9 +54,9 @@ if ($QtSourceArchive -and -not (Test-Path -LiteralPath $QtSourceArchive -PathTyp
     Fail 'the Qt source archive does not exist'
 }
 
+$lock = Get-Content -Raw -Path (Join-Path $repoRoot 'sdk\sdk.lock.json') | ConvertFrom-Json
 # The pinned Qt's windeployqt, unless one was given.
 if (-not $WinDeployQt) {
-    $lock = Get-Content -Raw -Path (Join-Path $repoRoot 'sdk\sdk.lock.json') | ConvertFrom-Json
     $WinDeployQt = Join-Path $SdkRoot "qt\$($lock.qt.version)\msvc2022_64\bin\windeployqt.exe"
 }
 if (-not [System.IO.Path]::IsPathRooted($WinDeployQt) -or -not (Test-Path -LiteralPath $WinDeployQt)) {
@@ -127,6 +130,45 @@ $unityPackage = Join-Path $repoRoot 'integrations\unity\com.frostide.editor'
 $unityDestination = Join-Path $Destination 'unity'
 New-Item -ItemType Directory -Force -Path $unityDestination | Out-Null
 Copy-Item -LiteralPath $unityPackage -Destination $unityDestination -Recurse
+
+# 3b. Bundled language servers and debug adapters (clangd, lldb-dap, csharp-ls, netcoredbg + PdbGuard).
+if ($Config -ne 'Debug' -or $BundleTools) {
+    $llvmRel = "llvm-$($lock.windows.llvm.version)"
+    $clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
+    if (Test-Path -LiteralPath $clangdSource -PathType Leaf) {
+        $llvmBinDest = Join-Path $Destination "$llvmRel\bin"
+        New-Item -ItemType Directory -Force -Path $llvmBinDest | Out-Null
+        Copy-Item -LiteralPath $clangdSource -Destination $llvmBinDest -Force
+        $clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
+        if (Test-Path -LiteralPath $clangLibSource -PathType Container) {
+            $llvmLibDest = Join-Path $Destination "$llvmRel\lib"
+            New-Item -ItemType Directory -Force -Path $llvmLibDest | Out-Null
+            Copy-Item -LiteralPath $clangLibSource -Destination $llvmLibDest -Recurse -Force
+        }
+    }
+    $lldbRel = "lldb-$($lock.windows.lldb.version)"
+    $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
+    if (Test-Path -LiteralPath (Join-Path $lldbSourceDir 'lldb-dap.exe') -PathType Leaf) {
+        $lldbBinDest = Join-Path $Destination "$lldbRel\bin"
+        New-Item -ItemType Directory -Force -Path $lldbBinDest | Out-Null
+        foreach ($lldbFile in @('lldb-dap.exe', 'liblldb.dll', 'lldb-argdumper.exe')) {
+            $srcFile = Join-Path $lldbSourceDir $lldbFile
+            if (Test-Path -LiteralPath $srcFile -PathType Leaf) {
+                Copy-Item -LiteralPath $srcFile -Destination $lldbBinDest -Force
+            }
+        }
+    }
+    if ($ManagedServerDir -and (Test-Path -LiteralPath (Join-Path $ManagedServerDir 'CSharpLanguageServer.dll') -PathType Leaf)) {
+        $managedDest = Join-Path $Destination 'managed'
+        New-Item -ItemType Directory -Force -Path $managedDest | Out-Null
+        Copy-Item -Path (Join-Path $ManagedServerDir '*') -Destination $managedDest -Recurse -Force
+    }
+    if ($ManagedDebugDir -and (Test-Path -LiteralPath (Join-Path $ManagedDebugDir 'adapter\netcoredbg.exe') -PathType Leaf)) {
+        $managedDbgDest = Join-Path $Destination 'FrostManagedDebug'
+        New-Item -ItemType Directory -Force -Path $managedDbgDest | Out-Null
+        Copy-Item -Path (Join-Path $ManagedDebugDir '*') -Destination $managedDbgDest -Recurse -Force
+    }
+}
 
 # 4. The Qt runtime for frost_app.dll, then the build's platform plugins (offscreen for --selftest).
 $mode = if ($Config -eq 'Debug') { '--debug' } else { '--release' }

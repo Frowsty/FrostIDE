@@ -63,7 +63,7 @@ constexpr std::string_view kExpectedTree =
     "Core[Empty Filter,Generated[Config[config.h]],Header Files[Shared[common.h],core.h],"
     "Source Files[Detail[strings.cpp],core.cpp],core.natvis,gen.py,version.h],"
     "Engine[engine.cpp,engine.h]],"
-    "Tools[Gone(unavailable),Packager(unsupported),README.md],"
+    "Tools[Gone(unavailable),Packager,README.md],"
     "App[Header Files[app.h],Resource Files[app.ico,app.rc],Source Files[app.cpp,main.cpp],README.md]]";
 
 TEST(SolutionModel, EvaluatedFilesOverlayKeepsFiltersAndOtherItems) {
@@ -121,7 +121,7 @@ TEST(SolutionModel, ReportsUnsupportedAndUnavailableProjects) {
     ASSERT_TRUE(model.has_value()) << model.error().describe();
     const ProjectInfo& packager = model->project(projectNamed(*model, "Packager"));
     EXPECT_EQ(packager.kind, ProjectKind::CSharp);
-    EXPECT_EQ(packager.nodeKind, NodeKind::UnsupportedProject);
+    EXPECT_EQ(packager.nodeKind, NodeKind::Project);
     EXPECT_FALSE(packager.vcxproj.has_value());
     EXPECT_EQ(toString(packager.kind), "C#");
 
@@ -300,6 +300,71 @@ TEST(SolutionModel, FailsOnlyForTheSolutionFile) {
     auto bad = SolutionModel::load(tree.fs, MemTree::path("Bad.sln"));
     ASSERT_FALSE(bad.has_value());
     EXPECT_EQ(bad.error().code(), ErrorCode::Corrupt);
+}
+
+TEST(SolutionModel, LoadsCSharpCsprojHierarchyWithSubfoldersAndProjectReferences) {
+    MemTree tree;
+    tree.write("ManagedSuite.slnx", R"(<Solution>
+  <Project Path="Core/Core.csproj" />
+  <Project Path="App/App.csproj" />
+</Solution>)");
+    tree.write("Core/Core.csproj", R"(<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ProjectGuid>{11111111-2222-3333-4444-555555555555}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <Folder Include="EmptyFolder\" />
+  </ItemGroup>
+</Project>)");
+    tree.write("Core/Greeter.cs", "namespace Core; public class Greeter {}\n");
+    tree.write("Core/Models/User.cs", "namespace Core.Models; public record User(string Name);\n");
+    tree.write("Core/bin/Debug/net10.0/Generated.cs", "// ignored build output\n");
+    tree.write("Core/obj/Debug/net10.0/Temporary.cs", "// ignored intermediate\n");
+    tree.write("Core/.vs/hidden.cs", "// ignored hidden folder\n");
+
+    tree.write("App/App.csproj", R"(<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Core.csproj" />
+    <Compile Remove="Excluded.cs" />
+  </ItemGroup>
+</Project>)");
+    tree.write("App/Program.cs", "using Core;\n");
+    tree.write("App/Excluded.cs", "// removed via Compile Remove\n");
+    tree.write("App/Services/AuthService.cs", "namespace App.Services; public class AuthService {}\n");
+    tree.write("App/appsettings.json", "{}\n");
+
+    auto model = SolutionModel::load(tree.fs, MemTree::path("ManagedSuite.slnx"));
+    ASSERT_TRUE(model.has_value()) << model.error().describe();
+    EXPECT_EQ(dump(*model, SolutionModel::root()),
+              "ManagedSuite[App[Services[AuthService.cs],appsettings.json,Program.cs],"
+              "Core[EmptyFolder,Models[User.cs],Greeter.cs]]");
+
+    const ProjectId coreId = projectNamed(*model, "Core");
+    const ProjectId appId = projectNamed(*model, "App");
+    EXPECT_EQ(model->project(coreId).kind, ProjectKind::CSharp);
+    EXPECT_EQ(model->project(coreId).nodeKind, NodeKind::Project);
+    EXPECT_EQ(model->project(appId).kind, ProjectKind::CSharp);
+    EXPECT_EQ(model->project(appId).nodeKind, NodeKind::Project);
+    EXPECT_EQ(model->project(appId).dependencies, std::vector<ProjectId>{coreId});
+    EXPECT_EQ(model->findProjectByGuid("11111111-2222-3333-4444-555555555555"), coreId);
+
+    const std::string authPath = MemTree::path("App/Services/AuthService.cs");
+    EXPECT_EQ(model->owningProject(authPath), appId);
+    const auto authNode = model->findFileNode(authPath);
+    ASSERT_TRUE(authNode.has_value());
+    EXPECT_EQ(model->node(*authNode).itemType, ItemType::ClCompile);
+    const auto servicesFolder = model->parent(*authNode);
+    ASSERT_TRUE(servicesFolder.has_value());
+    EXPECT_EQ(model->node(*servicesFolder).kind, NodeKind::Filter);
+    EXPECT_EQ(model->node(*servicesFolder).path, MemTree::path("App/Services"));
+    EXPECT_FALSE(model->findFileNode(MemTree::path("App/Excluded.cs")).has_value());
+    EXPECT_FALSE(model->findFileNode(MemTree::path("Core/bin/Debug/net10.0/Generated.cs")).has_value());
+    EXPECT_FALSE(model->findFileNode(MemTree::path("Core/obj/Debug/net10.0/Temporary.cs")).has_value());
 }
 
 } // namespace

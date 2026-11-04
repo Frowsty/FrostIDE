@@ -10,8 +10,10 @@
 
 #include "paths.hpp"
 #include "text_util.hpp"
+#include "xml.hpp"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <unordered_set>
 
@@ -38,6 +40,154 @@ ProjectKind classify(std::string_view path) {
         return ProjectKind::SharedItems;
     }
     return ProjectKind::Unknown;
+}
+
+ItemType classifyCsprojFileType(std::string_view path) {
+    const std::string ext = detail::lowerExtension(io::fileName(path));
+    if (ext == ".cs" || ext == ".csx") {
+        return ItemType::ClCompile;
+    }
+    if (ext == ".resx" || ext == ".resources") {
+        return ItemType::ResourceCompile;
+    }
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".bmp" || ext == ".ico" ||
+        ext == ".svg" || ext == ".webp") {
+        return ItemType::Image;
+    }
+    if (ext == ".txt" || ext == ".md" || ext == ".rst") {
+        return ItemType::Text;
+    }
+    if (ext == ".natvis") {
+        return ItemType::Natvis;
+    }
+    return ItemType::None;
+}
+
+bool isExcludedCsprojDirectory(std::string_view name) noexcept {
+    if (name.empty() || name.front() == '.') {
+        return true;
+    }
+    static constexpr std::array<std::string_view, 6> kExcluded{
+        "bin", "obj", "node_modules", "testresults", "packages", "artifacts",
+    };
+    return std::ranges::any_of(kExcluded, [&](std::string_view excluded) { return iequals(name, excluded); });
+}
+
+bool isExcludedCsprojMetaFile(std::string_view fileName) {
+    if (fileName.empty() || fileName.front() == '.') {
+        return true;
+    }
+    const std::string ext = detail::lowerExtension(fileName);
+    static constexpr std::array<std::string_view, 12> kExcludedExt{
+        ".csproj",    ".vcxproj", ".vbproj", ".fsproj", ".vcxitems", ".shproj",
+        ".projitems", ".sln",     ".slnx",   ".suo",    ".user",     ".filters",
+    };
+    return std::ranges::any_of(kExcludedExt, [&](std::string_view excluded) { return ext == excluded; });
+}
+
+struct ParsedCsproj {
+    std::string directory;
+    std::string projectGuid;
+    bool enableDefaultItems = true;
+    bool enableDefaultCompileItems = true;
+    std::vector<ProjectReference> references;
+    std::vector<std::string> explicitFolders;
+    struct ExplicitItem {
+        ItemType type = ItemType::None;
+        std::string include;
+        std::string link;
+    };
+    std::vector<ExplicitItem> explicitIncludes;
+    std::vector<std::string> removePatterns;
+    std::vector<std::string> warnings;
+};
+
+Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPath) {
+    auto normalized = detail::normalizeAbsolute(projectPath);
+    if (!normalized) {
+        return std::unexpected(std::move(normalized.error()));
+    }
+    auto content = fs.readFile(*normalized);
+    if (!content) {
+        return std::unexpected(std::move(content.error()));
+    }
+    pugi::xml_document doc;
+    if (auto ok = detail::parseXml(doc, *content, *normalized, "Project"); !ok) {
+        return std::unexpected(std::move(ok.error()));
+    }
+    ParsedCsproj out;
+    out.directory = std::string(io::parentPath(*normalized));
+    const pugi::xml_node root = doc.document_element();
+    for (pugi::xml_node group : root.children()) {
+        if (detail::isElement(group, "PropertyGroup")) {
+            for (pugi::xml_node prop : group.children()) {
+                if (detail::isElement(prop, "ProjectGuid")) {
+                    const std::string guid = detail::normalizeGuid(detail::elementText(prop));
+                    if (!guid.empty()) {
+                        out.projectGuid = guid;
+                    }
+                } else if (detail::isElement(prop, "EnableDefaultItems")) {
+                    const std::string_view val = detail::elementText(prop);
+                    if (iequals(val, "false")) {
+                        out.enableDefaultItems = false;
+                    } else if (iequals(val, "true")) {
+                        out.enableDefaultItems = true;
+                    }
+                } else if (detail::isElement(prop, "EnableDefaultCompileItems")) {
+                    const std::string_view val = detail::elementText(prop);
+                    if (iequals(val, "false")) {
+                        out.enableDefaultCompileItems = false;
+                    } else if (iequals(val, "true")) {
+                        out.enableDefaultCompileItems = true;
+                    }
+                }
+            }
+        } else if (detail::isElement(group, "ItemGroup")) {
+            for (pugi::xml_node item : group.children()) {
+                const std::string_view name = detail::localName(item);
+                if (iequals(name, "ProjectReference")) {
+                    for (std::string_view raw : detail::splitTrimmed(detail::attribute(item, "Include"), ';')) {
+                        auto resolved = detail::resolvePath(out.directory, raw);
+                        if (!resolved) {
+                            out.warnings.push_back(std::format("ProjectReference '{}' could not be resolved", raw));
+                            continue;
+                        }
+                        std::string guid;
+                        if (pugi::xml_node guidNode = detail::childElement(item, "Project")) {
+                            guid = detail::normalizeGuid(detail::elementText(guidNode));
+                        }
+                        out.references.push_back(ProjectReference{
+                            .include = std::string(raw), .path = std::move(*resolved), .projectGuid = std::move(guid)});
+                    }
+                } else if (iequals(name, "Folder")) {
+                    for (std::string_view raw : detail::splitTrimmed(detail::attribute(item, "Include"), ';')) {
+                        out.explicitFolders.emplace_back(raw);
+                    }
+                } else if (iequals(name, "Compile") || iequals(name, "None") || iequals(name, "Content") ||
+                           iequals(name, "EmbeddedResource") || iequals(name, "Page") ||
+                           iequals(name, "ApplicationDefinition") || iequals(name, "Resource") ||
+                           iequals(name, "AdditionalFiles") || iequals(name, "AnalyzerConfigFiles")) {
+                    for (std::string_view raw : detail::splitTrimmed(detail::attribute(item, "Remove"), ';')) {
+                        out.removePatterns.emplace_back(raw);
+                    }
+                    const ItemType itemType = iequals(name, "Compile")            ? ItemType::ClCompile
+                                              : iequals(name, "EmbeddedResource") ? ItemType::ResourceCompile
+                                                                                  : ItemType::None;
+                    std::string link(detail::attribute(item, "Link"));
+                    if (link.empty()) {
+                        if (pugi::xml_node linkNode = detail::childElement(item, "Link")) {
+                            link = std::string(detail::elementText(linkNode));
+                        }
+                    }
+                    for (std::string_view raw : detail::splitTrimmed(detail::attribute(item, "Include"), ';')) {
+                        out.explicitIncludes.push_back(
+                            ParsedCsproj::ExplicitItem{.type = itemType, .include = std::string(raw), .link = link});
+                    }
+                }
+            }
+        }
+    }
+    return out;
 }
 
 // The sort rank of a node kind: folders and filters, then projects, then files.
@@ -146,7 +296,7 @@ public:
                  .itemType = ItemType::None});
         addFolders(file);
         for (std::size_t i = 0; i < file.projects.size(); ++i) {
-            addProject(file.projects[i], i);
+            addProject(file, file.projects[i], i);
         }
         resolveDependencies(file);
         resolveConfigurations(file);
@@ -252,7 +402,7 @@ private:
         }
     }
 
-    void addProject(const SolutionProjectEntry& entry, std::size_t index) {
+    void addProject(const SolutionFile& solutionFile, const SolutionProjectEntry& entry, std::size_t index) {
         const ProjectId id{static_cast<std::uint32_t>(index)};
         ProjectInfo info;
         info.name = entry.name;
@@ -260,6 +410,7 @@ private:
         info.projectGuid = entry.projectGuid;
         info.typeGuid = entry.typeGuid;
         info.kind = classify(entry.path.empty() ? entry.relativePath : entry.path);
+        std::optional<ParsedCsproj> csproj;
         if (entry.path.empty()) {
             info.nodeKind = NodeKind::UnavailableProject;
             info.error = Error(ErrorCode::InvalidArgument,
@@ -275,6 +426,18 @@ private:
             } else {
                 info.nodeKind = NodeKind::UnavailableProject;
                 info.error = std::move(project.error());
+            }
+        } else if (info.kind == ProjectKind::CSharp) {
+            auto parsed = readCsproj(m_fs, entry.path);
+            if (parsed) {
+                info.nodeKind = NodeKind::Project;
+                if (info.projectGuid.empty() && !parsed->projectGuid.empty()) {
+                    info.projectGuid = parsed->projectGuid;
+                }
+                csproj = std::move(*parsed);
+            } else {
+                info.nodeKind = NodeKind::UnavailableProject;
+                info.error = std::move(parsed.error());
             }
         } else {
             info.nodeKind = NodeKind::UnsupportedProject;
@@ -303,6 +466,11 @@ private:
         }
         if (info.vcxproj) {
             addProjectTree(info, id);
+        } else if (csproj) {
+            addCsprojTree(info, id, *csproj, solutionFile, index);
+            if (!csproj->references.empty()) {
+                m_csprojReferences.emplace(id.value(), std::move(csproj->references));
+            }
         }
         m_model.m_projects.push_back(std::move(info));
     }
@@ -370,6 +538,191 @@ private:
         }
     }
 
+    // The folder tree and the files of a loaded C# (.csproj) project.
+    void addCsprojTree(const ProjectInfo& info, ProjectId id, const ParsedCsproj& csproj,
+                       const SolutionFile& solutionFile, std::size_t projectIndex) {
+        const std::string projectKey = m_model.m_nodes[info.node.value()].key;
+        for (const std::string& message : csproj.warnings) {
+            warn(std::format("{}: {}", info.name, message));
+        }
+
+        const std::string projectDirKey = detail::pathKey(csproj.directory);
+        std::unordered_set<std::string> nestedProjectDirs;
+        for (std::size_t j = 0; j < solutionFile.projects.size(); ++j) {
+            if (j == projectIndex || solutionFile.projects[j].path.empty()) {
+                continue;
+            }
+            const std::string otherDir(io::parentPath(solutionFile.projects[j].path));
+            const std::string otherKey = detail::pathKey(otherDir);
+            if (otherKey != projectDirKey && detail::isSameOrUnder(otherDir, csproj.directory)) {
+                nestedProjectDirs.insert(otherKey);
+            }
+        }
+
+        std::vector<detail::PathPattern> removePatterns;
+        for (const std::string& raw : csproj.removePatterns) {
+            if (auto pattern = detail::PathPattern::make(csproj.directory, raw)) {
+                removePatterns.push_back(std::move(*pattern));
+            }
+        }
+        const auto isRemoved = [&](std::string_view absPath) {
+            return std::ranges::any_of(removePatterns,
+                                       [&](const detail::PathPattern& p) { return p.matches(absPath); });
+        };
+
+        std::unordered_map<std::string, NodeId> folderNodes; // Lower-cased relative folder path -> node.
+        const auto ensureFolder = [&](std::string_view relativeFolder) {
+            NodeId parent = info.node;
+            std::string prefix;
+            std::string currentAbs = csproj.directory;
+            std::size_t pos = 0;
+            while (pos < relativeFolder.size()) {
+                const std::size_t nextSep = relativeFolder.find_first_of("\\/", pos);
+                const std::string_view component = detail::trim(relativeFolder.substr(
+                    pos, nextSep == std::string_view::npos ? std::string_view::npos : nextSep - pos));
+                pos = nextSep == std::string_view::npos ? relativeFolder.size() : nextSep + 1;
+                if (component.empty() || component == "." || component == "..") {
+                    continue;
+                }
+                if (!prefix.empty()) {
+                    prefix += '\\';
+                }
+                prefix += component;
+                if (!currentAbs.empty()) {
+                    if (auto joined = io::joinPath(currentAbs, component)) {
+                        currentAbs = detail::normalizeAbsolute(*joined).value_or(*joined);
+                    }
+                }
+                const std::string key = detail::toLowerAscii(prefix);
+                if (auto it = folderNodes.find(key); it != folderNodes.end()) {
+                    parent = it->second;
+                    continue;
+                }
+                parent = addNode({.kind = NodeKind::Filter,
+                                  .parent = parent,
+                                  .children = {},
+                                  .displayName = std::string(component),
+                                  .path = currentAbs,
+                                  .key = projectKey + "/filter:" + key,
+                                  .project = id,
+                                  .itemType = ItemType::None});
+                folderNodes.emplace(key, parent);
+            }
+            return parent;
+        };
+
+        std::unordered_set<std::string> addedFiles;
+        const std::string selfPathKey = detail::pathKey(info.path);
+
+        if (csproj.enableDefaultItems && !csproj.directory.empty()) {
+            detail::WildcardLimits limits;
+            std::size_t visitedDirs = 0;
+            std::size_t visitedFiles = 0;
+            const auto walk = [&](const auto& self, const std::string& absDir, const std::string& relDir,
+                                  NodeId parentNode) -> void {
+                if (visitedDirs >= limits.maxDirectories || visitedFiles >= limits.maxFiles) {
+                    return;
+                }
+                ++visitedDirs;
+                auto entries = m_fs.listDirectory(absDir);
+                if (!entries) {
+                    return;
+                }
+                std::ranges::sort(*entries, [](const io::DirEntry& a, const io::DirEntry& b) {
+                    return detail::icompare(a.name, b.name) < 0;
+                });
+                for (const io::DirEntry& entry : *entries) {
+                    if (entry.type == io::FileType::Directory) {
+                        if (isExcludedCsprojDirectory(entry.name)) {
+                            continue;
+                        }
+                        auto childAbs = io::joinPath(absDir, entry.name);
+                        if (!childAbs) {
+                            continue;
+                        }
+                        const std::string normDir = detail::normalizeAbsolute(*childAbs).value_or(*childAbs);
+                        if (nestedProjectDirs.contains(detail::pathKey(normDir))) {
+                            continue;
+                        }
+                        const std::string childRel = relDir.empty() ? entry.name : (relDir + "\\" + entry.name);
+                        const NodeId folderNode = ensureFolder(childRel);
+                        self(self, normDir, childRel, folderNode);
+                    } else if (entry.type == io::FileType::Regular) {
+                        if (visitedFiles >= limits.maxFiles) {
+                            break;
+                        }
+                        if (isExcludedCsprojMetaFile(entry.name)) {
+                            continue;
+                        }
+                        if (!csproj.enableDefaultCompileItems && detail::lowerExtension(entry.name) == ".cs") {
+                            continue;
+                        }
+                        auto childAbs = io::joinPath(absDir, entry.name);
+                        if (!childAbs) {
+                            continue;
+                        }
+                        const std::string normFile = detail::normalizeAbsolute(*childAbs).value_or(*childAbs);
+                        const std::string fileKey = detail::pathKey(normFile);
+                        if (fileKey == selfPathKey || addedFiles.contains(fileKey) || isRemoved(normFile)) {
+                            continue;
+                        }
+                        ++visitedFiles;
+                        addedFiles.insert(fileKey);
+                        addFile(parentNode, projectKey, normFile, classifyCsprojFileType(normFile), id);
+                    }
+                }
+            };
+            walk(walk, csproj.directory, {}, info.node);
+        }
+
+        for (const std::string& folder : csproj.explicitFolders) {
+            ensureFolder(folder);
+        }
+
+        for (const ParsedCsproj::ExplicitItem& item : csproj.explicitIncludes) {
+            std::vector<std::string> matchedPaths;
+            if (detail::hasWildcard(item.include)) {
+                if (auto pattern = detail::PathPattern::make(csproj.directory, item.include)) {
+                    if (auto expanded = detail::expandWildcard(m_fs, *pattern)) {
+                        matchedPaths = std::move(expanded->paths);
+                        if (!expanded->warning.empty()) {
+                            warn(std::format("{}: {}", info.name, expanded->warning));
+                        }
+                    }
+                }
+            } else if (auto resolved = detail::resolvePath(csproj.directory, item.include)) {
+                matchedPaths.push_back(std::move(*resolved));
+            }
+            for (const std::string& fileAbs : matchedPaths) {
+                const std::string fileKey = detail::pathKey(fileAbs);
+                if (fileKey == selfPathKey || addedFiles.contains(fileKey) || isRemoved(fileAbs)) {
+                    continue;
+                }
+                addedFiles.insert(fileKey);
+                NodeId parentNode = info.node;
+                if (!item.link.empty()) {
+                    const std::string_view linkParent = io::parentPath(item.link);
+                    if (!linkParent.empty() && linkParent != ".") {
+                        parentNode = ensureFolder(linkParent);
+                    }
+                } else if (detail::isSameOrUnder(fileAbs, csproj.directory)) {
+                    const std::string_view fileParent = io::parentPath(fileAbs);
+                    if (fileParent.size() > csproj.directory.size()) {
+                        std::string_view relParent = fileParent.substr(csproj.directory.size());
+                        if (!relParent.empty() && (relParent.front() == '\\' || relParent.front() == '/')) {
+                            relParent.remove_prefix(1);
+                        }
+                        if (!relParent.empty()) {
+                            parentNode = ensureFolder(relParent);
+                        }
+                    }
+                }
+                const ItemType type = item.type != ItemType::None ? item.type : classifyCsprojFileType(fileAbs);
+                addFile(parentNode, projectKey, fileAbs, type, id);
+            }
+        }
+    }
+
     void resolveDependencies(const SolutionFile& file) {
         for (std::size_t i = 0; i < m_model.m_projects.size(); ++i) {
             ProjectInfo& info = m_model.m_projects[i];
@@ -390,10 +743,16 @@ private:
                         std::format("{}: build dependency {} names no project in the solution", info.name, dependency));
                 }
             }
-            if (!info.vcxproj) {
+            const std::vector<ProjectReference>* refs = nullptr;
+            if (info.vcxproj) {
+                refs = &info.vcxproj->references;
+            } else if (auto it = m_csprojReferences.find(self.value()); it != m_csprojReferences.end()) {
+                refs = &it->second;
+            }
+            if (!refs) {
                 continue;
             }
-            for (const ProjectReference& reference : info.vcxproj->references) {
+            for (const ProjectReference& reference : *refs) {
                 auto found = m_model.findProjectByPath(reference.path);
                 if (!found && !reference.projectGuid.empty()) {
                     found = m_model.findProjectByGuid(reference.projectGuid);
@@ -449,6 +808,7 @@ private:
     io::IFileSystem& m_fs;
     SolutionModel& m_model;
     std::unordered_map<std::string, NodeId> m_folderNodes; // Folder id -> node.
+    std::unordered_map<std::uint32_t, std::vector<ProjectReference>> m_csprojReferences;
 };
 
 Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view solutionPath) {

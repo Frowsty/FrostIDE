@@ -149,7 +149,7 @@ TEST(SolutionTreeModel, ShowsFoldersFiltersAndLoadErrorsOfTheSdkSolution) {
         EXPECT_EQ(goneIndex.data(SolutionTreeModel::SecondaryTextRole).toString(), QStringLiteral("(unavailable)"));
         EXPECT_FALSE(goneIndex.data(Qt::ToolTipRole).toString().isEmpty()); // The load error.
         EXPECT_EQ(model.indexOf(nodeAt(solution, {"Tools", "Packager"})).data(SolutionTreeModel::SecondaryTextRole),
-                  QStringLiteral("(not supported yet)"));
+                  QVariant(QString()));
 
         // Icons by kind, from the theme atlas.
         EXPECT_EQ(solutionNodeIconId(solution, project::SolutionModel::root()), icons::kToolwindowStructure);
@@ -162,7 +162,7 @@ TEST(SolutionTreeModel, ShowsFoldersFiltersAndLoadErrorsOfTheSdkSolution) {
         EXPECT_EQ(solutionNodeIconId(solution, nodeAt(solution, {"Libraries", "Core", "core.natvis"})),
                   icons::kNodesFile);
         EXPECT_EQ(solutionNodeIconId(solution, gone), icons::kStatusFailed);
-        EXPECT_EQ(solutionNodeIconId(solution, nodeAt(solution, {"Tools", "Packager"})), icons::kStatusWarning);
+        EXPECT_EQ(solutionNodeIconId(solution, nodeAt(solution, {"Tools", "Packager"})), icons::kBuildPackage);
 
         // Every node maps to an index and back.
         for (const NodeId id : model.displayOrder()) {
@@ -468,6 +468,45 @@ TEST(SolutionExplorer, ContextMenuOffersNewFileNewFolderAndAddNewProjectSource) 
         newFolder->trigger();
         EXPECT_EQ(newFolderDir.toStdString(), tiny("App"));
     }
+}
+
+TEST(SolutionExplorer, CSharpSolutionShowsSubfoldersAndCodeIconsWithoutNotSupportedYet) {
+    project::test::MemTree tree;
+    tree.write("Game.slnx", R"(<Solution>
+  <Project Path="Client/Client.csproj" />
+  <Project Path="Legacy/Legacy.vbproj" />
+</Solution>)");
+    tree.write("Client/Client.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+    tree.write("Client/Program.cs", "class Program {}\n");
+    tree.write("Client/Systems/InputSystem.cs", "class InputSystem {}\n");
+    tree.write("Legacy/Legacy.vbproj", "<Project />");
+
+    auto loaded = project::SolutionModel::load(tree.fs, project::test::MemTree::path("Game.slnx"));
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    auto solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+
+    SolutionExplorer explorer;
+    explorer.setSolution(solution);
+    EXPECT_EQ(dumpAll(*explorer.model()), QStringLiteral("Game[Client[Systems[InputSystem.cs],Program.cs],Legacy]"));
+
+    const NodeId clientNode = nodeAt(*solution, {"Client"});
+    const NodeId systemsNode = nodeAt(*solution, {"Client", "Systems"});
+    const NodeId inputCsNode = nodeAt(*solution, {"Client", "Systems", "InputSystem.cs"});
+    const NodeId legacyNode = nodeAt(*solution, {"Legacy"});
+
+    EXPECT_EQ(explorer.model()->indexOf(clientNode).data(SolutionTreeModel::SecondaryTextRole).toString(), QString());
+    EXPECT_EQ(explorer.model()->indexOf(legacyNode).data(SolutionTreeModel::SecondaryTextRole).toString(),
+              QStringLiteral("(not supported yet)"));
+    EXPECT_EQ(solutionNodeIconId(*solution, clientNode), icons::kBuildPackage);
+    EXPECT_EQ(solutionNodeIconId(*solution, systemsNode), icons::kNodesFolder);
+    EXPECT_EQ(solutionNodeIconId(*solution, inputCsNode), icons::kNodesFileCode);
+    EXPECT_EQ(solutionNodeIconId(*solution, legacyNode), icons::kStatusWarning);
+
+    // Selecting the C# subfolder targets that subfolder for currentDirectory() and New File / New Folder.
+    const QModelIndex systemsIdx = explorer.filterModel()->mapFromSource(explorer.model()->indexOf(systemsNode));
+    ASSERT_TRUE(systemsIdx.isValid());
+    explorer.view()->setCurrentIndex(systemsIdx);
+    EXPECT_EQ(explorer.currentDirectory().toStdString(), project::test::MemTree::path("Client/Systems"));
 }
 
 } // namespace

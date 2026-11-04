@@ -38,8 +38,10 @@ bool isCodeFileName(std::string_view path) {
     for (char& c : extension) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
-    static constexpr std::array<std::string_view, 15> kCode{"c",   "cc",  "cpp", "cxx", "c++", "h",    "hh", "hpp",
-                                                            "hxx", "h++", "inl", "ipp", "ixx", "cppm", "tpp"};
+    static constexpr std::array<std::string_view, 18> kCode{
+        "c",   "cc",  "cpp", "cxx", "c++",  "h",   "hh", "hpp", "hxx",
+        "h++", "inl", "ipp", "ixx", "cppm", "tpp", "cs", "csx", "lua",
+    };
     return std::ranges::find(kCode, extension) != kCode.end();
 }
 

@@ -3,6 +3,66 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-04: Beta 4 C# `.slnx`/`.sln` solution hierarchy, bundled LSPs & debuggers, and 1:1 Rider Find/Replace bar keyboard behavior
+
+- Resolved three user-reported Beta 4 issues across C# solution hierarchy, bundled language
+  servers/debuggers on standalone PCs, and Rider-faithful editor Find/Replace keyboard routing:
+  - **C# `.csproj` Solution Hierarchy in `.slnx` and `.sln` (`SolutionModel` & `SolutionExplorer`)**:
+    - Added `readCsproj` and `addCsprojTree` in `src/project/src/solution_model.cpp` so C# `.csproj`
+      projects in `.slnx` and `.sln` solutions load as full `NodeKind::Project` trees instead of
+      `NodeKind::UnsupportedProject` (`"not supported yet"`).
+    - Parses SDK-style and MSBuild `.csproj` XML (`<ProjectGuid>`, `<EnableDefaultItems>`,
+      `<EnableDefaultCompileItems>`, `<ProjectReference>`, `<Folder>`, `Include`/`Remove`/`Link`
+      items), recursively populates `NodeKind::Filter` folder nodes (with `.path` set to the
+      on-disk folder path) and `NodeKind::File` nodes while excluding `bin`, `obj`, `node_modules`,
+      `TestResults`, `packages`, `artifacts`, `.`-prefixed folders, nested project directories, and
+      project/solution metadata files, and resolves `<ProjectReference>` dependencies in
+      `resolveDependencies`.
+    - Updated `SolutionTreeModel` to recognize `.cs`, `.csx`, and `.lua` code file icons, and
+      updated `SolutionExplorer::currentDirectory` / `createContextMenu` to resolve `NodeKind::Filter`
+      nodes with non-empty `.path` so `New > File...` and `New > Folder...` target the selected C#
+      subfolder and reload the C# solution model immediately.
+    - Updated `DotNetConsole` and `DotNetClassLibrary` project templates in
+      `src/app/src/workbench_project.cpp` to also generate `<name>.slnx` and open the solution via
+      `openSolution`.
+  - **Bundled LSPs & Debuggers and Auto-Discovery on Standalone PCs**:
+    - Updated `src/lang/src/clangd_locator.cpp`, `src/debug/src/lldb_dap.cpp`, and
+      `src/lang/src/lua_config.cpp` to search relative to the running `frost` executable directory
+      (`<exeDir>/llvm-23.1.4/bin`, `<exeDir>/lldb-23.1.4/bin`, `<exeDir>/lua-language-server/bin`,
+      `<exeDir>/bin`, `<exeDir>`) in addition to environment variables, SDK roots, and `PATH`.
+    - Updated `src/app/src/workbench_managed.cpp` and `src/app/src/workbench_managed_debug.cpp` so
+      `dotnet` is discovered via `tools.managed.dotnet.path`, `DOTNET_ROOT`, `<appDir>/dotnet`,
+      `<FROST_SDK>/dotnet`, `%ProgramFiles%/dotnet/dotnet.exe` (Windows) / `/usr/share/dotnet/dotnet`
+      (Linux), and `PATH` (`QStandardPaths::findExecutable("dotnet")`), `CSharpLanguageServer.dll`
+      falls back to `<appDir>/managed/CSharpLanguageServer.dll` when `<FROST_SDK>/managed` is absent,
+      and `DOTNET_ROLL_FORWARD=LatestMajor` is passed to the managed language server.
+    - Updated `tools/stage.ps1` to bundle `llvm-23.1.4` (`bin/clangd.exe` + `lib/clang` resource
+      headers), `lldb-23.1.4` (`bin/lldb-dap.exe`, `bin/liblldb.dll`, `bin/lldb-argdumper.exe`),
+      `managed/` (`CSharpLanguageServer.dll` + dependencies), and `FrostManagedDebug/`
+      (`adapter/netcoredbg.exe`, `adapter/ManagedPart.dll`, `PdbGuard/PdbGuard.dll`) into Release
+      staged builds.
+  - **1:1 Rider Editor Find/Replace Bar & Go to Line Keyboard Routing**:
+    - Updated `ShellWindow::actionContext()` (`src/ui/shell/src/shell_window.cpp`) so child
+      `QLineEdit` controls hosted inside an `EditorView` (`EditorFindBar` and `GoToLinePopup`) report
+      `ContextKey::TextFieldFocus` instead of `ContextKey::EditorFocus`, preventing
+      `ShortcutDispatcher` from routing `Enter`, `Up`, `Down`, `Backspace`, `Delete`, `Ctrl+V`, or
+      `Ctrl+A` to `editor.*` actions that mutate the underlying document selection.
+    - Updated `EditorFindBar` (`src/ui/editor/src/find_bar.cpp`) and `GoToLinePopup`
+      (`src/ui/editor/src/go_to_line.cpp`) event filters to handle both `QEvent::ShortcutOverride`
+      and `QEvent::KeyPress` for `Enter`/`Shift+Enter`, `F3`/`Shift+F3`, `Down`/`Up` match stepping,
+      `Escape`, `Ctrl+F`, `Ctrl+R`/`Ctrl+H`, and Rider toggle/replace mnemonics (`Alt+C`, `Alt+W`,
+      `Alt+X`, `Alt+P`, `Alt+A`), and guarded `EditorView` `Tab`/`Backtab` handling so `Tab` cycles
+      between Find and Replace inputs.
+- Independent review by subagent `d6f4122d-70c4-4bae-99c4-29102f0ea9da` inspected all 22 modified
+  files and verified all new and updated unit tests with zero blocking issues.
+- Combined verification passed on both platforms:
+  - Windows: `3097/3122` passed (`25` skipped, `1` disabled), `0` failed; `format ok`,
+    `frost_lint ok`, `licensecheck ok`, `featurecheck ok`.
+  - WSL Ubuntu 24.04: `2914/2965` passed (`51` skipped), `0` failed; `licensecheck ok`.
+- Portable beta restaged at `E:/FrostBuilds/beta/FrostIDE-2026.11.04-beta.4/frost.exe` and
+  `E:/FrostBuilds/beta/FrostIDE-2026.11.04-beta.4.zip` with bundled `clangd`, `lldb-dap`,
+  `CSharpLanguageServer`, and `FrostManagedDebug`.
+
 ## 2026-11-04: Beta 4 project/file creation, Visual Studio & .NET templates, RHI fix, and Visual Studio keymap mode
 
 - Implemented the project and file creation workflows prioritized in `continue.txt`, expanded

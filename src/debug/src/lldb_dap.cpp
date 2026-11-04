@@ -12,6 +12,14 @@
 #include <algorithm>
 #include <format>
 
+#ifdef _WIN32
+#include "frost/io/utf.hpp"
+
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #ifndef FROST_PINNED_LLDB_VERSION
 #error "FROST_PINNED_LLDB_VERSION comes from src/debug/CMakeLists.txt (sdk/sdk.lock.json)"
 #endif
@@ -24,6 +32,29 @@ constexpr std::string_view kLldbDapName = "lldb-dap.exe";
 #else
 constexpr std::string_view kLldbDapName = "lldb-dap";
 #endif
+
+[[nodiscard]] std::string executableDirectory() {
+#ifdef _WIN32
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) {
+        return {};
+    }
+    buffer.resize(length);
+    auto utf8 = io::fromWide(buffer);
+    return utf8 ? std::string(io::parentPath(*utf8)) : std::string();
+#elif defined(__linux__)
+    std::string buffer(4096, '\0');
+    const ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (length <= 0) {
+        return {};
+    }
+    buffer.resize(static_cast<std::size_t>(length));
+    return std::string(io::parentPath(buffer));
+#else
+    return {};
+#endif
+}
 
 } // namespace
 
@@ -64,6 +95,9 @@ LldbDapSearch defaultLldbDapSearch(std::string configured) {
     search.configured = std::move(configured);
     if (const auto sdk = project::processEnvironmentVariable("FROST_SDK"); sdk && !sdk->empty()) {
         search.sdkRoots.push_back(*sdk);
+    }
+    if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
+        search.sdkRoots.push_back(exeDir);
     }
 #ifdef _WIN32
     search.sdkRoots.emplace_back("E:\\sdk"); // tools/bootstrap.ps1's default -SdkRoot.

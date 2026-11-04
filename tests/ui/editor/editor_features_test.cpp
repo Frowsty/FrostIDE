@@ -423,5 +423,59 @@ TEST(EditorActions, TableIdsAreRegisteredAndBound) {
     EXPECT_FALSE(registerEditorActions(registry, host));
 }
 
+TEST(EditorFindBar, EnterUpDownAndRiderShortcutsInFindBarNeverMutateSelectedEditorText) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("alpha beta\nalpha gamma\nalpha delta\n");
+    // Select "alpha" on line 1 (bytes 0..5) and open Find (Ctrl+F).
+    h.press(Qt::Key_Right, Qt::ShiftModifier);
+    h.press(Qt::Key_Right, Qt::ShiftModifier);
+    h.press(Qt::Key_Right, Qt::ShiftModifier);
+    h.press(Qt::Key_Right, Qt::ShiftModifier);
+    h.press(Qt::Key_Right, Qt::ShiftModifier);
+    h.press(Qt::Key_F, Qt::ControlModifier);
+
+    ASSERT_NE(h.view->findBar(), nullptr);
+    EditorFindBar& bar = *h.view->findBar();
+    EXPECT_TRUE(h.view->findBarVisible());
+    QLineEdit* findField = bar.findField();
+    ASSERT_NE(findField, nullptr);
+    EXPECT_EQ(findField->text(), QStringLiteral("alpha"));
+    ASSERT_EQ(h.view->searchMatches().size(), 3U);
+    EXPECT_EQ(bar.matchText(), QStringLiteral("1/3"));
+
+    // Pressing Enter in findField (including ShortcutOverride + KeyPress) steps to match 2/3 and NEVER replaces "alpha"
+    // with a newline!
+    {
+        QKeyEvent overrideDown(QEvent::ShortcutOverride, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(findField, &overrideDown);
+        EXPECT_TRUE(overrideDown.isAccepted());
+        sendKey(findField, Qt::Key_Return);
+    }
+    EXPECT_EQ(h.text(), "alpha beta\nalpha gamma\nalpha delta\n");
+    EXPECT_EQ(bar.matchText(), QStringLiteral("2/3"));
+
+    // Pressing Down and Up in findField steps matches without moving the editor caret onto another line or mutating
+    // text.
+    sendKey(findField, Qt::Key_Down);
+    EXPECT_EQ(bar.matchText(), QStringLiteral("3/3"));
+    sendKey(findField, Qt::Key_Up);
+    EXPECT_EQ(bar.matchText(), QStringLiteral("2/3"));
+    EXPECT_EQ(h.text(), "alpha beta\nalpha gamma\nalpha delta\n");
+
+    // Rider toggle shortcuts Alt+C (Case), Alt+W (Words), Alt+X (Regex).
+    EXPECT_FALSE(bar.options().caseSensitive);
+    sendKey(findField, Qt::Key_C, Qt::AltModifier);
+    EXPECT_TRUE(bar.options().caseSensitive);
+    sendKey(findField, Qt::Key_W, Qt::AltModifier);
+    EXPECT_TRUE(bar.options().wholeWord);
+    sendKey(findField, Qt::Key_X, Qt::AltModifier);
+    EXPECT_TRUE(bar.options().regex);
+
+    // Ctrl+R inside Find bar switches to Replace mode and focuses the Replace field.
+    sendKey(findField, Qt::Key_R, Qt::ControlModifier);
+    EXPECT_TRUE(bar.replaceVisible());
+    EXPECT_EQ(h.text(), "alpha beta\nalpha gamma\nalpha delta\n");
+}
+
 } // namespace
 } // namespace frost::ui

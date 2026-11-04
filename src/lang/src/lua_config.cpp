@@ -9,6 +9,8 @@
 #include <format>
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace frost::lang {
@@ -66,6 +68,21 @@ LuaSearch defaultLuaSearch(std::string configuredPath) {
     LuaSearch search;
     search.configuredPath = std::move(configuredPath);
 #ifdef _WIN32
+    {
+        std::wstring buffer(32768, L'\0');
+        const DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (len > 0 && len < buffer.size()) {
+            buffer.resize(len);
+            if (auto exePath = io::fromWide(buffer)) {
+                const std::string exeDir(io::parentPath(*exePath));
+                if (!exeDir.empty()) {
+                    if (auto sub = io::joinPath(exeDir, "lua-language-server/bin"))
+                        search.directories.push_back(std::move(*sub));
+                    search.directories.push_back(exeDir);
+                }
+            }
+        }
+    }
     DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
     if (size) {
         std::wstring value(size, L'\0');
@@ -77,6 +94,21 @@ LuaSearch defaultLuaSearch(std::string configuredPath) {
         }
     }
 #else
+#if defined(__linux__)
+    {
+        std::string buffer(4096, '\0');
+        const ssize_t len = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+        if (len > 0) {
+            buffer.resize(static_cast<std::size_t>(len));
+            const std::string exeDir(io::parentPath(buffer));
+            if (!exeDir.empty()) {
+                if (auto sub = io::joinPath(exeDir, "lua-language-server/bin"))
+                    search.directories.push_back(std::move(*sub));
+                search.directories.push_back(exeDir);
+            }
+        }
+    }
+#endif
     if (const char* path = std::getenv("PATH"))
         search.pathVariable = path;
 #endif

@@ -469,16 +469,22 @@ input::ActionContext ShellWindow::actionContext() const {
     if (QApplication::activeModalWidget() != nullptr) {
         keys.set(input::ContextKey::DialogFocus);
     }
+    const QWidget* focus = QApplication::focusWidget();
     if (qobject_cast<Popup*>(QApplication::activePopupWidget()) != nullptr) {
         keys.set(input::ContextKey::PopupFocus);
     }
-    const QWidget* focus = QApplication::focusWidget();
     if (focus == nullptr || keys.has(input::ContextKey::PopupFocus) || keys.has(input::ContextKey::DialogFocus) ||
         m_tabs == nullptr) {
         return context;
     }
     if (IEditorView* editor = m_tabs->currentEditor();
         editor != nullptr && (editor->widget() == focus || editor->widget()->isAncestorOf(focus))) {
+        const QWidget* surface =
+            editor->widget()->focusProxy() != nullptr ? editor->widget()->focusProxy() : editor->widget();
+        if (focus != surface && focus != editor->widget() && isTextField(focus)) {
+            keys.set(input::ContextKey::TextFieldFocus);
+            return context;
+        }
         keys.set(input::ContextKey::EditorFocus);
         addKeys(keys, editor->contextKeys());
         return context;

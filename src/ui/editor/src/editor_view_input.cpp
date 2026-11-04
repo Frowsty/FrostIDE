@@ -49,22 +49,30 @@ constexpr int kWordScanLimit = 4096;
 // --- events ---
 
 bool EditorView::event(QEvent* event) {
+    QWidget* focus = focusWidget();
+    const bool inOverlay = focus != nullptr && focus != this &&
+                           ((m_findBar != nullptr && m_findBar->isAncestorOf(focus)) ||
+                            (m_goToLine != nullptr && m_goToLine->isAncestorOf(focus)));
     switch (event->type()) {
     case QEvent::ShortcutOverride: {
         // A window shortcut must not steal a key the editor binds or types.
-        auto* key = static_cast<QKeyEvent*>(event);
-        if (m_services.keys != nullptr && m_services.keys->wantsKey(*this, *key)) {
-            event->accept();
-            return true;
+        if (!inOverlay) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            if (m_services.keys != nullptr && m_services.keys->wantsKey(*this, *key)) {
+                event->accept();
+                return true;
+            }
         }
         break;
     }
     case QEvent::KeyPress: {
         // Tab and Shift+Tab indent and unindent instead of moving the focus.
-        auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
-            keyPressEvent(key);
-            return true;
+        if (!inOverlay) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
+                keyPressEvent(key);
+                return true;
+            }
         }
         break;
     }

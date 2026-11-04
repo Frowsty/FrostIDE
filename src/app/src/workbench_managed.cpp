@@ -18,6 +18,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QStandardPaths>
 
 #include <algorithm>
 #include <array>
@@ -228,20 +229,84 @@ void Workbench::startManaged(const std::string& root) {
     std::string dotnetPath = m_managedDotnetPath;
     std::string serverPath = m_managedServerPath;
     if (dotnetPath.empty()) {
-        const QString dotnetRoot = qEnvironmentVariable("DOTNET_ROOT");
 #ifdef _WIN32
         const QString executable = QStringLiteral("dotnet.exe");
 #else
         const QString executable = QStringLiteral("dotnet");
 #endif
-        if (!dotnetRoot.isEmpty())
-            dotnetPath = QDir(dotnetRoot).filePath(executable).toUtf8().toStdString();
+        const auto isRegular = [&](const std::string& candidate) {
+            if (!io::isAbsolutePath(candidate))
+                return false;
+            const auto st = m_services.fs.status(candidate);
+            return st && st->type == io::FileType::Regular;
+        };
+        const QString dotnetRoot = qEnvironmentVariable("DOTNET_ROOT");
+        if (!dotnetRoot.isEmpty()) {
+            const std::string candidate = QDir(dotnetRoot).filePath(executable).toUtf8().toStdString();
+            if (isRegular(candidate))
+                dotnetPath = candidate;
+        }
+        if (dotnetPath.empty()) {
+            const QString appDir = QCoreApplication::applicationDirPath();
+            if (!appDir.isEmpty()) {
+                const std::string bundled =
+                    QDir(appDir).filePath(QStringLiteral("dotnet/") + executable).toUtf8().toStdString();
+                if (isRegular(bundled))
+                    dotnetPath = bundled;
+            }
+        }
+        if (dotnetPath.empty()) {
+            const QString sdk = qEnvironmentVariable("FROST_SDK");
+            if (!sdk.isEmpty()) {
+                const std::string sdkDotnet =
+                    QDir(sdk).filePath(QStringLiteral("dotnet/") + executable).toUtf8().toStdString();
+                if (isRegular(sdkDotnet))
+                    dotnetPath = sdkDotnet;
+            }
+        }
+#ifdef _WIN32
+        if (dotnetPath.empty()) {
+            const QString programFiles = qEnvironmentVariable("ProgramFiles", QStringLiteral("C:/Program Files"));
+            const std::string sysDotnet =
+                QDir(programFiles).filePath(QStringLiteral("dotnet/dotnet.exe")).toUtf8().toStdString();
+            if (isRegular(sysDotnet))
+                dotnetPath = sysDotnet;
+        }
+#else
+        if (dotnetPath.empty()) {
+            for (const char* dir : {"/usr/share/dotnet", "/usr/local/share/dotnet", "/opt/dotnet"}) {
+                const std::string sysDotnet =
+                    QDir(QString::fromLatin1(dir)).filePath(executable).toUtf8().toStdString();
+                if (isRegular(sysDotnet)) {
+                    dotnetPath = sysDotnet;
+                    break;
+                }
+            }
+        }
+#endif
+        if (dotnetPath.empty()) {
+            const QString onPath = QStandardPaths::findExecutable(QStringLiteral("dotnet"));
+            if (!onPath.isEmpty()) {
+                const std::string candidate = onPath.toUtf8().toStdString();
+                if (isRegular(candidate))
+                    dotnetPath = candidate;
+            }
+        }
     }
     if (serverPath.empty()) {
-        QString base = qEnvironmentVariable("FROST_SDK");
-        if (base.isEmpty())
-            base = QCoreApplication::applicationDirPath();
-        serverPath = QDir(base).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+        const QString sdk = qEnvironmentVariable("FROST_SDK");
+        if (!sdk.isEmpty()) {
+            const std::string sdkServer =
+                QDir(sdk).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+            const auto st = m_services.fs.status(sdkServer);
+            if (st && st->type == io::FileType::Regular)
+                serverPath = sdkServer;
+        }
+        if (serverPath.empty()) {
+            const QString appDir = QCoreApplication::applicationDirPath();
+            serverPath =
+                QDir(appDir).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+        }
     }
     if (!io::isAbsolutePath(dotnetPath) || !io::isAbsolutePath(serverPath)) {
         return;
@@ -269,6 +334,7 @@ void Workbench::startManaged(const std::string& root) {
         return;
     }
     auto options = lang::managedServiceOptions(dotnetPath, serverPath, root, true);
+    options.environment.emplace_back("DOTNET_ROLL_FORWARD", "LatestMajor");
     // Keep the Unity root as the LSP workspace: source documents live outside the
     // generated directory. Tell csharp-ls which solution to load explicitly.
     if (!m_unityRevision.empty()) {

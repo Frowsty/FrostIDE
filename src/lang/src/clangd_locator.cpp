@@ -18,6 +18,8 @@
 #include <windows.h>
 #else
 #include <cstdlib>
+
+#include <unistd.h>
 #endif
 
 #ifndef FROST_PINNED_LLVM_VERSION
@@ -91,6 +93,29 @@ constexpr char kPathListSeparator = ':';
     return bin ? std::move(*bin) : std::string();
 }
 
+[[nodiscard]] std::string executableDirectory() {
+#ifdef _WIN32
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) {
+        return {};
+    }
+    buffer.resize(length);
+    auto utf8 = io::fromWide(buffer);
+    return utf8 ? std::string(io::parentPath(*utf8)) : std::string();
+#elif defined(__linux__)
+    std::string buffer(4096, '\0');
+    const ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (length <= 0) {
+        return {};
+    }
+    buffer.resize(static_cast<std::size_t>(length));
+    return std::string(io::parentPath(buffer));
+#else
+    return {};
+#endif
+}
+
 } // namespace
 
 std::string_view toString(ClangdOrigin origin) noexcept {
@@ -118,6 +143,18 @@ ClangdSearch defaultClangdSearch(std::string configuredPath) {
     }
     if (const std::string sdk = environment("FROST_SDK"); !sdk.empty()) {
         search.sdkDirectories.push_back(llvmBin(sdk));
+    }
+    if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
+        if (std::string bundledPinned = llvmBin(exeDir); !bundledPinned.empty()) {
+            search.sdkDirectories.push_back(std::move(bundledPinned));
+        }
+        if (auto bundledLlvm = io::joinPath(exeDir, "llvm/bin")) {
+            search.sdkDirectories.push_back(std::move(*bundledLlvm));
+        }
+        if (auto bundledBin = io::joinPath(exeDir, "bin")) {
+            search.sdkDirectories.push_back(std::move(*bundledBin));
+        }
+        search.sdkDirectories.push_back(exeDir);
     }
 #ifdef _WIN32
     search.sdkDirectories.push_back(llvmBin("E:\\sdk")); // tools/bootstrap.ps1's default -SdkRoot.

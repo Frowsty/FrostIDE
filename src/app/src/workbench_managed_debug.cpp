@@ -16,12 +16,14 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QPlainTextEdit>
+#include <QStandardPaths>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -218,8 +220,31 @@ void Workbench::startManagedDebug() {
     QDialog dialog(m_window);
     dialog.setWindowTitle(QStringLiteral("Debug .NET console project"));
     auto* layout = new QFormLayout(&dialog);
-    QLineEdit dotnet(QString::fromStdString(m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath)),
-                     &dialog);
+    QString defaultDotnet =
+        QString::fromStdString(m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath));
+    if (defaultDotnet.isEmpty()) {
+#ifdef _WIN32
+        const QString exeName = QStringLiteral("dotnet.exe");
+#else
+        const QString exeName = QStringLiteral("dotnet");
+#endif
+        const QString dotnetRoot = qEnvironmentVariable("DOTNET_ROOT");
+        if (!dotnetRoot.isEmpty() && QFileInfo::exists(QDir(dotnetRoot).filePath(exeName))) {
+            defaultDotnet = QDir(dotnetRoot).filePath(exeName);
+        } else if (QFileInfo::exists(
+                       QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("dotnet/") + exeName))) {
+            defaultDotnet = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("dotnet/") + exeName);
+        } else {
+#ifdef _WIN32
+            const QString pf = qEnvironmentVariable("ProgramFiles", QStringLiteral("C:/Program Files"));
+            if (QFileInfo::exists(QDir(pf).filePath(QStringLiteral("dotnet/dotnet.exe"))))
+                defaultDotnet = QDir(pf).filePath(QStringLiteral("dotnet/dotnet.exe"));
+#endif
+            if (defaultDotnet.isEmpty())
+                defaultDotnet = QStandardPaths::findExecutable(QStringLiteral("dotnet"));
+        }
+    }
+    QLineEdit dotnet(defaultDotnet, &dialog);
     QLineEdit configuration(QStringLiteral("Debug"), &dialog);
     QLineEdit framework(QStringLiteral("net10.0"), &dialog);
     QLineEdit rid(&dialog);

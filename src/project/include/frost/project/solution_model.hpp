@@ -11,8 +11,8 @@
  * the model is safe to build before the folder is trusted (PLAN.md section 3.5).
  *
  * Only a problem with the solution file itself fails the load. A project file that is missing
- * or unreadable becomes an UnavailableProject node carrying the error; .csproj, .vbproj,
- * .fsproj, .vcxitems, .shproj and unknown project types become UnsupportedProject nodes ("not
+ * or unreadable becomes an UnavailableProject node carrying the error; .vbproj, .fsproj,
+ * .vcxitems, .shproj and unknown project types become UnsupportedProject nodes ("not
  * supported yet"); a missing .filters file puts every file at the project root, an unreadable
  * one does the same with a warning. Warnings collects everything non-fatal for the log.
  *
@@ -73,10 +73,10 @@ using ProjectId = StrongIndex<ProjectIdTag, std::uint32_t>;
 enum class NodeKind : unsigned char {
     Solution,
     SolutionFolder,
-    Project,            // A loaded C++ project (.vcxproj).
+    Project,            // A loaded C++ (.vcxproj) or C# (.csproj) project.
     UnsupportedProject, // A project type FrostIDE cannot open yet; shown, not loaded.
     UnavailableProject, // A project whose file is missing or unreadable; ProjectInfo::error says why.
-    Filter,             // A .vcxproj.filters folder.
+    Filter,             // A .vcxproj.filters folder or physical C# project subfolder.
     File,               // A project item, or a solution item when `project` is empty.
 };
 

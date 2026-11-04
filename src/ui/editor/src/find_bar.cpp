@@ -140,6 +140,11 @@ void EditorFindBar::focusFind() {
     m_find->selectAll();
 }
 
+void EditorFindBar::focusReplace() {
+    m_replace->setFocus(Qt::ShortcutFocusReason);
+    m_replace->selectAll();
+}
+
 void EditorFindBar::showMatches(std::size_t current, std::size_t total) {
     if (total == 0) {
         m_matches->setText(QStringLiteral("0 results"));
@@ -155,11 +160,44 @@ void EditorFindBar::showError(const QString& message) { m_matches->setText(messa
 QString EditorFindBar::matchText() const { return m_matches->text(); }
 
 bool EditorFindBar::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() != QEvent::KeyPress || (watched != m_find && watched != m_replace)) {
+    if ((watched != m_find && watched != m_replace) ||
+        (event->type() != QEvent::KeyPress && event->type() != QEvent::ShortcutOverride)) {
         return QWidget::eventFilter(watched, event);
     }
-    const auto* key = static_cast<const QKeyEvent*>(event);
-    const bool shift = (key->modifiers() & Qt::ShiftModifier) != 0;
+    auto* key = static_cast<QKeyEvent*>(event);
+    const Qt::KeyboardModifiers mods = key->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier);
+    const bool shift = (mods & Qt::ShiftModifier) != 0;
+    const bool ctrlOnly = mods == Qt::ControlModifier;
+    const bool altOnly = mods == Qt::AltModifier;
+    const bool noMods = mods == Qt::NoModifier;
+
+    const auto handledKey = [&]() -> bool {
+        switch (key->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+        case Qt::Key_F3:
+        case Qt::Key_Escape: return true;
+        case Qt::Key_Down:
+        case Qt::Key_Up: return watched == m_find && noMods;
+        case Qt::Key_F:
+        case Qt::Key_R:
+        case Qt::Key_H: return ctrlOnly;
+        case Qt::Key_C:
+        case Qt::Key_W:
+        case Qt::Key_X: return altOnly;
+        case Qt::Key_P:
+        case Qt::Key_A: return altOnly && m_replaceVisible;
+        default: return false;
+        }
+    }();
+    if (!handledKey) {
+        return QWidget::eventFilter(watched, event);
+    }
+    if (event->type() == QEvent::ShortcutOverride) {
+        key->accept();
+        return true;
+    }
+
     switch (key->key()) {
     case Qt::Key_Return:
     case Qt::Key_Enter:
@@ -178,6 +216,16 @@ bool EditorFindBar::eventFilter(QObject* watched, QEvent* event) {
             emit findNextRequested();
         }
         return true;
+    case Qt::Key_Down: emit findNextRequested(); return true;
+    case Qt::Key_Up: emit findPreviousRequested(); return true;
+    case Qt::Key_F: focusFind(); return true;
+    case Qt::Key_R:
+    case Qt::Key_H: emit replaceModeRequested(); return true;
+    case Qt::Key_C: m_case->toggle(); return true;
+    case Qt::Key_W: m_word->toggle(); return true;
+    case Qt::Key_X: m_regex->toggle(); return true;
+    case Qt::Key_P: emit replaceRequested(); return true;
+    case Qt::Key_A: emit replaceAllRequested(); return true;
     case Qt::Key_Escape: emit closeRequested(); return true;
     default: return QWidget::eventFilter(watched, event);
     }

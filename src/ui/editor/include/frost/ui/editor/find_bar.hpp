@@ -42,6 +42,8 @@ public:
     void setOptions(text::SearchOptions options);
     // Focuses the find field with its text selected.
     void focusFind();
+    // Focuses the replace field with its text selected.
+    void focusReplace();
 
     // The match count: "3/12", "12 results", "0 results", or the pattern's error.
     void showMatches(std::size_t current, std::size_t total);
@@ -62,6 +64,7 @@ signals:
     void findPreviousRequested();
     void replaceRequested();
     void replaceAllRequested();
+    void replaceModeRequested();
     void closeRequested();
 
 protected:

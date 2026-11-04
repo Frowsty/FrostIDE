@@ -51,14 +51,19 @@ void GoToLinePopup::showError(const QString& message) {
 QString GoToLinePopup::errorText() const { return m_error->isVisible() ? m_error->text() : QString(); }
 
 bool GoToLinePopup::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == m_field && event->type() == QEvent::KeyPress) {
-        const int key = static_cast<const QKeyEvent*>(event)->key();
-        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
-            emit accepted(m_field->text());
-            return true;
-        }
-        if (key == Qt::Key_Escape) {
-            emit cancelled();
+    if (watched == m_field && (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        const int key = keyEvent->key();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape) {
+            if (event->type() == QEvent::ShortcutOverride) {
+                keyEvent->accept();
+                return true;
+            }
+            if (key == Qt::Key_Escape) {
+                emit cancelled();
+            } else {
+                emit accepted(m_field->text());
+            }
             return true;
         }
     }

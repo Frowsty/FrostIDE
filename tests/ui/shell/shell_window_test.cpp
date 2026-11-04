@@ -591,4 +591,41 @@ TEST(GoToLine, ParsesLineAndColumn) {
     EXPECT_FALSE(parseGoToLine(QStringLiteral("x")).has_value());
 }
 
+TEST(ShellWindow, ActionContextUsesTextFieldFocusForChildLineEditInsideEditorSurface) {
+    ShellRig rig;
+    bool editorEnterCalled = false;
+    frost::input::ActionSpec enterSpec;
+    enterSpec.id = "editor.enter";
+    enterSpec.name = "Enter";
+    enterSpec.context = {{frost::input::ContextKey::EditorFocus}, {}};
+    enterSpec.handler = [&](const frost::input::ActionContext&, const frost::input::InvokeInfo&) {
+        editorEnterCalled = true;
+    };
+    ASSERT_TRUE(rig.registry.add(std::move(enterSpec)).has_value());
+    frost::input::KeymapPreferences preferences;
+    preferences.overrides.push_back(
+        {"editor.enter", {*frost::input::parseSequence("Enter", frost::input::SyntaxMode::Strict)}});
+    ASSERT_TRUE(rig.keymap->setPreferences(preferences).has_value());
+
+    ShellWindow window(rig.environment());
+    frost::ui::test::showAndWait(window);
+    ASSERT_TRUE(window.openFile("/src/a.cpp").has_value());
+    frost::ui::test::FakeEditor* editor = rig.editors.last;
+    ASSERT_NE(editor, nullptr);
+
+    // A QLineEdit child inside the editor widget (like EditorFindBar or GoToLinePopup) must set
+    // TextFieldFocus rather than EditorFocus, so pressing Enter never triggers editor.enter!
+    auto* findInput = new QLineEdit(editor->widget());
+    findInput->show();
+    findInput->setFocus();
+    QApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), findInput);
+
+    EXPECT_TRUE(window.actionContext().keys.has(frost::input::ContextKey::TextFieldFocus));
+    EXPECT_FALSE(window.actionContext().keys.has(frost::input::ContextKey::EditorFocus));
+
+    sendKey(findInput, Qt::Key_Return, Qt::NoModifier);
+    EXPECT_FALSE(editorEnterCalled);
+}
+
 } // namespace

@@ -1693,6 +1693,12 @@ TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
         });
         ASSERT_TRUE(dotnetConsole.has_value()) << dotnetConsole.error().describe();
         EXPECT_EQ(rig.workbench->projectRoot(), dir.join("ManagedApp"));
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_EQ(rig.workbench->solution()->path(), dir.join("ManagedApp/ManagedApp.slnx"));
+        ASSERT_EQ(rig.workbench->solution()->projects().size(), 1U);
+        EXPECT_EQ(rig.workbench->solution()->projects()[0].kind, frost::project::ProjectKind::CSharp);
+        EXPECT_EQ(rig.workbench->solution()->projects()[0].nodeKind, frost::project::NodeKind::Project);
+        EXPECT_TRUE(rig.workbench->solution()->findFileNode(dir.join("ManagedApp/Program.cs")).has_value());
         const std::string csproj = dir.read("ManagedApp/ManagedApp.csproj");
         EXPECT_TRUE(csproj.contains("<OutputType>Exe</OutputType>")) << csproj;
         EXPECT_TRUE(csproj.contains("<TargetFramework>net10.0</TargetFramework>")) << csproj;
@@ -1706,6 +1712,12 @@ TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
         });
         ASSERT_TRUE(dotnetLib.has_value()) << dotnetLib.error().describe();
         EXPECT_EQ(rig.workbench->projectRoot(), dir.join("ManagedLib"));
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_EQ(rig.workbench->solution()->path(), dir.join("ManagedLib/ManagedLib.slnx"));
+        ASSERT_EQ(rig.workbench->solution()->projects().size(), 1U);
+        EXPECT_EQ(rig.workbench->solution()->projects()[0].kind, frost::project::ProjectKind::CSharp);
+        EXPECT_EQ(rig.workbench->solution()->projects()[0].nodeKind, frost::project::NodeKind::Project);
+        EXPECT_TRUE(rig.workbench->solution()->findFileNode(dir.join("ManagedLib/Class1.cs")).has_value());
         const std::string libCsproj = dir.read("ManagedLib/ManagedLib.csproj");
         EXPECT_FALSE(libCsproj.contains("<OutputType>Exe</OutputType>")) << libCsproj;
         EXPECT_TRUE(libCsproj.contains("<TargetFramework>net10.0</TargetFramework>")) << libCsproj;

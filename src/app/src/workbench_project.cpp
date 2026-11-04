@@ -1112,8 +1112,13 @@ Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
         break;
     }
     case NewProjectTemplate::DotNetConsole: {
+        const std::string slnxFile = spec.name + ".slnx";
         const std::string csprojFile = spec.name + ".csproj";
-        pathsOk = addFile(csprojFile, "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+        pathsOk = addFile(slnxFile, std::format("<Solution>\n"
+                                                "  <Project Path=\"{}\" />\n"
+                                                "</Solution>\n",
+                                                csprojFile)) &&
+                  addFile(csprojFile, "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
                                       "\n"
                                       "  <PropertyGroup>\n"
                                       "    <OutputType>Exe</OutputType>\n"
@@ -1129,11 +1134,19 @@ Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
                                       "Console.WriteLine(\"Hello from {}!\");\n",
                                       targetName),
                           true);
+        if (!files.empty()) {
+            solutionToOpen = files.front().path;
+        }
         break;
     }
     case NewProjectTemplate::DotNetClassLibrary: {
+        const std::string slnxFile = spec.name + ".slnx";
         const std::string csprojFile = spec.name + ".csproj";
-        pathsOk = addFile(csprojFile, "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+        pathsOk = addFile(slnxFile, std::format("<Solution>\n"
+                                                "  <Project Path=\"{}\" />\n"
+                                                "</Solution>\n",
+                                                csprojFile)) &&
+                  addFile(csprojFile, "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
                                       "\n"
                                       "  <PropertyGroup>\n"
                                       "    <TargetFramework>net10.0</TargetFramework>\n"
@@ -1150,6 +1163,9 @@ Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
                                       "}}\n",
                                       codeIdent),
                           true);
+        if (!files.empty()) {
+            solutionToOpen = files.front().path;
+        }
         break;
     }
     case NewProjectTemplate::EmptyFolder: break;
@@ -1221,7 +1237,25 @@ Result<std::string> Workbench::createNewFile(std::string_view directory, std::st
         return fail(ErrorCode::InvalidArgument, "the workbench has no window");
     }
     const std::string baseDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
-    return m_nav->createNewFile(baseDir, relativeName);
+    Result<std::string> created = m_nav->createNewFile(baseDir, relativeName);
+    if (created && m_solution && m_buildService->state() == build::BuildState::Idle &&
+        !m_buildService->projectEditInProgress() &&
+        std::ranges::any_of(m_solution->projects(), [](const project::ProjectInfo& p) {
+            return p.kind == project::ProjectKind::CSharp && p.nodeKind == project::NodeKind::Project;
+        })) {
+        if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
+            auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+            m_solution = refreshed;
+            if (m_explorer) {
+                m_explorer->setSolution(refreshed, true);
+                (void)m_explorer->selectPath(*created);
+            }
+            if (m_nav) {
+                (void)m_nav->refreshSolution(*refreshed);
+            }
+        }
+    }
+    return created;
 }
 
 Result<std::string> Workbench::createNewFolder(std::string_view directory, std::string_view relativeName) {
@@ -1229,7 +1263,24 @@ Result<std::string> Workbench::createNewFolder(std::string_view directory, std::
         return fail(ErrorCode::InvalidArgument, "the workbench has no window");
     }
     const std::string baseDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
-    return m_nav->createNewFolder(baseDir, relativeName);
+    Result<std::string> created = m_nav->createNewFolder(baseDir, relativeName);
+    if (created && m_solution && m_buildService->state() == build::BuildState::Idle &&
+        !m_buildService->projectEditInProgress() &&
+        std::ranges::any_of(m_solution->projects(), [](const project::ProjectInfo& p) {
+            return p.kind == project::ProjectKind::CSharp && p.nodeKind == project::NodeKind::Project;
+        })) {
+        if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
+            auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+            m_solution = refreshed;
+            if (m_explorer) {
+                m_explorer->setSolution(refreshed, true);
+            }
+            if (m_nav) {
+                (void)m_nav->refreshSolution(*refreshed);
+            }
+        }
+    }
+    return created;
 }
 
 Result<std::string> Workbench::createNewProjectSource(std::string_view projectPath, std::string_view relativeName) {

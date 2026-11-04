@@ -208,6 +208,9 @@ QString SolutionExplorer::currentDirectory() const {
     if (item.kind == NodeKind::Solution || item.kind == NodeKind::SolutionFolder) {
         return QString::fromStdString(solution->directory());
     }
+    if (item.kind == NodeKind::Filter && !item.path.empty()) {
+        return QString::fromStdString(item.path);
+    }
     if (item.kind == NodeKind::File && !item.path.empty()) {
         return QString::fromStdString(std::string(io::parentPath(item.path)));
     }
@@ -419,7 +422,8 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         connect(open, &QAction::triggered, this, [this, path] { emit openFile(path); });
         const auto solution = m_model->solution();
         const auto& item = solution->node(*node);
-        if (m_removeProjectFileHandler && item.project && !item.path.empty()) {
+        if (m_removeProjectFileHandler && item.project && !item.path.empty() &&
+            solution->project(*item.project).kind == project::ProjectKind::Cpp) {
             const QString projectPath = QString::fromStdString(solution->project(*item.project).path);
             const QString key = QString::fromStdString(item.key);
             QAction* remove = menu->addAction(tr("Remove from Project"));
@@ -527,6 +531,8 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         QString targetDir;
         if (item.kind == NodeKind::Solution || item.kind == NodeKind::SolutionFolder) {
             targetDir = QString::fromStdString(solution->directory());
+        } else if (item.kind == NodeKind::Filter && !item.path.empty()) {
+            targetDir = QString::fromStdString(item.path);
         } else if (item.kind == NodeKind::File && !item.path.empty()) {
             targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
         } else if (item.project) {

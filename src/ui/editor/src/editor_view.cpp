@@ -270,6 +270,16 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     connect(m_findBar, &EditorFindBar::findPreviousRequested, this, [this] { (void)findPrevious(); });
     connect(m_findBar, &EditorFindBar::replaceRequested, this, [this] { (void)replaceNext(); });
     connect(m_findBar, &EditorFindBar::replaceAllRequested, this, [this] { (void)replaceAll(); });
+    connect(m_findBar, &EditorFindBar::replaceModeRequested, this, [this] {
+        m_findBar->setReplaceVisible(true);
+        m_findBar->show();
+        updateOverlayGeometry();
+        if (m_findBar->findText().isEmpty()) {
+            m_findBar->focusFind();
+        } else {
+            m_findBar->focusReplace();
+        }
+    });
     connect(m_findBar, &EditorFindBar::closeRequested, this, [this] { closeFind(); });
 
     m_goToLine = new GoToLinePopup(this);
