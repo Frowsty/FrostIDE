@@ -80,6 +80,8 @@ public:
     void setActions(BannerActions actions) { m_actions = std::move(actions); }
     // Rebuilds the banners of every open view of `path` (canonical) from its document's state.
     void refreshBanners(const std::string& path);
+    // Updates the canonical path of every open view of `oldPath` to `newPath` and refreshes banners.
+    void renamePath(const std::string& oldPath, const std::string& newPath);
     // The banners the view of `path` shows now (empty when it is not open).
     [[nodiscard]] std::vector<EditorBanner*> banners(const std::string& path) const;
     [[nodiscard]] nav::DocumentRegistry& documents() const noexcept { return *m_documents; }

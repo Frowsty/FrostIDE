@@ -1354,4 +1354,231 @@ TEST(Workbench, PathHelpers) {
     EXPECT_FALSE(frost::app::isSolutionFile("/x/Game.vcxproj"));
 }
 
+TEST(Workbench, NewProjectCreatesCMakeExecutableAndOpensStarterMain) {
+    WorkDir dir("new-project");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    auto* welcome = rig.workbench->welcomeScreen();
+    ASSERT_NE(welcome, nullptr);
+    ASSERT_NE(welcome->newProjectButton(), nullptr);
+    ASSERT_NE(rig.window->menus().action("file.newProject"), nullptr);
+
+    // Refuses invalid names (path traversal, Windows reserved device names) without touching disk.
+    EXPECT_FALSE(
+        rig.workbench
+            ->createNewProject(
+                {.name = "../escape", .location = dir.path(), .kind = frost::app::NewProjectTemplate::CMakeExecutable})
+            .has_value());
+    EXPECT_FALSE(
+        rig.workbench
+            ->createNewProject(
+                {.name = "CON", .location = dir.path(), .kind = frost::app::NewProjectTemplate::CMakeExecutable})
+            .has_value());
+    EXPECT_FALSE(rig.workbench->hasProject());
+
+    // Refuses a target directory that already exists and is non-empty, leaving existing files intact.
+    dir.write("Existing/keep.txt", "untouched\n");
+    EXPECT_FALSE(
+        rig.workbench
+            ->createNewProject(
+                {.name = "Existing", .location = dir.path(), .kind = frost::app::NewProjectTemplate::CMakeExecutable})
+            .has_value());
+    EXPECT_EQ(dir.read("Existing/keep.txt"), "untouched\n");
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("Existing/CMakeLists.txt")).value_or(true));
+
+    // Welcome screen's New Project button drives chooseNewProject and creates + opens a CMake executable project.
+    rig.prompts.newProject = frost::app::NewProjectSpec{
+        .name = "StarterApp",
+        .location = dir.path(),
+        .kind = frost::app::NewProjectTemplate::CMakeExecutable,
+    };
+    welcome->newProjectButton()->click();
+    EXPECT_EQ(rig.prompts.newProjectPrompts, 1U);
+
+    const std::string projectRoot = dir.join("StarterApp");
+    const std::string cmakeLists = dir.join("StarterApp/CMakeLists.txt");
+    const std::string mainCpp = dir.join("StarterApp/main.cpp");
+    ASSERT_TRUE(rig.workbench->hasProject());
+    EXPECT_EQ(rig.workbench->projectRoot(), projectRoot);
+    EXPECT_NE(rig.workbench->cmakeService(), nullptr);
+    EXPECT_TRUE(frost::io::realFileSystem().exists(cmakeLists).value_or(false));
+    EXPECT_TRUE(frost::io::realFileSystem().exists(mainCpp).value_or(false));
+    EXPECT_TRUE(dir.read("StarterApp/CMakeLists.txt").contains("add_executable(StarterApp"));
+    EXPECT_TRUE(dir.read("StarterApp/main.cpp").contains("int main("));
+
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), mainCpp);
+    ASSERT_NE(rig.nav().fileSystemView(), nullptr);
+    EXPECT_TRUE(waitFor([&] { return rig.nav().fileSystemView()->selectedPath() == mainCpp; }));
+
+    // Also supports creating and opening an EmptyFolder project via file.newProject.
+    rig.prompts.newProject = frost::app::NewProjectSpec{
+        .name = "PlainFolder",
+        .location = dir.path(),
+        .kind = frost::app::NewProjectTemplate::EmptyFolder,
+    };
+    rig.window->menus().action("file.newProject")->trigger();
+    EXPECT_EQ(rig.prompts.newProjectPrompts, 2U);
+    EXPECT_TRUE(rig.workbench->hasProject());
+    EXPECT_EQ(rig.workbench->projectRoot(), dir.join("PlainFolder"));
+    EXPECT_EQ(rig.workbench->cmakeService(), nullptr);
+    EXPECT_EQ(rig.window->tabs().count(), 0);
+}
+
+TEST(Workbench, NewFileAndNewFolderInAppWorkbenchAndCMakeTargetMembership) {
+    WorkDir dir("new-file-cmake");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    auto createdProject = rig.workbench->createNewProject({
+        .name = "Demo",
+        .location = dir.path(),
+        .kind = frost::app::NewProjectTemplate::CMakeExecutable,
+    });
+    ASSERT_TRUE(createdProject.has_value()) << createdProject.error().describe();
+    const std::string originalLists = dir.read("Demo/CMakeLists.txt");
+
+    // Creating a new .cpp file via file.new creates it on disk and opens it in a tab,
+    // without silently mutating CMakeLists.txt.
+    rig.prompts.newItemName = "helper.cpp";
+    rig.window->menus().refresh();
+    ASSERT_NE(rig.window->menus().action("file.new"), nullptr);
+    rig.window->menus().action("file.new")->trigger();
+    EXPECT_EQ(rig.prompts.newItemPrompts, 1U);
+    EXPECT_FALSE(rig.prompts.lastNewItemFolder);
+
+    const std::string helperPath = dir.join("Demo/helper.cpp");
+    EXPECT_TRUE(frost::io::realFileSystem().exists(helperPath).value_or(false));
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), helperPath);
+    EXPECT_EQ(dir.read("Demo/CMakeLists.txt"), originalLists);
+
+    // Explicit addSourceToCMakeLists adds helper.cpp to add_executable(...) and keeps CMakeLists valid.
+    auto added = rig.workbench->addSourceToCMakeLists(helperPath);
+    ASSERT_TRUE(added.has_value()) << added.error().describe();
+    const std::string updatedLists = dir.read("Demo/CMakeLists.txt");
+    EXPECT_TRUE(updatedLists.contains("helper.cpp")) << updatedLists;
+    EXPECT_TRUE(updatedLists.contains("main.cpp")) << updatedLists;
+
+    // Creating a nested folder creates the directory on disk.
+    auto folder = rig.workbench->createNewFolder("", "include/sub");
+    ASSERT_TRUE(folder.has_value()) << folder.error().describe();
+    EXPECT_EQ(*folder, dir.join("Demo/include/sub"));
+    const auto folderStatus = frost::io::realFileSystem().status(*folder);
+    ASSERT_TRUE(folderStatus.has_value());
+    EXPECT_EQ(folderStatus->type, frost::io::FileType::Directory);
+
+    // Refuses addSourceToCMakeLists when CMakeLists.txt has unsaved editor changes.
+    auto extraFile = rig.workbench->createNewFile("", "extra.cpp");
+    ASSERT_TRUE(extraFile.has_value()) << extraFile.error().describe();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Demo/CMakeLists.txt")).has_value());
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("# dirty\n"));
+    ASSERT_TRUE(rig.workbench->currentView()->document().dirty());
+    EXPECT_FALSE(rig.workbench->addSourceToCMakeLists(*extraFile).has_value());
+    EXPECT_FALSE(dir.read("Demo/CMakeLists.txt").contains("extra.cpp"));
+
+    // Save/revert CMakeLists.txt and verify non-literal / conditional target declarations are refused cleanly.
+    ASSERT_TRUE(rig.window->tabs().close(rig.window->tabs().indexOf(dir.join("Demo/CMakeLists.txt"))));
+    const std::string conditionalLists = "cmake_minimum_required(VERSION 3.21)\n"
+                                         "project(Demo LANGUAGES CXX)\n"
+                                         "if(WIN32)\n"
+                                         "    add_executable(Demo main.cpp)\n"
+                                         "endif()\n";
+    dir.write("Demo/CMakeLists.txt", conditionalLists);
+    rig.workbench->checkExternalChanges();
+    EXPECT_FALSE(rig.workbench->addSourceToCMakeLists(*extraFile).has_value());
+    EXPECT_EQ(dir.read("Demo/CMakeLists.txt"), conditionalLists);
+}
+
+TEST(Workbench, SaveAsUpdatesAppWorkbenchEditorLspAndTabsWithoutDuplicates) {
+    WorkDir dir("save-as");
+    dir.write("a.cpp", "int a = 1;\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    const std::string aPath = dir.join("a.cpp");
+    const std::string bPath = dir.join("b.cpp");
+    ASSERT_TRUE(rig.workbench->openPath(aPath).has_value());
+    ASSERT_EQ(rig.window->tabs().count(), 1);
+    DocumentEditorView* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    ASSERT_TRUE(view->editor().typeText("// header\n"));
+    ASSERT_TRUE(view->document().dirty());
+
+    // Cancelling Save As (empty path) leaves the dirty buffer and path unchanged.
+    rig.prompts.saveAsPath.clear();
+    rig.window->menus().refresh();
+    ASSERT_NE(rig.window->menus().action("file.saveAs"), nullptr);
+    rig.window->menus().action("file.saveAs")->trigger();
+    EXPECT_EQ(rig.prompts.saveAsPrompts, 1U);
+    EXPECT_EQ(rig.prompts.lastSaveAsCurrentPath, aPath);
+    EXPECT_EQ(rig.window->tabs().count(), 1);
+    EXPECT_EQ(rig.workbench->currentView()->path(), aPath);
+    EXPECT_TRUE(rig.workbench->currentView()->document().dirty());
+    EXPECT_FALSE(frost::io::realFileSystem().exists(bPath).value_or(true));
+
+    // Confirming Save As writes b.cpp, leaves a.cpp untouched on disk, and rebinds the single tab and registry entry.
+    rig.prompts.saveAsPath = bPath;
+    rig.window->menus().refresh();
+    rig.window->menus().action("file.saveAs")->trigger();
+    EXPECT_EQ(rig.prompts.saveAsPrompts, 2U);
+    EXPECT_EQ(dir.read("a.cpp"), "int a = 1;\n");
+    EXPECT_EQ(dir.read("b.cpp"), "// header\nint a = 1;\n");
+    EXPECT_EQ(rig.window->tabs().count(), 1);
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), bPath);
+    EXPECT_FALSE(rig.workbench->currentView()->document().dirty());
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+    EXPECT_EQ(rig.workbench->documentRegistry().viewCount(aPath), 0U);
+    EXPECT_EQ(rig.workbench->documentRegistry().viewCount(bPath), 1U);
+    EXPECT_EQ(rig.workbench->documents().find(aPath), nullptr);
+    EXPECT_NE(rig.workbench->documents().find(bPath), nullptr);
+}
+
+TEST(Workbench, KeymapSettingsSwitchesBetweenIntelliJAndVisualStudioModes) {
+    WorkDir dir("settings-keymap-vs");
+    WorkbenchRig rig(dir);
+    rig.show();
+    rig.window->refreshActions();
+    rig.window->mainToolbar().button(frost::ui::MainToolbar::kSettings)->click();
+    auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
+    ASSERT_NE(dialog, nullptr);
+    auto* keymapCombo = dialog->findChild<QComboBox*>(QStringLiteral("setting.keymap.id"));
+    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+    ASSERT_NE(keymapCombo, nullptr);
+    ASSERT_NE(buttons, nullptr);
+    EXPECT_EQ(keymapCombo->currentData().toString(), QStringLiteral("intellij"));
+
+    const int vsIndex = keymapCombo->findData(QStringLiteral("visual-studio"));
+    ASSERT_GE(vsIndex, 0);
+    keymapCombo->setCurrentIndex(vsIndex);
+    EXPECT_TRUE(buttons->button(QDialogButtonBox::Apply)->isEnabled());
+    buttons->button(QDialogButtonBox::Apply)->click();
+
+    EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::keymapId), "visual-studio");
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->keymap().keymap().id() == "visual-studio"; }));
+
+    const auto buildId = rig.workbench->registry().find("build.buildSolution");
+    ASSERT_TRUE(buildId.has_value());
+    const auto buildShortcuts = rig.workbench->keymap().shortcutsFor(*buildId);
+    ASSERT_FALSE(buildShortcuts.empty());
+    EXPECT_EQ(frost::input::formatSequence(buildShortcuts.front()), "Ctrl+Shift+B");
+
+    const auto debugId = rig.workbench->registry().find("run.debug");
+    ASSERT_TRUE(debugId.has_value());
+    const auto debugShortcuts = rig.workbench->keymap().shortcutsFor(*debugId);
+    ASSERT_FALSE(debugShortcuts.empty());
+    EXPECT_EQ(frost::input::formatSequence(debugShortcuts.front()), "F5");
+
+    const auto saveAllId = rig.workbench->registry().find("file.saveAll");
+    ASSERT_TRUE(saveAllId.has_value());
+    const auto saveAllShortcuts = rig.workbench->keymap().shortcutsFor(*saveAllId);
+    ASSERT_FALSE(saveAllShortcuts.empty());
+    EXPECT_EQ(frost::input::formatSequence(saveAllShortcuts.front()), "Ctrl+Shift+S");
+
+    buttons->button(QDialogButtonBox::Cancel)->click();
+}
+
 } // namespace

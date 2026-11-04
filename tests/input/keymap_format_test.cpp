@@ -403,9 +403,11 @@ TEST(KeymapFormat, FormatIsAFixpointAndRoundTrips) {
 }
 
 TEST(KeymapFormat, BuiltinKeymapLookup) {
-    EXPECT_EQ(builtinKeymapIds().size(), 1U);
+    ASSERT_EQ(builtinKeymapIds().size(), 2U);
     EXPECT_EQ(builtinKeymapIds()[0], "intellij");
+    EXPECT_EQ(builtinKeymapIds()[1], "visual-studio");
     EXPECT_FALSE(builtinKeymapText("intellij").empty());
+    EXPECT_FALSE(builtinKeymapText("visual-studio").empty());
     EXPECT_TRUE(builtinKeymapText("vs").empty());
     auto missing = builtinKeymap("vs");
     ASSERT_FALSE(missing.has_value());

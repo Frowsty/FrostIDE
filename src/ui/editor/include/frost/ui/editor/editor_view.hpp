@@ -230,6 +230,8 @@ public:
     [[nodiscard]] const text::Editor& editor() const noexcept { return *m_editor; }
     [[nodiscard]] text::Document& document() noexcept { return *m_document; }
     [[nodiscard]] const std::string& path() const noexcept { return m_path; }
+    // Updates the file path (after Save As), refreshing the language and syntax session if needed.
+    void setPath(std::string path);
     [[nodiscard]] const text::LanguageInfo& language() const noexcept { return *m_language; }
     [[nodiscard]] syntax::LanguageId syntaxLanguage() const noexcept { return m_syntaxLanguage; }
     // The syntax session, or nullptr without languages and scheduler.

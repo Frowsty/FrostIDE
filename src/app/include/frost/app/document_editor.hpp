@@ -79,6 +79,8 @@ public:
 
     [[nodiscard]] QWidget* widget() override;
     [[nodiscard]] const std::string& path() const override { return m_path; }
+    // Updates the view's path after Save As, rebinding editor language, settings, and saved status.
+    void setPath(std::string path);
     [[nodiscard]] ui::EditorStatus status() const override;
     void goToLine(int line, int column) override;
     void goToStatusPosition(int line, int column) override;

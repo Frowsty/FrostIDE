@@ -77,4 +77,9 @@ void EditorSettingsBinding::refresh() {
     }
 }
 
+void EditorSettingsBinding::setPath(std::string path) {
+    m_path = std::move(path);
+    refresh();
+}
+
 } // namespace frost::ui

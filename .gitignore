@@ -12,6 +12,7 @@
 # Claude Code agent worktrees and local settings.
 /.claude/worktrees/
 /.claude/settings.local.json
+/continue.txt
 CMakeUserPresets.json
 # ...except the CMake presets fixture's user file, which the tests read (ADR 0046).
 !/tests/project/fixtures/cmake/presets/CMakeUserPresets.json

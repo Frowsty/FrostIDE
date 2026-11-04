@@ -34,6 +34,7 @@ public:
     [[nodiscard]] std::vector<std::string> recentProjects() const;
 
     [[nodiscard]] QListWidget* recentList() const noexcept { return m_recent; }
+    [[nodiscard]] QPushButton* newProjectButton() const noexcept { return m_newProject; }
     [[nodiscard]] QPushButton* openButton() const noexcept { return m_open; }
     [[nodiscard]] QPushButton* openFolderButton() const noexcept { return m_openFolder; }
 
@@ -43,6 +44,7 @@ public:
     void removeRow(int row);
 
 signals:
+    void newProjectRequested();
     void openRequested();
     void openFolderRequested();
     void openRecent(const QString& path);
@@ -54,6 +56,7 @@ protected:
 private:
     void showContextMenu(const QPoint& position);
 
+    QPushButton* m_newProject = nullptr;
     QPushButton* m_open = nullptr;
     QPushButton* m_openFolder = nullptr;
     QListWidget* m_recent = nullptr;

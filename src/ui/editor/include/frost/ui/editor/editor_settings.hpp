@@ -74,6 +74,8 @@ public:
 
     // Resolves the settings now and applies them to the view.
     void refresh();
+    // Updates the bound file path (after Save As) and resolves settings again.
+    void setPath(std::string path);
     // The settings applied last.
     [[nodiscard]] const EditorViewSettings& current() const noexcept { return m_current; }
 

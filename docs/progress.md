@@ -3,6 +3,69 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-04: Beta 4 project/file creation, Save As, and Visual Studio keymap mode
+
+- Implemented the project and file creation workflows prioritized in `continue.txt` plus a
+  Rider-style Visual Studio keymap mode:
+  - **New File (`file.new` / `Alt+Insert`) & New Folder (`file.newFolder`)**: wired through
+    `File` menu, `FileSystemView` context menu, `SolutionExplorer` context menu, and
+    `ui::Workbench` / `app::Workbench`. Validates single-segment relative names (`..`,
+    separators, Windows device names and invalid characters rejected), creates files/folders
+    via `io::LocalFileSystem`, opens created files in the editor, and selects created items
+    in `FileSystemView` via `selectWhenAvailable` once the background scan completes.
+  - **Save As (`file.saveAs`)**: wired through `File` menu and action system into
+    `SaveManager::saveAs`, updating `DocumentRegistry::renamePath`,
+    `DocumentEditorFactory::renamePath`, `EditorTabGroup::renamePath` (including tab tooltip),
+    `DocumentEditorView::setPath`, `EditorView::setPath`, `EditorSettingsBinding::setPath`,
+    `EditorChangeMarkers`, git status, and LSP (`didClose` old URI / `didOpen` new URI for
+    clangd, managed, and Lua) without creating duplicate tabs. Provides the UI escape hatch
+    when saving an EFS-encrypted or NTFS object-ID file is refused under ADR 0076.
+  - **New Project (`file.newProject`)**: accessible from the Welcome screen (`New Project...`),
+    `File > New Project...`, toolbar project switcher menu, and command palette. Offers
+    `CMake Executable (C++20)` (generating `CMakeLists.txt`, `src/main.cpp`, `.gitignore`)
+    and `Empty Folder` templates with live path preview, atomic rollback on failure, and
+    immediate workspace opening. Verified generated `CMakeExecutable` + added source file
+    configures, builds, and runs cleanly under `cmake` + `Ninja` + `clang-cl`.
+  - **Build Target Membership**: reuses `SolutionExplorer`'s `.vcxproj` `Add New File...`
+    (`createNewProjectSource`) flow for MSBuild solutions, and posts an actionable
+    notification (`Add to CMakeLists.txt`) for CMake projects that inserts the relative path
+    into the first `add_executable` / `add_library` target via `project::scanCMakeSyntax`.
+  - **Visual Studio Keymap Mode (`visual-studio`)**: added built-in `visual-studio` keymap
+    alongside `intellij` in `frost::input` (`F5` debug, `Ctrl+F5` run, `F9` toggle breakpoint,
+    `F10`/`F11`/`Shift+F11` step, `Ctrl+Shift+B` build solution, `F7` build project, `F12`
+    go to declaration, `Shift+F12` find usages, `Ctrl+,` search everywhere, `Ctrl+K, Ctrl+C` /
+    `Ctrl+K, Ctrl+U` comment, `Ctrl+K, Ctrl+D` format), registered in `keymap.id` enum schema
+    and exposed the Keymap scheme selector (`setting.keymap.id`) in `Settings > Keymap`.
+- Independent review by subagent `d6f4122d-70c4-4bae-99c4-29102f0ea9da` inspected all modified
+  files and tests; all 5 findings (Windows path separator normalization in `SolutionExplorer`,
+  `defaultNewItemDirectory` priority/workspace-root check, `app::Workbench::saveAs` peer editor
+  path and change-marker update ordering, `FileSystemView` pending selection clearing, and
+  open-document collision coverage in `workbench_test.cpp`) were resolved and verified.
+- Combined verification passed on both platforms:
+  - Windows: `3092/3117` passed (`25` skipped, `1` disabled), `0` failed; `format ok`,
+    `frost_lint ok`, `licensecheck ok`, `featurecheck ok`.
+  - WSL Ubuntu 24.04: `2909/2960` passed (`51` skipped), `0` failed; `licensecheck ok`.
+- Portable beta staged at `E:/FrostBuilds/beta/FrostIDE-2026.11.04-beta.4/frost.exe`.
+  Private-desktop `--selftest` passed (`exit code 0`). Application DLL SHA-256:
+  `A6A75168E00E6165189E971E7E2F45BB16D2D57D14906E36F3AB0738E8ED94C4`.
+- Next: user testing of beta 4. Unfinished worktrees (`Rename`, rich CMake target management,
+  Unity launch ownership) remain untouched for future slices.
+
+## 2026-11-04: Handoff for another AI
+
+- User requested continuation notes focused on a good working beta, including project
+  and file creation. Wrote local `continue.txt`, backed up to
+  `E:/FrostBuilds/orchestration/frostide-handoff-20261104.txt`, with beta 3 provenance,
+  shipped/missing functionality, recommended creation workflow priorities, source
+  entry points, unfinished worktree caveats, verification commands and save limitations.
+- Captured current worktree heads/status counts in
+  `E:/FrostBuilds/orchestration/frostide-worktrees-20261104.json`. Dirty drafts remain
+  untouched. Old orchestration handoffs contain obsolete live-job/preview status.
+- Implementation remains at main/origin/main `5fea365`; no product changes, builds or
+  new feature work were performed for this handoff. Notes are local documentation
+  changes. Next: implement and verify a narrow New File/Save As/New Project workflow;
+  these features are still missing from beta 3, and the priority order is a proposal.
+
 ## 2026-11-04: Beta 3 File System tree refresh fix
 
 - User reported beta 2 repeatedly undoing scroll/collapse in the File System pane

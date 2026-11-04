@@ -6,15 +6,20 @@
 
 #include "frost/search/fuzzy_path.hpp"
 #include "frost/ui/icon_ids.hpp"
+#include "frost/ui/nav/paths.hpp"
 
 #include "file_tree_filter.hpp"
 #include "workbench_util.hpp"
 #include <QAbstractItemModel>
+#include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QScrollBar>
 #include <QTimer>
 #include <QTreeView>
@@ -221,6 +226,7 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     m_tree->setHeaderHidden(true);
     m_tree->setUniformRowHeights(true);
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tree->installEventFilter(this);
     m_tree->viewport()->installEventFilter(this);
     m_search->installEventFilter(this);
@@ -231,6 +237,16 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     layout->addWidget(m_tree, 1);
     layout->addWidget(m_empty, 1);
     m_tree->hide();
+    connect(m_tree, &QTreeView::customContextMenuRequested, this, [this](QPoint pos) {
+        const QModelIndex index = m_tree->indexAt(pos);
+        if (index.isValid()) {
+            m_tree->setCurrentIndex(index);
+        }
+        std::unique_ptr<QMenu> menu(createContextMenu(index, this));
+        if (!menu->isEmpty()) {
+            menu->exec(m_tree->viewport()->mapToGlobal(pos));
+        }
+    });
     connect(m_tree, &QTreeView::expanded, this,
             [this](const QModelIndex& index) { m_expanded.insert(toUtf8(index.data(kPathRole).toString())); });
     connect(m_tree, &QTreeView::collapsed, this, [this](const QModelIndex& index) {
@@ -473,6 +489,7 @@ void FileSystemView::setFiles(std::shared_ptr<const nav::ProjectFiles> files) {
     m_empty->setVisible(!hasRoot);
     if (!hasRoot) {
         m_restoreScroll.reset();
+        m_pendingSelectPath.clear();
         return;
     }
     if (!sameRoot)
@@ -487,6 +504,11 @@ void FileSystemView::setFiles(std::shared_ptr<const nav::ProjectFiles> files) {
         m_tree->selectionModel()->setCurrentIndex(m_model->indexForPath(selected), QItemSelectionModel::ClearAndSelect);
     }
     restoreScrollPosition();
+    if (!m_pendingSelectPath.empty()) {
+        if (select(m_pendingSelectPath) || (m_model->files() && m_model->files()->nodes().size() > 1)) {
+            m_pendingSelectPath.clear();
+        }
+    }
     if (!m_search->text().isEmpty())
         setSpeedSearch(m_search->text());
 }
@@ -547,12 +569,28 @@ std::string FileSystemView::selectedPath() const {
     return index.isValid() ? toUtf8(index.data(kPathRole).toString()) : std::string();
 }
 
+std::string FileSystemView::selectedDirectory() const {
+    const QModelIndex index = m_tree->currentIndex();
+    if (index.isValid()) {
+        const std::string path = toUtf8(index.data(kPathRole).toString());
+        if (index.data(kDirectoryRole).toBool()) {
+            return path;
+        }
+        return std::string(nav::parentOf(path));
+    }
+    if (m_model->files() && !m_model->files()->root().empty()) {
+        return m_model->files()->root();
+    }
+    return {};
+}
+
 QModelIndex FileSystemView::indexOfPath(const std::string& path) const { return m_model->indexForPath(path); }
 
 bool FileSystemView::select(const std::string& path) {
     const QModelIndex found = m_model->indexForPath(path);
     if (!found.isValid())
         return false;
+    m_pendingSelectPath.clear();
     m_restoreScroll.reset(); // Explicit navigation wins over passive refresh restoration.
     for (QModelIndex parent = found.parent(); parent.isValid(); parent = parent.parent()) {
         m_tree->expand(parent);
@@ -560,6 +598,54 @@ bool FileSystemView::select(const std::string& path) {
     m_tree->setCurrentIndex(found);
     m_tree->scrollTo(found);
     return true;
+}
+
+void FileSystemView::selectWhenAvailable(std::string path) {
+    if (path.empty()) {
+        m_pendingSelectPath.clear();
+        return;
+    }
+    if (m_displayCurrent && select(path)) {
+        m_pendingSelectPath.clear();
+        return;
+    }
+    m_pendingSelectPath = std::move(path);
+}
+
+QMenu* FileSystemView::createContextMenu(const QModelIndex& index, QWidget* parent) {
+    auto* menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("fileSystemContextMenu"));
+    if (!m_displayCurrent || !m_model->files() || m_model->files()->root().empty()) {
+        return menu;
+    }
+    QString targetPath;
+    bool isDirectory = true;
+    if (index.isValid()) {
+        targetPath = index.data(kPathRole).toString();
+        isDirectory = index.data(kDirectoryRole).toBool();
+    } else {
+        targetPath = fromUtf8(m_model->files()->root());
+        isDirectory = true;
+    }
+    const QString directory = isDirectory ? targetPath : fromUtf8(nav::parentOf(toUtf8(targetPath)));
+    if (index.isValid() && !isDirectory) {
+        QAction* open = menu->addAction(text("Open"));
+        open->setObjectName(QStringLiteral("openFile"));
+        connect(open, &QAction::triggered, this, [this, targetPath] { emit fileActivated(targetPath); });
+        menu->addSeparator();
+    }
+    QAction* newFile = menu->addAction(text("New File..."));
+    newFile->setObjectName(QStringLiteral("newFile"));
+    connect(newFile, &QAction::triggered, this, [this, directory] { emit newFileRequested(directory); });
+    QAction* newFolder = menu->addAction(text("New Folder..."));
+    newFolder->setObjectName(QStringLiteral("newFolder"));
+    connect(newFolder, &QAction::triggered, this, [this, directory] { emit newFolderRequested(directory); });
+    menu->addSeparator();
+    QAction* copy = menu->addAction(text("Copy Path"));
+    copy->setObjectName(QStringLiteral("copyPath"));
+    connect(copy, &QAction::triggered, this,
+            [targetPath] { QApplication::clipboard()->setText(QDir::toNativeSeparators(targetPath)); });
+    return menu;
 }
 
 void FileSystemView::activateSelected() { activate(m_tree->currentIndex()); }

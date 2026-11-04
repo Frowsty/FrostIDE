@@ -18,6 +18,7 @@ public:
     SettingsKeymapPage(const input::ActionRegistry& registry, input::KeymapService& keymap,
                        std::function<void()> changed, QWidget* parent = nullptr);
     void load(const settings::SettingsDocument& document, const settings::Registry& registry);
+    void setKeymapId(std::string_view keymapId);
     [[nodiscard]] bool dirty() const noexcept;
     [[nodiscard]] bool matches(const QString& query) const;
     void filter(const QString& query);

@@ -42,12 +42,16 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     layout->addWidget(title);
 
     auto* buttons = new QHBoxLayout();
+    m_newProject = new QPushButton(text("New Project..."), this);
+    m_newProject->setObjectName(QStringLiteral("welcomeNewProject"));
+    m_newProject->setToolTip(text("Create a new C++ CMake project or empty project folder"));
     m_open = new QPushButton(text("Open..."), this);
     m_open->setObjectName(QStringLiteral("welcomeOpen"));
     m_open->setToolTip(text("Open a solution (.sln, .slnx), CMakeLists.txt, or a file"));
     m_openFolder = new QPushButton(text("Open Folder..."), this);
     m_openFolder->setObjectName(QStringLiteral("welcomeOpenFolder"));
     m_openFolder->setToolTip(text("Open a project folder, including a CMake project"));
+    buttons->addWidget(m_newProject);
     buttons->addWidget(m_open);
     buttons->addWidget(m_openFolder);
     buttons->addStretch(1);
@@ -62,6 +66,7 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     m_recent->installEventFilter(this);
     layout->addWidget(m_recent, 1);
 
+    connect(m_newProject, &QPushButton::clicked, this, &WelcomeScreen::newProjectRequested);
     connect(m_open, &QPushButton::clicked, this, &WelcomeScreen::openRequested);
     connect(m_openFolder, &QPushButton::clicked, this, &WelcomeScreen::openFolderRequested);
     // Rider opens a recent project on a single click; Enter opens the current row (eventFilter).

@@ -85,6 +85,14 @@ public:
     void setAddProjectFileHandler(std::function<void(const QString&)> handler) {
         m_addProjectFileHandler = std::move(handler);
     }
+    void setAddNewProjectFileHandler(std::function<void(const QString&)> handler) {
+        m_addNewProjectFileHandler = std::move(handler);
+    }
+    void setNewItemHandlers(std::function<void(const QString&)> newFile,
+                            std::function<void(const QString&)> newFolder) {
+        m_newFileHandler = std::move(newFile);
+        m_newFolderHandler = std::move(newFolder);
+    }
     // Recovery is offered for a project when the caller reports a pending journal.
     void setRecoverProjectHandler(std::function<bool(const QString&)> available,
                                   std::function<void(const QString&)> handler) {
@@ -104,6 +112,8 @@ public:
     // The project of the selected project node, if a project node is selected.
     [[nodiscard]] std::optional<project::ProjectId> currentProject() const;
     [[nodiscard]] QString currentPath() const;
+    // The directory associated with the selected node (solution, project, filter or file), or "".
+    [[nodiscard]] QString currentDirectory() const;
 
     [[nodiscard]] bool isSpeedSearchActive() const noexcept { return m_searchActive; }
     [[nodiscard]] const QString& speedSearchText() const noexcept { return m_query; }
@@ -152,6 +162,9 @@ private:
     std::function<void(project::ProjectId)> m_startupHandler;
     std::function<void(const QString&, const QString&)> m_removeProjectFileHandler;
     std::function<void(const QString&)> m_addProjectFileHandler;
+    std::function<void(const QString&)> m_addNewProjectFileHandler;
+    std::function<void(const QString&)> m_newFileHandler;
+    std::function<void(const QString&)> m_newFolderHandler;
     std::function<bool(const QString&)> m_recoveryAvailable;
     std::function<void(const QString&)> m_recoverProjectHandler;
     std::function<void(const QString&)> m_terminalHandler;

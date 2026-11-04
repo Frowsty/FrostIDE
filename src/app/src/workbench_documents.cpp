@@ -8,12 +8,14 @@
 #include "frost/app/workbench.hpp"
 #include "frost/build/build_diagnostics.hpp"
 #include "frost/core/log.hpp"
+#include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/tr.hpp"
+#include "frost/ui/vcs/change_markers.hpp"
 
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
@@ -234,6 +236,108 @@ Result<void> Workbench::save(DocumentEditorView& view) {
                ui::NotificationKind::Error);
     }
     return saved;
+}
+
+Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view targetPath) {
+    if (targetPath.empty()) {
+        return fail(ErrorCode::InvalidArgument, "Save As requires a destination path");
+    }
+    Result<std::string> normalized = io::normalizePath(targetPath);
+    if (!normalized) {
+        notify(text("Cannot save %1").arg(qs(targetPath)), qs(normalized.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(normalized.error()));
+    }
+    std::string candidate = m_documentRegistry->canonicalize(*normalized);
+    if (!m_services.fs.exists(candidate).value_or(false)) {
+        const std::string_view parent = io::parentPath(*normalized);
+        if (!parent.empty()) {
+            if (Result<std::string> canonicalParent = m_services.fs.canonicalPath(parent); canonicalParent) {
+                if (Result<std::string> joined = io::joinPath(*canonicalParent, io::fileName(*normalized)); joined) {
+                    candidate = std::move(*joined);
+                }
+            }
+        }
+    }
+
+    document::FileDocument& document = view.document();
+    const std::string oldPath = document.path();
+    if (lang::documentKey(candidate) == lang::documentKey(oldPath)) {
+        return save(view);
+    }
+
+    Result<document::SaveOutcome> outcome = m_documents->saveAs(document, candidate);
+    if (!outcome) {
+        m_tabs->refreshBanners(oldPath);
+        notify(text("Cannot save %1").arg(displayName(candidate)), qs(outcome.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(outcome.error()));
+    }
+
+    const std::string newPath = document.path();
+    for (const Error& warning : outcome->warnings) {
+        log::warn(kLog, "after saving {}: {}", newPath, warning.describe());
+        notify(text("Saved %1 with a warning").arg(displayName(newPath)), qs(warning.describe()),
+               ui::NotificationKind::Warning);
+    }
+
+    if (m_clangd && isCFamilySource(oldPath))
+        (void)m_clangd->closeDocument(oldPath);
+    if (m_managed && isManagedSource(oldPath))
+        (void)m_managed->closeDocument(oldPath);
+    if (m_lua && isLuaSource(oldPath))
+        (void)m_lua->closeDocument(oldPath);
+    m_liveMarkers.erase(lang::documentKey(oldPath));
+    std::erase(m_discarded, oldPath);
+
+    for (DocumentEditorView* peer : m_editors->views()) {
+        if (&peer->document() != &document)
+            continue;
+        peer->setPath(newPath);
+        delete peer->editor().findChild<ui::EditorChangeMarkers*>();
+        if (m_git)
+            m_git->attachEditor(*peer);
+        delete peer->editor().findChild<ui::lang::EditorInsightBinding*>();
+        if (m_clangd && isCFamilySource(newPath) && peer == currentView()) {
+            auto* binding = new ui::lang::EditorInsightBinding(peer->editor(), {*m_bridge, *m_pool});
+            binding->attach(*m_clangd);
+        }
+        refreshMarkers(*peer);
+    }
+    m_documentRegistry->renamePath(oldPath, newPath);
+    m_tabs->renamePath(oldPath, newPath);
+    if (m_nav) {
+        m_nav->notifyPathRenamed(oldPath, newPath);
+    }
+
+    if (DocumentEditorView* updated = m_editors->find(newPath); updated != nullptr) {
+        syncClangdDocument(*updated);
+        syncLuaDocument(*updated);
+        syncManagedDocument(*updated);
+    }
+    if (isManagedSource(newPath) && !m_managed)
+        offerManagedTrust();
+    if (isLuaSource(newPath) && !m_lua)
+        offerLuaTrust();
+
+    m_documentRegistry->notifyChanged(newPath);
+    if (m_language) {
+        m_language->editorChanged();
+    }
+    updateLanguageTarget();
+    return {};
+}
+
+void Workbench::showSaveAsDialog() {
+    DocumentEditorView* view = currentView();
+    if (view == nullptr) {
+        return;
+    }
+    const std::string chosen = m_services.prompts.chooseSaveAsPath(m_window, view->path());
+    if (chosen.empty()) {
+        return;
+    }
+    (void)saveAs(*view, chosen);
 }
 
 document::SaveAllResult Workbench::saveAllDocuments() {

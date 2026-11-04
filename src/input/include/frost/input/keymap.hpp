@@ -131,7 +131,7 @@ inline constexpr std::size_t kMaxSequencesPerBinding = 8;
 // text does not parse. Budget: B1 (KeymapService::create may run during start-up; at most
 // 1 ms in Release).
 [[nodiscard]] Result<Keymap> builtinKeymap(std::string_view id);
-// {"intellij"}. Valid for the program's lifetime.
+// {"intellij", "visual-studio"}. Valid for the program's lifetime.
 [[nodiscard]] std::span<const std::string_view> builtinKeymapIds() noexcept;
 // The embedded source text of a built-in keymap ("" for unknown ids), for tests.
 [[nodiscard]] std::string_view builtinKeymapText(std::string_view id) noexcept;

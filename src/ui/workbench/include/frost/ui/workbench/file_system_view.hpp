@@ -22,6 +22,7 @@
 
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QModelIndex;
 
 class QTreeView;
@@ -54,8 +55,14 @@ public:
     [[nodiscard]] QString speedSearch() const;
     // The path of the selected row, or empty.
     [[nodiscard]] std::string selectedPath() const;
+    // The directory of the selected row (its own path for a folder, parent for a file), else root.
+    [[nodiscard]] std::string selectedDirectory() const;
     // Selects the row of `path` (expanding its parents); false when the tree does not have it.
     bool select(const std::string& path);
+    // Selects `path` now, or remembers it to select as soon as a scan publishes it.
+    void selectWhenAvailable(std::string path);
+    // Builds the context menu for `index` (invalid index: the root folder's menu); caller owns it.
+    [[nodiscard]] QMenu* createContextMenu(const QModelIndex& index, QWidget* parent = nullptr);
     // Activates the selected row: a file emits fileActivated(), a folder toggles.
     void activateSelected();
     // The visible rows' names in tree order (expanded folders' children included), for tests.
@@ -72,6 +79,8 @@ public:
 
 signals:
     void fileActivated(const QString& path);
+    void newFileRequested(const QString& directory);
+    void newFolderRequested(const QString& directory);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -91,6 +100,7 @@ private:
     std::unique_ptr<FilterState> m_filterState;
     std::set<std::string> m_expanded;
     std::optional<QPoint> m_restoreScroll;
+    std::string m_pendingSelectPath;
     bool m_displayCurrent = true;
     FileColorProvider m_fileColors;
     QTreeView* m_tree;

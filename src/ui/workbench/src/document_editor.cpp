@@ -136,6 +136,10 @@ public:
 
     [[nodiscard]] QWidget* widget() override { return m_container; }
     [[nodiscard]] const std::string& path() const override { return m_path; }
+    void setPath(std::string path) {
+        m_path = std::move(path);
+        refreshBanners();
+    }
 
     [[nodiscard]] EditorStatus status() const override {
         EditorStatus status = m_inner != nullptr ? m_inner->status() : EditorStatus{};
@@ -271,6 +275,15 @@ void DocumentEditorFactory::refreshBanners(const std::string& path) {
     for (DocumentEditorView* view : views) {
         if (view->path() == path) {
             view->refreshBanners();
+        }
+    }
+}
+
+void DocumentEditorFactory::renamePath(const std::string& oldPath, const std::string& newPath) {
+    const std::vector<DocumentEditorView*> views = m_views;
+    for (DocumentEditorView* view : views) {
+        if (view->path() == oldPath) {
+            view->setPath(newPath);
         }
     }
 }

@@ -165,9 +165,21 @@ class GitIntegration;
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
 // others).
 namespace workbench_actions {
+inline constexpr std::string_view kNewProject = "file.newProject";
 inline constexpr std::string_view kOpenFolder = "file.openFolder";
 inline constexpr std::string_view kOpenRecent = "file.openRecent";
 } // namespace workbench_actions
+
+enum class NewProjectTemplate : std::uint8_t {
+    CMakeExecutable,
+    EmptyFolder,
+};
+
+struct NewProjectSpec {
+    std::string name;
+    std::string location;
+    NewProjectTemplate kind = NewProjectTemplate::CMakeExecutable;
+};
 
 // The ids of the Build output and Find Usages tool windows (bottom); Run is the shell's "run".
 inline constexpr std::string_view kBuildToolWindow = "build";
@@ -195,6 +207,26 @@ public:
     enum class OpenKind : std::uint8_t { SolutionOrFile, Folder };
     // The path chosen in File > Open (a .sln, .slnx or any file) or Open Folder; "" when cancelled.
     [[nodiscard]] virtual std::string chooseOpenPath(QWidget* parent, OpenKind kind) = 0;
+    // The destination path chosen in File > Save As; "" when cancelled.
+    [[nodiscard]] virtual std::string chooseSaveAsPath(QWidget* parent, const std::string& currentPath) {
+        (void)parent;
+        (void)currentPath;
+        return {};
+    }
+    // The relative file or folder name chosen in New File / New Folder; "" when cancelled.
+    [[nodiscard]] virtual std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) {
+        (void)parent;
+        (void)directory;
+        (void)folder;
+        return {};
+    }
+    // The specification chosen in File > New Project; nullopt when cancelled.
+    [[nodiscard]] virtual std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
+                                                                         const std::string& defaultLocation) {
+        (void)parent;
+        (void)defaultLocation;
+        return std::nullopt;
+    }
     // A dirty tab is closing and saving it failed with `error`: true closes it, losing the changes.
     [[nodiscard]] virtual bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) = 0;
     // `project` is running: true stops and reruns it (Rider's "stop and rerun?").
@@ -213,6 +245,10 @@ protected:
 class DialogWorkbenchPrompts final : public IWorkbenchPrompts {
 public:
     [[nodiscard]] std::string chooseOpenPath(QWidget* parent, OpenKind kind) override;
+    [[nodiscard]] std::string chooseSaveAsPath(QWidget* parent, const std::string& currentPath) override;
+    [[nodiscard]] std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) override;
+    [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
+                                                                 const std::string& defaultLocation) override;
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
     [[nodiscard]] bool confirmRerun(QWidget* parent, const QString& project) override;
     [[nodiscard]] bool confirmProjectRecovery(QWidget* parent, const QString& project) override;
@@ -348,6 +384,18 @@ public:
     bool closeProject();
     // Shows the File > Open (or Open Folder) prompt and opens the choice.
     void showOpenDialog(IWorkbenchPrompts::OpenKind kind);
+    // Shows the File > New Project prompt and creates + opens the project.
+    void showNewProjectDialog();
+    // Creates a new project from `spec` without overwriting existing non-empty folders, and opens it.
+    [[nodiscard]] Result<std::string> createNewProject(const NewProjectSpec& spec);
+    // Creates a new file or folder in `directory` (empty: active tree/editor/project directory).
+    [[nodiscard]] Result<std::string> createNewFile(std::string_view directory, std::string_view relativeName);
+    [[nodiscard]] Result<std::string> createNewFolder(std::string_view directory, std::string_view relativeName);
+    // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and adds it to the .vcxproj.
+    [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
+                                                             std::string_view relativeName);
+    // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt.
+    [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
     // Canonical directory of the current project, empty when none is open.
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
@@ -360,6 +408,10 @@ public:
 
     // Saves `view`'s document. Errors: SaveManager::save's (also shown as a notification).
     Result<void> save(DocumentEditorView& view);
+    // Saves `view`'s document to `targetPath` and updates its tab, registry and LSP identity.
+    [[nodiscard]] Result<void> saveAs(DocumentEditorView& view, std::string_view targetPath);
+    // Prompts for a destination path and runs saveAs() on the active editor view.
+    void showSaveAsDialog();
     // Save All (the navigation workbench's, file.saveAll); failures are shown as notifications.
     document::SaveAllResult saveAllDocuments();
     // The IDE frame lost focus to another application (autosave) or got it back (external changes).
@@ -504,6 +556,8 @@ private:
     // Documents.
     // The registry reported a state change of `path` (a save, a reload, a merge): the view follows.
     void documentChanged(const std::string& path);
+    void onNewFileCreated(const std::string& path);
+    [[nodiscard]] std::string defaultNewItemDirectory() const;
     void openLocation(const QString& path, int line, int column);
     void notify(const QString& title, const QString& text, ui::NotificationKind kind);
     // Saves without notifying (the close path shows the error in its prompt).
@@ -625,6 +679,7 @@ private:
     std::map<std::string, std::vector<ui::LineMarker>> m_liveMarkers;
     // Paths whose close the user confirmed after a failed save: the document closes unsaved.
     std::vector<std::string> m_discarded;
+    bool m_suppressNewFileNotice = false;
     bool m_shutDown = false;
 };
 

@@ -13,6 +13,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/cmake_syntax.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
@@ -24,6 +25,7 @@
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/tr.hpp"
+#include "frost/ui/workbench/file_system_view.hpp"
 
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
@@ -31,7 +33,9 @@
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
 #include "unity_control.hpp"
+#include <QDir>
 #include <QFileInfo>
+#include <QStandardPaths>
 
 #include <algorithm>
 #include <array>
@@ -83,6 +87,88 @@ std::string cacheNameFor(std::string_view root) {
     std::ranges::replace_if(name, [](char c) { return !std::isalnum(static_cast<unsigned char>(c)); }, '_');
     return std::format("{}-{:016x}", name.empty() ? std::string("root") : name,
                        std::hash<std::string>{}(lang::documentKey(root)));
+}
+
+bool isWindowsReservedDeviceName(std::string_view component) {
+    const std::size_t dot = component.find('.');
+    const std::string_view stem = dot == std::string_view::npos ? component : component.substr(0, dot);
+    if (stem.empty())
+        return false;
+    std::string upper(stem);
+    std::ranges::transform(upper, upper.begin(),
+                           [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; });
+    static constexpr std::array<std::string_view, 22> kReserved{
+        "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+    return std::ranges::find(kReserved, std::string_view(upper)) != kReserved.end();
+}
+
+Result<void> validateProjectNameComponent(std::string_view name) {
+    if (name.empty() || name == "." || name == "..") {
+        return fail(ErrorCode::InvalidArgument, "enter a valid project name");
+    }
+    if (name.back() == ' ' || name.back() == '.') {
+        return fail(ErrorCode::InvalidArgument, "a project name cannot end with a space or period");
+    }
+    for (const char raw : name) {
+        const auto ch = static_cast<unsigned char>(raw);
+        if (ch < 0x20U || ch == '<' || ch == '>' || ch == ':' || ch == '"' || ch == '/' || ch == '\\' || ch == '|' ||
+            ch == '?' || ch == '*') {
+            return fail(ErrorCode::InvalidArgument, "the project name contains invalid path characters");
+        }
+    }
+    if (isWindowsReservedDeviceName(name)) {
+        return fail(ErrorCode::InvalidArgument, "the project name is a reserved device name");
+    }
+    return {};
+}
+
+std::string sanitizeCMakeTargetName(std::string_view name) {
+    std::string out;
+    out.reserve(name.size());
+    for (const char raw : name) {
+        const auto ch = static_cast<unsigned char>(raw);
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' ||
+            ch == '-') {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('_');
+        }
+    }
+    if (out.empty() || out.front() == '-') {
+        out.insert(0, "app_");
+    }
+    return out;
+}
+
+bool isCTranslationUnit(std::string_view path) noexcept {
+    static constexpr std::array<std::string_view, 8> kTranslationUnits{".c",   ".cc",   ".cpp", ".cxx",
+                                                                       ".c++", ".cppm", ".ixx", ".cu"};
+    const std::string ext = extensionOf(path);
+    return std::ranges::find(kTranslationUnits, ext) != kTranslationUnits.end();
+}
+
+Result<std::string> cmakeRelativeSourcePath(std::string_view projectRoot, std::string_view sourcePath) {
+    if (!sourcePath.starts_with(projectRoot) || sourcePath.size() <= projectRoot.size() ||
+        (sourcePath[projectRoot.size()] != '/' && sourcePath[projectRoot.size()] != '\\')) {
+        return fail(ErrorCode::InvalidArgument, "the source file must be inside the CMake project directory");
+    }
+    std::string out(sourcePath.substr(projectRoot.size() + 1));
+    std::ranges::replace(out, '\\', '/');
+    while (out.starts_with('/')) {
+        out.erase(out.begin());
+    }
+    if (out.empty() || out == "." || out == ".." || out.starts_with("../") || out.find("/../") != std::string::npos) {
+        return fail(ErrorCode::InvalidArgument, "the source file must be inside the CMake project directory");
+    }
+    for (const char raw : out) {
+        const auto ch = static_cast<unsigned char>(raw);
+        if (ch <= 0x20U || ch == '"' || ch == '#' || ch == '$' || ch == '(' || ch == ')' || ch == ';') {
+            return fail(ErrorCode::Unsupported,
+                        "the source path contains characters that require manual CMakeLists.txt quoting");
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -473,6 +559,337 @@ Result<void> Workbench::reopenRoot(const std::string& root) {
         }
     }
     return openPath(root);
+}
+
+// --- Project and file creation ---
+
+void Workbench::showNewProjectDialog() {
+    std::string defaultLocation;
+    if (!m_projectRoot.empty()) {
+        defaultLocation = std::string(io::parentPath(m_projectRoot));
+    } else {
+        QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (docs.isEmpty())
+            docs = QDir::homePath();
+        defaultLocation = QDir::toNativeSeparators(docs).toStdString();
+    }
+    const std::optional<NewProjectSpec> chosen = m_services.prompts.chooseNewProject(m_window, defaultLocation);
+    if (!chosen)
+        return;
+    (void)createNewProject(*chosen);
+}
+
+Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
+    if (Result<void> validName = validateProjectNameComponent(spec.name); !validName) {
+        notify(text("Cannot create project"), qs(validName.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(validName.error()));
+    }
+    if (spec.location.empty() || !io::isAbsolutePath(spec.location)) {
+        Error err(ErrorCode::InvalidArgument, "select an absolute location for the project");
+        notify(text("Cannot create project"), qs(err.message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
+    Result<std::string> normalizedLocation = io::normalizePath(spec.location);
+    if (!normalizedLocation) {
+        notify(text("Cannot create project"), qs(normalizedLocation.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(normalizedLocation.error()));
+    }
+    Result<std::string> targetDir = io::joinPath(*normalizedLocation, spec.name);
+    if (!targetDir) {
+        notify(text("Cannot create project"), qs(targetDir.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(targetDir.error()));
+    }
+
+    Result<bool> existed = m_services.fs.exists(*targetDir);
+    if (!existed) {
+        notify(text("Cannot create project"), qs(existed.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(existed.error()));
+    }
+    const bool dirExisted = *existed;
+    if (dirExisted) {
+        Result<io::FileStatus> status = m_services.fs.status(*targetDir);
+        if (!status) {
+            notify(text("Cannot create project"), qs(status.error().message()), ui::NotificationKind::Error);
+            return std::unexpected(std::move(status.error()));
+        }
+        if (status->type != io::FileType::Directory) {
+            Error err(ErrorCode::AlreadyExists, "a file already exists at " + *targetDir);
+            notify(text("Cannot create project"), qs(err.message()), ui::NotificationKind::Error);
+            return std::unexpected(std::move(err));
+        }
+        Result<std::vector<io::DirEntry>> entries = m_services.fs.listDirectory(*targetDir);
+        if (!entries) {
+            notify(text("Cannot create project"), qs(entries.error().message()), ui::NotificationKind::Error);
+            return std::unexpected(std::move(entries.error()));
+        }
+        if (!entries->empty()) {
+            Error err(ErrorCode::AlreadyExists, "the target folder is not empty: " + *targetDir);
+            notify(text("Cannot create project"), qs(err.message()), ui::NotificationKind::Error);
+            return std::unexpected(std::move(err));
+        }
+    } else {
+        if (Result<void> created = m_services.fs.createDirectories(*targetDir); !created) {
+            notify(text("Cannot create project"), qs(created.error().message()), ui::NotificationKind::Error);
+            return std::unexpected(std::move(created.error()));
+        }
+    }
+
+    const std::string canonicalDir = m_documentRegistry->canonicalize(*targetDir);
+    if (spec.kind == NewProjectTemplate::EmptyFolder) {
+        Result<void> opened = openFolder(canonicalDir, false);
+        if (!opened) {
+            return std::unexpected(std::move(opened.error()));
+        }
+        if (m_window) {
+            m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
+        }
+        return canonicalDir;
+    }
+
+    const std::string targetName = sanitizeCMakeTargetName(spec.name);
+    Result<std::string> cmakeListsPath = io::joinPath(canonicalDir, "CMakeLists.txt");
+    Result<std::string> mainCppPath = io::joinPath(canonicalDir, "main.cpp");
+    if (!cmakeListsPath || !mainCppPath) {
+        Error err(ErrorCode::InvalidArgument, "could not construct starter project file paths");
+        notify(text("Cannot create project"), qs(err.message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
+
+    const std::string cmakeContents = std::format("cmake_minimum_required(VERSION 3.20)\n"
+                                                  "project({0} LANGUAGES CXX)\n"
+                                                  "\n"
+                                                  "set(CMAKE_CXX_STANDARD 20)\n"
+                                                  "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
+                                                  "set(CMAKE_CXX_EXTENSIONS OFF)\n"
+                                                  "\n"
+                                                  "add_executable({0}\n"
+                                                  "    main.cpp\n"
+                                                  ")\n",
+                                                  targetName);
+    const std::string mainContents = std::format("#include <iostream>\n"
+                                                 "\n"
+                                                 "int main() {{\n"
+                                                 "    std::cout << \"Hello from {}!\\n\";\n"
+                                                 "    return 0;\n"
+                                                 "}}\n",
+                                                 targetName);
+
+    const auto cleanupCreated = [&] {
+        (void)m_services.fs.removeFile(*mainCppPath);
+        (void)m_services.fs.removeFile(*cmakeListsPath);
+        if (!dirExisted) {
+            (void)m_services.fs.removeDirectory(canonicalDir);
+        }
+    };
+
+    if (Result<void> wroteLists = m_services.fs.writeFileAtomic(*cmakeListsPath, cmakeContents); !wroteLists) {
+        cleanupCreated();
+        notify(text("Cannot create project"), qs(wroteLists.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(wroteLists.error()));
+    }
+    if (Result<void> wroteMain = m_services.fs.writeFileAtomic(*mainCppPath, mainContents); !wroteMain) {
+        cleanupCreated();
+        notify(text("Cannot create project"), qs(wroteMain.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(wroteMain.error()));
+    }
+
+    Result<void> openedProject = openCMakeProject(*cmakeListsPath);
+    if (!openedProject) {
+        return std::unexpected(std::move(openedProject.error()));
+    }
+    if (m_window) {
+        m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
+    }
+    if (m_nav && m_nav->fileSystemView()) {
+        m_nav->fileSystemView()->selectWhenAvailable(*mainCppPath);
+    }
+    (void)openPath(*mainCppPath);
+    return canonicalDir;
+}
+
+Result<std::string> Workbench::createNewFile(std::string_view directory, std::string_view relativeName) {
+    if (!m_nav) {
+        return fail(ErrorCode::InvalidArgument, "the workbench has no window");
+    }
+    const std::string baseDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
+    return m_nav->createNewFile(baseDir, relativeName);
+}
+
+Result<std::string> Workbench::createNewFolder(std::string_view directory, std::string_view relativeName) {
+    if (!m_nav) {
+        return fail(ErrorCode::InvalidArgument, "the workbench has no window");
+    }
+    const std::string baseDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
+    return m_nav->createNewFolder(baseDir, relativeName);
+}
+
+Result<std::string> Workbench::createNewProjectSource(std::string_view projectPath, std::string_view relativeName) {
+    if (!m_nav) {
+        return fail(ErrorCode::InvalidArgument, "the workbench has no window");
+    }
+    const std::string canonicalProject = m_documentRegistry->canonicalize(projectPath);
+    const std::string projectDir(io::parentPath(canonicalProject));
+    m_suppressNewFileNotice = true;
+    Result<std::string> created = m_nav->createNewFile(projectDir, relativeName);
+    m_suppressNewFileNotice = false;
+    if (!created) {
+        return created;
+    }
+    removeProjectFile(qs(canonicalProject), qs(*created), true);
+    return created;
+}
+
+void Workbench::onNewFileCreated(const std::string& path) {
+    if (m_suppressNewFileNotice || !m_window || !isCTranslationUnit(path)) {
+        return;
+    }
+    if (m_cmake) {
+        ui::Notification notice;
+        notice.title = text("Created %1").arg(qs(io::fileName(path)));
+        notice.text = text("New C/C++ source files are not added to CMake targets automatically.");
+        notice.kind = ui::NotificationKind::Info;
+        notice.actions.push_back(ui::NotificationAction{
+            text("Add to CMakeLists.txt"),
+            [self = QPointer<Workbench>(this), path] {
+                if (self)
+                    (void)self->addSourceToCMakeLists(path);
+            },
+        });
+        notice.actions.push_back(ui::NotificationAction{
+            text("Open CMakeLists.txt"),
+            [self = QPointer<Workbench>(this)] {
+                if (!self || self->m_projectRoot.empty())
+                    return;
+                if (const auto lists = io::joinPath(self->m_projectRoot, "CMakeLists.txt"))
+                    (void)self->openPath(*lists);
+            },
+        });
+        m_window->notifications().notify(std::move(notice));
+    }
+}
+
+Result<void> Workbench::addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName) {
+    if (m_projectRoot.empty()) {
+        return fail(ErrorCode::InvalidArgument, "no project is open");
+    }
+    Result<std::string> listsPath = io::joinPath(m_projectRoot, "CMakeLists.txt");
+    if (!listsPath) {
+        return std::unexpected(std::move(listsPath.error()));
+    }
+    const std::string canonicalLists = m_documentRegistry->canonicalize(*listsPath);
+    if (!m_services.fs.exists(canonicalLists).value_or(false)) {
+        return fail(ErrorCode::NotFound, "CMakeLists.txt was not found in the project root");
+    }
+    if (const document::FileDocument* openLists = m_documentRegistry->find(canonicalLists);
+        openLists != nullptr && openLists->dirty()) {
+        Error err(ErrorCode::Busy, "save or revert unsaved changes in CMakeLists.txt before adding a source file");
+        notify(text("Cannot update CMakeLists.txt"), qs(err.message()), ui::NotificationKind::Warning);
+        return std::unexpected(std::move(err));
+    }
+
+    const std::string canonicalRoot = m_documentRegistry->canonicalize(m_projectRoot);
+    const std::string canonicalSource = m_documentRegistry->canonicalize(sourcePath);
+    if (!m_services.fs.exists(canonicalSource).value_or(false)) {
+        return fail(ErrorCode::NotFound, "source file does not exist: " + canonicalSource);
+    }
+    Result<std::string> relSource = cmakeRelativeSourcePath(canonicalRoot, canonicalSource);
+    if (!relSource) {
+        notify(text("Manual CMakeLists.txt edit required"), qs(relSource.error().message()),
+               ui::NotificationKind::Warning);
+        return std::unexpected(std::move(relSource.error()));
+    }
+
+    Result<std::string> content = m_services.fs.readFile(canonicalLists);
+    if (!content) {
+        notify(text("Cannot read CMakeLists.txt"), qs(content.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(content.error()));
+    }
+
+    Result<std::vector<project::CMakeSyntaxCommand>> commands = project::scanCMakeSyntax(*content);
+    if (!commands) {
+        notify(text("Manual CMakeLists.txt edit required"), qs(commands.error().message()),
+               ui::NotificationKind::Warning);
+        return std::unexpected(std::move(commands.error()));
+    }
+
+    std::vector<const project::CMakeSyntaxCommand*> candidates;
+    for (const project::CMakeSyntaxCommand& cmd : *commands) {
+        if (cmd.scopeDepth != 0 || cmd.nestedArguments || cmd.name == "add_subdirectory" || cmd.name == "include") {
+            Error err(ErrorCode::Unsupported,
+                      "CMakeLists.txt uses conditional or multi-directory commands; update it manually");
+            notify(text("Manual CMakeLists.txt edit required"), qs(err.message()), ui::NotificationKind::Warning);
+            return std::unexpected(std::move(err));
+        }
+        if (cmd.name != "add_executable" && cmd.name != "add_library") {
+            continue;
+        }
+        if (cmd.arguments.empty() || !std::ranges::all_of(cmd.arguments, &project::CMakeSyntaxArgument::isLiteral)) {
+            Error err(ErrorCode::Unsupported,
+                      "CMake target declaration uses non-literal arguments; update CMakeLists.txt manually");
+            notify(text("Manual CMakeLists.txt edit required"), qs(err.message()), ui::NotificationKind::Warning);
+            return std::unexpected(std::move(err));
+        }
+        const bool isImportedOrAlias = std::ranges::any_of(cmd.arguments, [](const project::CMakeSyntaxArgument& arg) {
+            return arg.literal == "IMPORTED" || arg.literal == "ALIAS" || arg.literal == "INTERFACE";
+        });
+        if (isImportedOrAlias) {
+            continue;
+        }
+        if (!targetName.empty() && cmd.arguments.front().literal != targetName) {
+            continue;
+        }
+        candidates.push_back(&cmd);
+    }
+
+    if (candidates.size() != 1) {
+        Error err(ErrorCode::Unsupported, "CMakeLists.txt does not have a single simple top-level C/C++ target");
+        notify(text("Manual CMakeLists.txt edit required"), qs(err.message()), ui::NotificationKind::Warning);
+        return std::unexpected(std::move(err));
+    }
+
+    const project::CMakeSyntaxCommand* selected = candidates.front();
+    for (std::size_t i = 1; i < selected->arguments.size(); ++i) {
+        if (selected->arguments[i].literal == *relSource) {
+            return {};
+        }
+    }
+
+    const std::string_view newline = content->find("\r\n") != std::string::npos ? "\r\n" : "\n";
+    const std::size_t firstArgBegin = selected->arguments.front().begin;
+    const std::size_t closePos = selected->close;
+    const std::string_view spanView = std::string_view(*content).substr(firstArgBegin, closePos - firstArgBegin);
+    const bool multiline = spanView.find('\n') != std::string_view::npos;
+
+    std::string updated = *content;
+    if (multiline) {
+        std::size_t lineStart = closePos;
+        while (lineStart > 0 && (updated[lineStart - 1] == ' ' || updated[lineStart - 1] == '\t')) {
+            --lineStart;
+        }
+        if (lineStart > 0 && updated[lineStart - 1] == '\n') {
+            updated.insert(lineStart, std::format("    {}{}", *relSource, newline));
+        } else {
+            updated.insert(closePos, std::format("{}    {}{}", newline, *relSource, newline));
+        }
+    } else {
+        updated.insert(closePos, std::format(" {}", *relSource));
+    }
+
+    if (Result<std::vector<project::CMakeSyntaxCommand>> verified = project::scanCMakeSyntax(updated); !verified) {
+        return std::unexpected(std::move(verified.error()));
+    }
+    if (Result<io::SafeWriteResult> written = m_services.fs.safeWrite(canonicalLists, updated, {}); !written) {
+        notify(text("Cannot update CMakeLists.txt"), qs(written.error().message()), ui::NotificationKind::Error);
+        return std::unexpected(std::move(written.error()));
+    }
+    if (document::FileDocument* openLists = m_documents->find(canonicalLists); openLists != nullptr) {
+        (void)m_documents->checkDisk(*openLists);
+        m_documentRegistry->notifyChanged(canonicalLists);
+    }
+    notify(text("CMakeLists.txt updated"),
+           text("Added %1 to target %2.").arg(qs(*relSource), qs(selected->arguments.front().literal)),
+           ui::NotificationKind::Info);
+    return {};
 }
 
 // --- clangd ---

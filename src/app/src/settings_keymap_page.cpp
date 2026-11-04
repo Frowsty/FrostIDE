@@ -127,6 +127,13 @@ void SettingsKeymapPage::load(const settings::SettingsDocument& document, const 
     m_message->clear();
     rebuild();
 }
+void SettingsKeymapPage::setKeymapId(std::string_view keymapId) {
+    if (m_preferences.keymapId == keymapId)
+        return;
+    m_preferences.keymapId = std::string(keymapId);
+    if (m_valid)
+        rebuild();
+}
 bool SettingsKeymapPage::dirty() const noexcept { return m_valid && m_records != m_original; }
 std::optional<settings::ConditionalSettingEdit> SettingsKeymapPage::edit() const {
     if (!dirty())
@@ -135,14 +142,16 @@ std::optional<settings::ConditionalSettingEdit> SettingsKeymapPage::edit() const
                                             settings::Value(m_records)};
 }
 input::BindingIndex SettingsKeymapPage::index() const {
-    auto defaults = m_keymap.keymap().bindings(m_keymap.platform());
+    const auto activeKeymap = input::builtinKeymap(m_preferences.keymapId);
+    const input::Keymap& baseKeymap = activeKeymap ? *activeKeymap : m_keymap.keymap();
+    auto defaults = baseKeymap.bindings(m_keymap.platform());
     std::vector<input::ActionOverride> overrides;
     for (const auto& module : m_keymap.moduleDefaults()) {
         if (std::ranges::none_of(defaults, [&](const auto& item) { return item.actionId == module.actionId; }))
             overrides.push_back({module.actionId, module.sequences});
     }
     overrides.insert(overrides.end(), m_preferences.overrides.begin(), m_preferences.overrides.end());
-    return input::BindingIndex::build(m_keymap.keymap(), m_keymap.platform(), overrides, m_registry);
+    return input::BindingIndex::build(baseKeymap, m_keymap.platform(), overrides, m_registry);
 }
 void SettingsKeymapPage::rebuild() {
     const auto selectedId =

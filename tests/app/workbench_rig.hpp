@@ -137,6 +137,23 @@ public:
         lastOpenKind = kind;
         return openPath;
     }
+    [[nodiscard]] std::string chooseSaveAsPath(QWidget*, const std::string& currentPath) override {
+        ++saveAsPrompts;
+        lastSaveAsCurrentPath = currentPath;
+        return saveAsPath;
+    }
+    [[nodiscard]] std::string chooseNewItemName(QWidget*, const std::string& directory, bool folder) override {
+        ++newItemPrompts;
+        lastNewItemDirectory = directory;
+        lastNewItemFolder = folder;
+        return newItemName;
+    }
+    [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget*,
+                                                                 const std::string& defaultLocation) override {
+        ++newProjectPrompts;
+        lastNewProjectDefaultLocation = defaultLocation;
+        return newProject;
+    }
     [[nodiscard]] bool confirmDiscard(QWidget*, const QString&, const QString& error) override {
         ++discardCalls;
         lastDiscardError = error;
@@ -156,6 +173,16 @@ public:
     std::string openPath;
     OpenKind lastOpenKind = OpenKind::SolutionOrFile;
     int openCalls = 0;
+    std::string saveAsPath;
+    std::string lastSaveAsCurrentPath;
+    std::size_t saveAsPrompts = 0;
+    std::string newItemName;
+    std::string lastNewItemDirectory;
+    bool lastNewItemFolder = false;
+    std::size_t newItemPrompts = 0;
+    std::optional<NewProjectSpec> newProject;
+    std::string lastNewProjectDefaultLocation;
+    std::size_t newProjectPrompts = 0;
     bool discard = false;
     std::function<void()> onDiscard;
     int discardCalls = 0;

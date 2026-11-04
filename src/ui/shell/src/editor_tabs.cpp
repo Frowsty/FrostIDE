@@ -389,10 +389,12 @@ void EditorTabGroup::updateTabText(int index) {
     if (index < 0 || index >= m_bar->count()) {
         return;
     }
+    const std::string& path = m_tabs[static_cast<std::size_t>(index)].editor->path();
     m_bar->setTabText(index, escapeMnemonics(tabText(index)));
+    m_bar->setTabToolTip(index, QDir::toNativeSeparators(fromUtf8(path)));
     std::optional<QColor> color;
     if (m_titleColors) {
-        color = m_titleColors(m_tabs[static_cast<std::size_t>(index)].editor->path());
+        color = m_titleColors(path);
     }
     m_bar->setTabTextColor(index, color.value_or(QColor()));
 }

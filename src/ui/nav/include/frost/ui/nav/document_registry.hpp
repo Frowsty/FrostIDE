@@ -60,6 +60,8 @@ public:
     // does nothing. O(log n).
     void acquire(const std::string& path);
     void release(const std::string& path);
+    // Moves acquired view counts from `oldPath` to `newPath` (both canonical) after Save As.
+    void renamePath(const std::string& oldPath, const std::string& newPath);
     [[nodiscard]] int viewCount(std::string_view path) const;
 
     // Registers a listener for notifyChanged(); returns its id for unsubscribe().

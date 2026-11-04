@@ -32,7 +32,9 @@ constexpr MenuEntry endSub() { return MenuEntry{Kind::EndSubmenu, {}, {}}; }
 namespace a = frost::ui::actions;
 
 constexpr std::array kFileMenu{
+    act("file.newProject"),
     act("file.new"),
+    act("file.newFolder"),
     act(a::kOpenFile),
     act("file.openFolder"),
     act("file.openRecent"),
@@ -44,6 +46,7 @@ constexpr std::array kFileMenu{
     act(a::kCloseAllButPinned),
     sep(),
     act("file.saveDocument"),
+    act("file.saveAs"),
     act("file.saveAll"),
     act("file.reloadFromDisk"),
     sep(),

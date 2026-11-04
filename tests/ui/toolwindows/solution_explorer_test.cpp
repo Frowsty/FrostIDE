@@ -410,5 +410,65 @@ TEST(FileManager, SpecSelectsFilesAndOpensFolders) {
     EXPECT_EQ(relative.error().code(), ErrorCode::InvalidArgument);
 }
 
+TEST(SolutionExplorer, ContextMenuOffersNewFileNewFolderAndAddNewProjectSource) {
+    SolutionExplorer explorer;
+    explorer.setSolution(loadTiny("Tiny.sln"));
+
+    QString addedNewProjectTarget;
+    QString newFileDir;
+    QString newFolderDir;
+    explorer.setAddNewProjectFileHandler([&](const QString& project) { addedNewProjectTarget = project; });
+    explorer.setNewItemHandlers([&](const QString& dir) { newFileDir = dir; },
+                                [&](const QString& dir) { newFolderDir = dir; });
+
+    // Project node context menu offers Add New C/C++ Source..., New File..., and New Folder...
+    {
+        ASSERT_NE(explorer.solution(), nullptr);
+        const NodeId appNode = nodeAt(*explorer.solution(), {"App"});
+        const QModelIndex appIdx = explorer.filterModel()->mapFromSource(explorer.model()->indexOf(appNode));
+        ASSERT_TRUE(appIdx.isValid());
+        explorer.view()->setCurrentIndex(appIdx);
+        EXPECT_EQ(explorer.currentDirectory().toStdString(), tiny("App"));
+
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(appIdx));
+        ASSERT_NE(menu, nullptr);
+        QAction* addNewSource = findAction(*menu, "addNewProjectFile");
+        QAction* newFile = findAction(*menu, "newFile");
+        QAction* newFolder = findAction(*menu, "newFolder");
+        ASSERT_NE(addNewSource, nullptr);
+        ASSERT_NE(newFile, nullptr);
+        ASSERT_NE(newFolder, nullptr);
+
+        addNewSource->trigger();
+        EXPECT_EQ(addedNewProjectTarget.toStdString(), tiny("App/App.vcxproj"));
+        newFile->trigger();
+        EXPECT_EQ(newFileDir.toStdString(), tiny("App"));
+        newFolder->trigger();
+        EXPECT_EQ(newFolderDir.toStdString(), tiny("App"));
+    }
+
+    // File node context menu offers New File... and New Folder... in its parent directory.
+    {
+        newFileDir.clear();
+        newFolderDir.clear();
+        const QModelIndex mainIdx =
+            explorer.filterModel()->mapFromSource(explorer.model()->indexOfPath(tiny("App/main.cpp")));
+        ASSERT_TRUE(mainIdx.isValid());
+        explorer.view()->setCurrentIndex(mainIdx);
+        EXPECT_EQ(explorer.currentDirectory().toStdString(), tiny("App"));
+
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(mainIdx));
+        ASSERT_NE(menu, nullptr);
+        QAction* newFile = findAction(*menu, "newFile");
+        QAction* newFolder = findAction(*menu, "newFolder");
+        ASSERT_NE(newFile, nullptr);
+        ASSERT_NE(newFolder, nullptr);
+        newFile->trigger();
+        EXPECT_EQ(newFileDir.toStdString(), tiny("App"));
+        newFolder->trigger();
+        EXPECT_EQ(newFolderDir.toStdString(), tiny("App"));
+    }
+}
+
 } // namespace
 } // namespace frost::ui

@@ -6,6 +6,7 @@
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 
 #include "frost/build/msbuild_driver.hpp"
+#include "frost/io/path.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/file_manager.hpp"
@@ -15,6 +16,7 @@
 #include <QAction>
 #include <QClipboard>
 #include <QEvent>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -194,6 +196,28 @@ std::optional<project::ProjectId> SolutionExplorer::currentProject() const {
 
 QString SolutionExplorer::currentPath() const {
     return m_view->currentIndex().data(SolutionTreeModel::PathRole).toString();
+}
+
+QString SolutionExplorer::currentDirectory() const {
+    const auto solution = m_model->solution();
+    const auto nodeId = currentNode();
+    if (!solution || !nodeId) {
+        return {};
+    }
+    const auto& item = solution->node(*nodeId);
+    if (item.kind == NodeKind::Solution || item.kind == NodeKind::SolutionFolder) {
+        return QString::fromStdString(solution->directory());
+    }
+    if (item.kind == NodeKind::File && !item.path.empty()) {
+        return QString::fromStdString(std::string(io::parentPath(item.path)));
+    }
+    if (item.project) {
+        return QString::fromStdString(std::string(io::parentPath(solution->project(*item.project).path)));
+    }
+    if (!item.path.empty()) {
+        return QString::fromStdString(std::string(io::parentPath(item.path)));
+    }
+    return QString::fromStdString(solution->directory());
 }
 
 QStringList SolutionExplorer::expandedKeys() const {
@@ -465,6 +489,16 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
             });
         }
         if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive) &&
+            m_addNewProjectFileHandler) {
+            const auto solution = m_model->solution();
+            QAction* addNew = menu->addAction(tr("Add New C/C++ Source..."));
+            addNew->setObjectName(QStringLiteral("addNewProjectFile"));
+            connect(addNew, &QAction::triggered, this, [this, solution, path] {
+                if (m_model->solution() == solution && m_addNewProjectFileHandler)
+                    m_addNewProjectFileHandler(path);
+            });
+        }
+        if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive) &&
             m_addProjectFileHandler) {
             const auto solution = m_model->solution();
             QAction* add = menu->addAction(tr("Add Existing C/C++ Source"));
@@ -485,6 +519,40 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
             });
         }
         menu->addSeparator();
+    }
+
+    if ((m_newFileHandler || m_newFolderHandler) && m_model->solution()) {
+        const auto solution = m_model->solution();
+        const auto& item = solution->node(*node);
+        QString targetDir;
+        if (item.kind == NodeKind::Solution || item.kind == NodeKind::SolutionFolder) {
+            targetDir = QString::fromStdString(solution->directory());
+        } else if (item.kind == NodeKind::File && !item.path.empty()) {
+            targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
+        } else if (item.project) {
+            targetDir = QString::fromStdString(std::string(io::parentPath(solution->project(*item.project).path)));
+        } else if (!item.path.empty()) {
+            targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
+        }
+        if (!targetDir.isEmpty()) {
+            if (m_newFileHandler) {
+                QAction* newFile = menu->addAction(tr("New File..."));
+                newFile->setObjectName(QStringLiteral("newFile"));
+                connect(newFile, &QAction::triggered, this, [this, targetDir] {
+                    if (m_newFileHandler)
+                        m_newFileHandler(targetDir);
+                });
+            }
+            if (m_newFolderHandler) {
+                QAction* newFolder = menu->addAction(tr("New Folder..."));
+                newFolder->setObjectName(QStringLiteral("newFolder"));
+                connect(newFolder, &QAction::triggered, this, [this, targetDir] {
+                    if (m_newFolderHandler)
+                        m_newFolderHandler(targetDir);
+                });
+            }
+            menu->addSeparator();
+        }
     }
 
     if (m_terminalHandler && !path.isEmpty()) {

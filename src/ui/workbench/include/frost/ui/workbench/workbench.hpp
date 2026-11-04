@@ -51,6 +51,8 @@ namespace frost::ui {
 
 // The ids the workbench registers (none is reserved by another slice, ADR 0042).
 namespace workbench_actions {
+inline constexpr std::string_view kNewFile = "file.new";
+inline constexpr std::string_view kNewFolder = "file.newFolder";
 inline constexpr std::string_view kFindAction = "search.findAction";
 inline constexpr std::string_view kSearchEverywhere = "search.everywhere";
 inline constexpr std::string_view kGoToFile = "navigate.gotoFile";
@@ -60,6 +62,7 @@ inline constexpr std::string_view kBack = "navigate.back";
 inline constexpr std::string_view kForward = "navigate.forward";
 inline constexpr std::string_view kSaveAll = "file.saveAll";
 inline constexpr std::string_view kSaveDocument = "file.saveDocument";
+inline constexpr std::string_view kSaveAs = "file.saveAs";
 inline constexpr std::string_view kReloadFromDisk = "file.reloadFromDisk";
 inline constexpr std::string_view kCloseProject = "file.closeProject";
 inline constexpr std::string_view kFileSystemWindow = "fileSystem.show";
@@ -99,6 +102,16 @@ struct WorkbenchServices {
     std::function<Result<void>(const std::string& root)> openProjectHook{};
     // Receives the same watcher batches as the document and project views, on the GUI thread.
     std::function<void(const io::FileChangeBatch&)> filesChanged{};
+    // Prompts for a relative new file or folder name under `directory`; "" cancels.
+    std::function<std::string(const std::string& directory, bool folder)> promptNewItem{};
+    // Optional override for determining the default directory when creating a file/folder.
+    std::function<std::string()> defaultNewItemDirectory{};
+    // Notified after a new file has been created on disk and opened in an editor tab.
+    std::function<void(const std::string& path)> fileCreated{};
+    // Prompts for a Save As target path given `currentPath`; "" cancels.
+    std::function<std::string(const std::string& currentPath)> promptSaveAsPath{};
+    // Optional composition-root override for Save As (runs LSP/editor rebinding too).
+    std::function<void()> saveAsHook{};
 };
 
 /*
@@ -235,6 +248,22 @@ public:
     document::SaveAllResult saveAll();
     // Saves the active editor's document. Errors: the save's (also notified).
     [[nodiscard]] Result<void> saveDocument();
+    // Saves the active editor's document to `targetPath` and updates its tab/registry identity.
+    [[nodiscard]] Result<void> saveDocumentAs(std::string_view targetPath);
+    // Updates navigation state (active path, recent files, places, and folder scan) after Save As.
+    void notifyPathRenamed(const std::string& oldPath, const std::string& newPath);
+
+    // --- File and folder creation ---
+
+    // Default directory for New File / New Folder (selected tree directory, active file's parent, or root).
+    [[nodiscard]] std::string defaultNewItemDirectory() const;
+    // Creates a new empty file at `directory`/`relativeName`, selects it in File System, and opens it.
+    [[nodiscard]] Result<std::string> createNewFile(std::string_view directory, std::string_view relativeName);
+    // Creates a new directory at `directory`/`relativeName` and selects it in File System.
+    [[nodiscard]] Result<std::string> createNewFolder(std::string_view directory, std::string_view relativeName);
+    // Prompts for a name and creates a new file or folder in `directory` (empty: defaultNewItemDirectory()).
+    void promptAndCreateNewFile(std::string_view directory = {});
+    void promptAndCreateNewFolder(std::string_view directory = {});
 
     [[nodiscard]] FileSystemView* fileSystemView() const noexcept { return m_fileSystem; }
     [[nodiscard]] QTimer* autosaveTimer() const noexcept { return m_autosaveTimer; }

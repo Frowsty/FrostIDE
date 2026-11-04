@@ -38,6 +38,7 @@
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/tr.hpp"
 #include "frost/ui/vcs/git_actions.hpp"
+#include "frost/ui/workbench/file_system_view.hpp"
 
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
@@ -53,21 +54,30 @@
 #include <QAction>
 #include <QApplication>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleHints>
 #include <QTemporaryFile>
 #include <QTimer>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
@@ -114,6 +124,171 @@ std::string DialogWorkbenchPrompts::chooseOpenPath(QWidget* parent, OpenKind kin
                        "CMake project (CMakeLists.txt);;"
                        "All files (*)"));
     return QDir::toNativeSeparators(chosen).toStdString();
+}
+
+std::string DialogWorkbenchPrompts::chooseSaveAsPath(QWidget* parent, const std::string& currentPath) {
+    const QString initial = QDir::toNativeSeparators(qs(currentPath));
+    const QString chosen = QFileDialog::getSaveFileName(parent, text("Save As"), initial, text("All files (*)"));
+    return QDir::toNativeSeparators(chosen).toStdString();
+}
+
+std::string DialogWorkbenchPrompts::chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) {
+    QDialog dialog(parent);
+    dialog.setObjectName(folder ? QStringLiteral("newFolderDialog") : QStringLiteral("newFileDialog"));
+    dialog.setWindowTitle(folder ? text("New Folder") : text("New File"));
+    dialog.setModal(true);
+    dialog.setMinimumWidth(440);
+
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(10);
+
+    if (!directory.empty()) {
+        auto* dirLabel = new QLabel(text("In: %1").arg(QDir::toNativeSeparators(qs(directory))), &dialog);
+        dirLabel->setWordWrap(true);
+        layout->addWidget(dirLabel);
+    }
+
+    auto* edit = new QLineEdit(&dialog);
+    edit->setObjectName(QStringLiteral("newItemNameEdit"));
+    edit->setPlaceholderText(folder ? text("include or src/detail") : text("example.cpp or sub/example.hpp"));
+    layout->addWidget(edit);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+    if (ok) {
+        ok->setText(text("Create"));
+        ok->setEnabled(false);
+    }
+    QObject::connect(edit, &QLineEdit::textChanged, &dialog, [ok](const QString& value) {
+        if (ok)
+            ok->setEnabled(!value.trimmed().isEmpty());
+    });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    edit->setFocus();
+    if (dialog.exec() != QDialog::Accepted)
+        return {};
+    return edit->text().trimmed().toStdString();
+}
+
+std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* parent,
+                                                                       const std::string& defaultLocation) {
+    QDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("newProjectDialog"));
+    dialog.setWindowTitle(text("New Project"));
+    dialog.setModal(true);
+    dialog.setMinimumSize(620, 340);
+
+    auto* outer = new QVBoxLayout(&dialog);
+    outer->setContentsMargins(16, 16, 16, 16);
+    outer->setSpacing(12);
+
+    auto* body = new QHBoxLayout();
+    body->setSpacing(16);
+
+    auto* templateList = new QListWidget(&dialog);
+    templateList->setObjectName(QStringLiteral("newProjectTemplateList"));
+    templateList->setFixedWidth(210);
+    auto* cmakeItem = new QListWidgetItem(text("C++ Executable (CMake)"), templateList);
+    cmakeItem->setData(Qt::UserRole, static_cast<int>(NewProjectTemplate::CMakeExecutable));
+    auto* emptyItem = new QListWidgetItem(text("Empty Folder"), templateList);
+    emptyItem->setData(Qt::UserRole, static_cast<int>(NewProjectTemplate::EmptyFolder));
+    templateList->setCurrentRow(0);
+    body->addWidget(templateList);
+
+    auto* rightCol = new QVBoxLayout();
+    rightCol->setSpacing(10);
+
+    auto* descriptionLabel = new QLabel(&dialog);
+    descriptionLabel->setObjectName(QStringLiteral("newProjectDescription"));
+    descriptionLabel->setWordWrap(true);
+    rightCol->addWidget(descriptionLabel);
+
+    auto* form = new QFormLayout();
+    form->setSpacing(8);
+
+    auto* nameEdit = new QLineEdit(QStringLiteral("UntitledProject"), &dialog);
+    nameEdit->setObjectName(QStringLiteral("newProjectNameEdit"));
+    nameEdit->selectAll();
+    form->addRow(text("Project name:"), nameEdit);
+
+    QString initialLocation = QDir::toNativeSeparators(qs(defaultLocation));
+    if (initialLocation.isEmpty()) {
+        initialLocation = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (initialLocation.isEmpty())
+            initialLocation = QDir::homePath();
+        initialLocation = QDir::toNativeSeparators(initialLocation);
+    }
+
+    auto* locationRow = new QWidget(&dialog);
+    auto* locationLayout = new QHBoxLayout(locationRow);
+    locationLayout->setContentsMargins(0, 0, 0, 0);
+    locationLayout->setSpacing(6);
+    auto* locationEdit = new QLineEdit(initialLocation, locationRow);
+    locationEdit->setObjectName(QStringLiteral("newProjectLocationEdit"));
+    auto* browseBtn = new QPushButton(text("Browse..."), locationRow);
+    browseBtn->setObjectName(QStringLiteral("newProjectBrowseButton"));
+    locationLayout->addWidget(locationEdit, 1);
+    locationLayout->addWidget(browseBtn);
+    form->addRow(text("Location:"), locationRow);
+
+    rightCol->addLayout(form);
+
+    auto* previewLabel = new QLabel(&dialog);
+    previewLabel->setObjectName(QStringLiteral("newProjectPathPreview"));
+    previewLabel->setWordWrap(true);
+    rightCol->addWidget(previewLabel);
+    rightCol->addStretch(1);
+
+    body->addLayout(rightCol, 1);
+    outer->addLayout(body, 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QPushButton* createBtn = buttons->button(QDialogButtonBox::Ok);
+    if (createBtn)
+        createBtn->setText(text("Create"));
+
+    const auto updateState = [&] {
+        const int row = templateList->currentRow();
+        const bool isCMake = row <= 0;
+        descriptionLabel->setText(
+            isCMake ? text("Creates a C++20 CMake project with a starter CMakeLists.txt and main.cpp.")
+                    : text("Creates an empty folder and opens it in the File System view."));
+        const QString name = nameEdit->text().trimmed();
+        const QString loc = locationEdit->text().trimmed();
+        const QString combined =
+            (loc.isEmpty() || name.isEmpty()) ? QString() : QDir::toNativeSeparators(QDir(loc).filePath(name));
+        previewLabel->setText(combined.isEmpty() ? QString() : text("Project directory: %1").arg(combined));
+        if (createBtn)
+            createBtn->setEnabled(!name.isEmpty() && !loc.isEmpty());
+    };
+
+    QObject::connect(templateList, &QListWidget::currentRowChanged, &dialog, [&](int) { updateState(); });
+    QObject::connect(nameEdit, &QLineEdit::textChanged, &dialog, [&](const QString&) { updateState(); });
+    QObject::connect(locationEdit, &QLineEdit::textChanged, &dialog, [&](const QString&) { updateState(); });
+    QObject::connect(browseBtn, &QPushButton::clicked, &dialog, [&] {
+        const QString chosen =
+            QFileDialog::getExistingDirectory(&dialog, text("Select Project Location"), locationEdit->text().trimmed());
+        if (!chosen.isEmpty())
+            locationEdit->setText(QDir::toNativeSeparators(chosen));
+    });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    outer->addWidget(buttons);
+
+    updateState();
+    nameEdit->setFocus();
+    if (dialog.exec() != QDialog::Accepted)
+        return std::nullopt;
+
+    NewProjectSpec spec;
+    spec.name = nameEdit->text().trimmed().toStdString();
+    spec.location = QDir::toNativeSeparators(locationEdit->text().trimmed()).toStdString();
+    spec.kind = templateList->currentRow() == 1 ? NewProjectTemplate::EmptyFolder : NewProjectTemplate::CMakeExecutable;
+    return spec;
 }
 
 bool DialogWorkbenchPrompts::confirmDiscard(QWidget* parent, const QString& file, const QString& error) {
@@ -564,6 +739,7 @@ void Workbench::registerActions() {
     if (auto added = m_registry.add(std::move(checkUpdate)); !added)
         log::warn(kLog, "update action: {}", added.error().describe());
     // Save All, Save, Reload All from Disk and Close Project are the navigation workbench's.
+    add(wa::kNewProject, "New Project...", [this] { showNewProjectDialog(); });
     add(wa::kOpenFolder, "Open Folder...", [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
     add("file.settings", "Settings...", [this] { showSettings(); }, [this] { return m_window != nullptr; });
     add("window.structure", "Structure", [this] {
@@ -654,6 +830,12 @@ void Workbench::attach(ui::ShellWindow& window) {
     nav.applicationSettingsFile = m_options.applicationSettingsFile;
     nav.closeProjectHook = [this] { static_cast<void>(closeProject()); };
     nav.openProjectHook = [this](const std::string& root) { return reopenRoot(root); };
+    nav.promptNewItem = [this](const std::string& directory, bool folder) {
+        return m_services.prompts.chooseNewItemName(m_window, directory, folder);
+    };
+    nav.defaultNewItemDirectory = [this] { return defaultNewItemDirectory(); };
+    nav.fileCreated = [this](const std::string& path) { onNewFileCreated(path); };
+    nav.saveAsHook = [this] { showSaveAsDialog(); };
     nav.filesChanged = [this](const io::FileChangeBatch& batch) {
         if (m_cmake)
             m_cmake->filesChanged(batch);
@@ -684,6 +866,7 @@ void Workbench::attach(ui::ShellWindow& window) {
     auto* welcome = new WelcomeScreen();
     m_welcome = welcome;
     window.tabs().setEmptyStateWidget(welcome);
+    connect(welcome, &WelcomeScreen::newProjectRequested, this, [this] { showNewProjectDialog(); });
     connect(welcome, &WelcomeScreen::openRequested, this,
             [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::SolutionOrFile); });
     connect(welcome, &WelcomeScreen::openFolderRequested, this,
@@ -803,6 +986,21 @@ void Workbench::attachToolWindows() {
         if (!source.isEmpty())
             removeProjectFile(project, source, true);
     });
+    explorer->setAddNewProjectFileHandler([this](const QString& project) {
+        const std::string dir = QDir::toNativeSeparators(QFileInfo(project).absolutePath()).toStdString();
+        const std::string name = m_services.prompts.chooseNewItemName(m_window, dir, false);
+        if (!name.empty())
+            (void)createNewProjectSource(project.toStdString(), name);
+    });
+    explorer->setNewItemHandlers(
+        [this](const QString& dir) {
+            if (m_nav)
+                m_nav->promptAndCreateNewFile(dir.toStdString());
+        },
+        [this](const QString& dir) {
+            if (m_nav)
+                m_nav->promptAndCreateNewFolder(dir.toStdString());
+        });
     explorer->setRecoverProjectHandler(
         [this](const QString&) {
             const auto journal = io::joinPath(m_projectRoot, ".frost-project-edit-journal");
@@ -867,6 +1065,13 @@ void Workbench::attachToolbar() {
             QTimer::singleShot(0, this, [this] {
                 if (m_window && m_nav)
                     showOpenDialog(IWorkbenchPrompts::OpenKind::Folder);
+            });
+        });
+        auto* newProj = menu.addAction(text("New Project..."));
+        connect(newProj, &QAction::triggered, this, [this] {
+            QTimer::singleShot(0, this, [this] {
+                if (m_window && m_nav)
+                    showNewProjectDialog();
             });
         });
         const auto recent = recentProjects(*m_services.settings.snapshot());
@@ -1229,6 +1434,35 @@ void Workbench::refreshRecent() {
     if (m_welcome) {
         m_welcome->setRecentProjects(recentProjects(*m_services.settings.snapshot()));
     }
+}
+
+std::string Workbench::defaultNewItemDirectory() const {
+    const bool filesVisible = m_window && m_window->toolWindows().isVisible(ui::kFileSystemToolWindow);
+    const bool projectVisible = m_window && m_window->toolWindows().isVisible(ui::tool_windows::kProject);
+    if (m_solution && m_explorer && (projectVisible || !filesVisible)) {
+        const QString explorerDir = m_explorer->currentDirectory();
+        if (!explorerDir.isEmpty())
+            return explorerDir.toStdString();
+    }
+    if (m_nav && m_nav->fileSystemView() && !m_nav->fileSystemView()->selectedPath().empty()) {
+        const std::string selectedDir = m_nav->fileSystemView()->selectedDirectory();
+        if (!selectedDir.empty())
+            return selectedDir;
+    }
+    if (m_explorer) {
+        const QString explorerDir = m_explorer->currentDirectory();
+        if (!explorerDir.isEmpty())
+            return explorerDir.toStdString();
+    }
+    if (const DocumentEditorView* active = currentView(); active != nullptr && !active->path().empty()) {
+        const std::string parent(io::parentPath(active->path()));
+        if (m_projectRoot.empty() || parent == m_projectRoot ||
+            (parent.starts_with(m_projectRoot) && parent.size() > m_projectRoot.size() &&
+             (parent[m_projectRoot.size()] == '/' || parent[m_projectRoot.size()] == '\\'))) {
+            return parent;
+        }
+    }
+    return m_projectRoot;
 }
 
 void Workbench::shutdown() {

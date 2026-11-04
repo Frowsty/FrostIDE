@@ -325,6 +325,24 @@ std::unique_ptr<EditorView> createEditorView(text::Document& document, std::stri
     return std::make_unique<EditorView>(document, std::move(path), std::move(services), std::move(settings), parent);
 }
 
+void EditorView::setPath(std::string path) {
+    if (m_path == path) {
+        return;
+    }
+    m_path = std::move(path);
+    m_language = &text::languageForPath(m_path);
+    m_editor->setLanguage(m_language);
+    if (m_syntax != nullptr) {
+        const syntax::LanguageId next = syntax::languageForFileName(m_path);
+        if (next != m_syntaxLanguage) {
+            m_syntaxLanguage = next;
+            m_highlights.valid = false;
+            m_syntax->open(m_syntaxLanguage, m_editor->text());
+            viewport()->update();
+        }
+    }
+}
+
 // --- settings and appearance ---
 
 double EditorView::zoomFactor() const noexcept {

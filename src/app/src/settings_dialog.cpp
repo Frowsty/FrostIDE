@@ -63,6 +63,7 @@ constexpr std::array kEntries{
     Entry{settings::key::debugSourceMapTo.name, 4},
     Entry{settings::key::networkOffline.name, 5},
     Entry{settings::key::updateChannel.name, 5},
+    Entry{settings::key::keymapId.name, 6},
 };
 constexpr std::array<std::string_view, 7> kPages{"Appearance", "Editor",  "Code Style", "Files",
                                                  "Tools",      "Updates", "Keymap"};
@@ -189,7 +190,6 @@ void SettingsDialog::build() {
                                 std::ranges::any_of(m_rows, [](const auto& row) { return row->dirty; }));
         },
         this);
-    layouts[kKeymapPage]->addWidget(m_keymapPage);
     auto* noResults = new QLabel(text("No settings found"), m_pages);
     noResults->setObjectName(QStringLiteral("settingsNoResults"));
     noResults->setAlignment(Qt::AlignCenter);
@@ -270,6 +270,7 @@ void SettingsDialog::build() {
         layouts[static_cast<std::size_t>(entry.page)]->addWidget(row->container);
         m_rows.push_back(std::move(row));
     }
+    layouts[kKeymapPage]->addWidget(m_keymapPage);
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("settingsStatus"));
     m_status->setWordWrap(true);
@@ -336,8 +337,12 @@ void SettingsDialog::changed(std::size_t index) {
         return;
     auto& row = *m_rows[index];
     row.reset = false;
-    row.dirty = controlValue(row.control, row.spec->schema) != row.initial;
+    const settings::Value current = controlValue(row.control, row.spec->schema);
+    row.dirty = current != row.initial;
     row.title->setText(text(row.spec->title) + (row.dirty ? QStringLiteral(" *") : QString()));
+    if (row.spec->key == settings::key::keymapId.name) {
+        m_keymapPage->setKeymapId(std::get<std::string>(current));
+    }
     m_apply->setEnabled(m_keymapPage->dirty() ||
                         std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
 }
@@ -349,6 +354,9 @@ void SettingsDialog::resetRow(std::size_t index) {
     row.reset = true;
     row.dirty = row.expectedRaw.has_value();
     row.title->setText(text(row.spec->title) + (row.dirty ? QStringLiteral(" *") : QString()));
+    if (row.spec->key == settings::key::keymapId.name) {
+        m_keymapPage->setKeymapId(std::get<std::string>(row.spec->defaultValue));
+    }
     m_apply->setEnabled(m_keymapPage->dirty() ||
                         std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
 }
@@ -362,7 +370,7 @@ void SettingsDialog::refreshSearch() {
         row->container->setVisible(match);
         matches[static_cast<std::size_t>(row->page)] |= match;
     }
-    matches[kKeymapPage] = m_keymapPage->matches(query);
+    matches[kKeymapPage] |= m_keymapPage->matches(query);
     m_keymapPage->filter(query);
     int first = -1;
     for (std::size_t i = 0; i < matches.size(); ++i) {

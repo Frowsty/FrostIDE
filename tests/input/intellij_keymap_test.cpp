@@ -199,5 +199,60 @@ TEST(IntelliJKeymap, SpotChecks) {
     EXPECT_EQ(shortcuts(KeymapPlatform::MacOS, "file.settings"), V{"Meta+Comma"}) << "listed in [macos]";
 }
 
+TEST(VisualStudioKeymap, ParsesAndResolvesVisualStudioBindings) {
+    auto keymap = builtinKeymap("visual-studio");
+    ASSERT_TRUE(keymap.has_value()) << keymap.error().message();
+    EXPECT_EQ(keymap->id(), "visual-studio");
+    EXPECT_EQ(keymap->name(), "Visual Studio");
+    EXPECT_TRUE(keymap->hasSection(KeymapSection::Default));
+    EXPECT_GT(keymap->section(KeymapSection::Default).size(), 180U);
+
+    for (const KeymapPlatform platform : kPlatforms) {
+        for (const Binding& binding : keymap->bindings(platform)) {
+            EXPECT_TRUE(isValidActionId(binding.actionId)) << binding.actionId;
+            for (const Sequence& s : binding.sequences) {
+                EXPECT_TRUE(s.valid()) << binding.actionId;
+                if (!s.isGesture()) {
+                    EXPECT_FALSE(isTypingKey(s.first().key) && !s.first().mods.hasCommandModifier())
+                        << platformName(platform) << ": " << binding.actionId << " = " << formatSequence(s);
+                }
+            }
+        }
+    }
+
+    const auto shortcuts = [&](KeymapPlatform platform, std::string_view id) {
+        std::vector<std::string> out;
+        for (const Binding& b : keymap->bindings(platform)) {
+            if (b.actionId == id) {
+                for (const Sequence& s : b.sequences) {
+                    out.push_back(formatSequence(s));
+                }
+            }
+        }
+        return out;
+    };
+    using V = std::vector<std::string>;
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "run.debug"), (V{"F5", "Shift+F9"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "run.stop"), (V{"Shift+F5", "Ctrl+F2"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "debug.toggleBreakpoint"), (V{"F9", "Ctrl+F8"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "debug.stepOver"), V{"F10"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "debug.stepInto"), V{"F11"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "debug.stepOut"), V{"Shift+F11"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "build.project"), (V{"Ctrl+Shift+B", "F7", "Ctrl+F9"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "navigate.declaration"), (V{"F12", "Ctrl+B"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "navigate.implementation"), (V{"Ctrl+F12", "Ctrl+Alt+B"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "navigate.findUsages"), (V{"Shift+F12", "Alt+F7"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "navigate.back"), V{"Ctrl+Minus"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "navigate.forward"), V{"Ctrl+Shift+Minus"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "editor.replace"), V{"Ctrl+H"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "search.replaceInFiles"), V{"Ctrl+Shift+H"});
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "editor.commentLine"),
+              (V{"Ctrl+K, Ctrl+C", "Ctrl+Slash", "Ctrl+NumpadDivide"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "code.reformat"), (V{"Ctrl+K, Ctrl+D", "Ctrl+Alt+L"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "refactor.rename"), (V{"Ctrl+R, Ctrl+R", "F2", "Shift+F6"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "file.new"), (V{"Ctrl+N", "Alt+Insert"}));
+    EXPECT_EQ(shortcuts(KeymapPlatform::Windows, "file.saveAll"), (V{"Ctrl+Shift+S", "Ctrl+S"}));
+}
+
 } // namespace
 } // namespace frost::input

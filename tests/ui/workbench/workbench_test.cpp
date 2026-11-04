@@ -37,6 +37,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QObject>
 #include <QPushButton>
@@ -1093,6 +1094,102 @@ TEST_F(WorkbenchTest, CloseDoesNotAutosaveWhenFrameAutosaveIsDisabled) {
     EXPECT_TRUE(document->dirty());
     EXPECT_EQ(memFs.readFile("/proj/README.md").value_or(""), "# proj\n");
     EXPECT_EQ(app.notificationsTitled(QStringLiteral("Saved")), 0);
+}
+
+TEST_F(WorkbenchTest, CreateNewFileAndFolderSelectsInTreeAndPreservesNavigation) {
+    Ide& app = ide();
+    openProject(app);
+    FileSystemView* tree = app.workbench->fileSystemView();
+    ASSERT_NE(tree, nullptr);
+
+    // Existing navigation works before creating items.
+    ASSERT_TRUE(tree->select("/proj/src/main.cpp"));
+    EXPECT_EQ(tree->selectedDirectory(), "/proj/src");
+    tree->activateSelected();
+    EXPECT_EQ(app.activePath(), "/proj/src/main.cpp");
+
+    // Context menu on a file node offers New File... and New Folder....
+    {
+        std::unique_ptr<QMenu> menu(tree->createContextMenu(tree->indexOfPath("/proj/src/main.cpp")));
+        ASSERT_NE(menu, nullptr);
+        QAction* newFileAct = nullptr;
+        QAction* newFolderAct = nullptr;
+        for (QAction* act : menu->actions()) {
+            if (act->objectName() == QStringLiteral("newFile"))
+                newFileAct = act;
+            if (act->objectName() == QStringLiteral("newFolder"))
+                newFolderAct = act;
+        }
+        EXPECT_NE(newFileAct, nullptr);
+        EXPECT_NE(newFolderAct, nullptr);
+    }
+
+    // Create a new file in /proj/src: writes to disk, opens in editor, and selects in the tree.
+    auto createdFile = app.workbench->createNewFile("/proj/src", "new_unit.cpp");
+    ASSERT_TRUE(createdFile.has_value()) << createdFile.error().describe();
+    EXPECT_EQ(*createdFile, "/proj/src/new_unit.cpp");
+    EXPECT_TRUE(memFs.exists("/proj/src/new_unit.cpp").value_or(false));
+    EXPECT_EQ(app.activePath(), "/proj/src/new_unit.cpp");
+    EXPECT_EQ(tree->selectedPath(), "/proj/src/new_unit.cpp");
+
+    // Create a new folder in /proj: creates directory on disk and selects it in the tree.
+    auto createdFolder = app.workbench->createNewFolder("/proj", "include/detail");
+    ASSERT_TRUE(createdFolder.has_value()) << createdFolder.error().describe();
+    EXPECT_EQ(*createdFolder, "/proj/include/detail");
+    const auto folderStatus = memFs.status("/proj/include/detail");
+    ASSERT_TRUE(folderStatus.has_value());
+    EXPECT_EQ(folderStatus->type, io::FileType::Directory);
+    EXPECT_EQ(tree->selectedPath(), "/proj/include/detail");
+
+    // Refuses to overwrite an existing file or folder, and refuses traversal names.
+    ASSERT_TRUE(memFs.writeFileAtomic("/proj/src/main.cpp", "keep me\n").has_value());
+    const auto duplicateFile = app.workbench->createNewFile("/proj/src", "main.cpp");
+    ASSERT_FALSE(duplicateFile.has_value());
+    EXPECT_EQ(duplicateFile.error().code(), ErrorCode::AlreadyExists);
+    EXPECT_EQ(memFs.readFile("/proj/src/main.cpp").value_or(""), "keep me\n");
+
+    const auto traversal = app.workbench->createNewFile("/proj/src", "../outside.cpp");
+    ASSERT_FALSE(traversal.has_value());
+    EXPECT_EQ(traversal.error().code(), ErrorCode::InvalidArgument);
+
+    // Existing tree navigation continues to work after creating files and folders.
+    ASSERT_TRUE(tree->select("/proj/src/util.cpp"));
+    tree->activateSelected();
+    EXPECT_EQ(app.activePath(), "/proj/src/util.cpp");
+}
+
+TEST_F(WorkbenchTest, SaveDocumentAsUpdatesIdentityWithoutDuplicateTab) {
+    Ide& app = ide();
+    openProject(app);
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/util.cpp").has_value());
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/main.cpp").has_value());
+    document::FileDocument* doc = app.documents->find("/proj/src/main.cpp");
+    ASSERT_NE(doc, nullptr);
+    edit(*doc, 0, 0, "// saved-as\n");
+    ASSERT_TRUE(doc->dirty());
+    EXPECT_EQ(app.window->tabs().count(), 2);
+
+    // Save As to another already-open document's path is refused; original buffer stays dirty and bound to old path.
+    const auto collision = app.workbench->saveDocumentAs("/proj/src/util.cpp");
+    ASSERT_FALSE(collision.has_value());
+    EXPECT_EQ(collision.error().code(), ErrorCode::AlreadyExists);
+    EXPECT_TRUE(doc->dirty());
+    EXPECT_EQ(app.activePath(), "/proj/src/main.cpp");
+    EXPECT_EQ(app.window->tabs().count(), 2);
+
+    // Save As to a new path writes the new file, clears dirty state, and updates tab + registry identity.
+    const auto savedAs = app.workbench->saveDocumentAs("/proj/src/renamed_main.cpp");
+    ASSERT_TRUE(savedAs.has_value()) << savedAs.error().describe();
+    EXPECT_FALSE(doc->dirty());
+    EXPECT_EQ(doc->path(), "/proj/src/renamed_main.cpp");
+    EXPECT_EQ(app.window->tabs().count(), 2);
+    EXPECT_EQ(app.activePath(), "/proj/src/renamed_main.cpp");
+    EXPECT_EQ(app.documents->viewCount("/proj/src/main.cpp"), 0U);
+    EXPECT_EQ(app.documents->viewCount("/proj/src/renamed_main.cpp"), 1U);
+    EXPECT_EQ(memFs.readFile("/proj/src/main.cpp").value_or(""), "int a;\nint b;\nint c;\nint d;\n");
+    EXPECT_EQ(memFs.readFile("/proj/src/renamed_main.cpp").value_or(""),
+              "// saved-as\nint a;\nint b;\nint c;\nint d;\n");
+    EXPECT_EQ(app.workbench->recentFiles().paths().front(), "/proj/src/renamed_main.cpp");
 }
 
 #ifdef _WIN32

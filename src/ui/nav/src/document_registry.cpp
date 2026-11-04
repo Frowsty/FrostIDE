@@ -56,6 +56,19 @@ void DocumentRegistry::release(const std::string& path) {
     }
 }
 
+void DocumentRegistry::renamePath(const std::string& oldPath, const std::string& newPath) {
+    if (oldPath == newPath) {
+        return;
+    }
+    const auto it = m_views.find(oldPath);
+    if (it == m_views.end()) {
+        return;
+    }
+    const int count = it->second;
+    m_views.erase(it);
+    m_views[newPath] += count;
+}
+
 int DocumentRegistry::viewCount(std::string_view path) const {
     const auto it = m_views.find(path);
     return it == m_views.end() ? 0 : it->second;

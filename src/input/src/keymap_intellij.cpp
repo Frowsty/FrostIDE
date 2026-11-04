@@ -357,14 +357,275 @@ code.overrideMethods =
 run.runWithoutDebugging =
 )keymap";
 
-constexpr std::array<std::string_view, 1> kBuiltinIds = {"intellij"};
+constexpr std::string_view kVisualStudioKeymap =
+    R"keymap(# FrostIDE built-in keymap: Visual Studio (Rider-compatible Visual Studio scheme).
+frost-keymap 1
+id visual-studio
+name Visual Studio
+
+[default]
+# Caret movement and selection.
+editor.moveLeft = Left
+editor.moveRight = Right
+editor.moveUp = Up
+editor.moveDown = Down
+editor.moveLeftWithSelection = Shift+Left
+editor.moveRightWithSelection = Shift+Right
+editor.moveUpWithSelection = Shift+Up
+editor.moveDownWithSelection = Shift+Down
+editor.wordLeft = Ctrl+Left
+editor.wordRight = Ctrl+Right
+editor.wordLeftWithSelection = Ctrl+Shift+Left
+editor.wordRightWithSelection = Ctrl+Shift+Right
+editor.lineStart = Home
+editor.lineEnd = End
+editor.lineStartWithSelection = Shift+Home
+editor.lineEndWithSelection = Shift+End
+editor.textStart = Ctrl+Home
+editor.textEnd = Ctrl+End
+editor.textStartWithSelection = Ctrl+Shift+Home
+editor.textEndWithSelection = Ctrl+Shift+End
+editor.pageUp = PageUp
+editor.pageDown = PageDown
+editor.pageUpWithSelection = Shift+PageUp
+editor.pageDownWithSelection = Shift+PageDown
+editor.pageTop = Ctrl+PageUp
+editor.pageBottom = Ctrl+PageDown
+editor.pageTopWithSelection = Ctrl+Shift+PageUp
+editor.pageBottomWithSelection = Ctrl+Shift+PageDown
+editor.scrollUp = Ctrl+Up
+editor.scrollDown = Ctrl+Down
+
+# Editing.
+editor.backspace = Backspace | Shift+Backspace
+editor.delete = Delete
+editor.deleteToWordStart = Ctrl+Backspace
+editor.deleteToWordEnd = Ctrl+Delete
+editor.enter = Enter
+editor.tab = Tab
+editor.unindent = Shift+Tab
+editor.escape = Escape
+editor.startNewLine = Shift+Enter
+editor.startNewLineBefore = Ctrl+Enter
+editor.splitLine = Ctrl+Alt+Enter
+editor.toggleOverwrite = Insert
+editor.selectAll = Ctrl+A
+editor.copy = Ctrl+C | Ctrl+Insert
+editor.cut = Ctrl+X | Shift+Delete
+editor.paste = Ctrl+V | Shift+Insert
+editor.pasteFromHistory = Ctrl+Shift+V
+editor.pasteWithoutFormatting = Ctrl+Alt+Shift+V
+editor.undo = Ctrl+Z | Alt+Backspace
+editor.redo = Ctrl+Y | Ctrl+Shift+Z | Alt+Shift+Backspace
+editor.duplicate = Ctrl+D
+editor.deleteLine = Ctrl+Shift+L
+editor.joinLines = Ctrl+Shift+J
+editor.commentLine = Ctrl+K, Ctrl+C | Ctrl+Slash | Ctrl+NumpadDivide
+editor.commentBlock = Ctrl+Shift+Slash | Ctrl+Shift+NumpadDivide
+editor.extendSelection = Ctrl+Alt+Right | Ctrl+W
+editor.shrinkSelection = Ctrl+Alt+Left | Ctrl+Shift+W
+editor.moveLineUp = Alt+Up | Alt+Shift+Up
+editor.moveLineDown = Alt+Down | Alt+Shift+Down
+editor.moveStatementUp = Ctrl+Shift+Up
+editor.moveStatementDown = Ctrl+Shift+Down
+editor.toggleCase = Ctrl+Shift+U
+editor.autoIndentLines = Ctrl+K, Ctrl+F | Ctrl+Alt+I
+editor.selectNextOccurrence = Alt+Shift+Period | Alt+J
+editor.unselectOccurrence = Alt+Shift+Comma | Alt+Shift+J
+editor.selectAllOccurrences = Alt+Shift+Semicolon | Ctrl+Alt+Shift+J
+editor.toggleColumnMode = Alt+Shift+Insert
+editor.codeBlockStart = Ctrl+BracketLeft
+editor.codeBlockEnd = Ctrl+BracketRight
+editor.codeBlockStartWithSelection = Ctrl+Shift+BracketLeft
+editor.codeBlockEndWithSelection = Ctrl+Shift+BracketRight
+editor.foldCollapse = Ctrl+M, Ctrl+M | Ctrl+NumpadSubtract
+editor.foldExpand = Ctrl+M, Ctrl+L | Ctrl+NumpadAdd
+editor.foldCollapseAll = Ctrl+M, Ctrl+O | Ctrl+Shift+NumpadSubtract
+editor.foldExpandAll = Ctrl+M, Ctrl+X | Ctrl+Shift+NumpadAdd
+editor.foldSelection = Ctrl+M, Ctrl+H | Ctrl+Period
+editor.find = Ctrl+F
+editor.replace = Ctrl+H
+editor.findNext = F3
+editor.findPrevious = Shift+F3
+editor.findWordAtCaret = Ctrl+F3
+editor.gotoLine = Ctrl+G
+
+# Search and navigation.
+search.everywhere = Ctrl+T | Ctrl+Comma | DoubleShift
+search.findAction = Ctrl+Shift+A | Ctrl+Q
+search.findInFiles = Ctrl+Shift+F
+search.replaceInFiles = Ctrl+Shift+H
+search.nextOccurrence = F8 | Ctrl+Alt+Down
+search.previousOccurrence = Shift+F8 | Ctrl+Alt+Up
+navigate.gotoFile = Ctrl+Shift+T | Ctrl+Shift+N
+navigate.gotoClass = Ctrl+N
+navigate.gotoSymbol = Ctrl+Alt+Shift+N
+navigate.recentFiles = Ctrl+Comma | Ctrl+E
+navigate.recentLocations = Ctrl+Shift+E
+navigate.back = Ctrl+Minus
+navigate.forward = Ctrl+Shift+Minus
+navigate.lastEditLocation = Ctrl+Shift+Backspace
+navigate.fileStructure = Alt+Backslash
+navigate.nextError = Alt+PageDown | F2
+navigate.previousError = Alt+PageUp | Shift+F2
+navigate.nextMember = Alt+Down
+navigate.previousMember = Alt+Up
+navigate.matchingBrace = Ctrl+BracketRight | Ctrl+Shift+M
+navigate.selectIn = Alt+F1
+navigate.declaration = F12 | Ctrl+B
+navigate.implementation = Ctrl+F12 | Ctrl+Alt+B
+navigate.typeDeclaration = Ctrl+Shift+F11
+navigate.superMethod = Alt+Home | Ctrl+U
+navigate.findUsages = Shift+F12 | Alt+F7
+navigate.showUsages = Alt+Shift+F12 | Ctrl+Alt+F7
+navigate.highlightUsages = Ctrl+Shift+F7
+navigate.callHierarchy = Ctrl+K, Ctrl+T | Ctrl+Alt+H
+navigate.typeHierarchy = Ctrl+E, Ctrl+H
+navigate.quickDefinition = Alt+F12 | Ctrl+Shift+I
+navigate.relatedFiles = Ctrl+Alt+Home
+navigate.navigationBar = Alt+Home
+
+# Code.
+code.completion = Ctrl+Space | Ctrl+J
+code.smartCompletion = Ctrl+Shift+Space
+code.parameterInfo = Ctrl+Shift+Space | Ctrl+P
+code.quickDocumentation = Ctrl+K, Ctrl+I | Ctrl+Shift+F1
+code.showIntentions = Alt+Enter | Ctrl+Period
+code.completeStatement = Ctrl+Shift+Enter
+code.reformat = Ctrl+K, Ctrl+D | Ctrl+Alt+L
+code.reformatFile = Ctrl+K, Ctrl+F | Ctrl+Alt+Shift+L
+code.optimizeImports = Ctrl+R, Ctrl+O | Ctrl+Alt+O
+code.generate = Alt+Insert
+code.overrideMethods = Ctrl+O
+code.implementMethods = Ctrl+I
+code.surroundWith = Ctrl+K, Ctrl+S | Ctrl+Alt+T
+code.insertLiveTemplate = Ctrl+K, Ctrl+X
+
+# Refactoring.
+refactor.rename = Ctrl+R, Ctrl+R | F2 | Shift+F6
+refactor.this = Ctrl+Shift+R | Ctrl+Alt+Shift+T
+refactor.extractVariable = Ctrl+R, Ctrl+V | Ctrl+Alt+V
+refactor.extractConstant = Ctrl+R, Ctrl+C | Ctrl+Alt+C
+refactor.extractField = Ctrl+R, Ctrl+F | Ctrl+Alt+F
+refactor.extractParameter = Ctrl+R, Ctrl+P | Ctrl+Alt+P
+refactor.extractMethod = Ctrl+R, Ctrl+M | Ctrl+Alt+M
+refactor.inline = Ctrl+R, Ctrl+I | Ctrl+Alt+N
+refactor.changeSignature = Ctrl+R, Ctrl+S | Ctrl+F6
+refactor.move = Ctrl+R, Ctrl+O | F6
+refactor.copy = Ctrl+R, Ctrl+D
+refactor.safeDelete = Ctrl+R, Ctrl+D | Alt+Delete
+
+# Tool windows and tabs.
+window.project = Ctrl+Alt+L | Alt+Digit1
+window.bookmarks = Ctrl+K, Ctrl+W | Alt+Digit2
+window.find = Ctrl+Alt+F | Alt+Digit3
+window.run = Alt+Digit4
+window.debug = Alt+Digit5
+window.problems = Ctrl+Backslash, Ctrl+E | Alt+Digit6
+window.structure = Ctrl+Alt+T | Alt+Digit7
+window.services = Alt+Digit8
+window.git = Alt+Digit9
+window.commit = Alt+Digit0
+window.terminal = Ctrl+Backquote | Alt+F12
+window.hideActive = Shift+Escape
+window.hideAll = Ctrl+Shift+F12
+window.jumpToLast = F12
+window.focusEditor = Escape
+window.maximizeToolWindow = Ctrl+Shift+Quote
+window.closeTab = Ctrl+F4 | Ctrl+W
+window.nextTab = Ctrl+Alt+PageDown | Alt+Right
+window.previousTab = Ctrl+Alt+PageUp | Alt+Left
+window.switcher = Ctrl+Tab
+window.switcherBack = Ctrl+Shift+Tab
+window.focusToolbar = Alt+PageUp
+window.focusStatusBar = Alt+PageDown
+
+# Files and view.
+file.saveAll = Ctrl+Shift+S | Ctrl+S
+file.settings = Ctrl+Alt+S
+file.projectStructure = Ctrl+Alt+Shift+S
+file.reloadFromDisk = Ctrl+Alt+Y
+file.new = Ctrl+N | Alt+Insert
+view.quickSwitchScheme = Ctrl+Backquote
+
+# Version control.
+vcs.commit = Ctrl+Alt+K
+vcs.push = Ctrl+Shift+K
+vcs.update = Ctrl+T
+vcs.quickPopup = Alt+Backquote
+vcs.rollback = Ctrl+Alt+Z
+
+# Run, build and debug.
+run.run = Ctrl+F5 | Shift+F10
+run.debug = F5 | Shift+F9
+run.runContext = Ctrl+Shift+F10
+run.debugContext = Ctrl+Shift+F9
+run.stop = Shift+F5 | Ctrl+F2
+run.selectConfiguration = Alt+Shift+F10
+run.selectDebugConfiguration = Alt+Shift+F9
+run.runWithoutDebugging = Ctrl+F5
+tools.runAnything = DoubleCtrl
+build.project = Ctrl+Shift+B | F7 | Ctrl+F9
+debug.toggleBreakpoint = F9 | Ctrl+F8
+debug.viewBreakpoints = Ctrl+Alt+B | Ctrl+Shift+F8
+debug.stepOver = F10
+debug.stepInto = F11
+debug.smartStepInto = Shift+F7
+debug.stepOut = Shift+F11
+debug.runToCursor = Ctrl+F10 | Alt+F9
+debug.resume = F5
+debug.evaluate = Shift+F9 | Alt+F8
+
+# Bookmarks.
+bookmarks.toggle = Ctrl+K, Ctrl+K
+bookmarks.toggleMnemonic = Ctrl+F11
+bookmarks.show = Ctrl+K, Ctrl+W
+bookmarks.toggle1 = Ctrl+Shift+Digit1
+bookmarks.toggle2 = Ctrl+Shift+Digit2
+bookmarks.toggle3 = Ctrl+Shift+Digit3
+bookmarks.toggle4 = Ctrl+Shift+Digit4
+bookmarks.toggle5 = Ctrl+Shift+Digit5
+bookmarks.toggle6 = Ctrl+Shift+Digit6
+bookmarks.toggle7 = Ctrl+Shift+Digit7
+bookmarks.toggle8 = Ctrl+Shift+Digit8
+bookmarks.toggle9 = Ctrl+Shift+Digit9
+bookmarks.goto1 = Ctrl+Digit1
+bookmarks.goto2 = Ctrl+Digit2
+bookmarks.goto3 = Ctrl+Digit3
+bookmarks.goto4 = Ctrl+Digit4
+bookmarks.goto5 = Ctrl+Digit5
+bookmarks.goto6 = Ctrl+Digit6
+bookmarks.goto7 = Ctrl+Digit7
+bookmarks.goto8 = Ctrl+Digit8
+bookmarks.goto9 = Ctrl+Digit9
+
+# Agent (PLAN.md section 5.1).
+agent.atMention = Ctrl+Alt+K
+agent.terminal =
+
+[windows]
+
+[linux]
+
+[macos]
+file.settings = Meta+Comma
+run.runWithoutDebugging =
+)keymap";
+
+constexpr std::array<std::string_view, 2> kBuiltinIds = {"intellij", "visual-studio"};
 
 } // namespace
 
 std::span<const std::string_view> builtinKeymapIds() noexcept { return kBuiltinIds; }
 
 std::string_view builtinKeymapText(std::string_view id) noexcept {
-    return id == "intellij" ? kIntelliJKeymap : std::string_view();
+    if (id == "intellij") {
+        return kIntelliJKeymap;
+    }
+    if (id == "visual-studio") {
+        return kVisualStudioKeymap;
+    }
+    return {};
 }
 
 } // namespace frost::input

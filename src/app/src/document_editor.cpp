@@ -149,6 +149,15 @@ void DocumentEditorView::markSaved() {
     refresh();
 }
 
+void DocumentEditorView::setPath(std::string path) {
+    m_path = std::move(path);
+    m_editor->setPath(m_path);
+    if (auto* binding = m_editor->findChild<ui::EditorSettingsBinding*>()) {
+        binding->setPath(m_path);
+    }
+    markSaved();
+}
+
 void DocumentEditorView::reloadFromDocument() {
     m_editor->reloadFromDocument();
     if (!m_document->dirty()) {

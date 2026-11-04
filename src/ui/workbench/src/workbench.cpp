@@ -24,12 +24,20 @@
 #include "workbench_util.hpp"
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QEvent>
+#include <QFileDialog>
+#include <QFormLayout>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <QVariantMap>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <iterator>
 #include <mutex>
@@ -64,6 +72,116 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
     }
     const char next = path[root.size()];
     return next == '/' || next == '\\' || root.back() == '/' || root.back() == '\\';
+}
+
+[[nodiscard]] bool isReservedWindowsDeviceStem(std::string_view stem) noexcept {
+    std::string upper(stem);
+    std::ranges::transform(upper, upper.begin(),
+                           [](unsigned char c) { return static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c); });
+    if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") {
+        return true;
+    }
+    if (upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0' &&
+        upper[3] <= '9') {
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] Result<std::string> validateNewItemTarget(io::IFileSystem& fs, const nav::DocumentRegistry& documents,
+                                                        std::string_view directory, std::string_view relativeName) {
+    if (directory.empty()) {
+        return fail(ErrorCode::InvalidArgument, "No folder is open to create an item in.");
+    }
+    if (relativeName.empty()) {
+        return fail(ErrorCode::InvalidArgument, "The name must not be empty.");
+    }
+    if (relativeName.front() == ' ' || relativeName.back() == ' ' || relativeName.front() == '/' ||
+        relativeName.front() == '\\' || io::isAbsolutePath(relativeName, io::PathStyle::Posix) ||
+        io::isAbsolutePath(relativeName, io::PathStyle::Windows)) {
+        return fail(ErrorCode::InvalidArgument, "Enter a relative name inside the target folder.");
+    }
+    std::size_t pos = 0;
+    while (pos <= relativeName.size()) {
+        const std::size_t sep = relativeName.find_first_of("/\\", pos);
+        const std::string_view segment =
+            sep == std::string_view::npos ? relativeName.substr(pos) : relativeName.substr(pos, sep - pos);
+        if (segment.empty() || segment == "." || segment == "..") {
+            return fail(ErrorCode::InvalidArgument, "The path may not contain empty, '.' or '..' segments.");
+        }
+        if (segment.back() == '.' || segment.back() == ' ') {
+            return fail(ErrorCode::InvalidArgument, "A file or folder name may not end with a dot or space.");
+        }
+        for (const char ch : segment) {
+            const auto uc = static_cast<unsigned char>(ch);
+            if (uc < 0x20 || ch == '<' || ch == '>' || ch == ':' || ch == '"' || ch == '|' || ch == '?' || ch == '*') {
+                return fail(ErrorCode::InvalidArgument,
+                            "The name contains characters that are not allowed in file names.");
+            }
+        }
+        const std::size_t dot = segment.find('.');
+        const std::string_view stem = dot == std::string_view::npos ? segment : segment.substr(0, dot);
+        if (isReservedWindowsDeviceStem(stem)) {
+            return fail(ErrorCode::InvalidArgument, "The name is a reserved device name.");
+        }
+        if (sep == std::string_view::npos) {
+            break;
+        }
+        pos = sep + 1;
+    }
+    const std::string baseDir = documents.canonicalize(directory);
+    auto baseStatus = fs.status(baseDir);
+    if (!baseStatus) {
+        return std::unexpected(std::move(baseStatus.error()));
+    }
+    if (baseStatus->type != io::FileType::Directory) {
+        return fail(ErrorCode::InvalidArgument, "'" + baseDir + "' is not a directory.");
+    }
+    const io::PathStyle style = nav::styleOf(baseDir);
+    auto joined = io::joinPath(baseDir, relativeName, style);
+    if (!joined) {
+        return std::unexpected(std::move(joined.error()));
+    }
+    auto normalized = io::normalizePath(*joined, style);
+    if (!normalized) {
+        return std::unexpected(std::move(normalized.error()));
+    }
+    if (!isUnder(baseDir, *normalized)) {
+        return fail(ErrorCode::InvalidArgument, "The target path must stay inside the selected folder.");
+    }
+    auto exists = fs.exists(*normalized);
+    if (!exists) {
+        return std::unexpected(std::move(exists.error()));
+    }
+    if (*exists) {
+        return fail(ErrorCode::AlreadyExists, "'" + std::string(nav::baseName(*normalized)) + "' already exists.");
+    }
+    return *normalized;
+}
+
+[[nodiscard]] std::string showNewItemDialog(QWidget* parent, const std::string& directory, bool folder) {
+    QDialog dialog(parent);
+    dialog.setObjectName(folder ? QStringLiteral("newFolderDialog") : QStringLiteral("newFileDialog"));
+    dialog.setWindowTitle(folder ? text("New Folder") : text("New File"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* info = new QLabel(folder ? text("Create a new folder in %1:").arg(nativePath(directory))
+                                   : text("Create a new file in %1:").arg(nativePath(directory)),
+                            &dialog);
+    info->setWordWrap(true);
+    layout->addWidget(info);
+    auto* edit = new QLineEdit(&dialog);
+    edit->setObjectName(QStringLiteral("newItemNameEdit"));
+    edit->setPlaceholderText(folder ? text("Folder name") : text("File name (e.g. main.cpp)"));
+    layout->addWidget(edit);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    edit->setFocus();
+    if (dialog.exec() != QDialog::Accepted) {
+        return {};
+    }
+    return toUtf8(edit->text());
 }
 
 [[nodiscard]] QVariant fileData(const std::string& path, std::optional<int> line = std::nullopt,
@@ -305,6 +423,11 @@ void Workbench::registerActions() {
     namespace a = workbench_actions;
     const auto hasEditor = [this] { return m_shell.tabs().currentEditor() != nullptr; };
     const auto hasProject = [this] { return !m_root.empty(); };
+    const auto canCreateItem = [this] { return !defaultNewItemDirectory().empty(); };
+    addAction(a::kNewFile, "New File...", "File", [this] { promptAndCreateNewFile(); }, canCreateItem,
+              {"create file", "add file"});
+    addAction(a::kNewFolder, "New Folder...", "File", [this] { promptAndCreateNewFolder(); }, canCreateItem,
+              {"create folder", "new directory"});
     addAction(a::kFindAction, "Find Action...", "Help", [this] { showFindAction(); }, {}, {"command", "action"});
     addAction(a::kSearchEverywhere, "Search Everywhere", "Navigate", [this] { showSearchEverywhere(); }, {},
               {"find", "search"});
@@ -317,6 +440,25 @@ void Workbench::registerActions() {
     addAction(a::kSaveAll, "Save All", "File", [this] { saveAll(); }, {}, {"save"});
     addAction(a::kSaveDocument, "Save Document", "File", [this] { static_cast<void>(saveDocument()); }, hasEditor,
               {"save file"});
+    addAction(a::kSaveAs, "Save As...", "File",
+              [this] {
+                  if (m_services.saveAsHook) {
+                      m_services.saveAsHook();
+                      return;
+                  }
+                  const IEditorView* editor = m_shell.tabs().currentEditor();
+                  if (editor == nullptr) {
+                      return;
+                  }
+                  const std::string chosen = m_services.promptSaveAsPath
+                                                 ? m_services.promptSaveAsPath(editor->path())
+                                                 : toUtf8(QDir::toNativeSeparators(QFileDialog::getSaveFileName(
+                                                       &m_shell, text("Save As"), nativePath(editor->path()))));
+                  if (!chosen.empty()) {
+                      static_cast<void>(saveDocumentAs(chosen));
+                  }
+              },
+              hasEditor, {"save file as", "duplicate"});
     // Rider's Reload All from Disk (Ctrl+Alt+Y): every open file, not only the active one.
     addAction(a::kReloadFromDisk, "Reload All from Disk", "File", [this] { reloadAllFromDisk(); }, {},
               {"refresh", "revert", "synchronize"});
@@ -366,6 +508,10 @@ void Workbench::addToolWindow() {
     m_fileSystem = view;
     connect(view, &FileSystemView::fileActivated, this,
             [this](const QString& path) { static_cast<void>(openFile(toUtf8(path))); });
+    connect(view, &FileSystemView::newFileRequested, this,
+            [this](const QString& directory) { promptAndCreateNewFile(toUtf8(directory)); });
+    connect(view, &FileSystemView::newFolderRequested, this,
+            [this](const QString& directory) { promptAndCreateNewFolder(toUtf8(directory)); });
     ToolWindowSpec spec;
     spec.id = std::string(kFileSystemToolWindow);
     spec.title = text("File System");
@@ -1473,6 +1619,198 @@ Result<void> Workbench::saveDocument() {
     for (const Error& warning : saved->warnings)
         notifySaveWarning(document->path(), warning);
     return {};
+}
+
+Result<void> Workbench::saveDocumentAs(std::string_view targetPath) {
+    IEditorView* editor = m_shell.tabs().currentEditor();
+    if (editor == nullptr) {
+        return fail(ErrorCode::NotFound, "no document is active");
+    }
+    const std::string oldPath = editor->path();
+    document::FileDocument* document = m_services.documents.find(oldPath);
+    if (document == nullptr) {
+        return fail(ErrorCode::NotFound, "'" + oldPath + "' is not open as a document");
+    }
+    if (targetPath.empty()) {
+        return fail(ErrorCode::Cancelled, "Save As was cancelled");
+    }
+    const io::PathStyle style = nav::styleOf(oldPath.empty() ? targetPath : std::string_view(oldPath));
+    auto normalized = io::normalizePath(targetPath, style);
+    if (!normalized) {
+        notifyError(text("Cannot save %1").arg(fromUtf8(targetPath)), normalized.error());
+        return std::unexpected(std::move(normalized.error()));
+    }
+    std::string candidate = *normalized;
+    if (auto existingCanonical = m_services.fs.canonicalPath(candidate); existingCanonical) {
+        candidate = std::move(*existingCanonical);
+    } else {
+        const std::string_view parent = io::parentPath(candidate, style);
+        const std::string_view name = io::fileName(candidate, style);
+        if (!parent.empty() && !name.empty()) {
+            const std::string canonicalParent = m_services.documents.canonicalize(parent);
+            if (auto rejoined = io::joinPath(canonicalParent, name, style); rejoined) {
+                candidate = std::move(*rejoined);
+            }
+        }
+    }
+    if (candidate == oldPath) {
+        return saveDocument();
+    }
+    auto saved = m_services.saveManager.saveAs(*document, candidate);
+    if (!saved) {
+        m_services.editors.refreshBanners(oldPath);
+        notifyError(text("Cannot save %1").arg(nativePath(candidate)), saved.error());
+        return std::unexpected(std::move(saved.error()));
+    }
+    const std::string newPath = document->path();
+    m_services.documents.renamePath(oldPath, newPath);
+    m_services.editors.renamePath(oldPath, newPath);
+    notifyPathRenamed(oldPath, newPath);
+    m_services.documents.notifyChanged(newPath);
+    for (const Error& warning : saved->warnings) {
+        notifySaveWarning(newPath, warning);
+    }
+    return {};
+}
+
+void Workbench::notifyPathRenamed(const std::string& oldPath, const std::string& newPath) {
+    if (oldPath == newPath) {
+        return;
+    }
+    if (const auto it = m_lastPlaces.find(oldPath); it != m_lastPlaces.end()) {
+        nav::Place place = it->second;
+        place.path = newPath;
+        m_lastPlaces.erase(it);
+        m_lastPlaces[newPath] = std::move(place);
+    }
+    if (m_activePath == oldPath) {
+        m_activePath = newPath;
+    }
+    m_recentFiles.touch(newPath);
+    if (!m_root.empty() && (isUnder(m_root, newPath) || isUnder(m_root, oldPath))) {
+        if (m_fileSystem != nullptr && isUnder(m_root, newPath)) {
+            m_fileSystem->selectWhenAvailable(newPath);
+        }
+        refresh();
+    }
+}
+
+std::string Workbench::defaultNewItemDirectory() const {
+    if (m_services.defaultNewItemDirectory) {
+        if (const std::string custom = m_services.defaultNewItemDirectory(); !custom.empty()) {
+            return custom;
+        }
+    }
+    if (m_fileSystem != nullptr) {
+        if (const std::string selected = m_fileSystem->selectedDirectory(); !selected.empty()) {
+            return selected;
+        }
+    }
+    if (const IEditorView* editor = m_shell.tabs().currentEditor(); editor != nullptr && !editor->path().empty()) {
+        const std::string parent(nav::parentOf(editor->path()));
+        if (!parent.empty() && (m_root.empty() || isUnder(m_root, editor->path()) || parent == m_root)) {
+            return parent;
+        }
+    }
+    return m_root;
+}
+
+Result<std::string> Workbench::createNewFile(std::string_view directory, std::string_view relativeName) {
+    const std::string targetDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
+    auto validated = validateNewItemTarget(m_services.fs, m_services.documents, targetDir, relativeName);
+    if (!validated) {
+        notifyError(text("Cannot create file"), validated.error());
+        return std::unexpected(std::move(validated.error()));
+    }
+    const std::string target = std::move(*validated);
+    if (m_services.saveManager.find(target) != nullptr) {
+        Error err(ErrorCode::AlreadyExists, "'" + std::string(nav::baseName(target)) + "' is already open.");
+        notifyError(text("Cannot create file"), err);
+        return std::unexpected(std::move(err));
+    }
+    const std::string parent(nav::parentOf(target));
+    if (!parent.empty()) {
+        if (auto made = m_services.fs.createDirectories(parent); !made) {
+            notifyError(text("Cannot create %1").arg(nativePath(target)), made.error());
+            return std::unexpected(std::move(made.error()));
+        }
+    }
+    if (auto exists = m_services.fs.exists(target); !exists || *exists) {
+        Error err =
+            !exists ? exists.error()
+                    : Error(ErrorCode::AlreadyExists, "'" + std::string(nav::baseName(target)) + "' already exists.");
+        notifyError(text("Cannot create %1").arg(nativePath(target)), err);
+        return std::unexpected(std::move(err));
+    }
+    if (auto written = m_services.fs.writeFileAtomic(target, ""); !written) {
+        notifyError(text("Cannot create %1").arg(nativePath(target)), written.error());
+        return std::unexpected(std::move(written.error()));
+    }
+    const std::string canonical = m_services.documents.canonicalize(target);
+    if (!m_root.empty() && isUnder(m_root, canonical)) {
+        if (m_fileSystem != nullptr) {
+            m_fileSystem->selectWhenAvailable(canonical);
+        }
+        refresh();
+    }
+    if (auto opened = openFile(canonical); !opened) {
+        return std::unexpected(std::move(opened.error()));
+    }
+    if (m_services.fileCreated) {
+        m_services.fileCreated(canonical);
+    }
+    return canonical;
+}
+
+Result<std::string> Workbench::createNewFolder(std::string_view directory, std::string_view relativeName) {
+    const std::string targetDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
+    auto validated = validateNewItemTarget(m_services.fs, m_services.documents, targetDir, relativeName);
+    if (!validated) {
+        notifyError(text("Cannot create folder"), validated.error());
+        return std::unexpected(std::move(validated.error()));
+    }
+    const std::string target = std::move(*validated);
+    if (auto made = m_services.fs.createDirectories(target); !made) {
+        notifyError(text("Cannot create %1").arg(nativePath(target)), made.error());
+        return std::unexpected(std::move(made.error()));
+    }
+    const std::string canonical = m_services.documents.canonicalize(target);
+    if (!m_root.empty() && isUnder(m_root, canonical)) {
+        m_shell.toolWindows().show(kFileSystemToolWindow, false);
+        if (m_fileSystem != nullptr) {
+            m_fileSystem->selectWhenAvailable(canonical);
+        }
+        refresh();
+    }
+    return canonical;
+}
+
+void Workbench::promptAndCreateNewFile(std::string_view directory) {
+    const std::string targetDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
+    if (targetDir.empty()) {
+        notifyError(text("Cannot create file"), Error(ErrorCode::InvalidArgument, "Open a folder or project first."));
+        return;
+    }
+    const std::string name = m_services.promptNewItem ? m_services.promptNewItem(targetDir, false)
+                                                      : showNewItemDialog(&m_shell, targetDir, false);
+    if (name.empty()) {
+        return;
+    }
+    static_cast<void>(createNewFile(targetDir, name));
+}
+
+void Workbench::promptAndCreateNewFolder(std::string_view directory) {
+    const std::string targetDir = directory.empty() ? defaultNewItemDirectory() : std::string(directory);
+    if (targetDir.empty()) {
+        notifyError(text("Cannot create folder"), Error(ErrorCode::InvalidArgument, "Open a folder or project first."));
+        return;
+    }
+    const std::string name = m_services.promptNewItem ? m_services.promptNewItem(targetDir, true)
+                                                      : showNewItemDialog(&m_shell, targetDir, true);
+    if (name.empty()) {
+        return;
+    }
+    static_cast<void>(createNewFolder(targetDir, name));
 }
 
 void Workbench::openSettingsFile(const std::string& path) {
