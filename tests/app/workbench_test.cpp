@@ -1853,6 +1853,24 @@ TEST(Workbench, WelcomeScreenTwoPaneLayoutAndLiveProjectSearch) {
     EXPECT_FALSE(welcome->recentList()->item(0)->isHidden());
     EXPECT_FALSE(welcome->recentList()->item(1)->isHidden());
     EXPECT_FALSE(welcome->recentList()->item(2)->isHidden());
+
+    // Standalone LauncherWindow closes when a project opens and reopens when the project closes.
+    auto* launcher = rig.workbench->launcherWindow();
+    ASSERT_NE(launcher, nullptr);
+    ASSERT_NE(launcher->welcomeScreen(), nullptr);
+    rig.workbench->showLauncherWindow();
+    EXPECT_TRUE(launcher->isVisible());
+    EXPECT_FALSE(rig.window->isVisible());
+
+    const std::string projDir = dir.join("LauncherSample");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(projDir).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(projDir).has_value());
+    EXPECT_FALSE(launcher->isVisible());
+    EXPECT_TRUE(rig.window->isVisible());
+
+    ASSERT_TRUE(rig.workbench->closeProject());
+    EXPECT_TRUE(launcher->isVisible());
+    EXPECT_FALSE(rig.window->isVisible());
 }
 
 TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {

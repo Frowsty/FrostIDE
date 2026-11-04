@@ -76,6 +76,7 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleHints>
@@ -1073,11 +1074,142 @@ Result<void> Workbench::announceUnity(const lang::Json& message) {
 // --- The window ---
 
 bool Workbench::interactiveReady() const {
-    if (!m_interactiveStartupComplete || !m_window || !m_window->isVisible() || !m_nav)
+    const bool anyVisible = (m_window && m_window->isVisible()) || (m_launcherWindow && m_launcherWindow->isVisible());
+    if (!m_interactiveStartupComplete || !anyVisible || !m_nav)
         return false;
     if (m_projectRoot.empty())
         return m_nav->projectRoot().empty();
     return m_nav->projectRoot() == m_projectRoot && m_nav->initialScanReady() && !m_nav->scanPending();
+}
+
+QWidget* Workbench::activeTopWindow() const noexcept {
+    if (m_launcherWindow && m_launcherWindow->isVisible())
+        return m_launcherWindow.data();
+    return m_window.data();
+}
+
+void Workbench::showLauncherWindow() {
+    m_launcherModeEnabled = true;
+    if (m_window && m_window->isVisible()) {
+        m_window->hide();
+    }
+    if (!m_launcherWindow) {
+        return;
+    }
+    refreshRecent();
+    if (!m_launcherWindow->isVisible()) {
+        if (const QScreen* screen = QGuiApplication::primaryScreen()) {
+            const QRect avail = screen->availableGeometry();
+            m_launcherWindow->move(avail.center() -
+                                   QPoint(m_launcherWindow->width() / 2, m_launcherWindow->height() / 2));
+        }
+    }
+    m_launcherWindow->show();
+    m_launcherWindow->raise();
+    m_launcherWindow->activateWindow();
+}
+
+void Workbench::transitionLauncherToMainWindow() {
+    if (!m_launcherWindow || !m_launcherWindow->isVisible()) {
+        return;
+    }
+    m_launcherWindow->setTransitioningToIde(true);
+    m_launcherWindow->hide();
+    m_launcherWindow->setTransitioningToIde(false);
+    if (m_window && !m_window->isVisible()) {
+        if (const QScreen* screen = QGuiApplication::primaryScreen()) {
+            const QRect avail = screen->availableGeometry();
+            m_window->move(avail.center() - QPoint(m_window->width() / 2, m_window->height() / 2));
+        }
+        m_window->show();
+        m_window->raise();
+        m_window->activateWindow();
+    }
+}
+
+void Workbench::wireWelcomeScreen(WelcomeScreen* welcome) {
+    if (!welcome)
+        return;
+    connect(welcome, &WelcomeScreen::newProjectRequested, this, [this] { showNewProjectDialog(); });
+    connect(welcome, &WelcomeScreen::openRequested, this,
+            [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::SolutionOrFile); });
+    connect(welcome, &WelcomeScreen::cloneRepositoryRequested, this, [this] {
+        QWidget* parentWin = activeTopWindow();
+        if (!parentWin)
+            return;
+        QDialog dialog(parentWin);
+        dialog.setObjectName(QStringLiteral("cloneRepositoryDialog"));
+        dialog.setWindowTitle(text("Get from Version Control — Clone Repository"));
+        dialog.resize(580, 220);
+        auto* root = new QVBoxLayout(&dialog);
+        auto* form = new QFormLayout();
+        auto* urlEdit = new QLineEdit(&dialog);
+        urlEdit->setObjectName(QStringLiteral("cloneRepoUrlEdit"));
+        urlEdit->setPlaceholderText(QStringLiteral("https://github.com/owner/repository.git"));
+        auto* dirRow = new QWidget(&dialog);
+        auto* dirLayout = new QHBoxLayout(dirRow);
+        dirLayout->setContentsMargins(0, 0, 0, 0);
+        auto* dirEdit = new QLineEdit(QDir::toNativeSeparators(QDir::homePath()), dirRow);
+        dirEdit->setObjectName(QStringLiteral("cloneRepoDirEdit"));
+        auto* browseBtn = new QPushButton(text("Browse..."), dirRow);
+        QObject::connect(browseBtn, &QPushButton::clicked, &dialog, [&dialog, dirEdit] {
+            const QString chosen =
+                QFileDialog::getExistingDirectory(&dialog, text("Select Clone Directory"), dirEdit->text());
+            if (!chosen.isEmpty())
+                dirEdit->setText(QDir::toNativeSeparators(chosen));
+        });
+        dirLayout->addWidget(dirEdit, 1);
+        dirLayout->addWidget(browseBtn);
+        form->addRow(text("Repository URL:"), urlEdit);
+        form->addRow(text("Directory:"), dirRow);
+        root->addLayout(form);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->button(QDialogButtonBox::Ok)->setText(text("Clone"));
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        root->addWidget(buttons);
+        ui::installDialogChrome(&dialog, false);
+        if (dialog.exec() == QDialog::Accepted) {
+            const QString url = urlEdit->text().trimmed();
+            const QString targetDir = dirEdit->text().trimmed();
+            if (!url.isEmpty() && !targetDir.isEmpty()) {
+                if (QProcess::execute(QStringLiteral("git"), {QStringLiteral("clone"), url, targetDir}) == 0)
+                    (void)openPath(targetDir.toStdString());
+                else
+                    notify(text("Git Clone"), text("Failed to clone repository from %1").arg(url),
+                           ui::NotificationKind::Warning);
+            }
+        }
+    });
+    connect(welcome, &WelcomeScreen::openFolderRequested, this,
+            [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
+    connect(welcome, &WelcomeScreen::openRecent, this, [this](const QString& path) {
+        // Queued: opening replaces the Welcome screen whose click is being handled.
+        QMetaObject::invokeMethod(
+            this, [this, path] { (void)openProjectIdentity(path.toStdString()); }, Qt::QueuedConnection);
+    });
+    connect(welcome, &WelcomeScreen::removeRecent, this, [this](const QString& path) {
+        if (auto removed = removeRecentProject(m_services.settings, path.toStdString()); !removed) {
+            notify(text("Cannot update the recent projects"), qs(removed.error().message()),
+                   ui::NotificationKind::Warning);
+        }
+        refreshRecent();
+    });
+    connect(welcome, &WelcomeScreen::quickSwitchThemeRequested, this, [this] {
+        if (m_window) {
+            (void)m_window->showQuickSwitchTheme();
+        }
+    });
+    connect(welcome, &WelcomeScreen::settingsRequested, this, [this] { showSettings(); });
+    connect(welcome, &WelcomeScreen::checkForUpdatesRequested, this, [this] { showUpdateCheck(); });
+    {
+        const auto snap = m_services.settings.snapshot();
+        const QString ch = qs(snap->get(key::updateChannel));
+        const bool offline = snap->get(key::networkOffline);
+        welcome->setUpdateStatus(
+            offline ? text("FrostIDE %1 • Offline (%2)").arg(qs(build_info::kVersion), ch)
+                    : text("FrostIDE %1 • Channel: %2 (Up to date)").arg(qs(build_info::kVersion), ch));
+    }
 }
 
 void Workbench::markInteractiveStartupComplete() {
@@ -1177,85 +1309,17 @@ void Workbench::attach(ui::ShellWindow& window) {
     auto* welcome = new WelcomeScreen();
     m_welcome = welcome;
     window.tabs().setEmptyStateWidget(welcome);
-    connect(welcome, &WelcomeScreen::newProjectRequested, this, [this] { showNewProjectDialog(); });
-    connect(welcome, &WelcomeScreen::openRequested, this,
-            [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::SolutionOrFile); });
-    connect(welcome, &WelcomeScreen::cloneRepositoryRequested, this, [this] {
-        if (!m_window)
-            return;
-        QDialog dialog(m_window);
-        dialog.setObjectName(QStringLiteral("cloneRepositoryDialog"));
-        dialog.setWindowTitle(text("Get from Version Control — Clone Repository"));
-        dialog.resize(580, 220);
-        auto* root = new QVBoxLayout(&dialog);
-        auto* form = new QFormLayout();
-        auto* urlEdit = new QLineEdit(&dialog);
-        urlEdit->setObjectName(QStringLiteral("cloneRepoUrlEdit"));
-        urlEdit->setPlaceholderText(QStringLiteral("https://github.com/owner/repository.git"));
-        auto* dirRow = new QWidget(&dialog);
-        auto* dirLayout = new QHBoxLayout(dirRow);
-        dirLayout->setContentsMargins(0, 0, 0, 0);
-        auto* dirEdit = new QLineEdit(QDir::toNativeSeparators(QDir::homePath()), dirRow);
-        dirEdit->setObjectName(QStringLiteral("cloneRepoDirEdit"));
-        auto* browseBtn = new QPushButton(text("Browse..."), dirRow);
-        QObject::connect(browseBtn, &QPushButton::clicked, &dialog, [&dialog, dirEdit] {
-            const QString chosen =
-                QFileDialog::getExistingDirectory(&dialog, text("Select Clone Directory"), dirEdit->text());
-            if (!chosen.isEmpty())
-                dirEdit->setText(QDir::toNativeSeparators(chosen));
-        });
-        dirLayout->addWidget(dirEdit, 1);
-        dirLayout->addWidget(browseBtn);
-        form->addRow(text("Repository URL:"), urlEdit);
-        form->addRow(text("Directory:"), dirRow);
-        root->addLayout(form);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-        buttons->button(QDialogButtonBox::Ok)->setText(text("Clone"));
-        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        root->addWidget(buttons);
-        ui::installDialogChrome(&dialog, false);
-        if (dialog.exec() == QDialog::Accepted) {
-            const QString url = urlEdit->text().trimmed();
-            const QString targetDir = dirEdit->text().trimmed();
-            if (!url.isEmpty() && !targetDir.isEmpty()) {
-                if (QProcess::execute(QStringLiteral("git"), {QStringLiteral("clone"), url, targetDir}) == 0)
-                    (void)openPath(targetDir.toStdString());
-                else
-                    notify(text("Git Clone"), text("Failed to clone repository from %1").arg(url),
-                           ui::NotificationKind::Warning);
-            }
-        }
-    });
-    connect(welcome, &WelcomeScreen::openFolderRequested, this,
-            [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
-    connect(welcome, &WelcomeScreen::openRecent, this, [this](const QString& path) {
-        // Queued: opening replaces the Welcome screen whose click is being handled.
-        QMetaObject::invokeMethod(
-            this, [this, path] { (void)openProjectIdentity(path.toStdString()); }, Qt::QueuedConnection);
-    });
-    connect(welcome, &WelcomeScreen::removeRecent, this, [this](const QString& path) {
-        if (auto removed = removeRecentProject(m_services.settings, path.toStdString()); !removed) {
-            notify(text("Cannot update the recent projects"), qs(removed.error().message()),
-                   ui::NotificationKind::Warning);
-        }
-        refreshRecent();
-    });
-    connect(welcome, &WelcomeScreen::quickSwitchThemeRequested, this, [this] {
+    wireWelcomeScreen(welcome);
+
+    auto* launcher = new LauncherWindow();
+    m_launcherWindow = launcher;
+    wireWelcomeScreen(launcher->welcomeScreen());
+    connect(launcher, &LauncherWindow::closedByUser, this, [this] {
         if (m_window) {
-            (void)m_window->showQuickSwitchTheme();
+            m_window->close();
         }
+        QCoreApplication::quit();
     });
-    connect(welcome, &WelcomeScreen::settingsRequested, this, [this] { showSettings(); });
-    connect(welcome, &WelcomeScreen::checkForUpdatesRequested, this, [this] { showUpdateCheck(); });
-    {
-        const auto snap = m_services.settings.snapshot();
-        const QString ch = qs(snap->get(key::updateChannel));
-        const bool offline = snap->get(key::networkOffline);
-        welcome->setUpdateStatus(
-            offline ? text("FrostIDE %1 • Offline (%2)").arg(qs(build_info::kVersion), ch)
-                    : text("FrostIDE %1 • Channel: %2 (Up to date)").arg(qs(build_info::kVersion), ch));
-    }
     refreshRecent();
 
     // Build: auto-show rules (ADR 0044) and gutter markers.
@@ -1290,6 +1354,11 @@ void Workbench::attach(ui::ShellWindow& window) {
 void Workbench::detach() {
     if (!m_window) {
         return;
+    }
+    if (m_launcherWindow) {
+        m_launcherWindow->setTransitioningToIde(true);
+        delete m_launcherWindow.data();
+        m_launcherWindow = nullptr;
     }
     delete m_settingsDialog.data();
     m_settingsDialog = nullptr;
@@ -1896,22 +1965,27 @@ void Workbench::showUpdateCheck() {
 }
 
 void Workbench::showSettings() {
-    if (!m_window)
+    QWidget* parentWin = activeTopWindow();
+    if (!parentWin)
         return;
     if (m_settingsDialog) {
         m_settingsDialog->raise();
         m_settingsDialog->activateWindow();
         return;
     }
-    auto* dialog = new SettingsDialog(m_services.settings, m_registry, *m_keymap, m_window);
+    auto* dialog = new SettingsDialog(m_services.settings, m_registry, *m_keymap, parentWin);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     m_settingsDialog = dialog;
     dialog->open();
 }
 
 void Workbench::refreshRecent() {
+    const auto recent = recentProjects(*m_services.settings.snapshot());
     if (m_welcome) {
-        m_welcome->setRecentProjects(recentProjects(*m_services.settings.snapshot()));
+        m_welcome->setRecentProjects(recent);
+    }
+    if (m_launcherWindow && m_launcherWindow->welcomeScreen()) {
+        m_launcherWindow->welcomeScreen()->setRecentProjects(recent);
     }
 }
 

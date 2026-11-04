@@ -132,6 +132,7 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             (void)m_window->invoke(actionId.toStdString());
         }
     });
+    transitionLauncherToMainWindow();
 }
 
 void Workbench::editorClosing(DocumentEditorView& view) {

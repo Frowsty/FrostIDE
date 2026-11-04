@@ -472,6 +472,7 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
 
 Result<void> Workbench::openSolution(const std::string& path) {
     if (m_solution && lang::documentKey(m_solution->path()) == lang::documentKey(path)) {
+        transitionLauncherToMainWindow();
         return {}; // Already the project.
     }
     Result<project::SolutionModel> loaded = project::SolutionModel::load(m_services.fs, path);
@@ -559,6 +560,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             if (auto saved = m_sessions->setLastProject(m_projectIdentity); !saved)
                 log::warn(kLog, "last project: {}", saved.error().describe());
         }
+        transitionLauncherToMainWindow();
         return {};
     }
     if (!closeForOpen()) {
@@ -634,6 +636,7 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
         m_window->tabs().setEmptyStateWidget(nullptr);
         m_window->refreshActions();
     }
+    transitionLauncherToMainWindow();
     emit projectChanged(name);
 }
 
@@ -736,6 +739,9 @@ bool Workbench::closeProject() {
         if (auto cleared = m_sessions->clearLastProject(); !cleared) {
             log::warn(kLog, "last project: {}", cleared.error().describe());
         }
+    }
+    if (m_launcherModeEnabled && m_launcherWindow) {
+        showLauncherWindow();
     }
     return true;
 }

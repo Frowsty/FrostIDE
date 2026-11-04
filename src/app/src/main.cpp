@@ -688,8 +688,16 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QObject::connect(&workbench, &frost::app::Workbench::projectChanged, &broker,
                          [&broker](const QString&) { broker.projectChanged(); });
         workbench.markInteractiveStartupComplete();
-        window.show();
-        frost::app::afterFirstFrame(window, [&app, &window, &workbench, &broker, restartedFrom] {
+        const bool startInLauncher = parsed->project.empty() && projects.empty() && files.empty();
+        if (startInLauncher) {
+            workbench.showLauncherWindow();
+        } else {
+            window.show();
+        }
+        QWidget& initialWindow = (startInLauncher && workbench.launcherWindow() != nullptr)
+                                     ? static_cast<QWidget&>(*workbench.launcherWindow())
+                                     : static_cast<QWidget&>(window);
+        frost::app::afterFirstFrame(initialWindow, [&app, &window, &workbench, &broker, restartedFrom] {
             if (auto started = broker.start(); !started)
                 frost::log::warn("app", "cannot start project-open IPC: {}", started.error().message());
             // FrostProcess.GuiStartsTheCrashHandlerAfterTheFirstFrame orders this line before the

@@ -495,6 +495,8 @@ public:
     [[nodiscard]] ui::BuildOutputPane* buildOutput() const noexcept { return m_output.data(); }
     [[nodiscard]] ui::ConfigurationCombo* configurationCombo() const noexcept { return m_configurations.data(); }
     [[nodiscard]] WelcomeScreen* welcomeScreen() const noexcept { return m_welcome.data(); }
+    [[nodiscard]] LauncherWindow* launcherWindow() const noexcept { return m_launcherWindow.data(); }
+    void showLauncherWindow();
     [[nodiscard]] ui::ShellWindow* window() const noexcept { return m_window.data(); }
     // The view of the active tab, or nullptr.
     [[nodiscard]] DocumentEditorView* currentView() const;
@@ -711,6 +713,11 @@ private:
     QPointer<ui::RunConsole> m_runConsole;
     QPointer<ui::ConfigurationCombo> m_configurations;
     QPointer<WelcomeScreen> m_welcome;
+    QPointer<LauncherWindow> m_launcherWindow;
+    bool m_launcherModeEnabled = false;
+    void transitionLauncherToMainWindow();
+    void wireWelcomeScreen(WelcomeScreen* welcome);
+    [[nodiscard]] QWidget* activeTopWindow() const noexcept;
     ui::TrustPrompter* m_trustPrompter = nullptr; // Child of this.
 
     std::shared_ptr<const project::SolutionModel> m_solution;

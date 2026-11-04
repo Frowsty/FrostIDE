@@ -84,4 +84,29 @@ private:
     QListWidget* m_recent = nullptr;
 };
 
+// Standalone compact JetBrains Rider-style Launcher window that opens before the main IDE shell and
+// closes when a project or file is opened.
+class LauncherWindow final : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit LauncherWindow(QWidget* parent = nullptr);
+    ~LauncherWindow() override;
+
+    [[nodiscard]] WelcomeScreen* welcomeScreen() const noexcept { return m_welcome; }
+    void setTransitioningToIde(bool transitioning) noexcept { m_transitioningToIde = transitioning; }
+
+signals:
+    void closedByUser();
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    QWidget* m_titleBar = nullptr;
+    WelcomeScreen* m_welcome = nullptr;
+    bool m_transitioningToIde = false;
+};
+
 } // namespace frost::app

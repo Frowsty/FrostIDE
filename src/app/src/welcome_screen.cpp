@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QColor>
 #include <QDesktopServices>
 #include <QDir>
@@ -17,6 +18,7 @@
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
@@ -25,6 +27,7 @@
 #include <QLinearGradient>
 #include <QListWidget>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
@@ -32,6 +35,7 @@
 #include <QStyledItemDelegate>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWindow>
 
 namespace frost::app {
 
@@ -560,6 +564,108 @@ void WelcomeScreen::showContextMenu(const QPoint& position) {
     } else if (chosen == remove) {
         removeRow(row);
     }
+}
+
+LauncherWindow::LauncherWindow(QWidget* parent) : QWidget(parent, Qt::Window) {
+    setObjectName(QStringLiteral("FrostLauncherWindow"));
+    setWindowTitle(QStringLiteral("FrostIDE"));
+    setWindowIcon(ui::glacialLogoIcon());
+    setMinimumSize(720, 480);
+    resize(840, 560);
+
+#ifdef _WIN32
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint |
+                       Qt::WindowCloseButtonHint);
+    }
+#endif
+
+    auto* outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+
+    auto* borderFrame = new QFrame(this);
+    borderFrame->setObjectName(QStringLiteral("launcherBorderFrame"));
+    borderFrame->setStyleSheet(
+        QStringLiteral("QFrame#launcherBorderFrame { background: #1E1F22; border: 1px solid #393B40; }"));
+    auto* frameLayout = new QVBoxLayout(borderFrame);
+    frameLayout->setContentsMargins(1, 1, 1, 1);
+    frameLayout->setSpacing(0);
+
+    m_titleBar = new QWidget(borderFrame);
+    m_titleBar->setObjectName(QStringLiteral("launcherTitleBar"));
+    m_titleBar->setFixedHeight(34);
+    m_titleBar->setStyleSheet(
+        QStringLiteral("QWidget#launcherTitleBar { background: #2B2D30; border-bottom: 1px solid #393B40; }"));
+    m_titleBar->installEventFilter(this);
+
+    auto* titleLayout = new QHBoxLayout(m_titleBar);
+    titleLayout->setContentsMargins(12, 0, 0, 0);
+    titleLayout->setSpacing(8);
+
+    auto* iconLabel = new QLabel(m_titleBar);
+    iconLabel->setPixmap(ui::glacialLogoPixmap(18, 2.0));
+    iconLabel->setFixedSize(18, 18);
+    iconLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+
+    auto* titleLabel = new QLabel(text("Welcome to FrostIDE"), m_titleBar);
+    titleLabel->setStyleSheet(
+        QStringLiteral("color: #DFE1E5; font-size: 12px; font-weight: 600; background: transparent; border: none;"));
+    titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+
+    titleLayout->addWidget(iconLabel);
+    titleLayout->addWidget(titleLabel);
+    titleLayout->addStretch(1);
+
+    auto* minBtn = new QPushButton(QStringLiteral("\u2014"), m_titleBar);
+    minBtn->setObjectName(QStringLiteral("launcherMinimizeButton"));
+    minBtn->setFixedSize(42, 33);
+    minBtn->setFlat(true);
+    minBtn->setToolTip(text("Minimize"));
+    minBtn->setStyleSheet(
+        QStringLiteral("QPushButton { background: transparent; color: #DFE1E5; border: none; font-size: 12px; }"
+                       "QPushButton:hover { background: #393B40; }"));
+    connect(minBtn, &QPushButton::clicked, this, &QWidget::showMinimized);
+
+    auto* closeBtn = new QPushButton(QStringLiteral("\u2715"), m_titleBar);
+    closeBtn->setObjectName(QStringLiteral("launcherCloseButton"));
+    closeBtn->setFixedSize(42, 33);
+    closeBtn->setFlat(true);
+    closeBtn->setToolTip(text("Close"));
+    closeBtn->setStyleSheet(
+        QStringLiteral("QPushButton { background: transparent; color: #DFE1E5; border: none; font-size: 12px; }"
+                       "QPushButton:hover { background: #C75450; color: #FFFFFF; }"));
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
+
+    titleLayout->addWidget(minBtn);
+    titleLayout->addWidget(closeBtn);
+
+    m_welcome = new WelcomeScreen(borderFrame);
+    frameLayout->addWidget(m_titleBar);
+    frameLayout->addWidget(m_welcome, 1);
+    outerLayout->addWidget(borderFrame, 1);
+}
+
+LauncherWindow::~LauncherWindow() = default;
+
+void LauncherWindow::closeEvent(QCloseEvent* event) {
+    QWidget::closeEvent(event);
+    if (!m_transitioningToIde) {
+        emit closedByUser();
+    }
+}
+
+bool LauncherWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_titleBar && event->type() == QEvent::MouseButtonPress) {
+        const auto* mouse = static_cast<QMouseEvent*>(event);
+        if (mouse->button() == Qt::LeftButton) {
+            if (QWindow* wh = windowHandle(); wh != nullptr) {
+                wh->startSystemMove();
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 } // namespace frost::app
