@@ -30,6 +30,7 @@
 #include <QTimer>
 #include <QWindow>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <utility>
@@ -228,6 +229,87 @@ protected:
     }
 };
 
+// Rider VCS Branch Widget button: crisp Git branch glyph + branch name + dropdown chevron.
+class RiderVcsBranchButton final : public QToolButton {
+public:
+    explicit RiderVcsBranchButton(QWidget* parent = nullptr) : QToolButton(parent) {
+        setAutoRaise(true);
+        setAttribute(Qt::WA_Hover, true);
+    }
+
+    [[nodiscard]] QSize sizeHint() const override {
+        const QFontMetrics fm(font());
+        const int textWidth = fm.horizontalAdvance(text());
+        const int chevronSpace = menu() != nullptr ? scaledPx(16) : scaledPx(6);
+        const int w = scaledPx(8) + scaledPx(16) + scaledPx(6) + textWidth + chevronSpace + scaledPx(6);
+        return {std::clamp(w, scaledPx(72), scaledPx(220)), scaledPx(30)};
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const bool down = isDown() || (menu() != nullptr && menu()->isVisible());
+        const bool hovered = underMouse() && isEnabled();
+        if (down || hovered) {
+            const QColor fill = down ? themeColor(ColorKey::ButtonPressedBackground, QColor(70, 74, 82))
+                                     : themeColor(ColorKey::ButtonHoverBackground, QColor(58, 61, 68));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(fill);
+            const qreal radius = scaledPx(6);
+            painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0), radius, radius);
+        }
+
+        // Crisp Git branch glyph on the left (16x16 box).
+        const QColor glyphColor = themeColor(ColorKey::LabelSecondaryForeground, QColor(165, 170, 180));
+        painter.setPen(QPen(glyphColor, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+
+        const qreal iconLeft = scaledPx(8);
+        const qreal cy = height() * 0.5;
+        const qreal r = scaledPx(2);
+        const qreal x1 = iconLeft + scaledPx(4);
+        const qreal x2 = iconLeft + scaledPx(12);
+        const qreal yTop = cy - scaledPx(5);
+        const qreal yBot = cy + scaledPx(5);
+        const qreal yFork = cy + scaledPx(2);
+
+        painter.drawLine(QPointF(x1, yTop + r), QPointF(x1, yBot - r));
+        QPainterPath branchPath;
+        branchPath.moveTo(x1, yFork);
+        branchPath.cubicTo(x1 + (x2 - x1) * 0.6, yFork, x2, yFork - scaledPx(2), x2, yTop + r);
+        painter.drawPath(branchPath);
+
+        painter.drawEllipse(QPointF(x1, yTop), r, r);
+        painter.drawEllipse(QPointF(x1, yBot), r, r);
+        painter.drawEllipse(QPointF(x2, yTop), r, r);
+
+        // Branch name text.
+        painter.setFont(font());
+        painter.setPen(themeColor(ColorKey::LabelForeground, QColor(220, 223, 228)));
+
+        const int textLeft = scaledPx(8) + scaledPx(16) + scaledPx(6);
+        const int chevronWidth = menu() != nullptr ? scaledPx(16) : scaledPx(6);
+        const QRect textRect(textLeft, 0, std::max(0, width() - textLeft - chevronWidth - scaledPx(4)), height());
+        const QString elided = painter.fontMetrics().elidedText(text(), Qt::ElideRight, textRect.width());
+        painter.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, elided);
+
+        // Dropdown chevron when a VCS menu is attached.
+        if (menu() != nullptr) {
+            const QColor secondary = themeColor(ColorKey::LabelSecondaryForeground, QColor(155, 160, 170));
+            painter.setPen(QPen(secondary, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            const qreal cx = width() - scaledPx(11);
+            const qreal d = scaledPx(3);
+            QPainterPath chevron;
+            chevron.moveTo(cx - d, cy - d * 0.5);
+            chevron.lineTo(cx, cy + d * 0.6);
+            chevron.lineTo(cx + d, cy - d * 0.5);
+            painter.drawPath(chevron);
+        }
+    }
+};
+
 // Integrated Window Caption Button (Minimize, Maximize/Restore, Close).
 class WindowCaptionButton final : public QToolButton {
 public:
@@ -304,7 +386,9 @@ private:
 MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     : QToolBar(parent), m_invoke(std::move(invoke)), m_mainMenuButton(new RiderMenuBadgeButton(this)),
       m_mainMenu(new QMenu(m_mainMenuButton)), m_project(new RiderProjectButton(this)),
-      m_projectMenu(new QMenu(m_project)), m_configurations(new QComboBox(this)), m_themeButton(new QToolButton(this)),
+      m_projectMenu(new QMenu(m_project)), m_vcsBranch(new RiderVcsBranchButton(this)),
+      m_vcsMenu(new QMenu(m_vcsBranch)), m_buildMenu(new QMenu(this)), m_configurations(new QComboBox(this)),
+      m_themeButton(new QToolButton(this)),
       m_minimizeButton(new WindowCaptionButton(WindowCaptionButton::Kind::Minimize, this)),
       m_maximizeButton(new WindowCaptionButton(WindowCaptionButton::Kind::MaximizeRestore, this)),
       m_closeButton(new WindowCaptionButton(WindowCaptionButton::Kind::Close, this)) {
@@ -352,6 +436,21 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     setProjectName({});
     addWidget(m_project);
 
+    // 3. Rider VCS Branch Pill Widget (hidden until a branch name is set).
+    m_vcsBranch->setObjectName(QStringLiteral("vcsBranchWidget"));
+    m_vcsBranch->setAutoRaise(true);
+    m_vcsBranch->setFocusPolicy(Qt::NoFocus);
+    m_vcsBranch->setToolTip(text("Current VCS branch"));
+    m_vcsMenu->setObjectName(QStringLiteral("vcsBranchMenu"));
+    connect(m_vcsMenu, &QMenu::aboutToShow, this, [this] {
+        m_vcsMenu->clear();
+        if (m_vcsMenuBuilder) {
+            m_vcsMenuBuilder(*m_vcsMenu);
+        }
+    });
+    m_vcsAction = addWidget(m_vcsBranch);
+    setVcsBranchName({});
+
     auto* spacer = new QWidget(this);
     spacer->setObjectName(QStringLiteral("toolbarSpacer"));
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -360,8 +459,10 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
 
     m_configurations->setObjectName(QStringLiteral("runConfigurations"));
     m_configurations->setMinimumContentsLength(18);
+    m_configurations->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_configurations->setPlaceholderText(text("No configurations"));
     m_configurations->setToolTip(text("Run/Build Configuration"));
+    m_configurations->setAccessibleName(text("Run/Build Configuration"));
     m_configurations->setEnabled(false);
     addWidget(m_configurations);
     // The slot is usable as soon as a later slice adds configurations.
@@ -372,6 +473,13 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
 
     addSeparator();
     addSlot(kBuild, icons::kBuildBuild, "Build");
+    m_buildMenu->setObjectName(QStringLiteral("buildToolbarMenu"));
+    connect(m_buildMenu, &QMenu::aboutToShow, this, [this] {
+        m_buildMenu->clear();
+        if (m_buildMenuBuilder) {
+            m_buildMenuBuilder(*m_buildMenu);
+        }
+    });
     addSeparator();
     addSlot(kRun, icons::kRunRun, "Run");
     addSlot(kDebug, icons::kRunDebug, "Debug");
@@ -466,6 +574,47 @@ void MainToolbar::setProjectMenuBuilder(std::function<void(QMenu&)> builder) {
     m_project->updateGeometry();
     m_project->update();
     updateTabOrder();
+}
+
+void MainToolbar::setVcsBranchName(const QString& branchName) {
+    const QString trimmed = branchName.trimmed();
+    const bool hasBranch = !trimmed.isEmpty();
+    m_vcsBranch->setText(trimmed);
+    m_vcsBranch->setAccessibleName(hasBranch ? text("VCS Branch: %1").arg(trimmed) : text("VCS Branch"));
+    if (m_vcsAction != nullptr) {
+        m_vcsAction->setVisible(hasBranch);
+    }
+    m_vcsBranch->setVisible(hasBranch);
+    m_vcsBranch->updateGeometry();
+    m_vcsBranch->update();
+    updateTabOrder();
+}
+
+void MainToolbar::setVcsMenuBuilder(std::function<void(QMenu&)> builder) {
+    m_vcsMenu->close();
+    m_vcsMenuBuilder = std::move(builder);
+    const bool available = static_cast<bool>(m_vcsMenuBuilder);
+    m_vcsBranch->setMenu(available ? m_vcsMenu : nullptr);
+    m_vcsBranch->setPopupMode(available ? QToolButton::InstantPopup : QToolButton::DelayedPopup);
+    m_vcsBranch->setFocusPolicy(available ? Qt::TabFocus : Qt::NoFocus);
+    m_vcsBranch->setToolTip(available ? text("VCS branch and operations") : text("Current VCS branch"));
+    m_vcsBranch->updateGeometry();
+    m_vcsBranch->update();
+    updateTabOrder();
+}
+
+void MainToolbar::setBuildMenuBuilder(std::function<void(QMenu&)> builder) {
+    if (m_buildMenu != nullptr) {
+        m_buildMenu->close();
+    }
+    m_buildMenuBuilder = std::move(builder);
+    if (QToolButton* buildBtn = button(kBuild)) {
+        const bool available = static_cast<bool>(m_buildMenuBuilder);
+        buildBtn->setMenu(available ? m_buildMenu : nullptr);
+        buildBtn->setPopupMode(available ? QToolButton::MenuButtonPopup : QToolButton::DelayedPopup);
+        buildBtn->updateGeometry();
+        buildBtn->update();
+    }
 }
 
 QToolButton* MainToolbar::button(std::string_view actionId) const {

@@ -8,6 +8,7 @@
 #include "frost/io/path.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
+#include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
@@ -236,6 +237,8 @@ void GitIntegration::shutdown() {
 void GitIntegration::clearRepository() {
     auto* window = m_workbench.m_window.data();
     if (window) {
+        window->mainToolbar().setVcsBranchName({});
+        window->mainToolbar().setVcsMenuBuilder({});
         window->tabs().setTitleColorProvider({});
         if (m_workbench.m_nav && m_workbench.m_nav->fileSystemView())
             m_workbench.m_nav->fileSystemView()->setFileColorProvider({});
@@ -322,6 +325,16 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     m_branch = new ui::BranchStatusWidget(*m_controller, window.statusBar());
     window.statusBar()->addPermanentWidget(m_branch);
     const QPointer<GitIntegration> self(this);
+    m_controller->readBranches();
+    window.mainToolbar().setVcsBranchName(m_branch->text());
+    window.mainToolbar().setVcsMenuBuilder([self](QMenu& menu) {
+        if (self && self->m_branch) {
+            if (self->m_controller) {
+                self->m_controller->readBranches();
+            }
+            self->m_branch->populateMenu(menu);
+        }
+    });
     auto color = [self](std::string_view path) -> std::optional<QColor> {
         if (!self || !self->m_controller)
             return std::nullopt;
@@ -349,6 +362,8 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     connect(m_controller.get(), &ui::GitController::statusChanged, this, [this] {
         if (!m_workbench.m_window)
             return;
+        if (m_branch)
+            m_workbench.m_window->mainToolbar().setVcsBranchName(m_branch->text());
         m_workbench.m_window->tabs().refreshTitleColors();
         if (m_workbench.m_nav && m_workbench.m_nav->fileSystemView())
             m_workbench.m_nav->fileSystemView()->refreshFileColors();

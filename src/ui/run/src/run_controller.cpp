@@ -121,12 +121,24 @@ void RunController::bindStartupCombo(QComboBox* combo) {
             if (!data.isValid()) {
                 return;
             }
+            if (data.toInt() == -1) {
+                onStartupChanged(m_service->startupProject());
+                if (m_hooks.editConfigurations) {
+                    m_hooks.editConfigurations();
+                }
+                return;
+            }
             const project::ProjectId project{data.toUInt()};
             if (auto set = m_service->setStartupProject(project); !set) {
                 report(set.error());
             }
         });
     }
+    refreshStartupCombo();
+}
+
+void RunController::setEditConfigurationsHandler(std::function<void()> handler) {
+    m_hooks.editConfigurations = std::move(handler);
     refreshStartupCombo();
 }
 
@@ -140,6 +152,9 @@ void RunController::refreshStartupCombo() {
     if (solution) {
         for (const project::ProjectId id : m_service->startupCandidates()) {
             m_combo->addItem(QString::fromStdString(solution->project(id).name), QVariant(id.value()));
+        }
+        if (m_combo->count() > 0 && m_hooks.editConfigurations) {
+            m_combo->addItem(tr("Edit Configurations..."), QVariant(-1));
         }
         if (const auto startup = m_service->startupProject()) {
             m_combo->setCurrentIndex(m_combo->findData(QVariant(startup->value())));

@@ -216,51 +216,55 @@ void BranchStatusWidget::populateBranchSubmenu(QMenu* branchMenu, const QString&
     }
 }
 
-QMenu* BranchStatusWidget::buildMenu(QWidget* parent) {
-    auto* menu = new QMenu(parent != nullptr ? parent : this);
-    menu->setTitle(tr("Git Branches"));
+void BranchStatusWidget::populateMenu(QMenu& menu) {
+    menu.setTitle(tr("Git Branches"));
 
-    QAction* newBranchAct = menu->addAction(tr("New Branch..."));
+    QAction* newBranchAct = menu.addAction(tr("New Branch..."));
     connect(newBranchAct, &QAction::triggered, this, [this] { runItem(QStringLiteral("new:")); });
 
-    QAction* fetchAct = menu->addAction(tr("Fetch"));
+    QAction* fetchAct = menu.addAction(tr("Fetch"));
     connect(fetchAct, &QAction::triggered, this, [this] { runItem(QStringLiteral("fetch:")); });
 
-    QAction* pullAct = menu->addAction(tr("Pull"));
+    QAction* pullAct = menu.addAction(tr("Pull"));
     connect(pullAct, &QAction::triggered, this, [this] { runItem(QStringLiteral("pull:")); });
 
-    QAction* pushAct = menu->addAction(tr("Push..."));
+    QAction* pushAct = menu.addAction(tr("Push..."));
     connect(pushAct, &QAction::triggered, this, [this] { runItem(QStringLiteral("push:")); });
 
-    QAction* stashAct = menu->addAction(tr("Stash Changes..."));
+    QAction* stashAct = menu.addAction(tr("Stash Changes..."));
     connect(stashAct, &QAction::triggered, this, [this] { runItem(QStringLiteral("stash:")); });
 
-    QAction* unstashAct = menu->addAction(tr("Unstash Changes..."));
+    QAction* unstashAct = menu.addAction(tr("Unstash Changes..."));
     connect(unstashAct, &QAction::triggered, this, [this] { runItem(QStringLiteral("unstash:")); });
 
     if (m_controller != nullptr) {
-        menu->addSeparator();
-        menu->addSection(tr("Local Branches"));
+        menu.addSeparator();
+        menu.addSection(tr("Local Branches"));
         for (const vcs::GitBranch& branch : m_controller->branches()) {
             if (branch.remote) {
                 continue;
             }
             const QString name = qs(branch.name);
             const QString title = branch.current ? tr("%1 (current)").arg(name) : name;
-            QMenu* sub = menu->addMenu(title);
+            QMenu* sub = menu.addMenu(title);
             populateBranchSubmenu(sub, name, true);
         }
-        menu->addSeparator();
-        menu->addSection(tr("Remote Branches"));
+        menu.addSeparator();
+        menu.addSection(tr("Remote Branches"));
         for (const vcs::GitBranch& branch : m_controller->branches()) {
             if (!branch.remote) {
                 continue;
             }
             const QString name = qs(branch.name);
-            QMenu* sub = menu->addMenu(name);
+            QMenu* sub = menu.addMenu(name);
             populateBranchSubmenu(sub, name, false);
         }
     }
+}
+
+QMenu* BranchStatusWidget::buildMenu(QWidget* parent) {
+    auto* menu = new QMenu(parent != nullptr ? parent : this);
+    populateMenu(*menu);
     return menu;
 }
 

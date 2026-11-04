@@ -56,6 +56,16 @@ public:
     // Installs the GUI-thread menu builder (called each time it opens). An empty builder
     // removes the interactive menu; the caller must clear it before captured services die.
     void setProjectMenuBuilder(std::function<void(QMenu&)> builder);
+
+    // The VCS branch pill button right after the project widget (hidden when branchName is empty).
+    [[nodiscard]] QToolButton* vcsBranchButton() const noexcept { return m_vcsBranch; }
+    void setVcsBranchName(const QString& branchName);
+    void setVcsMenuBuilder(std::function<void(QMenu&)> builder);
+
+    // Installs the dropdown menu builder for the Build slot button (MenuButtonPopup mode).
+    // Clicking the Build button itself still invokes kBuild directly.
+    void setBuildMenuBuilder(std::function<void(QMenu&)> builder);
+
     // The run/build configuration slot; disabled while it has no items.
     [[nodiscard]] QComboBox* runConfigurations() const noexcept { return m_configurations; }
     // The Quick Switch Theme button in the header's utility area.
@@ -101,6 +111,10 @@ private:
     QMenu* m_mainMenu = nullptr;
     QToolButton* m_project = nullptr;
     QMenu* m_projectMenu = nullptr;
+    QToolButton* m_vcsBranch = nullptr;
+    QAction* m_vcsAction = nullptr;
+    QMenu* m_vcsMenu = nullptr;
+    QMenu* m_buildMenu = nullptr;
     QComboBox* m_configurations = nullptr;
     QToolButton* m_themeButton = nullptr;
     QToolButton* m_minimizeButton = nullptr;
@@ -109,6 +123,8 @@ private:
     std::vector<Slot> m_slots;
     std::function<void(QMenu&)> m_mainMenuBuilder;
     std::function<void(QMenu&)> m_projectMenuBuilder;
+    std::function<void(QMenu&)> m_vcsMenuBuilder;
+    std::function<void(QMenu&)> m_buildMenuBuilder;
     QPoint m_dragStartGlobal;
     QPoint m_windowStartPos;
     bool m_draggingWindow = false;

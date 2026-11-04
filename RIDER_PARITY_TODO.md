@@ -27,18 +27,6 @@ This file tracks all remaining features required for complete 1:1 JetBrains Ride
 
 ---
 
-## 3. Top Titlebar Run/Debug Configuration & Startup Project Widget
-- **Titlebar Run/Debug Toolbar Widget (`ShellHeaderBar` / `MainWindow`)**:
-  - **Startup Project / Target Selector**: Dropdown in the custom window header bar to switch the active startup project/target or open `Edit Configurations...`.
-  - **Build Configuration & Platform Selector**: Dropdown in the custom window header bar to switch active `Configuration | Platform` (e.g. `Debug | x64`, `Release | x64`) or open `Configuration Manager...`.
-  - **Action Buttons in Titlebar**:
-    - **Build** (`hammer` icon)
-    - **Run** (`play` icon)
-    - **Debug** (`bug` icon)
-    - **Stop** (`stop` icon, enabled while a build, run, or debug session is active)
-
----
-
 ## 4. `Attach to Process...` (`Ctrl+Alt+P`) & Compound Launch Configurations
 - **Attach to Process Dialog (`Run > Attach to Process...`, `Ctrl+Alt+P`)**:
   - Live filterable list of running local processes (PID, executable name, window title, native vs. .NET runtime detection).

@@ -1399,6 +1399,8 @@ void Workbench::detach() {
     delete m_settingsDialog.data();
     m_settingsDialog = nullptr;
     m_window->mainToolbar().setProjectMenuBuilder({});
+    m_window->mainToolbar().setVcsMenuBuilder({});
+    m_window->mainToolbar().setBuildMenuBuilder({});
     QCoreApplication::instance()->removeEventFilter(this);
     cancelFind();
     m_find.reset();
@@ -1875,9 +1877,62 @@ void Workbench::attachToolbar() {
         }
     });
     toolbar.setSlotAction(ui::MainToolbar::kBuild, ui::build_actions::kBuildSolution);
+    toolbar.setBuildMenuBuilder([this](QMenu& menu) {
+        if (m_buildActions != nullptr) {
+            menu.addAction(m_buildActions->buildSolution());
+            menu.addAction(m_buildActions->rebuildSolution());
+            menu.addAction(m_buildActions->cleanSolution());
+            menu.addSeparator();
+            menu.addAction(m_buildActions->cancelBuild());
+        }
+        if (m_solution && m_runService && m_runService->startupProject()) {
+            const project::ProjectId startupId = *m_runService->startupProject();
+            if (const project::ProjectEntry* entry = m_solution->findProject(startupId); entry != nullptr) {
+                menu.addSeparator();
+                const QString projName = qs(entry->name);
+                QAction* buildStartup = menu.addAction(text("Build '%1'").arg(projName));
+                buildStartup->setEnabled(m_build && !m_build->isBuilding());
+                connect(buildStartup, &QAction::triggered, this, [this, startupId] {
+                    if (m_build) {
+                        (void)m_build->buildProject(startupId);
+                    }
+                });
+                QAction* rebuildStartup = menu.addAction(text("Rebuild '%1'").arg(projName));
+                rebuildStartup->setEnabled(m_build && !m_build->isBuilding());
+                connect(rebuildStartup, &QAction::triggered, this, [this, startupId] {
+                    if (m_build) {
+                        (void)m_build->rebuildProject(startupId);
+                    }
+                });
+                QAction* cleanStartup = menu.addAction(text("Clean '%1'").arg(projName));
+                cleanStartup->setEnabled(m_build && !m_build->isBuilding());
+                connect(cleanStartup, &QAction::triggered, this, [this, startupId] {
+                    if (m_build) {
+                        (void)m_build->cleanProject(startupId);
+                    }
+                });
+            }
+        }
+    });
     toolbar.setSlotAction(ui::MainToolbar::kDebug, "run.debug");
     auto* combo = new ui::ConfigurationCombo(*m_build, &toolbar);
     combo->setObjectName(QStringLiteral("solutionConfigurations"));
+    combo->setConfigurationManagerHandler([this] {
+        if (!m_window || !m_solution)
+            return;
+        showConfigurationManagerDialog(
+            m_window, m_services.fs, *m_solution, static_cast<int>(m_build->activeConfigurationIndex().value_or(0)),
+            [this](int idx) {
+                if (idx >= 0)
+                    (void)m_build->setActiveConfiguration(static_cast<std::size_t>(idx));
+            },
+            [this] {
+                refreshSolutionExplorerForFsChange();
+                startProjectEvaluation(m_projectRoot);
+                if (m_clangd)
+                    restartClangd();
+            });
+    });
     QAction* before = nullptr;
     for (QAction* action : toolbar.actions()) {
         if (toolbar.widgetForAction(action) == toolbar.runConfigurations()) {
@@ -1892,6 +1947,29 @@ void Workbench::attachToolbar() {
 void Workbench::attachRun() {
     // The Run tool window (Alt+4) is the shell's "run" window; its content is the Run console.
     m_window->toolWindows().setContent(ui::tool_windows::kRun, m_runConsole);
+    m_runController->setEditConfigurationsHandler([this] {
+        if (!m_window || !m_solution || !m_runService)
+            return;
+        std::string projPath;
+        if (const auto startupId = m_runService->startupProject()) {
+            if (const project::ProjectEntry* entry = m_solution->findProject(*startupId)) {
+                projPath = entry->filePath;
+            }
+        }
+        if (projPath.empty() && !m_solution->projects().empty()) {
+            projPath = m_solution->projects().front().filePath;
+        }
+        std::string activeCfg = "Debug|x64";
+        if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
+            activeCfg = m_build->configurations()[*idx].name();
+        showEditRunConfigurationsDialog(
+            m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
+            [this](bool ext) {
+                if (m_runService)
+                    (void)m_runService->setUseExternalConsole(ext);
+            },
+            [this] { refreshSolutionExplorerForFsChange(); });
+    });
     m_runController->bindStartupCombo(m_window->mainToolbar().runConfigurations());
 }
 

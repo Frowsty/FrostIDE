@@ -42,6 +42,7 @@ public:
     ListPopup* openPopup();
     [[nodiscard]] ListPopup* popup() const noexcept { return m_popup; }
     // Builds or opens the hierarchical Branches QMenu with top actions and per-branch submenus.
+    void populateMenu(QMenu& menu);
     [[nodiscard]] QMenu* buildMenu(QWidget* parent = nullptr);
     QMenu* openMenu();
     // Runs the popup row with `data` (as accepting it does): a checkout, or the new-branch prompt.

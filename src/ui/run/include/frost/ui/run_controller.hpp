@@ -41,6 +41,8 @@ struct RunControllerHooks {
     std::function<bool(const QString& projectName)> confirmRerun{};
     // Shows a run that could not start or a setting that could not be saved; empty: ignored.
     std::function<void(const QString& message)> reportError{};
+    // Opens the Run/Debug Configurations dialog when "Edit Configurations..." is selected.
+    std::function<void()> editConfigurations{};
     // An alternate project kind (such as CMake) supplies its own run lifecycle.
     std::function<bool()> mayRun{};
     std::function<bool()> alternateAvailable{};
@@ -75,6 +77,9 @@ public:
     void bindStartupCombo(QComboBox* combo);
     // Re-reads the candidates (after a solution was opened or closed).
     void refreshStartupCombo();
+    // Installs or replaces the callback invoked when "Edit Configurations..." is chosen in the
+    // startup project combo, then refreshes the combo.
+    void setEditConfigurationsHandler(std::function<void()> handler);
 
     // Runs `project` (default: the startup project), with the Busy prompt (header comment).
     // Errors: those of RunService::run, Cancelled when the user declined the rerun.

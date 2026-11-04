@@ -164,7 +164,17 @@ ConfigurationCombo::ConfigurationCombo(BuildController& controller, QWidget* par
         if (m_updating || index < 0) {
             return;
         }
-        if (!m_controller.setActiveConfiguration(static_cast<std::size_t>(index))) {
+        const QVariant data = itemData(index);
+        if (data.isValid() && data.toInt() == -1) {
+            showActive();
+            if (m_configManagerHandler) {
+                m_configManagerHandler();
+            }
+            return;
+        }
+        const std::size_t configIndex = data.isValid() ? static_cast<std::size_t>(data.toInt())
+                                                       : static_cast<std::size_t>(index);
+        if (!m_controller.setActiveConfiguration(configIndex)) {
             showActive(); // Refused (a build started, say): snap back; requestFailed() says why.
         }
     });
@@ -176,11 +186,20 @@ ConfigurationCombo::ConfigurationCombo(BuildController& controller, QWidget* par
 
 ConfigurationCombo::~ConfigurationCombo() = default;
 
+void ConfigurationCombo::setConfigurationManagerHandler(std::function<void()> handler) {
+    m_configManagerHandler = std::move(handler);
+    reload();
+}
+
 void ConfigurationCombo::reload() {
     m_updating = true;
     clear();
-    for (const project::SolutionConfiguration& configuration : m_controller.configurations()) {
-        addItem(configurationLabel(configuration));
+    const auto& configurations = m_controller.configurations();
+    for (std::size_t i = 0; i < configurations.size(); ++i) {
+        addItem(configurationLabel(configurations[i]), QVariant(static_cast<int>(i)));
+    }
+    if (!configurations.empty() && m_configManagerHandler) {
+        addItem(tr("Configuration Manager..."), QVariant(-1));
     }
     m_updating = false;
     showActive();
@@ -190,10 +209,14 @@ void ConfigurationCombo::reload() {
 void ConfigurationCombo::showActive() {
     m_updating = true;
     const std::optional<std::size_t> active = m_controller.activeConfigurationIndex();
-    setCurrentIndex(active && *active < static_cast<std::size_t>(count()) ? static_cast<int>(*active) : -1);
+    const std::size_t configCount = m_controller.configurations().size();
+    setCurrentIndex(active && *active < configCount && static_cast<int>(*active) < count() ? static_cast<int>(*active)
+                                                                                           : -1);
     m_updating = false;
 }
 
-void ConfigurationCombo::updateEnabled() { setEnabled(m_controller.canBuild() && count() > 0); }
+void ConfigurationCombo::updateEnabled() {
+    setEnabled(m_controller.canBuild() && !m_controller.configurations().empty());
+}
 
 } // namespace frost::ui

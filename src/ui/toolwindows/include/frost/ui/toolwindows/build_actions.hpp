@@ -34,6 +34,7 @@
 #include <QPointer>
 
 #include <array>
+#include <functional>
 #include <string_view>
 #include <vector>
 
@@ -120,12 +121,17 @@ public:
     explicit ConfigurationCombo(BuildController& controller, QWidget* parent = nullptr);
     ~ConfigurationCombo() override;
 
+    // Optional callback invoked when "Configuration Manager..." is selected in the combo.
+    // When set and at least one configuration exists, "Configuration Manager..." is appended.
+    void setConfigurationManagerHandler(std::function<void()> handler);
+
 private:
     void reload();
     void showActive();
     void updateEnabled();
 
     BuildController& m_controller;
+    std::function<void()> m_configManagerHandler;
     bool m_updating = false;
 };
 
