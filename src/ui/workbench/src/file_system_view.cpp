@@ -226,6 +226,7 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     m_tree->setHeaderHidden(true);
     m_tree->setUniformRowHeights(true);
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_tree->installEventFilter(this);
     m_tree->viewport()->installEventFilter(this);
@@ -240,7 +241,11 @@ FileSystemView::FileSystemView(QWidget* parent, sched::IScheduler* scheduler)
     connect(m_tree, &QTreeView::customContextMenuRequested, this, [this](QPoint pos) {
         const QModelIndex index = m_tree->indexAt(pos);
         if (index.isValid()) {
-            m_tree->setCurrentIndex(index);
+            if (m_tree->selectionModel() && m_tree->selectionModel()->isSelected(index)) {
+                m_tree->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+            } else {
+                m_tree->setCurrentIndex(index);
+            }
         }
         std::unique_ptr<QMenu> menu(createContextMenu(index, this));
         if (!menu->isEmpty()) {
@@ -569,6 +574,26 @@ std::string FileSystemView::selectedPath() const {
     return index.isValid() ? toUtf8(index.data(kPathRole).toString()) : std::string();
 }
 
+QStringList FileSystemView::selectedPaths() const {
+    QStringList paths;
+    if (!m_tree->selectionModel()) {
+        return paths;
+    }
+    for (const QModelIndex& idx : m_tree->selectionModel()->selectedIndexes()) {
+        const QString p = idx.data(kPathRole).toString();
+        if (!p.isEmpty() && !paths.contains(p)) {
+            paths.push_back(p);
+        }
+    }
+    if (paths.isEmpty() && m_tree->currentIndex().isValid()) {
+        const QString p = m_tree->currentIndex().data(kPathRole).toString();
+        if (!p.isEmpty()) {
+            paths.push_back(p);
+        }
+    }
+    return paths;
+}
+
 bool FileSystemView::selectedIsDirectory() const {
     const QModelIndex index = m_tree->currentIndex();
     return index.isValid() && index.data(kDirectoryRole).toBool();
@@ -645,6 +670,29 @@ QMenu* FileSystemView::createContextMenu(const QModelIndex& index, QWidget* pare
     QAction* newFolder = menu->addAction(text("New Folder..."));
     newFolder->setObjectName(QStringLiteral("newFolder"));
     connect(newFolder, &QAction::triggered, this, [this, directory] { emit newFolderRequested(directory); });
+
+    menu->addSeparator();
+    QStringList selPaths = selectedPaths();
+    if (index.isValid() && !targetPath.isEmpty() && !selPaths.contains(targetPath)) {
+        selPaths = QStringList{targetPath};
+    }
+    if (index.isValid() && toUtf8(targetPath) != m_model->files()->root() && !selPaths.isEmpty()) {
+        const QString addLabel = selPaths.size() > 1
+                                     ? text("Add %1 Items to Project").arg(selPaths.size())
+                                     : (isDirectory ? text("Add Folder to Project") : text("Add to Project"));
+        QAction* addSelected = menu->addAction(addLabel);
+        addSelected->setObjectName(QStringLiteral("addSelectedToProject"));
+        connect(addSelected, &QAction::triggered, this,
+                [this, selPaths] { emit addPathsToProjectRequested(selPaths); });
+    }
+    QAction* addExistingFiles = menu->addAction(text("Add Existing Files to Project..."));
+    addExistingFiles->setObjectName(QStringLiteral("addExistingFilesToProject"));
+    connect(addExistingFiles, &QAction::triggered, this,
+            [this, directory] { emit addExistingFilesToProjectRequested(directory); });
+    QAction* addExistingFolder = menu->addAction(text("Add Existing Folder to Project..."));
+    addExistingFolder->setObjectName(QStringLiteral("addExistingFolderToProject"));
+    connect(addExistingFolder, &QAction::triggered, this,
+            [this, directory] { emit addExistingFolderToProjectRequested(directory); });
     if (index.isValid() && toUtf8(targetPath) != m_model->files()->root()) {
         menu->addSeparator();
         QAction* renameAct = menu->addAction(text("Rename..."));

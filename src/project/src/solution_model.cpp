@@ -293,7 +293,8 @@ public:
                  .path = file.path,
                  .key = "solution",
                  .project = std::nullopt,
-                 .itemType = ItemType::None});
+                 .itemType = ItemType::None,
+                 .filterPath = {}});
         addFolders(file);
         for (std::size_t i = 0; i < file.projects.size(); ++i) {
             addProject(file, file.projects[i], i);
@@ -331,7 +332,8 @@ private:
                         .path = path,
                         .key = parentKey + "/file:" + detail::pathKey(path),
                         .project = project,
-                        .itemType = type});
+                        .itemType = type,
+                        .filterPath = {}});
     }
 
     void warn(std::string message) { m_model.m_warnings.push_back(std::move(message)); }
@@ -359,7 +361,8 @@ private:
                                        .path = {},
                                        .key = std::move(key),
                                        .project = std::nullopt,
-                                       .itemType = ItemType::None});
+                                       .itemType = ItemType::None,
+                                       .filterPath = {}});
             nodes.push_back(id);
             m_folderNodes.emplace(folder.id, id);
         }
@@ -457,7 +460,8 @@ private:
                              .path = entry.path,
                              .key = "project:" + pathKey,
                              .project = id,
-                             .itemType = ItemType::None});
+                             .itemType = ItemType::None,
+                             .filterPath = {}});
         if (!entry.path.empty()) {
             m_model.m_projectsByPath.emplace(pathKey, id);
         }
@@ -517,13 +521,77 @@ private:
                                   .path = {},
                                   .key = projectKey + "/filter:" + key,
                                   .project = id,
-                                  .itemType = ItemType::None});
+                                  .itemType = ItemType::None,
+                                  .filterPath = prefix});
                 filterNodes.emplace(key, parent);
             }
             return parent;
         };
-        for (const FilterDefinition& filter : filters.filters) {
-            ensureFilter(filter.path);
+        const auto ensurePhysicalFolder = [&](std::string_view relativeFolder) {
+            NodeId parent = info.node;
+            std::string prefix;
+            std::string currentAbs = project.directory;
+            std::size_t pos = 0;
+            while (pos < relativeFolder.size()) {
+                const std::size_t nextSep = relativeFolder.find_first_of("\\/", pos);
+                const std::string_view component = detail::trim(relativeFolder.substr(
+                    pos, nextSep == std::string_view::npos ? std::string_view::npos : nextSep - pos));
+                pos = nextSep == std::string_view::npos ? relativeFolder.size() : nextSep + 1;
+                if (component.empty() || component == "." || component == "..") {
+                    continue;
+                }
+                if (!prefix.empty()) {
+                    prefix += '\\';
+                }
+                prefix += component;
+                if (!currentAbs.empty()) {
+                    if (auto joined = io::joinPath(currentAbs, component)) {
+                        currentAbs = detail::normalizeAbsolute(*joined).value_or(*joined);
+                    }
+                }
+                const std::string key = detail::toLowerAscii(prefix);
+                if (auto it = filterNodes.find(key); it != filterNodes.end()) {
+                    parent = it->second;
+                    if (m_model.m_nodes[parent.value()].path.empty()) {
+                        m_model.m_nodes[parent.value()].path = currentAbs;
+                    }
+                    continue;
+                }
+                parent = addNode({.kind = NodeKind::Filter,
+                                  .parent = parent,
+                                  .children = {},
+                                  .displayName = std::string(component),
+                                  .path = currentAbs,
+                                  .key = projectKey + "/filter:" + key,
+                                  .project = id,
+                                  .itemType = ItemType::None,
+                                  .filterPath = prefix});
+                filterNodes.emplace(key, parent);
+            }
+            return parent;
+        };
+        const auto physicalFolderParent = [&](std::string_view itemPath) -> std::optional<NodeId> {
+            if (project.directory.empty() || !detail::isSameOrUnder(itemPath, project.directory)) {
+                return std::nullopt;
+            }
+            const std::string_view fileParent = io::parentPath(itemPath);
+            if (fileParent.size() <= project.directory.size()) {
+                return std::nullopt;
+            }
+            std::string_view relParent = fileParent.substr(project.directory.size());
+            if (!relParent.empty() && (relParent.front() == '\\' || relParent.front() == '/')) {
+                relParent.remove_prefix(1);
+            }
+            if (relParent.empty()) {
+                return std::nullopt;
+            }
+            return ensurePhysicalFolder(relParent);
+        };
+        const CppHierarchyMode mode = m_model.m_cppHierarchy;
+        if (mode != CppHierarchyMode::PhysicalFolders) {
+            for (const FilterDefinition& filter : filters.filters) {
+                ensureFilter(filter.path);
+            }
         }
         std::unordered_map<std::string, std::string> assignment; // Item path key -> filter path.
         for (const FilterAssignment& a : filters.assignments) {
@@ -531,8 +599,17 @@ private:
         }
         for (const ProjectItem& item : project.items) {
             NodeId parent = info.node;
-            if (auto it = assignment.find(detail::pathKey(item.path)); it != assignment.end() && !it->second.empty()) {
+            if (mode == CppHierarchyMode::PhysicalFolders) {
+                if (auto folder = physicalFolderParent(item.path)) {
+                    parent = *folder;
+                }
+            } else if (auto it = assignment.find(detail::pathKey(item.path));
+                       it != assignment.end() && !it->second.empty()) {
                 parent = ensureFilter(it->second);
+            } else if (mode == CppHierarchyMode::FiltersAndFolders) {
+                if (auto folder = physicalFolderParent(item.path)) {
+                    parent = *folder;
+                }
             }
             addFile(parent, projectKey, item.path, item.type, id);
         }
@@ -605,7 +682,8 @@ private:
                                   .path = currentAbs,
                                   .key = projectKey + "/filter:" + key,
                                   .project = id,
-                                  .itemType = ItemType::None});
+                                  .itemType = ItemType::None,
+                                  .filterPath = prefix});
                 folderNodes.emplace(key, parent);
             }
             return parent;
@@ -811,12 +889,14 @@ private:
     std::unordered_map<std::uint32_t, std::vector<ProjectReference>> m_csprojReferences;
 };
 
-Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view solutionPath) {
+Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view solutionPath,
+                                          SolutionLoadOptions options) {
     auto file = readSolutionFile(fs, solutionPath);
     if (!file) {
         return std::unexpected(std::move(file.error()));
     }
     SolutionModel model;
+    model.m_cppHierarchy = options.cppHierarchy;
     SolutionModelBuilder(fs, model).build(std::move(*file));
     return model;
 }
@@ -884,7 +964,8 @@ SolutionModel SolutionModel::withEvaluatedFiles(ProjectId projectId, ItemType ty
                                .path = *normalized,
                                .key = key,
                                .project = projectId,
-                               .itemType = type});
+                               .itemType = type,
+                               .filterPath = {}});
         out.m_nodes[info.node.value()].children.push_back(id);
         out.m_nodesByKey.emplace(std::move(key), id);
         auto& matches = out.m_filesByPath[pathKey];

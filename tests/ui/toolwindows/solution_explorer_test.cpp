@@ -598,6 +598,32 @@ TEST(SolutionExplorer, ContextMenuOffersProjectAndSolutionPropertiesAndCppFilter
         EXPECT_EQ(addedExistingTarget.toStdString(), project::test::sdk("App/App.vcxproj"));
         findAction(*menu, "projectProperties")->trigger();
         EXPECT_EQ(projProps.count(), 3);
+        EXPECT_EQ(explorer.contextFilterPath(), QStringLiteral("Source Files"));
+        ASSERT_NE(findAction(*menu, "addNewFilter"), nullptr);
+        ASSERT_NE(findAction(*menu, "addExistingProjectFolder"), nullptr);
+        ASSERT_NE(findAction(*menu, "renameFilter"), nullptr);
+        ASSERT_NE(findAction(*menu, "removeFilter"), nullptr);
+    }
+
+    // 4. File node context menu offers Move to Filter submenu and Drag-and-Drop onto Filter
+    test::SignalLog movedToFilter(&explorer, &SolutionExplorer::moveFilesToFilterRequested);
+    const QModelIndex mainCppIdx =
+        explorer.filterModel()->mapFromSource(explorer.model()->indexOfPath(project::test::sdk("App/src/main.cpp")));
+    ASSERT_TRUE(mainCppIdx.isValid());
+    {
+        std::unique_ptr<QMenu> menu(explorer.createContextMenu(mainCppIdx));
+        ASSERT_NE(menu, nullptr);
+        QAction* moveRoot = nullptr;
+        for (QAction* act : menu->actions()) {
+            if (QMenu* sub = act->menu(); sub && sub->objectName() == QStringLiteral("moveToFilterMenu")) {
+                moveRoot = findAction(*sub, "moveToFilterRoot");
+            }
+        }
+        ASSERT_NE(moveRoot, nullptr);
+        moveRoot->trigger();
+        ASSERT_EQ(movedToFilter.count(), 1);
+        EXPECT_EQ(movedToFilter.at(0).at(0).toString().toStdString(), project::test::sdk("App/App.vcxproj"));
+        EXPECT_EQ(movedToFilter.at(0).at(2).toString(), QString());
     }
 }
 

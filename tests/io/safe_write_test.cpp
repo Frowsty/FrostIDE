@@ -317,7 +317,7 @@ TEST(SafeWrite, CopyCandidatePreservesProtectedDacl) {
     EXPECT_EQ(security(), before);
     EXPECT_EQ(read(file), "new");
 }
-TEST(SafeWrite, CopyCandidateRefusesObjectIdBeforeMutation) {
+TEST(SafeWrite, PreservesObjectIdInPlace) {
     const ScratchDir dir("safe-write-object-id");
     const std::string file = dir.join("v.txt");
     ASSERT_TRUE(fs().writeFileAtomic(file, "original"));
@@ -331,9 +331,9 @@ TEST(SafeWrite, CopyCandidateRefusesObjectIdBeforeMutation) {
     ASSERT_TRUE(DeviceIoControl(h.get(), FSCTL_CREATE_OR_GET_OBJECT_ID, nullptr, 0, &id, sizeof(id), &count, nullptr));
     h.reset();
     auto saved = fs().safeWrite(file, "new", {});
-    ASSERT_FALSE(saved);
-    EXPECT_NE(saved.error().message().find("object ID"), std::string::npos);
-    EXPECT_EQ(read(file), "original");
+    ASSERT_TRUE(saved) << saved.error().describe();
+    EXPECT_EQ(saved->method, SafeWriteMethod::InPlace);
+    EXPECT_EQ(read(file), "new");
     EXPECT_FALSE(tempLeft(dir.path()));
 }
 
@@ -377,8 +377,7 @@ TEST(SafeWrite, CopyCandidatePreservesNtfsCompression) {
     EXPECT_NE(GetFileAttributesW(wide.c_str()) & FILE_ATTRIBUTE_COMPRESSED, 0u);
     EXPECT_EQ(read(file), "new");
 }
-// Beta policy refuses object-ID-bearing files without changing the existing file.
-TEST(SafeWrite, ObjectIdRefusedWithoutChangingFile) {
+TEST(SafeWrite, ObjectIdPreservedAcrossSave) {
     const ScratchDir dir("safe-write-object-id-contract");
     const std::string file = dir.join("v.txt");
     ASSERT_TRUE(fs().writeFileAtomic(file, "original"));
@@ -395,8 +394,8 @@ TEST(SafeWrite, ObjectIdRefusedWithoutChangingFile) {
     h.reset();
     ASSERT_TRUE(before.hasObjectId);
     auto saved = fs().safeWrite(file, "new", {});
-    ASSERT_FALSE(saved);
-    EXPECT_NE(saved.error().message().find("Copy your edits to a new, unencrypted file"), std::string::npos);
+    ASSERT_TRUE(saved) << saved.error().describe();
+    EXPECT_EQ(saved->method, SafeWriteMethod::InPlace);
     h.reset(CreateFileW(wide.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         nullptr, OPEN_EXISTING, 0, nullptr));
     ASSERT_TRUE(h.valid());
@@ -405,11 +404,11 @@ TEST(SafeWrite, ObjectIdRefusedWithoutChangingFile) {
     h.reset();
     EXPECT_TRUE(after.hasObjectId);
     EXPECT_EQ(after.objectId, before.objectId);
-    EXPECT_EQ(read(file), "original");
+    EXPECT_EQ(read(file), "new");
     EXPECT_FALSE(tempLeft(dir.path()));
 }
 
-TEST(SafeWrite, ObjectIdHardlinkRefusedWithoutChangingFile) {
+TEST(SafeWrite, ObjectIdHardlinkPreservesBothInPlace) {
     const ScratchDir dir("safe-write-object-id-hardlink");
     const std::string file = dir.join("v.txt"), alias = dir.join("alias.txt");
     ASSERT_TRUE(fs().writeFileAtomic(file, "original"));
@@ -422,13 +421,23 @@ TEST(SafeWrite, ObjectIdHardlinkRefusedWithoutChangingFile) {
     FILE_OBJECTID_BUFFER id{};
     DWORD count = 0;
     ASSERT_TRUE(DeviceIoControl(h.get(), FSCTL_CREATE_OR_GET_OBJECT_ID, nullptr, 0, &id, sizeof(id), &count, nullptr));
+    frost::io::save_metadata::Metadata before;
+    ASSERT_EQ(frost::io::save_metadata::queryMetadata(h.get(), wide, before), ERROR_SUCCESS);
     h.reset();
     ASSERT_TRUE(CreateHardLinkW(wideAlias.c_str(), wide.c_str(), nullptr));
+    ASSERT_TRUE(before.hasObjectId);
     const auto saved = fs().safeWrite(file, "new", {});
-    ASSERT_FALSE(saved);
-    EXPECT_NE(saved.error().message().find("Copy your edits to a new, unencrypted file"), std::string::npos);
-    EXPECT_EQ(read(file), "original");
-    EXPECT_EQ(read(alias), "original");
+    ASSERT_TRUE(saved) << saved.error().describe();
+    h.reset(CreateFileW(wide.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, 0, nullptr));
+    ASSERT_TRUE(h.valid());
+    frost::io::save_metadata::Metadata after;
+    ASSERT_EQ(frost::io::save_metadata::queryMetadata(h.get(), wide, after), ERROR_SUCCESS);
+    h.reset();
+    EXPECT_TRUE(after.hasObjectId);
+    EXPECT_EQ(after.objectId, before.objectId);
+    EXPECT_EQ(read(file), "new");
+    EXPECT_EQ(read(alias), "new");
 }
 
 TEST(SafeWrite, ShortNamePreservedOnSuccessfulSave) {

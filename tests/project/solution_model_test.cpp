@@ -367,5 +367,50 @@ TEST(SolutionModel, LoadsCSharpCsprojHierarchyWithSubfoldersAndProjectReferences
     EXPECT_FALSE(model->findFileNode(MemTree::path("Core/obj/Debug/net10.0/Temporary.cs")).has_value());
 }
 
+TEST(SolutionModel, SupportsCppHierarchyModesFiltersAndFoldersAndPhysicalFolders) {
+    MemTree tree;
+    tree.write("Hierarchy.slnx", R"(<Solution>
+  <Project Path="App/App.vcxproj" />
+</Solution>)");
+    tree.write("App/App.vcxproj", R"(<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="src\core\engine.cpp" />
+    <ClInclude Include="include\engine.h" />
+  </ItemGroup>
+</Project>)");
+    tree.write("App/App.vcxproj.filters", R"(<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>)");
+    tree.write("App/main.cpp", "int main() { return 0; }\n");
+    tree.write("App/src/core/engine.cpp", "void run() {}\n");
+    tree.write("App/include/engine.h", "#pragma once\n");
+
+    auto filtersOnly =
+        SolutionModel::load(tree.fs, MemTree::path("Hierarchy.slnx"), {.cppHierarchy = CppHierarchyMode::Filters});
+    ASSERT_TRUE(filtersOnly.has_value());
+    EXPECT_EQ(dump(*filtersOnly, SolutionModel::root()),
+              "Hierarchy[App[Source Files[main.cpp],engine.cpp,engine.h]]");
+
+    auto filtersAndFolders = SolutionModel::load(tree.fs, MemTree::path("Hierarchy.slnx"),
+                                                 {.cppHierarchy = CppHierarchyMode::FiltersAndFolders});
+    ASSERT_TRUE(filtersAndFolders.has_value());
+    EXPECT_EQ(dump(*filtersAndFolders, SolutionModel::root()),
+              "Hierarchy[App[include[engine.h],Source Files[main.cpp],src[core[engine.cpp]]]]");
+
+    auto physicalOnly = SolutionModel::load(tree.fs, MemTree::path("Hierarchy.slnx"),
+                                            {.cppHierarchy = CppHierarchyMode::PhysicalFolders});
+    ASSERT_TRUE(physicalOnly.has_value());
+    EXPECT_EQ(dump(*physicalOnly, SolutionModel::root()),
+              "Hierarchy[App[include[engine.h],src[core[engine.cpp]],main.cpp]]");
+}
+
 } // namespace
 } // namespace frost::project

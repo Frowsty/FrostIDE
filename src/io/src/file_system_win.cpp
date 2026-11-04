@@ -844,22 +844,14 @@ public:
                 return fail(ErrorCode::IoError, std::format("safeWrite '{}': cannot identify target drive", path));
             localNtfs = driveType == DRIVE_FIXED && _wcsicmp(filesystem, L"NTFS") == 0;
         }
+        bool hasObjectId = false;
+        const bool encrypted = (info.dwFileAttributes & FILE_ATTRIBUTE_ENCRYPTED) != 0;
         if (localNtfs) {
             save_metadata::Metadata metadata;
             if (const DWORD error = save_metadata::queryMetadata(current.get(), wideTarget, metadata);
                 error != ERROR_SUCCESS)
                 return std::unexpected(win32Error(error, "safeWrite: inspect metadata for", path));
-            if (metadata.hasObjectId)
-                return fail(ErrorCode::IoError,
-                            std::format("safeWrite '{}': files with an NTFS object ID are not supported in this beta; "
-                                        "the file was left unchanged. Copy your edits to a new, unencrypted file",
-                                        path));
-
-            if ((info.dwFileAttributes & FILE_ATTRIBUTE_ENCRYPTED) != 0)
-                return fail(ErrorCode::IoError,
-                            std::format("safeWrite '{}': encrypted files are not supported in this "
-                                        "beta; the file was left unchanged. Copy your edits to a new, unencrypted file",
-                                        path));
+            hasObjectId = metadata.hasObjectId;
         }
         const DWORD attributes = info.dwFileAttributes & kSettableAttributes;
         const bool readOnly = (attributes & FILE_ATTRIBUTE_READONLY) != 0;
@@ -873,8 +865,9 @@ public:
                 return std::unexpected(lastWin32Error("safeWrite: clear the read-only attribute of", path));
             }
         }
+        const bool inPlace = linked || hasObjectId || encrypted;
         Result<void> written;
-        if (linked)
+        if (inPlace)
             written = rewriteInPlace(wideTarget, data, path);
         else if (localNtfs) {
             auto copied = replaceWithCopy(canonicalTarget, wideTarget, identity, data, path);
@@ -890,7 +883,7 @@ public:
             }
             return std::unexpected(std::move(written.error()));
         }
-        result.method = linked ? SafeWriteMethod::InPlace : SafeWriteMethod::Replaced;
+        result.method = inPlace ? SafeWriteMethod::InPlace : SafeWriteMethod::Replaced;
         return result;
     }
 

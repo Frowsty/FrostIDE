@@ -715,8 +715,10 @@ private:
     QPointer<WelcomeScreen> m_welcome;
     QPointer<LauncherWindow> m_launcherWindow;
     bool m_launcherModeEnabled = false;
+    project::CppHierarchyMode m_cppHierarchyMode = project::CppHierarchyMode::FiltersAndFolders;
     void transitionLauncherToMainWindow();
     void wireWelcomeScreen(WelcomeScreen* welcome);
+    void addPathsToActiveProject(const std::vector<std::string>& paths, std::string_view targetFilterPath = {});
     [[nodiscard]] QWidget* activeTopWindow() const noexcept;
     ui::TrustPrompter* m_trustPrompter = nullptr; // Child of this.
 

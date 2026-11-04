@@ -14,8 +14,10 @@
 #include <QString>
 #include <QWidget>
 
+#include <cstddef>
 #include <functional>
 #include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -66,6 +68,23 @@ struct NuGetPackageEntry {
                                                             std::string_view projectPath);
 [[nodiscard]] Result<void> removeProjectFromSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
                                                          std::string_view projectPath);
+
+// C++ (.vcxproj / .vcxproj.filters) filter management and batch file/folder operations.
+[[nodiscard]] Result<void> addFilterToVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
+                                                     std::string_view filterPath);
+[[nodiscard]] Result<void> renameFilterInVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
+                                                        std::string_view oldFilterPath,
+                                                        std::string_view newFilterPath);
+[[nodiscard]] Result<void> removeFilterFromVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
+                                                          std::string_view filterPath);
+[[nodiscard]] Result<void> moveFilesToVcxprojFilter(io::IFileSystem& fs, std::string_view vcxprojPath,
+                                                    std::span<const std::string> filePaths,
+                                                    std::string_view targetFilterPath);
+[[nodiscard]] Result<std::size_t> addExistingFilesToVcxproj(io::IFileSystem& fs, std::string_view vcxprojPath,
+                                                            std::span<const std::string> paths,
+                                                            std::string_view targetFilterPath = {});
+[[nodiscard]] Result<std::size_t> removeFilesFromVcxproj(io::IFileSystem& fs, std::string_view vcxprojPath,
+                                                         std::span<const std::string> filePaths);
 
 // Modal dialogs with custom frameless Rider chrome (`ui::installDialogChrome`).
 void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std::string& projectPath,

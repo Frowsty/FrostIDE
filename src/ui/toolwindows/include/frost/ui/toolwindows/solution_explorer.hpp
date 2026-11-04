@@ -46,6 +46,7 @@
 #include <string_view>
 #include <vector>
 
+class QComboBox;
 class QKeyEvent;
 class QLineEdit;
 class QMenu;
@@ -104,6 +105,11 @@ public:
     void setSolution(std::shared_ptr<const project::SolutionModel> solution, bool preserveSearch = false);
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const;
 
+    void setCppHierarchyMode(project::CppHierarchyMode mode);
+    [[nodiscard]] project::CppHierarchyMode cppHierarchyMode() const noexcept { return m_cppHierarchyMode; }
+    [[nodiscard]] const QString& contextFilterPath() const noexcept { return m_contextFilterPath; }
+    [[nodiscard]] QStringList selectedProjectFilePaths(project::ProjectId projectId) const;
+
     // Selects and reveals the file node at `path` (absolute) for "autoscroll from source", ending a
     // speed search first. Returns false, changing nothing, when the solution has no such file.
     bool selectPath(std::string_view path);
@@ -146,6 +152,15 @@ signals:
     void removeProjectFromSolutionRequested(const QString& projectPath);
     void addProjectReferenceRequested(const QString& projectPath);
     void manageNuGetPackagesRequested(const QString& projectPath);
+    void cppHierarchyModeChanged(project::CppHierarchyMode mode);
+    void addFilterRequested(const QString& projectPath, const QString& parentFilterPath);
+    void renameFilterRequested(const QString& projectPath, const QString& filterPath);
+    void removeFilterRequested(const QString& projectPath, const QString& filterPath);
+    void moveFilesToFilterRequested(const QString& projectPath, const QStringList& filePaths,
+                                    const QString& targetFilterPath);
+    void moveFilesToNewFilterRequested(const QString& projectPath, const QStringList& filePaths);
+    void addExistingFolderToFilterRequested(const QString& projectPath, const QString& targetFilterPath);
+    void removeMultipleProjectFilesRequested(const QString& projectPath, const QStringList& filePaths);
     void commandFailed(const QString& message);
 
 protected:
@@ -163,12 +178,15 @@ private:
     void restoreExpansion(const QStringList& keys);
     void openContainingFolder(const QString& path);
 
+    QComboBox* m_hierarchyCombo = nullptr;
     QTreeView* m_view = nullptr;
     QLineEdit* m_searchField = nullptr;
     SolutionTreeModel* m_model = nullptr;
     SolutionFilterModel* m_filter = nullptr;
     BuildController* m_controller = nullptr;
     io::IProcessLauncher* m_launcher = nullptr;
+    project::CppHierarchyMode m_cppHierarchyMode = project::CppHierarchyMode::FiltersAndFolders;
+    QString m_contextFilterPath;
     std::function<void(project::ProjectId)> m_startupHandler;
     std::function<void(const QString&, const QString&)> m_removeProjectFileHandler;
     std::function<void(const QString&)> m_addProjectFileHandler;

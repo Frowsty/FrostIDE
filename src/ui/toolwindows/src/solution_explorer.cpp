@@ -15,14 +15,24 @@
 #include "tool_icons.hpp"
 #include <QAction>
 #include <QClipboard>
+#include <QComboBox>
+#include <QDataStream>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QIODevice>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMimeData>
 #include <QPalette>
 #include <QTreeView>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -46,10 +56,26 @@ bool isProjectKind(NodeKind kind) {
 } // namespace
 
 SolutionExplorer::SolutionExplorer(QWidget* parent)
-    : QWidget(parent), m_view(new QTreeView(this)), m_searchField(new QLineEdit(this)),
-      m_model(new SolutionTreeModel(this)), m_filter(new SolutionFilterModel(this)) {
+    : QWidget(parent), m_hierarchyCombo(new QComboBox(this)), m_view(new QTreeView(this)),
+      m_searchField(new QLineEdit(this)), m_model(new SolutionTreeModel(this)), m_filter(new SolutionFilterModel(this)) {
     setObjectName(QStringLiteral("solutionExplorer"));
     m_filter->setSourceModel(m_model);
+
+    auto* headerBar = new QWidget(this);
+    headerBar->setObjectName(QStringLiteral("solutionExplorerHeader"));
+    auto* headerLayout = new QHBoxLayout(headerBar);
+    headerLayout->setContentsMargins(6, 3, 6, 3);
+    headerLayout->setSpacing(6);
+    auto* viewLabel = new QLabel(tr("View:"), headerBar);
+    m_hierarchyCombo->setObjectName(QStringLiteral("cppHierarchyCombo"));
+    m_hierarchyCombo->addItem(tr("Filters & Folders"),
+                              static_cast<int>(project::CppHierarchyMode::FiltersAndFolders));
+    m_hierarchyCombo->addItem(tr("Filters Only"), static_cast<int>(project::CppHierarchyMode::Filters));
+    m_hierarchyCombo->addItem(tr("Folder Structure"),
+                              static_cast<int>(project::CppHierarchyMode::PhysicalFolders));
+    m_hierarchyCombo->setCurrentIndex(0);
+    headerLayout->addWidget(viewLabel);
+    headerLayout->addWidget(m_hierarchyCombo, 1);
 
     m_searchField->setObjectName(QStringLiteral("speedSearch"));
     m_searchField->setReadOnly(true);
@@ -63,7 +89,12 @@ SolutionExplorer::SolutionExplorer(QWidget* parent)
     m_view->setUniformRowHeights(true);
     m_view->setAnimated(false);
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_view->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_view->setDragEnabled(true);
+    m_view->setAcceptDrops(true);
+    m_view->setDropIndicatorShown(true);
+    m_view->setDragDropMode(QAbstractItemView::DragDrop);
+    m_view->setDefaultDropAction(Qt::MoveAction);
     m_view->setContextMenuPolicy(Qt::CustomContextMenu);
     m_view->installEventFilter(this);
     m_view->viewport()->installEventFilter(this);
@@ -71,13 +102,33 @@ SolutionExplorer::SolutionExplorer(QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+    layout->addWidget(headerBar);
     layout->addWidget(m_searchField);
     layout->addWidget(m_view);
 
+    connect(m_hierarchyCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        if (idx < 0) {
+            return;
+        }
+        const auto mode = static_cast<project::CppHierarchyMode>(m_hierarchyCombo->itemData(idx).toInt());
+        if (mode != m_cppHierarchyMode) {
+            m_cppHierarchyMode = mode;
+            emit cppHierarchyModeChanged(m_cppHierarchyMode);
+        }
+    });
+    connect(m_model, &SolutionTreeModel::filesDroppedOnFilter, this, &SolutionExplorer::moveFilesToFilterRequested);
     connect(m_view, &QTreeView::doubleClicked, this, [this](const QModelIndex& index) { activate(index, false); });
     connect(m_view, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) {
         endSpeedSearch();
-        QMenu* menu = createContextMenu(m_view->indexAt(position), this);
+        const QModelIndex idx = m_view->indexAt(position);
+        if (idx.isValid()) {
+            if (m_view->selectionModel() && m_view->selectionModel()->isSelected(idx)) {
+                m_view->selectionModel()->setCurrentIndex(idx, QItemSelectionModel::NoUpdate);
+            } else {
+                m_view->setCurrentIndex(idx);
+            }
+        }
+        QMenu* menu = createContextMenu(idx, this);
         menu->setAttribute(Qt::WA_DeleteOnClose);
         menu->popup(m_view->viewport()->mapToGlobal(position));
     });
@@ -152,6 +203,41 @@ void SolutionExplorer::setSolution(std::shared_ptr<const project::SolutionModel>
 }
 
 std::shared_ptr<const project::SolutionModel> SolutionExplorer::solution() const { return m_model->solution(); }
+
+void SolutionExplorer::setCppHierarchyMode(project::CppHierarchyMode mode) {
+    m_cppHierarchyMode = mode;
+    if (m_hierarchyCombo) {
+        const int idx = m_hierarchyCombo->findData(static_cast<int>(mode));
+        if (idx >= 0 && m_hierarchyCombo->currentIndex() != idx) {
+            m_hierarchyCombo->blockSignals(true);
+            m_hierarchyCombo->setCurrentIndex(idx);
+            m_hierarchyCombo->blockSignals(false);
+        }
+    }
+}
+
+QStringList SolutionExplorer::selectedProjectFilePaths(project::ProjectId projectId) const {
+    QStringList paths;
+    const auto solution = m_model->solution();
+    if (!solution || !m_view->selectionModel()) {
+        return paths;
+    }
+    for (const QModelIndex& proxyIdx : m_view->selectionModel()->selectedIndexes()) {
+        const QModelIndex srcIdx = m_filter->mapToSource(proxyIdx);
+        const std::optional<NodeId> nodeId = m_model->nodeOf(srcIdx);
+        if (!nodeId) {
+            continue;
+        }
+        const project::Node& node = solution->node(*nodeId);
+        if (node.kind == NodeKind::File && node.project == projectId && !node.path.empty()) {
+            const QString filePath = QString::fromStdString(node.path);
+            if (!paths.contains(filePath)) {
+                paths.push_back(filePath);
+            }
+        }
+    }
+    return paths;
+}
 
 QModelIndex SolutionExplorer::proxyIndexOf(NodeId id) const { return m_filter->mapFromSource(m_model->indexOf(id)); }
 
@@ -283,6 +369,28 @@ bool SolutionExplorer::eventFilter(QObject* watched, QEvent* event) {
         endSpeedSearch();
     } else if (watched == m_view->viewport() && event->type() == QEvent::MouseButtonPress) {
         endSpeedSearch();
+    } else if (watched == m_view->viewport() &&
+               (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
+        auto* dragEvent = static_cast<QDragMoveEvent*>(event);
+        const QMimeData* mime = dragEvent->mimeData();
+        if (mime != nullptr &&
+            (mime->hasFormat(QStringLiteral("application/x-frostide-solution-files")) || mime->hasUrls())) {
+            const QModelIndex proxyIdx = m_view->indexAt(dragEvent->position().toPoint());
+            const QModelIndex srcIdx = m_filter->mapToSource(proxyIdx);
+            if (m_model->canDropMimeData(mime, dragEvent->proposedAction(), -1, 0, srcIdx)) {
+                dragEvent->acceptProposedAction();
+                return true;
+            }
+        }
+    } else if (watched == m_view->viewport() && event->type() == QEvent::Drop) {
+        auto* dropEvent = static_cast<QDropEvent*>(event);
+        const QMimeData* mime = dropEvent->mimeData();
+        const QModelIndex proxyIdx = m_view->indexAt(dropEvent->position().toPoint());
+        const QModelIndex srcIdx = m_filter->mapToSource(proxyIdx);
+        if (m_model->dropMimeData(mime, dropEvent->proposedAction(), -1, 0, srcIdx)) {
+            dropEvent->acceptProposedAction();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -365,6 +473,14 @@ bool SolutionExplorer::handleKey(QKeyEvent& event) {
             const QString path = idx.data(SolutionTreeModel::PathRole).toString();
             if ((kind == NodeKind::File || kind == NodeKind::Filter) && !path.isEmpty()) {
                 emit renameRequested(path, kind == NodeKind::Filter);
+            } else if (kind == NodeKind::Filter && m_model->solution()) {
+                const QString filterPath = idx.data(SolutionTreeModel::FilterPathRole).toString();
+                const int projVal = idx.data(SolutionTreeModel::ProjectIdRole).toInt();
+                if (!filterPath.isEmpty() && projVal >= 0) {
+                    const QString projPath = QString::fromStdString(
+                        m_model->solution()->project(project::ProjectId{static_cast<std::uint32_t>(projVal)}).path);
+                    emit renameFilterRequested(projPath, filterPath);
+                }
             }
         }
         return true;
@@ -376,6 +492,14 @@ bool SolutionExplorer::handleKey(QKeyEvent& event) {
             const QString path = idx.data(SolutionTreeModel::PathRole).toString();
             if ((kind == NodeKind::File || kind == NodeKind::Filter) && !path.isEmpty()) {
                 emit deleteRequested(path, kind == NodeKind::Filter);
+            } else if (kind == NodeKind::Filter && m_model->solution()) {
+                const QString filterPath = idx.data(SolutionTreeModel::FilterPathRole).toString();
+                const int projVal = idx.data(SolutionTreeModel::ProjectIdRole).toInt();
+                if (!filterPath.isEmpty() && projVal >= 0) {
+                    const QString projPath = QString::fromStdString(
+                        m_model->solution()->project(project::ProjectId{static_cast<std::uint32_t>(projVal)}).path);
+                    emit removeFilterRequested(projPath, filterPath);
+                }
             }
         }
         return true;
@@ -582,6 +706,11 @@ void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildCont
             });
         }
         if (kind == NodeKind::Project && path.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)) {
+            QAction* addFilter = menu.addAction(SolutionExplorer::tr("Add New Filter..."));
+            addFilter->setObjectName(QStringLiteral("addNewFilter"));
+            QObject::connect(addFilter, &QAction::triggered, &explorer, [&explorer, path] {
+                emit explorer.addFilterRequested(path, QString());
+            });
             if (addNewHandler) {
                 QAction* addNew = menu.addAction(SolutionExplorer::tr("Add New C/C++ Source..."));
                 addNew->setObjectName(QStringLiteral("addNewProjectFile"));
@@ -591,13 +720,18 @@ void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildCont
                 });
             }
             if (addExistingHandler) {
-                QAction* add = menu.addAction(SolutionExplorer::tr("Add Existing C/C++ Source"));
+                QAction* add = menu.addAction(SolutionExplorer::tr("Add Existing C/C++ Files..."));
                 add->setObjectName(QStringLiteral("addExistingProjectFile"));
                 QObject::connect(add, &QAction::triggered, &explorer, [&explorer, solution, path, addExistingHandler] {
                     if (explorer.solution() == solution && addExistingHandler)
                         addExistingHandler(path);
                 });
             }
+            QAction* addFolder = menu.addAction(SolutionExplorer::tr("Add Existing Folder..."));
+            addFolder->setObjectName(QStringLiteral("addExistingProjectFolder"));
+            QObject::connect(addFolder, &QAction::triggered, &explorer, [&explorer, path] {
+                emit explorer.addExistingFolderToFilterRequested(path, QString());
+            });
         }
         if (kind == NodeKind::Project && recoveryAvailable && recoverHandler && recoveryAvailable(path)) {
             QAction* recover = menu.addAction(SolutionExplorer::tr("Recover Project Edit"));
@@ -612,6 +746,13 @@ void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildCont
         menu.addSeparator();
     } else if (kind == NodeKind::Filter &&
                filterProjectPath.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)) {
+        const QString filterLogicalPath = source.data(SolutionTreeModel::FilterPathRole).toString();
+        QAction* addFilter = menu.addAction(SolutionExplorer::tr("Add New Filter..."));
+        addFilter->setObjectName(QStringLiteral("addNewFilter"));
+        QObject::connect(addFilter, &QAction::triggered, &explorer,
+                         [&explorer, filterProjectPath, filterLogicalPath] {
+                             emit explorer.addFilterRequested(filterProjectPath, filterLogicalPath);
+                         });
         if (addNewHandler) {
             QAction* addNew = menu.addAction(SolutionExplorer::tr("Add New C/C++ Source..."));
             addNew->setObjectName(QStringLiteral("addNewProjectFile"));
@@ -622,7 +763,7 @@ void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildCont
                              });
         }
         if (addExistingHandler) {
-            QAction* add = menu.addAction(SolutionExplorer::tr("Add Existing C/C++ Source"));
+            QAction* add = menu.addAction(SolutionExplorer::tr("Add Existing C/C++ Files..."));
             add->setObjectName(QStringLiteral("addExistingProjectFile"));
             QObject::connect(add, &QAction::triggered, &explorer,
                              [&explorer, solution, filterProjectPath, addExistingHandler] {
@@ -630,6 +771,12 @@ void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildCont
                                      addExistingHandler(filterProjectPath);
                              });
         }
+        QAction* addFolder = menu.addAction(SolutionExplorer::tr("Add Existing Folder..."));
+        addFolder->setObjectName(QStringLiteral("addExistingProjectFolder"));
+        QObject::connect(addFolder, &QAction::triggered, &explorer,
+                         [&explorer, filterProjectPath, filterLogicalPath] {
+                             emit explorer.addExistingFolderToFilterRequested(filterProjectPath, filterLogicalPath);
+                         });
         menu.addSeparator();
     }
 }
@@ -645,6 +792,8 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
     }
     const auto kind = static_cast<NodeKind>(source.data(SolutionTreeModel::KindRole).toInt());
     const QString path = source.data(SolutionTreeModel::PathRole).toString();
+    m_contextFilterPath =
+        kind == NodeKind::Filter ? source.data(SolutionTreeModel::FilterPathRole).toString() : QString();
     detail::IconCache icons;
     const auto solution = m_model->solution();
     QString filterProjectPath;
@@ -659,26 +808,75 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         open->setObjectName(QStringLiteral("openFile"));
         connect(open, &QAction::triggered, this, [this, path] { emit openFile(path); });
         const auto& item = solution->node(*node);
-        if (m_removeProjectFileHandler && item.project && !item.path.empty() &&
+        if (item.project && !item.path.empty() &&
             solution->project(*item.project).kind == project::ProjectKind::Cpp) {
             const QString projectPath = QString::fromStdString(solution->project(*item.project).path);
-            const QString key = QString::fromStdString(item.key);
-            QAction* remove = menu->addAction(tr("Remove from Project"));
-            remove->setObjectName(QStringLiteral("removeFromProject"));
-            connect(remove, &QAction::triggered, this, [this, key, path, projectPath, solution] {
-                const auto current = m_model->solution();
-                if (current != solution || !m_removeProjectFileHandler)
-                    return;
-                const auto id = current->findNode(toUtf8(key));
-                if (!id)
-                    return;
-                const auto& selected = current->node(*id);
-                if (selected.kind != NodeKind::File || !selected.project ||
-                    QString::fromStdString(selected.path) != path ||
-                    QString::fromStdString(current->project(*selected.project).path) != projectPath)
-                    return;
-                m_removeProjectFileHandler(projectPath, path);
+            QStringList filesToActOn = selectedProjectFilePaths(*item.project);
+            if (filesToActOn.isEmpty() || !filesToActOn.contains(path)) {
+                filesToActOn = QStringList{path};
+            }
+
+            QMenu* moveMenu = menu->addMenu(tr("Move to Filter"));
+            moveMenu->setObjectName(QStringLiteral("moveToFilterMenu"));
+            QAction* moveRoot = moveMenu->addAction(tr("<Project Root>"));
+            moveRoot->setObjectName(QStringLiteral("moveToFilterRoot"));
+            connect(moveRoot, &QAction::triggered, this, [this, projectPath, filesToActOn] {
+                emit moveFilesToFilterRequested(projectPath, filesToActOn, QString());
             });
+
+            QStringList projectFilters;
+            for (std::size_t i = 0; i < solution->nodeCount(); ++i) {
+                const project::Node& n = solution->node(NodeId{static_cast<std::uint32_t>(i)});
+                if (n.kind == NodeKind::Filter && n.project == *item.project && !n.filterPath.empty()) {
+                    const QString fp = QString::fromStdString(n.filterPath);
+                    if (!projectFilters.contains(fp)) {
+                        projectFilters.push_back(fp);
+                    }
+                }
+            }
+            projectFilters.sort(Qt::CaseInsensitive);
+            if (!projectFilters.isEmpty()) {
+                moveMenu->addSeparator();
+                for (const QString& fp : projectFilters) {
+                    QAction* moveAct = moveMenu->addAction(fp);
+                    connect(moveAct, &QAction::triggered, this, [this, projectPath, filesToActOn, fp] {
+                        emit moveFilesToFilterRequested(projectPath, filesToActOn, fp);
+                    });
+                }
+            }
+            moveMenu->addSeparator();
+            QAction* moveNew = moveMenu->addAction(tr("New Filter..."));
+            moveNew->setObjectName(QStringLiteral("moveToNewFilter"));
+            connect(moveNew, &QAction::triggered, this, [this, projectPath, filesToActOn] {
+                emit moveFilesToNewFilterRequested(projectPath, filesToActOn);
+            });
+
+            if (m_removeProjectFileHandler) {
+                const QString key = QString::fromStdString(item.key);
+                QAction* remove = menu->addAction(filesToActOn.size() > 1
+                                                      ? tr("Remove %1 Files from Project").arg(filesToActOn.size())
+                                                      : tr("Remove from Project"));
+                remove->setObjectName(QStringLiteral("removeFromProject"));
+                connect(remove, &QAction::triggered, this,
+                        [this, key, path, projectPath, filesToActOn, solution] {
+                            const auto current = m_model->solution();
+                            if (current != solution || !m_removeProjectFileHandler)
+                                return;
+                            if (filesToActOn.size() > 1) {
+                                emit removeMultipleProjectFilesRequested(projectPath, filesToActOn);
+                                return;
+                            }
+                            const auto id = current->findNode(toUtf8(key));
+                            if (!id)
+                                return;
+                            const auto& selected = current->node(*id);
+                            if (selected.kind != NodeKind::File || !selected.project ||
+                                QString::fromStdString(selected.path) != path ||
+                                QString::fromStdString(current->project(*selected.project).path) != projectPath)
+                                return;
+                            m_removeProjectFileHandler(projectPath, path);
+                        });
+            }
         }
         menu->addSeparator();
     }
@@ -729,6 +927,20 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
         QAction* deleteAct = menu->addAction(tr("Delete..."));
         deleteAct->setObjectName(QStringLiteral("deleteItem"));
         connect(deleteAct, &QAction::triggered, this, [this, path, isDir] { emit deleteRequested(path, isDir); });
+        menu->addSeparator();
+    } else if (kind == NodeKind::Filter && !m_contextFilterPath.isEmpty() &&
+               filterProjectPath.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)) {
+        const QString filterLogicalPath = m_contextFilterPath;
+        QAction* renameAct = menu->addAction(tr("Rename Filter..."));
+        renameAct->setObjectName(QStringLiteral("renameFilter"));
+        connect(renameAct, &QAction::triggered, this, [this, filterProjectPath, filterLogicalPath] {
+            emit renameFilterRequested(filterProjectPath, filterLogicalPath);
+        });
+        QAction* removeAct = menu->addAction(tr("Remove Filter"));
+        removeAct->setObjectName(QStringLiteral("removeFilter"));
+        connect(removeAct, &QAction::triggered, this, [this, filterProjectPath, filterLogicalPath] {
+            emit removeFilterRequested(filterProjectPath, filterLogicalPath);
+        });
         menu->addSeparator();
     }
 

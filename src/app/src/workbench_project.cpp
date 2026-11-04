@@ -32,9 +32,11 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
+#include "project_properties_dialog.hpp"
 #include "unity_control.hpp"
 #include <QDir>
 #include <QFileInfo>
+#include <QInputDialog>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -475,7 +477,8 @@ Result<void> Workbench::openSolution(const std::string& path) {
         transitionLauncherToMainWindow();
         return {}; // Already the project.
     }
-    Result<project::SolutionModel> loaded = project::SolutionModel::load(m_services.fs, path);
+    Result<project::SolutionModel> loaded =
+        project::SolutionModel::load(m_services.fs, path, {.cppHierarchy = m_cppHierarchyMode});
     if (!loaded) {
         notify(text("Cannot open %1").arg(qs(path)), qs(loaded.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(loaded.error()));
@@ -1249,7 +1252,8 @@ Result<std::string> Workbench::createNewFile(std::string_view directory, std::st
         std::ranges::any_of(m_solution->projects(), [](const project::ProjectInfo& p) {
             return p.kind == project::ProjectKind::CSharp && p.nodeKind == project::NodeKind::Project;
         })) {
-        if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
+        if (auto loaded =
+                project::SolutionModel::load(m_services.fs, m_solution->path(), {.cppHierarchy = m_cppHierarchyMode})) {
             auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
             m_solution = refreshed;
             if (m_explorer) {
@@ -1275,7 +1279,8 @@ Result<std::string> Workbench::createNewFolder(std::string_view directory, std::
         std::ranges::any_of(m_solution->projects(), [](const project::ProjectInfo& p) {
             return p.kind == project::ProjectKind::CSharp && p.nodeKind == project::NodeKind::Project;
         })) {
-        if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
+        if (auto loaded =
+                project::SolutionModel::load(m_services.fs, m_solution->path(), {.cppHierarchy = m_cppHierarchyMode})) {
             auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
             m_solution = refreshed;
             if (m_explorer) {
@@ -1301,7 +1306,17 @@ Result<std::string> Workbench::createNewProjectSource(std::string_view projectPa
     if (!created) {
         return created;
     }
-    removeProjectFile(qs(canonicalProject), qs(*created), true);
+    if (!m_options.projectEditHostPath.empty()) {
+        removeProjectFile(qs(canonicalProject), qs(*created), true);
+    } else {
+        const std::array<std::string, 1> files{*created};
+        (void)addExistingFilesToVcxproj(m_services.fs, canonicalProject, files);
+        refreshSolutionExplorerForFsChange(*created);
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+    }
     return created;
 }
 
@@ -1495,7 +1510,8 @@ void Workbench::refreshSolutionExplorerForFsChange(std::string_view selectPath) 
     if (!m_solution || m_buildService->state() != build::BuildState::Idle || m_buildService->projectEditInProgress()) {
         return;
     }
-    if (auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path())) {
+    if (auto loaded =
+            project::SolutionModel::load(m_services.fs, m_solution->path(), {.cppHierarchy = m_cppHierarchyMode})) {
         auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
         if (m_buildService->beginProjectEdit()) {
             (void)m_buildService->finishProjectEdit(refreshed);
@@ -1517,6 +1533,118 @@ void Workbench::refreshSolutionExplorerForFsChange(std::string_view selectPath) 
             (void)m_nav->refreshSolution(*refreshed);
         }
     }
+}
+
+void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, std::string_view targetFilterPath) {
+    if (paths.empty()) {
+        return;
+    }
+    if (m_solution) {
+        std::vector<const project::ProjectInfo*> cppProjects;
+        const project::ProjectInfo* bestMatch = nullptr;
+        std::size_t bestMatchLen = 0;
+        const std::string firstKey = lang::documentKey(paths.front());
+
+        for (const project::ProjectInfo& proj : m_solution->projects()) {
+            if (proj.kind == project::ProjectKind::Cpp && proj.nodeKind == project::NodeKind::Project &&
+                !proj.path.empty()) {
+                cppProjects.push_back(&proj);
+                const std::string projDirKey = lang::documentKey(io::parentPath(proj.path));
+                if (firstKey.starts_with(projDirKey) && projDirKey.size() > bestMatchLen) {
+                    bestMatch = &proj;
+                    bestMatchLen = projDirKey.size();
+                }
+            }
+        }
+        if (cppProjects.empty()) {
+            notify(text("Add to Project"),
+                   text("No loaded C++ (.vcxproj) project is open in the solution. C# SDK-style projects include files "
+                        "in their directory automatically."),
+                   ui::NotificationKind::Info);
+            return;
+        }
+        std::string targetVcxproj;
+        std::string targetProjName;
+        if (bestMatch != nullptr) {
+            targetVcxproj = bestMatch->path;
+            targetProjName = bestMatch->name;
+        } else if (cppProjects.size() == 1) {
+            targetVcxproj = cppProjects.front()->path;
+            targetProjName = cppProjects.front()->name;
+        } else if (m_window) {
+            QStringList names;
+            for (const project::ProjectInfo* p : cppProjects) {
+                names.push_back(qs(p->name));
+            }
+            bool ok = false;
+            const QString chosen =
+                QInputDialog::getItem(m_window, text("Add to Project"), text("Select target C++ project:"), names, 0,
+                                      false, &ok);
+            if (!ok || chosen.isEmpty()) {
+                return;
+            }
+            const qsizetype idx = names.indexOf(chosen);
+            if (idx >= 0 && static_cast<std::size_t>(idx) < cppProjects.size()) {
+                targetVcxproj = cppProjects[static_cast<std::size_t>(idx)]->path;
+                targetProjName = cppProjects[static_cast<std::size_t>(idx)]->name;
+            }
+        }
+        if (targetVcxproj.empty()) {
+            return;
+        }
+        auto added = addExistingFilesToVcxproj(m_services.fs, targetVcxproj, paths, targetFilterPath);
+        if (!added) {
+            notify(text("Add to Project"), qs(added.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        refreshSolutionExplorerForFsChange(paths.front());
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+        notify(text("Added to Project"),
+               text("Added %1 file(s) to %2.").arg(*added).arg(qs(targetProjName)),
+               ui::NotificationKind::Info);
+        return;
+    }
+
+    if (!m_projectRoot.empty()) {
+        const auto listsPath = io::joinPath(m_projectRoot, "CMakeLists.txt");
+        if (listsPath && m_services.fs.exists(*listsPath).value_or(false)) {
+            std::vector<std::string> sourceFiles;
+            const auto collectSources = [&](const auto& self, const std::string& p) -> void {
+                auto st = m_services.fs.status(p);
+                if (!st) {
+                    return;
+                }
+                if (st->type == io::FileType::Regular) {
+                    if (isCFamilySource(p)) {
+                        sourceFiles.push_back(p);
+                    }
+                } else if (st->type == io::FileType::Directory) {
+                    if (auto entries = m_services.fs.listDirectory(p)) {
+                        for (const io::DirEntry& e : *entries) {
+                            if (e.name == ".git" || e.name == "build" || e.name == "out") {
+                                continue;
+                            }
+                            if (auto child = io::joinPath(p, e.name)) {
+                                self(self, *child);
+                            }
+                        }
+                    }
+                }
+            };
+            for (const std::string& p : paths) {
+                collectSources(collectSources, p);
+            }
+            for (const std::string& src : sourceFiles) {
+                (void)addSourceToCMakeLists(src);
+            }
+            return;
+        }
+    }
+    notify(text("Add to Project"), text("Open a C++ solution (.sln / .slnx) or CMake project first."),
+           ui::NotificationKind::Warning);
 }
 
 void Workbench::renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory) {

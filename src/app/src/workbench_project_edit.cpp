@@ -221,7 +221,8 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
                 return;
             }
             static_cast<void>(m_services.fs.removeFile(ownedMarker));
-            auto loaded = project::SolutionModel::load(m_services.fs, solution->path());
+            auto loaded =
+                project::SolutionModel::load(m_services.fs, solution->path(), {.cppHierarchy = m_cppHierarchyMode});
             if (!loaded) {
                 notify(QStringLiteral("Project recovery"), q(loaded.error().message()), ui::NotificationKind::Error);
                 return;
@@ -319,7 +320,8 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
         if (m_solution != solution || m_projectRoot != root) {
             return;
         }
-        auto loaded = project::SolutionModel::load(m_services.fs, solution->path());
+        auto loaded =
+            project::SolutionModel::load(m_services.fs, solution->path(), {.cppHierarchy = m_cppHierarchyMode});
         if (!loaded) {
             notify(title, q(loaded.error().message()), ui::NotificationKind::Error);
             return;

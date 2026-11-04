@@ -66,6 +66,7 @@
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -1285,6 +1286,41 @@ void Workbench::attach(ui::ShellWindow& window) {
                 (void)m_terminal->openInTerminal(dir.toStdString());
             }
         });
+        connect(fsView, &ui::FileSystemView::addPathsToProjectRequested, this, [this](const QStringList& paths) {
+            std::vector<std::string> stdPaths;
+            stdPaths.reserve(static_cast<std::size_t>(paths.size()));
+            for (const QString& p : paths) {
+                stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+            }
+            addPathsToActiveProject(stdPaths);
+        });
+        connect(fsView, &ui::FileSystemView::addExistingFilesToProjectRequested, this,
+                [this](const QString& directory) {
+                    const QString startDir = directory.isEmpty() ? qs(m_projectRoot) : directory;
+                    const QStringList chosen = QFileDialog::getOpenFileNames(
+                        m_window, text("Add Existing Files to Project"), startDir,
+                        text("C/C++ and Project Files (*.c *.cc *.cpp *.cxx *.c++ *.cppm *.ixx *.h *.hh *.hpp *.hxx "
+                             "*.inl *.rc *.natvis *.hlsl *.glsl);;All Files (*.*)"));
+                    if (chosen.isEmpty()) {
+                        return;
+                    }
+                    std::vector<std::string> stdPaths;
+                    stdPaths.reserve(static_cast<std::size_t>(chosen.size()));
+                    for (const QString& p : chosen) {
+                        stdPaths.push_back(QDir::toNativeSeparators(p).toStdString());
+                    }
+                    addPathsToActiveProject(stdPaths);
+                });
+        connect(fsView, &ui::FileSystemView::addExistingFolderToProjectRequested, this,
+                [this](const QString& directory) {
+                    const QString startDir = directory.isEmpty() ? qs(m_projectRoot) : directory;
+                    const QString chosen = QFileDialog::getExistingDirectory(
+                        m_window, text("Add Existing Folder to Project"), startDir);
+                    if (chosen.isEmpty()) {
+                        return;
+                    }
+                    addPathsToActiveProject({QDir::toNativeSeparators(chosen).toStdString()});
+                });
     }
 
     attachToolWindows();
@@ -1414,25 +1450,71 @@ void Workbench::attachToolWindows() {
     ui::ToolWindowManager& windows = m_window->toolWindows();
 
     auto* explorer = new ui::SolutionExplorer();
+    explorer->setCppHierarchyMode(m_cppHierarchyMode);
     m_projectEdit = std::make_unique<ProjectEditProcess>(m_services.launcher, m_services.clock);
     explorer->setController(m_build.get());
     explorer->setProcessLauncher(&m_services.launcher);
-    explorer->setRemoveProjectFileHandler(
-        [this](const QString& project, const QString& source) { removeProjectFile(project, source); });
-    explorer->setAddProjectFileHandler([this](const QString& project) {
-        const auto source = m_options.selectExistingProjectSource
-                                ? m_options.selectExistingProjectSource(project)
-                                : QFileDialog::getOpenFileName(m_window, QStringLiteral("Add Existing C/C++ Source"),
-                                                               QFileInfo(project).absolutePath(),
-                                                               QStringLiteral("C/C++ files (*.c *.cpp *.h *.hpp)"));
-        if (!source.isEmpty())
-            removeProjectFile(project, source, true);
+    explorer->setRemoveProjectFileHandler([this](const QString& project, const QString& source) {
+        if (!m_options.projectEditHostPath.empty()) {
+            removeProjectFile(project, source);
+            return;
+        }
+        const std::array<std::string, 1> files{QDir::toNativeSeparators(source).toStdString()};
+        if (auto removed = removeFilesFromVcxproj(m_services.fs, project.toStdString(), files); !removed) {
+            notify(text("Remove from Project"), qs(removed.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        refreshSolutionExplorerForFsChange();
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
     });
-    explorer->setAddNewProjectFileHandler([this](const QString& project) {
+    explorer->setAddProjectFileHandler([this, explorer](const QString& project) {
+        if (m_options.selectExistingProjectSource) {
+            const QString source = m_options.selectExistingProjectSource(project);
+            if (!source.isEmpty()) {
+                removeProjectFile(project, source, true);
+            }
+            return;
+        }
+        const QStringList selected = QFileDialog::getOpenFileNames(
+            m_window, text("Add Existing C/C++ Files"), QFileInfo(project).absolutePath(),
+            text("C/C++ and Project Files (*.c *.cc *.cpp *.cxx *.c++ *.cppm *.ixx *.h *.hh *.hpp *.hxx *.inl *.rc "
+                 "*.natvis *.hlsl *.glsl);;All Files (*.*)"));
+        if (selected.isEmpty()) {
+            return;
+        }
+        std::vector<std::string> files;
+        files.reserve(static_cast<std::size_t>(selected.size()));
+        for (const QString& s : selected) {
+            files.push_back(QDir::toNativeSeparators(s).toStdString());
+        }
+        const std::string targetFilter = explorer ? explorer->contextFilterPath().toStdString() : std::string{};
+        auto added = addExistingFilesToVcxproj(m_services.fs, project.toStdString(), files, targetFilter);
+        if (!added) {
+            notify(text("Add Existing Files"), qs(added.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        refreshSolutionExplorerForFsChange(files.front());
+        startProjectEvaluation(m_projectRoot);
+        if (m_clangd) {
+            restartClangd();
+        }
+    });
+    explorer->setAddNewProjectFileHandler([this, explorer](const QString& project) {
+        const std::string targetFilter = explorer ? explorer->contextFilterPath().toStdString() : std::string{};
         const std::string dir = QDir::toNativeSeparators(QFileInfo(project).absolutePath()).toStdString();
         const std::string name = m_services.prompts.chooseNewItemName(m_window, dir, false);
-        if (!name.empty())
-            (void)createNewProjectSource(project.toStdString(), name);
+        if (name.empty()) {
+            return;
+        }
+        auto created = createNewProjectSource(project.toStdString(), name);
+        if (created && !targetFilter.empty()) {
+            const std::array<std::string, 1> files{*created};
+            (void)moveFilesToVcxprojFilter(m_services.fs, project.toStdString(), files, targetFilter);
+            refreshSolutionExplorerForFsChange(*created);
+        }
     });
     explorer->setNewItemHandlers(
         [this](const QString& dir) {
@@ -1569,6 +1651,154 @@ void Workbench::attachToolWindows() {
         showNuGetPackageManagerDialog(m_window, m_services.fs, projectPath.toStdString(),
                                       [this] { refreshSolutionExplorerForFsChange(); });
     });
+    connect(explorer, &ui::SolutionExplorer::cppHierarchyModeChanged, this, [this](project::CppHierarchyMode mode) {
+        m_cppHierarchyMode = mode;
+        refreshSolutionExplorerForFsChange();
+    });
+    connect(explorer, &ui::SolutionExplorer::addFilterRequested, this,
+            [this](const QString& projectPath, const QString& parentFilterPath) {
+                if (!m_window || !m_solution)
+                    return;
+                bool ok = false;
+                const QString name =
+                    QInputDialog::getText(m_window, text("New Filter"), text("Filter name:"), QLineEdit::Normal,
+                                          QString(), &ok)
+                        .trimmed();
+                if (!ok || name.isEmpty())
+                    return;
+                const QString fullFilter =
+                    parentFilterPath.isEmpty() ? name : (parentFilterPath + QLatin1Char('\\') + name);
+                if (auto res = addFilterToVcxprojFilters(m_services.fs, projectPath.toStdString(),
+                                                         fullFilter.toStdString());
+                    !res) {
+                    notify(text("Add Filter"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::renameFilterRequested, this,
+            [this](const QString& projectPath, const QString& filterPath) {
+                if (!m_window || !m_solution || filterPath.isEmpty())
+                    return;
+                const qsizetype lastSep = filterPath.lastIndexOf(QLatin1Char('\\'));
+                const QString prefix = lastSep >= 0 ? filterPath.left(lastSep) : QString();
+                const QString leaf = lastSep >= 0 ? filterPath.mid(lastSep + 1) : filterPath;
+                bool ok = false;
+                const QString newName =
+                    QInputDialog::getText(m_window, text("Rename Filter"), text("New filter name:"), QLineEdit::Normal,
+                                          leaf, &ok)
+                        .trimmed();
+                if (!ok || newName.isEmpty() || newName == leaf)
+                    return;
+                const QString newFilterPath =
+                    (newName.contains(QLatin1Char('\\')) || newName.contains(QLatin1Char('/')) || prefix.isEmpty())
+                        ? newName
+                        : (prefix + QLatin1Char('\\') + newName);
+                if (auto res = renameFilterInVcxprojFilters(m_services.fs, projectPath.toStdString(),
+                                                            filterPath.toStdString(), newFilterPath.toStdString());
+                    !res) {
+                    notify(text("Rename Filter"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::removeFilterRequested, this,
+            [this](const QString& projectPath, const QString& filterPath) {
+                if (!m_window || !m_solution || filterPath.isEmpty())
+                    return;
+                if (auto res =
+                        removeFilterFromVcxprojFilters(m_services.fs, projectPath.toStdString(), filterPath.toStdString());
+                    !res) {
+                    notify(text("Remove Filter"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+            });
+    connect(explorer, &ui::SolutionExplorer::moveFilesToFilterRequested, this,
+            [this](const QString& projectPath, const QStringList& filePaths, const QString& targetFilterPath) {
+                if (!m_solution || filePaths.isEmpty())
+                    return;
+                std::vector<std::string> files;
+                files.reserve(static_cast<std::size_t>(filePaths.size()));
+                for (const QString& f : filePaths) {
+                    files.push_back(QDir::toNativeSeparators(f).toStdString());
+                }
+                if (auto res = moveFilesToVcxprojFilter(m_services.fs, projectPath.toStdString(), files,
+                                                        targetFilterPath.toStdString());
+                    !res) {
+                    notify(text("Move to Filter"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange(files.front());
+            });
+    connect(explorer, &ui::SolutionExplorer::moveFilesToNewFilterRequested, this,
+            [this](const QString& projectPath, const QStringList& filePaths) {
+                if (!m_window || !m_solution || filePaths.isEmpty())
+                    return;
+                bool ok = false;
+                const QString filterName =
+                    QInputDialog::getText(m_window, text("Move to New Filter"),
+                                          text("Filter path (e.g. Source Files\\Subfilter):"), QLineEdit::Normal,
+                                          QString(), &ok)
+                        .trimmed();
+                if (!ok || filterName.isEmpty())
+                    return;
+                std::vector<std::string> files;
+                files.reserve(static_cast<std::size_t>(filePaths.size()));
+                for (const QString& f : filePaths) {
+                    files.push_back(QDir::toNativeSeparators(f).toStdString());
+                }
+                if (auto res = moveFilesToVcxprojFilter(m_services.fs, projectPath.toStdString(), files,
+                                                        filterName.toStdString());
+                    !res) {
+                    notify(text("Move to Filter"), qs(res.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange(files.front());
+            });
+    connect(explorer, &ui::SolutionExplorer::addExistingFolderToFilterRequested, this,
+            [this](const QString& projectPath, const QString& targetFilterPath) {
+                if (!m_window || !m_solution)
+                    return;
+                const QString chosen = QFileDialog::getExistingDirectory(
+                    m_window, text("Add Existing Folder to Project"), QFileInfo(projectPath).absolutePath());
+                if (chosen.isEmpty())
+                    return;
+                const std::array<std::string, 1> dirs{QDir::toNativeSeparators(chosen).toStdString()};
+                auto added = addExistingFilesToVcxproj(m_services.fs, projectPath.toStdString(), dirs,
+                                                       targetFilterPath.toStdString());
+                if (!added) {
+                    notify(text("Add Existing Folder"), qs(added.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+                startProjectEvaluation(m_projectRoot);
+                if (m_clangd) {
+                    restartClangd();
+                }
+                notify(text("Added Folder to Project"),
+                       text("Added %1 file(s) from '%2'.").arg(*added).arg(QFileInfo(chosen).fileName()),
+                       ui::NotificationKind::Info);
+            });
+    connect(explorer, &ui::SolutionExplorer::removeMultipleProjectFilesRequested, this,
+            [this](const QString& projectPath, const QStringList& filePaths) {
+                if (!m_solution || filePaths.isEmpty())
+                    return;
+                std::vector<std::string> files;
+                files.reserve(static_cast<std::size_t>(filePaths.size()));
+                for (const QString& f : filePaths) {
+                    files.push_back(QDir::toNativeSeparators(f).toStdString());
+                }
+                if (auto removed = removeFilesFromVcxproj(m_services.fs, projectPath.toStdString(), files); !removed) {
+                    notify(text("Remove from Project"), qs(removed.error().message()), ui::NotificationKind::Error);
+                    return;
+                }
+                refreshSolutionExplorerForFsChange();
+                startProjectEvaluation(m_projectRoot);
+                if (m_clangd) {
+                    restartClangd();
+                }
+            });
 
     auto* problems = new ui::ProblemsView();
     problems->setController(m_build.get());

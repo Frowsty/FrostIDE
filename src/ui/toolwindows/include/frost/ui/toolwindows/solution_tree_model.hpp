@@ -65,6 +65,7 @@ public:
         IconIdRole,                    // QString: the atlas icon id (header comment).
         SecondaryTextRole,             // QString: the grey suffix ("5 projects", "(unavailable)"), or "".
         KeyRole,                       // QString: project::Node::key, stable across reloads.
+        FilterPathRole,                // QString: project::Node::filterPath for Filter nodes.
     };
 
     explicit SolutionTreeModel(QObject* parent = nullptr);
@@ -96,6 +97,17 @@ public:
     [[nodiscard]] int columnCount(const QModelIndex& parent = {}) const override;
     [[nodiscard]] QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
+    [[nodiscard]] Qt::DropActions supportedDropActions() const override;
+    [[nodiscard]] QStringList mimeTypes() const override;
+    [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    [[nodiscard]] bool canDropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                                       const QModelIndex& parent) const override;
+    [[nodiscard]] bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                                    const QModelIndex& parent) override;
+
+signals:
+    void filesDroppedOnFilter(const QString& projectPath, const QStringList& filePaths,
+                              const QString& targetFilterPath);
 
 private:
     std::shared_ptr<const project::SolutionModel> m_solution;

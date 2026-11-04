@@ -55,6 +55,8 @@ public:
     [[nodiscard]] QString speedSearch() const;
     // The path of the selected row, or empty.
     [[nodiscard]] std::string selectedPath() const;
+    // All selected paths in the tree (supports multi-selection).
+    [[nodiscard]] QStringList selectedPaths() const;
     // True when the selected row is a directory.
     [[nodiscard]] bool selectedIsDirectory() const;
     // The directory of the selected row (its own path for a folder, parent for a file), else root.
@@ -87,6 +89,9 @@ signals:
     void deleteRequested(const QString& path, bool isDirectory);
     void openContainingFolderRequested(const QString& path);
     void openInTerminalRequested(const QString& directoryPath);
+    void addPathsToProjectRequested(const QStringList& paths);
+    void addExistingFilesToProjectRequested(const QString& directory);
+    void addExistingFolderToProjectRequested(const QString& directory);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

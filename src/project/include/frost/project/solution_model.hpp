@@ -82,6 +82,16 @@ enum class NodeKind : unsigned char {
 
 enum class ProjectKind : unsigned char { Cpp, CSharp, VisualBasic, FSharp, SharedItems, Unknown };
 
+enum class CppHierarchyMode : unsigned char {
+    Filters,           // .vcxproj.filters tree only (Visual Studio default).
+    FiltersAndFolders, // .vcxproj.filters tree, plus physical subfolders for unfiltered items.
+    PhysicalFolders,   // Physical folder structure relative to the .vcxproj directory.
+};
+
+struct SolutionLoadOptions {
+    CppHierarchyMode cppHierarchy = CppHierarchyMode::Filters;
+};
+
 // "C++", "C#", "Visual Basic", "F#", "shared items", "unknown".
 [[nodiscard]] std::string_view toString(ProjectKind kind) noexcept;
 
@@ -94,6 +104,7 @@ struct Node {
     std::string key;                    // Stable across reloads (see above); unique in the model.
     std::optional<ProjectId> project;   // The project of project, filter and project-file nodes.
     ItemType itemType = ItemType::None; // For project files.
+    std::string filterPath;             // Logical filter or relative folder path for Filter nodes.
 };
 
 struct ProjectInfo {
@@ -119,7 +130,8 @@ public:
      * Errors: those of readSolutionFile (InvalidArgument, NotFound, PermissionDenied, IoError,
      * Corrupt, Unsupported); project problems never fail the load.
      */
-    [[nodiscard]] static Result<SolutionModel> load(io::IFileSystem& fs, std::string_view solutionPath);
+    [[nodiscard]] static Result<SolutionModel> load(io::IFileSystem& fs, std::string_view solutionPath,
+                                                    SolutionLoadOptions options = {});
 
     // Worker-thread overlay for one successfully evaluated project's item type.
     // Unlisted static nodes of this type are disconnected; other item types and filters remain.
@@ -127,6 +139,7 @@ public:
                                                    std::span<const std::string> files) const;
 
     [[nodiscard]] SolutionFormat format() const noexcept { return m_format; }
+    [[nodiscard]] CppHierarchyMode cppHierarchyMode() const noexcept { return m_cppHierarchy; }
     [[nodiscard]] const std::string& path() const noexcept { return m_path; }
     [[nodiscard]] const std::string& directory() const noexcept { return m_directory; }
     // The solution's name: its file name without the extension.
@@ -170,6 +183,7 @@ private:
     SolutionModel() = default;
 
     SolutionFormat m_format = SolutionFormat::Sln;
+    CppHierarchyMode m_cppHierarchy = CppHierarchyMode::Filters;
     std::string m_path;
     std::string m_directory;
     std::string m_name;

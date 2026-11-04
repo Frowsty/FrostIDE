@@ -10,9 +10,13 @@
 
 #include "tool_icons.hpp"
 #include <QApplication>
+#include <QDataStream>
+#include <QIODevice>
+#include <QMimeData>
 #include <QPainter>
 #include <QStyle>
 #include <QTreeView>
+#include <QUrl>
 
 #include <algorithm>
 #include <array>
@@ -211,6 +215,7 @@ QVariant SolutionTreeModel::data(const QModelIndex& index, int role) const {
         default: return QString();
         }
     case KeyRole: return qs(node.key);
+    case FilterPathRole: return qs(node.filterPath);
     case Qt::ForegroundRole:
         if (m_fileColors && node.kind == NodeKind::File && !node.path.empty()) {
             if (const std::optional<QColor> color = m_fileColors(node.path)) {
@@ -227,11 +232,135 @@ Qt::ItemFlags SolutionTreeModel::flags(const QModelIndex& index) const {
     if (!id) {
         return Qt::NoItemFlags;
     }
+    const project::Node& node = m_solution->node(*id);
     Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
-    if (m_solution->node(*id).kind == NodeKind::File) {
+    if (node.kind == NodeKind::File) {
         result |= Qt::ItemNeverHasChildren;
+        if (node.project && !node.path.empty()) {
+            result |= Qt::ItemIsDragEnabled;
+        }
+    } else if (node.kind == NodeKind::Filter || node.kind == NodeKind::Project) {
+        result |= Qt::ItemIsDropEnabled;
     }
     return result;
+}
+
+Qt::DropActions SolutionTreeModel::supportedDropActions() const { return Qt::MoveAction | Qt::CopyAction; }
+
+QStringList SolutionTreeModel::mimeTypes() const {
+    return {QStringLiteral("application/x-frostide-solution-files"), QStringLiteral("text/uri-list")};
+}
+
+QMimeData* SolutionTreeModel::mimeData(const QModelIndexList& indexes) const {
+    if (!m_solution) {
+        return nullptr;
+    }
+    QString projectPath;
+    QStringList filePaths;
+    QList<QUrl> urls;
+    for (const QModelIndex& index : indexes) {
+        const std::optional<NodeId> id = nodeOf(index);
+        if (!id) {
+            continue;
+        }
+        const project::Node& node = m_solution->node(*id);
+        if (node.kind != NodeKind::File || !node.project || node.path.empty()) {
+            continue;
+        }
+        const QString proj = qs(m_solution->project(*node.project).path);
+        if (projectPath.isEmpty()) {
+            projectPath = proj;
+        } else if (projectPath != proj) {
+            continue;
+        }
+        const QString filePath = qs(node.path);
+        if (!filePaths.contains(filePath)) {
+            filePaths.push_back(filePath);
+            urls.push_back(QUrl::fromLocalFile(filePath));
+        }
+    }
+    if (filePaths.isEmpty()) {
+        return nullptr;
+    }
+    auto* mime = new QMimeData();
+    QByteArray payload;
+    QDataStream stream(&payload, QIODevice::WriteOnly);
+    stream << projectPath << filePaths;
+    mime->setData(QStringLiteral("application/x-frostide-solution-files"), payload);
+    mime->setUrls(urls);
+    return mime;
+}
+
+bool SolutionTreeModel::canDropMimeData(const QMimeData* data, Qt::DropAction /*action*/, int /*row*/, int /*column*/,
+                                        const QModelIndex& parent) const {
+    if (!m_solution || data == nullptr) {
+        return false;
+    }
+    const std::optional<NodeId> targetId = nodeOf(parent);
+    if (!targetId) {
+        return false;
+    }
+    const project::Node& targetNode = m_solution->node(*targetId);
+    if ((targetNode.kind != NodeKind::Filter && targetNode.kind != NodeKind::Project &&
+         targetNode.kind != NodeKind::File) ||
+        !targetNode.project) {
+        return false;
+    }
+    const QString targetProjectPath = qs(m_solution->project(*targetNode.project).path);
+    if (!targetProjectPath.endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)) {
+        return false;
+    }
+    if (data->hasFormat(QStringLiteral("application/x-frostide-solution-files"))) {
+        QByteArray payload = data->data(QStringLiteral("application/x-frostide-solution-files"));
+        QDataStream stream(&payload, QIODevice::ReadOnly);
+        QString srcProjectPath;
+        QStringList files;
+        stream >> srcProjectPath >> files;
+        return !files.isEmpty() && srcProjectPath.compare(targetProjectPath, Qt::CaseInsensitive) == 0;
+    }
+    return data->hasUrls();
+}
+
+bool SolutionTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                                     const QModelIndex& parent) {
+    if (!canDropMimeData(data, action, row, column, parent)) {
+        return false;
+    }
+    std::optional<NodeId> targetId = nodeOf(parent);
+    if (!targetId) {
+        return false;
+    }
+    if (m_solution->node(*targetId).kind == NodeKind::File) {
+        targetId = m_solution->parent(*targetId);
+        if (!targetId) {
+            return false;
+        }
+    }
+    const project::Node& targetNode = m_solution->node(*targetId);
+    if (!targetNode.project) {
+        return false;
+    }
+    const QString targetProjectPath = qs(m_solution->project(*targetNode.project).path);
+    const QString targetFilterPath =
+        targetNode.kind == NodeKind::Filter ? qs(targetNode.filterPath) : QString();
+    QStringList files;
+    if (data->hasFormat(QStringLiteral("application/x-frostide-solution-files"))) {
+        QByteArray payload = data->data(QStringLiteral("application/x-frostide-solution-files"));
+        QDataStream stream(&payload, QIODevice::ReadOnly);
+        QString srcProjectPath;
+        stream >> srcProjectPath >> files;
+    } else if (data->hasUrls()) {
+        for (const QUrl& url : data->urls()) {
+            if (url.isLocalFile()) {
+                files.push_back(url.toLocalFile());
+            }
+        }
+    }
+    if (files.isEmpty()) {
+        return false;
+    }
+    emit filesDroppedOnFilter(targetProjectPath, files, targetFilterPath);
+    return true;
 }
 
 // ---- SolutionFilterModel.
