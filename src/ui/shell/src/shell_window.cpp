@@ -33,12 +33,17 @@
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QPlainTextEdit>
+#include <QRhiWidget>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include <array>
 #include <utility>
@@ -234,6 +239,21 @@ void ShellWindow::buildCentral() {
     auto* editorIsland = new IslandFrame(dock);
     editorIsland->setObjectName(QStringLiteral("editorIsland"));
     m_tabs = new EditorTabs(m_env.editors, editorIsland);
+#ifdef _WIN32
+    if (QGuiApplication::platformName() == QStringLiteral("windows") && GetSystemMetrics(SM_REMOTESESSION) == 0) {
+        // Keep a persistent Direct3D 11 QRhiWidget in the top-level window from startup so Qt
+        // creates the native HWND with a Direct3D surface up front instead of destroying and
+        // recreating the window when the first RhiEditorViewport tab is opened.
+        auto* rhiAnchor = new QRhiWidget(editorIsland);
+        rhiAnchor->setObjectName(QStringLiteral("rhiBackingAnchor"));
+        rhiAnchor->setApi(QRhiWidget::Api::Direct3D11);
+        rhiAnchor->setFixedSize(1, 1);
+        rhiAnchor->move(2, 2);
+        rhiAnchor->lower();
+        rhiAnchor->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        rhiAnchor->setFocusPolicy(Qt::NoFocus);
+    }
+#endif
     auto* editorLayout = new QVBoxLayout(editorIsland);
     editorLayout->setContentsMargins(1, 1, 1, 1);
     editorLayout->setSpacing(0);

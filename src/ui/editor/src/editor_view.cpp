@@ -307,7 +307,7 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     updateWrap();
     updateScrollBars();
     m_lastStatus = status();
-    selectRenderer(); // Raster now; the QRhi backend, when chosen, after the first frame.
+    selectRenderer();
 }
 
 EditorView::~EditorView() {

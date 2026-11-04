@@ -172,6 +172,14 @@ inline constexpr std::string_view kOpenRecent = "file.openRecent";
 
 enum class NewProjectTemplate : std::uint8_t {
     CMakeExecutable,
+    CMakeStaticLibrary,
+    CMakeSharedLibrary,
+    VsCppConsole,
+    SlnxCppConsole,
+    VsCppStaticLibrary,
+    VsCppDynamicLibrary,
+    DotNetConsole,
+    DotNetClassLibrary,
     EmptyFolder,
 };
 

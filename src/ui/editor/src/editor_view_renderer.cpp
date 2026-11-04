@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // EditorView (frost/ui/editor/editor_view.hpp), part 4: the renderer choice (ADR 0043). The view
-// starts on raster, attaches the QRhi viewport after its first frame when editor.renderer's rule
-// says so, and swaps back to a raster viewport on a setting change or a QRhi failure, keeping the
-// editor model untouched.
+// attaches the QRhi viewport when editor.renderer's rule says so, and swaps back to a raster
+// viewport on a setting change or a QRhi failure, keeping the editor model untouched.
 
 #include "frost/core/log.hpp"
 #include "frost/ui/editor/editor_view.hpp"
@@ -51,12 +50,6 @@ void EditorView::selectRenderer() {
     if (m_rendererState.active == EditorBackend::Rhi) {
         return;
     }
-    if (m_paintCount == 0) {
-        // ADR 0007 decision 3: QRhi's start-up (about 210 ms of the first show()) stays off the first
-        // frame, which raster paints; paintEvent attaches the QRhi viewport after it.
-        m_rendererState.pending = true;
-        return;
-    }
     attachRhi();
 }
 
@@ -97,12 +90,6 @@ void EditorView::attachRhi() {
     // resize on to the QRhiWidget.
     m_renderer = std::make_unique<RhiEditorRenderer>(*surface);
     m_rhiViewport = surface;
-    // Hooked reports go first: a QRhiWidget that cannot render reports it during installViewport.
-    if (m_services.renderer.failRhiCreation) {
-        surface->reportFailure(QStringLiteral("forced QRhi creation failure (EditorRendererHooks)"));
-    } else if (m_services.renderer.softwareAdapter.has_value()) {
-        emit surface->adapterReady(QString::fromStdString(*m_services.renderer.softwareAdapter), true);
-    }
     installViewport(surface);
     m_rendererState.active = EditorBackend::Rhi;
     log::info("editor", "editor renderer: rhi ({})", m_rendererState.reason);

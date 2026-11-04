@@ -91,8 +91,19 @@ bool EditorView::viewportEvent(QEvent* event) {
         }
         return true;
     }
+    const bool rhiHooked = m_services.renderer.failRhiCreation || m_services.renderer.softwareAdapter.has_value();
+    if (m_rhiViewport && rhiHooked &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::Show || event->type() == QEvent::Paint)) {
+        // Hooked reports go before the QRhiWidget's own first resize/paint on show.
+        if (m_services.renderer.failRhiCreation) {
+            m_rhiViewport->reportFailure(QStringLiteral("forced QRhi creation failure (EditorRendererHooks)"));
+        } else if (m_services.renderer.softwareAdapter.has_value()) {
+            emit m_rhiViewport->adapterReady(QString::fromStdString(*m_services.renderer.softwareAdapter), true);
+        }
+        return true;
+    }
     const bool handled = QAbstractScrollArea::viewportEvent(event);
-    if (m_rhiViewport && (event->type() == QEvent::Paint || event->type() == QEvent::Resize)) {
+    if (m_rhiViewport && !rhiHooked && (event->type() == QEvent::Paint || event->type() == QEvent::Resize)) {
         // The view built the frame (Paint) or followed the size (Resize); the QRhiWidget must see
         // the event too, to render that frame and to resize its colour buffer.
         return false;

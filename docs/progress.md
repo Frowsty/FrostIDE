@@ -3,10 +3,20 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
-## 2026-11-04: Beta 4 project/file creation, Save As, and Visual Studio keymap mode
+## 2026-11-04: Beta 4 project/file creation, Visual Studio & .NET templates, RHI fix, and Visual Studio keymap mode
 
-- Implemented the project and file creation workflows prioritized in `continue.txt` plus a
-  Rider-style Visual Studio keymap mode:
+- Implemented the project and file creation workflows prioritized in `continue.txt`, expanded
+  project templates across CMake, Visual Studio (`.sln`/`.slnx`), and `.NET/C#`, fixed the
+  Direct3D 11 RHI window reload when opening the first file, and added a Rider-style Visual
+  Studio keymap mode:
+  - **Direct3D 11 RHI Window-Reload Fix (`ShellWindow` & `EditorView`)**:
+    - Hosted a persistent 1x1 Direct3D 11 `QRhiWidget` backing anchor (`rhiBackingAnchor`) in
+      `ShellWindow::buildCentral` on Windows desktop sessions so Qt creates the top-level
+      `HWND` with a `Direct3DSurface` up front at startup instead of destroying and recreating
+      the top-level window when the first `RhiEditorViewport` editor tab is opened.
+    - Updated `EditorView::selectRenderer` to attach `RhiEditorViewport` immediately when
+      `chooseEditorBackend` selects `EditorBackend::Rhi` instead of painting Frame 1 on a
+      raster `QWidget` viewport and swapping viewports via a queued post-paint callback.
   - **New File (`file.new` / `Alt+Insert`) & New Folder (`file.newFolder`)**: wired through
     `File` menu, `FileSystemView` context menu, `SolutionExplorer` context menu, and
     `ui::Workbench` / `app::Workbench`. Validates single-segment relative names (`..`,
@@ -21,11 +31,18 @@ what is next, blockers and open questions for the user.
     clangd, managed, and Lua) without creating duplicate tabs. Provides the UI escape hatch
     when saving an EFS-encrypted or NTFS object-ID file is refused under ADR 0076.
   - **New Project (`file.newProject`)**: accessible from the Welcome screen (`New Project...`),
-    `File > New Project...`, toolbar project switcher menu, and command palette. Offers
-    `CMake Executable (C++20)` (generating `CMakeLists.txt`, `src/main.cpp`, `.gitignore`)
-    and `Empty Folder` templates with live path preview, atomic rollback on failure, and
-    immediate workspace opening. Verified generated `CMakeExecutable` + added source file
-    configures, builds, and runs cleanly under `cmake` + `Ninja` + `clang-cl`.
+    `File > New Project...`, toolbar project switcher menu, and command palette. Supports 10
+    templates with live path preview, atomic rollback on failure, and immediate opening:
+    - `CMakeExecutable`: C++ Console App (CMake `CMakeLists.txt` + `main.cpp`)
+    - `CMakeStaticLibrary`: C++ Static Library (CMake `CMakeLists.txt` + header + source)
+    - `CMakeSharedLibrary`: C++ Shared Library (CMake `CMakeLists.txt` + export header + source)
+    - `VsCppConsole`: C++ Console App (Visual Studio `.sln` + `.vcxproj` + `.vcxproj.filters` + `main.cpp`)
+    - `SlnxCppConsole`: C++ Console App (Visual Studio `.slnx` + `.vcxproj` + `.vcxproj.filters` + `main.cpp`)
+    - `VsCppStaticLibrary`: C++ Static Library (Visual Studio `.sln` + `.vcxproj` + `.vcxproj.filters` + header + source)
+    - `VsCppDynamicLibrary`: C++ Dynamic Library (Visual Studio `.sln` + `.vcxproj` + `.vcxproj.filters` + DLL export header + source)
+    - `DotNetConsole`: .NET Console App (C# SDK-style `.csproj` targeting `net10.0` + `Program.cs`)
+    - `DotNetClassLibrary`: .NET Class Library (C# SDK-style `.csproj` targeting `net10.0` + `Class1.cs`)
+    - `EmptyFolder`: Empty Folder workspace
   - **Build Target Membership**: reuses `SolutionExplorer`'s `.vcxproj` `Add New File...`
     (`createNewProjectSource`) flow for MSBuild solutions, and posts an actionable
     notification (`Add to CMakeLists.txt`) for CMake projects that inserts the relative path
@@ -37,17 +54,17 @@ what is next, blockers and open questions for the user.
     `Ctrl+K, Ctrl+U` comment, `Ctrl+K, Ctrl+D` format), registered in `keymap.id` enum schema
     and exposed the Keymap scheme selector (`setting.keymap.id`) in `Settings > Keymap`.
 - Independent review by subagent `d6f4122d-70c4-4bae-99c4-29102f0ea9da` inspected all modified
-  files and tests; all 5 findings (Windows path separator normalization in `SolutionExplorer`,
-  `defaultNewItemDirectory` priority/workspace-root check, `app::Workbench::saveAs` peer editor
-  path and change-marker update ordering, `FileSystemView` pending selection clearing, and
-  open-document collision coverage in `workbench_test.cpp`) were resolved and verified.
+  files and tests across both passes; all findings (including `QEvent::Resize` before
+  `QEvent::Show` for offscreen RHI fault hooks in `EditorView::viewportEvent` and
+  `rhiBackingAnchor` placement under `m_tabs` in `ShellWindow::buildCentral`) were resolved
+  and verified.
 - Combined verification passed on both platforms:
-  - Windows: `3092/3117` passed (`25` skipped, `1` disabled), `0` failed; `format ok`,
+  - Windows: `3093/3118` passed (`25` skipped, `1` disabled), `0` failed; `format ok`,
     `frost_lint ok`, `licensecheck ok`, `featurecheck ok`.
-  - WSL Ubuntu 24.04: `2909/2960` passed (`51` skipped), `0` failed; `licensecheck ok`.
+  - WSL Ubuntu 24.04: `2910/2961` passed (`51` skipped), `0` failed; `licensecheck ok`.
 - Portable beta staged at `E:/FrostBuilds/beta/FrostIDE-2026.11.04-beta.4/frost.exe`.
   Private-desktop `--selftest` passed (`exit code 0`). Application DLL SHA-256:
-  `A6A75168E00E6165189E971E7E2F45BB16D2D57D14906E36F3AB0738E8ED94C4`.
+  `FB98B0D6EBBF0A700326242417A706EF19E93A29E44FE46DBD957E9BE99DFA50`.
 - Next: user testing of beta 4. Unfinished worktrees (`Rename`, rich CMake target management,
   Unity launch ownership) remain untouched for future slices.
 

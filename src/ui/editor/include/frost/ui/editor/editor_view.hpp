@@ -165,9 +165,8 @@ struct EditorServices {
 
 /*
  * Which backend draws the view (ADR 0043): `active` draws now; `mode` is the editor.renderer setting;
- * `reason` is why (the rule's answer, or the failure the view fell back from); `pending` means the
- * QRhi backend was chosen and waits for the first raster frame (ADR 0007 decision 3: QRhi's start-up
- * stays off the first frame); `fallbacks` counts switches to raster after a QRhi failure.
+ * `reason` is why (the rule's answer, or the failure the view fell back from); `pending` is false once
+ * the chosen backend is attached; `fallbacks` counts switches to raster after a QRhi failure.
  */
 struct EditorRendererState {
     EditorBackend active = EditorBackend::Raster;
@@ -195,12 +194,12 @@ struct EditorRendererState {
  * or the rows change; while the worker reparses, the session's stale tree (edited to the current
  * text) keeps colouring. Budget: B5.
  *
- * Renderers (ADR 0043): the first frame is always raster. When editor.renderer's rule picks QRhi
- * (chooseEditorBackend), the view swaps its viewport for a RhiEditorViewport after that frame, and
- * back to a plain raster viewport when the setting changes, the QRhi cannot be created, the device
- * is lost or the adapter turns out to be WARP under "auto". A swap keeps the editor model (document,
- * selections, undo), the scroll position and the overlays; only the viewport widget is replaced, so
- * callers must not keep viewport() pointers across rendererChanged().
+ * Renderers (ADR 0043): when editor.renderer's rule picks QRhi (chooseEditorBackend), the view
+ * attaches a RhiEditorViewport as its viewport, and switches back to a plain raster viewport when
+ * the setting changes, the QRhi cannot be created, the device is lost or the adapter turns out to
+ * be WARP under "auto". A swap keeps the editor model (document, selections, undo), the scroll
+ * position and the overlays; only the viewport widget is replaced, so callers must not keep
+ * viewport() pointers across rendererChanged().
  *
  * Insight (ADR 0047). The workbench feeds the language server's and the build's results through
  * small seams: setSemanticTokens and setInactiveRanges (ranges of a given text version, mapped
@@ -620,7 +619,6 @@ private:
     EditorRendererState m_rendererState;
     // Why the QRhi backend failed in this view; it is not tried again until editor.renderer changes.
     std::optional<std::string> m_rhiFailure;
-    bool m_rhiAttachQueued = false;
     std::unique_ptr<syntax::SyntaxSession> m_syntax;
     std::unique_ptr<SyntaxOutlineProvider> m_outline;
 

@@ -180,7 +180,7 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
     dialog.setObjectName(QStringLiteral("newProjectDialog"));
     dialog.setWindowTitle(text("New Project"));
     dialog.setModal(true);
-    dialog.setMinimumSize(620, 340);
+    dialog.setMinimumSize(680, 380);
 
     auto* outer = new QVBoxLayout(&dialog);
     outer->setContentsMargins(16, 16, 16, 16);
@@ -191,11 +191,38 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
 
     auto* templateList = new QListWidget(&dialog);
     templateList->setObjectName(QStringLiteral("newProjectTemplateList"));
-    templateList->setFixedWidth(210);
-    auto* cmakeItem = new QListWidgetItem(text("C++ Executable (CMake)"), templateList);
-    cmakeItem->setData(Qt::UserRole, static_cast<int>(NewProjectTemplate::CMakeExecutable));
-    auto* emptyItem = new QListWidgetItem(text("Empty Folder"), templateList);
-    emptyItem->setData(Qt::UserRole, static_cast<int>(NewProjectTemplate::EmptyFolder));
+    templateList->setFixedWidth(265);
+    struct TemplateEntry {
+        NewProjectTemplate kind;
+        QString label;
+        QString description;
+    };
+    const std::array<TemplateEntry, 10> entries{{
+        {NewProjectTemplate::CMakeExecutable, text("C++ Console App (CMake)"),
+         text("Creates a C++20 CMake executable project with CMakeLists.txt and main.cpp.")},
+        {NewProjectTemplate::CMakeStaticLibrary, text("C++ Static Library (CMake)"),
+         text("Creates a C++20 CMake static library project with CMakeLists.txt, header, and source files.")},
+        {NewProjectTemplate::CMakeSharedLibrary, text("C++ Shared Library (CMake)"),
+         text("Creates a C++20 CMake shared library (DLL/.so) project with export macros, header, and source files.")},
+        {NewProjectTemplate::VsCppConsole, text("C++ Console App (Visual Studio .sln)"),
+         text("Creates a Visual Studio solution (.sln) and C++20 MSBuild project (.vcxproj) with main.cpp.")},
+        {NewProjectTemplate::SlnxCppConsole, text("C++ Console App (Visual Studio .slnx)"),
+         text("Creates an XML Visual Studio solution (.slnx) and C++20 MSBuild project (.vcxproj) with main.cpp.")},
+        {NewProjectTemplate::VsCppStaticLibrary, text("C++ Static Library (Visual Studio .sln)"),
+         text("Creates a Visual Studio solution (.sln) and C++20 static library project (.vcxproj).")},
+        {NewProjectTemplate::VsCppDynamicLibrary, text("C++ Dynamic Library (Visual Studio .sln)"),
+         text("Creates a Visual Studio solution (.sln) and C++20 DLL project (.vcxproj) with export macros.")},
+        {NewProjectTemplate::DotNetConsole, text(".NET Console App (C#)"),
+         text("Creates an SDK-style .NET 10 C# console application (.csproj) with Program.cs.")},
+        {NewProjectTemplate::DotNetClassLibrary, text(".NET Class Library (C#)"),
+         text("Creates an SDK-style .NET 10 C# class library (.csproj) with Class1.cs.")},
+        {NewProjectTemplate::EmptyFolder, text("Empty Folder"),
+         text("Creates an empty folder and opens it in the File System view.")},
+    }};
+    for (const TemplateEntry& entry : entries) {
+        auto* item = new QListWidgetItem(entry.label, templateList);
+        item->setData(Qt::UserRole, static_cast<int>(entry.kind));
+    }
     templateList->setCurrentRow(0);
     body->addWidget(templateList);
 
@@ -252,11 +279,8 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
         createBtn->setText(text("Create"));
 
     const auto updateState = [&] {
-        const int row = templateList->currentRow();
-        const bool isCMake = row <= 0;
-        descriptionLabel->setText(
-            isCMake ? text("Creates a C++20 CMake project with a starter CMakeLists.txt and main.cpp.")
-                    : text("Creates an empty folder and opens it in the File System view."));
+        const int row = std::clamp(templateList->currentRow(), 0, static_cast<int>(entries.size()) - 1);
+        descriptionLabel->setText(entries[static_cast<std::size_t>(row)].description);
         const QString name = nameEdit->text().trimmed();
         const QString loc = locationEdit->text().trimmed();
         const QString combined =
@@ -287,7 +311,8 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
     NewProjectSpec spec;
     spec.name = nameEdit->text().trimmed().toStdString();
     spec.location = QDir::toNativeSeparators(locationEdit->text().trimmed()).toStdString();
-    spec.kind = templateList->currentRow() == 1 ? NewProjectTemplate::EmptyFolder : NewProjectTemplate::CMakeExecutable;
+    const int row = std::clamp(templateList->currentRow(), 0, static_cast<int>(entries.size()) - 1);
+    spec.kind = entries[static_cast<std::size_t>(row)].kind;
     return spec;
 }
 

@@ -393,9 +393,9 @@ TEST(EditorRenderer, ForcedCreationFailureFallsBackAndKeepsTheModel) {
     options.renderer.failRhiCreation = true;
     options.show = false;
     EditorHarness h("first line\nsecond line\nthird line\n", options);
-    // QRhi is chosen, but waits for the first (raster) frame.
-    EXPECT_EQ(h.view->rendererState().active, EditorBackend::Raster);
-    EXPECT_TRUE(h.view->rendererState().pending);
+    // QRhi is attached immediately on construction; the creation failure is queued.
+    EXPECT_EQ(h.view->rendererState().active, EditorBackend::Rhi);
+    EXPECT_FALSE(h.view->rendererState().pending);
     EXPECT_EQ(h.view->rendererState().reason, "auto: QRhi (Direct3D 11)");
 
     selectRange(*h.view, 11, 17); // "second"
@@ -407,7 +407,7 @@ TEST(EditorRenderer, ForcedCreationFailureFallsBackAndKeepsTheModel) {
 
     h.view->show();
     ASSERT_TRUE(pumpUntil([&] { return h.view->rendererState().fallbacks > 0; }));
-    EXPECT_EQ(seen, (std::vector<EditorBackend>{EditorBackend::Rhi, EditorBackend::Raster}));
+    EXPECT_EQ(seen, (std::vector<EditorBackend>{EditorBackend::Raster}));
     EXPECT_EQ(h.view->rendererState().active, EditorBackend::Raster);
     EXPECT_EQ(h.view->renderer().name(), "raster");
     EXPECT_EQ(h.view->rendererState().reason.rfind("fallback: forced QRhi creation failure", 0), 0U)

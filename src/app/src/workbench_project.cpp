@@ -141,6 +141,215 @@ std::string sanitizeCMakeTargetName(std::string_view name) {
     return out;
 }
 
+std::string sanitizeCodeIdentifier(std::string_view name) {
+    std::string out;
+    out.reserve(name.size());
+    for (const char raw : name) {
+        const auto ch = static_cast<unsigned char>(raw);
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('_');
+        }
+    }
+    if (out.empty() || (out.front() >= '0' && out.front() <= '9')) {
+        out.insert(0, "project_");
+    }
+    return out;
+}
+
+std::string sanitizeMacroPrefix(std::string_view name) {
+    std::string out = sanitizeCodeIdentifier(name);
+    std::ranges::transform(out, out.begin(),
+                           [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; });
+    return out;
+}
+
+std::string escapeXml(std::string_view input) {
+    std::string out;
+    out.reserve(input.size());
+    for (const char ch : input) {
+        switch (ch) {
+        case '&': out += "&amp;"; break;
+        case '<': out += "&lt;"; break;
+        case '>': out += "&gt;"; break;
+        case '"': out += "&quot;"; break;
+        case '\'': out += "&apos;"; break;
+        default: out.push_back(ch); break;
+        }
+    }
+    return out;
+}
+
+std::string projectGuidForName(std::string_view name) {
+    std::uint64_t h1 = 0xcbf29ce484222325ULL;
+    std::uint64_t h2 = 0x84222325cbf29ce4ULL;
+    for (const char raw : name) {
+        const auto ch = static_cast<unsigned char>(raw);
+        h1 = (h1 ^ ch) * 0x100000001b3ULL;
+        h2 = (h2 ^ (ch + 0x9e3779b97f4a7c15ULL)) * 0x100000001b3ULL;
+    }
+    const auto d1 = static_cast<std::uint32_t>(h1 >> 32U);
+    const auto d2 = static_cast<std::uint16_t>((h1 >> 16U) & 0xFFFFU);
+    const auto d3 = static_cast<std::uint16_t>((h1 & 0x0FFFU) | 0x4000U);
+    const auto d4 = static_cast<std::uint16_t>(((h2 >> 48U) & 0x3FFFU) | 0x8000U);
+    const auto d5 = h2 & 0xFFFFFFFFFFFFULL;
+    return std::format("{{{:08X}-{:04X}-{:04X}-{:04X}-{:012X}}}", d1, d2, d3, d4, d5);
+}
+
+std::string buildSlnContents(std::string_view projectName, std::string_view vcxprojFile, std::string_view projectGuid) {
+    return std::format("Microsoft Visual Studio Solution File, Format Version 12.00\n"
+                       "# Visual Studio Version 17\n"
+                       "VisualStudioVersion = 17.0.31903.59\n"
+                       "MinimumVisualStudioVersion = 10.0.40219.1\n"
+                       "Project(\"{{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}}\") = \"{0}\", \"{1}\", \"{2}\"\n"
+                       "EndProject\n"
+                       "Global\n"
+                       "\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\n"
+                       "\t\tDebug|x64 = Debug|x64\n"
+                       "\t\tRelease|x64 = Release|x64\n"
+                       "\tEndGlobalSection\n"
+                       "\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\n"
+                       "\t\t{2}.Debug|x64.ActiveCfg = Debug|x64\n"
+                       "\t\t{2}.Debug|x64.Build.0 = Debug|x64\n"
+                       "\t\t{2}.Release|x64.ActiveCfg = Release|x64\n"
+                       "\t\t{2}.Release|x64.Build.0 = Release|x64\n"
+                       "\tEndGlobalSection\n"
+                       "EndGlobal\n",
+                       projectName, vcxprojFile, projectGuid);
+}
+
+std::string buildSlnxContents(std::string_view vcxprojFile, std::string_view projectGuid) {
+    return std::format("<Solution>\n"
+                       "  <Configurations>\n"
+                       "    <BuildType Name=\"Debug\" />\n"
+                       "    <BuildType Name=\"Release\" />\n"
+                       "    <Platform Name=\"x64\" />\n"
+                       "  </Configurations>\n"
+                       "  <Project Path=\"{}\" Id=\"{}\" />\n"
+                       "</Solution>\n",
+                       escapeXml(vcxprojFile), projectGuid);
+}
+
+std::string buildVcxprojContents(std::string_view projectGuid, std::string_view rootNamespace,
+                                 std::string_view configurationType, std::string_view preprocessorSuffix,
+                                 std::string_view subSystem, std::string_view sourceFile, std::string_view headerFile) {
+    const std::string headerGroup = headerFile.empty() ? std::string{}
+                                                       : std::format("  <ItemGroup>\n"
+                                                                     "    <ClInclude Include=\"{}\" />\n"
+                                                                     "  </ItemGroup>\n",
+                                                                     escapeXml(headerFile));
+    return std::format(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n"
+        "  <ItemGroup Label=\"ProjectConfigurations\">\n"
+        "    <ProjectConfiguration Include=\"Debug|x64\">\n"
+        "      <Configuration>Debug</Configuration>\n"
+        "      <Platform>x64</Platform>\n"
+        "    </ProjectConfiguration>\n"
+        "    <ProjectConfiguration Include=\"Release|x64\">\n"
+        "      <Configuration>Release</Configuration>\n"
+        "      <Platform>x64</Platform>\n"
+        "    </ProjectConfiguration>\n"
+        "  </ItemGroup>\n"
+        "  <PropertyGroup Label=\"Globals\">\n"
+        "    <VCProjectVersion>17.0</VCProjectVersion>\n"
+        "    <Keyword>Win32Proj</Keyword>\n"
+        "    <ProjectGuid>{0}</ProjectGuid>\n"
+        "    <RootNamespace>{1}</RootNamespace>\n"
+        "    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>\n"
+        "  </PropertyGroup>\n"
+        "  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.Default.props\" />\n"
+        "  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Debug|x64'\" Label=\"Configuration\">\n"
+        "    <ConfigurationType>{2}</ConfigurationType>\n"
+        "    <UseDebugLibraries>true</UseDebugLibraries>\n"
+        "    <PlatformToolset>v143</PlatformToolset>\n"
+        "    <CharacterSet>Unicode</CharacterSet>\n"
+        "  </PropertyGroup>\n"
+        "  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|x64'\" Label=\"Configuration\">\n"
+        "    <ConfigurationType>{2}</ConfigurationType>\n"
+        "    <UseDebugLibraries>false</UseDebugLibraries>\n"
+        "    <WholeProgramOptimization>true</WholeProgramOptimization>\n"
+        "    <PlatformToolset>v143</PlatformToolset>\n"
+        "    <CharacterSet>Unicode</CharacterSet>\n"
+        "  </PropertyGroup>\n"
+        "  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.props\" />\n"
+        "  <ItemDefinitionGroup Condition=\"'$(Configuration)|$(Platform)'=='Debug|x64'\">\n"
+        "    <ClCompile>\n"
+        "      <WarningLevel>Level3</WarningLevel>\n"
+        "      <SDLCheck>true</SDLCheck>\n"
+        "      <PreprocessorDefinitions>_DEBUG;{3};%(PreprocessorDefinitions)</PreprocessorDefinitions>\n"
+        "      <ConformanceMode>true</ConformanceMode>\n"
+        "      <LanguageStandard>stdcpp20</LanguageStandard>\n"
+        "    </ClCompile>\n"
+        "    <Link>\n"
+        "      <SubSystem>{4}</SubSystem>\n"
+        "      <GenerateDebugInformation>true</GenerateDebugInformation>\n"
+        "    </Link>\n"
+        "  </ItemDefinitionGroup>\n"
+        "  <ItemDefinitionGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|x64'\">\n"
+        "    <ClCompile>\n"
+        "      <WarningLevel>Level3</WarningLevel>\n"
+        "      <FunctionLevelLinking>true</FunctionLevelLinking>\n"
+        "      <IntrinsicFunctions>true</IntrinsicFunctions>\n"
+        "      <SDLCheck>true</SDLCheck>\n"
+        "      <PreprocessorDefinitions>NDEBUG;{3};%(PreprocessorDefinitions)</PreprocessorDefinitions>\n"
+        "      <ConformanceMode>true</ConformanceMode>\n"
+        "      <LanguageStandard>stdcpp20</LanguageStandard>\n"
+        "    </ClCompile>\n"
+        "    <Link>\n"
+        "      <SubSystem>{4}</SubSystem>\n"
+        "      <EnableCOMDATFolding>true</EnableCOMDATFolding>\n"
+        "      <OptimizeReferences>true</OptimizeReferences>\n"
+        "      <GenerateDebugInformation>true</GenerateDebugInformation>\n"
+        "    </Link>\n"
+        "  </ItemDefinitionGroup>\n"
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"{5}\" />\n"
+        "  </ItemGroup>\n"
+        "{6}"
+        "  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.targets\" />\n"
+        "</Project>\n",
+        projectGuid, escapeXml(rootNamespace), configurationType, preprocessorSuffix, subSystem, escapeXml(sourceFile),
+        headerGroup);
+}
+
+std::string buildVcxprojFiltersContents(std::string_view sourceFile, std::string_view headerFile) {
+    const std::string headerGroup = headerFile.empty() ? std::string{}
+                                                       : std::format("  <ItemGroup>\n"
+                                                                     "    <ClInclude Include=\"{}\">\n"
+                                                                     "      <Filter>Header Files</Filter>\n"
+                                                                     "    </ClInclude>\n"
+                                                                     "  </ItemGroup>\n",
+                                                                     escapeXml(headerFile));
+    return std::format("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+                       "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n"
+                       "  <ItemGroup>\n"
+                       "    <Filter Include=\"Source Files\">\n"
+                       "      <UniqueIdentifier>{{4FC737F1-C7A5-4376-A066-2A32D752A2FF}}</UniqueIdentifier>\n"
+                       "      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>\n"
+                       "    </Filter>\n"
+                       "    <Filter Include=\"Header Files\">\n"
+                       "      <UniqueIdentifier>{{93995380-89BD-4b04-88EB-625FBE52EBFB}}</UniqueIdentifier>\n"
+                       "      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>\n"
+                       "    </Filter>\n"
+                       "    <Filter Include=\"Resource Files\">\n"
+                       "      <UniqueIdentifier>{{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}}</UniqueIdentifier>\n"
+                       "      "
+                       "<Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;"
+                       "mfcribbon-ms</Extensions>\n"
+                       "    </Filter>\n"
+                       "  </ItemGroup>\n"
+                       "  <ItemGroup>\n"
+                       "    <ClCompile Include=\"{0}\">\n"
+                       "      <Filter>Source Files</Filter>\n"
+                       "    </ClCompile>\n"
+                       "  </ItemGroup>\n"
+                       "{1}"
+                       "</Project>\n",
+                       escapeXml(sourceFile), headerGroup);
+}
+
 bool isCTranslationUnit(std::string_view path) noexcept {
     static constexpr std::array<std::string_view, 8> kTranslationUnits{".c",   ".cc",   ".cpp", ".cxx",
                                                                        ".c++", ".cppm", ".ixx", ".cu"};
@@ -647,63 +856,363 @@ Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
     }
 
     const std::string targetName = sanitizeCMakeTargetName(spec.name);
-    Result<std::string> cmakeListsPath = io::joinPath(canonicalDir, "CMakeLists.txt");
-    Result<std::string> mainCppPath = io::joinPath(canonicalDir, "main.cpp");
-    if (!cmakeListsPath || !mainCppPath) {
+    const std::string codeIdent = sanitizeCodeIdentifier(spec.name);
+    const std::string macroPrefix = sanitizeMacroPrefix(spec.name);
+    const std::string projectGuid = projectGuidForName(spec.name);
+
+    struct GeneratedFile {
+        std::string path;
+        std::string contents;
+    };
+    std::vector<GeneratedFile> files;
+    std::string primarySourcePath;
+    std::string solutionToOpen;
+    std::string cmakeToOpen;
+
+    const auto addFile = [&](std::string_view relativeName, std::string contents,
+                             bool isPrimarySource = false) -> bool {
+        Result<std::string> fullPath = io::joinPath(canonicalDir, relativeName);
+        if (!fullPath) {
+            return false;
+        }
+        if (isPrimarySource) {
+            primarySourcePath = *fullPath;
+        }
+        files.push_back(GeneratedFile{std::move(*fullPath), std::move(contents)});
+        return true;
+    };
+
+    bool pathsOk = true;
+    switch (spec.kind) {
+    case NewProjectTemplate::CMakeExecutable: {
+        pathsOk = addFile("CMakeLists.txt", std::format("cmake_minimum_required(VERSION 3.20)\n"
+                                                        "project({0} LANGUAGES CXX)\n"
+                                                        "\n"
+                                                        "set(CMAKE_CXX_STANDARD 20)\n"
+                                                        "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
+                                                        "set(CMAKE_CXX_EXTENSIONS OFF)\n"
+                                                        "\n"
+                                                        "add_executable({0}\n"
+                                                        "    main.cpp\n"
+                                                        ")\n",
+                                                        targetName)) &&
+                  addFile("main.cpp",
+                          std::format("#include <iostream>\n"
+                                      "\n"
+                                      "int main() {{\n"
+                                      "    std::cout << \"Hello from {}!\\n\";\n"
+                                      "    return 0;\n"
+                                      "}}\n",
+                                      targetName),
+                          true);
+        if (!files.empty()) {
+            cmakeToOpen = files.front().path;
+        }
+        break;
+    }
+    case NewProjectTemplate::CMakeStaticLibrary: {
+        const std::string headerName = targetName + ".hpp";
+        const std::string sourceName = targetName + ".cpp";
+        pathsOk = addFile("CMakeLists.txt",
+                          std::format("cmake_minimum_required(VERSION 3.20)\n"
+                                      "project({0} LANGUAGES CXX)\n"
+                                      "\n"
+                                      "set(CMAKE_CXX_STANDARD 20)\n"
+                                      "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
+                                      "set(CMAKE_CXX_EXTENSIONS OFF)\n"
+                                      "\n"
+                                      "add_library({0} STATIC\n"
+                                      "    {1}\n"
+                                      "    {2}\n"
+                                      ")\n"
+                                      "target_include_directories({0} PUBLIC ${{CMAKE_CURRENT_SOURCE_DIR}})\n",
+                                      targetName, sourceName, headerName)) &&
+                  addFile(headerName, std::format("#pragma once\n"
+                                                  "\n"
+                                                  "namespace {0} {{\n"
+                                                  "\n"
+                                                  "int add(int a, int b);\n"
+                                                  "\n"
+                                                  "}} // namespace {0}\n",
+                                                  codeIdent)) &&
+                  addFile(sourceName,
+                          std::format("#include \"{0}\"\n"
+                                      "\n"
+                                      "namespace {1} {{\n"
+                                      "\n"
+                                      "int add(int a, int b) {{\n"
+                                      "    return a + b;\n"
+                                      "}}\n"
+                                      "\n"
+                                      "}} // namespace {1}\n",
+                                      headerName, codeIdent),
+                          true);
+        if (!files.empty()) {
+            cmakeToOpen = files.front().path;
+        }
+        break;
+    }
+    case NewProjectTemplate::CMakeSharedLibrary: {
+        const std::string headerName = targetName + ".hpp";
+        const std::string sourceName = targetName + ".cpp";
+        pathsOk = addFile("CMakeLists.txt",
+                          std::format("cmake_minimum_required(VERSION 3.20)\n"
+                                      "project({0} LANGUAGES CXX)\n"
+                                      "\n"
+                                      "set(CMAKE_CXX_STANDARD 20)\n"
+                                      "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
+                                      "set(CMAKE_CXX_EXTENSIONS OFF)\n"
+                                      "\n"
+                                      "add_library({0} SHARED\n"
+                                      "    {1}\n"
+                                      "    {2}\n"
+                                      ")\n"
+                                      "target_compile_definitions({0} PRIVATE {3}_EXPORTS)\n"
+                                      "target_include_directories({0} PUBLIC ${{CMAKE_CURRENT_SOURCE_DIR}})\n",
+                                      targetName, sourceName, headerName, macroPrefix)) &&
+                  addFile(headerName, std::format("#pragma once\n"
+                                                  "\n"
+                                                  "#if defined(_WIN32)\n"
+                                                  "#  if defined({0}_EXPORTS)\n"
+                                                  "#    define {0}_API __declspec(dllexport)\n"
+                                                  "#  else\n"
+                                                  "#    define {0}_API __declspec(dllimport)\n"
+                                                  "#  endif\n"
+                                                  "#else\n"
+                                                  "#  define {0}_API\n"
+                                                  "#endif\n"
+                                                  "\n"
+                                                  "namespace {1} {{\n"
+                                                  "\n"
+                                                  "{0}_API int add(int a, int b);\n"
+                                                  "\n"
+                                                  "}} // namespace {1}\n",
+                                                  macroPrefix, codeIdent)) &&
+                  addFile(sourceName,
+                          std::format("#include \"{0}\"\n"
+                                      "\n"
+                                      "namespace {1} {{\n"
+                                      "\n"
+                                      "int add(int a, int b) {{\n"
+                                      "    return a + b;\n"
+                                      "}}\n"
+                                      "\n"
+                                      "}} // namespace {1}\n",
+                                      headerName, codeIdent),
+                          true);
+        if (!files.empty()) {
+            cmakeToOpen = files.front().path;
+        }
+        break;
+    }
+    case NewProjectTemplate::VsCppConsole:
+    case NewProjectTemplate::SlnxCppConsole: {
+        const bool isSlnx = spec.kind == NewProjectTemplate::SlnxCppConsole;
+        const std::string slnFile = spec.name + (isSlnx ? ".slnx" : ".sln");
+        const std::string vcxprojFile = spec.name + ".vcxproj";
+        const std::string filtersFile = vcxprojFile + ".filters";
+        pathsOk = addFile(slnFile, isSlnx ? buildSlnxContents(vcxprojFile, projectGuid)
+                                          : buildSlnContents(spec.name, vcxprojFile, projectGuid)) &&
+                  addFile(vcxprojFile, buildVcxprojContents(projectGuid, codeIdent, "Application", "_CONSOLE",
+                                                            "Console", "main.cpp", "")) &&
+                  addFile(filtersFile, buildVcxprojFiltersContents("main.cpp", "")) &&
+                  addFile("main.cpp",
+                          std::format("#include <iostream>\n"
+                                      "\n"
+                                      "int main() {{\n"
+                                      "    std::cout << \"Hello from {}!\\n\";\n"
+                                      "    return 0;\n"
+                                      "}}\n",
+                                      targetName),
+                          true);
+        if (!files.empty()) {
+            solutionToOpen = files.front().path;
+        }
+        break;
+    }
+    case NewProjectTemplate::VsCppStaticLibrary: {
+        const std::string slnFile = spec.name + ".sln";
+        const std::string vcxprojFile = spec.name + ".vcxproj";
+        const std::string filtersFile = vcxprojFile + ".filters";
+        const std::string headerName = targetName + ".h";
+        const std::string sourceName = targetName + ".cpp";
+        pathsOk = addFile(slnFile, buildSlnContents(spec.name, vcxprojFile, projectGuid)) &&
+                  addFile(vcxprojFile, buildVcxprojContents(projectGuid, codeIdent, "StaticLibrary", "_LIB", "Windows",
+                                                            sourceName, headerName)) &&
+                  addFile(filtersFile, buildVcxprojFiltersContents(sourceName, headerName)) &&
+                  addFile(headerName, std::format("#pragma once\n"
+                                                  "\n"
+                                                  "namespace {0} {{\n"
+                                                  "\n"
+                                                  "int add(int a, int b);\n"
+                                                  "\n"
+                                                  "}} // namespace {0}\n",
+                                                  codeIdent)) &&
+                  addFile(sourceName,
+                          std::format("#include \"{0}\"\n"
+                                      "\n"
+                                      "namespace {1} {{\n"
+                                      "\n"
+                                      "int add(int a, int b) {{\n"
+                                      "    return a + b;\n"
+                                      "}}\n"
+                                      "\n"
+                                      "}} // namespace {1}\n",
+                                      headerName, codeIdent),
+                          true);
+        if (!files.empty()) {
+            solutionToOpen = files.front().path;
+        }
+        break;
+    }
+    case NewProjectTemplate::VsCppDynamicLibrary: {
+        const std::string slnFile = spec.name + ".sln";
+        const std::string vcxprojFile = spec.name + ".vcxproj";
+        const std::string filtersFile = vcxprojFile + ".filters";
+        const std::string headerName = targetName + ".h";
+        const std::string sourceName = targetName + ".cpp";
+        const std::string defines = macroPrefix + "_EXPORTS;_WINDOWS;_USRDLL";
+        pathsOk = addFile(slnFile, buildSlnContents(spec.name, vcxprojFile, projectGuid)) &&
+                  addFile(vcxprojFile, buildVcxprojContents(projectGuid, codeIdent, "DynamicLibrary", defines,
+                                                            "Windows", sourceName, headerName)) &&
+                  addFile(filtersFile, buildVcxprojFiltersContents(sourceName, headerName)) &&
+                  addFile(headerName, std::format("#pragma once\n"
+                                                  "\n"
+                                                  "#if defined(_WIN32)\n"
+                                                  "#  if defined({0}_EXPORTS)\n"
+                                                  "#    define {0}_API __declspec(dllexport)\n"
+                                                  "#  else\n"
+                                                  "#    define {0}_API __declspec(dllimport)\n"
+                                                  "#  endif\n"
+                                                  "#else\n"
+                                                  "#  define {0}_API\n"
+                                                  "#endif\n"
+                                                  "\n"
+                                                  "namespace {1} {{\n"
+                                                  "\n"
+                                                  "{0}_API int add(int a, int b);\n"
+                                                  "\n"
+                                                  "}} // namespace {1}\n",
+                                                  macroPrefix, codeIdent)) &&
+                  addFile(sourceName,
+                          std::format("#include \"{0}\"\n"
+                                      "\n"
+                                      "namespace {1} {{\n"
+                                      "\n"
+                                      "int add(int a, int b) {{\n"
+                                      "    return a + b;\n"
+                                      "}}\n"
+                                      "\n"
+                                      "}} // namespace {1}\n",
+                                      headerName, codeIdent),
+                          true);
+        if (!files.empty()) {
+            solutionToOpen = files.front().path;
+        }
+        break;
+    }
+    case NewProjectTemplate::DotNetConsole: {
+        const std::string csprojFile = spec.name + ".csproj";
+        pathsOk = addFile(csprojFile, "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+                                      "\n"
+                                      "  <PropertyGroup>\n"
+                                      "    <OutputType>Exe</OutputType>\n"
+                                      "    <TargetFramework>net10.0</TargetFramework>\n"
+                                      "    <ImplicitUsings>enable</ImplicitUsings>\n"
+                                      "    <Nullable>enable</Nullable>\n"
+                                      "  </PropertyGroup>\n"
+                                      "\n"
+                                      "</Project>\n") &&
+                  addFile("Program.cs",
+                          std::format("using System;\n"
+                                      "\n"
+                                      "Console.WriteLine(\"Hello from {}!\");\n",
+                                      targetName),
+                          true);
+        break;
+    }
+    case NewProjectTemplate::DotNetClassLibrary: {
+        const std::string csprojFile = spec.name + ".csproj";
+        pathsOk = addFile(csprojFile, "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+                                      "\n"
+                                      "  <PropertyGroup>\n"
+                                      "    <TargetFramework>net10.0</TargetFramework>\n"
+                                      "    <ImplicitUsings>enable</ImplicitUsings>\n"
+                                      "    <Nullable>enable</Nullable>\n"
+                                      "  </PropertyGroup>\n"
+                                      "\n"
+                                      "</Project>\n") &&
+                  addFile("Class1.cs",
+                          std::format("namespace {};\n"
+                                      "\n"
+                                      "public class Class1\n"
+                                      "{{\n"
+                                      "}}\n",
+                                      codeIdent),
+                          true);
+        break;
+    }
+    case NewProjectTemplate::EmptyFolder: break;
+    }
+
+    if (!pathsOk) {
+        if (!dirExisted) {
+            (void)m_services.fs.removeDirectory(canonicalDir);
+        }
         Error err(ErrorCode::InvalidArgument, "could not construct starter project file paths");
         notify(text("Cannot create project"), qs(err.message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(err));
     }
 
-    const std::string cmakeContents = std::format("cmake_minimum_required(VERSION 3.20)\n"
-                                                  "project({0} LANGUAGES CXX)\n"
-                                                  "\n"
-                                                  "set(CMAKE_CXX_STANDARD 20)\n"
-                                                  "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
-                                                  "set(CMAKE_CXX_EXTENSIONS OFF)\n"
-                                                  "\n"
-                                                  "add_executable({0}\n"
-                                                  "    main.cpp\n"
-                                                  ")\n",
-                                                  targetName);
-    const std::string mainContents = std::format("#include <iostream>\n"
-                                                 "\n"
-                                                 "int main() {{\n"
-                                                 "    std::cout << \"Hello from {}!\\n\";\n"
-                                                 "    return 0;\n"
-                                                 "}}\n",
-                                                 targetName);
-
     const auto cleanupCreated = [&] {
-        (void)m_services.fs.removeFile(*mainCppPath);
-        (void)m_services.fs.removeFile(*cmakeListsPath);
+        for (const GeneratedFile& file : files) {
+            (void)m_services.fs.removeFile(file.path);
+        }
         if (!dirExisted) {
             (void)m_services.fs.removeDirectory(canonicalDir);
         }
     };
 
-    if (Result<void> wroteLists = m_services.fs.writeFileAtomic(*cmakeListsPath, cmakeContents); !wroteLists) {
-        cleanupCreated();
-        notify(text("Cannot create project"), qs(wroteLists.error().message()), ui::NotificationKind::Error);
-        return std::unexpected(std::move(wroteLists.error()));
-    }
-    if (Result<void> wroteMain = m_services.fs.writeFileAtomic(*mainCppPath, mainContents); !wroteMain) {
-        cleanupCreated();
-        notify(text("Cannot create project"), qs(wroteMain.error().message()), ui::NotificationKind::Error);
-        return std::unexpected(std::move(wroteMain.error()));
+    for (const GeneratedFile& file : files) {
+        if (Result<void> wrote = m_services.fs.writeFileAtomic(file.path, file.contents); !wrote) {
+            cleanupCreated();
+            notify(text("Cannot create project"), qs(wrote.error().message()), ui::NotificationKind::Error);
+            return std::unexpected(std::move(wrote.error()));
+        }
     }
 
-    Result<void> openedProject = openCMakeProject(*cmakeListsPath);
-    if (!openedProject) {
-        return std::unexpected(std::move(openedProject.error()));
+    if (!solutionToOpen.empty()) {
+        Result<void> openedSolution = openSolution(solutionToOpen);
+        if (!openedSolution) {
+            return std::unexpected(std::move(openedSolution.error()));
+        }
+    } else if (!cmakeToOpen.empty()) {
+        Result<void> openedProject = openCMakeProject(cmakeToOpen);
+        if (!openedProject) {
+            return std::unexpected(std::move(openedProject.error()));
+        }
+        if (m_window) {
+            m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
+        }
+        if (m_nav && m_nav->fileSystemView() && !primarySourcePath.empty()) {
+            m_nav->fileSystemView()->selectWhenAvailable(primarySourcePath);
+        }
+    } else {
+        Result<void> openedFolder = openFolder(canonicalDir, false);
+        if (!openedFolder) {
+            return std::unexpected(std::move(openedFolder.error()));
+        }
+        if (m_window) {
+            m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
+        }
+        if (m_nav && m_nav->fileSystemView() && !primarySourcePath.empty()) {
+            m_nav->fileSystemView()->selectWhenAvailable(primarySourcePath);
+        }
     }
-    if (m_window) {
-        m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
+
+    if (!primarySourcePath.empty()) {
+        (void)openPath(primarySourcePath);
     }
-    if (m_nav && m_nav->fileSystemView()) {
-        m_nav->fileSystemView()->selectWhenAvailable(*mainCppPath);
-    }
-    (void)openPath(*mainCppPath);
     return canonicalDir;
 }
 

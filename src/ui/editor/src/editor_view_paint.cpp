@@ -640,19 +640,6 @@ void EditorView::paintEvent(QPaintEvent*) {
         m_inputToPaint(InputToPaintSample{*m_pendingInput, m_clock->steadyNow(), m_editor->text().version()});
     }
     m_pendingInput.reset();
-    if (m_rendererState.pending && !m_rhiAttachQueued) {
-        // The first frame was raster; the QRhi viewport replaces this one once the paint is over.
-        m_rhiAttachQueued = true;
-        QMetaObject::invokeMethod(
-            this,
-            [this] {
-                m_rhiAttachQueued = false;
-                if (m_rendererState.pending) {
-                    attachRhi();
-                }
-            },
-            Qt::QueuedConnection);
-    }
 }
 
 } // namespace frost::ui

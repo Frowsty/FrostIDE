@@ -1581,4 +1581,137 @@ TEST(Workbench, KeymapSettingsSwitchesBetweenIntelliJAndVisualStudioModes) {
     buttons->button(QDialogButtonBox::Cancel)->click();
 }
 
+TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
+    WorkDir dir("new-project-all-templates");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    // 1. Visual Studio C++ Console Application (.sln + .vcxproj + .vcxproj.filters)
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "VsConsoleApp",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::VsCppConsole,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        EXPECT_EQ(*created, dir.join("VsConsoleApp"));
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_TRUE(rig.workbench->solution()->warnings().empty());
+        ASSERT_EQ(rig.workbench->solution()->projects().size(), 1U);
+        ASSERT_TRUE(rig.workbench->solution()->projects().front().vcxproj.has_value());
+        EXPECT_EQ(rig.workbench->solution()->projects().front().vcxproj->configurationType, "Application");
+        EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::ui::tool_windows::kProject));
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("VsConsoleApp/main.cpp"));
+    }
+
+    // 2. Visual Studio C++ Console Application (.slnx + .vcxproj + .vcxproj.filters)
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "SlnxConsoleApp",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::SlnxCppConsole,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_TRUE(rig.workbench->solution()->warnings().empty());
+        EXPECT_EQ(rig.workbench->solution()->path(), dir.join("SlnxConsoleApp/SlnxConsoleApp.slnx"));
+        ASSERT_EQ(rig.workbench->solution()->projects().size(), 1U);
+        ASSERT_TRUE(rig.workbench->solution()->projects().front().vcxproj.has_value());
+        EXPECT_EQ(rig.workbench->solution()->projects().front().vcxproj->configurationType, "Application");
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("SlnxConsoleApp/main.cpp"));
+    }
+
+    // 3. Visual Studio C++ Static Library (.sln + .vcxproj)
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "VsStaticLib",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::VsCppStaticLibrary,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_TRUE(rig.workbench->solution()->warnings().empty());
+        ASSERT_EQ(rig.workbench->solution()->projects().size(), 1U);
+        ASSERT_TRUE(rig.workbench->solution()->projects().front().vcxproj.has_value());
+        EXPECT_EQ(rig.workbench->solution()->projects().front().vcxproj->configurationType, "StaticLibrary");
+        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("VsStaticLib/VsStaticLib.h")).value_or(false));
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("VsStaticLib/VsStaticLib.cpp"));
+    }
+
+    // 4. Visual Studio C++ Dynamic-Link Library (.sln + .vcxproj)
+    {
+        auto created = rig.workbench->createNewProject({
+            .name = "VsDynamicLib",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::VsCppDynamicLibrary,
+        });
+        ASSERT_TRUE(created.has_value()) << created.error().describe();
+        ASSERT_NE(rig.workbench->solution(), nullptr);
+        EXPECT_TRUE(rig.workbench->solution()->warnings().empty());
+        ASSERT_EQ(rig.workbench->solution()->projects().size(), 1U);
+        ASSERT_TRUE(rig.workbench->solution()->projects().front().vcxproj.has_value());
+        EXPECT_EQ(rig.workbench->solution()->projects().front().vcxproj->configurationType, "DynamicLibrary");
+        const std::string header = dir.read("VsDynamicLib/VsDynamicLib.h");
+        EXPECT_TRUE(header.contains("__declspec(dllexport)")) << header;
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("VsDynamicLib/VsDynamicLib.cpp"));
+    }
+
+    // 5. CMake Static & Shared Libraries
+    {
+        auto staticLib = rig.workbench->createNewProject({
+            .name = "CMakeStatic",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::CMakeStaticLibrary,
+        });
+        ASSERT_TRUE(staticLib.has_value()) << staticLib.error().describe();
+        EXPECT_NE(rig.workbench->cmakeService(), nullptr);
+        EXPECT_TRUE(dir.read("CMakeStatic/CMakeLists.txt").contains("add_library(CMakeStatic STATIC"));
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("CMakeStatic/CMakeStatic.cpp"));
+
+        auto sharedLib = rig.workbench->createNewProject({
+            .name = "CMakeShared",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::CMakeSharedLibrary,
+        });
+        ASSERT_TRUE(sharedLib.has_value()) << sharedLib.error().describe();
+        EXPECT_NE(rig.workbench->cmakeService(), nullptr);
+        EXPECT_TRUE(dir.read("CMakeShared/CMakeLists.txt").contains("add_library(CMakeShared SHARED"));
+        EXPECT_TRUE(dir.read("CMakeShared/CMakeShared.hpp").contains("CMAKESHARED_API"));
+    }
+
+    // 6. .NET / C# Console App & Class Library
+    {
+        auto dotnetConsole = rig.workbench->createNewProject({
+            .name = "ManagedApp",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::DotNetConsole,
+        });
+        ASSERT_TRUE(dotnetConsole.has_value()) << dotnetConsole.error().describe();
+        EXPECT_EQ(rig.workbench->projectRoot(), dir.join("ManagedApp"));
+        const std::string csproj = dir.read("ManagedApp/ManagedApp.csproj");
+        EXPECT_TRUE(csproj.contains("<OutputType>Exe</OutputType>")) << csproj;
+        EXPECT_TRUE(csproj.contains("<TargetFramework>net10.0</TargetFramework>")) << csproj;
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("ManagedApp/Program.cs"));
+
+        auto dotnetLib = rig.workbench->createNewProject({
+            .name = "ManagedLib",
+            .location = dir.path(),
+            .kind = frost::app::NewProjectTemplate::DotNetClassLibrary,
+        });
+        ASSERT_TRUE(dotnetLib.has_value()) << dotnetLib.error().describe();
+        EXPECT_EQ(rig.workbench->projectRoot(), dir.join("ManagedLib"));
+        const std::string libCsproj = dir.read("ManagedLib/ManagedLib.csproj");
+        EXPECT_FALSE(libCsproj.contains("<OutputType>Exe</OutputType>")) << libCsproj;
+        EXPECT_TRUE(libCsproj.contains("<TargetFramework>net10.0</TargetFramework>")) << libCsproj;
+        ASSERT_NE(rig.workbench->currentView(), nullptr);
+        EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("ManagedLib/Class1.cs"));
+    }
+}
+
 } // namespace
