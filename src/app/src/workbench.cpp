@@ -2744,10 +2744,28 @@ void Workbench::applyVerifiedUpdate() {
         psZip.replace(QLatin1Char('\''), QStringLiteral("''"));
         QString psDest = QDir::toNativeSeparators(targetDir);
         psDest.replace(QLatin1Char('\''), QStringLiteral("''"));
+        const QString psScript =
+            QStringLiteral(
+                "$ErrorActionPreference = 'Stop'\n"
+                "$dest = '%2'\n"
+                "$tmp = Join-Path $dest '_frost_extract_tmp'\n"
+                "if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }\n"
+                "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
+                "Expand-Archive -LiteralPath '%1' -DestinationPath $tmp -Force\n"
+                "$src = $tmp\n"
+                "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
+                "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
+                "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = $sub.FullName }\n"
+                "}\n"
+                "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
+                "    Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force\n"
+                "}\n"
+                "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n")
+                .arg(psZip, psDest);
         proc.start(QStringLiteral("powershell.exe"),
                    {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
                     QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"), QStringLiteral("-Command"),
-                    QStringLiteral("Expand-Archive -LiteralPath '%1' -DestinationPath '%2' -Force").arg(psZip, psDest)});
+                    psScript});
         if (!proc.waitForFinished(120000) || proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
             const QString errOut = QString::fromUtf8(proc.readAllStandardError()).trimmed();
             QMessageBox::warning(parentWin, tr("Update Installation Failed"),
@@ -2755,17 +2773,7 @@ void Workbench::applyVerifiedUpdate() {
             return;
         }
 
-        QString newExe = QDir(targetDir).filePath(QStringLiteral("frost.exe"));
-        if (!QFileInfo::exists(newExe)) {
-            const QFileInfoList subDirs = QDir(targetDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
-            for (const QFileInfo& sub : subDirs) {
-                const QString candidate = QDir(sub.absoluteFilePath()).filePath(QStringLiteral("frost.exe"));
-                if (QFileInfo::exists(candidate)) {
-                    newExe = candidate;
-                    break;
-                }
-            }
-        }
+        const QString newExe = QDir(targetDir).filePath(QStringLiteral("frost.exe"));
         if (!QFileInfo::exists(newExe)) {
             QMessageBox::warning(parentWin, tr("Update Installed"),
                                  tr("Update extracted to %1, but frost.exe was not found at the root.")
@@ -2813,10 +2821,25 @@ void Workbench::applyVerifiedUpdate() {
 
         const QString scriptContent = QStringLiteral(
             "$ErrorActionPreference = 'SilentlyContinue'\n"
+            "$appDir = '%3'\n"
             "Wait-Process -Id %1 -Timeout 30\n"
+            "Get-Process crashpad_handler, CSharpLanguageServer, frost_held_read -ErrorAction SilentlyContinue | Where-Object {\n"
+            "    $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase)\n"
+            "} | Stop-Process -Force -ErrorAction SilentlyContinue\n"
             "Start-Sleep -Milliseconds 600\n"
-            "Expand-Archive -LiteralPath '%2' -DestinationPath '%3' -Force\n"
-            "Start-Process -FilePath '%4' -WorkingDirectory '%3'\n")
+            "$tmp = Join-Path $env:TEMP ('frost-update-' + [guid]::NewGuid().ToString('N'))\n"
+            "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
+            "Expand-Archive -LiteralPath '%2' -DestinationPath $tmp -Force\n"
+            "$src = $tmp\n"
+            "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
+            "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
+            "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = $sub.FullName }\n"
+            "}\n"
+            "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
+            "    Copy-Item -LiteralPath $_.FullName -Destination $appDir -Recurse -Force\n"
+            "}\n"
+            "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "Start-Process -FilePath '%4' -WorkingDirectory $appDir\n")
             .arg(pid)
             .arg(psStagedZip, psAppDir, psAppExe);
         scriptFile.write(scriptContent.toUtf8());

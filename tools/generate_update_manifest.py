@@ -117,7 +117,9 @@ def main() -> int:
         if not stage_dir.is_dir():
             raise FileNotFoundError(f"Stage directory not found: {stage_dir}")
         base_name = str(target_zip.with_suffix(""))
-        shutil.make_archive(base_name, "zip", root_dir=str(stage_dir.parent), base_dir=stage_dir.name)
+        # Package files at the root of the zip (no top-level wrapper folder) so in-place
+        # Expand-Archive overwrites frost.exe and frost_app.dll directly in the target directory.
+        shutil.make_archive(base_name, "zip", root_dir=str(stage_dir))
     elif not target_zip.is_file():
         raise ValueError("Provide either --zip <path> or --stage-dir <dir> (or place the zip in --out-dir).")
 
