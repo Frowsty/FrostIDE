@@ -63,6 +63,11 @@ TEST(Fonts, EditorFontsLazyAndFixedPitch) {
     ASSERT_TRUE(editor) << editor.error().describe();
     EXPECT_TRUE(editor->primaryFamily.startsWith(QStringLiteral("JetBrains Mono")))
         << editor->primaryFamily.toStdString();
+    for (const char* expectedFamily : {"Fira Code", "Cascadia Code", "Cascadia Mono", "Source Code Pro",
+                                       "IBM Plex Mono", "Inconsolata", "Intel One Mono", "CommitMono",
+                                       "Fantasque Sans Mono"}) {
+        EXPECT_TRUE(editor->families.contains(QString::fromUtf8(expectedFamily))) << expectedFamily;
+    }
     QFont mono(editor->primaryFamily);
     mono.setPixelSize(13);
     const QFontInfo info(mono);

@@ -1,0 +1,193 @@
+{
+  "name": "Tokyo Night Light",
+  "dark": false,
+  "author": "FrostIDE",
+  "colors": {
+    "canvas": "#C8CCD6",
+    "island": "#E6E7ED",
+    "popup": "#DCDFE8",
+    "field": "#F2F3F7",
+    "text": "#24283B",
+    "border": "#B8BCD0",
+    "accent": "#2959AA"
+  },
+  "ui": {
+    "MainWindow.background": "canvas",
+    "Island": {
+      "background": "island",
+      "borderColor": "border",
+      "arc": 10,
+      "gap": 4
+    },
+    "Popup": {
+      "background": "popup",
+      "borderColor": "border"
+    },
+    "Separator.color": "border",
+    "Label": {
+      "foreground": "text",
+      "secondaryForeground": "#424866",
+      "disabledForeground": "#848CB5"
+    },
+    "Link.foreground": "#166775",
+    "Component": {
+      "borderColor": "border",
+      "focusColor": "accent",
+      "disabledBorderColor": "border",
+      "arc": 6,
+      "focusWidth": 2,
+      "paddingH": 8
+    },
+    "Button": {
+      "background": "#DADBE1",
+      "borderColor": "border",
+      "hoverBackground": "#CFD0D5",
+      "pressedBackground": "#C4C4C9",
+      "arc": 6,
+      "height": 28,
+      "default": {
+        "background": "#2959AA",
+        "foreground": "#FFFFFF",
+        "hoverBackground": "#234C90"
+      }
+    },
+    "TextField": {
+      "background": "field",
+      "placeholderForeground": "#424866",
+      "height": 28
+    },
+    "CheckBox.borderColor": "#424866",
+    "List": {
+      "hoverBackground": "#DADBE1",
+      "selectionBackground": "#BCC8DE",
+      "selectionForeground": "#24283B",
+      "selectionInactiveBackground": "#CFD0D5",
+      "rowHeight": 24
+    },
+    "Tree.rowHeight": 24,
+    "ScrollBar": {
+      "thumbColor": "#B6B7C0",
+      "thumbHoverColor": "#989BA6",
+      "trackColor": "#00000000",
+      "width": 10
+    },
+    "Menu.itemHeight": 26,
+    "TabbedPane": {
+      "underlineColor": "accent",
+      "tabHeight": 36
+    },
+    "StatusBar.height": 28,
+    "Layout": {
+      "margin": 8,
+      "spacing": 6
+    },
+    "Icon.size": 16,
+    "Toolbar.iconSize": 20,
+    "Font": {
+      "uiSize": 13,
+      "smallSize": 11
+    },
+    "Window.inactiveAlpha": 0.44,
+    "Editor": {
+      "foreground": "#24283B",
+      "caretColor": "#24283B",
+      "selectionBackground": "#BCC8DE",
+      "currentLineBackground": "#DADBE1",
+      "lineNumberForeground": "#848CB5",
+      "lineNumberCurrentForeground": "#24283B",
+      "searchMatchBackground": "#C8B7A1",
+      "rightMarginColor": "#B8BCD0",
+      "errorMarkerColor": "#8C2232",
+      "warningMarkerColor": "#8F5E15",
+      "inactiveCodeForeground": "#848CB5",
+      "weakWarningMarkerColor": "#656B8A",
+      "infoMarkerColor": "#166775",
+      "cleanMarkerColor": "#385F0D",
+      "errorStripeBackground": "#E6E7ED",
+      "searchMatchStripeColor": "#8F5E15",
+      "usageHighlightBackground": "#BCC8DE",
+      "writeUsageHighlightBackground": "#D0B8C0",
+      "usageStripeColor": "#2959AA",
+      "inspectionWidgetBackground": "#DCDFE8",
+      "inspectionWidgetForeground": "#424866"
+    },
+    "Syntax": {
+      "keyword": "#5A3E8E",
+      "comment": "#656B8A",
+      "docComment": "#555A76",
+      "string": "#385F0D",
+      "stringEscape": "#965027",
+      "number": "#965027",
+      "type": "#0F5E6E",
+      "builtinType": "#5A3E8E",
+      "function": "#2959AA",
+      "macro": "#965027",
+      "property": "#166775",
+      "attribute": "#0F5E6E",
+      "tag": "#5A3E8E",
+      "heading": "#2959AA",
+      "link": "#166775"
+    },
+    "Semantic": {
+      "localVariable": "#24283B",
+      "parameter": "#965027",
+      "field": "#166775",
+      "staticField": "#2959AA",
+      "globalVariable": "#2959AA",
+      "constant": "#965027",
+      "function": "#2959AA",
+      "method": "#2959AA",
+      "staticMethod": "#2959AA",
+      "class": "#0F5E6E",
+      "enum": "#0F5E6E",
+      "enumerator": "#965027",
+      "namespace": "#154E5F",
+      "macro": "#965027",
+      "templateParameter": "#0F5E6E",
+      "concept": "#0F5E6E",
+      "typeAlias": "#0F5E6E"
+    },
+    "Vcs": {
+      "added": "#385F0D",
+      "modified": "#166775",
+      "deleted": "#656B8A",
+      "untracked": "#8F5E15",
+      "conflicted": "#8C2232",
+      "ignored": "#848CB5"
+    },
+    "Diff": {
+      "insertedBackground": "#C3CCC0",
+      "deletedBackground": "#D4C0C8",
+      "modifiedBackground": "#BCCDD5",
+      "innerChangeBackground": "#9DBAC3"
+    }
+  },
+  "compact": {
+    "Island.arc": 8,
+    "Island.gap": 3,
+    "Button.height": 24,
+    "TextField.height": 24,
+    "List.rowHeight": 20,
+    "Tree.rowHeight": 20,
+    "Menu.itemHeight": 22,
+    "TabbedPane.tabHeight": 30,
+    "StatusBar.height": 24,
+    "ScrollBar.width": 8,
+    "Component.paddingH": 6,
+    "Layout.margin": 6,
+    "Layout.spacing": 4,
+    "Toolbar.iconSize": 16
+  },
+  "icons": {
+    "ColorPalette": {
+      "Icon.Default": "#424866",
+      "Icon.Secondary": "#5B607A",
+      "Icon.Accent": "accent",
+      "Icon.Error": "#8C2232",
+      "Icon.Warning": "#8F5E15",
+      "Icon.Success": "#385F0D",
+      "Icon.Disabled": "#848CB5",
+      "Icon.Selected": "#24283B"
+    }
+  }
+}

@@ -12,63 +12,258 @@
       "crossCheck": "The archive hash equals the digest GitHub publishes for the release asset (asset_fetch --pin reads it from the REST API); every SVG equals the file at tag 1.66.0 (crossCheckBase); LICENSE is not in the archive and comes from the tag (extraFiles). Verified 2026-11-01.",
       "crossCheckBase": "https://raw.githubusercontent.com/lucide-icons/lucide/1.66.0/",
       "licence": "ISC AND MIT",
-      "copyright": ["Copyright (c) 2026 Lucide Icons and Contributors", "Copyright (c) 2013-present Cole Bemis"],
+      "copyright": [
+        "Copyright (c) 2026 Lucide Icons and Contributors",
+        "Copyright (c) 2013-present Cole Bemis"
+      ],
       "reservedFontNames": [],
       "modified": false,
       "homepage": "https://lucide.dev",
       "dest": "resources/icons/lucide",
       "licenceFile": "LICENSE",
       "files": [
-        {"member": "icons/search.svg", "path": "search.svg", "sha256": "283d371c2e433817bb9c0c8310caa6c77fa4177c0f4f1168d9c83b97af7389dc"},
-        {"member": "icons/x.svg", "path": "x.svg", "sha256": "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117"},
-        {"member": "icons/plus.svg", "path": "plus.svg", "sha256": "7f6af73bf1ff6c4bca3f18351c8d1bdec6749c0c2530c4de5da85d520c21df17"},
-        {"member": "icons/minus.svg", "path": "minus.svg", "sha256": "a0c743ab6dbf545d8a6e19ef3874f48ede686ce68d25e231bd81f540d97b1f19"},
-        {"member": "icons/check.svg", "path": "check.svg", "sha256": "7f33acc9a77a61659531044525fc008edebe215bf4dcf1c789c8674ad3277db0"},
-        {"member": "icons/chevron-right.svg", "path": "chevron-right.svg", "sha256": "2758143d7b2434e4aa7307dfd34405c87909ff4052f21b5f3f40d45224b4f19b"},
-        {"member": "icons/chevron-down.svg", "path": "chevron-down.svg", "sha256": "66ea878e72ed3488bb3b464c39dfdccee8d1f78e560dccea40e5e12da0e87e87"},
-        {"member": "icons/chevron-up.svg", "path": "chevron-up.svg", "sha256": "d09f13fcbef3c493ead7e4663b5ee91804fec38d5edb5e7cc3acfbd547641cf4"},
-        {"member": "icons/chevron-left.svg", "path": "chevron-left.svg", "sha256": "83b0681aa38bf55e9d52a1e4b4cced624abe1fe7678ecafda133a574f1161d93"},
-        {"member": "icons/arrow-left.svg", "path": "arrow-left.svg", "sha256": "c5f4b88076108eb1a0d95336e1aa7e7bb1419a3a92af96f6247d88cd3456f933"},
-        {"member": "icons/arrow-right.svg", "path": "arrow-right.svg", "sha256": "288397fdb73bb4f783cf9eabb726ff47357df1d4e3f1201dd748090579f108b9"},
-        {"member": "icons/folder.svg", "path": "folder.svg", "sha256": "f0d92b94b797a8ab7d4c4ae33c3236c47f64068351b4e14bdb5014ee42898a39"},
-        {"member": "icons/folder-open.svg", "path": "folder-open.svg", "sha256": "ee57452b40e71df310214091dd9da1941a397c83197b8ff8d7ae66dd4242578b"},
-        {"member": "icons/file.svg", "path": "file.svg", "sha256": "499039795d7412d67664ff79d2eb6b7412e746b24c18c8fd8aba383c24ddada0"},
-        {"member": "icons/file-code.svg", "path": "file-code.svg", "sha256": "8ac619671f53653a483c2d5e2e6afe6d009c3198918cf76632e2cb4abf0d6721"},
-        {"member": "icons/settings.svg", "path": "settings.svg", "sha256": "0ae27fd0f81999229e3127ac96c5b32edfea448e291d509e76212b917551d66b"},
-        {"member": "icons/play.svg", "path": "play.svg", "sha256": "d7c34786135922a92b6896f6c2384ceeb0346afbf6041dc79982011411409833"},
-        {"member": "icons/bug.svg", "path": "bug.svg", "sha256": "c4fddf0d43b4c4f0b8fc52eb8810173c8d8bd25618034a70f162d85e8189d69d"},
-        {"member": "icons/square.svg", "path": "square.svg", "sha256": "bd979354f0ab184b95cecf03eedefe40c2dc65830ac6d7e60017b2b25a354acb"},
-        {"member": "icons/refresh-cw.svg", "path": "refresh-cw.svg", "sha256": "2e10dd403c85a24f163d59fc6151aa21147fe9402e1305dfc8979208caee8944"},
-        {"member": "icons/git-branch.svg", "path": "git-branch.svg", "sha256": "041f04acc8f92657b849540f0440e2e85d0df0b8da2365611e81b9bebfafc4eb"},
-        {"member": "icons/terminal.svg", "path": "terminal.svg", "sha256": "4f9b6488b237757d5cb615ccd07502fa99774826839e2a99017784bdb2596f1a"},
-        {"member": "icons/list-tree.svg", "path": "list-tree.svg", "sha256": "e4c994b829b8b4d0ddc66c1ce14f9f56d0347e37b1b1fb124111831a61ec3890"},
-        {"member": "icons/bell.svg", "path": "bell.svg", "sha256": "394889e9631fe3a9a63be9a479a95b451b708e432d895978d21d9130b5ee5dbe"},
-        {"member": "icons/rotate-ccw-clock.svg", "path": "rotate-ccw-clock.svg", "sha256": "a98ff758157910b9fc9d42d5d5dc80c2f4e037afa5f8ea4dee5f5649f03d438d"},
-        {"member": "icons/circle-alert.svg", "path": "circle-alert.svg", "sha256": "ce3e98b7a03b78c0071131df42466e4e1ff5187fccad30e739ec9ce951cf685a"},
-        {"member": "icons/triangle-alert.svg", "path": "triangle-alert.svg", "sha256": "4866f38b8560d410f21e3226413e0b77997b6dfbb6931fadfe0a0d5aef9ffeb4"},
-        {"member": "icons/info.svg", "path": "info.svg", "sha256": "bc977a64eb96f3e9c1041ffd09a3fceb70e3e65c02b571f76064062ed31f3cb9"},
-        {"member": "icons/circle-check.svg", "path": "circle-check.svg", "sha256": "9711e045a5999f8a3b0782eb88e09b04e0559bc7b379dcc0a4ae645223e10345"},
-        {"member": "icons/circle-x.svg", "path": "circle-x.svg", "sha256": "bcd8788901e6f29e1b231a81ba5e707d083d06cb4848a28f29407fab4f8e0b64"},
-        {"member": "icons/loader-circle.svg", "path": "loader-circle.svg", "sha256": "043021bb903919668804bdb6fee0342072e4ffea5f03fbd857774c440179ad3b"},
-        {"member": "icons/copy.svg", "path": "copy.svg", "sha256": "ea80e566c7a12628a447cb53179b19aea4f60b9143e2becd0d0f20bf260e5718"},
-        {"member": "icons/scissors.svg", "path": "scissors.svg", "sha256": "4c831fc2c903825f68565c28ffab945c34b2c60b6c564e2ae54250e1099fa550"},
-        {"member": "icons/clipboard.svg", "path": "clipboard.svg", "sha256": "d9b433e6a571d96a035ddb83d2ff52c4f85925ffcba9e584cf371d0dfa90875d"},
-        {"member": "icons/undo-2.svg", "path": "undo-2.svg", "sha256": "efad2edbbd2be6038cc23fd64df2d012fad5cc6460dfbf227cfa3d990e9e897f"},
-        {"member": "icons/redo-2.svg", "path": "redo-2.svg", "sha256": "4cbd2cdebc70b6b7979c681ed3f313d9cbb102465dcf7d0d2d6a72c937b344bc"},
-        {"member": "icons/save.svg", "path": "save.svg", "sha256": "ee9d56a7fec4b20dd6689546d41f68219ea8cbd67f99bd17a1bdaff5be6edb53"},
-        {"member": "icons/eye.svg", "path": "eye.svg", "sha256": "5bf90197dd7629cad64a2e48d1186a71559deb6121207d10e3dc5b19ebaffdcf"},
-        {"member": "icons/funnel.svg", "path": "funnel.svg", "sha256": "288f869330602e29a640099ffc5d6ac01caadad2ef6f8aac1138b8bf91ccd752"},
-        {"member": "icons/ellipsis.svg", "path": "ellipsis.svg", "sha256": "4f495cc72013ffdfec677f03b33a150f7b4dd741979283fd6853a09024bca112"},
-        {"member": "icons/pin.svg", "path": "pin.svg", "sha256": "55e8e5e04bcb671179fc1dd589abf09cf6a1e71301ff14eb739419cfab6011e7"},
-        {"member": "icons/maximize-2.svg", "path": "maximize-2.svg", "sha256": "9b8413ad44a3d4f5a80049713743daddcdc3c5465a71c218cac156a99f582b5b"},
-        {"member": "icons/minimize-2.svg", "path": "minimize-2.svg", "sha256": "1150437d5a870321c59b7ebca2e1bc3f6227f0fa03dd10484ab384dfe5110739"},
-        {"member": "icons/panel-left.svg", "path": "panel-left.svg", "sha256": "029f67b9e3eeb7ddf7c7c499b174c50388725e8ea50d4ea59ed7dbaf8d61cb82"},
-        {"member": "icons/panel-bottom.svg", "path": "panel-bottom.svg", "sha256": "7792f8b39919a347ba7be86fda059c41a46e38dbe23758f7be6aa4514579703e"},
-        {"member": "icons/hammer.svg", "path": "hammer.svg", "sha256": "db75caf31bd080726be0c2dab09372498b999cbdcf10c756f44636831f9529f5"},
-        {"member": "icons/package.svg", "path": "package.svg", "sha256": "69d6bc7650d26c4d24dd55eb22791607b982ce7637073944c256f1f61575509d"}
+        {
+          "member": "icons/search.svg",
+          "path": "search.svg",
+          "sha256": "283d371c2e433817bb9c0c8310caa6c77fa4177c0f4f1168d9c83b97af7389dc"
+        },
+        {
+          "member": "icons/x.svg",
+          "path": "x.svg",
+          "sha256": "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117"
+        },
+        {
+          "member": "icons/plus.svg",
+          "path": "plus.svg",
+          "sha256": "7f6af73bf1ff6c4bca3f18351c8d1bdec6749c0c2530c4de5da85d520c21df17"
+        },
+        {
+          "member": "icons/minus.svg",
+          "path": "minus.svg",
+          "sha256": "a0c743ab6dbf545d8a6e19ef3874f48ede686ce68d25e231bd81f540d97b1f19"
+        },
+        {
+          "member": "icons/check.svg",
+          "path": "check.svg",
+          "sha256": "7f33acc9a77a61659531044525fc008edebe215bf4dcf1c789c8674ad3277db0"
+        },
+        {
+          "member": "icons/chevron-right.svg",
+          "path": "chevron-right.svg",
+          "sha256": "2758143d7b2434e4aa7307dfd34405c87909ff4052f21b5f3f40d45224b4f19b"
+        },
+        {
+          "member": "icons/chevron-down.svg",
+          "path": "chevron-down.svg",
+          "sha256": "66ea878e72ed3488bb3b464c39dfdccee8d1f78e560dccea40e5e12da0e87e87"
+        },
+        {
+          "member": "icons/chevron-up.svg",
+          "path": "chevron-up.svg",
+          "sha256": "d09f13fcbef3c493ead7e4663b5ee91804fec38d5edb5e7cc3acfbd547641cf4"
+        },
+        {
+          "member": "icons/chevron-left.svg",
+          "path": "chevron-left.svg",
+          "sha256": "83b0681aa38bf55e9d52a1e4b4cced624abe1fe7678ecafda133a574f1161d93"
+        },
+        {
+          "member": "icons/arrow-left.svg",
+          "path": "arrow-left.svg",
+          "sha256": "c5f4b88076108eb1a0d95336e1aa7e7bb1419a3a92af96f6247d88cd3456f933"
+        },
+        {
+          "member": "icons/arrow-right.svg",
+          "path": "arrow-right.svg",
+          "sha256": "288397fdb73bb4f783cf9eabb726ff47357df1d4e3f1201dd748090579f108b9"
+        },
+        {
+          "member": "icons/folder.svg",
+          "path": "folder.svg",
+          "sha256": "f0d92b94b797a8ab7d4c4ae33c3236c47f64068351b4e14bdb5014ee42898a39"
+        },
+        {
+          "member": "icons/folder-open.svg",
+          "path": "folder-open.svg",
+          "sha256": "ee57452b40e71df310214091dd9da1941a397c83197b8ff8d7ae66dd4242578b"
+        },
+        {
+          "member": "icons/file.svg",
+          "path": "file.svg",
+          "sha256": "499039795d7412d67664ff79d2eb6b7412e746b24c18c8fd8aba383c24ddada0"
+        },
+        {
+          "member": "icons/file-code.svg",
+          "path": "file-code.svg",
+          "sha256": "8ac619671f53653a483c2d5e2e6afe6d009c3198918cf76632e2cb4abf0d6721"
+        },
+        {
+          "member": "icons/settings.svg",
+          "path": "settings.svg",
+          "sha256": "0ae27fd0f81999229e3127ac96c5b32edfea448e291d509e76212b917551d66b"
+        },
+        {
+          "member": "icons/play.svg",
+          "path": "play.svg",
+          "sha256": "d7c34786135922a92b6896f6c2384ceeb0346afbf6041dc79982011411409833"
+        },
+        {
+          "member": "icons/bug.svg",
+          "path": "bug.svg",
+          "sha256": "c4fddf0d43b4c4f0b8fc52eb8810173c8d8bd25618034a70f162d85e8189d69d"
+        },
+        {
+          "member": "icons/square.svg",
+          "path": "square.svg",
+          "sha256": "bd979354f0ab184b95cecf03eedefe40c2dc65830ac6d7e60017b2b25a354acb"
+        },
+        {
+          "member": "icons/refresh-cw.svg",
+          "path": "refresh-cw.svg",
+          "sha256": "2e10dd403c85a24f163d59fc6151aa21147fe9402e1305dfc8979208caee8944"
+        },
+        {
+          "member": "icons/git-branch.svg",
+          "path": "git-branch.svg",
+          "sha256": "041f04acc8f92657b849540f0440e2e85d0df0b8da2365611e81b9bebfafc4eb"
+        },
+        {
+          "member": "icons/terminal.svg",
+          "path": "terminal.svg",
+          "sha256": "4f9b6488b237757d5cb615ccd07502fa99774826839e2a99017784bdb2596f1a"
+        },
+        {
+          "member": "icons/list-tree.svg",
+          "path": "list-tree.svg",
+          "sha256": "e4c994b829b8b4d0ddc66c1ce14f9f56d0347e37b1b1fb124111831a61ec3890"
+        },
+        {
+          "member": "icons/bell.svg",
+          "path": "bell.svg",
+          "sha256": "394889e9631fe3a9a63be9a479a95b451b708e432d895978d21d9130b5ee5dbe"
+        },
+        {
+          "member": "icons/rotate-ccw-clock.svg",
+          "path": "rotate-ccw-clock.svg",
+          "sha256": "a98ff758157910b9fc9d42d5d5dc80c2f4e037afa5f8ea4dee5f5649f03d438d"
+        },
+        {
+          "member": "icons/circle-alert.svg",
+          "path": "circle-alert.svg",
+          "sha256": "ce3e98b7a03b78c0071131df42466e4e1ff5187fccad30e739ec9ce951cf685a"
+        },
+        {
+          "member": "icons/triangle-alert.svg",
+          "path": "triangle-alert.svg",
+          "sha256": "4866f38b8560d410f21e3226413e0b77997b6dfbb6931fadfe0a0d5aef9ffeb4"
+        },
+        {
+          "member": "icons/info.svg",
+          "path": "info.svg",
+          "sha256": "bc977a64eb96f3e9c1041ffd09a3fceb70e3e65c02b571f76064062ed31f3cb9"
+        },
+        {
+          "member": "icons/circle-check.svg",
+          "path": "circle-check.svg",
+          "sha256": "9711e045a5999f8a3b0782eb88e09b04e0559bc7b379dcc0a4ae645223e10345"
+        },
+        {
+          "member": "icons/circle-x.svg",
+          "path": "circle-x.svg",
+          "sha256": "bcd8788901e6f29e1b231a81ba5e707d083d06cb4848a28f29407fab4f8e0b64"
+        },
+        {
+          "member": "icons/loader-circle.svg",
+          "path": "loader-circle.svg",
+          "sha256": "043021bb903919668804bdb6fee0342072e4ffea5f03fbd857774c440179ad3b"
+        },
+        {
+          "member": "icons/copy.svg",
+          "path": "copy.svg",
+          "sha256": "ea80e566c7a12628a447cb53179b19aea4f60b9143e2becd0d0f20bf260e5718"
+        },
+        {
+          "member": "icons/scissors.svg",
+          "path": "scissors.svg",
+          "sha256": "4c831fc2c903825f68565c28ffab945c34b2c60b6c564e2ae54250e1099fa550"
+        },
+        {
+          "member": "icons/clipboard.svg",
+          "path": "clipboard.svg",
+          "sha256": "d9b433e6a571d96a035ddb83d2ff52c4f85925ffcba9e584cf371d0dfa90875d"
+        },
+        {
+          "member": "icons/undo-2.svg",
+          "path": "undo-2.svg",
+          "sha256": "efad2edbbd2be6038cc23fd64df2d012fad5cc6460dfbf227cfa3d990e9e897f"
+        },
+        {
+          "member": "icons/redo-2.svg",
+          "path": "redo-2.svg",
+          "sha256": "4cbd2cdebc70b6b7979c681ed3f313d9cbb102465dcf7d0d2d6a72c937b344bc"
+        },
+        {
+          "member": "icons/save.svg",
+          "path": "save.svg",
+          "sha256": "ee9d56a7fec4b20dd6689546d41f68219ea8cbd67f99bd17a1bdaff5be6edb53"
+        },
+        {
+          "member": "icons/eye.svg",
+          "path": "eye.svg",
+          "sha256": "5bf90197dd7629cad64a2e48d1186a71559deb6121207d10e3dc5b19ebaffdcf"
+        },
+        {
+          "member": "icons/funnel.svg",
+          "path": "funnel.svg",
+          "sha256": "288f869330602e29a640099ffc5d6ac01caadad2ef6f8aac1138b8bf91ccd752"
+        },
+        {
+          "member": "icons/ellipsis.svg",
+          "path": "ellipsis.svg",
+          "sha256": "4f495cc72013ffdfec677f03b33a150f7b4dd741979283fd6853a09024bca112"
+        },
+        {
+          "member": "icons/pin.svg",
+          "path": "pin.svg",
+          "sha256": "55e8e5e04bcb671179fc1dd589abf09cf6a1e71301ff14eb739419cfab6011e7"
+        },
+        {
+          "member": "icons/maximize-2.svg",
+          "path": "maximize-2.svg",
+          "sha256": "9b8413ad44a3d4f5a80049713743daddcdc3c5465a71c218cac156a99f582b5b"
+        },
+        {
+          "member": "icons/minimize-2.svg",
+          "path": "minimize-2.svg",
+          "sha256": "1150437d5a870321c59b7ebca2e1bc3f6227f0fa03dd10484ab384dfe5110739"
+        },
+        {
+          "member": "icons/panel-left.svg",
+          "path": "panel-left.svg",
+          "sha256": "029f67b9e3eeb7ddf7c7c499b174c50388725e8ea50d4ea59ed7dbaf8d61cb82"
+        },
+        {
+          "member": "icons/panel-bottom.svg",
+          "path": "panel-bottom.svg",
+          "sha256": "7792f8b39919a347ba7be86fda059c41a46e38dbe23758f7be6aa4514579703e"
+        },
+        {
+          "member": "icons/hammer.svg",
+          "path": "hammer.svg",
+          "sha256": "db75caf31bd080726be0c2dab09372498b999cbdcf10c756f44636831f9529f5"
+        },
+        {
+          "member": "icons/package.svg",
+          "path": "package.svg",
+          "sha256": "69d6bc7650d26c4d24dd55eb22791607b982ce7637073944c256f1f61575509d"
+        }
       ],
       "extraFiles": [
-        {"url": "https://raw.githubusercontent.com/lucide-icons/lucide/1.66.0/LICENSE", "path": "LICENSE", "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"}
+        {
+          "url": "https://raw.githubusercontent.com/lucide-icons/lucide/1.66.0/LICENSE",
+          "path": "LICENSE",
+          "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+        }
       ],
       "maxMemberBytes": 65536,
       "adr": "docs/adr/0015-themes-icons-fonts.md"
@@ -82,18 +277,41 @@
       "sha256": "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e",
       "crossCheck": "GitHub publishes no digest for this asset. The tag v4.1 does not track the static TTFs, so they are single-source; their 'name' tables carry the OFL 1.1 licence and the copyright holder (licensecheck). LICENSE.txt equals the file at tag v4.1, and the archive's InterVariable.ttf (not bundled) equals docs/font-files/InterVariable.ttf at the tag, so the archive matches the tagged release. Verified 2026-11-01.",
       "licence": "OFL-1.1",
-      "copyright": ["Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)"],
+      "copyright": [
+        "Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)"
+      ],
       "reservedFontNames": [],
       "modified": false,
       "homepage": "https://rsms.me/inter/",
       "dest": "resources/fonts/inter",
       "licenceFile": "LICENSE.txt",
       "files": [
-        {"member": "extras/ttf/Inter-Regular.ttf", "path": "Inter-Regular.ttf", "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"},
-        {"member": "extras/ttf/Inter-Medium.ttf", "path": "Inter-Medium.ttf", "sha256": "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872"},
-        {"member": "extras/ttf/Inter-SemiBold.ttf", "path": "Inter-SemiBold.ttf", "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"},
-        {"member": "extras/ttf/Inter-Bold.ttf", "path": "Inter-Bold.ttf", "sha256": "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f"},
-        {"member": "LICENSE.txt", "path": "LICENSE.txt", "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a", "crossCheckUrl": "https://raw.githubusercontent.com/rsms/inter/v4.1/LICENSE.txt"}
+        {
+          "member": "extras/ttf/Inter-Regular.ttf",
+          "path": "Inter-Regular.ttf",
+          "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
+        },
+        {
+          "member": "extras/ttf/Inter-Medium.ttf",
+          "path": "Inter-Medium.ttf",
+          "sha256": "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872"
+        },
+        {
+          "member": "extras/ttf/Inter-SemiBold.ttf",
+          "path": "Inter-SemiBold.ttf",
+          "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
+        },
+        {
+          "member": "extras/ttf/Inter-Bold.ttf",
+          "path": "Inter-Bold.ttf",
+          "sha256": "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f"
+        },
+        {
+          "member": "LICENSE.txt",
+          "path": "LICENSE.txt",
+          "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+          "crossCheckUrl": "https://raw.githubusercontent.com/rsms/inter/v4.1/LICENSE.txt"
+        }
       ],
       "adr": "docs/adr/0015-themes-icons-fonts.md"
     },
@@ -107,18 +325,436 @@
       "crossCheck": "GitHub publishes no digest for this asset. Every bundled TTF and OFL.txt equals the file at tag v2.304 (crossCheckBase). Verified 2026-11-01.",
       "crossCheckBase": "https://raw.githubusercontent.com/JetBrains/JetBrainsMono/v2.304/",
       "licence": "OFL-1.1",
-      "copyright": ["Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)"],
+      "copyright": [
+        "Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)"
+      ],
       "reservedFontNames": [],
       "modified": false,
       "homepage": "https://www.jetbrains.com/lp/mono/",
       "dest": "resources/fonts/jetbrains-mono",
       "licenceFile": "OFL.txt",
       "files": [
-        {"member": "fonts/ttf/JetBrainsMono-Regular.ttf", "path": "JetBrainsMono-Regular.ttf", "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f"},
-        {"member": "fonts/ttf/JetBrainsMono-Italic.ttf", "path": "JetBrainsMono-Italic.ttf", "sha256": "9d0a1f7a708e6af183f1193b7e81d40da294f5c67682c085d8401c60aac8ded4"},
-        {"member": "fonts/ttf/JetBrainsMono-Bold.ttf", "path": "JetBrainsMono-Bold.ttf", "sha256": "5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb"},
-        {"member": "fonts/ttf/JetBrainsMono-BoldItalic.ttf", "path": "JetBrainsMono-BoldItalic.ttf", "sha256": "4039d5ce0ed225bf9c8b2c8c6436290ae2f356b7e90d70fa666227238324aa3b"},
-        {"member": "OFL.txt", "path": "OFL.txt", "sha256": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad"}
+        {
+          "member": "fonts/ttf/JetBrainsMono-Regular.ttf",
+          "path": "JetBrainsMono-Regular.ttf",
+          "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f"
+        },
+        {
+          "member": "fonts/ttf/JetBrainsMono-Italic.ttf",
+          "path": "JetBrainsMono-Italic.ttf",
+          "sha256": "9d0a1f7a708e6af183f1193b7e81d40da294f5c67682c085d8401c60aac8ded4"
+        },
+        {
+          "member": "fonts/ttf/JetBrainsMono-Bold.ttf",
+          "path": "JetBrainsMono-Bold.ttf",
+          "sha256": "5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb"
+        },
+        {
+          "member": "fonts/ttf/JetBrainsMono-BoldItalic.ttf",
+          "path": "JetBrainsMono-BoldItalic.ttf",
+          "sha256": "4039d5ce0ed225bf9c8b2c8c6436290ae2f356b7e90d70fa666227238324aa3b"
+        },
+        {
+          "member": "OFL.txt",
+          "path": "OFL.txt",
+          "sha256": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md"
+    },
+    {
+      "id": "fira-code",
+      "name": "Fira Code",
+      "version": "6.2",
+      "url": "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip",
+      "archive": "Fira_Code_v6.2.zip",
+      "sha256": "0949915ba8eb24d89fd93d10a7ff623f42830d7c5ffc3ecbf960e4ecad3e3e79",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Fira Code 6.2.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright (c) 2014-2021 The Fira Code Project Authors (https://github.com/tonsky/FiraCode)"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/tonsky/FiraCode",
+      "dest": "resources/fonts/fira-code",
+      "licenceFile": "LICENSE",
+      "files": [
+        {
+          "member": "ttf/FiraCode-Regular.ttf",
+          "path": "FiraCode-Regular.ttf",
+          "sha256": "5992ab9640e2df491b2f609467b1de60e8bc39b2c28db184342a0592d98f6117"
+        },
+        {
+          "member": "ttf/FiraCode-Medium.ttf",
+          "path": "FiraCode-Medium.ttf",
+          "sha256": "97091f90623661fb4f7979c10d188f30f4806d8ce326b0bc8d1acc79dcc20d8f"
+        },
+        {
+          "member": "ttf/FiraCode-SemiBold.ttf",
+          "path": "FiraCode-SemiBold.ttf",
+          "sha256": "500c74eec6249b06d49aef922dd3e8fc754c70c3b3f7791cd7b1a09ca9a26140"
+        },
+        {
+          "member": "ttf/FiraCode-Bold.ttf",
+          "path": "FiraCode-Bold.ttf",
+          "sha256": "41f6554e845e2f5b70adad3950122334b866aac436793b7742ade600067701be"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md",
+      "extraFiles": [
+        {
+          "url": "https://raw.githubusercontent.com/tonsky/FiraCode/6.2/LICENSE",
+          "path": "LICENSE",
+          "sha256": "1d41e10031ab125302780a05ec4c91d218e47db0c7e37cf315cce5e608cdc25c"
+        }
+      ]
+    },
+    {
+      "id": "cascadia-code",
+      "name": "Cascadia Code",
+      "version": "2111.01",
+      "url": "https://github.com/microsoft/cascadia-code/releases/download/v2111.01/CascadiaCode-2111.01.zip",
+      "archive": "CascadiaCode-2111.01.zip",
+      "sha256": "51fd68176dffb87e2fbc79381aef7f5c9488b58918dee223cd7439b5aa14e712",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Cascadia Code 2111.01.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright (c) 2021 Microsoft Corporation"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/microsoft/cascadia-code",
+      "dest": "resources/fonts/cascadia-code",
+      "licenceFile": "LICENSE",
+      "files": [
+        {
+          "member": "ttf/static/CascadiaCode-Regular.ttf",
+          "path": "CascadiaCode-Regular.ttf",
+          "sha256": "4b3659309b8f7eb1b39e4387ce9a338dc6f623a17731a809be406c6bbfd92c34"
+        },
+        {
+          "member": "ttf/static/CascadiaCode-Italic.ttf",
+          "path": "CascadiaCode-Italic.ttf",
+          "sha256": "34ca36791510d6c6a8260e5593dd36506eaf1042294ceb9ab0374232fa8c21d9"
+        },
+        {
+          "member": "ttf/static/CascadiaCode-Bold.ttf",
+          "path": "CascadiaCode-Bold.ttf",
+          "sha256": "f5c76ef1a9e10668a090511536bc66aaf580ce15d396bdb2d763215f5c1cdc0f"
+        },
+        {
+          "member": "ttf/static/CascadiaCode-BoldItalic.ttf",
+          "path": "CascadiaCode-BoldItalic.ttf",
+          "sha256": "f65ffe46e5ca5ddb54538fad0bd1320983d4e367a8bf3e48192fe55e0917a47d"
+        },
+        {
+          "member": "ttf/static/CascadiaMono-Regular.ttf",
+          "path": "CascadiaMono-Regular.ttf",
+          "sha256": "8107d343a6e3260d6204002a043fddf077fef00df6d0611d23876b9f7c962e9d"
+        },
+        {
+          "member": "ttf/static/CascadiaMono-Italic.ttf",
+          "path": "CascadiaMono-Italic.ttf",
+          "sha256": "a6e56638148081cb2208bc03910272a3e1992582c077c1e3239c9d5713c4d864"
+        },
+        {
+          "member": "ttf/static/CascadiaMono-Bold.ttf",
+          "path": "CascadiaMono-Bold.ttf",
+          "sha256": "6fba97068f413e11fb03c0e063381c4dcf7d8375891b634b946725829584737a"
+        },
+        {
+          "member": "ttf/static/CascadiaMono-BoldItalic.ttf",
+          "path": "CascadiaMono-BoldItalic.ttf",
+          "sha256": "ed173fd691336f87653d7ead7d27587d49a9f3dcc24aed689a10a3acc6461e4b"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md",
+      "extraFiles": [
+        {
+          "url": "https://raw.githubusercontent.com/microsoft/cascadia-code/v2111.01/LICENSE",
+          "path": "LICENSE",
+          "sha256": "51882cd3cdba4e16f220f44ddb08a635c38c44ea6e0975db2574f4be6f958238"
+        }
+      ]
+    },
+    {
+      "id": "source-code-pro",
+      "name": "Source Code Pro",
+      "version": "2.042R-u/1.062R-i",
+      "url": "https://github.com/adobe-fonts/source-code-pro/releases/download/2.042R-u%2F1.062R-i%2F1.026R-vf/TTF-source-code-pro-2.042R-u_1.062R-i.zip",
+      "archive": "TTF-source-code-pro-2.042R-u_1.062R-i.zip",
+      "sha256": "0c85bac90d15c040b82939aa92bc8404420fccc02e37bbcb9c93a7f21abb52c6",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Source Code Pro 2.042R-u/1.062R-i.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright 2023 Adobe (http://www.adobe.com/)"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/adobe-fonts/source-code-pro",
+      "dest": "resources/fonts/source-code-pro",
+      "licenceFile": "LICENSE.md",
+      "files": [
+        {
+          "member": "TTF/SourceCodePro-Regular.ttf",
+          "path": "SourceCodePro-Regular.ttf",
+          "sha256": "74bd80d3e42a08517cd7e1108ba3d86f2da29ac0f3065be95e0357956ab9db37"
+        },
+        {
+          "member": "TTF/SourceCodePro-It.ttf",
+          "path": "SourceCodePro-It.ttf",
+          "sha256": "9c9e0f4d016210a3c5bdfba5262637c5b26ddff4ccc382ebbc781de5961d0042"
+        },
+        {
+          "member": "TTF/SourceCodePro-Bold.ttf",
+          "path": "SourceCodePro-Bold.ttf",
+          "sha256": "b2095e0d657e6d28dc32444a9dacabab0c9241d0bf39d96371756cc9bdbc3a5f"
+        },
+        {
+          "member": "TTF/SourceCodePro-BoldIt.ttf",
+          "path": "SourceCodePro-BoldIt.ttf",
+          "sha256": "1b49d9304012bf8db9e5dd4104183d5c122c445d0570a2259125f71977595b90"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md",
+      "extraFiles": [
+        {
+          "url": "https://raw.githubusercontent.com/adobe-fonts/source-code-pro/release/LICENSE.md",
+          "path": "LICENSE.md",
+          "sha256": "7c940e28a5388e9bba866cf0e408edda45fe0899ba98665b8f6ab31dc5e4b8ff"
+        }
+      ]
+    },
+    {
+      "id": "ibm-plex-mono",
+      "name": "IBM Plex Mono",
+      "version": "1.1.0",
+      "url": "https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-mono%401.1.0/ibm-plex-mono.zip",
+      "archive": "ibm-plex-mono.zip",
+      "sha256": "4bfc936d0e1fd19db6327a3786eabdbc3dc0d464500576f6458f6706df68d26c",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for IBM Plex Mono 1.1.0.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright 2017 IBM Corp."
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/IBM/plex",
+      "dest": "resources/fonts/ibm-plex-mono",
+      "licenceFile": "LICENSE.txt",
+      "files": [
+        {
+          "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf",
+          "path": "IBMPlexMono-Regular.ttf",
+          "sha256": "fe11304a5fe956d5744e9b6a246cc83d90425245e75a62230044966ca96a7f50"
+        },
+        {
+          "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Italic.ttf",
+          "path": "IBMPlexMono-Italic.ttf",
+          "sha256": "8ebe04c8c6cc82f0be19896ddc61d9935cdd0f027b0173c1945b8d247d7dfc2a"
+        },
+        {
+          "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Bold.ttf",
+          "path": "IBMPlexMono-Bold.ttf",
+          "sha256": "ca403c56931baef307d20ba64b69acb71abcad61f75e66414661d57484b690ec"
+        },
+        {
+          "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-BoldItalic.ttf",
+          "path": "IBMPlexMono-BoldItalic.ttf",
+          "sha256": "0e45a5a540992163229d2a29662553f313fab391757ca2ab3dc8f4e0d9be0979"
+        },
+        {
+          "member": "ibm-plex-mono/LICENSE.txt",
+          "path": "LICENSE.txt",
+          "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md"
+    },
+    {
+      "id": "inconsolata",
+      "name": "Inconsolata",
+      "version": "3.000",
+      "url": "https://github.com/googlefonts/Inconsolata/releases/download/v3.000/fonts_ttf.zip",
+      "archive": "fonts_ttf.zip",
+      "sha256": "626e8ee07501dbb544b50aa59ac2e4b9ec86b810670158a59c7a3cbaf475548a",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Inconsolata 3.000.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright 2006 The Inconsolata Project Authors (https://github.com/cyrealtype/Inconsolata)"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/googlefonts/Inconsolata",
+      "dest": "resources/fonts/inconsolata",
+      "licenceFile": "OFL.txt",
+      "files": [
+        {
+          "member": "fonts/ttf/Inconsolata-Regular.ttf",
+          "path": "Inconsolata-Regular.ttf",
+          "sha256": "127875d255d4c5973ca57267a43bb9d1c04397e6c7d236984a595b6cdcb12b7c"
+        },
+        {
+          "member": "fonts/ttf/Inconsolata-Medium.ttf",
+          "path": "Inconsolata-Medium.ttf",
+          "sha256": "9262ad2f063246e1e98725848ff5fe4d4129e9cc1656f7f30829b3e89f4cefe3"
+        },
+        {
+          "member": "fonts/ttf/Inconsolata-SemiBold.ttf",
+          "path": "Inconsolata-SemiBold.ttf",
+          "sha256": "ea2bdaab0a8cfdcdd778c22d6a845197b17f40fd6d6474a29285808f32244df5"
+        },
+        {
+          "member": "fonts/ttf/Inconsolata-Bold.ttf",
+          "path": "Inconsolata-Bold.ttf",
+          "sha256": "263faa57f6c00c43a04e77df7abd5cb5cd4aae9f93507002c1217e02641fc7e6"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md",
+      "extraFiles": [
+        {
+          "url": "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/OFL.txt",
+          "path": "OFL.txt",
+          "sha256": "5d362a6f8690517fd9a5573128a081d8bbbb2f92714cf00556e08fbbe9600426"
+        }
+      ]
+    },
+    {
+      "id": "intel-one-mono",
+      "name": "Intel One Mono",
+      "version": "1.4.0",
+      "url": "https://github.com/intel/intel-one-mono/releases/download/V1.4.0/ttf.zip",
+      "archive": "ttf.zip",
+      "sha256": "54863552d25dcb9c3f5360b296fc980d6e1fbfd02e0d214224e8b78f0a2bccf0",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Intel One Mono 1.4.0.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright 2023-2024 The Intel One Mono Project Authors (https://github.com/intel/intel-one-mono)"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/intel/intel-one-mono",
+      "dest": "resources/fonts/intel-one-mono",
+      "licenceFile": "OFL.txt",
+      "files": [
+        {
+          "member": "ttf/IntelOneMono-Regular.ttf",
+          "path": "IntelOneMono-Regular.ttf",
+          "sha256": "131ab6a8f6e8b9160bc526353262828bc24caab8fcdcfd7a9edc7a044e974230"
+        },
+        {
+          "member": "ttf/IntelOneMono-Italic.ttf",
+          "path": "IntelOneMono-Italic.ttf",
+          "sha256": "124e14d8448447608f5e9d65645ec77f3d274ba729049c9f7931ccf30b4647ea"
+        },
+        {
+          "member": "ttf/IntelOneMono-Bold.ttf",
+          "path": "IntelOneMono-Bold.ttf",
+          "sha256": "511623927c22f8c5e70af85598e01eaed06bf9eb875aa77452ce0f379a52826a"
+        },
+        {
+          "member": "ttf/IntelOneMono-BoldItalic.ttf",
+          "path": "IntelOneMono-BoldItalic.ttf",
+          "sha256": "88aa389ce50467cc189b1176bdde8a1d1f8bd8adea879b5eed595f46b8ead0e8"
+        },
+        {
+          "member": "ttf/OFL.txt",
+          "path": "OFL.txt",
+          "sha256": "1b2e40cca73713395e95e3a1fce0c742550ff07f3c65cc2c4fc75404bfb45c22"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md"
+    },
+    {
+      "id": "commit-mono",
+      "name": "Commit Mono",
+      "version": "1.143",
+      "url": "https://github.com/eigilnikolajsen/commit-mono/releases/download/v1.143/CommitMono-1.143.zip",
+      "archive": "CommitMono-1.143.zip",
+      "sha256": "f7d1f26a7c7554800a996f76f5d706bf0648b936ca2a66b5bc4d46e3a2c49ed0",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Commit Mono 1.143.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright 2023 Commit Mono authors (https://github.com/eigilnikolajsen/commit-mono)"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/eigilnikolajsen/commit-mono",
+      "dest": "resources/fonts/commit-mono",
+      "licenceFile": "OFL.txt",
+      "files": [
+        {
+          "member": "CommitMono-1.143/ttfautohint/CommitMono-400-Regular.ttf",
+          "path": "CommitMono-400-Regular.ttf",
+          "sha256": "7430751f8621b4027df29dbc54d466fca9d75eb4e7a99c7f227625249ad4fb76"
+        },
+        {
+          "member": "CommitMono-1.143/ttfautohint/CommitMono-400-Italic.ttf",
+          "path": "CommitMono-400-Italic.ttf",
+          "sha256": "10f37afc91cfdc6fd92c98010504df0a32e996633fa9e5bbdbd20843ba5f1659"
+        },
+        {
+          "member": "CommitMono-1.143/ttfautohint/CommitMono-700-Regular.ttf",
+          "path": "CommitMono-700-Regular.ttf",
+          "sha256": "c299efc092cf4d25a4fd1ee3283eb2539324a3a67757216b543e586f727bb8a3"
+        },
+        {
+          "member": "CommitMono-1.143/ttfautohint/CommitMono-700-Italic.ttf",
+          "path": "CommitMono-700-Italic.ttf",
+          "sha256": "41d65996e306639dc02e5db31d2fb2b416c754f87ffc066c531dcc96a7c61c0d"
+        },
+        {
+          "member": "CommitMono-1.143/license.txt",
+          "path": "OFL.txt",
+          "sha256": "2e2dc937707819086e7631d02e6183fbe52316a89da0a611d9b09d3be7d4bd72"
+        }
+      ],
+      "adr": "docs/adr/0015-themes-icons-fonts.md"
+    },
+    {
+      "id": "fantasque-sans-mono",
+      "name": "Fantasque Sans Mono",
+      "version": "1.8.0",
+      "url": "https://github.com/belluzj/fantasque-sans/releases/download/v1.8.0/FantasqueSansMono-Normal.zip",
+      "archive": "FantasqueSansMono-Normal.zip",
+      "sha256": "84be689e231ff773ed9d352e83dccd8151d9e445f1cb0b88cb0e9330fc4d9cfc",
+      "crossCheck": "Verified upstream release archive and OpenType name tables for Fantasque Sans Mono 1.8.0.",
+      "licence": "OFL-1.1",
+      "copyright": [
+        "Copyright (c) 2013-2017 Jany Belluz"
+      ],
+      "reservedFontNames": [],
+      "modified": false,
+      "homepage": "https://github.com/belluzj/fantasque-sans",
+      "dest": "resources/fonts/fantasque-sans-mono",
+      "licenceFile": "LICENSE.txt",
+      "files": [
+        {
+          "member": "TTF/FantasqueSansMono-Regular.ttf",
+          "path": "FantasqueSansMono-Regular.ttf",
+          "sha256": "c949732ce5e779c03bf46bfe4a1e4128450a47eef7e78b470d5f8ae358e889c5"
+        },
+        {
+          "member": "TTF/FantasqueSansMono-Italic.ttf",
+          "path": "FantasqueSansMono-Italic.ttf",
+          "sha256": "9b3617063d20fbc90b5884f06a0ad6b435e21c8974673f83080b3cc714d563a8"
+        },
+        {
+          "member": "TTF/FantasqueSansMono-Bold.ttf",
+          "path": "FantasqueSansMono-Bold.ttf",
+          "sha256": "17f8bd3f9d610d701f25af63048c15218438978a37e27eb55db660c31585ca70"
+        },
+        {
+          "member": "TTF/FantasqueSansMono-BoldItalic.ttf",
+          "path": "FantasqueSansMono-BoldItalic.ttf",
+          "sha256": "21410b41094e79229489453245b5d07ed6d76ab744fe295a90cce81718c9d06f"
+        },
+        {
+          "member": "LICENSE.txt",
+          "path": "LICENSE.txt",
+          "sha256": "847988f40bfc79f3c3260167ff952f1fd7abe7e428ca616e110a2ea82c71f0a9"
+        }
       ],
       "adr": "docs/adr/0015-themes-icons-fonts.md"
     }

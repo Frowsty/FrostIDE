@@ -108,6 +108,14 @@ def package(repo: Path, stage: Path, installed: Path, triplet: str, qt_root: Pat
         paths.append(target)
     for relative, name in (("resources/fonts/inter/LICENSE.txt", "Inter.txt"),
                            ("resources/fonts/jetbrains-mono/OFL.txt", "JetBrains-Mono.txt"),
+                           ("resources/fonts/fira-code/LICENSE", "Fira-Code.txt"),
+                           ("resources/fonts/cascadia-code/LICENSE", "Cascadia-Code.txt"),
+                           ("resources/fonts/source-code-pro/LICENSE.md", "Source-Code-Pro.txt"),
+                           ("resources/fonts/ibm-plex-mono/LICENSE.txt", "IBM-Plex-Mono.txt"),
+                           ("resources/fonts/inconsolata/OFL.txt", "Inconsolata.txt"),
+                           ("resources/fonts/intel-one-mono/OFL.txt", "Intel-One-Mono.txt"),
+                           ("resources/fonts/commit-mono/OFL.txt", "Commit-Mono.txt"),
+                           ("resources/fonts/fantasque-sans-mono/LICENSE.txt", "Fantasque-Sans-Mono.txt"),
                            ("resources/icons/lucide/LICENSE", "Lucide.txt")):
         target = stage / "licenses" / name
         shutil.copyfile(repo / relative, target)

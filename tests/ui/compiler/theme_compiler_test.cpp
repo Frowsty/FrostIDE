@@ -37,9 +37,13 @@ namespace {
 
 const std::filesystem::path kSourceDir(FROST_SOURCE_DIR);
 constexpr std::string_view kShippedThemes[] = {
-    "glacier-dark", "glacier-light",      "glacier-classic", "glacier-high-contrast", "rider-dark",
-    "rider-light",  "rider-islands-dark", "darcula",         "monokai-pro",           "dracula",
-    "nord",         "one-dark",           "solarized-dark",  "solarized-light"};
+    "glacier-dark",         "glacier-light",      "glacier-classic", "glacier-high-contrast", "rider-dark",
+    "rider-light",          "rider-islands-dark", "darcula",         "monokai-pro",           "dracula",
+    "nord",                 "one-dark",           "solarized-dark",  "solarized-light",       "catppuccin-mocha",
+    "catppuccin-macchiato", "catppuccin-frappe",  "catppuccin-latte", "tokyo-night",          "tokyo-night-storm",
+    "tokyo-night-light",    "gruvbox-dark",       "gruvbox-light",   "github-dark",           "github-light",
+    "ayu-dark",             "ayu-mirage",         "ayu-light",       "everforest-dark",       "kanagawa-wave",
+    "rose-pine",            "rose-pine-dawn",     "night-owl",       "synthwave-84"};
 
 std::string readFile(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -135,7 +139,10 @@ TEST(ThemeCompiler, ShippedThemesCompileStrict) {
             }
         }
         EXPECT_EQ(result.data->highContrast, id == "glacier-high-contrast") << id;
-        const bool isLight = (id == "glacier-light" || id == "rider-light" || id == "solarized-light");
+        const bool isLight =
+            (id == "glacier-light" || id == "rider-light" || id == "solarized-light" || id == "catppuccin-latte" ||
+             id == "tokyo-night-light" || id == "gruvbox-light" || id == "github-light" || id == "ayu-light" ||
+             id == "rose-pine-dawn");
         EXPECT_EQ(result.data->dark, !isLight) << id;
         ASSERT_TRUE(compileThemeToBlob(id, test::asBytes(json))) << id;
     }

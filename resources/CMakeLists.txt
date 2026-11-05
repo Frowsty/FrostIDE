@@ -37,7 +37,27 @@ set(_frost_themes
     nord
     one-dark
     solarized-dark
-    solarized-light)
+    solarized-light
+    catppuccin-mocha
+    catppuccin-macchiato
+    catppuccin-frappe
+    catppuccin-latte
+    tokyo-night
+    tokyo-night-storm
+    tokyo-night-light
+    gruvbox-dark
+    gruvbox-light
+    github-dark
+    github-light
+    ayu-dark
+    ayu-mirage
+    ayu-light
+    everforest-dark
+    kanagawa-wave
+    rose-pine
+    rose-pine-dawn
+    night-owl
+    synthwave-84)
 foreach(theme IN LISTS _frost_themes)
     set(json "${CMAKE_CURRENT_SOURCE_DIR}/themes/${theme}.theme.json")
     set(out "${_frost_res}/themes/${theme}.ftheme")
@@ -88,6 +108,47 @@ foreach(font IN ITEMS JetBrainsMono-Regular JetBrainsMono-Italic JetBrainsMono-B
                          "${_frost_res}/fonts/jetbrains-mono/${font}.ttf")
 endforeach()
 _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/jetbrains-mono/OFL.txt" "${_frost_res}/fonts/jetbrains-mono/OFL.txt")
+foreach(font IN ITEMS FiraCode-Regular FiraCode-Medium FiraCode-SemiBold FiraCode-Bold)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/fira-code/${font}.ttf"
+                         "${_frost_res}/fonts/fira-code/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/fira-code/LICENSE" "${_frost_res}/fonts/fira-code/LICENSE")
+foreach(font IN ITEMS CascadiaCode-Regular CascadiaCode-Italic CascadiaCode-Bold CascadiaCode-BoldItalic
+                      CascadiaMono-Regular CascadiaMono-Italic CascadiaMono-Bold CascadiaMono-BoldItalic)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/cascadia-code/${font}.ttf"
+                         "${_frost_res}/fonts/cascadia-code/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/cascadia-code/LICENSE" "${_frost_res}/fonts/cascadia-code/LICENSE")
+foreach(font IN ITEMS SourceCodePro-Regular SourceCodePro-It SourceCodePro-Bold SourceCodePro-BoldIt)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/source-code-pro/${font}.ttf"
+                         "${_frost_res}/fonts/source-code-pro/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/source-code-pro/LICENSE.md" "${_frost_res}/fonts/source-code-pro/LICENSE.md")
+foreach(font IN ITEMS IBMPlexMono-Regular IBMPlexMono-Italic IBMPlexMono-Bold IBMPlexMono-BoldItalic)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/ibm-plex-mono/${font}.ttf"
+                         "${_frost_res}/fonts/ibm-plex-mono/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/ibm-plex-mono/LICENSE.txt" "${_frost_res}/fonts/ibm-plex-mono/LICENSE.txt")
+foreach(font IN ITEMS Inconsolata-Regular Inconsolata-Medium Inconsolata-SemiBold Inconsolata-Bold)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/inconsolata/${font}.ttf"
+                         "${_frost_res}/fonts/inconsolata/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/inconsolata/OFL.txt" "${_frost_res}/fonts/inconsolata/OFL.txt")
+foreach(font IN ITEMS IntelOneMono-Regular IntelOneMono-Italic IntelOneMono-Bold IntelOneMono-BoldItalic)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/intel-one-mono/${font}.ttf"
+                         "${_frost_res}/fonts/intel-one-mono/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/intel-one-mono/OFL.txt" "${_frost_res}/fonts/intel-one-mono/OFL.txt")
+foreach(font IN ITEMS CommitMono-400-Regular CommitMono-400-Italic CommitMono-700-Regular CommitMono-700-Italic)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/commit-mono/${font}.ttf"
+                         "${_frost_res}/fonts/commit-mono/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/commit-mono/OFL.txt" "${_frost_res}/fonts/commit-mono/OFL.txt")
+foreach(font IN ITEMS FantasqueSansMono-Regular FantasqueSansMono-Italic FantasqueSansMono-Bold FantasqueSansMono-BoldItalic)
+    _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/fantasque-sans-mono/${font}.ttf"
+                         "${_frost_res}/fonts/fantasque-sans-mono/${font}.ttf")
+endforeach()
+_frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/fonts/fantasque-sans-mono/LICENSE.txt" "${_frost_res}/fonts/fantasque-sans-mono/LICENSE.txt")
 _frost_copy_resource("${CMAKE_CURRENT_SOURCE_DIR}/icons/lucide/LICENSE" "${_frost_res}/icons/LICENSE.lucide.txt")
 get_property(_frost_copies DIRECTORY PROPERTY _FROST_RESOURCE_COPIES)
 list(APPEND _frost_outputs ${_frost_copies})

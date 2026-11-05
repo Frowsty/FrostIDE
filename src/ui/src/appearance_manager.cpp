@@ -11,7 +11,9 @@
 #include "frost/ui/model/theme_blob.hpp"
 
 #include <QApplication>
+#include <QByteArray>
 #include <QFont>
+#include <QFontDatabase>
 #include <QScreen>
 
 #include <algorithm>
@@ -215,6 +217,64 @@ Result<RegisteredFonts> AppearanceManager::ensureEditorFonts() {
         registerBundledFonts(m_env.fileSystem, joined(m_env.resourceDir, "fonts", "jetbrains-mono"), FontSet::Editor);
     if (!fonts) {
         return fonts;
+    }
+    struct BundledFontFile {
+        std::string_view subdir;
+        std::string_view file;
+    };
+    constexpr std::array<BundledFontFile, 36> kExtraEditorFontFiles{{
+        {"fira-code", "FiraCode-Regular.ttf"},
+        {"fira-code", "FiraCode-Medium.ttf"},
+        {"fira-code", "FiraCode-SemiBold.ttf"},
+        {"fira-code", "FiraCode-Bold.ttf"},
+        {"cascadia-code", "CascadiaCode-Regular.ttf"},
+        {"cascadia-code", "CascadiaCode-Italic.ttf"},
+        {"cascadia-code", "CascadiaCode-Bold.ttf"},
+        {"cascadia-code", "CascadiaCode-BoldItalic.ttf"},
+        {"cascadia-code", "CascadiaMono-Regular.ttf"},
+        {"cascadia-code", "CascadiaMono-Italic.ttf"},
+        {"cascadia-code", "CascadiaMono-Bold.ttf"},
+        {"cascadia-code", "CascadiaMono-BoldItalic.ttf"},
+        {"source-code-pro", "SourceCodePro-Regular.ttf"},
+        {"source-code-pro", "SourceCodePro-It.ttf"},
+        {"source-code-pro", "SourceCodePro-Bold.ttf"},
+        {"source-code-pro", "SourceCodePro-BoldIt.ttf"},
+        {"ibm-plex-mono", "IBMPlexMono-Regular.ttf"},
+        {"ibm-plex-mono", "IBMPlexMono-Italic.ttf"},
+        {"ibm-plex-mono", "IBMPlexMono-Bold.ttf"},
+        {"ibm-plex-mono", "IBMPlexMono-BoldItalic.ttf"},
+        {"inconsolata", "Inconsolata-Regular.ttf"},
+        {"inconsolata", "Inconsolata-Medium.ttf"},
+        {"inconsolata", "Inconsolata-SemiBold.ttf"},
+        {"inconsolata", "Inconsolata-Bold.ttf"},
+        {"intel-one-mono", "IntelOneMono-Regular.ttf"},
+        {"intel-one-mono", "IntelOneMono-Italic.ttf"},
+        {"intel-one-mono", "IntelOneMono-Bold.ttf"},
+        {"intel-one-mono", "IntelOneMono-BoldItalic.ttf"},
+        {"commit-mono", "CommitMono-400-Regular.ttf"},
+        {"commit-mono", "CommitMono-400-Italic.ttf"},
+        {"commit-mono", "CommitMono-700-Regular.ttf"},
+        {"commit-mono", "CommitMono-700-Italic.ttf"},
+        {"fantasque-sans-mono", "FantasqueSansMono-Regular.ttf"},
+        {"fantasque-sans-mono", "FantasqueSansMono-Italic.ttf"},
+        {"fantasque-sans-mono", "FantasqueSansMono-Bold.ttf"},
+        {"fantasque-sans-mono", "FantasqueSansMono-BoldItalic.ttf"},
+    }};
+    for (const auto& entry : kExtraEditorFontFiles) {
+        const std::string dir = joined(m_env.resourceDir, "fonts", entry.subdir);
+        if (auto path = io::joinPath(dir, entry.file)) {
+            if (auto bytes = m_env.fileSystem.readFile(*path)) {
+                const int id = QFontDatabase::addApplicationFontFromData(
+                    QByteArray(bytes->data(), static_cast<qsizetype>(bytes->size())));
+                if (id >= 0) {
+                    for (const QString& family : QFontDatabase::applicationFontFamilies(id)) {
+                        if (!fonts->families.contains(family)) {
+                            fonts->families.push_back(family);
+                        }
+                    }
+                }
+            }
+        }
     }
     m_editorFonts = *fonts;
     return fonts;

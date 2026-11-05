@@ -11,6 +11,22 @@ Bundled assets (resources/, pinned in resources/assets.lock.json, ADR 0015):
   License 1.1 (resources/fonts/inter/LICENSE.txt);
 - JetBrains Mono 2.304, Copyright 2020 The JetBrains Mono Project Authors,
   SIL Open Font License 1.1 (resources/fonts/jetbrains-mono/OFL.txt);
+- Fira Code 6.2, Copyright (c) 2014-2021 The Fira Code Project Authors,
+  SIL Open Font License 1.1 (resources/fonts/fira-code/LICENSE);
+- Cascadia Code and Cascadia Mono 2111.01, Copyright (c) 2021 Microsoft
+  Corporation, SIL Open Font License 1.1 (resources/fonts/cascadia-code/LICENSE);
+- Source Code Pro 2.042R-u/1.062R-i, Copyright 2023 Adobe, SIL Open Font
+  License 1.1 (resources/fonts/source-code-pro/LICENSE.md);
+- IBM Plex Mono 1.1.0, Copyright 2017 IBM Corp., SIL Open Font License 1.1
+  (resources/fonts/ibm-plex-mono/LICENSE.txt);
+- Inconsolata 3.000, Copyright 2006 The Inconsolata Project Authors, SIL Open
+  Font License 1.1 (resources/fonts/inconsolata/OFL.txt);
+- Intel One Mono 1.4.0, Copyright 2023-2024 The Intel One Mono Project Authors,
+  SIL Open Font License 1.1 (resources/fonts/intel-one-mono/OFL.txt);
+- Commit Mono 1.143, Copyright 2023 Commit Mono authors, SIL Open Font
+  License 1.1 (resources/fonts/commit-mono/OFL.txt);
+- Fantasque Sans Mono 1.8.0, Copyright (c) 2013-2017 Jany Belluz, SIL Open
+  Font License 1.1 (resources/fonts/fantasque-sans-mono/LICENSE.txt);
 - a subset of Lucide 1.66.0 icons, Copyright (c) 2026 Lucide Icons and
   Contributors, ISC License, including icons derived from Feather,
   Copyright (c) 2013-present Cole Bemis, MIT License
