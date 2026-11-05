@@ -299,6 +299,9 @@ public:
     // The messages of the markers on the line at viewport point `at` when it is in the gutter, one per
     // line (the gutter tooltip); empty elsewhere.
     [[nodiscard]] QString lineMarkerToolTip(QPointF at) const;
+    // The buffer line under viewport point `at` when it lies in the marker column on a line with a
+    // RunTest gutter marker, else nullopt.
+    [[nodiscard]] std::optional<LineIndex> runTestMarkerLineAt(QPointF at) const;
 
     // Line breakpoints (sorted by line on the way in; replaces the previous set). A line with a
     // breakpoint or the execution point shows it in place of its number (IntelliJ's new UI).
@@ -482,6 +485,8 @@ signals:
     void contextActionRequested(const QString& actionId);
     // A click on a Code Vision lens badge.
     void codeVisionClicked(const frost::ui::EditorCodeVisionLens& lens);
+    // A click on a Run/Debug Test or Entry Point play marker in the gutter.
+    void gutterRunMarkerClicked(int line, QPoint globalPos);
 
 public:
     // Builds the Rider editor right-click context menu for the current caret/selection state.

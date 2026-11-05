@@ -194,7 +194,8 @@ struct NewProjectSpec {
 inline constexpr std::string_view kBuildToolWindow = "build";
 inline constexpr std::string_view kFindUsagesToolWindow = "findUsages";
 inline constexpr std::string_view kNuGetToolWindow = "nuget";
-inline constexpr std::string_view kAsmViewerToolWindow = "asm_viewer";
+inline constexpr std::string_view kAsmViewerToolWindow = "asmViewer";
+inline constexpr std::string_view kUnitTestsToolWindow = "unitTests";
 
 // A place in a file: 1-based line and column; line 0 leaves the caret where it is (a new document:
 // at the start), column 0 is column 1.

@@ -14,13 +14,17 @@
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/tr.hpp"
 #include "frost/ui/vcs/change_markers.hpp"
 
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "project_properties_dialog.hpp"
 #include <QDir>
 #include <QFileInfo>
+#include <QLineEdit>
+#include <QPushButton>
 
 #include <algorithm>
 #include <chrono>
@@ -134,6 +138,48 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             (void)m_window->invoke(actionId.toStdString());
         }
     });
+    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this,
+            [this, editor](int lineZeroBased, QPoint) {
+                DocumentEditorView* targetView = nullptr;
+                for (DocumentEditorView* v : m_editors->views()) {
+                    if (&v->editor() == editor) {
+                        targetView = v;
+                        break;
+                    }
+                }
+                if (!targetView)
+                    return;
+                const auto entries =
+                    discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
+                const int targetLine = lineZeroBased + 1;
+                for (const auto& entry : entries) {
+                    if (entry.line == targetLine) {
+                        if (entry.isEntryPoint) {
+                            if (m_window)
+                                (void)m_window->invoke("run.run");
+                            return;
+                        }
+                        if (m_window) {
+                            m_window->toolWindows().show(kUnitTestsToolWindow, false);
+                            if (QWidget* content = m_window->toolWindows().content(kUnitTestsToolWindow)) {
+                                if (auto* refreshBtn =
+                                        content->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"))) {
+                                    refreshBtn->click();
+                                }
+                                if (auto* filterEdit =
+                                        content->findChild<QLineEdit*>(QStringLiteral("unitTestsFilterEdit"))) {
+                                    filterEdit->setText(qs(entry.testName));
+                                }
+                                if (auto* runAllBtn =
+                                        content->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"))) {
+                                    runAllBtn->click();
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+            });
     transitionLauncherToMainWindow();
 }
 
@@ -173,6 +219,7 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
         const ui::EditorViewStatus st = view.editor().status();
         m_nav->recordEditLocation(view.path(), st.line, st.column);
     }
+    refreshMarkers(view);
     for (DocumentEditorView* peer : m_editors->views()) {
         if (peer == &view || &peer->document() != &view.document())
             continue;
@@ -594,6 +641,19 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
     }
     if (const auto live = m_liveMarkers.find(lang::documentKey(view.path())); live != m_liveMarkers.end()) {
         markers.insert(markers.end(), live->second.begin(), live->second.end());
+    }
+    if (!view.path().empty() && !view.editor().fileInfo().largeFile) {
+        const auto runnable = discoverTestsAndEntryPointsInFile(view.path(), view.document().document().text().text());
+        for (const auto& entry : runnable) {
+            if (entry.line <= 0)
+                continue;
+            const std::string msg =
+                entry.isEntryPoint
+                    ? std::format("Run '{}' ({})", entry.testName, entry.suiteName)
+                    : std::format("Run Test '{}.{}' / Debug Test", entry.suiteName, entry.testName);
+            markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(entry.line - 1)},
+                                             ui::MarkerSeverity::RunTest, msg});
+        }
     }
     view.editor().setLineMarkers(std::move(markers));
     view.editor().setDiagnostics(ui::EditorDiagnosticSource::Build, ui::lang::toEditorDiagnostics(buildDiagnostics));

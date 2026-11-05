@@ -494,6 +494,12 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
             return;
         }
     }
+    if (const std::optional<LineIndex> runLine = runTestMarkerLineAt(event->position())) {
+        emit gutterRunMarkerClicked(static_cast<int>(runLine->value()),
+                                    viewport()->mapToGlobal(event->position().toPoint()));
+        event->accept();
+        return;
+    }
     if (m_breakpointGutter) {
         if (const std::optional<LineIndex> line = breakpointLineAt(event->position())) {
             // The breakpoint area toggles a breakpoint and leaves the selection alone (IntelliJ).

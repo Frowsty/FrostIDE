@@ -1993,6 +1993,59 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     frost::app::showAttachToProcessDialog(
         rig.window.get(), [&](const frost::app::RunningProcessInfo& proc, bool) { attachedPid = proc.pid; });
     EXPECT_GT(attachedPid, 0U);
+
+    // 6. Unit Testing Tool Window (Alt+8 / "unit_tests") & Editor Gutter Test Runner.
+    EXPECT_TRUE(rig.workbench->registry().find("window.unitTests").has_value());
+    dir.write("App/math_tests.cpp",
+              "TEST(MathSuite, AddsNumbers) {\n"
+              "    EXPECT_EQ(2 + 2, 4);\n"
+              "}\n"
+              "TEST_F(MathFixture, FailsIntentionally) {\n"
+              "    EXPECT_TRUE(false);\n"
+              "}\n"
+              "int main(int argc, char** argv) {\n"
+              "    return 0;\n"
+              "}\n");
+    dir.write("App/ManagedTests.cs",
+              "public class CalculatorTests {\n"
+              "    [Fact]\n"
+              "    public void MultipliesCorrectly() {\n"
+              "    }\n"
+              "    public static void Main(string[] args) {}\n"
+              "}\n");
+
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("App/math_tests.cpp")).has_value());
+    ASSERT_NE(rig.view(), nullptr);
+    const auto& markers = rig.view()->editor().lineMarkers();
+    int runTestMarkerCount = 0;
+    for (const auto& m : markers) {
+        if (m.severity == frost::ui::MarkerSeverity::RunTest)
+            ++runTestMarkerCount;
+    }
+    EXPECT_EQ(runTestMarkerCount, 3); // TEST, TEST_F, and main()
+
+    rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
+    QWidget* unitTestsWidget = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
+    ASSERT_NE(unitTestsWidget, nullptr);
+    auto* refreshBtn = unitTestsWidget->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
+    ASSERT_NE(refreshBtn, nullptr);
+    refreshBtn->click();
+    auto* tree = unitTestsWidget->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
+    ASSERT_NE(tree, nullptr);
+    EXPECT_GE(tree->topLevelItemCount(), 1);
+
+    auto* runAllBtn = unitTestsWidget->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
+    ASSERT_NE(runAllBtn, nullptr);
+    runAllBtn->click();
+
+    auto* summaryLbl = unitTestsWidget->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
+    ASSERT_NE(summaryLbl, nullptr);
+    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("Passed: 2")));
+    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("Failed: 1")));
+
+    auto* stackLinks = unitTestsWidget->findChild<QListWidget*>(QStringLiteral("unitTestsStackTraceLinks"));
+    ASSERT_NE(stackLinks, nullptr);
+    EXPECT_GT(stackLinks->count(), 0);
 }
 
 } // namespace

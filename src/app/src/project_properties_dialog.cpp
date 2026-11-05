@@ -1538,4 +1538,631 @@ void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, con
     dialog.exec();
 }
 
+std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_view filePath, std::string_view content,
+                                                                   std::string_view projectName,
+                                                                   std::string_view projectPath,
+                                                                   std::string_view solutionName) {
+    std::vector<DiscoveredTestEntry> results;
+    const QString qPath = toQs(filePath);
+    const bool isCs = qPath.endsWith(QStringLiteral(".cs"), Qt::CaseInsensitive);
+    const QString textContent = toQs(content);
+    const QStringList lines = textContent.split(QLatin1Char('\n'));
+
+    const QRegularExpression kGTestRe(
+        QStringLiteral(R"(^\s*(?:TEST|TEST_F|TEST_P|TYPED_TEST)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))"));
+    const QRegularExpression kCatchRe(QStringLiteral(R"re(^\s*(?:TEST_CASE|SCENARIO)\s*\(\s*"([^"]+)")re"));
+    const QRegularExpression kCsClassRe(QStringLiteral(R"(\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b)"));
+    const QRegularExpression kCsAttrRe(
+        QStringLiteral(R"(^\s*\[\s*(?:Fact|Theory|Test|TestCase|TestMethod)\b)"));
+    const QRegularExpression kCsMethodRe(
+        QStringLiteral(R"(\b(?:void|Task(?:<[^>]+>)?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()"));
+    const QRegularExpression kCppMainRe(QStringLiteral(R"(^\s*(?:int|void|auto)\s+main\s*\()"));
+    const QRegularExpression kCsMainRe(
+        QStringLiteral(R"(^\s*(?:(?:public|private|internal|static|async)\s+)*(?:void|int|Task(?:<int>)?)\s+Main\s*\()"));
+
+    const std::string resolvedSln = solutionName.empty() ? "Solution" : std::string(solutionName);
+    const std::string resolvedProj =
+        projectName.empty() ? QFileInfo(qPath).dir().dirName().toStdString() : std::string(projectName);
+    const std::string resolvedProjPath = std::string(projectPath);
+
+    auto bodyHasExplicitFailure = [&](int startLineIdx) -> bool {
+        int braceDepth = 0;
+        bool seenOpenBrace = false;
+        const int limit = std::min<int>(static_cast<int>(lines.size()), startLineIdx + 30);
+        for (int i = startLineIdx; i < limit; ++i) {
+            const QString& ln = lines[i];
+            if (ln.contains(QStringLiteral("EXPECT_TRUE(false)")) ||
+                ln.contains(QStringLiteral("ASSERT_TRUE(false)")) || ln.contains(QStringLiteral("FAIL()")) ||
+                ln.contains(QStringLiteral("Assert.Fail")) || ln.contains(QStringLiteral("Assert.True(false)"))) {
+                return true;
+            }
+            for (QChar ch : ln) {
+                if (ch == QLatin1Char('{')) {
+                    ++braceDepth;
+                    seenOpenBrace = true;
+                } else if (ch == QLatin1Char('}')) {
+                    --braceDepth;
+                }
+            }
+            if (seenOpenBrace && braceDepth <= 0)
+                break;
+        }
+        return false;
+    };
+
+    std::string currentCsClass = QFileInfo(qPath).completeBaseName().toStdString();
+    bool pendingCsTestAttr = false;
+
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString& lineText = lines[i];
+        if (isCs) {
+            if (const auto clsMatch = kCsClassRe.match(lineText); clsMatch.hasMatch()) {
+                currentCsClass = clsMatch.captured(1).toStdString();
+            }
+            if (kCsAttrRe.match(lineText).hasMatch()) {
+                pendingCsTestAttr = true;
+            }
+            if (pendingCsTestAttr) {
+                if (const auto mMatch = kCsMethodRe.match(lineText); mMatch.hasMatch()) {
+                    DiscoveredTestEntry entry;
+                    entry.solutionName = resolvedSln;
+                    entry.projectName = resolvedProj.empty() ? "Tests" : resolvedProj;
+                    entry.projectPath = resolvedProjPath;
+                    entry.suiteName = currentCsClass.empty() ? "Tests" : currentCsClass;
+                    entry.testName = mMatch.captured(1).toStdString();
+                    entry.filePath = std::string(filePath);
+                    entry.line = i + 1;
+                    entry.isDotNet = true;
+                    entry.isEntryPoint = false;
+                    entry.expectsFailureInSource = bodyHasExplicitFailure(i);
+                    results.push_back(std::move(entry));
+                    pendingCsTestAttr = false;
+                    continue;
+                }
+            }
+            if (kCsMainRe.match(lineText).hasMatch()) {
+                DiscoveredTestEntry entry;
+                entry.solutionName = resolvedSln;
+                entry.projectName = resolvedProj.empty() ? "App" : resolvedProj;
+                entry.projectPath = resolvedProjPath;
+                entry.suiteName = currentCsClass;
+                entry.testName = "Main";
+                entry.filePath = std::string(filePath);
+                entry.line = i + 1;
+                entry.isDotNet = true;
+                entry.isEntryPoint = true;
+                results.push_back(std::move(entry));
+            }
+        } else {
+            if (const auto gtMatch = kGTestRe.match(lineText); gtMatch.hasMatch()) {
+                DiscoveredTestEntry entry;
+                entry.solutionName = resolvedSln;
+                entry.projectName = resolvedProj.empty() ? "Tests" : resolvedProj;
+                entry.projectPath = resolvedProjPath;
+                entry.suiteName = gtMatch.captured(1).toStdString();
+                entry.testName = gtMatch.captured(2).toStdString();
+                entry.filePath = std::string(filePath);
+                entry.line = i + 1;
+                entry.isDotNet = false;
+                entry.isEntryPoint = false;
+                entry.expectsFailureInSource = bodyHasExplicitFailure(i);
+                results.push_back(std::move(entry));
+                continue;
+            }
+            if (const auto catchMatch = kCatchRe.match(lineText); catchMatch.hasMatch()) {
+                DiscoveredTestEntry entry;
+                entry.solutionName = resolvedSln;
+                entry.projectName = resolvedProj.empty() ? "Tests" : resolvedProj;
+                entry.projectPath = resolvedProjPath;
+                entry.suiteName = "Catch2";
+                entry.testName = catchMatch.captured(1).toStdString();
+                entry.filePath = std::string(filePath);
+                entry.line = i + 1;
+                entry.isDotNet = false;
+                entry.isEntryPoint = false;
+                entry.expectsFailureInSource = bodyHasExplicitFailure(i);
+                results.push_back(std::move(entry));
+                continue;
+            }
+            if (kCppMainRe.match(lineText).hasMatch()) {
+                DiscoveredTestEntry entry;
+                entry.solutionName = resolvedSln;
+                entry.projectName = resolvedProj.empty() ? "App" : resolvedProj;
+                entry.projectPath = resolvedProjPath;
+                entry.suiteName = QFileInfo(qPath).fileName().toStdString();
+                entry.testName = "main";
+                entry.filePath = std::string(filePath);
+                entry.line = i + 1;
+                entry.isDotNet = false;
+                entry.isEntryPoint = true;
+                results.push_back(std::move(entry));
+            }
+        }
+    }
+    return results;
+}
+
+std::vector<DiscoveredTestEntry> discoverWorkspaceUnitTests(io::IFileSystem& fs, const project::SolutionModel* solution,
+                                                            std::string_view workspaceRoot) {
+    std::vector<DiscoveredTestEntry> allTests;
+    std::vector<std::string> visitedFiles;
+
+    const auto scanDirectory = [&](const std::string& dirPath, std::string_view projName, std::string_view projPath,
+                                   std::string_view slnName, auto& selfRef, int depth) -> void {
+        if (depth > 3 || dirPath.empty())
+            return;
+        auto entries = fs.listDirectory(dirPath);
+        if (!entries)
+            return;
+        for (const auto& de : *entries) {
+            if (de.name.empty() || de.name.starts_with('.') || de.name == "bin" || de.name == "obj" ||
+                de.name == "build" || de.name == "out" || de.name == "node_modules") {
+                continue;
+            }
+            const auto fullRes = io::joinPath(dirPath, de.name);
+            if (!fullRes)
+                continue;
+            if (de.type == io::FileType::Directory) {
+                selfRef(*fullRes, projName, projPath, slnName, selfRef, depth + 1);
+                continue;
+            }
+            const QString qName = toQs(de.name);
+            if (!qName.endsWith(QStringLiteral(".cpp"), Qt::CaseInsensitive) &&
+                !qName.endsWith(QStringLiteral(".cc"), Qt::CaseInsensitive) &&
+                !qName.endsWith(QStringLiteral(".cxx"), Qt::CaseInsensitive) &&
+                !qName.endsWith(QStringLiteral(".h"), Qt::CaseInsensitive) &&
+                !qName.endsWith(QStringLiteral(".hpp"), Qt::CaseInsensitive) &&
+                !qName.endsWith(QStringLiteral(".cs"), Qt::CaseInsensitive)) {
+                continue;
+            }
+            if (std::ranges::contains(visitedFiles, *fullRes))
+                continue;
+            visitedFiles.push_back(*fullRes);
+            if (auto content = fs.readFile(*fullRes)) {
+                auto found = discoverTestsAndEntryPointsInFile(*fullRes, *content, projName, projPath, slnName);
+                for (auto& item : found) {
+                    if (!item.isEntryPoint) {
+                        allTests.push_back(std::move(item));
+                    }
+                }
+            }
+        }
+    };
+
+    const std::string slnName =
+        (solution && !solution->name().empty())
+            ? solution->name()
+            : (!workspaceRoot.empty() ? QFileInfo(toQs(workspaceRoot)).fileName().toStdString() : "Solution");
+
+    if (solution) {
+        for (const auto& proj : solution->projects()) {
+            if (proj.nodeKind != project::NodeKind::Project || proj.path.empty())
+                continue;
+            const std::string projDir(io::parentPath(proj.path));
+            scanDirectory(projDir, proj.name, proj.path, slnName, scanDirectory, 0);
+        }
+    }
+    if (!workspaceRoot.empty()) {
+        scanDirectory(std::string(workspaceRoot), slnName, {}, slnName, scanDirectory, 0);
+    }
+    return allTests;
+}
+
+namespace {
+
+enum class UnitTestRunState : int {
+    NotRun = 0,
+    Running = 1,
+    Passed = 2,
+    Failed = 3,
+    Skipped = 4,
+};
+
+struct UnitTestsPanelState {
+    std::vector<DiscoveredTestEntry> tests;
+    std::vector<UnitTestRunState> states;
+    std::vector<int> durationsMs;
+    std::vector<QString> outputs;
+    std::vector<QStringList> stackLinks;
+    std::vector<QTreeWidgetItem*> leafItems;
+    bool stopRequested = false;
+};
+
+} // namespace
+
+QWidget* createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
+                                         std::function<const project::SolutionModel*()> solutionProvider,
+                                         std::function<std::string()> workspaceRootProvider,
+                                         std::function<void(const std::string& path, int line)> onNavigateToSource,
+                                         std::function<void(const DiscoveredTestEntry& test)> onDebugTest) {
+    auto* root = new QWidget(parent);
+    root->setObjectName(QStringLiteral("unitTestsToolWindow"));
+    auto* outer = new QVBoxLayout(root);
+    outer->setContentsMargins(6, 6, 6, 6);
+    outer->setSpacing(6);
+
+    auto state = std::make_shared<UnitTestsPanelState>();
+
+    // Top toolbar
+    auto* toolbar = new QHBoxLayout();
+    auto* runAllBtn = new QPushButton(QStringLiteral("▶ Run All"), root);
+    runAllBtn->setObjectName(QStringLiteral("unitTestsRunAllButton"));
+    auto* runSelectedBtn = new QPushButton(QStringLiteral("▶ Run Selected"), root);
+    runSelectedBtn->setObjectName(QStringLiteral("unitTestsRunSelectedButton"));
+    auto* runFailedBtn = new QPushButton(QStringLiteral("↻ Run Failed"), root);
+    runFailedBtn->setObjectName(QStringLiteral("unitTestsRunFailedButton"));
+    auto* repeatUntilFailBtn = new QPushButton(QStringLiteral("∞ Repeat Until Failure"), root);
+    repeatUntilFailBtn->setObjectName(QStringLiteral("unitTestsRepeatUntilFailureButton"));
+    auto* debugSelectedBtn = new QPushButton(QStringLiteral("🐞 Debug Selected Test"), root);
+    debugSelectedBtn->setObjectName(QStringLiteral("unitTestsDebugSelectedButton"));
+    auto* stopBtn = new QPushButton(QStringLiteral("■ Stop"), root);
+    stopBtn->setObjectName(QStringLiteral("unitTestsStopButton"));
+    stopBtn->setEnabled(false);
+    auto* refreshBtn = new QPushButton(QStringLiteral("⟳ Refresh"), root);
+    refreshBtn->setObjectName(QStringLiteral("unitTestsRefreshButton"));
+
+    auto* filterEdit = new QLineEdit(root);
+    filterEdit->setObjectName(QStringLiteral("unitTestsFilterEdit"));
+    filterEdit->setPlaceholderText(QStringLiteral("Filter tests by suite or name..."));
+
+    auto* summaryLabel = new QLabel(QStringLiteral("Passed: 0 | Failed: 0 | Total: 0"), root);
+    summaryLabel->setObjectName(QStringLiteral("unitTestsSummaryLabel"));
+
+    toolbar->addWidget(runAllBtn);
+    toolbar->addWidget(runSelectedBtn);
+    toolbar->addWidget(runFailedBtn);
+    toolbar->addWidget(repeatUntilFailBtn);
+    toolbar->addWidget(debugSelectedBtn);
+    toolbar->addWidget(stopBtn);
+    toolbar->addWidget(refreshBtn);
+    toolbar->addWidget(filterEdit, 1);
+    toolbar->addWidget(summaryLabel);
+    outer->addLayout(toolbar);
+
+    // Main horizontal splitter: Hierarchical Tree on left, Output + Clickable Stack Trace on right
+    auto* splitter = new QSplitter(Qt::Horizontal, root);
+    auto* tree = new QTreeWidget(splitter);
+    tree->setObjectName(QStringLiteral("unitTestsTreeWidget"));
+    tree->setColumnCount(3);
+    tree->setHeaderLabels({
+        QStringLiteral("Test Hierarchy (Solution → Project → Suite → Test)"),
+        QStringLiteral("Status"),
+        QStringLiteral("Duration"),
+    });
+    tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    tree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    splitter->addWidget(tree);
+
+    auto* rightPane = new QWidget(splitter);
+    auto* rightLayout = new QVBoxLayout(rightPane);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(4);
+
+    auto* outputView = new QPlainTextEdit(rightPane);
+    outputView->setObjectName(QStringLiteral("unitTestsOutputView"));
+    outputView->setReadOnly(true);
+    outputView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    outputView->setPlaceholderText(QStringLiteral("Select a test node to view its output and assertion stack trace."));
+
+    auto* stackLabel = new QLabel(QStringLiteral("Stack Trace / Source Locations (Click to jump):"), rightPane);
+    auto* stackList = new QListWidget(rightPane);
+    stackList->setObjectName(QStringLiteral("unitTestsStackTraceLinks"));
+    stackList->setMaximumHeight(110);
+
+    rightLayout->addWidget(outputView, 1);
+    rightLayout->addWidget(stackLabel);
+    rightLayout->addWidget(stackList);
+    splitter->addWidget(rightPane);
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 1);
+    outer->addWidget(splitter, 1);
+
+    const auto statusTextFor = [](UnitTestRunState st) -> QString {
+        switch (st) {
+        case UnitTestRunState::Running: return QStringLiteral("⏳ Running");
+        case UnitTestRunState::Passed: return QStringLiteral("✓ Passed");
+        case UnitTestRunState::Failed: return QStringLiteral("✗ Failed");
+        case UnitTestRunState::Skipped: return QStringLiteral("↷ Skipped");
+        case UnitTestRunState::NotRun:
+        default: return QStringLiteral("○ Not Run");
+        }
+    };
+
+    const auto updateSummaryAndParents = [=] {
+        int passed = 0;
+        int failed = 0;
+        for (std::size_t i = 0; i < state->tests.size(); ++i) {
+            if (state->states[i] == UnitTestRunState::Passed)
+                ++passed;
+            else if (state->states[i] == UnitTestRunState::Failed)
+                ++failed;
+            if (i < state->leafItems.size() && state->leafItems[i]) {
+                state->leafItems[i]->setText(1, statusTextFor(state->states[i]));
+                state->leafItems[i]->setText(
+                    2, state->durationsMs[i] > 0 ? QStringLiteral("%1 ms").arg(state->durationsMs[i]) : QString());
+            }
+        }
+        // Roll up status and duration to Suite -> Project -> Solution parent nodes
+        auto rollupItem = [&](QTreeWidgetItem* item, auto& selfRef) -> std::pair<UnitTestRunState, int> {
+            const int idx = item->data(0, Qt::UserRole).toInt();
+            if (idx >= 0 && static_cast<std::size_t>(idx) < state->tests.size()) {
+                return {state->states[static_cast<std::size_t>(idx)],
+                        state->durationsMs[static_cast<std::size_t>(idx)]};
+            }
+            UnitTestRunState agg = UnitTestRunState::NotRun;
+            int totalMs = 0;
+            for (int c = 0; c < item->childCount(); ++c) {
+                const auto [childSt, childMs] = selfRef(item->child(c), selfRef);
+                totalMs += childMs;
+                if (childSt == UnitTestRunState::Failed)
+                    agg = UnitTestRunState::Failed;
+                else if (childSt == UnitTestRunState::Running && agg != UnitTestRunState::Failed)
+                    agg = UnitTestRunState::Running;
+                else if (childSt == UnitTestRunState::Passed && agg == UnitTestRunState::NotRun)
+                    agg = UnitTestRunState::Passed;
+            }
+            item->setText(1, statusTextFor(agg));
+            item->setText(2, totalMs > 0 ? QStringLiteral("%1 ms").arg(totalMs) : QString());
+            return {agg, totalMs};
+        };
+        for (int t = 0; t < tree->topLevelItemCount(); ++t) {
+            rollupItem(tree->topLevelItem(t), rollupItem);
+        }
+        summaryLabel->setText(QStringLiteral("Passed: %1 | Failed: %2 | Total: %3")
+                                  .arg(passed)
+                                  .arg(failed)
+                                  .arg(state->tests.size()));
+    };
+
+    const auto showTestDetails = [=](int idx) {
+        stackList->clear();
+        if (idx < 0 || static_cast<std::size_t>(idx) >= state->tests.size()) {
+            outputView->clear();
+            return;
+        }
+        const auto& t = state->tests[static_cast<std::size_t>(idx)];
+        const QString& out = state->outputs[static_cast<std::size_t>(idx)];
+        outputView->setPlainText(
+            out.isEmpty()
+                ? QStringLiteral("Test: %1.%2\nSource: %3:%4\nStatus: Not run yet.")
+                      .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                      .arg(t.line)
+                : out);
+        for (const QString& link : state->stackLinks[static_cast<std::size_t>(idx)]) {
+            stackList->addItem(link);
+        }
+        if (stackList->count() == 0 && !t.filePath.empty()) {
+            stackList->addItem(QStringLiteral("%1:%2").arg(toQs(t.filePath)).arg(t.line));
+        }
+    };
+
+    const auto rebuildTree = [=, &fs] {
+        const project::SolutionModel* sln = solutionProvider ? solutionProvider() : nullptr;
+        const std::string wsRoot = workspaceRootProvider ? workspaceRootProvider() : std::string{};
+        state->tests = discoverWorkspaceUnitTests(fs, sln, wsRoot);
+        state->states.assign(state->tests.size(), UnitTestRunState::NotRun);
+        state->durationsMs.assign(state->tests.size(), 0);
+        state->outputs.assign(state->tests.size(), QString());
+        state->stackLinks.assign(state->tests.size(), QStringList());
+        state->leafItems.assign(state->tests.size(), nullptr);
+
+        const QString filter = filterEdit->text().trimmed();
+        tree->clear();
+
+        std::map<std::string, QTreeWidgetItem*> slnNodes;
+        std::map<std::string, QTreeWidgetItem*> projNodes;
+        std::map<std::string, QTreeWidgetItem*> suiteNodes;
+
+        for (std::size_t i = 0; i < state->tests.size(); ++i) {
+            const auto& t = state->tests[i];
+            if (!filter.isEmpty() && !toQs(t.suiteName).contains(filter, Qt::CaseInsensitive) &&
+                !toQs(t.testName).contains(filter, Qt::CaseInsensitive) &&
+                !toQs(t.projectName).contains(filter, Qt::CaseInsensitive)) {
+                continue;
+            }
+            QTreeWidgetItem* slnItem = nullptr;
+            if (auto it = slnNodes.find(t.solutionName); it != slnNodes.end()) {
+                slnItem = it->second;
+            } else {
+                slnItem = new QTreeWidgetItem(tree, {toQs(t.solutionName), QStringLiteral("○ Not Run"), QString()});
+                slnItem->setData(0, Qt::UserRole, -1);
+                slnNodes[t.solutionName] = slnItem;
+            }
+
+            const std::string projKey = t.solutionName + "::" + t.projectName;
+            QTreeWidgetItem* projItem = nullptr;
+            if (auto it = projNodes.find(projKey); it != projNodes.end()) {
+                projItem = it->second;
+            } else {
+                projItem = new QTreeWidgetItem(slnItem, {toQs(t.projectName), QStringLiteral("○ Not Run"), QString()});
+                projItem->setData(0, Qt::UserRole, -1);
+                projNodes[projKey] = projItem;
+            }
+
+            const std::string suiteKey = projKey + "::" + t.suiteName;
+            QTreeWidgetItem* suiteItem = nullptr;
+            if (auto it = suiteNodes.find(suiteKey); it != suiteNodes.end()) {
+                suiteItem = it->second;
+            } else {
+                suiteItem = new QTreeWidgetItem(projItem, {toQs(t.suiteName), QStringLiteral("○ Not Run"), QString()});
+                suiteItem->setData(0, Qt::UserRole, -1);
+                suiteNodes[suiteKey] = suiteItem;
+            }
+
+            auto* leaf = new QTreeWidgetItem(suiteItem, {toQs(t.testName), QStringLiteral("○ Not Run"), QString()});
+            leaf->setData(0, Qt::UserRole, static_cast<int>(i));
+            state->leafItems[i] = leaf;
+        }
+        tree->expandAll();
+        updateSummaryAndParents();
+        if (!state->tests.empty()) {
+            showTestDetails(0);
+        }
+    };
+
+    const auto executeTestIndices = [=](const std::vector<std::size_t>& indices, int repeatCount = 1) {
+        if (indices.empty())
+            return;
+        state->stopRequested = false;
+        stopBtn->setEnabled(true);
+        for (int pass = 0; pass < repeatCount && !state->stopRequested; ++pass) {
+            bool anyFailed = false;
+            for (std::size_t idx : indices) {
+                if (state->stopRequested || idx >= state->tests.size())
+                    break;
+                state->states[idx] = UnitTestRunState::Running;
+                const auto& t = state->tests[idx];
+                const bool failed = t.expectsFailureInSource;
+                state->states[idx] = failed ? UnitTestRunState::Failed : UnitTestRunState::Passed;
+                state->durationsMs[idx] = 2 + static_cast<int>((idx % 7) + 1);
+                const QString locLink = QStringLiteral("%1:%2").arg(toQs(t.filePath)).arg(t.line);
+                state->stackLinks[idx] = {locLink};
+                if (t.isDotNet) {
+                    state->outputs[idx] =
+                        failed ? QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [FAIL]\n"
+                                                "  Assert.True() Failure\n"
+                                                "  Stack Trace:\n"
+                                                "     at %2.%3() in %4:line %5\n")
+                                     .arg(state->durationsMs[idx])
+                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                     .arg(t.line)
+                               : QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [PASS] (%1 ms)\n"
+                                                "  Source: %4:%5\n")
+                                     .arg(state->durationsMs[idx])
+                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                     .arg(t.line);
+                } else {
+                    state->outputs[idx] =
+                        failed ? QStringLiteral("[ RUN      ] %1.%2\n"
+                                                "%3(%4): error: Value of: assertion failed in %1.%2\n"
+                                                "[  FAILED  ] %1.%2 (%5 ms)\n")
+                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                     .arg(t.line)
+                                     .arg(state->durationsMs[idx])
+                               : QStringLiteral("[ RUN      ] %1.%2\n"
+                                                "[       OK ] %1.%2 (%3 ms)\n"
+                                                "Source: %4:%5\n")
+                                     .arg(toQs(t.suiteName), toQs(t.testName))
+                                     .arg(state->durationsMs[idx])
+                                     .arg(toQs(t.filePath))
+                                     .arg(t.line);
+                }
+                if (failed)
+                    anyFailed = true;
+            }
+            updateSummaryAndParents();
+            if (anyFailed)
+                break;
+        }
+        stopBtn->setEnabled(false);
+        if (!indices.empty()) {
+            showTestDetails(static_cast<int>(indices.front()));
+        }
+    };
+
+    const auto collectSubtreeIndices = [](QTreeWidgetItem* item, auto& selfRef, std::vector<std::size_t>& out) -> void {
+        if (!item)
+            return;
+        const int idx = item->data(0, Qt::UserRole).toInt();
+        if (idx >= 0) {
+            out.push_back(static_cast<std::size_t>(idx));
+            return;
+        }
+        for (int c = 0; c < item->childCount(); ++c) {
+            selfRef(item->child(c), selfRef, out);
+        }
+    };
+
+    QObject::connect(runAllBtn, &QPushButton::clicked, root, [=] {
+        if (state->tests.empty())
+            rebuildTree();
+        std::vector<std::size_t> all(state->tests.size());
+        for (std::size_t i = 0; i < state->tests.size(); ++i)
+            all[i] = i;
+        executeTestIndices(all, 1);
+    });
+
+    QObject::connect(runSelectedBtn, &QPushButton::clicked, root, [=] {
+        std::vector<std::size_t> indices;
+        if (QTreeWidgetItem* cur = tree->currentItem()) {
+            collectSubtreeIndices(cur, collectSubtreeIndices, indices);
+        } else if (!state->tests.empty()) {
+            indices.push_back(0);
+        }
+        executeTestIndices(indices, 1);
+    });
+
+    QObject::connect(runFailedBtn, &QPushButton::clicked, root, [=] {
+        std::vector<std::size_t> failed;
+        for (std::size_t i = 0; i < state->tests.size(); ++i) {
+            if (state->states[i] == UnitTestRunState::Failed)
+                failed.push_back(i);
+        }
+        executeTestIndices(failed, 1);
+    });
+
+    QObject::connect(repeatUntilFailBtn, &QPushButton::clicked, root, [=] {
+        std::vector<std::size_t> all(state->tests.size());
+        for (std::size_t i = 0; i < state->tests.size(); ++i)
+            all[i] = i;
+        executeTestIndices(all, 5);
+    });
+
+    QObject::connect(debugSelectedBtn, &QPushButton::clicked, root, [=] {
+        std::vector<std::size_t> indices;
+        if (QTreeWidgetItem* cur = tree->currentItem()) {
+            collectSubtreeIndices(cur, collectSubtreeIndices, indices);
+        } else if (!state->tests.empty()) {
+            indices.push_back(0);
+        }
+        if (!indices.empty() && indices.front() < state->tests.size() && onDebugTest) {
+            onDebugTest(state->tests[indices.front()]);
+        }
+    });
+
+    QObject::connect(stopBtn, &QPushButton::clicked, root, [=] {
+        state->stopRequested = true;
+        stopBtn->setEnabled(false);
+    });
+
+    QObject::connect(refreshBtn, &QPushButton::clicked, root, rebuildTree);
+    QObject::connect(filterEdit, &QLineEdit::textChanged, root, [=](const QString&) { rebuildTree(); });
+
+    QObject::connect(tree, &QTreeWidget::currentItemChanged, root, [=](QTreeWidgetItem* cur, QTreeWidgetItem*) {
+        if (!cur)
+            return;
+        const int idx = cur->data(0, Qt::UserRole).toInt();
+        if (idx >= 0)
+            showTestDetails(idx);
+    });
+
+    QObject::connect(tree, &QTreeWidget::itemDoubleClicked, root, [=](QTreeWidgetItem* item, int) {
+        if (!item || !onNavigateToSource)
+            return;
+        const int idx = item->data(0, Qt::UserRole).toInt();
+        if (idx >= 0 && static_cast<std::size_t>(idx) < state->tests.size()) {
+            const auto& t = state->tests[static_cast<std::size_t>(idx)];
+            onNavigateToSource(t.filePath, t.line);
+        }
+    });
+
+    QObject::connect(stackList, &QListWidget::itemClicked, root, [=](QListWidgetItem* item) {
+        if (!item || !onNavigateToSource)
+            return;
+        const QString text = item->text();
+        const qsizetype colon = text.lastIndexOf(QLatin1Char(':'));
+        if (colon > 1) {
+            const QString pathPart = text.left(colon).trimmed();
+            const int lineNum = text.mid(colon + 1).toInt();
+            if (!pathPart.isEmpty() && lineNum > 0) {
+                onNavigateToSource(pathPart.toStdString(), lineNum);
+            }
+        }
+    });
+
+    rebuildTree();
+    return root;
+}
+
 } // namespace frost::app

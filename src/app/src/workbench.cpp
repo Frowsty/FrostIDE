@@ -1104,6 +1104,20 @@ void Workbench::registerActions() {
         },
         [this] { return m_window != nullptr; });
     add(
+        "window.unitTests", "Unit Tests",
+        [this] {
+            if (m_window)
+                m_window->toolWindows().toggle(kUnitTestsToolWindow);
+        },
+        [this] { return m_window != nullptr; });
+    add(
+        "window.services", "Unit Tests (Alt+8)",
+        [this] {
+            if (m_window)
+                m_window->toolWindows().toggle(kUnitTestsToolWindow);
+        },
+        [this] { return m_window != nullptr; });
+    add(
         "application.switchVersion", "Switch IDE Version...",
         [this] { showVersionSwitcher(); },
         [this] { return activeTopWindow() != nullptr; });
@@ -2119,6 +2133,27 @@ void Workbench::attachToolWindows() {
     };
     if (auto added = windows.add(std::move(asmSpec)); !added) {
         log::warn(kLog, "asm viewer tool window: {}", added.error().describe());
+    }
+
+    ui::ToolWindowSpec unitTestsSpec;
+    unitTestsSpec.id = std::string(kUnitTestsToolWindow);
+    unitTestsSpec.title = text("Unit Tests");
+    unitTestsSpec.side = ui::ToolWindowSide::Bottom;
+    unitTestsSpec.iconId = std::string(ui::icons::kRunRun);
+    unitTestsSpec.createContent = [this]() -> QWidget* {
+        return createUnitTestsToolWindowWidget(
+            m_window, m_services.fs,
+            [this]() -> const project::SolutionModel* { return m_solution.get(); },
+            [this]() -> std::string { return m_projectRoot; },
+            [this](const std::string& path, int line) { openLocation(qs(path), line, 1); },
+            [this](const DiscoveredTestEntry& test) {
+                openLocation(qs(test.filePath), test.line, 1);
+                if (m_window)
+                    (void)m_window->invoke("run.debug");
+            });
+    };
+    if (auto added = windows.add(std::move(unitTestsSpec)); !added) {
+        log::warn(kLog, "unit tests tool window: {}", added.error().describe());
     }
 }
 

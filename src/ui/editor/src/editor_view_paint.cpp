@@ -71,6 +71,27 @@ std::optional<LineIndex> EditorView::foldLineAt(QPointF at) const {
     return info.kind == text::RowKind::Text && info.startsLine ? std::optional(info.line) : std::nullopt;
 }
 
+std::optional<LineIndex> EditorView::runTestMarkerLineAt(QPointF at) const {
+    const double zoom = zoomFactor();
+    const double gutter = gutterWidth();
+    const double left = gutter - (kMarkerColumn + kFoldColumn) * zoom;
+    const double right = gutter - kFoldColumn * zoom;
+    if (at.x() < left || at.x() >= right || at.y() < 0.0)
+        return std::nullopt;
+    const auto row = static_cast<std::uint64_t>(at.y() / m_lineHeight) + firstVisibleRow();
+    if (row >= m_editor->display().rowCount())
+        return std::nullopt;
+    const auto info = m_editor->display().rowInfo(text::DisplayRow{static_cast<std::uint32_t>(row)});
+    if (info.kind != text::RowKind::Text || !info.startsLine)
+        return std::nullopt;
+    for (auto it = std::ranges::lower_bound(m_markers, info.line, {}, &LineMarker::line);
+         it != m_markers.end() && it->line == info.line; ++it) {
+        if (it->severity == MarkerSeverity::RunTest)
+            return info.line;
+    }
+    return std::nullopt;
+}
+
 std::optional<LineIndex> EditorView::breakpointLineAt(QPointF at) const {
     const double gutter = gutterWidth();
     const double right = m_settings.lineNumbers ? gutter - (kMarkerColumn + kFoldColumn) * zoomFactor()
@@ -778,13 +799,16 @@ EditorDisplayList EditorView::buildDisplayList() {
                     severity = std::min(severity, it->severity);
                 }
             }
-            const double size = std::min(m_lineHeight, kMarkerColumn * zoom) * 0.6;
+            const double size = std::min(m_lineHeight, kMarkerColumn * zoom) *
+                                (severity == MarkerSeverity::RunTest ? 0.72 : 0.6);
             const double cx = gutter - kFoldColumn * zoom - kMarkerColumn * zoom / 2.0;
             const double cy = top + m_lineHeight / 2.0;
             const QColor color =
                 severity == MarkerSeverity::Error
                     ? m_colors.errorMarker
-                    : (severity == MarkerSeverity::Warning ? m_colors.warningMarker : m_colors.markerBookmark);
+                    : (severity == MarkerSeverity::Warning
+                           ? m_colors.warningMarker
+                           : (severity == MarkerSeverity::RunTest ? m_colors.changeAdded : m_colors.markerBookmark));
             list.markers.push_back(
                 DisplayMarker{QRectF(cx - size / 2.0, cy - size / 2.0, size, size), color, severity, row.line});
         }

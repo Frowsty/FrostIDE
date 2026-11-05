@@ -188,7 +188,13 @@ void RasterEditorRenderer::render(const EditorDisplayList& list, QPaintDevice& d
         painter.setPen(Qt::NoPen);
         for (const DisplayMarker& marker : list.markers) {
             painter.setBrush(marker.color);
-            painter.drawEllipse(marker.rect);
+            if (marker.severity == MarkerSeverity::RunTest) {
+                const QRectF& r = marker.rect;
+                const QPointF playTriangle[] = {r.topLeft(), QPointF(r.right(), r.center().y()), r.bottomLeft()};
+                painter.drawPolygon(playTriangle, 3);
+            } else {
+                painter.drawEllipse(marker.rect);
+            }
         }
         for (const DisplayBreakpoint& breakpoint : list.breakpoints) {
             if (breakpoint.kind == BreakpointKind::Verified) {

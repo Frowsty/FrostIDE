@@ -144,6 +144,34 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
 createAsmViewerToolWindowWidget(QWidget* parent,
                                 std::function<std::pair<std::string, int>()> activeFileAndLineProvider);
 
+struct DiscoveredTestEntry {
+    std::string solutionName;
+    std::string projectName;
+    std::string projectPath;
+    std::string suiteName;
+    std::string testName;
+    std::string filePath;
+    int line = 1; // 1-based source line
+    bool isDotNet = false;
+    bool isEntryPoint = false;
+    bool expectsFailureInSource = false;
+};
+
+[[nodiscard]] std::vector<DiscoveredTestEntry>
+discoverTestsAndEntryPointsInFile(std::string_view filePath, std::string_view content,
+                                  std::string_view projectName = {}, std::string_view projectPath = {},
+                                  std::string_view solutionName = {});
+
+[[nodiscard]] std::vector<DiscoveredTestEntry>
+discoverWorkspaceUnitTests(io::IFileSystem& fs, const project::SolutionModel* solution,
+                           std::string_view workspaceRoot);
+
+[[nodiscard]] QWidget* createUnitTestsToolWindowWidget(
+    QWidget* parent, io::IFileSystem& fs, std::function<const project::SolutionModel*()> solutionProvider,
+    std::function<std::string()> workspaceRootProvider,
+    std::function<void(const std::string& path, int line)> onNavigateToSource,
+    std::function<void(const DiscoveredTestEntry& test)> onDebugTest = {});
+
 void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, const std::string& filePath,
                             const std::string& currentContent,
                             std::function<void(const std::string& restoredContent)> onRestore);
