@@ -14,6 +14,7 @@
 #include "frost/sched/lane.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/ui/debug_controller.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "cmake_integration.hpp"
@@ -792,7 +793,7 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
     auto added = workbench.m_window->toolWindows().add({"frostEngine",
                                                         QStringLiteral("FrostEngine"),
                                                         ui::ToolWindowSide::Bottom,
-                                                        {},
+                                                        std::string(ui::icons::kRunRun),
                                                         {},
                                                         [panel] { return panel; },
                                                         240});

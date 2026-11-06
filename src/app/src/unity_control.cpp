@@ -7,6 +7,7 @@
 #include "frost/lang/json.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "project_open_broker.hpp"
@@ -401,7 +402,7 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     m_impl->status = new QLabel(QStringLiteral("Disconnected"), panel);
     layout->addWidget(m_impl->status);
     auto added = workbench.m_window->toolWindows().add(
-        {"unityControls", QStringLiteral("Unity"), ui::ToolWindowSide::Bottom, {}, {}, [panel] { return panel; }, 180});
+        {"unityControls", QStringLiteral("Unity"), ui::ToolWindowSide::Bottom, std::string(ui::icons::kRunRun), {}, [panel] { return panel; }, 180});
     if (!added) {
         delete panel;
         m_impl->stopped = true;

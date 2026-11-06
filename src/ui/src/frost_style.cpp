@@ -5,6 +5,7 @@
 
 #include "frost/ui/frost_style.hpp"
 
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_engine.hpp"
 
 #include "device_pixels.hpp"
@@ -12,15 +13,23 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
+#include <QEvent>
+#include <QLinearGradient>
 #include <QMenu>
 #include <QPaintDevice>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QRadialGradient>
 #include <QStyleFactory>
 #include <QStyleOption>
 #include <QTabBar>
 #include <QTreeView>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -75,6 +84,123 @@ void setEnabledGroups(QPalette& palette, QPalette::ColorRole role, const QColor&
     palette.setColor(QPalette::Active, role, color);
     palette.setColor(QPalette::Inactive, role, color);
 }
+
+void paintMenuEllipticalGlow(QPainter* painter, QPointF center, qreal radiusX, qreal radiusY, QColor color,
+                             int peakAlpha) {
+    if (radiusX <= 1.0 || radiusY <= 1.0 || peakAlpha <= 0) {
+        return;
+    }
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->translate(center);
+    painter->scale(radiusX, radiusY);
+
+    QRadialGradient grad(QPointF(0.0, 0.0), 1.0);
+    const auto withAlpha = [&](qreal factor) {
+        QColor c = color;
+        c.setAlpha(std::clamp(static_cast<int>(peakAlpha * factor), 0, 255));
+        return c;
+    };
+    grad.setColorAt(0.00, withAlpha(1.00));
+    grad.setColorAt(0.25, withAlpha(0.78));
+    grad.setColorAt(0.50, withAlpha(0.45));
+    grad.setColorAt(0.75, withAlpha(0.16));
+    grad.setColorAt(1.00, withAlpha(0.00));
+
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(grad);
+    painter->drawRect(QRectF(-1.0, -1.0, 2.0, 2.0));
+    painter->restore();
+}
+
+class ComboBoxPopupFilter final : public QObject {
+public:
+    explicit ComboBoxPopupFilter(QObject* parent = nullptr) : QObject(parent) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event != nullptr &&
+            (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress ||
+             event->type() == QEvent::Show)) {
+            if (auto* combo = qobject_cast<QComboBox*>(watched)) {
+                if (QAbstractItemView* view = combo->view()) {
+                    const QFontMetrics fm(combo->font());
+                    int maxTextW = 0;
+                    for (int i = 0; i < combo->count(); ++i) {
+                        maxTextW = std::max(maxTextW, fm.horizontalAdvance(combo->itemText(i)));
+                    }
+                    const FrostStyle* frost = FrostStyle::current();
+                    const int pad = frost != nullptr ? frost->scale().px(34) : 34;
+                    view->setMinimumWidth(std::max(combo->width(), maxTextW + pad));
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+#ifdef _WIN32
+void applyRoundedPopupDwmShadow(QWidget* popup) {
+    if (popup == nullptr || popup->internalWinId() == 0) {
+        return;
+    }
+    const HWND hwnd = reinterpret_cast<HWND>(popup->internalWinId());
+    if (hwnd == nullptr) {
+        return;
+    }
+    // Remove legacy Windows 2000/XP rectangular CS_DROPSHADOW so Windows 11 DWM renders its
+    // smooth, wide, diffused rounded popup elevation shadow instead.
+    const ULONG_PTR clsStyle = GetClassLongPtrW(hwnd, GCL_STYLE);
+    if ((clsStyle & static_cast<ULONG_PTR>(CS_DROPSHADOW)) != 0) {
+        SetClassLongPtrW(hwnd, GCL_STYLE, static_cast<LONG_PTR>(clsStyle & ~static_cast<ULONG_PTR>(CS_DROPSHADOW)));
+    }
+
+    using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    static const DwmSetWindowAttributeFn dwmSetAttr = []() -> DwmSetWindowAttributeFn {
+        HMODULE mod = GetModuleHandleW(L"dwmapi.dll");
+        if (mod == nullptr) {
+            mod = LoadLibraryW(L"dwmapi.dll");
+        }
+        return mod != nullptr
+                   ? reinterpret_cast<DwmSetWindowAttributeFn>(GetProcAddress(mod, "DwmSetWindowAttribute"))
+                   : nullptr;
+    }();
+    if (dwmSetAttr == nullptr) {
+        return;
+    }
+
+    const FrostStyle* frost = FrostStyle::current();
+    const QColor bg = frost != nullptr ? frost->color(ColorKey::MenuBackground) : popup->palette().color(QPalette::Window);
+    const QColor border = frost != nullptr ? frost->color(ColorKey::PopupBorderColor) : popup->palette().color(QPalette::Mid);
+
+    // DWMWA_USE_IMMERSIVE_DARK_MODE (20)
+    const BOOL darkMode = bg.lightness() < 128 ? TRUE : FALSE;
+    dwmSetAttr(hwnd, 20, &darkMode, sizeof(darkMode));
+
+    // DWMWA_WINDOW_CORNER_PREFERENCE (33) = DWMWCP_ROUND (2)
+    const DWORD cornerPref = 2;
+    dwmSetAttr(hwnd, 33, &cornerPref, sizeof(cornerPref));
+
+    // DWMWA_BORDER_COLOR (34)
+    const COLORREF borderColorRef = RGB(border.red(), border.green(), border.blue());
+    dwmSetAttr(hwnd, 34, &borderColorRef, sizeof(borderColorRef));
+}
+
+class MenuPopupDwmFilter final : public QObject {
+public:
+    explicit MenuPopupDwmFilter(QObject* parent = nullptr) : QObject(parent) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event != nullptr && (event->type() == QEvent::Show || event->type() == QEvent::WinIdChange)) {
+            if (auto* w = qobject_cast<QWidget*>(watched)) {
+                applyRoundedPopupDwmShadow(w);
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+#endif
 
 } // namespace
 
@@ -151,12 +277,32 @@ void FrostStyle::polish(QPalette& palette) {
 void FrostStyle::polish(QWidget* widget) {
     QProxyStyle::polish(widget);
     if (qobject_cast<QAbstractButton*>(widget) != nullptr || qobject_cast<QComboBox*>(widget) != nullptr ||
-        qobject_cast<QTabBar*>(widget) != nullptr) {
+        qobject_cast<QTabBar*>(widget) != nullptr || qobject_cast<QMenu*>(widget) != nullptr) {
         widget->setAttribute(Qt::WA_Hover, true);
+    }
+    if (auto* combo = qobject_cast<QComboBox*>(widget)) {
+        static constexpr const char* kComboFilterProp = "_frost_combo_popup_filter";
+        if (!combo->property(kComboFilterProp).toBool()) {
+            combo->setProperty(kComboFilterProp, true);
+            combo->installEventFilter(new ComboBoxPopupFilter(combo));
+        }
     }
     if (auto* view = qobject_cast<QAbstractItemView*>(widget)) {
         view->viewport()->setAttribute(Qt::WA_Hover, true);
     }
+    if (auto* dialog = qobject_cast<QDialog*>(widget); dialog != nullptr && !dialog->inherits("QFileDialog")) {
+        installDialogChrome(dialog, dialog->isSizeGripEnabled());
+    }
+#ifdef _WIN32
+    if (qobject_cast<QMenu*>(widget) != nullptr ||
+        (widget != nullptr && (widget->windowFlags() & Qt::Popup) == Qt::Popup)) {
+        static constexpr const char* kFilterProp = "_frost_dwm_popup_filter";
+        if (!widget->property(kFilterProp).toBool()) {
+            widget->setProperty(kFilterProp, true);
+            widget->installEventFilter(new MenuPopupDwmFilter(widget));
+        }
+    }
+#endif
 }
 
 void FrostStyle::unpolish(QWidget* widget) { QProxyStyle::unpolish(widget); }
@@ -170,6 +316,9 @@ int FrostStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, cons
     case PM_ToolBarIconSize: return metricPx(MetricKey::ToolbarIconSize);
     case PM_ScrollBarExtent: return metricPx(MetricKey::ScrollBarWidth);
     case PM_DefaultFrameWidth: return 1;
+    case PM_MenuPanelWidth: return 1;
+    case PM_MenuHMargin: return m_scale.px(4);
+    case PM_MenuVMargin: return m_scale.px(6);
     case PM_FocusFrameHMargin:
     case PM_FocusFrameVMargin: return metricPx(MetricKey::ComponentFocusWidth);
     case PM_ButtonMargin: return metricPx(MetricKey::ComponentPaddingH);
@@ -201,8 +350,17 @@ QSize FrostStyle::sizeFromContents(ContentsType type, const QStyleOption* option
                                                                            : MetricKey::ListRowHeight));
         break;
     case CT_MenuItem:
-        if (const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option);
-            item == nullptr || item->menuItemType != QStyleOptionMenuItem::Separator) {
+        if (const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option)) {
+            if (item->menuItemType == QStyleOptionMenuItem::Separator) {
+                result.setHeight(m_scale.px(9));
+            } else {
+                atLeast(metricPx(MetricKey::MenuItemHeight));
+                if (widget != nullptr && widget->isVisible()) {
+                    atLeast(m_scale.px(28));
+                }
+                result.rwidth() += m_scale.px(20);
+            }
+        } else {
             atLeast(metricPx(MetricKey::MenuItemHeight));
         }
         break;
@@ -369,7 +527,22 @@ void FrostStyle::drawItemPanel(const QStyleOption* option, QPainter* painter, co
         fill = option->palette.color(QPalette::AlternateBase);
     }
     if (fill.isValid() && fill.alpha() > 0) {
-        painter->fillRect(option->rect, fill);
+        if (!tree && (selected || hover)) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            const QRectF pill = QRectF(option->rect).adjusted(2.0, 1.0, -2.0, -1.0);
+            const qreal radius = m_scale.px(6.0);
+            fillRounded(painter, pill, radius, fill);
+            if (selected) {
+                QColor innerSpec(255, 255, 255, fill.lightness() < 128 ? 22 : 60);
+                painter->setPen(QPen(innerSpec, 1.0));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
+            }
+            painter->restore();
+        } else {
+            painter->fillRect(option->rect, fill);
+        }
     }
 }
 
@@ -393,6 +566,43 @@ void FrostStyle::drawComplexControl(ComplexControl control, const QStyleOptionCo
     const auto* combo = qstyleoption_cast<const QStyleOptionComboBox*>(option);
     if (control != CC_ComboBox || combo == nullptr) {
         QProxyStyle::drawComplexControl(control, option, painter, widget);
+        return;
+    }
+    // Rider header combo boxes (Solution Configuration & Run Configuration inside MainToolbar)
+    // render as flat borderless pills with hover fill and a clean chevron arrow.
+    if (widget != nullptr && widget->parentWidget() != nullptr &&
+        widget->parentWidget()->objectName() == QStringLiteral("mainToolbar")) {
+        const bool enabled = (combo->state & State_Enabled) != 0;
+        const bool hover = enabled && (combo->state & State_MouseOver) != 0;
+        const bool pressed = enabled && (combo->state & (State_Sunken | State_On)) != 0;
+        const bool focus = enabled && (combo->state & State_HasFocus) != 0;
+        const QRectF pillRect = QRectF(combo->rect).adjusted(1.0, 2.0, -1.0, -2.0);
+        const qreal radius = m_scale.px(6.0);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        if (pressed || hover) {
+            fillRounded(painter, pillRect, radius,
+                        color(pressed ? ColorKey::ButtonPressedBackground : ColorKey::ButtonHoverBackground));
+        }
+        if (focus) {
+            drawFocusRing(pillRect, radius, painter);
+        }
+        if ((combo->subControls & SC_ComboBoxArrow) != 0) {
+            const QRect arrow = subControlRect(CC_ComboBox, combo, SC_ComboBoxArrow, widget);
+            const QColor chevronColor =
+                enabled ? color(ColorKey::LabelSecondaryForeground) : color(ColorKey::LabelDisabledForeground);
+            painter->setPen(QPen(chevronColor, std::max<qreal>(1.4, m_scale.px(1.5)), Qt::SolidLine, Qt::RoundCap,
+                                 Qt::RoundJoin));
+            painter->setBrush(Qt::NoBrush);
+            const QPointF c = QRectF(arrow).center();
+            const qreal d = m_scale.px(3.0);
+            QPainterPath path;
+            path.moveTo(c.x() - d, c.y() - d * 0.45);
+            path.lineTo(c.x(), c.y() + d * 0.55);
+            path.lineTo(c.x() + d, c.y() - d * 0.45);
+            painter->drawPath(path);
+        }
+        painter->restore();
         return;
     }
     // A text field's frame and fill in the ComboBox colours (focus ring included), then the arrow.
@@ -428,13 +638,47 @@ void FrostStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* opt
     case PE_IndicatorRadioButton: drawCheckIndicator(option, painter, true); return;
     case PE_PanelItemViewItem: drawItemPanel(option, painter, widget, false); return;
     case PE_PanelItemViewRow: drawItemPanel(option, painter, widget, true); return;
-    case PE_PanelMenu: painter->fillRect(option->rect, color(ColorKey::MenuBackground)); return;
-    case PE_FrameMenu:
+    case PE_PanelMenu: {
+        const QColor bg = color(ColorKey::MenuBackground);
+        painter->fillRect(option->rect, bg);
+        if (widget != nullptr && widget->isVisible() && option->rect.height() > 30) {
+            painter->save();
+            painter->setClipRect(option->rect);
+            const bool isDark = bg.lightness() < 128;
+            const QColor accent = color(ColorKey::TabbedPaneUnderlineColor);
+            paintMenuEllipticalGlow(painter,
+                                    QPointF(option->rect.left() + option->rect.width() * 0.25, option->rect.top()),
+                                    option->rect.width() * 0.85, std::min(180, option->rect.height()),
+                                    accent, isDark ? 34 : 18);
+            paintMenuEllipticalGlow(painter,
+                                    QPointF(option->rect.right() - option->rect.width() * 0.20, option->rect.bottom()),
+                                    option->rect.width() * 0.70, std::min(160, option->rect.height()),
+                                    QColor(0x7C, 0x4D, 0xFF), isDark ? 22 : 12);
+            QLinearGradient sheen(option->rect.topLeft(), option->rect.bottomLeft());
+            sheen.setColorAt(0.0, isDark ? QColor(255, 255, 255, 9) : QColor(255, 255, 255, 32));
+            sheen.setColorAt(0.5, QColor(255, 255, 255, 2));
+            sheen.setColorAt(1.0, isDark ? QColor(0, 0, 0, 12) : QColor(0, 0, 0, 6));
+            painter->fillRect(option->rect, sheen);
+            painter->restore();
+        }
+        return;
+    }
+    case PE_FrameMenu: {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const qreal radius = (widget != nullptr && widget->isVisible()) ? m_scale.px(8) : 0.0;
+        if (radius > 0.0) {
+            strokeRounded(painter, QRectF(option->rect).adjusted(1.0, 1.0, -1.0, -1.0), radius - 1.0,
+                          QColor(255, 255, 255, 16), deviceWidth(painter, 1.0));
+        }
+        strokeRounded(painter, QRectF(option->rect), radius, color(ColorKey::PopupBorderColor),
+                      deviceWidth(painter, 1.0));
+        painter->restore();
+        return;
+    }
     case PE_FrameTabWidget:
         painter->save();
-        if (element == PE_FrameTabWidget) {
-            painter->fillRect(option->rect, color(ColorKey::PopupBackground));
-        }
+        painter->fillRect(option->rect, color(ColorKey::PopupBackground));
         strokeRounded(painter, QRectF(option->rect), 0.0, color(ColorKey::PopupBorderColor), deviceWidth(painter, 1.0));
         painter->restore();
         return;
@@ -513,16 +757,108 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
         }
     }
     if (element == CE_MenuItem) {
-        // Menus take Menu.* rather than the palette's Text and Highlight roles (which are the
-        // TextField and List keys); Fusion draws the item with them.
         if (const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option)) {
-            QStyleOptionMenuItem copy(*item);
-            for (const QPalette::ColorRole role : {QPalette::Text, QPalette::WindowText, QPalette::ButtonText}) {
-                setEnabledGroups(copy.palette, role, color(ColorKey::MenuForeground));
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+
+            if (item->menuItemType == QStyleOptionMenuItem::EmptyArea) {
+                painter->restore();
+                return;
             }
-            setEnabledGroups(copy.palette, QPalette::Highlight, color(ColorKey::MenuSelectionBackground));
-            setEnabledGroups(copy.palette, QPalette::HighlightedText, color(ColorKey::MenuSelectionForeground));
-            QProxyStyle::drawControl(element, &copy, painter, widget);
+            if (item->menuItemType == QStyleOptionMenuItem::Separator) {
+                const int pad = m_scale.px(10);
+                const int y = item->rect.center().y();
+                painter->fillRect(QRect(item->rect.left() + pad, y,
+                                        std::max(1, item->rect.width() - pad * 2), 1),
+                                  color(ColorKey::SeparatorColor));
+                painter->restore();
+                return;
+            }
+
+            const bool enabled = (item->state & State_Enabled) != 0;
+            const bool selected = enabled && (item->state & State_Selected) != 0;
+            const bool isMenuWidget = qobject_cast<const QMenu*>(widget) != nullptr;
+            const bool isLiveMenu = isMenuWidget && widget->isVisible() && widget->height() > 30;
+
+            if (!isLiveMenu && !selected) {
+                painter->fillRect(item->rect, color(ColorKey::MenuBackground));
+            }
+
+            if (selected) {
+                const qreal hInset = isLiveMenu ? m_scale.px(4) : m_scale.px(2);
+                const QRectF pillRect = QRectF(item->rect).adjusted(hInset, 1.0, -hInset, -1.0);
+                const qreal radius = m_scale.px(5);
+                fillRounded(painter, pillRect, radius, color(ColorKey::MenuSelectionBackground));
+                if (isLiveMenu) {
+                    strokeRounded(painter, pillRect, radius, QColor(255, 255, 255, 22), deviceWidth(painter, 1.0));
+                }
+            }
+
+            const QColor fg = !enabled ? color(ColorKey::LabelDisabledForeground)
+                                       : color(selected ? ColorKey::MenuSelectionForeground : ColorKey::MenuForeground);
+            const QColor shortcutFg = !enabled ? color(ColorKey::LabelDisabledForeground)
+                                               : (selected ? fg : color(ColorKey::LabelSecondaryForeground));
+
+            const int iconPx = metricPx(MetricKey::IconSize);
+            const int iconColWidth = m_scale.px(28);
+            const QRect iconRect(item->rect.left() + m_scale.px(8),
+                                 item->rect.center().y() - iconPx / 2, iconPx, iconPx);
+
+            if (!item->icon.isNull()) {
+                const QIcon::Mode mode = !enabled ? QIcon::Disabled : (selected ? QIcon::Active : QIcon::Normal);
+                item->icon.paint(painter, iconRect, Qt::AlignCenter, mode,
+                                 item->checked ? QIcon::On : QIcon::Off);
+            } else if (item->checked && isMenuWidget) {
+                painter->setPen(QPen(fg, std::max<qreal>(1.6, m_scale.px(1.6)),
+                                     Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                painter->setBrush(Qt::NoBrush);
+                const QPointF c = QRectF(iconRect).center();
+                const qreal d = m_scale.px(4);
+                QPainterPath check;
+                check.moveTo(c.x() - d, c.y() + d * 0.1);
+                check.lineTo(c.x() - d * 0.25, c.y() + d * 0.85);
+                check.lineTo(c.x() + d, c.y() - d * 0.75);
+                painter->drawPath(check);
+            }
+
+            const qsizetype tabPos = item->text.indexOf(QLatin1Char('\t'));
+            const QString mainText = tabPos >= 0 ? item->text.left(tabPos) : item->text;
+            const QString shortcutText = tabPos >= 0 ? item->text.mid(tabPos + 1) : QString();
+
+            const int textLeft = isMenuWidget
+                                     ? (item->rect.left() + iconColWidth + m_scale.px(2))
+                                     : (!item->icon.isNull() ? (item->rect.left() + m_scale.px(12) + iconPx)
+                                                             : (item->rect.left() + m_scale.px(8)));
+            const int rightPad =
+                isMenuWidget ? m_scale.px(item->menuItemType == QStyleOptionMenuItem::SubMenu ? 24 : 12)
+                             : m_scale.px(8);
+            const QRect textRect(textLeft, item->rect.top(),
+                                 std::max(0, item->rect.right() - rightPad - textLeft), item->rect.height());
+
+            painter->setFont(item->font);
+            painter->setPen(fg);
+            painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextShowMnemonic, mainText);
+
+            if (!shortcutText.isEmpty()) {
+                painter->setPen(shortcutFg);
+                painter->drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, shortcutText);
+            }
+
+            if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
+                painter->setPen(QPen(shortcutFg, std::max<qreal>(1.4, m_scale.px(1.4)),
+                                     Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                painter->setBrush(Qt::NoBrush);
+                const qreal cx = item->rect.right() - m_scale.px(13);
+                const qreal cy = item->rect.center().y();
+                const qreal d = m_scale.px(3);
+                QPainterPath chevron;
+                chevron.moveTo(cx - d * 0.5, cy - d);
+                chevron.lineTo(cx + d * 0.6, cy);
+                chevron.lineTo(cx - d * 0.5, cy + d);
+                painter->drawPath(chevron);
+            }
+
+            painter->restore();
             return;
         }
     }
@@ -583,6 +919,21 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
     const bool hover = (option->state & State_Enabled) != 0 && (option->state & State_MouseOver) != 0;
     const QRectF rect(option->rect);
     painter->save();
+    if (widget != nullptr && widget->objectName() == QStringLiteral("editorTabBar")) {
+        painter->fillRect(rect,
+                          color(selected ? ColorKey::EditorBackground
+                                : hover  ? ColorKey::ButtonHoverBackground
+                                         : ColorKey::MainWindowBackground));
+        const QColor sep = color(ColorKey::SeparatorColor);
+        painter->fillRect(QRectF(rect.right() - 1.0, rect.top() + 6.0, 1.0, std::max(0.0, rect.height() - 12.0)), sep);
+        if (selected) {
+            const qreal t = deviceWidth(painter, m_scale.px(3.0));
+            painter->fillRect(QRectF(rect.left(), rect.bottom() - t, rect.width(), t),
+                              color(ColorKey::TabbedPaneUnderlineColor));
+        }
+        painter->restore();
+        return;
+    }
     if (hover && !selected) {
         painter->fillRect(rect, color(ColorKey::TabbedPaneHoverBackground));
     }

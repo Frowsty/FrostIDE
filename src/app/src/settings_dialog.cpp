@@ -5,6 +5,8 @@
 #include "frost/core/assert.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/tr.hpp"
 
 #include "settings_keymap_page.hpp"
@@ -14,10 +16,14 @@
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
@@ -147,6 +153,40 @@ void setControl(QWidget* control, const settings::Schema& schema, const settings
     case ValueType::RecordList: FROST_PRE(false); break;
     }
 }
+
+class SettingsCategoryCard final : public QFrame {
+public:
+    explicit SettingsCategoryCard(QWidget* parent = nullptr) : QFrame(parent) {
+        setFrameShape(QFrame::NoFrame);
+        setAttribute(Qt::WA_OpaquePaintEvent, false);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const ui::FrostStyle* style = ui::FrostStyle::current();
+        const QColor winBg =
+            style != nullptr ? style->color(ui::ColorKey::MainWindowBackground) : palette().color(QPalette::Window);
+        const QColor sep =
+            style != nullptr ? style->color(ui::ColorKey::SeparatorColor) : palette().color(QPalette::Mid);
+        const bool dark = winBg.lightness() < 128;
+
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QColor fill = dark ? winBg.darker(118) : winBg.lighter(106);
+        fill.setAlpha(dark ? 180 : 205);
+        painter.setPen(QPen(sep, 1.0));
+        painter.setBrush(fill);
+        painter.drawRoundedRect(r, 10.0, 10.0);
+
+        QColor innerRim = dark ? QColor(255, 255, 255, 16) : QColor(255, 255, 255, 110);
+        painter.setPen(QPen(innerRim, 1.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(r.adjusted(1.0, 1.0, -1.0, -1.0), 9.0, 9.0);
+    }
+};
+
 } // namespace
 
 struct SettingsDialog::Row {
@@ -182,24 +222,61 @@ void SettingsDialog::build() {
         text("Application settings apply to all projects. Project or file settings can override them."), this);
     scope->setWordWrap(true);
     outer->addWidget(scope);
+
+    auto* content = new QHBoxLayout();
+    content->setSpacing(12);
+    auto* leftSidebar = new QVBoxLayout();
+    leftSidebar->setContentsMargins(0, 0, 0, 0);
+    leftSidebar->setSpacing(6);
     m_search = new QLineEdit(this);
     m_search->setObjectName(QStringLiteral("settingsSearch"));
     m_search->setPlaceholderText(text("Search settings"));
-    outer->addWidget(m_search);
-    auto* content = new QHBoxLayout();
-    m_categories = new QListWidget(this);
+    m_search->setClearButtonEnabled(true);
+    if (const ui::FrostStyle* style = ui::FrostStyle::current(); style != nullptr) {
+        if (const QIcon searchIcon = style->icon(ui::icons::kActionsSearch); !searchIcon.isNull()) {
+            m_search->addAction(searchIcon, QLineEdit::LeadingPosition);
+        }
+    }
+    auto* categoryCard = new SettingsCategoryCard(this);
+    categoryCard->setMaximumWidth(228);
+    categoryCard->setMinimumWidth(168);
+    auto* categoryCardLayout = new QVBoxLayout(categoryCard);
+    categoryCardLayout->setContentsMargins(5, 5, 5, 5);
+    categoryCardLayout->setSpacing(0);
+
+    m_categories = new QListWidget(categoryCard);
     m_categories->setObjectName(QStringLiteral("settingsCategories"));
-    m_categories->setMaximumWidth(200);
-    m_categories->setMinimumWidth(140);
+    m_categories->setFrameShape(QFrame::NoFrame);
+    m_categories->setSpacing(2);
+    m_categories->setAutoFillBackground(false);
+    QPalette catPal = m_categories->palette();
+    catPal.setColor(QPalette::Base, Qt::transparent);
+    catPal.setColor(QPalette::Window, Qt::transparent);
+    m_categories->setPalette(catPal);
+    if (QWidget* vp = m_categories->viewport()) {
+        vp->setAutoFillBackground(false);
+        vp->setPalette(catPal);
+        vp->setAttribute(Qt::WA_Hover, true);
+    }
+    categoryCardLayout->addWidget(m_categories, 1);
+    leftSidebar->addWidget(m_search);
+    leftSidebar->addWidget(categoryCard, 1);
+
+    auto* sidebarDivider = new QFrame(this);
+    sidebarDivider->setFrameShape(QFrame::VLine);
+    sidebarDivider->setFrameShadow(QFrame::Plain);
+
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("settingsPages"));
-    content->addWidget(m_categories);
+    content->addLayout(leftSidebar);
+    content->addWidget(sidebarDivider);
     content->addWidget(m_pages, 1);
     outer->addLayout(content, 1);
     std::array<QVBoxLayout*, kPages.size()> layouts{};
     for (std::size_t i = 0; i < kPages.size(); ++i) {
         m_categories->addItem(text(kPages[i]));
         auto* scroll = new QScrollArea(m_pages);
+        scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidgetResizable(true);
         auto* page = new QWidget(scroll);
         layouts[i] = new QVBoxLayout(page);
@@ -207,6 +284,9 @@ void SettingsDialog::build() {
         auto* heading = new QLabel(text(kPages[i]), page);
         QFont font = heading->font();
         font.setBold(true);
+        if (font.pointSizeF() > 8.0) {
+            font.setPointSizeF(font.pointSizeF() * 1.15);
+        }
         heading->setFont(font);
         layouts[i]->addWidget(heading);
         scroll->setWidget(page);
@@ -289,9 +369,13 @@ void SettingsDialog::build() {
         rowLayout->addLayout(line);
         auto* description = new QLabel(text(spec->description), row->container);
         description->setWordWrap(true);
+        QPalette descPal = description->palette();
+        descPal.setColor(QPalette::WindowText, descPal.color(QPalette::PlaceholderText));
+        description->setPalette(descPal);
         rowLayout->addWidget(description);
         row->source = new QLabel(row->container);
         row->source->setWordWrap(true);
+        row->source->setVisible(false);
         rowLayout->addWidget(row->source);
         const std::size_t index = m_rows.size();
         if (auto* check = qobject_cast<QCheckBox*>(row->control))
@@ -364,6 +448,7 @@ void SettingsDialog::reload() {
             note += text("The open project overrides this application setting.");
         }
         row->source->setText(note);
+        row->source->setVisible(!note.isEmpty());
     }
     m_keymapPage->load(*document, m_store.registry());
     m_loading = false;

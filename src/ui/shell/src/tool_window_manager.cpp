@@ -20,15 +20,22 @@
 #include "frost/ui/island_frame.hpp"
 
 #include "shell_util.hpp"
+#include <QAbstractItemView>
 #include <QApplication>
+#include <QComboBox>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QSplitter>
+#include <QSplitterHandle>
 #include <QStackedWidget>
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
+#include <QTextEdit>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -50,6 +57,292 @@ bool isValidWindowId(std::string_view id) noexcept {
 
 constexpr std::size_t index(ToolWindowSide side) noexcept { return static_cast<std::size_t>(side); }
 
+// Secondary tool windows are unpinned from the vertical stripe by default in Rider New UI and
+// appear on the stripe when opened or pinned via the More Tool Windows (⋯) menu.
+bool isSecondaryToolWindow(std::string_view id) noexcept {
+    static constexpr std::array<std::string_view, 11> kSecondary{
+        "fileSystem", "cmakeTargets", "nuget",      "unitTests",   "findUsages", "todo",
+        "gitDiff",    "gitConsole",   "cmake",      "frostEngine", "unityControls",
+    };
+    return std::ranges::find(kSecondary, id) != kSecondary.end();
+}
+
+// Canonical Rider vertical stripe order for top-left and bottom-left tool window groups.
+int stripeOrderRank(ToolWindowSide side, std::string_view id) noexcept {
+    if (side == ToolWindowSide::Left) {
+        if (id == "project")
+            return 0;
+        if (id == "commit")
+            return 1;
+        if (id == "structure")
+            return 2;
+        if (id == "fileSystem")
+            return 3;
+        if (id == "cmakeTargets")
+            return 4;
+        return 100;
+    }
+    if (side == ToolWindowSide::Bottom) {
+        if (id == "build")
+            return 0;
+        if (id == "run")
+            return 1;
+        if (id == "debug")
+            return 2;
+        if (id == "find")
+            return 3;
+        if (id == "terminal")
+            return 4;
+        if (id == "problems")
+            return 5;
+        if (id == "gitLog")
+            return 6;
+        if (id == "unitTests")
+            return 7;
+        if (id == "nuget")
+            return 8;
+        if (id == "findUsages")
+            return 9;
+        if (id == "todo")
+            return 10;
+        if (id == "cmake")
+            return 11;
+        return 100;
+    }
+    if (id == "notifications")
+        return 0;
+    if (id == "asmViewer")
+        return 1;
+    return 100;
+}
+
+class ToolWindowHeaderSeparator final : public QFrame {
+public:
+    explicit ToolWindowHeaderSeparator(QWidget* parent = nullptr) : QFrame(parent) {
+        setFrameShape(QFrame::NoFrame);
+        setFixedHeight(1);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor color = frost != nullptr ? frost->color(ColorKey::SeparatorColor) : palette().color(QPalette::Mid);
+        painter.fillRect(rect(), color);
+    }
+};
+
+class RiderSplitterHandle final : public QSplitterHandle {
+public:
+    RiderSplitterHandle(Qt::Orientation orientation, QSplitter* parent) : QSplitterHandle(orientation, parent) {}
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor color = frost != nullptr ? frost->color(ColorKey::SeparatorColor) : palette().color(QPalette::Mid);
+        painter.fillRect(rect(), color);
+    }
+};
+
+class RiderSplitter final : public QSplitter {
+public:
+    RiderSplitter(Qt::Orientation orientation, QWidget* parent = nullptr) : QSplitter(orientation, parent) {
+        setHandleWidth(1);
+        setChildrenCollapsible(false);
+    }
+
+protected:
+    QSplitterHandle* createHandle() override { return new RiderSplitterHandle(orientation(), this); }
+};
+
+void applyToolWindowChromePalette(QWidget* root) {
+    if (root == nullptr) {
+        return;
+    }
+    const FrostStyle* frost = FrostStyle::current();
+    if (frost == nullptr) {
+        return;
+    }
+    const QColor chromeBg = frost->color(ColorKey::MainWindowBackground);
+    const auto applyOne = [&chromeBg](QWidget* w) {
+        if (w == nullptr || qobject_cast<QLineEdit*>(w) != nullptr || qobject_cast<QComboBox*>(w) != nullptr) {
+            return;
+        }
+        QPalette pal = w->palette();
+        pal.setColor(QPalette::Window, chromeBg);
+        if (qobject_cast<QAbstractItemView*>(w) != nullptr) {
+            pal.setColor(QPalette::Base, chromeBg);
+            if (QWidget* vp = static_cast<QAbstractItemView*>(w)->viewport()) {
+                QPalette vpPal = vp->palette();
+                vpPal.setColor(QPalette::Base, chromeBg);
+                vpPal.setColor(QPalette::Window, chromeBg);
+                vp->setPalette(vpPal);
+            }
+        }
+        w->setPalette(pal);
+    };
+    applyOne(root);
+    const QList<QWidget*> descendants = root->findChildren<QWidget*>();
+    for (QWidget* child : descendants) {
+        applyOne(child);
+    }
+}
+
+class ToolWindowPanel final : public QFrame {
+public:
+    explicit ToolWindowPanel(QWidget* parent = nullptr) : QFrame(parent) { setFrameShape(QFrame::NoFrame); }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor bg =
+            frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : palette().color(QPalette::Window);
+        painter.fillRect(rect(), bg);
+    }
+
+    void changeEvent(QEvent* event) override {
+        if (event != nullptr && event->type() == QEvent::StyleChange) {
+            applyToolWindowChromePalette(this);
+            update();
+        }
+        QFrame::changeEvent(event);
+    }
+};
+
+class ToolWindowHeaderBar final : public QWidget {
+public:
+    explicit ToolWindowHeaderBar(ToolWindowSide side, QWidget* parent = nullptr)
+        : QWidget(parent), m_side(side) {
+        setFixedHeight(35);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor bg =
+            frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : palette().color(QPalette::Window);
+        const bool isDark = bg.lightness() < 128;
+        painter.fillRect(rect(), bg);
+
+        if (m_side == ToolWindowSide::Left) {
+            const QColor projColor = shell_detail::activeProjectColor(this);
+            shell_detail::paintEllipticalGlow(painter, QPointF(72.0, 0.0), 240.0, height() * 2.4,
+                                              projColor, isDark ? 38 : 22);
+        } else {
+            const QColor accent = frost != nullptr ? frost->color(ColorKey::TabbedPaneUnderlineColor)
+                                                   : QColor(0x35, 0x74, 0xF0);
+            shell_detail::paintEllipticalGlow(painter, QPointF(56.0, height() * 0.5), 170.0, height() * 2.0,
+                                              accent, isDark ? 26 : 16);
+        }
+        shell_detail::paintFrostedGlassSheen(painter, rect(), isDark, true);
+    }
+
+private:
+    ToolWindowSide m_side;
+};
+
+class ToolWindowSidebar final : public QWidget {
+public:
+    ToolWindowSidebar(bool borderOnRight, QWidget* parent = nullptr)
+        : QWidget(parent), m_borderOnRight(borderOnRight) {}
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor bg =
+            frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : palette().color(QPalette::Window);
+        const QColor sep = frost != nullptr ? frost->color(ColorKey::SeparatorColor) : palette().color(QPalette::Mid);
+        const QColor accent =
+            frost != nullptr ? frost->color(ColorKey::TabbedPaneUnderlineColor) : QColor(0x35, 0x74, 0xF0);
+        const bool isDark = bg.lightness() < 128;
+        painter.fillRect(rect(), bg);
+
+        // Top ambient color continuity from the Main Header's Project Gradient.
+        if (m_borderOnRight) {
+            const QColor projColor = shell_detail::activeProjectColor(this);
+            shell_detail::paintEllipticalGlow(painter, QPointF(width() * 0.5, 0.0), width() * 2.4, 130.0,
+                                              projColor, isDark ? 38 : 22);
+        }
+
+        // Ambient frosted glow behind active (checked) and hovered stripe buttons.
+        const QList<QToolButton*> buttons = findChildren<QToolButton*>();
+        for (const QToolButton* btn : buttons) {
+            if (btn == nullptr || !btn->isVisible()) {
+                continue;
+            }
+            const bool checked = btn->isCheckable() && btn->isChecked();
+            const bool hovered = btn->underMouse() && btn->isEnabled();
+            if (!checked && !hovered) {
+                continue;
+            }
+            const QPoint centerInSidebar = mapFromGlobal(btn->mapToGlobal(btn->rect().center()));
+            const int alpha = checked ? (isDark ? 56 : 36) : (isDark ? 30 : 18);
+            shell_detail::paintEllipticalGlow(painter, QPointF(centerInSidebar), width() * 1.4, 38.0,
+                                              accent, alpha);
+        }
+
+        if (m_borderOnRight) {
+            painter.fillRect(QRect(width() - 1, 0, 1, height()), sep);
+        } else {
+            painter.fillRect(QRect(0, 0, 1, height()), sep);
+        }
+    }
+
+private:
+    bool m_borderOnRight = true;
+};
+
+// Rider's More Tool Windows (⋯) button in the Left Sidebar.
+class MoreToolWindowsButton final : public QToolButton {
+public:
+    explicit MoreToolWindowsButton(QWidget* parent = nullptr) : QToolButton(parent) {
+        setAutoRaise(true);
+        setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_Hover, true);
+        setIconSize(QSize(20, 20));
+    }
+
+    [[nodiscard]] QSize sizeHint() const override { return {32, 32}; }
+    [[nodiscard]] QSize minimumSizeHint() const override { return {32, 32}; }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const FrostStyle* frost = FrostStyle::current();
+        const auto themeColor = [frost](ColorKey key, QColor fallback) {
+            return frost != nullptr ? QColor::fromRgba(frost->theme().color(key).argb) : fallback;
+        };
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const bool down = isDown() || (menu() != nullptr && menu()->isVisible());
+        const bool hovered = underMouse() && isEnabled();
+        if (down || hovered) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(down ? themeColor(ColorKey::ButtonPressedBackground, QColor(70, 74, 82))
+                                  : themeColor(ColorKey::ButtonHoverBackground, QColor(58, 61, 68)));
+            painter.drawRoundedRect(QRectF(rect()).adjusted(2.0, 2.0, -2.0, -2.0), 6.0, 6.0);
+        }
+
+        // Draw crisp horizontal 3-dots (⋯) glyph matching Rider's More Tool Windows icon.
+        const QColor dotColor = themeColor(ColorKey::LabelSecondaryForeground, QColor(165, 170, 180));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(dotColor);
+        const qreal cy = height() * 0.5;
+        const qreal cx = width() * 0.5;
+        const qreal r = 1.6;
+        for (const qreal dx : {-5.0, 0.0, 5.0}) {
+            painter.drawEllipse(QPointF(cx + dx, cy), r, r);
+        }
+    }
+};
+
 } // namespace
 
 StripeButton::StripeButton(ToolWindowSide side, QWidget* parent) : QToolButton(parent), m_side(side) {
@@ -58,71 +351,73 @@ StripeButton::StripeButton(ToolWindowSide side, QWidget* parent) : QToolButton(p
     setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover, true);
     setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    setIconSize(QSize(20, 20));
 }
 
 QSize StripeButton::sizeHint() const {
-    if (m_side == ToolWindowSide::Bottom) {
-        QSize base = QToolButton::sizeHint();
-        base.setHeight(std::max(base.height(), 28));
-        return base;
-    }
-    if (!icon().isNull()) {
-        const int extent = std::max(iconSize().width(), iconSize().height()) + 16;
-        return {extent, extent};
+    if (!icon().isNull() && !m_showLabel) {
+        return {32, 32};
     }
     const QFontMetrics metrics(font());
     const int iconExtent = icon().isNull() ? 0 : iconSize().width() + 4;
-    const int length = metrics.horizontalAdvance(text()) + iconExtent + 16;
-    const int thickness = std::max(metrics.height(), iconSize().height()) + 10;
+    const int length = metrics.horizontalAdvance(text()) + iconExtent + 18;
+    const int thickness = std::max(metrics.height(), iconSize().height()) + 12;
     return {thickness, length};
 }
 
-void StripeButton::paintEvent(QPaintEvent* event) {
+void StripeButton::paintEvent(QPaintEvent* /*event*/) {
     const FrostStyle* frost = FrostStyle::current();
     const auto themeColor = [frost](ColorKey key, QColor fallback) {
         return frost != nullptr ? QColor::fromRgba(frost->theme().color(key).argb) : fallback;
     };
 
-    if (m_side == ToolWindowSide::Bottom) {
-        QToolButton::paintEvent(event);
-        if (isChecked()) {
-            QPainter accentPainter(this);
-            accentPainter.setRenderHint(QPainter::Antialiasing, true);
-            accentPainter.setPen(Qt::NoPen);
-            accentPainter.setBrush(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
-            accentPainter.drawRoundedRect(QRectF(6.0, height() - 3.0, std::max(8, width() - 12), 3.0), 1.5, 1.5);
-        }
-        return;
-    }
-    QStylePainter painter(this);
+    QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    QStyleOptionToolButton option;
-    initStyleOption(&option);
-    if (!icon().isNull()) {
-        // The side rail uses upright icons. Its accessible name and tooltip retain the title.
-        option.text.clear();
-        option.toolButtonStyle = Qt::ToolButtonIconOnly;
-        painter.drawComplexControl(QStyle::CC_ToolButton, option);
-        if (isChecked()) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
-            const qreal barX = m_side == ToolWindowSide::Left ? 0.0 : width() - 3.0;
-            painter.drawRoundedRect(QRectF(barX, 6.0, 3.0, std::max(8, height() - 12)), 1.5, 1.5);
-        }
+
+    const bool hovered = underMouse() && isEnabled();
+    const bool checked = isChecked();
+    const bool pressed = isDown() && isEnabled();
+
+    const QColor accentColor = themeColor(ColorKey::TabbedPaneUnderlineColor,
+                                          themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
+
+    const QRectF pillRect = QRectF(rect()).adjusted(2.0, 2.0, -2.0, -2.0);
+    if (checked) {
+        // Rider New UI active tool window button: luminous #3574F0 rounded square with glass rim.
+        QLinearGradient pillGrad(pillRect.topLeft(), pillRect.bottomRight());
+        const QColor baseAccent = pressed ? accentColor.darker(112) : accentColor;
+        pillGrad.setColorAt(0.0, baseAccent.lighter(112));
+        pillGrad.setColorAt(1.0, baseAccent.darker(106));
+        painter.setPen(QPen(QColor(255, 255, 255, 48), 1.0));
+        painter.setBrush(pillGrad);
+        painter.drawRoundedRect(pillRect, 6.0, 6.0);
+    } else if (pressed) {
+        painter.setPen(QPen(QColor(255, 255, 255, 28), 1.0));
+        painter.setBrush(themeColor(ColorKey::ButtonPressedBackground, palette().color(QPalette::Midlight)));
+        painter.drawRoundedRect(pillRect, 6.0, 6.0);
+    } else if (hovered) {
+        painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
+        painter.setBrush(themeColor(ColorKey::ButtonHoverBackground, palette().color(QPalette::AlternateBase)));
+        painter.drawRoundedRect(pillRect, 6.0, 6.0);
+    }
+    if (hasFocus()) {
+        painter.setPen(QPen(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)), 1.5));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(pillRect.adjusted(1.0, 1.0, -1.0, -1.0), 5.0, 5.0);
+    }
+
+    const QIcon::Mode iconMode = !isEnabled() ? QIcon::Disabled : (checked ? QIcon::Selected : QIcon::Normal);
+
+    if (!icon().isNull() && !m_showLabel) {
+        const QSize extent = iconSize();
+        const QRect iconRect((width() - extent.width()) / 2, (height() - extent.height()) / 2, extent.width(),
+                             extent.height());
+        icon().paint(&painter, iconRect, Qt::AlignCenter, iconMode, checked ? QIcon::On : QIcon::Off);
         return;
     }
-    // The panel (hover, checked) unrotated; then the icon and text rotated.
-    option.text.clear();
-    option.icon = QIcon();
-    painter.drawComplexControl(QStyle::CC_ToolButton, option);
-    if (isChecked()) {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
-        const qreal barX = m_side == ToolWindowSide::Left ? 0.0 : width() - 3.0;
-        painter.drawRoundedRect(QRectF(barX, 6.0, 3.0, std::max(8, height() - 12)), 1.5, 1.5);
-    }
+
     painter.save();
-    if (m_side == ToolWindowSide::Left) {
+    if (m_side != ToolWindowSide::Right) {
         painter.translate(0, height());
         painter.rotate(-90);
     } else {
@@ -135,26 +430,67 @@ void StripeButton::paintEvent(QPaintEvent* event) {
         const QSize iconExtent = iconSize();
         const QRect iconRect(area.left(), area.top() + (area.height() - iconExtent.height()) / 2, iconExtent.width(),
                              iconExtent.height());
-        icon().paint(&painter, iconRect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled,
-                     isChecked() ? QIcon::On : QIcon::Off);
+        icon().paint(&painter, iconRect, Qt::AlignCenter, iconMode, checked ? QIcon::On : QIcon::Off);
         area.setLeft(iconRect.right() + 5);
     }
-    painter.setPen(palette().color(isEnabled() ? QPalette::ButtonText : QPalette::PlaceholderText));
+    painter.setPen(!isEnabled() ? themeColor(ColorKey::LabelDisabledForeground, palette().color(QPalette::PlaceholderText))
+                   : checked    ? themeColor(ColorKey::ButtonDefaultForeground, QColor(255, 255, 255))
+                                : themeColor(ColorKey::LabelForeground, palette().color(QPalette::ButtonText)));
     painter.drawText(area, Qt::AlignVCenter | Qt::AlignLeft, text());
     painter.restore();
 }
 
 ToolWindowManager::ToolWindowManager(QWidget& host, QWidget& center, IShellSettings& settings, QObject* parent)
     : QObject(parent), m_host(host), m_center(center), m_settings(settings),
-      m_horizontal(new QSplitter(Qt::Horizontal, &host)), m_vertical(new QSplitter(Qt::Vertical, m_horizontal)) {
+      m_leftSidebar(new ToolWindowSidebar(true, &host)), m_moreButton(new MoreToolWindowsButton(m_leftSidebar)),
+      m_horizontal(new RiderSplitter(Qt::Horizontal, &host)),
+      m_vertical(new RiderSplitter(Qt::Vertical, m_horizontal)) {
     setObjectName(QStringLiteral("toolWindowManager"));
+    m_leftSidebar->setObjectName(QStringLiteral("toolWindowLeftSidebar"));
+    m_moreButton->setObjectName(QStringLiteral("moreToolWindowsButton"));
+    m_moreButton->setToolTip(text("More Tool Windows"));
+    m_moreButton->setAccessibleName(text("More Tool Windows"));
+    m_moreButton->setPopupMode(QToolButton::InstantPopup);
+    auto* moreMenu = new QMenu(m_moreButton);
+    moreMenu->setObjectName(QStringLiteral("moreToolWindowsMenu"));
+    connect(moreMenu, &QMenu::aboutToShow, this, [this, moreMenu] {
+        moreMenu->clear();
+        const auto addSideGroup = [&](ToolWindowSide whichSide) {
+            bool addedAny = false;
+            for (const Window& w : m_windows) {
+                if (w.spec.side != whichSide) {
+                    continue;
+                }
+                const QString label = w.spec.shortcutText.isEmpty()
+                                          ? w.spec.title
+                                          : QStringLiteral("%1\t%2").arg(w.spec.title, w.spec.shortcutText);
+                QAction* act = moreMenu->addAction(w.button != nullptr ? w.button->icon() : QIcon(), label);
+                act->setCheckable(true);
+                act->setChecked(w.visible);
+                const std::string id = w.spec.id;
+                connect(act, &QAction::triggered, this, [this, id] { toggle(id); });
+                addedAny = true;
+            }
+            return addedAny;
+        };
+        if (addSideGroup(ToolWindowSide::Left)) {
+            moreMenu->addSeparator();
+        }
+        if (addSideGroup(ToolWindowSide::Bottom)) {
+            moreMenu->addSeparator();
+        }
+        if (addSideGroup(ToolWindowSide::Right)) {
+            moreMenu->addSeparator();
+        }
+        QAction* showNames = moreMenu->addAction(text("Show Tool Window Names"));
+        showNames->setCheckable(true);
+        showNames->setChecked(m_showStripeLabels);
+        connect(showNames, &QAction::toggled, this, [this](bool checked) { setShowStripeLabels(checked); });
+    });
+    m_moreButton->setMenu(moreMenu);
+
     m_horizontal->setObjectName(QStringLiteral("toolWindowHorizontalSplitter"));
     m_vertical->setObjectName(QStringLiteral("toolWindowVerticalSplitter"));
-    m_horizontal->setChildrenCollapsible(false);
-    m_vertical->setChildrenCollapsible(false);
-    // Leave a visible gutter between islands while retaining a generous resize target.
-    m_horizontal->setHandleWidth(6);
-    m_vertical->setHandleWidth(6);
     for (const ToolWindowSide which : {ToolWindowSide::Left, ToolWindowSide::Right, ToolWindowSide::Bottom}) {
         buildSide(which);
     }
@@ -169,18 +505,36 @@ ToolWindowManager::ToolWindowManager(QWidget& host, QWidget& center, IShellSetti
     m_vertical->setStretchFactor(0, 1);
     m_vertical->setStretchFactor(1, 0);
 
+    // Rider New UI Left Sidebar: top-left stripe + More Tool Windows (⋯) + stretch + bottom-left stripe.
+    auto* leftSidebarLayout = new QVBoxLayout(m_leftSidebar);
+    leftSidebarLayout->setContentsMargins(0, 2, 1, 2);
+    leftSidebarLayout->setSpacing(2);
+    leftSidebarLayout->addWidget(side(ToolWindowSide::Left).stripe);
+    auto* moreRow = new QHBoxLayout();
+    moreRow->setContentsMargins(4, 0, 3, 2);
+    moreRow->setSpacing(0);
+    moreRow->addWidget(m_moreButton, 0, Qt::AlignHCenter);
+    leftSidebarLayout->addLayout(moreRow);
+    leftSidebarLayout->addStretch(1);
+    leftSidebarLayout->addWidget(side(ToolWindowSide::Bottom).stripe);
+
+    auto* islandCanvas = new QHBoxLayout();
+    islandCanvas->setContentsMargins(0, 0, 0, 0);
+    islandCanvas->setSpacing(0);
+    islandCanvas->addWidget(m_horizontal, 1);
+
     auto* row = new QHBoxLayout();
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(0);
-    row->addWidget(side(ToolWindowSide::Left).stripe);
-    row->addWidget(m_horizontal, 1);
+    row->addWidget(m_leftSidebar);
+    row->addLayout(islandCanvas, 1);
     row->addWidget(side(ToolWindowSide::Right).stripe);
     auto* outer = new QVBoxLayout(&host);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
     outer->addLayout(row, 1);
-    outer->addWidget(side(ToolWindowSide::Bottom).stripe);
 
+    m_leftSidebar->hide();
     for (Side& each : m_sides) {
         each.panel->hide();
         each.stripe->hide();
@@ -196,7 +550,7 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
     static constexpr std::array<std::string_view, 3> kNames{"left", "right", "bottom"};
     const QString name = shell_detail::fromUtf8(kNames[index(which)]);
 
-    auto* panel = new IslandFrame();
+    auto* panel = new ToolWindowPanel();
     panel->setObjectName(QStringLiteral("toolWindowPanel.") + name);
     panel->setFocusPolicy(Qt::StrongFocus);
     s.panel = panel;
@@ -211,7 +565,12 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
     optionsButton->setAutoRaise(true);
     optionsButton->setFocusPolicy(Qt::NoFocus);
     optionsButton->setToolTip(text("Options"));
-    optionsButton->setText(QStringLiteral("⋮"));
+    const QIcon moreIcon = shell_detail::themedIcon(icons::kActionsMore);
+    if (moreIcon.isNull()) {
+        optionsButton->setText(QStringLiteral("⋮"));
+    } else {
+        optionsButton->setIcon(moreIcon);
+    }
     optionsButton->setPopupMode(QToolButton::InstantPopup);
     auto* optionsMenu = new QMenu(optionsButton);
     optionsMenu->setObjectName(QStringLiteral("toolWindowOptionsMenu"));
@@ -229,17 +588,22 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
                 [this, which, shown] { setSize(shown, which == ToolWindowSide::Bottom ? 220 : 280); });
         optionsMenu->addSeparator();
         if (which != ToolWindowSide::Left) {
-            connect(optionsMenu->addAction(text("Move to Left")), &QAction::triggered, this,
+            connect(optionsMenu->addAction(text("Move to Left - Top")), &QAction::triggered, this,
                     [this, shown] { moveToSide(shown, ToolWindowSide::Left); });
+        }
+        if (which != ToolWindowSide::Bottom) {
+            connect(optionsMenu->addAction(text("Move to Left - Bottom")), &QAction::triggered, this,
+                    [this, shown] { moveToSide(shown, ToolWindowSide::Bottom); });
         }
         if (which != ToolWindowSide::Right) {
             connect(optionsMenu->addAction(text("Move to Right")), &QAction::triggered, this,
                     [this, shown] { moveToSide(shown, ToolWindowSide::Right); });
         }
-        if (which != ToolWindowSide::Bottom) {
-            connect(optionsMenu->addAction(text("Move to Bottom")), &QAction::triggered, this,
-                    [this, shown] { moveToSide(shown, ToolWindowSide::Bottom); });
-        }
+        optionsMenu->addSeparator();
+        QAction* showNames = optionsMenu->addAction(text("Show Tool Window Names"));
+        showNames->setCheckable(true);
+        showNames->setChecked(m_showStripeLabels);
+        connect(showNames, &QAction::toggled, this, [this](bool checked) { setShowStripeLabels(checked); });
         optionsMenu->addSeparator();
         connect(optionsMenu->addAction(text("Hide\tShift+Esc")), &QAction::triggered, this,
                 [this, shown] { hide(shown); });
@@ -264,31 +628,48 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
             hide(shown);
         }
     });
-    auto* header = new QHBoxLayout();
-    header->setContentsMargins(10, 4, 6, 4);
-    header->setSpacing(2);
+    auto* headerWidget = new ToolWindowHeaderBar(which, panel);
+    auto* header = new QHBoxLayout(headerWidget);
+    header->setContentsMargins(12, 4, 6, 4);
+    header->setSpacing(4);
     header->addWidget(s.title, 1);
     header->addWidget(optionsButton);
     header->addWidget(hideButton);
-    auto* separator = new QFrame(panel);
+    auto* separator = new ToolWindowHeaderSeparator(panel);
     separator->setObjectName(QStringLiteral("toolWindowHeaderSeparator"));
-    separator->setFrameShape(QFrame::HLine);
-    separator->setFixedHeight(1);
     s.stack = new QStackedWidget(panel);
     auto* layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(1, 1, 1, 1);
+    layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addLayout(header);
+    layout->addWidget(headerWidget);
     layout->addWidget(separator);
     layout->addWidget(s.stack, 1);
 
-    s.stripe = new QWidget(&m_host);
+    if (which == ToolWindowSide::Right) {
+        s.stripe = new ToolWindowSidebar(false, &m_host);
+    } else {
+        s.stripe = new QWidget(m_leftSidebar);
+    }
     s.stripe->setObjectName(QStringLiteral("toolWindowStripe.") + name);
-    QBoxLayout* stripeLayout = which == ToolWindowSide::Bottom ? static_cast<QBoxLayout*>(new QHBoxLayout(s.stripe))
-                                                               : static_cast<QBoxLayout*>(new QVBoxLayout(s.stripe));
-    stripeLayout->setContentsMargins(3, 3, 3, 3);
-    stripeLayout->setSpacing(4);
-    stripeLayout->addStretch(1);
+    s.stripe->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(s.stripe, &QWidget::customContextMenuRequested, this, [this, stripeWidget = s.stripe](const QPoint& pos) {
+        QMenu menu(stripeWidget);
+        menu.setObjectName(QStringLiteral("toolWindowStripeContextMenu"));
+        QAction* showNames = menu.addAction(text("Show Tool Window Names"));
+        showNames->setCheckable(true);
+        showNames->setChecked(m_showStripeLabels);
+        connect(showNames, &QAction::toggled, this, [this](bool checked) { setShowStripeLabels(checked); });
+        menu.exec(stripeWidget->mapToGlobal(pos));
+    });
+    auto* stripeLayout = new QVBoxLayout(s.stripe);
+    if (which == ToolWindowSide::Right) {
+        stripeLayout->setContentsMargins(4, 4, 3, 4);
+        stripeLayout->setSpacing(4);
+        stripeLayout->addStretch(1);
+    } else {
+        stripeLayout->setContentsMargins(4, 2, 3, 2);
+        stripeLayout->setSpacing(4);
+    }
 }
 
 Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
@@ -303,16 +684,73 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     button->setObjectName(QStringLiteral("stripeButton.") + shell_detail::fromUtf8(spec.id));
     button->setText(spec.title);
     button->setAccessibleName(spec.title);
+    button->setShowLabel(m_showStripeLabels);
     if (!spec.iconId.empty()) {
         button->setIcon(shell_detail::themedIcon(spec.iconId));
     }
     button->setToolTip(spec.shortcutText.isEmpty() ? spec.title
                                                    : QStringLiteral("%1 (%2)").arg(spec.title, spec.shortcutText));
-    auto* stripeLayout = static_cast<QBoxLayout*>(s.stripe->layout());
-    stripeLayout->insertWidget(stripeLayout->count() - 1, button);
-    s.stripe->show();
-
     const std::string id = spec.id;
+    button->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(button, &QWidget::customContextMenuRequested, this, [this, id, button](const QPoint& pos) {
+        Window* w = find(id);
+        if (w == nullptr) {
+            return;
+        }
+        QMenu menu(button);
+        menu.setObjectName(QStringLiteral("stripeButtonContextMenu"));
+        if (w->spec.side != ToolWindowSide::Left) {
+            connect(menu.addAction(text("Move to Left - Top")), &QAction::triggered, this,
+                    [this, id] { moveToSide(id, ToolWindowSide::Left); });
+        }
+        if (w->spec.side != ToolWindowSide::Bottom) {
+            connect(menu.addAction(text("Move to Left - Bottom")), &QAction::triggered, this,
+                    [this, id] { moveToSide(id, ToolWindowSide::Bottom); });
+        }
+        if (w->spec.side != ToolWindowSide::Right) {
+            connect(menu.addAction(text("Move to Right")), &QAction::triggered, this,
+                    [this, id] { moveToSide(id, ToolWindowSide::Right); });
+        }
+        menu.addSeparator();
+        QAction* pinAct = menu.addAction(text("Pin to Sidebar"));
+        pinAct->setCheckable(true);
+        pinAct->setChecked(w->pinned);
+        connect(pinAct, &QAction::toggled, this, [this, id](bool checked) {
+            if (Window* win = find(id); win != nullptr) {
+                win->pinned = checked;
+                win->button->setVisible(win->pinned || win->visible);
+                updateSidebarVisibility();
+            }
+        });
+        QAction* showNames = menu.addAction(text("Show Tool Window Names"));
+        showNames->setCheckable(true);
+        showNames->setChecked(m_showStripeLabels);
+        connect(showNames, &QAction::toggled, this, [this](bool checked) { setShowStripeLabels(checked); });
+        if (w->visible) {
+            menu.addSeparator();
+            connect(menu.addAction(text("Hide")), &QAction::triggered, this, [this, id] { hide(id); });
+        }
+        menu.exec(button->mapToGlobal(pos));
+    });
+
+    auto* stripeLayout = static_cast<QBoxLayout*>(s.stripe->layout());
+    const int newRank = stripeOrderRank(spec.side, spec.id);
+    const int maxInsertIndex = spec.side == ToolWindowSide::Right ? stripeLayout->count() - 1 : stripeLayout->count();
+    int insertAt = maxInsertIndex;
+    for (int i = 0; i < maxInsertIndex; ++i) {
+        if (const QWidget* existingWidget = stripeLayout->itemAt(i)->widget(); existingWidget != nullptr) {
+            const QString objName = existingWidget->objectName();
+            if (objName.startsWith(QStringLiteral("stripeButton."))) {
+                const std::string existingId = shell_detail::toUtf8(objName.mid(13));
+                if (stripeOrderRank(spec.side, existingId) > newRank) {
+                    insertAt = i;
+                    break;
+                }
+            }
+        }
+    }
+    stripeLayout->insertWidget(insertAt, button);
+
     connect(button, &QToolButton::clicked, this, [this, id] {
         toggle(id);
         // The checked state follows visibility, not the click.
@@ -324,7 +762,10 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     const int defaultSize = spec.defaultSize > 0
                                 ? spec.defaultSize
                                 : (spec.side == ToolWindowSide::Bottom ? kDefaultBottomSize : kDefaultSideSize);
-    Window& window = m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, false});
+    const bool pinnedByDefault = !isSecondaryToolWindow(spec.id);
+    button->setVisible(pinnedByDefault);
+    Window& window = m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, false, pinnedByDefault});
+    updateSidebarVisibility();
     if (const Result<ShellLayout> layout = m_settings.load(); layout) {
         if (const ToolWindowLayout* remembered = layout->find(id); remembered != nullptr) {
             if (remembered->size > 0) {
@@ -454,6 +895,7 @@ void ToolWindowManager::setContent(std::string_view id, QWidget* replacement) {
     Side& s = side(window->spec.side);
     QWidget* old = std::exchange(window->content, replacement);
     s.stack->addWidget(replacement);
+    applyToolWindowChromePalette(replacement);
     if (window->visible) {
         s.stack->setCurrentWidget(replacement);
     }
@@ -485,34 +927,52 @@ void ToolWindowManager::moveToSide(std::string_view id, ToolWindowSide newSide) 
     if (window == nullptr || window->spec.side == newSide) {
         return;
     }
-    const ToolWindowSide oldSide = window->spec.side;
     const bool wasVisible = window->visible;
     if (wasVisible) {
         setVisible(*window, false, false);
     }
-    Side& from = side(oldSide);
+    Side& from = side(window->spec.side);
     Side& to = side(newSide);
     if (window->content != nullptr) {
         from.stack->removeWidget(window->content);
         to.stack->addWidget(window->content);
     }
+    window->pinned = true;
     if (window->button != nullptr) {
         from.stripe->layout()->removeWidget(window->button);
         window->button->setParent(to.stripe);
         window->button->setSide(newSide);
         auto* toStripeLayout = static_cast<QBoxLayout*>(to.stripe->layout());
-        toStripeLayout->insertWidget(toStripeLayout->count() - 1, window->button);
+        const int insertAt = newSide == ToolWindowSide::Right ? toStripeLayout->count() - 1 : toStripeLayout->count();
+        toStripeLayout->insertWidget(insertAt, window->button);
         window->button->show();
-        to.stripe->show();
     }
     window->spec.side = newSide;
-    const bool oldHasAny =
-        std::ranges::any_of(m_windows, [oldSide](const Window& w) { return w.spec.side == oldSide; });
-    if (!oldHasAny) {
-        from.stripe->hide();
-    }
+    updateSidebarVisibility();
     if (wasVisible) {
         setVisible(*window, true, true);
+    }
+}
+
+void ToolWindowManager::setShowStripeLabels(bool show) {
+    if (m_showStripeLabels == show) {
+        return;
+    }
+    m_showStripeLabels = show;
+    for (Window& window : m_windows) {
+        if (window.button != nullptr) {
+            window.button->setShowLabel(show);
+        }
+    }
+    for (Side& s : m_sides) {
+        if (s.stripe != nullptr) {
+            s.stripe->updateGeometry();
+            s.stripe->update();
+        }
+    }
+    if (m_leftSidebar != nullptr) {
+        m_leftSidebar->updateGeometry();
+        m_leftSidebar->update();
     }
 }
 
@@ -565,6 +1025,7 @@ void ToolWindowManager::ensureContent(Window& window) {
     }
     window.content = created;
     side(window.spec.side).stack->addWidget(created);
+    applyToolWindowChromePalette(created);
 }
 
 void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
@@ -574,6 +1035,7 @@ void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
             if (Window* previous = find(s.shown); previous != nullptr) {
                 previous->visible = false;
                 previous->button->setChecked(false);
+                previous->button->setVisible(previous->pinned || previous->visible);
                 emit visibilityChanged(shell_detail::fromUtf8(previous->spec.id), false);
             }
         }
@@ -584,7 +1046,9 @@ void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
         s.shown = window.spec.id;
         window.visible = true;
         window.button->setChecked(true);
+        window.button->setVisible(window.pinned || window.visible);
         m_lastActive = window.spec.id;
+        updateSidebarVisibility();
         applySizes();
         if (focus) {
             if (window.content->focusPolicy() != Qt::NoFocus) {
@@ -604,6 +1068,8 @@ void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
         }
         window.visible = false;
         window.button->setChecked(false);
+        window.button->setVisible(window.pinned || window.visible);
+        updateSidebarVisibility();
         applySizes();
         if (hadFocus) {
             m_center.setFocus(Qt::OtherFocusReason);
@@ -611,6 +1077,22 @@ void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
         emit visibilityChanged(shell_detail::fromUtf8(window.spec.id), false);
     }
     storeLayout();
+}
+
+void ToolWindowManager::updateSidebarVisibility() {
+    for (const ToolWindowSide which : {ToolWindowSide::Left, ToolWindowSide::Bottom, ToolWindowSide::Right}) {
+        const bool anyOnSide = std::ranges::any_of(
+            m_windows, [which](const Window& w) { return w.spec.side == which && (w.pinned || w.visible); });
+        side(which).stripe->setVisible(anyOnSide);
+    }
+    if (m_leftSidebar != nullptr) {
+        const bool anyLeftOrBottom = !m_windows.empty() &&
+                                     std::ranges::any_of(m_windows, [](const Window& w) {
+                                         return w.spec.side == ToolWindowSide::Left ||
+                                                w.spec.side == ToolWindowSide::Bottom;
+                                     });
+        m_leftSidebar->setVisible(anyLeftOrBottom);
+    }
 }
 
 void ToolWindowManager::applySizes() {

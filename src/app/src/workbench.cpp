@@ -523,6 +523,15 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             return;
         const auto trust = m_services.trust.snapshot(m_projectRoot);
         const bool trusted = trust.trusted;
+        if (trusted && m_projectTrustDialog) {
+            const bool allTrusted = std::ranges::all_of(m_projectTrustDialog->roots(), [this](const QString& r) {
+                return m_services.trust.isTrusted(r.toUtf8().toStdString());
+            });
+            if (allTrusted) {
+                delete m_projectTrustDialog.data();
+                m_projectTrustDialog.clear();
+            }
+        }
         if (m_solution && trust.revision != m_projectTrustRevision) {
             startProjectEvaluation(m_projectRoot);
             if (m_clangd)
@@ -1460,6 +1469,12 @@ void Workbench::attach(ui::ShellWindow& window) {
     attachFind();
     if (m_options.git)
         m_git = std::make_unique<GitIntegration>(*this);
+    connect(m_build.get(), &ui::BuildController::needsTrust, this, [this](const QStringList&) {
+        if (m_projectTrustDialog) {
+            delete m_projectTrustDialog.data();
+            m_projectTrustDialog.clear();
+        }
+    });
     m_trustPrompter = new ui::TrustPrompter(*m_build, &window, this);
 
     auto* welcome = new WelcomeScreen();
@@ -1470,6 +1485,16 @@ void Workbench::attach(ui::ShellWindow& window) {
     auto* launcher = new LauncherWindow();
     m_launcherWindow = launcher;
     wireWelcomeScreen(launcher->welcomeScreen());
+    if (m_appearance != nullptr) {
+        connect(m_appearance.get(), &ui::AppearanceManager::appearanceChanged, launcher, [launcher] {
+            for (QWidget* w : launcher->findChildren<QWidget*>()) {
+                if (w != nullptr) {
+                    w->update();
+                }
+            }
+            launcher->update();
+        });
+    }
     connect(launcher, &LauncherWindow::closedByUser, this, [this] {
         if (m_window) {
             m_window->close();
@@ -1518,6 +1543,9 @@ void Workbench::detach() {
     }
     delete m_settingsDialog.data();
     m_settingsDialog = nullptr;
+    delete m_projectTrustDialog.data();
+    m_projectTrustDialog.clear();
+    m_projectTrustPromptedRoot.clear();
     m_window->mainToolbar().setProjectMenuBuilder({});
     m_window->mainToolbar().setVcsMenuBuilder({});
     m_window->mainToolbar().setBuildMenuBuilder({});
@@ -2434,7 +2462,7 @@ void Workbench::showUpdateCheck() {
     QByteArray configuredKey(FROST_UPDATE_PUBLIC_KEY_HEX);
     if (configuredKey.isEmpty()) {
         // Default Ed25519 release verification public key when not overridden via CMake.
-        configuredKey = QByteArrayLiteral("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+        configuredKey = QByteArrayLiteral("c90263efb760658afedf515b2889f50cd8de7261009e7ae9da5e8038126dde1f");
     }
     const QByteArray decoded = QByteArray::fromHex(configuredKey);
     if (configuredKey.size() != 64 || decoded.size() != 32) {

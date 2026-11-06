@@ -183,22 +183,7 @@ bool isManagedSource(std::string_view path) noexcept {
     auto ext = path.substr(path.size() - 3);
     return ext[0] == '.' && (ext[1] == 'c' || ext[1] == 'C') && (ext[2] == 's' || ext[2] == 'S');
 }
-void Workbench::offerManagedTrust() {
-    if (m_projectRoot.empty() || m_services.trust.isTrusted(m_projectRoot) || !m_window || m_managedTrustDialog)
-        return;
-    auto* dialog = new ui::TrustDialog(
-        *m_build, {QString::fromUtf8(m_projectRoot.data(), static_cast<qsizetype>(m_projectRoot.size()))}, m_window,
-        ui::TrustPurpose::ManagedLanguageServer);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    m_managedTrustDialog = dialog;
-    const std::string root = m_projectRoot;
-    connect(dialog, &QDialog::accepted, this, [this, root] {
-        m_managedTrustDialog.clear();
-        if (m_projectRoot == root && m_services.trust.isTrusted(root))
-            startManaged(root);
-    });
-    dialog->open();
-}
+void Workbench::offerManagedTrust() { offerProjectTrust(); }
 void Workbench::checkUnityProjectContext() {
     if (m_shutDown || m_projectRoot.empty() || m_projectRoot != m_unityRevisionRoot ||
         !m_services.trust.isTrusted(m_projectRoot))

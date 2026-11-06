@@ -12,9 +12,13 @@
 #include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QLinearGradient>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QProgressDialog>
+#include <QRadialGradient>
 #include <QToolButton>
 #include <QWindow>
 
@@ -40,6 +44,34 @@ QColor themeColor(ColorKey key, const QColor& fallback) {
         return style->color(key);
     }
     return fallback;
+}
+
+void paintDialogEllipticalGlow(QPainter& painter, QPointF center, qreal radiusX, qreal radiusY, QColor color,
+                               int peakAlpha) {
+    if (radiusX <= 1.0 || radiusY <= 1.0 || peakAlpha <= 0) {
+        return;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.translate(center);
+    painter.scale(radiusX, radiusY);
+
+    QRadialGradient grad(QPointF(0.0, 0.0), 1.0);
+    const auto withAlpha = [&](qreal factor) {
+        QColor c = color;
+        c.setAlpha(std::clamp(static_cast<int>(peakAlpha * factor), 0, 255));
+        return c;
+    };
+    grad.setColorAt(0.00, withAlpha(1.00));
+    grad.setColorAt(0.25, withAlpha(0.78));
+    grad.setColorAt(0.50, withAlpha(0.45));
+    grad.setColorAt(0.75, withAlpha(0.16));
+    grad.setColorAt(1.00, withAlpha(0.00));
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(grad);
+    painter.drawRect(QRectF(-1.0, -1.0, 2.0, 2.0));
+    painter.restore();
 }
 
 enum class CaptionButtonKind { Minimize, MaximizeRestore, Close };
@@ -119,7 +151,10 @@ void syncWin32DialogDarkFrame(QDialog* dialog) {
         !dialog->testAttribute(Qt::WA_WState_Created)) {
         return;
     }
-    const HMODULE dwm = GetModuleHandleW(L"dwmapi.dll");
+    HMODULE dwm = GetModuleHandleW(L"dwmapi.dll");
+    if (dwm == nullptr) {
+        dwm = LoadLibraryW(L"dwmapi.dll");
+    }
     if (dwm == nullptr) {
         return;
     }
@@ -134,9 +169,16 @@ void syncWin32DialogDarkFrame(QDialog* dialog) {
         return;
     }
     const QColor bg = themeColor(ColorKey::PanelBackground, dialog->palette().color(QPalette::Window));
+    const QColor border = themeColor(ColorKey::PopupBorderColor, dialog->palette().color(QPalette::Mid));
     const BOOL dark = bg.lightness() < 128 ? TRUE : FALSE;
     constexpr DWORD kDwmUseImmersiveDarkMode = 20;
+    constexpr DWORD kDwmWindowCornerPreference = 33;
+    constexpr DWORD kDwmBorderColor = 34;
+    const DWORD cornerPref = dialog->isMaximized() ? 1U : 2U; // DWMWCP_ROUND = 2
+    const COLORREF borderRef = RGB(border.red(), border.green(), border.blue());
     static_cast<void>(setAttr(hwnd, kDwmUseImmersiveDarkMode, &dark, sizeof(dark)));
+    static_cast<void>(setAttr(hwnd, kDwmWindowCornerPreference, &cornerPref, sizeof(cornerPref)));
+    static_cast<void>(setAttr(hwnd, kDwmBorderColor, &borderRef, sizeof(borderRef)));
 }
 #endif
 
@@ -144,6 +186,12 @@ class DialogChromeFilter final : public QObject {
 public:
     DialogChromeFilter(QDialog* dialog, DialogTitleBar* titleBar, bool resizable)
         : QObject(dialog), m_dialog(dialog), m_titleBar(titleBar), m_resizable(resizable) {
+        setObjectName(QStringLiteral("dialogChromeFilter"));
+        syncGeometry();
+    }
+
+    void setResizable(bool resizable) {
+        m_resizable = resizable;
         syncGeometry();
     }
 
@@ -156,6 +204,13 @@ public:
         const int border = maximized ? 0 : 1;
         const int headerH = DialogTitleBar::preferredHeight();
         m_dialog->setContentsMargins(border, headerH + border, border, border);
+        if (!m_expandedFixedDialog &&
+            (qobject_cast<QMessageBox*>(m_dialog) != nullptr || qobject_cast<QProgressDialog*>(m_dialog) != nullptr) &&
+            m_dialog->height() > 0) {
+            m_expandedFixedDialog = true;
+            m_dialog->setMinimumHeight(m_dialog->minimumHeight() + headerH);
+            m_dialog->resize(std::max(m_dialog->width(), scaledPx(380)), m_dialog->height() + headerH);
+        }
         m_titleBar->setGeometry(border, border, std::max(0, m_dialog->width() - border * 2), headerH);
         m_titleBar->syncState();
         m_titleBar->raise();
@@ -191,8 +246,28 @@ protected:
             m_dialog->update();
             break;
         case QEvent::Paint: {
+            QPainter painter(m_dialog);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            const QColor bg = themeColor(ColorKey::PanelBackground, m_dialog->palette().color(QPalette::Window));
+            const QColor accent = themeColor(ColorKey::TabbedPaneUnderlineColor, QColor(0x35, 0x74, 0xF0));
+            const bool isDark = bg.lightness() < 128;
+            painter.fillRect(m_dialog->rect(), bg);
+
+            // Frosted glass ambient color spill across the dialog surface.
+            paintDialogEllipticalGlow(painter, QPointF(m_dialog->width() * 0.22, DialogTitleBar::preferredHeight()),
+                                      m_dialog->width() * 0.65, std::max(180, m_dialog->height() / 2),
+                                      accent, isDark ? 32 : 18);
+            paintDialogEllipticalGlow(painter, QPointF(m_dialog->width() * 0.82, m_dialog->height() * 0.85),
+                                      m_dialog->width() * 0.55, std::max(160, m_dialog->height() / 2),
+                                      QColor(0x7C, 0x4D, 0xFF), isDark ? 22 : 12);
+
+            QLinearGradient sheen(m_dialog->rect().topLeft(), m_dialog->rect().bottomLeft());
+            sheen.setColorAt(0.0, isDark ? QColor(255, 255, 255, 7) : QColor(255, 255, 255, 28));
+            sheen.setColorAt(0.5, QColor(255, 255, 255, 2));
+            sheen.setColorAt(1.0, isDark ? QColor(0, 0, 0, 12) : QColor(0, 0, 0, 6));
+            painter.fillRect(m_dialog->rect(), sheen);
+
             if (!m_dialog->isMaximized()) {
-                QPainter painter(m_dialog);
                 QColor borderColor = themeColor(ColorKey::PopupBorderColor, m_dialog->palette().color(QPalette::Mid));
                 if (!m_dialog->isActiveWindow()) {
                     if (const FrostStyle* style = FrostStyle::current()) {
@@ -202,7 +277,7 @@ protected:
                 }
                 painter.setPen(QPen(borderColor, 1));
                 painter.setBrush(Qt::NoBrush);
-                painter.drawRect(m_dialog->rect().adjusted(0, 0, -1, -1));
+                painter.drawRoundedRect(QRectF(m_dialog->rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0);
             }
             break;
         }
@@ -283,6 +358,7 @@ private:
     bool m_resizable = true;
     bool m_updatingMargins = false;
     bool m_cursorOverridden = false;
+    bool m_expandedFixedDialog = false;
 };
 
 } // namespace
@@ -342,6 +418,12 @@ DialogTitleBar::~DialogTitleBar() = default;
 
 int DialogTitleBar::preferredHeight() { return scaledPx(34); }
 
+void DialogTitleBar::setResizable(bool resizable) {
+    m_resizable = resizable;
+    syncState();
+    update();
+}
+
 void DialogTitleBar::syncState() {
     const int h = preferredHeight();
     setFixedHeight(h);
@@ -365,7 +447,18 @@ void DialogTitleBar::paintEvent(QPaintEvent*) {
 
     const QColor bg = themeColor(ColorKey::MainWindowBackground, palette().color(QPalette::Window));
     const QColor sep = themeColor(ColorKey::SeparatorColor, palette().color(QPalette::Mid));
+    const bool dark = bg.lightness() < 128;
     painter.fillRect(rect(), bg);
+
+    // Frosted glass ambient glow across dialog header (glacial cyan at logo + sapphire center)
+    const qreal w = std::max(1, width());
+    const qreal h = std::max(1, height());
+    paintDialogEllipticalGlow(painter, QPointF(scaledPx(28), h * 0.5), w * 0.36, h * 3.0, QColor(0x21, 0xD4, 0xFD),
+                              dark ? 22 : 12);
+    paintDialogEllipticalGlow(painter, QPointF(w * 0.52, -h * 0.2), w * 0.48, h * 2.6, QColor(0x35, 0x74, 0xF0),
+                              dark ? 16 : 9);
+    QColor topSpec = dark ? QColor(255, 255, 255, 16) : QColor(255, 255, 255, 110);
+    painter.fillRect(QRect(0, 0, width(), 1), topSpec);
     painter.fillRect(QRect(0, height() - 1, width(), 1), sep);
 
     const int padLeft = scaledPx(10);
@@ -466,7 +559,14 @@ DialogTitleBar* installDialogChrome(QDialog* dialog, bool resizable) {
     }
     if (auto* existing =
             dialog->findChild<DialogTitleBar*>(QStringLiteral("dialogTitleBar"), Qt::FindDirectChildrenOnly)) {
-        existing->syncState();
+        existing->setResizable(resizable);
+        if (auto* filterObj = dialog->findChild<QObject*>(QStringLiteral("dialogChromeFilter"),
+                                                          Qt::FindDirectChildrenOnly)) {
+            static_cast<DialogChromeFilter*>(filterObj)->setResizable(resizable);
+        }
+        if (!dialog->isVisible() && resizable) {
+            dialog->setWindowFlags(dialog->windowFlags() | Qt::WindowMaximizeButtonHint);
+        }
         return existing;
     }
 

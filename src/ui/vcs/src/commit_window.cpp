@@ -4,6 +4,8 @@
 
 #include "frost/ui/vcs/commit_window.hpp"
 
+#include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/vcs/git_controller.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/vcs/vcs_status.hpp"
@@ -17,6 +19,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSplitter>
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -225,15 +228,19 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
       m_result(new QLabel(this)), m_statusInfo(new QLabel(this)) {
     setObjectName(QStringLiteral("commitToolWindow"));
     m_tree->setModel(m_model);
+    m_tree->setFrameShape(QFrame::NoFrame);
     m_tree->setHeaderHidden(true);
     m_tree->setRootIsDecorated(true);
     m_tree->setUniformRowHeights(true);
     m_tree->header()->setStretchLastSection(true);
     m_message->setPlaceholderText(tr("Commit Message"));
     m_message->setTabChangesFocus(true);
-    m_message->setMaximumHeight(140);
     m_historyButton->setText(tr("History"));
     m_historyButton->setToolTip(tr("Recent commit messages"));
+    m_historyButton->setAutoRaise(true);
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        m_historyButton->setIcon(style->icon(icons::kToolwindowHistory));
+    }
     m_resolveConflictsButton->setObjectName(QStringLiteral("resolveConflictsButton"));
     m_resolveConflictsButton->hide();
     m_statusInfo->setObjectName(QStringLiteral("gitRestrictedStatusInfo"));
@@ -243,6 +250,15 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     m_result->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_commit->setDefault(true);
 
+    auto* splitter = new QSplitter(Qt::Vertical, this);
+    splitter->setObjectName(QStringLiteral("commitSplitter"));
+    splitter->setChildrenCollapsible(false);
+    splitter->addWidget(m_tree);
+
+    auto* bottomPane = new QWidget(splitter);
+    auto* bottomLayout = new QVBoxLayout(bottomPane);
+    bottomLayout->setContentsMargins(0, 4, 0, 0);
+    bottomLayout->setSpacing(4);
     auto* messageRow = new QHBoxLayout;
     messageRow->addWidget(m_amend);
     messageRow->addStretch(1);
@@ -253,14 +269,18 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     buttons->addWidget(m_commitAndPush);
     buttons->addStretch(1);
     buttons->addWidget(m_rollback);
+    bottomLayout->addLayout(messageRow);
+    bottomLayout->addWidget(m_message, 1);
+    bottomLayout->addLayout(buttons);
+    bottomLayout->addWidget(m_result);
+    splitter->addWidget(bottomPane);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->addWidget(m_statusInfo);
-    layout->addWidget(m_tree, 1);
-    layout->addLayout(messageRow);
-    layout->addWidget(m_message);
-    layout->addLayout(buttons);
-    layout->addWidget(m_result);
+    layout->addWidget(splitter, 1);
 
     connect(m_commit, &QPushButton::clicked, this, [this] { commit(); });
     connect(m_commitAndPush, &QPushButton::clicked, this, [this] { commitAndPush(); });

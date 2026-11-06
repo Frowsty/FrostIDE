@@ -495,16 +495,215 @@ tryDecompileSymbol(fl::ILspRequester& server, io::IFileSystem& fs, std::string p
     co_return fl::Location{*decompiledPathRes, decompiledUri, fl::LspRange{synth.declarationPosition, endPos}};
 }
 
-sched::Task<Result<fl::GotoResult>> gotoDeclarationOrDecompile(fl::ILspRequester& server, io::IFileSystem& fs,
-                                                               std::string path, fl::LspPosition position,
-                                                               ExtractedSymbolInfo sym, std::stop_token token) {
+std::optional<std::string> readDocumentOrDisk(std::string_view targetPath,
+                                              const std::vector<std::pair<std::string, text::Snapshot>>& openDocs,
+                                              io::IFileSystem& fs) {
+    const std::string key = fl::documentKey(targetPath);
+    for (const auto& [openPath, snap] : openDocs) {
+        if (fl::documentKey(openPath) == key) {
+            return snap.text();
+        }
+    }
+    if (auto content = fs.readFile(targetPath)) {
+        return std::move(*content);
+    }
+    return std::nullopt;
+}
+
+bool hasReturnTypeOrScopePrefix(std::string_view beforeSymbol) {
+    while (!beforeSymbol.empty() && (beforeSymbol.back() == ' ' || beforeSymbol.back() == '\t')) {
+        beforeSymbol.remove_suffix(1);
+    }
+    if (beforeSymbol.empty()) {
+        return false;
+    }
+    if (beforeSymbol.ends_with("::")) {
+        return true;
+    }
+    const char last = beforeSymbol.back();
+    if (!fl::isIdentifierByte(last) && last != '*' && last != '&' && last != '>') {
+        return false;
+    }
+    if (last == '>' && beforeSymbol.ends_with("->")) {
+        return false;
+    }
+    std::size_t wordEnd = beforeSymbol.size();
+    while (wordEnd > 0 && (beforeSymbol[wordEnd - 1] == '*' || beforeSymbol[wordEnd - 1] == '&' ||
+                           beforeSymbol[wordEnd - 1] == ' ' || beforeSymbol[wordEnd - 1] == '\t')) {
+        --wordEnd;
+    }
+    std::size_t wordStart = wordEnd;
+    while (wordStart > 0 && fl::isIdentifierByte(beforeSymbol[wordStart - 1])) {
+        --wordStart;
+    }
+    const std::string_view word = beforeSymbol.substr(wordStart, wordEnd - wordStart);
+    if (word.empty()) {
+        return false;
+    }
+    static constexpr std::string_view kForbiddenKeywords[] = {
+        "if", "else", "while", "for", "switch", "case", "return", "co_return", "co_await", "co_yield", "sizeof",
+        "decltype", "new", "delete", "throw"};
+    for (std::string_view kw : kForbiddenKeywords) {
+        if (word == kw) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<fl::Location> findFunctionInFile(std::string_view filePath, std::string_view symbolName,
+                                               bool requireDefinitionBody,
+                                               const std::vector<std::pair<std::string, text::Snapshot>>& openDocs,
+                                               io::IFileSystem& fs) {
+    if (symbolName.empty()) {
+        return std::nullopt;
+    }
+    const auto content = readDocumentOrDisk(filePath, openDocs, fs);
+    if (!content) {
+        return std::nullopt;
+    }
+    std::uint32_t lineIdx = 0;
+    std::size_t lineStart = 0;
+    while (lineStart < content->size()) {
+        const std::size_t nl = content->find('\n', lineStart);
+        std::string_view lineView =
+            nl == std::string::npos ? std::string_view(*content).substr(lineStart)
+                                    : std::string_view(*content).substr(lineStart, nl - lineStart);
+        if (!lineView.empty() && lineView.back() == '\r') {
+            lineView.remove_suffix(1);
+        }
+        const std::size_t firstNonSpace = lineView.find_first_not_of(" \t");
+        if (firstNonSpace != std::string_view::npos && !lineView.substr(firstNonSpace).starts_with("//") &&
+            !lineView.substr(firstNonSpace).starts_with('#')) {
+            std::size_t searchPos = firstNonSpace;
+            while (searchPos < lineView.size()) {
+                const std::size_t found = lineView.find(symbolName, searchPos);
+                if (found == std::string_view::npos) {
+                    break;
+                }
+                const bool leftBoundary = (found == 0 || !fl::isIdentifierByte(lineView[found - 1]));
+                const std::size_t afterSym = found + symbolName.size();
+                const bool rightBoundary = (afterSym == lineView.size() || !fl::isIdentifierByte(lineView[afterSym]));
+                if (leftBoundary && rightBoundary &&
+                    hasReturnTypeOrScopePrefix(lineView.substr(firstNonSpace, found - firstNonSpace))) {
+                    std::size_t parenPos = afterSym;
+                    while (parenPos < lineView.size() && (lineView[parenPos] == ' ' || lineView[parenPos] == '\t')) {
+                        ++parenPos;
+                    }
+                    if (parenPos < lineView.size() && lineView[parenPos] == '(') {
+                        const std::size_t absParen = lineStart + parenPos;
+                        const std::size_t nextBrace = content->find('{', absParen);
+                        const std::size_t nextSemi = content->find(';', absParen);
+                        const bool isDefinition =
+                            (nextBrace != std::string_view::npos &&
+                             (nextSemi == std::string_view::npos || nextBrace < nextSemi));
+                        if (!requireDefinitionBody || isDefinition) {
+                            const auto colStart = static_cast<std::uint32_t>(found);
+                            const auto colEnd = static_cast<std::uint32_t>(afterSym);
+                            return fl::Location{
+                                .path = std::string(filePath),
+                                .uri = fl::pathToUri(filePath).value_or(""),
+                                .range = fl::LspRange{{lineIdx, colStart}, {lineIdx, colEnd}},
+                            };
+                        }
+                    }
+                }
+                searchPos = afterSym;
+            }
+        }
+        if (nl == std::string::npos) {
+            break;
+        }
+        lineStart = nl + 1;
+        ++lineIdx;
+    }
+    return std::nullopt;
+}
+
+bool isHeaderPrototypeLocation(const fl::Location& loc,
+                               const std::vector<std::pair<std::string, text::Snapshot>>& openDocs,
+                               io::IFileSystem& fs) {
+    if (!isHeaderExt(splitPathParts(loc.path).ext)) {
+        return false;
+    }
+    const auto content = readDocumentOrDisk(loc.path, openDocs, fs);
+    if (!content) {
+        return true;
+    }
+    std::uint32_t lineIdx = 0;
+    std::size_t lineStart = 0;
+    while (lineStart < content->size() && lineIdx < loc.range.start.line) {
+        const std::size_t nl = content->find('\n', lineStart);
+        if (nl == std::string::npos) {
+            return true;
+        }
+        lineStart = nl + 1;
+        ++lineIdx;
+    }
+    const std::size_t nextBrace = content->find('{', lineStart);
+    const std::size_t nextSemi = content->find(';', lineStart);
+    return nextSemi != std::string_view::npos && (nextBrace == std::string_view::npos || nextSemi < nextBrace);
+}
+
+sched::Task<Result<fl::GotoResult>>
+gotoDeclarationOrDecompile(fl::ILspRequester& server, io::IFileSystem& fs,
+                           std::function<std::vector<std::string>()> projectFiles,
+                           std::vector<std::pair<std::string, text::Snapshot>> openDocs, std::string path,
+                           fl::LspPosition position, ExtractedSymbolInfo sym, std::stop_token token) {
     auto result = co_await fl::gotoDeclarationOrUsages(server, path, position, token);
+    if (result && !sym.symbolName.empty()) {
+        if (result->showUsages && isSourceExt(splitPathParts(path).ext)) {
+            if (const auto relatedHeader = findRelatedProjectFile(path, projectFiles, fs)) {
+                if (auto declLoc = findFunctionInFile(*relatedHeader, sym.symbolName, false, openDocs, fs);
+                    declLoc && isHeaderPrototypeLocation(*declLoc, openDocs, fs)) {
+                    result->showUsages = false;
+                    result->locations.push_back(std::move(*declLoc));
+                }
+            }
+        } else if (!result->showUsages && result->locations.size() == 1 &&
+                   isSourceExt(splitPathParts(result->locations.front().path).ext)) {
+            if (const auto relatedHeader =
+                    findRelatedProjectFile(result->locations.front().path, projectFiles, fs)) {
+                if (auto declLoc = findFunctionInFile(*relatedHeader, sym.symbolName, false, openDocs, fs);
+                    declLoc && isHeaderPrototypeLocation(*declLoc, openDocs, fs)) {
+                    result->locations.front() = std::move(*declLoc);
+                }
+            }
+        }
+    }
     if (result && !result->showUsages && result->locations.empty() && !sym.symbolName.empty()) {
         if (auto decompiled = co_await tryDecompileSymbol(server, fs, path, position, sym, false, token); decompiled) {
             result->locations.push_back(std::move(*decompiled));
         }
     }
     co_return result;
+}
+
+sched::Task<Result<std::vector<fl::Location>>>
+gotoImplementationTask(fl::ILspRequester& server, io::IFileSystem& fs,
+                       std::function<std::vector<std::string>()> projectFiles,
+                       std::vector<std::pair<std::string, text::Snapshot>> openDocs, std::string path,
+                       fl::LspPosition position, ExtractedSymbolInfo sym, std::stop_token token) {
+    auto locations = co_await fl::gotoImplementation(server, path, position, token);
+    if (!locations) {
+        co_return locations;
+    }
+    if (!sym.symbolName.empty()) {
+        if (locations->empty() && isHeaderExt(splitPathParts(path).ext)) {
+            if (const auto relatedSource = findRelatedProjectFile(path, projectFiles, fs)) {
+                if (auto defLoc = findFunctionInFile(*relatedSource, sym.symbolName, true, openDocs, fs)) {
+                    locations->push_back(std::move(*defLoc));
+                }
+            }
+        } else if (locations->size() == 1 && isHeaderPrototypeLocation(locations->front(), openDocs, fs)) {
+            if (const auto relatedSource = findRelatedProjectFile(locations->front().path, projectFiles, fs)) {
+                if (auto defLoc = findFunctionInFile(*relatedSource, sym.symbolName, true, openDocs, fs)) {
+                    locations->front() = std::move(*defLoc);
+                }
+            }
+        }
+    }
+    co_return locations;
 }
 
 sched::Task<Result<std::optional<fl::Location>>> decompileSymbolTask(fl::ILspRequester& server,
@@ -1183,8 +1382,10 @@ void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
         extractSymbolAtPosition(path, m_services.host.snapshot(), position, m_services.server.encoding());
     start<fl::GotoResult>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, path, position, sym](std::stop_token token) {
-            return gotoDeclarationOrDecompile(server, fs, path, position, sym, std::move(token));
+        [&server = m_services.server, &fs = m_services.fs, projectFiles = m_services.projectFiles,
+         openDocs = m_services.host.openDocuments(), path, position, sym](std::stop_token token) {
+            return gotoDeclarationOrDecompile(server, fs, projectFiles, openDocs, path, position, sym,
+                                              std::move(token));
         },
         [this, path, position, symName = sym.symbolName](Result<fl::GotoResult> result) {
             if (!result) {
@@ -1235,11 +1436,15 @@ void LanguageController::gotoImplementation() {
     if (!hasDocument()) {
         return;
     }
+    const std::string path = m_services.host.documentPath();
+    const fl::LspPosition position = caretPosition();
+    const ExtractedSymbolInfo sym =
+        extractSymbolAtPosition(path, m_services.host.snapshot(), position, m_services.server.encoding());
     start<std::vector<fl::Location>>(
         m_navigationSlot,
-        [&server = m_services.server, path = m_services.host.documentPath(),
-         position = caretPosition()](std::stop_token token) {
-            return fl::requestLocations(server, fl::NavigationTarget::Implementation, path, position, std::move(token));
+        [&server = m_services.server, &fs = m_services.fs, projectFiles = m_services.projectFiles,
+         openDocs = m_services.host.openDocuments(), path, position, sym](std::stop_token token) {
+            return gotoImplementationTask(server, fs, projectFiles, openDocs, path, position, sym, std::move(token));
         },
         [this](Result<std::vector<fl::Location>> locations) {
             if (!locations) {

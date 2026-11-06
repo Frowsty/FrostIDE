@@ -100,6 +100,8 @@ private:
     }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> serverFor(const lang::Json& params) const {
         const auto* doc = params.find("textDocument");
+        if (!doc)
+            doc = params.find("item");
         if (doc) {
             auto uri = doc->stringAt("uri");
             auto path = lang::uriToPath(uri);
@@ -108,7 +110,10 @@ private:
             LockGuard lock(m_mutex);
             return isLua(*path) ? m_lua : isCSharp(*path) ? m_managed : isCpp(*path) ? m_server : nullptr;
         }
-        return server();
+        if (auto active = server())
+            return active;
+        LockGuard lock(m_mutex);
+        return m_server ? m_server : m_managed ? m_managed : m_lua;
     }
     static sched::Task<Result<lang::Json>> invoke(std::shared_ptr<lang::ILspRequester> server, std::string method,
                                                   lang::Json params, std::stop_token token) {

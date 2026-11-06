@@ -804,7 +804,10 @@ void EditorView::addInsightChrome(EditorDisplayList& list) const {
     if (layout.state != InspectionState::Hidden) {
         const QColor background = m_colors.inspectionBackground;
         const QColor foreground = m_colors.inspectionForeground;
-        list.chrome.push_back(rectShape(layout.rect, withAlpha(background, 0.92), 4.0 * zoom));
+        DisplayShape pill = rectShape(layout.rect, withAlpha(background, 0.94), layout.rect.height() * 0.5);
+        pill.stroke = withAlpha(foreground, 0.18);
+        pill.strokeWidth = std::max(1.0, zoom);
+        list.chrome.push_back(pill);
         if (!layout.badge.isEmpty()) {
             const QRectF& box = layout.badge;
             if (summary.analyzing) {

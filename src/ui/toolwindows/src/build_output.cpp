@@ -130,6 +130,7 @@ BuildOutputPane::BuildOutputPane(QWidget* parent)
     : QWidget(parent), m_editor(new QPlainTextEdit(this)), m_clear(new QToolButton(this)) {
     setObjectName(QStringLiteral("buildOutput"));
     m_editor->setObjectName(QStringLiteral("buildOutputText"));
+    m_editor->setFrameShape(QFrame::NoFrame);
     m_editor->setReadOnly(true);
     m_editor->setPlaceholderText(
         tr("Build output appears here. Move the cursor to a diagnostic and press Enter or F4 to open its source."));
@@ -153,9 +154,21 @@ BuildOutputPane::BuildOutputPane(QWidget* parent)
     m_clear->setEnabled(false);
     connect(m_clear, &QToolButton::clicked, this, &BuildOutputPane::clear);
 
+    auto* wrapBtn = new QToolButton(this);
+    wrapBtn->setObjectName(QStringLiteral("wrapOutput"));
+    wrapBtn->setText(tr("Soft-Wrap"));
+    wrapBtn->setToolTip(tr("Toggle Soft-Wrap"));
+    wrapBtn->setCheckable(true);
+    wrapBtn->setAutoRaise(true);
+    connect(wrapBtn, &QToolButton::toggled, this, [this](bool wrap) {
+        m_editor->setLineWrapMode(wrap ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
+    });
+
     auto* toolbar = new QHBoxLayout;
-    toolbar->setContentsMargins(0, 0, 0, 0);
+    toolbar->setContentsMargins(6, 2, 6, 2);
+    toolbar->setSpacing(4);
     toolbar->addWidget(m_clear);
+    toolbar->addWidget(wrapBtn);
     toolbar->addStretch(1);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

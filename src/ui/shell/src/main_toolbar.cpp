@@ -385,7 +385,8 @@ private:
 
 MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     : QToolBar(parent), m_invoke(std::move(invoke)), m_mainMenuButton(new RiderMenuBadgeButton(this)),
-      m_mainMenu(new QMenu(m_mainMenuButton)), m_project(new RiderProjectButton(this)),
+      m_mainMenu(new QMenu(m_mainMenuButton)), m_backButton(new QToolButton(this)),
+      m_forwardButton(new QToolButton(this)), m_project(new RiderProjectButton(this)),
       m_projectMenu(new QMenu(m_project)), m_vcsBranch(new RiderVcsBranchButton(this)),
       m_vcsMenu(new QMenu(m_vcsBranch)), m_buildMenu(new QMenu(this)), m_configurations(new QComboBox(this)),
       m_themeButton(new QToolButton(this)),
@@ -398,7 +399,8 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     setFloatable(false);
     setContextMenuPolicy(Qt::PreventContextMenu);
     setContentsMargins(scaledPx(6), scaledPx(3), scaledPx(6), scaledPx(4));
-    setMinimumHeight(scaledPx(38));
+    setMinimumHeight(scaledPx(40));
+    setStyleSheet(QStringLiteral("QToolBar#mainToolbar::separator { background: transparent; width: 4px; height: 0px; }"));
 
     // 1. Far-left FrostIDE badge + Main Menu button.
     m_mainMenuButton->setObjectName(QStringLiteral("toolbar.mainMenu"));
@@ -414,6 +416,35 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     m_mainMenuButton->setMenu(m_mainMenu);
     m_mainMenuButton->setPopupMode(QToolButton::InstantPopup);
     addWidget(m_mainMenuButton);
+
+    // 1b. Rider Header Back / Forward navigation buttons (Qt::NoFocus so Tab focus order stays on dynamic slots).
+    m_backButton->setObjectName(QStringLiteral("toolbar.navigate.back"));
+    m_backButton->setAutoRaise(true);
+    m_backButton->setFocusPolicy(Qt::NoFocus);
+    m_backButton->setIcon(shell_detail::themedIcon(icons::kNavBack));
+    m_backButton->setToolTip(text("Back"));
+    m_backButton->setAccessibleName(text("Back"));
+    m_backButton->setEnabled(false);
+    connect(m_backButton, &QToolButton::clicked, this, [this] {
+        if (m_invoke) {
+            m_invoke("navigate.back");
+        }
+    });
+    addWidget(m_backButton);
+
+    m_forwardButton->setObjectName(QStringLiteral("toolbar.navigate.forward"));
+    m_forwardButton->setAutoRaise(true);
+    m_forwardButton->setFocusPolicy(Qt::NoFocus);
+    m_forwardButton->setIcon(shell_detail::themedIcon(icons::kNavForward));
+    m_forwardButton->setToolTip(text("Forward"));
+    m_forwardButton->setAccessibleName(text("Forward"));
+    m_forwardButton->setEnabled(false);
+    connect(m_forwardButton, &QToolButton::clicked, this, [this] {
+        if (m_invoke) {
+            m_invoke("navigate.forward");
+        }
+    });
+    addWidget(m_forwardButton);
 
     // 2. Rider Project Widget (colored initials avatar + bold project name).
     m_project->setObjectName(QStringLiteral("projectWidget"));
@@ -481,12 +512,12 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
         }
     });
     addSeparator();
-    addSlot(kRun, icons::kRunRun, "Run");
-    addSlot(kDebug, icons::kRunDebug, "Debug");
-    addSlot(kStop, icons::kRunStop, "Stop");
+    addSlot(kRun, icons::kRunRun, "Run", IconRole::Success);
+    addSlot(kDebug, icons::kRunDebug, "Debug", IconRole::Success);
+    addSlot(kStop, icons::kRunStop, "Stop", IconRole::Error);
     auto* utilitySpacer = new QWidget(this);
     utilitySpacer->setObjectName(QStringLiteral("toolbarUtilitySpacer"));
-    utilitySpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    utilitySpacer->setFixedWidth(scaledPx(12));
     utilitySpacer->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     addWidget(utilitySpacer);
     addSeparator();
@@ -561,6 +592,10 @@ void MainToolbar::setProjectName(const QString& name) {
     m_project->setAccessibleName(text("Project: %1").arg(m_project->text()));
     m_project->updateGeometry();
     m_project->update();
+    update();
+    if (QWidget* top = window()) {
+        top->update();
+    }
 }
 
 void MainToolbar::setProjectMenuBuilder(std::function<void(QMenu&)> builder) {
@@ -660,7 +695,76 @@ void MainToolbar::actionEvent(QActionEvent* event) {
 
 void MainToolbar::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), themeColor(ColorKey::MainWindowBackground, palette().color(QPalette::Window)));
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor baseBg = themeColor(ColorKey::MainWindowBackground, palette().color(QPalette::Window));
+    const bool isDark = baseBg.lightness() < 128;
+    painter.fillRect(rect(), baseBg);
+
+    // 1. JetBrains Rider Project Gradient: wide horizontal + elliptical frosted color spill from
+    // the project avatar badge across the left/center of the main header bar.
+    const QString projText = m_project != nullptr ? m_project->text() : QString();
+    const QColor projColor = shell_detail::projectAvatarColor(projText);
+    const QPointF projCenter = (m_project != nullptr && m_project->isVisible())
+                                   ? QPointF(m_project->geometry().center())
+                                   : QPointF(scaledPx(140), height() * 0.5);
+
+    const qreal washSpan = std::max<qreal>(scaledPx(480), width() * 0.44);
+    QLinearGradient projectWash(0.0, 0.0, washSpan, 0.0);
+    const qreal peakStop = std::clamp(projCenter.x() / std::max<qreal>(1.0, washSpan), 0.08, 0.55);
+    auto withAlpha = [](QColor c, int a) {
+        c.setAlpha(std::clamp(a, 0, 255));
+        return c;
+    };
+    const int washPeak = isDark ? 44 : 26;
+    projectWash.setColorAt(0.00, withAlpha(projColor, washPeak / 2));
+    projectWash.setColorAt(peakStop, withAlpha(projColor, washPeak));
+    projectWash.setColorAt(std::min(1.0, peakStop + 0.25), withAlpha(projColor, washPeak / 2));
+    projectWash.setColorAt(1.00, withAlpha(projColor, 0));
+    painter.fillRect(QRectF(0.0, 0.0, washSpan, height()), projectWash);
+
+    const int projGlowAlpha = (m_project != nullptr && m_project->underMouse()) ? (isDark ? 88 : 54)
+                                                                                : (isDark ? 68 : 42);
+    shell_detail::paintEllipticalGlow(painter, projCenter,
+                                      std::max<qreal>(scaledPx(280), width() * 0.22),
+                                      height() * 2.5, projColor, projGlowAlpha);
+
+    // 2. Frost Brand Badge top-left glacial cyan spill.
+    const QPointF menuCenter = (m_mainMenuButton != nullptr && m_mainMenuButton->isVisible())
+                                   ? QPointF(m_mainMenuButton->geometry().left() + scaledPx(18), height() * 0.5)
+                                   : QPointF(scaledPx(22), height() * 0.5);
+    shell_detail::paintEllipticalGlow(painter, menuCenter, scaledPx(95), height() * 1.9,
+                                      QColor(0x21, 0xD4, 0xFD), isDark ? 28 : 16);
+
+    // 3. VCS Branch pill subtle cool-indigo spill when visible.
+    if (m_vcsBranch != nullptr && m_vcsBranch->isVisible()) {
+        const int vcsAlpha = m_vcsBranch->underMouse() ? (isDark ? 46 : 28) : (isDark ? 22 : 14);
+        shell_detail::paintEllipticalGlow(painter, QPointF(m_vcsBranch->geometry().center()),
+                                          scaledPx(115), height() * 1.8,
+                                          QColor(0x5C, 0x7C, 0xFA), vcsAlpha);
+    }
+
+    // 4. Run / Debug / Stop cluster ambient color spill into the frosted header.
+    for (const Slot& slot : m_slots) {
+        if (slot.button == nullptr || !slot.button->isVisible()) {
+            continue;
+        }
+        const QPointF btnCenter(slot.button->geometry().center());
+        if (slot.iconRole == IconRole::Success) {
+            const int alpha = slot.button->underMouse()
+                                  ? (isDark ? 68 : 44)
+                                  : (slot.button->isEnabled() ? (isDark ? 38 : 24) : (isDark ? 18 : 10));
+            shell_detail::paintEllipticalGlow(painter, btnCenter, scaledPx(82), height() * 1.9,
+                                              QColor(0x3F, 0xB9, 0x50), alpha);
+        } else if (slot.iconRole == IconRole::Error && slot.button->isEnabled()) {
+            const int alpha = slot.button->underMouse() ? (isDark ? 72 : 48) : (isDark ? 46 : 28);
+            shell_detail::paintEllipticalGlow(painter, btnCenter, scaledPx(86), height() * 1.9,
+                                              QColor(0xE5, 0x53, 0x4B), alpha);
+        }
+    }
+
+    // 5. Frosted glass surface sheen, top specular highlight, and 1px bottom separator.
+    shell_detail::paintFrostedGlassSheen(painter, rect(), isDark, true);
     painter.fillRect(QRect(0, height() - 1, width(), 1),
                      themeColor(ColorKey::SeparatorColor, palette().color(QPalette::Mid)));
 }
@@ -740,12 +844,13 @@ void MainToolbar::updateTabOrder() {
     }
 }
 
-void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText) {
+void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText,
+                          std::optional<IconRole> iconRole) {
     auto* button = new QToolButton(this);
     button->setObjectName(QStringLiteral("toolbar.") + shell_detail::fromUtf8(actionId));
     button->setAutoRaise(true);
     button->setFocusPolicy(Qt::TabFocus);
-    const QIcon icon = shell_detail::themedIcon(iconId);
+    const QIcon icon = shell_detail::themedIcon(iconId, iconRole);
     if (icon.isNull()) {
         button->setText(text(fallbackText));
     } else {
@@ -763,12 +868,18 @@ void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, st
         }
     });
     addWidget(button);
-    m_slots.push_back(Slot{id, id, button});
+    m_slots.push_back(Slot{id, id, std::string(iconId), iconRole, button});
 }
 
 void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService& keymap,
                           const input::ActionContext& context) {
     for (Slot& slot : m_slots) {
+        if (!slot.iconId.empty()) {
+            const QIcon slotIcon = shell_detail::themedIcon(slot.iconId, slot.iconRole);
+            if (!slotIcon.isNull()) {
+                slot.button->setIcon(slotIcon);
+            }
+        }
         const std::optional<input::ActionId> id = registry.find(slot.actionId);
         if (!id) {
             slot.button->setEnabled(false);
@@ -787,6 +898,29 @@ void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService&
     if (!paletteIcon.isNull()) {
         m_themeButton->setIcon(paletteIcon);
     }
+    const auto refreshNavButton = [&](QToolButton* btn, std::string_view actionId, std::string_view iconId) {
+        if (btn == nullptr) {
+            return;
+        }
+        const QIcon navIcon = shell_detail::themedIcon(iconId);
+        if (!navIcon.isNull()) {
+            btn->setIcon(navIcon);
+        }
+        if (const std::optional<input::ActionId> id = registry.find(actionId); id) {
+            QString tooltip = qtr(shell_detail::kActionsContext, registry.info(*id).name);
+            if (const std::optional<input::Sequence> shortcut = keymap.primaryShortcut(*id); shortcut) {
+                tooltip += QStringLiteral(" (") +
+                           shell_detail::fromUtf8(input::toDisplayText(*shortcut, keymap.layout(), keymap.platform())) +
+                           QStringLiteral(")");
+            }
+            btn->setToolTip(tooltip);
+            btn->setEnabled(registry.isEnabled(*id, context));
+        } else {
+            btn->setEnabled(false);
+        }
+    };
+    refreshNavButton(m_backButton, "navigate.back", icons::kNavBack);
+    refreshNavButton(m_forwardButton, "navigate.forward", icons::kNavForward);
 }
 
 } // namespace frost::ui

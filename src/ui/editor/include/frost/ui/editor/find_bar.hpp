@@ -69,8 +69,10 @@ signals:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
+    QToolButton* m_expandReplace = nullptr;
     QLineEdit* m_find;
     QLineEdit* m_replace;
     QToolButton* m_case;

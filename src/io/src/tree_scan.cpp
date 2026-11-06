@@ -141,7 +141,13 @@ const IgnoreRules& defaultProjectExcludes() {
                                                                                 "[Rr]elease/\n"
                                                                                 "x64/\n"
                                                                                 "x86/\n"
-                                                                                "ARM64/\n",
+                                                                                "ARM64/\n"
+                                                                                "/[Ll]ibrary/\n"
+                                                                                "/[Tt]emp/\n"
+                                                                                "/[Ll]ogs/\n"
+                                                                                "/[Uu]ser[Ss]ettings/\n"
+                                                                                "/MemoryCaptures/\n"
+                                                                                "node_modules/\n",
                                                                                 {}, "<FrostIDE default excludes>"));
     return *kRules;
 }

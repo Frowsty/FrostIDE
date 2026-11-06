@@ -9,15 +9,21 @@
 #include "frost/lang/uri.hpp"
 
 #include <QCryptographicHash>
+#include <QDir>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QPointer>
 #include <QTimer>
 
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <condition_variable>
 #include <mutex>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace frost::app {
 namespace {
@@ -56,6 +62,92 @@ Result<std::string> externalProjectRoot(std::string_view project) {
     if (canonical.isEmpty())
         return fail(ErrorCode::IoError, "cannot resolve project path");
     return utf8(canonical);
+}
+std::optional<std::string> inferExternalProjectRootForFile(std::string_view filePath) {
+    if (filePath.empty() || filePath.find('\0') != std::string_view::npos)
+        return std::nullopt;
+    const QFileInfo fileInfo(qs(filePath));
+    if (!fileInfo.exists() || !fileInfo.isFile())
+        return std::nullopt;
+    const QString suffix = fileInfo.suffix().toLower();
+    if (suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
+        fileInfo.fileName().compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0)
+        return std::nullopt;
+    const QString canonicalFile = fileInfo.canonicalFilePath();
+    if (canonicalFile.isEmpty())
+        return std::nullopt;
+
+    struct AncestorDir {
+        QString path;
+        QString childName;
+    };
+    std::vector<AncestorDir> chain;
+    QDir current(QFileInfo(canonicalFile).absolutePath());
+    QString childName;
+    for (int depth = 0; depth < 24 && !current.isRoot(); ++depth) {
+        const QString canonicalDir = QFileInfo(current.absolutePath()).canonicalFilePath();
+        const QString dirPath = canonicalDir.isEmpty() ? current.absolutePath() : canonicalDir;
+        if (dirPath.isEmpty())
+            break;
+        chain.push_back(AncestorDir{dirPath, childName});
+        childName = current.dirName();
+        if (!current.cdUp())
+            break;
+    }
+    if (chain.empty())
+        return std::nullopt;
+
+    const auto hasEntryWithSuffix = [](const QDir& dir, QStringView ext) {
+        const auto entries = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+        return std::ranges::any_of(entries, [&](const QFileInfo& entry) {
+            return entry.suffix().compare(ext, Qt::CaseInsensitive) == 0;
+        });
+    };
+
+    // Pass 1: Explicit FrostEngine project root (.frostproj file or .frost directory).
+    for (const auto& ancestor : chain) {
+        const QDir dir(ancestor.path);
+        if (hasEntryWithSuffix(dir, u"frostproj") || QFileInfo(dir.filePath(QStringLiteral(".frost"))).isDir()) {
+            if (auto root = externalProjectRoot(utf8(ancestor.path)))
+                return *root;
+        }
+    }
+
+    // Pass 2: Parent directory of an "Assets" folder (FrostEngine / Unity layout: <Root>/Assets/...).
+    for (const auto& ancestor : chain) {
+        if (ancestor.childName.compare(QStringLiteral("Assets"), Qt::CaseInsensitive) == 0) {
+            if (auto root = externalProjectRoot(utf8(ancestor.path)))
+                return *root;
+        }
+    }
+
+    // Pass 3: Workspace markers (.luarc.json, ProjectSettings, .sln, .slnx, CMakeLists.txt).
+    for (const auto& ancestor : chain) {
+        const QDir dir(ancestor.path);
+        if (QFileInfo(dir.filePath(QStringLiteral(".luarc.json"))).isFile() ||
+            QFileInfo(dir.filePath(QStringLiteral("ProjectSettings"))).isDir() ||
+            hasEntryWithSuffix(dir, u"sln") || hasEntryWithSuffix(dir, u"slnx") ||
+            QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile()) {
+            if (auto root = externalProjectRoot(utf8(ancestor.path)))
+                return *root;
+        }
+    }
+
+    // Pass 4: Parent directory of a "Scripts" folder (e.g. <Root>/Scripts/foo.lua).
+    for (const auto& ancestor : chain) {
+        if (ancestor.childName.compare(QStringLiteral("Scripts"), Qt::CaseInsensitive) == 0) {
+            if (auto root = externalProjectRoot(utf8(ancestor.path)))
+                return *root;
+        }
+    }
+
+    // Pass 5: A .lua script directly in a non-root project folder.
+    if (suffix == QStringLiteral("lua")) {
+        if (auto root = externalProjectRoot(utf8(chain.front().path)))
+            return *root;
+    }
+
+    return std::nullopt;
 }
 std::string externalProjectKey(std::string_view root) {
     const std::string key = lang::documentKey(root);
@@ -125,6 +217,9 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
     } else {
         payload.set("line", line).set("column", column);
     }
+#ifdef _WIN32
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
     auto reply = io::requestLocalIpc(externalProjectKey(root), payload.dump(), 5s);
     if (!reply)
         return std::unexpected(std::move(reply.error()));
@@ -212,6 +307,8 @@ Result<std::string> ProjectOpenBroker::accept(std::string request) {
             openExternalFile(m_workbench, file, static_cast<int>(*line), static_cast<int>(*column), columnUtf16);
         !opened)
         return std::unexpected(std::move(opened.error()));
+    if (m_window.isMinimized())
+        m_window.setWindowState((m_window.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
     m_window.show();
     m_window.raise();
     m_window.activateWindow();

@@ -51,6 +51,67 @@ bool isCodeFileName(std::string_view path) {
 
 NodeId nodeFromInternalId(quintptr id) { return NodeId{static_cast<std::uint32_t>(id)}; }
 
+QIcon solutionFileBadgeIcon(std::string_view path, const QIcon& fallback) {
+    const std::string_view rawName = io::fileName(path);
+    const QString fileName = qs(rawName);
+    const std::size_t dot = rawName.rfind('.');
+    std::string ext;
+    if (dot != std::string_view::npos) {
+        ext.assign(rawName.substr(dot + 1));
+        for (char& c : ext) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+    }
+
+    QString label;
+    QColor badgeColor;
+    if (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "c++" || ext == "cppm" || ext == "ixx") {
+        label = QStringLiteral("C+");
+        badgeColor = QColor(0x35, 0x74, 0xF0);
+    } else if (ext == "h" || ext == "hh" || ext == "hpp" || ext == "hxx" || ext == "inl") {
+        label = QStringLiteral("H");
+        badgeColor = QColor(0x9C, 0x59, 0xD1);
+    } else if (ext == "c") {
+        label = QStringLiteral("C");
+        badgeColor = QColor(0x2A, 0xAC, 0xB8);
+    } else if (ext == "cs" || ext == "csx") {
+        label = QStringLiteral("C#");
+        badgeColor = QColor(0x57, 0x96, 0x5C);
+    } else if (fileName.compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0 || ext == "cmake") {
+        label = QStringLiteral("CM");
+        badgeColor = QColor(0x00, 0x96, 0x88);
+    } else if (ext == "lua") {
+        label = QStringLiteral("LU");
+        badgeColor = QColor(0x54, 0x8A, 0xF7);
+    } else if (ext == "json") {
+        label = QStringLiteral("{}");
+        badgeColor = QColor(0xD9, 0x77, 0x24);
+    } else {
+        return fallback;
+    }
+
+    QIcon icon;
+    for (const int dpr : {1, 2}) {
+        QPixmap pm(16 * dpr, 16 * dpr);
+        pm.setDevicePixelRatio(dpr);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(badgeColor);
+        p.drawRoundedRect(QRectF(1.0, 2.0, 14.0, 12.0), 3.0, 3.0);
+        QFont f;
+        f.setBold(true);
+        f.setPixelSize(label.size() > 1 ? 8 : 9);
+        p.setFont(f);
+        p.setPen(QColor(255, 255, 255));
+        p.drawText(QRectF(1.0, 2.0, 14.0, 12.0), Qt::AlignCenter, label);
+        p.end();
+        icon.addPixmap(pm);
+    }
+    return icon;
+}
+
 } // namespace
 
 std::string_view solutionNodeIconId(const project::SolutionModel& model, NodeId id) noexcept {
@@ -184,7 +245,13 @@ QVariant SolutionTreeModel::data(const QModelIndex& index, int role) const {
     const project::Node& node = m_solution->node(*id);
     switch (role) {
     case Qt::DisplayRole: return qs(node.displayName);
-    case Qt::DecorationRole: return m_icons->get(solutionNodeIconId(*m_solution, *id));
+    case Qt::DecorationRole: {
+        const QIcon baseIcon = m_icons->get(solutionNodeIconId(*m_solution, *id));
+        if (node.kind == NodeKind::File && !node.path.empty()) {
+            return solutionFileBadgeIcon(node.path, baseIcon);
+        }
+        return baseIcon;
+    }
     case Qt::ToolTipRole: {
         QString tip = qs(node.path);
         if (node.kind == NodeKind::UnavailableProject && node.project) {

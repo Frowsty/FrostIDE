@@ -36,6 +36,128 @@ namespace frost::ui {
 using shell_detail::fromUtf8;
 using shell_detail::text;
 
+namespace {
+
+// Renders a crisp Rider-style colored file-type badge icon (16x16) for editor tabs.
+QIcon fileTypeBadgeIcon(std::string_view path, const QIcon& fallback) {
+    const QString fileName = QFileInfo(fromUtf8(path)).fileName();
+    const QString ext = QFileInfo(fileName).suffix().toLower();
+
+    QString label;
+    QColor badgeColor;
+    if (ext == QStringLiteral("cpp") || ext == QStringLiteral("cc") || ext == QStringLiteral("cxx") ||
+        ext == QStringLiteral("c++") || ext == QStringLiteral("cppm") || ext == QStringLiteral("ixx")) {
+        label = QStringLiteral("C+");
+        badgeColor = QColor(0x35, 0x74, 0xF0); // Rider C++ Blue
+    } else if (ext == QStringLiteral("h") || ext == QStringLiteral("hh") || ext == QStringLiteral("hpp") ||
+               ext == QStringLiteral("hxx") || ext == QStringLiteral("inl")) {
+        label = QStringLiteral("H");
+        badgeColor = QColor(0x9C, 0x59, 0xD1); // Rider Header Purple
+    } else if (ext == QStringLiteral("c")) {
+        label = QStringLiteral("C");
+        badgeColor = QColor(0x2A, 0xAC, 0xB8); // Rider C Cyan
+    } else if (ext == QStringLiteral("cs") || ext == QStringLiteral("csx")) {
+        label = QStringLiteral("C#");
+        badgeColor = QColor(0x57, 0x96, 0x5C); // Rider C# Green
+    } else if (fileName.compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0 ||
+               ext == QStringLiteral("cmake")) {
+        label = QStringLiteral("CM");
+        badgeColor = QColor(0x00, 0x96, 0x88); // CMake Teal
+    } else if (ext == QStringLiteral("lua")) {
+        label = QStringLiteral("LU");
+        badgeColor = QColor(0x54, 0x8A, 0xF7); // Lua Blue
+    } else if (ext == QStringLiteral("json")) {
+        label = QStringLiteral("{}");
+        badgeColor = QColor(0xD9, 0x77, 0x24); // JSON Amber
+    } else if (ext == QStringLiteral("sln") || ext == QStringLiteral("slnx") || ext == QStringLiteral("vcxproj") ||
+               ext == QStringLiteral("csproj")) {
+        label = QStringLiteral("PR");
+        badgeColor = QColor(0x7C, 0x4D, 0xFF); // Project Violet
+    } else {
+        return fallback;
+    }
+
+    QIcon icon;
+    for (const int dpr : {1, 2}) {
+        QPixmap pm(16 * dpr, 16 * dpr);
+        pm.setDevicePixelRatio(dpr);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(badgeColor);
+        p.drawRoundedRect(QRectF(1.0, 2.0, 14.0, 12.0), 3.0, 3.0);
+        QFont f;
+        f.setBold(true);
+        f.setPixelSize(label.size() > 1 ? 8 : 9);
+        p.setFont(f);
+        p.setPen(QColor(255, 255, 255));
+        p.drawText(QRectF(1.0, 2.0, 14.0, 12.0), Qt::AlignCenter, label);
+        p.end();
+        icon.addPixmap(pm);
+    }
+    return icon;
+}
+
+[[nodiscard]] QColor fileTypeBadgeColor(const QString& titleOrPath, QColor fallback) {
+    QString clean = titleOrPath.trimmed();
+    if (clean.startsWith(QLatin1Char('*'))) {
+        clean.remove(0, 1);
+    }
+    const QFileInfo info(clean.trimmed());
+    const QString ext = info.suffix().toLower();
+    const QString fileName = info.fileName();
+    if (ext == QStringLiteral("cpp") || ext == QStringLiteral("cc") || ext == QStringLiteral("cxx") ||
+        ext == QStringLiteral("c++") || ext == QStringLiteral("ixx") || ext == QStringLiteral("cppm")) {
+        return QColor(0x35, 0x74, 0xF0);
+    }
+    if (ext == QStringLiteral("h") || ext == QStringLiteral("hh") || ext == QStringLiteral("hpp") ||
+        ext == QStringLiteral("hxx") || ext == QStringLiteral("inl")) {
+        return QColor(0x9C, 0x59, 0xD1);
+    }
+    if (ext == QStringLiteral("c")) {
+        return QColor(0x2A, 0xAC, 0xB8);
+    }
+    if (ext == QStringLiteral("cs") || ext == QStringLiteral("csx")) {
+        return QColor(0x57, 0x96, 0x5C);
+    }
+    if (fileName.compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0 ||
+        ext == QStringLiteral("cmake")) {
+        return QColor(0x00, 0x96, 0x88);
+    }
+    if (ext == QStringLiteral("lua")) {
+        return QColor(0x54, 0x8A, 0xF7);
+    }
+    if (ext == QStringLiteral("json")) {
+        return QColor(0xD9, 0x77, 0x24);
+    }
+    if (ext == QStringLiteral("sln") || ext == QStringLiteral("slnx") || ext == QStringLiteral("vcxproj") ||
+        ext == QStringLiteral("csproj")) {
+        return QColor(0x7C, 0x4D, 0xFF);
+    }
+    return fallback;
+}
+
+class EditorTabStripContainer final : public QWidget {
+public:
+    explicit EditorTabStripContainer(QWidget* parent = nullptr) : QWidget(parent) {}
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor bg =
+            frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : palette().color(QPalette::Window);
+        const QColor sep = frost != nullptr ? frost->color(ColorKey::SeparatorColor) : palette().color(QPalette::Mid);
+        const bool isDark = bg.lightness() < 128;
+        painter.fillRect(rect(), bg);
+        shell_detail::paintFrostedGlassSheen(painter, rect(), isDark, true);
+        painter.fillRect(QRect(0, height() - 1, width(), 1), sep);
+    }
+};
+
+} // namespace
+
 EditorTabBar::EditorTabBar(QWidget* parent) : QTabBar(parent) {
     setObjectName(QStringLiteral("editorTabBar"));
     setTabsClosable(true);
@@ -77,27 +199,71 @@ void EditorTabBar::contextMenuEvent(QContextMenuEvent* event) {
 }
 
 void EditorTabBar::paintEvent(QPaintEvent* event) {
+    const FrostStyle* frost = FrostStyle::current();
+    const auto themeColor = [frost](ColorKey key, QColor fallback) {
+        return frost != nullptr ? QColor::fromRgba(frost->theme().color(key).argb) : fallback;
+    };
+
+    {
+        QPainter bgPainter(this);
+        const QColor stripBg = themeColor(ColorKey::MainWindowBackground, palette().color(QPalette::Window));
+        bgPainter.fillRect(rect(), stripBg);
+        shell_detail::paintFrostedGlassSheen(bgPainter, rect(), stripBg.lightness() < 128, true);
+    }
+
     QTabBar::paintEvent(event);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    QColor border = palette().color(QPalette::Mid);
-    border.setAlpha(75);
-    painter.setPen(QPen(border, 1.0));
-    painter.drawLine(0, height() - 1, width(), height() - 1);
+    const QColor stripBg = themeColor(ColorKey::MainWindowBackground, palette().color(QPalette::Window));
+    const bool isDark = stripBg.lightness() < 128;
+    const QColor border = themeColor(ColorKey::SeparatorColor, palette().color(QPalette::Mid));
+    painter.fillRect(QRect(0, height() - 1, width(), 1), border);
 
+    const QColor accent = themeColor(ColorKey::TabbedPaneUnderlineColor,
+                                     themeColor(ColorKey::ComponentFocusColor, QColor(0x35, 0x74, 0xF0)));
     const int current = currentIndex();
+    for (int i = 0; i < count(); ++i) {
+        const QRect tRect = tabRect(i);
+        if (!tRect.isValid()) {
+            continue;
+        }
+        const QColor badgeCol = fileTypeBadgeColor(tabToolTip(i).isEmpty() ? tabText(i) : tabToolTip(i), accent);
+        painter.save();
+        painter.setClipRect(tRect);
+        if (i == current) {
+            // Active tab: soft color spill from the file-type badge on the left + upward glow from the #3574F0 underline.
+            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.left() + 18.0, tRect.center().y()),
+                                              72.0, tRect.height() * 1.4, badgeCol, isDark ? 34 : 20);
+            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.center().x(), tRect.bottom()),
+                                              tRect.width() * 0.65, 22.0, accent, isDark ? 42 : 24);
+            painter.fillRect(QRect(tRect.left(), tRect.top(), tRect.width(), 1),
+                             isDark ? QColor(255, 255, 255, 18) : QColor(255, 255, 255, 70));
+        } else {
+            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.left() + 18.0, tRect.center().y()),
+                                              54.0, tRect.height() * 1.2, badgeCol, isDark ? 18 : 10);
+        }
+        painter.restore();
+    }
     if (current >= 0 && current < count()) {
         const QRect activeRect = tabRect(current);
-        QColor underline = palette().color(QPalette::Highlight);
-        if (!underline.isValid() || underline.alpha() == 0) {
-            underline = QColor(0x35, 0x74, 0xF0);
+        painter.fillRect(QRect(activeRect.left(), height() - 3, activeRect.width(), 3), accent);
+    }
+
+    // Rider modified indicator dot on dirty tabs.
+    for (int i = 0; i < count(); ++i) {
+        if (tabText(i).startsWith(QLatin1Char('*'))) {
+            const QRect rect = tabRect(i);
+            int dotRight = rect.right() - 8;
+            for (const QTabBar::ButtonPosition side : {QTabBar::RightSide, QTabBar::LeftSide}) {
+                if (const QWidget* btn = tabButton(i, side); btn != nullptr && btn->isVisible()) {
+                    dotRight = std::min(dotRight, btn->geometry().left() - 4);
+                }
+            }
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(accent);
+            painter.drawEllipse(QRectF(dotRight - 6.0, rect.center().y() - 3.0, 6.0, 6.0));
         }
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(underline);
-        painter.drawRoundedRect(
-            QRectF(activeRect.left() + 2.0, activeRect.bottom() - 2.0, std::max(4.0, activeRect.width() - 4.0), 3.0),
-            1.5, 1.5);
     }
 }
 
@@ -138,16 +304,17 @@ EditorTabGroup::EditorTabGroup(IEditorFactory& factory, QWidget* parent)
     m_empty->setText(text("No files are open"));
     m_stack->addWidget(m_empty);
 
-    auto* strip = new QHBoxLayout();
-    strip->setContentsMargins(0, 0, 0, 0);
-    strip->setSpacing(0);
+    auto* stripContainer = new EditorTabStripContainer(this);
+    auto* strip = new QHBoxLayout(stripContainer);
+    strip->setContentsMargins(0, 0, 4, 0);
+    strip->setSpacing(2);
     strip->addWidget(m_bar, 1);
     strip->addWidget(m_listButton);
     strip->addWidget(m_closeGroupButton);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addLayout(strip);
+    layout->addWidget(stripContainer);
     layout->addWidget(m_stack, 1);
     m_bar->hide();
 
@@ -433,7 +600,7 @@ void EditorTabGroup::syncBar(int current) {
         updateTabText(i);
         const Tab& tab = m_tabs[static_cast<std::size_t>(i)];
         m_bar->setTabToolTip(i, QDir::toNativeSeparators(fromUtf8(tab.editor->path())));
-        m_bar->setTabIcon(i, tab.pinned ? pin : codeIcon);
+        m_bar->setTabIcon(i, tab.pinned ? pin : fileTypeBadgeIcon(tab.editor->path(), codeIcon));
         for (const QTabBar::ButtonPosition side : {QTabBar::LeftSide, QTabBar::RightSide}) {
             if (QWidget* button = m_bar->tabButton(i, side); button != nullptr) {
                 button->setVisible(!tab.pinned);

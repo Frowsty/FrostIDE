@@ -339,12 +339,20 @@ protected:
 
 private:
     struct WatchState;
+    struct TodoEntry {
+        std::string path;
+        std::string relativePath;
+        std::string snippet;
+        int line = 1;
+        int column = 1;
+    };
 
     void registerActions();
     void addAction(std::string_view id, std::string_view name, std::string_view group, std::function<void()> run,
                    std::function<bool()> enabled = {}, std::vector<std::string> synonyms = {});
     void addToolWindow();
     void addTodoToolWindow();
+    void applyTodoEntries(const std::vector<TodoEntry>& entries);
     void syncEditorBookmarks(const std::string& path);
     [[nodiscard]] std::string defaultTargetPathForModify() const;
     [[nodiscard]] Result<void> openRoot(std::string root, std::string solution, std::vector<std::string> solutionFiles);
@@ -408,6 +416,10 @@ private:
     QTimer* m_scanTimer = nullptr;
     bool m_scanPending = false;
     bool m_rescanQueued = false;
+    std::optional<sched::JoinHandle<std::vector<TodoEntry>>> m_todoScan;
+    std::stop_source m_todoStop;
+    std::uint64_t m_todoScanGeneration = 0;
+    bool m_todoRescanQueued = false;
     std::unique_ptr<WatchState> m_watch;
     QTimer* m_autosaveTimer = nullptr;
     bool m_restoring = false;

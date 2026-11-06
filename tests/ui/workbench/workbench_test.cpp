@@ -1263,14 +1263,15 @@ TEST_F(WorkbenchTest, LastEditLocationBookmarksAndTodoToolWindow) {
     app.workbench->toggleBookmark();
     EXPECT_EQ(app.workbench->bookmarks().size(), 1U);
 
-    // 3. TODO tool window scans project files for TODO / FIXME and navigates on activation.
-    app.workbench->refreshTodoItems();
+    // 3. TODO tool window scans project files for TODO / FIXME (including when shown via ToolWindowManager)
+    // and navigates on click or activation.
+    app.window->toolWindows().show(kTodoToolWindow);
     auto* todoList = app.window->findChild<QListWidget*>(QStringLiteral("todoToolWindowList"));
     ASSERT_NE(todoList, nullptr);
     ASSERT_EQ(todoList->count(), 2);
     EXPECT_TRUE(todoList->item(0)->text().contains(QStringLiteral("TODO")));
     EXPECT_TRUE(todoList->item(1)->text().contains(QStringLiteral("FIXME")));
-    emit todoList->itemActivated(todoList->item(1));
+    emit todoList->itemClicked(todoList->item(1));
     EXPECT_EQ(app.activePath(), "/proj/src/todo_sample.cpp");
     EXPECT_EQ(app.window->tabs().currentEditor()->status().line, 3);
 }

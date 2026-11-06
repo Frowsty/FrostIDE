@@ -573,6 +573,7 @@ private:
     void syncLuaDocument(DocumentEditorView& view);
     void onLuaDiagnostics(const std::string& file);
     void updateLanguageTarget();
+    void offerProjectTrust();
     void offerLuaTrust();
     void startManagedDebug();
     void invalidateManagedDebug();
@@ -678,6 +679,8 @@ private:
     std::shared_ptr<lang::ManagedService> m_managed;
     std::uint64_t m_managedListener = 0;
     std::vector<sched::JoinHandle<void>> m_retiredManaged;
+    QPointer<ui::TrustDialog> m_projectTrustDialog;
+    std::string m_projectTrustPromptedRoot;
     QPointer<ui::TrustDialog> m_managedTrustDialog;
     std::string m_unityRevisionRoot;
     std::string m_unityRevision;

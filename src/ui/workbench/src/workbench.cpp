@@ -232,26 +232,167 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
 }
 
+[[nodiscard]] bool isTodoScannablePath(std::string_view path) noexcept {
+    if (path.empty()) {
+        return false;
+    }
+    const auto toLowerAscii = [](char c) noexcept {
+        return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
+    };
+    const auto containsSegmentInsensitive = [&](std::string_view seg) noexcept {
+        for (std::size_t i = 0; i + seg.size() + 2 <= path.size(); ++i) {
+            const char prev = path[i];
+            if (prev != '/' && prev != '\\') {
+                continue;
+            }
+            const char next = path[i + 1 + seg.size()];
+            if (next != '/' && next != '\\') {
+                continue;
+            }
+            bool match = true;
+            for (std::size_t j = 0; j < seg.size(); ++j) {
+                if (toLowerAscii(path[i + 1 + j]) != seg[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    static constexpr std::string_view kIgnoredDirs[] = {
+        "library", "temp", "logs", "usersettings", "memorycaptures", "packagecache",
+        "obj",     "bin",  "out",  "build",        "node_modules",   ".git",
+        ".vs",     ".svn", ".hg",  "artifacts",    "shadercache",    "il2cpp_cache"};
+    for (std::string_view seg : kIgnoredDirs) {
+        if (containsSegmentInsensitive(seg)) {
+            return false;
+        }
+    }
+
+    const std::string_view name = nav::baseName(path);
+    if (name == "CMakeLists.txt" || name == "Makefile" || name == "Dockerfile") {
+        return true;
+    }
+    const std::size_t dot = name.rfind('.');
+    if (dot == std::string_view::npos || dot + 1 >= name.size()) {
+        return false;
+    }
+    const std::string_view rawExt = name.substr(dot);
+    if (rawExt.size() > 12) {
+        return false;
+    }
+    char extBuf[12]{};
+    for (std::size_t i = 0; i < rawExt.size(); ++i) {
+        extBuf[i] = toLowerAscii(rawExt[i]);
+    }
+    const std::string_view ext(extBuf, rawExt.size());
+
+    static constexpr std::string_view kSourceExts[] = {
+        ".c",      ".cc",     ".cpp",     ".cxx",   ".c++",  ".cppm", ".ixx",  ".h",    ".hh",   ".hpp",
+        ".hxx",    ".inl",    ".ipp",     ".cs",    ".csx",  ".fs",   ".vb",   ".lua",  ".luau", ".hlsl",
+        ".hlsli",  ".glsl",   ".vert",    ".frag",  ".comp", ".shader", ".cginc", ".compute", ".uss", ".uxml",
+        ".py",     ".js",     ".ts",      ".jsx",   ".tsx",  ".rs",   ".go",   ".java", ".kt",   ".swift",
+        ".cmake",  ".txt",    ".md",      ".sh",    ".ps1",  ".bat",  ".cmd"};
+    for (std::string_view allowed : kSourceExts) {
+        if (ext == allowed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool hasCommentPrefixBefore(std::string_view line, std::size_t pos) noexcept {
+    const std::string_view prefix = line.substr(0, pos);
+    if (prefix.find("//") != std::string_view::npos || prefix.find("/*") != std::string_view::npos ||
+        prefix.find("--") != std::string_view::npos || prefix.find("<!--") != std::string_view::npos ||
+        prefix.find('#') != std::string_view::npos) {
+        return true;
+    }
+    const std::size_t firstNonSpace = prefix.find_first_not_of(" \t");
+    return firstNonSpace != std::string_view::npos && (prefix[firstNonSpace] == '*' || prefix[firstNonSpace] == ';');
+}
+
+[[nodiscard]] bool mayContainTodoTag(std::string_view content) noexcept {
+    const auto toUpper = [](char c) noexcept {
+        return (c >= 'a' && c <= 'z') ? static_cast<char>(c - ('a' - 'A')) : c;
+    };
+    for (std::size_t i = 0; i + 3 <= content.size(); ++i) {
+        const char c0 = toUpper(content[i]);
+        if (c0 == 'T' && i + 4 <= content.size() && toUpper(content[i + 1]) == 'O' &&
+            toUpper(content[i + 2]) == 'D' && toUpper(content[i + 3]) == 'O') {
+            return true;
+        }
+        if (c0 == 'F' && i + 5 <= content.size() && toUpper(content[i + 1]) == 'I' &&
+            toUpper(content[i + 2]) == 'X' && toUpper(content[i + 3]) == 'M' && toUpper(content[i + 4]) == 'E') {
+            return true;
+        }
+        if (c0 == 'H' && i + 4 <= content.size() && toUpper(content[i + 1]) == 'A' &&
+            toUpper(content[i + 2]) == 'C' && toUpper(content[i + 3]) == 'K') {
+            return true;
+        }
+        if (c0 == 'B' && toUpper(content[i + 1]) == 'U' && toUpper(content[i + 2]) == 'G') {
+            return true;
+        }
+        if (c0 == 'U' && i + 6 <= content.size() && toUpper(content[i + 1]) == 'N' &&
+            toUpper(content[i + 2]) == 'D' && toUpper(content[i + 3]) == 'O' && toUpper(content[i + 4]) == 'N' &&
+            toUpper(content[i + 5]) == 'E') {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] std::optional<std::pair<std::size_t, std::string_view>> findTodoTag(std::string_view line) {
-    static constexpr std::string_view kTags[] = {"TODO", "FIXME"};
-    const auto isWordChar = [](char c) {
+    static constexpr std::string_view kTags[] = {"TODO", "FIXME", "HACK", "UNDONE", "BUG"};
+    const auto isWordChar = [](char c) noexcept {
         const auto uc = static_cast<unsigned char>(c);
         return std::isalnum(uc) != 0 || c == '_';
     };
+    const auto toUpperAscii = [](char c) noexcept {
+        return (c >= 'a' && c <= 'z') ? static_cast<char>(c - ('a' - 'A')) : c;
+    };
+    const auto matchesTagAt = [&](std::size_t pos, std::string_view tag, bool& exactUpper) noexcept {
+        if (pos + tag.size() > line.size()) {
+            return false;
+        }
+        exactUpper = true;
+        for (std::size_t i = 0; i < tag.size(); ++i) {
+            if (line[pos + i] != tag[i]) {
+                exactUpper = false;
+            }
+            if (toUpperAscii(line[pos + i]) != tag[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
     std::optional<std::pair<std::size_t, std::string_view>> best;
     for (std::string_view tag : kTags) {
-        std::size_t pos = 0;
-        while ((pos = line.find(tag, pos)) != std::string_view::npos) {
+        for (std::size_t pos = 0; pos + tag.size() <= line.size(); ++pos) {
+            bool exactUpper = false;
+            if (!matchesTagAt(pos, tag, exactUpper)) {
+                continue;
+            }
             const bool leftOk = (pos == 0) || !isWordChar(line[pos - 1]);
             const std::size_t end = pos + tag.size();
             const bool rightOk = (end >= line.size()) || !isWordChar(line[end]);
-            if (leftOk && rightOk) {
-                if (!best || pos < best->first) {
-                    best = std::pair<std::size_t, std::string_view>{pos, tag};
-                }
-                break;
+            if (!leftOk || !rightOk) {
+                continue;
             }
-            pos += tag.size();
+            const bool inComment = hasCommentPrefixBefore(line, pos);
+            const bool hasColon = (end < line.size() && line[end] == ':');
+            const bool isPrimaryTag = (tag == "TODO" || tag == "FIXME");
+            if (!inComment && !hasColon && !(isPrimaryTag && exactUpper)) {
+                continue;
+            }
+            if (!best || pos < best->first) {
+                best = std::pair<std::size_t, std::string_view>{pos, tag};
+            }
+            break;
         }
     }
     return best;
@@ -460,6 +601,11 @@ Workbench::~Workbench() {
             retireSnapshot(m_services.scheduler, std::move(*result));
         }
     }
+    if (m_todoScan) {
+        m_todoStop.request_stop();
+        static_cast<void>(m_todoScan->join());
+        m_todoScan.reset();
+    }
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles({});
     }
@@ -577,8 +723,11 @@ void Workbench::registerActions() {
               [this] { m_shell.toolWindows().show(kFileSystemToolWindow); }, {}, {"files", "folder", "tree"});
     addAction(a::kTodoWindow, "TODO", "View",
               [this] {
-                  refreshTodoItems();
+                  const bool alreadyVisible = m_shell.toolWindows().isVisible(kTodoToolWindow);
                   m_shell.toolWindows().show(kTodoToolWindow);
+                  if (alreadyVisible) {
+                      refreshTodoItems();
+                  }
               },
               {}, {"todo", "fixme", "tasks"});
     // The settings files' stand-in actions, described by frost::settings (settingsActions()).
@@ -639,9 +788,11 @@ void Workbench::addToolWindow() {
 void Workbench::addTodoToolWindow() {
     auto* list = new QListWidget(&m_shell);
     list->setObjectName(QStringLiteral("todoToolWindowList"));
+    list->setFrameShape(QFrame::NoFrame);
+    list->setUniformItemSizes(true);
     list->hide();
     m_todoList = list;
-    connect(list, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
+    const auto openTodoItem = [this](QListWidgetItem* item) {
         if (item == nullptr) {
             return;
         }
@@ -653,7 +804,15 @@ void Workbench::addTodoToolWindow() {
         const int line = map.value(QStringLiteral("line"), 1).toInt();
         const int column = map.value(QStringLiteral("column"), 1).toInt();
         static_cast<void>(openFile(toUtf8(path), LinePosition{line, column}));
-    });
+    };
+    connect(list, &QListWidget::itemActivated, this, openTodoItem);
+    connect(list, &QListWidget::itemClicked, this, openTodoItem);
+    connect(&m_shell.toolWindows(), &ToolWindowManager::visibilityChanged, this,
+            [this](const QString& id, bool visible) {
+                if (visible && id == fromUtf8(kTodoToolWindow)) {
+                    refreshTodoItems();
+                }
+            });
     ToolWindowSpec spec;
     spec.id = std::string(kTodoToolWindow);
     spec.title = text("TODO");
@@ -742,6 +901,8 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     ++m_projectGeneration;
     m_scanStop.request_stop();
     m_initialStop.request_stop();
+    m_todoStop.request_stop();
+    m_todoRescanQueued = false;
     m_scanPublished = false;
     m_root = std::move(root);
     auto oldSolutionFiles = std::move(m_solutionFiles);
@@ -783,6 +944,8 @@ bool Workbench::closeProject() {
     ++m_projectGeneration;
     m_scanStop.request_stop();
     m_initialStop.request_stop();
+    m_todoStop.request_stop();
+    m_todoRescanQueued = false;
     m_scanPublished = false;
     m_root.clear();
     m_solution.clear();
@@ -849,6 +1012,9 @@ void Workbench::pollInitialFiles() {
         m_files = std::make_shared<nav::ProjectFiles>(std::move(files));
         if (m_fileSystem)
             m_fileSystem->setFiles(m_files);
+        if (m_todoList != nullptr && (m_shell.toolWindows().isVisible(kTodoToolWindow) || m_todoList->isVisible())) {
+            refreshTodoItems();
+        }
         retireSnapshot(m_services.scheduler, std::move(old));
     } else {
         retireSnapshot(m_services.scheduler, std::make_shared<nav::ProjectFiles>(std::move(files)));
@@ -879,7 +1045,18 @@ void Workbench::pollScan() {
         }
     }
     pollInitialFiles();
-    if (!m_scan && !m_initialFiles)
+    if (m_todoScan && m_todoScan->ready()) {
+        auto entries = m_todoScan->join();
+        m_todoScan.reset();
+        if (m_todoScanGeneration == m_projectGeneration && !m_todoStop.stop_requested()) {
+            applyTodoEntries(entries);
+        }
+        if (m_todoRescanQueued) {
+            m_todoRescanQueued = false;
+            refreshTodoItems();
+        }
+    }
+    if (!m_scan && !m_initialFiles && !m_todoScan)
         m_scanTimer->stop();
 }
 
@@ -889,14 +1066,19 @@ void Workbench::applyScan(Result<std::shared_ptr<const nav::ProjectFiles>> scan)
         return;
     }
     m_scanPublished = true;
-    if (*scan == m_files)
+    if (*scan == m_files) {
+        if (m_todoList != nullptr && (m_shell.toolWindows().isVisible(kTodoToolWindow) || m_todoList->isVisible()) &&
+            m_todoList->count() == 0) {
+            refreshTodoItems();
+        }
         return;
+    }
     auto oldFiles = std::move(m_files);
     m_files = std::move(*scan);
     if (m_fileSystem != nullptr) {
         m_fileSystem->setFiles(m_files);
     }
-    if (m_todoList != nullptr && m_shell.toolWindows().isVisible(kTodoToolWindow)) {
+    if (m_todoList != nullptr && (m_shell.toolWindows().isVisible(kTodoToolWindow) || m_todoList->isVisible())) {
         refreshTodoItems();
     }
     retireSnapshot(m_services.scheduler, std::move(oldFiles));
@@ -1221,6 +1403,8 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
     auto* popup = new ListPopup(&m_shell, categoryTitle(category), true);
     popup->setObjectName(QStringLiteral("searchEverywherePopup"));
     popup->setFilterMode(ListPopup::FilterMode::External);
+    popup->setScopeTabs({text("All"), text("Classes"), text("Files"), text("Symbols"), text("Actions")},
+                        static_cast<int>(category));
     auto currentCategory = std::make_shared<SearchEverywhereCategory>(category);
     auto queryGen = std::make_shared<std::uint64_t>(0);
     const auto buildSyncItems = [this, captured](const search::LocationQuery& location, const std::string& utf8,
@@ -1309,14 +1493,22 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
         }
     };
     connect(popup, &ListPopup::filterTextChanged, popup, update);
-    connect(popup, &ListPopup::tabPressed, popup, [popup, currentCategory, categoryTitle, update](bool backward) {
+    const auto switchCategory = [popup, currentCategory, categoryTitle, update](int next) {
+        if (next < 0 || next >= 5) {
+            return;
+        }
+        *currentCategory = static_cast<SearchEverywhereCategory>(next);
+        popup->setTitle(categoryTitle(*currentCategory));
+        popup->setActiveScopeTab(next);
+        update(popup->filterField() != nullptr ? popup->filterField()->text() : QString());
+    };
+    connect(popup, &ListPopup::tabPressed, popup, [currentCategory, switchCategory](bool backward) {
         const int count = 5;
         const int cur = static_cast<int>(*currentCategory);
         const int next = backward ? (cur + count - 1) % count : (cur + 1) % count;
-        *currentCategory = static_cast<SearchEverywhereCategory>(next);
-        popup->setTitle(categoryTitle(*currentCategory));
-        update(popup->filterField() != nullptr ? popup->filterField()->text() : QString());
+        switchCategory(next);
     });
+    connect(popup, &ListPopup::scopeTabClicked, popup, switchCategory);
     connect(popup, &ListPopup::itemAccepted, this,
             [this, captured](int, const QVariant& data) { acceptItem(data, captured); });
     update(QString());
@@ -1508,61 +1700,160 @@ ListPopup* Workbench::showBookmarksPopup() {
     return popup;
 }
 
+void Workbench::applyTodoEntries(const std::vector<TodoEntry>& entries) {
+    if (m_todoList == nullptr) {
+        return;
+    }
+    m_todoList->setUpdatesEnabled(false);
+    m_todoList->clear();
+    for (const TodoEntry& entry : entries) {
+        auto* item = new QListWidgetItem(QStringLiteral("%1:%2  %3")
+                                             .arg(nativePath(entry.relativePath))
+                                             .arg(entry.line)
+                                             .arg(fromUtf8(entry.snippet).trimmed()));
+        item->setIcon(fileIcon(nav::baseName(entry.path)));
+        QVariantMap data;
+        data.insert(QStringLiteral("path"), fromUtf8(entry.path));
+        data.insert(QStringLiteral("line"), entry.line);
+        data.insert(QStringLiteral("column"), entry.column);
+        item->setData(Qt::UserRole, data);
+        m_todoList->addItem(item);
+    }
+    m_todoList->setUpdatesEnabled(true);
+}
+
 void Workbench::refreshTodoItems() {
     if (m_todoList == nullptr) {
         return;
     }
-    m_todoList->clear();
-    if (!m_files) {
-        return;
-    }
-    for (const std::string& path : m_files->candidates()) {
-        std::string content;
-        if (const document::FileDocument* doc = m_services.documents.find(path); doc != nullptr) {
-            content = doc->document().committedText().text();
-        } else {
-            auto status = m_services.fs.status(path);
-            if (!status || status->type != io::FileType::Regular || status->size > 512ULL * 1024ULL) {
-                continue;
-            }
-            auto read = m_services.fs.readFile(path);
-            if (!read) {
-                continue;
-            }
-            content = std::move(*read);
+
+    static constexpr std::size_t kMaxCandidateFiles = 2048;
+    static constexpr std::size_t kMaxTodoItems = 1500;
+    static constexpr std::uint64_t kMaxFileBytes = 256ULL * 1024ULL;
+
+    std::vector<std::string> candidatePaths;
+    std::set<std::string, std::less<>> seen;
+    const auto addCandidate = [&](const std::string& path) {
+        if (candidatePaths.size() >= kMaxCandidateFiles || !isTodoScannablePath(path)) {
+            return;
         }
-        if (content.find("TODO") == std::string::npos && content.find("FIXME") == std::string::npos) {
+        if (seen.insert(path).second) {
+            candidatePaths.push_back(path);
+        }
+    };
+
+    if (m_solutionFiles) {
+        for (const std::string& path : *m_solutionFiles) {
+            addCandidate(path);
+        }
+    }
+    if (m_files) {
+        for (const std::string& path : m_files->candidates()) {
+            addCandidate(path);
+        }
+    }
+    for (const auto& doc : m_services.saveManager.documents()) {
+        if (doc != nullptr && !doc->path().empty()) {
+            addCandidate(doc->path());
+        }
+    }
+    for (EditorTabGroup* group : m_shell.tabs().groups()) {
+        if (group == nullptr) {
             continue;
         }
-        std::size_t pos = 0;
-        int lineNum = 1;
-        while (pos <= content.size()) {
-            const std::size_t nl = content.find('\n', pos);
-            std::string_view line = nl == std::string::npos ? std::string_view(content).substr(pos)
-                                                            : std::string_view(content).substr(pos, nl - pos);
-            if (!line.empty() && line.back() == '\r') {
-                line.remove_suffix(1);
+        for (int i = 0; i < group->count(); ++i) {
+            if (const IEditorView* editor = group->editor(i); editor != nullptr && !editor->path().empty()) {
+                addCandidate(editor->path());
             }
-            if (const auto match = findTodoTag(line)) {
-                const std::string_view snippet = line.substr(match->first);
-                const std::string rel = m_root.empty() ? path : nav::relativeTo(m_root, path);
-                auto* item = new QListWidgetItem(
-                    QStringLiteral("%1:%2  %3").arg(nativePath(rel)).arg(lineNum).arg(fromUtf8(snippet).trimmed()));
-                item->setIcon(fileIcon(nav::baseName(path)));
-                QVariantMap data;
-                data.insert(QStringLiteral("path"), fromUtf8(path));
-                data.insert(QStringLiteral("line"), lineNum);
-                data.insert(QStringLiteral("column"), static_cast<int>(match->first) + 1);
-                item->setData(Qt::UserRole, data);
-                m_todoList->addItem(item);
-            }
-            if (nl == std::string::npos) {
-                break;
-            }
-            pos = nl + 1;
-            ++lineNum;
         }
     }
+
+    std::map<std::string, std::string, std::less<>> openBuffers;
+    for (const auto& doc : m_services.saveManager.documents()) {
+        if (doc != nullptr && !doc->path().empty()) {
+            openBuffers.emplace(doc->path(), doc->document().text().text());
+        }
+    }
+
+    auto runScan = [root = m_root](io::IFileSystem& fs, const std::vector<std::string>& paths,
+                                   const std::map<std::string, std::string, std::less<>>& buffers,
+                                   std::stop_token token) -> std::vector<TodoEntry> {
+        std::vector<TodoEntry> entries;
+        for (const std::string& path : paths) {
+            if (token.stop_requested() || entries.size() >= kMaxTodoItems) {
+                break;
+            }
+            std::string content;
+            if (const auto it = buffers.find(path); it != buffers.end()) {
+                content = it->second;
+            } else {
+                auto status = fs.status(path);
+                if (!status || status->type != io::FileType::Regular || status->size == 0 ||
+                    status->size > kMaxFileBytes) {
+                    continue;
+                }
+                auto read = fs.readFile(path);
+                if (!read) {
+                    continue;
+                }
+                content = std::move(*read);
+            }
+            if (!mayContainTodoTag(content)) {
+                continue;
+            }
+            const std::string rel = root.empty() ? path : nav::relativeTo(root, path);
+            std::size_t pos = 0;
+            int lineNum = 1;
+            while (pos <= content.size() && entries.size() < kMaxTodoItems) {
+                const std::size_t nl = content.find('\n', pos);
+                std::string_view line = nl == std::string::npos ? std::string_view(content).substr(pos)
+                                                                : std::string_view(content).substr(pos, nl - pos);
+                if (!line.empty() && line.back() == '\r') {
+                    line.remove_suffix(1);
+                }
+                if (const auto match = findTodoTag(line)) {
+                    std::string_view snippet = line.substr(match->first);
+                    if (snippet.size() > 240) {
+                        snippet = snippet.substr(0, 240);
+                    }
+                    entries.push_back(
+                        TodoEntry{path, rel, std::string(snippet), lineNum, static_cast<int>(match->first) + 1});
+                }
+                if (nl == std::string::npos) {
+                    break;
+                }
+                pos = nl + 1;
+                ++lineNum;
+            }
+        }
+        return entries;
+    };
+
+    if (m_services.scheduler == nullptr) {
+        applyTodoEntries(runScan(m_services.fs, candidatePaths, openBuffers, {}));
+        return;
+    }
+
+    if (m_todoScan) {
+        m_todoStop.request_stop();
+        m_todoRescanQueued = true;
+        m_scanTimer->start();
+        return;
+    }
+
+    m_todoStop = std::stop_source();
+    m_todoScanGeneration = m_projectGeneration;
+    auto& fs = m_services.fs;
+    const std::stop_token token = m_todoStop.get_token();
+    auto task = [](io::IFileSystem& fileSystem, auto scanner, std::vector<std::string> paths,
+                   std::map<std::string, std::string, std::less<>> buffers,
+                   std::stop_token stopToken) -> sched::Task<std::vector<TodoEntry>> {
+        co_return scanner(fileSystem, paths, buffers, stopToken);
+    };
+    m_todoScan.emplace(m_services.scheduler->spawn(
+        sched::Lane::Background,
+        task(fs, std::move(runScan), std::move(candidatePaths), std::move(openBuffers), token)));
+    m_scanTimer->start();
 }
 
 // --- Sessions ---
@@ -1964,6 +2255,10 @@ void Workbench::reportSaveAll(const document::SaveAllResult& result, bool quiet)
         m_services.editors.refreshBanners(document->path());
         m_services.documents.notifyChanged(document->path());
     }
+    if (!result.saved.empty() && m_todoList != nullptr &&
+        (m_shell.toolWindows().isVisible(kTodoToolWindow) || m_todoList->isVisible())) {
+        refreshTodoItems();
+    }
     for (const document::FailedSave& failed : result.failed) {
         notifyError(text("Cannot save %1").arg(nativePath(failed.document->path())), failed.error);
     }
@@ -2031,6 +2326,9 @@ Result<void> Workbench::saveDocument() {
     auto saved = m_services.saveManager.save(*document);
     m_services.editors.refreshBanners(document->path());
     m_services.documents.notifyChanged(document->path());
+    if (m_todoList != nullptr && (m_shell.toolWindows().isVisible(kTodoToolWindow) || m_todoList->isVisible())) {
+        refreshTodoItems();
+    }
     if (!saved) {
         notifyError(text("Cannot save %1").arg(nativePath(document->path())), saved.error());
         return std::unexpected(std::move(saved.error()));

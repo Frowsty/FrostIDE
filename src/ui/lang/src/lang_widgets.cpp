@@ -6,6 +6,8 @@
 
 #include "frost/ui/lang/lang_widgets.hpp"
 
+#include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include <QApplication>
 #include <QCheckBox>
 #include <QFile>
@@ -332,19 +334,35 @@ CompletionPopup::CompletionPopup(QWidget* parent) : HintPopup(parent) {
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(1, 1, 1, 1);
     layout->setSpacing(1);
-    m_list = new QListWidget(this);
+    auto* leftPane = new QWidget(this);
+    auto* leftLayout = new QVBoxLayout(leftPane);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(0);
+    m_list = new QListWidget(leftPane);
     m_list->setObjectName(QStringLiteral("completionList"));
     m_list->setFocusPolicy(Qt::NoFocus);
+    m_list->setFrameShape(QFrame::NoFrame);
     m_list->setUniformItemSizes(true);
     m_list->setItemDelegate(new CompletionDelegate(m_list));
     m_list->setFixedWidth(kCompletionWidth);
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* footer = new QLabel(QStringLiteral("Enter to insert  •  Tab to replace  •  Esc to close"), leftPane);
+    footer->setObjectName(QStringLiteral("completionFooter"));
+    footer->setContentsMargins(8, 3, 8, 3);
+    QFont footerFont = footer->font();
+    if (footerFont.pointSizeF() > 8.0) {
+        footerFont.setPointSizeF(footerFont.pointSizeF() * 0.86);
+    }
+    footer->setFont(footerFont);
+    leftLayout->addWidget(m_list);
+    leftLayout->addWidget(footer);
     m_documentation = new QTextBrowser(this);
     m_documentation->setObjectName(QStringLiteral("completionDocumentation"));
     m_documentation->setFocusPolicy(Qt::NoFocus);
+    m_documentation->setFrameShape(QFrame::NoFrame);
     m_documentation->setFixedWidth(kDocumentationWidth);
     m_documentation->hide();
-    layout->addWidget(m_list);
+    layout->addWidget(leftPane);
     layout->addWidget(m_documentation, 0, Qt::AlignTop);
     // A click chooses the row; a double-click commits it.
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -577,6 +595,11 @@ FindUsagesPanel::FindUsagesPanel(QWidget* parent) : QWidget(parent) {
     m_title = new QLabel(this);
     m_groupByDirButton =
         makeToggleToolButton(this, QStringLiteral("Dir"), QStringLiteral("Group by Directory / File"), false);
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        if (const QIcon folderIcon = style->icon(icons::kNodesFolder); !folderIcon.isNull()) {
+            m_groupByDirButton->setIcon(folderIcon);
+        }
+    }
     m_showReadButton = makeToggleToolButton(this, QStringLiteral("R"), QStringLiteral("Show Read Access"), true);
     m_showWriteButton = makeToggleToolButton(this, QStringLiteral("W"), QStringLiteral("Show Write Access"), true);
     headerRow->addWidget(m_title, 1);
@@ -774,6 +797,11 @@ StructurePanel::StructurePanel(QWidget* parent) : QWidget(parent) {
     m_search->setObjectName(QStringLiteral("structureSearch"));
     m_search->setPlaceholderText(QStringLiteral("Filter symbols"));
     m_search->setClearButtonEnabled(true);
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        if (const QIcon searchIcon = style->icon(icons::kActionsSearch); !searchIcon.isNull()) {
+            m_search->addAction(searchIcon, QLineEdit::LeadingPosition);
+        }
+    }
     m_sortAlphaButton = makeToggleToolButton(this, QStringLiteral("A-Z"), QStringLiteral("Sort Alphabetically"), false);
     m_showFieldsButton = makeToggleToolButton(this, QStringLiteral("F"), QStringLiteral("Show Fields/Variables"), true);
     m_showFunctionsButton =

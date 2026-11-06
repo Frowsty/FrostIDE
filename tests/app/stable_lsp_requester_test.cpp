@@ -146,6 +146,20 @@ TEST(StableLspRequester, FormattingRoutesAcrossMixedLanguageTabs) {
     EXPECT_EQ(first->asInteger(), 2);
     EXPECT_EQ(second->asInteger(), 1);
     EXPECT_EQ(third->asInteger(), 3);
+
+    // Workspace-wide requests without textDocument (e.g. workspace/symbol) still reach an available
+    // language server even when a non-source tab (notes.txt) is active.
+    auto sym = frost::sched::syncWait(
+        requester.request("workspace/symbol", frost::lang::Json::object().set("query", "Player")));
+    ASSERT_TRUE(sym.has_value());
+    EXPECT_EQ(sym->asInteger(), 1);
+
+    // Hierarchy requests carrying item.uri route by that item's language.
+    auto itemParams = frost::lang::Json::object().set(
+        "item", frost::lang::Json::object().set("uri", frost::lang::pathToUri(root + "file.cs").value()));
+    auto hierarchy = frost::sched::syncWait(requester.request("typeHierarchy/supertypes", std::move(itemParams)));
+    ASSERT_TRUE(hierarchy.has_value());
+    EXPECT_EQ(hierarchy->asInteger(), 3);
 }
 
 } // namespace

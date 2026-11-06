@@ -399,7 +399,11 @@ TEST_F(UpdateDiscovery, InvalidAndExpiredCandidatesNeverHideValidLaterRelease) {
     EXPECT_NE(result.error().code(), frost::ErrorCode::NotFound);
 }
 TEST_F(UpdateDiscovery, AuthenticCurrentReleaseIsNotAValidationError) {
-    auto result = run({candidate("current", 40, "1.2.0")});
+    const auto badOld = candidate("old-retired-key", 39, "1.1.0");
+    const QString badOldSignature =
+        "https://github.com/Frowsty/FrostIDE/releases/download/old-retired-key/frost-update-stable-windows-x64.json.sig";
+    manager.responses[badOldSignature][0] ^= 1;
+    auto result = run({candidate("current", 40, "1.2.0"), badOld});
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), frost::ErrorCode::NotFound);
     EXPECT_EQ(result.error().message(), "No newer signed update is available");

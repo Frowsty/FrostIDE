@@ -46,6 +46,17 @@ sched::Task<Result<std::vector<Location>>> requestLocations(ILspRequester& serve
 
 sched::Task<Result<GotoResult>> gotoDeclarationOrUsages(ILspRequester& server, std::string path, LspPosition position,
                                                         std::stop_token token) {
+    auto declarations = co_await requestLocations(server, NavigationTarget::Declaration, path, position, token);
+    if (!declarations && declarations.error().code() == ErrorCode::Cancelled) {
+        co_return std::unexpected(std::move(declarations.error()));
+    }
+    if (declarations && !declarations->empty()) {
+        if (!anyContains(*declarations, path, position)) {
+            co_return GotoResult{.locations = std::move(*declarations), .showUsages = false};
+        }
+        // Caret is already on the symbol's declaration: run find usages.
+        co_return GotoResult{.locations = {}, .showUsages = true};
+    }
     auto definitions = co_await requestLocations(server, NavigationTarget::Definition, path, position, token);
     if (!definitions) {
         co_return std::unexpected(std::move(definitions.error()));
@@ -53,16 +64,33 @@ sched::Task<Result<GotoResult>> gotoDeclarationOrUsages(ILspRequester& server, s
     if (!definitions->empty() && !anyContains(*definitions, path, position)) {
         co_return GotoResult{.locations = std::move(*definitions), .showUsages = false};
     }
-    auto declarations = co_await requestLocations(server, NavigationTarget::Declaration, path, position, token);
-    if (!declarations) {
-        co_return std::unexpected(std::move(declarations.error()));
-    }
-    if (!declarations->empty() && !anyContains(*declarations, path, position)) {
-        co_return GotoResult{.locations = std::move(*declarations), .showUsages = false};
-    }
-    // On the symbol's own declaration (or nothing found while the server knows the symbol).
-    const bool onSymbol = !definitions->empty() || !declarations->empty();
+    // On the symbol's own declaration/definition (or nothing found while the server knows the symbol).
+    const bool onSymbol = !definitions->empty();
     co_return GotoResult{.locations = {}, .showUsages = onSymbol};
+}
+
+sched::Task<Result<std::vector<Location>>> gotoImplementation(ILspRequester& server, std::string path,
+                                                              LspPosition position, std::stop_token token) {
+    auto implementations = co_await requestLocations(server, NavigationTarget::Implementation, path, position, token);
+    if (!implementations && implementations.error().code() == ErrorCode::Cancelled) {
+        co_return std::unexpected(std::move(implementations.error()));
+    }
+    if (implementations) {
+        std::erase_if(*implementations,
+                      [&](const Location& location) { return locationContains(location, path, position); });
+        if (!implementations->empty()) {
+            co_return std::move(*implementations);
+        }
+    }
+    auto definitions = co_await requestLocations(server, NavigationTarget::Definition, path, position, token);
+    if (!definitions) {
+        if (!implementations) {
+            co_return std::unexpected(std::move(implementations.error()));
+        }
+        co_return std::unexpected(std::move(definitions.error()));
+    }
+    std::erase_if(*definitions, [&](const Location& location) { return locationContains(location, path, position); });
+    co_return std::move(*definitions);
 }
 
 sched::Task<Result<std::optional<std::string>>> requestSwitchSourceHeader(ILspRequester& server, std::string path,

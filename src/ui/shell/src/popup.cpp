@@ -7,14 +7,17 @@
 #include "frost/ui/frost_style.hpp"
 
 #include "shell_util.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include <QFont>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
 #include <QStyledItemDelegate>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -157,7 +160,7 @@ void Popup::showCentered(QWidget* window, double topFraction) {
         openAt(QPoint());
         return;
     }
-    const QPoint origin = window->mapToGlobal(QPoint(0, 0));
+    const QPoint origin = window->isVisible() ? window->mapToGlobal(QPoint(0, 0)) : window->geometry().topLeft();
     const int x = origin.x() + std::max(0, (window->width() - width()) / 2);
     const int y = origin.y() + static_cast<int>(window->height() * topFraction);
     openAt(QPoint(x, y));
@@ -172,6 +175,7 @@ void Popup::openAt(QPoint globalTopLeft) {
     move(globalTopLeft);
     m_open = true;
     show();
+    move(globalTopLeft);
     raise();
     activateWindow();
     if (QWidget* proxy = focusProxy(); proxy != nullptr) {
@@ -210,13 +214,23 @@ void Popup::hideEvent(QHideEvent* event) {
 
 void Popup::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
     const FrostStyle* style = FrostStyle::current();
     const QColor background =
         style != nullptr ? style->color(ColorKey::PopupBackground) : palette().color(QPalette::Window);
     const QColor border = style != nullptr ? style->color(ColorKey::PopupBorderColor) : palette().color(QPalette::Mid);
+    const QColor accent =
+        style != nullptr ? style->color(ColorKey::TabbedPaneUnderlineColor) : QColor(0x35, 0x74, 0xF0);
+    const bool isDark = background.lightness() < 128;
+
     painter.fillRect(rect(), background);
-    painter.setPen(border);
-    painter.drawRect(rect().adjusted(0, 0, -1, -1));
+    shell_detail::paintEllipticalGlow(painter, QPointF(width() * 0.25, 0.0),
+                                      width() * 0.65, std::min(160, height()), accent, isDark ? 32 : 18);
+    shell_detail::paintFrostedGlassSheen(painter, rect(), isDark, true);
+
+    painter.setPen(QPen(border, 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8.0, 8.0);
 }
 
 ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
@@ -227,11 +241,22 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     titleFont.setBold(true);
     m_title->setFont(titleFont);
     m_title->setVisible(!title.isEmpty());
+    m_scopeBar = new QWidget(this);
+    m_scopeBar->setObjectName(QStringLiteral("popupScopeTabs"));
+    m_scopeLayout = new QHBoxLayout(m_scopeBar);
+    m_scopeLayout->setContentsMargins(0, 0, 0, 0);
+    m_scopeLayout->setSpacing(4);
+    m_scopeBar->setVisible(false);
     m_filter->setObjectName(QStringLiteral("popupFilter"));
     m_filter->setVisible(filterable);
     m_filter->setClearButtonEnabled(true);
     m_filter->setMinimumHeight(28);
     m_filter->setPlaceholderText(shell_detail::text("Type to filter"));
+    if (filterable) {
+        if (const QIcon searchIcon = shell_detail::themedIcon(icons::kActionsSearch); !searchIcon.isNull()) {
+            m_filter->addAction(searchIcon, QLineEdit::LeadingPosition);
+        }
+    }
     m_list->setObjectName(QStringLiteral("popupList"));
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setFrameShape(QFrame::NoFrame);
@@ -242,6 +267,7 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     layout->setContentsMargins(8, 8, 8, 6);
     layout->setSpacing(6);
     layout->addWidget(m_title);
+    layout->addWidget(m_scopeBar);
     layout->addWidget(m_filter);
     auto* topDivider = new QFrame(this);
     topDivider->setFrameShape(QFrame::HLine);
@@ -268,6 +294,7 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
         emit filterTextChanged(value);
     });
     connect(m_list, &QListWidget::itemActivated, this, [this] { acceptCurrent(); });
+    setMinimumSize(420, 320);
     resize(580, 380);
 }
 
@@ -278,7 +305,61 @@ void ListPopup::setFilterMode(FilterMode mode) {
 
 void ListPopup::setTitle(const QString& title) {
     m_title->setText(title);
-    m_title->setVisible(!title.isEmpty());
+    m_title->setVisible(!title.isEmpty() && m_scopeButtons.empty());
+}
+
+void ListPopup::setScopeTabs(const QStringList& tabs, int activeIndex) {
+    for (QToolButton* btn : m_scopeButtons) {
+        delete btn;
+    }
+    m_scopeButtons.clear();
+    while (QLayoutItem* item = m_scopeLayout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    if (tabs.isEmpty()) {
+        m_activeScopeTab = -1;
+        m_scopeBar->setVisible(false);
+        m_title->setVisible(!m_title->text().isEmpty());
+        return;
+    }
+    m_scopeButtons.reserve(static_cast<std::size_t>(tabs.size()));
+    for (int i = 0; i < tabs.size(); ++i) {
+        auto* btn = new QToolButton(m_scopeBar);
+        btn->setObjectName(QStringLiteral("popupScopeTab.%1").arg(i));
+        btn->setText(tabs[i]);
+        btn->setCheckable(true);
+        btn->setAutoRaise(true);
+        btn->setFocusPolicy(Qt::NoFocus);
+        connect(btn, &QToolButton::clicked, this, [this, i] {
+            setActiveScopeTab(i);
+            emit scopeTabClicked(i);
+        });
+        m_scopeLayout->addWidget(btn);
+        m_scopeButtons.push_back(btn);
+    }
+    m_scopeLayout->addStretch(1);
+    auto* hint = new QLabel(shell_detail::text("Tab to switch"), m_scopeBar);
+    QFont hintFont = hint->font();
+    if (hintFont.pointSizeF() > 8.0) {
+        hintFont.setPointSizeF(hintFont.pointSizeF() * 0.88);
+    }
+    hint->setFont(hintFont);
+    m_scopeLayout->addWidget(hint);
+    m_title->setVisible(false);
+    m_scopeBar->setVisible(true);
+    setActiveScopeTab(activeIndex);
+}
+
+void ListPopup::setActiveScopeTab(int activeIndex) {
+    m_activeScopeTab = activeIndex;
+    for (std::size_t i = 0; i < m_scopeButtons.size(); ++i) {
+        const bool active = static_cast<int>(i) == activeIndex;
+        m_scopeButtons[i]->setChecked(active);
+        QFont f = m_scopeButtons[i]->font();
+        f.setBold(active);
+        m_scopeButtons[i]->setFont(f);
+    }
 }
 
 void ListPopup::setItems(std::vector<ListPopupItem> items) {

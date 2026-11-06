@@ -2,6 +2,8 @@
 // Navigation bar over a live project tree model.
 #include "frost/ui/shell/navigation_bar.hpp"
 
+#include "frost/ui/frost_style.hpp"
+
 #include <QAbstractItemModel>
 #include <QAction>
 #include <QEvent>
@@ -9,12 +11,93 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPersistentModelIndex>
 #include <QScrollArea>
 #include <QTimer>
 #include <QToolButton>
 
 namespace frost::ui {
+
+namespace {
+
+// Crisp vector chevron (›) separator between breadcrumb segments in the status bar.
+class BreadcrumbSeparator final : public QLabel {
+public:
+    explicit BreadcrumbSeparator(QWidget* parent = nullptr) : QLabel(QStringLiteral(u"\u203A"), parent) {
+        setFocusPolicy(Qt::NoFocus);
+        setFixedSize(14, 20);
+        setAlignment(Qt::AlignCenter);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const FrostStyle* frost = FrostStyle::current();
+        const QColor color = frost != nullptr ? frost->color(ColorKey::LabelSecondaryForeground)
+                                              : palette().color(QPalette::PlaceholderText);
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        const qreal cx = width() * 0.5;
+        const qreal cy = height() * 0.5;
+        QPainterPath path;
+        path.moveTo(cx - 2.0, cy - 3.5);
+        path.lineTo(cx + 1.8, cy);
+        path.lineTo(cx - 2.0, cy + 3.5);
+        painter.drawPath(path);
+    }
+};
+
+// Clean Rider-style breadcrumb button without a redundant InstantPopup menu indicator arrow.
+class BreadcrumbButton final : public QToolButton {
+public:
+    explicit BreadcrumbButton(QWidget* parent = nullptr) : QToolButton(parent) {
+        setAutoRaise(true);
+        setAttribute(Qt::WA_Hover, true);
+    }
+
+    [[nodiscard]] QSize sizeHint() const override {
+        const QFontMetrics fm(font());
+        const int w = fm.horizontalAdvance(text()) + 12;
+        return {std::max(w, 20), 20};
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const FrostStyle* frost = FrostStyle::current();
+        const bool hovered = underMouse() && isEnabled();
+        const bool down = isDown() || (menu() != nullptr && menu()->isVisible());
+
+        if (down || hovered) {
+            const QColor fill = frost != nullptr
+                                    ? frost->color(down ? ColorKey::ButtonPressedBackground : ColorKey::ButtonHoverBackground)
+                                    : palette().color(QPalette::AlternateBase);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(fill);
+            painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0), 4.0, 4.0);
+        }
+        if (hasFocus()) {
+            const QColor focusCol =
+                frost != nullptr ? frost->color(ColorKey::ComponentFocusColor) : QColor(0x35, 0x74, 0xF0);
+            painter.setPen(QPen(focusCol, 1.2));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0), 4.0, 4.0);
+        }
+
+        const QColor fg = frost != nullptr ? frost->color(isEnabled() ? ColorKey::LabelForeground
+                                                                      : ColorKey::LabelSecondaryForeground)
+                                           : palette().color(QPalette::WindowText);
+        painter.setFont(font());
+        painter.setPen(fg);
+        painter.drawText(rect().adjusted(6, 0, -6, 0), Qt::AlignCenter, text());
+    }
+};
+
+} // namespace
 NavigationBar::NavigationBar(QWidget* parent) : QWidget(parent), m_layout(new QHBoxLayout(this)) {
     setObjectName(QStringLiteral("navigationBar"));
     m_layout->setContentsMargins(6, 2, 6, 2);
@@ -88,8 +171,13 @@ void NavigationBar::rebuild() {
         ancestors.prepend(index);
         index = index.parent();
     }
-    for (const auto& node : ancestors) {
-        auto* button = new QToolButton(this);
+    for (qsizetype i = 0; i < ancestors.size(); ++i) {
+        if (i > 0) {
+            auto* sep = new BreadcrumbSeparator(this);
+            m_layout->addWidget(sep);
+        }
+        const auto& node = ancestors[i];
+        auto* button = new BreadcrumbButton(this);
         button->installEventFilter(this);
         button->setAutoRaise(true);
         button->setText(node.data(Qt::DisplayRole).toString());
@@ -178,5 +266,14 @@ bool NavigationBar::eventFilter(QObject* watched, QEvent* event) {
         }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void NavigationBar::paintEvent(QPaintEvent* event) {
+    QWidget::paintEvent(event);
+    QPainter painter(this);
+    const FrostStyle* frost = FrostStyle::current();
+    const QColor bg =
+        frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : palette().color(QPalette::Window);
+    painter.fillRect(rect(), bg);
 }
 } // namespace frost::ui

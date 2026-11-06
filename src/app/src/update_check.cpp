@@ -341,11 +341,12 @@ void UpdateCheck::finishScan() {
         }
         winner.release = std::move(*checked);
         finish(std::move(winner));
+    } else if (m_authenticCandidates > 0) {
+        finish(fail(ErrorCode::NotFound, "No newer signed update is available"));
     } else if (m_discoveryError) {
         finish(std::unexpected(*m_discoveryError));
     } else {
-        finish(fail(ErrorCode::NotFound, m_authenticCandidates ? "No newer signed update is available"
-                                                               : "No matching signed release was found"));
+        finish(fail(ErrorCode::NotFound, "No matching signed release was found"));
     }
 }
 } // namespace frost::app

@@ -5,9 +5,12 @@
 
 #include "frost/ui/cmake/cmake_tool_window.hpp"
 
+#include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/tr.hpp"
 
 #include <QComboBox>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -31,7 +34,8 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     layout->setSpacing(0);
 
     auto* bar = new QHBoxLayout();
-    bar->setContentsMargins(4, 2, 4, 2);
+    bar->setContentsMargins(6, 3, 6, 3);
+    bar->setSpacing(4);
     m_profiles = new QComboBox(this);
     m_profiles->setObjectName(QStringLiteral("cmakeProfiles"));
     m_profiles->setToolTip(qtr(kContext, "CMake profile"));
@@ -39,10 +43,18 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     m_reload = new QToolButton(this);
     m_reload->setObjectName(QStringLiteral("cmakeReload"));
     m_reload->setText(qtr(kContext, "Reload CMake Project"));
+    m_reload->setAutoRaise(true);
+    m_reload->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_stop = new QToolButton(this);
     m_stop->setObjectName(QStringLiteral("cmakeStop"));
     m_stop->setText(qtr(kContext, "Stop"));
+    m_stop->setAutoRaise(true);
+    m_stop->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_stop->setEnabled(false);
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        m_reload->setIcon(style->icon(icons::kActionsRefresh));
+        m_stop->setIcon(style->icon(icons::kRunStop, IconSlot::Small, IconRole::Error));
+    }
     bar->addWidget(m_profiles);
     bar->addWidget(m_reload);
     bar->addWidget(m_stop);
@@ -59,6 +71,7 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
 
     m_output = new QPlainTextEdit(this);
     m_output->setObjectName(QStringLiteral("cmakeOutput"));
+    m_output->setFrameShape(QFrame::NoFrame);
     m_output->setReadOnly(true);
     m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_output->setMaximumBlockCount(kOutputLines);

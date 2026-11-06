@@ -24,6 +24,7 @@
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
+#include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/tr.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 
@@ -479,6 +480,7 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
 Result<void> Workbench::openSolution(const std::string& path) {
     if (m_solution && lang::documentKey(m_solution->path()) == lang::documentKey(path)) {
         transitionLauncherToMainWindow();
+        offerProjectTrust();
         return {}; // Already the project.
     }
     Result<project::SolutionModel> loaded = project::SolutionModel::load(
@@ -530,6 +532,7 @@ Result<void> Workbench::openSolution(const std::string& path) {
     startLua(model->directory());
     startManaged(model->directory());
     refreshAllMarkers();
+    offerProjectTrust();
     return {};
 }
 
@@ -568,6 +571,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                 log::warn(kLog, "last project: {}", saved.error().describe());
         }
         transitionLauncherToMainWindow();
+        offerProjectTrust();
         return {};
     }
     if (!closeForOpen()) {
@@ -614,7 +618,112 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     startClangd(path);
     startLua(path);
     startManaged(path);
+    offerProjectTrust();
     return {};
+}
+
+void Workbench::offerProjectTrust() {
+    if (m_shutDown || m_projectRoot.empty() || !m_window || !m_build) {
+        return;
+    }
+    QStringList untrustedRoots;
+    const auto addUntrusted = [&](std::string_view candidate) {
+        if (candidate.empty() || m_services.trust.isTrusted(candidate)) {
+            return;
+        }
+        const QString qpath = qs(candidate);
+        if (!untrustedRoots.contains(qpath)) {
+            untrustedRoots.push_back(qpath);
+        }
+    };
+    addUntrusted(m_projectRoot);
+    if (m_solution) {
+        for (const project::ProjectInfo& proj : m_solution->projects()) {
+            if (proj.nodeKind == project::NodeKind::Project && !proj.path.empty()) {
+                addUntrusted(io::parentPath(proj.path));
+            }
+        }
+    }
+    if (untrustedRoots.isEmpty()) {
+        m_window->setProjectTrusted(true);
+        if (m_projectTrustDialog) {
+            delete m_projectTrustDialog.data();
+            m_projectTrustDialog.clear();
+        }
+        return;
+    }
+    m_window->setProjectTrusted(false);
+    if (m_projectTrustDialog) {
+        m_projectTrustDialog->setRoots(untrustedRoots);
+        return;
+    }
+    if (m_projectTrustPromptedRoot == m_projectRoot) {
+        return;
+    }
+    m_projectTrustPromptedRoot = m_projectRoot;
+    auto* dialog = new ui::TrustDialog(*m_build, untrustedRoots, m_window, ui::TrustPurpose::ProjectOpen);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_projectTrustDialog = dialog;
+    const std::string root = m_projectRoot;
+    connect(dialog, &QDialog::accepted, this, [this, root] {
+        m_projectTrustDialog.clear();
+        if (m_projectRoot != root || !m_services.trust.isTrusted(root)) {
+            return;
+        }
+        if (m_window) {
+            m_window->setProjectTrusted(true);
+        }
+        if (m_solution) {
+            startProjectEvaluation(root);
+            if (m_clangd) {
+                restartClangd();
+            }
+        } else if (m_cmake && m_cmake->service().state() == build::BuildState::Idle && !m_cmake->service().model()) {
+            (void)m_cmake->service().configure();
+        }
+        m_luaObservedTrust = true;
+        startLua(root);
+        startManaged(root);
+        if (m_engine) {
+            m_engine->trustChanged();
+        }
+    });
+    connect(dialog, &QDialog::finished, this, [this, dialog](int) {
+        if (m_projectTrustDialog == dialog) {
+            m_projectTrustDialog.clear();
+        }
+        dialog->setObjectName(QString());
+        dialog->deleteLater();
+    });
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        dialog->setAttribute(Qt::WA_ShowWithoutActivating, true);
+        dialog->show();
+        if (m_window->isVisible()) {
+            m_window->activateWindow();
+        }
+    } else {
+        dialog->show();
+        const auto centerAndActivate = [dialog = QPointer<ui::TrustDialog>(dialog),
+                                        win = QPointer<ui::ShellWindow>(m_window)] {
+            if (!dialog) {
+                return;
+            }
+            if (win && win->isVisible()) {
+                const QSize hint = dialog->sizeHint().expandedTo(dialog->minimumSize());
+                const QRect parentFrame = win->frameGeometry();
+                dialog->move(parentFrame.center().x() - hint.width() / 2,
+                             parentFrame.center().y() - hint.height() / 2);
+            }
+            dialog->show();
+            dialog->raise();
+            dialog->activateWindow();
+        };
+        if (m_window->isVisible()) {
+            centerAndActivate();
+        } else {
+            QTimer::singleShot(0, dialog, centerAndActivate);
+        }
+    }
 }
 
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
@@ -695,6 +804,9 @@ bool Workbench::closeForOpen() {
         }
     }
     m_closingSolution = true;
+    delete m_projectTrustDialog.data();
+    m_projectTrustDialog.clear();
+    m_projectTrustPromptedRoot.clear();
     stopLua();
     stopManaged();
     stopClangd();

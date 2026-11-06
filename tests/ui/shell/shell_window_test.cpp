@@ -638,6 +638,8 @@ TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
 
     auto& header = window.mainToolbar();
     ASSERT_NE(header.mainMenuButton(), nullptr);
+    ASSERT_NE(header.backButton(), nullptr);
+    ASSERT_NE(header.forwardButton(), nullptr);
     ASSERT_NE(header.projectButton(), nullptr);
     ASSERT_NE(header.themeButton(), nullptr);
     ASSERT_NE(header.minimizeButton(), nullptr);
@@ -646,10 +648,23 @@ TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
 
     // Header utility/caption controls keep Qt::NoFocus so Tab focus order stays on dynamic slots.
     EXPECT_EQ(header.mainMenuButton()->focusPolicy(), Qt::NoFocus);
+    EXPECT_EQ(header.backButton()->focusPolicy(), Qt::NoFocus);
+    EXPECT_EQ(header.forwardButton()->focusPolicy(), Qt::NoFocus);
     EXPECT_EQ(header.themeButton()->focusPolicy(), Qt::NoFocus);
     EXPECT_EQ(header.minimizeButton()->focusPolicy(), Qt::NoFocus);
     EXPECT_EQ(header.maximizeButton()->focusPolicy(), Qt::NoFocus);
     EXPECT_EQ(header.closeButton()->focusPolicy(), Qt::NoFocus);
+
+    // Left sidebar houses both top-left and bottom-left stripes plus the More Tool Windows (⋯) button.
+    ASSERT_NE(window.toolWindows().moreToolWindowsButton(), nullptr);
+    ASSERT_NE(window.toolWindows().moreToolWindowsButton()->menu(), nullptr);
+    QMetaObject::invokeMethod(
+        window.toolWindows().moreToolWindowsButton()->menu(), "aboutToShow", Qt::DirectConnection);
+    EXPECT_GE(window.toolWindows().moreToolWindowsButton()->menu()->actions().size(), 8);
+
+    // NavigationBar breadcrumbs live inside the bottom StatusBar on the left like Rider New UI.
+    auto* navScroll = window.statusBar()->findChild<QWidget*>(QStringLiteral("navigationScroll"));
+    EXPECT_NE(navScroll, nullptr);
 
     // Main Menu popup populates top-level menus and the Show Classic Menu Bar toggle.
     QMenu* mainMenu = header.mainMenuButton()->menu();
@@ -657,11 +672,11 @@ TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
     QMetaObject::invokeMethod(mainMenu, "aboutToShow", Qt::DirectConnection);
     EXPECT_GE(mainMenu->actions().size(), 3);
 
-    // Clicking the header's Quick Switch Theme button opens the theme switcher popup with all 14 themes + Sync with OS.
+    // Clicking the header's Quick Switch Theme button opens the theme switcher popup with all 34 themes + Sync with OS.
     header.themeButton()->click();
     auto* popup = qobject_cast<frost::ui::ListPopup*>(window.activePopup());
     ASSERT_NE(popup, nullptr);
-    EXPECT_EQ(popup->visibleCount(), 15);
+    EXPECT_EQ(popup->visibleCount(), 35);
     EXPECT_NE(popup->findChild<QLabel*>(QStringLiteral("popupFooter")), nullptr);
 
     // Refactor and Run/Debug actions are wired in ShellMenus.

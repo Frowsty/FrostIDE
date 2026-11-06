@@ -64,8 +64,17 @@ public:
     [[nodiscard]] QSize minimumSizeHint() const override { return sizeHint(); }
     void setSide(ToolWindowSide side) noexcept {
         m_side = side;
+        setIconSize(QSize(20, 20));
         updateGeometry();
         update();
+    }
+    [[nodiscard]] bool showLabel() const noexcept { return m_showLabel; }
+    void setShowLabel(bool show) noexcept {
+        if (m_showLabel != show) {
+            m_showLabel = show;
+            updateGeometry();
+            update();
+        }
     }
 
 protected:
@@ -73,6 +82,7 @@ protected:
 
 private:
     ToolWindowSide m_side;
+    bool m_showLabel = false;
 };
 
 /*
@@ -127,11 +137,15 @@ public:
     void setSize(std::string_view id, int size);
     // Moves a tool window to another dock side (Left, Right, Bottom).
     void moveToSide(std::string_view id, ToolWindowSide newSide);
+    // Whether side stripes render text labels alongside icons (Rider "Show Tool Window Names").
+    [[nodiscard]] bool showStripeLabels() const noexcept { return m_showStripeLabels; }
+    void setShowStripeLabels(bool show);
     // Reads the splitters' current sizes into the visible windows' remembered sizes (the splitters
     // call it after a drag) and stores the layout.
     void syncSizesFromSplitters();
 
     [[nodiscard]] StripeButton* stripeButton(std::string_view id) const;
+    [[nodiscard]] QToolButton* moreToolWindowsButton() const noexcept { return m_moreButton; }
     [[nodiscard]] QSplitter* horizontalSplitter() const noexcept { return m_horizontal; }
     [[nodiscard]] QSplitter* verticalSplitter() const noexcept { return m_vertical; }
     [[nodiscard]] QWidget* panel(ToolWindowSide side) const noexcept;
@@ -150,6 +164,7 @@ private:
         QWidget* content = nullptr;
         int size = 0;
         bool visible = false;
+        bool pinned = true;
     };
     struct Side {
         QWidget* panel = nullptr;
@@ -165,12 +180,15 @@ private:
     void buildSide(ToolWindowSide which);
     void ensureContent(Window& window);
     void setVisible(Window& window, bool visible, bool focus);
+    void updateSidebarVisibility();
     void applySizes();
     void storeLayout();
 
     QWidget& m_host;
     QWidget& m_center;
     IShellSettings& m_settings;
+    QWidget* m_leftSidebar = nullptr;
+    QToolButton* m_moreButton = nullptr;
     QSplitter* m_horizontal = nullptr;
     QSplitter* m_vertical = nullptr;
     std::array<Side, 3> m_sides{};
@@ -179,6 +197,7 @@ private:
     std::vector<std::string> m_hiddenByHideAll;
     bool m_applying = false;
     bool m_storeFailed = false;
+    bool m_showStripeLabels = false;
 };
 
 } // namespace frost::ui

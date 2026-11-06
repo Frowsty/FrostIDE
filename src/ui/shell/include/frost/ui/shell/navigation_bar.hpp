@@ -13,6 +13,7 @@ class QAbstractItemModel;
 class QHBoxLayout;
 class QMenu;
 class QModelIndex;
+class QPaintEvent;
 
 namespace frost::ui {
 
@@ -34,6 +35,7 @@ signals:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     void rebuild();

@@ -24,6 +24,11 @@ IslandHost::IslandHost(QBoxLayout::Direction direction, QWidget* parent)
 void IslandHost::addIsland(QWidget* island, int stretch) { m_layout->addWidget(island, stretch); }
 
 void IslandHost::applyMetrics() {
+    if (objectName() == QStringLiteral("shellCentral")) {
+        m_layout->setContentsMargins(0, 0, 0, 0);
+        m_layout->setSpacing(0);
+        return;
+    }
     const FrostStyle* style = FrostStyle::current();
     const int gap = style != nullptr ? style->metricPx(MetricKey::IslandGap) : 0;
     m_layout->setContentsMargins(gap, gap, gap, gap);

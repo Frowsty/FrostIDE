@@ -75,15 +75,31 @@ RunConsole::RunConsole(QWidget* parent) : QWidget(parent) {
     m_rerun->setObjectName(QStringLiteral("runConsoleRerun"));
     m_rerun->setText(tr("Rerun"));
     m_rerun->setToolTip(tr("Rerun (stops the program first)"));
+    m_rerun->setAutoRaise(true);
     m_stop = new QToolButton(this);
     m_stop->setObjectName(QStringLiteral("runConsoleStop"));
     m_stop->setText(tr("Stop"));
     m_stop->setToolTip(tr("Stop the program and everything it started"));
+    m_stop->setAutoRaise(true);
     m_stop->setEnabled(false);
     m_rerun->setEnabled(false);
 
+    auto* wrapBtn = new QToolButton(this);
+    wrapBtn->setObjectName(QStringLiteral("runConsoleWrap"));
+    wrapBtn->setText(tr("Soft-Wrap"));
+    wrapBtn->setToolTip(tr("Toggle Soft-Wrap"));
+    wrapBtn->setCheckable(true);
+    wrapBtn->setAutoRaise(true);
+
+    auto* clearBtn = new QToolButton(this);
+    clearBtn->setObjectName(QStringLiteral("runConsoleClear"));
+    clearBtn->setText(tr("Clear"));
+    clearBtn->setToolTip(tr("Clear All"));
+    clearBtn->setAutoRaise(true);
+
     m_output = new QPlainTextEdit(this);
     m_output->setObjectName(QStringLiteral("runConsoleOutput"));
+    m_output->setFrameShape(QFrame::NoFrame);
     m_output->setReadOnly(true);
     m_output->setUndoRedoEnabled(false);
     m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -97,10 +113,13 @@ RunConsole::RunConsole(QWidget* parent) : QWidget(parent) {
     m_input->setEnabled(false);
 
     auto* header = new QHBoxLayout;
-    header->setContentsMargins(0, 0, 0, 0);
+    header->setContentsMargins(6, 2, 6, 2);
+    header->setSpacing(4);
     header->addWidget(m_title, 1);
     header->addWidget(m_rerun);
     header->addWidget(m_stop);
+    header->addWidget(wrapBtn);
+    header->addWidget(clearBtn);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(2);
@@ -110,6 +129,10 @@ RunConsole::RunConsole(QWidget* parent) : QWidget(parent) {
 
     connect(m_stop, &QToolButton::clicked, this, &RunConsole::stopRequested);
     connect(m_rerun, &QToolButton::clicked, this, &RunConsole::rerunRequested);
+    connect(wrapBtn, &QToolButton::toggled, this, [this](bool wrap) {
+        m_output->setLineWrapMode(wrap ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
+    });
+    connect(clearBtn, &QToolButton::clicked, m_output, &QPlainTextEdit::clear);
     connect(m_input, &QLineEdit::returnPressed, this, [this] {
         const QString line = m_input->text();
         m_input->clear();

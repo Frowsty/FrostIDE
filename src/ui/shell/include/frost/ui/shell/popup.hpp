@@ -16,9 +16,11 @@
 #include <optional>
 #include <vector>
 
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QToolButton;
 
 namespace frost::ui {
 
@@ -98,6 +100,10 @@ public:
     [[nodiscard]] FilterMode filterMode() const noexcept { return m_mode; }
     // The title label (Search Everywhere shows the scope there).
     void setTitle(const QString& title);
+    // Optional Rider-style scope tabs bar (Search Everywhere: All / Classes / Files / Symbols / Actions).
+    void setScopeTabs(const QStringList& tabs, int activeIndex = 0);
+    void setActiveScopeTab(int activeIndex);
+    [[nodiscard]] int activeScopeTab() const noexcept { return m_activeScopeTab; }
 
     void setItems(std::vector<ListPopupItem> items);
     [[nodiscard]] const std::vector<ListPopupItem>& items() const noexcept { return m_items; }
@@ -123,6 +129,8 @@ signals:
     void filterTextChanged(const QString& text);
     // Tab or Shift+Tab was pressed in the popup (Search Everywhere category cycling).
     void tabPressed(bool backward);
+    // A scope tab pill in the header was clicked.
+    void scopeTabClicked(int index);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -133,6 +141,10 @@ private:
     [[nodiscard]] bool selectable(int row) const;
 
     QLabel* m_title;
+    QWidget* m_scopeBar = nullptr;
+    QHBoxLayout* m_scopeLayout = nullptr;
+    std::vector<QToolButton*> m_scopeButtons;
+    int m_activeScopeTab = -1;
     QLineEdit* m_filter;
     QListWidget* m_list;
     std::vector<ListPopupItem> m_items;

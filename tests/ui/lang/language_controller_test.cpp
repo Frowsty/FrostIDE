@@ -933,4 +933,72 @@ TEST(LanguageControllerNavigation, GotoDeclarationDecompilesExternalDotNetAndCpp
     EXPECT_TRUE(decompiledCpp->contains("template <class T> class vector;"));
 }
 
+TEST(LanguageControllerNavigation, QuickDefinitionAndGotoSuperMethodRunSafelyOnScheduler) {
+    FeatureServer server;
+    const std::string header = workPath("main.cpp");
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    server.on("textDocument/declaration", [&](const Json&) {
+        return Json::array({Json::object().set("uri", uriOf(header)).set("range", rangeJson(0, 6, 13))});
+    });
+    server.on("textDocument/prepareTypeHierarchy", [&](const Json&) {
+        return Json::array({Json::object()
+                                .set("name", "Derived")
+                                .set("kind", 5)
+                                .set("uri", uriOf(header))
+                                .set("range", rangeJson(0, 0, 20))
+                                .set("selectionRange", rangeJson(0, 6, 13))});
+    });
+    server.on("typeHierarchy/supertypes", [&](const Json&) {
+        return Json::array({Json::object()
+                                .set("name", "Base")
+                                .set("kind", 5)
+                                .set("uri", uriOf(header))
+                                .set("range", rangeJson(0, 0, 15))
+                                .set("selectionRange", rangeJson(0, 23, 27))});
+    });
+
+    FakeHost host("class Derived : public Base {};\n", header);
+    host.caretAfter("class Der");
+    Rig rig(server, host);
+
+    rig.controller.quickDefinition();
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.quickDefinitionPopup().isVisible(); }));
+    rig.controller.quickDefinitionPopup().hide();
+
+    rig.controller.gotoSuperMethod();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
+    EXPECT_EQ(fl::documentKey(host.opened[0].first), fl::documentKey(header));
+    EXPECT_EQ(host.opened[0].second, (fl::LspPosition{0, 23}));
+}
+
+TEST(LanguageControllerNavigation, GotoDeclarationGoesToHeaderAndGotoImplementationGoesToCppBody) {
+    FeatureServer server;
+    const std::string header = workPath("math_utils.h");
+    const std::string impl = workPath("math_utils.cpp");
+    server.on("textDocument/declaration", [&](const Json&) {
+        return Json::array({Json::object().set("uri", uriOf(header)).set("range", rangeJson(2, 4, 15))});
+    });
+    server.on("textDocument/definition", [&](const Json&) {
+        return Json::array({Json::object().set("uri", uriOf(impl)).set("range", rangeJson(8, 4, 15))});
+    });
+    server.on("textDocument/implementation", [](const Json&) { return Json::array(); });
+
+    FakeHost host("#include \"math_utils.h\"\nint main() {\n    return computeHash(42);\n}\n", workPath("main.cpp"));
+    host.caretAfter("computeH");
+    Rig rig(server, host);
+
+    // "Go to Declaration or Usages" jumps to the declaration in math_utils.h (not math_utils.cpp).
+    rig.controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
+    EXPECT_EQ(fl::documentKey(host.opened[0].first), fl::documentKey(header));
+    EXPECT_EQ(host.opened[0].second, (fl::LspPosition{2, 4}));
+
+    // "Go to Implementation" jumps to the function implementation in math_utils.cpp even when
+    // textDocument/implementation is empty.
+    rig.controller.gotoImplementation();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 2; }));
+    EXPECT_EQ(fl::documentKey(host.opened[1].first), fl::documentKey(impl));
+    EXPECT_EQ(host.opened[1].second, (fl::LspPosition{8, 4}));
+}
+
 } // namespace

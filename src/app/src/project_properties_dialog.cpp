@@ -9,6 +9,7 @@
 #include "frost/io/path.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -28,6 +29,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -36,6 +38,7 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -1368,27 +1371,52 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
     layout->setContentsMargins(8, 8, 8, 8);
     layout->setSpacing(6);
 
-    auto* bar = new QHBoxLayout();
+    auto* topRow = new QHBoxLayout();
+    topRow->setSpacing(6);
     auto* optCombo = new QComboBox(root);
     optCombo->setObjectName(QStringLiteral("asmOptCombo"));
-    optCombo->addItems({QStringLiteral("-O2"), QStringLiteral("-O0"), QStringLiteral("-O1"), QStringLiteral("-O3")});
+    optCombo->addItem(QStringLiteral("-O2 (Fast)"), QStringLiteral("-O2"));
+    optCombo->addItem(QStringLiteral("-O0 (None)"), QStringLiteral("-O0"));
+    optCombo->addItem(QStringLiteral("-O1 (Basic)"), QStringLiteral("-O1"));
+    optCombo->addItem(QStringLiteral("-O3 (Max)"), QStringLiteral("-O3"));
+    optCombo->addItem(QStringLiteral("-Os (Size)"), QStringLiteral("-Os"));
+    optCombo->setMinimumContentsLength(10);
+    optCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    optCombo->setMinimumWidth(112);
+    if (QAbstractItemView* v = optCombo->view()) {
+        v->setMinimumWidth(140);
+    }
+
     auto* syntaxCombo = new QComboBox(root);
     syntaxCombo->setObjectName(QStringLiteral("asmSyntaxCombo"));
-    syntaxCombo->addItems({QStringLiteral("Intel"), QStringLiteral("AT&T")});
+    syntaxCombo->addItem(QStringLiteral("Intel"), QStringLiteral("-masm=intel"));
+    syntaxCombo->addItem(QStringLiteral("AT&T"), QStringLiteral("-masm=att"));
+    syntaxCombo->setMinimumContentsLength(6);
+    syntaxCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    syntaxCombo->setMinimumWidth(88);
+    if (QAbstractItemView* v = syntaxCombo->view()) {
+        v->setMinimumWidth(110);
+    }
+
+    topRow->addWidget(new QLabel(QStringLiteral("Opt:"), root));
+    topRow->addWidget(optCombo);
+    topRow->addSpacing(6);
+    topRow->addWidget(new QLabel(QStringLiteral("Syntax:"), root));
+    topRow->addWidget(syntaxCombo);
+    topRow->addStretch(1);
+    layout->addLayout(topRow);
+
+    auto* actionRow = new QHBoxLayout();
+    actionRow->setSpacing(6);
     auto* syncCheck = new QCheckBox(QStringLiteral("Sync with Active Editor"), root);
     syncCheck->setObjectName(QStringLiteral("asmSyncCheck"));
     syncCheck->setChecked(true);
     auto* refreshBtn = new QPushButton(QStringLiteral("Disassemble / View IL"), root);
     refreshBtn->setObjectName(QStringLiteral("asmRefreshButton"));
-
-    bar->addWidget(new QLabel(QStringLiteral("Opt:"), root));
-    bar->addWidget(optCombo);
-    bar->addWidget(new QLabel(QStringLiteral("Syntax:"), root));
-    bar->addWidget(syntaxCombo);
-    bar->addWidget(syncCheck);
-    bar->addStretch(1);
-    bar->addWidget(refreshBtn);
-    layout->addLayout(bar);
+    actionRow->addWidget(syncCheck);
+    actionRow->addStretch(1);
+    actionRow->addWidget(refreshBtn);
+    layout->addLayout(actionRow);
 
     auto* output = new QPlainTextEdit(root);
     output->setObjectName(QStringLiteral("asmViewerOutput"));
@@ -1399,9 +1427,38 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
         QStringLiteral("Open a C/C++ or C# source file and click 'Disassemble / View IL' to inspect compiler output."));
     layout->addWidget(output, 1);
 
+    struct AsmAsyncState {
+        QPointer<QProcess> activeProcess;
+        QTimer* timeoutTimer = nullptr;
+        std::uint64_t requestId = 0;
+    };
+    auto asyncState = std::make_shared<AsmAsyncState>();
+    asyncState->timeoutTimer = new QTimer(root);
+    asyncState->timeoutTimer->setSingleShot(true);
+
+    QObject::connect(root, &QObject::destroyed, root, [asyncState] {
+        if (asyncState->activeProcess) {
+            asyncState->activeProcess->disconnect();
+            asyncState->activeProcess->kill();
+        }
+    });
+
     const auto runDisassembly = [=] {
         if (!activeFileAndLineProvider)
             return;
+
+        const std::uint64_t reqId = ++asyncState->requestId;
+        if (asyncState->timeoutTimer) {
+            asyncState->timeoutTimer->stop();
+            asyncState->timeoutTimer->disconnect();
+        }
+        if (asyncState->activeProcess) {
+            asyncState->activeProcess->disconnect();
+            asyncState->activeProcess->kill();
+            asyncState->activeProcess->deleteLater();
+            asyncState->activeProcess = nullptr;
+        }
+
         const auto [filePath, line] = activeFileAndLineProvider();
         if (filePath.empty()) {
             output->setPlainText(QStringLiteral("; No active source file in editor."));
@@ -1409,9 +1466,6 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
         }
         const QString qPath = toQs(filePath);
         if (qPath.endsWith(QStringLiteral(".cs"), Qt::CaseInsensitive)) {
-            QProcess proc;
-            proc.start(QStringLiteral("dotnet"), {QStringLiteral("--info")});
-            proc.waitForFinished(3000);
             output->setPlainText(
                 QStringLiteral("// .NET IL & Metadata Projection for %1 (line %2)\n"
                                "// Use Build > Build Solution to emit assembly IL in bin/Debug.\n\n"
@@ -1423,34 +1477,77 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
                     .arg(QFileInfo(qPath).completeBaseName()));
             return;
         }
+
         QString clangExe = QStringLiteral("clang++");
         if (QFileInfo::exists(QStringLiteral("E:/sdk/llvm-23.1.4/bin/clang++.exe"))) {
             clangExe = QStringLiteral("E:/sdk/llvm-23.1.4/bin/clang++.exe");
         }
-        QStringList args{
+        QString optFlag = optCombo->currentData().toString();
+        if (optFlag.isEmpty()) {
+            optFlag = optCombo->currentText().section(QLatin1Char(' '), 0, 0);
+        }
+        QString syntaxFlag = syntaxCombo->currentData().toString();
+        if (syntaxFlag.isEmpty()) {
+            syntaxFlag = syntaxCombo->currentIndex() == 0 ? QStringLiteral("-masm=intel") : QStringLiteral("-masm=att");
+        }
+        const QStringList args{
             QStringLiteral("-S"),
             QStringLiteral("-std=c++20"),
-            optCombo->currentText(),
+            optFlag,
             QStringLiteral("-fno-discard-value-names"),
-            syntaxCombo->currentIndex() == 0 ? QStringLiteral("-masm=intel") : QStringLiteral("-masm=att"),
+            syntaxFlag,
             QDir::toNativeSeparators(qPath),
             QStringLiteral("-o"),
             QStringLiteral("-"),
         };
-        QProcess proc;
-        proc.start(clangExe, args);
-        if (!proc.waitForFinished(8000)) {
-            proc.kill();
+
+        output->setPlainText(QStringLiteral("; Generating %1 assembly (%2) for %3...")
+                                 .arg(syntaxCombo->currentText(), optFlag, QFileInfo(qPath).fileName()));
+
+        auto* proc = new QProcess(root);
+        asyncState->activeProcess = proc;
+
+        QObject::connect(asyncState->timeoutTimer, &QTimer::timeout, root, [=] {
+            if (asyncState->requestId != reqId || asyncState->activeProcess != proc)
+                return;
+            proc->disconnect();
+            proc->kill();
+            proc->deleteLater();
+            asyncState->activeProcess = nullptr;
             output->setPlainText(QStringLiteral("; Compiler disassembly timed out."));
-            return;
-        }
-        const QString stdOut = QString::fromUtf8(proc.readAllStandardOutput());
-        const QString stdErr = QString::fromUtf8(proc.readAllStandardError());
-        if (!stdOut.isEmpty()) {
-            output->setPlainText(stdOut);
-        } else {
-            output->setPlainText(QStringLiteral("; Compiler output (%1):\n%2").arg(clangExe, stdErr));
-        }
+        });
+
+        QObject::connect(proc, &QProcess::errorOccurred, root, [=](QProcess::ProcessError err) {
+            if (asyncState->requestId != reqId || asyncState->activeProcess != proc)
+                return;
+            if (err == QProcess::FailedToStart) {
+                if (asyncState->timeoutTimer)
+                    asyncState->timeoutTimer->stop();
+                asyncState->activeProcess = nullptr;
+                output->setPlainText(
+                    QStringLiteral("; Failed to start compiler (%1): %2").arg(clangExe, proc->errorString()));
+                proc->deleteLater();
+            }
+        });
+
+        QObject::connect(proc, &QProcess::finished, root, [=](int, QProcess::ExitStatus) {
+            if (asyncState->requestId != reqId || asyncState->activeProcess != proc)
+                return;
+            if (asyncState->timeoutTimer)
+                asyncState->timeoutTimer->stop();
+            asyncState->activeProcess = nullptr;
+            const QString stdOut = QString::fromUtf8(proc->readAllStandardOutput());
+            const QString stdErr = QString::fromUtf8(proc->readAllStandardError());
+            if (!stdOut.isEmpty()) {
+                output->setPlainText(stdOut);
+            } else {
+                output->setPlainText(QStringLiteral("; Compiler output (%1):\n%2").arg(clangExe, stdErr));
+            }
+            proc->deleteLater();
+        });
+
+        asyncState->timeoutTimer->start(8000);
+        proc->start(clangExe, args);
     };
 
     QObject::connect(refreshBtn, &QPushButton::clicked, root, runDisassembly);
@@ -1695,8 +1792,19 @@ std::vector<DiscoveredTestEntry> discoverWorkspaceUnitTests(io::IFileSystem& fs,
         if (!entries)
             return;
         for (const auto& de : *entries) {
-            if (de.name.empty() || de.name.starts_with('.') || de.name == "bin" || de.name == "obj" ||
-                de.name == "build" || de.name == "out" || de.name == "node_modules") {
+            const QString qEntryName = toQs(de.name);
+            if (de.name.empty() || de.name.starts_with('.') ||
+                qEntryName.compare(QStringLiteral("bin"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("obj"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("build"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("out"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("node_modules"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("Library"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("Temp"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("Logs"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("UserSettings"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("PackageCache"), Qt::CaseInsensitive) == 0 ||
+                qEntryName.compare(QStringLiteral("MemoryCaptures"), Qt::CaseInsensitive) == 0) {
                 continue;
             }
             const auto fullRes = io::joinPath(dirPath, de.name);

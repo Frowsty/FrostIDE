@@ -12,6 +12,7 @@
 #include "frost/settings/store.hpp"
 #include "frost/ui/cmake/cmake_tool_window.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
@@ -152,6 +153,7 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         spec.id = std::string(kTargets);
         spec.title = tr("CMake Targets");
         spec.side = ui::ToolWindowSide::Left;
+        spec.iconId = std::string(ui::icons::kBuildBuild);
         (void)windows.add(std::move(spec));
     }
     if (!windows.contains(kCMake)) {
@@ -159,6 +161,7 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         spec.id = std::string(kCMake);
         spec.title = tr("CMake");
         spec.side = ui::ToolWindowSide::Bottom;
+        spec.iconId = std::string(ui::icons::kBuildBuild);
         (void)windows.add(std::move(spec));
     }
     auto* tree = new QTreeView();

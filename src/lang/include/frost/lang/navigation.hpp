@@ -5,8 +5,10 @@
 // Ctrl+Alt+Home), find usages (Alt+F7: textDocument/references grouped by file with the line
 // text) and the usages highlighted under the caret (textDocument/documentHighlight).
 /*
- * Ctrl+B follows Rider's "go to declaration or usages": the definition, unless the caret is
- * already on it, then the declaration, unless the caret is on that too, then find usages.
+ * Ctrl+B follows Rider's "go to declaration or usages": the declaration (or definition when the
+ * server has no separate declaration), unless the caret is already on it, in which case it runs
+ * find usages. Ctrl+Alt+B ("go to implementation") queries textDocument/implementation and falls
+ * back to textDocument/definition for non-virtual functions and methods.
  *
  * Usage lines. groupUsages reads each usage's line through a LineSource, so open documents are
  * read from their snapshots and other files from disk (FileLineSource caches each file once per
@@ -60,6 +62,12 @@ struct GotoResult {
 
 [[nodiscard]] sched::Task<Result<GotoResult>> gotoDeclarationOrUsages(ILspRequester& server, std::string path,
                                                                       LspPosition position, std::stop_token token = {});
+
+// Where Ctrl+Alt+B ("Go to Implementation") goes: textDocument/implementation (excluding the
+// current caret position), falling back to textDocument/definition for functions and methods
+// whose body is reported as a definition rather than a polymorphic override.
+[[nodiscard]] sched::Task<Result<std::vector<Location>>>
+gotoImplementation(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
 
 // clangd's textDocument/switchSourceHeader: the counterpart of `path`, or nullopt. Errors:
 // request's (MethodNotFound from servers other than clangd).

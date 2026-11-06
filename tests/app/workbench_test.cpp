@@ -25,6 +25,7 @@
 #include "frost/ui/toolwindows/build_actions.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/solution_tree_model.hpp"
+#include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
 
 #include "../../src/app/src/language_bridge.hpp"
@@ -314,7 +315,7 @@ TEST(Workbench, SwitchingFromCMakeRestoresSolutionToolbar) {
     EXPECT_EQ(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets")), nullptr);
     EXPECT_FALSE(rig.workbench->configurationCombo()->isHidden());
     EXPECT_FALSE(rig.window->mainToolbar().runConfigurations()->isHidden());
-    EXPECT_EQ(rig.workbench->configurationCombo()->count(), 2);
+    EXPECT_EQ(rig.workbench->configurationCombo()->count(), 3);
     EXPECT_GT(rig.window->mainToolbar().runConfigurations()->count(), 0);
 }
 
@@ -399,7 +400,7 @@ TEST(Workbench, SolutionFromTheCommandLineFillsTheExplorerAndTheConfigurations) 
     // The configuration combo in the main toolbar lists the solution's configurations.
     QComboBox* combo = rig.workbench->configurationCombo();
     ASSERT_NE(combo, nullptr);
-    ASSERT_EQ(combo->count(), 2);
+    ASSERT_EQ(combo->count(), 3);
     EXPECT_EQ(combo->itemText(0).toStdString(), "Debug | x64");
     EXPECT_EQ(combo->currentText().toStdString(), "Debug | x64");
     EXPECT_EQ(combo->parentWidget(), static_cast<QWidget*>(&rig.window->mainToolbar()));
@@ -2046,6 +2047,44 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     auto* stackLinks = unitTestsWidget->findChild<QListWidget*>(QStringLiteral("unitTestsStackTraceLinks"));
     ASSERT_NE(stackLinks, nullptr);
     EXPECT_GT(stackLinks->count(), 0);
+
+    // 7. Search Everywhere (Classes / Symbols / All) exercises Workbench::queryWorkspaceSymbols
+    // asynchronously on the worker thread pool without use-after-free.
+    auto* popup = rig.nav().showSearchEverywhere(QStringLiteral("Math"), frost::ui::SearchEverywhereCategory::Classes);
+    ASSERT_NE(popup, nullptr);
+    popup->setFilterText(QStringLiteral("MathSuite"));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    popup->close();
+}
+
+TEST(Workbench, OpeningUntrustedProjectOrFolderPromptsForTrustImmediately) {
+    WorkDir dir("trust-on-open", "tiny_sln");
+    dir.write("untrusted_folder/script.lua", "return 1\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+
+    const std::string folderPath = dir.join("untrusted_folder");
+    ASSERT_FALSE(rig.trust->isTrusted(folderPath));
+    ASSERT_TRUE(rig.workbench->openPath(folderPath).has_value());
+    EXPECT_FALSE(rig.window->projectTrusted());
+
+    auto* folderDialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
+    ASSERT_NE(folderDialog, nullptr);
+    EXPECT_TRUE(folderDialog->isVisible());
+    folderDialog->trustButton()->click();
+    EXPECT_TRUE(rig.trust->isTrusted(folderPath));
+    EXPECT_TRUE(rig.window->projectTrusted());
+
+    ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    EXPECT_FALSE(rig.window->projectTrusted());
+
+    auto* slnDialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
+    ASSERT_NE(slnDialog, nullptr);
+    EXPECT_TRUE(slnDialog->isVisible());
+    slnDialog->trustButton()->click();
+    EXPECT_TRUE(rig.trust->isTrusted(dir.path()));
+    EXPECT_TRUE(rig.window->projectTrusted());
 }
 
 } // namespace

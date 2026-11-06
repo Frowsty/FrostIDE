@@ -229,6 +229,9 @@ void TerminalToolWindow::setupHeaderBar(QHBoxLayout& header) {
     m_newTab->setToolTip(text("New Tab"));
     m_newTab->setAutoRaise(true);
     m_newTab->setFocusPolicy(Qt::NoFocus);
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        m_newTab->setIcon(style->icon(icons::kActionsAdd));
+    }
 
     m_shellMenu = new QMenu(this);
     m_shellMenu->setObjectName(QStringLiteral("terminalShellMenu"));

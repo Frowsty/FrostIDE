@@ -7,6 +7,7 @@
 #include <QObject>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -17,6 +18,9 @@ class Workbench;
 class MainWindow;
 // Canonical directory of an existing project root or .frostproj. Errors: NotFound, InvalidArgument.
 [[nodiscard]] Result<std::string> externalProjectRoot(std::string_view project);
+// Infers the canonical project root directory for an external script or source file when
+// launched without --project (e.g. from FrostEngine); returns nullopt if none can be inferred.
+[[nodiscard]] std::optional<std::string> inferExternalProjectRootForFile(std::string_view filePath);
 // SHA-256 of the canonical document key; no raw user path is exposed in IPC names.
 [[nodiscard]] std::string externalProjectKey(std::string_view canonicalRoot);
 // Opens an absolute file in the running project; zero line/column keeps the existing coordinate.

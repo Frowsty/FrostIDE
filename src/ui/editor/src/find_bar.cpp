@@ -5,11 +5,14 @@
 
 #include "frost/ui/editor/find_bar.hpp"
 
+#include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPushButton>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -48,6 +51,8 @@ EditorFindBar::EditorFindBar(QWidget* parent) : QWidget(parent) {
 
     auto* findRow = new QHBoxLayout();
     findRow->setSpacing(4);
+    m_expandReplace = plainButton(QStringLiteral("▸"), QStringLiteral("Toggle Replace (Ctrl+R)"), this);
+    m_expandReplace->setObjectName(QStringLiteral("findBarToggleReplace"));
     m_find = new QLineEdit(this);
     m_find->setPlaceholderText(QStringLiteral("Find"));
     m_find->setClearButtonEnabled(true);
@@ -59,6 +64,24 @@ EditorFindBar::EditorFindBar(QWidget* parent) : QWidget(parent) {
     m_previous = plainButton(QStringLiteral("↑"), QStringLiteral("Previous Occurrence (Shift+F3)"), this);
     m_next = plainButton(QStringLiteral("↓"), QStringLiteral("Next Occurrence (F3)"), this);
     m_close = plainButton(QStringLiteral("✕"), QStringLiteral("Close (Escape)"), this);
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        if (const QIcon searchIcon = style->icon(icons::kActionsSearch); !searchIcon.isNull()) {
+            m_find->addAction(searchIcon, QLineEdit::LeadingPosition);
+        }
+        if (const QIcon upIcon = style->icon(icons::kNavChevronUp); !upIcon.isNull()) {
+            m_previous->setIcon(upIcon);
+        }
+        if (const QIcon downIcon = style->icon(icons::kNavChevronDown); !downIcon.isNull()) {
+            m_next->setIcon(downIcon);
+        }
+        if (const QIcon closeIcon = style->icon(icons::kActionsClose); !closeIcon.isNull()) {
+            m_close->setIcon(closeIcon);
+        }
+        if (const QIcon rightIcon = style->icon(icons::kNavChevronRight); !rightIcon.isNull()) {
+            m_expandReplace->setIcon(rightIcon);
+        }
+    }
+    findRow->addWidget(m_expandReplace);
     findRow->addWidget(m_find, 1);
     findRow->addWidget(m_case);
     findRow->addWidget(m_word);
@@ -100,6 +123,7 @@ EditorFindBar::EditorFindBar(QWidget* parent) : QWidget(parent) {
             }
         });
     }
+    connect(m_expandReplace, &QToolButton::clicked, this, [this] { setReplaceVisible(!m_replaceVisible); });
     connect(m_previous, &QToolButton::clicked, this, &EditorFindBar::findPreviousRequested);
     connect(m_next, &QToolButton::clicked, this, &EditorFindBar::findNextRequested);
     connect(m_close, &QToolButton::clicked, this, &EditorFindBar::closeRequested);
@@ -110,7 +134,24 @@ EditorFindBar::EditorFindBar(QWidget* parent) : QWidget(parent) {
 void EditorFindBar::setReplaceVisible(bool visible) {
     m_replaceVisible = visible;
     m_replaceRow->setVisible(visible);
+    if (m_expandReplace != nullptr) {
+        m_expandReplace->setText(visible ? QStringLiteral("▾") : QStringLiteral("▸"));
+        if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+            const QIcon chevron = style->icon(visible ? icons::kNavChevronDown : icons::kNavChevronRight);
+            if (!chevron.isNull()) {
+                m_expandReplace->setIcon(chevron);
+            }
+        }
+    }
     adjustSize();
+}
+
+void EditorFindBar::paintEvent(QPaintEvent* event) {
+    QWidget::paintEvent(event);
+    QPainter painter(this);
+    const FrostStyle* style = FrostStyle::current();
+    const QColor border = style != nullptr ? style->color(ColorKey::SeparatorColor) : palette().color(QPalette::Mid);
+    painter.fillRect(QRect(0, height() - 1, width(), 1), border);
 }
 
 QString EditorFindBar::findText() const { return m_find->text(); }

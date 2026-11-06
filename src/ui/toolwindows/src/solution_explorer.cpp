@@ -31,6 +31,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPalette>
+#include <QToolButton>
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -77,12 +78,40 @@ SolutionExplorer::SolutionExplorer(QWidget* parent)
     headerLayout->addWidget(viewLabel);
     headerLayout->addWidget(m_hierarchyCombo, 1);
 
+    detail::IconCache icons;
+    auto* expandAllBtn = new QToolButton(headerBar);
+    expandAllBtn->setObjectName(QStringLiteral("solutionExpandAll"));
+    expandAllBtn->setText(QStringLiteral("▾"));
+    expandAllBtn->setIcon(icons.get(icons::kNavChevronDown));
+    expandAllBtn->setToolTip(tr("Expand All"));
+    expandAllBtn->setAutoRaise(true);
+    expandAllBtn->setFocusPolicy(Qt::NoFocus);
+    connect(expandAllBtn, &QToolButton::clicked, m_view, &QTreeView::expandAll);
+
+    auto* collapseAllBtn = new QToolButton(headerBar);
+    collapseAllBtn->setObjectName(QStringLiteral("solutionCollapseAll"));
+    collapseAllBtn->setText(QStringLiteral("▴"));
+    collapseAllBtn->setIcon(icons.get(icons::kNavChevronUp));
+    collapseAllBtn->setToolTip(tr("Collapse All"));
+    collapseAllBtn->setAutoRaise(true);
+    collapseAllBtn->setFocusPolicy(Qt::NoFocus);
+    connect(collapseAllBtn, &QToolButton::clicked, this, [this] {
+        m_view->collapseAll();
+        if (m_model->solution()) {
+            m_view->expand(proxyIndexOf(project::SolutionModel::root()));
+        }
+    });
+
+    headerLayout->addWidget(expandAllBtn);
+    headerLayout->addWidget(collapseAllBtn);
+
     m_searchField->setObjectName(QStringLiteral("speedSearch"));
     m_searchField->setReadOnly(true);
     m_searchField->setFocusPolicy(Qt::NoFocus);
     m_searchField->hide();
 
     m_view->setObjectName(QStringLiteral("solutionTree"));
+    m_view->setFrameShape(QFrame::NoFrame);
     m_view->setModel(m_filter);
     m_view->setItemDelegate(new SolutionItemDelegate(m_view));
     m_view->setHeaderHidden(true);

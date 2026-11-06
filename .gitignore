@@ -22,6 +22,9 @@ CMakeUserPresets.json
 compile_commands.json
 # Tool logs written into the working directory.
 *.log
+# Local release signing config (contains Ed25519 private seed; never commit).
+/signing.config.json
+*.signing.json
 # Python bytecode from tools/.
 __pycache__/
 *.pyc

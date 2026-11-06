@@ -245,6 +245,9 @@ ShellWindow::ShellWindow(ShellEnvironment environment, QWidget* parent)
     }
 
     m_status = new ShellStatusBar(*statusBar(), *m_tasks, *m_notifications, this);
+    if (auto* navScroll = findChild<QScrollArea*>(QStringLiteral("navigationScroll"))) {
+        statusBar()->insertPermanentWidget(0, navScroll, 1);
+    }
     statusBar()->showMessage(text("Ready"));
     connect(m_status, &ShellStatusBar::caretClicked, this, [this] { static_cast<void>(showGoToLine()); });
     connect(m_status, &ShellStatusBar::notificationsClicked, this,
@@ -260,6 +263,9 @@ ShellWindow::ShellWindow(ShellEnvironment environment, QWidget* parent)
     m_dispatcher = new ShortcutDispatcher(
         *this, m_env.registry, m_env.keymap, [this] { return actionContext(); }, m_env.followActiveLayout, this);
     connect(m_dispatcher, &ShortcutDispatcher::pendingChanged, this, [this](const QString& prefix) {
+        if (auto* navScroll = findChild<QScrollArea*>(QStringLiteral("navigationScroll"))) {
+            navScroll->setVisible(prefix.isEmpty() && m_navigationBar != nullptr && !m_navigationBar->isHidden());
+        }
         statusBar()->showMessage(
             prefix.isEmpty() ? text("Ready") : text("%1 was pressed. Waiting for the second stroke...").arg(prefix));
     });
@@ -316,11 +322,15 @@ void ShellWindow::teardown() {
 void ShellWindow::buildCentral() {
     auto* host = new IslandHost(QBoxLayout::TopToBottom, this);
     host->setObjectName(QStringLiteral("shellCentral"));
+    if (QLayout* hostLayout = host->layout(); hostLayout != nullptr) {
+        hostLayout->setContentsMargins(0, 0, 0, 0);
+        hostLayout->setSpacing(0);
+    }
     auto* dock = new QWidget(host);
     dock->setObjectName(QStringLiteral("toolWindowHost"));
     host->addIsland(dock, 1);
 
-    auto* editorIsland = new IslandFrame(dock);
+    auto* editorIsland = new QWidget(dock);
     editorIsland->setObjectName(QStringLiteral("editorIsland"));
     m_tabs = new EditorTabs(m_env.editors, editorIsland);
 #ifdef _WIN32
@@ -339,9 +349,9 @@ void ShellWindow::buildCentral() {
     }
 #endif
     auto* editorLayout = new QVBoxLayout(editorIsland);
-    editorLayout->setContentsMargins(1, 1, 1, 1);
+    editorLayout->setContentsMargins(0, 0, 0, 0);
     editorLayout->setSpacing(0);
-    auto* navigationScroll = new QScrollArea(editorIsland);
+    auto* navigationScroll = new QScrollArea(this);
     navigationScroll->setObjectName(QStringLiteral("navigationScroll"));
     navigationScroll->setFrameShape(QFrame::NoFrame);
     navigationScroll->setWidgetResizable(true);
@@ -349,16 +359,15 @@ void ShellWindow::buildCentral() {
     navigationScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_navigationBar = new NavigationBar(navigationScroll);
     navigationScroll->setWidget(m_navigationBar);
-    navigationScroll->setFixedHeight(fontMetrics().height() + 12);
+    navigationScroll->setFixedHeight(fontMetrics().height() + 8);
     connect(navigationScroll->horizontalScrollBar(), &QScrollBar::rangeChanged, navigationScroll,
             [navigationScroll](int, int maximum) {
                 navigationScroll->setFixedHeight(
-                    navigationScroll->fontMetrics().height() + 12 +
+                    navigationScroll->fontMetrics().height() + 8 +
                     (maximum > 0 ? navigationScroll->horizontalScrollBar()->sizeHint().height() : 0));
             });
     navigationScroll->hide();
     connect(m_navigationBar, &NavigationBar::contentVisibilityChanged, navigationScroll, &QWidget::setVisible);
-    editorLayout->addWidget(navigationScroll);
     editorLayout->addWidget(m_tabs);
 
     m_toolWindows = new ToolWindowManager(*dock, *editorIsland, m_env.settings, this);
@@ -705,7 +714,20 @@ ListPopup* ShellWindow::showQuickSwitchTheme() {
     if (m_env.appearanceSettings == nullptr) {
         return nullptr;
     }
-    auto* popup = new ListPopup(this, text("Theme"), false);
+    QWidget* ownerWin = this;
+    if (!isVisible()) {
+        if (QWidget* active = QApplication::activeWindow(); active != nullptr && active->isVisible()) {
+            ownerWin = active;
+        } else {
+            for (QWidget* top : QApplication::topLevelWidgets()) {
+                if (top != nullptr && top->isVisible() && (top->windowFlags() & Qt::Popup) == 0) {
+                    ownerWin = top;
+                    break;
+                }
+            }
+        }
+    }
+    auto* popup = new ListPopup(ownerWin, text("Theme"), false);
     popup->setObjectName(QStringLiteral("quickSwitchThemePopup"));
     std::vector<ListPopupItem> items;
     const std::string current = m_env.appearanceSettings->load().theme;
@@ -973,7 +995,23 @@ void ShellWindow::openPopup(Popup* popup) {
         m_popup->closePopup(Popup::CloseReason::Dismissed);
     }
     m_popup = popup;
-    popup->showCentered(this, 0.2);
+    QWidget* anchorWin = this;
+    if (!isVisible()) {
+        if (QWidget* parentWin = popup != nullptr ? popup->parentWidget() : nullptr;
+            parentWin != nullptr && parentWin->isVisible()) {
+            anchorWin = parentWin;
+        } else if (QWidget* active = QApplication::activeWindow(); active != nullptr && active->isVisible()) {
+            anchorWin = active;
+        } else {
+            for (QWidget* top : QApplication::topLevelWidgets()) {
+                if (top != nullptr && top->isVisible() && top != popup && (top->windowFlags() & Qt::Popup) == 0) {
+                    anchorWin = top;
+                    break;
+                }
+            }
+        }
+    }
+    popup->showCentered(anchorWin, 0.16);
 }
 
 void ShellWindow::storeChromeVisibility() {

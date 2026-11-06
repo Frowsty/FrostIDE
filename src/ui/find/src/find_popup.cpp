@@ -17,6 +17,7 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSplitter>
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -83,30 +84,17 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
     layout->setContentsMargins(8, 8, 8, 8);
     layout->setSpacing(6);
 
-    // Title, file mask.
+    // Header row: Title, scope tabs, file mask.
     auto* header = new QHBoxLayout();
+    header->setSpacing(6);
     m_title = new QLabel(m_replaceMode ? label("Replace in Files") : label("Find in Files"), this);
     m_title->setObjectName(QStringLiteral("popupTitle"));
     QFont titleFont = m_title->font();
     titleFont.setBold(true);
     m_title->setFont(titleFont);
     header->addWidget(m_title);
-    header->addStretch(1);
-    m_maskEnabled = new QCheckBox(label("File mask:"), this);
-    m_maskEnabled->setObjectName(QStringLiteral("findFileMaskEnabled"));
-    m_maskEnabled->setChecked(settings.fileMaskEnabled);
-    m_maskEnabled->setFocusPolicy(Qt::NoFocus);
-    m_mask = new QLineEdit(fromUtf8(settings.query.fileMask), this);
-    m_mask->setObjectName(QStringLiteral("findFileMask"));
-    m_mask->setPlaceholderText(QStringLiteral("*.cpp, *.h, !*.generated.h"));
-    m_mask->setEnabled(settings.fileMaskEnabled);
-    m_mask->setMaximumWidth(220);
-    header->addWidget(m_maskEnabled);
-    header->addWidget(m_mask);
-    layout->addLayout(header);
+    header->addSpacing(8);
 
-    // Scopes.
-    auto* scopes = new QHBoxLayout();
     auto* group = new QButtonGroup(this);
     group->setExclusive(true);
     const std::array names{label("In Solution"), label("In Project"), label("Directory"), label("Open Files")};
@@ -115,7 +103,7 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
         QToolButton* button = toggleButton(this, names[i], names[i], objectNames[i]);
         button->setToolButtonStyle(Qt::ToolButtonTextOnly);
         group->addButton(button);
-        scopes->addWidget(button);
+        header->addWidget(button);
         m_scopes[i] = button;
     }
     const bool solutionScope =
@@ -130,16 +118,24 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
         initial = search::ScopeKind::Solution;
     }
     scopeButton(initial)->setChecked(true);
-    m_directory = new QLineEdit(fromUtf8(settings.scope.directory), this);
-    m_directory->setObjectName(QStringLiteral("findDirectory"));
-    m_directory->setPlaceholderText(label("Directory to search"));
-    m_directory->setVisible(initial == search::ScopeKind::Directory);
-    scopes->addWidget(m_directory, 1);
-    scopes->addStretch(0);
-    layout->addLayout(scopes);
 
-    // Query with its toggles.
+    header->addStretch(1);
+    m_maskEnabled = new QCheckBox(label("File mask:"), this);
+    m_maskEnabled->setObjectName(QStringLiteral("findFileMaskEnabled"));
+    m_maskEnabled->setChecked(settings.fileMaskEnabled);
+    m_maskEnabled->setFocusPolicy(Qt::NoFocus);
+    m_mask = new QLineEdit(fromUtf8(settings.query.fileMask), this);
+    m_mask->setObjectName(QStringLiteral("findFileMask"));
+    m_mask->setPlaceholderText(QStringLiteral("*.cpp, *.h, !*.generated.h"));
+    m_mask->setEnabled(settings.fileMaskEnabled);
+    m_mask->setMaximumWidth(200);
+    header->addWidget(m_maskEnabled);
+    header->addWidget(m_mask);
+    layout->addLayout(header);
+
+    // Query with its inline toggles (Cc, W, .*).
     auto* queryRow = new QHBoxLayout();
+    queryRow->setSpacing(4);
     m_query = new QLineEdit(fromUtf8(settings.query.pattern), this);
     m_query->setObjectName(QStringLiteral("findQuery"));
     m_query->setPlaceholderText(label("Search text"));
@@ -157,31 +153,64 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
     queryRow->addWidget(m_regex);
     layout->addLayout(queryRow);
 
+    // Replace row (Replace field + Replace / Replace All buttons).
+    auto* replaceRow = new QHBoxLayout();
+    replaceRow->setSpacing(4);
     m_replacement = new QLineEdit(fromUtf8(settings.replacement), this);
     m_replacement->setObjectName(QStringLiteral("findReplacement"));
     m_replacement->setPlaceholderText(label("Replace with"));
     m_replacement->setVisible(m_replaceMode);
-    layout->addWidget(m_replacement);
+    replaceRow->addWidget(m_replacement, 1);
+    m_replaceOne = new QPushButton(label("Replace"), this);
+    m_replaceOne->setObjectName(QStringLiteral("findReplaceOne"));
+    m_replaceOne->setFocusPolicy(Qt::NoFocus);
+    m_replaceOne->setVisible(m_replaceMode);
+    m_replaceAll = new QPushButton(label("Replace All"), this);
+    m_replaceAll->setObjectName(QStringLiteral("findReplaceAll"));
+    m_replaceAll->setFocusPolicy(Qt::NoFocus);
+    m_replaceAll->setVisible(m_replaceMode);
+    replaceRow->addWidget(m_replaceOne);
+    replaceRow->addWidget(m_replaceAll);
+    layout->addLayout(replaceRow);
 
-    // Results and the preview.
-    m_results = new QListWidget(this);
+    // Directory row (when Directory scope is active).
+    m_directory = new QLineEdit(fromUtf8(settings.scope.directory), this);
+    m_directory->setObjectName(QStringLiteral("findDirectory"));
+    m_directory->setPlaceholderText(label("Directory to search"));
+    m_directory->setVisible(initial == search::ScopeKind::Directory);
+    layout->addWidget(m_directory);
+
+    // Results list and code preview in a vertical splitter.
+    auto* splitter = new QSplitter(Qt::Vertical, this);
+    splitter->setObjectName(QStringLiteral("findSplitter"));
+    splitter->setChildrenCollapsible(false);
+    m_results = new QListWidget(splitter);
     m_results->setObjectName(QStringLiteral("findResults"));
     m_results->setSelectionMode(QAbstractItemView::SingleSelection);
     m_results->setUniformItemSizes(true);
     m_results->setFrameShape(QFrame::NoFrame);
     m_results->setItemDelegate(new find_detail::MatchItemDelegate(m_results));
-    layout->addWidget(m_results, 3);
-    m_previewTitle = new QLabel(this);
+    splitter->addWidget(m_results);
+
+    auto* previewContainer = new QWidget(splitter);
+    auto* previewLayout = new QVBoxLayout(previewContainer);
+    previewLayout->setContentsMargins(0, 2, 0, 0);
+    previewLayout->setSpacing(2);
+    m_previewTitle = new QLabel(previewContainer);
     m_previewTitle->setObjectName(QStringLiteral("findPreviewTitle"));
-    layout->addWidget(m_previewTitle);
-    m_preview = new QPlainTextEdit(this);
+    previewLayout->addWidget(m_previewTitle);
+    m_preview = new QPlainTextEdit(previewContainer);
     m_preview->setObjectName(QStringLiteral("findPreview"));
     m_preview->setReadOnly(true);
     m_preview->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_preview->setFocusPolicy(Qt::NoFocus);
-    layout->addWidget(m_preview, 2);
+    previewLayout->addWidget(m_preview, 1);
+    splitter->addWidget(previewContainer);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+    layout->addWidget(splitter, 1);
 
-    // Status and buttons.
+    // Status and Open in Find Window button.
     auto* footer = new QHBoxLayout();
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("findStatus"));
@@ -191,16 +220,6 @@ void FindPopup::buildUi(const FindSettings& settings, bool solutionOpen) {
     m_openInWindow->setFocusPolicy(Qt::NoFocus);
     m_openInWindow->setToolTip(QStringLiteral("Ctrl+Enter"));
     footer->addWidget(m_openInWindow);
-    m_replaceOne = new QPushButton(label("Replace"), this);
-    m_replaceOne->setObjectName(QStringLiteral("findReplaceOne"));
-    m_replaceOne->setFocusPolicy(Qt::NoFocus);
-    m_replaceOne->setVisible(m_replaceMode);
-    m_replaceAll = new QPushButton(label("Replace All"), this);
-    m_replaceAll->setObjectName(QStringLiteral("findReplaceAll"));
-    m_replaceAll->setFocusPolicy(Qt::NoFocus);
-    m_replaceAll->setVisible(m_replaceMode);
-    footer->addWidget(m_replaceOne);
-    footer->addWidget(m_replaceAll);
     layout->addLayout(footer);
 
     setFocusProxy(m_query);

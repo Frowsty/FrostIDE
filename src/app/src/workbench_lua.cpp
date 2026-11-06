@@ -54,22 +54,7 @@ void Workbench::updateLanguageTarget() {
         }
     }
 }
-void Workbench::offerLuaTrust() {
-    if (m_projectRoot.empty() || m_services.trust.isTrusted(m_projectRoot) || !m_window || m_luaTrustDialog)
-        return;
-    auto* dialog = new ui::TrustDialog(
-        *m_build, {QString::fromUtf8(m_projectRoot.data(), static_cast<qsizetype>(m_projectRoot.size()))}, m_window,
-        ui::TrustPurpose::LuaLanguageServer);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    m_luaTrustDialog = dialog;
-    const std::string root = m_projectRoot;
-    connect(dialog, &QDialog::accepted, this, [this, root] {
-        m_luaTrustDialog.clear();
-        if (m_projectRoot == root && m_services.trust.isTrusted(root))
-            startLua(root);
-    });
-    dialog->open();
-}
+void Workbench::offerLuaTrust() { offerProjectTrust(); }
 void Workbench::startLua(const std::string& root) {
     if (m_shutDown)
         return;

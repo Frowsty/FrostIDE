@@ -8,6 +8,9 @@
 #include "frost/ui/toolwindows/build_controller.hpp"
 
 #include "tool_icons.hpp"
+#include "frost/ui/icon_ids.hpp"
+#include <QButtonGroup>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -208,6 +211,15 @@ void ProblemsFilterModel::setSeverityShown(build::Severity severity, bool shown)
 
 bool ProblemsFilterModel::isSeverityShown(build::Severity severity) const noexcept { return m_shown[slot(severity)]; }
 
+void ProblemsFilterModel::setSourceFilter(std::optional<DiagnosticSource> source) {
+    if (m_sourceFilter == source) {
+        return;
+    }
+    beginFilterChange();
+    m_sourceFilter = source;
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+}
+
 void ProblemsFilterModel::setText(const QString& text) {
     if (text == m_text) {
         return;
@@ -220,6 +232,12 @@ void ProblemsFilterModel::setText(const QString& text) {
 bool ProblemsFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const {
     const QAbstractItemModel* source = sourceModel();
     const QModelIndex first = source->index(sourceRow, 0, sourceParent);
+    if (m_sourceFilter) {
+        const auto rowSource = static_cast<DiagnosticSource>(first.data(ProblemsModel::SourceRole).toInt());
+        if (rowSource != *m_sourceFilter) {
+            return false;
+        }
+    }
     const auto severity = static_cast<build::Severity>(first.data(ProblemsModel::SeverityRole).toInt());
     if (slot(severity) >= m_shown.size() || !m_shown[slot(severity)]) {
         return false;
@@ -246,7 +264,37 @@ ProblemsView::ProblemsView(QWidget* parent)
 
     detail::IconCache icons;
     auto* toolbar = new QHBoxLayout;
-    toolbar->setContentsMargins(0, 0, 0, 0);
+    toolbar->setContentsMargins(6, 3, 6, 3);
+    toolbar->setSpacing(4);
+
+    auto* scopeGroup = new QButtonGroup(this);
+    scopeGroup->setExclusive(true);
+    const auto makeScopeTab = [&](const QString& label, const char* name, std::optional<DiagnosticSource> src,
+                                  bool checked) {
+        auto* tab = new QToolButton(this);
+        tab->setObjectName(QString::fromLatin1(name));
+        tab->setText(label);
+        tab->setCheckable(true);
+        tab->setChecked(checked);
+        tab->setAutoRaise(true);
+        tab->setFocusPolicy(Qt::NoFocus);
+        scopeGroup->addButton(tab);
+        connect(tab, &QToolButton::toggled, this, [this, src](bool on) {
+            if (on) {
+                m_filter->setSourceFilter(src);
+            }
+        });
+        toolbar->addWidget(tab);
+    };
+    makeScopeTab(tr("All Problems"), "problemsScopeAll", std::nullopt, true);
+    makeScopeTab(tr("Toolset, Environment"), "problemsScopeBuild", DiagnosticSource::Build, false);
+    makeScopeTab(tr("All Solution Files"), "problemsScopeLive", DiagnosticSource::Live, false);
+
+    auto* sep = new QFrame(this);
+    sep->setFrameShape(QFrame::VLine);
+    sep->setFrameShadow(QFrame::Plain);
+    toolbar->addWidget(sep);
+
     static constexpr std::array<const char*, 3> kButtonNames{"errorsFilter", "warningsFilter", "messagesFilter"};
     for (const build::Severity severity : kSeverities) {
         auto* button = new QToolButton(this);
@@ -264,10 +312,14 @@ ProblemsView::ProblemsView(QWidget* parent)
     m_search->setObjectName(QStringLiteral("problemsSearch"));
     m_search->setPlaceholderText(tr("Search Problems"));
     m_search->setClearButtonEnabled(true);
+    if (const QIcon searchIcon = icons.get(icons::kActionsSearch); !searchIcon.isNull()) {
+        m_search->addAction(searchIcon, QLineEdit::LeadingPosition);
+    }
     connect(m_search, &QLineEdit::textChanged, m_filter, &ProblemsFilterModel::setText);
     toolbar->addWidget(m_search, 1);
 
     m_view->setObjectName(QStringLiteral("problemsTable"));
+    m_view->setFrameShape(QFrame::NoFrame);
     m_view->setAccessibleDescription(tr("Press Enter or F4 on a diagnostic to open its source."));
     m_view->setModel(m_filter);
     m_view->setRootIsDecorated(false);

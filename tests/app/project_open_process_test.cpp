@@ -697,4 +697,82 @@ TEST(ProjectOpenProcess, UnityEditorBridgeReusesDirtyScriptAtLocation) {
     ASSERT_TRUE(after);
     EXPECT_EQ(*after, *original);
 }
+
+TEST(ProjectOpenProcess, ScriptPathWithoutProjectFlagInfersProjectRootAndReusesExistingInstance) {
+    WorkDir dir("engine-infer-project");
+    dir.write("projectA/Game.frostproj", "{}");
+    dir.write("projectA/Assets/Scripts/first.lua", "local a = 1\nlocal b = 2\n");
+    dir.write("projectA/Assets/Scripts/second.lua", "local c = 3\n");
+    dir.write("projectB/Assets/Scripts/third.lua", "local d = 4\n");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("profile")));
+
+    const std::string rootA = dir.join("projectA");
+    const std::string script1 = dir.join("projectA/Assets/Scripts/first.lua");
+    const std::string script2 = dir.join("projectA/Assets/Scripts/second.lua");
+    const std::string rootB = dir.join("projectB");
+    const std::string script3 = dir.join("projectB/Assets/Scripts/third.lua");
+
+    const auto inferredA = frost::app::inferExternalProjectRootForFile(script1);
+    const auto expectedA = frost::app::externalProjectRoot(rootA);
+    ASSERT_TRUE(inferredA.has_value());
+    ASSERT_TRUE(expectedA.has_value());
+    EXPECT_EQ(frost::app::externalProjectKey(*inferredA), frost::app::externalProjectKey(*expectedA));
+
+    // Even without a .frostproj file, an Assets/Scripts hierarchy infers the project base directory.
+    const auto inferredB = frost::app::inferExternalProjectRootForFile(script3);
+    const auto expectedB = frost::app::externalProjectRoot(rootB);
+    ASSERT_TRUE(inferredB.has_value());
+    ASSERT_TRUE(expectedB.has_value());
+    EXPECT_EQ(frost::app::externalProjectKey(*inferredB), frost::app::externalProjectKey(*expectedB));
+    EXPECT_NE(frost::app::externalProjectKey(*inferredA), frost::app::externalProjectKey(*inferredB));
+
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(rootA));
+    ASSERT_TRUE(rig.workbench->openExternalProject(rootA));
+    auto ownerA = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*expectedA));
+    ASSERT_TRUE(ownerA.has_value());
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *expectedA, std::move(*ownerA));
+    ASSERT_TRUE(broker.start());
+
+    // Launch frost.exe with ONLY the script path (no --project flag), as FrostEngine does when
+    // invoking the external script editor directly. It must infer projectA and forward to `rig`.
+    frost::io::ProcessSpec spec;
+    spec.executable = frost::io::normalizePath(FROST_EXE_PATH).value();
+    spec.arguments = {script1 + ":2:7"};
+    spec.environment = {{"QT_QPA_PLATFORM", "offscreen"},
+                        {"APPDATA", dir.join("profile")},
+                        {"LOCALAPPDATA", dir.join("profile")},
+                        {"XDG_CONFIG_HOME", dir.join("profile")},
+                        {"XDG_DATA_HOME", dir.join("profile")}};
+    std::atomic<bool> done1{false};
+    frost::Result<frost::io::ProcessResult> result1 = frost::fail(frost::ErrorCode::Unknown, "not launched");
+    std::jthread client1([&] {
+        result1 = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 15s);
+        done1.store(true, std::memory_order_release);
+    });
+    ASSERT_TRUE(waitFor([&] { return done1.load(std::memory_order_acquire); }, 20s));
+    client1.join();
+    ASSERT_TRUE(result1.has_value()) << result1.error().describe();
+    EXPECT_EQ(result1->exitCode, 0) << result1->stderrBytes;
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), script1);
+    EXPECT_EQ(rig.workbench->currentView()->status().line, 2);
+    EXPECT_EQ(rig.workbench->currentView()->status().column, 7);
+
+    // Subsequent script open in the same project also reuses the existing instance.
+    spec.arguments = {script2 + ":1:3"};
+    std::atomic<bool> done2{false};
+    frost::Result<frost::io::ProcessResult> result2 = frost::fail(frost::ErrorCode::Unknown, "not launched");
+    std::jthread client2([&] {
+        result2 = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 15s);
+        done2.store(true, std::memory_order_release);
+    });
+    ASSERT_TRUE(waitFor([&] { return done2.load(std::memory_order_acquire); }, 20s));
+    client2.join();
+    ASSERT_TRUE(result2.has_value()) << result2.error().describe();
+    EXPECT_EQ(result2->exitCode, 0) << result2->stderrBytes;
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_EQ(rig.workbench->currentView()->path(), script2);
+    EXPECT_EQ(rig.window->tabs().count(), 2);
+}
 } // namespace

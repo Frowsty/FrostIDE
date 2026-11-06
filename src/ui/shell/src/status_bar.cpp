@@ -9,6 +9,8 @@
 #include "frost/ui/shell/notifications.hpp"
 
 #include "shell_util.hpp"
+#include <QEvent>
+#include <QPainter>
 #include <QStatusBar>
 #include <QToolButton>
 
@@ -18,6 +20,40 @@ using shell_detail::text;
 
 namespace {
 
+class StatusBarChromeFilter final : public QObject {
+public:
+    explicit StatusBarChromeFilter(QStatusBar& bar) : QObject(&bar), m_bar(bar) { m_bar.installEventFilter(this); }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == &m_bar && event != nullptr && event->type() == QEvent::Paint) {
+            QPainter painter(&m_bar);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            const FrostStyle* frost = FrostStyle::current();
+            const QColor bg =
+                frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : m_bar.palette().color(QPalette::Window);
+            const QColor sep =
+                frost != nullptr ? frost->color(ColorKey::SeparatorColor) : m_bar.palette().color(QPalette::Mid);
+            const QColor accent =
+                frost != nullptr ? frost->color(ColorKey::TabbedPaneUnderlineColor) : QColor(0x35, 0x74, 0xF0);
+            const bool isDark = bg.lightness() < 128;
+            painter.fillRect(m_bar.rect(), bg);
+
+            const QColor projColor = shell_detail::activeProjectColor(&m_bar);
+            shell_detail::paintEllipticalGlow(painter, QPointF(80.0, m_bar.height() * 0.5),
+                                              220.0, m_bar.height() * 2.2, projColor, isDark ? 28 : 16);
+            shell_detail::paintEllipticalGlow(painter, QPointF(m_bar.width() - 140.0, m_bar.height() * 0.5),
+                                              200.0, m_bar.height() * 2.0, accent, isDark ? 22 : 12);
+            shell_detail::paintFrostedGlassSheen(painter, m_bar.rect(), isDark, false);
+            painter.fillRect(QRect(0, 0, m_bar.width(), 1), sep);
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QStatusBar& m_bar;
+};
+
 QToolButton* statusButton(QStatusBar& bar, const char* objectName, const QString& tooltip) {
     auto* button = new QToolButton(&bar);
     button->setObjectName(QString::fromLatin1(objectName));
@@ -25,6 +61,7 @@ QToolButton* statusButton(QStatusBar& bar, const char* objectName, const QString
     button->setFocusPolicy(Qt::TabFocus);
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     button->setToolTip(tooltip);
+    button->setContentsMargins(4, 1, 4, 1);
     bar.addPermanentWidget(button);
     return button;
 }
@@ -35,6 +72,14 @@ ShellStatusBar::ShellStatusBar(QStatusBar& bar, BackgroundTaskManager& tasks, No
                                QObject* parent)
     : QObject(parent), m_center(notifications), m_processes(new ProcessesIndicator(tasks, &bar)) {
     setObjectName(QStringLiteral("shellStatusBar"));
+    new StatusBarChromeFilter(bar);
+    bar.setSizeGripEnabled(false);
+    bar.setContentsMargins(8, 1, 8, 0);
+    if (const FrostStyle* frost = FrostStyle::current(); frost != nullptr) {
+        bar.setMinimumHeight(frost->metricPx(MetricKey::StatusBarHeight));
+    } else {
+        bar.setMinimumHeight(26);
+    }
     bar.addPermanentWidget(m_processes);
     m_caret = statusButton(bar, "statusCaret", text("Go to Line:Column"));
     m_separator = statusButton(bar, "statusLineSeparator", text("Line Separator"));

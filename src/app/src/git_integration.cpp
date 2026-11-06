@@ -9,6 +9,7 @@
 #include "frost/io/path.hpp"
 #include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/nav/merge_layout.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
@@ -88,6 +89,7 @@ GitIntegration::GitIntegration(Workbench& wb) : QObject(&wb), m_workbench(wb) {
         spec.id = id;
         spec.title = QString::fromLatin1(title);
         spec.side = ui::ToolWindowSide::Bottom;
+        spec.iconId = std::string(ui::icons::kVcsBranch);
         if (auto added = window.toolWindows().add(std::move(spec)); !added)
             log::warn("git", "tool window: {}", added.error().describe());
     }
@@ -478,6 +480,10 @@ void GitIntegration::requestTrust() {
         return;
     if (m_workbench.m_services.trust.isTrusted(m_controller->info().workTree))
         return;
+    if (m_workbench.m_projectTrustDialog) {
+        delete m_workbench.m_projectTrustDialog.data();
+        m_workbench.m_projectTrustDialog.clear();
+    }
     auto* dialog = new ui::TrustDialog(*m_workbench.m_build, {QString::fromStdString(m_controller->info().workTree)},
                                        m_workbench.m_window, ui::TrustPurpose::GitRepository);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -829,6 +835,7 @@ void GitIntegration::showResolveConflictsDialog() {
     auto* buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     mainLayout->addWidget(buttonBox);
+    ui::installDialogChrome(&dialog, true);
 
     if (m_controller->snapshot()) {
         const std::string& workTree = m_controller->info().workTree;

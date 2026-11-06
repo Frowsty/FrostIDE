@@ -548,6 +548,36 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         std::string externalRoot;
         std::string externalFile;
         std::unique_ptr<frost::io::LocalIpcOwner> reserved;
+        if (parsed->project.empty()) {
+            if (parsed->paths.size() == 1) {
+                if (auto inferred = frost::app::inferExternalProjectRootForFile(parsed->paths.front())) {
+                    parsed->project = std::move(*inferred);
+                } else {
+                    const QFileInfo candidate(QString::fromUtf8(
+                        parsed->paths.front().data(), static_cast<qsizetype>(parsed->paths.front().size())));
+                    if (candidate.isFile() &&
+                        candidate.suffix().compare(QStringLiteral("frostproj"), Qt::CaseInsensitive) == 0) {
+                        parsed->project = parsed->paths.front();
+                        parsed->paths.clear();
+                    }
+                }
+            } else if (parsed->paths.size() == 2) {
+                const auto isEditorFile = [](std::string_view arg) {
+                    const QFileInfo info(QString::fromUtf8(arg.data(), static_cast<qsizetype>(arg.size())));
+                    const QString suffix = info.suffix().toLower();
+                    return info.isFile() && suffix != QStringLiteral("frostproj") && suffix != QStringLiteral("sln") &&
+                           suffix != QStringLiteral("slnx");
+                };
+                if (frost::app::externalProjectRoot(parsed->paths[0]).has_value() && isEditorFile(parsed->paths[1])) {
+                    parsed->project = parsed->paths[0];
+                    parsed->paths = {parsed->paths[1]};
+                } else if (frost::app::externalProjectRoot(parsed->paths[1]).has_value() &&
+                           isEditorFile(parsed->paths[0])) {
+                    parsed->project = parsed->paths[1];
+                    parsed->paths = {parsed->paths[0]};
+                }
+            }
+        }
         if (!parsed->project.empty()) {
             if (parsed->paths.size() > 1) {
                 reportExternalOpenFailure(consoleCodePage, "--project accepts at most one file");

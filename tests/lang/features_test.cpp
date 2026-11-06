@@ -109,18 +109,42 @@ TEST(NavigationModel, GoToDeclarationOrUsages) {
     EXPECT_EQ(use->locations[0].range.start.line, 10u);
     EXPECT_FALSE(use->showUsages);
 
-    // On the definition: the declaration in the header (a LocationLink).
+    // On the definition (or from a call site when both declaration and definition exist): the
+    // declaration in the header (a LocationLink) is preferred over the definition.
     server.on("textDocument/declaration", [&](const Json&) {
         return Json::array({Json::object()
                                 .set("targetUri", uriOf(header))
                                 .set("targetRange", rangeJson(3, 0, 20))
                                 .set("targetSelectionRange", rangeJson(3, 4, 7))});
     });
+    auto callWithHeaderDecl =
+        server.run(frost::lang::gotoDeclarationOrUsages(server.client(), source, LspPosition{20, 5}));
+    ASSERT_TRUE(callWithHeaderDecl.has_value());
+    ASSERT_EQ(callWithHeaderDecl->locations.size(), 1u);
+    EXPECT_EQ(frost::lang::documentKey(callWithHeaderDecl->locations[0].path), frost::lang::documentKey(header));
+    EXPECT_EQ(callWithHeaderDecl->locations[0].range.start.character, 4u);
+    EXPECT_FALSE(callWithHeaderDecl->showUsages);
+
     auto definition = server.run(frost::lang::gotoDeclarationOrUsages(server.client(), source, LspPosition{10, 5}));
     ASSERT_TRUE(definition.has_value());
     ASSERT_EQ(definition->locations.size(), 1u);
     EXPECT_EQ(frost::lang::documentKey(definition->locations[0].path), frost::lang::documentKey(header));
     EXPECT_EQ(definition->locations[0].range.start.character, 4u);
+
+    // Already on the header declaration itself: show usages instead of jumping to definition.
+    auto onHeaderDecl = server.run(frost::lang::gotoDeclarationOrUsages(server.client(), header, LspPosition{3, 5}));
+    ASSERT_TRUE(onHeaderDecl.has_value());
+    EXPECT_TRUE(onHeaderDecl->showUsages);
+    EXPECT_TRUE(onHeaderDecl->locations.empty());
+
+    // Go to Implementation on a non-virtual function (empty textDocument/implementation) falls back
+    // to textDocument/definition in the source file.
+    server.on("textDocument/implementation", [](const Json&) { return Json::array(); });
+    auto funcImpl = server.run(frost::lang::gotoImplementation(server.client(), header, LspPosition{3, 5}));
+    ASSERT_TRUE(funcImpl.has_value());
+    ASSERT_EQ(funcImpl->size(), 1u);
+    EXPECT_EQ(frost::lang::documentKey((*funcImpl)[0].path), frost::lang::documentKey(source));
+    EXPECT_EQ((*funcImpl)[0].range.start.line, 10u);
 
     // On a declaration that is its own definition: find usages.
     server.on("textDocument/declaration", [&](const Json&) { return Json::array({location(source, 10, 4, 7)}); });
@@ -130,10 +154,10 @@ TEST(NavigationModel, GoToDeclarationOrUsages) {
     EXPECT_TRUE(self->locations.empty());
 
     server.on("textDocument/implementation", [&](const Json&) { return Json::array({location(source, 30, 0, 3)}); });
-    auto implementations = server.run(frost::lang::requestLocations(
-        server.client(), frost::lang::NavigationTarget::Implementation, source, LspPosition{1, 1}));
+    auto implementations = server.run(frost::lang::gotoImplementation(server.client(), source, LspPosition{1, 1}));
     ASSERT_TRUE(implementations.has_value());
-    EXPECT_EQ(implementations->size(), 1u);
+    ASSERT_EQ(implementations->size(), 1u);
+    EXPECT_EQ((*implementations)[0].range.start.line, 30u);
 }
 
 TEST(NavigationModel, SwitchesBetweenHeaderAndSource) {

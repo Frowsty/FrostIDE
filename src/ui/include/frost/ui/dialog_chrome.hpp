@@ -29,6 +29,7 @@ public:
     [[nodiscard]] QToolButton* maximizeButton() const noexcept { return m_maximizeButton; }
     [[nodiscard]] QToolButton* closeButton() const noexcept { return m_closeButton; }
     [[nodiscard]] bool isResizable() const noexcept { return m_resizable; }
+    void setResizable(bool resizable);
 
     [[nodiscard]] static int preferredHeight();
     void syncState();

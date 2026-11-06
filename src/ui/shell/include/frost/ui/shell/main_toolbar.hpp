@@ -8,11 +8,13 @@
 
 #include "frost/input/action.hpp"
 #include "frost/input/keymap_service.hpp"
+#include "frost/ui/model/theme_registry.hpp"
 
 #include <QToolBar>
 #include <QToolButton>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,6 +51,10 @@ public:
     // The unified Rider main-menu button on the far left of the header.
     [[nodiscard]] QToolButton* mainMenuButton() const noexcept { return m_mainMenuButton; }
     void setMainMenuBuilder(std::function<void(QMenu&)> builder);
+
+    // Rider header Back / Forward navigation buttons next to the Main Menu button.
+    [[nodiscard]] QToolButton* backButton() const noexcept { return m_backButton; }
+    [[nodiscard]] QToolButton* forwardButton() const noexcept { return m_forwardButton; }
 
     // The project widget ("No project" until a solution opens).
     [[nodiscard]] QToolButton* projectButton() const noexcept { return m_project; }
@@ -100,15 +106,20 @@ private:
     struct Slot {
         std::string slotId;   // The k* id the slot was created with.
         std::string actionId; // The action it invokes now.
+        std::string iconId;
+        std::optional<IconRole> iconRole;
         QToolButton* button = nullptr;
     };
 
-    void addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText);
+    void addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText,
+                 std::optional<IconRole> iconRole = std::nullopt);
     void updateTabOrder();
 
     Invoker m_invoke;
     QToolButton* m_mainMenuButton = nullptr;
     QMenu* m_mainMenu = nullptr;
+    QToolButton* m_backButton = nullptr;
+    QToolButton* m_forwardButton = nullptr;
     QToolButton* m_project = nullptr;
     QMenu* m_projectMenu = nullptr;
     QToolButton* m_vcsBranch = nullptr;

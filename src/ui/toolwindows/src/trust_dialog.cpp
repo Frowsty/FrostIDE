@@ -10,6 +10,7 @@
 
 #include "tool_icons.hpp"
 #include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
@@ -36,7 +37,8 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
     const auto& solution = controller.solution();
     const QString name =
         solution ? QString::fromUtf8(solution->name().data(), static_cast<qsizetype>(solution->name().size()))
-                 : QString();
+        : !roots.isEmpty() ? QFileInfo(roots.front()).fileName()
+                           : QString();
     auto* heading =
         new QLabel(name.isEmpty() ? tr("Trust and open project?") : tr("Trust and open project '%1'?").arg(name), this);
     QFont headingFont = heading->font();
@@ -54,6 +56,12 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
         : purpose == TrustPurpose::ManagedLanguageServer
             ? tr("The C# language server evaluates project files and may run project-selected code. Trust it only "
                  "if you know where it comes from. Trusting covers these folders and everything below them:")
+        : purpose == TrustPurpose::ProjectOpen
+            ? tr("Opening, configuring, or building this project or folder can run project-controlled code: "
+                 "CMake scripts, MSBuild targets, build events, and language servers (including the Lua language "
+                 "server and C# language server) that read project configuration and load scripts or extensions. "
+                 "Trust it only if you know where it comes from. Trusting covers these folders and everything below "
+                 "them:")
             : tr("Configuring or building runs code from the project: CMake scripts, MSBuild targets, "
                  "build events and custom build steps. "
                  "Trust it only if you know where it comes from. Trusting covers these folders and everything below "

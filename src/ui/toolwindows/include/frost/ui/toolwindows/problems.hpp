@@ -108,6 +108,8 @@ public:
 
     void setSeverityShown(build::Severity severity, bool shown);
     [[nodiscard]] bool isSeverityShown(build::Severity severity) const noexcept;
+    void setSourceFilter(std::optional<DiagnosticSource> source);
+    [[nodiscard]] std::optional<DiagnosticSource> sourceFilter() const noexcept { return m_sourceFilter; }
     // Rows whose code, description, project or file contains `text` (case ignored); "" shows all.
     void setText(const QString& text);
     [[nodiscard]] const QString& text() const noexcept { return m_text; }
@@ -117,6 +119,7 @@ protected:
 
 private:
     std::array<bool, 3> m_shown{true, true, true}; // By build::Severity.
+    std::optional<DiagnosticSource> m_sourceFilter;
     QString m_text;
 };
 

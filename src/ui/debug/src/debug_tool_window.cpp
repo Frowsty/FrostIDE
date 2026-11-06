@@ -9,6 +9,8 @@
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_models.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/run_console.hpp"
 
 #include <QAction>
@@ -188,6 +190,7 @@ DebugToolWindow::~DebugToolWindow() = default;
 void DebugToolWindow::buildToolbar(QVBoxLayout* layout) {
     m_toolbar = new QToolBar(this);
     m_toolbar->setIconSize(QSize(16, 16));
+    m_toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     const auto add = [this](const QString& text, const QString& shortcut, auto slot) {
         QAction* action = m_toolbar->addAction(text);
         action->setToolTip(shortcut.isEmpty() ? text : QStringLiteral("%1 (%2)").arg(text, shortcut));
@@ -205,6 +208,15 @@ void DebugToolWindow::buildToolbar(QVBoxLayout* layout) {
         add(QStringLiteral("Run to Cursor"), QStringLiteral("Alt+F9"), [this] { m_controller.runToCursor(); });
     m_toolbar->addSeparator();
     m_evaluate = add(QStringLiteral("Evaluate Expression"), QStringLiteral("Alt+F8"), [this] { openEvaluate(); });
+    if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
+        m_resume->setIcon(style->icon(icons::kRunRun, IconSlot::Small, IconRole::Success));
+        m_stop->setIcon(style->icon(icons::kRunStop, IconSlot::Small, IconRole::Error));
+        m_stepOver->setIcon(style->icon(icons::kNavForward));
+        m_stepInto->setIcon(style->icon(icons::kNavChevronDown));
+        m_stepOut->setIcon(style->icon(icons::kNavChevronUp));
+        m_runToCursor->setIcon(style->icon(icons::kNavChevronRight));
+        m_evaluate->setIcon(style->icon(icons::kActionsSearch));
+    }
     layout->addWidget(m_toolbar);
 }
 

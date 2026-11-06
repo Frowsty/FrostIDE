@@ -214,6 +214,33 @@ sched::Task<Result<HierarchyQueryResult>> runTypeHierarchyTask(fl::ILspRequester
     co_return out;
 }
 
+sched::Task<Result<std::vector<fl::Location>>> runQuickDefinitionTask(fl::ILspRequester& server, std::string path,
+                                                                      fl::LspPosition position,
+                                                                      std::stop_token token) {
+    auto defs = co_await fl::requestLocations(server, fl::NavigationTarget::Definition, path, position, token);
+    if (defs && !defs->empty()) {
+        co_return defs;
+    }
+    co_return co_await fl::requestLocations(server, fl::NavigationTarget::Declaration, path, position, token);
+}
+
+sched::Task<Result<std::vector<fl::Location>>> runGotoSuperMethodTask(fl::ILspRequester& server, std::string path,
+                                                                      fl::LspPosition position,
+                                                                      std::stop_token token) {
+    if (auto prepared = co_await fl::requestPrepareTypeHierarchy(server, path, position, token);
+        prepared && !prepared->empty()) {
+        if (auto supers = co_await fl::requestSupertypes(server, prepared->front(), token);
+            supers && !supers->empty()) {
+            std::vector<fl::Location> locs;
+            for (const fl::TypeHierarchyItem& item : *supers) {
+                locs.push_back(fl::Location{.path = item.path, .uri = item.uri, .range = item.selectionRange});
+            }
+            co_return locs;
+        }
+    }
+    co_return co_await fl::requestLocations(server, fl::NavigationTarget::Declaration, path, position, token);
+}
+
 } // namespace
 
 void LanguageController::quickDefinition() {
@@ -224,13 +251,8 @@ void LanguageController::quickDefinition() {
     const fl::LspPosition position = caretPosition();
     start<std::vector<fl::Location>>(
         m_navigationSlot,
-        [&server = m_services.server, path,
-         position](std::stop_token token) -> sched::Task<Result<std::vector<fl::Location>>> {
-            auto defs = co_await fl::requestLocations(server, fl::NavigationTarget::Definition, path, position, token);
-            if (defs && !defs->empty()) {
-                co_return defs;
-            }
-            co_return co_await fl::requestLocations(server, fl::NavigationTarget::Declaration, path, position, token);
+        [&server = m_services.server, path, position](std::stop_token token) {
+            return runQuickDefinitionTask(server, path, position, std::move(token));
         },
         [this](Result<std::vector<fl::Location>> locations) {
             if (!locations) {
@@ -373,20 +395,8 @@ void LanguageController::gotoSuperMethod() {
     const fl::LspPosition position = caretPosition();
     start<std::vector<fl::Location>>(
         m_navigationSlot,
-        [&server = m_services.server, path,
-         position](std::stop_token token) -> sched::Task<Result<std::vector<fl::Location>>> {
-            if (auto prepared = co_await fl::requestPrepareTypeHierarchy(server, path, position, token);
-                prepared && !prepared->empty()) {
-                if (auto supers = co_await fl::requestSupertypes(server, prepared->front(), token);
-                    supers && !supers->empty()) {
-                    std::vector<fl::Location> locs;
-                    for (const fl::TypeHierarchyItem& item : *supers) {
-                        locs.push_back(fl::Location{.path = item.path, .uri = item.uri, .range = item.selectionRange});
-                    }
-                    co_return locs;
-                }
-            }
-            co_return co_await fl::requestLocations(server, fl::NavigationTarget::Declaration, path, position, token);
+        [&server = m_services.server, path, position](std::stop_token token) {
+            return runGotoSuperMethodTask(server, path, position, std::move(token));
         },
         [this](Result<std::vector<fl::Location>> locations) {
             if (!locations) {
