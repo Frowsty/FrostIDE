@@ -248,43 +248,14 @@ class SiteAllowance:
 SITE_CONTEXT_LINES = 8
 
 
-_FND3 = "FND-3 harm, removed at integration"
-# TEMPORARY entries (tagged _FND3) cover fabrications still on this branch while FND-3 removes
-# them in parallel; the integrator deletes each entry with its harm. The others are reviewed
-# real sites in files that also hold a harm.
+# Every entry is a reviewed site in a file that the fabricated-result or tool-output rule scans.
+# The temporary FND-3 entries were deleted at the R0 integration together with their harms.
 SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
-    # The Unit Tests window invents pass/fail and output (project_properties_dialog.cpp).
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "UnitTestRunState",
-                  "state->states[idx] = failed ? UnitTestRunState::Failed : UnitTestRunState::Passed;", _FND3),
-    # The tree's suite and project rows aggregate the invented leaf states.
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "UnitTestRunState",
-                  "agg = UnitTestRunState::Failed;", _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "UnitTestRunState",
-                  "agg = UnitTestRunState::Passed;", _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", 'state->outputs[idx] = failed ? '
-                  'QStringLiteral("[ RUN      ] %1.%2\\n"', _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", '"[  FAILED  ] %1.%2 (%5 ms)\\n")', _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", ': QStringLiteral("[ RUN      ] %1.%2\\n"',
-                  _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", '"[       OK ] %1.%2 (%3 ms)\\n"', _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "xunit", 'state->outputs[idx] = failed ? '
-                  'QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [FAIL]\\n"', _FND3),
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "xunit",
-                  ': QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [PASS] (%1 ms)\\n"', _FND3),
-    # Test discovery by regular expressions over source text, not ctest -N or --gtest_list_tests.
+    # Reviewed, labelled heuristic: the Unit Tests window lists tests found by regular expressions
+    # over the source text and labels every one "Discovered, not run"; no outcome is shown. RUN-7
+    # replaces it with ctest -N / --gtest_list_tests.
     SiteAllowance("src/app/src/project_properties_dialog.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
-                  _FND3),
-    # The constant NuGet "catalogue" of 8 packages.
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "CatalogItem",
-                  "static constexpr std::array<CatalogItem, 8> kCatalog{{", _FND3),
-    # The IL viewer placeholder.
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "il", '".assembly extern System.Runtime {}\\n"',
-                  _FND3),
-    # Code Vision: usages counted by text match, and a fixed "implementations" label.
-    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
-                  "out.push_back(EditorCodeVisionLens{", _FND3, context=".label = usageLabel,"),
-    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
-                  "out.push_back(EditorCodeVisionLens{", _FND3, context='.label = "implementations",'),
+                  "source-text discovery shown as 'Discovered, not run' until RUN-7"),
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
     SiteAllowance("src/app/src/workbench_project.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
