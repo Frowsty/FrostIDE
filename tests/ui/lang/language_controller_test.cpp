@@ -992,6 +992,67 @@ TEST(LanguageControllerNavigation, GotoDeclarationShowsServerMetadataFromTheCach
     EXPECT_TRUE(status[0].contains(QStringLiteral("LTR-6")));
 }
 
+// R0 follow-up 4: when the C# server answers Go to Declaration with a metadata URI and no cache is
+// configured, the message names LTR-6 and the missing cache instead of "returned no result", and
+// csharp/metadata is not asked (nothing could be shown).
+TEST(LanguageControllerNavigation, MetadataWithoutACacheNamesLtr6) {
+    FeatureServer server;
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) {
+        return Json::array(
+            {Json::object()
+                 .set("uri", "csharp:/metadata/projects/App/assemblies/System.Console/symbols/Console.cs")
+                 .set("range", rangeJson(4, 27, 36))});
+    });
+    server.on("csharp/metadata", [](const Json&) { return Json::object().set("source", "namespace System {}\n"); });
+    FakeHost host("class Program {\n    static void Main() {\n        System.Console.WriteLine(\"hi\");\n    }\n}\n",
+                  workPath("Program.cs"));
+    host.caretAfter("System.Console.Write");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    LanguageController controller(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = host,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+    });
+    std::vector<QString> status;
+    QObject::connect(&controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_TRUE(host.opened.empty());
+    EXPECT_TRUE(status[0].contains(QStringLiteral("LTR-6"))) << status[0].toStdString();
+    EXPECT_TRUE(status[0].contains(QStringLiteral("no metadata cache"))) << status[0].toStdString();
+    EXPECT_FALSE(status[0].contains(QStringLiteral("returned no result"))) << status[0].toStdString();
+    EXPECT_TRUE(server.paramsOf("csharp/metadata").empty());
+    EXPECT_FALSE(fs.exists(workDir()).value_or(true));
+
+    // A server that offers no metadata keeps the honest empty-result message.
+    FeatureServer plain;
+    plain.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    plain.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    FakeHost plainHost(host.text(), workPath("Program.cs"));
+    plainHost.caretAfter("System.Console.Write");
+    LanguageController plainController(frost::ui::lang::LanguageServices{
+        .server = plain.client(),
+        .scheduler = plain.scheduler(),
+        .host = plainHost,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+    });
+    std::vector<QString> plainStatus;
+    QObject::connect(&plainController, &LanguageController::statusMessage,
+                     [&](const QString& message) { plainStatus.push_back(message); });
+    plainController.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return !plainStatus.empty(); }));
+    EXPECT_TRUE(plainStatus[0].contains(QStringLiteral("Cannot find a declaration"))) << plainStatus[0].toStdString();
+    EXPECT_FALSE(plainStatus[0].contains(QStringLiteral("LTR-6"))) << plainStatus[0].toStdString();
+}
+
 // FND-3 (D32): a C++ symbol clangd cannot resolve is not "decompiled" from hover text: nothing is
 // written or opened, and the message says why the result is empty.
 TEST(LanguageControllerNavigation, EmptyCppDeclarationWritesNothingAndExplainsWhy) {

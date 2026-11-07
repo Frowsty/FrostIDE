@@ -4,12 +4,15 @@
 // compile_commands.json under build/ and a main.cpp that names an undeclared identifier. Opening
 // main.cpp shows clangd's error as a Live row in Problems, a squiggle (range decoration) and a
 // gutter marker; typing the declaration clears all three. A second folder checks the language
-// controller: Ctrl+B and Ctrl+click open a declaration, Alt+F7 shows Find Usages.
+// controller: Ctrl+B and Ctrl+click open a declaration, Alt+F7 shows Find Usages. A third checks
+// the readiness that empty answers name (fallback flags, indexing) against clangd itself.
 
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/find/find_popup.hpp"
+#include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
@@ -28,6 +31,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <functional>
 #include <string>
 #include <vector>
@@ -745,6 +749,103 @@ TEST(WorkbenchClangd, CtrlBOpensTheDeclarationAndFindUsagesShowsItsWindow) {
     EXPECT_EQ(rig.window->invoke("navigate.findUsages"), frost::input::InvokeResult::Ran);
     EXPECT_TRUE(
         waitFor([&] { return rig.window->toolWindows().isVisible(frost::app::kFindUsagesToolWindow); }, kPatience));
+}
+
+// R0 follow-up 4: the reason the language features give for an empty answer comes from the real
+// clangd. The oracles: clangd's own state (NotRunning before it runs), the compile_commands.json it
+// was started with (a source missing from it is parsed with fallback flags; a header is not
+// claimed), and clangd's "indexing" work-done progress, which the workbench shows as the
+// "clangd: indexing" background task: whenever that task runs, readiness is Indexing, and only then.
+TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
+    frost::test::disableCrashDialogs();
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << found.error().describe();
+    using Readiness = frost::ui::lang::ServerReadiness;
+
+    WorkDir dir("clangd-readiness");
+    dir.write("lib.h", "#pragma once\nint compute();\n");
+    dir.write("listed.cpp", "#include \"lib.h\"\nint main() { return compute(); }\n");
+    dir.write("unlisted.cpp", "int other();\nint use() { return other(); }\n");
+    std::vector<frost::lang::CompileCommand> commands;
+    const auto listed = [&](const std::string& file) {
+        commands.push_back(
+            frost::lang::CompileCommand{.directory = dir.path(),
+                                        .file = file,
+                                        .arguments = {"clang++", "-std=c++20", "-I", dir.path(), "-c", file}});
+    };
+    listed(dir.join("listed.cpp"));
+    // Enough code that clangd's background index takes a while to build (so its progress is seen).
+    for (int unit = 0; unit < 4; ++unit) {
+        std::string text;
+        for (int i = 0; i < 20000; ++i)
+            text += std::format("int unit{}_f{}(int x) {{ return x + {}; }}\n", unit, i, i);
+        const std::string name = std::format("bulk{}.cpp", unit);
+        dir.write(name, text);
+        listed(dir.join(name));
+    }
+    ASSERT_TRUE(frost::lang::writeCompileCommands(frost::io::realFileSystem(), dir.join("build"), commands));
+
+    RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("listed.cpp")), Readiness::NotRunning);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return rig.workbench->clangd() && rig.workbench->clangd()->state() == frost::lang::ClangdState::Running;
+        },
+        kPatience));
+    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("notes.txt")), Readiness::NotRunning);
+    // clangd loads the database, and starts its background index, for the first open document.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("listed.cpp")).has_value());
+
+    // Indexing exactly while clangd's progress runs; the database read settles the rest.
+    const auto indexingTask = [&] {
+        const auto tasks = rig.window->backgroundTasks().tasks();
+        return std::ranges::any_of(
+            tasks, [](const auto& task) { return task->state().title == QStringLiteral("clangd: indexing"); });
+    };
+    bool sawIndexing = false;
+    bool consistent = true;
+    std::string mismatch;
+    const auto check = [&] {
+        const bool running = indexingTask();
+        const Readiness readiness = rig.workbench->languageReadiness(dir.join("listed.cpp"));
+        sawIndexing = sawIndexing || running;
+        if (running != (readiness == Readiness::Indexing) && consistent) {
+            consistent = false;
+            mismatch = std::format("task running {}, readiness {}", running, static_cast<int>(readiness));
+        }
+        return running;
+    };
+    ASSERT_TRUE(waitFor(check, kPatience)) << "clangd never reported its background index";
+    ASSERT_TRUE(waitFor([&] { return !check(); }, 240s)) << "clangd's background index never ended";
+    EXPECT_TRUE(sawIndexing);
+    EXPECT_TRUE(consistent) << mismatch;
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->languageReadiness(dir.join("unlisted.cpp")) == Readiness::NoCompileCommand; },
+        kPatience))
+        << "a source missing from the database was not reported";
+    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("listed.cpp")), Readiness::Unknown);
+    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("lib.h")), Readiness::Unknown); // Interpolated.
+
+    // The message of an empty answer for the unlisted file names the fallback flags.
+    std::vector<QString> status;
+    QObject::connect(rig.workbench->language(), &frost::ui::lang::LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("unlisted.cpp"), {2, 22}).has_value());
+    const auto said = [&](const QString& needle) {
+        return std::ranges::any_of(status, [&](const QString& message) { return message.contains(needle); });
+    };
+    const auto deadline = std::chrono::steady_clock::now() + kPatience;
+    while (!said(QStringLiteral("no compile command")) && std::chrono::steady_clock::now() < deadline) {
+        rig.workbench->language()->gotoImplementation();
+        (void)waitFor([&] { return said(QStringLiteral("no compile command")); }, 3s);
+    }
+    EXPECT_TRUE(said(QStringLiteral("no compile command")))
+        << (status.empty() ? std::string("no status message") : status.back().toStdString());
 }
 
 } // namespace

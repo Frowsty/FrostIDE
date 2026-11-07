@@ -81,6 +81,18 @@ public:
     // Removes `root` if it is in the list (nothing happens otherwise) and saves. Errors: as trust.
     [[nodiscard]] Result<void> untrust(std::string_view root);
 
+    /*
+     * Session grants: `root` counts as trusted (isTrusted, snapshot, requireTrusted) until
+     * endSessionTrust(root) or the store is destroyed. A session grant is never written to the file,
+     * is not listed by roots() and leaves other instances alone. For one confirmed operation that
+     * must pass a trust gate without the folder becoming a trusted project, such as a debugger
+     * attach to a program in a system folder with no project open (FND-3). Granting a root twice
+     * keeps one grant. Each change advances the snapshot revision. Errors: InvalidArgument (as trust).
+     */
+    [[nodiscard]] Result<void> trustForSession(std::string_view root);
+    // Ends the session grant of `root` (nothing happens without one); the file is not touched.
+    void endSessionTrust(std::string_view root);
+
     // The trusted roots, normalised, in the order they were added.
     [[nodiscard]] std::vector<std::string> roots() const;
     [[nodiscard]] const std::string& storePath() const noexcept { return m_storePath; }
@@ -101,6 +113,7 @@ private:
     const std::string m_storePath;
     mutable Mutex m_mutex;
     std::vector<std::string> m_roots FROST_GUARDED_BY(m_mutex);
+    std::vector<std::string> m_sessionRoots FROST_GUARDED_BY(m_mutex); // Never saved.
     std::vector<std::string> m_warnings FROST_GUARDED_BY(m_mutex);
     std::uint64_t m_revision FROST_GUARDED_BY(m_mutex) = 0;
 };

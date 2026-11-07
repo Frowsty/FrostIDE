@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // LanguageBridge (language_bridge.hpp): the language features' server, editor host and open
-// documents over the Workbench's clangd and editor views.
+// documents over the Workbench's clangd and editor views; and Workbench::languageReadiness, the
+// reason the language features give for an empty answer (ServerReadiness, R0 follow-up 4).
 
 #include "frost/app/workbench.hpp"
+#include "frost/io/path.hpp"
+#include "frost/lang/clangd.hpp"
 #include "frost/lang/document_sync.hpp"
+#include "frost/lang/json.hpp"
+#include "frost/lang/lua_service.hpp"
 #include "frost/lang/symbols.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/text/editor/commands.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
+#include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 
 #include "language_bridge.hpp"
@@ -16,10 +23,21 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <array>
 #include <format>
+#include <memory>
+#include <unordered_set>
 #include <utility>
 
 namespace frost::app {
+
+// The source files a compile_commands.json names (Workbench::languageReadiness).
+struct CompileCommandFiles {
+    std::string database;                 // The compile_commands.json that was read.
+    io::FileStatus status;                // Its size and modification time then; a change means a new read.
+    bool readable = false;                // false: it could not be read or parsed, so nothing is known.
+    std::unordered_set<std::string> keys; // lang::documentKey of every entry's absolute "file".
+};
 
 namespace {
 
@@ -207,6 +225,13 @@ void LanguageBridge::openLocation(std::string_view path, lang::LspPosition posit
     view->goToLine(static_cast<int>(point.line.value()) + 1, static_cast<int>(point.column.value()) + 1);
 }
 
+void LanguageBridge::openReadOnlyLocation(std::string_view path, lang::LspPosition position) {
+    openLocation(path, position);
+    DocumentEditorView* view = m_workbench.currentView();
+    if (view != nullptr && lang::documentKey(view->path()) == lang::documentKey(path))
+        view->setForcedReadOnly(true);
+}
+
 void LanguageBridge::setUsageHighlights(std::vector<lang::DocumentHighlight> highlights) {
     ui::EditorView* editor = activeEditor();
     if (editor == nullptr) {
@@ -293,7 +318,123 @@ sched::Task<void> runWorkspaceSymbolQuery(lang::ILspRequester& server, std::stri
         Qt::QueuedConnection);
 }
 
+// Reads `database` (JSON compilation database format: an array of {directory, file, ...}); a
+// relative "file" is below its "directory". Runs on a worker; O(size of the file).
+std::shared_ptr<const CompileCommandFiles> readCompileCommandFiles(io::IFileSystem& fs, std::string database,
+                                                                   io::FileStatus status) {
+    auto files = std::make_shared<CompileCommandFiles>();
+    files->database = std::move(database);
+    files->status = status;
+    auto bytes = fs.readFile(files->database);
+    if (!bytes)
+        return files;
+    auto json = lang::parseJson(*bytes);
+    if (!json || !json->isArray())
+        return files;
+    for (const lang::Json& entry : json->items()) {
+        if (!entry.isObject())
+            continue;
+        std::string file(entry.stringAt("file"));
+        if (file.empty())
+            continue;
+        if (!io::isAbsolutePath(file)) {
+            auto joined = io::joinPath(entry.stringAt("directory"), file);
+            if (!joined)
+                continue;
+            file = std::move(*joined);
+        }
+        if (auto normalized = io::normalizePath(file))
+            files->keys.insert(lang::documentKey(*normalized));
+    }
+    files->readable = true;
+    return files;
+}
+
+sched::Task<void> readCompileCommandFilesTask(io::IFileSystem* fs, std::string database, io::FileStatus status,
+                                              std::function<void(std::shared_ptr<const CompileCommandFiles>)> done) {
+    done(readCompileCommandFiles(*fs, std::move(database), status));
+    co_return;
+}
+
+// Headers get their compile command from a source that includes them (clangd interpolates), so a
+// header absent from the database says nothing about its flags.
+bool isHeaderPath(std::string_view path) {
+    const std::size_t dot = path.find_last_of('.');
+    const std::size_t slash = path.find_last_of("/\\");
+    if (dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash))
+        return false;
+    std::string extension(path.substr(dot));
+    for (char& c : extension)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c + ('a' - 'A'));
+    constexpr std::array<std::string_view, 10> kHeaders{".h",   ".hh",  ".hpp", ".hxx", ".h++",
+                                                        ".inl", ".ipp", ".tpp", ".cuh", ".inc"};
+    return std::ranges::find(kHeaders, extension) != kHeaders.end();
+}
+
 } // namespace
+
+ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
+    using Readiness = ui::lang::ServerReadiness;
+    if (isLuaSource(path))
+        return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
+    if (isManagedSource(path))
+        return m_managed && m_managed->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
+    if (!isCFamilySource(path) || !m_clangd || m_clangd->state() != lang::ClangdState::Running)
+        return Readiness::NotRunning;
+    if (compileCommandListed(path) == false)
+        return Readiness::NoCompileCommand;
+    return m_clangdIndexing ? Readiness::Indexing : Readiness::Unknown;
+}
+
+std::optional<bool> Workbench::compileCommandListed(std::string_view path) {
+    if (!m_clangd)
+        return std::nullopt;
+    const std::optional<lang::CompileCommandsLocation> location = m_clangd->compileCommands();
+    if (!location)
+        return false; // clangd runs without a database: every file gets its fallback flags.
+    if (isHeaderPath(path))
+        return std::nullopt;
+    const CompileCommandFiles* files = currentCompileCommandFiles();
+    if (files == nullptr || !files->readable)
+        return std::nullopt;
+    auto normalized = io::normalizePath(path);
+    return normalized && files->keys.contains(lang::documentKey(*normalized));
+}
+
+const CompileCommandFiles* Workbench::currentCompileCommandFiles() {
+    const std::optional<lang::CompileCommandsLocation> location = m_clangd ? m_clangd->compileCommands() : std::nullopt;
+    if (!location)
+        return nullptr;
+    const Result<io::FileStatus> status = m_services.fs.status(location->file);
+    if (!status)
+        return nullptr;
+    if (m_compileCommandFiles && m_compileCommandFiles->database == location->file &&
+        m_compileCommandFiles->status == *status)
+        return m_compileCommandFiles.get();
+    // Not read yet, or changed since (a reconfigure rewrites it in place): read it on a worker and
+    // claim nothing until then. One read at a time; the next question after it ends checks again.
+    if (!m_compileCommandFilesReading && m_pool && !m_shutDown) {
+        m_compileCommandFilesReading = true;
+        const QPointer<Workbench> self(this);
+        auto done = [self](std::shared_ptr<const CompileCommandFiles> files) {
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(),
+                [self, files = std::move(files)] {
+                    if (!self)
+                        return;
+                    self->m_compileCommandFilesReading = false;
+                    self->m_compileCommandFiles = files;
+                },
+                Qt::QueuedConnection);
+        };
+        m_pool
+            ->spawn(sched::Lane::Background,
+                    readCompileCommandFilesTask(&m_services.fs, location->file, *status, std::move(done)))
+            .detach();
+    }
+    return nullptr;
+}
 
 void Workbench::queryWorkspaceSymbols(std::string_view query, bool classesOnly,
                                       std::function<void(std::vector<ui::WorkbenchSymbol>)> done) {

@@ -10,6 +10,7 @@
 #include "paths.hpp"
 #include "text_util.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdlib>
 #include <format>
@@ -185,12 +186,41 @@ TrustSnapshot TrustStore::snapshot(std::string_view path) const {
     LockGuard lock(m_mutex);
     if (!normalized)
         return {.trusted = false, .revision = m_revision};
-    for (const std::string& root : m_roots) {
-        if (detail::isSameOrUnder(*normalized, root)) {
-            return {.trusted = true, .revision = m_revision};
+    for (const auto* list : {&m_roots, &m_sessionRoots}) {
+        for (const std::string& root : *list) {
+            if (detail::isSameOrUnder(*normalized, root)) {
+                return {.trusted = true, .revision = m_revision};
+            }
         }
     }
     return {.trusted = false, .revision = m_revision};
+}
+
+Result<void> TrustStore::trustForSession(std::string_view root) {
+    auto normalized = normalizeTrustPath(root);
+    if (!normalized) {
+        return std::unexpected(std::move(normalized.error()));
+    }
+    LockGuard lock(m_mutex);
+    const std::string key = detail::pathKey(*normalized);
+    if (std::ranges::any_of(m_sessionRoots,
+                            [&](const std::string& existing) { return detail::pathKey(existing) == key; }))
+        return {};
+    m_sessionRoots.push_back(std::move(*normalized));
+    ++m_revision;
+    return {};
+}
+
+void TrustStore::endSessionTrust(std::string_view root) {
+    auto normalized = normalizeTrustPath(root);
+    if (!normalized) {
+        return;
+    }
+    LockGuard lock(m_mutex);
+    const std::string key = detail::pathKey(*normalized);
+    if (std::erase_if(m_sessionRoots, [&](const std::string& existing) { return detail::pathKey(existing) == key; }) >
+        0)
+        ++m_revision;
 }
 
 Result<void> TrustStore::requireTrusted(std::string_view path) const {

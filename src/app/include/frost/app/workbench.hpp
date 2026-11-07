@@ -146,6 +146,7 @@ class TerminalIntegration;
 
 namespace frost::ui::lang {
 class LanguageController;
+enum class ServerReadiness : std::uint8_t; // frost/ui/lang/language_controller.hpp
 } // namespace frost::ui::lang
 
 class QTemporaryFile;
@@ -162,6 +163,7 @@ class EngineIntegration;
 class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
+struct CompileCommandFiles; // workbench_language.cpp
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -326,6 +328,10 @@ struct WorkbenchOptions {
     // Where FrostIDE-written compile_commands.json files go (absolute; one directory per solution);
     // "" uses only existing databases.
     std::string compileCommandsCache;
+    // Where a language server's metadata sources are written to be shown read-only (absolute,
+    // <profile>/caches/metadata, never a workspace; LanguageServices::metadataCacheDir); "" shows
+    // none and navigation names LTR-6.
+    std::string metadataCacheDirectory;
     // The build service's persisted active configurations (absolute); "" persists nothing.
     std::string buildStatePath;
     // The CMake service's selected profiles (absolute); "" persists nothing.
@@ -522,6 +528,21 @@ public:
     // Live UI, navigation and current-project scan readiness; GUI thread only.
     [[nodiscard]] bool interactiveReady() const;
     [[nodiscard]] ui::lang::LanguageController* language() const noexcept { return m_language.get(); }
+    /*
+     * Why the language server may answer nothing for `path` (LanguageServices::readiness, R0
+     * follow-up 4): NotRunning when no server for its language runs (or the file has no language
+     * server); for a clangd file, NoCompileCommand when clangd parses it with fallback flags (clangd
+     * runs without a database, or a source file is missing from the database clangd was started
+     * with), else Indexing while clangd reports its background index ($/progress), else Unknown.
+     * The database is read on a worker the first time it is needed and again when it changes; until
+     * then nothing is claimed about compile commands. Headers are never NoCompileCommand with a
+     * database (clangd interpolates their command). GUI thread; one stat per call.
+     */
+    [[nodiscard]] ui::lang::ServerReadiness languageReadiness(std::string_view path);
+    // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
+    [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
+        return m_options.metadataCacheDirectory;
+    }
     [[nodiscard]] ui::RunController* runController() const noexcept { return m_runController.get(); }
     [[nodiscard]] ui::RunConsole* runConsole() const noexcept { return m_runConsole.data(); }
     [[nodiscard]] ui::SolutionExplorer* solutionExplorer() const noexcept { return m_explorer.data(); }
@@ -625,6 +646,15 @@ private:
     // A CMake model change, or a trust change, restarts clangd only when the compile-commands
     // location or the trust its launch flags came from changed.
     void restartClangdIfCMakeStateChanged();
+    // Where a CMake folder's clangd would read its compile commands now (the active build
+    // directory and whether its database exists; "" without CMake). One stat, GUI thread.
+    [[nodiscard]] std::string clangdCMakeStateNow() const;
+    // Whether clangd's compile_commands.json lists `path` (languageReadiness): false without a
+    // database; nullopt for headers and while the database is being read (or cannot be).
+    [[nodiscard]] std::optional<bool> compileCommandListed(std::string_view path);
+    // The files of clangd's current database when read and unchanged since; otherwise null, and a
+    // read on a worker starts (one at a time). One stat.
+    const CompileCommandFiles* currentCompileCommandFiles();
     // Starts the clangd that openFolder deferred until its configure finished (FND-9a). With
     // `retryUntilIdle`, a CMake service that is not idle yet is asked again shortly.
     void resumeDeferredClangd(bool retryUntilIdle = false);
@@ -762,6 +792,11 @@ private:
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
     std::string m_indexToken;
+    // clangd reports its background index (between the "indexing" progress begin and end).
+    bool m_clangdIndexing = false;
+    // The files of clangd's database, read on a worker (compileCommandListed).
+    std::shared_ptr<const CompileCommandFiles> m_compileCommandFiles;
+    bool m_compileCommandFilesReading = false;
     sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
     std::unique_ptr<ui::lang::LanguageController> m_language;

@@ -398,6 +398,9 @@ frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
         options.journalDirectory = under("hot-exit");
         options.historyPath = under("local-history.db");
         options.compileCommandsCache = under("compile-commands");
+        // A language server's metadata sources, shown read-only (LTR-1): <profile>/caches/metadata.
+        if (auto caches = frost::io::joinPath(under("caches"), "metadata"))
+            options.metadataCacheDirectory = std::move(*caches);
         options.sessionDirectory = under("sessions");
         options.projectEditStateDirectory = under("project-edits");
         options.cmakeStatePath = under("cmake-profiles.txt");

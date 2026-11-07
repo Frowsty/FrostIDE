@@ -79,6 +79,7 @@
 #include <QNetworkAccessManager>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScreen>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -581,7 +582,11 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                    },
                                    [this]() -> std::vector<std::string> {
                                        return m_nav ? m_nav->projectFiles().candidates() : std::vector<std::string>{};
-                                   }});
+                                   },
+                                   // Metadata sources go to the profile's cache only (LTR-1); "" names LTR-6.
+                                   m_options.metadataCacheDirectory,
+                                   // Empty answers say why: no server, fallback flags, indexing (R0 follow-up 4).
+                                   [this](std::string_view path) { return languageReadiness(path); }});
     if (auto registered = m_language->registerActions(m_registry); !registered) {
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
@@ -606,17 +611,34 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             if (m_clangd)
                 restartClangd();
         }
+        /* Trust granted straight to the store (Settings, another instance) gets the same
+         * configure-on-open as the trust prompt: CMakeService::trust configures a folder that was
+         * not configured yet in this session (R0 follow-up 15). Asked before the clangd check, so
+         * the configure it starts makes that check wait for its publication. */
+        if (!m_solution && m_cmake && trusted && !m_luaObservedTrust) {
+            if (auto configured = m_cmake->service().trust(m_projectRoot); !configured)
+                log::warn(kLog, "configure after a trust grant: {}", configured.error().describe());
+        }
         /* A CMake or plain-folder clangd follows trust granted or revoked by any route (Settings,
          * the Attach prompt, revocation); its launch flags depend on it (FND-3). While a CMake
          * configure runs, its model publication compares the trust too and restarts clangd once
-         * with the database it writes, so the watch waits (FND-9a: no second restart); if the
-         * configure fails, the next tick restarts it. */
+         * with the database it writes, so a grant waits (FND-9a: no second restart); if the
+         * configure fails, the next idle tick restarts it. A revocation restarts clangd restricted
+         * at once, even during a long build: .clangd and --query-driver must stop applying now (R0
+         * follow-up 15); a configure that then writes a first database restarts it once more.
+         * Once the service is idle, the watch also restarts a clangd whose compile commands moved
+         * without a publication saying so (a profile's configure that failed, R0 follow-up 10). */
         const bool cmakeBusy = m_cmake && m_cmake->service().state() != build::BuildState::Idle;
-        if (!m_solution && m_clangd && !cmakeBusy && trusted != m_clangdTrusted) {
-            if (m_cmake)
+        if (!m_solution && m_clangd) {
+            if (trusted != m_clangdTrusted && (!trusted || !cmakeBusy)) {
+                if (m_cmake)
+                    restartClangdIfCMakeStateChanged();
+                else
+                    restartClangd();
+            } else if (m_cmake && !cmakeBusy && trusted == m_clangdTrusted &&
+                       clangdCMakeStateNow() != m_clangdCMakeState) {
                 restartClangdIfCMakeStateChanged();
-            else
-                restartClangd();
+            }
         }
         if (m_solution && m_explorer) {
             auto model = m_solution;
@@ -3364,18 +3386,36 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
     }
     target.program = exePath;
     target.workingDirectory = !m_projectRoot.empty() ? m_projectRoot : std::string(io::parentPath(target.program));
-    // The folder that must be trusted: the open project, else the program's own folder. Trust is
-    // only ever granted by the user through the normal trust prompt, never silently here.
-    const std::string trustRoot = !m_projectRoot.empty() ? m_projectRoot : std::string(io::parentPath(target.program));
+    /*
+     * The folder that must be trusted: the open project, else the program's own folder. Trust is
+     * only ever granted by the user through the attach prompt (TrustPurpose::DebugAttach, which
+     * never cancels a build waiting for trust), never silently here. With a project open the prompt
+     * trusts the project as usual. With none open, the program's folder may be a system folder such
+     * as C:\Windows\System32: the prompt then only confirms this attach, through a session grant
+     * (TrustStore::trustForSession) that lasts while the debugger's trust gate runs and ends right
+     * after the session started or failed, so the folder is never saved or trusted for anything else.
+     */
+    const bool oneOff = m_projectRoot.empty();
+    const std::string trustRoot = oneOff ? std::string(io::parentPath(target.program)) : m_projectRoot;
     target.trustRoots = {trustRoot};
     if (!m_services.trust.isTrusted(trustRoot)) {
         if (!m_window || !m_build)
             return;
-        auto* dialog = new ui::TrustDialog(*m_build, {qs(trustRoot)}, m_window, ui::TrustPurpose::Build);
+        auto* dialog = new ui::TrustDialog(*m_build, {qs(trustRoot)}, m_window, ui::TrustPurpose::DebugAttach);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
-        connect(dialog, &QDialog::accepted, this, [this, pid, exePath, exeName, attachAsDotNet, trustRoot] {
-            // Retry only when the user actually trusted the folder; a cancelled prompt attaches nothing.
-            if (m_services.trust.isTrusted(trustRoot))
+        if (oneOff) {
+            dialog->setSessionGrant(
+                [this](std::string_view root) -> Result<void> { return m_services.trust.trustForSession(root); });
+        }
+        connect(dialog, &QDialog::accepted, this, [this, pid, exePath, exeName, attachAsDotNet, trustRoot, oneOff] {
+            // The session grant ends with this handler, whatever the attach does.
+            const auto endGrant = qScopeGuard([this, &trustRoot, oneOff] {
+                if (oneOff)
+                    m_services.trust.endSessionTrust(trustRoot);
+            });
+            // Retry only when the user actually trusted (or, one-off, confirmed) the folder and the
+            // project did not change meanwhile; a cancelled prompt attaches nothing.
+            if (!m_shutDown && oneOff == m_projectRoot.empty() && m_services.trust.isTrusted(trustRoot))
                 attachToProcess(pid, exePath, exeName, attachAsDotNet);
         });
         dialog->open();

@@ -95,6 +95,43 @@ TEST(TrustStore, SnapshotRevisionDetectsRevokeAndRegrant) {
     EXPECT_EQ((*store)->snapshot(root).revision, regranted.revision);
 }
 
+// FND-3 (R0 follow-up 1): a session grant passes the gates without being saved or listed, ends on
+// endSessionTrust, and is gone for a store reopened from the same file.
+TEST(TrustStore, SessionGrantsAreNeverSaved) {
+    MemTree tree;
+    const std::string storePath = MemTree::path("data/trusted-roots.txt");
+    auto store = TrustStore::open(tree.fs, storePath);
+    ASSERT_TRUE(store);
+    const auto root = MemTree::path("system");
+    const auto before = (*store)->snapshot(root);
+    ASSERT_FALSE(before.trusted);
+    ASSERT_TRUE((*store)->trustForSession(root));
+    ASSERT_TRUE((*store)->trustForSession(root)); // Again: one grant.
+    const auto granted = (*store)->snapshot(MemTree::path("system/tool.exe"));
+    EXPECT_TRUE(granted.trusted);
+    EXPECT_GT(granted.revision, before.revision);
+    EXPECT_TRUE((*store)->requireTrusted(root).has_value());
+    EXPECT_TRUE((*store)->roots().empty());
+    EXPECT_FALSE(tree.fs.exists(storePath).value_or(true)); // Nothing written.
+    {
+        auto other = TrustStore::open(tree.fs, storePath);
+        ASSERT_TRUE(other);
+        EXPECT_FALSE((*other)->isTrusted(root));
+    }
+    // A persistent grant of another folder keeps the file free of the session root.
+    ASSERT_TRUE((*store)->trust(MemTree::path("work")));
+    EXPECT_EQ(tree.fs.readFile(storePath).value_or("").find(root), std::string::npos);
+    (*store)->endSessionTrust(MemTree::path("SYSTEM"));
+    EXPECT_EQ((*store)->isTrusted(root), !kWindows); // Case is ignored on Windows only.
+    (*store)->endSessionTrust(root);
+    const auto ended = (*store)->snapshot(root);
+    EXPECT_FALSE(ended.trusted);
+    EXPECT_GT(ended.revision, granted.revision);
+    (*store)->endSessionTrust(root); // Nothing left to end.
+    EXPECT_EQ((*store)->snapshot(root).revision, ended.revision);
+    EXPECT_FALSE((*store)->trustForSession("relative/path").has_value());
+}
+
 TEST(TrustStore, RefusesBadRootsAndFiles) {
     MemTree tree;
     auto store = TrustStore::open(tree.fs, MemTree::path("trusted-roots.txt"));
