@@ -259,6 +259,181 @@ class FileListingTest(TempDirTestCase):
         self.assertEqual(paths, {"untracked/bad.cpp"})
 
 
+class TruthRuleTest(TempDirTestCase):
+    """The FND-5 rules on the seeded fixture tests/tools/fixtures/lint/truth (ADR 0078 decision 1)."""
+
+    TRUTH_RULES = ("fabricated-result", "result-type-registry", "synthesized-output", "parity-claim")
+
+    def _found(self, repo) -> list[tuple[str, int, str]]:
+        return sorted((v.path, v.line, v.rule) for v in frost_lint.lint(repo) if v.rule in self.TRUTH_RULES)
+
+    def test_seeded_fabrications_fail_and_honest_code_passes(self) -> None:
+        repo = self.copy_fixture("lint/truth")
+        expected = sorted(
+            [("README.md", 3, "parity-claim"), ("README.md", 7, "parity-claim")]
+            # TestResult braced, declared with an initializer, default-constructed, from make_shared;
+            # the NuGet-like catalogue literal and a produced outcome enumerator.
+            + [("src/app/src/fake_runner.cpp", line, "fabricated-result") for line in (6, 11, 12, 14, 17, 19)]
+            + [("src/app/src/fake_runner.cpp", line, "synthesized-output") for line in (21, 22, 23, 24)]
+            + [("src/app/src/fake_runner.hpp", 19, "result-type-registry")]
+            + [("src/ui/shell/src/about.cpp", 7, "parity-claim"), ("src/ui/shell/src/about.cpp", 11, "parity-claim")]
+        )
+        self.assertEqual(self._found(repo), expected)
+
+    def test_cli_fails_on_the_seeded_fixture(self) -> None:
+        repo = self.copy_fixture("lint/truth")
+        result = run_tool("frost_lint.py", "--repo", str(repo))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("src/app/src/fake_runner.cpp:6: fabricated-result: TestResult (test outcome, declaration)",
+                      result.stdout)
+        self.assertIn("src/app/src/fake_runner.cpp:21: synthesized-output: string literal imitates gtest output",
+                      result.stdout)
+
+    def test_messages_name_the_allowed_parsers(self) -> None:
+        rel = "src/app/src/adapter.cpp"
+        _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// A diagnostic made up in the app.\n"
+                               "void f() { LiveDiagnostic d{.message = \"made up\"}; }\n")
+        messages = [v.message for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "fabricated-result"]
+        self.assertEqual(len(messages), 1)
+        self.assertIn("allowed only in src/lang/src/diagnostics.cpp", messages[0])
+        # The same construction in the allowlisted parser passes.
+        _write(self.tmp / "src/lang/src/diagnostics.cpp", (self.tmp / rel).read_text(encoding="utf-8"))
+        self.assertEqual([v for v in frost_lint.lint(self.tmp, ["src/lang/src/diagnostics.cpp"])
+                          if v.rule == "fabricated-result"], [])
+
+    def test_tests_and_fixtures_are_exempt(self) -> None:
+        body = ("// SPDX-License-Identifier: Apache-2.0\n// A test double.\n"
+                "TestResult r{.passed = true}; const char* o = \"[  PASSED  ] 1 test.\";\n")
+        for rel in ("tests/app/double_test.cpp", "tests/tools/fixtures/x/src/a.cpp"):
+            _write(self.tmp / rel, body)
+            self.assertEqual([v for v in frost_lint.lint(self.tmp, [rel]) if v.rule in self.TRUTH_RULES], [], rel)
+        _write(self.tmp / "src/core/a.cpp", body)
+        rules = sorted(v.rule for v in frost_lint.lint(self.tmp, ["src/core/a.cpp"]) if v.rule in self.TRUTH_RULES)
+        self.assertEqual(rules, ["fabricated-result", "synthesized-output"])
+
+    def test_csharp_strings_are_checked_too(self) -> None:
+        rel = "integrations/unity/Editor/Fake.cs"
+        _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// Seeded tool output in C#.\n"
+                               "class F { string s = @\"[xUnit.net 00:00:00.01] [PASS]\"; }\n")
+        self.assertEqual([(v.line, v.rule) for v in frost_lint.lint(self.tmp, [rel])], [(3, "synthesized-output")])
+
+    def test_site_allowances_cover_exact_sites_only(self) -> None:
+        repo = self.copy_fixture("lint/truth")
+        rel = "src/app/src/fake_runner.cpp"
+        allowance = frost_lint.SiteAllowance(rel, "TestResult", "out.push_back(TestResult{.name = \"a\", .passed = false});",
+                                             "test", context="TestResult second;")
+        with mock.patch.object(frost_lint, "SITE_ALLOWANCES", (allowance,)):
+            lines = [v.line for v in frost_lint.lint(repo, [rel]) if v.rule == "fabricated-result"]
+        self.assertEqual(lines, [6, 12, 14, 17, 19])
+        # A context that is not there does not match, and the unused entry is reported as stale.
+        wrong = frost_lint.SiteAllowance(rel, "TestResult", allowance.line, "test", context="never")
+        with mock.patch.object(frost_lint, "SITE_ALLOWANCES", (wrong,)):
+            found = [(v.line, v.message.split(" ", 2)[1]) for v in frost_lint.lint(repo, [rel])
+                     if v.rule == "fabricated-result"]
+        self.assertIn((11, "(test"), found)
+        self.assertIn((1, "site"), found)
+
+    def test_stale_allowances_are_reported_only_for_linted_files(self) -> None:
+        entry = frost_lint.SiteAllowance("src/gone.cpp", "TestResult", "TestResult r{};", "FND-3 harm, removed at integration")
+        _write(self.tmp / "src/gone.cpp", "// SPDX-License-Identifier: Apache-2.0\n// The harm was removed here.\n")
+        with mock.patch.object(frost_lint, "SITE_ALLOWANCES", (entry,)):
+            stale = [v for v in frost_lint.lint(self.tmp, ["src/gone.cpp"]) if v.rule == "fabricated-result"]
+            self.assertEqual(len(stale), 1)
+            self.assertIn("stale site allowance", stale[0].message)
+            self.assertEqual(frost_lint.lint(self.tmp, []), [])
+
+    def test_repository_allowances_all_match(self) -> None:
+        # Every entry of the real table covers a site in this checkout (no stale entries), and each
+        # temporary FND-3 entry names its harm tag so the integrator can find them.
+        files = sorted({e.path for e in frost_lint.SITE_ALLOWANCES})
+        used: set[int] = set()
+        for rel in files:
+            self.assertTrue((REPO / rel).is_file(), rel)
+            frost_lint.lint_file(REPO, rel, None, used)
+        self.assertEqual(frost_lint.stale_site_allowances(set(files), used), [])
+        for entry in frost_lint.SITE_ALLOWANCES:
+            self.assertTrue(entry.reason)
+
+    def test_parity_claims_in_documents(self) -> None:
+        cases = {
+            "FrostIDE is a complete replacement for Rider.": True,
+            "A drop-in replacement for CLion.": True,
+            "Full Visual Studio replacement": True,
+            "1:1 JetBrains Rider parity": True,
+            "Rider 1:1 backlog": True,
+            "complete Rider feature parity": True,
+            "It is feature-complete.": True,
+            "Rider parity is a goal; 1 of 191 matrix rows is green.": False,
+            "Independently implemented Rider workflow parity is the target, not a claim.": False,
+            "A 1:1 aspect ratio.": False,
+        }
+        for line, claim in cases.items():
+            with self.subTest(line=line):
+                found = frost_lint.check_parity_claims_in_document("README.md", line)
+                self.assertEqual(bool(found), claim)
+
+
+class RatchetTest(TempDirTestCase):
+    """The source-to-test line ratchet (ADR 0078 decision 6) on scratch repositories."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        git("init", "-q", cwd=self.tmp)
+        _write(self.tmp / "src/core/base.cpp", "// base\n" * 50)
+        git("add", "-A", cwd=self.tmp)
+        git("commit", "-q", "-m", "base", cwd=self.tmp)
+        git("switch", "-q", "-c", "slice", cwd=self.tmp)
+
+    def _ratchet(self, *args: str) -> subprocess.CompletedProcess:
+        return run_tool("frost_lint.py", "ratchet", "--repo", str(self.tmp), "--base", "main", *args)
+
+    def test_a_thousand_source_lines_with_ten_test_lines_fail(self) -> None:
+        _write(self.tmp / "src/app/big.cpp", "int x;\n" * 1000)
+        _write(self.tmp / "tests/app/big_test.cpp", "TEST(A, B) {}\n" * 10)
+        git("add", "-A", cwd=self.tmp)
+        git("commit", "-q", "-m", "big", cwd=self.tmp)
+        result = self._ratchet()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines()[-1],
+                         "ratchet FAILED (src +1000 net, tests +10; 1000 source lines need 200 test lines, 20 per 100)")
+        # Enough tests, committed or not, pass it.
+        _write(self.tmp / "tests/app/more_test.cpp", "TEST(A, C) {}\n" * 190)
+        result = self._ratchet()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(result.stdout.splitlines()[-1], "ratchet ok (src +1000 net, tests +200)")
+
+    def test_fixtures_docs_and_moves_do_not_count(self) -> None:
+        _write(self.tmp / "src/app/big.cpp", "int x;\n" * 600)
+        _write(self.tmp / "tests/app/fixtures/data.cpp", "int y;\n" * 600)
+        _write(self.tmp / "docs/notes.md", "words\n" * 600)
+        result = self._ratchet()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("src +600 net, tests +0", result.stdout)
+        # Moving code is net zero: delete the base file's 50 lines and add them elsewhere.
+        (self.tmp / "src/app/big.cpp").unlink()
+        (self.tmp / "src/core/base.cpp").unlink()
+        _write(self.tmp / "src/core/moved.cpp", "// base\n" * 50)
+        result = self._ratchet()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ratchet ok (src +0 net, tests +0)", result.stdout)
+
+    def test_small_slices_are_under_the_floor(self) -> None:
+        _write(self.tmp / "src/app/small.cpp", "int x;\n" * (frost_lint.RATCHET_MIN_SOURCE_LINES - 1))
+        result = self._ratchet()
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_an_unknown_base_is_not_run(self) -> None:
+        result = run_tool("frost_lint.py", "ratchet", "--repo", str(self.tmp), "--base", "nosuch")
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(result.stdout.splitlines()[-1].startswith("ratchet not-run (the base 'nosuch' does not resolve"))
+
+    def test_verdict_thresholds(self) -> None:
+        verdict = frost_lint.ratchet_verdict
+        self.assertTrue(verdict(frost_lint.RatchetCounts(9372, 0, 1875))[0])
+        self.assertFalse(verdict(frost_lint.RatchetCounts(9372, 0, 196))[0])  # commit 1c29790
+        self.assertTrue(verdict(frost_lint.RatchetCounts(5000, 4900, 0))[0])  # a reformat or a split
+
+
 class GlobTest(unittest.TestCase):
     def test_reuse_globs(self) -> None:
         cases = {

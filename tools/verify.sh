@@ -25,8 +25,10 @@
 # with the fuzz tree's own TUs, or when there is no changed-file list), and the licence
 # check inspects the Linux build trees and Qt. Both run even with --no-checks, because they
 # depend on the Linux build trees. The tree checks (clang-format, frost-lint, the
-# feature-matrix check) run unless --no-checks is given, which verify.ps1 passes because it
-# has already checked the same tree.
+# feature-matrix check and the source-to-test line ratchet against the merge base with
+# FROST_VERIFY_BASE, FND-5) run unless --no-checks is given, which verify.ps1 passes because it
+# has already checked the same tree. A standalone passing run (without --no-checks) records its
+# summary as a verify-stamp of the source tree for the commit-msg hook (FND-2, tools/hooks).
 #
 # --tidy and --tsan-quick are off by default during the feature-first phase (ADR 0031; ADR 0027
 # decision 9); without them the summary says "tidy not-run (off by default)" and, in --quick,
@@ -58,7 +60,8 @@
 # a failing test, tidy finds something, or a check fails; 2 for a usage error or a missing tool.
 # Side effects: the mirror, its lock file "<mirror>.lock" and, when verify.sh computes the
 # list, "<mirror>.changed-files" and its stderr "<mirror>.changed-files.err" (both overwritten by
-# the next run on the mirror).
+# the next run on the mirror), and after a passing standalone run the verify-stamp in the source
+# repository's <git common dir>/frost/verify-stamps.
 
 set -euo pipefail
 
@@ -182,6 +185,17 @@ fi
 mirror_source() {
     rsync -a --checksum --no-times --delete --exclude '/build/' --exclude '/.git/' --exclude '/.claude/' "$1/" "$2/"
 }
+# The tree hash of the source tree, taken before the copy (FND-2; tools/hooks/verify_stamp.py), for a
+# standalone run only: under verify.ps1 (--no-checks) verify.ps1 stamps the combined summary itself.
+stamp_tree=""
+stamp_reason="a verify.ps1 leg (--no-checks)"
+if [[ $CHECKS -eq 1 ]]; then
+    if stamp_out="$(python3 -I "$SOURCE/tools/hooks/verify_stamp.py" tree --repo "$SOURCE" "${SOURCE_GIT_ARGS[@]}" 2>&1)"; then
+        stamp_tree="$(tail -1 <<< "$stamp_out")"
+    else
+        stamp_reason="no tree hash: $(tail -1 <<< "$stamp_out")"
+    fi
+fi
 mirror_source "$SOURCE" "$MIRROR"
 cd "$MIRROR"
 echo "verify.sh: source $SOURCE, mirror $MIRROR, jobs $JOBS"
@@ -343,6 +357,29 @@ run_tidy() {
     if ((rc != 0)); then status=1; fi
 }
 
+# The source-to-test line ratchet of this slice against the merge base with FROST_VERIFY_BASE (FND-5,
+# ADR 0078 decision 6; threshold in tools/frost_lint.py), measured in the source tree's git. Appends
+# the "ratchet ..." line frost_lint.py prints last; "ratchet not-run (...)" does not fail.
+run_ratchet() {
+    echo "=== check: ratchet"
+    local out rc=0 line
+    out="$(python3 -I tools/frost_lint.py ratchet --repo "$SOURCE" "${SOURCE_GIT_ARGS[@]}" \
+        --base "${FROST_VERIFY_BASE:-main}" 2>&1)" || rc=$?
+    echo "$out"
+    line="$(grep -E '^ratchet ' <<< "$out" | tail -1 || true)"
+    if [[ -z "$line" ]]; then line="ratchet FAILED (exit $rc without a summary)"; rc=1; fi
+    summary+=("$line")
+    if ((rc != 0)); then status=1; fi
+}
+
+# Records the final summary line ($1) as a verify-stamp of the tree taken before the copy (FND-2),
+# unless the source tree changed meanwhile. Prints one "verify-stamp: ..." line; never fails the run.
+write_stamp() {
+    if [[ -z "$stamp_tree" ]]; then echo "verify-stamp: not written ($stamp_reason)"; return 0; fi
+    python3 -I "$SOURCE/tools/hooks/verify_stamp.py" write --repo "$SOURCE" "${SOURCE_GIT_ARGS[@]}" \
+        --script verify.sh --summary "$1" --expect-tree "$stamp_tree" 2>&1 || true
+}
+
 if [[ $CHECKS -eq 1 ]]; then
     # clang-format on the tracked C/C++ files (the list comes from the source tree's
     # git; the mirror has the same contents). Fixtures are excluded: they are
@@ -364,9 +401,12 @@ if [[ $CHECKS -eq 1 ]]; then
     else summary+=("format FAILED ($unformatted files)"); status=1; fi
     run_check frost_lint
     run_check featurecheck
+    run_ratchet
 fi
 run_tidy
 run_check licensecheck
 
-echo "wsl: $(join_items "${summary[@]}")"
+final="wsl: $(join_items "${summary[@]}")"
+if [[ $CHECKS -eq 1 && $status -eq 0 ]]; then write_stamp "$final"; fi
+echo "$final"
 exit $status

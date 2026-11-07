@@ -29,6 +29,21 @@
 ### 6.1 Test pyramid
 - **Feature matrix.** `frost-featurecheck` gates the matrix (M7 ≥30 frost, ≥2 CFG, ≥45%; M9 ≥45, ≥4, ≥60%; M13 ≥60, 5, ≥75%).
 
+## 7. Roadmap
+
+### Roadmap v2: the R-ladder
+
+| # | Milestone | Units | Cumulative |
+|---|---|---|---|
+| R0 | Stabilise | 2.5 | 2.5 |
+| R1 | Daily driver | 5.5 | 8 |
+
+#### R0: Stabilise (2.5 units)
+**Epics** (Appendix C): FND-1 Green HEAD; FND-5 Lint.
+
+#### R1: Daily driver (5.5 units)
+**Epics** (Appendix C): CMK-2 Presets; UX-3 Editor essentials.
+
 ## Appendix A: Feature matrix → milestone
 
 | Milestone | Tier | Rows |
@@ -42,3 +57,26 @@
 - **M0:** I7 Windows long paths, UTF-8 code-page manifest.
 - **M5:** I14 `IHttpClient` (+M6 for Linux); I15 portable packages, symbol archival, Collect Logs.
 - **P1:** I18 Power Save Mode (M7).
+
+**Epic mapping** (the fixture's).
+
+| Epic | Rows |
+|---|---|
+| FND-5 | I14, I15, I18 |
+| CMK-2 | 3, 20 |
+| UX-3 | 57, 250 |
+
+**Out of epic scope** (foundation): 28, I7.
+
+## Appendix C: Roadmap v2 epic catalogue
+
+### R0
+
+- **FND-1 Green HEAD** (P0, 1u; after none). Fix the failing tests.
+- **FND-5 Lint** (P0, 1.5u; after FND-1). The truth rule.
+- **RUN-0 Remove fake runner** (merged, 0u; after none). Merged into FND-5.
+
+### R1
+
+- **CMK-2 Presets** (P0, 2.5u; after FND-1). Complete presets.
+- **UX-3 Editor essentials** (P1, 3u; after FND-5, CMK-2). Every action works.

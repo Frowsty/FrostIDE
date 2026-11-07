@@ -2,8 +2,9 @@
 #
 # Tests for tools/featurecheck.py against the mini plan in tests/tools/fixtures/features:
 # parsing Appendix A rows and markers, the run order from the milestone ladder,
-# generate/check round trips, preservation of the hand-maintained fields, and each
-# failure the check reports.
+# generate/check round trips, preservation of the hand-maintained fields, each failure the
+# check reports, and the Roadmap v2 checks (FND-15): Appendix C epic ids, the R-ladder, the
+# Appendix A epic mapping (orphan rows, unknown and merged epics) and the matrix's epic ids.
 
 from __future__ import annotations
 
@@ -12,12 +13,14 @@ import shutil
 import unittest
 from pathlib import Path
 
-from tools_test_support import FIXTURES, TempDirTestCase, run_tool
+from tools_test_support import FIXTURES, REPO, TempDirTestCase, run_tool
 
 import featurecheck
 
 
-class FeatureCheckTest(TempDirTestCase):
+class PlanFixtureTestCase(TempDirTestCase):
+    """A copy of the mini plan in self.tmp, with helpers to generate, check and edit it."""
+
     def setUp(self) -> None:
         super().setUp()
         shutil.copy(FIXTURES / "features" / "PLAN.md", self.tmp / "PLAN.md")
@@ -39,6 +42,8 @@ class FeatureCheckTest(TempDirTestCase):
     def _rows(self) -> dict[str, dict]:
         return {r["id"]: r for r in json.loads(self.matrix.read_text(encoding="utf-8"))["rows"]}
 
+
+class FeatureCheckTest(PlanFixtureTestCase):
     def test_generate_parses_rows_and_markers(self) -> None:
         self._generate()
         rows = self._rows()
@@ -195,6 +200,121 @@ class FeatureCheckTest(TempDirTestCase):
                         "28 File System view; 28 gutter (+M6); 250 soft wrap*")
         problems = self._check()
         self.assertTrue(any("row 28 is listed twice" in p for p in problems), problems)
+
+
+class RoadmapTest(PlanFixtureTestCase):
+    """Roadmap v2 (FND-15): epic ids from Appendix C, the R-ladder and Appendix A's epic mapping."""
+
+    def _problems_after(self, old: str, new: str) -> list[str]:
+        self._edit_plan(old, new)
+        return self._check()
+
+    def test_generate_maps_rows_to_epics_and_lists_the_roadmap(self) -> None:
+        self._generate()
+        rows = self._rows()
+        self.assertEqual((rows["57"]["epics"], rows["3"]["epics"], rows["I14"]["epics"]), (["UX-3"], ["CMK-2"], ["FND-5"]))
+        self.assertEqual((rows["28"]["epics"], rows["I7"]["epics"]), ([], []))
+        roadmap = json.loads(self.matrix.read_text(encoding="utf-8"))["roadmap"]
+        self.assertEqual(roadmap["milestones"], ["R0", "R1"])
+        self.assertEqual(roadmap["out_of_epic_scope"], ["28", "I7"])
+        epics = {e["id"]: e for e in roadmap["epics"]}
+        self.assertEqual(list(epics), ["FND-1", "FND-5", "RUN-0", "CMK-2", "UX-3"])
+        self.assertEqual((epics["FND-5"]["rows"], epics["FND-5"]["m_ids"]), (["I14", "I15", "I18"], ["M5", "M7"]))
+        self.assertEqual((epics["FND-1"]["rows"], epics["FND-1"]["m_ids"]), ([], []))
+        self.assertEqual((epics["RUN-0"]["priority"], epics["RUN-0"]["merged_into"]), ("merged", ["FND-5"]))
+        self.assertEqual((epics["UX-3"]["after"], epics["UX-3"]["units"], epics["FND-5"]["units"]),
+                         (["FND-5", "CMK-2"], 3, 1.5))
+        self.assertEqual(self._check(), [])
+
+    def test_mapping_rejects_unknown_epics(self) -> None:
+        problems = self._problems_after("| UX-3 | 57, 250 |", "| UX-9 | 57, 250 |")
+        self.assertTrue(any("epic mapping: unknown epic UX-9 (not in Appendix C)" in p for p in problems), problems)
+        self.assertTrue(any("orphan row 57" in p for p in problems), problems)
+
+    def test_mapping_rejects_merged_epics(self) -> None:
+        problems = self._problems_after("| UX-3 | 57, 250 |", "| UX-3 | 250 |\n| RUN-0 | 57 |")
+        self.assertTrue(any("RUN-0 is merged into FND-5; map its rows there" in p for p in problems), problems)
+
+    def test_every_row_is_mapped_or_out_of_scope(self) -> None:
+        problems = self._problems_after("foundation): 28, I7.", "foundation): I7.")
+        self.assertTrue(any("orphan row 28 (File System view)" in p for p in problems), problems)
+        problems = self._problems_after("foundation): I7.", "foundation): 28, I7, 57.")
+        self.assertTrue(any("row 57 is both mapped to an epic and out of epic scope" in p for p in problems), problems)
+
+    def test_mapping_rows_must_exist(self) -> None:
+        problems = self._problems_after("| CMK-2 | 3, 20 |", "| CMK-2 | 3, 20, 999 |")
+        self.assertTrue(any("CMK-2 maps 999, which is not an Appendix A row" in p for p in problems), problems)
+        problems = self._problems_after("foundation): 28, I7.", "foundation): 28, I7, I99.")
+        self.assertTrue(any("out of epic scope: I99 is not an Appendix A row" in p for p in problems), problems)
+
+    def test_matrix_rejects_unknown_and_orphan_epic_ids(self) -> None:
+        self._generate()
+        document = json.loads(self.matrix.read_text(encoding="utf-8"))
+        for row in document["rows"]:
+            if row["id"] == "57":
+                row["epics"] = ["NOPE-1"]
+            if row["id"] == "250":
+                row["epics"] = ["RUN-0"]
+            if row["id"] == "20":
+                row["epics"] = []
+        self.matrix.write_text(featurecheck.render(document), encoding="utf-8", newline="\n")
+        problems = self._check()
+        self.assertTrue(any("row 57 references unknown epic NOPE-1" in p for p in problems), problems)
+        self.assertTrue(any("row 250 references merged epic RUN-0; its owner is FND-5" in p for p in problems), problems)
+        self.assertTrue(any("orphan row 20: no epic delivers it" in p for p in problems), problems)
+        self.assertTrue(any("out of date" in p for p in problems), problems)
+
+    def test_appendix_c_epics_are_checked(self) -> None:
+        cases = {
+            ("(P1, 3u; after FND-5, CMK-2)", "(P1, 3u; after FND-5, CMK-9)"): "epic UX-3 depends on unknown epic CMK-9",
+            ("- **CMK-2 Presets** (P0, 2.5u; after FND-1).", "- **FND-5 Presets** (P0, 2.5u; after FND-1)."):
+                "epic FND-5 is listed twice",
+            ("(P1, 3u; after", "(P7, 3u; after"): "epic UX-3: priority 'P7' is not one of",
+            ("Merged into FND-5.", "Gone."): "merged epic RUN-0 names no epic that absorbed it",
+            ("Merged into FND-5.", "Merged into FND-9."): "merged epic RUN-0 names unknown epic FND-9",
+            ("- **FND-1 Green HEAD** (P0, 1u; after none).", "- **FND-1 Green HEAD** (P0 1u after none)."):
+                "cannot parse Appendix C epic",
+        }
+        for (old, new), expected in cases.items():
+            with self.subTest(expected=expected):
+                problems = self._problems_after(old, new)
+                self.assertTrue(any(expected in p for p in problems), problems)
+                self._edit_plan(new, old)
+                self.assertEqual([p for p in self._check() if "matrix.json" not in p], [])
+
+    def test_r_ladder_and_appendix_c_groups_must_agree(self) -> None:
+        problems = self._problems_after("### R1\n", "### R2\n")
+        self.assertTrue(any("Appendix C groups epics under R0, R2, not the R-ladder's R0, R1" in p for p in problems),
+                        problems)
+        self._edit_plan("### R2\n", "### R1\n")
+        problems = self._problems_after("| R1 | Daily driver |", "| R3 | Daily driver |")
+        self.assertTrue(any("the R-ladder must run R0..R1 in order, not R0, R3" in p for p in problems), problems)
+
+    def test_milestone_epic_lists_match_appendix_c(self) -> None:
+        problems = self._problems_after("CMK-2 Presets; UX-3 Editor essentials.", "CMK-2 Presets; FND-7 Journeys.")
+        self.assertTrue(any("R1 lists unknown epic FND-7" in p for p in problems), problems)
+        self.assertTrue(any("R1's epic list lacks UX-3" in p for p in problems), problems)
+        problems = self._problems_after("CMK-2 Presets; FND-7 Journeys.", "CMK-2 Presets; UX-3 Editor; FND-1 Again.")
+        self.assertTrue(any("R1 lists FND-1, which Appendix C puts in R0" in p for p in problems), problems)
+        problems = self._problems_after("FND-1 Green HEAD; FND-5 Lint.", "FND-1 Green HEAD; FND-5 Lint; RUN-0 Fake.")
+        self.assertTrue(any("R0 lists merged epic RUN-0" in p for p in problems), problems)
+
+    def test_missing_appendix_c_and_mapping_fail(self) -> None:
+        plan = self.tmp / "PLAN.md"
+        text = plan.read_text(encoding="utf-8")
+        plan.write_text(text[: text.index("## Appendix C")], encoding="utf-8", newline="\n")
+        self.assertTrue(any("no '## Appendix C' section" in p for p in self._check()))
+        plan.write_text(text.replace("**Epic mapping**", "**Mapping**"), encoding="utf-8", newline="\n")
+        self.assertTrue(any("Appendix A has no '**Epic mapping**' table" in p for p in self._check()))
+
+    def test_the_repository_plan_maps_every_row(self) -> None:
+        # The real PLAN.md and matrix.json pass, and the M-ladder is still validated alongside.
+        parsed = featurecheck.parse_plan((REPO / "PLAN.md").read_text(encoding="utf-8"))
+        self.assertEqual([str(p) for p in parsed.problems], [])
+        self.assertEqual(parsed.roadmap.ladder, [f"R{n}" for n in range(20)])
+        self.assertEqual(len(parsed.roadmap.epics), 226)
+        mapped = {ref for refs in parsed.roadmap.mapping.values() for ref in refs}
+        self.assertEqual(mapped | set(parsed.roadmap.out_of_scope), {row["id"] for row in parsed.rows})
 
 
 class SplitTest(unittest.TestCase):
