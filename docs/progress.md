@@ -84,8 +84,12 @@ what is next, blockers and open questions for the user.
   on a synthetic fixture: without `FROST_TEST_LUA_API`, `LuaLsE2E.CompletesGeneratedFrostEngineApi` and
   `WorkbenchLua.TrustGateAndGeneratedApiReachEditor` use a hand-written stand-in API, so the engine-generated
   API is only exercised when that variable is set (FEC-10a covers it with the pinned corpus).
-- **Verification.** The combined tree is verified on Windows and WSL by `tools\verify.ps1 -Quick`; the real summary
-  is the `Verified:` footer of the merge into `main`.
+- **Verification.** Merged to `main` as d4a07f4 (pushed) after four combined runs; the last one:
+  `Verified: win debug 3167/3195 (28 skipped, 1 disabled), wsl debug 2981/3038 (57 skipped), format ok,
+  frost_lint ok, licensecheck ok, featurecheck ok, ratchet ok`. Skips are environment-gated: the real
+  FrostEngine/Unity/managed end-to-end tests, symlink tests, the RHI device, MSBuild and the Windows-only
+  clangd/vcxproj tests on Linux, watcher performance and the update-process probes; RealPty's Claude probe
+  is disabled. The verify-stamp hook is installed in this clone (`core.hooksPath tools/hooks`).
 - **Open R0 follow-ups** (from the reviews; next slice wave):
   1. TrustPurpose for debug attach: cancelling the attach prompt can cancel a build waiting for trust.
   2. Project Properties Debugging page: stop writing LocalDebugger* into the shared project (read-only, RUN-1).
@@ -116,6 +120,12 @@ what is next, blockers and open questions for the user.
       clangd Structure request, is fixed above for both; unproven. It
       passed in about 60 later runs, including two full Windows suites and parallel stress, also with
       diagnostics on the Structure reply check. The test is not changed or weakened.
+  15. clangd trust, last review nits: a revocation during a long build leaves clangd in full mode until the
+      build ends (the watch waits for an idle CMake service); a grant through Settings goes straight to the
+      trust store, so a never-configured folder gets no configure-on-open (consider calling
+      `CMakeService::trust` from the watch on a grant).
+  16. The other `waitFor` helpers (`tests/lang/fake_server.hpp`, `tests/sched`, `tests/diag`) may share the
+      old trailing evaluation fixed in the workbench rig.
 
 ## 2026-11-07: Audit, Roadmap v2 (R-ladder) and definition of done v2
 
