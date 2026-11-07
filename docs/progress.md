@@ -3,6 +3,73 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-07: R0 integration (FND-1, FND-3 harm wave, FND-9a/13 + LUA-1, FND-5/2/4/15)
+
+- **Merged into `r0/integration`** (each slice was implemented in its own worktree, then re-tested and approved
+  by an independent reviewer with no blockers): `r0/fnd-1-green-head`, `r0/fnd-3a-project-dialogs`,
+  `r0/fnd-3b-workbench`, `r0/fnd-3c-language`, `r0/fnd-9a-13-lua-1`, `r0/fnd-5-4-15-2`. Two trivial conflicts
+  (an include list, a CMake comment). The temporary "FND-3 harm, removed at integration" lint allowances
+  were deleted; frost-lint is clean without them.
+- **What changed for the user.**
+  - Unit Tests lists tests found in source as "Discovered, not run"; every run button is disabled (RUN-7).
+  - NuGet is a read-only list of the project's PackageReferences (LTR-7); ASM/IL views are disabled with reasons.
+  - Configuration Manager, Run/Debug Configurations and project references are read-only; solution and
+    project membership edits other than single-file add/remove (through ProjectHost) are refused (SLN-6).
+  - Attach to Process asks for trust; compound launch is disabled (RUN-5); git clone runs off the GUI thread.
+  - Save actions now run on autosave too (caret lines spared). With this repository's `.editorconfig`
+    (`trim_trailing_whitespace = true`) every other line is trimmed on autosave.
+  - "Debug Lua (experimental)" is gone until FER-8; the FrostEngine tool window appears only for
+    `.frostproj`/`.feproject` projects; engine errors show the engine's code and a redacted message.
+  - Decompiled/hover-synthesized sources, text-hack refactorings and text-counted Code Vision are gone;
+    clangd tweaks and the include cleaner are used instead, the rest are disabled naming REF-6..REF-9.
+  - One clangd per project open, LSP 3.17 positionEncodings; clangd in untrusted projects runs restricted.
+  - LuaLS 3.19.1 is pinned, bootstrapped (Windows and WSL) and staged on Windows; its tests fail instead of
+    skipping when it is missing. The stage fails without its bundled tools and writes a symbol archive.
+  - New gates: truth-rule lint (fabricated results, synthesized tool output, parity claims), a test ratchet,
+    and the verify-stamp commit-msg hook (`git config core.hooksPath tools/hooks`).
+- **Harm register (FND-3; D32), current.**
+
+  | Harm | Status |
+  |---|---|
+  | Unit Tests window invents pass/fail, durations, output; a test asserts them | removed (test replaced) |
+  | NuGet constant catalogue; regex NuGet writers | removed (read-only Installed list) |
+  | IL viewer placeholder; ASM via QProcess with a hard-coded `-std` | removed (both disabled: CPP-3, LTR-3) |
+  | Decompiler writes synthetic source into the workspace; hover-text C++ projection | removed |
+  | Text-hack refactorings, line-sorting Optimize Includes, codegen text fallbacks | removed (clangd or disabled, REF-6..9) |
+  | Code Vision text-counted usages, fixed "implementations" | removed (git author lens kept) |
+  | Silent trust grants on Attach to Process and compound launch | removed |
+  | Services window alias | removed (keymap entries `window.services` still bound to nothing: open) |
+  | Settings toggles shown but not applied (trim, final newline, confirm exit, reopen last, detect indentation) | removed (applied or hidden) |
+  | Engine helper 15 s blanket deadline; hidden engine errors | removed (per-method deadlines, real codes) |
+  | Regex solution/project edits (SLN-1) | partly guarded: membership edits refused; rename/move (`updatePathInVcxproj`) and the property pages (`applyVcxprojPropertiesForConfig`, SLN-8) still use regex writers |
+  | LocalDebugger* written into the shared .vcxproj | partly removed: Run/Debug Configurations is read-only, the Project Properties Debugging page still writes them |
+  | 3-way merge Apply writing marker text and git-adding it | guarded |
+  | clangd honouring `.clangd`/`--query-driver` in untrusted projects | guarded (restricted mode) |
+  | Updater overwrites the live install without rollback | guarded by policy (auto-updates frozen, D38) |
+
+  Tests removed or inverted with their feature (D32 or spec change): the fake Passed/Failed counts; the regex
+  NuGet and solution-edit round trips (replaced by parse and refusal tests); 21 WorkbenchEngine Lua-debug tests
+  and 2 EngineAutomation `script.debug.*` tests (feature removed until FER-8); the decompiler test (replaced by
+  two metadata-cache tests); the Code Vision count expectations; the run-marker count 3 -> 1; the LSP
+  `offsetEncoding` offer (spec change, FND-9a). Every LuaLS skip became a failure.
+- **Verification.** The combined tree is verified on Windows and WSL by `tools\verify.ps1 -Quick`; the real summary
+  is the `Verified:` footer of the merge into `main`.
+- **Open R0 follow-ups** (from the reviews; next slice wave):
+  1. TrustPurpose for debug attach: cancelling the attach prompt can cancel a build waiting for trust.
+  2. Project Properties Debugging page: stop writing LocalDebugger* into the shared project (read-only, RUN-1).
+  3. "Debug Selected Test" button is a silent no-op: disable it naming RUN-10; drop `window.services` keymap entries.
+  4. Wire `LanguageServices::metadataCacheDir`, `readiness` and a read-only `openReadOnlyLocation` in src/app;
+     restart clangd on a trust change; name LTR-6 when a C# metadata result has no cache.
+  5. Refuse or route `updatePathInVcxproj` (rename/move regex writer); move `.fmeta` siblings on rename/move.
+  6. Disable refused explorer actions up front instead of after their dialogs.
+  7. stage.ps1: check symbols before populating the destination; Linux staging of LuaLS.
+  8. Lint: join adjacent literals for the tool-output rule; per-entry occurrence counts; footer check must
+     require the test-count items. Spawn log (IProcessLauncher decorator) is not implemented.
+  9. E:\sdk defaults in `lldb_dap.cpp`, `clangd_locator.cpp`, `lua_config.cpp` (FND-10).
+  10. Profile switch still starts clangd about 3 times.
+- **Process note.** The DoD asks for GPT-6.1 Terra / GPT-6 Astra agents where available; they are not
+  available in this session, so Claude agents did the implementation and the independent reviews.
+
 ## 2026-11-07: Audit, Roadmap v2 (R-ladder) and definition of done v2
 
 - **Audit of ec3d580.** Eleven area analysts each had their claims re-checked in code by a skeptic, and an
@@ -23,7 +90,8 @@ what is next, blockers and open questions for the user.
   - The feature-first phase (ADR 0031) has ended.
 - **Working files** (outside the repository): `E:\FrostBuilds\orchestration\roadmap-2026-11-07\` holds ROADMAP.md
   plus the raw audit and roadmap JSON.
-- **Harm register (FND-3; D32).** Each harm is removed or guarded by its owning slice.
+- **Harm register (FND-3; D32).** Each harm is removed or guarded by its owning slice. (Superseded by the
+  register in the R0 integration entry above.)
 
   | Harm | Where | Owner | Status |
   |---|---|---|---|
