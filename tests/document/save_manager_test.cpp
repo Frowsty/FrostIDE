@@ -421,7 +421,7 @@ TEST(SaveTransformEdits, InsertsTheFinalNewlineWithTheDocumentSeparator) {
     EXPECT_EQ(applied("x  ", edits), "x\n");
 }
 
-TEST_F(SaveManagerTest, SaveTransformRunsOnExplicitSavesAsOneUndoableEditButNeverOnAutosave) {
+TEST_F(SaveManagerTest, SaveTransformRunsOnEverySaveIncludingAutosaveAsOneUndoableEdit) {
     policies.localHistory = false;
     writeExternally("t.txt", "one  \ntwo");
     FileDocument* document = open("t.txt");
@@ -438,20 +438,112 @@ TEST_F(SaveManagerTest, SaveTransformRunsOnExplicitSavesAsOneUndoableEditButNeve
     ASSERT_TRUE(manager().save(*document));
     EXPECT_TRUE(asked.empty());
     EXPECT_EQ(read("t.txt"), "one  \ntwo");
+    // An autosave applies the save actions too: autosave is on by default, and skipping it left
+    // most saves untrimmed.
     edit(*document, 9, 9, "!  ");
     SaveOptions autosave;
     autosave.reason = SaveReason::Autosave;
     ASSERT_TRUE(manager().save(*document, autosave));
-    EXPECT_TRUE(asked.empty());
-    EXPECT_EQ(read("t.txt"), "one  \ntwo!  ");
-    edit(*document, 0, 0, "#");
+    EXPECT_EQ(asked, std::vector<SaveReason>{SaveReason::Autosave});
+    EXPECT_EQ(read("t.txt"), "one\ntwo!\n");
+    EXPECT_EQ(textOf(*document), "one\ntwo!\n"); // The editor shows what was written.
+    EXPECT_FALSE(document->dirty());
+    edit(*document, 0, 0, "#  x  ");
     auto saved = manager().save(*document);
     ASSERT_TRUE(saved) << saved.error().describe();
-    EXPECT_EQ(asked, std::vector<SaveReason>{SaveReason::Explicit});
-    EXPECT_EQ(read("t.txt"), "#one\ntwo!\n");
-    EXPECT_EQ(textOf(*document), "#one\ntwo!\n"); // The editor shows what was written...
+    EXPECT_EQ(asked, (std::vector<SaveReason>{SaveReason::Autosave, SaveReason::Explicit}));
+    EXPECT_EQ(read("t.txt"), "#  x  one\ntwo!\n"); // Only trailing blanks go; inner ones stay.
     EXPECT_FALSE(document->dirty());
-    ASSERT_TRUE(document->document().undo()); // ...and one undo takes the save actions back.
-    EXPECT_EQ(textOf(*document), "#one  \ntwo!  ");
+    // Nothing trailing to trim: the explicit save added no undo step of its own.
+    ASSERT_TRUE(document->document().undo());
+    EXPECT_EQ(textOf(*document), "one\ntwo!\n");
+    ASSERT_TRUE(document->document().undo()); // One undo takes the autosave's save actions back.
+    EXPECT_EQ(textOf(*document), "one  \ntwo!  ");
+}
+
+TEST_F(SaveManagerTest, AnExplicitSaveAfterAnAutosaveAppliesWhatTheAutosaveSpared) {
+    policies.localHistory = false;
+    writeExternally("m.txt", "keep  \nb\nc\n");
+    writeExternally("n.txt", "x\n");
+    FileDocument* document = open("m.txt");
+    FileDocument* other = open("n.txt");
+    ASSERT_NE(document, nullptr);
+    ASSERT_NE(other, nullptr);
+    std::vector<LineIndex> caret{LineIndex{1}};
+    int asked = 0;
+    manager().setSaveTransform([&](const FileDocument&, SaveReason) {
+        ++asked;
+        SaveTransform transform;
+        transform.trim = TrimTrailingWhitespace::Modified;
+        transform.keepLines = caret;
+        return transform;
+    });
+    edit(*document, 8, 8, "  ");   // "b  ", the caret line.
+    edit(*document, 12, 12, "  "); // "c  "
+    SaveOptions autosave;
+    autosave.reason = SaveReason::Autosave;
+    ASSERT_TRUE(manager().save(*document, autosave));
+    // The idle autosave trims the edited line the caret is not on and spares the caret line.
+    EXPECT_EQ(read("m.txt"), "keep  \nb  \nc\n");
+    EXPECT_FALSE(document->dirty());
+    // A later autosave of the clean document writes nothing.
+    EXPECT_TRUE(manager().saveAll(SaveReason::Autosave).saved.empty());
+    EXPECT_EQ(read("m.txt"), "keep  \nb  \nc\n");
+    // The caret moved away: the user's Save All still trims line 1, which changed since the last
+    // explicit save although the autosave moved the merge base. The unedited "keep  " stays.
+    caret.clear();
+    const SaveAllResult all = manager().saveAll(SaveReason::SaveAll);
+    EXPECT_EQ(all.saved, std::vector<FileDocument*>{document}); // n.txt has nothing pending.
+    EXPECT_TRUE(all.skipped.empty());
+    EXPECT_TRUE(all.failed.empty());
+    EXPECT_EQ(read("m.txt"), "keep  \nb\nc\n");
+    EXPECT_EQ(textOf(*document), "keep  \nb\nc\n");
+    EXPECT_FALSE(document->dirty());
+    // That save was explicit: the next save of the clean document has nothing pending, asks nothing.
+    const int before = asked;
+    auto again = manager().save(*document);
+    ASSERT_TRUE(again);
+    EXPECT_FALSE(again->written);
+    EXPECT_EQ(asked, before);
+
+    // After an autosave that left nothing to do, an explicit save of the clean document writes nothing.
+    caret = {LineIndex{0}};
+    edit(*other, 0, 0, "y");
+    ASSERT_TRUE(manager().save(*other, autosave));
+    EXPECT_EQ(read("n.txt"), "yx\n");
+    auto clean = manager().save(*other);
+    ASSERT_TRUE(clean);
+    EXPECT_FALSE(clean->written);
+    EXPECT_EQ(read("n.txt"), "yx\n");
+}
+
+TEST_F(SaveManagerTest, AReloadEndsTheSaveActionsAnAutosaveLeftPending) {
+    policies.localHistory = false;
+    writeExternally("r.txt", "a\n");
+    FileDocument* document = open("r.txt");
+    ASSERT_NE(document, nullptr);
+    std::vector<LineIndex> caret{LineIndex{0}};
+    manager().setSaveTransform([&](const FileDocument&, SaveReason) {
+        SaveTransform transform;
+        transform.trim = TrimTrailingWhitespace::Modified;
+        transform.keepLines = caret;
+        return transform;
+    });
+    edit(*document, 1, 1, "  "); // "a  ", the caret line.
+    SaveOptions autosave;
+    autosave.reason = SaveReason::Autosave;
+    ASSERT_TRUE(manager().save(*document, autosave));
+    EXPECT_EQ(read("r.txt"), "a  \n");
+    // Another program rewrites the file; the clean buffer reloads it. Its trailing blanks are not
+    // the user's edit, so the user's next save leaves them.
+    writeExternally("r.txt", "zz  \nmore  \n");
+    const ExternalChange change = manager().checkDisk(*document);
+    ASSERT_EQ(change.kind, ExternalChangeKind::Reloaded);
+    EXPECT_EQ(textOf(*document), "zz  \nmore  \n");
+    caret.clear();
+    auto saved = manager().save(*document);
+    ASSERT_TRUE(saved);
+    EXPECT_FALSE(saved->written);
+    EXPECT_EQ(read("r.txt"), "zz  \nmore  \n");
 }
 } // namespace frost::document::test

@@ -2132,6 +2132,56 @@ TEST(Workbench, SaveActionsFollowTheSettingsAndEditorConfigAndSpareTheCaretLine)
     EXPECT_EQ(dir.read("proj/plain.txt"), "xa  \nb  ");
 }
 
+TEST(Workbench, SaveActionsReachTheFileWhenAutosavesRanFirstWithTheDefaultSettings) {
+    WorkDir dir("save-actions-autosave");
+    dir.write("proj/code.txt", "keep  \nb\nc\n");
+    // Keeps the checkout's own .editorconfig (trim_trailing_whitespace = true) out of the test.
+    dir.write("proj/.editorconfig", "root = true\n");
+    RigOptions options;
+    options.autosave = true; // As the defaults: autosave on idle and on frame deactivation.
+    WorkbenchRig rig(dir, std::move(options));
+    // The default save action: trim the modified lines, except a caret line.
+    ASSERT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTrimTrailingWhitespace), "modified");
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::saveAutosaveIdleSeconds,
+                                  std::int64_t{1}));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj/code.txt")));
+    DocumentEditorView* view = rig.view();
+    ASSERT_NE(view, nullptr);
+    QWidget* editor = view->widget();
+    editor->setFocus();
+    QApplication::processEvents();
+    const auto typeSpaces = [&] {
+        sendKey(editor, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+        sendKey(editor, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+    };
+    view->editor().goToLine(3, 2);
+    typeSpaces(); // "c  "
+    view->editor().goToLine(2, 2);
+    typeSpaces(); // "b  ", where the caret stays
+    EXPECT_EQ(view->document().document().committedText().text(), "keep  \nb  \nc  \n");
+    // The idle autosave applies the save actions and spares the caret line.
+    EXPECT_TRUE(waitFor([&] { return dir.read("proj/code.txt") == "keep  \nb  \nc\n"; }, std::chrono::seconds(10)))
+        << dir.read("proj/code.txt");
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+    // The caret moves away and Ctrl+S (Save All) of the now clean document trims the line the
+    // autosave spared; the unedited "keep  " stays.
+    view->editor().goToLine(1, 1);
+    sendKey(editor, Qt::Key_S, Qt::ControlModifier);
+    EXPECT_EQ(dir.read("proj/code.txt"), "keep  \nb\nc\n");
+    EXPECT_EQ(view->document().document().committedText().text(), "keep  \nb\nc\n");
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+
+    // Frame deactivation (Alt+Tab) applies them as well.
+    view->editor().goToLine(3, 2);
+    typeSpaces(); // "c  "
+    view->editor().goToLine(1, 1);
+    rig.workbench->frameDeactivated();
+    EXPECT_EQ(dir.read("proj/code.txt"), "keep  \nb\nc\n");
+    EXPECT_EQ(view->document().document().committedText().text(), "keep  \nb\nc\n");
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+}
+
 TEST(Workbench, ConfirmExitAsksBeforeTheIdeWindowClosesOnlyWhenEnabled) {
     WorkDir dir("confirm-exit");
     WorkbenchRig rig(dir);
@@ -2266,6 +2316,50 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
     frost::input::ActionContext context;
     context.trusted = true;
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Disabled);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+// The Edit Run Configurations dialog's compound section reaches the same refusal: the RUN-5 notice
+// and no launch.
+TEST(Workbench, CompoundRunFromTheRunConfigurationsDialogShowsTheRunFiveNoticeAndStartsNothing) {
+    WorkDir dir("compound-run-dialog", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto id = rig.workbench->registry().find("run.editConfigurations");
+    ASSERT_TRUE(id);
+    int checked = 0;
+    bool clicked = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("compoundProjectsList"));
+        auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
+        if (list != nullptr && launch != nullptr) {
+            for (int row = 0; row < list->count(); ++row) {
+                list->item(row)->setCheckState(Qt::Checked);
+                ++checked;
+            }
+            launch->click();
+            clicked = true;
+        }
+        // Whatever happened, no dialog stays open.
+        for (QDialog* dialog : rig.window->findChildren<QDialog*>())
+            if (dialog->isVisible())
+                dialog->reject();
+    });
+    frost::input::ActionContext context;
+    context.trusted = true;
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(clicked);
+    EXPECT_EQ(checked, 2); // App and Lib.
+    bool notice = false;
+    for (const auto& entry : rig.window->notifications().log())
+        notice = notice || (entry.notification.title.contains(QStringLiteral("Compound Run unavailable")) &&
+                            entry.notification.text.contains(QStringLiteral("RUN-5")));
+    EXPECT_TRUE(notice);
     EXPECT_TRUE(launcher.launches().empty());
 }
 

@@ -114,7 +114,7 @@ enum class TrimTrailingWhitespace : std::uint8_t { None, Modified, All };
 /*
  * What a save does to the text before it is encoded (the pre-save transform; editor.* "On Save"
  * settings). Trailing spaces and tabs are removed on every line (All) or on the lines that differ
- * from the last saved text (Modified, by line diff; none when the file is above the diff's
+ * from the last explicitly saved text (Modified, by line diff; none when the file is above the diff's
  * limits), except on keepLines, the lines a caret is on, so typing is never undone under the caret
  * (Rider's default). insertFinalNewline appends the document's line separator to a non-empty text
  * that does not end with a line break. Plain value.
@@ -260,9 +260,14 @@ public:
      * The pre-save transform: before a dirty document (or a Save As) is encoded, `provider` says
      * what to do to its text (SaveTransform; the caller resolves the file's settings and
      * EditorConfig), and the edits are applied to the document as one undoable step, so the editor
-     * shows exactly what was written. Not run for SaveReason::Autosave, which must never change
-     * the text under the user, nor while an IME composition is active. Empty removes it. Owner
-     * thread; the provider must not save or close documents.
+     * shows exactly what was written. It runs for every SaveReason, autosaves included; the
+     * provider's keepLines (the caret lines) keep typing from being trimmed under the user. Modified
+     * lines are measured from the last explicit save: after an autosave, an explicit save (or Save
+     * All) of the then clean document still runs the transform and writes only if it changes the
+     * text, so what the autosave spared is trimmed then. Not run while an IME composition is
+     * active. If the write fails after the edits were applied, they stay in the still dirty buffer
+     * as an undoable step. Empty removes it. Owner thread; the provider must not save or close
+     * documents.
      */
     void setSaveTransform(std::function<SaveTransform(const FileDocument&, SaveReason)> provider) {
         m_saveTransform = std::move(provider);

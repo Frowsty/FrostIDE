@@ -276,28 +276,47 @@ Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::strin
             }
         }
     }
-    if (!saveAs && !document.dirty() && document.m_diskState == DiskState::InSync) {
-        return outcome; // Clean and in sync: nothing to write.
+    const bool autosave = options.reason == SaveReason::Autosave;
+    const bool clean = !saveAs && !document.dirty() && document.m_diskState == DiskState::InSync;
+    // Clean and in sync: nothing to write, unless an autosave since the last explicit save left
+    // save actions for this one (FileDocument::m_transformBase).
+    if (clean && (autosave || !document.m_transformBase)) {
+        return outcome;
     }
-    // The pre-save transform (setSaveTransform): one undoable edit the editor shows, then the save.
-    if (m_saveTransform && options.reason != SaveReason::Autosave && !document.m_document.compositionRange()) {
+    /*
+     * The pre-save transform (setSaveTransform): one undoable edit the editor shows, then the save.
+     * Autosaves run it too, sparing the caret lines like every save, so with autosave on (the
+     * default) the file on disk still gets the save actions. Modified lines are measured from the
+     * last explicit save, not from the last autosave.
+     */
+    std::vector<SaveEdit> owned;
+    const bool composing = document.m_document.compositionRange().has_value();
+    if (m_saveTransform && !composing) {
         const SaveTransform transform = m_saveTransform(document, options.reason);
-        const std::vector<SaveEdit> owned =
-            saveTransformEdits(document.m_document.committedText(), document.m_baseText, transform,
-                               text::separatorBytes(document.m_encoding.format.lineSeparator));
-        if (!owned.empty()) {
-            std::vector<text::Edit> edits;
-            edits.reserve(owned.size());
-            for (const SaveEdit& edit : owned)
-                edits.push_back(text::Edit{edit.range, edit.text});
-            // Its own undo step: neither merged into the typing before it nor into the next.
-            document.m_document.breakCoalescing();
-            if (auto applied = document.m_document.edit(edits, text::EditContext{}); !applied) {
-                applied.error().withContext("while applying the save actions");
-                outcome.warnings.push_back(std::move(applied.error()));
-            }
-            document.m_document.breakCoalescing();
+        owned = saveTransformEdits(document.m_document.committedText(),
+                                   document.m_transformBase ? *document.m_transformBase : document.m_baseText,
+                                   transform, text::separatorBytes(document.m_encoding.format.lineSeparator));
+    }
+    if (clean && owned.empty()) {
+        // This explicit save is the new base: the file is already right. During an IME composition
+        // the transform did not run, so what is pending stays for the next save.
+        if (m_saveTransform && !composing)
+            document.m_transformBase.reset();
+        return outcome;
+    }
+    if (!owned.empty()) {
+        std::vector<text::Edit> edits;
+        edits.reserve(owned.size());
+        for (const SaveEdit& edit : owned)
+            edits.push_back(text::Edit{edit.range, edit.text});
+        // Its own undo step: neither merged into the typing before it nor into the next. If the write
+        // below fails, the edit stays in the (still dirty) buffer and can be undone.
+        document.m_document.breakCoalescing();
+        if (auto applied = document.m_document.edit(edits, text::EditContext{}); !applied) {
+            applied.error().withContext("while applying the save actions");
+            outcome.warnings.push_back(std::move(applied.error()));
         }
+        document.m_document.breakCoalescing();
     }
 
     // Captured on the owner thread; everything up to the write only reads these immutable values.
@@ -340,6 +359,11 @@ Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::strin
     document.m_encoding = encoding.afterSave();
     document.m_savedStateId = stateId;
     document.m_formatDirty = false;
+    // An autosave keeps the Modified base at the last explicit save; any other save moves it here.
+    if (!autosave)
+        document.m_transformBase.reset();
+    else if (!document.m_transformBase)
+        document.m_transformBase = document.m_baseText;
     document.m_baseText = snapshot;
     document.m_disk = base;
     document.m_diskState = DiskState::InSync;
@@ -390,19 +414,27 @@ SaveAllResult SaveManager::saveAll(SaveReason reason) {
     // Saving never adds or removes documents, so the list is stable.
     for (const auto& owned : m_documents) {
         FileDocument& document = *owned;
-        if (!document.dirty() && document.m_diskState != DiskState::Deleted) {
+        // A clean document is saved only for a deleted file, or for the save actions an autosave left
+        // to an explicit Save All (saveTo writes it only when they change the text).
+        const bool pendingTransform =
+            reason != SaveReason::Autosave && document.m_transformBase && document.m_diskState == DiskState::InSync;
+        if (!document.dirty() && document.m_diskState != DiskState::Deleted && !pendingTransform) {
             continue;
         }
         if (!document.dirty() && reason == SaveReason::Autosave) {
             continue; // A clean buffer of a deleted file is not recreated by an autosave.
         }
         if (const auto skip = skipReason(document, reason)) {
+            if (pendingTransform && !document.dirty())
+                continue; // Nothing unsaved to report: only the save actions could not run.
             result.skipped.push_back(SkippedDocument{&document, *skip});
             continue;
         }
         SaveOptions options;
         options.reason = reason;
         if (auto saved = save(document, options); saved) {
+            if (!saved->written && !document.dirty())
+                continue; // A pending-transform check that found nothing to change.
             result.saved.push_back(&document);
             for (auto& warning : saved->warnings)
                 result.warnings.push_back(FailedSave{&document, std::move(warning)});

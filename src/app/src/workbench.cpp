@@ -718,7 +718,6 @@ Workbench::~Workbench() {
 
 void Workbench::createBuildService() {
     m_build = std::make_unique<ui::BuildController>();
-    m_build->setBuildAdmission([this] { return !m_engine || !m_engine->luaReservationPending(); });
     const auto snapshot = m_services.settings.snapshot();
     build::BuildServiceOptions options;
     options.stateFilePath = m_options.buildStatePath;
@@ -851,7 +850,7 @@ void Workbench::createRunService() {
     attachProcess.synonyms = {"attach", "pid", "debug process"};
     attachProcess.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
     attachProcess.enabled = [this](const input::ActionContext&) {
-        return (!m_engine || !m_engine->luaReservationPending()) && m_debug && !m_debug->debugging() &&
+        return m_debug && !m_debug->debugging() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     attachProcess.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { showAttachToProcess(); };
@@ -859,15 +858,10 @@ void Workbench::createRunService() {
         log::warn(kLog, "attach process action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
     actionHooks.debugging = [this] {
-        return (m_engine && m_engine->luaReservationPending()) ||
-               (m_debug && (m_debug->debugging() || m_debug->rerunPending())) ||
+        return (m_debug && (m_debug->debugging() || m_debug->rerunPending())) ||
                (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
     };
     actionHooks.stopDebugging = [this] {
-        if (m_engine && m_engine->luaReservationPending()) {
-            m_engine->cancel();
-            return;
-        }
         if ((m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob)
             invalidateManagedDebug();
         if (m_debug)
@@ -1564,9 +1558,9 @@ void Workbench::attach(ui::ShellWindow& window) {
     }
     connect(launcher, &LauncherWindow::closedByUser, this, [this] {
         m_exitConfirmed = true; // The user closed the launcher; the IDE window is not showing.
-        if (m_window) {
-            m_window->close();
-        }
+        // A vetoed close (the unsaved-changes prompt) leaves later closes to general.confirmExit.
+        if (m_window && !m_window->close())
+            m_exitConfirmed = false;
         QCoreApplication::quit();
     });
     refreshRecent();
@@ -2882,8 +2876,9 @@ void Workbench::applyVerifiedUpdate() {
         }
         if (auto started = launchDetached(m_services.launcher, newExe, {}, QFileInfo(newExe).absolutePath()); started) {
             m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
-            if (m_window)
-                m_window->close();
+            // A vetoed close (the unsaved-changes prompt) leaves later closes to general.confirmExit.
+            if (m_window && !m_window->close())
+                m_exitConfirmed = false;
             QCoreApplication::quit();
         } else {
             QMessageBox::warning(parentWin, tr("Update Installed"),
@@ -2966,8 +2961,9 @@ void Workbench::applyVerifiedUpdate() {
                                           updatesDir);
             started) {
             m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
-            if (m_window)
-                m_window->close();
+            // A vetoed close (the unsaved-changes prompt) leaves later closes to general.confirmExit.
+            if (m_window && !m_window->close())
+                m_exitConfirmed = false;
             QCoreApplication::quit();
         } else {
             QMessageBox::warning(parentWin, tr("Update Installation Failed"),
@@ -3102,8 +3098,9 @@ void Workbench::showVersionSwitcher() {
             started) {
             dialog.accept();
             m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
-            if (m_window)
-                m_window->close();
+            // A vetoed close (the unsaved-changes prompt) leaves later closes to general.confirmExit.
+            if (m_window && !m_window->close())
+                m_exitConfirmed = false;
             QCoreApplication::quit();
         } else {
             QMessageBox::warning(&dialog, tr("Switch FrostIDE Version"), qs(started.error().message()));

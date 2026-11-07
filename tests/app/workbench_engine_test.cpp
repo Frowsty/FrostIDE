@@ -25,6 +25,8 @@
 #include <array>
 #include <atomic>
 #include <filesystem>
+#include <span>
+#include <stop_token>
 #include <thread>
 
 #ifdef _WIN32
@@ -604,5 +606,98 @@ TEST(WorkbenchEngine, ShowsTheEngineErrorInsteadOfAGenericFailure) {
             return hasStatus(panel, QStringLiteral("FrostEngine error -32000: Play refused: a scene is still loading"));
         },
         5s));
+}
+/*
+ * The scripted launcher's async processes, observed: the timeout communicate() was given and
+ * whether the owner released the process. Releasing is what ends a real helper: AsyncProcess's
+ * destructor kills its process tree (async_process.cpp), which the scripted process cannot show.
+ */
+struct ObservedHelper {
+    std::atomic<bool> released{false};
+    std::atomic<std::int64_t> timeoutMs{-1};
+};
+class ObservedAsyncProcess final : public frost::io::IAsyncProcess {
+public:
+    ObservedAsyncProcess(std::unique_ptr<frost::io::IAsyncProcess> inner, std::shared_ptr<ObservedHelper> seen)
+        : m_inner(std::move(inner)), m_seen(std::move(seen)) {}
+    ~ObservedAsyncProcess() override { m_seen->released = true; }
+    frost::io::ProcessId pid() const noexcept override { return m_inner->pid(); }
+    frost::sched::Task<frost::Result<std::size_t>> readStdout(std::span<char> buffer, std::stop_token token) override {
+        return m_inner->readStdout(buffer, std::move(token));
+    }
+    frost::sched::Task<frost::Result<std::size_t>> readStderr(std::span<char> buffer, std::stop_token token) override {
+        return m_inner->readStderr(buffer, std::move(token));
+    }
+    frost::sched::Task<frost::Result<void>> writeStdin(std::string bytes, std::stop_token token) override {
+        return m_inner->writeStdin(std::move(bytes), std::move(token));
+    }
+    void closeStdin() noexcept override { m_inner->closeStdin(); }
+    frost::sched::Task<frost::Result<frost::io::ExitStatus>> exited(std::stop_token token) override {
+        return m_inner->exited(std::move(token));
+    }
+    frost::Result<void> terminate() override { return m_inner->terminate(); }
+    frost::sched::Task<frost::Result<frost::io::ProcessResult>>
+    communicate(std::string stdinData, frost::IClock::Duration timeout, std::stop_token token) override {
+        m_seen->timeoutMs = std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
+        return m_inner->communicate(std::move(stdinData), timeout, std::move(token));
+    }
+
+private:
+    std::unique_ptr<frost::io::IAsyncProcess> m_inner;
+    std::shared_ptr<ObservedHelper> m_seen;
+};
+class ObservingLauncher final : public frost::io::IProcessLauncher {
+public:
+    explicit ObservingLauncher(frost::io::ScriptedProcessLauncher& inner) : m_inner(inner) {}
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        return m_inner.launch(spec);
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        auto process = m_inner.launchAsync(spec, context);
+        if (!process)
+            return process;
+        return std::make_unique<ObservedAsyncProcess>(std::move(*process), seen);
+    }
+    std::shared_ptr<ObservedHelper> seen = std::make_shared<ObservedHelper>();
+
+private:
+    frost::io::ScriptedProcessLauncher& m_inner;
+};
+
+// test.run has no deadline (engineMethodTimeout): a long test run is not cut off, and Cancel
+// Request ends the helper process.
+TEST(WorkbenchEngine, CancelRequestReleasesTheHelperOfARunningTestRunThatHasNoDeadline) {
+    WorkDir dir("engine-test-run-cancel");
+    dir.write("project/Game.frostproj", "{}");
+    frost::io::ScriptedProcessLauncher launcher;
+    ObservingLauncher observing(launcher);
+    RigOptions options;
+    options.launcher = &observing;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.join("project")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project")));
+    rig.window->toolWindows().show("frostEngine");
+    auto* panel = rig.window->toolWindows().content("frostEngine");
+    ASSERT_NE(panel, nullptr);
+    auto* runTests = button(panel, QStringLiteral("Run Tests"));
+    auto* cancel = button(panel, QStringLiteral("Cancel Request"));
+    ASSERT_NE(runTests, nullptr);
+    ASSERT_NE(cancel, nullptr);
+    launcher.expect(frost::io::ScriptedProcess{.neverExits = true}); // A test run that keeps going.
+    runTests->click();
+    ASSERT_TRUE(waitFor([&] { return !engineRequests(launcher, "test.run").empty(); }, 3s));
+    ASSERT_TRUE(waitFor([&] { return observing.seen->timeoutMs.load() >= 0; }, 3s));
+    // No practical deadline: far beyond the old blanket 15 s (helperTimeout gives about a year).
+    EXPECT_GE(observing.seen->timeoutMs.load(), std::chrono::milliseconds(std::chrono::hours(24)).count());
+    static_cast<void>(waitFor([] { return false; }, 500ms));
+    ASSERT_EQ(launcher.launches().size(), 1U);
+    EXPECT_FALSE(observing.seen->released.load()); // Still running.
+    EXPECT_FALSE(launcher.launches().front().terminated);
+    cancel->click();
+    EXPECT_TRUE(hasStatus(panel, QStringLiteral("Request cancelled locally")));
+    // The helper's communicate() sees the stop and the request releases the process.
+    EXPECT_TRUE(waitFor([&] { return observing.seen->released.load(); }, 5s));
+    EXPECT_EQ(engineRequests(launcher, "test.run").size(), 1U);
 }
 } // namespace

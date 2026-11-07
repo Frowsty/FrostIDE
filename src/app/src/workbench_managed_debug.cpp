@@ -187,10 +187,9 @@ void Workbench::showManagedDebugSource(const std::string& path, int line) {
 }
 
 void Workbench::startManagedDebug() {
-    if ((m_engine && m_engine->luaReservationPending()) || m_projectRoot.empty() ||
-        m_buildService->projectEditInProgress() || !m_managedDebugPreparation || m_managedDebugPreparation->active() ||
-        m_managedSnapshotJob || !m_debug || m_debug->debugging() || m_runController->running() ||
-        !m_runService->activeRuns().empty())
+    if (m_projectRoot.empty() || m_buildService->projectEditInProgress() || !m_managedDebugPreparation ||
+        m_managedDebugPreparation->active() || m_managedSnapshotJob || !m_debug || m_debug->debugging() ||
+        m_runController->running() || !m_runService->activeRuns().empty())
         return;
     const std::string root = m_projectRoot;
     if (!sameCanonical(m_services.fs, root) || !m_services.trust.isTrusted(root)) {
@@ -278,9 +277,8 @@ void Workbench::startManagedDebug() {
         return;
     // The project picker and options dialog run nested event loops: any competing operation,
     // project switch or trust revocation may have happened while either was open.
-    if ((m_engine && m_engine->luaReservationPending()) || m_buildService->externalLaunchAdmissionBusy() ||
-        m_projectRoot != root || !canStartLuaDebug() || !m_services.trust.isTrusted(root) ||
-        !sameCanonical(m_services.fs, root)) {
+    if (m_buildService->externalLaunchAdmissionBusy() || m_projectRoot != root || !canStartLuaDebug() ||
+        !m_services.trust.isTrusted(root) || !sameCanonical(m_services.fs, root)) {
         notify(QStringLiteral("Debug .NET"), QStringLiteral("The project or debug state changed; try again."),
                ui::NotificationKind::Warning);
         return;
@@ -315,8 +313,7 @@ void Workbench::startManagedDebug() {
                                          .runtimeIdentifier = rid.text().toStdString()};
     m_managedDebugRoot = root;
     auto current = [this, root, projectPath] {
-        return !m_shutDown && (!m_engine || !m_engine->luaReservationPending()) &&
-               !m_buildService->externalLaunchAdmissionBusy() &&
+        return !m_shutDown && !m_buildService->externalLaunchAdmissionBusy() &&
                (!m_cmake || (!m_cmake->running() && m_cmake->service().state() == build::BuildState::Idle)) &&
                m_debug && !m_debug->debugging() && !m_debug->rerunPending() && m_runController &&
                !m_runController->running() && m_runService && m_runService->activeRuns().empty() &&

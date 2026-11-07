@@ -111,6 +111,14 @@ private:
     DiskState m_diskState = DiskState::InSync;
     std::optional<storage::DiskBase> m_disk;
     text::Snapshot m_baseText;
+    /*
+     * The Modified base of the pre-save transform while autosaves have run since the last explicit
+     * save (load, Save, Save All, Save As): the text at that point, which m_baseText no longer is.
+     * Set by the first such autosave, cleared by the next explicit save, a reload or an adopted
+     * external change. While it is set, an explicit save of a clean document still runs the
+     * transform, so what an autosave spared (the caret line) is trimmed on the user's save.
+     */
+    std::optional<text::Snapshot> m_transformBase;
     std::uint64_t m_savedStateId = 0;
     bool m_formatDirty = false;
     std::uint64_t m_formatVersion = 0; // Bumped by every format change, for journal generations.
