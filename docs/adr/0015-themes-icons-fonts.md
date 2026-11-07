@@ -188,7 +188,7 @@ licensecheck (pinned hashes, OFL 1.1 licence text, name tables naming the OFL an
 - Cascadia Code and Cascadia Mono 2111.01: "Copyright (c) 2021 Microsoft Corporation"; Reserved Font Name
   "Cascadia Code". Its name tables' nameID 13 opens with Microsoft's generic "Microsoft supplied font ... Any
   other use is prohibited" paragraph before the OFL-based terms; nameID 14 and the repository LICENSE are the
-  OFL (question 7).
+  OFL (question 7, answered 2026-11-07: kept, see there).
 - Source Code Pro 2.042R-u/1.062R-i: "Copyright 2023 Adobe"; Reserved Font Name "Source".
 - IBM Plex Mono 1.1.0: "Copyright 2017 IBM Corp."; Reserved Font Name "Plex".
 - Inconsolata 3.000: "Copyright 2006 The Inconsolata Project Authors"; no Reserved Font Name.
@@ -333,3 +333,18 @@ Atlas sizes (47 icons, 16 and 20 px designs, one page each): 100% 43,048 bytes; 
 7. Cascadia Code's name tables (decision 9a) carry Microsoft's generic "Microsoft supplied font" paragraph next
    to the OFL terms, while its repository LICENSE and nameID 14 are the OFL 1.1. Keep bundling it on the
    strength of the OFL licence file (the usual reading for this upstream release), or drop it?
+   **Answered 2026-11-07.** The user asked for a re-fetch from the GitHub release, so the bundle was checked
+   against upstream again:
+   - CascadiaCode-2111.01.zip, downloaded from the v2111.01 release of microsoft/cascadia-code (published
+     2021-12-14 by a Microsoft maintainer), has the pinned sha256 51fd6817...e712. GitHub publishes no digest for
+     this asset.
+   - All 8 bundled TTFs are byte-identical to the archive members.
+   - The bundled LICENSE is byte-identical to `LICENSE` at tag v2111.01 (sha256 51882cd3...8238): OFL-1.1, with
+     Reserved Font Name "Cascadia Code".
+   - The "Microsoft supplied font" paragraph in nameID 13 therefore comes with the official upstream release
+     itself. The latest release, v2407.24, still carries it, so moving to a newer pin would not remove it.
+     nameID 14 points to the OFL.
+
+   Decision: keep Cascadia Code bundled under OFL-1.1, the licence of the upstream repository and release, and
+   leave the files unmodified, because changing name tables would make an OFL Modified Version. Counsel's review
+   before any public release (D28) should include this paragraph.
