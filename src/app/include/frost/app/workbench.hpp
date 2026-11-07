@@ -446,6 +446,8 @@ public:
      * once the clone has started: git runs on a worker thread, its --progress lines update a
      * progress dialog with Cancel, and the GUI thread never waits for it (FND-9a). The outcome
      * arrives as a notification with git's own last output lines, or as the opened project.
+     * Userinfo in the URL (https://user:token@host/...) is shown as "***@" in every label and
+     * notification, including git's quoted lines; git itself gets the URL unchanged.
      * Errors: Busy (a clone is running), InvalidArgument (empty or option-like `url`, relative
      * `directory`), Cancelled (shutting down). GUI thread only.
      */
@@ -714,6 +716,9 @@ private:
     QPointer<ui::TrustDialog> m_managedTrustDialog;
     std::string m_unityRevisionRoot;
     std::string m_unityRevision;
+    // "<root>\n<revision>" of the Unity generation whose unmodelled compiler options were last
+    // notified; a restart for the same generation (settings, trust) does not notify again.
+    std::string m_unityNotifiedGeneration;
     std::string m_managedDotnetPath;
     std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;

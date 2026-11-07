@@ -81,12 +81,37 @@ std::string redactEngineMessage(std::string_view message, std::string_view secre
         text.resize(end);
         text += "...";
     }
-    // One line of printable text: control characters (bidi overrides are left to the label) become spaces.
-    for (char& c : text) {
-        if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f)
-            c = ' ';
+    // One line of printable text in logical order: control characters and the bidi formatting
+    // characters (embeddings, overrides, isolates, marks; UTF-8 D8 9C, E2 80 8E-8F, E2 80 AA-AE,
+    // E2 81 A6-A9) each become one space, so a hostile message cannot reorder what the label shows.
+    std::string shown;
+    shown.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const auto byte = [&](std::size_t at) -> unsigned {
+            return at < text.size() ? static_cast<unsigned char>(text[at]) : 0u;
+        };
+        const unsigned c = byte(i);
+        if (c < 0x20 || c == 0x7f) {
+            shown += ' ';
+            continue;
+        }
+        if (c == 0xD8 && byte(i + 1) == 0x9C) {
+            shown += ' ';
+            i += 1;
+            continue;
+        }
+        if (c == 0xE2) {
+            const unsigned second = byte(i + 1), third = byte(i + 2);
+            if ((second == 0x80 && (third == 0x8E || third == 0x8F || (third >= 0xAA && third <= 0xAE))) ||
+                (second == 0x81 && third >= 0xA6 && third <= 0xA9)) {
+                shown += ' ';
+                i += 2;
+                continue;
+            }
+        }
+        shown += static_cast<char>(c);
     }
-    return text;
+    return shown;
 }
 
 std::optional<std::chrono::milliseconds> engineMethodTimeout(std::string_view method) noexcept {

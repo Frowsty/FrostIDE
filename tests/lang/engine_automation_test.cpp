@@ -166,6 +166,15 @@ TEST(EngineAutomation, ReportsTheEngineErrorCodeAndRedactedMessage) {
 TEST(EngineAutomation, RedactsAndBoundsEngineMessages) {
     EXPECT_EQ(redactEngineMessage("abc secret def secret", "secret"), "abc <redacted> def <redacted>");
     EXPECT_EQ(redactEngineMessage("tab\there", ""), "tab here");
+    // Bidi overrides, isolates, marks and the Arabic letter mark become spaces; other text stays.
+    EXPECT_EQ(redactEngineMessage("a\xE2\x80\xAE"
+                                  "b\xE2\x81\xA6"
+                                  "c\xE2\x80\x8F"
+                                  "d\xD8\x9C"
+                                  "e",
+                                  ""),
+              "a b c d e");
+    EXPECT_EQ(redactEngineMessage("caf\xC3\xA9 \xE2\x80\x94 ok", ""), "caf\xC3\xA9 \xE2\x80\x94 ok");
     const std::string bounded = redactEngineMessage(std::string(4 * kEngineMessageLimit, 'x'), "secret");
     EXPECT_EQ(bounded.size(), kEngineMessageLimit + 3);
     EXPECT_TRUE(bounded.ends_with("..."));

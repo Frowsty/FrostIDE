@@ -172,7 +172,9 @@ Result<QString> windowsPowerShell() {
  * queued posts never outlive it.
  */
 struct GitClone {
-    std::string url;
+    std::string url;      // As given; passed to git only.
+    std::string shownUrl; // The URL with any userinfo redacted, for labels and notifications.
+    std::string userInfo; // The URL's userinfo ("user:token"), redacted from git's own lines too.
     std::string directory;
     bool cancelled = false; // GUI thread only.
     QPointer<QProgressDialog> dialog;
@@ -3159,6 +3161,28 @@ int clonePercent(std::string_view line) {
     return std::min(value, 100);
 }
 
+// The userinfo of a URL with an authority ("user:token" in https://user:token@host/repo), or empty.
+std::string cloneUserInfo(std::string_view url) {
+    const std::size_t scheme = url.find("://");
+    if (scheme == std::string_view::npos)
+        return {}; // A local path or scp-like "user@host:path": no credential can be embedded.
+    const std::string_view rest = url.substr(scheme + 3);
+    const std::string_view authority = rest.substr(0, rest.find_first_of("/?#"));
+    const std::size_t at = authority.rfind('@');
+    return at == std::string_view::npos ? std::string() : std::string(authority.substr(0, at));
+}
+
+// `line` with every "<userinfo>@" replaced by "***@", so a token in the URL never reaches a label
+// or the notification log (git's own messages may quote the URL).
+std::string redactUserInfo(std::string line, std::string_view userInfo) {
+    if (userInfo.empty())
+        return line;
+    const std::string needle = std::string(userInfo) + '@';
+    for (std::size_t at = line.find(needle); at != std::string::npos; at = line.find(needle, at + 4))
+        line.replace(at, needle.size(), "***@");
+    return line;
+}
+
 } // namespace
 
 Result<void> Workbench::cloneRepository(const std::string& url, const std::string& directory) {
@@ -3174,8 +3198,11 @@ Result<void> Workbench::cloneRepository(const std::string& url, const std::strin
 
     auto clone = std::make_unique<GitClone>();
     clone->url = url;
+    clone->userInfo = cloneUserInfo(url);
+    clone->shownUrl = redactUserInfo(url, clone->userInfo);
     clone->directory = directory;
-    auto* dialog = new QProgressDialog(text("Cloning %1…").arg(qs(url)), text("Cancel"), 0, 0, activeTopWindow());
+    auto* dialog =
+        new QProgressDialog(text("Cloning %1…").arg(qs(clone->shownUrl)), text("Cancel"), 0, 0, activeTopWindow());
     dialog->setObjectName(QStringLiteral("gitCloneProgressDialog"));
     dialog->setWindowTitle(text("Git Clone"));
     dialog->setAutoClose(false);
@@ -3285,7 +3312,8 @@ void Workbench::cancelClone() {
 void Workbench::cloneProgress(const std::string& line) {
     if (!m_clone || !m_clone->dialog)
         return;
-    m_clone->dialog->setLabelText(text("Cloning %1…\n%2").arg(qs(m_clone->url), qs(line)));
+    m_clone->dialog->setLabelText(
+        text("Cloning %1…\n%2").arg(qs(m_clone->shownUrl), qs(redactUserInfo(line, m_clone->userInfo))));
     if (const int percent = clonePercent(line); percent >= 0) {
         m_clone->dialog->setRange(0, 100);
         m_clone->dialog->setValue(percent);
@@ -3311,11 +3339,12 @@ void Workbench::finishClone(bool ok, const std::string& message) {
     if (clone->cancelled) {
         notify(text("Git Clone cancelled"),
                text("Cloning %1 was cancelled; %2 may hold a partial clone.")
-                   .arg(qs(clone->url), QDir::toNativeSeparators(qs(clone->directory))),
+                   .arg(qs(clone->shownUrl), QDir::toNativeSeparators(qs(clone->directory))),
                ui::NotificationKind::Info);
         return;
     }
-    notify(text("Git Clone failed"), text("Cloning %1 failed:\n%2").arg(qs(clone->url), qs(message)),
+    notify(text("Git Clone failed"),
+           text("Cloning %1 failed:\n%2").arg(qs(clone->shownUrl), qs(redactUserInfo(message, clone->userInfo))),
            ui::NotificationKind::Warning);
 }
 

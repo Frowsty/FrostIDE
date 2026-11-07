@@ -838,6 +838,11 @@ TEST(Workbench, SettingsDialogAppliesResetsAndDetectsExternalChanges) {
     auto* empty = dialog->findChild<QLabel*>(QStringLiteral("settingsNoResults"));
     ASSERT_NE(empty, nullptr);
     EXPECT_TRUE(empty->isVisible());
+    // No indentation detector exists, so its toggle is not offered (neither as a control nor in search).
+    EXPECT_NE(dialog->findChild<QWidget*>(QStringLiteral("setting.editor.insertSpaces")), nullptr);
+    EXPECT_EQ(dialog->findChild<QWidget*>(QStringLiteral("setting.editor.detectIndentation")), nullptr);
+    search->setText(QStringLiteral("Detect and use existing file indents"));
+    EXPECT_TRUE(empty->isVisible());
     search->setText(QStringLiteral("tab size"));
     EXPECT_TRUE(tabSize->isVisible());
     tabSize->setValue(6);
@@ -2369,6 +2374,15 @@ TEST(Workbench, NoActionPretendsToDebugOneTestOrOpenAServicesWindow) {
     WorkbenchRig rig(dir);
     EXPECT_FALSE(rig.workbench->registry().find("window.services").has_value());
     EXPECT_TRUE(rig.workbench->registry().find("window.unitTests").has_value());
+    // The IntelliJ keymap still names window.services for Alt+8; with no such action that binding
+    // resolves to nothing, and Alt+8 still toggles the Unit Tests window (module default).
+    rig.show();
+    rig.window->refreshActions();
+    ASSERT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
+    sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
+    EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
+    sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
+    EXPECT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
 }
 
 } // namespace

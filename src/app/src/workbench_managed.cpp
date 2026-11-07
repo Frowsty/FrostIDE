@@ -238,7 +238,10 @@ void Workbench::startManaged(const std::string& root) {
         return;
     }
     m_unityRevision = trustedUnityRevision(root);
-    if (!m_unityRevision.empty()) {
+    // Once per generation: a restart for the same one (settings, trust) has nothing new to say.
+    if (std::string generation = root + '\n' + m_unityRevision;
+        !m_unityRevision.empty() && generation != m_unityNotifiedGeneration) {
+        m_unityNotifiedGeneration = std::move(generation);
         if (const QString ignored = unityUnsupportedArguments(root, m_unityRevision); !ignored.isEmpty())
             notify(QStringLiteral("Unity compiler options not modelled"),
                    QStringLiteral("C# code insight ignores these csc.rsp / compiler options, so it may differ "

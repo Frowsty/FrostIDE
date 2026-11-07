@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPointer>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QTimer>
@@ -569,14 +570,22 @@ TEST(WorkbenchGit, CancellingACloneTerminatesGitAndOpensNothing) {
     WorkbenchRig rig(dir, options);
     ASSERT_TRUE(
         rig.settings->set(settings::Scope::Application, settings::key::toolsGitPath, dir.join("tools/git.exe")));
-    ASSERT_TRUE(rig.workbench->cloneRepository("https://example.invalid/repo.git", dir.join("cloned")));
+    // A token in the URL reaches git unchanged but never a label or the notification log.
+    const std::string url = "https://user:s3cret-token@example.invalid/repo.git";
+    ASSERT_TRUE(rig.workbench->cloneRepository(url, dir.join("cloned")));
     ASSERT_TRUE(waitFor([&] { return !launcher.launches().empty(); }, 5s));
     const auto spec = launcher.launches().front().spec; // launches() returns a copy.
     EXPECT_EQ(spec.executable, dir.join("tools/git.exe"));
     EXPECT_NE(std::ranges::find(spec.arguments, std::string("--")), spec.arguments.end());
     EXPECT_NE(std::ranges::find(spec.arguments, std::string("protocol.ext.allow=never")), spec.arguments.end());
+    EXPECT_NE(std::ranges::find(spec.arguments, url), spec.arguments.end());
     static_cast<void>(waitFor([] { return false; }, 200ms));
     EXPECT_TRUE(rig.workbench->cloneRunning());
+    auto* progress = rig.window->findChild<QProgressDialog*>(QStringLiteral("gitCloneProgressDialog"));
+    ASSERT_NE(progress, nullptr);
+    EXPECT_FALSE(progress->labelText().contains(QStringLiteral("s3cret-token"))) << progress->labelText().toStdString();
+    EXPECT_TRUE(progress->labelText().contains(QStringLiteral("https://***@example.invalid/repo.git")))
+        << progress->labelText().toStdString();
     rig.workbench->cancelClone();
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->cloneRunning(); }, 5s));
     EXPECT_TRUE(launcher.launches().front().terminated);
@@ -585,6 +594,11 @@ TEST(WorkbenchGit, CancellingACloneTerminatesGitAndOpensNothing) {
     ASSERT_FALSE(log.empty());
     EXPECT_TRUE(log.back().notification.title.contains(QStringLiteral("cancel"), Qt::CaseInsensitive) ||
                 log.back().notification.text.contains(QStringLiteral("cancel"), Qt::CaseInsensitive))
+        << log.back().notification.text.toStdString();
+    for (const auto& entry : log)
+        EXPECT_FALSE(entry.notification.text.contains(QStringLiteral("s3cret-token")))
+            << entry.notification.text.toStdString();
+    EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("https://***@example.invalid/repo.git")))
         << log.back().notification.text.toStdString();
 }
 } // namespace

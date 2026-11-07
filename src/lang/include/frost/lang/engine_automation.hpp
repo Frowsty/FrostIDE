@@ -34,7 +34,9 @@ inline constexpr std::size_t kEngineMessageLimit = 512;
 
 // An engine-supplied message made safe to show: every occurrence of `secret` (the session token)
 // replaced by "<redacted>" before it is shortened to kEngineMessageLimit bytes (at a UTF-8
-// boundary, with "..."), and control characters turned into spaces. Pure; O(message length).
+// boundary, with "..."), and control characters (C0, DEL) and bidirectional formatting characters
+// (U+061C, U+200E/F, U+202A-202E, U+2066-2069) each turned into one space, so the label cannot be
+// visually reordered. Pure; O(message length).
 [[nodiscard]] std::string redactEngineMessage(std::string_view message, std::string_view secret);
 
 /*
