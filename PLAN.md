@@ -8,6 +8,14 @@ checkpoints, not the whole goal. Appendix B records the added acceptance tracks;
 estimates and Appendix A counts do not estimate or cover that additional work. Original source, icons,
 themes and branding remain required. Implementation uses GPT-6.1 Terra agents with GPT-6 Astra review.
 
+**Roadmap update (2026-11-07, user decision; ADRs 0077 and 0078).** A code-level audit of ec3d580 found the
+foundation solid but the 2026-11-04..06 "parity" layer thin and partly fabricated (ADR 0077, Context). The
+user set the order C++ (MSVC solutions and CLion-class CMake) > Lua > FrostEngine > later tiers, and accepted
+the R-ladder (R0..R19, section 7 "Roadmap v2", epics in Appendix C), which supersedes the run order and the
+estimate of the M-ladder below. The feature-first phase (ADR 0031) has ended; every slice now follows the
+definition of done v2 (ADR 0078): real-tool acceptance, an independent review that re-runs the tests, and
+a mandatory verification footer. The decisions are in section 9, "Decided 2026-11-07".
+
 ## Plan at a glance
 
 **Status (2026-10-31).** The user answered the before-M0 and before-M1 decisions (§9) and authorised development; M0 is in progress. No CI/CD of any kind is used (D24): every build and test runs locally on REF-W1 and in WSL on it. **2026-11-01, evening:** M0 is signed off and M1 is under way. The user chose a thin path to a first usable build (D29, ADR 0029): M1–M4 shrink to the cores that real C++ work needs, the first usable build U1 is the M4 exit (around month 10–12), and the deferred halves move to M15–M17, which run before Preview 0.1. The user answered ADR 0029's questions the same evening ("I agree with everything except 4 and 5. I don't care for those savings"), so ADR 0029 is accepted: U1 also has a minimal debugger, moved from M6 to M4, and U1 is not thinned further. The same evening the user put W1, a work-ready build for their MSVC solutions, first inside M1–M4 (ADR 0032), and started a feature-first phase that runs until U1, with a hardening phase after it (ADR 0031; §7, "W1 first" and "Feature-first phase").
@@ -538,7 +546,8 @@ Code is documented with ordinary comments in every language in the repository. C
 | Commit permission | Granted (D23, 2026-10-31): Claude commits, pushes and merges under the standing permission recorded in CLAUDE.md. Repository: https://github.com/Frowsty/FrostIDE (private); pushes authenticate through Git Credential Manager. |
 | Branches and PRs | One feature branch and PR per vertical slice; merge only with `verify.ps1 -Full` and `verify.sh -Full` green on REF-W1 and WSL and the verification footer present. No CI/CD pipeline is ever added (D24). |
 | Review | An independent review (`/code-review` or a second agent) on every PR touching core, sched, text, storage or security code (listeners, trust, auth gate, updater, licence check); findings resolved before merge. |
-| Feature-first phase | ADR 0031 (user decision, 2026-11-01): until U1, one agent per slice with simple functional tests and `-Quick`; the `-Full` and independent-review rules above, sanitizers, fuzzing, stress, perf gates and goldens move to a hardening phase after U1. Existing tests and budgets are never weakened. |
+| Feature-first phase | Ended 2026-11-07 (ADR 0077). ADR 0031 (user decision, 2026-11-01) had, until U1, one agent per slice with simple functional tests and `-Quick`; its deferred lists are worked through by FND-14 (R5). |
+| Definition of done v2 | ADR 0078 (user decision, 2026-11-07), overriding the two rows above where they differ: results come only from real tools (truth rule, anti-fabrication lint FND-5); acceptance against pinned real tools with oracle-derived expectations; `-Quick` per slice on Windows and WSL (a skipped real-tool test fails it once FND-6 lands), `-Corpus` before domain merges and at exits, `-Full` at exits from R5 and at R16; an independent review of every slice by an agent that re-runs the tests; the verification footer on every commit, checked by a local `commit-msg` hook (FND-2); stalls over 250 ms fail the milestone journeys; milestone exits add the j1/j2/j3 journeys, from R2 the user's UAT-1 journey, and explicit sign-off. |
 | Hand-off | `docs/progress.md` is the session log (done, next, blockers, questions); GitHub Issues is the backlog, labelled by milestone and matrix row. |
 | Milestone exit | A demo pack: packages (from M5), screenshots or a recording, a perf report with trends, the feature-matrix diff, the ADR list, the comment-accuracy result. The next milestone starts only after explicit user sign-off. |
 | Escalation | Claude stops and asks on legal questions (licences, terms, trademarks, borrowed code), costs (services, certificates), scope changes (any row moved or slice redefined) and any weakening of a budget or test. |
@@ -547,6 +556,326 @@ Code is documented with ordinary comments in every language in the repository. C
 ---
 
 ## 7. Roadmap
+
+### Roadmap v2: the R-ladder (2026-11-07, ADR 0077), superseding the order below
+
+**Status.** On 2026-11-07 the user accepted a re-planned roadmap from the current state to Rider parity with CLion-class CMake, after a code-level audit of ec3d580 (ADR 0077, Context). **Priority order:** C++ (MSVC solutions and CMake) first, then Lua, then FrostEngine integration (aimed at Rider-for-Unity class), then the later tiers (C#/.NET, Unity, Unreal, other languages). The feature-first phase (ADR 0031) has ended; the definition of done is ADR 0078's. The material from "Estimate" to the end of M14 below is the historical M-ladder: its milestone ids stay as identities for `TODO(Mn)` markers, Appendix A and featurecheck, and its content is mapped onto R-milestones in "Mapping" below. Where it conflicts with this subsection, this subsection wins. Appendix C lists every epic with its acceptance tests and dependencies.
+
+**Daily-driver points.** Only the current point's P0 epics are in flight; other work is read-only spikes. **DD-1a** (R1 exit, 32.25u): FrostEngine C++ on its CMake presets, edit, navigate and build, plus Lua basics. **DD-1** (R2 exit, 47.25u): FrostEngine run, test and debug. **DD-2** (R3 exit, 79.75u): the user's MSVC work solution.
+
+**Estimate.** About 402 units to the C++/Lua/FrostEngine 1.0 (R16) and about 508 in total, without contingency; a unit is about one agent-assisted week. No calendar dates: totals are re-baselined from green matrix rows per week after four weeks of measured velocity (ADR 0077, decision 6).
+
+**Principles.**
+- Truth before features: no result may be shown unless it came from a real tool's output (a process stream or an LSP/DAP message). A structural lint plus a stub test that removes the tool enforce this. A missing tool shows an error, never invented data.
+- Real tools on real projects. Acceptance runs the pinned clangd 23.1.4, cmake/ninja, MSBuild (found with vswhere), lldb-dap 23.1.4 or DbgEng, LuaLS 3.19.1 (sha256 checked against the release) and FrostEditor built from engine.lock. Expected counts come from oracles (cmake --list-presets, ctest -N, doctest --list-test-cases, MSBuild evaluation, clangd references, lua-language-server --check). In -Quick and -Corpus a skipped test is a failure.
+- Never touch the user's live trees. Corpora are `git clone --no-hardlinks` copies under E:\FrostBuilds\corpora pinned by SHA. A lint rule forbids D:\dev\FrostEngine-AI-Claude in tests and fixtures.
+- Daily driver first. Only the current daily-driver cut's P0 epics are in flight (DD-1a, then DD-1, then DD-2). Other P0 and P1 work waits, apart from read-only spikes.
+- One owner per concern: one harm register (FND-3), one harness stack (FND-6/6b/7), one template engine (UX-6), one Code Vision provider API (UX-4), one contract v2 owner (FER-1), one CDB owner (CPP-3), one run-config model (RUN-1), one multi-session debugger (DBG-10).
+- CLAUDE.md hard rules hold throughout: clang only; Qt only in src/ui and src/app; std::expected errors; wide Win32 APIs; child processes only through IProcessLauncher with absolute paths; clean room (jetbrains.com documentation only, never JetBrains, Qt Creator or VS sources); an SPDX check and an ADR for every new dependency; no CI/CD; Windows 11 and WSL Ubuntu 24.04 only, macOS unsupported.
+- A milestone exits only when all of these pass: verify.ps1 -Quick, verify.sh, the -Corpus tier on the pinned corpora, the milestone's j1/j2/j3 journeys driven by the automation endpoint, an Astra review that re-runs the tests itself, a Verified footer checked by the commit-msg hook, and a UAT-1 journey you run yourself (from R2).
+- Engine-side work (FEC-1, FER-1, FER-8) lands on FrostEngine main through Build.py --test and WslBuild.py --test. engine.lock pins only main SHAs. Recovering a347410d, which is on no branch, needs your decision.
+- Resources: one heavy leg (an engine build or a full index) at a time under a build lock. One prebuilt engine per pinned SHA and preset. The machine has 31.9 GB RAM and 24 threads.
+- Velocity is measured, not assumed: M0 was signed off in about 1.5 days and 1c29790 added 9,372 src lines against 196 test lines. A src-to-test line ratchet applies, and the unit estimates are re-baselined from green matrix rows per week after 4 weeks.
+- Later tiers wait. C#/.NET, Unity, Unreal and other languages get only harm removal until R16. Their roadmap position is fixed after R16.
+
+| # | Milestone | Units | Cumulative |
+|---|---|---|---|
+| R0 | Stabilise and honest baseline | 13.25 | 13.25 |
+| R1 | DD-1a: FrostEngine C++ on CMake presets (edit, navigate, build) and Lua basics | 19 | 32.25 |
+| R2 | DD-1: FrostEngine run, test and debug | 15 | 47.25 |
+| R3 | DD-2: MSVC .sln/.slnx daily driver (the work solution) | 32.5 | 79.75 |
+| R4 | Lua daily driver with FrostEngine API awareness, plus C++ editor completeness | 28 | 107.75 |
+| R5 | C++ insight at FrostEngine scale (CLion essentials I) | 27 | 134.75 |
+| R6 | FrostEngine live session | 20.75 | 155.5 |
+| R7 | FrostEngine Lua debugging, mixed C++/Lua and binding navigation | 22.5 | 178 |
+| R8 | C++ refactoring core (AST-correct) | 16.5 | 194.5 |
+| R9 | C++ debugger depth (VS/CLion class) | 28.5 | 223 |
+| R10 | CLion-class CMake and full MSBuild depth | 30 | 253 |
+| R11 | C++ refactoring II, generators and templates | 27.5 | 280.5 |
+| R12 | Lua depth | 11.5 | 292 |
+| R13 | C++ analysis tier (frost-clang) | 24 | 316 |
+| R14 | FrostEngine content integration | 33 | 349 |
+| R15 | Rider workflow UX | 26 | 375 |
+| R16 | 1.0 for C++, Lua and FrostEngine | 27 | 402 |
+| R17 | C#/.NET tier | 31.5 | 433.5 |
+| R18 | Unity tier | 19 | 452.5 |
+| R19 | Unreal, other languages and long tail | 55 | 507.5 |
+
+#### R0: Stabilise and honest baseline (13.25 units)
+**Goal.** You get a green HEAD with an installed build that never shows invented results, writes nothing into your source tree, grants no trust silently, has working Lua intelligence through bundled LuaLS, and no longer freezes on git clone or the clangd double-spawn.
+
+**Exit criteria.**
+- tools\verify.ps1 -Quick and tools/verify.sh pass with 0 failures. The commit-msg hook rejects a commit whose verify-stamp does not match the tree.
+- frost-lint anti-fabrication rule fails on a seeded fixture that builds TestResult objects outside an allowlisted parser, and passes on the tree. featurecheck rejects an unknown epic id.
+- Tool-ablation test: with clangd/ctest/LuaLS removed from PATH and sdk, the IDE shows 'tool unavailable' and no results.
+- Decompiler/navigation test on a temp workspace: after Go to Definition into a library, the workspace file list is unchanged (language_controller.cpp:478-489 path removed).
+- Opening an untrusted folder through the automation endpoint triggers no build, CMake configure or engine command until trust is granted; there is no silent grant.
+- Staged installer build on a fresh profile, Windows and WSL: opening a .lua file starts LuaLS 3.19.1 (sha256 matches the release) through IProcessLauncher and shows an undefined-global diagnostic.
+- stage.ps1 exits non-zero when a bundled tool is missing, and writes a symbol archive that lldb uses to symbolize a test minidump.
+- Cloning a real repo and opening the FrostEngine pinned clone records no GUI stall above 250 ms. The process list shows exactly one clangd, and initialize negotiates positionEncodings.
+
+**Epics** (Appendix C): FND-1 Green HEAD; FND-2 Process ADR, Verified footers, commit-msg verify-stamp hook, stall policy table; FND-3 Harm-removal wave (single owner per harm); FND-4 Truthful claims; FND-5 Anti-fabrication lint and evidence matrix; FND-9a Responsiveness quick fixes; FND-10 Hard-rule sweep; FND-13 Staging honesty and symbol archive; FND-15 Parity inventory and Roadmap v2 ADR; UX-1 Keymap coverage test; LUA-1 Bundle LuaLS 3.19.1.
+
+**Parallel tracks.** FND-1 comes first, alone (1u). After that run three tracks with exclusive files: (A) the FND-3 harm wave, partitioned by file with the harm register; (B) FND-5 lint, then FND-15 and FND-4; (C) FND-9a, FND-10, FND-13, then LUA-1. UX-1 follows FND-3. FND-2 runs at any time.
+
+#### R1: DD-1a: FrostEngine C++ on CMake presets (edit, navigate, build) and Lua basics (19 units)
+**Goal.** You open FrostEngine (its CMakePresets.json), pick windows-debug or linux-debug, and get correct clangd intelligence for each configuration, navigation, builds with clickable errors, Lua editing with engine-aware LuaLS defaults, and build/.cache folders excluded. This is the first FrostEngine daily-driver point.
+
+**Exit criteria.**
+- The automation endpoint runs j1_cmake on E:\FrostBuilds\corpora\frostengine-<engine.lock sha>, using the real cmake/ninja/clangd 23.1.4. The listed presets equal the `cmake --list-presets=all` output. Configure windows-debug, then open a source file: clangd uses the IDE-owned CDB, and Go to Definition in 3 modules lands where clangd's own textDocument/definition oracle says. `cmake --build --preset` reports errors in Problems that jump to the right line. Edit, rebuild, clean.
+- The same journey on WSL ext4 with linux-debug passes on clang plus libstdc++.
+- Switching windows-debug to a second preset changes the CDB directory and restarts clangd once. The clangd log shows shards loaded for the new configuration (stock-clangd per-config evidence).
+- A header used by two targets offers a resolve-context choice, and diagnostics follow the selected context.
+- Find in Files and the file watcher over the clone never traverse build/ or .cache/ (UX-23); the file-count probe equals the git ls-files count.
+- In a FrostEngine .lua script, LuaLS reports no undefined-global for engine globals declared by the project defaults. A deliberately misspelled global is still flagged.
+- -Corpus counts a missing pinned engine build as a failure, not a skip. A lint rule forbids D:\dev\FrostEngine-AI-Claude in tests.
+
+**Epics** (Appendix C): FND-6 Real-tool fixtures by default; FND-6b Single corpus policy and engine leg; FND-7a Automation endpoint, evidence format, j1_cmake; FND-12a God-file split I (daily-driver path); UX-23 Directory roles and exclusion; CMK-1 CMake harness and stale-state fixes; CMK-2 Complete CMake presets; CMK-4 CMake code model to clangd and VS-generator CDB synthesis; CMK-15 CMake responsiveness; CPP-3 Owned CDB per configuration and resolve context; FEC-10a FrostEngine Lua defaults.
+
+**Parallel tracks.** FND-6, then FND-6b, then FND-7a is the harness track. In parallel: CMK-1, then CMK-2, then CMK-4, then CPP-3 (CMake track, owns cmake_* files), with CMK-15 alongside CMK-2. FND-12a runs first on workbench.cpp/language_controller.cpp to give later agents exclusive files. UX-23 and FEC-10a are independent small tracks.
+
+#### R2: DD-1: FrostEngine run, test and debug (15 units)
+**Goal.** From the toolbar you run any FrostEngine target taken from the CMake File API, run the engine's real CTest and doctest tests with true results, and debug FrostEditor with lldb-dap, including breakpoints and C++ throw/catch stops. This completes the FrostEngine C++ daily driver.
+
+**Exit criteria.**
+- Run/debug configurations are generated for every executable target in the File API codemodel (count equals the oracle). Running FrostEditor from the toolbar launches it through IProcessLauncher, streams its output, and Stop kills the whole process tree (verified by process enumeration).
+- The Unit Tests list for the engine equals `ctest -N --preset` and doctest `--list-test-cases`. Running them shows pass/fail and durations parsed from the real ctest/doctest output. An injected failing doctest in a scratch branch of the clone shows as failed with a navigable location.
+- With ctest replaced by a stub that exits 1 with no output, the window shows the tool error and no results.
+- DBG-1 suite: at least 60 dap-real scenarios against lldb-dap 23.1.4 pass on Windows (clang-cl PDB) and WSL (DWARF).
+- Debugging FrostEditor: a line breakpoint in a .cpp is hit, then step over/into/out, locals and call stack. The cpp_throw exception filter stops at a `throw` in a corpus fixture. Conditional breakpoints and logpoints fire.
+- UAT-1: you run j1 plus run/test/debug on FrostEngine yourself, and pass/fail is recorded in docs/progress.md.
+
+**Epics** (Appendix C): RUN-1 Run configuration model and RunManager (src/run); RUN-2 CMake, MSBuild and native run types; RUN-3 Run toolbar, dialog and Run tool window v2; RUN-7 Test runner core: gtest and CTest; RUN-8 doctest and CTest fixtures for FrostEngine; DBG-1 Honest debugger baseline and at least 60 real DAP scenarios; DBG-2a Breakpoints and C++ exception filters; UAT-1 Journey run by the user at each milestone exit.
+
+**Parallel tracks.** RUN-1 comes first, then two tracks: (A) RUN-2 and RUN-3 for the run UI; (B) RUN-7 then RUN-8 for tests. DBG-1 then DBG-2a run fully in parallel from the start, since only DBG files are touched.
+
+#### R3: DD-2: MSVC .sln/.slnx daily driver (the work solution) (32.5 units)
+**Goal.** You open your work .sln or .slnx and get an MSBuild-evaluated Solution Explorer, correct clangd flags for each Configuration|Platform, safe add/remove/rename of files, a working Configuration Manager, Build/Rebuild/Clean/Ctrl+F7 through the real MSBuild, startup projects, F5 debugging with type-filtered exception breakpoints and STL visualisation, VS/ReSharper keymaps, and no freezes.
+
+**Exit criteria.**
+- j2_msvc on R2a (pinned Notepad++ clone) and on a synthetic solution shaped like your generated ones (in tests/). Solution Explorer item counts per project equal the MSBuild evaluation oracle, and both .sln and .slnx load.
+- clangd flags for a file equal the GetClCommandLines output for Debug|x64. Switching to Release|x64 in Configuration Manager restarts clangd with the new CDB, and a #ifdef NDEBUG block flips its highlighting.
+- Adding, removing and renaming a file through the IDE changes .vcxproj and .vcxproj.filters through SolutionPersistence and the MSBuild APIs. `git diff` shows only the intended elements, and the real MSBuild build passes afterwards.
+- Build, Rebuild, Clean and Ctrl+F7 single-file compile use the real MSBuild.exe. The error list equals the diagnostics MSBuild printed.
+- Set as Startup Project writes .vcxproj.user. F5 debugs it, a breakpoint on _CxxThrowException filtered to std::runtime_error stops only for that type, and std::vector/std::string/std::map show their elements.
+- DBG-0 ADR records DbgEng and lldb time-to-first-breakpoint and peak RSS on FrostTests.pdb (3.01 GB), FrostEditor.pdb and FrostRuntime.pdb.
+- Opening the malicious-repo fixture before trust runs no process (verified by the spawn log).
+- Freeze reports over the j1/j2 journeys show no stall above 250 ms.
+- UAT-1 on the work solution, run by you with only pass/fail recorded: open, edit, build and debug, with no regression against VS for these steps.
+
+**Epics** (Appendix C): SLN-0 MSVC corpus and oracle; SLN-2 ProjectHost v1 turned on in production; SLN-3 Evaluated model and Solution Explorer; SLN-4 ProjectModelCache; SLN-5 GetClCommandLines to clangd; SLN-6 Safe solution and project edits; SLN-7 Configuration Manager; SLN-9 Build parity and Ctrl+F7; SLN-11 Startup projects and .vcxproj.user; SLN-14 Toolchain discovery core; RUN-5 Before-launch steps, compound run and attach config; DBG-0 Debugger backend spikes and ADR; DBG-2b MSVC type-filtered throws; DBG-4a STL visualisation baseline; FND-7b j2_msvc journey; FND-8 Trust repair and malicious-repo test; FND-9b Responsiveness II; UX-21 VS and ReSharper keymaps with a first-run picker.
+
+**Parallel tracks.** (A) Project-model track: SLN-0, then SLN-2, then SLN-3, then SLN-4, SLN-5 and SLN-6 in sequence. SLN-6 and SLN-7 can split after SLN-3. (B) Build/run track: SLN-14, then SLN-9 and SLN-11, then RUN-5. (C) Debugger track: DBG-0, DBG-2b, DBG-4a. (D) Shell track: FND-8, FND-9b, UX-21, then FND-7b last. Four agents work in parallel, at most one heavy MSBuild/engine leg at a time.
+
+#### R4: Lua daily driver with FrostEngine API awareness, plus C++ editor completeness (28 units)
+**Goal.** Lua scripts in FrostEngine get complete LSP behaviour: completion for the engine API generated from the engine's own schema.export, go-to-definition from Lua into the C++ binding through source_location, diagnostics and Inspect Code, formatting, and file operations that keep .fmeta files intact. On the C++ side you get the remaining stock clangd features, format on save and the missing editor actions.
+
+**Exit criteria.**
+- j3_frostengine_lua on the pinned clone: the engine-API completion items for a component equal the entries schema.export lists for it. Go to Definition on an engine call opens the generated stub, and 'Go to C++ binding' opens the file:line from source_location.
+- Creating a new Lua module in the clone makes `require` resolve without a restart (didChangeWatchedFiles), and changing the runtime in settings re-sends didChangeConfiguration.
+- Inspect Code on the scripts folder equals the `lua-language-server --check` output for that folder.
+- Renaming or moving a script with a .fmeta sibling moves the sibling, and the engine CLI find-references run warns about every referencing asset it reports.
+- FEC-1: a FrostEngine handle above 2^53 survives the IDE↔engine round trip (json.cpp:39-44 regression test against the real engine build).
+- LUA-11a conformance suite runs against the existing engine Lua endpoint and records a baseline list of failures, with no skipped cases.
+- C++: format on save equals the clang-format CLI output on 5 FrostEngine files. clangd semantic tokens, inlay hints and signature help work in the clone. The keymap coverage test shows every bound action registered (the 52 unregistered actions are fixed or unbound).
+
+**Epics** (Appendix C): LUA-3 LuaLS LSP completeness; LUA-4 Lua configuration, runtimes and libraries; LUA-5 Lua code insight; LUA-6 Lua diagnostics and Inspect Code; LUA-7 Lua highlighting, formatting and editing; LUA-11a Lua DAP conformance suite; LUA-13 Lua host extension points; FEC-1 u64 handles and the frost::engine layer; FER-1a Contract v2 A: schema.export, project.lua aliases, source_location, cost tags; FEC-10b Engine-aware Lua; FEC-9a .fmeta-safe file operations, phase A; FND-7c j3_frostengine_lua journey; CPP-5 Stock clangd feature sweep; REF-12 Formatting and actions on save; UX-3 Editor essentials and the 52 unregistered actions.
+
+**Parallel tracks.** (A) Lua LSP track: LUA-3, then LUA-4 and LUA-13, then LUA-5, LUA-6 and LUA-7. (B) Engine track in the FrostEngine repo: FEC-1, then FER-1a, joining A at FEC-10b. (C) FEC-9a. (D) C++ track: CPP-5 and REF-12. (E) UX-3. LUA-11a runs independently. FND-7c closes the milestone.
+
+#### R5: C++ insight at FrostEngine scale (CLion essentials I) (27 units)
+**Goal.** Background indexing of the whole FrostEngine within a recorded budget, real Find Usages and hierarchies, an inspection framework with clang-tidy and SARIF, Code Vision and gutter marks from the index, a Unit Tests window with gutter run/debug, include management, Alt+Enter fixes, a sanitizer leg and a safe updater.
+
+**Exit criteria.**
+- A full background index of the pinned FrostEngine clone finishes within the baseline recorded in the CPP-4 ADR, with peak clangd RSS under the governor cap, while a cmake build runs under the build lock.
+- Find Usages, call hierarchy and type hierarchy for 10 named engine symbols equal clangd's references and hierarchy oracles. Code Vision usage counts equal the reference counts (no text matching).
+- Inspect Code over one engine module runs the real clang-tidy with the project profile and exports SARIF that `sarif` schema validation accepts. Alt+Enter applies a clangd quick fix, and the file then builds.
+- Gutter run on one doctest and one gtest case runs only that case (shown in the ctest/doctest command line in the spawn log). Debug-test stops at a breakpoint inside the test.
+- CLANG-0: a FeatureModule linked into clangd built against the /MT LLVM 23.1.4 SDK answers a custom request, and a LibTooling tool rewrites a fixture.
+- FND-14: the ASan (clang-cl) unit-test leg is green and a 10-minute parser fuzz run finds no crash.
+- FND-11: an update installs. A failed health check rolls back to the previous version, and that version starts.
+
+**Epics** (Appendix C): CLANG-0 Shared LLVM SDK and /MT link spike; FND-12b God-file split II; FND-18 ResourceGovernor; CPP-4 Indexing at scale; CPP-6 Navigation and hierarchies; UX-4 Folding, inlay layer and Code Vision provider API; CPP-9 C++ Code Vision and gutter provider; CPP-10 Inspection framework; RUN-10 Unit Tests window, gutter and debug single test; REF-3 clangd tweaks and Alt+Enter; REF-11 Include management; FND-11 Safe updater with rollback; FND-16 IHttpClient, network policy and consent; FND-14 Hardening legs.
+
+**Parallel tracks.** (A) Index track: FND-18, then CPP-4, then CPP-6 and CPP-9. (B) UI: UX-4 then RUN-10. (C) CPP-10, REF-3 and REF-11 on clangd. (D) CLANG-0 spike, alone on the /MT triplet. (E) FND-16 then FND-11. (F) FND-14 and FND-12b. Index and engine builds share the build lock.
+
+#### R6: FrostEngine live session (20.75 units)
+**Goal.** FrostEditor started or paired from the IDE keeps a persistent authenticated session. Play/Pause/Step on the toolbar shows real engine state through push events. An Engine Console accepts commands allowed by the schema-driven policy. Engine errors appear in Problems with locations. A .frostproj Engine view and FrostEngine run types are available.
+
+**Exit criteria.**
+- Starting FrostEditor (pinned build) from a RUN-11 config opens the session through the HMAC challenge. An unpaired client is rejected (negative test against the real engine).
+- Play, Pause and Step change engine state, and the IDE shows each state from the engine's push events (no polling). Pause/resume 20 times without desync.
+- An Engine Console command allowed by schema.export policy runs. A command outside the policy is refused by the IDE before it is sent. Engine log lines stream live.
+- An engine-side script error appears in Problems at the engine-reported file:line.
+- Killing the engine shows disconnected within the heartbeat timeout. The heartbeat runs on the network thread (WindowsTcpServer.cpp:517), so a long main-thread command (CommandContext.h:93) does not drop the session.
+- The Engine view lists the scenes and assets the .frostproj declares, with counts equal to the engine CLI listing.
+
+**Epics** (Appendix C): FER-1b Contract v2 B: push events, HMAC challenge, capabilities, paused state, heartbeat; FER-2 Persistent EngineSession; FER-3 Schema-driven command policy; FER-4 Pairing, Start Editor, engine locator and instance picker; FER-5 Toolbar Play, Pause and Step; FER-6 Engine Console; FER-7 Engine diagnostics; FEC-3 .frostproj model and Engine view; RUN-11 FrostEngine run types.
+
+**Parallel tracks.** Engine repo: FER-1b. IDE in parallel: FEC-3 and FER-3 (needs only FER-1a). Then FER-2, after which FER-4, FER-5, FER-6, FER-7 and RUN-11 run in parallel with exclusive files.
+
+#### R7: FrostEngine Lua debugging, mixed C++/Lua and binding navigation (22.5 units)
+**Goal.** You debug Lua scripts running inside FrostEditor (breakpoints, stepping, locals and upvalues, watches, coroutines), run a C++ and a Lua session together, run engine tests in the Unit Tests window, see engine types through Frost.natvis, and navigate or rename across C++↔Lua bindings.
+
+**Exit criteria.**
+- A breakpoint in a FrostEngine Lua script is hit while FrostEditor plays. Step in/over/out, locals and upvalues and watch evaluation work. A coroutine created after attach stops at its breakpoint. LUA-11a conformance shows 0 failures.
+- The ScriptEngine watchdog (LUA_MASKCOUNT hook, ScriptEngine.cpp:83-93, 888-893) still trips an infinite loop while the debugger is attached. Sitting paused for 60 s does not trip it. Measured overhead with 5 breakpoints is at most 25%.
+- A Dist engine build contains no debugger endpoint (FROST_ENABLE_SCRIPT_DEBUGGER off), verified by a symbol and port probe.
+- A compound debug config runs lldb-dap on FrostEditor and a Lua session at the same time. Stopping in either one shows the right thread and stack.
+- Engine tests listed by the engine's test command appear in Unit Tests with real results.
+- Frost.natvis renders handle/entity types in the debugger. An engine crash.dmp event offers to open the dump.
+- Find Usages on a C++ function bound to Lua lists the Lua call sites the engine schema maps. A rename preview changes both sides, and the engine builds and its tests pass afterwards.
+
+**Epics** (Appendix C): FER-8 Engine-embedded Lua DAP; FER-9 IDE Lua debugging on the engine DAP, with pausepoints; DBG-10 Multi-session and compound debugging; DBG-11 FrostEngine mixed C++ and Lua debugging; FER-10 Engine tests in the Unit Tests window; FER-16 Frost.natvis and crash.dmp event; FEC-13 C++ registration and binding navigation, with C++↔Lua usages and rename.
+
+**Parallel tracks.** Engine repo: FER-8. IDE: DBG-10 at the same time, then FER-9, then DBG-11. FER-10, FER-16 and FEC-13 run independently in parallel.
+
+#### R8: C++ refactoring core (AST-correct) (16.5 units)
+**Goal.** Transactional, previewable, undoable refactoring on a LibTooling engine. Rename across FrostEngine and MSVC solutions updates CMakeLists and .vcxproj membership, with results proven by building.
+
+**Exit criteria.**
+- Renaming a class used in at least 50 FrostEngine files shows a preview within 10 s. After apply, `cmake --build --preset windows-debug` and the engine doctest suite pass. Undo restores the tree byte for byte (git status clean).
+- Renaming a source file updates its CMakeLists.txt entry (CMK-10) in the clone and its .vcxproj entry (SLN-6) in R2a, and both build.
+- The REF-14 golden corpus (rename, conflict detection across macros and templates and /Yu PCH) passes on Windows and WSL.
+
+**Epics** (Appendix C): REF-1 RefactoringTransaction; REF-2 Refactoring preview UI; REF-4 frost-refactor LibTooling engine; REF-5 Rename completion; REF-14 Refactoring golden corpus; CMK-10 CMake target membership edits.
+
+**Parallel tracks.** REF-1 comes first. Then REF-2 (UI) and REF-4 (engine) run in parallel, and CMK-10 runs in parallel with REF-4. REF-14 grows alongside REF-4. REF-5 integrates everything.
+
+#### R9: C++ debugger depth (VS/CLion class) (28.5 units)
+**Goal.** Debugging large MSVC PDBs with full natvis, watchpoints, attach and dumps, disassembly, memory and registers, rich value views and stepping, plus a GDB backend on Linux.
+
+**Exit criteria.**
+- FrostTests (3.01 GB PDB): time to first breakpoint and peak RSS stay within the DBG-0 ADR targets on the chosen backend.
+- Natvis from Frost.natvis and the MSVC STL files renders 20 listed types the same way as the oracle (cdb.exe `dx` output).
+- A hardware watchpoint fires on write. Attaching to a running FrostEditor works. A minidump produced by the test opens with the right stack.
+- Disassembly, memory and registers views work during a stopped session. A GDB-backend session on WSL passes the DBG-1 subset.
+
+**Epics** (Appendix C): DBG-3 Stepping and threads; DBG-14 DbgEng adapter; DBG-4b Natvis engine completion; DBG-5 Visualiser packs; DBG-6 Values UX; DBG-7 Watchpoints; DBG-8 Large PDBs and symbols; DBG-9 Attach and dumps; DBG-12 Disassembly, memory and registers; DBG-13 GDB backend.
+
+**Parallel tracks.** DBG-14 (DbgEng adapter) and DBG-13 (GDB) are separate backend tracks. DBG-3, DBG-6, DBG-7, DBG-9 and DBG-12 form the UI/protocol track. DBG-8 and DBG-4b/DBG-5 depend on the DBG-14 outcome.
+
+#### R10: CLion-class CMake and full MSBuild depth (30 units)
+**Goal.** A CMake language service, the CMake debugger, toolchain kits UI, a CMake tool window and cache editor, vcpkg/Conan, compile_commands-only and Makefile projects, MSBuild property pages, binlog, NMake, scale and launch-config importers.
+
+**Exit criteria.**
+- In FrostEngine's CMakeLists.txt, completion and go-to work for targets, variables and functions, and target names equal the File API list. A breakpoint set through `cmake --debugger` stops during configure.
+- A vcpkg-manifest fixture configures through its toolchain from a local feed. A compile_commands.json-only project and a Makefile project open with clangd working.
+- Editing a property page (for example AdditionalIncludeDirectories) writes valid XML, the MSBuild build passes, and the clangd flags update. A binlog build shows structured errors.
+- A 500-project generated solution opens within the SLN-15 budget. An NMake project builds.
+
+**Epics** (Appendix C): CMK-3 Toolchains and CMake settings UI; CMK-5 CMake tool window and cache editor; CMK-8 CMake language service I; CMK-11 CMake debugger; CMK-12 Build breadth; CMK-13 Dependency managers; CMK-17 compile_commands.json and Makefile projects; VCPKG-1 vcpkg integration core; SLN-8 Property pages; SLN-10 MSBuild logger and binlog; SLN-13 vcpkg and NuGet for native projects; SLN-15 Solution scale; SLN-16 Approximate solutions on Linux; SLN-17 NMake projects; RUN-6 Run configuration importers; UX-22 JSON schema service.
+
+**Parallel tracks.** CMake track (CMK-3, 5, 8, 11, 12, 17), MSBuild track (SLN-8, 10, 15, 16, 17), and a dependency-manager track (VCPKG-1, CMK-13, SLN-13). UX-22 and RUN-6 run independently.
+
+#### R11: C++ refactoring II, generators and templates (27.5 units)
+**Goal.** Change signature, inline, extract, move and safe delete, generate and create-from-usage (with Doxygen stubs), conversions with fix in scope, live, postfix and file templates, completion extras, and Catch2/Boost tests.
+
+**Exit criteria.**
+- Each refactoring passes its REF-14 golden cases, and the FrostEngine clone builds and its tests pass after a scripted sequence of 10 refactorings.
+- New Class from a file template adds the file to CMakeLists or .vcxproj, and the project builds.
+- Catch2 and Boost.Test fixture suites list and run with results from the real binaries.
+
+**Epics** (Appendix C): UX-6 Template engine and spellcheck; REF-6 Change signature and inline; REF-7 Extract refactorings; REF-8 Move and safe delete; REF-9 Generate and create from usage, with Doxygen stubs; REF-10 Conversions and fix in scope; REF-13 C++ and CMake live and postfix templates; CMK-14 CMake file and project templates; SLN-12 MSVC templates; CPP-14 Completion extras and inlay hints; RUN-9 Catch2 and Boost.Test.
+
+**Parallel tracks.** UX-6, then REF-13, CMK-14 and SLN-12. REF-6 to REF-10 run as two or three agents on the REF-4 engine with exclusive files. CPP-14 and RUN-9 run independently.
+
+#### R12: Lua depth (11.5 units)
+**Goal.** Lua refactorings on the AST, Lua templates, a standalone Lua 5.4 interpreter with run, REPL and DAP debugging, busted and LuaUnit tests, and performance on large script trees.
+
+**Exit criteria.**
+- Extract function, inline variable and rename module on a fixture produce code that LuaLS --check reports clean and that the busted suite still passes.
+- Running a standalone script on the clang-built Lua 5.4 and debugging it through the standalone DAP passes the LUA-11a conformance suite. Debugging behaves the same with Run and with Debug.
+- The busted test list equals `busted --list`, with real results.
+
+**Epics** (Appendix C): LUA-8 Lua templates; LUA-9 Lua AST refactorings; LUA-10 Lua interpreters, run and REPL; LUA-11b Standalone Lua DAP; LUA-12 busted and LuaUnit; LUA-14 Lua performance; LUA-15 EmmyLua (Rust) spike.
+
+**Parallel tracks.** LUA-10, then LUA-11b and LUA-12. LUA-9, LUA-8, LUA-14 and LUA-15 run in parallel.
+
+#### R13: C++ analysis tier (frost-clang) (24 units)
+**Goal.** frost-clangd and frost-indexer with own inspections, data-flow analysis, SARIF analyzer, preprocessor tools and C++20 modules support.
+
+**Exit criteria.**
+- frost-clangd replaces stock clangd for the FrostEngine journeys with no regression on j1/j2.
+- The DFA flags the null-dereference and use-after-move fixtures, with false positives on FrostEngine below the ADR limit.
+- The macro expansion view equals clang -E output. A modules fixture builds and navigates.
+
+**Epics** (Appendix C): CPP-7 frost-clangd; CPP-8 frost-indexer; CPP-11 frost-analyzer and SARIF; CPP-12 Our own inspections; CPP-13 Preprocessor tools; CPP-15 C++20 modules; CPP-16 Data-flow analysis.
+
+**Parallel tracks.** CPP-7, then CPP-8 and CPP-13. CPP-11, then CPP-12 and CPP-16. CPP-15 runs independently.
+
+#### R14: FrostEngine content integration (33 units)
+**Goal.** Asset index and usages, serialized-property editing, engine document editing against schemas, validation in Problems, safe reference-updating file operations, hot paths, templates and New C++ Component, shader/material validation, previews, export and multiplayer run configs, and Show in FrostEditor.
+
+**Exit criteria.**
+- Find Usages on a script or asset lists the referencing assets, and the count equals the engine's find-references CLI output.
+- Editing a serialized property in the IDE round-trips through the live engine and is still there after the engine restarts.
+- shader.validate errors from the engine show in Problems on the GLSL file. A New C++ Component template builds and registers.
+
+**Epics** (Appendix C): FEC-4 Asset index; FEC-5 Asset Find Usages and Code Vision; FEC-6 Serialized properties; FEC-7 Engine document editing against schemas; FEC-8 Engine validation in Problems; FEC-9b .fmeta-safe file operations, phase B; FEC-11 Hot paths in the editor; FEC-12 FrostEngine templates and New C++ Component; FEC-14 GLSL, materials and shader.validate; FEC-15 Previews; FER-11 Export and multiplayer run configurations; FER-13 Context actions and Show in FrostEditor; FER-14 Engine performance data source and view.
+
+**Parallel tracks.** FEC-4, then FEC-5, FEC-6 and FEC-9b. FEC-7 and FEC-8 form a schema track. FEC-14 and FEC-15 form a shader track. FER-11, FER-13, FER-14 and FEC-11 form a session track. FEC-12 runs independently.
+
+#### R15: Rider workflow UX (26 units)
+**Goal.** Daily VCS with commit checks, editor-quality diff and merge, Search Everywhere at scale, tabs, windows and large files, docking v2 and Services, settings, schemes and importers, sticky lines, bookmarks, TODO and Problems, terminal profiles, local history, grammar packs and Markdown preview.
+
+**Exit criteria.**
+- Search Everywhere over the FrostEngine clone returns the first results within the UX-10 budget.
+- Commit, amend, rebase and stash run through the real git, and the result is checked with git log/status. A 3-way merge of a conflict fixture resolves and builds.
+- The settings importer reads VS keymap and colour exports (clean room, from documentation).
+
+**Epics** (Appendix C): UX-5 Grammar packs and Markdown preview; UX-7 Sticky lines, bookmarks, TODO and Problems; UX-8 Tabs, windows, modes and large files; UX-9 Docking v2 and Services; UX-10 Search Everywhere at scale; UX-11 Settings, schemes and importers; UX-12 Daily VCS with commit checks; UX-13 Editor-quality diff and merge; UX-15 Terminal OSC sequences and profiles; UX-16 Local history and diagnostics UI.
+
+**Parallel tracks.** Up to four UX agents on exclusive src/ui areas: VCS (UX-12, UX-13), shell (UX-8, UX-9), search and settings (UX-10, UX-11), and the editor extras (UX-5, UX-7, UX-15, UX-16). Most of these epics can be pulled forward as background tracks from R5 on.
+
+#### R16: 1.0 for C++, Lua and FrostEngine (27 units)
+**Goal.** A releasable 1.0 for the C++/Lua/FrostEngine tier: installer and file associations, accessibility, HiDPI and Linux polish, coverage and profiling, Claude C1, VCS PRs, an MSBuild language service, CMake language service II, and the upgrade track. Release gates are -Full, sanitizers and budgets.
+
+**Exit criteria.**
+- verify -Full on Windows and WSL, sanitizer legs and perf budgets are green. Journeys j1, j2 and j3 and UAT-1 on the work solution pass.
+- The installer installs, associates .sln/.slnx/CMakeLists/.lua, and uninstalls cleanly. The CLI diff, merge and wait modes work with git.
+- Coverage from llvm-cov for an engine test run shows in the editor gutter.
+
+**Epics** (Appendix C): UX-14 Advanced VCS and pull requests; UX-17 Claude C1; UX-19 Accessibility, HiDPI and Linux polish; SLN-18 MSBuild language service; CMK-9 CMake language service II; RUN-12 Coverage; RUN-13 Profiling; FND-17 Installer, file associations and CLI diff/merge/wait; UPG-1 Upgrade track (LLVM, Qt, vcpkg); REL-1 1.0 release gate (C++, Lua, FrostEngine).
+
+**Parallel tracks.** Release track (FND-17, REL-1, UPG-1), feature track (RUN-12, RUN-13, SLN-18, CMK-9) and UX track (UX-14, UX-17, UX-19).
+
+#### R17: C#/.NET tier (31.5 units)
+**Goal.** A .NET project model, RoslynHost intelligence and refactoring, NuGet, .NET tests, debugger and library sources/decompiler cache (read-only, outside the workspace).
+
+**Exit criteria.**
+- On a pinned open-source .NET solution: `dotnet build` errors show in Problems, Roslyn completion and rename build cleanly, the test list equals `dotnet test --list-tests`, and a debugger breakpoint is hit on the licence-approved backend.
+- NuGet search and install use a local feed in tests (network-live tests marked manual).
+
+**Epics** (Appendix C): LTR-2 .NET inventory and fixtures; LTR-3 .NET project model and dotnet driver; LTR-4 RoslynHost; LTR-5 C# refactoring; LTR-6 Library sources and decompiler cache; LTR-7 NuGet; LTR-8 .NET tests; LTR-9 .NET debugger; LTR-17 Language server registry.
+
+**Parallel tracks.** LTR-3, then LTR-4, then LTR-5. LTR-7 and LTR-8 run in parallel. LTR-9 runs independently. LTR-17 is shared.
+
+#### R18: Unity tier (19 units)
+**Goal.** Unity link v2 built on the EngineSession pattern, Unity debugging, tests, asset semantics and HLSL/ShaderLab.
+
+**Exit criteria.**
+- With a Unity 6 sample project (licence decision required), Play/Pause from the IDE reflects the editor state, a breakpoint in a MonoBehaviour is hit, and the EditMode test list equals Unity's test runner output.
+
+**Epics** (Appendix C): LTR-10 Unity link v2; LTR-11 Unity debugging; LTR-12 Unity tests; LTR-13 Unity assets and semantics; LTR-14 HLSL and ShaderLab.
+
+**Parallel tracks.** LTR-10, then LTR-11 and LTR-12. LTR-13 and LTR-14 run in parallel.
+
+#### R19: Unreal, other languages and long tail (55 units)
+**Goal.** Unreal project model, build, debug and semantics, other languages through the server registry, frameworks and profiling, Claude C2/C3, extension API, SSR, remote/WSL toolchains, Lua dialects, scene merge and the hot-reload ADR.
+
+**Exit criteria.**
+- Each epic's own real-tool acceptance passes (for example, an Unreal sample builds through UnrealBuildTool and a breakpoint is hit), subject to the licence decisions.
+
+**Epics** (Appendix C): LTR-15 Unreal model, build and debug; LTR-16 Unreal semantics and FrostLink; LTR-18 Other languages; LTR-19 Frameworks and profiling; REF-15 Structural search and replace; CMK-16 WSL and remote toolchains; RUN-15 Remote run; DBG-16 Hot reload ADR; LUA-16 Lua dialects; FEC-16 Scene merge; UX-18 Claude C2 and C3; UX-20 Extension API.
+
+**Parallel tracks.** Fully parallel by domain. Re-sequence after R16 against the measured velocity.
+
+#### Mapping onto the M-ladder
+PLAN.md section 7 (M0 at :576 through M14 at :911, with M15-M17 at :765-:802, and the U1/W1 ordering) should be superseded by the R-ladder in a 'Parity roadmap v2' ADR (FND-15). The M-ids stay as historical identities: M0 is signed off 2026-11-01, and ADR 0029 already says ids are identities, not positions. How each R-milestone maps onto the M-milestones: - **R0** is new. It repays the feature-first debt that ADR 0031 deferred and the honesty gaps of M1/M2. - **R1-R2** cover M2's CMake/trust part, M3 (C++ on stock clangd) and M4 (Build/Run/Debug, U1) for CMake and FrostEngine. U1 is redefined as DD-1 (R2 exit). - **R3** covers M2's MSVC half, the ProjectHost and solution writes of M16, M4's MSVC build and debug, and the start of M6's debugger. The W1 checkpoint (ADR 0032) is subsumed by DD-2. - **R4** covers Appendix B LUA-01..04 and FROST-01 (:1069-1071) in part, M15's editor completion and M17's stock-clangd part. - **R5** covers M17, M13's indexing, and M6's test runner and updater. - **R6-R7** cover FROST-01..03 and M10's multi-session work. - **R8 and R11** cover M9 (refactoring, codegen, templates). - **R9** covers the debugger parts of M6 and M10. - **R10** covers M16's CMake language and M11's importers. - **R12** covers the remaining LUA rows. - **R13** covers M7 (frost-clangd and the analysis tiers). - **R14** covers the remaining FROST rows. - **R15** covers M5's Git, M11 (Rider UX) and the rest of M15. - **R16** covers M13, M14 (v1.0) and M5's C1, and gains ACCESS-01 and DELIVERY-01. - **R17-R18** cover MANAGED-01/02, UNITY-01..04 and M16's C# part. - **R19** covers M8/M12 (Claude C2/C3), the extension API and new Unreal scope. M6 'Preview 0.1' disappears as a gate; its content is split across R3, R5 and R9. Changes needed in PLAN.md: - **Section 7:** replace the order paragraph, the W1 list and the feature-first paragraph with the R-ladder, the DD-1a/DD-1/DD-2 points and the verify tiers. Restate the estimate (138-168u at PLAN.md:33/551) as about 402u to the C++/Lua/FrostEngine 1.0 and about 508u in total, with re-baselining from green rows after 4 weeks. Calendar years are dropped until measured. - **Section 6.7 and CLAUDE.md definition of done:** add -Corpus, skip-equals-failure, verify-stamp hooks, Astra re-runs and UAT-1, subject to your decision. - **Section 8 Risk (:923):** add fabrication risk with its lint and ratchet mitigations, the /MT-vs-/MD LLVM link risk, the 3.01 GB PDB near the 4 GB MSF limit, and engine repo governance. - **Section 9 Decisions (:961):** add the decisions_for_user items. - **Appendix A (:1004):** tag every one of the 257 rows with its epic id; featurecheck rejects orphans. - **Appendix B (:1046):** attach each track to its R exit: CPP-01..06 to R1-R5/R8; EDIT, NAV, SHELL and INPUT to R4/R5/R15; LUA to R4/R12; FROST to R4/R6/R7/R14; MANAGED and UNITY to R17/R18; PARITY-01/02 to R16. - **ADRs:** retire ADR 0031; keep ADR 0054 (Terra implementation with Astra review).
+
+
+**Historical M-ladder (superseded in order and estimate by Roadmap v2 above; ids kept as identities).**
 
 **Estimate.** One unit is roughly one focused work-week of Claude Code sessions. 129–156 milestone units plus 9–12 for the upgrade track gives 138–168 units; with 10% contingency, about 152–185 weeks or 2.9–3.6 years sequentially (M14 around months 35–43). The upgrade track covers 5–7 LLVM majors at ~1 unit each, 5–7 Qt minors at ~0.5 each, and 12–14 quarterly vcpkg bumps (~1.5–2 units), because LLVM 24 lands around March 2027 and both projects ship about every six months (§2.3). The drivers are the full P0/P1 matrix (Appendix A), product infrastructure (§2.2) and review and sign-off at each exit. The thin path (D29, ADR 0029) costs about 9–11 units against the previous 120–145: three more milestone exits, interim versions that are later replaced (path (c) before ProjectHost, the large-file guard before large-file mode, the native frame before the frameless window, JSON scope files before the Settings dialog, parsed build output before the MSBuild logger), work done twice or added (M15's settings pages for keys M1–M5 added, a test-only SolutionPersistence oracle in M2, U1's acceptance scenario and its trust tests), M16's share of milestone overhead, and U1's minimal debugger, which moves about 3 units from M6 to M4 and adds up to 2 there (spike S10, its trust tests and the scenario's debug steps). In return the first usable build U1, with that debugger, arrives around month 10–12 instead of the old M4's month 12–15.
 
@@ -567,7 +896,7 @@ W1 is a checkpoint inside M1–M4, not a milestone: it has no ID in the ladder, 
 
 **Every milestone exit also requires:** `verify.ps1 -Full` and `verify.sh -Full` green on REF-W1 and WSL, with the verification footer in the merge commit, including offscreen UI tests with Windows and Linux goldens reviewed (from M1); the no-network (from M1) and listener-enumeration (from M2) tests green; a tagged build, updated ADRs and a green matrix slice; the demo pack, the comment-accuracy review and explicit user sign-off (§6.7).
 
-**Feature-first phase until U1** (ADR 0031, the user's decision of 2026-11-01: "I want to focus on pumping features. Make sure we get everything in, no need for the hour and minute long tests ... Once we have a functional IDE that can be used that's when we start going over the code"). From then until U1, or until the user ends it:
+**Feature-first phase until U1 (ended 2026-11-07, ADR 0077; history)** (ADR 0031, the user's decision of 2026-11-01: "I want to focus on pumping features. Make sure we get everything in, no need for the hour and minute long tests ... Once we have a functional IDE that can be used that's when we start going over the code"). From then until U1, or until the user ends it:
 - One agent builds each slice: its whole scope (no feature is cut), simple functional tests (the happy path and the obvious edge cases, each fast), `verify.ps1 -Quick` on Windows and WSL, one commit. The orchestrator reads the agent's summary as the review and merges slices in batches, with one `-Quick` run of each merged batch (§6.7, "Feature-first phase").
 - Not done in the phase: design critics, independent reviews, sanitizer builds, fuzzing, stress and differential runs, mutation checks, perf and budget gates, screenshot goldens and `-Full`. Each slice lists what it deferred, and `docs/progress.md` keeps the lists. For the phase this overrides §6.7's `-Full` and review rows, CLAUDE.md's independent-review rule, and the `-Full`, goldens and budget parts of the paragraph above.
 - Still required, because they are cheap or legal: Clang only, FrostLayers layering, `std::expected` errors, wide Windows APIs, child processes through `IProcessLauncher`, the clean room, licence checks and a short ADR for each new dependency, SPDX lines, header and doc comments, no CI. No existing test, budget or warning is weakened or deleted, and every exit criterion and budget target of M1–M4 stays as written: budgets stay the targets, not gates, during the phase.
@@ -984,6 +1313,22 @@ The deferred half of M3 (ADR 0029).
 |---|---|---|---|
 | D29 | A thin "usable for real C++ work sooner" path (basic editor, CMake, clangd, build and run) ahead of the full M1 polish | **"Yes I want something usable before a fully polished version"** | ADR 0029: the first usable build U1 is the M4 exit (§7, "First usable build"); M1–M4 shrink to their thin cores; their deferred halves move to M15, M16 and M17, before M6; no item or exit criterion is dropped and no target changes; B15's gate moves with large-file mode to M15, B16's with the minimal debugger to M4, and B23's first project is gated at M2 on path (c) and at M16 on ProjectHost; 129–156 milestone units instead of 120–145. The sub-decisions beyond the answer were ADR 0029's questions Q1–Q5, answered the same evening: **"I agree with everything except 4 and 5. I don't care for those savings"**. So path (c) is U1's evaluator (Q1), B23's first project is gated at M2 on path (c) (Q2) and M5 runs before M15–M17 (Q3), as recommended; U1 has a minimal debugger, moved from M6 to M4 (Q4, the recommendation to keep it in M6 reversed); and U1 is not thinned (Q5, the option declined). ADR 0029 is accepted. |
 
+### Decided 2026-11-07 (user: "Yes to all recommendations, go ahead")
+| # | Decision | User's answer | Consequence |
+|---|---|---|---|
+| D30 | Priority order after the 2026-11-07 audit | **"Highest priority is C++ and LUA with FrostEngine integration. The other engine integrations and language support etc should come later"**, with CLion-class CMake handling in the goal. | Roadmap v2, the R-ladder (§7, ADR 0077): C++ (MSVC and CMake) > Lua > FrostEngine > C#/.NET, Unity, Unreal and other languages (R17–R19). |
+| D31 | End the feature-first phase (ADR 0031) | **Yes.** | Definition of done v2 (ADR 0078); CLAUDE.md updated. |
+| D32 | Tests that assert fabricated behaviour | **May be deleted or rewritten** in the FND-3 harm wave. | Each is replaced by a real-tool or "feature unavailable" test and listed in the harm register in `docs/progress.md`; no other test is weakened without an ADR and approval. |
+| D33 | Disk and schedule for test corpora | **Approved on E:.** | One pinned FrostEngine SHA and preset (windows-debug) under `E:\FrostBuilds\corpora`, plus linux-debug on WSL ext4, plus R2a; older SHAs pruned automatically; heavy legs one at a time, scheduled when the user is not gaming (FND-6b). |
+| D34 | How FrostEngine-side slices land; orphan commit a347410d | **Engine slices land on FrostEngine `main`** through `Build.py --test` and `WslBuild.py --test`, reviewed like FrostIDE slices; `engine.lock` pins only `main` SHAs. | a347410d is reference material only; FER-8 reimplements the Lua debug endpoint on a shared engine hook. |
+| D35 | E2E automation endpoint | **Test builds only**, with a security ADR and a symbol probe proving it is absent from Release (FND-7a). | Revisited for the extension API in R19. |
+| D36 | LLVM policy and DbgEng | **FeatureModules and our own LibTooling tools, no carried patches** to clangd or lldb-dap, with a 2–3u budget per LLVM major; DbgEng is decided after the DBG-0 spike and a licence review of the Debugging Tools for Windows redistribution terms. | CLANG-0 (R5), DBG-0 ADR (R3), R9. Supersedes D12's timing. |
+| D37 | LuaLS and the Lua formatter | **Bundle LuaLS 3.19.1 (MIT)** and use its built-in EmmyLuaCodeStyle formatter (MIT); StyLua (MPL-2.0) is optional, user-configured and not bundled. | LUA-1 (R0) with a licence ADR, LUA-7 (R4). |
+| D38 | Beta updates | **Automatic updates frozen** until FND-11 (rollback, R5) passes. | Betas ship as manual side-by-side zips. |
+| D39 | Supersede the §7 M-ladder | **Yes**, via ADR 0077; M-ids stay as identities, each epic is mapped to an M-id and an Appendix A row (FND-15). | ~402u to the C++/Lua/FrostEngine 1.0, ~508u in total, against 138–168u before. |
+| D40 | Parallelism and calendar | **At most 3–4 implementation agents** with exclusive files or worktrees, plus one independent reviewer; one heavy leg at a time; no calendar dates until velocity is re-baselined after four weeks. | Scheduling from R0 on. |
+| D41 | Later-tier engines and installer | **Decided at R16.** Defaults: RoslynHost (MIT) and netcoredbg (MIT) for .NET; Unreal only after a EULA review; WiX (MS-RL) or a zip plus self-registration in an ADR. | R16–R19. |
+
 ### Later
 - **D6 C# scope (M16, ADR 0029):** solution citizenship in v1, frost-dotnet in 1.1.
 - **D8 Distribution hosting (M5):** packages stay local (E:\FrostBuilds) or in the private repository while FrostIDE is for personal use (D22); public hosting only after the D28 name search.
@@ -997,7 +1342,9 @@ The deferred half of M3 (ADR 0029).
 - **D27 ProjectHost runtime (M16, with ProjectHost):** net472 in-box; net10 framework-dependent (needs the .NET 10 runtime) or self-contained (larger install).
 - **D28 Legal counsel and name clearance:** the trademark search for "FrostIDE" and "Glacier" comes before the repository goes public or any build is downloadable (D4); with the private repository and personal use (D22) it is not needed yet. Counsel's review of the JetBrains look-alike, LGPL and DbgEng questions comes before any public release.
 
-**Next step (M0 complete; M1 under way).** M0's exit is met (§7 M0): every M0 branch is merged on `m0/foundation` under D23, verified only locally (D24), S1–S7 and S9 are reported as ADRs with numbers (ADRs 0001 and 0005–0008), B28 is met (ADR 0010), the M0 decisions are recorded in ADR 0011, the launch from a path over 260 characters is met (ADR 0012), and `verify -Full` is green on both platforms. The sign-off follows ADR 0011's G1: the final commit is tagged `m0` and `main` is created from it, both pushed to the private repository; the demo pack is in `E:\FrostBuilds\demo\m0\`. Next is M1, already under way on `m1/*` branches, on the user's instruction of 2026-11-01 to go on with M1 and the milestones after it (`docs/progress.md`). Since D29 (2026-11-01, evening) M1 is its thin core (ADR 0029), and the milestones run in §7's order towards the first usable build U1 at the M4 exit: W1 first (ADR 0032), in the feature-first phase (ADR 0031).
+**Next step (2026-11-07).** R0, "Stabilise and honest baseline" (§7, Roadmap v2): FND-1 (green HEAD) first, then three parallel tracks, the FND-3 harm wave; FND-5 lint, FND-15 and FND-4; FND-9a, FND-10, FND-13 and LUA-1. The paragraph below is the historical status of 2026-11-01.
+
+**Next step (M0 complete; M1 under way; history).** M0's exit is met (§7 M0): every M0 branch is merged on `m0/foundation` under D23, verified only locally (D24), S1–S7 and S9 are reported as ADRs with numbers (ADRs 0001 and 0005–0008), B28 is met (ADR 0010), the M0 decisions are recorded in ADR 0011, the launch from a path over 260 characters is met (ADR 0012), and `verify -Full` is green on both platforms. The sign-off follows ADR 0011's G1: the final commit is tagged `m0` and `main` is created from it, both pushed to the private repository; the demo pack is in `E:\FrostBuilds\demo\m0\`. Next is M1, already under way on `m1/*` branches, on the user's instruction of 2026-11-01 to go on with M1 and the milestones after it (`docs/progress.md`). Since D29 (2026-11-01, evening) M1 is its thin core (ADR 0029), and the milestones run in §7's order towards the first usable build U1 at the M4 exit: W1 first (ADR 0032), in the feature-first phase (ADR 0031).
 
 ---
 
@@ -1208,3 +1555,565 @@ switching or complete input parity; those remain required.
 
 Keep these scenarios alongside Appendix A and the expanded language/engine tracks. A passing build or
 debugger fixture closes only its demonstrated workflow; it does not mark all C++ support complete.
+
+---
+
+## Appendix C: Roadmap v2 epic catalogue (2026-11-07, ADR 0077)
+
+Every epic of the R-ladder (section 7, "Roadmap v2"), grouped by milestone. Priorities: P0 = needed to daily-drive C++, Lua or FrostEngine; P1 = parity in the priority domains; P2 = later-tier parity; P3 = nice to have; "merged" = folded into the epic named in its summary. Units are agent-assisted weeks. Acceptance tests run real tools (ADR 0078). FND-15 maps each epic onto Appendix A rows and teaches featurecheck these ids; until then this list is maintained by hand.
+
+### R0
+
+- **FND-1 Green HEAD** (P0, 1u; after none). Fix the 5 failing tests at ec3d580 in code, never by weakening the tests, and record real counts.
+  - Acceptance: verify.ps1 -Quick and verify.sh pass with 0 failures; the footer carries the real counts
+- **FND-2 Process ADR, Verified footers, commit-msg verify-stamp hook, stall policy table** (P0, 0.5u; after FND-1). Replaces feature-first practice (24 commits had no footer). Adds a local commit-msg hook that checks a verify-stamp tied to the tree hash, and one stall policy table (250 ms interim, 50 ms recorded). No CI.
+  - Acceptance: A scratch-repo commit with a stale stamp is rejected
+  - Acceptance: The ADR is merged with the policy table
+- **FND-3 Harm-removal wave (single owner per harm)** (P0, 4u; after FND-1). Absorbs REF-0, RUN-0, SLN-1, LUA-2, FER-0, LTR-1, the harm part of CPP-1 and the honesty part of UX-1. Removes or disables the fake test results (project_properties_dialog.cpp:2124), the NuGet list (:1157), the IL placeholder (:1468-1478), decompiler writes (language_controller.cpp:478-489), the textual navigation override (:622-705), text-hack refactorings (language_controller_refactor.cpp:360-369), text Code Vision (editor_insight_binding.cpp:293-310), silent trust grants (workbench.cpp:3074-3086, 3152-3154), the C++ features that corrupt Lua files, and FrostEngine requests that hang (engine_request_helper.cpp:158-159). Adds a guard that a rename moves the .fmeta sibling. Keeps a harm register in docs/progress.md.
+  - Acceptance: The tool-ablation test shows no result without a tool process
+  - Acceptance: A decompiler or navigation test leaves the workspace file list unchanged
+  - Acceptance: The untrusted-folder test spawns nothing before trust
+  - Acceptance: The harm register lists every harm with its owner and status 'removed' or 'guarded'
+- **FND-4 Truthful claims** (P0, 0.75u; after FND-3). Rewrite the README/About/feature-matrix wording ('complete replacement', '1:1 parity') to match the evidence (1 of 191 rows green).
+  - Acceptance: frost-lint parity-claim rule passes on README and UI strings
+- **FND-5 Anti-fabrication lint and evidence matrix** (P0, 1.5u; after FND-1). Structural lint: result types (test outcome, package, usage count, IL, diagnostics) are built only by allowlisted parsers fed from IProcessLauncher or LSP/DAP streams. featurecheck rejects unknown and orphan ids. Adds a src-to-test line ratchet and a spawn log with each tool's sha256.
+  - Acceptance: The lint fails on a seeded fabricated-result fixture
+  - Acceptance: featurecheck fails on an unknown id
+  - Acceptance: The ratchet fails a fixture adding 1000 src lines with 10 test lines
+- **FND-9a Responsiveness quick fixes** (P0, 1u; after FND-1). Async git clone (workbench.cpp:1272), a single clangd spawn (workbench_project.cpp:586-588, 2739-2744), and positionEncodings negotiation replacing offsetEncoding (lsp_client.cpp:229,251).
+  - Acceptance: Clone of a real repo records no stall above 250 ms
+  - Acceptance: Exactly one clangd is running after opening the FrostEngine clone
+  - Acceptance: A UTF-16 column test on a non-ASCII line passes against the real clangd
+- **FND-10 Hard-rule sweep** (P0, 1u; after FND-1). Replace QProcess dotnet (workbench.cpp:3168) with IProcessLauncher and audit layering, wide APIs and exceptions across modules.
+  - Acceptance: The frost-lint QProcess ban has zero hits
+  - Acceptance: FrostLayers configure passes
+- **FND-13 Staging honesty and symbol archive** (P0, 0.75u; after FND-1). stage.ps1 archives PDBs (:119-124) and fails loudly on missing bundled tools (:135-170).
+  - Acceptance: Staging without clangd exits non-zero
+  - Acceptance: lldb symbolizes a minidump frame from the archive
+- **FND-15 Parity inventory and Roadmap v2 ADR** (P0, 0.75u; after FND-4, FND-5). A lean inventory plus an ADR that maps every epic to its PLAN.md M-id and Appendix A row, and supersedes the PLAN.md section 7 ladder. featurecheck enforces the mapping.
+  - Acceptance: featurecheck shows every Appendix A row mapped or marked out of scope, and every epic mapped to a row
+- **UX-1 Keymap coverage test** (P0, 0.5u; after FND-3). The honesty and GUI-thread parts moved into FND-3. Adds a test that every bound shortcut resolves to a registered action.
+  - Acceptance: The test lists the 52 unregistered actions as known failures, now owned by UX-3, with no silent passes
+- **LUA-1 Bundle LuaLS 3.19.1** (P0, 1.5u; after FND-13). Pin LuaLS in sdk.lock.json with the release sha256 and stage it on Windows and Linux. Launch it through IProcessLauncher with --logpath and --metapath under the profile. Fix luaDefaults(...,false) (workbench_lua.cpp:97). Mandatory tests. MIT licence ADR.
+  - Acceptance: A staged build on a fresh profile shows an undefined-global diagnostic on Windows and WSL
+  - Acceptance: Tests fail, not skip, when LuaLS is missing
+- **CPP-1 C++ truth pass** (merged, 0u; after none). Merged into FND-3 (harm) and FND-4 (claims).
+  - Acceptance: Covered by FND-3/FND-4 acceptance
+- **REF-0 Stop refactoring damage** (merged, 0u; after none). Merged into FND-3.
+  - Acceptance: Covered by FND-3
+- **RUN-0 Remove fake runner** (merged, 0u; after none). Merged into FND-3.
+  - Acceptance: Covered by FND-3
+- **SLN-1 Stop solution damage** (merged, 0u; after none). Merged into FND-3. Regex project edits are disabled until SLN-6.
+  - Acceptance: Covered by FND-3
+- **LUA-2 Stop C++ features corrupting Lua** (merged, 0u; after none). Merged into FND-3.
+  - Acceptance: Covered by FND-3
+- **FER-0 FrostEngine stop bleeding** (merged, 0u; after none). Merged into FND-3; depends only on FND-1.
+  - Acceptance: Covered by FND-3
+- **LTR-1 Stop harm in managed/decompiler** (merged, 0u; after none). Merged into FND-3.
+  - Acceptance: Covered by FND-3
+
+### R1
+
+- **FND-6 Real-tool fixtures by default** (P0, 3u; after FND-5). Provision pinned real tools from sdk.lock (clangd, cmake, ninja, lldb-dap, LuaLS) with tiny fixtures for -Quick. Expected values come from oracles; a skip counts as a failure. Absorbs CPP-2.
+  - Acceptance: -Quick runs the clangd/cmake/LuaLS/lldb-dap fixture suites on both platforms with 0 skips
+- **CPP-2 C++ real-tool harness** (merged, 0u; after none). Merged into FND-6.
+  - Acceptance: Covered by FND-6
+- **FND-6b Single corpus policy and engine leg** (P0, 1.5u; after FND-6). engine.lock pins a FrostEngine main SHA, cloned with `git clone --no-hardlinks` to E:\FrostBuilds\corpora\frostengine-<sha>. CPM_SOURCE_CACHE uses a copy of .cache/cpm (482 MB). One prebuilt engine per SHA and preset under a build lock. Adds the -Corpus tier and a lint against D:\dev paths. Absorbs FER-15 and the FEC-1 leg.
+  - Acceptance: -Corpus builds or reuses the pinned engine and fails when it is missing
+  - Acceptance: The lint fails on a test that references D:\dev\FrostEngine-AI-Claude
+- **FER-15 Real-engine leg** (merged, 0u; after none). Merged into FND-6b.
+  - Acceptance: Covered by FND-6b
+- **FND-7a Automation endpoint, evidence format, j1_cmake** (P0, 2.5u; after FND-6). A test-build-only automation endpoint (security ADR), WorkbenchRig extensions (UX-2 folded in), an evidence format (spawn log, tool sha256, oracle values) and the j1_cmake journey.
+  - Acceptance: j1_cmake passes on the pinned clone on Windows and WSL
+  - Acceptance: The endpoint is absent from Release builds (symbol probe)
+- **UX-2 Acceptance harness** (merged, 0u; after none). Deleted. Rig extensions are folded into FND-7a, so there is one harness stack.
+  - Acceptance: Covered by FND-7a
+- **FND-12a God-file split I (daily-driver path)** (P0, 1u; after FND-3). Split workbench.cpp, language_controller.cpp and project_properties_dialog.cpp by concern so parallel agents get exclusive files.
+  - Acceptance: No behaviour change; the test count is equal or higher and verify is green
+- **UX-23 Directory roles and exclusion** (P0, 1u; after FND-3). Exclude build/, .cache/ and out/ (FrostEngine build/windows-debug is 49 GB, .cache 40 GB) from indexing, search and watchers, with per-folder roles.
+  - Acceptance: Find in Files and watcher counts over the clone equal the git ls-files count
+- **CMK-1 CMake harness and stale-state fixes** (P0, 1.5u; after FND-6). Fix the builds.front() assumption (cmake_profile.cpp:274), stale File API replies and preset-switch state.
+  - Acceptance: A preset with several build presets picks the selected one in real cmake
+- **CMK-2 Complete CMake presets** (P0, 2.5u; after CMK-1). Configure, build, test, package and workflow presets, with include, conditions, inheritance, macros and user presets.
+  - Acceptance: Presets listed for FrostEngine equal `cmake --list-presets=all`
+- **CMK-4 CMake code model to clangd and VS-generator CDB synthesis** (P0, 2u; after CMK-2). File API codemodel v2 supplies per-target sources and flags. A CDB is synthesized for VS generators, and headers are mapped to their owning targets.
+  - Acceptance: clangd flags for 5 FrostEngine files equal the compile_commands oracle
+- **CMK-15 CMake responsiveness** (P0, 1u; after CMK-1). Configure and File API parsing run off the GUI thread, with progress and cancel.
+  - Acceptance: The FrostEngine configure records no GUI stall above 250 ms
+- **CPP-3 Owned CDB per configuration and resolve context** (P0, 2u; after CMK-4). Narrowed scope. The IDE owns one CDB directory per configuration and restarts clangd on a switch, because stock clangd shards are per CDB directory and a multi-config index in one process is impossible. Adds a resolve-context UI. SLN-5 feeds it from R3.
+  - Acceptance: A preset switch restarts clangd and the log shows shards loaded
+  - Acceptance: A header resolve-context choice changes its diagnostics
+- **FEC-10a FrostEngine Lua defaults** (P0, 1u; after LUA-1). For a detected FrostEngine project, LuaLS gets the runtime version, workspace.library and globals from the engine's project files and script conventions (ScriptEngine.cpp:63-91).
+  - Acceptance: No undefined-global for engine globals in clone scripts, while a misspelled global is still flagged
+
+### R2
+
+- **RUN-1 Run configuration model and RunManager (src/run)** (P0, 2u; after FND-12a). A Qt-free model persisted per workspace. Launches go through IProcessLauncher, and Stop kills the process tree.
+  - Acceptance: Stop leaves no descendant process (enumeration test)
+- **RUN-2 CMake, MSBuild and native run types** (P0, 2u; after RUN-1, CMK-4). Absorbs CMK-6: run configs are generated per executable target from the File API, plus MSBuild and native types.
+  - Acceptance: Generated config count equals the executable targets in the codemodel
+- **CMK-6 Per-target run configurations** (merged, 0u; after none). Merged into RUN-2.
+  - Acceptance: Covered by RUN-2
+- **RUN-3 Run toolbar, dialog and Run tool window v2** (P0, 2.5u; after RUN-1). Absorbs RUN-4.
+  - Acceptance: Run and Stop from the toolbar work in the j1 journey
+- **RUN-4 Run tool window v2** (merged, 0u; after none). Merged into RUN-3.
+  - Acceptance: Covered by RUN-3
+- **RUN-7 Test runner core: gtest and CTest** (P0, 3u; after RUN-1, CMK-2). Absorbs CMK-7. Discovery and results are parsed only from real ctest and gtest output, shown in a minimal results tree. Depends on CMK-2, not CMK-3.
+  - Acceptance: The test list equals `ctest -N`
+  - Acceptance: A stub ctest yields an error, not results
+- **CMK-7 CTest integration** (merged, 0u; after none). Merged into RUN-7 and RUN-8.
+  - Acceptance: Covered by RUN-7/RUN-8
+- **RUN-8 doctest and CTest fixtures for FrostEngine** (P0, 1.5u; after RUN-7). doctest discovery and results for the engine suites.
+  - Acceptance: The case list equals `--list-test-cases`, and an injected failure shows at its location
+- **DBG-1 Honest debugger baseline and at least 60 real DAP scenarios** (P0, 2u; after FND-6). Scenario suite against lldb-dap 23.1.4 on PDB and DWARF.
+  - Acceptance: At least 60 scenarios pass on Windows and WSL
+- **DBG-2a Breakpoints and C++ exception filters** (P0, 1.5u; after DBG-1). Line, conditional, log and function breakpoints, plus the cpp_throw and cpp_catch filters, with no lldb fork.
+  - Acceptance: The throw filter stops at a fixture `throw` on both platforms
+- **UAT-1 Journey run by the user at each milestone exit** (P0, 0.5u; after FND-7a). A privacy-safe checklist you run at each exit from R2 on (FrostEngine first, the work solution from R3). Only pass/fail is recorded.
+  - Acceptance: The result is recorded in docs/progress.md at each exit
+
+### R3
+
+- **SLN-0 MSVC corpus and oracle** (P0, 1.5u; after FND-6b). R2a (Notepad++) pinned, plus a synthetic solution shaped like your generated ones and .slnx fixtures, with an MSBuild evaluation oracle.
+  - Acceptance: The oracle produces item and flag lists from real MSBuild
+- **SLN-2 ProjectHost v1 turned on in production** (P0, 4u; after SLN-0, FND-10). The existing C# helper launched through IProcessLauncher with MSBuildLocator. Falls back to path (c) with a visible banner.
+  - Acceptance: R2a evaluates through ProjectHost
+  - Acceptance: Killing the helper shows the fallback banner
+- **SLN-3 Evaluated model and Solution Explorer** (P0, 3u; after SLN-2). Explorer built from the evaluated items, filters and imports.
+  - Acceptance: Item counts equal the oracle per project
+- **SLN-4 ProjectModelCache** (P0, 2.5u; after SLN-3). Persistent cache, invalidated when imports change.
+  - Acceptance: A warm open of R2a is faster than cold and its items are identical
+- **SLN-5 GetClCommandLines to clangd** (P0, 2u; after SLN-2, CPP-3). Per-configuration CDB from MSBuild's real command lines.
+  - Acceptance: clangd flags equal the GetClCommandLines output for Debug|x64 and Release|x64
+- **SLN-6 Safe solution and project edits** (P0, 4u; after SLN-2). Microsoft.VisualStudio.SolutionPersistence (MIT, needs an ADR) plus the MSBuild construction APIs. No regex edits.
+  - Acceptance: Add, remove and rename produce a minimal git diff, and MSBuild builds afterwards
+- **SLN-7 Configuration Manager** (P1, 1.5u; after SLN-3). Solution and project configuration mapping edits. Pulled into DD-2 because the audit lists it as a main gap.
+  - Acceptance: The edited mapping builds in MSBuild with the expected configuration
+- **SLN-9 Build parity and Ctrl+F7** (P0, 2u; after SLN-3). Build, Rebuild, Clean and single-file compile through the real MSBuild.
+  - Acceptance: Error list equals MSBuild output
+- **SLN-11 Startup projects and .vcxproj.user** (P0, 1.5u; after SLN-3, RUN-2). Startup project, debugger arguments and working directory stored in VS-compatible .user files.
+  - Acceptance: VS-format .user is written and F5 uses it
+- **SLN-14 Toolchain discovery core** (P0, 1.5u; after FND-10). vswhere, toolsets, Windows SDKs and vcvars environment capture, shared by CMake and MSBuild.
+  - Acceptance: Discovered instances equal `vswhere -all -format json`
+- **RUN-5 Before-launch steps, compound run and attach config** (P0, 1u; after RUN-3). Compound runs here are run-only. Compound debugging is owned by DBG-10, which breaks the earlier dependency cycle.
+  - Acceptance: A compound of two targets starts both, and a before-launch build runs first
+- **DBG-0 Debugger backend spikes and ADR** (P0, 1u; after DBG-1). Spike DbgEng natvis and time to first breakpoint and RSS on FrostTests.pdb (3.01 GB), FrostEditor and FrostRuntime against lldb. The ADR chooses the Windows natvis and large-PDB path.
+  - Acceptance: The ADR records the measured numbers
+- **DBG-2b MSVC type-filtered throws** (P0, 1.5u; after DBG-2a). Breakpoint on _CxxThrowException, matched by type through ThrowInfo.
+  - Acceptance: Stops only for std::runtime_error in the fixture
+- **DBG-4a STL visualisation baseline** (P0, 1.5u; after DBG-1). Verify and turn on LLDB's MSVC STL formatters, and list the gaps.
+  - Acceptance: vector, string, map, unique_ptr and optional show their elements on an MSVC build
+- **FND-7b j2_msvc journey** (P0, 0.5u; after FND-7a, SLN-0). An automated MSVC journey.
+  - Acceptance: j2 passes on R2a and the synthetic solution
+- **FND-8 Trust repair and malicious-repo test** (P0, 1u; after FND-3). Silent-grant removal is in FND-3. This adds the malicious-repo fixture (CMakePresets hooks, MSBuild targets, .lua, engine project).
+  - Acceptance: The spawn log is empty before trust
+- **FND-9b Responsiveness II** (P0, 1.5u; after FND-9a). Triage the freeze reports (145 in 5 days) down to the interim policy.
+  - Acceptance: No stall above 250 ms across j1 and j2
+- **UX-21 VS and ReSharper keymaps with a first-run picker** (P1, 1u; after UX-1). Built from public documentation only (clean room).
+  - Acceptance: The keymap coverage test passes for the VS and ReSharper keymaps
+
+### R4
+
+- **LUA-3 LuaLS LSP completeness** (P0, 2u; after LUA-1). File watchers, didChangeConfiguration, progress, refresh requests and multi-root.
+  - Acceptance: A new module resolves without a restart, and a settings change takes effect live
+- **LUA-4 Lua configuration, runtimes and libraries** (P0, 1.5u; after LUA-3). Settings UI that maps to .luarc.json.
+  - Acceptance: Changing the runtime changes LuaLS diagnostics
+- **LUA-5 Lua code insight** (P0, 2.5u; after LUA-3). Hover, signature help, usages, structure and inlay hints from LuaLS. The Code Vision provider follows UX-4.
+  - Acceptance: Usages equal the LuaLS references oracle
+- **LUA-6 Lua diagnostics and Inspect Code** (P0, 1.5u; after LUA-3). Inspect Code over a scope.
+  - Acceptance: Results equal `lua-language-server --check`
+- **LUA-7 Lua highlighting, formatting and editing** (P1, 2u; after LUA-3). The formatter choice is a user decision.
+  - Acceptance: Formatting equals the chosen formatter's CLI output
+- **LUA-11a Lua DAP conformance suite** (P0, 1u; after DBG-1). Required before FER-8. Records a baseline against the current engine endpoint.
+  - Acceptance: Runs with no skipped cases and records the failure baseline
+- **LUA-13 Lua host extension points** (P0, 1.5u; after LUA-4). API for host providers (FrostEngine) to supply libraries, globals and meta files.
+  - Acceptance: FEC-10b uses it, with no FrostEngine-specific code in the Lua module
+- **FEC-1 u64 handles and the frost::engine layer** (P0, 1.5u; after FND-6b). Fix lost u64 precision (json.cpp:39-44) and add a Qt-free frost::engine module. The verify leg moved to FND-6b.
+  - Acceptance: A handle above 2^53 round-trips with the real engine
+- **FER-1a Contract v2 A: schema.export, project.lua aliases, source_location, cost tags** (P0, 2u; after FEC-1). Engine-side work that absorbs FEC-2's exports. Lands on engine main through Build.py --test and WslBuild.py --test.
+  - Acceptance: The engine CLI exports a schema the IDE validates, and source_location resolves to real files
+- **FEC-2 Contract v2 exports** (merged, 0u; after none). Merged into FER-1a and FER-1b, so contract v2 has one owner.
+  - Acceptance: Covered by FER-1a/FER-1b
+- **FEC-10b Engine-aware Lua** (P0, 3u; after FER-1a, LUA-13, FEC-10a). Meta stubs generated from schema.export, completion for component and event names, and go-to-binding.
+  - Acceptance: Completion items equal the schema.export entries, and go-to-binding opens the source_location
+- **FEC-9a .fmeta-safe file operations, phase A** (P0, 1.5u; after FND-6b). Rename, move and delete keep the .fmeta pair together. The engine CLI find-references warns about referencing assets.
+  - Acceptance: The sibling moves, and the warning lists the CLI-reported references
+- **FND-7c j3_frostengine_lua journey** (P0, 0.5u; after FND-7a, FEC-10b). An automated Lua journey on the clone.
+  - Acceptance: j3 passes on Windows and WSL
+- **CPP-5 Stock clangd feature sweep** (P0, 2u; after CPP-3). Semantic tokens, inlay hints, signature help, document links, folding ranges and AST view, wired fully.
+  - Acceptance: Each feature is checked against clangd responses on the clone
+- **REF-12 Formatting and actions on save** (P0, 2.5u; after CPP-3). clang-format through clangd or the CLI, with optimise-on-save hooks.
+  - Acceptance: Output equals the clang-format CLI on 5 engine files
+- **UX-3 Editor essentials and the 52 unregistered actions** (P0, 3u; after UX-1, FND-12a). Implement or unbind every action.
+  - Acceptance: The keymap coverage test has 0 failures
+
+### R5
+
+- **CLANG-0 Shared LLVM SDK and /MT link spike** (P0, 1.5u; after FND-6). The LLVM 23.1.4 libraries are /MT static release while FrostIDE is /MD. Link a FeatureModule or Tweak into clangdMain and build a LibTooling tool on the Qt-free /MT triplet (x64-windows-clangcl-fuzz), as one frost-clang engine. Each later LLVM major costs 2-3u (UPG-1).
+  - Acceptance: The custom request answers, and the tool rewrites the fixture on both platforms
+- **FND-12b God-file split II** (P0, 1u; after FND-12a). The remaining oversized files.
+  - Acceptance: No behaviour change; verify is green
+- **FND-18 ResourceGovernor** (P1, 1.5u; after FND-6b). The feasibility critic's FND-16, renumbered. Covers clangd -j and index priority, the build lock, one heavy leg at a time, and RSS caps on the 31.9 GB / 24-thread machine.
+  - Acceptance: Index plus build stay under the RAM cap, measured
+- **CPP-4 Indexing at scale** (P0, 2.5u; after FND-18, CPP-3). A background index of the whole engine, with the baseline fixed in an ADR as a number.
+  - Acceptance: The full index finishes within the ADR baseline on the clone
+- **CPP-6 Navigation and hierarchies** (P0, 3u; after CPP-4). Find Usages, call and type hierarchy, and go to symbol, class or file.
+  - Acceptance: Results equal clangd's references and hierarchy oracles for 10 symbols
+- **UX-4 Folding, inlay layer and Code Vision provider API** (P0, 3u; after UX-3). Replace the identity inlay layer (display_layers.hpp:3). UX-4 owns the provider API; CPP-9, LUA-5, FEC-5 and FEC-11 are providers.
+  - Acceptance: Inlay hints from clangd render at the correct columns
+- **CPP-9 C++ Code Vision and gutter provider** (P1, 1.5u; after UX-4, CPP-4). Usage, override and implementation counts from the index.
+  - Acceptance: Counts equal clangd references
+- **CPP-10 Inspection framework** (P0, 3u; after CPP-5). Profiles, severities and scopes, with real clang-tidy runs and SARIF export.
+  - Acceptance: SARIF validates and the findings equal a clang-tidy CLI run
+- **RUN-10 Unit Tests window, gutter and debug single test** (P0, 2u; after RUN-7, DBG-2a). Absorbs the debug-test part of DBG-15.
+  - Acceptance: A gutter run executes only that case, and debug stops inside the test
+- **DBG-15 Debug test and CMake debugger hookup** (merged, 0u; after none). Merged: debug-test goes to RUN-10, the CMake debugger to CMK-11.
+  - Acceptance: Covered by RUN-10/CMK-11
+- **REF-3 clangd tweaks and Alt+Enter** (P0, 1.5u; after CPP-5). Expose the stock clangd code actions.
+  - Acceptance: The fix applies and the file still builds
+- **REF-11 Include management** (P0, 1.5u; after CPP-5). include-cleaner and add-missing-include through clangd. Owns includes.
+  - Acceptance: The fixture builds after Optimize Includes
+- **FND-11 Safe updater with rollback** (P1, 1.5u; after FND-16, FND-13). Betas ship as manual side-by-side zips until this passes.
+  - Acceptance: A failed health check rolls back, and the previous version starts
+- **FND-16 IHttpClient, network policy and consent** (P0, 1.5u; after FND-10). WinHTTP on Windows and libcurl on Linux (licence ADR), with an offline default and consent.
+  - Acceptance: The no-network test passes with networking off, and the consent prompt gates the first request
+- **FND-14 Hardening legs** (P1, 2u; after FND-6). ASan/UBSan, fuzzing of parsers (json, sln, presets, natvis) and journey stress. Works through ADR 0031's deferred lists.
+  - Acceptance: The ASan leg is green, and a 10-minute fuzz run finds no crash
+
+### R6
+
+- **FER-1b Contract v2 B: push events, HMAC challenge, capabilities, paused state, heartbeat** (P0, 3u; after FER-1a). Engine side. Commands run on the main thread (CommandContext.h:93) while the TCP server has its own thread (WindowsTcpServer.cpp:517), so this adds a paused-in-debugger state and a network-thread heartbeat. Stop goes through DAP terminate.
+  - Acceptance: The engine test suite covers HMAC rejection and the heartbeat during a long command
+- **FER-2 Persistent EngineSession** (P0, 3u; after FER-1b, FEC-1). Replaces one-shot requests and the 15 s cap.
+  - Acceptance: The session survives 20 pause/resume cycles and reconnects after an engine restart
+- **FER-3 Schema-driven command policy** (P0, 1.5u; after FER-1a). Replaces the 10-RPC allowlist (engine_automation.cpp:23-28). Raised to P0.
+  - Acceptance: A command outside the policy is refused before it is sent
+- **FER-4 Pairing, Start Editor, engine locator and instance picker** (P1, 2.75u; after FER-2). Includes the +0.75 for the locator and instance picker.
+  - Acceptance: Two engine instances can be listed and paired
+- **FER-5 Toolbar Play, Pause and Step** (P0, 1.5u; after FER-2). State shown from push events.
+  - Acceptance: The toolbar state matches the engine events
+- **FER-6 Engine Console** (P0, 2.5u; after FER-2, FER-3). Live log and policy-gated commands.
+  - Acceptance: Log lines stream, and a command result returns
+- **FER-7 Engine diagnostics** (P1, 2u; after FER-2). Engine errors with locations go to Problems instead of a generic message.
+  - Acceptance: A script error shows at the engine-reported file:line
+- **FEC-3 .frostproj model and Engine view** (P0, 3u; after FEC-1). Project model of scenes, assets and modules.
+  - Acceptance: Counts equal the engine CLI listing
+- **RUN-11 FrostEngine run types** (P0, 1.5u; after FER-2, RUN-2). Start FrostEditor or the player with a project. The debug variant is added in R7 through FER-9. Owns the FrostEngine run types.
+  - Acceptance: Starting from a config opens the session
+
+### R7
+
+- **FER-8 Engine-embedded Lua DAP** (P0, 6u; after FER-1b, LUA-11a). Extend EngineHook (ScriptEngine.cpp:83-93, 888-893) so the watchdog shares the hook. The nested pause loop pumps only OS messages and starts no ImGui frame. Gated by FROST_ENABLE_SCRIPT_DEBUGGER, off in Dist. Replaces orphan commit a347410d.
+  - Acceptance: The watchdog trips while attached; 60 s paused does not trip it; overhead is at most 25% with 5 breakpoints; new coroutines stop; the Dist build has no endpoint
+- **FER-9 IDE Lua debugging on the engine DAP, with pausepoints** (P0, 3u; after FER-8, DBG-10). Replaces the pause/continue-only adapter (lua_debug_adapter.cpp:131). Includes the +0.5 for pausepoints.
+  - Acceptance: LUA-11a shows 0 failures against the engine
+- **DBG-10 Multi-session and compound debugging** (P0, 2.5u; after DBG-1, RUN-5). Removes the single-session limit (debug_controller.hpp:292) and owns compound debug.
+  - Acceptance: Two concurrent sessions each stop and resume independently
+- **DBG-11 FrostEngine mixed C++ and Lua debugging** (P1, 3u; after DBG-10, FER-2, FER-5, FER-9). Absorbs FER-12.
+  - Acceptance: A combined session shows the C++ and Lua stacks for the same pause
+- **FER-12 Mixed C++/Lua** (merged, 0u; after none). Merged into DBG-11.
+  - Acceptance: Covered by DBG-11
+- **FER-10 Engine tests in the Unit Tests window** (P1, 3u; after FER-2, RUN-10). Discovery and results come from the engine's own test command.
+  - Acceptance: The list equals the engine test listing, with real results
+- **FER-16 Frost.natvis and crash.dmp event** (P1, 1u; after DBG-4a, FER-2). Engine type visualisers and a crash-dump notification.
+  - Acceptance: Handle types render, and the dump opens
+- **FEC-13 C++ registration and binding navigation, with C++↔Lua usages and rename** (P1, 4u; after FER-1a, CPP-6, LUA-5). Includes the +1 for cross-language usages and rename (rename apply lands with REF-1 in R8).
+  - Acceptance: Usages of a bound C++ function include the Lua call sites
+
+### R8
+
+- **REF-1 RefactoringTransaction** (P0, 3u; after FND-3, FND-12b). Atomic multi-file edits, with project-file edits and undo as one transaction.
+  - Acceptance: Undo restores a byte-identical tree
+- **REF-2 Refactoring preview UI** (P0, 2u; after REF-1). Diff preview with include/exclude per edit.
+  - Acceptance: An excluded edit is not applied
+- **REF-4 frost-refactor LibTooling engine** (P0, 4.5u; after CLANG-0, REF-1). Includes a /Yu PCH spike. The conflict check runs asynchronously.
+  - Acceptance: The golden corpus passes on both platforms
+- **REF-5 Rename completion** (P0, 2.5u; after REF-2, REF-4, SLN-6, CMK-10, CPP-4). Previews from the clangd index within 10 s, with the frost-refactor conflict check in the background.
+  - Acceptance: Renaming across at least 50 files builds and passes the tests
+- **REF-14 Refactoring golden corpus** (P0, 2u; after REF-4). Macros, templates, PCH and MSVC extensions.
+  - Acceptance: Runs in -Quick
+- **CMK-10 CMake target membership edits** (P0, 2.5u; after CMK-4, REF-1). Raised to P0. Edits CMakeLists through a parsed model.
+  - Acceptance: The edited CMakeLists configures and builds
+
+### R9
+
+- **DBG-3 Stepping and threads** (P0, 3.5u; after DBG-1). Includes the +1 for details: step into a specific call, freeze and thaw threads, and the thread list at scale.
+  - Acceptance: DBG-1 stepping scenarios plus the new cases pass
+- **DBG-14 DbgEng adapter** (P1, 7u; after DBG-0). The Windows path for natvis and large PDBs if DBG-0 passes, and if you approve the licence. Otherwise it is dropped and DBG-4b grows to 8-10u.
+  - Acceptance: DBG-1 suite on DbgEng, and FrostTests time to first breakpoint within the ADR target
+- **DBG-4b Natvis engine completion** (P0, 2u; after DBG-0, DBG-14). Budgeted at 2u on the DbgEng path; 8-10u if lldb-only.
+  - Acceptance: 20 types match cdb `dx` output
+- **DBG-5 Visualiser packs** (P0, 2u; after DBG-4b). STL, Qt-free engine and common libraries.
+  - Acceptance: Pack fixtures render
+- **DBG-6 Values UX** (P0, 3u; after DBG-3). Includes the +0.5 for details: inline values, set value, pinned watches and formatting.
+  - Acceptance: A set-value write is visible in the program
+- **DBG-7 Watchpoints** (P0, 1u; after DBG-3). Hardware data breakpoints.
+  - Acceptance: Fires on write in the fixture
+- **DBG-8 Large PDBs and symbols** (P0, 3u; after DBG-0). FrostTests.pdb is 3.01 GB, near the 4 GB MSF limit (/PDBPAGESIZE:8192). Adds symbol paths and servers.
+  - Acceptance: Time to first breakpoint and RSS within the ADR targets
+- **DBG-9 Attach and dumps** (P0, 2u; after DBG-3). Uses a dump the test itself produces.
+  - Acceptance: The stack matches the dump's known frames
+- **DBG-12 Disassembly, memory and registers** (P1, 2.5u; after DBG-3). Low-level views.
+  - Acceptance: Memory at &var equals the known bytes
+- **DBG-13 GDB backend** (P1, 2.5u; after DBG-1). Linux alternative to lldb-dap.
+  - Acceptance: The DBG-1 subset passes on WSL
+
+### R10
+
+- **CMK-3 Toolchains and CMake settings UI** (P1, 2.5u; after SLN-14, CMK-2). Kits backed by toolchain discovery.
+  - Acceptance: A created kit configures with real cmake
+- **CMK-5 CMake tool window and cache editor** (P1, 2u; after CMK-2). Targets, cache, reload.
+  - Acceptance: A cache edit reconfigures
+- **CMK-8 CMake language service I** (P1, 3u; after CMK-4). Completion and navigation for commands, targets and variables.
+  - Acceptance: Target names equal the File API list
+- **CMK-11 CMake debugger** (P1, 1.5u; after CMK-2, DBG-10). `cmake --debugger` DAP. Owns the CMake debugger.
+  - Acceptance: A breakpoint stops during configure
+- **CMK-12 Build breadth** (P1, 1.5u; after CMK-2). Build, rebuild and clean of a target or file, plus install.
+  - Acceptance: Output equals cmake --build
+- **CMK-13 Dependency managers** (P2, 2u; after VCPKG-1). vcpkg manifest and Conan.
+  - Acceptance: The fixture configures from a local feed
+- **CMK-17 compile_commands.json and Makefile projects** (P1, 2u; after CPP-3). Projects that have only a CDB or a Makefile.
+  - Acceptance: clangd works on both fixtures
+- **VCPKG-1 vcpkg integration core** (P1, 1u; after SLN-14, FND-16). Shared by CMake and MSBuild.
+  - Acceptance: vcpkg is detected and installed from a local registry
+- **SLN-8 Property pages** (P1, 3.5u; after SLN-6). Edit through MSBuild APIs.
+  - Acceptance: The edit builds and the clangd flags update
+- **SLN-10 MSBuild logger and binlog** (P1, 2u; after SLN-9). Structured build output.
+  - Acceptance: Errors from the binlog equal the console errors
+- **SLN-13 vcpkg and NuGet for native projects** (P1, 2u; after VCPKG-1, FND-16). Local feeds in tests.
+  - Acceptance: Restore from a local feed builds
+- **SLN-15 Solution scale** (P1, 2u; after SLN-4, FND-18). A 500-project generated solution.
+  - Acceptance: Opens within the budget
+- **SLN-16 Approximate solutions on Linux** (P2, 1u; after SLN-3). Read-only static model in WSL.
+  - Acceptance: R2a browses in WSL
+- **SLN-17 NMake projects** (P2, 1.5u; after SLN-3). NMake build and intelligence.
+  - Acceptance: The fixture builds and clangd works
+- **RUN-6 Run configuration importers** (P1, 1u; after RUN-2). launch.vs.json and tasks.vs.json from documentation.
+  - Acceptance: An imported config runs
+- **UX-22 JSON schema service** (P1, 1.5u; after FND-16). Bundled schemas (CMakePresets, .luarc, engine documents) that work offline.
+  - Acceptance: An invalid preset is flagged
+
+### R11
+
+- **UX-6 Template engine and spellcheck** (P1, 2.5u; after UX-3). The only template engine.
+  - Acceptance: Live template expansion test
+- **REF-6 Change signature and inline** (P1, 3.5u; after REF-5). AST-based.
+  - Acceptance: Golden cases pass and the code builds
+- **REF-7 Extract refactorings** (P1, 2u; after REF-4). Method, variable, constant and field.
+  - Acceptance: Golden cases pass
+- **REF-8 Move and safe delete** (P1, 3.5u; after REF-5, SLN-6, CMK-10). Updates project membership.
+  - Acceptance: Moved code builds in CMake and MSBuild
+- **REF-9 Generate and create from usage, with Doxygen stubs** (P1, 3.5u; after REF-4). Includes the +0.5 for Doxygen stubs.
+  - Acceptance: Generated code builds
+- **REF-10 Conversions and fix in scope** (P1, 3u; after REF-4, CPP-10). Includes the +0.5 for fix in scope.
+  - Acceptance: Fix in scope over a module builds
+- **REF-13 C++ and CMake live and postfix templates** (P0, 3u; after UX-6). Template sets only (the engine is UX-6). File templates carry their own membership dependencies (CMK-14, SLN-12, FEC-12).
+  - Acceptance: The postfix .if and .for expansions compile
+- **CMK-14 CMake file and project templates** (P2, 1u; after UX-6, CMK-10). New target and class.
+  - Acceptance: The new target builds
+- **SLN-12 MSVC templates** (P1, 1.5u; after UX-6, SLN-6). New project and file.
+  - Acceptance: The new project builds in MSBuild
+- **CPP-14 Completion extras and inlay hints** (P1, 2.5u; after CPP-5, UX-4). Postfix completion, smart ranking and parameter hints.
+  - Acceptance: Fixture checks against clangd
+- **RUN-9 Catch2 and Boost.Test** (P1, 1.5u; after RUN-7). More test frameworks.
+  - Acceptance: The lists equal each framework's own --list output
+
+### R12
+
+- **LUA-8 Lua templates** (P1, 1u; after UX-6). Template sets on UX-6.
+  - Acceptance: The expansion passes LuaLS --check
+- **LUA-9 Lua AST refactorings** (P1, 3u; after REF-1, LUA-5). Extract, inline and rename module.
+  - Acceptance: The result passes --check and busted
+- **LUA-10 Lua interpreters, run and REPL** (P1, 2u; after RUN-1). A clang-built Lua 5.4 (MIT, ADR). Absorbs RUN-14.
+  - Acceptance: The script runs and the REPL evaluates
+- **RUN-14 Lua script run configuration** (merged, 0u; after none). Deleted; LUA-10 owns it.
+  - Acceptance: Covered by LUA-10
+- **LUA-11b Standalone Lua DAP** (P1, 2u; after LUA-11a, LUA-10). Spike lua-debug (MIT); must keep Run and Debug runtimes identical.
+  - Acceptance: LUA-11a shows 0 failures
+- **LUA-12 busted and LuaUnit** (P1, 1.5u; after RUN-7, RUN-10, LUA-10). Lua test frameworks.
+  - Acceptance: The list equals busted --list
+- **LUA-14 Lua performance** (P1, 1u; after LUA-5, FND-18). Large script trees.
+  - Acceptance: Within the budget on a large tree
+- **LUA-15 EmmyLua (Rust) spike** (P2, 1u; after LUA-3). Evaluate an alternative server; licence ADR if adopted.
+  - Acceptance: The ADR records the comparison on the clone
+
+### R13
+
+- **CPP-7 frost-clangd** (P1, 4u; after CLANG-0, CPP-10). clangd plus feature modules on the frost-clang engine.
+  - Acceptance: j1 and j2 show no regression
+- **CPP-8 frost-indexer** (P1, 5u; after CPP-7, CPP-4). Our own index for multiple configurations and scale.
+  - Acceptance: Beats the CPP-4 baseline
+- **CPP-11 frost-analyzer and SARIF** (P1, 4.5u; after CLANG-0, CPP-10). Analysis host.
+  - Acceptance: SARIF validates
+- **CPP-12 Our own inspections** (P1, 4u; after CPP-11). Rider-class inspection set.
+  - Acceptance: Fixtures for each inspection
+- **CPP-13 Preprocessor tools** (P1, 2u; after CPP-7). Macro expansion and include graph.
+  - Acceptance: Equals clang -E
+- **CPP-15 C++20 modules** (P2, 1.5u; after CPP-3). Module scanning in the CDB.
+  - Acceptance: The fixture builds and navigates
+- **CPP-16 Data-flow analysis** (P1, 3u; after CPP-11). DFA inspections. MISRA and Clazy are marked unsupported.
+  - Acceptance: Null-dereference and use-after-move fixtures are flagged
+
+### R14
+
+- **FEC-4 Asset index** (P1, 4u; after FEC-3). Index of engine assets.
+  - Acceptance: Equals the engine CLI listing
+- **FEC-5 Asset Find Usages and Code Vision** (P1, 3u; after FEC-4, CPP-9). A UX-4 provider.
+  - Acceptance: Equals engine find-references
+- **FEC-6 Serialized properties** (P1, 3u; after FEC-4). Starts with a spike.
+  - Acceptance: An edit round-trips through the live engine
+- **FEC-7 Engine document editing against schemas** (P1, 4u; after UX-22, FEC-3). Schema-validated editing.
+  - Acceptance: Invalid documents are flagged with the engine's own messages
+- **FEC-8 Engine validation in Problems** (P1, 2u; after FER-7, FEC-3). Validate runs through the session.
+  - Acceptance: Equals the engine validate output
+- **FEC-9b .fmeta-safe file operations, phase B** (P0, 1.5u; after FEC-9a, FER-2, REF-1). Updates references through the session inside a transaction.
+  - Acceptance: The engine reports no broken references after a rename
+- **FEC-11 Hot paths in the editor** (P2, 2u; after FER-14, UX-4). A provider using the FER-14 data.
+  - Acceptance: Values equal the engine profiler
+- **FEC-12 FrostEngine templates and New C++ Component** (P1, 2.5u; after UX-6, CMK-10). Includes the +0.5 for the component generator.
+  - Acceptance: The new component builds and registers
+- **FEC-14 GLSL, materials and shader.validate** (P1, 4u; after FER-2). Needs a licence ADR for the GLSL language server.
+  - Acceptance: Engine shader errors appear on the file
+- **FEC-15 Previews** (P2, 2u; after FER-2, FEC-4). Asset and material previews rendered by the engine.
+  - Acceptance: The preview image comes from the engine
+- **FER-11 Export and multiplayer run configurations** (P1, 2u; after RUN-11). Narrowed scope.
+  - Acceptance: Two clients plus a server start together
+- **FER-13 Context actions and Show in FrostEditor** (P1, 1.5u; after FER-2). Owns Show in FrostEditor.
+  - Acceptance: FrostEditor selects the asset
+- **FER-14 Engine performance data source and view** (P2, 1.5u; after FER-2). Raised from P3 because FEC-11 consumes its data.
+  - Acceptance: Live frame data shown
+
+### R15
+
+- **UX-5 Grammar packs and Markdown preview** (P1, 2u; after UX-3). Licensed grammars only.
+  - Acceptance: Fixture highlighting
+- **UX-7 Sticky lines, bookmarks, TODO and Problems** (P1, 2.5u; after UX-3). Editor navigation aids.
+  - Acceptance: TODO scan equals git grep
+- **UX-8 Tabs, windows, modes and large files** (P1, 3u; after UX-3). Large-file mode replaces the guard.
+  - Acceptance: A 1 GB file opens within the budget
+- **UX-9 Docking v2 and Services** (P1, 2.5u; after UX-3). Own docking (clean room).
+  - Acceptance: Layout persists across a restart
+- **UX-10 Search Everywhere at scale** (P1, 2.5u; after CPP-4, FND-18). Index-backed search.
+  - Acceptance: First results on the clone within the budget
+- **UX-11 Settings, schemes and importers** (P1, 3u; after UX-3). Imports VS settings from documented formats.
+  - Acceptance: An imported scheme applies
+- **UX-12 Daily VCS with commit checks** (P1, 4.5u; after UX-3). Includes the +0.5 for commit checks. Uses the real git.
+  - Acceptance: Commit, amend, rebase and stash checked with git
+- **UX-13 Editor-quality diff and merge** (P1, 2.5u; after UX-12). Three-way merge.
+  - Acceptance: The conflict fixture resolves and builds
+- **UX-15 Terminal OSC sequences and profiles** (P1, 2u; after UX-3). Shell integration.
+  - Acceptance: OSC 133 marks work in pwsh and bash
+- **UX-16 Local history and diagnostics UI** (P1, 1.5u; after UX-3). Freeze report viewer.
+  - Acceptance: Revert from local history works
+
+### R16
+
+- **UX-14 Advanced VCS and pull requests** (P2, 4u; after UX-12, FND-16). PR review.
+  - Acceptance: Network tests are manual; local-bare-repo tests are automated
+- **UX-17 Claude C1** (P1, 3u; after FND-16). PLAN.md C1 scope.
+  - Acceptance: Consent-gated; offline test
+- **UX-19 Accessibility, HiDPI and Linux polish** (P2, 3.5u; after UX-9). ACCESS-01.
+  - Acceptance: Screen-reader smoke test on Windows
+- **SLN-18 MSBuild language service** (P2, 2u; after SLN-3). Completion and navigation in .props and .targets.
+  - Acceptance: Go to an imported property definition
+- **CMK-9 CMake language service II** (P2, 2u; after CMK-8). Refactorings and inspections.
+  - Acceptance: Renaming a target configures
+- **RUN-12 Coverage** (P2, 2u; after RUN-7). llvm-cov.
+  - Acceptance: The gutter equals llvm-cov report
+- **RUN-13 Profiling** (P2, 4u; after RUN-2). ETW and perf (licence ADRs).
+  - Acceptance: A hot function in the fixture is identified
+- **FND-17 Installer, file associations and CLI diff/merge/wait** (P1, 1.5u; after FND-11). WiX is MS-RL and needs an ADR.
+  - Acceptance: Install, associate and uninstall cleanly
+- **UPG-1 Upgrade track (LLVM, Qt, vcpkg)** (P1, 3u; after CLANG-0). Recurring cost: 2-3u per LLVM major for frost-clang. Lands each time a major or quarterly bump arrives; the budget sits here.
+  - Acceptance: The full suite is green on the new LLVM
+- **REL-1 1.0 release gate (C++, Lua, FrostEngine)** (P1, 2u; after FND-14, FND-17). -Full, budgets, sanitizers, demo pack, sign-off.
+  - Acceptance: All gates are green and you sign off
+
+### R17
+
+- **LTR-2 .NET inventory and fixtures** (P2, 1.5u; after FND-6). Pinned open-source .NET corpus.
+  - Acceptance: Oracle from dotnet CLI
+- **LTR-3 .NET project model and dotnet driver** (P2, 4u; after LTR-2, SLN-2). SDK-style projects.
+  - Acceptance: Items equal the evaluation
+- **LTR-4 RoslynHost** (P2, 6u; after LTR-3). Replaces csharp-ls (your decision).
+  - Acceptance: Completion and diagnostics equal Roslyn's
+- **LTR-5 C# refactoring** (P2, 5u; after LTR-4, REF-1). Roslyn-based.
+  - Acceptance: Builds after refactoring
+- **LTR-6 Library sources and decompiler cache** (P2, 2u; after LTR-4). Read-only cache outside the workspace; licence ADR for the decompiler.
+  - Acceptance: The workspace is unchanged
+- **LTR-7 NuGet** (P2, 3u; after FND-16, LTR-3). Real feeds; local feeds in tests.
+  - Acceptance: Install from a local feed builds
+- **LTR-8 .NET tests** (P2, 3u; after RUN-7, LTR-3). dotnet test.
+  - Acceptance: The list equals --list-tests
+- **LTR-9 .NET debugger** (P2, 4u; after DBG-10). netcoredbg (MIT); vsdbg's licence forbids use.
+  - Acceptance: A breakpoint is hit
+- **LTR-17 Language server registry** (P2, 3u; after LUA-3). Generic LSP onboarding.
+  - Acceptance: A registered server works through the registry
+
+### R18
+
+- **LTR-10 Unity link v2** (P2, 4u; after FER-1b, FER-2). Reuses the EngineSession pattern.
+  - Acceptance: Play state matches the editor
+- **LTR-11 Unity debugging** (P2, 5u; after LTR-9, LTR-10). Mono and IL2CPP debugging.
+  - Acceptance: A MonoBehaviour breakpoint is hit
+- **LTR-12 Unity tests** (P2, 2u; after LTR-8, LTR-10). Unity test runner integration.
+  - Acceptance: Equals the Unity test runner
+- **LTR-13 Unity assets and semantics** (P2, 6u; after LTR-10). YAML assets and usages.
+  - Acceptance: Usages equal Unity's own references
+- **LTR-14 HLSL and ShaderLab** (P2, 2u; after LTR-17). Shader languages.
+  - Acceptance: Diagnostics from dxc
+
+### R19
+
+- **LTR-15 Unreal model, build and debug** (P3, 6u; after SLN-6, DBG-14). Subject to the EULA decision.
+  - Acceptance: UBT build and a breakpoint hit
+- **LTR-16 Unreal semantics and FrostLink** (P3, 8u; after LTR-15, CPP-7). Reflection macros and Blueprints links.
+  - Acceptance: UCLASS navigation fixture
+- **LTR-18 Other languages** (P3, 6u; after LTR-17). Through the registry.
+  - Acceptance: Per-language smoke test
+- **LTR-19 Frameworks and profiling** (P3, 8u; after RUN-13). Framework-specific support.
+  - Acceptance: Per-framework acceptance
+- **REF-15 Structural search and replace** (P3, 2.5u; after REF-4). SSR.
+  - Acceptance: Golden cases pass
+- **CMK-16 WSL and remote toolchains** (P3, 4u; after CMK-3). Windows IDE driving WSL builds.
+  - Acceptance: A WSL preset builds from the Windows IDE
+- **RUN-15 Remote run** (P3, 3u; after RUN-2). Remote targets.
+  - Acceptance: Runs over SSH to a WSL target
+- **DBG-16 Hot reload ADR** (P3, 0.5u; after DBG-14). Decision record only.
+  - Acceptance: ADR merged
+- **LUA-16 Lua dialects** (P3, 3u; after LUA-3). Luau and LuaJIT.
+  - Acceptance: Dialect fixtures
+- **FEC-16 Scene merge** (P3, 2u; after UX-13, FEC-4). Semantic scene merge.
+  - Acceptance: The merge fixture loads in the engine
+- **UX-18 Claude C2 and C3** (P2, 8u; after UX-17). PLAN.md M8 and M12 scope.
+  - Acceptance: Per PLAN.md C2/C3 acceptance
+- **UX-20 Extension API** (P2, 4u; after LTR-17). Public plug-in API.
+  - Acceptance: A sample extension loads in a sandbox
+
+### Domain parity targets
+
+The checklist each domain plan measured parity against (what Rider, ReSharper C++, CLion or Rider for Unity offer).
+
+**Stabilisation, honesty and quality gates.** Every result the IDE shows comes from a real process, adapter or server. Rider and CLion test runners show results from the executed test process, NuGet results come from the configured feeds, decompiled code comes from a real decompiler (dotPeek), and refactorings are AST-correct with preview and undo. Nothing is guessed from source text. Heuristic fallbacks never override a real semantic answer. For example, Go to Declaration never replaces clangd's exact result with a textual match. Generated or decompiled content opens as a read-only virtual document or in an IDE cache. It is never written into the user's source tree. Every setting shown in Settings is applied, or it is not shown. This covers save actions (trim trailing whitespace, final newline), confirm exit, reopen last project and indentation detection. Every menu, keymap and toolbar action either works or is absent. No action duplicates another under a different label (for example window.services). The UI stays responsive. IntelliJ-class freeze detection reports UI-thread stalls with thread dumps, and heavy work (VCS clone, local history, diffs, project model evaluation, updates) runs off the UI thread with progress and cancel. Freeze and crash reports can be symbolized for every shipped build (symbol archive per release), and there is a Collect Logs flow. Trusted projects (IntelliJ safe mode): untrusted projects open with no build scripts, run configurations, language-server project configs or VCS hooks executed. Trust is only granted through an explicit user decision, never silently by attach, compound launch or any other feature. Language servers start once per project open and are restarted only on a real configuration change. They speak the current LSP position-encoding negotiation (positionEncodings, not clangd's deprecated offsetEncoding). Updates are verified (signature), atomic, keep the previous version, and roll back when the new version fails to start (Toolbox-style). The Linux update path does not use Windows tools. Bundled tools (clangd, lldb-dap, LuaLS, csharp-ls, netcoredbg) ship with the IDE and are version-pinned. A missing tool is reported visibly in the UI, not only in a log. Headless and scripted operation is possible: a clean-profile launch, scripted project open, scriptable dialogs, and an automation surface for end-to-end UI tests (the JetBrains IDE Starter/Driver equivalent). Release quality is proven by end-to-end journeys on real projects. Real-integration test fixtures (MSBuild, CMake, clangd, lldb-dap, LuaLS, FrostEditor) run by default in local verification. A skipped real-tool test is visible and is not counted as a pass. Public status claims (README, feature matrix, release notes) are generated from passing evidence, not hand-written aspirations. Sanitizer, fuzz, TSan and performance-budget legs run regularly and gate merges of core code. Every new dependency or bundled asset (fonts, Qt modules, LuaLS) has a licence record and an ADR, and licence checks are never relaxed to make a test pass. The codebase is maintainable: no god files, Qt-free domain logic in the lower layers, comments that follow the documentation convention, and results never silently discarded.
+
+**C++ code intelligence.** NAV-1 Go to Declaration / Definition with the exact AST target (overloads, templates, macros, header/source pairs). Ctrl+Click. Falls back to usages when the caret is already on the declaration. NAV-2 Go to Implementation(s) of virtual functions and abstract classes, listing every override solution-wide. NAV-3 Go to Base / Super Method: jump to the overridden base member itself, not the base class. Go to Derived Symbols. NAV-4 Switch Header/Source (Alt+O / F10 equivalent), plus Related Symbols/Files (header, source, tests, includers). NAV-5 Find Usages tool window: groups by project/directory/file/containing member, separates declarations from usages, filters read/write/call/import/comment, previews, and supports rerun, pinning and export. Show Usages popup. Highlight Usages in File with read and write in different colours. NAV-6 Recursive, lazy Call Hierarchy (callers and callees) and Type Hierarchy (supertypes, subtypes, member view) tool windows. NAV-7 Go to Class / Symbol / File / File Member / Search Everywhere at solution scale (more than 100k symbols): fuzzy, CamelHumps, filters by kind and project, no truncation at 100 results, under 200 ms per keystroke. NAV-8 Recent Files/Locations, Back/Forward, Navigate To popup (Alt+`), navigation bar and breadcrumbs (namespace > class > member), Select In (Solution/File System/Structure). NAV-9 Structure view and File Structure popup: hierarchical, filters for fields, methods, inherited, macros and access, sorts, follows the caret. NAV-10 Quick Definition popup (Ctrl+Shift+I) that can be edited in place. HL-1 Semantic highlighting with ReSharper-C++-class token kinds: locals, parameters, fields, static members, globals, namespaces, macros, template parameters, concepts, enum members, user-defined operators, virtual/static/const modifiers, mutable-reference arguments. Unused code faded. Inactive #if regions dimmed per resolve context. COMP-1 Basic completion with good ranking: expected type, scope proximity, recency, member ordering, overloads shown separately with signatures, snippets with tab stops, auto-popup on . -> :: and #include path completion. COMP-2 Import-on-complete: auto-insert the #include for un-included symbols, PCH-aware (never above pch.h) and IWYU-pragma aware. COMP-3 Smart (type-matching) completion (Ctrl+Shift+Space) and completion of enum members, overrides and lambdas. COMP-4 Postfix templates (about 25 CLion-equivalent: if, else, for, fori, iter, while, switch, return, notnull, null, not, par, cast, static_cast, dynamic_cast, reinterpret_cast, move, forward, make_unique, make_shared, var, const, lambda) shown in the completion list, with the expression chosen from the AST. COMP-5 Parameter Info: overload list, current-parameter highlight, cycling, default arguments, shown inside templates. DOC-1 Quick Documentation: rendered Doxygen (@brief/@param/@return/@tparam/@note/\code), the declaration with resolved types, macro expansion, links to symbols, external documentation (cppreference) for std symbols. HINT-1 Inline inlay hints: parameter names, deduced types (auto, structured bindings, lambda returns), designators, end-of-block hints. Configurable per kind and toggled with a key. CV-1 Code Vision above declarations: index-backed usage count, derived types and overrides counts, base link, VCS author. Every number equals what Find Usages returns. CV-2 Gutter navigation icons: overrides, implements, is overridden, is implemented, hides, recursion. Each opens a navigation popup. INS-1 Inspection framework: one registry with stable IDs over all Clang warning groups (1157 in LLVM 23.1.4), clang-tidy primary checks (406), CSA checkers (112), and own checks. Severities (error/warning/suggestion/hint/off), profiles and scopes that are user or project-shared, Configure Severity from Alt+Enter, and Suppress for statement/file/all. INS-2 clang-tidy integration: per-check enable and options in a UI that reads and writes .clang-tidy (InheritParentConfig), live for open files, custom clang-tidy binary/plugins only in trusted mode. INS-3 ReSharper-C++-style own inspections with quick-fixes, such as naming conventions, class design, header guards, const-correctness, redundant code, possible bugs and performance. PLAN targets at least 45% of ReSharper C++'s roughly 296 own inspections at M7 and at least 75% at M13. INS-4 Data-flow analysis (null dereference, use-after-move, unchecked optional, dead code, constant conditions) via CSA and frost CFG checks, run on idle or save (T2). INS-5 Index-derived checks (T4): unused declarations solution-wide, function can be static or have internal linkage, class can be final, member can be const/static. INS-6 Inspect Code over a scope (file/project/solution/changed files/custom), a results window grouped by severity and category, batch quick-fix, and baseline / new-issues-only. INS-7 Solution-wide analysis: errors and warnings in files that are not open, a status-bar monitor, navigation to the next error in the solution. INS-8 SARIF 2.1.0 export (headless `frost inspect`) and import (MSVC /analyze, external clang-tidy, CodeChecker), all shown in the Problems window. ACT-1 Alt+Enter: clangd fixes and tweaks plus own quick-fixes, intention preview, Configure/Suppress submenu. AST-correct actions are listed first. PP-1 Macro expansion: full expansion and a step-by-step substitution view. Macro definitions and usages are navigable. PP-2 Include hierarchy (includes / included-by, transitive), Optimize Includes (unused removed, missing added) that respects PCH, include order and IWYU pragmas. CTX-1 Resolve context: choose which project/configuration/TU a header is analysed in, and show the active compile command for any file. CTX-2 MSVC fidelity: the full ClCompile command line (including /arch, /GR-, /Zc:*, /Zp, /fp, /openmp, /utf-8, PCH and forced includes) per file and per configuration. Zero false errors on clean code. CTX-3 CMake fidelity: per-preset/per-configuration commands, including the Visual Studio generator through the File API, and multiple build directories. IDX-1 Background index persisted in the IDE cache (never in the source or build tree), warm reopen, per-configuration indexes so switching back costs nothing, exclude/mark directories, an Invalidate Caches / Repair IDE action. IDX-2 Scale: FrostEngine (3,744 TUs in build/windows-debug, 34% third-party) and 100+-project MSVC solutions, with background indexing at low priority, a memory budget, Power Save pause, progress UI and no UI stalls during indexing. MOD-1 C++20 modules (.ixx/.cppm) with CMake and supported compilers; current-standard (C++23/26) conformance with zero false errors. FMT-1 ClangFormat formatting with a style editor that exports .clang-format (shared with the REF/formatter domain).
+
+**C++ refactoring, code generation and editing productivity.** RENAME: in-place (inline) rename with linked editing, plus a dialog for symbols across the whole solution/CMake project. Covers locals, members, functions and overloads, virtual hierarchies (base and all overrides), classes and constructors/destructors, namespaces, enums and enumerators, templates and specializations, macros, concepts and type aliases. No file-count limit. Preview, conflict detection (name clashes, hiding, shadowing, macro-expansion sites) and the options 'search in comments/strings' and 'rename in non-code files'. RENAME FILE / CLASS-FILE SYNC: renaming a header updates every #include that names it (quotes and angle brackets, relative paths), the matching .cpp, the header guard, .vcxproj/.vcxproj.filters/CMakeLists entries and git (mv). Renaming a class offers to rename its file pair, and renaming the file offers to rename the class. CHANGE SIGNATURE: add, remove, reorder and rename parameters, change types, default values, return type, const/noexcept/ref-qualifiers. Updates the declaration in the header, the out-of-line definition, every override and every call site across TUs, with a placeholder value for new arguments and a preview. EXTRACT: Extract Function/Method (free, member or lambda; parameters and return value inferred; const-correct; placement; multiple outputs via out-params or a struct). Extract Variable, Extract Constant (constexpr/static constexpr/namespace scope), Extract Typedef/using alias, Introduce Field, Introduce Parameter. Each offers 'replace all N occurrences' and asks for the name. INLINE: Inline Function (all call sites or this one, then delete the definition), Inline Variable, Inline Typedef/alias, Inline Macro (expand macro). MOVE: move a declaration/definition to another file (new or existing, adding #include and adding a new file to the project), move to another namespace, move a function body between header and source (define inline/outline), move members between classes (Pull Members Up / Push Members Down), Extract Interface/Superclass (P2). SAFE DELETE: deletes the whole declaration and definition (header and source) after an index-backed usage search. Shows usages as conflicts and cascades to overrides and parameters (safe-delete parameter updates callers). CONVERT / CONTEXT ACTIONS (Alt+Enter): explicit type <-> auto, index loop / iterator loop <-> range-for, printf/stream/string concatenation -> std::format/std::print (C++20/23 aware), C-style cast -> named cast, if/else <-> ternary, if-chain <-> switch, add/remove braces, invert if, split/merge declarations, make const/constexpr/static/noexcept, enum -> enum class, add using-declaration, remove using namespace, raw string literal, populate switch, swap branches/operands, clang-tidy modernize/readability fix-its offered as intentions. GENERATE (Alt+Insert): constructors (fields and base-class constructors, explicit/default/delete), getters/setters (naming style from settings or .clang-tidy readability-identifier-naming), equality operators (C++17 hand-written, C++20 defaulted), relational/<=>, stream operator<<, std::hash specialisation, std::formatter, swap, copy/move special members (rule of 5), Override/Implement missing members listing the real virtuals of all bases, Generate Definitions for declarations (bulk, into the counterpart .cpp, ordered), Doxygen comment stubs. CREATE FROM USAGE: from an undeclared-identifier diagnostic, create a function, member function, variable, field, class/struct, enum member or parameter, with inferred types and placement in the header or source. INCLUDES: automatic #include insertion when completing an un-included symbol, an 'Add #include' quick fix, Optimize Includes (remove unused, add missing) for a file, folder or project with preview, sorting/grouping by .clang-format IncludeBlocks/IncludeCategories, PCH-aware (pch.h/frostpch.h first), never reordering order-dependent headers (windows.h), quote vs angle style, relative vs project-relative paths, include hierarchy view (M7 row 90). FORMATTING: Reformat file/selection/changed lines (VCS), on paste, on type (onTypeFormatting), on save, all from .clang-format. A .clang-format detector with the version shown, a Code Style settings page that edits/exports .clang-format with live preview, a toggle to fall back to IDE style when .clang-format is absent, .editorconfig honoured for whitespace, and generated code formatted to project style (FrostEngine: tabs, Allman braces). ACTIONS ON SAVE / CODE CLEANUP: reformat changed lines, optimize includes, trim trailing whitespace, final newline, apply selected tidy fixes. Cleanup profiles applied to a file, selection or project with preview and one undo (rows 126, 127). LIVE TEMPLATES: user and project templates with abbreviation+Tab expansion, shown in the completion list. Variables with macros (className, methodName, fileName, namespace, guessed names, expression type, clipboard, date, enum/complete suggestions), linked placeholders (mirrors), $END$, contexts (language and C++ scope: statement, expression, class body, namespace, preprocessor), a settings editor with import/export, and built-in C++, CMake and Lua sets. SURROUND WITH (Ctrl+Alt+T): language- and context-aware templates (if, while, for, try/catch, #if/#ifdef, braces, namespace, region, lambda), re-indented to the caret's level. POSTFIX TEMPLATES: expr.if/.for/.forr/.while/.not/.null/.notnull/.return/.var/.cast/.static_cast/.move/.forward/.make_unique/.make_shared/.switch/.lambda, shown in the completion list. The expression boundary comes from the AST (choose among enclosing expressions), with user-defined postfix templates. FILE TEMPLATES: New C++ class (header+source pair, header guard or #pragma once per style, namespace from folder), new header/source/module interface, CMake target/CMakeLists, Lua script. The new file is added to .vcxproj(.filters)/CMakeLists and git. REFACTOR THIS (Ctrl+Shift+R) and ALT+ENTER ORDERING: a context-filtered list of only applicable, correct actions. Errors' quick fixes first (preferred fix pre-selected), then inspections' fixes, then refactorings, then context actions. Each shows an intention preview (diff) on hover and can be suppressed or configured from the menu. MULTI-FILE EDIT SAFETY: every multi-file change is planned off the UI thread, previewed as a tree of files and occurrences with checkboxes and a diff, checked against the current text (versions and fingerprints), applied atomically to open and closed files (encoding/BOM/line endings preserved), and undone/redone as one global action across all files. Local-history checkpoints are labelled with the refactoring name, and the apply is crash-safe. SCOPE AND PROJECT CONTEXT: refactorings run under the active configuration's real flags (MSBuild-evaluated clang-cl flags or the CMake File API compdb). Usages in inactive #if branches and other configurations are flagged. Read-only/third-party/system paths are never edited. Untrusted projects get restricted behaviour. STRUCTURAL SEARCH & REPLACE (P3): pattern-based search/replace over C++ ASTs.
+
+**CLion-class CMake support.** PROFILES: several named CMake profiles per project, each with build type (including custom ones like FrostEngine's 'Dist'), toolchain, generator, CMake options (-D...), environment, build directory, build options (-j, native tool args) and an enabled flag. More than one profile can be loaded at once, each with its own build directory and reply, and switching between them is instant. PRESETS: CMakePresets.json and CMakeUserPresets.json, every schema version the detected cmake accepts. configure, build, test, package and workflow presets; include, inherits, conditions, macros including $vendor{}; hidden presets, displayName/description, cmakeMinimumRequired check, vendor maps kept and readable. Presets are imported as read-only profiles, can be copied into an editable profile, and every build preset of a configure preset can be selected. PRESET/PROFILE UI: a Settings > Build > CMake page to add, copy, edit, reorder and enable profiles; a profile + build-preset + target selector in the Run widget/toolbar; per-profile Reload. TOOLCHAINS: Visual Studio (vswhere instance choice, version, architecture, vcvars capture), clang-cl through vcvars, LLVM clang and GCC on Linux, MinGW-w64/LLVM-MinGW on Windows, custom C/C++ compiler, debugger and make-program paths, an environment-script toolchain ('add environment from file'). Later: WSL, Remote/SSH, Docker. CODE MODEL: File API codemodel v2 (targets, sources, headers, fileSets, include dirs, defines, flags, language standard, artifacts, dependencies, backtraces), cache v2, cmakeFiles v1, toolchains v1 and configureLog v1. This drives the CMake/Project view (targets, files, CMake files, generated sources with a 'Build to generate' hint, external libraries). CLANGD CONTEXT: a compile database per profile and configuration, including multi-config and Visual Studio generators that write no compile_commands.json. Header-to-target context, a resolve-context switcher for files in several targets/configurations, a banner for files not in any target, and no clangd restart on an ordinary reload. RELOAD: an auto-reload toggle. Without it, a 'project needs reloading' notification when CMakeLists/*.cmake/presets change. Reload after a build-time regeneration (GLOB CONFIGURE_DEPENDS, ninja re-running cmake), Reset Cache and Reload, Stop, and reload on branch switch. CMAKE TOOL WINDOW: per-profile output tabs, clickable 'CMake Error/Warning at file:line' entries with their 'Call Stack' frames, log-level/--trace/--debug-find options, warnings into Problems. CACHE VIEWER/EDITOR: a table of the CMake cache (type, value, advanced, help string) with filtering. Edits are applied as profile -D options and a reconfigure, never by editing CMakeCache.txt directly. CMAKELISTS LANGUAGE: highlighting, folding, structure; completion of commands, keywords/arguments of known commands, variables, properties, policies, modules, find_package names, project functions/macros, targets and file paths; go to definition of functions/macros/variables/targets/include()/add_subdirectory() files; find usages; rename (functions, macros, variables, targets); quick documentation from the CMake help; parameter info; formatting with a code style; inspections (unknown command, wrong arity, deprecated command or policy); live templates. CMAKE DEBUGGER: `cmake --debugger --debugger-pipe` (CMake 3.27 or later) over DAP. Breakpoints in CMakeLists.txt and *.cmake, step in/over/out across include()/function calls, variables/cache/targets scopes, call stack, watches, and a 'Debug' variant of Reload per profile. RUN/DEBUG CONFIGURATIONS: a 'CMake Application' configuration generated for each executable target. It holds the target, an optional executable override, program arguments, working directory (with macros), environment (profile plus user), the before-launch build target and the profile, and is persisted (shared or personal). Also configurations to build all or a custom target, and Run/Debug from the toolbar and gutter. CTEST: test discovery via `ctest --show-only=json-v1` (including TEST_INCLUDE_FILES and gtest_discover_tests), test presets, labels/filters, fixtures, run or debug one test, a selection or all tests, a results tree with output and failure navigation, and drill-down into GoogleTest/Catch2/doctest/Boost.Test cases. BUILD ACTIONS: build target / all, rebuild, clean, recompile a single file, build selected targets, Install (cmake --install with prefix and configuration), Package (cpack / package presets), workflow presets, [n/m] progress, per-target output. SOURCE MEMBERSHIP: New File/Class dialogs offer 'Add to targets'. Add, remove and rename sources by safely editing literal add_executable/add_library/target_sources/file-set arguments, with preview, journaled atomic writes, a reconfigure and a File API check afterwards. GLOB(CONFIGURE_DEPENDS) projects reload instead of editing. TEMPLATES: New CMake project (executable, static/shared library, with presets, with tests) and New target, configurable C/C++ standard. DEPENDENCY MANAGERS: vcpkg (detection, VCPKG_ROOT/toolchain file wired into profiles, vcpkg.json schema completion, add/remove dependency, manifest features), FetchContent/CPM awareness (dependency sources shown as libraries, offline/disconnected reconfigure), Conan 2 provider (later). MULTI-CONFIG GENERATORS: Ninja Multi-Config and Visual Studio generators, with a configuration selector per profile and the reply read per configuration without a reconfigure. TRUST AND SAFETY: configure, test discovery, the CMake debugger and builds run only in a trusted root; repository-supplied build directories stay inside the root (already a FrostIDE rule, PLAN.md section 3.5).
+
+**SLN.** Open .sln (Format 12.00, UTF-8/UTF-16), .slnx and .slnf (solution filter) from Welcome, File > Open, the CLI and the recent list. The Solution Explorer shows the tree before trust (static), then the evaluated tree after trust, with no flicker or lost expansion. Faithful MSBuild evaluation of every .vcxproj per (configuration, platform): Conditions, <Choose>, Import closure (Microsoft.Cpp.*.props/targets, property sheets, Directory.Build.props/targets, vcpkg and NuGet .targets), wildcards with Remove/Update, ItemDefinitionGroups, per-file metadata and per-configuration ExcludedFromBuild. The results equal what Visual Studio and MSBuild.exe see. Exact compile context for code insight: per-file cl.exe command lines from the design-time targets (GetClCommandLines/ComputeReferenceCLInput), including PCH, forced includes, /external, /Zc:*, /std, /utf-8, C++/CLI and NMake properties for Makefile projects. Every extracted line compiles with cl.exe /c. Fast warm reopen: a fingerprinted per-(project, config, platform, toolchain) cache. An unchanged solution reopens to an interactive tree with zero MSBuild or .NET processes. Edits to .sln/.slnx/.vcxproj/.filters/.props/.targets in the import closure re-evaluate only the affected projects, active configuration first, 2-4 parallel workers. Solution Explorer fidelity: solution folders and solution items, filters (empty filters included), shared items projects (.vcxitems) with their consumers, project references and solution build dependencies, a References/Dependencies node (project refs, NuGet packages, vcpkg manifest), external/imported items, unloaded projects persisted per user, Show All Files, files excluded from the build marked per configuration, unavailable/unsupported projects explained. Project and solution editing through MSBuild-safe writers (MSBuild construction model plus Microsoft.VisualStudio.SolutionPersistence), never regex: add new or existing file or folder, remove, rename, move between filters and projects, new/rename/remove filter, add/remove existing project, new/rename/remove solution folder, move a project into a folder, rename a project, add/remove project references and build dependencies, solution items. Each edit has a preview, a dirty-tab guard, journal recovery and undo, and preserves unrelated bytes and formatting. .sln <-> .slnx conversion with output identical to what Visual Studio writes. New Solution / New Project / Add New Item templates for C++ (console, Windows desktop, static lib, DLL, empty, shared items) using the installed toolset (v143/v145) and the installed Windows SDK version; class and header/source item templates; an optional user-script project generator. Configuration Manager: switch the active solution configuration and platform; edit the per-project configuration, platform, Build and Deploy mapping; add, rename and remove solution and project configurations and platforms, written to both the solution and the project files. Separate Configuration and Platform switchers in the toolbar and status bar, persisted per solution, with immediate re-evaluation of the code-insight context. Project property pages driven by the installed VS rule schemas (General, Advanced, Debugging, VC++ Directories, C/C++, Linker, Librarian, Resources, Build Events, Custom Build Step, Manifest): evaluated values per configuration/platform, an inherited/defined-at indication (project, property sheet, default), 'All Configurations' and multi-select editing with correct conditions, a macros list with evaluated values, and per-file property overrides. Property Manager: view the property sheet import chain per configuration; add/remove existing or new .props; edit a sheet's properties. Build, Rebuild and Clean of the solution, a project, project-only (no dependencies) and a selection of projects; Batch Build; Compile single file (Ctrl+F7); Cancel; build the startup project(s) before Run/Debug; parallel builds (/m, MultiProcCL), with settings for max parallel projects and verbosity. Build output: a structured per-project/target tree with timing and warnings/errors, a raw log, clickable diagnostics (file:line:col ranges, linker errors, MSBuild errors in project files), a Problems integration, binary log (.binlog) recording, and opening an existing .binlog. Startup projects: single, current-selection, or multiple with per-project Start/Start without debugging, persisted per user. Debugger settings from .vcxproj.user and imported sheets (LocalDebuggerCommand, Arguments, WorkingDirectory, Environment, MergeEnvironment, DebuggerFlavor, attach), editable on the Debugging property page and written to .vcxproj.user, never to the shared project file. Package integration: vcpkg MSBuild integration (manifest mode vcpkg.json with VcpkgEnableManifest, triplets; classic `integrate install`), with a 'restore/install' action and missing-package diagnostics; native NuGet packages (packages.config with restore, PackageReference in vcxproj where supported, build/native .targets imports) with browse/update against real feeds. Toolchain and instance management: discover every VS/Build Tools instance (Setup COM API plus vswhere), choose the instance per solution, support VS 2022 (MSBuild 17) and VS 2026 (MSBuild 18, v145), report missing toolsets/SDKs and retarget them (Retarget Projects). NMake/Makefile projects: build/rebuild/clean command lines, NMakeIncludeSearchPath/PreprocessorDefinitions/ForcedIncludes/AdditionalOptions fed to clangd. This is the base for Unreal-generated solutions (Unreal itself is later). CMake-generated solutions (Visual Studio generators, e.g. FrostEngine's windows-vs2022 preset) are detected and offered as CMake projects, so edits go to CMakeLists rather than generated .vcxproj files. Linux approximate mode: open, browse and edit MSVC solutions on Linux, labelled approximate, with best-effort clangd flags and Build/Run/Debug disabled with an explanation. Scale: R2b-size and 500+ project solutions open without UI stalls over 50 ms, with a virtualized tree, background evaluation and bounded memory.
+
+**Run/debug configurations and test runner.** RC-1 Named run/debug configurations: create, copy, rename, delete, sort, group into folders, and use templates with per-type defaults (Rider/CLion Run/Debug Configurations dialog). RC-2 Persistence and sharing: 'Store as project file' (committed, one file per configuration) or personal (workspace). Configurations survive restarts and branch switches, and unknown keys round-trip so newer versions can share files. RC-3 Temporary configurations: created by gutter/context Run, capped at N (default 5), with 'Save configuration' to make one permanent. RC-4 Type: CMake Application (target, executable override, CMake profile/build preset, program args, working dir, env, redirect input), as in CLion. Configurations are auto-created per executable target on CMake load. RC-5 Type: MSBuild/.vcxproj application. Startup-project semantics plus the VS LocalDebugger* settings, read from and written to .vcxproj.user (never the shared .vcxproj). Per Configuration|Platform. RC-6 Type: Native/Custom executable (absolute path, args, working dir, env). CLion 'Custom Build Application'-like, with optional custom build target. RC-7 Type: Compound. Start N configurations together for run or debug (editor + game, client + server). Each child gets its own Run/Debug tab and Stop all. RC-8 Type: Attach to process: by PID or name, 'wait for process' (CLion/Rider attach), through lldb-dap. Also attach the debugger to a process already started by a Run configuration. RC-9 Type: CTest (CLion CTest Application): test preset or test directory, name regex/labels filter, -j, repeat, ctest args, results in the test runner. RC-10 Type: framework tests (Google Test, Catch2, doctest, Boost.Test): executable/target, suite/test/pattern filter, extra args. Results go to the test runner. RC-11 Type: FrostEngine Editor / Game / headless (FrostEditor --project/--scene/--panel/--automation-port), with combined native + Lua debug. Engine-side semantics belong to the FER/LUA domains. RC-12 Type: Lua script (standalone interpreter at an absolute path; FrostEngine Lua runs through RC-11). RC-13 Types later: remote GDB/LLDB server, core dump, WSL/Docker/remote toolchains (PLAN row 159 note, rows 188/190, 1.x non-goal). RC-14 Common options: program arguments with macros, working directory, environment vars plus .env files, include system env (pass-through/clean), redirect input from file, run in external console / Run console / emulated terminal (PTY), 'Allow multiple instances', 'Focus tool window on run'. RC-15 Macros/path variables in configs (project dir, build dir, target file, config name, prompt-for-value). Expansion is shown in a preview. RC-16 Before-launch task list: Build (target/project/solution/preset), Run another configuration, External tool (absolute path), CMake reload, Save All, Activate tool window. Reorderable; failure aborts the launch. RC-17 Importers: launch.vs.json, .vcxproj.user, CLion/Rider .run/*.run.xml and .idea/runConfigurations, VS Code launch.json (C++ types), CMakePresets testPresets. RC-18 Toolbar run widget: configuration combo (grouped, icons, temporary items, 'Edit Configurations...'), target/profile/configuration selector, Run (Shift+F10), Debug (Shift+F9), Profile, Run with Coverage, Stop (Ctrl+F2), Run... popup (Alt+Shift+F10), and a running-processes indicator. RC-19 Multiple simultaneous runs: one Run tool-window tab per run, pin tab, rerun reuses the tab, 'stop and rerun?' when single-instance, Stop all, Services window listing every running configuration. RC-20 Run console: stdout/stderr tint, ANSI SGR colours, optional PTY so programs do not fully buffer, input line, clear, soft-wrap, search, scroll lock, max buffer setting, 'Process finished with exit code N' plus the run time. RC-21 Console hyperlinks: file:line[:col] for MSVC, clang/gcc, sanitizer stacks (#0 ... file:line), gtest/doctest/Catch2/Boost failures, Lua tracebacks, CMake errors, and URLs. Links open the editor at that position. RC-22 Process control: Stop (tree kill), graceful stop (Ctrl+C/Ctrl+Break on Windows, SIGINT/SIGTERM on Linux) with escalation, pause/resume output, show PID, exit-code decoding (NTSTATUS/signals). RC-23 Trust and safety: nothing from a configuration or importer runs before the root is trusted. Programs are resolved to absolute paths through IProcessLauncher. TR-1 Discovery from built binaries: gtest --gtest_list_tests (+ --gtest_output=json for file:line), Catch2 --list-tests --reporter xml, doctest --list-test-cases --reporters=xml, Boost.Test --list_content, ctest --show-only=json-v1. Re-discovery after build; trust-gated, because discovery runs user code. TR-2 Source-side detection (TEST/TEST_F/TEST_P/TYPED_TEST, TEST_CASE/SCENARIO/SECTION, doctest TEST_CASE/TEST_SUITE/SUBCASE, BOOST_AUTO_TEST_CASE/SUITE) for gutter placement before a build. Never used to infer results. TR-3 CTest integration: test presets, labels, fixtures (FIXTURES_SETUP/CLEANUP), env/WORKING_DIRECTORY/TIMEOUT properties, and per-suite CTest tests expanded to per-case results (FrostEngine style). TR-4 Unit Tests tool window (Rider Unit Tests / CLion Test Runner): streaming results tree (executable > suite > case > parameterised instance), states (passed/failed/skipped/ignored/crashed/terminated/not run), durations from framework reports, progress bar, counters. TR-5 Run/Debug selected test, suite, file, or all. Rerun failed, rerun failed first, repeat N times / until failure, stop. Debug a single test runs only that test under lldb-dap. TR-6 Test output pane per test, with failure message, expected/actual, stack trace and file:line hyperlinks. Jump to test source from the tree (navigate-with-single-click option). TR-7 Filters and grouping: show passed/ignored, search, group by executable/suite/file/category, sort by name/duration, track the running test. TR-8 Test sessions and history: multiple sessions as tabs, history of the last N runs with per-run results, 'Import/Export results' (JUnit XML). TR-9 Gutter icons on test macros and main(): run/debug/(profile/coverage), state badge from the last result, 'Run all in file'. Explorer/Solution 'Run Unit Tests' (PLAN row 31). TR-10 Crash and timeout attribution: a test process that crashes or hangs marks the running test crashed/timed out, keeps partial results, and offers 'Debug this test'. TR-11 Pre-commit 'run tests' check (PLAN M6). TR-12 FrostEngine Lua Test API / test.run results in the same window. RUN provides the adapter seam only; FER/LUA domains own the engine side. CV-1 Run with Coverage for run configurations and tests: line/branch hits in the editor gutter, coverage tool window (per dir/file %), merge across runs, exclude patterns, export (lcov/HTML). clang source-based coverage (llvm-profdata/llvm-cov) as in CLion; an MSVC-binary backend is a decision. PF-1 Profile run configuration/test: Windows ETW (CLion uses Xperf/WPR), Linux perf. Flame graph, call tree, method list with navigation to source, attach to a running process, CPU and allocation views later. PF-2 Memory/dynamic analysis: Valgrind memcheck (Linux XML), sanitizer report viewer with stack navigation (CLion), later Rider-style dotTrace/dotMemory equivalents for .NET (later domain).
+
+**Native C/C++ debugger.** Breakpoints: line breakpoints with verified, pending, unverified and disabled states, each with its own gutter icon; conditional; hit-count with the adapter's syntax (no VS '>= 10' passed through); log points with {expr} interpolation and stack-trace option; 'suspend: none/thread/all' policy; temporary (remove once hit); enable/disable/mute all; persistence and moving with edits. Function/symbolic breakpoints by (qualified, overloaded, template) name, with completion against the symbol index; instruction (address) breakpoints from the disassembly gutter. Exception breakpoints: C++ throw and catch on Linux (Itanium ABI); C++ throw by type on MSVC (any, or a named type such as std::runtime_error); unhandled/second-chance; Win32 SEH by code (0xC0000005 etc.), first-chance and second-chance; an exception popup with the type, what()/message and code; filters built from the adapter's exceptionBreakpointFilters and applied before launch. Data breakpoints/watchpoints: 'Add Watchpoint' on a variable, field or address; read, write or access; 1/2/4/8 bytes; condition and hit count; a clear error when the 4 x64 debug registers are used up. Dependent breakpoints ('disable until breakpoint X is hit', with 'after hit: disable again/leave enabled'), breakpoint groups, and a Breakpoints dialog (Ctrl+Shift+F8) that lists and edits every kind. Stepping: over, into, out, Force Step Into, Step Into My Code with step filters (skip std::, the CRT and libraries without source), Smart Step Into (choose a call on the line), instruction-level step over/into, Run to Cursor, Force Run to Cursor (ignoring breakpoints), Set Next Statement / Jump to Line, pause, restart. Call stack: lazy frames, external/library frames folded, frame filters, copy stack, inlined frames marked, frames without source opening the disassembly at the PC, navigation into adapter-served sources. Threads: list with names, switching, freeze/thaw (suspend/resume single threads), 'show only threads in user code', a parallel-stacks overview (P2). Variables: lazy tree with paging, raw view toggle, format specifiers (hex, chars, array length such as ptr,N), changed-value highlighting, Set Value, copy value or expression, 'View as Array' for pointers, return values after step out. Watches persisted per project, Evaluate Expression dialog with completion and history, debugger console (REPL) with lldb/gdb command passthrough. Inline values in the editor from the current frame's scopes (not text heuristics), and expandable hover data tips that load asynchronously. Data renderers: natvis (Type, AlternativeType, DisplayString, StringView, Expand with Item, ArrayItems, IndexListItems, LinkedListItems, TreeItems, ExpandedItem, Synthetic, CustomListItems, Intrinsic, wildcard templates, conditions, IncludeView/ExcludeView) loaded from the project (.vcxproj Natvis items, CMake target sources, dependency trees such as FrostEngine's .cache/cpm) and the user folder, reloaded on save, with a diagnostics log; built-in MSVC STL and libstdc++ renderers that cover std::array and std::function; the same renderers on Linux builds. Disassembly view that follows the PC, interleaves source, uses Intel syntax by default for MSVC users, and supports instruction breakpoints and instruction stepping. Memory view opened from a pointer or variable (memoryReference): scrolling and paging, several formats, change highlighting, editing through writeMemory; a Registers view with groups, flags decoding and editing. Attach to Process on Windows and Linux: process list, manual PID, filter, attach by name or wait-for-launch, Reattach (last process), ptrace_scope detection with a fix hint, trust prompts rather than silent grants. Post-mortem: Open Core Dump / Minidump (Windows .dmp from crashpad or FrostEngine's crash.dmp, Linux ELF core) with symbols and source mapping. Symbols: Modules view (symbol status, load or unload, path), symbol search paths, Microsoft symbol server and local symstore, opt-in under the network policy; source server and Source Link with consent; fast first-breakpoint times on very large PDBs (FrostEditor.pdb is 1.42 GB). Several sessions at once (editor plus game, server plus client) with session tabs, breakpoints shared across compatible sessions, and compound debug configurations that actually debug every member. Debug from every run configuration type: MSBuild .vcxproj (including .vcxproj.user LocalDebugger* properties), CMake File API targets and presets, FrostEngine presets, a filtered unit test (gtest, Catch2, CTest), and a custom executable. Linux: LLDB with working libstdc++ containers, and a GDB backend (gdb -i=dap, GDB >= 16, user-installed GPL process), debuginfod opt-in, remote or WSL targets (P2). Mixed native + Lua debugging in one FrostEngine process: a native session and a Lua session side by side, coordinated stop state, Lua breakpoints while the native session runs, and an interleaved C++/Lua call stack (P2). FrostEngine-aware C++ debugging: visualizers for EnTT entities and components, glm, imgui, nlohmann_json, sol2 and box2d types; launch profiles for FrostEditor, FrostRuntime and FrostTests from the engine's CMake presets. Hot reload / Edit and Continue: Live++-style patching (expected to stay out of scope; recorded as a decision). Performance: F5 to breakpoint and step within PLAN budget B16 on R1; a stated budget for huge PDBs; variable expansion and natvis evaluation that never block the GUI thread.
+
+**Lua language support.** Rider has no built-in Lua, so the target is a best-in-class Lua IDE. The references are EmmyLua for IntelliJ, VS Code with LuaLS plus actboy168 lua-debug, and ZeroBrane Studio, delivered with Rider-level UX. Each row below is the target behaviour that must be shown against a real tool. Out-of-box server: a pinned LuaLS for Windows x64 and Linux x64 ships inside the installed FrostIDE. It starts with no user setup in a trusted project. Its state (starting, loading workspace N%, running, failed, restarting) shows in the status bar. Restart Server and Show Server Log actions exist. A missing or broken server raises a visible notification with a Configure action. The server never writes into the install directory: logs and meta go to the FrostIDE cache. Runtime and configuration: Lua 5.1, 5.2, 5.3, 5.4 and LuaJIT are selectable per project. `.luarc.json` and `.luarc.jsonc` are honoured, and nested configs in a multi-project repo resolve per folder (multi-root workspace folders). A Settings > Languages > Lua page edits globals, builtin libraries, `require` paths, workspace.library, diagnostic severities, hints and codeLens. Writes are atomic and preserve user and engine keys. Edits to `.luarc.json` get JSON-schema completion and validation. Library management: third-party definition libraries (LuaLS meta/3rd: busted, luassert, love2d, luv, OpenResty, ...) can be enabled per project, offline, without downloading code. Live workspace: on-disk changes from git checkout, generators (engine `.frost/lua-api`) or other tools reach the server through workspace/didChangeWatchedFiles. Settings changes are sent with workspace/didChangeConfiguration, without a server restart. Completion: locals, globals, fields, methods (`:`), `require` module paths, auto-require of unresolved globals, `---@alias` string-literal enums, `---` annotation stubs, snippet placeholders with tab stops, completionItem/resolve docs, and correct UTF-16 positions with non-ASCII text. Signature help: overloads (`---@overload`), active-parameter tracking, `self` handling for `:` calls, and triggering after snippet insertion (ADR 0068). Quick documentation and hover: rendered markdown of `---@class`, `---@field`, `---@param`, `---@return`, `---@generic`, `@deprecated` (strike-through in completion too), `@see` links that navigate, and the Lua manual for std-lib symbols. Navigation: Go to Declaration/Definition/Type Definition/Implementation; Ctrl+click on `require("mod")` strings; Go to Symbol and Search Everywhere over workspace symbols; document highlight; Structure view and breadcrumbs that include `function M.f`, `M.f = function`, `function M:m`, local functions and `---@class` tables; Back/Forward. Find Usages: results grouped by file, with read/write classification for fields and locals, a preview pane, and Code Vision 'N usages' computed from server references, never from text. Rename: a symbol across files (locals, fields, globals, `---@class` names), with a preview and conflict warnings. Renaming a file offers to update `require` strings. One atomic undo. Diagnostics: on-the-fly LuaLS diagnostics with diagnostic codes, shown in the editor, gutter, error stripe and Problems. Workspace diagnostics cover files that are not open. Per-code severity overrides. Type checking (param-type-mismatch, assign-type-mismatch, need-check-nil, undefined-field, missing-return). Quick fixes and intentions: Alt+Enter shows LuaLS code actions (disable diagnostic for line/file, mark as global, add to workspace library, swap params, convert JSON to Lua) and FrostIDE suppression fixes. No C++/C# text-template action is ever offered in a .lua file. Batch inspection: Inspect Code over the project or a directory, using `lua-language-server --check`, results in an inspection tool window. Counts must equal the CLI's. AST-correct refactorings: Extract Local, Inline Local, Extract Function (with upvalue, return-value and multiple-assignment analysis), Introduce Parameter and Safe Delete. Each has a preview and one undo, and is verified to keep the code parseable and behaviourally equal. Formatting: Reformat Code and Reformat Selection through LuaLS's EmmyLuaCodeStyle, driven by `.editorconfig` Lua keys. Optional user-installed StyLua honouring `stylua.toml`. Format on save (Actions on Save). Stale replies are discarded (ADR 0068). Highlighting: tree-sitter highlighting with LuaDoc annotation highlighting (`---@` tags, types, names), `<const>`/`<close>` attributes, goto labels, `self`, method calls; LuaLS semantic tokens mapped through the full LuaLS legend (global, defaultLibrary, readonly, static, deprecated) into theme colours. Inlay hints: parameter names, inferred local types, set-type, array index and await hints, with per-kind toggles. Refreshed when the server sends workspace/inlayHint/refresh. Folding: tree-sitter ranges plus LSP foldingRange, `--region`/`--endregion` regions and annotation-block folding. Persisted fold state (EDIT-02). Smart editing: auto-insert `end`/`until` on Enter, keyword-pair matching and highlight (function..end, if..then..elseif..else..end, repeat..until, do..end), line and block comment toggling (`--`, `--[[ ]]`), Lua-aware indentation (exists, ADR 0061), and surround-with Lua constructs. Live templates and file templates for Lua (module, class with `---@class`, function, ipairs/pairs loops, pcall, busted describe/it). Lua postfix templates (`.if`, `.ifnil`, `.ipairs`, `.pairs`, `.local`, `.return`). User-defined templates. C++/C# templates are never offered in Lua. Run configurations: run the current Lua file or a configured script with a chosen interpreter (lua 5.1-5.4, LuaJIT; absolute path; version probed), args, working directory, env, LUA_PATH/LUA_CPATH, before-launch tasks; a console with clickable `file.lua:N:` and stack-traceback lines. REPL: an interactive Lua console tool window bound to a chosen interpreter, with history, multi-line input, completion and send-selection-to-REPL. The debugger console evaluates in the selected frame. Standalone debugger (DAP): launch and attach; line, conditional, hit-count and log breakpoints; break on error (exception filters read from the adapter); step in/over/out; coroutines as threads; locals, upvalues, varargs and globals scopes; table expansion including metatables; watches; evaluate, hover and inline values; set value; run to cursor. Passes a shared Lua DAP conformance suite that the FrostEngine embedded debugger (FER) also has to pass. Unit testing: busted and LuaUnit discovery, run, debug, result tree, gutter icons, rerun failed, navigation from failures, durations from the real run. A provider interface for host test APIs (FrostEngine `Test.Case`, FEC). Mixed workspaces: Lua and C++ in one project. Lua documents never go to clangd and C++ never to LuaLS (exists, ADR 0058). Hook points for host-specific semantics (FrostEngine defaults, asset-path strings, callback implicit-use, C++ binding cross-navigation). Performance and stability: measured completion and hover latency on the FrostEngine TestProject and a large synthetic workspace (values recorded under LUA-04, no new gate without an ADR); no GUI-thread stall from Lua paths; a server crash recovers with documents replayed; memory accounted to the ResourceGovernor. Verification honesty: every Lua acceptance test runs against the pinned real LuaLS (and the real interpreter, adapter and test framework where relevant) in `verify.ps1 -Quick` and `verify.sh`. A missing tool fails the test instead of skipping it.
+
+**FrostEngine runtime integration.** PAIRING-1: The engine lists FrostIDE as a script-editor choice and can make it the default. Rider equivalent: com.unity.ide.rider adds Rider to Unity's External Script Editor list. Today the engine offers only Bundled fe or Custom (D:/dev/FrostEngine-AI-Claude/Frost-Editor/src/Editor/EditorPreferences.h:56-57; Docs/ScriptEditor.md section 1). PAIRING-2: FrostIDE has a 'Set FrostIDE as FrostEngine script editor' action, and a FrostIDE that the engine launches connects back automatically with no configuration. PAIRING-3: Open-at-line from every engine entry point (Content Browser, Inspector, Console, script.create) reuses the running IDE window. This already works through ADR 0060 and must not regress. CONN-1: One persistent, authenticated, loopback connection per project, with reconnect/backoff. No helper process per call and no global 15 s cap. CONN-2: An engine->IDE push channel carrying log entries, play-state changes, script hot-reload results, asset changes, selection changes, build/test progress, project open/close and server shutdown. CONN-3: A status-bar connection indicator (Connected / Not running / Stale discovery / Wrong project / Incompatible contract), a chooser when several editors advertise the project, and automatic rebind when the editor switches projects. CONN-4: Contract and capability negotiation. FrostIDE degrades gracefully against an older engine (v1: polling) and warns about a newer contract. CONN-5: The command allowlist is derived from the engine's own schema (commands.list/commands.describe) under a flag- and category-based policy, not a hard-coded list of 10. CONN-6: Engine errors reach the user with their code, message and data (sanitised), never as a generic 'engine rejected the command'. PLAY-1: Main-toolbar Play / Pause / Step(n) / Stop (and Simulate) with shortcuts, mirroring live engine state even when play is started from inside FrostEditor. PLAY-2: 'Start FrostEditor for this project' when no editor is running; optionally save dirty buffers before Play. LOG-1: An Engine Console tool window: live stream, level and logger filters, text/regex search, collapse duplicates, timestamps, clear-on-play, pause autoscroll, copy, bounded memory. LOG-2: Clickable locations. Script source path:line, every Lua traceback frame, and native C++ file:line (shader errors and engine errors in dev builds) navigate in the IDE. DIAG-1: Engine script validation (script.validate with the unsaved buffer) appears as in-editor diagnostics and in Problems, without duplicating LuaLS diagnostics. DIAG-2: Runtime script errors, hot-reload failures, shader compile errors and content validation issues (validation.run / content.validate) appear in Problems with navigation and engine quick-fixes (validation.apply-fix). DBG-1: A real Lua debugger embedded in the engine (lua_sethook-based) that speaks DAP, so FrostIDE's generic DAP client and debugger UI are reused. DBG-2: Line, conditional, hit-count and log-point breakpoints, verified against the lines the loaded chunk actually has, with an unverified state shown. DBG-3: Exception filters: break on uncaught script error (callbacks, coroutines) and optionally on errors caught by pcall. DBG-4: Step in / over / out (tail calls handled), pause, continue, run to cursor. DBG-5: Call stack across coroutines, with coroutines shown as threads, or as a continuation of the resume chain. DBG-6: Scopes Locals / Upvalues / Varargs / Globals (_ENV sandbox) / self.Properties; table paging; metatables; engine userdata (Vec2, Color, Entity, component proxies) shown with readable values. DBG-7: Watches, hover evaluation, a debug console REPL, and setVariable. DBG-8: Several Lua states in one process (scene engines, in-process multiplayer peers) and Lua debugging of FrostRuntime processes (standalone game, clients, dedicated server). DBG-9: Lua hot reload while debugging. Breakpoints are re-verified after ScriptSystem::ApplyHotReload, and the script watchdog and budgets are suspended while paused. DBG-10: Mixed debugging: lldb-dap attached to the FrostEditor/FrostRuntime process at the same time as the Lua DAP session, with engine type visualisers (EnTT/glm/sol2). TEST-1: FrostEngine Lua tests (test scenes under Assets/Tests and their Test.Case cases) appear in the Unit Tests window with gutter icons. TEST-2: Run all / one scene / one case with real results: status, failure message, path:line, script errors, logTail, duration, and no artificial time cap. TEST-3: Rerun failed; debug a test (Lua DAP); multiplayer test scenes (.peers.json); engine API coverage report. TEST-4: Tests run headless through the FrostEditor CLI when no editor is running, or in the live editor when connected. RUN-1: Run configurations for FrostEditor (project), FrostRuntime (scene and arguments), a deterministic play-test ('run' with frames, input script, dumps, screenshots), Tests, and Export/Build (build.start/status/cancel, build.export, build.run-game), with progress in the Build window. RUN-2: Multi-instance/multiplayer compound configurations: an editor host (network.start-host) or a dedicated server (FrostRuntime --server) plus N clients (network.launch-client or FrostRuntime --connect). Each process gets its own console tab and optional Lua debug session; Stop-all kills every process tree. CTX-1: 'Show in FrostEditor' (editor.open-asset / editor.browse-assets); selection sync between engine and IDE; New Lua Script from engine templates (script.create); regenerate definitions (script.generate-definitions) when the engine version or API hash changes. Asset/scene usages and serialized-value Code Vision belong to FEC-* but use this connection. HOTRELOAD-1: Lua hot reload is surfaced: reload succeeded or failed per class, with errors navigable. C++ hot reload is not offered (the engine has none). The replacement is a 'rebuild engine and restart FrostEditor with session restore' workflow. PERF-1 (later): a live script-cost view from server.scripts / stats.get, with jump to script.
+
+**FrostEngine content and code awareness.** P-1 Engine project recognition: opening a .frostproj, its folder, or the engine repo with a nested game project gives a first-class FrostEngine project. Rider analog: Unity project detection and the Unity Explorer. The .frostproj is parsed (General.Name/Version/StartScene handle, Build, Input.Actions, Layers, RenderLayers, Audio.Groups), and .feproject is recognized. P-2 Engine view, the analog of Unity Explorer: the Assets/ tree with .fmeta sidecars hidden and nested, type badges taken from the .fmeta Type (22 types from assets.list), filters for Scenes/Prefabs/Scripts/Materials/Data, the start scene marked, orphan, broken and duplicate-handle metas flagged, and read-only engine builtins (Builtin/<Name>, Engine/Builtin/Schemas) shown like Rider's read-only Packages node. P-3 .meta-safe file operations: rename, move, delete and duplicate of an asset take its .fmeta with it and keep the handle. Delete warns or refuses while the asset is referenced. Duplicates get a new handle. External moves (git checkout, Explorer) are reconciled. Rider analog: automatic .meta handling plus warnings. P-4 Asset index: every JSON engine document (.fscene, .fprefab, .fmeta, .fcell, .fworld, .ftable, .fschema, .fmat, .fsheet, .fanim, .ftileset, .fbtree, .fbots, .ftopology, .frt, .fquest, .fpost, .fdialogue, .frostproj and others) is parsed incrementally. It collects handles, asset references ({Handle, Path} or a bare path), entity IDs and hierarchy, Script components with Fields overrides, PrefabInstance links, and asset-path string literals in Lua. All of it updates live from file-watcher events and unsaved buffers. P-5 Find Usages in assets: Alt+F7 on a Lua script class or file, a Properties field, an asset path literal, a handle, a component name or a C++ component/field returns scene, prefab and asset usages grouped by kind ('Scene usages', 'Prefab usages', 'Lua string usages', 'Code usages'). Rows read entity name > component > field = value. Each row opens the JSON at the exact line, and 'Show in FrostEditor' (scene.open + editor.select) is offered. Rider analog: Unity usages in Find Usages. P-6 Code Vision for assets: 'Used in N scenes, M prefabs' on script classes and on C++ components, from real index counts. 'Overridden in K of N instances / values: 440, 2000' on exposed properties. Each lens navigates to its usages. Rider analog: 'N asset usages' and the Inspector-values Code Vision. P-7 Serialized-field awareness: properties declared in X.Properties are understood as serialized. Scene Fields keys that the script does not declare, and Fields values whose type mismatches the declaration, are reported in the asset. Renaming a property offers to rename its Fields keys in every asset (the analog of FormerlySerializedAs and serialized-field rename). Properties that are used only from assets are not flagged as unused. P-8 Event-function awareness: engine callbacks (OnCreate/OnUpdate/OnFixedUpdate/OnLateUpdate/OnDestroy/OnGameTick, collision, trigger, animation and network callbacks from the FrostScript contract in .frost/lua-api/frost.lua) get gutter markers and count as implicitly used. Typos are caught ('OnUpdat' -> did you mean OnUpdate) and wrong signatures are flagged. Alt+Insert 'Generate engine callback' inserts typed stubs. Rider analog: Unity event functions. P-9 Performance-critical context: functions reachable from per-frame callbacks are marked. Expensive engine calls inside them (GetComponent and FindEntityByName lookups, table and closure allocation per frame) are highlighted, as in Rider's Unity hot-path highlighting. While the game plays, live per-class costs from server.scripts appear (avg/p99 ms, instances, over-budget ticks). P-10 Engine-API-aware Lua: the generated EmmyLua definitions stay in sync with the engine version (a stale API hash is detected and script.generate-definitions is run by the engine, never rewritten by the IDE). Engine defaults apply when .luarc.json is missing. String-literal completion and validation cover component names, input action names, layer/tag/render-layer names, scene and asset paths for Scene.LoadScene/Net.Spawn/Properties defaults, and require module names. Rider analog: Unity string-literal completion and validation for tags, layers, scenes and input axes. P-11 Engine document editing: JSON schema validation, completion (component names, field names, enum values, asset paths filtered by asset type, entity IDs in the same document), hover with field documentation, ranges and defaults, handle -> path resolution with Ctrl+click, a structure/breadcrumb view of entity hierarchies, and .ftable rows validated against their .fschema columns. Rider analog: Unity YAML and .asmdef JSON support. P-12 Engine-backed validation: script.validate on save and content.validate on demand or on save for the affected assets feed the Problems view at the exact file:line or jsonPath. Engine fix commands are offered as quick fixes. P-13 File templates and generators: New Lua script (Behaviour/Physics/Test/Module through engine script.create), New Scene, New Prefab, New Material. Live templates for property declarations. 'Add property' and 'Implement missing callback' generators. Rider analog: Unity file and live templates. P-14 Shader support (Rider analog: ShaderLab/HLSL support): GLSL highlighting, outline and folding for .glsl/.glslh. The engine's #type stage, #pragma variant/layout/material_default/internal and #include rules (shader-root relative, include-once) are understood. Include navigation and completion, symbol navigation across includes, and validation errors from the engine's own preprocessor and glslang mapped back to the original file and line. P-15 Material awareness: .fmat 'Program' navigates to Resources/Shaders/<Program>.glsl, Features complete from #pragma variant, and Parameters complete and validate from the program's MaterialParams members. P-16 C++ engine-code awareness (Rider-for-Unreal reflection analog): the component registry (ComponentRegistry::Register<T>("Name").Field<&T::X>("X")) maps to JSON keys. Navigation works from a scene field to the C++ registration and member, and from a C++ component or field to its asset usages (with Code Vision). Navigation works from a Lua API symbol (Assets.AcquireTexture) to its sol2 binding lambda in C++. P-17 Asset previews: an image viewer tab for PNG/JPG (zoom, alpha checkerboard, size, import settings from .fmeta), thumbnail hovers on handles, asset-path strings and Fields values, and sprite-sheet (.fsheet) frame grids. P-18 VCS for assets (P3): a semantic diff and merge for .fscene/.fprefab keyed by entity ID, the analog of Rider's UnityYAMLMerge integration. A .fmeta moved without its asset is flagged in the commit dialog. P-19 Every capability works with no engine running (local index) and is upgraded or verified when FrostEditor or 'FrostEditor serve' is reachable. Unsaved scene state in a running editor is reflected when reported (the 'unsaved' flag of assets.find-references).
+
+**UX.** EDITOR CORE (Rider/IntelliJ editor). Matching-brace highlight at the caret, with a hint for an off-screen opener, plus Jump to Matching Brace (Ctrl+Shift+M). Every action in the shipped keymaps works: Move Statement Up/Down, Code Block Start/End (+selection), Start New Line Before, Split Line, Toggle Overwrite, Page Top/Bottom (+selection), Find Word at Caret, Auto-Indent Lines (Ctrl+Alt+I), Reformat File, Smart Completion, Select In, Run Anything, VCS Quick Popup, Maximize Tool Window. Multiple carets: N carets paste N clipboard lines; typing, completion and snippets at every caret; Ctrl,Ctrl+Up/Down caret cloning; column mode with virtual space past the line end. Clipboard history (Paste from History, Ctrl+Shift+V) and Paste without Formatting; smart paste that re-indents pasted code. Save actions: trim trailing whitespace (all lines or modified lines), ensure a final newline, honour .editorconfig, detect indentation, optional reformat/optimize-imports on save. Status-bar widgets that act: change line separator (CRLF/LF), reload in or convert to an encoding, change indent, toggle read-only, caret position opens Go to Line. Folding: language folds from tree-sitter and LSP textDocument/foldingRange; #region/#pragma region and //region comment regions; folds for C, JSON, XML, Markdown; persisted fold state; Fold/Unfold to level. True inline inlay hints (parameter names, types, chained-call types) that caret movement, selection, hit testing and soft wrap handle correctly in both renderers; Code Vision above declarations, backed by the language server. Sticky lines (scope headers pinned at the top) and code-structure breadcrumbs (namespace > class > method) that are clickable. Editor tabs: preview tab, Reopen Closed Tab, tab limit with closing policy, pin, Move to Opposite Group, drag between groups, bindable Split Vertically/Horizontally, detach an editor into its own window, per-editor soft-wrap toggle. Multiple project windows in one instance, with an Open Project choice between This Window and New Window, and a project window switcher. Distraction-free, Zen, Presentation and full-screen modes. Scratch files of any language, with language services where possible; scratches survive restart. Several rulers (visual guides at chosen columns), indent guides, whitespace display, current-line highlight, zoom. Text drag and drop inside and between editors. Spell checking of comments, strings and identifiers (camelCase-aware) with a user dictionary. Word (hippie) completion (Alt+/). Live templates: user-defined, per-language contexts, $VAR$ macros, linked/mirrored placeholders, abbreviation+Tab, Surround With, postfix templates and a settings UI; file templates. Highlighting and folding for GLSL, HLSL, Python, YAML, TOML, INI, PowerShell, Bash, JSON with comments, Markdown with fenced-code injection, XML (including .natvis), CMake. Markdown preview beside the source, with scroll sync. Large-file mode chosen by file size: a read-only paged view with highlighting off above a threshold. Editor-quality diff and merge: syntax-highlighted, editable working side, gutter apply/revert arrows, ignore-whitespace options, unified and side-by-side views, compare two files, a file with the clipboard, or folders; 3-way merge with Magic Resolve and a check for unresolved conflicts. WORKBENCH. Find Action that also finds settings and toggles them inline. Search Everywhere: All/Classes/Files/Symbols/Actions/Text tabs, run configurations and Git objects, CamelHump fuzzy matching, uncapped and paged results, empty-query history, responsive on a 100k+ file tree. Tool windows: drag-docking, Dock Pinned/Unpinned/Undock/Float/Window modes, two groups per side, persisted side and pin state, named layouts (Store as Default/Restore), multiple monitors, keyboard navigation of stripes. Settings: a complete, searchable tree with per-language code style and preview, colour-scheme editor, file and live template pages, toolchains, plugins page; export/import; importers from Rider, CLion, VS and VS Code; folder- or git-based sync. Themes: user and imported themes and colour schemes (VS Code theme JSON, .icls), high contrast. Keymaps: IntelliJ (Rider default), Visual Studio, ReSharper (VS), VS Code; every default shortcut triggers its action; Linux desktop conflict handling. Local History UI: diff against the current file, labels, folder history, recovery of deleted files, history for a selection. Problems window: Current File / Project tabs, grouping by file and severity, quick-fix from the row. TODO window: custom patterns and filters, scopes, grouping, live updates. Bookmarks: anonymous, numbered (0-9) and mnemonic (A-Z) bookmarks that follow edits and persist, in a Bookmarks tool window with descriptions. Services window: run/debug sessions and their consoles in one tree (content from RUN-*/DBG-*). Notifications: balloons, an event log, 'don't show again' per group, actions inside notifications. Diagnostics UI: an IDE-error balloon, a notice after a crash, Collect Logs, Show Log in Explorer/Files, a freeze-report viewer, Invalidate Caches / Repair IDE. VCS (Git): a commit tool window with hunk- and line-level partial commits, changelists, shelve/unshelve (partial), stash with preview, amend, commit checks; gutter blame annotations with age colours and click-through; file, folder and selection history; a log with a graph, filters (branch/author/path/date), paging and per-commit diffs; Compare with Revision/Branch and Compare Branches; merge/rebase/cherry-pick/revert in-progress state with Continue/Abort/Skip; interactive rebase (reword/squash/fixup/drop/reorder); Undo Commit; a push dialog with outgoing commits; askpass and SSH passphrase prompts; commit signing; worktrees; LFS; async clone with progress and cancel. VCS hosting: GitHub/GitLab accounts, Pull Requests tool window (list, review, comment, checkout), Share Project on GitHub. Terminal: tabs, splits, renaming, session restore, profiles (VS Developer PowerShell/Command Prompt, Git Bash, WSL distros, Linux shells from /etc/shells), OSC 7 cwd tracking, OSC 8 hyperlinks, OSC 133 shell-integration command blocks, clickable file:line links in compiler/Lua/engine output, IME, find. Accessibility: screen readers (NVDA, Narrator, Orca) read the editor text, caret, selection, diagnostics, terminal output and all tool windows through UIA and AT-SPI; keyboard-only operation of every chrome element; focus order; high-contrast and colour-deficiency support. HiDPI: per-monitor DPI changes at 100/125/150/175/200% with crisp icons and text in both renderers. Linux parity: the same workbench features on X11/Wayland, a platform-correct shell list, a Linux updater/package, the GPU path or a documented raster fallback. Extension API (FrostIDE's own; JetBrains plugin compatibility is a non-goal): declarative packs for themes, keymaps, templates, grammars, LSP/DAP server registration and external tools, plus a sandboxed out-of-process extension host. Customisable menus and toolbars, Quick Lists, recorded macros. Claude Code C1: a WebSocket IDE bridge with a lock file, openDiff/getDiagnostics/openFile and the other tools, selection_changed/at_mentioned, an Agent Terminal and a status widget, one bridge per window (PLAN 5.1). Claude Code C2: the frostide MCP server (find_usages, project_model, build, run_tests, ...), quality-gate hooks (PLAN 5.1, M8). Claude Code C3: native chat panel with the auth gate, permission UI, per-hunk diffs, checkpoints and sessions (PLAN 5.1, M12). Explicit non-goals unless the user decides otherwise: a minimap (Rider ships none by default), JetBrains or VS Code plugin binary compatibility, a JetBrains-style cloud settings service.
+
+**LATER tier.** C#/.NET language: semantic completion with import-on-complete, smart/postfix completion, parameter info, quick doc, hover, semantic highlighting, inlay parameter/type hints, all in unsaved buffers and across project references. C#/.NET analysis: solution-wide analysis covering closed files, the project's own Roslyn analyzers and source generators, .editorconfig/globalconfig severities, quick-fixes with preview, Inspect Code over a scope, a solution errors widget, suppressions. C#/.NET navigation: go to declaration/implementation/base/derived/type, Find Usages with read/write grouping, call and type hierarchy, File Structure, inheritance gutter markers, Code Vision usages/implementations/derived counts from the semantic index. C#/.NET refactorings, each with preview and one undo step: rename (type, file and namespace sync), change signature that updates call sites, extract method/local/constant/field/interface/superclass, inline, move type to file or namespace, pull members up/push down, introduce parameter, safe delete, the Roslyn conversions. C#/.NET code generation: constructors, equality members, ToString, properties, implement/override members with a member picker, create from usage, organize/remove unused usings through the server, C# live and postfix templates. C#/.NET library sources: SourceLink and embedded sources, decompiled sources kept in a read-only cache (never in the project tree), IL view, Assembly Explorer. C#/.NET project model: MSBuild-evaluated csproj (Conditions, Imports, Directory.Build.props/targets, multi-targeting per TFM, Central Package Management) and a Dependencies node (packages, projects, frameworks, analyzers). C#/.NET build and run: dotnet build/rebuild/clean/publish/pack on Windows and Linux, structured build errors you can navigate, launchSettings.json profiles as run configurations, any TFM, compound C++/C# launches. C#/.NET NuGet: real feed search through the v3 API, versions and prerelease, install/update/remove through MSBuild-safe edits, restore, nuget.config sources and credentials, CPM, vulnerable/deprecated flags. C#/.NET tests: xUnit/NUnit/MSTest discovery and run through VSTest and Microsoft.Testing.Platform, streamed results, failure stacks you can navigate, rerun failed, debug a single test, gutter icons; coverage later. C#/.NET debugging: launch and attach on any supported TFM on Windows and Linux, conditional/hit/log breakpoints, exception settings, multiple modules, rich value rendering (DebuggerDisplay), evaluate and Set Value, inline values, ASP.NET launch-browser; hot reload later. C#/.NET frameworks (later): ASP.NET Core, Razor/Blazor, XAML (WPF/Avalonia/MAUI), F#, VB.NET, profiling (trace/counters/gcdump). Unity project: an external-editor package for current LTS versions and Unity 6; tolerant project sync (response files, extra arguments, analyzers, source generators, player/editor define sets) with incremental regeneration; asmdef/asmref validation and navigation; an assets and packages view. Unity Editor link: a persistent authenticated two-way channel; main-toolbar Play/Pause/Step showing live state; a Unity Console with filters, collapse, clickable stack frames and clear-on-play; refresh assets/recompile on save; compile errors in Problems. Unity debugging: attach to the Editor and to standalone players (Mono and IL2CPP script debugging) with breakpoints, stepping, full value inspection including UnityEngine.Object fake-null, evaluate, exception breakpoints, and survival across domain reloads. Unity tests: EditMode/PlayMode tests in the Unit Tests window, with run and debug. Unity semantics: event-function completion, generation and implicit use; Unity inspections and quick-fixes; performance-critical context highlighting; serialized-field Code Vision with values from assets; Find Usages into scenes, prefabs and ScriptableObjects, including UnityEvent methods; .meta-aware rename, move and delete; ShaderLab/HLSL/compute highlighting and navigation; UnityYAMLMerge set up for VCS. Unreal project model: open .uproject; resolve the engine association; generate project files and an accurate compile database through UBT (GenerateClangDatabase) with NMake properties as the fallback; run UHT so generated headers exist; module/plugin/target view. Unreal build/run/debug: UBT targets (Editor/Game x DebugGame/Development/Shipping) with error navigation; launch and debug UnrealEditor -project; Unreal natvis loaded from the user's engine install. Unreal semantics: completion and validation of reflection macros and specifiers (UCLASS/UPROPERTY/UFUNCTION/USTRUCT/UENUM/GENERATED_BODY), UE naming-convention inspections, class/module/plugin wizards, USF/USH shader support. Unreal editor link (RiderLink equivalent, own code): log streaming, PIE play/stop/pause, Live Coding trigger and result, Blueprint usages and Code Vision for C++ classes and functions, open-in-IDE from the editor, Automation test runner. Other languages: a generic language-server registry (data-driven, pinned, licence-checked, trust-gated); tree-sitter highlighting for Python, YAML, TOML, JS/TS, PowerShell, HLSL/GLSL; LSP plus DAP for Python, JS/TS and PowerShell; JSON/YAML schema validation. Explicitly out of scope unless the user reopens it (PLAN.md:87 non-goals): database tools, HTTP client, remote development/containers/WSL workspaces.
