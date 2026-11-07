@@ -58,6 +58,29 @@ std::vector<frost::ui::Problem> liveErrors(const frost::app::Workbench& workbenc
     return rows;
 }
 
+// The gutter markers that report diagnostics (errors and warnings), without bookmarks and run markers.
+std::vector<frost::ui::LineMarker> diagnosticMarkers(const std::vector<frost::ui::LineMarker>& markers) {
+    std::vector<frost::ui::LineMarker> rows;
+    for (const frost::ui::LineMarker& marker : markers) {
+        if (marker.severity == frost::ui::MarkerSeverity::Error ||
+            marker.severity == frost::ui::MarkerSeverity::Warning) {
+            rows.push_back(marker);
+        }
+    }
+    return rows;
+}
+
+// The lines of the gutter's run markers (tests and entry points).
+std::vector<frost::LineIndex> runMarkerLines(const std::vector<frost::ui::LineMarker>& markers) {
+    std::vector<frost::LineIndex> lines;
+    for (const frost::ui::LineMarker& marker : markers) {
+        if (marker.severity == frost::ui::MarkerSeverity::RunTest) {
+            lines.push_back(marker.line);
+        }
+    }
+    return lines;
+}
+
 TEST(WorkbenchClangd, LiveDiagnosticsAppearAndClearAfterTheFix) {
     frost::test::disableCrashDialogs(); // clangd inherits the error mode: no WER box if it dies.
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
@@ -95,15 +118,21 @@ TEST(WorkbenchClangd, LiveDiagnosticsAppearAndClearAfterTheFix) {
     const frost::ui::ActiveDiagnostic squiggle = view->editor().diagnostics().front();
     EXPECT_EQ(squiggle.severity, frost::ui::InsightSeverity::Error);
     EXPECT_EQ(view->editor().document().text().text(squiggle.range), "missing_value");
-    EXPECT_TRUE(std::ranges::any_of(view->editor().lineMarkers(),
-                                    [](const frost::ui::LineMarker& m) { return m.line == frost::LineIndex{1}; }));
+    const std::vector<frost::ui::LineMarker> before = diagnosticMarkers(view->editor().lineMarkers());
+    ASSERT_EQ(before.size(), 1U);
+    EXPECT_EQ(before.front().line, frost::LineIndex{1});
+    EXPECT_EQ(before.front().severity, frost::ui::MarkerSeverity::Error);
+    // The gutter's run marker for main() (the test/entry-point gutter) sits beside it, on line 1.
+    EXPECT_EQ(runMarkerLines(view->editor().lineMarkers()), std::vector<frost::LineIndex>{frost::LineIndex{0}});
 
     // The fix, typed into the editor: clangd gets the change and publishes no error.
     view->editor().goToLine(1, 1);
     ASSERT_TRUE(view->editor().typeText("int missing_value = 0;\n"));
     ASSERT_TRUE(
         waitFor([&] { return liveErrors(*rig.workbench).empty() && view->editor().diagnostics().empty(); }, kPatience));
-    EXPECT_TRUE(view->editor().lineMarkers().empty());
+    // No diagnostic marker is left behind; the run marker followed main() down one line.
+    EXPECT_TRUE(diagnosticMarkers(view->editor().lineMarkers()).empty());
+    EXPECT_EQ(runMarkerLines(view->editor().lineMarkers()), std::vector<frost::LineIndex>{frost::LineIndex{1}});
 }
 
 TEST(WorkbenchClangd, FindReplaceUpdatesLiveDiagnostics) {

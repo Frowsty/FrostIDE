@@ -413,7 +413,9 @@ class AssetGateTest(TempDirTestCase):
         self.assertEqual(len(report.violations), 1)
         self.assertIn("invalid asset manifest", report.violations[0].message)
 
-    def _with_font(self, data: bytes, **asset_changes) -> list[str]:
+    def _with_font(self, data: bytes, licence_preamble: str | None = None, **asset_changes) -> list[str]:
+        """The demo font's violations with `data` as its TTF, `licence_preamble` (when given) put
+        before its OFL.txt (both re-pinned) and `asset_changes` applied to its manifest entry."""
         self._cases = getattr(self, "_cases", 0) + 1
         repo = self.tmp / f"case{self._cases}"
         shutil.copytree(FIXTURES / "licence" / "assets_ok", repo)
@@ -422,6 +424,10 @@ class AssetGateTest(TempDirTestCase):
         manifest = repo / "resources" / "assets.lock.json"
         document = json.loads(manifest.read_text(encoding="utf-8"))
         document["assets"][0]["files"][0]["sha256"] = hashlib.sha256(data).hexdigest()
+        if licence_preamble is not None:
+            licence = repo / "resources" / "fonts" / "demo" / "OFL.txt"
+            licence.write_bytes(licence_preamble.encode("utf-8") + licence.read_bytes())
+            document["assets"][0]["files"][1]["sha256"] = hashlib.sha256(licence.read_bytes()).hexdigest()
         document["assets"][0].update(asset_changes)
         manifest.write_text(json.dumps(document), encoding="utf-8")
         report = licensecheck.Report()
@@ -507,7 +513,53 @@ class AssetGateTest(TempDirTestCase):
         report = licensecheck.Report()
         licensecheck.check_assets(REPO, report)
         self.assertEqual([str(v) for v in report.violations], [])
-        self.assertEqual({p.name for p in report.packages}, {"Lucide", "Inter", "JetBrains Mono"})
+        # Lucide and the UI/editor fonts of ADR 0015 decision 9, plus the eight editor font families its
+        # 2026-11-07 amendment records (bundled by d540658). A new asset still needs this list and the ADR.
+        self.assertEqual({p.name for p in report.packages},
+                         {"Lucide", "Inter", "JetBrains Mono", "Fira Code", "Cascadia Code", "Source Code Pro",
+                          "IBM Plex Mono", "Inconsolata", "Intel One Mono", "Commit Mono", "Fantasque Sans Mono"})
+        fonts = [p for p in report.packages if p.name != "Lucide"]
+        for package in fonts:
+            self.assertEqual(package.declared, "OFL-1.1", package.name)
+            self.assertTrue(package.sha256, package.name)
+        # Every font's Reserved Font Names, as its licence file declares them (OFL-1.1 condition 3).
+        _document, assets = licensecheck.asset_fetch.load_manifest(REPO / licensecheck.ASSET_MANIFEST)
+        reserved = {a["id"]: a["reservedFontNames"] for a in assets if a["reservedFontNames"]}
+        self.assertEqual(reserved, {"cascadia-code": ["Cascadia Code"], "source-code-pro": ["Source"],
+                                    "ibm-plex-mono": ["Plex"], "intel-one-mono": ["Intel"]})
+
+    def test_declared_reserved_font_names(self) -> None:
+        header = licensecheck.LICENCE_MARKERS["OFL-1.1"]
+        body = f"\n{header} - 26 February 2007\n\"Reserved Font Name\" refers to any names specified as such\n"
+        cases = {
+            "Copyright (c) 2019 - Present, Microsoft Corporation,\nwith Reserved Font Name Cascadia Code.\n":
+                ["Cascadia Code"],
+            "Copyright 2017 IBM Corp. with Reserved Font Name \"Plex\"\n": ["Plex"],
+            "© 2023 Adobe, with Reserved Font Name 'Source'. All Rights Reserved. Source is a trademark.\n":
+                ["Source"],
+            "Copyright 2020 X, with Reserved Font Names “A”, “B” and “C”.\n": ["A", "B", "C"],
+            "Copyright 2020 X, with Reserved Font Names Alpha, Beta and Gamma.\n": ["Alpha", "Beta", "Gamma"],
+            "Copyright 2020 The Demo Authors\n": [],
+        }
+        for preamble, expected in cases.items():
+            with self.subTest(preamble=preamble):
+                self.assertEqual(licensecheck.declared_reserved_font_names(preamble + body, header), expected)
+
+    def test_undeclared_reserved_font_name_is_a_violation(self) -> None:
+        holder = "Copyright 2026 The Demo Font Authors"
+        font = _font({0: holder, 14: "https://scripts.sil.org/OFL"})
+        preamble = f"{holder}, with Reserved Font Name \"Demo\".\n"
+        messages = self._with_font(font, preamble, reservedFontNames=[])
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("OFL.txt:1: asset demo-font: the licence file declares the Reserved Font Name 'Demo', "
+                      "which reservedFontNames", messages[0])
+        # Recording it (in any case) passes; the recorded name is then bound by the modified-font rule.
+        self.assertEqual(self._with_font(font, preamble, reservedFontNames=["demo"]), [])
+        messages = self._with_font(font, preamble, reservedFontNames=["Demo"], modified=True)
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("a modified font may not keep its Reserved Font Names", messages[0])
+        # A licence without a declaration requires none.
+        self.assertEqual(self._with_font(font), [])
 
     def test_committed_vendored_sources_pass(self) -> None:
         report = licensecheck.Report()

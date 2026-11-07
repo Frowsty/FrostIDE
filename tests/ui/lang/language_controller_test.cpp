@@ -882,6 +882,39 @@ TEST(LanguageControllerNavigation, StructurePreservesCollapsedHierarchyOnJumpAnd
     EXPECT_FALSE(tree->topLevelItem(0)->isExpanded());
 }
 
+TEST(LanguageControllerNavigation, StructureKeepsTheTreeWhileTypingButClearsItWhenTheTextIsReplaced) {
+    FeatureServer server;
+    std::atomic<int> requests = 0;
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        ++requests;
+        return Json::array({Json::object()
+                                .set("name", "Holder")
+                                .set("kind", 5)
+                                .set("range", rangeJson(0, 0, 12))
+                                .set("selectionRange", rangeJson(0, 6, 12))});
+    });
+    FakeHost host("class Holder {};\n");
+    Rig rig(server, host);
+    auto* tree = rig.controller.structurePanel().findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+
+    // An edit keeps the (inert) tree until the reply arrives.
+    host.type("\n");
+    rig.controller.structureChanged();
+    EXPECT_EQ(tree->topLevelItemCount(), 1);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 2; }));
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+
+    // A replacement of the whole text (a reload from disk) clears it at once, then the reply refills it.
+    host.type("\n");
+    rig.controller.structureReplaced();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 3 && tree->topLevelItemCount() == 1; }));
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("Holder"));
+}
+
 TEST(LanguageControllerNavigation, GotoDeclarationDecompilesExternalDotNetAndCppSymbolsWhenNoLocalSource) {
     FeatureServer server;
     server.on("textDocument/definition", [](const Json&) {

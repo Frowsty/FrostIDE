@@ -416,6 +416,35 @@ TEST(RhiParity, TheCleanBadgeAndLongSquigglesMatchRaster) {
     }
 }
 
+// The gutter's run marker (tests and entry points) is a play triangle in both backends, not a disc
+// in one of them: the triangle's top and bottom rows start at the marker's left edge, a disc's do not.
+TEST(RhiParity, RunMarkerTriangleMatchesRaster) {
+    FROST_REQUIRE_OFFSCREEN();
+    AppearanceSettings settings;
+    settings.theme = "glacier-dark";
+    const auto appearance = test::install(settings);
+    ASSERT_NE(appearance, nullptr);
+    HarnessOptions options;
+    options.appearance = appearance->manager.get();
+    EditorHarness h("int main() {\n    return 0;\n}\n", options);
+    h.view->setLineMarkers({LineMarker{LineIndex{0}, MarkerSeverity::RunTest, "Run 'main'"}});
+    const EditorDisplayList list = isolate(h.view->buildDisplayList(), DisplayElementKind::Markers);
+    ASSERT_EQ(list.markers.size(), 1U);
+    ASSERT_EQ(list.markers.front().severity, MarkerSeverity::RunTest);
+    TestRhi rhi;
+    for (const double dpr : {1.0, 1.5}) {
+        SCOPED_TRACE(dpr);
+        const RhiFrame gpu = renderWithRhi(rhi, list, dpr);
+        EXPECT_EQ(gpu.stats.quads, gpu.stats.quadsOf(DisplayElementKind::Markers));
+        EXPECT_GT(gpu.stats.quads, 0U);
+        if (gpu.image.isNull()) {
+            GTEST_SKIP() << "no Direct3D 11 device (" << gpu.backend << "): quads only";
+        }
+        const QRect marker = deviceRect(list.markers.front().rect, dpr).adjusted(-2, -2, 2, 2);
+        expectSameInk(renderWithRaster(list, dpr).copy(marker), gpu.image.copy(marker), {}, 20);
+    }
+}
+
 TEST(RhiParity, OversizedChromeIsClippedAndDrawnWithoutDroppingShapes) {
     FROST_REQUIRE_OFFSCREEN();
     EditorDisplayList list;

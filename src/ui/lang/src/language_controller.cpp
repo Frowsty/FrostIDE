@@ -881,12 +881,16 @@ void LanguageController::setStructureVisible(bool visible) {
     structureChanged();
 }
 
-void LanguageController::structureChanged() {
+void LanguageController::structureChanged() { invalidateStructure(true); }
+
+void LanguageController::structureReplaced() { invalidateStructure(false); }
+
+void LanguageController::invalidateStructure(bool keepSameIdentityTree) {
     ++m_structureGeneration;
     m_structureSlot.cancel();
     m_structureTimer.stop();
     const bool keepExistingTreeForSameIdentity =
-        m_structureVisible && hasDocument() && !m_structurePath.empty() &&
+        keepSameIdentityTree && m_structureVisible && hasDocument() && !m_structurePath.empty() &&
         m_services.host.documentPath() == m_structurePath &&
         m_services.host.structureIdentity() == m_structureIdentity &&
         m_services.server.encoding() == m_structureEncoding;

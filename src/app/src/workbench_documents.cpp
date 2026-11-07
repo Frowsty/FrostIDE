@@ -297,8 +297,9 @@ void Workbench::documentChanged(const std::string& path) {
                     binding->refreshSemanticTokens();
             }
         }
+        // A reload replaced the whole text: the old Structure tree describes text that is gone.
         if (DocumentEditorView* current = currentView(); current && &current->document() == &view->document())
-            m_language->structureChanged();
+            m_language->structureReplaced();
     } else if (saved) {
         if (m_managed && isManagedSource(view->path()))
             (void)m_managed->saveDocument(view->path());

@@ -141,8 +141,20 @@ public:
     // --- Editor hooks ---
     // Cancel requests and dismiss document-specific UI when the active editor changes.
     void editorChanged();
-    // Invalidate locations immediately on every active-document edit or server replacement.
+    /*
+     * Invalidate locations immediately on every active-document edit or server replacement and request
+     * the structure again. After an edit of the same document on the same server session the old tree
+     * stays shown (inert: activating it does nothing) until the reply replaces it in place, so typing
+     * does not flicker or lose collapsed nodes; otherwise the panel shows "Loading structure...".
+     * GUI thread only.
+     */
     void structureChanged();
+    /*
+     * Like structureChanged(), for an active document whose whole text was replaced (a reload from
+     * disk): the old tree describes text that is gone, so it is always cleared at once ("Loading
+     * structure...") rather than kept until the reply. GUI thread only.
+     */
+    void structureReplaced();
     void setStructureVisible(bool visible);
     [[nodiscard]] StructurePanel& structurePanel();
     // A key press in the editor; true when the language features consumed it (lookup
@@ -203,6 +215,9 @@ private:
     void findUsagesAt(std::string path, ::frost::lang::LspPosition position);
     void gotoDeclarationAtPosition(::frost::lang::LspPosition position);
     void requestStructure();
+    // structureChanged() and structureReplaced(): `keepSameIdentityTree` keeps the shown tree for the
+    // same document and server session until the reply arrives.
+    void invalidateStructure(bool keepSameIdentityTree);
     bool nextTabStop();
     bool tryExpandPostfixCompletion();
     void insertSnippetAt(text::ByteRange replaceRange, std::string_view rawSnippet, std::string_view undoLabel);

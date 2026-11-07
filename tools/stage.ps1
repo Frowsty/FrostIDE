@@ -171,10 +171,12 @@ if ($Config -ne 'Debug' -or $BundleTools) {
 }
 
 # 4. The Qt runtime for frost_app.dll, then the build's platform plugins (offscreen for --selftest).
+# --no-svg: icons are baked to raster atlases at build time by tools/icon_baker, the only QtSvg user
+# (ADR 0015, "Runtime QtSvg" rejected); frost_app.dll imports no Qt6Svg, and the glacial logo is painted.
 $mode = if ($Config -eq 'Debug') { '--debug' } else { '--release' }
 $deployArgs = @($mode, '--no-translations', '--no-compiler-runtime', '--no-system-d3d-compiler',
     '--no-system-dxc-compiler', '--no-opengl-sw', '--no-ffmpeg',
-    '--no-plugins', '--dir', $Destination,
+    '--no-plugins', '--no-svg', '--dir', $Destination,
     (Join-Path $Destination 'frost_app.dll'))
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'

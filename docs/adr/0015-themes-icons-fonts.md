@@ -4,6 +4,8 @@
 - Date: 2026-11-01
 - Amended: 2026-11-01 by ADR 0029 (m1/large-file is m15/large-file, so the atlas mapping to-do is `TODO(M15)`;
   nothing else changes)
+- Amended: 2026-11-07 (r0/fnd-1-green-head): decision 9a records the eight editor font families bundled on
+  2026-11-05 (d540658) and their Reserved Font Names; licensecheck now cross-checks those names (decision 10)
 - Plan reference: PLAN.md section 2 ("Theming", "Icons and fonts"), 2.1 (`frost/compat`, banned features),
   3.4 (resources), 4 (B1, B5, B19, B28), 6.1 (test oracles), 8 (L1, L7), 9 (D13); milestone M1;
   feature matrix rows 243 ("themes") and 244 ("compact mode, IDE zoom, HiDPI")
@@ -176,6 +178,29 @@ The UI set registers at start-up from `<resources>/fonts/inter` (B1); the editor
 `ensureEditorFonts()` (B19). A missing UI font is a warning, not a failure. Registration is all or nothing: a
 failure removes the set's fonts registered so far, so retried editor opens never pile up partial registrations.
 
+**Decision 9a (amendment 2026-11-07). More editor font families.** d540658 bundled eight more editor families
+for the editor-font setting, registered with the editor set (`appearance_manager.cpp`, B19). All are SIL Open
+Font License 1.1 (already on the allowlist, so no new licence), unmodified and not subset, pinned in
+`resources/assets.lock.json` (release archive URL and SHA-256, every file's SHA-256), with the licence file next
+to them in the build output, a NOTICE entry and a REUSE.toml override table. Record, re-checked 2026-11-07 by
+licensecheck (pinned hashes, OFL 1.1 licence text, name tables naming the OFL and the holder):
+- Fira Code 6.2: "Copyright (c) 2014-2021 The Fira Code Project Authors"; no Reserved Font Name.
+- Cascadia Code and Cascadia Mono 2111.01: "Copyright (c) 2021 Microsoft Corporation"; Reserved Font Name
+  "Cascadia Code". Its name tables' nameID 13 opens with Microsoft's generic "Microsoft supplied font ... Any
+  other use is prohibited" paragraph before the OFL-based terms; nameID 14 and the repository LICENSE are the
+  OFL (question 7).
+- Source Code Pro 2.042R-u/1.062R-i: "Copyright 2023 Adobe"; Reserved Font Name "Source".
+- IBM Plex Mono 1.1.0: "Copyright 2017 IBM Corp."; Reserved Font Name "Plex".
+- Inconsolata 3.000: "Copyright 2006 The Inconsolata Project Authors"; no Reserved Font Name.
+- Intel One Mono 1.4.0: "Copyright 2023-2024 The Intel One Mono Project Authors"; Reserved Font Name "Intel".
+- Commit Mono 1.143: "Copyright 2023 Commit Mono authors" (name table; the archive's OFL.txt has no copyright
+  line); no Reserved Font Name.
+- Fantasque Sans Mono 1.8.0: "Copyright (c) 2013-2017 Jany Belluz"; no Reserved Font Name.
+The first manifest recorded no Reserved Font Names for Cascadia Code, Source Code Pro, IBM Plex Mono and Intel One
+Mono although their licence files declare them; the manifest now records them, and licensecheck fails when an OFL
+licence file's preamble declares a name the manifest does not record, so the modified-font rule (OFL condition 3)
+always sees every name. Unmodified bundling is allowed with Reserved Font Names.
+
 **Decision 10. The asset manifest and gate.** `resources/assets.lock.json` pins each asset (https URL, archive
 SHA-256, a recorded cross-check, SPDX licence, copyright lines, Reserved Font Names, files with SHA-256, extra
 files at the pinned tag). `tools/asset_fetch.py` fetches (https only, redirects included; every hash pinned; the
@@ -305,3 +330,6 @@ Atlas sizes (47 icons, 16 and 20 px designs, one page each): 100% 43,048 bytes; 
    skip these executables until an instrumented Qt build exists?
 6. The golden comparator lets up to 16 pixels differ by up to 32 per channel (decision 11). Confirm, or tighten
    (for example to 8 pixels) once more platforms have run the goldens?
+7. Cascadia Code's name tables (decision 9a) carry Microsoft's generic "Microsoft supplied font" paragraph next
+   to the OFL terms, while its repository LICENSE and nameID 14 are the OFL 1.1. Keep bundling it on the
+   strength of the OFL licence file (the usual reading for this upstream release), or drop it?

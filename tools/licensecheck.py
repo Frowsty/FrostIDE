@@ -24,7 +24,8 @@
 #                present with its pinned SHA-256;
 #                no unlisted file under an asset's dest directory; the licence file containing
 #                the text of every licence in the expression; reservedFontNames only with
-#                modified false; for OFL fonts, an OpenType 'name' table naming the OFL 1.1
+#                modified false, and recording every Reserved Font Name the OFL licence
+#                file's preamble declares; for OFL fonts, an OpenType 'name' table naming the OFL 1.1
 #                (nameID 13 or 14) and the manifest's copyright holder (nameID 0), unless the
 #                asset records "nameTableLicence": false; and the asset's ADR present. Each
 #                asset becomes an SBOM package with its archive's SHA-256.
@@ -107,8 +108,8 @@ BUILD_TOOL_EXCEPTIONS = {
 # input-context plugin. EntryPoint is Qt's static WinMain shim (BSD-3-Clause), linked
 # implicitly into Windows GUI executables.
 QT_RUNTIME_MODULES = {
-    "windows": frozenset({"Core", "Gui", "Widgets", "Network", "Svg", "EntryPoint"}),
-    "linux": frozenset({"Core", "Gui", "Widgets", "Network", "Svg", "DBus", "XcbQpa", "WaylandClient"}),
+    "windows": frozenset({"Core", "Gui", "Widgets", "Network", "EntryPoint"}),
+    "linux": frozenset({"Core", "Gui", "Widgets", "Network", "DBus", "XcbQpa", "WaylandClient"}),
 }
 # Plugins allowed at runtime, as "<plugin dir>/<file stem>". The offscreen platform
 # plugin ships next to frost because `frost --selftest` uses it (PLAN.md M0).
@@ -823,6 +824,40 @@ def names_holder(copyrights: str, holder: str) -> bool:
                                       re.IGNORECASE) is not None
 
 
+# A Reserved Font Name declaration in an OFL licence file's copyright preamble: "with Reserved
+# Font Name Cascadia Code.", "... Name \"Plex\"", "... Names 'A', 'B' and 'C'". The OFL's own
+# definition ("\"Reserved Font Name\" refers to ...") follows the licence header, never the preamble.
+_RFN_DECLARATION = re.compile(r"Reserved\s+Font\s+Names?[ \t]+([^\r\n]*)", re.IGNORECASE)
+_RFN_QUOTED = re.compile("[\"'‘“]([^\"'’”\r\n]+)[\"'’”]")
+_RFN_SEPARATOR = re.compile(r"\s*(?:,\s*(?:and\s+)?|and\s+)", re.IGNORECASE)
+
+
+def declared_reserved_font_names(text: str, header: str) -> list[str]:
+    """
+    The Reserved Font Names an OFL licence file declares in its preamble: the text before
+    `header` (the licence's "SIL OPEN FONT LICENSE Version 1.1" line; the whole text when absent).
+    Quoted names are read up to the last quoted name of the list; an unquoted list runs to the
+    first full stop, split at commas and "and". Pure; O(length of the preamble).
+    """
+    end = text.find(header)
+    preamble = text if end < 0 else text[:end]
+    names: list[str] = []
+    for declaration in _RFN_DECLARATION.finditer(preamble):
+        rest = declaration.group(1).strip()
+        if rest[:1] in "\"'‘“":
+            at = 0
+            while (quoted := _RFN_QUOTED.match(rest, at)) is not None:
+                names.append(quoted.group(1).strip())
+                separator = _RFN_SEPARATOR.match(rest, quoted.end())
+                if separator is None:
+                    break
+                at = separator.end()
+        else:
+            listed = rest.split(".", 1)[0]
+            names.extend(n.strip() for n in re.split(r",|\band\b", listed) if n.strip())
+    return names
+
+
 def expression_ids(node) -> set[str]:
     """The licence IDs in a parse_expression tree, without WITH exceptions."""
     if node[0] in ("id", "with"):
@@ -916,6 +951,16 @@ def check_assets(repo: Path, report: Report, files: list[str] | None = None,
                     report.violations.append(Violation(
                         f"{dest}/{asset['licenceFile']}", 1,
                         f"{label}: the licence file lacks the {ref} text (\"{marker}\")"))
+            # OFL condition 3 binds every Reserved Font Name the holder declared, so the manifest
+            # (and with it the modified-font rule above) must record each one.
+            if "OFL-1.1" in ids:
+                recorded = {n.casefold() for n in asset["reservedFontNames"]}
+                for reserved in declared_reserved_font_names(text, LICENCE_MARKERS["OFL-1.1"]):
+                    if reserved.casefold() not in recorded:
+                        report.violations.append(Violation(
+                            f"{dest}/{asset['licenceFile']}", 1,
+                            f"{label}: the licence file declares the Reserved Font Name '{reserved}', "
+                            f"which reservedFontNames in {manifest_rel} does not record"))
         if check_names:
             holders = [copyright_holder(line) for line in asset["copyright"]]
             for name, data in sorted(fonts.items()):
