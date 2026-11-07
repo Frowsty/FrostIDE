@@ -193,6 +193,21 @@ public:
         lastDeleteFolder = folder;
         return confirmDeleteAnswer;
     }
+    // Records each CMakeLists.txt preview; answers cmakeEditAnswer (default: decline, as the GUI's
+    // Cancel would, so no test edits a CMakeLists.txt without asking for it).
+    [[nodiscard]] bool confirmCMakeListsEdit(QWidget*, const std::string& listsPath, const std::string& before,
+                                             const std::string& after) override {
+        ++cmakeEditPrompts;
+        lastCMakeEditPath = listsPath;
+        lastCMakeEditBefore = before;
+        lastCMakeEditAfter = after;
+        return cmakeEditAnswer;
+    }
+    bool cmakeEditAnswer = false;
+    std::size_t cmakeEditPrompts = 0;
+    std::string lastCMakeEditPath;
+    std::string lastCMakeEditBefore;
+    std::string lastCMakeEditAfter;
 
     std::string openPath;
     OpenKind lastOpenKind = OpenKind::SolutionOrFile;

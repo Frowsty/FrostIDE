@@ -17,6 +17,7 @@
 #include "frost/project/cmake_syntax.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
@@ -38,14 +39,20 @@
 #include "project_properties_dialog.hpp"
 #include "unity_control.hpp"
 #include <QClipboard>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QInputDialog>
+#include <QLabel>
 #include <QMimeData>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
@@ -413,7 +420,95 @@ Result<std::string> cmakeRelativeSourcePath(std::string_view projectRoot, std::s
     return out;
 }
 
+/*
+ * The changed lines of a CMakeLists.txt edit, for the preview the user confirms before anything is
+ * written: the lines both texts share at the start and the end are left out, then "Line N:", the
+ * removed lines prefixed "- " and the added lines prefixed "+ ". Pure; O(size).
+ */
+std::string cmakeEditPreview(std::string_view before, std::string_view after) {
+    const auto lines = [](std::string_view text) {
+        std::vector<std::string_view> out;
+        std::size_t start = 0;
+        while (start < text.size()) {
+            std::size_t end = text.find('\n', start);
+            if (end == std::string_view::npos)
+                end = text.size();
+            std::string_view line = text.substr(start, end - start);
+            if (line.ends_with('\r'))
+                line.remove_suffix(1);
+            out.push_back(line);
+            start = end + 1;
+        }
+        return out;
+    };
+    const auto a = lines(before);
+    const auto b = lines(after);
+    std::size_t prefix = 0;
+    while (prefix < a.size() && prefix < b.size() && a[prefix] == b[prefix])
+        ++prefix;
+    std::size_t suffix = 0;
+    while (suffix < a.size() - prefix && suffix < b.size() - prefix &&
+           a[a.size() - 1 - suffix] == b[b.size() - 1 - suffix])
+        ++suffix;
+    std::string preview = std::format("Line {}:\n", prefix + 1);
+    for (std::size_t i = prefix; i < a.size() - suffix; ++i)
+        preview += std::format("- {}\n", a[i]);
+    for (std::size_t i = prefix; i < b.size() - suffix; ++i)
+        preview += std::format("+ {}\n", b[i]);
+    return preview;
+}
+
+/*
+ * A FrostEngine asset's metadata sidecar is <asset file name>.fmeta beside it (the engine's own
+ * layout: Click.wav and Click.wav.fmeta); it carries the asset's handle, so a rename or move that
+ * left it behind would orphan the metadata and break every reference to the handle (FEC-9a). This
+ * plans the sidecar's move with its asset: nullopt when `asset` has none (folders and .fmeta files
+ * themselves have none); AlreadyExists when `target`.fmeta exists, so neither file moves.
+ */
+using SidecarMove = std::pair<std::string, std::string>; // The .fmeta now, and where it goes.
+Result<std::optional<SidecarMove>> planFmetaSidecarMove(io::IFileSystem& fs, const std::string& asset,
+                                                        const std::string& target) {
+    if (extensionOf(asset) == ".fmeta")
+        return std::nullopt;
+    SidecarMove move{asset + ".fmeta", target + ".fmeta"};
+    const auto status = fs.status(move.first);
+    if (!status || status->type != io::FileType::Regular)
+        return std::nullopt;
+    if (fs.exists(move.second).value_or(true)) {
+        return fail(ErrorCode::AlreadyExists, "'" + std::string(io::fileName(move.second)) +
+                                                  "' already exists; an asset and its .fmeta file move together, "
+                                                  "so neither was moved");
+    }
+    return move;
+}
+
 } // namespace
+
+bool DialogWorkbenchPrompts::confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath,
+                                                   const std::string& before, const std::string& after) {
+    QDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("cmakeEditPreviewDialog"));
+    dialog.setWindowTitle(text("Edit CMakeLists.txt?"));
+    dialog.setModal(true);
+    dialog.resize(640, 360);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* label = new QLabel(text("FrostIDE would change %1 as shown. Nothing is written unless you apply it.")
+                                 .arg(QDir::toNativeSeparators(qs(listsPath))),
+                             &dialog);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+    auto* preview = new QPlainTextEdit(qs(cmakeEditPreview(before, after)), &dialog);
+    preview->setObjectName(QStringLiteral("cmakeEditPreviewText"));
+    preview->setReadOnly(true);
+    preview->setLineWrapMode(QPlainTextEdit::NoWrap);
+    layout->addWidget(preview, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    ui::installDialogChrome(&dialog, false);
+    return dialog.exec() == QDialog::Accepted;
+}
 
 bool isCFamilySource(std::string_view path) noexcept {
     static constexpr std::array<std::string_view, 18> kExtensions{".c",   ".cc",  ".cpp", ".cxx", ".c++", ".cppm",
@@ -1631,7 +1726,34 @@ Result<void> Workbench::addSourceToCMakeLists(std::string_view sourcePath, std::
     if (Result<std::vector<project::CMakeSyntaxCommand>> verified = project::scanCMakeSyntax(updated); !verified) {
         return std::unexpected(std::move(verified.error()));
     }
-    if (Result<io::SafeWriteResult> written = m_services.fs.safeWrite(canonicalLists, updated, {}); !written) {
+    if (auto written = writeCMakeListsWithPreview(
+            canonicalLists, *content, updated,
+            text("Adding %1 to target %2").arg(qs(*relSource), qs(selected->arguments.front().literal)));
+        !written) {
+        return written;
+    }
+    notify(text("CMakeLists.txt updated"),
+           text("Added %1 to target %2.").arg(qs(*relSource), qs(selected->arguments.front().literal)),
+           ui::NotificationKind::Info);
+    return {};
+}
+
+/*
+ * CMakeLists.txt is edited as text (add, rename and remove a source); FrostIDE writes such an edit
+ * only after the user saw it: the prompt shows the changed lines (cmakeEditPreview) and nothing is
+ * written unless the user applies them. Declined, the file stays byte for byte as it was and an
+ * Info notification says so (Cancelled). The write is atomic (safeWrite); an open CMakeLists.txt
+ * tab reloads from disk.
+ */
+Result<void> Workbench::writeCMakeListsWithPreview(const std::string& canonicalLists, const std::string& before,
+                                                   const std::string& after, const QString& change) {
+    if (!m_services.prompts.confirmCMakeListsEdit(m_window, canonicalLists, before, after)) {
+        notify(text("CMakeLists.txt not changed"),
+               text("%1 was not applied to CMakeLists.txt; update it manually if the target needs it.").arg(change),
+               ui::NotificationKind::Info);
+        return fail(ErrorCode::Cancelled, "the CMakeLists.txt edit was declined");
+    }
+    if (Result<io::SafeWriteResult> written = m_services.fs.safeWrite(canonicalLists, after, {}); !written) {
         notify(text("Cannot update CMakeLists.txt"), qs(written.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(written.error()));
     }
@@ -1639,9 +1761,6 @@ Result<void> Workbench::addSourceToCMakeLists(std::string_view sourcePath, std::
         (void)m_documents->checkDisk(*openLists);
         m_documentRegistry->notifyChanged(canonicalLists);
     }
-    notify(text("CMakeLists.txt updated"),
-           text("Added %1 to target %2.").arg(qs(*relSource), qs(selected->arguments.front().literal)),
-           ui::NotificationKind::Info);
     return {};
 }
 
@@ -1736,6 +1855,16 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
                    ui::NotificationKind::Info);
             return;
         }
+        // One regular file is the edit ProjectHost supports; several files, a folder or a filter
+        // are refused (SLN-6) before the user is asked anything.
+        const auto single = m_services.fs.status(paths.front());
+        if (paths.size() != 1 || !targetFilterPath.empty() || !single || single->type != io::FileType::Regular) {
+            notify(text("Add to Project"),
+                   text("Adding several files, a folder or a filter to a project requires safe solution and project "
+                        "edits (SLN-6). No file was changed."),
+                   ui::NotificationKind::Error);
+            return;
+        }
         std::string targetVcxproj;
         std::string targetProjName;
         if (bestMatch != nullptr) {
@@ -1764,25 +1893,7 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
         if (targetVcxproj.empty()) {
             return;
         }
-        // One regular C/C++ file is the edit ProjectHost supports; anything else is refused (SLN-6).
-        if (paths.size() == 1 && targetFilterPath.empty()) {
-            if (const auto st = m_services.fs.status(paths.front()); st && st->type == io::FileType::Regular) {
-                removeProjectFile(qs(targetVcxproj), qs(paths.front()), true);
-                return;
-            }
-        }
-        auto added = addExistingFilesToVcxproj(m_services.fs, targetVcxproj, paths, targetFilterPath);
-        if (!added) {
-            notify(text("Add to Project"), qs(added.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        refreshSolutionExplorerForFsChange(paths.front());
-        startProjectEvaluation(m_projectRoot);
-        if (m_clangd) {
-            restartClangd();
-        }
-        notify(text("Added to Project"), text("Added %1 file(s) to %2.").arg(*added).arg(qs(targetProjName)),
-               ui::NotificationKind::Info);
+        removeProjectFile(qs(targetVcxproj), qs(paths.front()), true);
         return;
     }
 
@@ -1892,12 +2003,8 @@ void Workbench::renameSourceInCMakeLists(const std::string& oldPath, const std::
     if (!project::scanCMakeSyntax(updated)) {
         return;
     }
-    if (m_services.fs.safeWrite(canonicalLists, updated, {})) {
-        if (document::FileDocument* openLists = m_documents->find(canonicalLists); openLists != nullptr) {
-            (void)m_documents->checkDisk(*openLists);
-            m_documentRegistry->notifyChanged(canonicalLists);
-        }
-    }
+    (void)writeCMakeListsWithPreview(canonicalLists, *content, updated,
+                                     text("Renaming %1 to %2").arg(qs(*relOld), qs(*relNew)));
 }
 
 void Workbench::removeSourceFromCMakeLists(const std::string& deletedPath, bool directory) {
@@ -1965,156 +2072,103 @@ void Workbench::removeSourceFromCMakeLists(const std::string& deletedPath, bool 
     if (!project::scanCMakeSyntax(updated)) {
         return;
     }
-    if (m_services.fs.safeWrite(canonicalLists, updated, {})) {
-        if (document::FileDocument* openLists = m_documents->find(canonicalLists); openLists != nullptr) {
-            (void)m_documents->checkDisk(*openLists);
-            m_documentRegistry->notifyChanged(canonicalLists);
-        }
-    }
+    (void)writeCMakeListsWithPreview(canonicalLists, *content, updated, text("Removing %1").arg(qs(*relDeleted)));
 }
 
+/*
+ * Project files are not edited on a rename, move or delete (SLN-1, FND-3): the text rewrites of
+ * .vcxproj, .vcxproj.filters and .csproj that used to run here could corrupt them, and safe project
+ * edits arrive with SLN-6. The file-system operation has already happened; this only finds the
+ * loaded projects that still list `oldPath` (a C++ item written without a wildcard, or a C#
+ * Include attribute naming it or, for a folder, a path under it) and tells the user which project
+ * files to update. Nothing is written. Reads each listed .csproj once; O(project items).
+ */
 void Workbench::updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory,
                                     bool deleted) {
-    if (!m_solution) {
+    if (!m_solution || oldPath.empty()) {
         return;
     }
-    const auto updateXmlFile = [&](const std::string& xmlFile, const std::string& projDir) {
-        if (!m_services.fs.exists(xmlFile).value_or(false)) {
-            return;
-        }
-        if (const document::FileDocument* openXml = m_documentRegistry->find(xmlFile);
-            openXml != nullptr && openXml->dirty()) {
-            return;
-        }
-        auto content = m_services.fs.readFile(xmlFile);
-        if (!content) {
-            return;
-        }
-        const auto relToProj = [&](const std::string& p) -> std::optional<std::string> {
-            const std::string projKey = lang::documentKey(projDir);
-            const std::string pKey = lang::documentKey(p);
-            if (!pKey.starts_with(projKey) || pKey.size() <= projKey.size()) {
-                return std::nullopt;
-            }
-            const char sep = p[projDir.size()];
-            if (sep != '/' && sep != '\\') {
-                return std::nullopt;
-            }
-            std::string rel = p.substr(projDir.size() + 1);
-            while (!rel.empty() && (rel.front() == '/' || rel.front() == '\\')) {
-                rel.erase(rel.begin());
-            }
-            return rel;
-        };
-        const auto relOld = relToProj(oldPath);
-        if (!relOld || relOld->empty()) {
-            return;
-        }
-        std::string relOldBack = *relOld;
-        std::ranges::replace(relOldBack, '/', '\\');
-        std::string relOldFwd = *relOld;
-        std::ranges::replace(relOldFwd, '\\', '/');
-
-        std::string updated = *content;
-        bool changed = false;
-        if (!deleted) {
-            const auto relNew = relToProj(newPath);
-            if (!relNew || relNew->empty()) {
-                return;
-            }
-            std::string relNewBack = *relNew;
-            std::ranges::replace(relNewBack, '/', '\\');
-            std::string relNewFwd = *relNew;
-            std::ranges::replace(relNewFwd, '\\', '/');
-            const auto replaceAll = [&](const std::string& from, const std::string& to) {
-                std::size_t pos = 0;
-                while ((pos = updated.find(from, pos)) != std::string::npos) {
-                    updated.replace(pos, from.size(), to);
-                    pos += to.size();
-                    changed = true;
-                }
-            };
-            if (!directory) {
-                replaceAll("Include=\"" + escapeXml(relOldBack) + "\"", "Include=\"" + escapeXml(relNewBack) + "\"");
-                replaceAll("Include=\"" + escapeXml(relOldFwd) + "\"", "Include=\"" + escapeXml(relNewFwd) + "\"");
-            } else {
-                replaceAll("Include=\"" + escapeXml(relOldBack) + "\\", "Include=\"" + escapeXml(relNewBack) + "\\");
-                replaceAll("Include=\"" + escapeXml(relOldFwd) + "/", "Include=\"" + escapeXml(relNewFwd) + "/");
-            }
-        } else {
-            const auto removeMatchingAttr = [&](const std::string& attrPattern, bool prefixMatch) {
-                std::size_t pos = 0;
-                while ((pos = updated.find(attrPattern, pos)) != std::string::npos) {
-                    if (!prefixMatch) {
-                        const std::size_t after = pos + attrPattern.size();
-                        if (after >= updated.size() || updated[after] != '"') {
-                            pos += attrPattern.size();
-                            continue;
-                        }
-                    }
-                    std::size_t tagStart = updated.rfind('<', pos);
-                    if (tagStart == std::string::npos) {
-                        break;
-                    }
-                    const std::size_t tagClose = updated.find('>', pos);
-                    if (tagClose == std::string::npos) {
-                        break;
-                    }
-                    std::size_t eraseEnd = tagClose + 1;
-                    if (tagClose > 0 && updated[tagClose - 1] != '/') {
-                        const std::size_t nameEnd = updated.find_first_of(" \t\r\n>", tagStart + 1);
-                        if (nameEnd != std::string::npos) {
-                            const std::string closeTag =
-                                "</" + updated.substr(tagStart + 1, nameEnd - (tagStart + 1)) + ">";
-                            if (const std::size_t closePos = updated.find(closeTag, tagClose + 1);
-                                closePos != std::string::npos) {
-                                eraseEnd = closePos + closeTag.size();
-                            }
-                        }
-                    }
-                    while (tagStart > 0 && (updated[tagStart - 1] == ' ' || updated[tagStart - 1] == '\t')) {
-                        --tagStart;
-                    }
-                    if (eraseEnd < updated.size() && updated[eraseEnd] == '\r') {
-                        ++eraseEnd;
-                    }
-                    if (eraseEnd < updated.size() && updated[eraseEnd] == '\n') {
-                        ++eraseEnd;
-                    }
-                    updated.erase(tagStart, eraseEnd - tagStart);
-                    pos = tagStart;
-                    changed = true;
-                }
-            };
-            if (!directory) {
-                removeMatchingAttr("Include=\"" + escapeXml(relOldBack), false);
-                removeMatchingAttr("Include=\"" + escapeXml(relOldFwd), false);
-            } else {
-                removeMatchingAttr("Include=\"" + escapeXml(relOldBack) + "\\", true);
-                removeMatchingAttr("Include=\"" + escapeXml(relOldFwd) + "/", true);
-            }
-        }
-        if (changed) {
-            if (m_services.fs.safeWrite(xmlFile, updated, {})) {
-                if (document::FileDocument* openXml = m_documents->find(xmlFile); openXml != nullptr) {
-                    (void)m_documents->checkDisk(*openXml);
-                    m_documentRegistry->notifyChanged(xmlFile);
-                }
-            }
-        }
+    const std::string oldKey = lang::documentKey(oldPath);
+    const auto names = [&](std::string_view path) {
+        const std::string key = lang::documentKey(path);
+        if (!directory)
+            return key == oldKey;
+        return key.size() > oldKey.size() && key.starts_with(oldKey) &&
+               (path[oldPath.size()] == '/' || path[oldPath.size()] == '\\');
     };
-
+    QStringList stale;
     for (const project::ProjectInfo& proj : m_solution->projects()) {
-        if ((proj.kind != project::ProjectKind::Cpp && proj.kind != project::ProjectKind::CSharp) ||
-            proj.nodeKind != project::NodeKind::Project || proj.path.empty()) {
+        if (proj.nodeKind != project::NodeKind::Project || proj.path.empty()) {
             continue;
         }
-        const std::string projDir(io::parentPath(proj.path));
-        updateXmlFile(proj.path, projDir);
-        if (proj.kind == project::ProjectKind::Cpp) {
-            updateXmlFile(proj.path + ".filters", projDir);
+        bool listed = false;
+        if (proj.kind == project::ProjectKind::Cpp && proj.vcxproj) {
+            listed = std::ranges::any_of(proj.vcxproj->items, [&](const project::ProjectItem& item) {
+                return !item.fromWildcard && names(item.path);
+            });
+        } else if (proj.kind == project::ProjectKind::CSharp) {
+            // SDK-style projects include their folder's files implicitly; only an explicit Include needs an edit.
+            const std::string projDir(io::parentPath(proj.path));
+            const std::string projKey = lang::documentKey(projDir);
+            if (oldKey.size() > projKey.size() && oldKey.starts_with(projKey)) {
+                std::string rel = oldPath.substr(projDir.size() + 1);
+                std::ranges::replace(rel, '/', '\\');
+                if (auto content = m_services.fs.readFile(proj.path)) {
+                    std::string forward = rel;
+                    std::ranges::replace(forward, '\\', '/');
+                    for (const std::string& spelling : {rel, forward}) {
+                        const std::string attribute = "Include=\"" + escapeXml(spelling);
+                        const std::string exact = attribute + (directory ? (spelling == rel ? "\\" : "/") : "\"");
+                        if (content->find(exact) != std::string::npos)
+                            listed = true;
+                    }
+                }
+            }
         }
+        if (listed)
+            stale.push_back(qs(io::fileName(proj.path)));
     }
+    if (stale.isEmpty()) {
+        return;
+    }
+    const QString name = qs(io::fileName(oldPath));
+    const QString what =
+        deleted ? text("%1 was deleted").arg(name)
+                : text("%1 was %2 to %3")
+                      .arg(name, io::parentPath(oldPath) == io::parentPath(newPath) ? text("renamed") : text("moved"),
+                           QDir::toNativeSeparators(qs(newPath)));
+    notify(text("Project files not updated"),
+           text("%1, but %2 still list its old path. Updating project files on rename, move or delete requires "
+                "safe solution and project edits (SLN-6); no project file was changed. Update the project manually.")
+               .arg(what, stale.join(QStringLiteral(", "))),
+           ui::NotificationKind::Warning);
+}
+
+/*
+ * Renames `from` to `to` and, when `sidecar` is set, the asset's .fmeta with it: both or neither.
+ * If the sidecar cannot follow, the asset is moved back; the error says what happened (and that the
+ * asset stayed at `to` when even that failed). Open tabs of the sidecar follow it.
+ */
+Result<void> Workbench::moveWithSidecar(const std::string& from, const std::string& to,
+                                        const std::optional<std::pair<std::string, std::string>>& sidecar) {
+    if (auto renamed = m_services.fs.rename(from, to); !renamed) {
+        return renamed;
+    }
+    if (!sidecar) {
+        return {};
+    }
+    if (auto metaMoved = m_services.fs.rename(sidecar->first, sidecar->second); !metaMoved) {
+        if (auto back = m_services.fs.rename(to, from); !back) {
+            return fail(ErrorCode::IoError, std::format("its .fmeta file could not follow ({}), and moving the asset "
+                                                        "back failed too ({}); the asset is now {}",
+                                                        metaMoved.error().message(), back.error().message(), to));
+        }
+        return fail(metaMoved.error().code(), "its .fmeta file could not follow (" + metaMoved.error().message() +
+                                                  "), so the asset was moved back");
+    }
+    rebindRenamedDocument(m_documentRegistry->canonicalize(sidecar->first),
+                          m_documentRegistry->canonicalize(sidecar->second));
+    return {};
 }
 
 Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_view newRelativeName) {
@@ -2154,7 +2208,14 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
                ui::NotificationKind::Error);
         return std::unexpected(std::move(err));
     }
-    if (auto renamed = m_services.fs.rename(canonicalOld, *targetJoined); !renamed) {
+    auto sidecar = isDir ? Result<std::optional<SidecarMove>>(std::nullopt)
+                         : planFmetaSidecarMove(m_services.fs, canonicalOld, *targetJoined);
+    if (!sidecar) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(sidecar.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(sidecar.error()));
+    }
+    if (auto renamed = moveWithSidecar(canonicalOld, *targetJoined, *sidecar); !renamed) {
         notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
                ui::NotificationKind::Error);
         return std::unexpected(std::move(renamed.error()));
@@ -2418,7 +2479,14 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
                    ui::NotificationKind::Warning);
             continue;
         }
-        if (auto renamed = m_services.fs.rename(canonicalOld, *targetJoined); !renamed) {
+        auto sidecar = isDir ? Result<std::optional<SidecarMove>>(std::nullopt)
+                             : planFmetaSidecarMove(m_services.fs, canonicalOld, *targetJoined);
+        if (!sidecar) {
+            notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(sidecar.error().message()),
+                   ui::NotificationKind::Warning);
+            continue;
+        }
+        if (auto renamed = moveWithSidecar(canonicalOld, *targetJoined, *sidecar); !renamed) {
             notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
                    ui::NotificationKind::Error);
             continue;

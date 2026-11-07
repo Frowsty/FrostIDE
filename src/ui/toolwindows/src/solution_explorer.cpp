@@ -37,7 +37,9 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <string>
+#include <string_view>
 
 namespace frost::ui {
 namespace {
@@ -974,6 +976,24 @@ void addBuildAndSourceActions(SolutionExplorer& explorer, QMenu& menu, BuildCont
     }
 }
 
+// Disables the actions (and submenus) of `menu` for edits setUnsupportedEditsReason names, with
+// `reason` as their tooltip. O(actions).
+void disableUnsupportedEdits(QMenu& menu, const QString& reason) {
+    static constexpr std::array<std::string_view, 12> kUnsupported{
+        "addSolutionFolder",  "renameSolutionFolder",      "removeSolutionFolder", "moveToSolutionFolderMenu",
+        "addExistingProject", "removeProjectFromSolution", "addNewFilter",         "renameFilter",
+        "removeFilter",       "addExistingProjectFolder",  "moveToFilterMenu",     "removeFilesFromProject",
+    };
+    menu.setToolTipsVisible(true);
+    for (QAction* action : menu.actions()) {
+        const QString name = action->menu() != nullptr ? action->menu()->objectName() : action->objectName();
+        if (std::ranges::contains(kUnsupported, name.toStdString())) {
+            action->setEnabled(false);
+            action->setToolTip(reason);
+        }
+    }
+}
+
 } // namespace
 
 QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* parent) {
@@ -1048,7 +1068,8 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
                 QAction* remove = menu->addAction(filesToActOn.size() > 1
                                                       ? tr("Remove %1 Files from Project").arg(filesToActOn.size())
                                                       : tr("Remove from Project"));
-                remove->setObjectName(QStringLiteral("removeFromProject"));
+                remove->setObjectName(filesToActOn.size() > 1 ? QStringLiteral("removeFilesFromProject")
+                                                              : QStringLiteral("removeFromProject"));
                 connect(remove, &QAction::triggered, this, [this, key, path, projectPath, filesToActOn, solution] {
                     const auto current = m_model->solution();
                     if (current != solution || !m_removeProjectFileHandler)
@@ -1207,6 +1228,8 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
     copy->setIcon(icons.get(icons::kEditCopy));
     copy->setEnabled(!effectivePath.isEmpty());
     connect(copy, &QAction::triggered, this, [effectivePath] { QGuiApplication::clipboard()->setText(effectivePath); });
+    if (!m_unsupportedEditsReason.isEmpty())
+        disableUnsupportedEdits(*menu, m_unsupportedEditsReason);
     return menu;
 }
 

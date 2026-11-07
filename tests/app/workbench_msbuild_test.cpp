@@ -296,4 +296,43 @@ TEST(WorkbenchMsBuild, RunSavesBuildsAndShowsTheProgramInTheRunToolWindow) {
     EXPECT_EQ(rig.workbench->runService()->lastOutcome()->exitCode, 3);
 }
 
+// The gutter marker on main() runs the project whose .vcxproj builds the file (App), labelled with
+// its name; the program's real output, input echo and exit code come back through the Run window.
+TEST(WorkbenchMsBuild, RunMarkerRunsTheProjectThatBuildsTheFile) {
+    const std::optional<std::string> msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir dir("run-marker", "tiny_sln");
+    RigOptions options;
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")).has_value());
+    ASSERT_NE(rig.view(), nullptr);
+    const auto& markers = rig.view()->editor().lineMarkers();
+    const auto marker =
+        std::ranges::find_if(markers, [](const auto& m) { return m.severity == frost::ui::MarkerSeverity::RunTest; });
+    ASSERT_NE(marker, markers.end());
+    EXPECT_EQ(marker->message, "Run 'App'");
+
+    emit rig.view()->editor().gutterRunMarkerClicked(static_cast<int>(marker->line.value()), QPoint());
+    frost::ui::RunConsole* console = rig.workbench->runConsole();
+    ASSERT_NE(console, nullptr);
+    ASSERT_TRUE(
+        waitFor([&] { return console->text().contains(QStringLiteral("tiny answer 42")); }, std::chrono::seconds(240)))
+        << console->text().toStdString();
+    ASSERT_TRUE(waitFor([&] { return console->input()->isEnabled(); }, std::chrono::seconds(30)));
+    console->input()->setText(QStringLiteral("marker"));
+    emit console->input()->returnPressed();
+    ASSERT_TRUE(
+        waitFor([&] { return console->text().contains(QStringLiteral("echo: marker")); }, std::chrono::seconds(30)))
+        << console->text().toStdString();
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->runController()->running(); }, std::chrono::seconds(30)));
+    ASSERT_TRUE(rig.workbench->runService()->lastOutcome().has_value());
+    EXPECT_EQ(rig.workbench->runService()->lastOutcome()->exitCode, 3);
+}
+
 } // namespace

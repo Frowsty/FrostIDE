@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // LuaLS discovery (the bundled and pinned SDK installs first, ADR 0079), its launch arguments and the
-// workspace configuration, including the FrostEngine defaults for a workspace with a .frostproj.
+// workspace configuration, including the FrostEngine defaults for a FrostEngine project root (a
+// .frostproj or .feproject file; isFrostEngineProjectRoot, shared with the FrostEngine tool window).
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/utf.hpp"
 #include "frost/lang/lua_service.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <format>
 #ifdef _WIN32
@@ -149,16 +151,32 @@ Result<std::vector<std::string>> luaLanguageServerArguments(std::string_view sta
         return std::unexpected(std::move(meta.error()));
     return std::vector<std::string>{"--logpath=" + *log, "--metapath=" + *meta};
 }
-bool isFrostEngineLuaWorkspace(io::IFileSystem& fs, std::string_view root) {
+bool isFrostEngineProjectFileName(std::string_view name) noexcept {
+    // ASCII case is ignored on every platform, so a project copied between Windows and Linux is
+    // recognised the same way; the stem must not be empty (".frostproj" alone is no project).
+    const auto endsWithIgnoringCase = [name](std::string_view suffix) {
+        if (name.size() <= suffix.size())
+            return false;
+        const std::string_view tail = name.substr(name.size() - suffix.size());
+        return std::ranges::equal(tail, suffix, [](char a, char b) {
+            const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+            return lower(a) == lower(b);
+        });
+    };
+    return endsWithIgnoringCase(".frostproj") || endsWithIgnoringCase(".feproject");
+}
+bool isFrostEngineProjectRoot(io::IFileSystem& fs, std::string_view root) {
+    if (root.empty())
+        return false;
     auto entries = fs.listDirectory(root);
     if (!entries)
         return false;
-    for (const auto& entry : *entries) {
-        const std::string_view name = entry.name;
-        if (entry.type == io::FileType::Regular && name.size() > 10 && name.ends_with(".frostproj"))
-            return true;
-    }
-    return false;
+    return std::ranges::any_of(*entries, [](const io::DirEntry& entry) {
+        return entry.type == io::FileType::Regular && isFrostEngineProjectFileName(entry.name);
+    });
+}
+bool isFrostEngineLuaWorkspace(io::IFileSystem& fs, std::string_view root) {
+    return isFrostEngineProjectRoot(fs, root);
 }
 Json luaDefaults(std::string runtimeVersion, bool frostEngine) {
     Json runtime = Json::object().set("version", std::move(runtimeVersion));

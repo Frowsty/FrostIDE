@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Explicit, trusted commands to a running FrostEngine editor, and the FrostEngine tool window that
-// carries them (registered only for projects that have a .frostproj or .feproject file).
+// carries them (registered only for FrostEngine projects: lang::isFrostEngineProjectRoot, a
+// .frostproj or .feproject file in the project folder).
 #include "engine_integration.hpp"
 
 #include "frost/app/workbench.hpp"
@@ -9,6 +10,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/lang/engine_automation.hpp"
 #include "frost/lang/engine_discovery_process.hpp"
+#include "frost/lang/lua_service.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/scheduler.hpp"
@@ -62,13 +64,6 @@ QString discoveryDirectory() {
         path = QDir(path).filePath(QStringLiteral("FrostEngine/Editor"));
     }
     return QDir(path).filePath(QStringLiteral("Automation"));
-}
-// Whether `root` is a FrostEngine project: a .frostproj or .feproject file directly inside it.
-bool isEngineProject(const std::string& root) {
-    if (root.empty())
-        return false;
-    const QDir dir(qs(root));
-    return !dir.entryList({QStringLiteral("*.frostproj"), QStringLiteral("*.feproject")}, QDir::Files).isEmpty();
 }
 /*
  * How long the parent waits for the helper process. The engine conversation itself is bounded by
@@ -168,7 +163,8 @@ struct EngineIntegration::Impl {
         if (stopped || !workbench.m_window)
             return;
         cancel();
-        available = isEngineProject(workbench.projectRoot());
+        // The one FrostEngine project rule, shared with the LuaLS defaults (lua_service.hpp).
+        available = lang::isFrostEngineProjectRoot(workbench.m_services.fs, workbench.projectRoot());
         auto& windows = workbench.m_window->toolWindows();
         if (available && !registered) {
             QWidget* content = panel;
@@ -440,7 +436,6 @@ EngineIntegration::~EngineIntegration() {
         delete m_impl->panel.data();
 }
 void EngineIntegration::cancel() { m_impl->cancel(); }
-bool EngineIntegration::luaReservationPending() const noexcept { return false; }
 void EngineIntegration::trustChanged() {
     if (m_impl->current && !m_impl->workbench.m_services.trust.isTrusted(m_impl->workbench.projectRoot()))
         m_impl->cancel(false);
