@@ -553,8 +553,8 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 if (auto inferred = frost::app::inferExternalProjectRootForFile(parsed->paths.front())) {
                     parsed->project = std::move(*inferred);
                 } else {
-                    const QFileInfo candidate(QString::fromUtf8(
-                        parsed->paths.front().data(), static_cast<qsizetype>(parsed->paths.front().size())));
+                    const QFileInfo candidate(QString::fromUtf8(parsed->paths.front().data(),
+                                                                static_cast<qsizetype>(parsed->paths.front().size())));
                     if (candidate.isFile() &&
                         candidate.suffix().compare(QStringLiteral("frostproj"), Qt::CaseInsensitive) == 0) {
                         parsed->project = parsed->paths.front();

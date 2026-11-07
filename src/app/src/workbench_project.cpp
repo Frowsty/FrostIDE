@@ -711,8 +711,7 @@ void Workbench::offerProjectTrust() {
             if (win && win->isVisible()) {
                 const QSize hint = dialog->sizeHint().expandedTo(dialog->minimumSize());
                 const QRect parentFrame = win->frameGeometry();
-                dialog->move(parentFrame.center().x() - hint.width() / 2,
-                             parentFrame.center().y() - hint.height() / 2);
+                dialog->move(parentFrame.center().x() - hint.width() / 2, parentFrame.center().y() - hint.height() / 2);
             }
             dialog->show();
             dialog->raise();
@@ -1697,9 +1696,8 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
                 names.push_back(qs(p->name));
             }
             bool ok = false;
-            const QString chosen =
-                QInputDialog::getItem(m_window, text("Add to Project"), text("Select target C++ project:"), names, 0,
-                                      false, &ok);
+            const QString chosen = QInputDialog::getItem(m_window, text("Add to Project"),
+                                                         text("Select target C++ project:"), names, 0, false, &ok);
             if (!ok || chosen.isEmpty()) {
                 return;
             }
@@ -1722,8 +1720,7 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
         if (m_clangd) {
             restartClangd();
         }
-        notify(text("Added to Project"),
-               text("Added %1 file(s) to %2.").arg(*added).arg(qs(targetProjName)),
+        notify(text("Added to Project"), text("Added %1 file(s) to %2.").arg(*added).arg(qs(targetProjName)),
                ui::NotificationKind::Info);
         return;
     }
@@ -2255,10 +2252,9 @@ Result<void> copyFileOrDirectoryRecursiveFs(io::IFileSystem& fs, const std::stri
     return {};
 }
 
-std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& targetDirectory,
-                                     std::string_view fileName, bool isDirectory) {
-    if (auto direct = io::joinPath(targetDirectory, fileName);
-        direct && !fs.exists(*direct).value_or(false)) {
+std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& targetDirectory, std::string_view fileName,
+                                     bool isDirectory) {
+    if (auto direct = io::joinPath(targetDirectory, fileName); direct && !fs.exists(*direct).value_or(false)) {
         return *direct;
     }
     std::string stem(fileName);
@@ -2272,8 +2268,7 @@ std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& tar
     for (int idx = 1; idx < 1000; ++idx) {
         const std::string candidateName =
             idx == 1 ? std::format("{}_copy{}", stem, ext) : std::format("{}_copy{}{}", stem, idx, ext);
-        if (auto joined = io::joinPath(targetDirectory, candidateName);
-            joined && !fs.exists(*joined).value_or(false)) {
+        if (auto joined = io::joinPath(targetDirectory, candidateName); joined && !fs.exists(*joined).value_or(false)) {
             return *joined;
         }
     }
@@ -2311,8 +2306,7 @@ void Workbench::cutPathsToClipboard(const std::vector<std::string>& paths) {
 }
 
 void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths,
-                                             const std::string& targetDirectory,
-                                             const std::string& projectPath) {
+                                             const std::string& targetDirectory, const std::string& projectPath) {
     if (sourcePaths.empty() || targetDirectory.empty()) {
         return;
     }
@@ -2347,8 +2341,7 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
             const std::string targetKey = lang::documentKey(canonicalTargetDir);
             if (targetKey == oldKey ||
                 (targetKey.starts_with(oldKey) && targetKey.size() > oldKey.size() &&
-                 (canonicalTargetDir[canonicalOld.size()] == '/' ||
-                  canonicalTargetDir[canonicalOld.size()] == '\\'))) {
+                 (canonicalTargetDir[canonicalOld.size()] == '/' || canonicalTargetDir[canonicalOld.size()] == '\\'))) {
                 notify(text("Cannot move folder"), text("Cannot move a folder into itself."),
                        ui::NotificationKind::Warning);
                 continue;
@@ -2446,8 +2439,7 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
             continue;
         }
         const bool isDir = st->type == io::FileType::Directory;
-        const std::string dst =
-            findNonCollidingCopyPath(m_services.fs, canonicalTargetDir, io::fileName(src), isDir);
+        const std::string dst = findNonCollidingCopyPath(m_services.fs, canonicalTargetDir, io::fileName(src), isDir);
         if (dst.empty()) {
             continue;
         }
@@ -2480,8 +2472,8 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
     }
 }
 
-void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory,
-                                        const std::string& projectPath, const std::string& filterPath) {
+void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory, const std::string& projectPath,
+                                        const std::string& filterPath) {
     if (sourcePath.empty()) {
         return;
     }
@@ -2521,8 +2513,7 @@ void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDi
         return;
     }
     if (m_services.fs.exists(*dstJoined).value_or(false)) {
-        notify(text("Cannot duplicate"), text("'%1' already exists.").arg(qs(chosenName)),
-               ui::NotificationKind::Error);
+        notify(text("Cannot duplicate"), text("'%1' already exists.").arg(qs(chosenName)), ui::NotificationKind::Error);
         return;
     }
     if (auto copied = copyFileOrDirectoryRecursiveFs(m_services.fs, canonicalSrc, *dstJoined); !copied) {

@@ -658,8 +658,8 @@ TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
     // Left sidebar houses both top-left and bottom-left stripes plus the More Tool Windows (⋯) button.
     ASSERT_NE(window.toolWindows().moreToolWindowsButton(), nullptr);
     ASSERT_NE(window.toolWindows().moreToolWindowsButton()->menu(), nullptr);
-    QMetaObject::invokeMethod(
-        window.toolWindows().moreToolWindowsButton()->menu(), "aboutToShow", Qt::DirectConnection);
+    QMetaObject::invokeMethod(window.toolWindows().moreToolWindowsButton()->menu(), "aboutToShow",
+                              Qt::DirectConnection);
     EXPECT_GE(window.toolWindows().moreToolWindowsButton()->menu()->actions().size(), 8);
 
     // NavigationBar breadcrumbs live inside the bottom StatusBar on the left like Rider New UI.

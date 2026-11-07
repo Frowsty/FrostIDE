@@ -400,8 +400,8 @@ TEST_F(UpdateDiscovery, InvalidAndExpiredCandidatesNeverHideValidLaterRelease) {
 }
 TEST_F(UpdateDiscovery, AuthenticCurrentReleaseIsNotAValidationError) {
     const auto badOld = candidate("old-retired-key", 39, "1.1.0");
-    const QString badOldSignature =
-        "https://github.com/Frowsty/FrostIDE/releases/download/old-retired-key/frost-update-stable-windows-x64.json.sig";
+    const QString badOldSignature = "https://github.com/Frowsty/FrostIDE/releases/download/old-retired-key/"
+                                    "frost-update-stable-windows-x64.json.sig";
     manager.responses[badOldSignature][0] ^= 1;
     auto result = run({candidate("current", 40, "1.2.0"), badOld});
     ASSERT_FALSE(result);

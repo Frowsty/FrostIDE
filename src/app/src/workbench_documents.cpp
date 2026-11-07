@@ -138,48 +138,46 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             (void)m_window->invoke(actionId.toStdString());
         }
     });
-    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this,
-            [this, editor](int lineZeroBased, QPoint) {
-                DocumentEditorView* targetView = nullptr;
-                for (DocumentEditorView* v : m_editors->views()) {
-                    if (&v->editor() == editor) {
-                        targetView = v;
-                        break;
-                    }
-                }
-                if (!targetView)
+    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this, [this, editor](int lineZeroBased, QPoint) {
+        DocumentEditorView* targetView = nullptr;
+        for (DocumentEditorView* v : m_editors->views()) {
+            if (&v->editor() == editor) {
+                targetView = v;
+                break;
+            }
+        }
+        if (!targetView)
+            return;
+        const auto entries =
+            discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
+        const int targetLine = lineZeroBased + 1;
+        for (const auto& entry : entries) {
+            if (entry.line == targetLine) {
+                if (entry.isEntryPoint) {
+                    if (m_window)
+                        (void)m_window->invoke("run.run");
                     return;
-                const auto entries =
-                    discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
-                const int targetLine = lineZeroBased + 1;
-                for (const auto& entry : entries) {
-                    if (entry.line == targetLine) {
-                        if (entry.isEntryPoint) {
-                            if (m_window)
-                                (void)m_window->invoke("run.run");
-                            return;
+                }
+                if (m_window) {
+                    m_window->toolWindows().show(kUnitTestsToolWindow, false);
+                    if (QWidget* content = m_window->toolWindows().content(kUnitTestsToolWindow)) {
+                        if (auto* refreshBtn =
+                                content->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"))) {
+                            refreshBtn->click();
                         }
-                        if (m_window) {
-                            m_window->toolWindows().show(kUnitTestsToolWindow, false);
-                            if (QWidget* content = m_window->toolWindows().content(kUnitTestsToolWindow)) {
-                                if (auto* refreshBtn =
-                                        content->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"))) {
-                                    refreshBtn->click();
-                                }
-                                if (auto* filterEdit =
-                                        content->findChild<QLineEdit*>(QStringLiteral("unitTestsFilterEdit"))) {
-                                    filterEdit->setText(qs(entry.testName));
-                                }
-                                if (auto* runAllBtn =
-                                        content->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"))) {
-                                    runAllBtn->click();
-                                }
-                            }
+                        if (auto* filterEdit = content->findChild<QLineEdit*>(QStringLiteral("unitTestsFilterEdit"))) {
+                            filterEdit->setText(qs(entry.testName));
                         }
-                        return;
+                        if (auto* runAllBtn =
+                                content->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"))) {
+                            runAllBtn->click();
+                        }
                     }
                 }
-            });
+                return;
+            }
+        }
+    });
     transitionLauncherToMainWindow();
 }
 
@@ -648,10 +646,9 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
         for (const auto& entry : runnable) {
             if (entry.line <= 0)
                 continue;
-            const std::string msg =
-                entry.isEntryPoint
-                    ? std::format("Run '{}' ({})", entry.testName, entry.suiteName)
-                    : std::format("Run Test '{}.{}' / Debug Test", entry.suiteName, entry.testName);
+            const std::string msg = entry.isEntryPoint
+                                        ? std::format("Run '{}' ({})", entry.testName, entry.suiteName)
+                                        : std::format("Run Test '{}.{}' / Debug Test", entry.suiteName, entry.testName);
             markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(entry.line - 1)},
                                              ui::MarkerSeverity::RunTest, msg});
         }

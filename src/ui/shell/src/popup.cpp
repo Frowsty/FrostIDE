@@ -5,9 +5,9 @@
 #include "frost/ui/shell/popup.hpp"
 
 #include "frost/ui/frost_style.hpp"
+#include "frost/ui/icon_ids.hpp"
 
 #include "shell_util.hpp"
-#include "frost/ui/icon_ids.hpp"
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -224,8 +224,8 @@ void Popup::paintEvent(QPaintEvent* /*event*/) {
     const bool isDark = background.lightness() < 128;
 
     painter.fillRect(rect(), background);
-    shell_detail::paintEllipticalGlow(painter, QPointF(width() * 0.25, 0.0),
-                                      width() * 0.65, std::min(160, height()), accent, isDark ? 32 : 18);
+    shell_detail::paintEllipticalGlow(painter, QPointF(width() * 0.25, 0.0), width() * 0.65, std::min(160, height()),
+                                      accent, isDark ? 32 : 18);
     shell_detail::paintFrostedGlassSheen(painter, rect(), isDark, true);
 
     painter.setPen(QPen(border, 1.0));

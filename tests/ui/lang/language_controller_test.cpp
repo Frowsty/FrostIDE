@@ -918,19 +918,20 @@ TEST(LanguageControllerNavigation, StructureKeepsTheTreeWhileTypingButClearsItWh
 TEST(LanguageControllerNavigation, GotoDeclarationDecompilesExternalDotNetAndCppSymbolsWhenNoLocalSource) {
     FeatureServer server;
     server.on("textDocument/definition", [](const Json&) {
-        return Json::array({Json::object()
-                                .set("uri", "csharp:/metadata/projects/App/assemblies/System.Console/symbols/Console.cs")
-                                .set("range", rangeJson(10, 4, 13))});
+        return Json::array(
+            {Json::object()
+                 .set("uri", "csharp:/metadata/projects/App/assemblies/System.Console/symbols/Console.cs")
+                 .set("range", rangeJson(10, 4, 13))});
     });
     server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
     server.on("textDocument/references", [](const Json&) { return Json::array(); });
     server.on("csharp/metadata", [](const Json&) {
-        return Json::object().set(
-            "source",
-            "namespace System\n{\n    public static class Console\n    {\n        public static void WriteLine(string? value);\n    }\n}\n");
+        return Json::object().set("source", "namespace System\n{\n    public static class Console\n    {\n        "
+                                            "public static void WriteLine(string? value);\n    }\n}\n");
     });
 
-    FakeHost csHost("using System;\nclass Program {\n    static void Main() {\n        System.Console.WriteLine(\"hi\");\n    }\n}\n",
+    FakeHost csHost("using System;\nclass Program {\n    static void Main() {\n        "
+                    "System.Console.WriteLine(\"hi\");\n    }\n}\n",
                     workPath("Program.cs"));
     csHost.caretAfter("System.Console.Write");
     Rig csRig(server, csHost);
@@ -948,11 +949,11 @@ TEST(LanguageControllerNavigation, GotoDeclarationDecompilesExternalDotNetAndCpp
     cppServer.on("textDocument/declaration", [](const Json&) { return Json::array(); });
     cppServer.on("textDocument/references", [](const Json&) { return Json::array(); });
     cppServer.on("textDocument/hover", [](const Json&) {
-        return Json::object().set(
-            "contents",
-            Json::object()
-                .set("kind", "markdown")
-                .set("value", "```cpp\ntemplate <class T> class vector\n```\n---\nSequence container encapsulating dynamic size arrays."));
+        return Json::object().set("contents",
+                                  Json::object()
+                                      .set("kind", "markdown")
+                                      .set("value", "```cpp\ntemplate <class T> class vector\n```\n---\nSequence "
+                                                    "container encapsulating dynamic size arrays."));
     });
     FakeHost cppHost("#include <vector>\nint main() {\n    std::vector<int> items;\n}\n", workPath("main.cpp"));
     cppHost.caretAfter("std::vec");

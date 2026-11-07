@@ -255,8 +255,8 @@ protected:
 
             // Frosted glass ambient color spill across the dialog surface.
             paintDialogEllipticalGlow(painter, QPointF(m_dialog->width() * 0.22, DialogTitleBar::preferredHeight()),
-                                      m_dialog->width() * 0.65, std::max(180, m_dialog->height() / 2),
-                                      accent, isDark ? 32 : 18);
+                                      m_dialog->width() * 0.65, std::max(180, m_dialog->height() / 2), accent,
+                                      isDark ? 32 : 18);
             paintDialogEllipticalGlow(painter, QPointF(m_dialog->width() * 0.82, m_dialog->height() * 0.85),
                                       m_dialog->width() * 0.55, std::max(160, m_dialog->height() / 2),
                                       QColor(0x7C, 0x4D, 0xFF), isDark ? 22 : 12);
@@ -560,8 +560,8 @@ DialogTitleBar* installDialogChrome(QDialog* dialog, bool resizable) {
     if (auto* existing =
             dialog->findChild<DialogTitleBar*>(QStringLiteral("dialogTitleBar"), Qt::FindDirectChildrenOnly)) {
         existing->setResizable(resizable);
-        if (auto* filterObj = dialog->findChild<QObject*>(QStringLiteral("dialogChromeFilter"),
-                                                          Qt::FindDirectChildrenOnly)) {
+        if (auto* filterObj =
+                dialog->findChild<QObject*>(QStringLiteral("dialogChromeFilter"), Qt::FindDirectChildrenOnly)) {
             static_cast<DialogChromeFilter*>(filterObj)->setResizable(resizable);
         }
         if (!dialog->isVisible() && resizable) {

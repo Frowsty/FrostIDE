@@ -88,8 +88,8 @@ void BranchStatusWidget::refresh() {
         return;
     }
     const vcs::GitBranchStatus& branch = m_controller->snapshot()->status.branch;
-    QString badge = branch.detached() ? (branch.oid.size() > 8 ? qs(branch.oid).left(8) : qs(branch.oid))
-                                      : qs(branch.head);
+    QString badge =
+        branch.detached() ? (branch.oid.size() > 8 ? qs(branch.oid).left(8) : qs(branch.oid)) : qs(branch.head);
     if (branch.ahead > 0) {
         badge += QStringLiteral(" \u2191%1").arg(branch.ahead);
     }

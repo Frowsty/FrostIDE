@@ -723,15 +723,9 @@ void GitIntegration::showResolveConflictsDialog() {
                 sides.ours.append(line);
                 sides.theirs.append(line);
                 break;
-            case Section::Ours:
-                blockOurs.append(line);
-                break;
-            case Section::Base:
-                blockBase.append(line);
-                break;
-            case Section::Theirs:
-                blockTheirs.append(line);
-                break;
+            case Section::Ours: blockOurs.append(line); break;
+            case Section::Base: blockBase.append(line); break;
+            case Section::Theirs: blockTheirs.append(line); break;
             }
         }
         if (section != Section::Normal) {

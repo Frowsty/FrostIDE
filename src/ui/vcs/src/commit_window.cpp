@@ -224,8 +224,8 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
       m_amend(new QCheckBox(tr("Amend"), this)), m_commit(new QPushButton(tr("Commit"), this)),
       m_commitAndPush(new QPushButton(tr("Commit and Push..."), this)),
       m_rollback(new QPushButton(tr("Rollback"), this)),
-      m_resolveConflictsButton(new QPushButton(tr("Resolve Conflicts..."), this)),
-      m_result(new QLabel(this)), m_statusInfo(new QLabel(this)) {
+      m_resolveConflictsButton(new QPushButton(tr("Resolve Conflicts..."), this)), m_result(new QLabel(this)),
+      m_statusInfo(new QLabel(this)) {
     setObjectName(QStringLiteral("commitToolWindow"));
     m_tree->setModel(m_model);
     m_tree->setFrameShape(QFrame::NoFrame);

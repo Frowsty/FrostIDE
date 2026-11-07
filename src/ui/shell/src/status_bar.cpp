@@ -30,8 +30,8 @@ protected:
             QPainter painter(&m_bar);
             painter.setRenderHint(QPainter::Antialiasing, true);
             const FrostStyle* frost = FrostStyle::current();
-            const QColor bg =
-                frost != nullptr ? frost->color(ColorKey::MainWindowBackground) : m_bar.palette().color(QPalette::Window);
+            const QColor bg = frost != nullptr ? frost->color(ColorKey::MainWindowBackground)
+                                               : m_bar.palette().color(QPalette::Window);
             const QColor sep =
                 frost != nullptr ? frost->color(ColorKey::SeparatorColor) : m_bar.palette().color(QPalette::Mid);
             const QColor accent =
@@ -40,10 +40,10 @@ protected:
             painter.fillRect(m_bar.rect(), bg);
 
             const QColor projColor = shell_detail::activeProjectColor(&m_bar);
-            shell_detail::paintEllipticalGlow(painter, QPointF(80.0, m_bar.height() * 0.5),
-                                              220.0, m_bar.height() * 2.2, projColor, isDark ? 28 : 16);
-            shell_detail::paintEllipticalGlow(painter, QPointF(m_bar.width() - 140.0, m_bar.height() * 0.5),
-                                              200.0, m_bar.height() * 2.0, accent, isDark ? 22 : 12);
+            shell_detail::paintEllipticalGlow(painter, QPointF(80.0, m_bar.height() * 0.5), 220.0, m_bar.height() * 2.2,
+                                              projColor, isDark ? 28 : 16);
+            shell_detail::paintEllipticalGlow(painter, QPointF(m_bar.width() - 140.0, m_bar.height() * 0.5), 200.0,
+                                              m_bar.height() * 2.0, accent, isDark ? 22 : 12);
             shell_detail::paintFrostedGlassSheen(painter, m_bar.rect(), isDark, false);
             painter.fillRect(QRect(0, 0, m_bar.width(), 1), sep);
         }

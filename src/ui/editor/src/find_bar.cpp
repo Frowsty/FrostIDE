@@ -7,6 +7,7 @@
 
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/icon_ids.hpp"
+
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QKeyEvent>

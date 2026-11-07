@@ -36,7 +36,7 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
 
     const auto& solution = controller.solution();
     const QString name =
-        solution ? QString::fromUtf8(solution->name().data(), static_cast<qsizetype>(solution->name().size()))
+        solution           ? QString::fromUtf8(solution->name().data(), static_cast<qsizetype>(solution->name().size()))
         : !roots.isEmpty() ? QFileInfo(roots.front()).fileName()
                            : QString();
     auto* heading =

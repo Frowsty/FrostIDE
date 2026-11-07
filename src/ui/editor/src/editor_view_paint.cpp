@@ -600,10 +600,9 @@ EditorDisplayList EditorView::buildDisplayList() {
                 const QRectF pillRect(pillX, top + 1.0 * zoom, textW + 2.0 * pad, m_lineHeight - 2.0 * zoom);
                 QColor pillBg = m_colors.currentLine;
                 pillBg.setAlpha(185);
-                list.decorations.push_back(
-                    DisplayDecoration{pillRect, baseline, DecorationStyle::Background, pillBg, 1.0,
-                                      text::ByteRange{hint.offset, hint.offset}, std::nullopt,
-                                      QString::fromStdString(hint.tooltip)});
+                list.decorations.push_back(DisplayDecoration{pillRect, baseline, DecorationStyle::Background, pillBg,
+                                                             1.0, text::ByteRange{hint.offset, hint.offset},
+                                                             std::nullopt, QString::fromStdString(hint.tooltip)});
                 list.text.push_back(DisplayText{QPointF(pillX + pad, baseline), label, m_colors.lineNumber,
                                                 hint.kind == InlayHintKind::Type, std::nullopt,
                                                 text::ByteRange{hint.offset, hint.offset}, std::nullopt, false});
@@ -621,14 +620,12 @@ EditorDisplayList EditorView::buildDisplayList() {
                 const QRectF lensRect(pillX, top + 1.0 * zoom, textW + 2.0 * pad, m_lineHeight - 2.0 * zoom);
                 QColor lensBg = m_colors.usage;
                 lensBg.setAlpha(55);
-                list.decorations.push_back(
-                    DisplayDecoration{lensRect, baseline, DecorationStyle::Background, lensBg, 1.0,
-                                      text::ByteRange{lens.symbolOffset, lens.symbolOffset}, std::nullopt,
-                                      QString::fromStdString(lens.tooltip)});
-                list.text.push_back(DisplayText{QPointF(pillX + pad, baseline), label, m_colors.lineNumberCurrent,
-                                                false, std::nullopt,
-                                                text::ByteRange{lens.symbolOffset, lens.symbolOffset}, std::nullopt,
-                                                false});
+                list.decorations.push_back(DisplayDecoration{lensRect, baseline, DecorationStyle::Background, lensBg,
+                                                             1.0, text::ByteRange{lens.symbolOffset, lens.symbolOffset},
+                                                             std::nullopt, QString::fromStdString(lens.tooltip)});
+                list.text.push_back(
+                    DisplayText{QPointF(pillX + pad, baseline), label, m_colors.lineNumberCurrent, false, std::nullopt,
+                                text::ByteRange{lens.symbolOffset, lens.symbolOffset}, std::nullopt, false});
                 pillX += lensRect.width() + 0.75 * cell;
             }
             for (const EditorInlineValue& val : m_inlineDebuggerValues) {
@@ -799,8 +796,8 @@ EditorDisplayList EditorView::buildDisplayList() {
                     severity = std::min(severity, it->severity);
                 }
             }
-            const double size = std::min(m_lineHeight, kMarkerColumn * zoom) *
-                                (severity == MarkerSeverity::RunTest ? 0.72 : 0.6);
+            const double size =
+                std::min(m_lineHeight, kMarkerColumn * zoom) * (severity == MarkerSeverity::RunTest ? 0.72 : 0.6);
             const double cx = gutter - kFoldColumn * zoom - kMarkerColumn * zoom / 2.0;
             const double cy = top + m_lineHeight / 2.0;
             const QColor color =

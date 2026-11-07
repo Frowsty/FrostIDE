@@ -232,16 +232,17 @@ void EditorTabBar::paintEvent(QPaintEvent* event) {
         painter.save();
         painter.setClipRect(tRect);
         if (i == current) {
-            // Active tab: soft color spill from the file-type badge on the left + upward glow from the #3574F0 underline.
-            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.left() + 18.0, tRect.center().y()),
-                                              72.0, tRect.height() * 1.4, badgeCol, isDark ? 34 : 20);
+            // Active tab: soft color spill from the file-type badge on the left + upward glow from the #3574F0
+            // underline.
+            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.left() + 18.0, tRect.center().y()), 72.0,
+                                              tRect.height() * 1.4, badgeCol, isDark ? 34 : 20);
             shell_detail::paintEllipticalGlow(painter, QPointF(tRect.center().x(), tRect.bottom()),
                                               tRect.width() * 0.65, 22.0, accent, isDark ? 42 : 24);
             painter.fillRect(QRect(tRect.left(), tRect.top(), tRect.width(), 1),
                              isDark ? QColor(255, 255, 255, 18) : QColor(255, 255, 255, 70));
         } else {
-            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.left() + 18.0, tRect.center().y()),
-                                              54.0, tRect.height() * 1.2, badgeCol, isDark ? 18 : 10);
+            shell_detail::paintEllipticalGlow(painter, QPointF(tRect.left() + 18.0, tRect.center().y()), 54.0,
+                                              tRect.height() * 1.2, badgeCol, isDark ? 18 : 10);
         }
         painter.restore();
     }

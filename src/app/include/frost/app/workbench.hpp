@@ -556,7 +556,8 @@ private:
     void showVersionSwitcher();
     void applyVerifiedUpdate();
     void showAttachToProcess();
-    void attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName, bool attachAsDotNet);
+    void attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName,
+                         bool attachAsDotNet);
     void launchCompoundConfiguration(const std::vector<project::ProjectId>& targets);
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
     [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
@@ -739,10 +740,10 @@ private:
     [[nodiscard]] bool canPastePaths() const noexcept { return !m_clipboardPaths.empty(); }
     void pasteClipboardIntoDirectory(const std::string& targetDirectory, const std::string& targetProjectPath = {},
                                      const std::string& targetFilterPath = {});
-    void duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory,
-                                 const std::string& projectPath = {}, const std::string& filterPath = {});
-    void movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths,
-                                      const std::string& targetDirectory, const std::string& projectPath = {});
+    void duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory, const std::string& projectPath = {},
+                                 const std::string& filterPath = {});
+    void movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths, const std::string& targetDirectory,
+                                      const std::string& projectPath = {});
     [[nodiscard]] QWidget* activeTopWindow() const noexcept;
     ui::TrustPrompter* m_trustPrompter = nullptr; // Child of this.
 

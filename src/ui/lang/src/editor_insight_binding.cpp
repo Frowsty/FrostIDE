@@ -213,8 +213,8 @@ std::vector<UsageHighlight> toUsageHighlights(std::span<const fl::DocumentHighli
     return out;
 }
 
-std::vector<EditorInlayHint> toEditorInlayHints(std::span<const fl::LspInlayHint> hints,
-                                                const text::Snapshot& snapshot, fl::PositionEncoding encoding) {
+std::vector<EditorInlayHint> toEditorInlayHints(std::span<const fl::LspInlayHint> hints, const text::Snapshot& snapshot,
+                                                fl::PositionEncoding encoding) {
     std::vector<EditorInlayHint> out;
     out.reserve(hints.size());
     for (const fl::LspInlayHint& hint : hints) {
@@ -293,8 +293,7 @@ std::vector<EditorCodeVisionLens> toCodeVisionLenses(std::span<const fl::Documen
         if (!shortName.empty()) {
             const std::size_t totalHits = countIdentifierOccurrences(fullText, shortName);
             const std::size_t usages = totalHits > 0 ? totalHits - 1 : 0;
-            const std::string usageLabel =
-                usages == 1 ? std::string("1 usage") : std::to_string(usages) + " usages";
+            const std::string usageLabel = usages == 1 ? std::string("1 usage") : std::to_string(usages) + " usages";
             out.push_back(EditorCodeVisionLens{
                 .line = declLine,
                 .symbolOffset = *symOffset,
@@ -555,16 +554,16 @@ void EditorInsightBinding::refreshCodeVision() {
     const auto authorFn = m_authorProvider;
     auto work = fl::requestDocumentSymbols(m_services.server, m_path, ticket.token);
     const QPointer<EditorInsightBinding> self(this);
-    auto deliver = [](sched::Task<Result<std::vector<fl::DocumentSymbol>>> task,
-                      QPointer<EditorInsightBinding> binding, sched::LatestWins* slot,
-                      sched::LatestWins::Ticket current, text::Snapshot snap, fl::PositionEncoding enc,
+    auto deliver = [](sched::Task<Result<std::vector<fl::DocumentSymbol>>> task, QPointer<EditorInsightBinding> binding,
+                      sched::LatestWins* slot, sched::LatestWins::Ticket current, text::Snapshot snap,
+                      fl::PositionEncoding enc,
                       std::function<std::string(int line)> authorProvider) -> sched::Task<void> {
         auto result = std::make_shared<Result<std::vector<fl::DocumentSymbol>>>(co_await std::move(task));
         if (!*result) {
             co_return;
         }
-        auto lenses =
-            std::make_shared<std::vector<EditorCodeVisionLens>>(toCodeVisionLenses(**result, snap, enc, authorProvider));
+        auto lenses = std::make_shared<std::vector<EditorCodeVisionLens>>(
+            toCodeVisionLenses(**result, snap, enc, authorProvider));
         post(binding, [slot, current, lenses](EditorInsightBinding& target) {
             if (!slot->isCurrent(current) || !target.m_view) {
                 return;

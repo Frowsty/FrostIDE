@@ -396,8 +396,7 @@ TEST(SolutionModel, SupportsCppHierarchyModesFiltersAndFoldersAndPhysicalFolders
     auto filtersOnly =
         SolutionModel::load(tree.fs, MemTree::path("Hierarchy.slnx"), {.cppHierarchy = CppHierarchyMode::Filters});
     ASSERT_TRUE(filtersOnly.has_value());
-    EXPECT_EQ(dump(*filtersOnly, SolutionModel::root()),
-              "Hierarchy[App[Source Files[main.cpp],engine.cpp,engine.h]]");
+    EXPECT_EQ(dump(*filtersOnly, SolutionModel::root()), "Hierarchy[App[Source Files[main.cpp],engine.cpp,engine.h]]");
 
     auto filtersAndFolders = SolutionModel::load(tree.fs, MemTree::path("Hierarchy.slnx"),
                                                  {.cppHierarchy = CppHierarchyMode::FiltersAndFolders});

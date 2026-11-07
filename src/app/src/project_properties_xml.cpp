@@ -594,8 +594,7 @@ bool isIgnoredMetaFile(std::string_view name) {
 
 } // namespace
 
-Result<void> addFilterToVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
-                                       std::string_view filterPath) {
+Result<void> addFilterToVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath, std::string_view filterPath) {
     const QString clean = normalizeFilterSeparators(toQs(filterPath));
     if (clean.isEmpty()) {
         return fail(ErrorCode::InvalidArgument, "enter a non-empty filter name");
@@ -664,9 +663,8 @@ Result<void> removeFilterFromVcxprojFilters(io::IFileSystem& fs, std::string_vie
         QRegularExpression::CaseInsensitiveOption);
     filtersXml.remove(filterDeclRe);
 
-    const QRegularExpression itemFilterRe(
-        QStringLiteral("[ \\t]*<Filter>%1(?:\\\\[^<]*)?</Filter>\\r?\\n?").arg(esc),
-        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression itemFilterRe(QStringLiteral("[ \\t]*<Filter>%1(?:\\\\[^<]*)?</Filter>\\r?\\n?").arg(esc),
+                                          QRegularExpression::CaseInsensitiveOption);
     filtersXml.remove(itemFilterRe);
 
     auto written = fs.safeWrite(filtersPath, filtersXml.toStdString(), {});
@@ -746,8 +744,7 @@ Result<void> moveFilesToVcxprojFilter(io::IFileSystem& fs, std::string_view vcxp
 }
 
 Result<std::size_t> addExistingFilesToVcxproj(io::IFileSystem& fs, std::string_view vcxprojPath,
-                                              std::span<const std::string> paths,
-                                              std::string_view targetFilterPath) {
+                                              std::span<const std::string> paths, std::string_view targetFilterPath) {
     if (paths.empty()) {
         return std::size_t{0};
     }
@@ -786,9 +783,8 @@ Result<std::size_t> addExistingFilesToVcxproj(io::IFileSystem& fs, std::string_v
                 if (isIgnoredSourceDirectory(entry.name)) {
                     continue;
                 }
-                const QString subFilter = currentFilter.isEmpty()
-                                              ? toQs(entry.name)
-                                              : (currentFilter + QLatin1Char('\\') + toQs(entry.name));
+                const QString subFilter =
+                    currentFilter.isEmpty() ? toQs(entry.name) : (currentFilter + QLatin1Char('\\') + toQs(entry.name));
                 ensureFilterDeclarationsInXml(filtersXml, subFilter);
                 self(self, *childAbs, subFilter);
             } else if (entry.type == io::FileType::Regular) {
@@ -815,8 +811,7 @@ Result<std::size_t> addExistingFilesToVcxproj(io::IFileSystem& fs, std::string_v
                 } else {
                     folderFilter = dirFi.fileName();
                 }
-            } else if (!dirFi.fileName().isEmpty() &&
-                       !folderFilter.endsWith(dirFi.fileName(), Qt::CaseInsensitive)) {
+            } else if (!dirFi.fileName().isEmpty() && !folderFilter.endsWith(dirFi.fileName(), Qt::CaseInsensitive)) {
                 folderFilter += QLatin1Char('\\') + dirFi.fileName();
             }
             ensureFilterDeclarationsInXml(filtersXml, folderFilter);
@@ -937,15 +932,14 @@ void upsertSlnNestedProject(QString& slnText, const QString& childGuid, const QS
         return;
     }
     const QString entryLine = QStringLiteral("\t\t%1 = %2\r\n").arg(childGuid, parentFolderGuid);
-    const QRegularExpression sectionRe(
-        QStringLiteral("(GlobalSection\\(NestedProjects\\)\\s*=\\s*preSolution\\r?\\n)"),
-        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression sectionRe(QStringLiteral("(GlobalSection\\(NestedProjects\\)\\s*=\\s*preSolution\\r?\\n)"),
+                                       QRegularExpression::CaseInsensitiveOption);
     if (const auto m = sectionRe.match(slnText); m.hasMatch()) {
         slnText.insert(m.capturedEnd(1), entryLine);
         return;
     }
-    const QString newSection = QStringLiteral("\tGlobalSection(NestedProjects) = preSolution\r\n%1\tEndGlobalSection\r\n")
-                                   .arg(entryLine);
+    const QString newSection =
+        QStringLiteral("\tGlobalSection(NestedProjects) = preSolution\r\n%1\tEndGlobalSection\r\n").arg(entryLine);
     const qsizetype endGlobal = slnText.lastIndexOf(QStringLiteral("EndGlobal"), -1, Qt::CaseInsensitive);
     if (endGlobal >= 0) {
         slnText.insert(endGlobal, newSection);
@@ -1067,10 +1061,9 @@ Result<void> removeSolutionFolderFromSolutionFile(io::IFileSystem& fs, std::stri
     const QString idQs = toQs(folderId);
 
     if (toQs(solutionPath).endsWith(QStringLiteral(".slnx"), Qt::CaseInsensitive)) {
-        const QRegularExpression selfCloseRe(
-            QStringLiteral("[ \\t]*<Folder\\s+Name=\"%1\"\\s*/>\\r?\\n?")
-                .arg(QRegularExpression::escape(xmlEscape(idQs))),
-            QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpression selfCloseRe(QStringLiteral("[ \\t]*<Folder\\s+Name=\"%1\"\\s*/>\\r?\\n?")
+                                                 .arg(QRegularExpression::escape(xmlEscape(idQs))),
+                                             QRegularExpression::CaseInsensitiveOption);
         text.remove(selfCloseRe);
         const QRegularExpression openTagRe(
             QStringLiteral("[ \\t]*<Folder\\s+Name=\"%1\"\\s*>([\\s\\S]*?)</Folder>\\r?\\n?")
@@ -1096,8 +1089,7 @@ Result<void> removeSolutionFolderFromSolutionFile(io::IFileSystem& fs, std::stri
 }
 
 Result<void> moveProjectToSolutionFolderInSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
-                                                       std::string_view projectPath,
-                                                       std::string_view targetFolderId) {
+                                                       std::string_view projectPath, std::string_view targetFolderId) {
     auto read = fs.readFile(solutionPath);
     if (!read) {
         return std::unexpected(read.error());
@@ -1125,15 +1117,13 @@ Result<void> moveProjectToSolutionFolderInSolutionFile(io::IFileSystem& fs, std:
         }
 
         const QString folderQs = toQs(targetFolderId);
-        const QRegularExpression selfCloseFolderRe(
-            QStringLiteral("([ \\t]*)<Folder\\s+Name=\"%1\"\\s*/>")
-                .arg(QRegularExpression::escape(xmlEscape(folderQs))),
-            QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpression selfCloseFolderRe(QStringLiteral("([ \\t]*)<Folder\\s+Name=\"%1\"\\s*/>")
+                                                       .arg(QRegularExpression::escape(xmlEscape(folderQs))),
+                                                   QRegularExpression::CaseInsensitiveOption);
         if (const auto m = selfCloseFolderRe.match(text); m.hasMatch()) {
             const QString indent = m.captured(1);
-            const QString expanded =
-                QStringLiteral("%1<Folder Name=\"%2\">\n%1  <Project Path=\"%3\" />\n%1</Folder>")
-                    .arg(indent, xmlEscape(folderQs), xmlEscape(relSlash));
+            const QString expanded = QStringLiteral("%1<Folder Name=\"%2\">\n%1  <Project Path=\"%3\" />\n%1</Folder>")
+                                         .arg(indent, xmlEscape(folderQs), xmlEscape(relSlash));
             text.replace(m.capturedStart(0), m.capturedLength(0), expanded);
             return fs.writeFileAtomic(solutionPath, text.toStdString());
         }

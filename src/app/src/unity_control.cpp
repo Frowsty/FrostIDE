@@ -401,8 +401,13 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     layout->addLayout(row);
     m_impl->status = new QLabel(QStringLiteral("Disconnected"), panel);
     layout->addWidget(m_impl->status);
-    auto added = workbench.m_window->toolWindows().add(
-        {"unityControls", QStringLiteral("Unity"), ui::ToolWindowSide::Bottom, std::string(ui::icons::kRunRun), {}, [panel] { return panel; }, 180});
+    auto added = workbench.m_window->toolWindows().add({"unityControls",
+                                                        QStringLiteral("Unity"),
+                                                        ui::ToolWindowSide::Bottom,
+                                                        std::string(ui::icons::kRunRun),
+                                                        {},
+                                                        [panel] { return panel; },
+                                                        180});
     if (!added) {
         delete panel;
         m_impl->stopped = true;

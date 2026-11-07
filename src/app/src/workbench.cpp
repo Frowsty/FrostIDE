@@ -778,7 +778,8 @@ void Workbench::createRunService() {
     input::ActionSpec attachProcess;
     attachProcess.id = "debug.attachToProcess";
     attachProcess.name = "Attach to Process...";
-    attachProcess.description = "Attach the native C++ (lldb-dap) or .NET (netcoredbg) debugger to a running local process";
+    attachProcess.description =
+        "Attach the native C++ (lldb-dap) or .NET (netcoredbg) debugger to a running local process";
     attachProcess.group = "Debug";
     attachProcess.synonyms = {"attach", "pid", "debug process"};
     attachProcess.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
@@ -1127,8 +1128,7 @@ void Workbench::registerActions() {
         },
         [this] { return m_window != nullptr; });
     add(
-        "application.switchVersion", "Switch IDE Version...",
-        [this] { showVersionSwitcher(); },
+        "application.switchVersion", "Switch IDE Version...", [this] { showVersionSwitcher(); },
         [this] { return activeTopWindow() != nullptr; });
 }
 
@@ -1410,8 +1410,8 @@ void Workbench::attach(ui::ShellWindow& window) {
         connect(fsView, &ui::FileSystemView::addExistingFolderToProjectRequested, this,
                 [this](const QString& directory) {
                     const QString startDir = directory.isEmpty() ? qs(m_projectRoot) : directory;
-                    const QString chosen = QFileDialog::getExistingDirectory(
-                        m_window, text("Add Existing Folder to Project"), startDir);
+                    const QString chosen =
+                        QFileDialog::getExistingDirectory(m_window, text("Add Existing Folder to Project"), startDir);
                     if (chosen.isEmpty()) {
                         return;
                     }
@@ -1810,16 +1810,15 @@ void Workbench::attachToolWindows() {
                 if (!m_window || !m_solution)
                     return;
                 bool ok = false;
-                const QString name =
-                    QInputDialog::getText(m_window, text("New Filter"), text("Filter name:"), QLineEdit::Normal,
-                                          QString(), &ok)
-                        .trimmed();
+                const QString name = QInputDialog::getText(m_window, text("New Filter"), text("Filter name:"),
+                                                           QLineEdit::Normal, QString(), &ok)
+                                         .trimmed();
                 if (!ok || name.isEmpty())
                     return;
                 const QString fullFilter =
                     parentFilterPath.isEmpty() ? name : (parentFilterPath + QLatin1Char('\\') + name);
-                if (auto res = addFilterToVcxprojFilters(m_services.fs, projectPath.toStdString(),
-                                                         fullFilter.toStdString());
+                if (auto res =
+                        addFilterToVcxprojFilters(m_services.fs, projectPath.toStdString(), fullFilter.toStdString());
                     !res) {
                     notify(text("Add Filter"), qs(res.error().message()), ui::NotificationKind::Error);
                     return;
@@ -1834,10 +1833,9 @@ void Workbench::attachToolWindows() {
                 const QString prefix = lastSep >= 0 ? filterPath.left(lastSep) : QString();
                 const QString leaf = lastSep >= 0 ? filterPath.mid(lastSep + 1) : filterPath;
                 bool ok = false;
-                const QString newName =
-                    QInputDialog::getText(m_window, text("Rename Filter"), text("New filter name:"), QLineEdit::Normal,
-                                          leaf, &ok)
-                        .trimmed();
+                const QString newName = QInputDialog::getText(m_window, text("Rename Filter"), text("New filter name:"),
+                                                              QLineEdit::Normal, leaf, &ok)
+                                            .trimmed();
                 if (!ok || newName.isEmpty() || newName == leaf)
                     return;
                 const QString newFilterPath =
@@ -1856,8 +1854,8 @@ void Workbench::attachToolWindows() {
             [this](const QString& projectPath, const QString& filterPath) {
                 if (!m_window || !m_solution || filterPath.isEmpty())
                     return;
-                if (auto res =
-                        removeFilterFromVcxprojFilters(m_services.fs, projectPath.toStdString(), filterPath.toStdString());
+                if (auto res = removeFilterFromVcxprojFilters(m_services.fs, projectPath.toStdString(),
+                                                              filterPath.toStdString());
                     !res) {
                     notify(text("Remove Filter"), qs(res.error().message()), ui::NotificationKind::Error);
                     return;
@@ -1886,11 +1884,10 @@ void Workbench::attachToolWindows() {
                 if (!m_window || !m_solution || filePaths.isEmpty())
                     return;
                 bool ok = false;
-                const QString filterName =
-                    QInputDialog::getText(m_window, text("Move to New Filter"),
-                                          text("Filter path (e.g. Source Files\\Subfilter):"), QLineEdit::Normal,
-                                          QString(), &ok)
-                        .trimmed();
+                const QString filterName = QInputDialog::getText(m_window, text("Move to New Filter"),
+                                                                 text("Filter path (e.g. Source Files\\Subfilter):"),
+                                                                 QLineEdit::Normal, QString(), &ok)
+                                               .trimmed();
                 if (!ok || filterName.isEmpty())
                     return;
                 std::vector<std::string> files;
@@ -1991,10 +1988,9 @@ void Workbench::attachToolWindows() {
         if (!m_window || !m_solution)
             return;
         bool ok = false;
-        const QString name =
-            QInputDialog::getText(m_window, text("New Solution Folder"), text("Solution folder name:"),
-                                  QLineEdit::Normal, QString(), &ok)
-                .trimmed();
+        const QString name = QInputDialog::getText(m_window, text("New Solution Folder"), text("Solution folder name:"),
+                                                   QLineEdit::Normal, QString(), &ok)
+                                 .trimmed();
         if (!ok || name.isEmpty())
             return;
         if (auto res = addSolutionFolderToSolutionFile(m_services.fs, m_solution->path(), parentFolderId.toStdString(),
@@ -2052,8 +2048,8 @@ void Workbench::attachToolWindows() {
                     return;
                 bool ok = false;
                 const QString name =
-                    QInputDialog::getText(m_window, text("Move to New Solution Folder"),
-                                          text("Solution folder name:"), QLineEdit::Normal, QString(), &ok)
+                    QInputDialog::getText(m_window, text("Move to New Solution Folder"), text("Solution folder name:"),
+                                          QLineEdit::Normal, QString(), &ok)
                         .trimmed();
                 if (!ok || name.isEmpty())
                     return;
@@ -2135,10 +2131,8 @@ void Workbench::attachToolWindows() {
                 initialProj = m_solution->project(*projId).path;
         }
         return createNuGetToolWindowWidget(
-            m_window, m_services.fs,
-            [this]() -> const project::SolutionModel* { return m_solution.get(); },
-            std::move(initialProj),
-            [this] { refreshSolutionExplorerForFsChange(); });
+            m_window, m_services.fs, [this]() -> const project::SolutionModel* { return m_solution.get(); },
+            std::move(initialProj), [this] { refreshSolutionExplorerForFsChange(); });
     };
     if (auto added = windows.add(std::move(nugetSpec)); !added) {
         log::warn(kLog, "nuget tool window: {}", added.error().describe());
@@ -2152,8 +2146,8 @@ void Workbench::attachToolWindows() {
     asmSpec.createContent = [this]() -> QWidget* {
         return createAsmViewerToolWindowWidget(m_window, [this]() -> std::pair<std::string, int> {
             if (DocumentEditorView* view = currentView()) {
-                const auto caretPos = view->editor().editor().text().pointAt(
-                    view->editor().editor().state().primary().head);
+                const auto caretPos =
+                    view->editor().editor().text().pointAt(view->editor().editor().state().primary().head);
                 return {view->path(), static_cast<int>(caretPos.line.value()) + 1};
             }
             return {{}, 1};
@@ -2170,8 +2164,7 @@ void Workbench::attachToolWindows() {
     unitTestsSpec.iconId = std::string(ui::icons::kRunRun);
     unitTestsSpec.createContent = [this]() -> QWidget* {
         return createUnitTestsToolWindowWidget(
-            m_window, m_services.fs,
-            [this]() -> const project::SolutionModel* { return m_solution.get(); },
+            m_window, m_services.fs, [this]() -> const project::SolutionModel* { return m_solution.get(); },
             [this]() -> std::string { return m_projectRoot; },
             [this](const std::string& path, int line) { openLocation(qs(path), line, 1); },
             [this](const DiscoveredTestEntry& test) {
@@ -2557,17 +2550,15 @@ void Workbench::showUpdateCheck() {
                 return;
             if (!result) {
                 if (result.error().code() == ErrorCode::NotFound) {
-                    const QString statusMsg =
-                        tr("FrostIDE %1 • Channel: %2 (Up to date — checked just now)")
-                            .arg(qs(build_info::kVersion), QString::fromStdString(channel));
+                    const QString statusMsg = tr("FrostIDE %1 • Channel: %2 (Up to date — checked just now)")
+                                                  .arg(qs(build_info::kVersion), QString::fromStdString(channel));
                     if (self->m_welcome)
                         self->m_welcome->setUpdateStatus(statusMsg);
                     if (self->m_launcherWindow && self->m_launcherWindow->welcomeScreen())
                         self->m_launcherWindow->welcomeScreen()->setUpdateStatus(statusMsg);
-                    QMessageBox::information(
-                        activeWin, tr("Check for Updates"),
-                        tr("You already have the latest version of FrostIDE (%1, channel: %2).")
-                            .arg(qs(build_info::kVersion), QString::fromStdString(channel)));
+                    QMessageBox::information(activeWin, tr("Check for Updates"),
+                                             tr("You already have the latest version of FrostIDE (%1, channel: %2).")
+                                                 .arg(qs(build_info::kVersion), QString::fromStdString(channel)));
                 } else {
                     QMessageBox::information(activeWin, tr("Update check"),
                                              QString::fromUtf8(result.error().message().c_str()));
@@ -2578,8 +2569,7 @@ void Workbench::showUpdateCheck() {
                 return;
             auto accepted = revalidate(*result);
             if (!accepted) {
-                QMessageBox::warning(activeWin, tr("Update check"),
-                                     QString::fromStdString(accepted.error().message()));
+                QMessageBox::warning(activeWin, tr("Update check"), QString::fromStdString(accepted.error().message()));
                 return;
             }
             result->release = std::move(*accepted);
@@ -2644,10 +2634,9 @@ void Workbench::showUpdateCheck() {
                     envelope->release = std::move(*current);
                     self->m_verifiedUpdate = std::move(*payload);
                     self->m_verifiedRelease = std::move(*envelope);
-                    const QString readyMsg =
-                        tr("Update %1 (build %2) verified & ready to install")
-                            .arg(QString::fromStdString(self->m_verifiedRelease->release.version))
-                            .arg(self->m_verifiedRelease->release.build);
+                    const QString readyMsg = tr("Update %1 (build %2) verified & ready to install")
+                                                 .arg(QString::fromStdString(self->m_verifiedRelease->release.version))
+                                                 .arg(self->m_verifiedRelease->release.build);
                     if (self->m_welcome)
                         self->m_welcome->setUpdateStatus(readyMsg);
                     if (self->m_launcherWindow && self->m_launcherWindow->welcomeScreen())
@@ -2690,11 +2679,10 @@ void Workbench::applyVerifiedUpdate() {
     root->setContentsMargins(18, 16, 18, 16);
     root->setSpacing(12);
 
-    auto* titleLabel = new QLabel(
-        tr("<b>FrostIDE %1 (Build %2)</b> — Ed25519 signature and SHA-256 payload verified.")
-            .arg(versionStr)
-            .arg(buildNum),
-        &dialog);
+    auto* titleLabel = new QLabel(tr("<b>FrostIDE %1 (Build %2)</b> — Ed25519 signature and SHA-256 payload verified.")
+                                      .arg(versionStr)
+                                      .arg(buildNum),
+                                  &dialog);
     titleLabel->setWordWrap(true);
     root->addWidget(titleLabel);
 
@@ -2760,8 +2748,9 @@ void Workbench::applyVerifiedUpdate() {
             return;
         QDir().mkpath(targetDir);
 
-        QProgressDialog extractProgress(tr("Extracting FrostIDE %1 to %2…").arg(versionStr, QDir::toNativeSeparators(targetDir)),
-                                        QString(), 0, 0, parentWin);
+        QProgressDialog extractProgress(
+            tr("Extracting FrostIDE %1 to %2…").arg(versionStr, QDir::toNativeSeparators(targetDir)), QString(), 0, 0,
+            parentWin);
         extractProgress.setWindowTitle(tr("Installing Update"));
         extractProgress.setMinimumDuration(0);
         extractProgress.show();
@@ -2773,31 +2762,31 @@ void Workbench::applyVerifiedUpdate() {
         QString psDest = QDir::toNativeSeparators(targetDir);
         psDest.replace(QLatin1Char('\''), QStringLiteral("''"));
         const QString psScript =
-            QStringLiteral(
-                "$ErrorActionPreference = 'Stop'\n"
-                "$dest = '%2'\n"
-                "$tmp = Join-Path $dest '_frost_extract_tmp'\n"
-                "if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }\n"
-                "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
-                "Expand-Archive -LiteralPath '%1' -DestinationPath $tmp -Force\n"
-                "$src = $tmp\n"
-                "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
-                "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
-                "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = $sub.FullName }\n"
-                "}\n"
-                "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
-                "    Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force\n"
-                "}\n"
-                "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n")
+            QStringLiteral("$ErrorActionPreference = 'Stop'\n"
+                           "$dest = '%2'\n"
+                           "$tmp = Join-Path $dest '_frost_extract_tmp'\n"
+                           "if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }\n"
+                           "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
+                           "Expand-Archive -LiteralPath '%1' -DestinationPath $tmp -Force\n"
+                           "$src = $tmp\n"
+                           "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
+                           "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
+                           "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = "
+                           "$sub.FullName }\n"
+                           "}\n"
+                           "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
+                           "    Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force\n"
+                           "}\n"
+                           "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n")
                 .arg(psZip, psDest);
         proc.start(QStringLiteral("powershell.exe"),
-                   {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
-                    QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"), QStringLiteral("-Command"),
-                    psScript});
+                   {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"), QStringLiteral("-ExecutionPolicy"),
+                    QStringLiteral("Bypass"), QStringLiteral("-Command"), psScript});
         if (!proc.waitForFinished(120000) || proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
             const QString errOut = QString::fromUtf8(proc.readAllStandardError()).trimmed();
-            QMessageBox::warning(parentWin, tr("Update Installation Failed"),
-                                 tr("Failed to extract update archive:\n%1").arg(errOut.isEmpty() ? proc.errorString() : errOut));
+            QMessageBox::warning(
+                parentWin, tr("Update Installation Failed"),
+                tr("Failed to extract update archive:\n%1").arg(errOut.isEmpty() ? proc.errorString() : errOut));
             return;
         }
 
@@ -2822,7 +2811,8 @@ void Workbench::applyVerifiedUpdate() {
             return;
         const QString updatesDir = localData + QStringLiteral("/updates");
         QDir().mkpath(updatesDir);
-        const QString stagedZip = QDir::toNativeSeparators(updatesDir + QStringLiteral("/staged-build-%1.zip").arg(buildNum));
+        const QString stagedZip =
+            QDir::toNativeSeparators(updatesDir + QStringLiteral("/staged-build-%1.zip").arg(buildNum));
         QFile::remove(stagedZip);
         if (!QFile::copy(m_verifiedUpdate->fileName(), stagedZip)) {
             QMessageBox::warning(parentWin, tr("Update Installation Failed"),
@@ -2847,38 +2837,40 @@ void Workbench::applyVerifiedUpdate() {
         QString psAppExe = appExe;
         psAppExe.replace(QLatin1Char('\''), QStringLiteral("''"));
 
-        const QString scriptContent = QStringLiteral(
-            "$ErrorActionPreference = 'SilentlyContinue'\n"
-            "$appDir = '%3'\n"
-            "Wait-Process -Id %1 -Timeout 30\n"
-            "Get-Process crashpad_handler, CSharpLanguageServer, frost_held_read -ErrorAction SilentlyContinue | Where-Object {\n"
-            "    $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase)\n"
-            "} | Stop-Process -Force -ErrorAction SilentlyContinue\n"
-            "Start-Sleep -Milliseconds 600\n"
-            "$tmp = Join-Path $env:TEMP ('frost-update-' + [guid]::NewGuid().ToString('N'))\n"
-            "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
-            "Expand-Archive -LiteralPath '%2' -DestinationPath $tmp -Force\n"
-            "$src = $tmp\n"
-            "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
-            "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
-            "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = $sub.FullName }\n"
-            "}\n"
-            "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
-            "    Copy-Item -LiteralPath $_.FullName -Destination $appDir -Recurse -Force\n"
-            "}\n"
-            "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
-            "Start-Process -FilePath '%4' -WorkingDirectory $appDir\n")
-            .arg(pid)
-            .arg(psStagedZip, psAppDir, psAppExe);
+        const QString scriptContent =
+            QStringLiteral(
+                "$ErrorActionPreference = 'SilentlyContinue'\n"
+                "$appDir = '%3'\n"
+                "Wait-Process -Id %1 -Timeout 30\n"
+                "Get-Process crashpad_handler, CSharpLanguageServer, frost_held_read -ErrorAction SilentlyContinue | "
+                "Where-Object {\n"
+                "    $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase)\n"
+                "} | Stop-Process -Force -ErrorAction SilentlyContinue\n"
+                "Start-Sleep -Milliseconds 600\n"
+                "$tmp = Join-Path $env:TEMP ('frost-update-' + [guid]::NewGuid().ToString('N'))\n"
+                "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
+                "Expand-Archive -LiteralPath '%2' -DestinationPath $tmp -Force\n"
+                "$src = $tmp\n"
+                "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
+                "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
+                "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = "
+                "$sub.FullName }\n"
+                "}\n"
+                "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
+                "    Copy-Item -LiteralPath $_.FullName -Destination $appDir -Recurse -Force\n"
+                "}\n"
+                "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
+                "Start-Process -FilePath '%4' -WorkingDirectory $appDir\n")
+                .arg(pid)
+                .arg(psStagedZip, psAppDir, psAppExe);
         scriptFile.write(scriptContent.toUtf8());
         scriptFile.close();
 
-        if (QProcess::startDetached(
-                QStringLiteral("powershell.exe"),
-                {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
-                 QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
-                 QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"),
-                 QStringLiteral("-File"), scriptPath})) {
+        if (QProcess::startDetached(QStringLiteral("powershell.exe"),
+                                    {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                                     QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+                                     QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-File"),
+                                     scriptPath})) {
             if (m_window)
                 m_window->close();
             QCoreApplication::quit();
@@ -2900,10 +2892,10 @@ void Workbench::showVersionSwitcher() {
     root->setContentsMargins(16, 14, 16, 14);
     root->setSpacing(10);
 
-    auto* headerLabel = new QLabel(
-        tr("<b>Installed FrostIDE Builds</b> — Running: <b>%1</b> (<code>%2</code>)")
-            .arg(qs(build_info::kVersion), QDir::toNativeSeparators(QCoreApplication::applicationDirPath())),
-        &dialog);
+    auto* headerLabel =
+        new QLabel(tr("<b>Installed FrostIDE Builds</b> — Running: <b>%1</b> (<code>%2</code>)")
+                       .arg(qs(build_info::kVersion), QDir::toNativeSeparators(QCoreApplication::applicationDirPath())),
+                   &dialog);
     headerLabel->setWordWrap(true);
     root->addWidget(headerLabel);
 
@@ -2954,7 +2946,8 @@ void Workbench::showVersionSwitcher() {
         QDir rootDir(scanRoot);
         if (!rootDir.exists())
             continue;
-        const QFileInfoList subDirs = rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed);
+        const QFileInfoList subDirs =
+            rootDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed);
         for (const QFileInfo& sub : subDirs) {
             addBuildIfValid(sub.absoluteFilePath());
         }
@@ -2967,11 +2960,11 @@ void Workbench::showVersionSwitcher() {
     });
 
     for (const InstalledBuildEntry& b : builds) {
-        const QString label = b.isCurrent
-            ? tr("%1  [Current Running Build]\n%2  •  Built %3")
-                  .arg(b.name, b.dirPath, b.lastModified.toString(QStringLiteral("yyyy-MM-dd HH:mm")))
-            : tr("%1\n%2  •  Built %3")
-                  .arg(b.name, b.dirPath, b.lastModified.toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+        const QString label =
+            b.isCurrent ? tr("%1  [Current Running Build]\n%2  •  Built %3")
+                              .arg(b.name, b.dirPath, b.lastModified.toString(QStringLiteral("yyyy-MM-dd HH:mm")))
+                        : tr("%1\n%2  •  Built %3")
+                              .arg(b.name, b.dirPath, b.lastModified.toString(QStringLiteral("yyyy-MM-dd HH:mm")));
         auto* item = new QListWidgetItem(label, listWidget);
         item->setData(Qt::UserRole, b.exePath);
         item->setData(Qt::UserRole + 1, b.dirPath);
@@ -2988,8 +2981,8 @@ void Workbench::showVersionSwitcher() {
     auto* sideBySideBtn = new QPushButton(tr("Launch Side-by-Side"), &dialog);
     sideBySideBtn->setObjectName(QStringLiteral("launchSideBySideButton"));
     auto* openFolderBtn = new QPushButton(tr("Reveal in Explorer"), &dialog);
-    auto* updateBtn = new QPushButton(
-        m_verifiedUpdate ? tr("Install Downloaded Update...") : tr("Check for Updates..."), &dialog);
+    auto* updateBtn =
+        new QPushButton(m_verifiedUpdate ? tr("Install Downloaded Update...") : tr("Check for Updates..."), &dialog);
     auto* closeBtn = new QPushButton(tr("Close"), &dialog);
 
     btnRow->addWidget(switchBtn);
@@ -3120,8 +3113,7 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
         auto lldbPath = debug::findLldbDap(
             m_services.fs, debug::defaultLldbDapSearch(m_services.settings.snapshot()->get(key::toolsLldbDapPath)));
         if (!lldbPath) {
-            notify(text("Attach to Process (Native C++)"), qs(lldbPath.error().message()),
-                   ui::NotificationKind::Error);
+            notify(text("Attach to Process (Native C++)"), qs(lldbPath.error().message()), ui::NotificationKind::Error);
             return;
         }
         factory = debug::lldbDapAdapterFactory(m_services.launcher, *lldbPath);
@@ -3161,12 +3153,11 @@ void Workbench::launchCompoundConfiguration(const std::vector<project::ProjectId
             const QString projPath = QDir::toNativeSeparators(qs(proj.path));
             const QString workDir = QFileInfo(projPath).absolutePath();
             if (m_runConsole) {
-                m_runConsole->appendOutput(
-                    build::RunOutputKind::System,
-                    std::format("[Compound Launch] Starting .NET project '{}'...\n", proj.name));
+                m_runConsole->appendOutput(build::RunOutputKind::System,
+                                           std::format("[Compound Launch] Starting .NET project '{}'...\n", proj.name));
             }
-            QProcess::startDetached(QStringLiteral("dotnet"), {QStringLiteral("run"), QStringLiteral("--project"), projPath},
-                                    workDir);
+            QProcess::startDetached(QStringLiteral("dotnet"),
+                                    {QStringLiteral("run"), QStringLiteral("--project"), projPath}, workDir);
             if (m_window) {
                 m_window->toolWindows().show(ui::tool_windows::kRun, false);
             }

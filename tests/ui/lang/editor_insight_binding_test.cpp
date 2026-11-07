@@ -271,19 +271,19 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
                 .set("selectionRange", Json::object()
                                            .set("start", Json::object().set("line", 0).set("character", 6))
                                            .set("end", Json::object().set("line", 0).set("character", 12)))
-                .set("children",
-                     Json::array({
-                         Json::object()
-                             .set("name", "compute")
-                             .set("kind", 6)
-                             .set("range", Json::object()
-                                               .set("start", Json::object().set("line", 1).set("character", 2))
-                                               .set("end", Json::object().set("line", 4).set("character", 3)))
-                             .set("selectionRange",
-                                  Json::object()
-                                      .set("start", Json::object().set("line", 1).set("character", 6))
-                                      .set("end", Json::object().set("line", 1).set("character", 13))),
-                     })),
+                .set(
+                    "children",
+                    Json::array({
+                        Json::object()
+                            .set("name", "compute")
+                            .set("kind", 6)
+                            .set("range", Json::object()
+                                              .set("start", Json::object().set("line", 1).set("character", 2))
+                                              .set("end", Json::object().set("line", 4).set("character", 3)))
+                            .set("selectionRange", Json::object()
+                                                       .set("start", Json::object().set("line", 1).set("character", 6))
+                                                       .set("end", Json::object().set("line", 1).set("character", 13))),
+                    })),
         });
     });
 
@@ -293,9 +293,7 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     binding->setAuthorProvider([](int line) { return line == 1 ? std::string("Alice") : std::string(); });
     binding->refreshSemanticTokens();
 
-    ASSERT_TRUE(pumpUntil([&] {
-        return h.view->inlayHints().size() == 2U && !h.view->codeVisionLenses().empty();
-    }));
+    ASSERT_TRUE(pumpUntil([&] { return h.view->inlayHints().size() == 2U && !h.view->codeVisionLenses().empty(); }));
 
     h.view->setInlineDebuggerValues({
         frost::ui::EditorInlineValue{frost::LineIndex{2}, "value = 42", "Debugger value"},

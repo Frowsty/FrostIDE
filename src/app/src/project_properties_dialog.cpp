@@ -45,7 +45,9 @@
 #include <algorithm>
 #ifdef _WIN32
 #include "frost/io/utf.hpp"
+
 #include <windows.h>
+
 #include <tlhelp32.h>
 #endif
 
@@ -862,11 +864,11 @@ void showAttachToProcessDialog(QWidget* parent,
         onAttach(chosen, attachAsDotNet);
 }
 
-void showEditRunConfigurationsDialog(
-    QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-    const std::string& preferredProjectPath, const std::string& activeConfigPlatform, bool externalConsole,
-    std::function<void(bool)> onExternalConsoleChanged, std::function<void()> onSaved,
-    std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound) {
+void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
+                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
+                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
+                                     std::function<void()> onSaved,
+                                     std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("editRunConfigurationsDialog"));
     dialog.setWindowTitle(QStringLiteral("Edit Run/Debug Configurations"));
@@ -1122,7 +1124,8 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
     auto* detailsPane = new QPlainTextEdit(rightPane);
     detailsPane->setObjectName(QStringLiteral("nugetDetailsPane"));
     detailsPane->setReadOnly(true);
-    detailsPane->setPlaceholderText(QStringLiteral("Select a NuGet package to view details, dependencies, and README."));
+    detailsPane->setPlaceholderText(
+        QStringLiteral("Select a NuGet package to view details, dependencies, and README."));
     rightLayout->addWidget(detailsPane, 1);
 
     auto* installRow = new QHBoxLayout();
@@ -1157,7 +1160,8 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
     static constexpr std::array<CatalogItem, 8> kCatalog{{
         {"Newtonsoft.Json", "13.0.3", "13.0.4-beta1", "Popular high-performance JSON framework for .NET."},
         {"Serilog", "4.0.1", "4.1.0-dev-02235", "Simple .NET logging with fully-structured events."},
-        {"Dapper", "2.1.35", "2.1.44-beta", "A high performance Micro-ORM supporting SQL Server, MySQL, Sqlite, and Postgres."},
+        {"Dapper", "2.1.35", "2.1.44-beta",
+         "A high performance Micro-ORM supporting SQL Server, MySQL, Sqlite, and Postgres."},
         {"xunit", "2.9.0", "2.9.1-pre.12", "xUnit.net is a developer testing framework for C# and .NET."},
         {"NUnit", "4.1.0", "4.2.0-beta.1", "NUnit unit-testing framework for all .NET languages."},
         {"FluentAssertions", "6.12.0", "7.0.0-alpha.4", "Fluent assertion library for .NET unit tests."},
@@ -1260,25 +1264,26 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
     refreshTables();
 
     const auto wireTableSelection = [=](QTableWidget* tbl) {
-        QObject::connect(tbl, &QTableWidget::currentCellChanged, root, [tbl, pkgIdEdit, pkgVerEdit, detailsPane](int row, int, int, int) {
-            if (row < 0 || !tbl->item(row, 0))
-                return;
-            const QString id = tbl->item(row, 0)->text();
-            const QString inst = tbl->item(row, 1) ? tbl->item(row, 1)->text() : QString();
-            const QString latest = tbl->item(row, 2) ? tbl->item(row, 2)->text() : inst;
-            pkgIdEdit->setText(id);
-            pkgVerEdit->setText(latest.isEmpty() || latest == QStringLiteral("—") ? inst : latest);
-            QString summary = QStringLiteral("NuGet Package Reference");
-            for (const auto& cat : kCatalog) {
-                if (id.compare(QLatin1String(cat.id), Qt::CaseInsensitive) == 0) {
-                    summary = QString::fromLatin1(cat.summary);
-                    break;
-                }
-            }
-            detailsPane->setPlainText(
-                QStringLiteral("Package: %1\nInstalled: %2\nLatest Available: %3\n\n%4")
-                    .arg(id, inst, latest, summary));
-        });
+        QObject::connect(tbl, &QTableWidget::currentCellChanged, root,
+                         [tbl, pkgIdEdit, pkgVerEdit, detailsPane](int row, int, int, int) {
+                             if (row < 0 || !tbl->item(row, 0))
+                                 return;
+                             const QString id = tbl->item(row, 0)->text();
+                             const QString inst = tbl->item(row, 1) ? tbl->item(row, 1)->text() : QString();
+                             const QString latest = tbl->item(row, 2) ? tbl->item(row, 2)->text() : inst;
+                             pkgIdEdit->setText(id);
+                             pkgVerEdit->setText(latest.isEmpty() || latest == QStringLiteral("—") ? inst : latest);
+                             QString summary = QStringLiteral("NuGet Package Reference");
+                             for (const auto& cat : kCatalog) {
+                                 if (id.compare(QLatin1String(cat.id), Qt::CaseInsensitive) == 0) {
+                                     summary = QString::fromLatin1(cat.summary);
+                                     break;
+                                 }
+                             }
+                             detailsPane->setPlainText(
+                                 QStringLiteral("Package: %1\nInstalled: %2\nLatest Available: %3\n\n%4")
+                                     .arg(id, inst, latest, summary));
+                         });
     };
     wireTableSelection(installedTable);
     wireTableSelection(updatesTable);
@@ -1308,7 +1313,8 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
         if (!activeTbl)
             activeTbl = installedTable;
         const int row = activeTbl->currentRow();
-        const QString id = (row >= 0 && activeTbl->item(row, 0)) ? activeTbl->item(row, 0)->text() : pkgIdEdit->text().trimmed();
+        const QString id =
+            (row >= 0 && activeTbl->item(row, 0)) ? activeTbl->item(row, 0)->text() : pkgIdEdit->text().trimmed();
         const std::string csproj = currentCsproj();
         if (id.isEmpty() || csproj.empty())
             return;
@@ -1466,15 +1472,14 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
         }
         const QString qPath = toQs(filePath);
         if (qPath.endsWith(QStringLiteral(".cs"), Qt::CaseInsensitive)) {
-            output->setPlainText(
-                QStringLiteral("// .NET IL & Metadata Projection for %1 (line %2)\n"
-                               "// Use Build > Build Solution to emit assembly IL in bin/Debug.\n\n"
-                               ".assembly extern System.Runtime {}\n"
-                               ".module '%3'\n"
-                               "// Source line %2 synced")
-                    .arg(QFileInfo(qPath).fileName())
-                    .arg(line)
-                    .arg(QFileInfo(qPath).completeBaseName()));
+            output->setPlainText(QStringLiteral("// .NET IL & Metadata Projection for %1 (line %2)\n"
+                                                "// Use Build > Build Solution to emit assembly IL in bin/Debug.\n\n"
+                                                ".assembly extern System.Runtime {}\n"
+                                                ".module '%3'\n"
+                                                "// Source line %2 synced")
+                                     .arg(QFileInfo(qPath).fileName())
+                                     .arg(line)
+                                     .arg(QFileInfo(qPath).completeBaseName()));
             return;
         }
 
@@ -1645,17 +1650,16 @@ std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_v
     const QString textContent = toQs(content);
     const QStringList lines = textContent.split(QLatin1Char('\n'));
 
-    const QRegularExpression kGTestRe(
-        QStringLiteral(R"(^\s*(?:TEST|TEST_F|TEST_P|TYPED_TEST)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))"));
+    const QRegularExpression kGTestRe(QStringLiteral(
+        R"(^\s*(?:TEST|TEST_F|TEST_P|TYPED_TEST)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))"));
     const QRegularExpression kCatchRe(QStringLiteral(R"re(^\s*(?:TEST_CASE|SCENARIO)\s*\(\s*"([^"]+)")re"));
     const QRegularExpression kCsClassRe(QStringLiteral(R"(\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b)"));
-    const QRegularExpression kCsAttrRe(
-        QStringLiteral(R"(^\s*\[\s*(?:Fact|Theory|Test|TestCase|TestMethod)\b)"));
+    const QRegularExpression kCsAttrRe(QStringLiteral(R"(^\s*\[\s*(?:Fact|Theory|Test|TestCase|TestMethod)\b)"));
     const QRegularExpression kCsMethodRe(
         QStringLiteral(R"(\b(?:void|Task(?:<[^>]+>)?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()"));
     const QRegularExpression kCppMainRe(QStringLiteral(R"(^\s*(?:int|void|auto)\s+main\s*\()"));
-    const QRegularExpression kCsMainRe(
-        QStringLiteral(R"(^\s*(?:(?:public|private|internal|static|async)\s+)*(?:void|int|Task(?:<int>)?)\s+Main\s*\()"));
+    const QRegularExpression kCsMainRe(QStringLiteral(
+        R"(^\s*(?:(?:public|private|internal|static|async)\s+)*(?:void|int|Task(?:<int>)?)\s+Main\s*\()"));
 
     const std::string resolvedSln = solutionName.empty() ? "Solution" : std::string(solutionName);
     const std::string resolvedProj =
@@ -2017,10 +2021,8 @@ QWidget* createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
         for (int t = 0; t < tree->topLevelItemCount(); ++t) {
             rollupItem(tree->topLevelItem(t), rollupItem);
         }
-        summaryLabel->setText(QStringLiteral("Passed: %1 | Failed: %2 | Total: %3")
-                                  .arg(passed)
-                                  .arg(failed)
-                                  .arg(state->tests.size()));
+        summaryLabel->setText(
+            QStringLiteral("Passed: %1 | Failed: %2 | Total: %3").arg(passed).arg(failed).arg(state->tests.size()));
     };
 
     const auto showTestDetails = [=](int idx) {
@@ -2031,12 +2033,10 @@ QWidget* createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
         }
         const auto& t = state->tests[static_cast<std::size_t>(idx)];
         const QString& out = state->outputs[static_cast<std::size_t>(idx)];
-        outputView->setPlainText(
-            out.isEmpty()
-                ? QStringLiteral("Test: %1.%2\nSource: %3:%4\nStatus: Not run yet.")
-                      .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                      .arg(t.line)
-                : out);
+        outputView->setPlainText(out.isEmpty() ? QStringLiteral("Test: %1.%2\nSource: %3:%4\nStatus: Not run yet.")
+                                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                                     .arg(t.line)
+                                               : out);
         for (const QString& link : state->stackLinks[static_cast<std::size_t>(idx)]) {
             stackList->addItem(link);
         }
@@ -2127,34 +2127,32 @@ QWidget* createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                 const QString locLink = QStringLiteral("%1:%2").arg(toQs(t.filePath)).arg(t.line);
                 state->stackLinks[idx] = {locLink};
                 if (t.isDotNet) {
-                    state->outputs[idx] =
-                        failed ? QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [FAIL]\n"
-                                                "  Assert.True() Failure\n"
-                                                "  Stack Trace:\n"
-                                                "     at %2.%3() in %4:line %5\n")
-                                     .arg(state->durationsMs[idx])
-                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                                     .arg(t.line)
-                               : QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [PASS] (%1 ms)\n"
-                                                "  Source: %4:%5\n")
-                                     .arg(state->durationsMs[idx])
-                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                                     .arg(t.line);
+                    state->outputs[idx] = failed ? QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [FAIL]\n"
+                                                                  "  Assert.True() Failure\n"
+                                                                  "  Stack Trace:\n"
+                                                                  "     at %2.%3() in %4:line %5\n")
+                                                       .arg(state->durationsMs[idx])
+                                                       .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                                       .arg(t.line)
+                                                 : QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [PASS] (%1 ms)\n"
+                                                                  "  Source: %4:%5\n")
+                                                       .arg(state->durationsMs[idx])
+                                                       .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                                       .arg(t.line);
                 } else {
-                    state->outputs[idx] =
-                        failed ? QStringLiteral("[ RUN      ] %1.%2\n"
-                                                "%3(%4): error: Value of: assertion failed in %1.%2\n"
-                                                "[  FAILED  ] %1.%2 (%5 ms)\n")
-                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                                     .arg(t.line)
-                                     .arg(state->durationsMs[idx])
-                               : QStringLiteral("[ RUN      ] %1.%2\n"
-                                                "[       OK ] %1.%2 (%3 ms)\n"
-                                                "Source: %4:%5\n")
-                                     .arg(toQs(t.suiteName), toQs(t.testName))
-                                     .arg(state->durationsMs[idx])
-                                     .arg(toQs(t.filePath))
-                                     .arg(t.line);
+                    state->outputs[idx] = failed ? QStringLiteral("[ RUN      ] %1.%2\n"
+                                                                  "%3(%4): error: Value of: assertion failed in %1.%2\n"
+                                                                  "[  FAILED  ] %1.%2 (%5 ms)\n")
+                                                       .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                                       .arg(t.line)
+                                                       .arg(state->durationsMs[idx])
+                                                 : QStringLiteral("[ RUN      ] %1.%2\n"
+                                                                  "[       OK ] %1.%2 (%3 ms)\n"
+                                                                  "Source: %4:%5\n")
+                                                       .arg(toQs(t.suiteName), toQs(t.testName))
+                                                       .arg(state->durationsMs[idx])
+                                                       .arg(toQs(t.filePath))
+                                                       .arg(t.line);
                 }
                 if (failed)
                     anyFailed = true;

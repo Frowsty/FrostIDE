@@ -1997,23 +1997,21 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
 
     // 6. Unit Testing Tool Window (Alt+8 / "unit_tests") & Editor Gutter Test Runner.
     EXPECT_TRUE(rig.workbench->registry().find("window.unitTests").has_value());
-    dir.write("App/math_tests.cpp",
-              "TEST(MathSuite, AddsNumbers) {\n"
-              "    EXPECT_EQ(2 + 2, 4);\n"
-              "}\n"
-              "TEST_F(MathFixture, FailsIntentionally) {\n"
-              "    EXPECT_TRUE(false);\n"
-              "}\n"
-              "int main(int argc, char** argv) {\n"
-              "    return 0;\n"
-              "}\n");
-    dir.write("App/ManagedTests.cs",
-              "public class CalculatorTests {\n"
-              "    [Fact]\n"
-              "    public void MultipliesCorrectly() {\n"
-              "    }\n"
-              "    public static void Main(string[] args) {}\n"
-              "}\n");
+    dir.write("App/math_tests.cpp", "TEST(MathSuite, AddsNumbers) {\n"
+                                    "    EXPECT_EQ(2 + 2, 4);\n"
+                                    "}\n"
+                                    "TEST_F(MathFixture, FailsIntentionally) {\n"
+                                    "    EXPECT_TRUE(false);\n"
+                                    "}\n"
+                                    "int main(int argc, char** argv) {\n"
+                                    "    return 0;\n"
+                                    "}\n");
+    dir.write("App/ManagedTests.cs", "public class CalculatorTests {\n"
+                                     "    [Fact]\n"
+                                     "    public void MultipliesCorrectly() {\n"
+                                     "    }\n"
+                                     "    public static void Main(string[] args) {}\n"
+                                     "}\n");
 
     ASSERT_TRUE(rig.workbench->openPath(dir.join("App/math_tests.cpp")).has_value());
     ASSERT_NE(rig.view(), nullptr);

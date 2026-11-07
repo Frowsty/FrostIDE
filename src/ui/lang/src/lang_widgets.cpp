@@ -8,6 +8,7 @@
 
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/icon_ids.hpp"
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QFile>
@@ -883,12 +884,11 @@ void StructurePanel::setSymbols(std::string path, std::vector<fl::DocumentSymbol
         (m_tree->topLevelItemCount() > 0 || symbols.empty())) {
         m_symbols = std::move(symbols);
         const auto textFiltered = fl::filterSymbols(m_symbols, m_search->text().trimmed().toStdString());
-        const auto shown = filterAndSortStructureSymbols(textFiltered, m_showFieldsButton->isChecked(),
-                                                         m_showFunctionsButton->isChecked(),
-                                                         m_sortAlphaButton->isChecked());
+        const auto shown =
+            filterAndSortStructureSymbols(textFiltered, m_showFieldsButton->isChecked(),
+                                          m_showFunctionsButton->isChecked(), m_sortAlphaButton->isChecked());
         if (m_tree->topLevelItemCount() == static_cast<int>(shown.size())) {
-            const auto updateInPlace = [&](auto& self, QTreeWidgetItem* item,
-                                           const fl::DocumentSymbol& sym) -> void {
+            const auto updateInPlace = [&](auto& self, QTreeWidgetItem* item, const fl::DocumentSymbol& sym) -> void {
                 if (!item || item->childCount() != static_cast<int>(sym.children.size()))
                     return;
                 item->setData(0, kTargetRole,

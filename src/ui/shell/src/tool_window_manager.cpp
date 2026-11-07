@@ -61,8 +61,8 @@ constexpr std::size_t index(ToolWindowSide side) noexcept { return static_cast<s
 // appear on the stripe when opened or pinned via the More Tool Windows (⋯) menu.
 bool isSecondaryToolWindow(std::string_view id) noexcept {
     static constexpr std::array<std::string_view, 11> kSecondary{
-        "fileSystem", "cmakeTargets", "nuget",      "unitTests",   "findUsages", "todo",
-        "gitDiff",    "gitConsole",   "cmake",      "frostEngine", "unityControls",
+        "fileSystem", "cmakeTargets", "nuget", "unitTests",   "findUsages",    "todo",
+        "gitDiff",    "gitConsole",   "cmake", "frostEngine", "unityControls",
     };
     return std::ranges::find(kSecondary, id) != kSecondary.end();
 }
@@ -213,8 +213,7 @@ protected:
 
 class ToolWindowHeaderBar final : public QWidget {
 public:
-    explicit ToolWindowHeaderBar(ToolWindowSide side, QWidget* parent = nullptr)
-        : QWidget(parent), m_side(side) {
+    explicit ToolWindowHeaderBar(ToolWindowSide side, QWidget* parent = nullptr) : QWidget(parent), m_side(side) {
         setFixedHeight(35);
     }
 
@@ -230,13 +229,13 @@ protected:
 
         if (m_side == ToolWindowSide::Left) {
             const QColor projColor = shell_detail::activeProjectColor(this);
-            shell_detail::paintEllipticalGlow(painter, QPointF(72.0, 0.0), 240.0, height() * 2.4,
-                                              projColor, isDark ? 38 : 22);
+            shell_detail::paintEllipticalGlow(painter, QPointF(72.0, 0.0), 240.0, height() * 2.4, projColor,
+                                              isDark ? 38 : 22);
         } else {
-            const QColor accent = frost != nullptr ? frost->color(ColorKey::TabbedPaneUnderlineColor)
-                                                   : QColor(0x35, 0x74, 0xF0);
-            shell_detail::paintEllipticalGlow(painter, QPointF(56.0, height() * 0.5), 170.0, height() * 2.0,
-                                              accent, isDark ? 26 : 16);
+            const QColor accent =
+                frost != nullptr ? frost->color(ColorKey::TabbedPaneUnderlineColor) : QColor(0x35, 0x74, 0xF0);
+            shell_detail::paintEllipticalGlow(painter, QPointF(56.0, height() * 0.5), 170.0, height() * 2.0, accent,
+                                              isDark ? 26 : 16);
         }
         shell_detail::paintFrostedGlassSheen(painter, rect(), isDark, true);
     }
@@ -266,8 +265,8 @@ protected:
         // Top ambient color continuity from the Main Header's Project Gradient.
         if (m_borderOnRight) {
             const QColor projColor = shell_detail::activeProjectColor(this);
-            shell_detail::paintEllipticalGlow(painter, QPointF(width() * 0.5, 0.0), width() * 2.4, 130.0,
-                                              projColor, isDark ? 38 : 22);
+            shell_detail::paintEllipticalGlow(painter, QPointF(width() * 0.5, 0.0), width() * 2.4, 130.0, projColor,
+                                              isDark ? 38 : 22);
         }
 
         // Ambient frosted glow behind active (checked) and hovered stripe buttons.
@@ -283,8 +282,7 @@ protected:
             }
             const QPoint centerInSidebar = mapFromGlobal(btn->mapToGlobal(btn->rect().center()));
             const int alpha = checked ? (isDark ? 56 : 36) : (isDark ? 30 : 18);
-            shell_detail::paintEllipticalGlow(painter, QPointF(centerInSidebar), width() * 1.4, 38.0,
-                                              accent, alpha);
+            shell_detail::paintEllipticalGlow(painter, QPointF(centerInSidebar), width() * 1.4, 38.0, accent, alpha);
         }
 
         if (m_borderOnRight) {
@@ -433,9 +431,10 @@ void StripeButton::paintEvent(QPaintEvent* /*event*/) {
         icon().paint(&painter, iconRect, Qt::AlignCenter, iconMode, checked ? QIcon::On : QIcon::Off);
         area.setLeft(iconRect.right() + 5);
     }
-    painter.setPen(!isEnabled() ? themeColor(ColorKey::LabelDisabledForeground, palette().color(QPalette::PlaceholderText))
-                   : checked    ? themeColor(ColorKey::ButtonDefaultForeground, QColor(255, 255, 255))
-                                : themeColor(ColorKey::LabelForeground, palette().color(QPalette::ButtonText)));
+    painter.setPen(!isEnabled()
+                       ? themeColor(ColorKey::LabelDisabledForeground, palette().color(QPalette::PlaceholderText))
+                   : checked ? themeColor(ColorKey::ButtonDefaultForeground, QColor(255, 255, 255))
+                             : themeColor(ColorKey::LabelForeground, palette().color(QPalette::ButtonText)));
     painter.drawText(area, Qt::AlignVCenter | Qt::AlignLeft, text());
     painter.restore();
 }
@@ -764,7 +763,8 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
                                 : (spec.side == ToolWindowSide::Bottom ? kDefaultBottomSize : kDefaultSideSize);
     const bool pinnedByDefault = !isSecondaryToolWindow(spec.id);
     button->setVisible(pinnedByDefault);
-    Window& window = m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, false, pinnedByDefault});
+    Window& window =
+        m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, false, pinnedByDefault});
     updateSidebarVisibility();
     if (const Result<ShellLayout> layout = m_settings.load(); layout) {
         if (const ToolWindowLayout* remembered = layout->find(id); remembered != nullptr) {
@@ -1086,11 +1086,9 @@ void ToolWindowManager::updateSidebarVisibility() {
         side(which).stripe->setVisible(anyOnSide);
     }
     if (m_leftSidebar != nullptr) {
-        const bool anyLeftOrBottom = !m_windows.empty() &&
-                                     std::ranges::any_of(m_windows, [](const Window& w) {
-                                         return w.spec.side == ToolWindowSide::Left ||
-                                                w.spec.side == ToolWindowSide::Bottom;
-                                     });
+        const bool anyLeftOrBottom = !m_windows.empty() && std::ranges::any_of(m_windows, [](const Window& w) {
+            return w.spec.side == ToolWindowSide::Left || w.spec.side == ToolWindowSide::Bottom;
+        });
         m_leftSidebar->setVisible(anyLeftOrBottom);
     }
 }

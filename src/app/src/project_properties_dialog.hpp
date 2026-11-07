@@ -85,8 +85,7 @@ struct NuGetPackageEntry {
 [[nodiscard]] Result<void> addFilterToVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
                                                      std::string_view filterPath);
 [[nodiscard]] Result<void> renameFilterInVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
-                                                        std::string_view oldFilterPath,
-                                                        std::string_view newFilterPath);
+                                                        std::string_view oldFilterPath, std::string_view newFilterPath);
 [[nodiscard]] Result<void> removeFilterFromVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
                                                           std::string_view filterPath);
 [[nodiscard]] Result<void> moveFilesToVcxprojFilter(io::IFileSystem& fs, std::string_view vcxprojPath,
@@ -124,11 +123,11 @@ struct RunningProcessInfo {
 void showAttachToProcessDialog(QWidget* parent,
                                std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach);
 
-void showEditRunConfigurationsDialog(
-    QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-    const std::string& preferredProjectPath, const std::string& activeConfigPlatform, bool externalConsole,
-    std::function<void(bool)> onExternalConsoleChanged, std::function<void()> onSaved,
-    std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound = {});
+void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
+                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
+                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
+                                     std::function<void()> onSaved,
+                                     std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound = {});
 
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                    const std::string& projectPath, std::function<void()> onSaved);
@@ -157,20 +156,21 @@ struct DiscoveredTestEntry {
     bool expectsFailureInSource = false;
 };
 
-[[nodiscard]] std::vector<DiscoveredTestEntry>
-discoverTestsAndEntryPointsInFile(std::string_view filePath, std::string_view content,
-                                  std::string_view projectName = {}, std::string_view projectPath = {},
-                                  std::string_view solutionName = {});
+[[nodiscard]] std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_view filePath,
+                                                                                 std::string_view content,
+                                                                                 std::string_view projectName = {},
+                                                                                 std::string_view projectPath = {},
+                                                                                 std::string_view solutionName = {});
 
 [[nodiscard]] std::vector<DiscoveredTestEntry>
-discoverWorkspaceUnitTests(io::IFileSystem& fs, const project::SolutionModel* solution,
-                           std::string_view workspaceRoot);
+discoverWorkspaceUnitTests(io::IFileSystem& fs, const project::SolutionModel* solution, std::string_view workspaceRoot);
 
-[[nodiscard]] QWidget* createUnitTestsToolWindowWidget(
-    QWidget* parent, io::IFileSystem& fs, std::function<const project::SolutionModel*()> solutionProvider,
-    std::function<std::string()> workspaceRootProvider,
-    std::function<void(const std::string& path, int line)> onNavigateToSource,
-    std::function<void(const DiscoveredTestEntry& test)> onDebugTest = {});
+[[nodiscard]] QWidget*
+createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
+                                std::function<const project::SolutionModel*()> solutionProvider,
+                                std::function<std::string()> workspaceRootProvider,
+                                std::function<void(const std::string& path, int line)> onNavigateToSource,
+                                std::function<void(const DiscoveredTestEntry& test)> onDebugTest = {});
 
 void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, const std::string& filePath,
                             const std::string& currentContent,

@@ -147,8 +147,9 @@ struct ExtractedSymbolInfo {
     bool hasExternalQualifier = false;
 };
 
-ExtractedSymbolInfo extractSymbolAtPosition(std::string_view documentPath, const std::optional<text::Snapshot>& snapshot,
-                                            fl::LspPosition position, fl::PositionEncoding encoding) {
+ExtractedSymbolInfo extractSymbolAtPosition(std::string_view documentPath,
+                                            const std::optional<text::Snapshot>& snapshot, fl::LspPosition position,
+                                            fl::PositionEncoding encoding) {
     ExtractedSymbolInfo info;
     const SplitPathParts parts = splitPathParts(documentPath);
     info.isCSharp = (parts.ext == ".cs" || parts.ext == ".csx");
@@ -202,11 +203,11 @@ ExtractedSymbolInfo extractSymbolAtPosition(std::string_view documentPath, const
     if (!info.hasExternalQualifier) {
         // Also check if the file imports System / UnityEngine / std and the symbol is a well-known external type.
         static constexpr std::string_view kKnownExternalTypes[] = {
-            "Console",       "String",        "Object",     "Exception",   "Task",          "List",
-            "Dictionary",    "IEnumerable",   "Math",       "DateTime",    "Guid",          "Span",
-            "MonoBehaviour", "GameObject",    "Transform",  "Vector3",     "Quaternion",    "Debug",
-            "Component",     "ScriptableObject", "vector",  "string",      "shared_ptr",    "unique_ptr",
-            "optional",      "variant",       "function"};
+            "Console",       "String",           "Object",    "Exception", "Task",       "List",
+            "Dictionary",    "IEnumerable",      "Math",      "DateTime",  "Guid",       "Span",
+            "MonoBehaviour", "GameObject",       "Transform", "Vector3",   "Quaternion", "Debug",
+            "Component",     "ScriptableObject", "vector",    "string",    "shared_ptr", "unique_ptr",
+            "optional",      "variant",          "function"};
         for (std::string_view known : kKnownExternalTypes) {
             if (info.symbolName == known) {
                 info.hasExternalQualifier = true;
@@ -241,9 +242,9 @@ DecompiledSynthesis synthesizeDecompiledSource(const ExtractedSymbolInfo& sym, s
         std::size_t lineStart = 0;
         while (lineStart < out.content.size()) {
             const std::size_t nl = out.content.find('\n', lineStart);
-            const std::string_view lineView =
-                nl == std::string::npos ? std::string_view(out.content).substr(lineStart)
-                                        : std::string_view(out.content).substr(lineStart, nl - lineStart);
+            const std::string_view lineView = nl == std::string::npos
+                                                  ? std::string_view(out.content).substr(lineStart)
+                                                  : std::string_view(out.content).substr(lineStart, nl - lineStart);
             if (!lineView.starts_with("//")) {
                 const std::size_t found = lineView.find(sym.symbolName);
                 if (found != std::string_view::npos) {
@@ -335,9 +336,8 @@ DecompiledSynthesis synthesizeDecompiledSource(const ExtractedSymbolInfo& sym, s
                 lines.push_back(std::format("{}/// {}", indent, d));
             }
         } else {
-            lines.push_back(
-                std::format("{}/// Decompiled metadata projection for {}.", indent,
-                            sym.qualifiedName.empty() ? sym.symbolName : sym.qualifiedName));
+            lines.push_back(std::format("{}/// Decompiled metadata projection for {}.", indent,
+                                        sym.qualifiedName.empty() ? sym.symbolName : sym.qualifiedName));
         }
         lines.push_back(std::format("{}/// </summary>", indent));
 
@@ -414,9 +414,10 @@ DecompiledSynthesis synthesizeDecompiledSource(const ExtractedSymbolInfo& sym, s
     return out;
 }
 
-sched::Task<std::optional<fl::Location>>
-tryDecompileSymbol(fl::ILspRequester& server, io::IFileSystem& fs, std::string path, fl::LspPosition position,
-                   ExtractedSymbolInfo sym, bool forceDecompile, std::stop_token token) {
+sched::Task<std::optional<fl::Location>> tryDecompileSymbol(fl::ILspRequester& server, io::IFileSystem& fs,
+                                                            std::string path, fl::LspPosition position,
+                                                            ExtractedSymbolInfo sym, bool forceDecompile,
+                                                            std::stop_token token) {
     if (sym.symbolName.empty()) {
         co_return std::nullopt;
     }
@@ -452,8 +453,8 @@ tryDecompileSymbol(fl::ILspRequester& server, io::IFileSystem& fs, std::string p
                 }
             }
             if (!metadataUri.empty()) {
-                fl::Json metaParams = fl::Json::object().set(
-                    "textDocument", fl::Json::object().set("uri", metadataUri));
+                fl::Json metaParams =
+                    fl::Json::object().set("textDocument", fl::Json::object().set("uri", metadataUri));
                 if (auto metaRes = co_await server.request("csharp/metadata", std::move(metaParams), token);
                     metaRes && metaRes->isObject()) {
                     rawMetadataSource = metaRes->stringAt("source");
@@ -488,9 +489,8 @@ tryDecompileSymbol(fl::ILspRequester& server, io::IFileSystem& fs, std::string p
     if (auto wrote = fs.writeFileAtomic(*decompiledPathRes, synth.content); !wrote) {
         co_return std::nullopt;
     }
-    const fl::LspPosition endPos{
-        synth.declarationPosition.line,
-        synth.declarationPosition.character + static_cast<std::uint32_t>(sym.symbolName.size())};
+    const fl::LspPosition endPos{synth.declarationPosition.line, synth.declarationPosition.character +
+                                                                     static_cast<std::uint32_t>(sym.symbolName.size())};
     const std::string decompiledUri = fl::pathToUri(*decompiledPathRes).value_or("");
     co_return fl::Location{*decompiledPathRes, decompiledUri, fl::LspRange{synth.declarationPosition, endPos}};
 }
@@ -540,9 +540,9 @@ bool hasReturnTypeOrScopePrefix(std::string_view beforeSymbol) {
     if (word.empty()) {
         return false;
     }
-    static constexpr std::string_view kForbiddenKeywords[] = {
-        "if", "else", "while", "for", "switch", "case", "return", "co_return", "co_await", "co_yield", "sizeof",
-        "decltype", "new", "delete", "throw"};
+    static constexpr std::string_view kForbiddenKeywords[] = {"if",     "else",     "while",     "for",      "switch",
+                                                              "case",   "return",   "co_return", "co_await", "co_yield",
+                                                              "sizeof", "decltype", "new",       "delete",   "throw"};
     for (std::string_view kw : kForbiddenKeywords) {
         if (word == kw) {
             return false;
@@ -566,9 +566,9 @@ std::optional<fl::Location> findFunctionInFile(std::string_view filePath, std::s
     std::size_t lineStart = 0;
     while (lineStart < content->size()) {
         const std::size_t nl = content->find('\n', lineStart);
-        std::string_view lineView =
-            nl == std::string::npos ? std::string_view(*content).substr(lineStart)
-                                    : std::string_view(*content).substr(lineStart, nl - lineStart);
+        std::string_view lineView = nl == std::string::npos
+                                        ? std::string_view(*content).substr(lineStart)
+                                        : std::string_view(*content).substr(lineStart, nl - lineStart);
         if (!lineView.empty() && lineView.back() == '\r') {
             lineView.remove_suffix(1);
         }
@@ -594,9 +594,8 @@ std::optional<fl::Location> findFunctionInFile(std::string_view filePath, std::s
                         const std::size_t absParen = lineStart + parenPos;
                         const std::size_t nextBrace = content->find('{', absParen);
                         const std::size_t nextSemi = content->find(';', absParen);
-                        const bool isDefinition =
-                            (nextBrace != std::string_view::npos &&
-                             (nextSemi == std::string_view::npos || nextBrace < nextSemi));
+                        const bool isDefinition = (nextBrace != std::string_view::npos &&
+                                                   (nextSemi == std::string_view::npos || nextBrace < nextSemi));
                         if (!requireDefinitionBody || isDefinition) {
                             const auto colStart = static_cast<std::uint32_t>(found);
                             const auto colEnd = static_cast<std::uint32_t>(afterSym);
@@ -662,8 +661,7 @@ gotoDeclarationOrDecompile(fl::ILspRequester& server, io::IFileSystem& fs,
             }
         } else if (!result->showUsages && result->locations.size() == 1 &&
                    isSourceExt(splitPathParts(result->locations.front().path).ext)) {
-            if (const auto relatedHeader =
-                    findRelatedProjectFile(result->locations.front().path, projectFiles, fs)) {
+            if (const auto relatedHeader = findRelatedProjectFile(result->locations.front().path, projectFiles, fs)) {
                 if (auto declLoc = findFunctionInFile(*relatedHeader, sym.symbolName, false, openDocs, fs);
                     declLoc && isHeaderPrototypeLocation(*declLoc, openDocs, fs)) {
                     result->locations.front() = std::move(*declLoc);
@@ -706,10 +704,9 @@ gotoImplementationTask(fl::ILspRequester& server, io::IFileSystem& fs,
     co_return locations;
 }
 
-sched::Task<Result<std::optional<fl::Location>>> decompileSymbolTask(fl::ILspRequester& server,
-                                                                     io::IFileSystem& fs, std::string path,
-                                                                     fl::LspPosition position, ExtractedSymbolInfo sym,
-                                                                     std::stop_token token) {
+sched::Task<Result<std::optional<fl::Location>>> decompileSymbolTask(fl::ILspRequester& server, io::IFileSystem& fs,
+                                                                     std::string path, fl::LspPosition position,
+                                                                     ExtractedSymbolInfo sym, std::stop_token token) {
     auto loc = co_await tryDecompileSymbol(server, fs, path, position, sym, true, token);
     co_return Result<std::optional<fl::Location>>(std::move(loc));
 }
@@ -845,11 +842,9 @@ LanguageController::~LanguageController() {
 void LanguageController::editorChanged() {
     const auto snapshot = m_services.host.snapshot();
     const bool sameStructureDoc =
-        m_structureVisible && !m_structurePath.empty() &&
-        m_services.host.documentPath() == m_structurePath &&
+        m_structureVisible && !m_structurePath.empty() && m_services.host.documentPath() == m_structurePath &&
         m_services.host.documentVersion() == m_structureVersion && snapshot &&
-        snapshot->version() == m_structureRevision &&
-        m_services.host.structureIdentity() == m_structureIdentity &&
+        snapshot->version() == m_structureRevision && m_services.host.structureIdentity() == m_structureIdentity &&
         m_services.server.encoding() == m_structureEncoding;
     if (!sameStructureDoc) {
         structureChanged();
@@ -889,11 +884,11 @@ void LanguageController::invalidateStructure(bool keepSameIdentityTree) {
     ++m_structureGeneration;
     m_structureSlot.cancel();
     m_structureTimer.stop();
-    const bool keepExistingTreeForSameIdentity =
-        keepSameIdentityTree && m_structureVisible && hasDocument() && !m_structurePath.empty() &&
-        m_services.host.documentPath() == m_structurePath &&
-        m_services.host.structureIdentity() == m_structureIdentity &&
-        m_services.server.encoding() == m_structureEncoding;
+    const bool keepExistingTreeForSameIdentity = keepSameIdentityTree && m_structureVisible && hasDocument() &&
+                                                 !m_structurePath.empty() &&
+                                                 m_services.host.documentPath() == m_structurePath &&
+                                                 m_services.host.structureIdentity() == m_structureIdentity &&
+                                                 m_services.server.encoding() == m_structureEncoding;
     m_structurePath.clear();
     if (!m_structureVisible) {
         m_structure->setStatus(QStringLiteral("Open Structure to view symbols."));

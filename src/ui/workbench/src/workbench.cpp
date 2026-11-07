@@ -292,11 +292,11 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
     const std::string_view ext(extBuf, rawExt.size());
 
     static constexpr std::string_view kSourceExts[] = {
-        ".c",      ".cc",     ".cpp",     ".cxx",   ".c++",  ".cppm", ".ixx",  ".h",    ".hh",   ".hpp",
-        ".hxx",    ".inl",    ".ipp",     ".cs",    ".csx",  ".fs",   ".vb",   ".lua",  ".luau", ".hlsl",
-        ".hlsli",  ".glsl",   ".vert",    ".frag",  ".comp", ".shader", ".cginc", ".compute", ".uss", ".uxml",
-        ".py",     ".js",     ".ts",      ".jsx",   ".tsx",  ".rs",   ".go",   ".java", ".kt",   ".swift",
-        ".cmake",  ".txt",    ".md",      ".sh",    ".ps1",  ".bat",  ".cmd"};
+        ".c",     ".cc",   ".cpp",  ".cxx",  ".c++",  ".cppm",   ".ixx",   ".h",       ".hh",   ".hpp",
+        ".hxx",   ".inl",  ".ipp",  ".cs",   ".csx",  ".fs",     ".vb",    ".lua",     ".luau", ".hlsl",
+        ".hlsli", ".glsl", ".vert", ".frag", ".comp", ".shader", ".cginc", ".compute", ".uss",  ".uxml",
+        ".py",    ".js",   ".ts",   ".jsx",  ".tsx",  ".rs",     ".go",    ".java",    ".kt",   ".swift",
+        ".cmake", ".txt",  ".md",   ".sh",   ".ps1",  ".bat",    ".cmd"};
     for (std::string_view allowed : kSourceExts) {
         if (ext == allowed) {
             return true;
@@ -322,24 +322,23 @@ constexpr std::string_view kActionsContext = "frost::input::actions";
     };
     for (std::size_t i = 0; i + 3 <= content.size(); ++i) {
         const char c0 = toUpper(content[i]);
-        if (c0 == 'T' && i + 4 <= content.size() && toUpper(content[i + 1]) == 'O' &&
-            toUpper(content[i + 2]) == 'D' && toUpper(content[i + 3]) == 'O') {
+        if (c0 == 'T' && i + 4 <= content.size() && toUpper(content[i + 1]) == 'O' && toUpper(content[i + 2]) == 'D' &&
+            toUpper(content[i + 3]) == 'O') {
             return true;
         }
-        if (c0 == 'F' && i + 5 <= content.size() && toUpper(content[i + 1]) == 'I' &&
-            toUpper(content[i + 2]) == 'X' && toUpper(content[i + 3]) == 'M' && toUpper(content[i + 4]) == 'E') {
+        if (c0 == 'F' && i + 5 <= content.size() && toUpper(content[i + 1]) == 'I' && toUpper(content[i + 2]) == 'X' &&
+            toUpper(content[i + 3]) == 'M' && toUpper(content[i + 4]) == 'E') {
             return true;
         }
-        if (c0 == 'H' && i + 4 <= content.size() && toUpper(content[i + 1]) == 'A' &&
-            toUpper(content[i + 2]) == 'C' && toUpper(content[i + 3]) == 'K') {
+        if (c0 == 'H' && i + 4 <= content.size() && toUpper(content[i + 1]) == 'A' && toUpper(content[i + 2]) == 'C' &&
+            toUpper(content[i + 3]) == 'K') {
             return true;
         }
         if (c0 == 'B' && toUpper(content[i + 1]) == 'U' && toUpper(content[i + 2]) == 'G') {
             return true;
         }
-        if (c0 == 'U' && i + 6 <= content.size() && toUpper(content[i + 1]) == 'N' &&
-            toUpper(content[i + 2]) == 'D' && toUpper(content[i + 3]) == 'O' && toUpper(content[i + 4]) == 'N' &&
-            toUpper(content[i + 5]) == 'E') {
+        if (c0 == 'U' && i + 6 <= content.size() && toUpper(content[i + 1]) == 'N' && toUpper(content[i + 2]) == 'D' &&
+            toUpper(content[i + 3]) == 'O' && toUpper(content[i + 4]) == 'N' && toUpper(content[i + 5]) == 'E') {
             return true;
         }
     }
@@ -1850,9 +1849,9 @@ void Workbench::refreshTodoItems() {
                    std::stop_token stopToken) -> sched::Task<std::vector<TodoEntry>> {
         co_return scanner(fileSystem, paths, buffers, stopToken);
     };
-    m_todoScan.emplace(m_services.scheduler->spawn(
-        sched::Lane::Background,
-        task(fs, std::move(runScan), std::move(candidatePaths), std::move(openBuffers), token)));
+    m_todoScan.emplace(
+        m_services.scheduler->spawn(sched::Lane::Background, task(fs, std::move(runScan), std::move(candidatePaths),
+                                                                  std::move(openBuffers), token)));
     m_scanTimer->start();
 }
 
