@@ -631,6 +631,33 @@ class ConPtySdkPinTest(TempDirTestCase):
         self.assertTrue(report.violations)
 
 
+class LuaLsSdkPinTest(TempDirTestCase):
+    def test_both_pins_enter_the_sbom_and_need_an_allowed_licence_and_notice(self) -> None:
+        pin = {"version": "3.19.1", "url": "https://example.invalid/luals", "sha256": "b" * 64,
+               "license": "MIT", "copyright": "Copyright (c) 2018 Demo", "adr": "docs/adr.md"}
+        _write(self.tmp / "sdk/sdk.lock.json", json.dumps({"windows": {"luals": pin}, "linux": {"luals": pin}}))
+        _write(self.tmp / "docs/adr.md", "accepted")
+        _write(self.tmp / "NOTICE", "Copyright (c) 2018 Demo. Permission is hereby granted, free of charge")
+        report = licensecheck.Report()
+        licensecheck.check_sdk_luals(self.tmp, report)
+        self.assertEqual(report.violations, [])
+        self.assertEqual([p.comment for p in report.packages], ["Bundled LuaLS (windows)", "Bundled LuaLS (linux)"])
+        for change in ({"license": "GPL-3.0-only"}, {"sha256": "short"}, {"adr": "docs/none.md"},
+                       {"copyright": "Copyright Someone Else"}):
+            broken = dict(pin, **change)
+            _write(self.tmp / "sdk/sdk.lock.json", json.dumps({"linux": {"luals": broken}}))
+            report = licensecheck.Report()
+            licensecheck.check_sdk_luals(self.tmp, report)
+            self.assertEqual(len(report.violations), 1, change)
+            self.assertIn("LuaLS linux pin", str(report.violations[0]))
+
+    def test_the_repository_pins_pass(self) -> None:
+        report = licensecheck.Report()
+        licensecheck.check_sdk_luals(REPO, report)
+        self.assertEqual(report.violations, [])
+        self.assertEqual(len(report.packages), 2)
+
+
 class ManagedSdkPinTest(TempDirTestCase):
     def test_transitive_licences_and_notices_are_checked(self) -> None:
         for relative in ("sdk/sdk.lock.json", "sdk/managed-dependencies.json", "NOTICE", "docs/adr/0064-managed-language.md"):

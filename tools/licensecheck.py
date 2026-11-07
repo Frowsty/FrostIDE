@@ -1096,6 +1096,40 @@ def check_sdk_conpty(repo: Path, report: Report) -> None:
         report.violations.append(Violation("sdk/sdk.lock.json", 1, f"ConPTY pin: {error}"))
 
 
+def check_sdk_luals(repo: Path, report: Report) -> None:
+    """Check the bundled LuaLS pins (ADR 0079, one per platform) and include them in the SBOM: an
+    allowed licence, a SHA-256, the ADR, and the MIT copyright and permission text in NOTICE."""
+    path = repo / "sdk/sdk.lock.json"
+    if not path.is_file():
+        return
+    try:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        report.violations.append(Violation("sdk/sdk.lock.json", 1, f"LuaLS pin: {error}"))
+        return
+    for platform in ("windows", "linux"):
+        pin = lock.get(platform, {}).get("luals") if isinstance(lock.get(platform), dict) else None
+        if pin is None:
+            continue
+        try:
+            licence, version, url, digest = pin["license"], pin["version"], pin["url"], pin["sha256"]
+            if not expression_allowed(licence, ALLOWLIST):
+                raise ValueError("licence is not on the allowlist")
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("archive SHA-256 is invalid")
+            if not (repo / pin["adr"]).is_file():
+                raise ValueError("ADR is missing")
+            notice = (repo / "NOTICE").read_text(encoding="utf-8")
+            if pin["copyright"] not in notice or "Permission is hereby granted, free of charge" not in notice:
+                raise ValueError("MIT copyright or permission notice is missing")
+            report.packages.append(Package(
+                _spdx_id(f"lua-language-server-{platform}"), "lua-language-server", version, licence, licence, url,
+                "https://github.com/LuaLS/lua-language-server", f"pkg:github/LuaLS/lua-language-server@{version}",
+                f"Bundled LuaLS ({platform})", sha256=digest))
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            report.violations.append(Violation("sdk/sdk.lock.json", 1, f"LuaLS {platform} pin: {error}"))
+
+
 def check_sdk_managed(repo: Path, report: Report) -> None:
     """Check the pinned managed server, transitive licence manifest and original notices."""
     lock = repo / "sdk/sdk.lock.json"
@@ -1184,6 +1218,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     check_assets(repo, report, files)
     check_assets(repo, report, files, VENDOR_MANIFEST)
     check_sdk_conpty(repo, report)
+    check_sdk_luals(repo, report)
     check_sdk_managed(repo, report)
     report.violations = sorted(set(report.violations))
     return report

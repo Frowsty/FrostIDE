@@ -12,13 +12,33 @@ struct LuaSearch {
     std::string pathVariable;             // PATH; relative entries are ignored.
 };
 
+// The LuaLS version pinned in sdk/sdk.lock.json (ADR 0079), e.g. "3.19.1".
+[[nodiscard]] std::string_view pinnedLuaLanguageServerVersion() noexcept;
 // Search without launching, O(directories + PATH entries). Returns InvalidArgument for a relative
 // configured path and NotFound if none exists; a bad configured path never silently falls back.
 [[nodiscard]] Result<std::string> findLuaLanguageServer(io::IFileSystem& fs, const LuaSearch& search);
-// Reads this process's PATH; caller may prepend a trusted installation directory.
+/*
+ * The default search, in priority order: the LuaLS bundled beside this executable
+ * (<exe dir>/luals-<pinned>/bin from tools/stage.ps1, then the older lua-language-server/bin and the
+ * executable's own directory), the pinned SDK install (<$FROST_SDK>/luals-<pinned>/bin, then
+ * E:\sdk on Windows or ~/sdk on Linux, the bootstrap scripts' roots), then this process's PATH.
+ * Reads the environment once; thread-safe.
+ */
 [[nodiscard]] LuaSearch defaultLuaSearch(std::string configuredPath = {});
+/*
+ * LuaLS's launch arguments that keep its log and its generated meta files under `stateDirectory`
+ * (a per-user directory) instead of the installation directory, which may be read-only:
+ * --logpath=<dir>/log and --metapath=<dir>/meta. The directories need not exist; LuaLS creates
+ * them. Errors: InvalidArgument (relative directory).
+ */
+[[nodiscard]] Result<std::vector<std::string>> luaLanguageServerArguments(std::string_view stateDirectory);
+// True when `root` directly holds a regular *.frostproj file (a FrostEngine project, whose Lua gets
+// luaDefaults(..., true)). One directory listing; false when it cannot be read.
+[[nodiscard]] bool isFrostEngineLuaWorkspace(io::IFileSystem& fs, std::string_view root);
 
-// Client defaults; .luarc.json has priority in LuaLS. FrostEngine generates and owns its API files.
+// Client defaults; .luarc.json has priority in LuaLS. FrostEngine generates and owns its API files:
+// `frostEngine` adds the engine's script path (Assets/Scripts/?.lua) and library (.frost/lua-api)
+// and disables the io, os, package and debug builtins; FEC-10a will read them from the engine instead.
 [[nodiscard]] Json luaDefaults(std::string runtimeVersion = "Lua 5.4", bool frostEngine = false);
 // Returns a copy of the requested Lua section, or null for an unknown section, O(size).
 [[nodiscard]] Json luaConfigurationSection(const Json& configuration, std::string_view section);

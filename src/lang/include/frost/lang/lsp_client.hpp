@@ -2,7 +2,7 @@
 //
 // LspClient: the Language Server Protocol 3.17 client over a JsonRpcConnection, written from the
 // specification: the initialize / initialized / shutdown / exit lifecycle, capability negotiation
-// (positionEncoding "utf-8" with clangd's offsetEncoding extension as the fallback), the
+// (LSP 3.17 general.positionEncodings preferring "utf-8"; UTF-16 when the server names none), the
 // text-document notifications, and answers to the server requests a client must handle.
 /*
  * Lifecycle (LSP 3.17 "Lifecycle Messages"): initialize() sends `initialize` and, on success,
@@ -114,8 +114,9 @@ protected:
 
 using LspRequestSender = ILspRequester;
 
-// Reads an InitializeResult. A server that answers with clangd's `offsetEncoding` instead of
-// `positionEncoding` gets that encoding. Unknown or "utf-32" encodings fall back to UTF-16.
+// Reads an InitializeResult. `capabilities.positionEncoding` (LSP 3.17) wins; a server that omits it
+// but still answers with clangd's deprecated `offsetEncoding` gets that encoding; otherwise UTF-16,
+// the LSP default. Unknown or "utf-32" encodings fall back to UTF-16 (initialize() rejects them).
 [[nodiscard]] ServerCapabilities parseInitializeResult(const Json& result);
 
 struct InitializeOptions {
@@ -131,8 +132,9 @@ struct InitializeOptions {
 
 // The capabilities FrostIDE announces: synchronization with didSave, publishDiagnostics with
 // versionSupport, relatedInformation and codeDescription, general.positionEncodings ["utf-8",
-// "utf-16"] (and clangd's offsetEncoding), workDoneProgress, workspace configuration and folders,
-// and semanticTokens (full and delta) with clangd's inactiveRegionsCapabilities (ADR 0047).
+// "utf-16"] (LSP 3.17 only; clangd's deprecated offsetEncoding is not offered), workDoneProgress,
+// workspace configuration and folders, and semanticTokens (full and delta) with clangd's inactiveRegionsCapabilities
+// (ADR 0047).
 [[nodiscard]] Json clientCapabilities();
 
 // The initialize params for `options`. Errors: InvalidArgument (rootPath not absolute).

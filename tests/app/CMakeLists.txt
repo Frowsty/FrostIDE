@@ -155,8 +155,8 @@ target_compile_definitions(app_workbench_lua_tests PRIVATE FROST_STRUCTURE_LSP="
 add_dependencies(app_workbench_lua_tests structure_lsp_fixture)
 
 frost_add_test(app_workbench_cmake_tests QT
-    SOURCES workbench_cmake_test.cpp
-    DEPS frost::app frost::build frost::io
+    SOURCES workbench_cmake_test.cpp workbench_clangd_spawn_test.cpp
+    DEPS frost::app frost::build frost::lang frost::io
     LABELS integration cmake clangd)
 target_include_directories(app_workbench_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_definitions}

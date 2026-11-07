@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// LuaLS configuration, trust boundary and supervised transport with a scripted server.
+// LuaLS configuration, discovery of the pinned release, its state arguments, FrostEngine workspace
+// detection, the trust boundary and the supervised transport with a scripted server.
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
@@ -11,7 +12,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <string>
+#include <vector>
 
 namespace {
 using namespace std::chrono_literals;
@@ -34,6 +38,38 @@ TEST(LuaService, DiscoveryRejectsRelativeAndMissingExplicitPaths) {
     EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).error().code(), frost::ErrorCode::NotFound);
     search.configuredPath.clear();
     EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).value(), tool);
+}
+// LUA-1: the default search names the pinned release's folder (staged and SDK) before PATH.
+TEST(LuaService, DefaultSearchPrefersThePinnedInstall) {
+    EXPECT_FALSE(frost::lang::pinnedLuaLanguageServerVersion().empty());
+    const auto search = frost::lang::defaultLuaSearch();
+    const std::string pinned = "luals-" + std::string(frost::lang::pinnedLuaLanguageServerVersion());
+    const auto pinnedDirs = std::ranges::count_if(
+        search.directories, [&](const std::string& dir) { return dir.find(pinned) != std::string::npos; });
+    EXPECT_GE(pinnedDirs, 2) << "the staged folder and the SDK root";
+    EXPECT_NE(search.directories.front().find(pinned), std::string::npos) << search.directories.front();
+    for (const auto& dir : search.directories)
+        EXPECT_TRUE(frost::io::isAbsolutePath(dir)) << dir;
+}
+TEST(LuaService, StateArgumentsKeepLogAndMetaUnderTheGivenDirectory) {
+    const std::string state = frost::io::joinPath(root, "state").value();
+    const auto arguments = frost::lang::luaLanguageServerArguments(state);
+    ASSERT_TRUE(arguments.has_value());
+    EXPECT_EQ(*arguments, (std::vector<std::string>{"--logpath=" + frost::io::joinPath(state, "log").value(),
+                                                    "--metapath=" + frost::io::joinPath(state, "meta").value()}));
+    EXPECT_EQ(frost::lang::luaLanguageServerArguments("relative").error().code(), frost::ErrorCode::InvalidArgument);
+}
+TEST(LuaService, FrostEngineWorkspaceNeedsAFrostprojInTheRoot) {
+    frost::io::MemFs fs(frost::systemClock());
+    ASSERT_TRUE(fs.createDirectories(frost::io::joinPath(root, "sub").value()).has_value());
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root));
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root, "sub/Game.frostproj").value(), "{}").has_value());
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root)) << "only the root itself counts";
+    ASSERT_TRUE(fs.createDirectories(frost::io::joinPath(root, "dir.frostproj").value()).has_value());
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root)) << "a directory is not a project file";
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root, "Game.frostproj").value(), "{}").has_value());
+    EXPECT_TRUE(frost::lang::isFrostEngineLuaWorkspace(fs, root));
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, frost::io::joinPath(root, "missing").value()));
 }
 TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
     auto reactor = frost::io::Reactor::create();

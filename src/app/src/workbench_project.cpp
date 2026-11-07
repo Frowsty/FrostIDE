@@ -2,7 +2,8 @@
 //
 // Workbench (frost/app/workbench.hpp), the project side: opening solutions, folders and files,
 // closing the project, the last project at start-up, the recent-projects list, and clangd (start
-// on solutionCompileCommandsChain, restart on a configuration switch, document sync, live
+// on solutionCompileCommandsChain, one start per project open (FND-9a), restart on a
+// configuration switch or a moved CMake database, document sync, live
 // diagnostics in Problems and the editors, the "clangd: indexing" background task).
 
 #include "frost/app/workbench.hpp"
@@ -22,6 +23,7 @@
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
@@ -42,11 +44,13 @@
 #include <QInputDialog>
 #include <QMimeData>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <format>
 #include <functional>
 #include <limits>
@@ -67,6 +71,28 @@ sched::Task<void> stopOwnedClangd(std::shared_ptr<lang::ClangdService> service, 
 sched::Task<void> stopOwnedProjectEvaluation(std::shared_ptr<lang::IndependentProjectEvaluation> service) {
     service->stopAndJoin();
     co_return;
+}
+
+// Suffix of cmakeClangdState when the active build directory holds compile_commands.json.
+constexpr std::string_view kCMakeDatabasePresent = "|database";
+
+/*
+ * Where a CMake folder's clangd would read its compile commands right now, as
+ * BuildDirectoryCompileCommandsProvider resolves them at clangd's start: the active profile's build
+ * directory and whether compile_commands.json is there ("" when there is no active profile). Two
+ * equal states give clangd the same --compile-commands-dir, so no restart is needed: clangd reloads
+ * a database that changes in place. One stat, on the UI thread.
+ */
+std::string cmakeClangdState(io::IFileSystem& fs, const build::CMakeService& service) {
+    std::string directory = service.activeBuildDirectory();
+    if (directory.empty())
+        return {};
+    bool present = false;
+    if (auto database = io::joinPath(directory, "compile_commands.json")) {
+        auto status = fs.status(*database);
+        present = status && status->type == io::FileType::Regular;
+    }
+    return directory + std::string(present ? kCMakeDatabasePresent : std::string_view("|none"));
 }
 
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
@@ -584,8 +610,12 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             *m_window, *m_runConsole, m_options.cmakeStatePath, [this] { m_runController->alternateStateChanged(); },
             [this](const std::string& file) { (void)openPath(file); },
             [this] {
-                if (m_cmake && m_clangd)
-                    restartClangd();
+                // FND-9a: the open's own model publication (and a configure that leaves the
+                // database where clangd already reads it) must not spawn a second clangd.
+                if (m_cmake && !m_clangdDeferredRoot.empty())
+                    resumeDeferredClangd();
+                else if (m_cmake && m_clangd)
+                    restartClangdIfCMakeStateChanged();
             });
         if (auto opened = m_cmake->open(path); !opened) {
             m_cmake.reset();
@@ -615,7 +645,26 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
         if (!m_cmake)
             m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
     }
-    startClangd(path);
+    /*
+     * FND-9a: resolve where clangd's compile commands come from before starting it, so an open
+     * spawns one clangd. A trusted CMake folder whose configure-on-open is still producing its first
+     * compile_commands.json starts clangd when that configure ends (resumeDeferredClangd), instead
+     * of starting now without a database and restarting when it appears. With a database already in
+     * the active build directory, clangd starts now and the configure's model does not restart it.
+     */
+    if (m_options.clangd && m_cmake && m_cmake->service().state() != build::BuildState::Idle &&
+        !cmakeClangdState(m_services.fs, m_cmake->service()).ends_with(kCMakeDatabasePresent)) {
+        stopClangd();
+        m_clangdDeferredRoot = path;
+        m_clangdDeferral =
+            connect(m_build.get(), &ui::BuildController::stateChanged, this, [this](build::BuildState state) {
+                if (state == build::BuildState::Idle)
+                    resumeDeferredClangd(true);
+            });
+        log::info(kLog, "clangd waits for the CMake configure of {}", path);
+    } else {
+        startClangd(path);
+    }
     startLua(path);
     startManaged(path);
     offerProjectTrust();
@@ -2628,6 +2677,7 @@ void Workbench::startClangd(const std::string& root) {
         }
     }
     if (m_cmake) {
+        m_clangdCMakeState = cmakeClangdState(m_services.fs, m_cmake->service());
         std::weak_ptr<build::CMakeService> service = m_cmake->sharedService();
         m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(m_services.fs, [service] {
             const auto current = service.lock();
@@ -2735,7 +2785,43 @@ void Workbench::restartClangd() {
     }
 }
 
+void Workbench::restartClangdIfCMakeStateChanged() {
+    if (!m_cmake || !m_clangd)
+        return;
+    const std::string state = cmakeClangdState(m_services.fs, m_cmake->service());
+    if (state == m_clangdCMakeState) {
+        // Same build directory, database present or absent as before: clangd already reads it.
+        log::info(kLog, "the CMake model changed; clangd's compile commands did not, so it keeps running");
+        return;
+    }
+    log::info(kLog, "the CMake compile commands moved ({} -> {}): clangd restarts", m_clangdCMakeState, state);
+    restartClangd();
+}
+
+void Workbench::resumeDeferredClangd(bool retryUntilIdle) {
+    if (m_clangdDeferredRoot.empty())
+        return;
+    if (m_shutDown || !m_cmake || m_clangdDeferredRoot != m_projectRoot) {
+        m_clangdDeferredRoot.clear();
+        QObject::disconnect(m_clangdDeferral);
+        return;
+    }
+    if (m_cmake->service().state() != build::BuildState::Idle) {
+        // The controller can report Idle (or the model) just before the service's own state does.
+        if (retryUntilIdle)
+            QTimer::singleShot(std::chrono::milliseconds(50), this, [this] { resumeDeferredClangd(true); });
+        return;
+    }
+    const std::string root = std::exchange(m_clangdDeferredRoot, {});
+    QObject::disconnect(m_clangdDeferral);
+    log::info(kLog, "the CMake configure of {} ended: clangd starts", root);
+    startClangd(root);
+}
+
 void Workbench::stopClangd() {
+    m_clangdDeferredRoot.clear();
+    QObject::disconnect(m_clangdDeferral);
+    m_clangdCMakeState.clear();
     ++m_clangdGeneration;
     std::erase_if(m_retiredClangd, [](auto& stopped) {
         if (!stopped.ready())

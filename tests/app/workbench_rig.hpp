@@ -231,7 +231,7 @@ struct RigOptions {
 
 /*
  * A Workbench and its MainWindow over files in `dir`: data/settings.json, data/trusted-roots.txt,
- * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt. Several rigs over one
+ * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt, data/luals. Several rigs over one
  * directory share them, as two runs of FrostIDE would. clangd is off unless the options turn it on;
  * runs write to the Run console (no external console).
  */
@@ -277,6 +277,9 @@ public:
         }
         if (wb.runStatePath.empty()) {
             wb.runStatePath = dir.join("data/run-settings.txt");
+        }
+        if (wb.luaStateDirectory.empty()) {
+            wb.luaStateDirectory = dir.join("data/luals"); // LuaLS's log and meta, not the profile's.
         }
         if (wb.applicationSettingsFile.empty()) {
             wb.applicationSettingsFile = dir.join("data/settings.json");

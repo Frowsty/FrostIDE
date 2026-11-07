@@ -11,7 +11,8 @@
 #                      semantic tokens and inactive regions (ADR 0047); label "unit";
 #   lang_clangd_tests  the real clangd (the pinned LLVM's) end to end on tiny fixtures: a CMake-style
 #                      compile_commands.json, the synthesized one for a .vcxproj, a restart after a
-#                      killed clangd, and semantic tokens and an inactive region (ADR 0047); label
+#                      killed clangd, semantic tokens and an inactive region (ADR 0047), and LSP 3.17
+#                      positionEncodings negotiation with columns on a non-ASCII line (FND-9a); label
 #                      "integration" (it starts real clangd processes, so RESOURCE_LOCK frost_desktop;
 #                      ADR 0027) with the tag "clangd" (ctest -L clangd).
 #                      Each test takes a second or two;
@@ -52,6 +53,7 @@ add_dependencies(lang_unit_tests engine_discovery_stall_child)
 frost_add_test(lang_clangd_tests
     SOURCES
         clangd_test.cpp
+        clangd_encoding_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(lang_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

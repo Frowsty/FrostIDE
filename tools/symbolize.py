@@ -7,9 +7,11 @@
 #   python -I tools/symbolize.py minidump <file.dmp> [common options]
 #   python -I tools/symbolize.py freeze <freeze-*.json> [--samples] [common options]
 #   python -I tools/symbolize.py check-selftest --artifacts <dir> [--source-root <repo>] [common options]
+#   python -I tools/symbolize.py archive --stage <dir> --pdb-dir <dir> --output <zip> [--require <image>]
 #
-# Common options: --llvm-symbolizer <path> (default: $FROST_LLVM_ROOT/bin, then PATH) and
-# --search-dir <dir> (repeatable; where to look for a module whose recorded path is gone).
+# Common options: --llvm-symbolizer <path> (default: $FROST_LLVM_ROOT/bin, then PATH),
+# --search-dir <dir> (repeatable; where to look for a module whose recorded path is gone) and
+# --symbol-archive <zip> (repeatable; a stage's symbol archive, see "Symbol archives" below).
 #
 # Every module is checked against the identity the dump or report recorded (the PDB GUID and
 # age of a PE image's RSDS record, the GNU build ID of an ELF image's NT_GNU_BUILD_ID note)
@@ -54,6 +56,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -61,6 +64,8 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
+import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,10 +168,16 @@ class LocalImage:
 
 def pe_image(path: Path, data: bytes) -> LocalImage:
     """A PE32/PE32+ image and the RSDS record of its debug directory."""
+    record = pe_codeview_record(data)
+    return LocalImage(path, "pe", codeview_identity(record) if record is not None else Identity("none"))
+
+
+def pe_codeview_record(data: bytes) -> bytes | None:
+    """The CodeView record (IMAGE_DEBUG_TYPE_CODEVIEW) of a PE32/PE32+ image's debug directory."""
     try:
         pe = struct.unpack_from("<I", data, 0x3C)[0]
         if data[pe : pe + 4] != b"PE\0\0":
-            return LocalImage(path, "pe", Identity("none"))
+            return None
         sections, optional_size = struct.unpack_from("<H", data, pe + 6)[0], struct.unpack_from("<H", data, pe + 20)[0]
         optional = pe + 24
         magic = struct.unpack_from("<H", data, optional)[0]
@@ -187,10 +198,18 @@ def pe_image(path: Path, data: bytes) -> LocalImage:
             for entry in range(start, start + debug_size, 28):
                 kind, size, _, pointer = struct.unpack_from("<IIII", data, entry + 12)
                 if kind == 2:  # IMAGE_DEBUG_TYPE_CODEVIEW
-                    return LocalImage(path, "pe", codeview_identity(data[pointer : pointer + size]))
+                    return data[pointer : pointer + size]
     except struct.error:
         pass
-    return LocalImage(path, "pe", Identity("none"))
+    return None
+
+
+def rsds_pdb_name(record: bytes) -> str:
+    """The file name of the PDB an RSDS record names (its path is the linker's), or ""."""
+    if len(record) <= 24 or record[:4] != b"RSDS":
+        return ""
+    recorded = record[24:].split(b"\0", 1)[0].decode("utf-8", errors="replace")
+    return base_name(recorded)
 
 
 def elf_image(path: Path, data: bytes) -> LocalImage:
@@ -236,6 +255,153 @@ def local_image(path: Path) -> LocalImage | None:
     if data[:4] == b"\x7fELF":
         return elf_image(path, data)
     return LocalImage(path, "unknown", Identity("none"))
+
+
+# --- Symbol archives (FND-13) ----------------------------------------------------------------
+#
+# tools/stage.ps1 writes <stage>-symbols.zip next to a staged folder: each FrostIDE PE image of
+# the stage together with the PDB its RSDS record names, both flat at the archive root, plus
+# symbols.json, a manifest {"schema": "frost-symbol-archive/1", "modules": [{"image", "pdb",
+# "identity", "imageSha256", "pdbSha256"}]}. A PDB is archived only when its own GUID and age match
+# the image's RSDS record, so an archive never pairs an image with a stale PDB. The PDB's identity
+# comes from its MSF 7.0 container (LLVM's "The PDB File Format" documentation): the superblock,
+# the stream directory, the PDB info stream (stream 1: version, signature, age, GUID) and the DBI
+# stream's age (stream 3, offset 8), which is the age the linker writes into the image.
+#
+# --symbol-archive <zip> (any symbolizing command) unpacks an archive into a temporary directory
+# and searches it like --search-dir; llvm-symbolizer then finds each PDB beside its image when the
+# path the linker recorded is gone.
+
+SYMBOL_ARCHIVE_SCHEMA = "frost-symbol-archive/1"
+SYMBOL_ARCHIVE_MANIFEST = "symbols.json"
+MSF_MAGIC = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0"
+
+
+def msf_streams(data: bytes) -> list[bytes]:
+    """The streams of an MSF 7.0 file (a PDB); InputError when it is not one or is truncated."""
+    if data[: len(MSF_MAGIC)] != MSF_MAGIC:
+        raise InputError("not an MSF 7.0 (PDB) file")
+    try:
+        block_size, _, block_count, directory_bytes, _, map_block = struct.unpack_from("<IIIIII", data,
+                                                                                       len(MSF_MAGIC))
+        if block_size not in (512, 1024, 2048, 4096) or block_count * block_size > len(data):
+            raise InputError("bad MSF superblock")
+
+        def blocks(indexes: list[int], size: int) -> bytes:
+            out = b"".join(data[i * block_size : (i + 1) * block_size] for i in indexes)
+            if len(out) < size or any(i >= block_count for i in indexes):
+                raise InputError("MSF stream outside the file")
+            return out[:size]
+
+        directory_blocks = (directory_bytes + block_size - 1) // block_size
+        directory = blocks(list(struct.unpack_from(f"<{directory_blocks}I", data, map_block * block_size)),
+                           directory_bytes)
+        count = struct.unpack_from("<I", directory, 0)[0]
+        sizes = [0 if s == 0xFFFFFFFF else s for s in struct.unpack_from(f"<{count}I", directory, 4)]
+        at = 4 + 4 * count
+        streams = []
+        for size in sizes:
+            needed = (size + block_size - 1) // block_size
+            streams.append(blocks(list(struct.unpack_from(f"<{needed}I", directory, at)), size))
+            at += 4 * needed
+        return streams
+    except struct.error as error:
+        raise InputError(f"truncated MSF file ({error})") from error
+
+
+def pdb_identity(data: bytes) -> Identity:
+    """A PDB's pdb70 identity: the GUID of its info stream and the age of its DBI stream (the info
+    stream's age when there is no DBI stream). InputError for a file that is not a readable PDB."""
+    streams = msf_streams(data)
+    if len(streams) < 2 or len(streams[1]) < 28:
+        raise InputError("the PDB has no info stream")
+    age = struct.unpack_from("<I", streams[1], 8)[0]
+    if len(streams) > 3 and len(streams[3]) >= 12:
+        age = struct.unpack_from("<I", streams[3], 8)[0]
+    return Identity("pdb70", guid=format_guid(streams[1][12:28]), age=age)
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def command_archive(stage: Path, pdb_dirs: list[Path], output: Path, required: list[str]) -> int:
+    """Writes the symbol archive for the PE images directly in `stage` whose PDB is in one of
+    `pdb_dirs` (images named in `required` must have one). Prints one line per module; exit 0, or 1
+    when a required image is missing or has no matching PDB."""
+    if not stage.is_dir():
+        raise UsageError(f"{stage} is not a directory")
+    modules, failures = [], []
+    images = sorted(p for p in stage.iterdir() if p.is_file() and p.suffix.lower() in (".exe", ".dll"))
+    for name in required:
+        if not (stage / name).is_file():
+            failures.append(f"{name}: not in the stage")
+    for image in images:
+        record = pe_codeview_record(image.read_bytes())
+        identity = codeview_identity(record) if record is not None else Identity("none")
+        pdb_name = rsds_pdb_name(record) if record is not None else ""
+        candidates = [directory / pdb_name for directory in pdb_dirs if pdb_name]
+        pdb = next((c for c in candidates if c.is_file()), None)
+        problem = ""
+        if identity.kind != "pdb70" or not pdb_name:
+            problem = "no PDB recorded"
+        elif pdb is None:
+            problem = f"{pdb_name} not found"
+        else:
+            try:
+                found = pdb_identity(pdb.read_bytes())
+                if not found.matches(identity):
+                    problem = f"{pdb} is {found.text()}, the image wants {identity.text()}"
+            except InputError as error:
+                problem = f"{pdb}: {error}"
+        if problem:
+            if image.name in required:
+                failures.append(f"{image.name}: {problem}")
+            else:
+                print(f"skip   {image.name}: {problem}")
+            continue
+        modules.append({"image": image.name, "pdb": pdb.name, "identity": identity.text(),
+                        "imageSha256": sha256_file(image), "pdbSha256": sha256_file(pdb), "_pdb": pdb, "_image": image})
+        print(f"module {image.name} + {pdb.name} ({identity.text()})")
+    for failure in failures:
+        print(f"FAIL   {failure}")
+    if failures:
+        return 1
+    output.parent.mkdir(parents=True, exist_ok=True)
+    partial = output.with_name(output.name + ".part")
+    manifest = {"schema": SYMBOL_ARCHIVE_SCHEMA,
+                "modules": [{k: v for k, v in m.items() if not k.startswith("_")} for m in modules]}
+    with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(SYMBOL_ARCHIVE_MANIFEST, json.dumps(manifest, indent=2) + "\n")
+        for module in modules:
+            archive.write(module["_image"], module["image"])
+            archive.write(module["_pdb"], module["pdb"])
+    os.replace(partial, output)
+    print(f"archive: {output} ({len(modules)} modules)")
+    return 0
+
+
+def unpack_symbol_archive(archive_path: Path, destination: Path) -> Path:
+    """Extracts a symbol archive's listed files into `destination` after checking the manifest and
+    every file's SHA-256; InputError for anything else (other names, paths, a mismatch)."""
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            manifest = json.loads(archive.read(SYMBOL_ARCHIVE_MANIFEST).decode("utf-8"))
+            if not isinstance(manifest, dict) or manifest.get("schema") != SYMBOL_ARCHIVE_SCHEMA:
+                raise InputError(f"{archive_path}: not a {SYMBOL_ARCHIVE_SCHEMA} archive")
+            for module in manifest.get("modules", []):
+                for key in ("image", "pdb"):
+                    name = module.get(key, "")
+                    # Flat names only: nothing may land outside the destination.
+                    if not name or name != base_name(name) or name in (".", "..") or ":" in name:
+                        raise InputError(f"{archive_path}: bad member name {name!r}")
+                    content = archive.read(name)
+                    if hashlib.sha256(content).hexdigest() != module.get(key + "Sha256"):
+                        raise InputError(f"{archive_path}: {name} does not match its manifest digest")
+                    (destination / name).write_bytes(content)
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
+        raise InputError(f"{archive_path}: {error}") from error
+    return destination
 
 
 # --- Inputs ----------------------------------------------------------------------------------
@@ -844,6 +1010,8 @@ def main(argv: list[str]) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--llvm-symbolizer")
     common.add_argument("--search-dir", action="append", default=[], type=Path)
+    common.add_argument("--symbol-archive", action="append", default=[], type=Path,
+                        help="a <stage>-symbols.zip from tools/stage.ps1, searched like --search-dir")
     parser = argparse.ArgumentParser(prog="symbolize.py",
                                      description="Symbolizes FrostIDE crash dumps and freeze reports (ADR 0022).")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -854,25 +1022,42 @@ def main(argv: list[str]) -> int:
     check = commands.add_parser("check-selftest", parents=[common])
     check.add_argument("--artifacts", type=Path, required=True)
     check.add_argument("--source-root", type=Path, default=REPO)
+    archive = commands.add_parser("archive", help="write a stage's symbol archive (FND-13)")
+    archive.add_argument("--stage", type=Path, required=True)
+    archive.add_argument("--pdb-dir", action="append", type=Path, required=True)
+    archive.add_argument("--output", type=Path, required=True)
+    archive.add_argument("--require", action="append", default=[], help="an image that must be archived")
     try:
         args = parser.parse_args(argv)
     except SystemExit as error:
         return 2 if error.code else 0
+    if args.command == "archive":
+        try:
+            return command_archive(args.stage, args.pdb_dir, args.output, args.require)
+        except (InputError, UsageError, OSError) as error:
+            print(f"symbolize.py: {error}", file=sys.stderr)
+            return 2
     executable = find_symbolizer(args.llvm_symbolizer)
     if executable is None:
         print("symbolize.py: llvm-symbolizer not found (--llvm-symbolizer, $FROST_LLVM_ROOT/bin or PATH)",
               file=sys.stderr)
         return 2
-    symbolizer = Symbolizer(executable, args.search_dir)
-    try:
-        if args.command == "minidump":
-            return command_minidump(symbolizer, args.path)
-        if args.command == "freeze":
-            return command_freeze(symbolizer, args.path, args.samples)
-        return command_check(symbolizer, args.artifacts, args.source_root)
-    except (InputError, UsageError) as error:
-        print(f"symbolize.py: {error}", file=sys.stderr)
-        return 2
+    with tempfile.TemporaryDirectory(prefix="frost-symbols-") as unpacked:
+        search_dirs = list(args.search_dir)
+        try:
+            for index, symbol_archive in enumerate(args.symbol_archive):
+                destination = Path(unpacked) / str(index)
+                destination.mkdir()
+                search_dirs.append(unpack_symbol_archive(symbol_archive, destination))
+            symbolizer = Symbolizer(executable, search_dirs)
+            if args.command == "minidump":
+                return command_minidump(symbolizer, args.path)
+            if args.command == "freeze":
+                return command_freeze(symbolizer, args.path, args.samples)
+            return command_check(symbolizer, args.artifacts, args.source_root)
+        except (InputError, UsageError) as error:
+            print(f"symbolize.py: {error}", file=sys.stderr)
+            return 2
 
 
 if __name__ == "__main__":

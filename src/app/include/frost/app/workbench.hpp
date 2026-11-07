@@ -325,6 +325,12 @@ struct WorkbenchOptions {
     std::string cmakeStatePath;
     // The run service's persisted startup projects (absolute); "" persists nothing.
     std::string runStatePath;
+    // Where LuaLS writes its log and meta files (absolute; --logpath/--metapath, ADR 0079); "" uses
+    // <FrostIDE data directory>/luals in the user profile.
+    std::string luaStateDirectory;
+    // Test seam: the LuaLS search instead of lang::defaultLuaSearch's bundled, SDK and PATH
+    // locations (the tools.lua.languageServer.path setting still applies on top).
+    std::optional<lang::LuaSearch> luaSearch;
     // Test seam: the FrostIDE executable that provides the isolated discovery helper.
     // Empty uses this application's own executable.
     std::string engineDiscoveryHelperPath;
@@ -588,6 +594,12 @@ private:
     void stopProjectEvaluation();
     void stopClangd();
     void restartClangd();
+    // A CMake model change restarts clangd only when the compile-commands location changed.
+    void restartClangdIfCMakeStateChanged();
+    // Starts the clangd that openFolder deferred until its configure finished (FND-9a). With
+    // `retryUntilIdle`, a CMake service that is not idle yet is asked again shortly.
+    void resumeDeferredClangd(bool retryUntilIdle = false);
+    void notifyLuaUnavailable();
     void onLiveDiagnostics(const std::string& file);
     void onSettingsChanged();
     void onClangdProgress(const lang::ClangdProgress& progress);
@@ -695,9 +707,18 @@ private:
     bool m_luaObservedTrust = false;
     std::string m_luaConfiguredPath;
     std::string m_luaRuntimeVersion;
+    // Why LuaLS could not start for the open project ("" when it runs or was not needed), and the
+    // root that was already told so: the notification appears once per project (LUA-1).
+    std::string m_luaUnavailable;
+    std::string m_luaUnavailableNotifiedRoot;
     std::shared_ptr<lang::ClangdService> m_clangd;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
     std::uint64_t m_clangdGeneration = 0;
+    // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
+    // started with (cmakeClangdState), and the root whose start waits for the open's configure.
+    std::string m_clangdCMakeState;
+    std::string m_clangdDeferredRoot;
+    QMetaObject::Connection m_clangdDeferral;
     std::uint64_t m_projectTrustRevision = 0;
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
