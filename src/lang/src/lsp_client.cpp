@@ -70,7 +70,13 @@ ServerCapabilities parseInitializeResult(const Json& result) {
         return out;
     }
     out.raw = *capabilities;
-    // positionEncoding (LSP 3.17); clangd before 3.17 support answers offsetEncoding at the top level.
+    /*
+     * positionEncoding (LSP 3.17) is the negotiated encoding; when a server omits it, the
+     * specification's default is UTF-16. FrostIDE no longer offers clangd's deprecated
+     * offsetEncoding extension, but a server that still answers with it unasked has said which
+     * encoding it uses, so that answer counts when positionEncoding is absent
+     * (LspClient::initialize rejects it unless it names one of the offered encodings).
+     */
     std::string_view encoding = capabilities->stringAt("positionEncoding");
     if (encoding.empty()) {
         encoding = result.stringAt("offsetEncoding");
@@ -220,13 +226,13 @@ Json clientCapabilities() {
             .set("semanticTokens", Json::object().set("refreshSupport", false))
             .set("inlayHint", Json::object().set("refreshSupport", true))
             .set("didChangeConfiguration", Json::object().set("dynamicRegistration", false));
+    // LSP 3.17 negotiation only: clangd's pre-3.17 offsetEncoding extension is deprecated, and
+    // clangd 23 reads general.positionEncodings and answers capabilities.positionEncoding.
     return Json::object()
         .set("general", Json::object().set("positionEncodings", encodings))
         .set("textDocument", std::move(textDocument))
         .set("workspace", std::move(workspace))
-        .set("window", Json::object().set("workDoneProgress", true))
-        // clangd's pre-3.17 extension (clangd.llvm.org/extensions#utf-8-offsets).
-        .set("offsetEncoding", encodings);
+        .set("window", Json::object().set("workDoneProgress", true));
 }
 
 Result<Json> initializeParams(const InitializeOptions& options) {
@@ -246,9 +252,8 @@ Result<Json> initializeParams(const InitializeOptions& options) {
     params.set("rootUri", *rootUri);
     Json capabilities = clientCapabilities();
     if (options.utf16Only) {
-        const Json encodings = Json::array({Json("utf-16")});
-        capabilities.set("general", Json::object().set("positionEncodings", encodings));
-        capabilities.set("offsetEncoding", encodings);
+        // Every LSP server must support UTF-16, so offering only it is always a valid offer.
+        capabilities.set("general", Json::object().set("positionEncodings", Json::array({Json("utf-16")})));
     }
     params.set("capabilities", std::move(capabilities));
     if (!options.initializationOptions.isNull()) {
@@ -366,8 +371,13 @@ sched::Task<Result<ServerCapabilities>> LspClient::initialize(std::stop_token to
     if (!result->isObject()) {
         co_return fail(ErrorCode::Corrupt, "initialize: the result is not an object");
     }
-    // A server must select an advertised encoding. In particular, never silently
-    // interpret LuaLS UTF-8 positions as UTF-16 after restricting its offer.
+    /*
+     * A server must select one of the offered general.positionEncodings (LSP 3.17) in
+     * capabilities.positionEncoding, or omit it for UTF-16. A legacy offsetEncoding answer (clangd's
+     * deprecated extension, which FrostIDE no longer offers) must also name an offered encoding and
+     * agree with positionEncoding. In particular, never silently interpret LuaLS UTF-8 positions as
+     * UTF-16 after restricting its offer.
+     */
     const Json* serverCapabilities = result->find("capabilities");
     std::optional<PositionEncoding> selected;
     const auto acceptEncoding = [&](std::string_view name) {

@@ -860,7 +860,8 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
         if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
             auto* dragEvent = static_cast<QDropEvent*>(event);
             const QModelIndex targetIdx = m_tree->indexAt(dragEvent->position().toPoint());
-            if (targetIdx.isValid() && m_model->canDropMimeData(dragEvent->mimeData(), Qt::MoveAction, -1, -1, targetIdx)) {
+            if (targetIdx.isValid() &&
+                m_model->canDropMimeData(dragEvent->mimeData(), Qt::MoveAction, -1, -1, targetIdx)) {
                 dragEvent->setDropAction(Qt::MoveAction);
                 dragEvent->accept();
                 return true;
@@ -868,7 +869,8 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
         } else if (event->type() == QEvent::Drop) {
             auto* dropEvent = static_cast<QDropEvent*>(event);
             const QModelIndex targetIdx = m_tree->indexAt(dropEvent->position().toPoint());
-            if (targetIdx.isValid() && m_model->dropMimeData(dropEvent->mimeData(), Qt::MoveAction, -1, -1, targetIdx)) {
+            if (targetIdx.isValid() &&
+                m_model->dropMimeData(dropEvent->mimeData(), Qt::MoveAction, -1, -1, targetIdx)) {
                 dropEvent->setDropAction(Qt::MoveAction);
                 dropEvent->accept();
                 return true;
@@ -881,9 +883,8 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
         if ((key->key() == Qt::Key_F2 && mods == Qt::NoModifier) ||
             (key->key() == Qt::Key_F6 && mods == Qt::ShiftModifier) ||
             (key->key() == Qt::Key_Delete && mods == Qt::NoModifier) ||
-            (mods == Qt::ControlModifier &&
-             (key->key() == Qt::Key_C || key->key() == Qt::Key_X || key->key() == Qt::Key_V ||
-              key->key() == Qt::Key_D))) {
+            (mods == Qt::ControlModifier && (key->key() == Qt::Key_C || key->key() == Qt::Key_X ||
+                                             key->key() == Qt::Key_V || key->key() == Qt::Key_D))) {
             event->accept();
             return true;
         }
@@ -951,8 +952,7 @@ bool FileSystemView::eventFilter(QObject* watched, QEvent* event) {
                     const QModelIndex idx = m_tree->currentIndex();
                     if (idx.isValid() && m_model->files() &&
                         toUtf8(idx.data(kPathRole).toString()) != m_model->files()->root()) {
-                        emit duplicatePathRequested(idx.data(kPathRole).toString(),
-                                                    idx.data(kDirectoryRole).toBool());
+                        emit duplicatePathRequested(idx.data(kPathRole).toString(), idx.data(kDirectoryRole).toBool());
                     }
                     return true;
                 }

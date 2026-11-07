@@ -10,6 +10,9 @@
 #                           label "integration";
 #   input_perf_tests        timing reports (asserted only in optimised, unsanitised builds),
 #                           label "perf";
+#   input_keymap_coverage_tests  (UX-1, UI builds) every id the built-in keymaps bind resolves to
+#                           an action a WorkbenchRig registers, except the shrinking UX-3 list;
+#                           offscreen, label "unit";
 #   input.NoLayoutSwitching[.DetectsPlanted]  the guard scripts: no code may switch, load or
 #                           unload keyboard layouts or inject real input.
 # No test switches the machine's keyboard layout or injects input: layouts are data and
@@ -78,6 +81,18 @@ foreach(test_target input_tests input_stress_tests input_alloc_tests input_layou
         FROST_INPUT_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
         FROST_INPUT_FUZZ_CORPUS="${FROST_SOURCE_DIR}/tests/fuzz/corpus/input_keymap")
 endforeach()
+
+# UX-1: the built-in keymaps against the workbench's real action registry (tests/app/workbench_rig.hpp,
+# whose work directory lives in this build directory).
+if(FROST_BUILD_UI)
+    frost_add_test(input_keymap_coverage_tests QT
+        SOURCES keymap_coverage_test.cpp
+        DEPS frost::app frost::input frost::io)
+    target_include_directories(input_keymap_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(input_keymap_coverage_tests PRIVATE
+        FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
+        FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/keymap-coverage-work")
+endif()
 
 # The layout-switching guard: a source scan, and a check that the scan detects every
 # planted name in tests/input/fixtures/layout_guard/.

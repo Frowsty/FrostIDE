@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Workbench integration for trusted LuaLS projects and Lua document diagnostics.
+// Workbench integration for trusted LuaLS projects and Lua document diagnostics: the pinned LuaLS
+// (ADR 0079) launched through IProcessLauncher with its log and meta under the user profile, the
+// FrostEngine defaults for a .frostproj workspace, and a visible notice when LuaLS is missing.
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
@@ -59,6 +62,7 @@ void Workbench::startLua(const std::string& root) {
     if (m_shutDown)
         return;
     stopLua();
+    m_luaUnavailable.clear();
     m_luaObservedTrust = m_services.trust.isTrusted(root);
     m_luaConfiguredPath = m_services.settings.snapshot()->get(settings::key::toolsLuaLanguageServerPath);
     m_luaRuntimeVersion = m_services.settings.snapshot()->get(settings::key::luaRuntimeVersion);
@@ -71,14 +75,36 @@ void Workbench::startLua(const std::string& root) {
         return;
     }
     auto snapshot = m_services.settings.snapshot();
-    auto found = lang::findLuaLanguageServer(
-        m_services.fs, lang::defaultLuaSearch(snapshot->get(settings::key::toolsLuaLanguageServerPath)));
+    lang::LuaSearch search = m_options.luaSearch ? *m_options.luaSearch : lang::defaultLuaSearch();
+    search.configuredPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
+    auto found = lang::findLuaLanguageServer(m_services.fs, search);
+    const bool frostEngine = lang::isFrostEngineLuaWorkspace(m_services.fs, root);
     if (!found) {
         log::info("workbench", "LuaLS unavailable: {}", found.error().describe());
-        if (!m_luaConfiguredPath.empty()) {
-            notify(QStringLiteral("Lua language server"), QString::fromStdString(found.error().message()),
-                   ui::NotificationKind::Warning);
+        m_luaUnavailable = found.error().message();
+        // Visible, not only logged (LUA-1): when the user asked for a server, works on a FrostEngine
+        // project or has a Lua file open; otherwise when the first Lua file opens (syncLuaDocument).
+        const bool luaOpen =
+            std::ranges::any_of(m_editors->views(), [](auto* view) { return isLuaSource(view->path()); });
+        if (!m_luaConfiguredPath.empty())
+            m_luaUnavailableNotifiedRoot.clear(); // Each wrong setting is reported, as before.
+        if (!m_luaConfiguredPath.empty() || frostEngine || luaOpen)
+            notifyLuaUnavailable();
+        return;
+    }
+    // LuaLS writes its log and generated meta files under the user profile, never into its
+    // (possibly read-only, staged) installation directory.
+    std::string stateDirectory = m_options.luaStateDirectory;
+    if (stateDirectory.empty()) {
+        if (auto trustFile = project::TrustStore::defaultStorePath()) {
+            if (auto under = io::joinPath(io::parentPath(*trustFile), "luals"))
+                stateDirectory = std::move(*under);
         }
+    }
+    auto arguments = lang::luaLanguageServerArguments(stateDirectory);
+    if (!arguments) {
+        m_luaUnavailable = "no per-user directory for the LuaLS log and meta files: " + arguments.error().message();
+        notifyLuaUnavailable();
         return;
     }
     if (!m_reactor) {
@@ -92,15 +118,19 @@ void Workbench::startLua(const std::string& root) {
     lang::LuaServiceOptions options;
     options.serverPath = *found;
     options.workspaceRoot = root;
+    options.arguments = std::move(*arguments);
     options.trusted = true;
-    // The engine's .luarc.json has priority and names its generated definitions.
-    options.configuration = lang::luaDefaults(m_luaRuntimeVersion, false);
+    // A FrostEngine project (a .frostproj in the root) gets the engine's defaults; the engine's
+    // .luarc.json still has priority in LuaLS and names its generated definitions.
+    options.configuration = lang::luaDefaults(m_luaRuntimeVersion, frostEngine);
     options.onLifecycle = [self = QPointer<Workbench>(this)] {
         if (self)
             QMetaObject::invokeMethod(
                 self.data(),
                 [self] {
-                    if (self && self->m_language)
+                    // Only the LuaLS's own documents: a lifecycle change must not cancel a
+                    // Structure request another server (clangd) is answering for the current file.
+                    if (self && self->m_language && self->currentView() && isLuaSource(self->currentView()->path()))
                         self->m_language->structureChanged();
                 },
                 Qt::QueuedConnection);
@@ -113,8 +143,11 @@ void Workbench::startLua(const std::string& root) {
     if (auto started = m_lua->start(); !started) {
         log::warn("workbench", "LuaLS startup: {}", started.error().describe());
         stopLua();
+        m_luaUnavailable = started.error().message();
+        notifyLuaUnavailable();
         return;
     }
+    m_luaUnavailable.clear();
     m_bridge->setLuaServer(m_lua);
     for (auto* view : m_editors->uniqueDocumentViews())
         syncLuaDocument(*view);
@@ -145,9 +178,26 @@ void Workbench::stopLua() {
     m_retiredLua.push_back(m_pool->spawn(sched::Lane::Background, stopOwnedLua(std::move(old))));
     refreshLiveProblems();
 }
-void Workbench::syncLuaDocument(DocumentEditorView& view) {
-    if (!m_lua || !isLuaSource(view.path()))
+void Workbench::notifyLuaUnavailable() {
+    if (m_luaUnavailable.empty() || m_luaUnavailableNotifiedRoot == m_projectRoot)
         return;
+    m_luaUnavailableNotifiedRoot = m_projectRoot;
+    // The truth rule (ADR 0078): no Lua results without LuaLS, and the user is told why.
+    notify(QStringLiteral("Lua language server unavailable"),
+           QStringLiteral("%1. Lua diagnostics, completion and navigation are off until LuaLS %2 is installed "
+                          "(tools/bootstrap, bundled LuaLS: LUA-1) or Settings > Tools names a LuaLS executable.")
+               .arg(QString::fromStdString(m_luaUnavailable),
+                    QString::fromUtf8(lang::pinnedLuaLanguageServerVersion().data(),
+                                      static_cast<qsizetype>(lang::pinnedLuaLanguageServerVersion().size()))),
+           ui::NotificationKind::Warning);
+}
+void Workbench::syncLuaDocument(DocumentEditorView& view) {
+    if (!isLuaSource(view.path()))
+        return;
+    if (!m_lua) {
+        notifyLuaUnavailable(); // A Lua file opened in a trusted project whose LuaLS is missing.
+        return;
+    }
     const auto& document = view.document().document();
     if (m_lua->openDocument(view.path(), document.text())) {
         view.editor().setInsightEnabled(true);

@@ -8,6 +8,7 @@
 
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/clangd_actions.hpp"
 #include "frost/lang/code_assist.hpp"
 #include "frost/lang/navigation.hpp"
 #include "frost/lang/snippet.hpp"
@@ -140,578 +141,158 @@ std::optional<std::string> findRelatedProjectFile(std::string_view currentPath,
     return std::nullopt;
 }
 
-struct ExtractedSymbolInfo {
-    std::string symbolName;
-    std::string qualifiedName;
-    bool isCSharp = false;
-    bool hasExternalQualifier = false;
-};
-
-ExtractedSymbolInfo extractSymbolAtPosition(std::string_view documentPath, const std::optional<text::Snapshot>& snapshot,
-                                            fl::LspPosition position, fl::PositionEncoding encoding) {
-    ExtractedSymbolInfo info;
-    const SplitPathParts parts = splitPathParts(documentPath);
-    info.isCSharp = (parts.ext == ".cs" || parts.ext == ".csx");
+// The identifier at `position`, for messages ("Source not available for 'X'"). "" when none.
+std::string identifierAtPosition(const std::optional<text::Snapshot>& snapshot, fl::LspPosition position,
+                                 fl::PositionEncoding encoding) {
     if (!snapshot) {
-        return info;
+        return {};
     }
-    const auto offsetRes = fl::fromLspPosition(*snapshot, position, encoding);
-    if (!offsetRes) {
-        return info;
+    const auto offset = fl::fromLspPosition(*snapshot, position, encoding);
+    if (!offset) {
+        return {};
     }
-    const ByteOffset offset = *offsetRes;
     const std::string text = snapshot->text();
-    std::size_t pos = std::min(offset.value(), text.size());
+    std::size_t pos = std::min(offset->value(), text.size());
     if (pos > 0 && (pos == text.size() || !fl::isIdentifierByte(text[pos])) && fl::isIdentifierByte(text[pos - 1])) {
         --pos;
     }
     if (pos >= text.size() || !fl::isIdentifierByte(text[pos])) {
-        return info;
+        return {};
     }
-    std::size_t symStart = pos;
-    while (symStart > 0 && fl::isIdentifierByte(text[symStart - 1])) {
-        --symStart;
+    std::size_t begin = pos;
+    while (begin > 0 && fl::isIdentifierByte(text[begin - 1])) {
+        --begin;
     }
-    std::size_t symEnd = pos;
-    while (symEnd < text.size() && fl::isIdentifierByte(text[symEnd])) {
-        ++symEnd;
+    std::size_t end = pos;
+    while (end < text.size() && fl::isIdentifierByte(text[end])) {
+        ++end;
     }
-    info.symbolName = text.substr(symStart, symEnd - symStart);
-
-    // Walk backward across '.' or '::' qualifiers to capture e.g. System.Console.WriteLine or std::vector.
-    std::size_t qualStart = symStart;
-    while (qualStart > 0) {
-        if (text[qualStart - 1] == '.' && qualStart >= 2 && fl::isIdentifierByte(text[qualStart - 2])) {
-            --qualStart;
-            while (qualStart > 0 && fl::isIdentifierByte(text[qualStart - 1])) {
-                --qualStart;
-            }
-            info.hasExternalQualifier = true;
-        } else if (qualStart >= 3 && text[qualStart - 1] == ':' && text[qualStart - 2] == ':' &&
-                   fl::isIdentifierByte(text[qualStart - 3])) {
-            qualStart -= 2;
-            while (qualStart > 0 && fl::isIdentifierByte(text[qualStart - 1])) {
-                --qualStart;
-            }
-            info.hasExternalQualifier = true;
-        } else {
-            break;
-        }
-    }
-    info.qualifiedName = text.substr(qualStart, symEnd - qualStart);
-    if (!info.hasExternalQualifier) {
-        // Also check if the file imports System / UnityEngine / std and the symbol is a well-known external type.
-        static constexpr std::string_view kKnownExternalTypes[] = {
-            "Console",       "String",        "Object",     "Exception",   "Task",          "List",
-            "Dictionary",    "IEnumerable",   "Math",       "DateTime",    "Guid",          "Span",
-            "MonoBehaviour", "GameObject",    "Transform",  "Vector3",     "Quaternion",    "Debug",
-            "Component",     "ScriptableObject", "vector",  "string",      "shared_ptr",    "unique_ptr",
-            "optional",      "variant",       "function"};
-        for (std::string_view known : kKnownExternalTypes) {
-            if (info.symbolName == known) {
-                info.hasExternalQualifier = true;
-                break;
-            }
-        }
-    }
-    return info;
+    return text.substr(begin, end - begin);
 }
 
-struct DecompiledSynthesis {
-    std::string content;
-    fl::LspPosition declarationPosition{0, 0};
-};
-
-DecompiledSynthesis synthesizeDecompiledSource(const ExtractedSymbolInfo& sym, std::string_view hoverContents,
-                                               std::string_view rawMetadataSource) {
-    DecompiledSynthesis out;
-    if (!rawMetadataSource.empty()) {
-        std::ostringstream s;
-        if (!rawMetadataSource.starts_with("// [Decompiled]")) {
-            s << "// ============================================================================\n";
-            s << "// [Decompiled] External Symbol Metadata-as-Source\n";
-            s << "// Symbol: " << (sym.qualifiedName.empty() ? sym.symbolName : sym.qualifiedName) << "\n";
-            s << "// Generated by FrostIDE Decompiler (Roslyn / Metadata Projection)\n";
-            s << "// ============================================================================\n\n";
-        }
-        s << rawMetadataSource;
-        out.content = s.str();
-        // Locate symbolName line in the decompiled source.
-        std::uint32_t lineIdx = 0;
-        std::size_t lineStart = 0;
-        while (lineStart < out.content.size()) {
-            const std::size_t nl = out.content.find('\n', lineStart);
-            const std::string_view lineView =
-                nl == std::string::npos ? std::string_view(out.content).substr(lineStart)
-                                        : std::string_view(out.content).substr(lineStart, nl - lineStart);
-            if (!lineView.starts_with("//")) {
-                const std::size_t found = lineView.find(sym.symbolName);
-                if (found != std::string_view::npos) {
-                    out.declarationPosition = fl::LspPosition{lineIdx, static_cast<std::uint32_t>(found)};
-                    break;
-                }
-            }
-            if (nl == std::string::npos)
-                break;
-            lineStart = nl + 1;
-            ++lineIdx;
-        }
-        return out;
-    }
-
-    // Parse hover markdown for signature and summary lines.
-    std::vector<std::string> codeLines;
-    std::vector<std::string> docLines;
-    bool inCodeFence = false;
-    std::istringstream stream{std::string(hoverContents)};
-    std::string line;
-    while (std::getline(stream, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        if (line.starts_with("```")) {
-            inCodeFence = !inCodeFence;
-            continue;
-        }
-        if (inCodeFence) {
-            if (!line.empty()) {
-                codeLines.push_back(line);
-            }
-        } else {
-            if (line == "---" || line.empty()) {
-                continue;
-            }
-            docLines.push_back(line);
-        }
-    }
-
-    // Determine namespace/container and leaf symbol.
-    std::string nsName = sym.isCSharp ? "System" : "std";
-    std::string containerType;
-    if (const std::size_t sep = sym.qualifiedName.rfind(sym.isCSharp ? "." : "::"); sep != std::string::npos) {
-        const std::string prefix = sym.qualifiedName.substr(0, sep);
-        if (sym.isCSharp) {
-            if (const std::size_t prevDot = prefix.rfind('.'); prevDot != std::string::npos) {
-                nsName = prefix.substr(0, prevDot);
-                containerType = prefix.substr(prevDot + 1);
-            } else {
-                // e.g. Console.WriteLine or System.Console
-                if (!prefix.empty() && std::isupper(static_cast<unsigned char>(prefix[0])) && prefix != "System" &&
-                    prefix != "UnityEngine" && prefix != "Microsoft" && prefix != "FrostEngine") {
-                    containerType = prefix;
-                } else {
-                    nsName = prefix;
-                }
-            }
-        } else {
-            nsName = prefix;
-        }
-    }
-
-    std::vector<std::string> lines;
-    lines.push_back("// ============================================================================");
-    lines.push_back("// [Decompiled] External Symbol Metadata-as-Source (Read-Only)");
-    lines.push_back(std::format("// Symbol:    {}", sym.qualifiedName.empty() ? sym.symbolName : sym.qualifiedName));
-    lines.push_back(std::format("// Assembly:  {} (External Reference Metadata)", nsName));
-    lines.push_back("// Generated by FrostIDE Decompiler (Metadata-as-Source Projection)");
-    lines.push_back("// ============================================================================");
-    lines.push_back("");
-
-    if (sym.isCSharp) {
-        lines.push_back("using System;");
-        lines.push_back("using System.Collections.Generic;");
-        lines.push_back("using System.Threading.Tasks;");
-        lines.push_back("");
-        lines.push_back(std::format("namespace {}", nsName));
-        lines.push_back("{");
-        const std::string indent = containerType.empty() ? "    " : "        ";
-        if (!containerType.empty()) {
-            lines.push_back(std::format("    public class {}", containerType));
-            lines.push_back("    {");
-        }
-        lines.push_back(std::format("{}/// <summary>", indent));
-        if (!docLines.empty()) {
-            for (const std::string& d : docLines) {
-                lines.push_back(std::format("{}/// {}", indent, d));
-            }
-        } else {
-            lines.push_back(
-                std::format("{}/// Decompiled metadata projection for {}.", indent,
-                            sym.qualifiedName.empty() ? sym.symbolName : sym.qualifiedName));
-        }
-        lines.push_back(std::format("{}/// </summary>", indent));
-
-        std::string declLine;
-        if (!codeLines.empty()) {
-            declLine = codeLines.front();
-            if (!declLine.ends_with(";") && !declLine.ends_with("}")) {
-                if (declLine.find('(') != std::string::npos) {
-                    declLine += " => throw null!;";
-                } else {
-                    declLine += " { get; set; }";
-                }
-            }
-        } else if (!containerType.empty()) {
-            declLine = std::format("public static void {}(params object[] args) => throw null!;", sym.symbolName);
-        } else {
-            declLine = std::format("public class {}", sym.symbolName);
-        }
-        const std::uint32_t targetLine = static_cast<std::uint32_t>(lines.size());
-        const std::string fullDeclLine = indent + declLine;
-        const std::size_t colPos = fullDeclLine.find(sym.symbolName);
-        out.declarationPosition =
-            fl::LspPosition{targetLine, colPos != std::string::npos ? static_cast<std::uint32_t>(colPos)
-                                                                    : static_cast<std::uint32_t>(indent.size())};
-        lines.push_back(fullDeclLine);
-        if (codeLines.empty() && containerType.empty()) {
-            lines.push_back("    {");
-            lines.push_back(std::format("        public {}() => throw null!;", sym.symbolName));
-            lines.push_back("        public override string ToString() => base.ToString();");
-            lines.push_back("    }");
-        }
-        if (!containerType.empty()) {
-            lines.push_back("    }");
-        }
-        lines.push_back("}");
-    } else {
-        lines.push_back("#pragma once");
-        lines.push_back("");
-        lines.push_back(std::format("namespace {} {{", nsName));
-        lines.push_back("");
-        lines.push_back("/**");
-        if (!docLines.empty()) {
-            for (const std::string& d : docLines) {
-                lines.push_back(std::format(" * {}", d));
-            }
-        } else {
-            lines.push_back(std::format(" * @brief Decompiled external declaration for {}.",
-                                        sym.qualifiedName.empty() ? sym.symbolName : sym.qualifiedName));
-        }
-        lines.push_back(" */");
-        std::string declLine;
-        if (!codeLines.empty()) {
-            declLine = codeLines.back();
-            if (!declLine.ends_with(";")) {
-                declLine += ";";
-            }
-        } else {
-            declLine = std::format("class {} {{ public: {}() = default; }};", sym.symbolName, sym.symbolName);
-        }
-        const std::uint32_t targetLine = static_cast<std::uint32_t>(lines.size());
-        const std::size_t colPos = declLine.find(sym.symbolName);
-        out.declarationPosition =
-            fl::LspPosition{targetLine, colPos != std::string::npos ? static_cast<std::uint32_t>(colPos) : 0U};
-        lines.push_back(declLine);
-        lines.push_back("");
-        lines.push_back(std::format("}} // namespace {}", nsName));
-    }
-
-    std::ostringstream joined;
-    for (const std::string& l : lines) {
-        joined << l << "\n";
-    }
-    out.content = joined.str();
-    return out;
+// A metadata URI as C# language servers answer for symbols without source (csharp:/metadata/...).
+bool isMetadataUri(std::string_view uri) {
+    return uri.starts_with("csharp:") || uri.starts_with("roslyn:") || uri.starts_with("metadata:");
 }
 
-sched::Task<std::optional<fl::Location>>
-tryDecompileSymbol(fl::ILspRequester& server, io::IFileSystem& fs, std::string path, fl::LspPosition position,
-                   ExtractedSymbolInfo sym, bool forceDecompile, std::stop_token token) {
-    if (sym.symbolName.empty()) {
-        co_return std::nullopt;
+// A file name for metadata `uri` under the cache: its last segment reduced to [A-Za-z0-9._-],
+// prefixed by a hash of the whole URI so two assemblies' "Console.cs" do not collide.
+std::string metadataFileName(std::string_view uri) {
+    const std::size_t slash = uri.find_last_of("/\\:");
+    std::string_view last = slash == std::string_view::npos ? uri : uri.substr(slash + 1);
+    std::string name;
+    for (const char c : last) {
+        const bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+                          c == '_' || c == '-';
+        name.push_back(safe ? c : '_');
     }
+    while (!name.empty() && name.front() == '.') {
+        name.erase(name.begin());
+    }
+    if (name.empty()) {
+        name = "metadata.cs";
+    }
+    // FNV-1a (public domain), 64-bit.
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const char c : uri) {
+        hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
+    }
+    return std::format("{:016x}-{}", hash, name);
+}
 
-    std::string rawMetadataSource;
-    // 1. Check if textDocument/definition returned a csharp:/metadata/... or roslyn:// URI.
+/*
+ * Real metadata-as-source for the symbol at `position` (LTR-1): textDocument/definition answered
+ * with a metadata URI, and the server's csharp/metadata answered with its source. The source is
+ * written to `cacheDir` (never the workspace) and the location points into that file at the range
+ * the server gave. nullopt when the server has no metadata (or no cache directory is configured).
+ */
+sched::Task<Result<std::optional<fl::Location>>> metadataSourceTask(fl::ILspRequester& server, io::IFileSystem& fs,
+                                                                    std::string cacheDir, std::string path,
+                                                                    fl::LspPosition position, std::stop_token token) {
     const auto uri = fl::pathToUri(path);
-    if (uri) {
-        fl::Json defParams = fl::Json::object()
-                                 .set("textDocument", fl::Json::object().set("uri", *uri))
-                                 .set("position", fl::Json::object()
-                                                      .set("line", static_cast<std::int64_t>(position.line))
-                                                      .set("character", static_cast<std::int64_t>(position.character)));
-        if (auto rawDef = co_await server.request("textDocument/definition", std::move(defParams), token); rawDef) {
-            std::string metadataUri;
-            auto extractMetaUri = [&](const fl::Json& item) {
-                for (std::string_view key : {"uri", "targetUri"}) {
-                    const std::string_view sv = item.stringAt(key);
-                    if (sv.starts_with("csharp:") || sv.starts_with("roslyn:") || sv.starts_with("metadata:")) {
-                        metadataUri = std::string(sv);
-                    }
-                }
-            };
-            if (rawDef->isObject()) {
-                extractMetaUri(*rawDef);
-            } else if (rawDef->isArray()) {
-                for (const fl::Json& elem : rawDef->items()) {
-                    if (elem.isObject()) {
-                        extractMetaUri(elem);
-                        if (!metadataUri.empty())
+    if (!uri) {
+        co_return std::unexpected(uri.error());
+    }
+    fl::Json params = fl::Json::object()
+                          .set("textDocument", fl::Json::object().set("uri", *uri))
+                          .set("position", fl::Json::object()
+                                               .set("line", static_cast<std::int64_t>(position.line))
+                                               .set("character", static_cast<std::int64_t>(position.character)));
+    auto definition = co_await server.request("textDocument/definition", std::move(params), token);
+    if (!definition) {
+        co_return std::unexpected(std::move(definition.error()));
+    }
+    std::string metadataUri;
+    fl::LspRange range{};
+    const auto consider = [&](const fl::Json& item) {
+        for (std::string_view key : {"uri", "targetUri"}) {
+            if (const std::string_view value = item.stringAt(key); metadataUri.empty() && isMetadataUri(value)) {
+                metadataUri = std::string(value);
+                for (std::string_view rangeKey : {"targetSelectionRange", "range", "targetRange"}) {
+                    if (const fl::Json* r = item.find(rangeKey); r != nullptr) {
+                        if (auto parsed = fl::parseRange(*r)) {
+                            range = *parsed;
                             break;
-                    }
-                }
-            }
-            if (!metadataUri.empty()) {
-                fl::Json metaParams = fl::Json::object().set(
-                    "textDocument", fl::Json::object().set("uri", metadataUri));
-                if (auto metaRes = co_await server.request("csharp/metadata", std::move(metaParams), token);
-                    metaRes && metaRes->isObject()) {
-                    rawMetadataSource = metaRes->stringAt("source");
-                }
-            }
-        }
-    }
-
-    // 2. Query textDocument/hover for signature and documentation.
-    std::string hoverMarkdown;
-    if (rawMetadataSource.empty()) {
-        if (auto hover = co_await fl::requestHover(server, path, position, token); hover && *hover) {
-            hoverMarkdown = (*hover)->contents.text;
-        }
-    }
-
-    if (rawMetadataSource.empty() && hoverMarkdown.empty() && !sym.hasExternalQualifier && !forceDecompile) {
-        co_return std::nullopt;
-    }
-
-    const DecompiledSynthesis synth = synthesizeDecompiledSource(sym, hoverMarkdown, rawMetadataSource);
-    const std::string parentDir(io::parentPath(path));
-    const std::string fileNameStr = std::format("[Decompiled] {}.{}", sym.symbolName, sym.isCSharp ? "cs" : "hpp");
-    const auto decompiledPathRes =
-        parentDir.empty() ? Result<std::string>(fileNameStr) : io::joinPath(parentDir, fileNameStr);
-    if (!decompiledPathRes) {
-        co_return std::nullopt;
-    }
-    if (!parentDir.empty()) {
-        (void)fs.createDirectories(parentDir);
-    }
-    if (auto wrote = fs.writeFileAtomic(*decompiledPathRes, synth.content); !wrote) {
-        co_return std::nullopt;
-    }
-    const fl::LspPosition endPos{
-        synth.declarationPosition.line,
-        synth.declarationPosition.character + static_cast<std::uint32_t>(sym.symbolName.size())};
-    const std::string decompiledUri = fl::pathToUri(*decompiledPathRes).value_or("");
-    co_return fl::Location{*decompiledPathRes, decompiledUri, fl::LspRange{synth.declarationPosition, endPos}};
-}
-
-std::optional<std::string> readDocumentOrDisk(std::string_view targetPath,
-                                              const std::vector<std::pair<std::string, text::Snapshot>>& openDocs,
-                                              io::IFileSystem& fs) {
-    const std::string key = fl::documentKey(targetPath);
-    for (const auto& [openPath, snap] : openDocs) {
-        if (fl::documentKey(openPath) == key) {
-            return snap.text();
-        }
-    }
-    if (auto content = fs.readFile(targetPath)) {
-        return std::move(*content);
-    }
-    return std::nullopt;
-}
-
-bool hasReturnTypeOrScopePrefix(std::string_view beforeSymbol) {
-    while (!beforeSymbol.empty() && (beforeSymbol.back() == ' ' || beforeSymbol.back() == '\t')) {
-        beforeSymbol.remove_suffix(1);
-    }
-    if (beforeSymbol.empty()) {
-        return false;
-    }
-    if (beforeSymbol.ends_with("::")) {
-        return true;
-    }
-    const char last = beforeSymbol.back();
-    if (!fl::isIdentifierByte(last) && last != '*' && last != '&' && last != '>') {
-        return false;
-    }
-    if (last == '>' && beforeSymbol.ends_with("->")) {
-        return false;
-    }
-    std::size_t wordEnd = beforeSymbol.size();
-    while (wordEnd > 0 && (beforeSymbol[wordEnd - 1] == '*' || beforeSymbol[wordEnd - 1] == '&' ||
-                           beforeSymbol[wordEnd - 1] == ' ' || beforeSymbol[wordEnd - 1] == '\t')) {
-        --wordEnd;
-    }
-    std::size_t wordStart = wordEnd;
-    while (wordStart > 0 && fl::isIdentifierByte(beforeSymbol[wordStart - 1])) {
-        --wordStart;
-    }
-    const std::string_view word = beforeSymbol.substr(wordStart, wordEnd - wordStart);
-    if (word.empty()) {
-        return false;
-    }
-    static constexpr std::string_view kForbiddenKeywords[] = {
-        "if", "else", "while", "for", "switch", "case", "return", "co_return", "co_await", "co_yield", "sizeof",
-        "decltype", "new", "delete", "throw"};
-    for (std::string_view kw : kForbiddenKeywords) {
-        if (word == kw) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::optional<fl::Location> findFunctionInFile(std::string_view filePath, std::string_view symbolName,
-                                               bool requireDefinitionBody,
-                                               const std::vector<std::pair<std::string, text::Snapshot>>& openDocs,
-                                               io::IFileSystem& fs) {
-    if (symbolName.empty()) {
-        return std::nullopt;
-    }
-    const auto content = readDocumentOrDisk(filePath, openDocs, fs);
-    if (!content) {
-        return std::nullopt;
-    }
-    std::uint32_t lineIdx = 0;
-    std::size_t lineStart = 0;
-    while (lineStart < content->size()) {
-        const std::size_t nl = content->find('\n', lineStart);
-        std::string_view lineView =
-            nl == std::string::npos ? std::string_view(*content).substr(lineStart)
-                                    : std::string_view(*content).substr(lineStart, nl - lineStart);
-        if (!lineView.empty() && lineView.back() == '\r') {
-            lineView.remove_suffix(1);
-        }
-        const std::size_t firstNonSpace = lineView.find_first_not_of(" \t");
-        if (firstNonSpace != std::string_view::npos && !lineView.substr(firstNonSpace).starts_with("//") &&
-            !lineView.substr(firstNonSpace).starts_with('#')) {
-            std::size_t searchPos = firstNonSpace;
-            while (searchPos < lineView.size()) {
-                const std::size_t found = lineView.find(symbolName, searchPos);
-                if (found == std::string_view::npos) {
-                    break;
-                }
-                const bool leftBoundary = (found == 0 || !fl::isIdentifierByte(lineView[found - 1]));
-                const std::size_t afterSym = found + symbolName.size();
-                const bool rightBoundary = (afterSym == lineView.size() || !fl::isIdentifierByte(lineView[afterSym]));
-                if (leftBoundary && rightBoundary &&
-                    hasReturnTypeOrScopePrefix(lineView.substr(firstNonSpace, found - firstNonSpace))) {
-                    std::size_t parenPos = afterSym;
-                    while (parenPos < lineView.size() && (lineView[parenPos] == ' ' || lineView[parenPos] == '\t')) {
-                        ++parenPos;
-                    }
-                    if (parenPos < lineView.size() && lineView[parenPos] == '(') {
-                        const std::size_t absParen = lineStart + parenPos;
-                        const std::size_t nextBrace = content->find('{', absParen);
-                        const std::size_t nextSemi = content->find(';', absParen);
-                        const bool isDefinition =
-                            (nextBrace != std::string_view::npos &&
-                             (nextSemi == std::string_view::npos || nextBrace < nextSemi));
-                        if (!requireDefinitionBody || isDefinition) {
-                            const auto colStart = static_cast<std::uint32_t>(found);
-                            const auto colEnd = static_cast<std::uint32_t>(afterSym);
-                            return fl::Location{
-                                .path = std::string(filePath),
-                                .uri = fl::pathToUri(filePath).value_or(""),
-                                .range = fl::LspRange{{lineIdx, colStart}, {lineIdx, colEnd}},
-                            };
                         }
                     }
                 }
-                searchPos = afterSym;
             }
         }
-        if (nl == std::string::npos) {
-            break;
+    };
+    if (definition->isObject()) {
+        consider(*definition);
+    } else {
+        for (const fl::Json& item : definition->items()) {
+            if (item.isObject()) {
+                consider(item);
+            }
         }
-        lineStart = nl + 1;
-        ++lineIdx;
     }
-    return std::nullopt;
+    if (metadataUri.empty() || cacheDir.empty()) {
+        co_return std::optional<fl::Location>();
+    }
+    auto metadata = co_await server.request(
+        "csharp/metadata", fl::Json::object().set("textDocument", fl::Json::object().set("uri", metadataUri)), token);
+    if (!metadata || !metadata->isObject() || metadata->stringAt("source").empty()) {
+        co_return std::optional<fl::Location>();
+    }
+    auto file = io::joinPath(cacheDir, metadataFileName(metadataUri));
+    if (!file) {
+        co_return std::unexpected(std::move(file.error()));
+    }
+    if (auto made = fs.createDirectories(cacheDir); !made) {
+        co_return std::unexpected(std::move(made.error()));
+    }
+    if (auto wrote = fs.writeFileAtomic(*file, metadata->stringAt("source")); !wrote) {
+        co_return std::unexpected(std::move(wrote.error()));
+    }
+    const std::string fileUri = fl::pathToUri(*file).value_or("");
+    co_return std::optional<fl::Location>(fl::Location{.path = *file, .uri = fileUri, .range = range});
 }
 
-bool isHeaderPrototypeLocation(const fl::Location& loc,
-                               const std::vector<std::pair<std::string, text::Snapshot>>& openDocs,
-                               io::IFileSystem& fs) {
-    if (!isHeaderExt(splitPathParts(loc.path).ext)) {
-        return false;
-    }
-    const auto content = readDocumentOrDisk(loc.path, openDocs, fs);
-    if (!content) {
-        return true;
-    }
-    std::uint32_t lineIdx = 0;
-    std::size_t lineStart = 0;
-    while (lineStart < content->size() && lineIdx < loc.range.start.line) {
-        const std::size_t nl = content->find('\n', lineStart);
-        if (nl == std::string::npos) {
-            return true;
-        }
-        lineStart = nl + 1;
-        ++lineIdx;
-    }
-    const std::size_t nextBrace = content->find('{', lineStart);
-    const std::size_t nextSemi = content->find(';', lineStart);
-    return nextSemi != std::string_view::npos && (nextBrace == std::string_view::npos || nextSemi < nextBrace);
-}
+// Go to Declaration or Usages from the server alone; when it found nothing for a C# document, the
+// server's metadata source (metadataSourceTask) if it has one.
+struct GotoOutcome {
+    fl::GotoResult result;
+    bool metadata = false; // result.locations holds one location in the metadata cache.
+};
 
-sched::Task<Result<fl::GotoResult>>
-gotoDeclarationOrDecompile(fl::ILspRequester& server, io::IFileSystem& fs,
-                           std::function<std::vector<std::string>()> projectFiles,
-                           std::vector<std::pair<std::string, text::Snapshot>> openDocs, std::string path,
-                           fl::LspPosition position, ExtractedSymbolInfo sym, std::stop_token token) {
+sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, io::IFileSystem& fs,
+                                                     std::string cacheDir, bool askMetadata, std::string path,
+                                                     fl::LspPosition position, std::stop_token token) {
     auto result = co_await fl::gotoDeclarationOrUsages(server, path, position, token);
-    if (result && !sym.symbolName.empty()) {
-        if (result->showUsages && isSourceExt(splitPathParts(path).ext)) {
-            if (const auto relatedHeader = findRelatedProjectFile(path, projectFiles, fs)) {
-                if (auto declLoc = findFunctionInFile(*relatedHeader, sym.symbolName, false, openDocs, fs);
-                    declLoc && isHeaderPrototypeLocation(*declLoc, openDocs, fs)) {
-                    result->showUsages = false;
-                    result->locations.push_back(std::move(*declLoc));
-                }
-            }
-        } else if (!result->showUsages && result->locations.size() == 1 &&
-                   isSourceExt(splitPathParts(result->locations.front().path).ext)) {
-            if (const auto relatedHeader =
-                    findRelatedProjectFile(result->locations.front().path, projectFiles, fs)) {
-                if (auto declLoc = findFunctionInFile(*relatedHeader, sym.symbolName, false, openDocs, fs);
-                    declLoc && isHeaderPrototypeLocation(*declLoc, openDocs, fs)) {
-                    result->locations.front() = std::move(*declLoc);
-                }
-            }
+    if (!result) {
+        co_return std::unexpected(std::move(result.error()));
+    }
+    GotoOutcome outcome{.result = std::move(*result), .metadata = false};
+    if (askMetadata && !outcome.result.showUsages && outcome.result.locations.empty()) {
+        auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token);
+        if (metadata && *metadata) {
+            outcome.result.locations.push_back(std::move(**metadata));
+            outcome.metadata = true;
         }
     }
-    if (result && !result->showUsages && result->locations.empty() && !sym.symbolName.empty()) {
-        if (auto decompiled = co_await tryDecompileSymbol(server, fs, path, position, sym, false, token); decompiled) {
-            result->locations.push_back(std::move(*decompiled));
-        }
-    }
-    co_return result;
-}
-
-sched::Task<Result<std::vector<fl::Location>>>
-gotoImplementationTask(fl::ILspRequester& server, io::IFileSystem& fs,
-                       std::function<std::vector<std::string>()> projectFiles,
-                       std::vector<std::pair<std::string, text::Snapshot>> openDocs, std::string path,
-                       fl::LspPosition position, ExtractedSymbolInfo sym, std::stop_token token) {
-    auto locations = co_await fl::gotoImplementation(server, path, position, token);
-    if (!locations) {
-        co_return locations;
-    }
-    if (!sym.symbolName.empty()) {
-        if (locations->empty() && isHeaderExt(splitPathParts(path).ext)) {
-            if (const auto relatedSource = findRelatedProjectFile(path, projectFiles, fs)) {
-                if (auto defLoc = findFunctionInFile(*relatedSource, sym.symbolName, true, openDocs, fs)) {
-                    locations->push_back(std::move(*defLoc));
-                }
-            }
-        } else if (locations->size() == 1 && isHeaderPrototypeLocation(locations->front(), openDocs, fs)) {
-            if (const auto relatedSource = findRelatedProjectFile(locations->front().path, projectFiles, fs)) {
-                if (auto defLoc = findFunctionInFile(*relatedSource, sym.symbolName, true, openDocs, fs)) {
-                    locations->front() = std::move(*defLoc);
-                }
-            }
-        }
-    }
-    co_return locations;
-}
-
-sched::Task<Result<std::optional<fl::Location>>> decompileSymbolTask(fl::ILspRequester& server,
-                                                                     io::IFileSystem& fs, std::string path,
-                                                                     fl::LspPosition position, ExtractedSymbolInfo sym,
-                                                                     std::stop_token token) {
-    auto loc = co_await tryDecompileSymbol(server, fs, path, position, sym, true, token);
-    co_return Result<std::optional<fl::Location>>(std::move(loc));
+    co_return outcome;
 }
 
 } // namespace
@@ -768,7 +349,6 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
         }
     });
     connect(m_choice.get(), &ChoicePopup::cancelled, this, [this] { m_choiceActions.clear(); });
-    connect(m_rename.get(), &RenameInput::cancelled, this, [this] { m_customRenameCallback = nullptr; });
     connect(m_rename.get(), &RenameInput::accepted, this, &LanguageController::onRenameAccepted);
 }
 
@@ -845,11 +425,9 @@ LanguageController::~LanguageController() {
 void LanguageController::editorChanged() {
     const auto snapshot = m_services.host.snapshot();
     const bool sameStructureDoc =
-        m_structureVisible && !m_structurePath.empty() &&
-        m_services.host.documentPath() == m_structurePath &&
+        m_structureVisible && !m_structurePath.empty() && m_services.host.documentPath() == m_structurePath &&
         m_services.host.documentVersion() == m_structureVersion && snapshot &&
-        snapshot->version() == m_structureRevision &&
-        m_services.host.structureIdentity() == m_structureIdentity &&
+        snapshot->version() == m_structureRevision && m_services.host.structureIdentity() == m_structureIdentity &&
         m_services.server.encoding() == m_structureEncoding;
     if (!sameStructureDoc) {
         structureChanged();
@@ -871,7 +449,6 @@ void LanguageController::editorChanged() {
     m_tabStops.clear();
     m_renamePath.clear();
     m_renameOldName.clear();
-    m_customRenameCallback = nullptr;
 }
 
 StructurePanel& LanguageController::structurePanel() { return *m_structure; }
@@ -881,15 +458,19 @@ void LanguageController::setStructureVisible(bool visible) {
     structureChanged();
 }
 
-void LanguageController::structureChanged() {
+void LanguageController::structureChanged() { invalidateStructure(true); }
+
+void LanguageController::structureReplaced() { invalidateStructure(false); }
+
+void LanguageController::invalidateStructure(bool keepSameIdentityTree) {
     ++m_structureGeneration;
     m_structureSlot.cancel();
     m_structureTimer.stop();
-    const bool keepExistingTreeForSameIdentity =
-        m_structureVisible && hasDocument() && !m_structurePath.empty() &&
-        m_services.host.documentPath() == m_structurePath &&
-        m_services.host.structureIdentity() == m_structureIdentity &&
-        m_services.server.encoding() == m_structureEncoding;
+    const bool keepExistingTreeForSameIdentity = keepSameIdentityTree && m_structureVisible && hasDocument() &&
+                                                 !m_structurePath.empty() &&
+                                                 m_services.host.documentPath() == m_structurePath &&
+                                                 m_services.host.structureIdentity() == m_structureIdentity &&
+                                                 m_services.server.encoding() == m_structureEncoding;
     m_structurePath.clear();
     if (!m_structureVisible) {
         m_structure->setStatus(QStringLiteral("Open Structure to view symbols."));
@@ -942,6 +523,34 @@ void LanguageController::requestStructure() {
         });
 }
 
+namespace {
+
+// Which documents an action's engine serves (registerActions; language_capabilities.hpp).
+enum class Availability : std::uint8_t {
+    Always,            // Any document (LSP-backed or editor-wide).
+    ClangdTweaks,      // C++ only: clangd tweaks.
+    OptimizeImports,   // capabilities.optimizeImports.
+    Surround,          // capabilities.surround.
+    CompleteStatement, // capabilities.completeStatement.
+    LiveTemplates,     // capabilities.liveTemplates.
+    Never,             // No correct engine yet (the description names the epic).
+};
+
+bool available(Availability availability, const LanguageCapabilities& caps) {
+    switch (availability) {
+    case Availability::Always: return true;
+    case Availability::ClangdTweaks: return caps.clangdTweaks;
+    case Availability::OptimizeImports: return caps.optimizeImports;
+    case Availability::Surround: return caps.surround;
+    case Availability::CompleteStatement: return caps.completeStatement;
+    case Availability::LiveTemplates: return caps.liveTemplates;
+    case Availability::Never: return false;
+    }
+    return false;
+}
+
+} // namespace
+
 Result<void> LanguageController::registerActions(input::ActionRegistry& registry) {
     struct Entry {
         std::string_view id;
@@ -949,7 +558,10 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         std::string_view group;
         void (LanguageController::*handler)();
         bool needsEditor;
+        Availability availability = Availability::Always;
+        std::string_view description = {};
     };
+    using A = Availability;
     const Entry entries[] = {
         {"code.completion", "Basic Completion", "Code", &LanguageController::completeCode, true},
         {"code.parameterInfo", "Parameter Info", "Code", &LanguageController::showParameterInfo, true},
@@ -970,37 +582,57 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         {"navigate.superMethod", "Go to Super Method / Base", "Navigate", &LanguageController::gotoSuperMethod, true},
         {"navigate.typeDeclaration", "Go to Type Declaration", "Navigate", &LanguageController::gotoTypeDeclaration,
          true},
-        {"navigate.decompileSymbol", "Decompile External Symbol", "Navigate",
-         &LanguageController::decompileExternalSymbol, true},
+        {"navigate.decompileSymbol", "Show Metadata Source", "Navigate", &LanguageController::decompileExternalSymbol,
+         true, A::Always, "Shows the metadata source the C# language server returns; the decompiler is LTR-6"},
         {"refactor.rename", "Rename", "Refactor", &LanguageController::rename, true},
-        {"refactor.this", "Refactor This...", "Refactor", &LanguageController::refactorThis, true},
-        {"refactor.extractVariable", "Extract Variable...", "Refactor", &LanguageController::extractVariable, true},
-        {"refactor.extractConstant", "Extract Constant...", "Refactor", &LanguageController::extractConstant, true},
-        {"refactor.extractField", "Extract Field...", "Refactor", &LanguageController::extractField, true},
-        {"refactor.extractParameter", "Extract Parameter...", "Refactor", &LanguageController::extractParameter, true},
-        {"refactor.extractMethod", "Extract Method...", "Refactor", &LanguageController::extractMethod, true},
-        {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true},
-        {"refactor.changeSignature", "Change Signature...", "Refactor", &LanguageController::changeSignature, true},
-        {"refactor.safeDelete", "Safe Delete...", "Refactor", &LanguageController::safeDelete, true},
-        {"refactor.move", "Move...", "Refactor", &LanguageController::moveSymbol, true},
+        {"refactor.this", "Refactor This...", "Refactor", &LanguageController::refactorThis, true, A::Always,
+         "Rename and the refactorings the language server offers at the caret"},
+        {"refactor.extractVariable", "Extract Variable...", "Refactor", &LanguageController::extractVariable, true,
+         A::ClangdTweaks, "C++: clangd's Extract Variable; other languages require REF-7"},
+        {"refactor.extractConstant", "Extract Constant...", "Refactor", &LanguageController::extractConstant, true,
+         A::Never, "Requires the extract refactorings (REF-7)"},
+        {"refactor.extractField", "Extract Field...", "Refactor", &LanguageController::extractField, true, A::Never,
+         "Requires the extract refactorings (REF-7)"},
+        {"refactor.extractParameter", "Extract Parameter...", "Refactor", &LanguageController::extractParameter, true,
+         A::Never, "Requires the extract refactorings (REF-7)"},
+        {"refactor.extractMethod", "Extract Method...", "Refactor", &LanguageController::extractMethod, true,
+         A::ClangdTweaks, "C++: clangd's Extract to Function; other languages require REF-7"},
+        {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true, A::Never,
+         "Requires the inline refactoring (REF-6)"},
+        {"refactor.changeSignature", "Change Signature...", "Refactor", &LanguageController::changeSignature, true,
+         A::Never, "Requires the change signature refactoring (REF-6)"},
+        {"refactor.safeDelete", "Safe Delete...", "Refactor", &LanguageController::safeDelete, true, A::Never,
+         "Requires the safe delete refactoring (REF-8)"},
+        {"refactor.move", "Move...", "Refactor", &LanguageController::moveSymbol, true, A::Never,
+         "Requires the move refactoring (REF-8)"},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
         {"code.reformat", "Reformat Code", "Code", &LanguageController::reformat, true},
-        {"code.generate", "Generate...", "Code", &LanguageController::generateCode, true},
-        {"code.overrideMethods", "Override Methods...", "Code", &LanguageController::overrideMethods, true},
-        {"code.implementMethods", "Implement Methods...", "Code", &LanguageController::implementMethods, true},
-        {"code.surroundWith", "Surround With...", "Code", &LanguageController::surroundWith, true},
-        {"code.completeStatement", "Complete Current Statement", "Code", &LanguageController::completeStatement, true},
-        {"code.optimizeImports", "Optimize Imports / Includes", "Code", &LanguageController::optimizeImports, true},
-        {"code.insertLiveTemplate", "Insert Live Template...", "Code", &LanguageController::insertLiveTemplate, true},
+        {"code.generate", "Generate...", "Code", &LanguageController::generateCode, true, A::ClangdTweaks,
+         "C++: clangd's constructor, special members and pure virtual overrides; the rest requires REF-9"},
+        {"code.overrideMethods", "Override Methods...", "Code", &LanguageController::overrideMethods, true, A::Never,
+         "Requires the generate engine (REF-9); Implement Methods overrides pure virtual methods"},
+        {"code.implementMethods", "Implement Methods...", "Code", &LanguageController::implementMethods, true,
+         A::ClangdTweaks, "C++: clangd's Override pure virtual methods; other languages require REF-9"},
+        {"code.surroundWith", "Surround With...", "Code", &LanguageController::surroundWith, true, A::Surround,
+         "C++ and C# only; templates for other languages arrive with REF-13"},
+        {"code.completeStatement", "Complete Current Statement", "Code", &LanguageController::completeStatement, true,
+         A::CompleteStatement, "C++ and C# only"},
+        {"code.optimizeImports", "Optimize Imports / Includes", "Code", &LanguageController::optimizeImports, true,
+         A::OptimizeImports, "C++: clangd's include cleaner (REF-11); C#: the server's organize imports (LTR-5)"},
+        {"code.insertLiveTemplate", "Insert Live Template...", "Code", &LanguageController::insertLiveTemplate, true,
+         A::LiveTemplates, "C++ and C# templates; the template engine is UX-6"},
     };
     for (const Entry& entry : entries) {
         input::ActionSpec spec;
         spec.id = std::string(entry.id);
         spec.name = std::string(entry.name);
         spec.group = std::string(entry.group);
+        spec.description = std::string(entry.description);
         if (entry.needsEditor) {
             spec.context = input::ContextRule{.all = {input::ContextKey::EditorFocus}, .none = {}};
-            spec.enabled = [this](const input::ActionContext&) { return hasDocument(); };
+            spec.enabled = [this, availability = entry.availability](const input::ActionContext&) {
+                return hasDocument() && available(availability, capabilities());
+            };
         }
         spec.handler = [this, handler = entry.handler](const input::ActionContext&, const input::InvokeInfo&) {
             (this->*handler)();
@@ -1016,6 +648,74 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
 
 bool LanguageController::hasDocument() const {
     return !m_services.host.documentPath().empty() && m_services.host.snapshot().has_value();
+}
+
+const LanguageCapabilities& LanguageController::capabilities() const {
+    return capabilitiesForPath(m_services.host.documentPath());
+}
+
+void LanguageController::unavailable(const QString& reason) { emit statusMessage(reason); }
+
+QString LanguageController::emptyResultMessage(const QString& none) const {
+    const std::string path = m_services.host.documentPath();
+    const LanguageCapabilities& caps = capabilities();
+    const QString server = caps.serverName.empty() ? QStringLiteral("the language server") : qs(caps.serverName);
+    ServerReadiness readiness = m_services.readiness ? m_services.readiness(path) : ServerReadiness::Unknown;
+    if (!m_services.server.serverCapabilities()) {
+        readiness = ServerReadiness::NotRunning;
+    }
+    switch (readiness) {
+    case ServerReadiness::NotRunning: return QStringLiteral("%1: %2 is not running for this file").arg(none, server);
+    case ServerReadiness::NoCompileCommand:
+        return QStringLiteral("%1: this file has no compile command, so %2 parses it with fallback flags")
+            .arg(none, server);
+    case ServerReadiness::Indexing:
+        return QStringLiteral("%1: %2 is still indexing; try again when indexing finishes").arg(none, server);
+    case ServerReadiness::Unknown: break;
+    }
+    return QStringLiteral("%1 (%2 returned no result)").arg(none, server);
+}
+
+void LanguageController::runCodeAction(fl::CodeActionItem action) {
+    const QString title = qs(action.title);
+    if (!action.edit.empty()) {
+        applyWorkspaceEdit(action.edit, title);
+    }
+    if (!action.commandName.empty()) {
+        // clangd.applyTweak answers with a workspace/applyEdit (the server's apply-edit handler).
+        executeServerCommand(std::move(action.commandName), std::move(action.commandArguments), title);
+    }
+}
+
+void LanguageController::runClangdTweak(std::string_view tweakId, const QString& label, const QString& none) {
+    if (!hasDocument()) {
+        return;
+    }
+    if (!capabilities().clangdTweaks) {
+        unavailable(QStringLiteral("%1 is not available for this language yet").arg(label));
+        return;
+    }
+    const std::string path = m_services.host.documentPath();
+    fl::LspRange range{caretPosition(), caretPosition()};
+    if (const auto selection = m_services.host.selection()) {
+        range = fl::LspRange{positionAt(selection->begin), positionAt(selection->end)};
+    }
+    start<std::vector<fl::CodeActionItem>>(
+        m_actionSlot,
+        [&server = m_services.server, path, range](std::stop_token token) {
+            return fl::requestCodeActions(server, path, range, {}, std::move(token));
+        },
+        [this, id = std::string(tweakId), label, none](Result<std::vector<fl::CodeActionItem>> actions) {
+            if (!actions) {
+                report(actions.error(), label.toStdString());
+                return;
+            }
+            if (const fl::CodeActionItem* tweak = fl::findTweak(*actions, id)) {
+                runCodeAction(*tweak);
+                return;
+            }
+            emit statusMessage(none);
+        });
 }
 
 fl::LspPosition LanguageController::positionAt(ByteOffset offset) const {
@@ -1067,7 +767,7 @@ void LanguageController::openTargets(std::vector<fl::Location> locations, const 
 // --- Completion ---
 
 void LanguageController::completeCode() {
-    if (tryExpandPostfixCompletion()) {
+    if (capabilities().postfix && tryExpandPostfixCompletion()) {
         return;
     }
     requestCompletion(fl::CompletionTrigger{});
@@ -1246,7 +946,7 @@ bool LanguageController::keyPress(int key, Qt::KeyboardModifiers modifiers) {
     if (key == Qt::Key_Tab && plain && !m_tabStops.empty()) {
         return nextTabStop();
     }
-    if (key == Qt::Key_Tab && plain && tryExpandPostfixCompletion()) {
+    if (key == Qt::Key_Tab && plain && hasDocument() && capabilities().postfix && tryExpandPostfixCompletion()) {
         return true;
     }
     return false;
@@ -1378,31 +1078,37 @@ void LanguageController::gotoDeclarationAt(ByteOffset offset) {
 
 void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
     const std::string path = m_services.host.documentPath();
-    const ExtractedSymbolInfo sym =
-        extractSymbolAtPosition(path, m_services.host.snapshot(), position, m_services.server.encoding());
-    start<fl::GotoResult>(
+    const std::string symbol = identifierAtPosition(m_services.host.snapshot(), position, m_services.server.encoding());
+    // Only C# servers answer with metadata URIs; C++ declarations come from clangd alone.
+    const bool askMetadata = capabilities().languageId == "csharp";
+    start<GotoOutcome>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, projectFiles = m_services.projectFiles,
-         openDocs = m_services.host.openDocuments(), path, position, sym](std::stop_token token) {
-            return gotoDeclarationOrDecompile(server, fs, projectFiles, openDocs, path, position, sym,
-                                              std::move(token));
+        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, askMetadata, path,
+         position](std::stop_token token) {
+            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, std::move(token));
         },
-        [this, path, position, symName = sym.symbolName](Result<fl::GotoResult> result) {
-            if (!result) {
-                report(result.error(), "Go to declaration");
+        [this, path, position, symbol](Result<GotoOutcome> outcome) {
+            if (!outcome) {
+                report(outcome.error(), "Go to declaration");
                 return;
             }
-            if (result->showUsages) {
+            if (outcome->result.showUsages) {
                 findUsagesAt(path, position);
                 return;
             }
-            if (result->locations.size() == 1 &&
-                result->locations.front().path.find("[Decompiled]") != std::string::npos) {
-                emit statusMessage(QStringLiteral("Opened decompiled metadata for '%1'").arg(qs(symName)));
+            if (outcome->metadata) {
+                openMetadataLocation(outcome->result.locations.front(), qs(symbol));
+                return;
             }
-            openTargets(std::move(result->locations), QStringLiteral("Choose Declaration"),
-                        QStringLiteral("Cannot find a declaration to go to"));
+            openTargets(std::move(outcome->result.locations), QStringLiteral("Choose Declaration"),
+                        emptyResultMessage(QStringLiteral("Cannot find a declaration to go to")));
         });
+}
+
+void LanguageController::openMetadataLocation(const fl::Location& location, const QString& symbol) {
+    emit statusMessage(QStringLiteral("Showing metadata source for '%1' from %2 (read-only cache)")
+                           .arg(symbol, qs(capabilities().serverName)));
+    m_services.host.openReadOnlyLocation(location.path, location.range.start);
 }
 
 void LanguageController::decompileExternalSymbol() {
@@ -1411,24 +1117,42 @@ void LanguageController::decompileExternalSymbol() {
     }
     const std::string path = m_services.host.documentPath();
     const fl::LspPosition position = caretPosition();
-    const ExtractedSymbolInfo sym =
-        extractSymbolAtPosition(path, m_services.host.snapshot(), position, m_services.server.encoding());
-    if (sym.symbolName.empty()) {
-        emit statusMessage(QStringLiteral("Place caret on a symbol to decompile"));
+    const std::string symbol = identifierAtPosition(m_services.host.snapshot(), position, m_services.server.encoding());
+    if (symbol.empty()) {
+        emit statusMessage(QStringLiteral("Place the caret on a symbol to show its metadata source"));
+        return;
+    }
+    const auto& caps = capabilities();
+    if (caps.languageId != "csharp") {
+        emit statusMessage(
+            QStringLiteral("Source not available for '%1': %2 provides no metadata or decompiled "
+                           "source (library sources and decompiler: LTR-6)")
+                .arg(qs(symbol), caps.serverName.empty() ? QStringLiteral("no language server") : qs(caps.serverName)));
+        return;
+    }
+    if (m_services.metadataCacheDir.empty()) {
+        emit statusMessage(
+            QStringLiteral("Source not available for '%1': no metadata cache is configured (LTR-6)").arg(qs(symbol)));
         return;
     }
     start<std::optional<fl::Location>>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, path, position, sym](std::stop_token token) {
-            return decompileSymbolTask(server, fs, path, position, sym, std::move(token));
+        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, path,
+         position](std::stop_token token) {
+            return metadataSourceTask(server, fs, cacheDir, path, position, std::move(token));
         },
-        [this, symName = sym.symbolName](Result<std::optional<fl::Location>> loc) {
-            if (!loc || !*loc) {
-                emit statusMessage(QStringLiteral("Could not decompile symbol '%1'").arg(qs(symName)));
+        [this, symbol](Result<std::optional<fl::Location>> location) {
+            if (!location) {
+                report(location.error(), "Metadata source");
                 return;
             }
-            emit statusMessage(QStringLiteral("Opened decompiled metadata for '%1'").arg(qs(symName)));
-            m_services.host.openLocation((*loc)->path, (*loc)->range.start);
+            if (!*location) {
+                emit statusMessage(
+                    QStringLiteral("Source not available for '%1': %2 returned no metadata source (LTR-6)")
+                        .arg(qs(symbol), qs(capabilities().serverName)));
+                return;
+            }
+            openMetadataLocation(**location, qs(symbol));
         });
 }
 
@@ -1436,23 +1160,17 @@ void LanguageController::gotoImplementation() {
     if (!hasDocument()) {
         return;
     }
-    const std::string path = m_services.host.documentPath();
-    const fl::LspPosition position = caretPosition();
-    const ExtractedSymbolInfo sym =
-        extractSymbolAtPosition(path, m_services.host.snapshot(), position, m_services.server.encoding());
     start<std::vector<fl::Location>>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, projectFiles = m_services.projectFiles,
-         openDocs = m_services.host.openDocuments(), path, position, sym](std::stop_token token) {
-            return gotoImplementationTask(server, fs, projectFiles, openDocs, path, position, sym, std::move(token));
-        },
+        [&server = m_services.server, path = m_services.host.documentPath(), position = caretPosition()](
+            std::stop_token token) { return fl::gotoImplementation(server, path, position, std::move(token)); },
         [this](Result<std::vector<fl::Location>> locations) {
             if (!locations) {
                 report(locations.error(), "Go to implementation");
                 return;
             }
             openTargets(std::move(*locations), QStringLiteral("Choose Implementation"),
-                        QStringLiteral("No implementations found"));
+                        emptyResultMessage(QStringLiteral("No implementations found")));
         });
 }
 
@@ -1651,7 +1369,6 @@ void LanguageController::rename() {
                     current = qs(snapshot->text(text::ByteRange{.begin = *begin, .end = *end}));
                 }
             }
-            m_customRenameCallback = nullptr;
             m_renamePath = path;
             m_renameOldName = current.toStdString();
             m_renamePosition = position;

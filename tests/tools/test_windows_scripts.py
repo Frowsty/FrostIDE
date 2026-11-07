@@ -4,7 +4,8 @@
 # anything: bootstrap.ps1's Python version check, taken from the script's syntax tree
 # so the bootstrap itself never runs, env.ps1's cache redirection (D1: no tool
 # caches on the system drive), dot-sourced in a child PowerShell, and stage.ps1's
-# folder layout over a fake build tree and a fake windeployqt. Windows only: the
+# folder layout over a fake build tree and a fake windeployqt: the bundled tools it requires
+# (FND-13), LuaLS among them, and the symbol archive next to the folder. Windows only: the
 # scripts target Windows PowerShell 5.1. tests/tools/CMakeLists.txt registers this
 # suite on Windows only.
 
@@ -13,12 +14,21 @@ from __future__ import annotations
 import json
 import ntpath
 import os
+import shutil
 import subprocess
 import sys
 import unittest
+import zipfile
 from pathlib import Path
 
 from tools_test_support import TOOLS, TempDirTestCase, clean_env
+
+# The synthetic PE images and PDBs of the symbolize.py tests (a module import, so unittest does not
+# collect that suite's tests here a second time).
+import test_symbolize as symbol_fixtures
+
+_FROST_GUID = bytes(range(16, 32))
+_APP_GUID = bytes(range(32, 48))
 
 
 def _powershell() -> str:
@@ -176,8 +186,13 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "project-host").mkdir(parents=True, exist_ok=True)
         (bin_dir / "project-host" / "ProjectHostVsProbe.exe").write_bytes(b"MZ")
         (bin_dir / "project-host" / "ProjectHostVsProbe.exe.config").write_text("<configuration/>", encoding="utf-8")
-        for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb"):
+        for name in ("crashpad_handler.exe", "conpty.dll", "OpenConsole.exe"):
             (bin_dir / name).write_bytes(b"MZ")
+        # frost.exe and frost_app.dll name their PDBs, whose GUID and age match (the symbol archive).
+        (bin_dir / "frost.exe").write_bytes(symbol_fixtures.pe_bytes(_FROST_GUID, 1, "frost.pdb"))
+        (bin_dir / "frost.pdb").write_bytes(symbol_fixtures.msf_bytes(_FROST_GUID))
+        (bin_dir / "frost_app.dll").write_bytes(symbol_fixtures.pe_bytes(_APP_GUID, 1, "frost_app.pdb"))
+        (bin_dir / "frost_app.pdb").write_bytes(symbol_fixtures.msf_bytes(_APP_GUID))
         (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
         (bin_dir / "resources" / "themes" / "dark.json").write_text("{}", encoding="utf-8")
         return build
@@ -186,7 +201,96 @@ class StageScriptTest(TempDirTestCase):
         deploy = self.tmp / "windeployqt.cmd"
         deploy.write_text(_FAKE_WINDEPLOYQT, encoding="ascii", newline="\r\n")
         return run_powershell(TOOLS / "stage.ps1", "-Destination", str(destination), "-Config", "Debug",
-                              "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-SkipBuild", *extra)
+                              "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-Python", sys.executable,
+                              "-SkipBuild", *extra)
+
+    def _fake_tools(self) -> list[str]:
+        """An SDK root and managed folders holding every bundled tool; the -BundleTools arguments."""
+        lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
+        sdk = self.tmp / "sdk"
+        files = [f"llvm-{lock['llvm']['version']}/bin/clangd.exe",
+                 f"llvm-{lock['llvm']['version']}/lib/clang/23/include/stddef.h",
+                 f"lldb-{lock['lldb']['version']}/bin/lldb-dap.exe",
+                 f"lldb-{lock['lldb']['version']}/bin/liblldb.dll",
+                 f"lldb-{lock['lldb']['version']}/bin/lldb-argdumper.exe",
+                 f"luals-{lock['luals']['version']}/bin/lua-language-server.exe",
+                 f"luals-{lock['luals']['version']}/main.lua",
+                 f"luals-{lock['luals']['version']}/LICENSE",
+                 f"luals-{lock['luals']['version']}/meta/template/basic.lua",
+                 f"luals-{lock['luals']['version']}/.frost-installed",
+                 f"luals-{lock['luals']['version']}/log/service.log"]
+        for name in files:
+            (sdk / name).parent.mkdir(parents=True, exist_ok=True)
+            (sdk / name).write_bytes(b"fixture " + name.encode())
+        managed, debug = self.tmp / "managed-server", self.tmp / "managed-debug"
+        managed.mkdir(exist_ok=True)
+        (managed / "CSharpLanguageServer.dll").write_bytes(b"MZ")
+        (debug / "adapter").mkdir(parents=True, exist_ok=True)
+        (debug / "adapter" / "netcoredbg.exe").write_bytes(b"MZ")
+        return ["-BundleTools", "-SdkRoot", str(sdk), "-ManagedServerDir", str(managed),
+                "-ManagedDebugDir", str(debug)]
+
+    def test_bundled_tools_and_luals_are_staged(self) -> None:
+        build = self._fake_build()
+        destination = self.tmp / "bundled"
+        lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
+        luals = f"luals-{lock['luals']['version']}"
+        result = self._stage(build, destination, *self._fake_tools())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in (f"llvm-{lock['llvm']['version']}/bin/clangd.exe",
+                     f"llvm-{lock['llvm']['version']}/lib/clang/23/include/stddef.h",
+                     f"lldb-{lock['lldb']['version']}/bin/liblldb.dll", f"{luals}/bin/lua-language-server.exe",
+                     f"{luals}/main.lua", f"{luals}/meta/template/basic.lua", "licenses/luals-LICENSE.txt",
+                     "managed/CSharpLanguageServer.dll", "FrostManagedDebug/adapter/netcoredbg.exe"):
+            self.assertTrue((destination / name).is_file(), name)
+        self.assertFalse((destination / luals / ".frost-installed").exists(), "the SDK's install marker")
+        self.assertFalse((destination / luals / "log").exists(), "a log a run left in the SDK")
+
+    def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
+        lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
+        cases = {"clangd": f"sdk/llvm-{lock['llvm']['version']}/bin/clangd.exe",
+                 "lldb-dap": f"sdk/lldb-{lock['lldb']['version']}/bin/liblldb.dll",
+                 "LuaLS": f"sdk/luals-{lock['luals']['version']}/bin/lua-language-server.exe",
+                 "managed language server": "managed-server/CSharpLanguageServer.dll",
+                 "managed debugger": "managed-debug/adapter/netcoredbg.exe"}
+        for tool, missing in cases.items():
+            with self.subTest(tool=tool):
+                build = self._fake_build()
+                arguments = self._fake_tools()
+                (self.tmp / missing).unlink()
+                destination = self.tmp / "missing-tool"
+                result = self._stage(build, destination, *arguments)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"stage: FAIL missing bundled {tool}", result.stdout)
+                self.assertFalse(destination.exists(), "nothing is staged without the tool")
+
+    def test_the_symbol_archive_holds_the_images_and_their_pdbs(self) -> None:
+        build = self._fake_build()
+        destination = self.tmp / "out" / "preview"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        archive = self.tmp / "out" / "preview-symbols.zip"
+        self.assertIn(f"symbols {archive}", result.stdout)
+        with zipfile.ZipFile(archive) as packed:
+            self.assertEqual(sorted(packed.namelist()),
+                             ["frost.exe", "frost.pdb", "frost_app.dll", "frost_app.pdb", "symbols.json"])
+            self.assertEqual(packed.read("frost_app.pdb"), (build / "src/app/Debug/frost_app.pdb").read_bytes())
+        shutil.rmtree(destination)
+        refused = self._stage(build, destination)
+        self.assertEqual(refused.returncode, 1, "an existing archive needs -Force like the folder")
+        self.assertIn("preview-symbols.zip exists", refused.stdout)
+        self.assertEqual(self._stage(build, destination, "-Force").returncode, 0)
+        self.assertTrue(archive.is_file())
+
+    def test_a_stale_pdb_fails_the_stage(self) -> None:
+        build = self._fake_build()
+        (build / "src/app/Debug/frost_app.pdb").write_bytes(symbol_fixtures.msf_bytes(_APP_GUID, dbi_age=2))
+        destination = self.tmp / "stale"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL   frost_app.dll:", result.stdout)
+        self.assertIn("the symbol archive failed", result.stdout)
+        self.assertFalse((self.tmp / "stale-symbols.zip").exists())
 
     def test_the_staged_folder_holds_frost_qt_and_the_platform_plugin(self) -> None:
         build = self._fake_build()

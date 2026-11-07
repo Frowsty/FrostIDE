@@ -66,7 +66,9 @@ constexpr std::array kEntries{
     Entry{settings::key::editorTabSize.name, 2},
     Entry{settings::key::editorIndentSize.name, 2},
     Entry{settings::key::editorInsertSpaces.name, 2},
-    Entry{settings::key::editorDetectIndentation.name, 2},
+    // editor.detectIndentation is not shown: FrostIDE has no indentation detector yet, so the
+    // toggle would change nothing.
+    // TODO(M2): show it again with an indentation detector (editor essentials).
     Entry{settings::key::editorTrimTrailingWhitespace.name, 2},
     Entry{settings::key::editorEditorConfig.name, 2},
     Entry{settings::key::filesEncoding.name, 3},

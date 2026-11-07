@@ -88,10 +88,11 @@ inactiveRangesFromTokens(std::span<const ::frost::lang::SemanticToken> tokens);
 toUsageHighlights(std::span<const ::frost::lang::DocumentHighlight> highlights, const text::Snapshot& snapshot,
                   ::frost::lang::PositionEncoding encoding);
 // LSP inlayHint results mapped to byte offsets of `snapshot`.
-[[nodiscard]] std::vector<EditorInlayHint>
-toEditorInlayHints(std::span<const ::frost::lang::LspInlayHint> hints, const text::Snapshot& snapshot,
-                   ::frost::lang::PositionEncoding encoding);
-// Code Vision lenses (usages, implementations, and optional Git author) for classes/structs/methods.
+[[nodiscard]] std::vector<EditorInlayHint> toEditorInlayHints(std::span<const ::frost::lang::LspInlayHint> hints,
+                                                              const text::Snapshot& snapshot,
+                                                              ::frost::lang::PositionEncoding encoding);
+// Code Vision lenses for top-level classes, structs and functions: the Git author of the
+// declaration line (authorForLine; none without it). Counts arrive with CPP-9 (see the .cpp).
 [[nodiscard]] std::vector<EditorCodeVisionLens>
 toCodeVisionLenses(std::span<const ::frost::lang::DocumentSymbol> symbols, const text::Snapshot& snapshot,
                    ::frost::lang::PositionEncoding encoding,

@@ -5,10 +5,10 @@
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "frost/io/path.hpp"
+#include "frost/ui/icon_ids.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 
 #include "tool_icons.hpp"
-#include "frost/ui/icon_ids.hpp"
 #include <QButtonGroup>
 #include <QFrame>
 #include <QHBoxLayout>

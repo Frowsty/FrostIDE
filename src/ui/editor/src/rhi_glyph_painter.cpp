@@ -506,13 +506,19 @@ bool RhiGlyphPainter::addText(const DisplayText& run, bool dropWhenFull) {
 }
 
 bool RhiGlyphPainter::addMarker(const DisplayMarker& marker, bool dropWhenFull) {
-    // The raster backend fills an antialiased ellipse in the marker's rectangle: the same shape.
-    const auto& [rect, color, severity [[maybe_unused]], line [[maybe_unused]]] = marker;
-    DisplayShape disc;
-    disc.kind = DisplayShape::Kind::Ellipse;
-    disc.rect = rect;
-    disc.fill = color;
-    return addShape(disc, dropWhenFull);
+    // The raster backend's shapes: a run marker (tests, entry points) is a right-pointing play
+    // triangle in the marker's rectangle, every other marker an antialiased ellipse.
+    const auto& [rect, color, severity, line [[maybe_unused]]] = marker;
+    DisplayShape shape;
+    shape.fill = color;
+    if (severity == MarkerSeverity::RunTest) {
+        shape.kind = DisplayShape::Kind::Polygon;
+        shape.points = QPolygonF({rect.topLeft(), QPointF(rect.right(), rect.center().y()), rect.bottomLeft()});
+    } else {
+        shape.kind = DisplayShape::Kind::Ellipse;
+        shape.rect = rect;
+    }
+    return addShape(shape, dropWhenFull);
 }
 
 bool RhiGlyphPainter::addCell(const AtlasEntry* cell, QPoint origin, const QColor& color, bool dropWhenFull) {

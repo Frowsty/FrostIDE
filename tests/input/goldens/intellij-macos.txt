@@ -147,7 +147,6 @@ window.run = Meta+Digit4
 window.debug = Meta+Digit5
 window.problems = Meta+Digit6
 window.structure = Meta+Digit7
-window.services = Meta+Digit8
 window.git = Meta+Digit9
 window.commit = Meta+Digit0
 window.terminal = Alt+F12

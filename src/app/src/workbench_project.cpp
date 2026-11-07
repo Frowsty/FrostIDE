@@ -2,7 +2,8 @@
 //
 // Workbench (frost/app/workbench.hpp), the project side: opening solutions, folders and files,
 // closing the project, the last project at start-up, the recent-projects list, and clangd (start
-// on solutionCompileCommandsChain, restart on a configuration switch, document sync, live
+// on solutionCompileCommandsChain, one start per project open (FND-9a), restart on a
+// configuration switch or a moved CMake database, document sync, live
 // diagnostics in Problems and the editors, the "clangd: indexing" background task).
 
 #include "frost/app/workbench.hpp"
@@ -22,6 +23,7 @@
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
@@ -42,11 +44,13 @@
 #include <QInputDialog>
 #include <QMimeData>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <format>
 #include <functional>
 #include <limits>
@@ -67,6 +71,28 @@ sched::Task<void> stopOwnedClangd(std::shared_ptr<lang::ClangdService> service, 
 sched::Task<void> stopOwnedProjectEvaluation(std::shared_ptr<lang::IndependentProjectEvaluation> service) {
     service->stopAndJoin();
     co_return;
+}
+
+// Suffix of cmakeClangdState when the active build directory holds compile_commands.json.
+constexpr std::string_view kCMakeDatabasePresent = "|database";
+
+/*
+ * Where a CMake folder's clangd would read its compile commands right now, as
+ * BuildDirectoryCompileCommandsProvider resolves them at clangd's start: the active profile's build
+ * directory and whether compile_commands.json is there ("" when there is no active profile). Two
+ * equal states give clangd the same --compile-commands-dir, so no restart is needed: clangd reloads
+ * a database that changes in place. One stat, on the UI thread.
+ */
+std::string cmakeClangdState(io::IFileSystem& fs, const build::CMakeService& service) {
+    std::string directory = service.activeBuildDirectory();
+    if (directory.empty())
+        return {};
+    bool present = false;
+    if (auto database = io::joinPath(directory, "compile_commands.json")) {
+        auto status = fs.status(*database);
+        present = status && status->type == io::FileType::Regular;
+    }
+    return directory + std::string(present ? kCMakeDatabasePresent : std::string_view("|none"));
 }
 
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
@@ -584,8 +610,12 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             *m_window, *m_runConsole, m_options.cmakeStatePath, [this] { m_runController->alternateStateChanged(); },
             [this](const std::string& file) { (void)openPath(file); },
             [this] {
-                if (m_cmake && m_clangd)
-                    restartClangd();
+                // FND-9a: the open's own model publication (and a configure that leaves the
+                // database where clangd already reads it) must not spawn a second clangd.
+                if (m_cmake && !m_clangdDeferredRoot.empty())
+                    resumeDeferredClangd();
+                else if (m_cmake && m_clangd)
+                    restartClangdIfCMakeStateChanged();
             });
         if (auto opened = m_cmake->open(path); !opened) {
             m_cmake.reset();
@@ -615,7 +645,26 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
         if (!m_cmake)
             m_window->toolWindows().show(ui::kFileSystemToolWindow, false);
     }
-    startClangd(path);
+    /*
+     * FND-9a: resolve where clangd's compile commands come from before starting it, so an open
+     * spawns one clangd. A trusted CMake folder whose configure-on-open is still producing its first
+     * compile_commands.json starts clangd when that configure ends (resumeDeferredClangd), instead
+     * of starting now without a database and restarting when it appears. With a database already in
+     * the active build directory, clangd starts now and the configure's model does not restart it.
+     */
+    if (m_options.clangd && m_cmake && m_cmake->service().state() != build::BuildState::Idle &&
+        !cmakeClangdState(m_services.fs, m_cmake->service()).ends_with(kCMakeDatabasePresent)) {
+        stopClangd();
+        m_clangdDeferredRoot = path;
+        m_clangdDeferral =
+            connect(m_build.get(), &ui::BuildController::stateChanged, this, [this](build::BuildState state) {
+                if (state == build::BuildState::Idle)
+                    resumeDeferredClangd(true);
+            });
+        log::info(kLog, "clangd waits for the CMake configure of {}", path);
+    } else {
+        startClangd(path);
+    }
     startLua(path);
     startManaged(path);
     offerProjectTrust();
@@ -678,8 +727,21 @@ void Workbench::offerProjectTrust() {
             if (m_clangd) {
                 restartClangd();
             }
-        } else if (m_cmake && m_cmake->service().state() == build::BuildState::Idle && !m_cmake->service().model()) {
-            (void)m_cmake->service().configure();
+        } else if (m_cmake) {
+            /* While a configure the grant resumed is running, nothing happens here: its model
+             * publication restarts clangd once, trusted, on the database it writes, and the trust
+             * watch covers an operation that publishes none once the service is idle (FND-9a: no
+             * restart in between). */
+            if (m_cmake->service().state() == build::BuildState::Idle) {
+                if (!m_cmake->service().model()) {
+                    // The configure's model publication restarts clangd if the database or trust moved.
+                    (void)m_cmake->service().configure();
+                } else {
+                    // A clangd started restricted on an existing database restarts trusted (.clangd,
+                    // --query-driver); without a running clangd this does nothing.
+                    restartClangdIfCMakeStateChanged();
+                }
+            }
         }
         m_luaObservedTrust = true;
         startLua(root);
@@ -711,8 +773,7 @@ void Workbench::offerProjectTrust() {
             if (win && win->isVisible()) {
                 const QSize hint = dialog->sizeHint().expandedTo(dialog->minimumSize());
                 const QRect parentFrame = win->frameGeometry();
-                dialog->move(parentFrame.center().x() - hint.width() / 2,
-                             parentFrame.center().y() - hint.height() / 2);
+                dialog->move(parentFrame.center().x() - hint.width() / 2, parentFrame.center().y() - hint.height() / 2);
             }
             dialog->show();
             dialog->raise();
@@ -1425,17 +1486,9 @@ Result<std::string> Workbench::createNewProjectSource(std::string_view projectPa
     if (!created) {
         return created;
     }
-    if (!m_options.projectEditHostPath.empty()) {
-        removeProjectFile(qs(canonicalProject), qs(*created), true);
-    } else {
-        const std::array<std::string, 1> files{*created};
-        (void)addExistingFilesToVcxproj(m_services.fs, canonicalProject, files);
-        refreshSolutionExplorerForFsChange(*created);
-        startProjectEvaluation(m_projectRoot);
-        if (m_clangd) {
-            restartClangd();
-        }
-    }
+    // Membership goes through the ProjectHost helper only (SLN-1, FND-3); its failures, including a
+    // missing helper, arrive as notifications while the new file stays on disk.
+    removeProjectFile(qs(canonicalProject), qs(*created), true);
     return created;
 }
 
@@ -1697,9 +1750,8 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
                 names.push_back(qs(p->name));
             }
             bool ok = false;
-            const QString chosen =
-                QInputDialog::getItem(m_window, text("Add to Project"), text("Select target C++ project:"), names, 0,
-                                      false, &ok);
+            const QString chosen = QInputDialog::getItem(m_window, text("Add to Project"),
+                                                         text("Select target C++ project:"), names, 0, false, &ok);
             if (!ok || chosen.isEmpty()) {
                 return;
             }
@@ -1712,6 +1764,13 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
         if (targetVcxproj.empty()) {
             return;
         }
+        // One regular C/C++ file is the edit ProjectHost supports; anything else is refused (SLN-6).
+        if (paths.size() == 1 && targetFilterPath.empty()) {
+            if (const auto st = m_services.fs.status(paths.front()); st && st->type == io::FileType::Regular) {
+                removeProjectFile(qs(targetVcxproj), qs(paths.front()), true);
+                return;
+            }
+        }
         auto added = addExistingFilesToVcxproj(m_services.fs, targetVcxproj, paths, targetFilterPath);
         if (!added) {
             notify(text("Add to Project"), qs(added.error().message()), ui::NotificationKind::Error);
@@ -1722,8 +1781,7 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
         if (m_clangd) {
             restartClangd();
         }
-        notify(text("Added to Project"),
-               text("Added %1 file(s) to %2.").arg(*added).arg(qs(targetProjName)),
+        notify(text("Added to Project"), text("Added %1 file(s) to %2.").arg(*added).arg(qs(targetProjName)),
                ui::NotificationKind::Info);
         return;
     }
@@ -2255,10 +2313,9 @@ Result<void> copyFileOrDirectoryRecursiveFs(io::IFileSystem& fs, const std::stri
     return {};
 }
 
-std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& targetDirectory,
-                                     std::string_view fileName, bool isDirectory) {
-    if (auto direct = io::joinPath(targetDirectory, fileName);
-        direct && !fs.exists(*direct).value_or(false)) {
+std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& targetDirectory, std::string_view fileName,
+                                     bool isDirectory) {
+    if (auto direct = io::joinPath(targetDirectory, fileName); direct && !fs.exists(*direct).value_or(false)) {
         return *direct;
     }
     std::string stem(fileName);
@@ -2272,8 +2329,7 @@ std::string findNonCollidingCopyPath(io::IFileSystem& fs, const std::string& tar
     for (int idx = 1; idx < 1000; ++idx) {
         const std::string candidateName =
             idx == 1 ? std::format("{}_copy{}", stem, ext) : std::format("{}_copy{}{}", stem, idx, ext);
-        if (auto joined = io::joinPath(targetDirectory, candidateName);
-            joined && !fs.exists(*joined).value_or(false)) {
+        if (auto joined = io::joinPath(targetDirectory, candidateName); joined && !fs.exists(*joined).value_or(false)) {
             return *joined;
         }
     }
@@ -2311,8 +2367,7 @@ void Workbench::cutPathsToClipboard(const std::vector<std::string>& paths) {
 }
 
 void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths,
-                                             const std::string& targetDirectory,
-                                             const std::string& projectPath) {
+                                             const std::string& targetDirectory, const std::string& projectPath) {
     if (sourcePaths.empty() || targetDirectory.empty()) {
         return;
     }
@@ -2347,8 +2402,7 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
             const std::string targetKey = lang::documentKey(canonicalTargetDir);
             if (targetKey == oldKey ||
                 (targetKey.starts_with(oldKey) && targetKey.size() > oldKey.size() &&
-                 (canonicalTargetDir[canonicalOld.size()] == '/' ||
-                  canonicalTargetDir[canonicalOld.size()] == '\\'))) {
+                 (canonicalTargetDir[canonicalOld.size()] == '/' || canonicalTargetDir[canonicalOld.size()] == '\\'))) {
                 notify(text("Cannot move folder"), text("Cannot move a folder into itself."),
                        ui::NotificationKind::Warning);
                 continue;
@@ -2408,7 +2462,10 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
         return;
     }
     if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
-        (void)addExistingFilesToVcxproj(m_services.fs, projectPath, movedFiles);
+        if (auto added = addExistingFilesToVcxproj(m_services.fs, projectPath, movedFiles); !added) {
+            notify(text("Moved files were not added to %1").arg(qs(io::fileName(projectPath))),
+                   qs(added.error().message()), ui::NotificationKind::Warning);
+        }
     }
     if (m_nav) {
         m_nav->refresh();
@@ -2446,8 +2503,7 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
             continue;
         }
         const bool isDir = st->type == io::FileType::Directory;
-        const std::string dst =
-            findNonCollidingCopyPath(m_services.fs, canonicalTargetDir, io::fileName(src), isDir);
+        const std::string dst = findNonCollidingCopyPath(m_services.fs, canonicalTargetDir, io::fileName(src), isDir);
         if (dst.empty()) {
             continue;
         }
@@ -2463,7 +2519,11 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
         return;
     }
     if (!targetProjectPath.empty() && targetProjectPath.ends_with(".vcxproj")) {
-        (void)addExistingFilesToVcxproj(m_services.fs, targetProjectPath, createdPaths, targetFilterPath);
+        if (auto added = addExistingFilesToVcxproj(m_services.fs, targetProjectPath, createdPaths, targetFilterPath);
+            !added) {
+            notify(text("Pasted files were not added to %1").arg(qs(io::fileName(targetProjectPath))),
+                   qs(added.error().message()), ui::NotificationKind::Warning);
+        }
     }
     if (m_nav) {
         m_nav->refresh();
@@ -2480,8 +2540,8 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
     }
 }
 
-void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory,
-                                        const std::string& projectPath, const std::string& filterPath) {
+void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory, const std::string& projectPath,
+                                        const std::string& filterPath) {
     if (sourcePath.empty()) {
         return;
     }
@@ -2521,8 +2581,7 @@ void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDi
         return;
     }
     if (m_services.fs.exists(*dstJoined).value_or(false)) {
-        notify(text("Cannot duplicate"), text("'%1' already exists.").arg(qs(chosenName)),
-               ui::NotificationKind::Error);
+        notify(text("Cannot duplicate"), text("'%1' already exists.").arg(qs(chosenName)), ui::NotificationKind::Error);
         return;
     }
     if (auto copied = copyFileOrDirectoryRecursiveFs(m_services.fs, canonicalSrc, *dstJoined); !copied) {
@@ -2531,8 +2590,11 @@ void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDi
     }
     const std::string canonicalDst = m_documentRegistry->canonicalize(*dstJoined);
     if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
-        const std::array<std::string, 1> added{canonicalDst};
-        (void)addExistingFilesToVcxproj(m_services.fs, projectPath, added, filterPath);
+        const std::array<std::string, 1> duplicate{canonicalDst};
+        if (auto added = addExistingFilesToVcxproj(m_services.fs, projectPath, duplicate, filterPath); !added) {
+            notify(text("The copy was not added to %1").arg(qs(io::fileName(projectPath))), qs(added.error().message()),
+                   ui::NotificationKind::Warning);
+        }
     }
     if (m_nav) {
         m_nav->refresh();
@@ -2637,6 +2699,7 @@ void Workbench::startClangd(const std::string& root) {
         }
     }
     if (m_cmake) {
+        m_clangdCMakeState = cmakeClangdState(m_services.fs, m_cmake->service());
         std::weak_ptr<build::CMakeService> service = m_cmake->sharedService();
         m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(m_services.fs, [service] {
             const auto current = service.lock();
@@ -2682,6 +2745,9 @@ void Workbench::startClangd(const std::string& root) {
     options.clangdPath = found->path;
     options.workspaceRoot = root;
     options.launch.jobs = m_options.clangdJobs;
+    // Restricted mode (no project config, default limits) unless the root is trusted (clangd.hpp).
+    options.launch.trusted = m_services.trust.isTrusted(root);
+    m_clangdTrusted = options.launch.trusted;
     options.compileCommands = m_compileCommands;
     const auto generation = m_clangdGeneration;
     // The owned server supervisors are joined before Workbench's QObject base is destroyed;
@@ -2739,12 +2805,55 @@ void Workbench::startClangd(const std::string& root) {
 void Workbench::restartClangd() {
     // A configuration switch: other flags, so another database (the chain regenerates it).
     if (hasProject()) {
-        log::info(kLog, "the solution configuration changed: clangd restarts");
+        log::info(kLog, "the configuration or trust of the project changed: clangd restarts");
         startClangd(m_projectRoot);
     }
 }
 
+void Workbench::restartClangdIfCMakeStateChanged() {
+    if (!m_cmake || !m_clangd)
+        return;
+    const std::string state = cmakeClangdState(m_services.fs, m_cmake->service());
+    const bool trusted = m_services.trust.isTrusted(m_projectRoot);
+    if (state == m_clangdCMakeState && trusted == m_clangdTrusted) {
+        // Same build directory, database present or absent as before, same trust: clangd already
+        // reads it with the right launch flags.
+        log::info(kLog, "the CMake model changed; clangd's compile commands did not, so it keeps running");
+        return;
+    }
+    if (trusted != m_clangdTrusted)
+        log::info(kLog, "the project's trust changed ({} -> {}): clangd restarts with the new launch flags",
+                  m_clangdTrusted, trusted);
+    else
+        log::info(kLog, "the CMake compile commands moved ({} -> {}): clangd restarts", m_clangdCMakeState, state);
+    restartClangd();
+}
+
+void Workbench::resumeDeferredClangd(bool retryUntilIdle) {
+    if (m_clangdDeferredRoot.empty())
+        return;
+    if (m_shutDown || !m_cmake || m_clangdDeferredRoot != m_projectRoot) {
+        m_clangdDeferredRoot.clear();
+        QObject::disconnect(m_clangdDeferral);
+        return;
+    }
+    if (m_cmake->service().state() != build::BuildState::Idle) {
+        // The controller can report Idle (or the model) just before the service's own state does.
+        if (retryUntilIdle)
+            QTimer::singleShot(std::chrono::milliseconds(50), this, [this] { resumeDeferredClangd(true); });
+        return;
+    }
+    const std::string root = std::exchange(m_clangdDeferredRoot, {});
+    QObject::disconnect(m_clangdDeferral);
+    log::info(kLog, "the CMake configure of {} ended: clangd starts", root);
+    startClangd(root);
+}
+
 void Workbench::stopClangd() {
+    m_clangdDeferredRoot.clear();
+    QObject::disconnect(m_clangdDeferral);
+    m_clangdCMakeState.clear();
+    m_clangdTrusted = false;
     ++m_clangdGeneration;
     std::erase_if(m_retiredClangd, [](auto& stopped) {
         if (!stopped.ready())

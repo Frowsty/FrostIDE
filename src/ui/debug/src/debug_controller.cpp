@@ -328,7 +328,8 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
     const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
     if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "another run or debug launch is already pending");
-    const std::string_view typeView = attachArguments.isObject() ? attachArguments.stringAt("type") : std::string_view{};
+    const std::string_view typeView =
+        attachArguments.isObject() ? attachArguments.stringAt("type") : std::string_view{};
     const std::string adapterId = !typeView.empty() ? std::string(typeView) : std::string("lldb-dap");
     const std::string displayAdapter =
         adapterId == "coreclr" ? "CoreCLR" : (!typeView.empty() ? adapterId : std::string("Lua"));
@@ -925,27 +926,27 @@ void DebugController::variables(std::int64_t reference, std::int64_t start, std:
     }
     const std::shared_ptr<Relay> relay = m_relay;
     const std::uint64_t generation = m_generation;
-    m_session->variables(reference, start, count,
-                         [relay, generation, done = std::move(done)](Result<debug::VariableList> list) {
-                             relay->post(generation, [done, list = std::move(list)](DebugController* self) {
-                                 if (list && self->paused()) {
-                                     for (const debug::dap::Variable& var : *list) {
-                                         if (var.name.empty() || var.value.empty()) {
-                                             continue;
-                                         }
-                                         const auto existing = std::ranges::find(
-                                             self->m_currentFrameVariables, var.name, &debug::dap::Variable::name);
-                                         if (existing == self->m_currentFrameVariables.end()) {
-                                             self->m_currentFrameVariables.push_back(var);
-                                         } else {
-                                             *existing = var;
-                                         }
-                                     }
-                                     self->refreshInlineDebuggerValues();
-                                 }
-                                 done(list);
-                             });
-                         });
+    m_session->variables(
+        reference, start, count, [relay, generation, done = std::move(done)](Result<debug::VariableList> list) {
+            relay->post(generation, [done, list = std::move(list)](DebugController* self) {
+                if (list && self->paused()) {
+                    for (const debug::dap::Variable& var : *list) {
+                        if (var.name.empty() || var.value.empty()) {
+                            continue;
+                        }
+                        const auto existing =
+                            std::ranges::find(self->m_currentFrameVariables, var.name, &debug::dap::Variable::name);
+                        if (existing == self->m_currentFrameVariables.end()) {
+                            self->m_currentFrameVariables.push_back(var);
+                        } else {
+                            *existing = var;
+                        }
+                    }
+                    self->refreshInlineDebuggerValues();
+                }
+                done(list);
+            });
+        });
 }
 
 void DebugController::evaluate(const QString& expression, const QString& context, EvaluateDone done) {
@@ -1144,8 +1145,7 @@ void DebugController::attachEditor(EditorView* view) {
     }));
     attached->connections.push_back(connect(view, &QObject::destroyed, this, [this, view] { m_editors.erase(view); }));
     view->setBreakpointGutterEnabled(true);
-    view->setDebugHoverProvider(
-        [this](std::string_view expr, LineIndex line) { return debugHoverFor(expr, line); });
+    view->setDebugHoverProvider([this](std::string_view expr, LineIndex line) { return debugHoverFor(expr, line); });
     m_editors.emplace(view, std::move(attached));
     refreshMarkers(*view);
     showExecutionPoint();
@@ -1273,9 +1273,8 @@ void DebugController::refreshInlineDebuggerValues() {
             attached->view->setInlineDebuggerValues({});
             continue;
         }
-        const std::uint32_t stoppedLine =
-            std::min<std::uint32_t>(static_cast<std::uint32_t>(std::max<std::int64_t>(1, m_frame->line) - 1),
-                                    lineCount - 1);
+        const std::uint32_t stoppedLine = std::min<std::uint32_t>(
+            static_cast<std::uint32_t>(std::max<std::int64_t>(1, m_frame->line) - 1), lineCount - 1);
         const std::uint32_t firstLine = stoppedLine > 40 ? stoppedLine - 40 : 0;
         const std::uint32_t lastLine = std::min<std::uint32_t>(stoppedLine + 2, lineCount - 1);
         std::vector<EditorInlineValue> inlineValues;
@@ -1372,9 +1371,9 @@ QString DebugController::debugHoverFor(std::string_view expression, LineIndex) {
                  if (!res || res->value.empty()) {
                      return;
                  }
-                 const std::string formatted =
-                     !res->type.empty() ? std::format("{} ({}) = {}", exprStr, res->type, res->value)
-                                        : std::format("{} = {}", exprStr, res->value);
+                 const std::string formatted = !res->type.empty()
+                                                   ? std::format("{} ({}) = {}", exprStr, res->type, res->value)
+                                                   : std::format("{} = {}", exprStr, res->value);
                  m_hoverCache[exprStr] = formatted;
              });
     return {};

@@ -99,9 +99,8 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
 
     const auto hasEntryWithSuffix = [](const QDir& dir, QStringView ext) {
         const auto entries = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
-        return std::ranges::any_of(entries, [&](const QFileInfo& entry) {
-            return entry.suffix().compare(ext, Qt::CaseInsensitive) == 0;
-        });
+        return std::ranges::any_of(
+            entries, [&](const QFileInfo& entry) { return entry.suffix().compare(ext, Qt::CaseInsensitive) == 0; });
     };
 
     // Pass 1: Explicit FrostEngine project root (.frostproj file or .frost directory).
@@ -125,9 +124,8 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
     for (const auto& ancestor : chain) {
         const QDir dir(ancestor.path);
         if (QFileInfo(dir.filePath(QStringLiteral(".luarc.json"))).isFile() ||
-            QFileInfo(dir.filePath(QStringLiteral("ProjectSettings"))).isDir() ||
-            hasEntryWithSuffix(dir, u"sln") || hasEntryWithSuffix(dir, u"slnx") ||
-            QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile()) {
+            QFileInfo(dir.filePath(QStringLiteral("ProjectSettings"))).isDir() || hasEntryWithSuffix(dir, u"sln") ||
+            hasEntryWithSuffix(dir, u"slnx") || QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile()) {
             if (auto root = externalProjectRoot(utf8(ancestor.path)))
                 return *root;
         }

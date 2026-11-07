@@ -1,9 +1,18 @@
-# FrostIDE — 1:1 JetBrains Rider Parity Backlog
+# FrostIDE: Rider parity backlog (superseded)
 
-This file tracks all remaining features required for complete 1:1 JetBrains Rider parity.
-**Workflow Rule**: As each item or sub-feature is completed, verified, and committed, **delete it from this file**.
+This file used to say that every Rider parity item was done. That was wrong. An audit of the code on
+2026-11-07 ([ADR 0077](docs/adr/0077-parity-roadmap-v2.md)) showed what the claim covered:
+- **Fabricated results.** Some features showed results that no tool produced.
+- **Unproved rows.** Only 1 of the 191 feature-matrix rows had an acceptance test.
 
----
+**Where the backlog lives now:**
+- **Plan.** [PLAN.md](PLAN.md), section 7 "Roadmap v2", sets the order: C++ (MSVC and CMake), then Lua, then
+  FrostEngine, then the later tiers.
+- **Epics.** PLAN.md Appendix C lists every epic, with acceptance tests that run real tools.
+- **Evidence.** [`tests/features/matrix.json`](tests/features/matrix.json) records each row's status and the
+  epics that deliver it. `tools/featurecheck.py` checks it.
+- **Harm removal.** The harm register in [docs/progress.md](docs/progress.md) tracks each fabricated feature
+  until it is removed or guarded (FND-3).
 
-All 8 major JetBrains Rider 1:1 parity backlog items have been completed, verified, and committed.
-
+Parity is measured only by green matrix rows, each proved by an acceptance test against a real tool
+([ADR 0078](docs/adr/0078-definition-of-done-v2.md)).

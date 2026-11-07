@@ -8,10 +8,14 @@
 #                      completion models (ADR 0041: completion, fuzzy matching, snippets, signature
 #                      help, hover, go to, usages, symbols, rename, quick fixes, formatting) against the
 #                      fake server, workspace edits, and the MSBuild provider with a scripted launcher;
-#                      semantic tokens and inactive regions (ADR 0047); label "unit";
+#                      semantic tokens and inactive regions (ADR 0047); clangd's tweak and
+#                      include-cleaner actions by name (FND-3); label "unit";
 #   lang_clangd_tests  the real clangd (the pinned LLVM's) end to end on tiny fixtures: a CMake-style
 #                      compile_commands.json, the synthesized one for a .vcxproj, a restart after a
-#                      killed clangd, and semantic tokens and an inactive region (ADR 0047); label
+#                      killed clangd, semantic tokens and an inactive region (ADR 0047), the
+#                      refactoring tweaks and include cleaner with compiling results (FND-3), and
+#                      LSP 3.17 positionEncodings negotiation with columns on a non-ASCII line
+#                      (FND-9a); label
 #                      "integration" (it starts real clangd processes, so RESOURCE_LOCK frost_desktop;
 #                      ADR 0027) with the tag "clangd" (ctest -L clangd).
 #                      Each test takes a second or two;
@@ -24,6 +28,7 @@
 
 frost_add_test(lang_unit_tests
     SOURCES
+        clangd_actions_test.cpp
         compile_commands_test.cpp
         completion_test.cpp
         clangd_locator_test.cpp
@@ -52,6 +57,7 @@ add_dependencies(lang_unit_tests engine_discovery_stall_child)
 frost_add_test(lang_clangd_tests
     SOURCES
         clangd_test.cpp
+        clangd_encoding_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(lang_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

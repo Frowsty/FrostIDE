@@ -299,9 +299,14 @@ class ChoicePopup final : public QFrame {
 
 public:
     explicit ChoicePopup(QWidget* parent = nullptr);
-    // Shows `choices` below `anchor`; `preferred` rows get a marker.
+    /*
+     * Shows `choices` below `anchor`; `preferred` rows get a marker. A row with a non-empty
+     * `disabledReasons` entry is shown greyed out with the reason as its tooltip (the epic that owns
+     * the missing engine, ADR 0078) and can be neither selected nor chosen; the first enabled row
+     * starts current.
+     */
     void start(const QString& title, const std::vector<QString>& choices, const QRect& anchor,
-               std::vector<bool> preferred = {});
+               std::vector<bool> preferred = {}, std::vector<QString> disabledReasons = {});
     [[nodiscard]] QListWidget* list() const noexcept { return m_list; }
 
 signals:

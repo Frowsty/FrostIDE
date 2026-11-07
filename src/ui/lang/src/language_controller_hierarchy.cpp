@@ -215,8 +215,7 @@ sched::Task<Result<HierarchyQueryResult>> runTypeHierarchyTask(fl::ILspRequester
 }
 
 sched::Task<Result<std::vector<fl::Location>>> runQuickDefinitionTask(fl::ILspRequester& server, std::string path,
-                                                                      fl::LspPosition position,
-                                                                      std::stop_token token) {
+                                                                      fl::LspPosition position, std::stop_token token) {
     auto defs = co_await fl::requestLocations(server, fl::NavigationTarget::Definition, path, position, token);
     if (defs && !defs->empty()) {
         co_return defs;
@@ -225,8 +224,7 @@ sched::Task<Result<std::vector<fl::Location>>> runQuickDefinitionTask(fl::ILspRe
 }
 
 sched::Task<Result<std::vector<fl::Location>>> runGotoSuperMethodTask(fl::ILspRequester& server, std::string path,
-                                                                      fl::LspPosition position,
-                                                                      std::stop_token token) {
+                                                                      fl::LspPosition position, std::stop_token token) {
     if (auto prepared = co_await fl::requestPrepareTypeHierarchy(server, path, position, token);
         prepared && !prepared->empty()) {
         if (auto supers = co_await fl::requestSupertypes(server, prepared->front(), token);

@@ -131,8 +131,7 @@ void syncWin32LauncherDarkFrame(QWidget* window) {
 // and "Recent Solutions & Projects") so list boxes have smooth rounded corners and a frosted glass interior.
 class FrostedListBoxCard final : public QFrame {
 public:
-    explicit FrostedListBoxCard(QWidget* parent = nullptr, qreal radius = 10.0)
-        : QFrame(parent), m_radius(radius) {
+    explicit FrostedListBoxCard(QWidget* parent = nullptr, qreal radius = 10.0) : QFrame(parent), m_radius(radius) {
         setFrameShape(QFrame::NoFrame);
         setAttribute(Qt::WA_OpaquePaintEvent, false);
     }
@@ -258,8 +257,9 @@ public:
         f.setWeight(selected ? QFont::DemiBold : QFont::Medium);
         painter->setFont(f);
         const QColor textCol =
-            selected ? themeColor(ui::ColorKey::ListSelectionForeground, option.palette.color(QPalette::HighlightedText))
-                     : themeColor(ui::ColorKey::LabelForeground, option.palette.color(QPalette::Text));
+            selected
+                ? themeColor(ui::ColorKey::ListSelectionForeground, option.palette.color(QPalette::HighlightedText))
+                : themeColor(ui::ColorKey::LabelForeground, option.palette.color(QPalette::Text));
         painter->setPen(textCol);
         const QRectF textRect = pill.adjusted(14.0, 0.0, -8.0, 0.0);
         painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
@@ -317,8 +317,8 @@ protected:
         paintLauncherEllipticalGlow(&painter, QPointF(w * 0.20, 42.0), w * 0.38, 130.0, QColor(0x21, 0xD4, 0xFD),
                                     dark ? 18 : 10);
         // Soft violet/indigo ambient glow at bottom-right
-        paintLauncherEllipticalGlow(&painter, QPointF(w * 0.82, h * 0.86), w * 0.50, h * 0.45,
-                                    QColor(0x7C, 0x4D, 0xFF), dark ? 22 : 11);
+        paintLauncherEllipticalGlow(&painter, QPointF(w * 0.82, h * 0.86), w * 0.50, h * 0.45, QColor(0x7C, 0x4D, 0xFF),
+                                    dark ? 22 : 11);
     }
 };
 
@@ -445,13 +445,12 @@ public:
             QColor restFill = dark ? QColor(255, 255, 255, 7) : QColor(0, 0, 0, 6);
             painter->fillPath(rowClip, restFill);
             paintLauncherEllipticalGlow(painter, QPointF(cardRect.left() + 26.0, cardRect.center().y()),
-                                        cardRect.width() * 0.32, cardRect.height() * 1.6, avatarColor,
-                                        dark ? 20 : 10);
+                                        cardRect.width() * 0.32, cardRect.height() * 1.6, avatarColor, dark ? 20 : 10);
         }
         painter->restore();
 
-        QColor cardBorder =
-            selected ? avatarColor.lighter(130) : (dark ? QColor(255, 255, 255, hovered ? 32 : 14) : QColor(0, 0, 0, 22));
+        QColor cardBorder = selected ? avatarColor.lighter(130)
+                                     : (dark ? QColor(255, 255, 255, hovered ? 32 : 14) : QColor(0, 0, 0, 22));
         if (selected) {
             cardBorder.setAlpha(dark ? 115 : 85);
         }
@@ -488,7 +487,8 @@ public:
             const QRectF badgeRect(rect.right() - bw - 10, rect.top() + (rect.height() - bh) / 2.0, bw, bh);
             QColor pillFill = avatarColor;
             pillFill.setAlpha(dark ? 48 : 34);
-            painter->setPen(QPen(QColor(avatarColor.red(), avatarColor.green(), avatarColor.blue(), dark ? 95 : 70), 1.0));
+            painter->setPen(
+                QPen(QColor(avatarColor.red(), avatarColor.green(), avatarColor.blue(), dark ? 95 : 70), 1.0));
             painter->setBrush(pillFill);
             painter->drawRoundedRect(badgeRect, 5.0, 5.0);
             painter->setPen(option.palette.color(QPalette::Text));
@@ -584,8 +584,8 @@ protected:
         const qreal h = std::max(1, height());
         paintLauncherEllipticalGlow(&painter, QPointF(32.0, h * 0.5), w * 0.35, h * 3.0, QColor(0x21, 0xD4, 0xFD),
                                     dark ? 26 : 14);
-        paintLauncherEllipticalGlow(&painter, QPointF(w * 0.48, -h * 0.2), w * 0.45, h * 2.6,
-                                    QColor(0x35, 0x74, 0xF0), dark ? 18 : 10);
+        paintLauncherEllipticalGlow(&painter, QPointF(w * 0.48, -h * 0.2), w * 0.45, h * 2.6, QColor(0x35, 0x74, 0xF0),
+                                    dark ? 18 : 10);
         painter.fillRect(QRect(0, 0, width(), 1), dark ? QColor(255, 255, 255, 16) : QColor(255, 255, 255, 110));
         painter.fillRect(QRect(0, height() - 1, width(), 1), sep);
     }
@@ -679,8 +679,7 @@ WelcomeScreen::WelcomeScreen(QWidget* parent) : QWidget(parent) {
     sidebarLayout->addWidget(navCard);
     sidebarLayout->addStretch(1);
 
-    m_updateStatus =
-        new QLabel(text("FrostIDE %1 • Ready").arg(QString::fromUtf8(build_info::kVersion)), sidebar);
+    m_updateStatus = new QLabel(text("FrostIDE %1 • Ready").arg(QString::fromUtf8(build_info::kVersion)), sidebar);
     m_updateStatus->setObjectName(QStringLiteral("welcomeUpdateStatus"));
     m_updateStatus->setWordWrap(true);
     m_updateStatus->setFont(verFont);
@@ -1090,9 +1089,8 @@ void LauncherWindow::closeEvent(QCloseEvent* event) {
 
 bool LauncherWindow::eventFilter(QObject* watched, QEvent* event) {
 #ifdef _WIN32
-    if (watched == this &&
-        (event->type() == QEvent::Show || event->type() == QEvent::PaletteChange ||
-         event->type() == QEvent::StyleChange)) {
+    if (watched == this && (event->type() == QEvent::Show || event->type() == QEvent::PaletteChange ||
+                            event->type() == QEvent::StyleChange)) {
         syncWin32LauncherDarkFrame(this);
     }
 #endif

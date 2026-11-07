@@ -40,13 +40,19 @@
 
 namespace frost::app::test {
 
-// Processes events until `done` or `timeout` passes; returns done().
+// Processes events until `done` or `timeout` passes; true when `done` was reached.
 inline bool waitFor(const std::function<bool()>& done, std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
+    // Returns the evaluation that ended the wait: evaluating `done` a second time could see a state
+    // that another thread (a CMake service, a language server) changed in between, and report a
+    // condition that was reached as not reached.
     const QDeadlineTimer deadline(timeout);
-    while (!done() && !deadline.hasExpired()) {
+    for (;;) {
+        if (done())
+            return true;
+        if (deadline.hasExpired())
+            return false;
         QApplication::processEvents(QEventLoop::AllEvents, 10);
     }
-    return done();
 }
 
 // Sends a key press and release to `target` as the platform would.
@@ -169,6 +175,12 @@ public:
         ++recoveryCalls;
         return recover;
     }
+    [[nodiscard]] bool confirmExit(QWidget*) override {
+        ++exitPrompts;
+        return exitAnswer;
+    }
+    int exitPrompts = 0;    // general.confirmExit prompts.
+    bool exitAnswer = true; // What they answer.
     [[nodiscard]] std::string chooseRenameName(QWidget*, const std::string& currentPath, bool folder) override {
         ++renamePrompts;
         lastRenameCurrentPath = currentPath;
@@ -231,7 +243,7 @@ struct RigOptions {
 
 /*
  * A Workbench and its MainWindow over files in `dir`: data/settings.json, data/trusted-roots.txt,
- * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt. Several rigs over one
+ * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt, data/luals. Several rigs over one
  * directory share them, as two runs of FrostIDE would. clangd is off unless the options turn it on;
  * runs write to the Run console (no external console).
  */
@@ -277,6 +289,16 @@ public:
         }
         if (wb.runStatePath.empty()) {
             wb.runStatePath = dir.join("data/run-settings.txt");
+        }
+        if (wb.luaStateDirectory.empty()) {
+            wb.luaStateDirectory = dir.join("data/luals"); // LuaLS's log and meta, not the profile's.
+        }
+        if (!wb.luaSearch) {
+            // No LuaLS unless the test asks for one, as before the pin (LUA-1): a test sets the LuaLS
+            // path setting or luaSearch (WorkbenchLua.DefaultSearchStartsThePinnedLuaLs uses the
+            // product's default search). Otherwise every trusted open would start a real LuaLS
+            // beside the processes the test drives or scripts.
+            wb.luaSearch = lang::LuaSearch{};
         }
         if (wb.applicationSettingsFile.empty()) {
             wb.applicationSettingsFile = dir.join("data/settings.json");

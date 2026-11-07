@@ -43,6 +43,7 @@ namespace FrostIDE.UnityIntegration
         }
 
         private const string Owner = "FrostIDE Unity project context v1";
+        internal const string UnsupportedArgumentsFile = "UnsupportedArguments.txt";
 
         private static void RejectLink(string path)
         {
@@ -130,24 +131,160 @@ namespace FrostIDE.UnityIntegration
             return escaped.ToString();
         }
 
-        // Unknown arguments can change language semantics; retain the previous generation
-        // instead of publishing a silently inaccurate model.
-        private static string CompilerWarnings(ScriptCompilerOptions options)
+        /*
+         * The csc options of an assembly's response files (csc.rsp) and AdditionalCompilerArguments
+         * that change the language model: -define/-d, -nowarn, -unsafe[+|-], -langversion,
+         * -nullable[+|-|:value], -reference/-r and -warnaserror[+|-|:list]. Anything else is kept
+         * in Unsupported, published with the generation (UnsupportedArguments.txt) so the IDE can
+         * name the options it does not model, instead of refusing the whole project.
+         */
+        internal sealed class CompilerArguments
         {
-            if (options.ResponseFiles != null && options.ResponseFiles.Length != 0)
-                throw new InvalidOperationException("Unity response files are not yet supported by FrostIDE");
-            var warnings = new List<string>();
-            foreach (string argument in options.AdditionalCompilerArguments ?? Array.Empty<string>())
+            internal readonly List<string> Defines = new List<string>();
+            internal readonly List<string> NoWarn = new List<string>();
+            internal readonly List<string> WarningsAsErrors = new List<string>();
+            internal readonly List<string> References = new List<string>();
+            internal readonly List<string> Unsupported = new List<string>();
+            internal bool? Unsafe;
+            internal bool? TreatWarningsAsErrors;
+            internal string LangVersion;
+            internal string Nullable;
+        }
+
+        // Splits a response file as csc does: whitespace separates arguments, double quotes group
+        // (and are dropped), and a line whose first non-blank character is '#' is a comment.
+        internal static List<string> SplitResponseFile(string text)
+        {
+            var arguments = new List<string>();
+            foreach (string rawLine in text.Replace("\r\n", "\n").Split('\n'))
             {
-                if (!(argument.StartsWith("/nowarn:", StringComparison.OrdinalIgnoreCase) ||
-                      argument.StartsWith("-nowarn:", StringComparison.OrdinalIgnoreCase)))
-                    throw new InvalidOperationException("Unsupported Unity compiler argument: " + argument);
-                string value = argument.Substring(8);
-                if (value.Length == 0 || value.Any(c => !Char.IsLetterOrDigit(c) && c != ',' && c != ';'))
-                    throw new InvalidOperationException("Unsupported Unity warning list: " + argument);
-                warnings.Add(value.Replace(',', ';'));
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                var current = new StringBuilder();
+                bool quoted = false, any = false;
+                foreach (char c in line)
+                {
+                    if (c == '"') { quoted = !quoted; any = true; continue; }
+                    if (!quoted && Char.IsWhiteSpace(c))
+                    {
+                        if (any) arguments.Add(current.ToString());
+                        current.Clear(); any = false;
+                        continue;
+                    }
+                    current.Append(c); any = true;
+                }
+                if (any) arguments.Add(current.ToString());
             }
-            return String.Join(";", warnings);
+            return arguments;
+        }
+
+        private static bool IsIdentifier(string value) =>
+            value.Length != 0 && (Char.IsLetter(value[0]) || value[0] == '_') && value.All(c => Char.IsLetterOrDigit(c) || c == '_');
+
+        private static IEnumerable<string> ListValues(string value) =>
+            value.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries).Select(v => v.Trim()).Where(v => v.Length != 0);
+
+        // Adds one csc argument to `into`; see CompilerArguments.
+        internal static void ParseCompilerArgument(string argument, CompilerArguments into)
+        {
+            if (argument == null || argument.Length < 2 || (argument[0] != '-' && argument[0] != '/'))
+            {
+                if (!String.IsNullOrEmpty(argument)) into.Unsupported.Add(argument);
+                return;
+            }
+            string body = argument.Substring(1);
+            int colon = body.IndexOf(':');
+            string name = (colon < 0 ? body : body.Substring(0, colon)).ToLowerInvariant();
+            string value = colon < 0 ? null : body.Substring(colon + 1).Trim('"');
+            bool? toggle = null;
+            if (name.EndsWith("+", StringComparison.Ordinal) || name.EndsWith("-", StringComparison.Ordinal))
+            {
+                toggle = name[name.Length - 1] == '+';
+                name = name.Substring(0, name.Length - 1);
+            }
+            switch (name)
+            {
+                case "define":
+                case "d":
+                {
+                    var symbols = value == null ? new List<string>() : ListValues(value).ToList();
+                    if (toggle != null || symbols.Count == 0 || !symbols.All(IsIdentifier)) break;
+                    foreach (string symbol in symbols)
+                        if (!into.Defines.Contains(symbol)) into.Defines.Add(symbol);
+                    return;
+                }
+                case "nowarn":
+                {
+                    var codes = value == null ? new List<string>() : ListValues(value).ToList();
+                    if (toggle != null || codes.Count == 0 || !codes.All(c => c.All(Char.IsLetterOrDigit))) break;
+                    foreach (string code in codes)
+                        if (!into.NoWarn.Contains(code)) into.NoWarn.Add(code);
+                    return;
+                }
+                case "unsafe":
+                    if (value != null) break;
+                    into.Unsafe = toggle ?? true;
+                    return;
+                case "langversion":
+                    if (toggle != null || String.IsNullOrEmpty(value) || !value.All(c => Char.IsLetterOrDigit(c) || c == '.')) break;
+                    into.LangVersion = value;
+                    return;
+                case "nullable":
+                {
+                    string mode = value == null ? (toggle == false ? "disable" : "enable") : value.ToLowerInvariant();
+                    if (value != null && toggle != null) break;
+                    if (mode != "enable" && mode != "disable" && mode != "warnings" && mode != "annotations") break;
+                    into.Nullable = mode;
+                    return;
+                }
+                case "reference":
+                case "r":
+                {
+                    var paths = value == null ? new List<string>() : value.Split(';').Select(p => p.Trim().Trim('"')).Where(p => p.Length != 0).ToList();
+                    // An extern alias ("-r:Alias=path") changes name binding; it is not modelled.
+                    if (toggle != null || paths.Count == 0 || paths.Any(p => p.IndexOf('=') >= 0)) break;
+                    into.References.AddRange(paths);
+                    return;
+                }
+                case "warnaserror":
+                    if (value == null)
+                    {
+                        into.TreatWarningsAsErrors = toggle ?? true;
+                        return;
+                    }
+                    if (toggle == false) break; // -warnaserror-:list (exclusions) is not modelled.
+                    var errors = ListValues(value).ToList();
+                    if (errors.Count == 0 || !errors.All(c => c.All(Char.IsLetterOrDigit))) break;
+                    foreach (string code in errors)
+                        if (!into.WarningsAsErrors.Contains(code)) into.WarningsAsErrors.Add(code);
+                    return;
+            }
+            into.Unsupported.Add(argument);
+        }
+
+        // The arguments of `options`: its response files in order (paths relative to the project,
+        // as Unity resolves them), then AdditionalCompilerArguments. A missing response file is
+        // recorded as unsupported; Unity reports it when it compiles.
+        internal static CompilerArguments ReadCompilerArguments(ScriptCompilerOptions options)
+        {
+            var parsed = new CompilerArguments();
+            foreach (string file in options.ResponseFiles ?? Array.Empty<string>())
+            {
+                string path = ResolveAssetPath(file);
+                if (!File.Exists(path))
+                {
+                    parsed.Unsupported.Add("@" + file + " (response file not found)");
+                    continue;
+                }
+                foreach (string argument in SplitResponseFile(File.ReadAllText(path)))
+                {
+                    if (argument.StartsWith("@", StringComparison.Ordinal)) parsed.Unsupported.Add(argument);
+                    else ParseCompilerArgument(argument, parsed);
+                }
+            }
+            foreach (string argument in options.AdditionalCompilerArguments ?? Array.Empty<string>())
+                ParseCompilerArgument(argument, parsed);
+            return parsed;
         }
 
         internal static void Sync()
@@ -156,6 +293,15 @@ namespace FrostIDE.UnityIntegration
             {
             // A complete generation is made visible by one atomic revision update. The
             // running language server keeps its previous generation while this one is built.
+            PublishPinned(owned.Output, GenerateFiles(), null);
+            }
+        }
+
+        // The files of one generation (Directory.Build.props, a .csproj per Unity assembly,
+        // FrostUnity.sln and UnsupportedArguments.txt when needed), by file name. Reads Unity's
+        // compilation pipeline and the assemblies' response files; writes nothing.
+        internal static SortedDictionary<string, string> GenerateFiles()
+        {
             var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
             files.Add("Directory.Build.props",
                 "<Project><PropertyGroup><BaseIntermediateOutputPath>obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>" +
@@ -163,9 +309,18 @@ namespace FrostIDE.UnityIntegration
                 "<BaseOutputPath>bin/$(MSBuildProjectName)/</BaseOutputPath></PropertyGroup></Project>");
             Assembly[] assemblies = CompilationPipeline.GetAssemblies(AssembliesType.Editor);
             var byName = assemblies.ToDictionary(a => a.name, a => Id(a.name), StringComparer.Ordinal);
+            var unsupported = new StringBuilder();
             foreach (Assembly assembly in assemblies)
             {
-                string noWarn = CompilerWarnings(assembly.compilerOptions);
+                CompilerArguments arguments = ReadCompilerArguments(assembly.compilerOptions);
+                foreach (string argument in arguments.Unsupported)
+                    unsupported.Append(assembly.name).Append('\t').Append(argument.Replace('\r', ' ').Replace('\n', ' ')).Append('\n');
+                string noWarn = String.Join(";", arguments.NoWarn);
+                var defines = new List<string>(assembly.defines ?? Array.Empty<string>());
+                foreach (string symbol in arguments.Defines)
+                    if (!defines.Contains(symbol)) defines.Add(symbol);
+                bool allowUnsafe = arguments.Unsafe ?? assembly.compilerOptions.AllowUnsafeCode;
+                string langVersion = arguments.LangVersion ?? assembly.compilerOptions.LanguageVersion;
                 bool editorOnly = (assembly.flags & AssemblyFlags.EditorAssembly) != 0;
                 ApiCompatibilityLevel profile = assembly.compilerOptions.ApiCompatibilityLevel;
                 if (editorOnly)
@@ -188,10 +343,15 @@ namespace FrostIDE.UnityIntegration
                     xml.WriteElementString("GenerateAssemblyInfo", "false");
                     if (!String.IsNullOrEmpty(noWarn)) xml.WriteElementString("NoWarn", noWarn);
                     xml.WriteElementString("AssemblyName", MsBuildLiteral(assembly.name));
-                    xml.WriteElementString("DefineConstants", String.Join(";", assembly.defines));
-                    xml.WriteElementString("AllowUnsafeBlocks", assembly.compilerOptions.AllowUnsafeCode ? "true" : "false");
-                    if (!String.IsNullOrEmpty(assembly.compilerOptions.LanguageVersion))
-                        xml.WriteElementString("LangVersion", assembly.compilerOptions.LanguageVersion);
+                    xml.WriteElementString("DefineConstants", String.Join(";", defines));
+                    xml.WriteElementString("AllowUnsafeBlocks", allowUnsafe ? "true" : "false");
+                    if (!String.IsNullOrEmpty(langVersion))
+                        xml.WriteElementString("LangVersion", MsBuildLiteral(langVersion));
+                    if (arguments.Nullable != null) xml.WriteElementString("Nullable", arguments.Nullable);
+                    if (arguments.TreatWarningsAsErrors != null)
+                        xml.WriteElementString("TreatWarningsAsErrors", arguments.TreatWarningsAsErrors.Value ? "true" : "false");
+                    if (arguments.WarningsAsErrors.Count != 0)
+                        xml.WriteElementString("WarningsAsErrors", String.Join(";", arguments.WarningsAsErrors));
                     xml.WriteEndElement();
                     xml.WriteStartElement("ItemGroup");
                     foreach (string file in assembly.sourceFiles.OrderBy(p => p, StringComparer.Ordinal))
@@ -234,6 +394,17 @@ namespace FrostIDE.UnityIntegration
                     }
                     foreach (string reference in assembly.compiledAssemblyReferences.OrderBy(p => p, StringComparer.Ordinal))
                         AddReference(reference);
+                    // -r from csc.rsp / AdditionalCompilerArguments, after Unity's own references
+                    // (Unity usually already passes a framework assembly named this way). A path
+                    // that is not a file next to the project (a bare framework name Unity resolves
+                    // itself) is reported as unsupported rather than guessed.
+                    foreach (string reference in arguments.References)
+                    {
+                        string absolute = ResolveAssetPath(reference);
+                        if (references.ContainsKey(Path.GetFileNameWithoutExtension(absolute))) continue;
+                        if (File.Exists(absolute)) AddReference(reference);
+                        else unsupported.Append(assembly.name).Append("\t-r:").Append(reference).Append(" (reference not found)\n");
+                    }
                     xml.WriteEndElement();
                     if (literalReferences.Count != 0)
                     {
@@ -274,8 +445,11 @@ namespace FrostIDE.UnityIntegration
             }
             solution.Append("\tEndGlobalSection\r\nEndGlobal\r\n");
             files.Add("FrostUnity.sln", solution.ToString());
-            PublishPinned(owned.Output, files, null);
-            }
+            // One "assembly<TAB>argument" line per compiler option FrostIDE does not model, so the
+            // IDE can say which options its C# model ignores.
+            if (unsupported.Length != 0)
+                files.Add(UnsupportedArgumentsFile, unsupported.ToString());
+            return files;
         }
 
         // The optional callback is a deterministic fault seam; publication never exposes

@@ -333,6 +333,52 @@ TEST(WorkbenchManaged, UnityDiscoveryRequiresOwnedVersionedRegularFiles) {
     EXPECT_TRUE(frost::app::trustedUnityRevision(dir.path()).empty());
 }
 
+TEST(WorkbenchManaged, UnmodelledUnityCompilerOptionsAreNotifiedOncePerGeneration) {
+    WorkDir dir("unity-unmodelled-once");
+    const std::string first(32, '1'), second(32, '2'), digest(32, 'a');
+    dir.write("Assets/Probe.cs", "public class Probe {}\n");
+    dir.write("Packages/manifest.json", "{}");
+    dir.write("ProjectSettings/ProjectVersion.txt", "scratch");
+    dir.write(".frost/unity/owner", "FrostIDE Unity project context v1");
+    for (const std::string& id : {first, second}) {
+        dir.write(".frost/unity/generations/" + id + "/FrostUnity.sln", "solution");
+        dir.write(".frost/unity/generations/" + id + "/UnsupportedArguments.txt",
+                  "Assembly-CSharp\t-nowarn:" + id + "\n");
+    }
+    dir.write(".frost/unity/revision", "1:" + first + ":" + digest);
+    WorkbenchRig rig(dir);
+    // Paths that do not exist: nothing is started, so only the notification logic runs.
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedDotnetPath,
+                                  dir.join("missing/dotnet.exe")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing/server-a.dll")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    const auto unmodelled = [&](const std::string& id) {
+        return std::ranges::count_if(rig.window->notifications().log(), [&](const auto& entry) {
+            return entry.notification.title == QStringLiteral("Unity compiler options not modelled") &&
+                   entry.notification.text.contains(QString::fromStdString("Assembly-CSharp: -nowarn:" + id));
+        });
+    };
+    ASSERT_TRUE(waitFor([&] { return unmodelled(first) == 1; }, 10s));
+    // A settings change restarts the C# service for the same generation (it reports the missing
+    // server again, which proves the restart ran) but does not repeat the compiler-options notice.
+    const auto missingServer = [&] {
+        return std::ranges::count_if(rig.window->notifications().log(), [](const auto& entry) {
+            return entry.notification.title == QStringLiteral("C# language server");
+        });
+    };
+    const auto before = missingServer();
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                  dir.join("missing/server-b.dll")));
+    ASSERT_TRUE(waitFor([&] { return missingServer() > before; }, 10s));
+    EXPECT_EQ(unmodelled(first), 1);
+    // A new generation has its own options, so it is notified once.
+    dir.write(".frost/unity/revision", "1:" + second + ":" + digest);
+    ASSERT_TRUE(waitFor([&] { return unmodelled(second) == 1; }, 10s));
+    EXPECT_EQ(unmodelled(first), 1);
+}
+
 #ifndef _WIN32
 TEST(WorkbenchManaged, ManagedDebugRejectsSymlinkComponents) {
     WorkDir dir("managed-debug-links");

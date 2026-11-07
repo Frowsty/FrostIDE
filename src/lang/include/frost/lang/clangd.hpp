@@ -15,7 +15,8 @@
  * Command line (clangdArguments): --background-index, --header-insertion=never, --log=error,
  * --pch-storage=memory, -j=<cores / 2, at most 8> (ADR 0008 decision 4: a first index build of R3
  * at -j=4 needed about 8.1 GiB of commit; TODO(M3): the ResourceGovernor sizes -j by free commit),
- * and --compile-commands-dir=<dir> when a provider found a database. stdout carries LSP, stdin
+ * --rename-file-limit=0, the trust-dependent flags of ClangdLaunchOptions, and
+ * --compile-commands-dir=<dir> when a provider found a database. stdout carries LSP, stdin
  * takes it, stderr is clangd's log.
  *
  * Supervision. start() spawns the supervisor on the Background lane. Each round asks the
@@ -112,11 +113,22 @@ struct ClangdSearch {
 
 // --- Command line --------------------------------------------------------------------------------
 
+/*
+ * Trust (FND-3, ADR 0078). Both modes pass --rename-file-limit=0, so a rename clangd computes is
+ * never silently cut at 50 files. A trusted workspace also raises --limit-references=0 (no limit,
+ * Find Usages lists every reference) and --limit-results=1000 (workspace symbols and completion).
+ * The restricted mode (untrusted, the default) passes --enable-config=false, so the project's
+ * .clangd and the user's config.yaml cannot add flags (plugins, a CompilationDatabase pointing
+ * elsewhere), keeps clangd's default limits and never passes --query-driver: extraArguments that
+ * start with --query-driver or --enable-config are dropped in restricted mode, so no driver of the
+ * project is executed to probe its system includes.
+ */
 struct ClangdLaunchOptions {
     bool backgroundIndex = true;
     unsigned jobs = 0; // 0: defaultClangdJobs().
     std::string logLevel = "error";
-    std::vector<std::string> extraArguments; // Appended last.
+    bool trusted = false;                    // The workspace root is trusted (see above).
+    std::vector<std::string> extraArguments; // Appended last (filtered in restricted mode).
 };
 
 // max(1, min(hardwareThreads / 2, 8)); see the header comment.

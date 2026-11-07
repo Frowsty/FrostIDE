@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Unit tests for LspClient (lsp_client.hpp) against a scripted in-memory server: the initialize
-// handshake and capability negotiation (positionEncoding, clangd's offsetEncoding fallback, the
-// UTF-16 default), Busy before initialize, the server requests a client answers, the document
+// handshake and capability negotiation (general.positionEncodings only, a legacy offsetEncoding
+// answer, the UTF-16 default), Busy before initialize, the server requests a client answers, the document
 // notifications with their versions, publishDiagnostics routing, and shutdown/exit with and
 // without an answer.
 
@@ -100,13 +100,14 @@ TEST(LspClientTest, InitializeNegotiatesUtf8AndSendsInitialized) {
     EXPECT_EQ(params->find("clientInfo")->stringAt("name"), "FrostIDE");
     const Json* encodings = params->find("capabilities")->find("general")->find("positionEncodings");
     ASSERT_NE(encodings, nullptr);
-    EXPECT_EQ(encodings->items().front(), Json("utf-8"));
-    ASSERT_NE(params->find("capabilities")->find("offsetEncoding"), nullptr);
+    EXPECT_EQ(*encodings, Json::array({Json("utf-8"), Json("utf-16")}));
+    // LSP 3.17 negotiation only: clangd's deprecated offsetEncoding extension is not offered.
+    EXPECT_EQ(params->find("capabilities")->find("offsetEncoding"), nullptr);
     EXPECT_EQ(received[1].stringAt("method"), "initialized");
     EXPECT_EQ(received[1].find("id"), nullptr);
 }
 
-TEST(LspClientTest, Utf16OnlyIsAdvertisedInBothEncodingCapabilities) {
+TEST(LspClientTest, Utf16OnlyIsTheWholeStandardOfferAndNoLegacyOffer) {
     auto init = options();
     init.utf16Only = true;
     const auto params = frost::lang::initializeParams(init);
@@ -116,11 +117,43 @@ TEST(LspClientTest, Utf16OnlyIsAdvertisedInBothEncodingCapabilities) {
     const auto* general = capabilities->find("general");
     ASSERT_NE(general, nullptr);
     const auto* standard = general->find("positionEncodings");
-    const auto* legacy = capabilities->find("offsetEncoding");
     ASSERT_NE(standard, nullptr);
-    ASSERT_NE(legacy, nullptr);
     EXPECT_EQ(*standard, Json::array({Json("utf-16")}));
-    EXPECT_EQ(*legacy, *standard);
+    EXPECT_EQ(capabilities->find("offsetEncoding"), nullptr);
+}
+
+// A server that omits positionEncoding uses UTF-16 (LSP 3.17), even though UTF-8 was preferred.
+TEST(LspClientTest, OmittedPositionEncodingNegotiatesUtf16) {
+    LangEnv env;
+    MemoryPipe pipe(env.pool());
+    FakeServer server(pipe, answering(capabilitiesWith(Json::object())));
+    LspClient client(pipe.clientStream(), env.pool(), options(), {});
+    const auto result = env.run(client.initialize());
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->positionEncoding, PositionEncoding::Utf16);
+    EXPECT_EQ(client.encoding(), PositionEncoding::Utf16);
+}
+
+// The server's positionEncoding choice from the offer is the client's encoding.
+TEST(LspClientTest, SelectedUtf8PositionEncodingIsUsed) {
+    LangEnv env;
+    MemoryPipe pipe(env.pool());
+    FakeServer server(pipe, answering(capabilitiesWith(Json::object().set("positionEncoding", "utf-8"))));
+    LspClient client(pipe.clientStream(), env.pool(), options(), {});
+    const auto result = env.run(client.initialize());
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(client.encoding(), PositionEncoding::Utf8);
+}
+
+// "utf-32" is a valid LSP kind but was not offered, so the handshake fails.
+TEST(LspClientTest, RejectsUnofferedUtf32) {
+    LangEnv env;
+    MemoryPipe pipe(env.pool());
+    FakeServer server(pipe, answering(capabilitiesWith(Json::object().set("positionEncoding", "utf-32"))));
+    LspClient client(pipe.clientStream(), env.pool(), options(), {});
+    const auto result = env.run(client.initialize());
+    EXPECT_FALSE(result.has_value());
+    EXPECT_FALSE(client.ready());
 }
 
 TEST(LspClientTest, RejectsServerEncodingOutsideTheOffer) {

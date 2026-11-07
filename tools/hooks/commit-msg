@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+#
+# commit-msg: FrostIDE's local footer check (ADR 0078 decision 5, FND-2; there is no CI, D24).
+# A commit on main needs a "Verified:" footer whose items a verify-stamp of the committed tree
+# records; tools/verify.ps1 and tools/verify.sh write the stamps (tools/hooks/verify_stamp.py).
+# Install once per clone, from its root:
+#   git config core.hooksPath tools/hooks
+# Python: $FROST_HOOK_PYTHON, then the SDK's ($FROST_SDK, tools/env.ps1), then python3 or python
+# on PATH. Without one, a commit on main is rejected (the check cannot run) and others pass.
+
+hook_dir=$(dirname "$0")
+python=""
+for candidate in "${FROST_HOOK_PYTHON:-}" "${FROST_SDK:+$FROST_SDK/py/Scripts/python.exe}" \
+        "${FROST_SDK:+$FROST_SDK/py/bin/python3}"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then python="$candidate"; break; fi
+done
+if [ -z "$python" ]; then
+    for name in python3 python; do
+        if command -v "$name" > /dev/null 2>&1; then python=$(command -v "$name"); break; fi
+    done
+fi
+if [ -z "$python" ]; then
+    if [ "$(git symbolic-ref -q HEAD)" = "refs/heads/main" ]; then
+        echo "commit-msg (FND-2): rejected: no Python to check the verify-stamp (set FROST_HOOK_PYTHON)" >&2
+        exit 1
+    fi
+    exit 0
+fi
+exec "$python" -I "$hook_dir/verify_stamp.py" check-msg "$1"

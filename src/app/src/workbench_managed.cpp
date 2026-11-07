@@ -16,6 +16,7 @@
 #include "unity_context.hpp"
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QStandardPaths>
@@ -176,6 +177,32 @@ QString unitySolution(const std::string& root, const std::string& revision) {
                             QString::fromLatin1(revision.data(), static_cast<qsizetype>(revision.size())) +
                             QStringLiteral("/FrostUnity.sln"));
 }
+/*
+ * The compiler options the Unity package could not model for generation `revision`
+ * (UnsupportedArguments.txt, "assembly<TAB>argument" lines written by ProjectContext.cs), as
+ * "assembly: argument" lines; empty when there are none. Reads at most 64 KiB and shows at most
+ * 10 lines (the count of the rest is appended). Used only for a notification, never for the model.
+ */
+QString unityUnsupportedArguments(const std::string& root, const std::string& revision) {
+    const QDir project(QString::fromUtf8(root.data(), static_cast<qsizetype>(root.size())));
+    QFile file(project.filePath(QStringLiteral(".frost/unity/generations/") +
+                                QString::fromLatin1(revision.data(), static_cast<qsizetype>(revision.size())) +
+                                QStringLiteral("/UnsupportedArguments.txt")));
+    if (!QFileInfo(file.fileName()).isFile() || QFileInfo(file.fileName()).isSymLink() ||
+        !file.open(QIODevice::ReadOnly))
+        return {};
+    const QStringList lines = QString::fromUtf8(file.read(64 * 1024)).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    QStringList shown;
+    for (const QString& line : lines) {
+        if (shown.size() == 10) {
+            shown.push_back(QStringLiteral("... and %1 more").arg(lines.size() - 10));
+            break;
+        }
+        const qsizetype tab = line.indexOf(QLatin1Char('\t'));
+        shown.push_back(tab < 0 ? line : line.left(tab) + QStringLiteral(": ") + line.mid(tab + 1));
+    }
+    return shown.join(QLatin1Char('\n'));
+}
 } // namespace
 bool isManagedSource(std::string_view path) noexcept {
     if (path.size() < 4)
@@ -211,6 +238,17 @@ void Workbench::startManaged(const std::string& root) {
         return;
     }
     m_unityRevision = trustedUnityRevision(root);
+    // Once per generation: a restart for the same one (settings, trust) has nothing new to say.
+    if (std::string generation = root + '\n' + m_unityRevision;
+        !m_unityRevision.empty() && generation != m_unityNotifiedGeneration) {
+        m_unityNotifiedGeneration = std::move(generation);
+        if (const QString ignored = unityUnsupportedArguments(root, m_unityRevision); !ignored.isEmpty())
+            notify(QStringLiteral("Unity compiler options not modelled"),
+                   QStringLiteral("C# code insight ignores these csc.rsp / compiler options, so it may differ "
+                                  "from Unity's compiler:\n") +
+                       ignored,
+                   ui::NotificationKind::Warning);
+    }
     std::string dotnetPath = m_managedDotnetPath;
     std::string serverPath = m_managedServerPath;
     if (dotnetPath.empty()) {
@@ -334,7 +372,9 @@ void Workbench::startManaged(const std::string& root) {
             QMetaObject::invokeMethod(
                 self.data(),
                 [self] {
-                    if (self && self->m_language)
+                    // Only the managed server's own documents: a lifecycle change must not cancel a
+                    // Structure request another server (clangd) is answering for the current file.
+                    if (self && self->m_language && self->currentView() && isManagedSource(self->currentView()->path()))
                         self->m_language->structureChanged();
                 },
                 Qt::QueuedConnection);

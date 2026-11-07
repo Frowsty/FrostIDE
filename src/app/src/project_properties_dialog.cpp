@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// ProjectPropertiesDialog, SolutionPropertiesDialog, ConfigurationManagerDialog,
-// EditRunConfigurationsDialog, AddProjectReferenceDialog, NuGetPackageManagerDialog,
-// and LocalHistoryDialog implementations.
+/*
+ * ProjectPropertiesDialog, SolutionPropertiesDialog, ConfigurationManagerDialog,
+ * EditRunConfigurationsDialog, AddProjectReferenceDialog, NuGet, ASM/IL, Unit Tests and
+ * LocalHistoryDialog implementations. Under the truth rule (ADR 0078, FND-3) a view without a real
+ * tool behind it is read-only or disabled and names the epic that will provide it: project
+ * reference and configuration edits (SLN-6), debugger settings (RUN-1), NuGet (LTR-7),
+ * disassembly (CPP-3) and IL (LTR-3), and running tests (RUN-7).
+ */
 
 #include "project_properties_dialog.hpp"
 
@@ -12,25 +17,23 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
-#include <QPointer>
-#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -38,14 +41,16 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
-#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
 #ifdef _WIN32
 #include "frost/io/utf.hpp"
+
 #include <windows.h>
+
 #include <tlhelp32.h>
 #endif
 
@@ -53,6 +58,17 @@ namespace frost::app {
 namespace {
 
 QString toQs(std::string_view sv) { return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size())); }
+
+/*
+ * Reasons shown where a feature has no real tool behind it yet (ADR 0078 truth rule, FND-3).
+ * Each names the epic that will provide it; tests match on the epic identifiers.
+ */
+QString referenceEditsUnavailable() {
+    return QStringLiteral("Read-only: adding or removing project references requires safe solution and project "
+                          "edits (SLN-6).");
+}
+QString testRunnerUnavailable() { return QStringLiteral("Requires the test runner (RUN-7)."); }
+QString runConfigurationsUnavailable() { return QStringLiteral("Requires run configurations (RUN-1)."); }
 
 struct FieldSpec {
     const char* key;
@@ -474,10 +490,13 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
 
     auto* buttons =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, &dialog);
+    // saveCurrentChanges reports a failed write itself; OK closes only after the write succeeded.
     QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog,
-                     [&] { (void)saveCurrentChanges(); });
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    QObject::connect(&dialog, &QDialog::accepted, &dialog, [&] { (void)saveCurrentChanges(); });
+                     [&] { static_cast<void>(saveCurrentChanges()); });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        if (saveCurrentChanges())
+            dialog.accept();
+    });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     outer->addWidget(buttons);
     ui::installDialogChrome(&dialog, true);
@@ -532,7 +551,8 @@ void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const pr
                 continue;
             auto* item = new QListWidgetItem(toQs(projects[i].name), depList);
             item->setData(Qt::UserRole, static_cast<int>(i));
-            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            // Shown as loaded, not editable: reference edits are refused until SLN-6.
+            item->setFlags(Qt::ItemIsUserCheckable);
             const bool depends =
                 std::ranges::find(selProj.dependencies, project::ProjectId{i}) != selProj.dependencies.end();
             item->setCheckState(depends ? Qt::Checked : Qt::Unchecked);
@@ -544,37 +564,20 @@ void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const pr
     depLayout->addWidget(projCombo);
     depLayout->addWidget(new QLabel(QStringLiteral("Depends on:"), depPage));
     depLayout->addWidget(depList, 1);
+    auto* depNote = new QLabel(referenceEditsUnavailable(), depPage);
+    depNote->setObjectName(QStringLiteral("solutionDependenciesReadOnlyNote"));
+    depNote->setWordWrap(true);
+    depLayout->addWidget(depNote);
     tabs->addTab(depPage, QStringLiteral("Project Dependencies"));
 
+    // Nothing in this dialog writes a file until SLN-6.
+    static_cast<void>(fs);
+    static_cast<void>(onDependenciesChanged);
     outer->addWidget(tabs, 1);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
         if (startupCombo->currentIndex() >= 0 && onSetStartup) {
             onSetStartup(project::ProjectId{static_cast<std::uint32_t>(startupCombo->currentData().toInt())});
-        }
-        if (projCombo->currentIndex() >= 0) {
-            const auto selId = static_cast<std::uint32_t>(projCombo->currentData().toInt());
-            const auto& selProj = projects[selId];
-            if (auto content = fs.readFile(selProj.path)) {
-                std::string xml = *content;
-                const QDir projDir = QFileInfo(toQs(selProj.path)).dir();
-                for (int r = 0; r < depList->count(); ++r) {
-                    auto* item = depList->item(r);
-                    const auto targetId = static_cast<std::uint32_t>(item->data(Qt::UserRole).toInt());
-                    const QString rel =
-                        QDir::toNativeSeparators(projDir.relativeFilePath(toQs(projects[targetId].path)));
-                    if (item->checkState() == Qt::Checked) {
-                        xml = addProjectReferenceXml(xml, rel.toStdString(), projects[targetId].projectGuid);
-                    } else {
-                        xml = removeProjectReferenceXml(xml, rel.toStdString());
-                    }
-                }
-                if (xml != *content) {
-                    (void)fs.writeFileAtomic(selProj.path, xml);
-                    if (onDependenciesChanged)
-                        onDependenciesChanged();
-                }
-            }
         }
         dialog.accept();
     });
@@ -587,8 +590,9 @@ void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const pr
 void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                     int activeConfigurationIndex, std::function<void(int)> onActiveConfigurationChanged,
                                     std::function<void()> onSolutionFileModified) {
-    (void)fs;
-    (void)onSolutionFileModified;
+    // Read-only until SLN-6/SLN-7: nothing here writes the solution or a project file.
+    static_cast<void>(fs);
+    static_cast<void>(onSolutionFileModified);
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("configurationManagerDialog"));
     dialog.setWindowTitle(QStringLiteral("Configuration Manager"));
@@ -614,29 +618,35 @@ void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const 
     table->setHorizontalHeaderLabels({QStringLiteral("Project"), QStringLiteral("Configuration"),
                                       QStringLiteral("Platform"), QStringLiteral("Build")});
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
+    // Shows each mapping exactly as the solution file declares it; a project without one says so
+    // instead of showing an invented Debug|x64.
     const auto populateTable = [&](int cfgIdx) {
         const auto projects = solution.projects();
         table->setRowCount(static_cast<int>(projects.size()));
         for (std::size_t p = 0; p < projects.size(); ++p) {
-            table->setItem(static_cast<int>(p), 0, new QTableWidgetItem(toQs(projects[p].name)));
-            QString cfgName = QStringLiteral("Debug");
-            QString platName = QStringLiteral("x64");
-            bool buildChecked = true;
+            const auto readOnly = [](QTableWidgetItem* item) {
+                item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                return item;
+            };
+            table->setItem(static_cast<int>(p), 0, readOnly(new QTableWidgetItem(toQs(projects[p].name))));
+            const project::ProjectConfigurationMapping* mapping = nullptr;
             if (cfgIdx >= 0 && static_cast<std::size_t>(cfgIdx) < configs.size()) {
-                const auto& mapping = solution.projectConfiguration(project::ProjectId{static_cast<std::uint32_t>(p)},
-                                                                    static_cast<std::size_t>(cfgIdx));
-                if (mapping) {
-                    cfgName = toQs(mapping->configuration);
-                    platName = toQs(mapping->platform);
-                    buildChecked = mapping->build;
-                }
+                const auto& found = solution.projectConfiguration(project::ProjectId{static_cast<std::uint32_t>(p)},
+                                                                  static_cast<std::size_t>(cfgIdx));
+                if (found)
+                    mapping = &*found;
             }
-            table->setItem(static_cast<int>(p), 1, new QTableWidgetItem(cfgName));
-            table->setItem(static_cast<int>(p), 2, new QTableWidgetItem(platName));
-            auto* buildItem = new QTableWidgetItem();
-            buildItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
-            buildItem->setCheckState(buildChecked ? Qt::Checked : Qt::Unchecked);
+            const QString notMapped = QStringLiteral("(not mapped)");
+            table->setItem(static_cast<int>(p), 1,
+                           readOnly(new QTableWidgetItem(mapping ? toQs(mapping->configuration) : notMapped)));
+            table->setItem(static_cast<int>(p), 2,
+                           readOnly(new QTableWidgetItem(mapping ? toQs(mapping->platform) : notMapped)));
+            auto* buildItem = new QTableWidgetItem(mapping ? QString() : notMapped);
+            // Checkable for display only: without Qt::ItemIsEnabled the user cannot toggle it.
+            buildItem->setFlags(Qt::ItemIsUserCheckable);
+            buildItem->setCheckState(mapping && mapping->build ? Qt::Checked : Qt::Unchecked);
             table->setItem(static_cast<int>(p), 3, buildItem);
         }
     };
@@ -644,7 +654,19 @@ void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const 
     QObject::connect(activeCombo, &QComboBox::currentIndexChanged, &dialog, populateTable);
     outer->addWidget(table, 1);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    auto* readOnlyNote = new QLabel(
+        QStringLiteral("Read-only: editing project configuration mappings arrives with SLN-6 (safe solution and "
+                       "project edits). Choosing the active solution configuration is applied; nothing is saved to "
+                       "the solution."),
+        &dialog);
+    readOnlyNote->setObjectName(QStringLiteral("cfgManagerReadOnlyNote"));
+    readOnlyNote->setWordWrap(true);
+    outer->addWidget(readOnlyNote);
+
+    // "Set Active" applies the selection to the IDE only; there is no OK that implies a save.
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    auto* setActive = buttons->addButton(QStringLiteral("Set Active"), QDialogButtonBox::AcceptRole);
+    setActive->setObjectName(QStringLiteral("cfgManagerSetActiveButton"));
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
         if (activeCombo->currentIndex() >= 0 && onActiveConfigurationChanged)
             onActiveConfigurationChanged(activeCombo->currentIndex());
@@ -655,6 +677,23 @@ void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const 
     ui::installDialogChrome(&dialog, true);
     dialog.exec();
 }
+
+namespace {
+// A .NET process: the dotnet host itself, or an apphost with its <name>.runtimeconfig.json beside it.
+void markDotNet(RunningProcessInfo& info) {
+    const QString qName = toQs(info.name);
+    if (qName.compare(QStringLiteral("dotnet.exe"), Qt::CaseInsensitive) == 0 ||
+        qName.compare(QStringLiteral("dotnet"), Qt::CaseInsensitive) == 0) {
+        info.isDotNet = true;
+    } else if (!info.executablePath.empty()) {
+        const QFileInfo exeInfo(toQs(info.executablePath));
+        const QString runtimeCfg =
+            exeInfo.dir().filePath(exeInfo.completeBaseName() + QStringLiteral(".runtimeconfig.json"));
+        if (QFileInfo::exists(runtimeCfg))
+            info.isDotNet = true;
+    }
+}
+} // namespace
 
 std::vector<RunningProcessInfo> enumerateRunningProcesses() {
     std::vector<RunningProcessInfo> processes;
@@ -711,21 +750,37 @@ std::vector<RunningProcessInfo> enumerateRunningProcesses() {
                     CloseHandle(proc);
                 }
 
-                const QString qName = toQs(info.name);
-                if (qName.compare(QStringLiteral("dotnet.exe"), Qt::CaseInsensitive) == 0 ||
-                    qName.compare(QStringLiteral("dotnet"), Qt::CaseInsensitive) == 0) {
-                    info.isDotNet = true;
-                } else if (!info.executablePath.empty()) {
-                    const QFileInfo exeInfo(toQs(info.executablePath));
-                    const QString runtimeCfg =
-                        exeInfo.dir().filePath(exeInfo.completeBaseName() + QStringLiteral(".runtimeconfig.json"));
-                    if (QFileInfo::exists(runtimeCfg))
-                        info.isDotNet = true;
-                }
+                markDotNet(info);
                 processes.push_back(std::move(info));
             } while (Process32NextW(snapshot, &entry));
         }
         CloseHandle(snapshot);
+    }
+#else
+    /* Linux: every numeric /proc entry, its name from /proc/<pid>/comm and its executable from the
+     * /proc/<pid>/exe link. The link is unreadable for other users' processes, which then have no
+     * path (and Attach refuses them); a process that exits during the walk is skipped. There are
+     * no window titles on this path. O(processes). */
+    const auto selfPid = static_cast<std::uint32_t>(QCoreApplication::applicationPid());
+    const QDir procRoot(QStringLiteral("/proc"));
+    for (const QString& entry : procRoot.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool numeric = false;
+        const uint pid = entry.toUInt(&numeric);
+        if (!numeric || pid == 0 || pid == selfPid)
+            continue;
+        RunningProcessInfo info;
+        info.pid = static_cast<std::uint32_t>(pid);
+        if (QFile comm(procRoot.filePath(entry + QStringLiteral("/comm"))); comm.open(QIODevice::ReadOnly))
+            info.name = QString::fromUtf8(comm.readAll()).trimmed().toStdString();
+        const QString exe = QFileInfo(procRoot.filePath(entry + QStringLiteral("/exe"))).symLinkTarget();
+        if (!exe.isEmpty())
+            info.executablePath = exe.toStdString();
+        if (info.name.empty() && !exe.isEmpty())
+            info.name = QFileInfo(exe).fileName().toStdString();
+        if (info.name.empty())
+            continue; // Gone, or a kernel thread without a readable name.
+        markDotNet(info);
+        processes.push_back(std::move(info));
     }
 #endif
     std::ranges::sort(processes, [](const RunningProcessInfo& a, const RunningProcessInfo& b) {
@@ -862,11 +917,11 @@ void showAttachToProcessDialog(QWidget* parent,
         onAttach(chosen, attachAsDotNet);
 }
 
-void showEditRunConfigurationsDialog(
-    QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-    const std::string& preferredProjectPath, const std::string& activeConfigPlatform, bool externalConsole,
-    std::function<void(bool)> onExternalConsoleChanged, std::function<void()> onSaved,
-    std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound) {
+void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
+                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
+                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
+                                     std::function<void()> onSaved,
+                                     std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("editRunConfigurationsDialog"));
     dialog.setWindowTitle(QStringLiteral("Edit Run/Debug Configurations"));
@@ -888,21 +943,31 @@ void showEditRunConfigurationsDialog(
     } else if (!preferredProjectPath.empty()) {
         projCombo->addItem(QFileInfo(toQs(preferredProjectPath)).completeBaseName(), toQs(preferredProjectPath));
     }
-    auto* cmdEdit = new QLineEdit(&dialog);
-    auto* argsEdit = new QLineEdit(&dialog);
-    argsEdit->setObjectName(QStringLiteral("runConfigArgumentsEdit"));
-    auto* cwdEdit = new QLineEdit(&dialog);
-    cwdEdit->setObjectName(QStringLiteral("runConfigWorkingDirEdit"));
-    auto* envEdit = new QLineEdit(&dialog);
-    envEdit->setObjectName(QStringLiteral("runConfigEnvironmentEdit"));
+    // Debugger settings are shown read-only: writing them belongs to run configurations (RUN-1),
+    // and the shared .vcxproj is never the place for per-user launch settings.
+    const auto readOnlyEdit = [&dialog](const char* objectName) {
+        auto* edit = new QLineEdit(&dialog);
+        edit->setObjectName(QLatin1String(objectName));
+        edit->setReadOnly(true);
+        edit->setToolTip(runConfigurationsUnavailable());
+        return edit;
+    };
+    auto* cmdEdit = readOnlyEdit("runConfigCommandEdit");
+    auto* argsEdit = readOnlyEdit("runConfigArgumentsEdit");
+    auto* cwdEdit = readOnlyEdit("runConfigWorkingDirEdit");
+    auto* envEdit = readOnlyEdit("runConfigEnvironmentEdit");
+    auto* sourceLabel = new QLabel(&dialog);
+    sourceLabel->setObjectName(QStringLiteral("runConfigSourceLabel"));
+    sourceLabel->setWordWrap(true);
     auto* extConsoleCheck = new QCheckBox(QStringLiteral("Run in external console window"), &dialog);
     extConsoleCheck->setChecked(externalConsole);
 
     form->addRow(QStringLiteral("Target project:"), projCombo);
-    form->addRow(QStringLiteral("Executable override:"), cmdEdit);
+    form->addRow(QStringLiteral("Debugger command:"), cmdEdit);
     form->addRow(QStringLiteral("Program arguments:"), argsEdit);
     form->addRow(QStringLiteral("Working directory:"), cwdEdit);
     form->addRow(QStringLiteral("Environment variables:"), envEdit);
+    form->addRow(QString(), sourceLabel);
     form->addRow(QString(), extConsoleCheck);
     outer->addLayout(form);
 
@@ -935,6 +1000,12 @@ void showEditRunConfigurationsDialog(
     }
     compoundLayout->addWidget(compoundList, 1);
     outer->addWidget(compoundGroup, 1);
+    // Compound launches need real run configurations (RUN-5); the group is shown, but nothing in
+    // it can be used, so no control advertises a launch that cannot happen.
+    const QString compoundReason = QStringLiteral("Compound runs require run configurations (RUN-5).");
+    compoundGroup->setEnabled(false);
+    compoundGroup->setToolTip(compoundReason);
+    launchCompoundBtn->setToolTip(compoundReason);
 
     QObject::connect(launchCompoundBtn, &QPushButton::clicked, &dialog, [&] {
         std::vector<project::ProjectId> selectedIds;
@@ -950,43 +1021,45 @@ void showEditRunConfigurationsDialog(
             onLaunchCompound(selectedIds);
     });
 
+    // MSBuild imports <project>.user after the project, so its values win; the project file is
+    // the fallback. A file that cannot be read leaves the fields empty and says so.
     const auto loadProj = [&] {
+        for (QLineEdit* edit : {cmdEdit, argsEdit, cwdEdit, envEdit})
+            edit->clear();
         const std::string path = projCombo->currentData().toString().toStdString();
-        if (path.empty())
+        if (path.empty()) {
+            sourceLabel->setText(runConfigurationsUnavailable());
             return;
-        if (auto content = fs.readFile(path)) {
-            auto props = parseVcxprojPropertiesForConfig(*content, activeConfigPlatform);
-            cmdEdit->setText(toQs(props["Prop.LocalDebuggerCommand"]));
-            argsEdit->setText(toQs(props["Prop.LocalDebuggerCommandArguments"]));
-            cwdEdit->setText(toQs(props["Prop.LocalDebuggerWorkingDirectory"]));
-            envEdit->setText(toQs(props["Prop.LocalDebuggerEnvironment"]));
         }
+        ProjectPropertyMap props;
+        QStringList readFrom;
+        for (const std::string& file : {path, path + ".user"}) {
+            if (!fs.exists(file).value_or(false))
+                continue;
+            if (auto content = fs.readFile(file)) {
+                for (auto& [key, value] : parseVcxprojPropertiesForConfig(*content, activeConfigPlatform))
+                    props[key] = std::move(value);
+                readFrom.push_back(QFileInfo(toQs(file)).fileName());
+            }
+        }
+        cmdEdit->setText(toQs(props["Prop.LocalDebuggerCommand"]));
+        argsEdit->setText(toQs(props["Prop.LocalDebuggerCommandArguments"]));
+        cwdEdit->setText(toQs(props["Prop.LocalDebuggerWorkingDirectory"]));
+        envEdit->setText(toQs(props["Prop.LocalDebuggerEnvironment"]));
+        sourceLabel->setText(
+            QStringLiteral("Read-only (%1). Editing debugger settings requires run configurations (RUN-1).")
+                .arg(readFrom.isEmpty() ? QStringLiteral("project file could not be read")
+                                        : QStringLiteral("read from %1").arg(readFrom.join(QStringLiteral(", ")))));
     };
     loadProj();
     QObject::connect(projCombo, &QComboBox::currentIndexChanged, &dialog, [&](int) { loadProj(); });
 
+    // OK applies the external-console choice only; no project file is written (RUN-1).
+    static_cast<void>(onSaved);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
         if (onExternalConsoleChanged && extConsoleCheck->isChecked() != externalConsole)
             onExternalConsoleChanged(extConsoleCheck->isChecked());
-        const std::string path = projCombo->currentData().toString().toStdString();
-        if (!path.empty()) {
-            if (auto content = fs.readFile(path)) {
-                ProjectPropertyMap updates{
-                    {"Prop.LocalDebuggerCommand", cmdEdit->text().trimmed().toStdString()},
-                    {"Prop.LocalDebuggerCommandArguments", argsEdit->text().trimmed().toStdString()},
-                    {"Prop.LocalDebuggerWorkingDirectory", cwdEdit->text().trimmed().toStdString()},
-                    {"Prop.LocalDebuggerEnvironment", envEdit->text().trimmed().toStdString()},
-                };
-                const std::string updated =
-                    toQs(path).endsWith(QStringLiteral(".vcxproj"), Qt::CaseInsensitive)
-                        ? applyVcxprojPropertiesForConfig(*content, activeConfigPlatform, updates)
-                        : applyCsprojProperties(*content, updates);
-                (void)fs.writeFileAtomic(path, updated);
-                if (onSaved)
-                    onSaved();
-            }
-        }
         dialog.accept();
     });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -1004,7 +1077,7 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
     dialog.resize(480, 360);
 
     auto* outer = new QVBoxLayout(&dialog);
-    outer->addWidget(new QLabel(QStringLiteral("Select projects in solution to reference:"), &dialog));
+    outer->addWidget(new QLabel(QStringLiteral("Projects in the solution this project references:"), &dialog));
     auto* list = new QListWidget(&dialog);
     list->setObjectName(QStringLiteral("projectReferenceList"));
 
@@ -1015,7 +1088,8 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
             continue;
         auto* item = new QListWidgetItem(toQs(projects[i].name), list);
         item->setData(Qt::UserRole, static_cast<int>(i));
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        // Shown as loaded, not editable: reference edits are refused until SLN-6.
+        item->setFlags(Qt::ItemIsUserCheckable);
         bool checked = false;
         if (selfId) {
             const auto& deps = projects[selfId->value()].dependencies;
@@ -1024,29 +1098,15 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
         item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
     }
     outer->addWidget(list, 1);
+    auto* note = new QLabel(referenceEditsUnavailable(), &dialog);
+    note->setObjectName(QStringLiteral("projectReferenceReadOnlyNote"));
+    note->setWordWrap(true);
+    outer->addWidget(note);
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        if (auto content = fs.readFile(projectPath)) {
-            std::string xml = *content;
-            const QDir projDir = QFileInfo(toQs(projectPath)).dir();
-            for (int r = 0; r < list->count(); ++r) {
-                auto* item = list->item(r);
-                const auto targetId = static_cast<std::uint32_t>(item->data(Qt::UserRole).toInt());
-                const QString rel = QDir::toNativeSeparators(projDir.relativeFilePath(toQs(projects[targetId].path)));
-                if (item->checkState() == Qt::Checked)
-                    xml = addProjectReferenceXml(xml, rel.toStdString(), projects[targetId].projectGuid);
-                else
-                    xml = removeProjectReferenceXml(xml, rel.toStdString());
-            }
-            if (xml != *content) {
-                (void)fs.writeFileAtomic(projectPath, xml);
-                if (onSaved)
-                    onSaved();
-            }
-        }
-        dialog.accept();
-    });
+    // Nothing is written until SLN-6.
+    static_cast<void>(fs);
+    static_cast<void>(onSaved);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     outer->addWidget(buttons);
     ui::installDialogChrome(&dialog, true);
@@ -1056,6 +1116,8 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
 QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                                      std::function<const project::SolutionModel*()> solutionProvider,
                                      std::string initialCsprojPath, std::function<void()> onSaved) {
+    // Read-only until LTR-7: nothing here writes a project file.
+    static_cast<void>(onSaved);
     auto* root = new QWidget(parent);
     root->setObjectName(QStringLiteral("nugetToolWindowWidget"));
     auto* outer = new QVBoxLayout(root);
@@ -1069,101 +1131,35 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
 
     auto* searchEdit = new QLineEdit(root);
     searchEdit->setObjectName(QStringLiteral("nugetSearchEdit"));
-    searchEdit->setPlaceholderText(QStringLiteral("Search NuGet packages..."));
+    searchEdit->setPlaceholderText(QStringLiteral("Filter installed packages..."));
     searchEdit->setClearButtonEnabled(true);
-
-    auto* prereleaseCheck = new QCheckBox(QStringLiteral("Include prerelease"), root);
-    prereleaseCheck->setObjectName(QStringLiteral("nugetPrereleaseCheck"));
-
-    auto* feedCombo = new QComboBox(root);
-    feedCombo->setObjectName(QStringLiteral("nugetFeedCombo"));
-    feedCombo->addItem(QStringLiteral("nuget.org (https://api.nuget.org/v3/index.json)"),
-                       QStringLiteral("https://api.nuget.org/v3/index.json"));
-    feedCombo->addItem(QStringLiteral("Local NuGet Cache"), QStringLiteral("local"));
-
-    auto* updateAllBtn = new QPushButton(QStringLiteral("Update All"), root);
-    updateAllBtn->setObjectName(QStringLiteral("nugetUpdateAllButton"));
 
     topBar->addWidget(new QLabel(QStringLiteral("Project:"), root));
     topBar->addWidget(projCombo);
     topBar->addWidget(searchEdit, 1);
-    topBar->addWidget(prereleaseCheck);
-    topBar->addWidget(new QLabel(QStringLiteral("Source:"), root));
-    topBar->addWidget(feedCombo);
-    topBar->addWidget(updateAllBtn);
     outer->addLayout(topBar);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, root);
-    auto* tabs = new QTabWidget(splitter);
-    tabs->setObjectName(QStringLiteral("nugetTabs"));
+    auto* note = new QLabel(QStringLiteral("Installed packages as listed in the project file (read-only). Searching, "
+                                           "installing and updating packages requires the NuGet client (LTR-7)."),
+                            root);
+    note->setObjectName(QStringLiteral("nugetReadOnlyNote"));
+    note->setWordWrap(true);
+    outer->addWidget(note);
 
-    auto makePkgTable = [](QWidget* tabParent, const QString& objName) {
-        auto* tbl = new QTableWidget(tabParent);
-        tbl->setObjectName(objName);
-        tbl->setColumnCount(3);
-        tbl->setHorizontalHeaderLabels(
-            {QStringLiteral("Package ID"), QStringLiteral("Installed"), QStringLiteral("Latest")});
-        tbl->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-        tbl->setSelectionBehavior(QAbstractItemView::SelectRows);
-        tbl->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        return tbl;
-    };
+    auto* installedTable = new QTableWidget(root);
+    installedTable->setObjectName(QStringLiteral("nugetPackagesTable"));
+    installedTable->setColumnCount(2);
+    installedTable->setHorizontalHeaderLabels(
+        {QStringLiteral("Package ID"), QStringLiteral("Version (from project file)")});
+    installedTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    installedTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    installedTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    outer->addWidget(installedTable, 1);
 
-    auto* installedTable = makePkgTable(tabs, QStringLiteral("nugetPackagesTable"));
-    auto* updatesTable = makePkgTable(tabs, QStringLiteral("nugetUpdatesTable"));
-    auto* browseTable = makePkgTable(tabs, QStringLiteral("nugetBrowseTable"));
-    tabs->addTab(installedTable, QStringLiteral("Installed"));
-    tabs->addTab(updatesTable, QStringLiteral("Updates"));
-    tabs->addTab(browseTable, QStringLiteral("Browse"));
-
-    auto* rightPane = new QWidget(splitter);
-    auto* rightLayout = new QVBoxLayout(rightPane);
-    rightLayout->setContentsMargins(6, 0, 0, 0);
-    auto* detailsPane = new QPlainTextEdit(rightPane);
-    detailsPane->setObjectName(QStringLiteral("nugetDetailsPane"));
-    detailsPane->setReadOnly(true);
-    detailsPane->setPlaceholderText(QStringLiteral("Select a NuGet package to view details, dependencies, and README."));
-    rightLayout->addWidget(detailsPane, 1);
-
-    auto* installRow = new QHBoxLayout();
-    auto* pkgIdEdit = new QLineEdit(rightPane);
-    pkgIdEdit->setObjectName(QStringLiteral("nugetPackageIdEdit"));
-    pkgIdEdit->setPlaceholderText(QStringLiteral("Package ID (e.g. Newtonsoft.Json)"));
-    auto* pkgVerEdit = new QLineEdit(QStringLiteral("13.0.3"), rightPane);
-    pkgVerEdit->setObjectName(QStringLiteral("nugetPackageVersionEdit"));
-    pkgVerEdit->setPlaceholderText(QStringLiteral("Version"));
-    auto* addBtn = new QPushButton(QStringLiteral("Install / Update"), rightPane);
-    addBtn->setObjectName(QStringLiteral("nugetInstallButton"));
-    auto* removeBtn = new QPushButton(QStringLiteral("Uninstall Selected"), rightPane);
-    removeBtn->setObjectName(QStringLiteral("nugetRemoveButton"));
-    installRow->addWidget(pkgIdEdit, 2);
-    installRow->addWidget(pkgVerEdit, 1);
-    installRow->addWidget(addBtn);
-    installRow->addWidget(removeBtn);
-    rightLayout->addLayout(installRow);
-
-    splitter->addWidget(tabs);
-    splitter->addWidget(rightPane);
-    splitter->setStretchFactor(0, 3);
-    splitter->setStretchFactor(1, 2);
-    outer->addWidget(splitter, 1);
-
-    struct CatalogItem {
-        const char* id;
-        const char* stableVer;
-        const char* preVer;
-        const char* summary;
-    };
-    static constexpr std::array<CatalogItem, 8> kCatalog{{
-        {"Newtonsoft.Json", "13.0.3", "13.0.4-beta1", "Popular high-performance JSON framework for .NET."},
-        {"Serilog", "4.0.1", "4.1.0-dev-02235", "Simple .NET logging with fully-structured events."},
-        {"Dapper", "2.1.35", "2.1.44-beta", "A high performance Micro-ORM supporting SQL Server, MySQL, Sqlite, and Postgres."},
-        {"xunit", "2.9.0", "2.9.1-pre.12", "xUnit.net is a developer testing framework for C# and .NET."},
-        {"NUnit", "4.1.0", "4.2.0-beta.1", "NUnit unit-testing framework for all .NET languages."},
-        {"FluentAssertions", "6.12.0", "7.0.0-alpha.4", "Fluent assertion library for .NET unit tests."},
-        {"CommunityToolkit.Mvvm", "8.2.2", "8.3.0-preview1", "Modern, fast, and modular MVVM library for .NET."},
-        {"StackExchange.Redis", "2.8.0", "2.8.12-alpha", "High performance general purpose redis client for .NET."},
-    }};
+    auto* statusLabel = new QLabel(root);
+    statusLabel->setObjectName(QStringLiteral("nugetStatusLabel"));
+    statusLabel->setWordWrap(true);
+    outer->addWidget(statusLabel);
 
     const auto currentCsproj = [=]() -> std::string {
         const QString data = projCombo->currentData().toString();
@@ -1194,153 +1190,44 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
         projCombo->blockSignals(false);
     };
 
-    const auto refreshTables = [=, &fs] {
+    // Every row comes from a PackageReference in the selected project file; a read failure is
+    // reported, never replaced by sample data.
+    const auto refreshTable = [=, &fs] {
         refreshProjects();
-        const std::string csproj = currentCsproj();
-        const QString filter = searchEdit->text().trimmed();
-        const bool includePre = prereleaseCheck->isChecked();
-
-        std::vector<NuGetPackageEntry> installed;
-        if (!csproj.empty()) {
-            if (auto content = fs.readFile(csproj)) {
-                installed = parseCsprojNuGetPackages(*content);
-            }
-        }
-
         installedTable->setRowCount(0);
-        updatesTable->setRowCount(0);
-        browseTable->setRowCount(0);
-
+        const std::string csproj = currentCsproj();
+        if (csproj.empty()) {
+            statusLabel->setText(QStringLiteral("No C# project is selected."));
+            return;
+        }
+        auto content = fs.readFile(csproj);
+        if (!content) {
+            statusLabel->setText(QStringLiteral("Cannot read %1: %2")
+                                     .arg(QFileInfo(toQs(csproj)).fileName(), toQs(content.error().message())));
+            return;
+        }
+        const std::vector<NuGetPackageEntry> installed = parseCsprojNuGetPackages(*content);
+        const QString filter = searchEdit->text().trimmed();
         for (const auto& pkg : installed) {
             const QString qId = toQs(pkg.id);
             if (!filter.isEmpty() && !qId.contains(filter, Qt::CaseInsensitive))
                 continue;
-            QString latest = toQs(pkg.version);
-            for (const auto& cat : kCatalog) {
-                if (qId.compare(QLatin1String(cat.id), Qt::CaseInsensitive) == 0) {
-                    latest = QString::fromLatin1(includePre ? cat.preVer : cat.stableVer);
-                    break;
-                }
-            }
             const int r = installedTable->rowCount();
             installedTable->insertRow(r);
             installedTable->setItem(r, 0, new QTableWidgetItem(qId));
-            installedTable->setItem(r, 1, new QTableWidgetItem(toQs(pkg.version)));
-            installedTable->setItem(r, 2, new QTableWidgetItem(latest));
-
-            if (latest != toQs(pkg.version)) {
-                const int ur = updatesTable->rowCount();
-                updatesTable->insertRow(ur);
-                updatesTable->setItem(ur, 0, new QTableWidgetItem(qId));
-                updatesTable->setItem(ur, 1, new QTableWidgetItem(toQs(pkg.version)));
-                updatesTable->setItem(ur, 2, new QTableWidgetItem(latest));
-            }
+            installedTable->setItem(r, 1,
+                                    new QTableWidgetItem(pkg.version.empty()
+                                                             ? QStringLiteral("(not set in the project file)")
+                                                             : toQs(pkg.version)));
         }
-
-        for (const auto& cat : kCatalog) {
-            const QString qId = QString::fromLatin1(cat.id);
-            if (!filter.isEmpty() && !qId.contains(filter, Qt::CaseInsensitive) &&
-                !QString::fromLatin1(cat.summary).contains(filter, Qt::CaseInsensitive))
-                continue;
-            QString instVer = QStringLiteral("—");
-            for (const auto& pkg : installed) {
-                if (qId.compare(toQs(pkg.id), Qt::CaseInsensitive) == 0) {
-                    instVer = toQs(pkg.version);
-                    break;
-                }
-            }
-            const QString latest = QString::fromLatin1(includePre ? cat.preVer : cat.stableVer);
-            const int br = browseTable->rowCount();
-            browseTable->insertRow(br);
-            browseTable->setItem(br, 0, new QTableWidgetItem(qId));
-            browseTable->setItem(br, 1, new QTableWidgetItem(instVer));
-            browseTable->setItem(br, 2, new QTableWidgetItem(latest));
-        }
+        statusLabel->setText(QStringLiteral("%1 package reference(s) in %2.")
+                                 .arg(installed.size())
+                                 .arg(QFileInfo(toQs(csproj)).fileName()));
     };
-    refreshTables();
+    refreshTable();
 
-    const auto wireTableSelection = [=](QTableWidget* tbl) {
-        QObject::connect(tbl, &QTableWidget::currentCellChanged, root, [tbl, pkgIdEdit, pkgVerEdit, detailsPane](int row, int, int, int) {
-            if (row < 0 || !tbl->item(row, 0))
-                return;
-            const QString id = tbl->item(row, 0)->text();
-            const QString inst = tbl->item(row, 1) ? tbl->item(row, 1)->text() : QString();
-            const QString latest = tbl->item(row, 2) ? tbl->item(row, 2)->text() : inst;
-            pkgIdEdit->setText(id);
-            pkgVerEdit->setText(latest.isEmpty() || latest == QStringLiteral("—") ? inst : latest);
-            QString summary = QStringLiteral("NuGet Package Reference");
-            for (const auto& cat : kCatalog) {
-                if (id.compare(QLatin1String(cat.id), Qt::CaseInsensitive) == 0) {
-                    summary = QString::fromLatin1(cat.summary);
-                    break;
-                }
-            }
-            detailsPane->setPlainText(
-                QStringLiteral("Package: %1\nInstalled: %2\nLatest Available: %3\n\n%4")
-                    .arg(id, inst, latest, summary));
-        });
-    };
-    wireTableSelection(installedTable);
-    wireTableSelection(updatesTable);
-    wireTableSelection(browseTable);
-
-    QObject::connect(projCombo, &QComboBox::currentIndexChanged, root, [=](int) { refreshTables(); });
-    QObject::connect(searchEdit, &QLineEdit::textChanged, root, [=](const QString&) { refreshTables(); });
-    QObject::connect(prereleaseCheck, &QCheckBox::toggled, root, [=](bool) { refreshTables(); });
-
-    QObject::connect(addBtn, &QPushButton::clicked, root, [=, &fs] {
-        const QString id = pkgIdEdit->text().trimmed();
-        const QString ver = pkgVerEdit->text().trimmed();
-        const std::string csproj = currentCsproj();
-        if (id.isEmpty() || ver.isEmpty() || csproj.empty())
-            return;
-        if (auto content = fs.readFile(csproj)) {
-            const std::string updated = upsertCsprojNuGetPackage(*content, id.toStdString(), ver.toStdString());
-            (void)fs.writeFileAtomic(csproj, updated);
-            refreshTables();
-            if (onSaved)
-                onSaved();
-        }
-    });
-
-    QObject::connect(removeBtn, &QPushButton::clicked, root, [=, &fs] {
-        QTableWidget* activeTbl = qobject_cast<QTableWidget*>(tabs->currentWidget());
-        if (!activeTbl)
-            activeTbl = installedTable;
-        const int row = activeTbl->currentRow();
-        const QString id = (row >= 0 && activeTbl->item(row, 0)) ? activeTbl->item(row, 0)->text() : pkgIdEdit->text().trimmed();
-        const std::string csproj = currentCsproj();
-        if (id.isEmpty() || csproj.empty())
-            return;
-        if (auto content = fs.readFile(csproj)) {
-            const std::string updated = removeCsprojNuGetPackage(*content, id.toStdString());
-            (void)fs.writeFileAtomic(csproj, updated);
-            refreshTables();
-            if (onSaved)
-                onSaved();
-        }
-    });
-
-    QObject::connect(updateAllBtn, &QPushButton::clicked, root, [=, &fs] {
-        const std::string csproj = currentCsproj();
-        if (csproj.empty())
-            return;
-        if (auto content = fs.readFile(csproj)) {
-            std::string xml = *content;
-            for (int r = 0; r < updatesTable->rowCount(); ++r) {
-                const QString id = updatesTable->item(r, 0)->text();
-                const QString latest = updatesTable->item(r, 2)->text();
-                xml = upsertCsprojNuGetPackage(xml, id.toStdString(), latest.toStdString());
-            }
-            if (xml != *content) {
-                (void)fs.writeFileAtomic(csproj, xml);
-                refreshTables();
-                if (onSaved)
-                    onSaved();
-            }
-        }
-    });
-
+    QObject::connect(projCombo, &QComboBox::currentIndexChanged, root, [=](int) { refreshTable(); });
+    QObject::connect(searchEdit, &QLineEdit::textChanged, root, [=](const QString&) { refreshTable(); });
     return root;
 }
 
@@ -1348,10 +1235,9 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
                                    std::function<void()> onSaved) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("nugetPackageManagerDialog"));
-    dialog.setWindowTitle(
-        QStringLiteral("NuGet Package Manager — %1").arg(QFileInfo(toQs(csprojPath)).completeBaseName()));
+    dialog.setWindowTitle(QStringLiteral("NuGet Packages — %1").arg(QFileInfo(toQs(csprojPath)).completeBaseName()));
     dialog.setModal(true);
-    dialog.resize(820, 500);
+    dialog.resize(640, 420);
 
     auto* outer = new QVBoxLayout(&dialog);
     outer->addWidget(createNuGetToolWindowWidget(&dialog, fs, {}, csprojPath, std::move(onSaved)), 1);
@@ -1365,55 +1251,27 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
 
 QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
                                          std::function<std::pair<std::string, int>()> activeFileAndLineProvider) {
+    /*
+     * Disabled until it can be real (ADR 0078 truth rule, FND-3). The previous view compiled the
+     * file with a hard-coded clang++ and -std=c++20 instead of the file's own compile command, via
+     * QProcess rather than IProcessLauncher, and showed an invented IL listing for C#. A correct
+     * view needs the file's compile command from the compile database (CPP-3), run through
+     * IProcessLauncher, and the .NET toolchain for IL (LTR-3). This widget starts no process.
+     */
     auto* root = new QWidget(parent);
     root->setObjectName(QStringLiteral("asmViewerWidget"));
     auto* layout = new QVBoxLayout(root);
     layout->setContentsMargins(8, 8, 8, 8);
     layout->setSpacing(6);
 
-    auto* topRow = new QHBoxLayout();
-    topRow->setSpacing(6);
-    auto* optCombo = new QComboBox(root);
-    optCombo->setObjectName(QStringLiteral("asmOptCombo"));
-    optCombo->addItem(QStringLiteral("-O2 (Fast)"), QStringLiteral("-O2"));
-    optCombo->addItem(QStringLiteral("-O0 (None)"), QStringLiteral("-O0"));
-    optCombo->addItem(QStringLiteral("-O1 (Basic)"), QStringLiteral("-O1"));
-    optCombo->addItem(QStringLiteral("-O3 (Max)"), QStringLiteral("-O3"));
-    optCombo->addItem(QStringLiteral("-Os (Size)"), QStringLiteral("-Os"));
-    optCombo->setMinimumContentsLength(10);
-    optCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    optCombo->setMinimumWidth(112);
-    if (QAbstractItemView* v = optCombo->view()) {
-        v->setMinimumWidth(140);
-    }
-
-    auto* syntaxCombo = new QComboBox(root);
-    syntaxCombo->setObjectName(QStringLiteral("asmSyntaxCombo"));
-    syntaxCombo->addItem(QStringLiteral("Intel"), QStringLiteral("-masm=intel"));
-    syntaxCombo->addItem(QStringLiteral("AT&T"), QStringLiteral("-masm=att"));
-    syntaxCombo->setMinimumContentsLength(6);
-    syntaxCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    syntaxCombo->setMinimumWidth(88);
-    if (QAbstractItemView* v = syntaxCombo->view()) {
-        v->setMinimumWidth(110);
-    }
-
-    topRow->addWidget(new QLabel(QStringLiteral("Opt:"), root));
-    topRow->addWidget(optCombo);
-    topRow->addSpacing(6);
-    topRow->addWidget(new QLabel(QStringLiteral("Syntax:"), root));
-    topRow->addWidget(syntaxCombo);
-    topRow->addStretch(1);
-    layout->addLayout(topRow);
-
-    auto* actionRow = new QHBoxLayout();
-    actionRow->setSpacing(6);
-    auto* syncCheck = new QCheckBox(QStringLiteral("Sync with Active Editor"), root);
-    syncCheck->setObjectName(QStringLiteral("asmSyncCheck"));
-    syncCheck->setChecked(true);
-    auto* refreshBtn = new QPushButton(QStringLiteral("Disassemble / View IL"), root);
+    auto* refreshBtn = new QPushButton(QStringLiteral("Disassemble"), root);
     refreshBtn->setObjectName(QStringLiteral("asmRefreshButton"));
-    actionRow->addWidget(syncCheck);
+    refreshBtn->setEnabled(false);
+    const QString reason =
+        QStringLiteral("Disassembly is unavailable: it requires the file's real compile command from the compile "
+                       "database (CPP-3). IL view is unavailable: it requires the .NET toolchain (LTR-3).");
+    refreshBtn->setToolTip(reason);
+    auto* actionRow = new QHBoxLayout();
     actionRow->addStretch(1);
     actionRow->addWidget(refreshBtn);
     layout->addLayout(actionRow);
@@ -1421,145 +1279,14 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
     auto* output = new QPlainTextEdit(root);
     output->setObjectName(QStringLiteral("asmViewerOutput"));
     output->setReadOnly(true);
-    output->setLineWrapMode(QPlainTextEdit::NoWrap);
-    output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    output->setPlaceholderText(
-        QStringLiteral("Open a C/C++ or C# source file and click 'Disassemble / View IL' to inspect compiler output."));
+    output->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    QString text = reason;
+    if (activeFileAndLineProvider) {
+        if (const auto [filePath, line] = activeFileAndLineProvider(); !filePath.empty())
+            text += QStringLiteral("\n\nActive file: %1 (line %2)").arg(toQs(filePath)).arg(line);
+    }
+    output->setPlainText(text);
     layout->addWidget(output, 1);
-
-    struct AsmAsyncState {
-        QPointer<QProcess> activeProcess;
-        QTimer* timeoutTimer = nullptr;
-        std::uint64_t requestId = 0;
-    };
-    auto asyncState = std::make_shared<AsmAsyncState>();
-    asyncState->timeoutTimer = new QTimer(root);
-    asyncState->timeoutTimer->setSingleShot(true);
-
-    QObject::connect(root, &QObject::destroyed, root, [asyncState] {
-        if (asyncState->activeProcess) {
-            asyncState->activeProcess->disconnect();
-            asyncState->activeProcess->kill();
-        }
-    });
-
-    const auto runDisassembly = [=] {
-        if (!activeFileAndLineProvider)
-            return;
-
-        const std::uint64_t reqId = ++asyncState->requestId;
-        if (asyncState->timeoutTimer) {
-            asyncState->timeoutTimer->stop();
-            asyncState->timeoutTimer->disconnect();
-        }
-        if (asyncState->activeProcess) {
-            asyncState->activeProcess->disconnect();
-            asyncState->activeProcess->kill();
-            asyncState->activeProcess->deleteLater();
-            asyncState->activeProcess = nullptr;
-        }
-
-        const auto [filePath, line] = activeFileAndLineProvider();
-        if (filePath.empty()) {
-            output->setPlainText(QStringLiteral("; No active source file in editor."));
-            return;
-        }
-        const QString qPath = toQs(filePath);
-        if (qPath.endsWith(QStringLiteral(".cs"), Qt::CaseInsensitive)) {
-            output->setPlainText(
-                QStringLiteral("// .NET IL & Metadata Projection for %1 (line %2)\n"
-                               "// Use Build > Build Solution to emit assembly IL in bin/Debug.\n\n"
-                               ".assembly extern System.Runtime {}\n"
-                               ".module '%3'\n"
-                               "// Source line %2 synced")
-                    .arg(QFileInfo(qPath).fileName())
-                    .arg(line)
-                    .arg(QFileInfo(qPath).completeBaseName()));
-            return;
-        }
-
-        QString clangExe = QStringLiteral("clang++");
-        if (QFileInfo::exists(QStringLiteral("E:/sdk/llvm-23.1.4/bin/clang++.exe"))) {
-            clangExe = QStringLiteral("E:/sdk/llvm-23.1.4/bin/clang++.exe");
-        }
-        QString optFlag = optCombo->currentData().toString();
-        if (optFlag.isEmpty()) {
-            optFlag = optCombo->currentText().section(QLatin1Char(' '), 0, 0);
-        }
-        QString syntaxFlag = syntaxCombo->currentData().toString();
-        if (syntaxFlag.isEmpty()) {
-            syntaxFlag = syntaxCombo->currentIndex() == 0 ? QStringLiteral("-masm=intel") : QStringLiteral("-masm=att");
-        }
-        const QStringList args{
-            QStringLiteral("-S"),
-            QStringLiteral("-std=c++20"),
-            optFlag,
-            QStringLiteral("-fno-discard-value-names"),
-            syntaxFlag,
-            QDir::toNativeSeparators(qPath),
-            QStringLiteral("-o"),
-            QStringLiteral("-"),
-        };
-
-        output->setPlainText(QStringLiteral("; Generating %1 assembly (%2) for %3...")
-                                 .arg(syntaxCombo->currentText(), optFlag, QFileInfo(qPath).fileName()));
-
-        auto* proc = new QProcess(root);
-        asyncState->activeProcess = proc;
-
-        QObject::connect(asyncState->timeoutTimer, &QTimer::timeout, root, [=] {
-            if (asyncState->requestId != reqId || asyncState->activeProcess != proc)
-                return;
-            proc->disconnect();
-            proc->kill();
-            proc->deleteLater();
-            asyncState->activeProcess = nullptr;
-            output->setPlainText(QStringLiteral("; Compiler disassembly timed out."));
-        });
-
-        QObject::connect(proc, &QProcess::errorOccurred, root, [=](QProcess::ProcessError err) {
-            if (asyncState->requestId != reqId || asyncState->activeProcess != proc)
-                return;
-            if (err == QProcess::FailedToStart) {
-                if (asyncState->timeoutTimer)
-                    asyncState->timeoutTimer->stop();
-                asyncState->activeProcess = nullptr;
-                output->setPlainText(
-                    QStringLiteral("; Failed to start compiler (%1): %2").arg(clangExe, proc->errorString()));
-                proc->deleteLater();
-            }
-        });
-
-        QObject::connect(proc, &QProcess::finished, root, [=](int, QProcess::ExitStatus) {
-            if (asyncState->requestId != reqId || asyncState->activeProcess != proc)
-                return;
-            if (asyncState->timeoutTimer)
-                asyncState->timeoutTimer->stop();
-            asyncState->activeProcess = nullptr;
-            const QString stdOut = QString::fromUtf8(proc->readAllStandardOutput());
-            const QString stdErr = QString::fromUtf8(proc->readAllStandardError());
-            if (!stdOut.isEmpty()) {
-                output->setPlainText(stdOut);
-            } else {
-                output->setPlainText(QStringLiteral("; Compiler output (%1):\n%2").arg(clangExe, stdErr));
-            }
-            proc->deleteLater();
-        });
-
-        asyncState->timeoutTimer->start(8000);
-        proc->start(clangExe, args);
-    };
-
-    QObject::connect(refreshBtn, &QPushButton::clicked, root, runDisassembly);
-    QObject::connect(optCombo, &QComboBox::currentIndexChanged, root, [=](int) {
-        if (syncCheck->isChecked())
-            runDisassembly();
-    });
-    QObject::connect(syntaxCombo, &QComboBox::currentIndexChanged, root, [=](int) {
-        if (syncCheck->isChecked())
-            runDisassembly();
-    });
-
     return root;
 }
 
@@ -1645,47 +1372,21 @@ std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_v
     const QString textContent = toQs(content);
     const QStringList lines = textContent.split(QLatin1Char('\n'));
 
-    const QRegularExpression kGTestRe(
-        QStringLiteral(R"(^\s*(?:TEST|TEST_F|TEST_P|TYPED_TEST)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))"));
+    const QRegularExpression kGTestRe(QStringLiteral(
+        R"(^\s*(?:TEST|TEST_F|TEST_P|TYPED_TEST)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))"));
     const QRegularExpression kCatchRe(QStringLiteral(R"re(^\s*(?:TEST_CASE|SCENARIO)\s*\(\s*"([^"]+)")re"));
     const QRegularExpression kCsClassRe(QStringLiteral(R"(\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b)"));
-    const QRegularExpression kCsAttrRe(
-        QStringLiteral(R"(^\s*\[\s*(?:Fact|Theory|Test|TestCase|TestMethod)\b)"));
+    const QRegularExpression kCsAttrRe(QStringLiteral(R"(^\s*\[\s*(?:Fact|Theory|Test|TestCase|TestMethod)\b)"));
     const QRegularExpression kCsMethodRe(
         QStringLiteral(R"(\b(?:void|Task(?:<[^>]+>)?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()"));
     const QRegularExpression kCppMainRe(QStringLiteral(R"(^\s*(?:int|void|auto)\s+main\s*\()"));
-    const QRegularExpression kCsMainRe(
-        QStringLiteral(R"(^\s*(?:(?:public|private|internal|static|async)\s+)*(?:void|int|Task(?:<int>)?)\s+Main\s*\()"));
+    const QRegularExpression kCsMainRe(QStringLiteral(
+        R"(^\s*(?:(?:public|private|internal|static|async)\s+)*(?:void|int|Task(?:<int>)?)\s+Main\s*\()"));
 
     const std::string resolvedSln = solutionName.empty() ? "Solution" : std::string(solutionName);
     const std::string resolvedProj =
         projectName.empty() ? QFileInfo(qPath).dir().dirName().toStdString() : std::string(projectName);
     const std::string resolvedProjPath = std::string(projectPath);
-
-    auto bodyHasExplicitFailure = [&](int startLineIdx) -> bool {
-        int braceDepth = 0;
-        bool seenOpenBrace = false;
-        const int limit = std::min<int>(static_cast<int>(lines.size()), startLineIdx + 30);
-        for (int i = startLineIdx; i < limit; ++i) {
-            const QString& ln = lines[i];
-            if (ln.contains(QStringLiteral("EXPECT_TRUE(false)")) ||
-                ln.contains(QStringLiteral("ASSERT_TRUE(false)")) || ln.contains(QStringLiteral("FAIL()")) ||
-                ln.contains(QStringLiteral("Assert.Fail")) || ln.contains(QStringLiteral("Assert.True(false)"))) {
-                return true;
-            }
-            for (QChar ch : ln) {
-                if (ch == QLatin1Char('{')) {
-                    ++braceDepth;
-                    seenOpenBrace = true;
-                } else if (ch == QLatin1Char('}')) {
-                    --braceDepth;
-                }
-            }
-            if (seenOpenBrace && braceDepth <= 0)
-                break;
-        }
-        return false;
-    };
 
     std::string currentCsClass = QFileInfo(qPath).completeBaseName().toStdString();
     bool pendingCsTestAttr = false;
@@ -1711,7 +1412,6 @@ std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_v
                     entry.line = i + 1;
                     entry.isDotNet = true;
                     entry.isEntryPoint = false;
-                    entry.expectsFailureInSource = bodyHasExplicitFailure(i);
                     results.push_back(std::move(entry));
                     pendingCsTestAttr = false;
                     continue;
@@ -1742,7 +1442,6 @@ std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_v
                 entry.line = i + 1;
                 entry.isDotNet = false;
                 entry.isEntryPoint = false;
-                entry.expectsFailureInSource = bodyHasExplicitFailure(i);
                 results.push_back(std::move(entry));
                 continue;
             }
@@ -1757,7 +1456,6 @@ std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_v
                 entry.line = i + 1;
                 entry.isDotNet = false;
                 entry.isEntryPoint = false;
-                entry.expectsFailureInSource = bodyHasExplicitFailure(i);
                 results.push_back(std::move(entry));
                 continue;
             }
@@ -1856,383 +1554,151 @@ std::vector<DiscoveredTestEntry> discoverWorkspaceUnitTests(io::IFileSystem& fs,
     return allTests;
 }
 
-namespace {
-
-enum class UnitTestRunState : int {
-    NotRun = 0,
-    Running = 1,
-    Passed = 2,
-    Failed = 3,
-    Skipped = 4,
-};
-
-struct UnitTestsPanelState {
-    std::vector<DiscoveredTestEntry> tests;
-    std::vector<UnitTestRunState> states;
-    std::vector<int> durationsMs;
-    std::vector<QString> outputs;
-    std::vector<QStringList> stackLinks;
-    std::vector<QTreeWidgetItem*> leafItems;
-    bool stopRequested = false;
-};
-
-} // namespace
-
 QWidget* createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                                          std::function<const project::SolutionModel*()> solutionProvider,
                                          std::function<std::string()> workspaceRootProvider,
                                          std::function<void(const std::string& path, int line)> onNavigateToSource,
                                          std::function<void(const DiscoveredTestEntry& test)> onDebugTest) {
+    /*
+     * Discovery only (RUN-0, absorbed by FND-3). The tree lists what a source-text scan finds and
+     * marks every test "Discovered, not run". There is no test runner yet: the run and debug
+     * actions are disabled with the owning epic (RUN-7, then RUN-10 for debugging a single test),
+     * so the window starts no process and never shows an outcome, a duration or console text.
+     */
+    static_cast<void>(onDebugTest);
     auto* root = new QWidget(parent);
     root->setObjectName(QStringLiteral("unitTestsToolWindow"));
     auto* outer = new QVBoxLayout(root);
     outer->setContentsMargins(6, 6, 6, 6);
     outer->setSpacing(6);
 
-    auto state = std::make_shared<UnitTestsPanelState>();
+    auto tests = std::make_shared<std::vector<DiscoveredTestEntry>>();
 
-    // Top toolbar
     auto* toolbar = new QHBoxLayout();
-    auto* runAllBtn = new QPushButton(QStringLiteral("▶ Run All"), root);
-    runAllBtn->setObjectName(QStringLiteral("unitTestsRunAllButton"));
-    auto* runSelectedBtn = new QPushButton(QStringLiteral("▶ Run Selected"), root);
-    runSelectedBtn->setObjectName(QStringLiteral("unitTestsRunSelectedButton"));
-    auto* runFailedBtn = new QPushButton(QStringLiteral("↻ Run Failed"), root);
-    runFailedBtn->setObjectName(QStringLiteral("unitTestsRunFailedButton"));
-    auto* repeatUntilFailBtn = new QPushButton(QStringLiteral("∞ Repeat Until Failure"), root);
-    repeatUntilFailBtn->setObjectName(QStringLiteral("unitTestsRepeatUntilFailureButton"));
-    auto* debugSelectedBtn = new QPushButton(QStringLiteral("🐞 Debug Selected Test"), root);
-    debugSelectedBtn->setObjectName(QStringLiteral("unitTestsDebugSelectedButton"));
-    auto* stopBtn = new QPushButton(QStringLiteral("■ Stop"), root);
-    stopBtn->setObjectName(QStringLiteral("unitTestsStopButton"));
-    stopBtn->setEnabled(false);
-    auto* refreshBtn = new QPushButton(QStringLiteral("⟳ Refresh"), root);
+    const auto runnerAction = [root, toolbar](const QString& label, const char* objectName) {
+        auto* button = new QPushButton(label, root);
+        button->setObjectName(QLatin1String(objectName));
+        button->setEnabled(false);
+        button->setToolTip(testRunnerUnavailable());
+        toolbar->addWidget(button);
+        return button;
+    };
+    runnerAction(QStringLiteral("Run All"), "unitTestsRunAllButton");
+    runnerAction(QStringLiteral("Run Selected"), "unitTestsRunSelectedButton");
+    runnerAction(QStringLiteral("Run Failed"), "unitTestsRunFailedButton");
+    runnerAction(QStringLiteral("Repeat Until Failure"), "unitTestsRepeatUntilFailureButton");
+    runnerAction(QStringLiteral("Debug Selected Test"), "unitTestsDebugSelectedButton");
+    runnerAction(QStringLiteral("Stop"), "unitTestsStopButton");
+    auto* refreshBtn = new QPushButton(QStringLiteral("Refresh"), root);
     refreshBtn->setObjectName(QStringLiteral("unitTestsRefreshButton"));
+    refreshBtn->setToolTip(QStringLiteral("Scan the project sources for test declarations again."));
+    toolbar->addWidget(refreshBtn);
 
     auto* filterEdit = new QLineEdit(root);
     filterEdit->setObjectName(QStringLiteral("unitTestsFilterEdit"));
     filterEdit->setPlaceholderText(QStringLiteral("Filter tests by suite or name..."));
-
-    auto* summaryLabel = new QLabel(QStringLiteral("Passed: 0 | Failed: 0 | Total: 0"), root);
-    summaryLabel->setObjectName(QStringLiteral("unitTestsSummaryLabel"));
-
-    toolbar->addWidget(runAllBtn);
-    toolbar->addWidget(runSelectedBtn);
-    toolbar->addWidget(runFailedBtn);
-    toolbar->addWidget(repeatUntilFailBtn);
-    toolbar->addWidget(debugSelectedBtn);
-    toolbar->addWidget(stopBtn);
-    toolbar->addWidget(refreshBtn);
     toolbar->addWidget(filterEdit, 1);
-    toolbar->addWidget(summaryLabel);
     outer->addLayout(toolbar);
 
-    // Main horizontal splitter: Hierarchical Tree on left, Output + Clickable Stack Trace on right
+    auto* summaryLabel = new QLabel(root);
+    summaryLabel->setObjectName(QStringLiteral("unitTestsSummaryLabel"));
+    summaryLabel->setWordWrap(true);
+    outer->addWidget(summaryLabel);
+
     auto* splitter = new QSplitter(Qt::Horizontal, root);
     auto* tree = new QTreeWidget(splitter);
     tree->setObjectName(QStringLiteral("unitTestsTreeWidget"));
-    tree->setColumnCount(3);
+    tree->setColumnCount(2);
     tree->setHeaderLabels({
         QStringLiteral("Test Hierarchy (Solution → Project → Suite → Test)"),
         QStringLiteral("Status"),
-        QStringLiteral("Duration"),
     });
     tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    tree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     splitter->addWidget(tree);
 
     auto* rightPane = new QWidget(splitter);
     auto* rightLayout = new QVBoxLayout(rightPane);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(4);
-
-    auto* outputView = new QPlainTextEdit(rightPane);
-    outputView->setObjectName(QStringLiteral("unitTestsOutputView"));
-    outputView->setReadOnly(true);
-    outputView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    outputView->setPlaceholderText(QStringLiteral("Select a test node to view its output and assertion stack trace."));
-
-    auto* stackLabel = new QLabel(QStringLiteral("Stack Trace / Source Locations (Click to jump):"), rightPane);
-    auto* stackList = new QListWidget(rightPane);
-    stackList->setObjectName(QStringLiteral("unitTestsStackTraceLinks"));
-    stackList->setMaximumHeight(110);
-
-    rightLayout->addWidget(outputView, 1);
-    rightLayout->addWidget(stackLabel);
-    rightLayout->addWidget(stackList);
+    auto* detailsView = new QPlainTextEdit(rightPane);
+    detailsView->setObjectName(QStringLiteral("unitTestsOutputView"));
+    detailsView->setReadOnly(true);
+    detailsView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    detailsView->setPlaceholderText(QStringLiteral("Select a test to see where it is declared."));
+    auto* locationLabel = new QLabel(QStringLiteral("Declaration (click to jump):"), rightPane);
+    auto* locationList = new QListWidget(rightPane);
+    locationList->setObjectName(QStringLiteral("unitTestsStackTraceLinks"));
+    locationList->setMaximumHeight(110);
+    rightLayout->addWidget(detailsView, 1);
+    rightLayout->addWidget(locationLabel);
+    rightLayout->addWidget(locationList);
     splitter->addWidget(rightPane);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 1);
     outer->addWidget(splitter, 1);
 
-    const auto statusTextFor = [](UnitTestRunState st) -> QString {
-        switch (st) {
-        case UnitTestRunState::Running: return QStringLiteral("⏳ Running");
-        case UnitTestRunState::Passed: return QStringLiteral("✓ Passed");
-        case UnitTestRunState::Failed: return QStringLiteral("✗ Failed");
-        case UnitTestRunState::Skipped: return QStringLiteral("↷ Skipped");
-        case UnitTestRunState::NotRun:
-        default: return QStringLiteral("○ Not Run");
-        }
-    };
-
-    const auto updateSummaryAndParents = [=] {
-        int passed = 0;
-        int failed = 0;
-        for (std::size_t i = 0; i < state->tests.size(); ++i) {
-            if (state->states[i] == UnitTestRunState::Passed)
-                ++passed;
-            else if (state->states[i] == UnitTestRunState::Failed)
-                ++failed;
-            if (i < state->leafItems.size() && state->leafItems[i]) {
-                state->leafItems[i]->setText(1, statusTextFor(state->states[i]));
-                state->leafItems[i]->setText(
-                    2, state->durationsMs[i] > 0 ? QStringLiteral("%1 ms").arg(state->durationsMs[i]) : QString());
-            }
-        }
-        // Roll up status and duration to Suite -> Project -> Solution parent nodes
-        auto rollupItem = [&](QTreeWidgetItem* item, auto& selfRef) -> std::pair<UnitTestRunState, int> {
-            const int idx = item->data(0, Qt::UserRole).toInt();
-            if (idx >= 0 && static_cast<std::size_t>(idx) < state->tests.size()) {
-                return {state->states[static_cast<std::size_t>(idx)],
-                        state->durationsMs[static_cast<std::size_t>(idx)]};
-            }
-            UnitTestRunState agg = UnitTestRunState::NotRun;
-            int totalMs = 0;
-            for (int c = 0; c < item->childCount(); ++c) {
-                const auto [childSt, childMs] = selfRef(item->child(c), selfRef);
-                totalMs += childMs;
-                if (childSt == UnitTestRunState::Failed)
-                    agg = UnitTestRunState::Failed;
-                else if (childSt == UnitTestRunState::Running && agg != UnitTestRunState::Failed)
-                    agg = UnitTestRunState::Running;
-                else if (childSt == UnitTestRunState::Passed && agg == UnitTestRunState::NotRun)
-                    agg = UnitTestRunState::Passed;
-            }
-            item->setText(1, statusTextFor(agg));
-            item->setText(2, totalMs > 0 ? QStringLiteral("%1 ms").arg(totalMs) : QString());
-            return {agg, totalMs};
-        };
-        for (int t = 0; t < tree->topLevelItemCount(); ++t) {
-            rollupItem(tree->topLevelItem(t), rollupItem);
-        }
-        summaryLabel->setText(QStringLiteral("Passed: %1 | Failed: %2 | Total: %3")
-                                  .arg(passed)
-                                  .arg(failed)
-                                  .arg(state->tests.size()));
-    };
+    const QString discoveredStatus = QStringLiteral("Discovered, not run");
 
     const auto showTestDetails = [=](int idx) {
-        stackList->clear();
-        if (idx < 0 || static_cast<std::size_t>(idx) >= state->tests.size()) {
-            outputView->clear();
+        locationList->clear();
+        if (idx < 0 || static_cast<std::size_t>(idx) >= tests->size()) {
+            detailsView->clear();
             return;
         }
-        const auto& t = state->tests[static_cast<std::size_t>(idx)];
-        const QString& out = state->outputs[static_cast<std::size_t>(idx)];
-        outputView->setPlainText(
-            out.isEmpty()
-                ? QStringLiteral("Test: %1.%2\nSource: %3:%4\nStatus: Not run yet.")
-                      .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                      .arg(t.line)
-                : out);
-        for (const QString& link : state->stackLinks[static_cast<std::size_t>(idx)]) {
-            stackList->addItem(link);
-        }
-        if (stackList->count() == 0 && !t.filePath.empty()) {
-            stackList->addItem(QStringLiteral("%1:%2").arg(toQs(t.filePath)).arg(t.line));
-        }
+        const auto& t = (*tests)[static_cast<std::size_t>(idx)];
+        detailsView->setPlainText(QStringLiteral("Test: %1.%2\nDeclared in: %3:%4\nStatus: %5. Running tests %6")
+                                      .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
+                                      .arg(t.line)
+                                      .arg(discoveredStatus, QStringLiteral("requires the test runner (RUN-7).")));
+        if (!t.filePath.empty())
+            locationList->addItem(QStringLiteral("%1:%2").arg(toQs(t.filePath)).arg(t.line));
     };
 
     const auto rebuildTree = [=, &fs] {
         const project::SolutionModel* sln = solutionProvider ? solutionProvider() : nullptr;
         const std::string wsRoot = workspaceRootProvider ? workspaceRootProvider() : std::string{};
-        state->tests = discoverWorkspaceUnitTests(fs, sln, wsRoot);
-        state->states.assign(state->tests.size(), UnitTestRunState::NotRun);
-        state->durationsMs.assign(state->tests.size(), 0);
-        state->outputs.assign(state->tests.size(), QString());
-        state->stackLinks.assign(state->tests.size(), QStringList());
-        state->leafItems.assign(state->tests.size(), nullptr);
+        *tests = discoverWorkspaceUnitTests(fs, sln, wsRoot);
 
         const QString filter = filterEdit->text().trimmed();
         tree->clear();
-
         std::map<std::string, QTreeWidgetItem*> slnNodes;
         std::map<std::string, QTreeWidgetItem*> projNodes;
         std::map<std::string, QTreeWidgetItem*> suiteNodes;
+        const auto groupNode = [&](std::map<std::string, QTreeWidgetItem*>& nodes, const std::string& key,
+                                   const std::string& label, QTreeWidgetItem* parentItem) {
+            if (auto it = nodes.find(key); it != nodes.end())
+                return it->second;
+            auto* item = parentItem ? new QTreeWidgetItem(parentItem, {toQs(label), QString()})
+                                    : new QTreeWidgetItem(tree, {toQs(label), QString()});
+            item->setData(0, Qt::UserRole, -1);
+            nodes[key] = item;
+            return item;
+        };
 
-        for (std::size_t i = 0; i < state->tests.size(); ++i) {
-            const auto& t = state->tests[i];
+        std::size_t shown = 0;
+        for (std::size_t i = 0; i < tests->size(); ++i) {
+            const auto& t = (*tests)[i];
             if (!filter.isEmpty() && !toQs(t.suiteName).contains(filter, Qt::CaseInsensitive) &&
                 !toQs(t.testName).contains(filter, Qt::CaseInsensitive) &&
                 !toQs(t.projectName).contains(filter, Qt::CaseInsensitive)) {
                 continue;
             }
-            QTreeWidgetItem* slnItem = nullptr;
-            if (auto it = slnNodes.find(t.solutionName); it != slnNodes.end()) {
-                slnItem = it->second;
-            } else {
-                slnItem = new QTreeWidgetItem(tree, {toQs(t.solutionName), QStringLiteral("○ Not Run"), QString()});
-                slnItem->setData(0, Qt::UserRole, -1);
-                slnNodes[t.solutionName] = slnItem;
-            }
-
+            QTreeWidgetItem* slnItem = groupNode(slnNodes, t.solutionName, t.solutionName, nullptr);
             const std::string projKey = t.solutionName + "::" + t.projectName;
-            QTreeWidgetItem* projItem = nullptr;
-            if (auto it = projNodes.find(projKey); it != projNodes.end()) {
-                projItem = it->second;
-            } else {
-                projItem = new QTreeWidgetItem(slnItem, {toQs(t.projectName), QStringLiteral("○ Not Run"), QString()});
-                projItem->setData(0, Qt::UserRole, -1);
-                projNodes[projKey] = projItem;
-            }
-
-            const std::string suiteKey = projKey + "::" + t.suiteName;
-            QTreeWidgetItem* suiteItem = nullptr;
-            if (auto it = suiteNodes.find(suiteKey); it != suiteNodes.end()) {
-                suiteItem = it->second;
-            } else {
-                suiteItem = new QTreeWidgetItem(projItem, {toQs(t.suiteName), QStringLiteral("○ Not Run"), QString()});
-                suiteItem->setData(0, Qt::UserRole, -1);
-                suiteNodes[suiteKey] = suiteItem;
-            }
-
-            auto* leaf = new QTreeWidgetItem(suiteItem, {toQs(t.testName), QStringLiteral("○ Not Run"), QString()});
+            QTreeWidgetItem* projItem = groupNode(projNodes, projKey, t.projectName, slnItem);
+            QTreeWidgetItem* suiteItem = groupNode(suiteNodes, projKey + "::" + t.suiteName, t.suiteName, projItem);
+            auto* leaf = new QTreeWidgetItem(suiteItem, {toQs(t.testName), discoveredStatus});
             leaf->setData(0, Qt::UserRole, static_cast<int>(i));
-            state->leafItems[i] = leaf;
+            ++shown;
         }
         tree->expandAll();
-        updateSummaryAndParents();
-        if (!state->tests.empty()) {
-            showTestDetails(0);
-        }
+        // Counts what the scan found; there are no run results to count.
+        summaryLabel->setText(QStringLiteral("%1 test(s) discovered in source, none run. Running and debugging tests "
+                                             "requires the test runner (RUN-7).")
+                                  .arg(shown));
+        showTestDetails(tests->empty() ? -1 : 0);
     };
-
-    const auto executeTestIndices = [=](const std::vector<std::size_t>& indices, int repeatCount = 1) {
-        if (indices.empty())
-            return;
-        state->stopRequested = false;
-        stopBtn->setEnabled(true);
-        for (int pass = 0; pass < repeatCount && !state->stopRequested; ++pass) {
-            bool anyFailed = false;
-            for (std::size_t idx : indices) {
-                if (state->stopRequested || idx >= state->tests.size())
-                    break;
-                state->states[idx] = UnitTestRunState::Running;
-                const auto& t = state->tests[idx];
-                const bool failed = t.expectsFailureInSource;
-                state->states[idx] = failed ? UnitTestRunState::Failed : UnitTestRunState::Passed;
-                state->durationsMs[idx] = 2 + static_cast<int>((idx % 7) + 1);
-                const QString locLink = QStringLiteral("%1:%2").arg(toQs(t.filePath)).arg(t.line);
-                state->stackLinks[idx] = {locLink};
-                if (t.isDotNet) {
-                    state->outputs[idx] =
-                        failed ? QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [FAIL]\n"
-                                                "  Assert.True() Failure\n"
-                                                "  Stack Trace:\n"
-                                                "     at %2.%3() in %4:line %5\n")
-                                     .arg(state->durationsMs[idx])
-                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                                     .arg(t.line)
-                               : QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [PASS] (%1 ms)\n"
-                                                "  Source: %4:%5\n")
-                                     .arg(state->durationsMs[idx])
-                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                                     .arg(t.line);
-                } else {
-                    state->outputs[idx] =
-                        failed ? QStringLiteral("[ RUN      ] %1.%2\n"
-                                                "%3(%4): error: Value of: assertion failed in %1.%2\n"
-                                                "[  FAILED  ] %1.%2 (%5 ms)\n")
-                                     .arg(toQs(t.suiteName), toQs(t.testName), toQs(t.filePath))
-                                     .arg(t.line)
-                                     .arg(state->durationsMs[idx])
-                               : QStringLiteral("[ RUN      ] %1.%2\n"
-                                                "[       OK ] %1.%2 (%3 ms)\n"
-                                                "Source: %4:%5\n")
-                                     .arg(toQs(t.suiteName), toQs(t.testName))
-                                     .arg(state->durationsMs[idx])
-                                     .arg(toQs(t.filePath))
-                                     .arg(t.line);
-                }
-                if (failed)
-                    anyFailed = true;
-            }
-            updateSummaryAndParents();
-            if (anyFailed)
-                break;
-        }
-        stopBtn->setEnabled(false);
-        if (!indices.empty()) {
-            showTestDetails(static_cast<int>(indices.front()));
-        }
-    };
-
-    const auto collectSubtreeIndices = [](QTreeWidgetItem* item, auto& selfRef, std::vector<std::size_t>& out) -> void {
-        if (!item)
-            return;
-        const int idx = item->data(0, Qt::UserRole).toInt();
-        if (idx >= 0) {
-            out.push_back(static_cast<std::size_t>(idx));
-            return;
-        }
-        for (int c = 0; c < item->childCount(); ++c) {
-            selfRef(item->child(c), selfRef, out);
-        }
-    };
-
-    QObject::connect(runAllBtn, &QPushButton::clicked, root, [=] {
-        if (state->tests.empty())
-            rebuildTree();
-        std::vector<std::size_t> all(state->tests.size());
-        for (std::size_t i = 0; i < state->tests.size(); ++i)
-            all[i] = i;
-        executeTestIndices(all, 1);
-    });
-
-    QObject::connect(runSelectedBtn, &QPushButton::clicked, root, [=] {
-        std::vector<std::size_t> indices;
-        if (QTreeWidgetItem* cur = tree->currentItem()) {
-            collectSubtreeIndices(cur, collectSubtreeIndices, indices);
-        } else if (!state->tests.empty()) {
-            indices.push_back(0);
-        }
-        executeTestIndices(indices, 1);
-    });
-
-    QObject::connect(runFailedBtn, &QPushButton::clicked, root, [=] {
-        std::vector<std::size_t> failed;
-        for (std::size_t i = 0; i < state->tests.size(); ++i) {
-            if (state->states[i] == UnitTestRunState::Failed)
-                failed.push_back(i);
-        }
-        executeTestIndices(failed, 1);
-    });
-
-    QObject::connect(repeatUntilFailBtn, &QPushButton::clicked, root, [=] {
-        std::vector<std::size_t> all(state->tests.size());
-        for (std::size_t i = 0; i < state->tests.size(); ++i)
-            all[i] = i;
-        executeTestIndices(all, 5);
-    });
-
-    QObject::connect(debugSelectedBtn, &QPushButton::clicked, root, [=] {
-        std::vector<std::size_t> indices;
-        if (QTreeWidgetItem* cur = tree->currentItem()) {
-            collectSubtreeIndices(cur, collectSubtreeIndices, indices);
-        } else if (!state->tests.empty()) {
-            indices.push_back(0);
-        }
-        if (!indices.empty() && indices.front() < state->tests.size() && onDebugTest) {
-            onDebugTest(state->tests[indices.front()]);
-        }
-    });
-
-    QObject::connect(stopBtn, &QPushButton::clicked, root, [=] {
-        state->stopRequested = true;
-        stopBtn->setEnabled(false);
-    });
 
     QObject::connect(refreshBtn, &QPushButton::clicked, root, rebuildTree);
     QObject::connect(filterEdit, &QLineEdit::textChanged, root, [=](const QString&) { rebuildTree(); });
@@ -2249,13 +1715,13 @@ QWidget* createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
         if (!item || !onNavigateToSource)
             return;
         const int idx = item->data(0, Qt::UserRole).toInt();
-        if (idx >= 0 && static_cast<std::size_t>(idx) < state->tests.size()) {
-            const auto& t = state->tests[static_cast<std::size_t>(idx)];
+        if (idx >= 0 && static_cast<std::size_t>(idx) < tests->size()) {
+            const auto& t = (*tests)[static_cast<std::size_t>(idx)];
             onNavigateToSource(t.filePath, t.line);
         }
     });
 
-    QObject::connect(stackList, &QListWidget::itemClicked, root, [=](QListWidgetItem* item) {
+    QObject::connect(locationList, &QListWidget::itemClicked, root, [=](QListWidgetItem* item) {
         if (!item || !onNavigateToSource)
             return;
         const QString text = item->text();

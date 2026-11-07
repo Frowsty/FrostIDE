@@ -172,8 +172,8 @@ ConfigurationCombo::ConfigurationCombo(BuildController& controller, QWidget* par
             }
             return;
         }
-        const std::size_t configIndex = data.isValid() ? static_cast<std::size_t>(data.toInt())
-                                                       : static_cast<std::size_t>(index);
+        const std::size_t configIndex =
+            data.isValid() ? static_cast<std::size_t>(data.toInt()) : static_cast<std::size_t>(index);
         if (!m_controller.setActiveConfiguration(configIndex)) {
             showActive(); // Refused (a build started, say): snap back; requestFailed() says why.
         }

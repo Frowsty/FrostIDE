@@ -5,13 +5,20 @@
 # runtime windeployqt picks for frost_app.dll, the .NET Framework ProjectHost (which uses installed
 # Visual Studio MSBuild), and the platform plugins (including the build's offscreen
 # plugin too, for --selftest), and the licence files (LICENSE, NOTICE, the vendored sources'
-# LICENSE files under licenses\). Windows only.
+# LICENSE files under licenses\). Release and RelWithDebInfo (and Debug with -BundleTools) also
+# bundle the pinned clangd with its resource directory, lldb-dap, LuaLS (ADR 0079), the managed
+# language server and the managed debugger; a missing one fails the stage (FND-13). Next to the
+# folder, <Destination>-symbols.zip holds frost.exe and frost_app.dll with the PDBs whose GUID and
+# age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage.ps1 -Destination E:\FrostBuilds\preview\x
 #              -QtSourceArchive <pinned-qtbase-source.tar.xz>
 #              [-Config Release|RelWithDebInfo] [-BuildDir build\win-clangcl] [-Jobs 6] [-SkipBuild] [-Force]
+#              [-Python <python.exe>] [-BundleTools]
 #
-# The destination must not exist or be empty; -Force replaces it. -SkipBuild stages what the build
+# -Python defaults to the SDK's (E:\sdk\py\Scripts\python.exe), which runs tools/symbolize.py.
+# The destination and its symbol archive must not exist (or the folder be empty); -Force replaces
+# them. -SkipBuild stages what the build
 # tree already holds (also -Config Debug, which the script's test uses). -WinDeployQt overrides the
 # windeployqt.exe of the pinned Qt (E:\sdk\qt\<version>\msvc2022_64\bin, sdk\sdk.lock.json). The
 # script then checks that the folder holds frost.exe, frost_app.dll and Qt's Windows platform
@@ -29,6 +36,7 @@ param(
     [string]$QtSourceArchive = '',
     [string]$ManagedServerDir = 'E:\FrostBuilds\managed-server-0.28.0-reviewed',
     [string]$ManagedDebugDir = 'E:\FrostBuilds\managed-debug\installed-app-v13\FrostManagedDebug',
+    [string]$Python = '',
     [switch]$BundleTools,
     [switch]$SkipBuild,
     [switch]$Force
@@ -88,13 +96,56 @@ foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpt
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 
-# 2. A fresh destination.
+# The bundled tools must all be there (FND-13): a stage without one would ship a feature that
+# cannot work, so a missing tool fails here, before the destination is touched.
+$bundle = $Config -ne 'Debug' -or $BundleTools
+$llvmRel = "llvm-$($lock.windows.llvm.version)"
+$clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
+$clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
+$lldbRel = "lldb-$($lock.windows.lldb.version)"
+$lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
+$lldbFiles = @('lldb-dap.exe', 'liblldb.dll', 'lldb-argdumper.exe')
+$lualsRel = "luals-$($lock.windows.luals.version)"
+$lualsSource = Join-Path $SdkRoot $lualsRel
+if ($bundle) {
+    if (-not (Test-Path -LiteralPath $clangdSource -PathType Leaf)) { Fail "missing bundled clangd: $clangdSource" }
+    if (-not (Test-Path -LiteralPath $clangLibSource -PathType Container)) {
+        Fail "missing bundled clangd resource directory: $clangLibSource"
+    }
+    foreach ($lldbFile in $lldbFiles) {
+        $path = Join-Path $lldbSourceDir $lldbFile
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled lldb-dap file: $path" }
+    }
+    foreach ($name in @('bin\lua-language-server.exe', 'main.lua', 'LICENSE')) {
+        $path = Join-Path $lualsSource $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled LuaLS file: $path (tools\bootstrap.ps1 -Only luals)" }
+    }
+    if (-not $ManagedServerDir -or -not (Test-Path -LiteralPath (Join-Path $ManagedServerDir 'CSharpLanguageServer.dll') -PathType Leaf)) {
+        Fail "missing bundled managed language server: no CSharpLanguageServer.dll in '$ManagedServerDir'"
+    }
+    if (-not $ManagedDebugDir -or -not (Test-Path -LiteralPath (Join-Path $ManagedDebugDir 'adapter\netcoredbg.exe') -PathType Leaf)) {
+        Fail "missing bundled managed debugger: no adapter\netcoredbg.exe in '$ManagedDebugDir'"
+    }
+}
+
+# The symbol archive goes next to the stage (FND-13), written by tools/symbolize.py.
+if (-not $Python) { $Python = Join-Path $SdkRoot 'py\Scripts\python.exe' }
+if (-not [System.IO.Path]::IsPathRooted($Python) -or -not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    Fail "no Python at $Python for the symbol archive (-Python)"
+}
+$symbolArchive = $Destination.TrimEnd('\', '/') + '-symbols.zip'
+
+# 2. A fresh destination (and symbol archive).
 if (Test-Path -LiteralPath $Destination) {
     $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
     if ($existing.Count -gt 0) {
         if (-not $Force) { Fail "$Destination is not empty (use -Force to replace it)" }
         Remove-Item -LiteralPath $Destination -Recurse -Force
     }
+}
+if (Test-Path -LiteralPath $symbolArchive) {
+    if (-not $Force) { Fail "$symbolArchive exists (use -Force to replace it)" }
+    Remove-Item -LiteralPath $symbolArchive -Force
 }
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
@@ -131,50 +182,44 @@ $unityDestination = Join-Path $Destination 'unity'
 New-Item -ItemType Directory -Force -Path $unityDestination | Out-Null
 Copy-Item -LiteralPath $unityPackage -Destination $unityDestination -Recurse
 
-# 3b. Bundled language servers and debug adapters (clangd, lldb-dap, csharp-ls, netcoredbg + PdbGuard).
-if ($Config -ne 'Debug' -or $BundleTools) {
-    $llvmRel = "llvm-$($lock.windows.llvm.version)"
-    $clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
-    if (Test-Path -LiteralPath $clangdSource -PathType Leaf) {
-        $llvmBinDest = Join-Path $Destination "$llvmRel\bin"
-        New-Item -ItemType Directory -Force -Path $llvmBinDest | Out-Null
-        Copy-Item -LiteralPath $clangdSource -Destination $llvmBinDest -Force
-        $clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
-        if (Test-Path -LiteralPath $clangLibSource -PathType Container) {
-            $llvmLibDest = Join-Path $Destination "$llvmRel\lib"
-            New-Item -ItemType Directory -Force -Path $llvmLibDest | Out-Null
-            Copy-Item -LiteralPath $clangLibSource -Destination $llvmLibDest -Recurse -Force
-        }
+# 3b. Bundled language servers and debug adapters (clangd, lldb-dap, LuaLS, csharp-ls, netcoredbg +
+# PdbGuard), checked before the destination was touched (FND-13).
+if ($bundle) {
+    $llvmBinDest = Join-Path $Destination "$llvmRel\bin"
+    New-Item -ItemType Directory -Force -Path $llvmBinDest | Out-Null
+    Copy-Item -LiteralPath $clangdSource -Destination $llvmBinDest -Force
+    $llvmLibDest = Join-Path $Destination "$llvmRel\lib"
+    New-Item -ItemType Directory -Force -Path $llvmLibDest | Out-Null
+    Copy-Item -LiteralPath $clangLibSource -Destination $llvmLibDest -Recurse -Force
+    $lldbBinDest = Join-Path $Destination "$lldbRel\bin"
+    New-Item -ItemType Directory -Force -Path $lldbBinDest | Out-Null
+    foreach ($lldbFile in $lldbFiles) {
+        Copy-Item -LiteralPath (Join-Path $lldbSourceDir $lldbFile) -Destination $lldbBinDest -Force
     }
-    $lldbRel = "lldb-$($lock.windows.lldb.version)"
-    $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
-    if (Test-Path -LiteralPath (Join-Path $lldbSourceDir 'lldb-dap.exe') -PathType Leaf) {
-        $lldbBinDest = Join-Path $Destination "$lldbRel\bin"
-        New-Item -ItemType Directory -Force -Path $lldbBinDest | Out-Null
-        foreach ($lldbFile in @('lldb-dap.exe', 'liblldb.dll', 'lldb-argdumper.exe')) {
-            $srcFile = Join-Path $lldbSourceDir $lldbFile
-            if (Test-Path -LiteralPath $srcFile -PathType Leaf) {
-                Copy-Item -LiteralPath $srcFile -Destination $lldbBinDest -Force
-            }
-        }
+    # LuaLS (ADR 0079) as installed, without the install marker or a log a run left behind. The
+    # locator looks for <exe dir>\luals-<version>\bin first, and FrostIDE points LuaLS's own log and
+    # meta output under the user profile, so the staged folder stays read-only at run time.
+    $lualsDest = Join-Path $Destination $lualsRel
+    Copy-Item -LiteralPath $lualsSource -Destination $lualsDest -Recurse -Force
+    foreach ($generated in @('.frost-installed', 'log')) {
+        $path = Join-Path $lualsDest $generated
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     }
-    if ($ManagedServerDir -and (Test-Path -LiteralPath (Join-Path $ManagedServerDir 'CSharpLanguageServer.dll') -PathType Leaf)) {
-        $managedDest = Join-Path $Destination 'managed'
-        New-Item -ItemType Directory -Force -Path $managedDest | Out-Null
-        Copy-Item -Path (Join-Path $ManagedServerDir '*') -Destination $managedDest -Recurse -Force
-    }
-    if ($ManagedDebugDir -and (Test-Path -LiteralPath (Join-Path $ManagedDebugDir 'adapter\netcoredbg.exe') -PathType Leaf)) {
-        $managedDbgDest = Join-Path $Destination 'FrostManagedDebug'
-        New-Item -ItemType Directory -Force -Path $managedDbgDest | Out-Null
-        Copy-Item -Path (Join-Path $ManagedDebugDir '*') -Destination $managedDbgDest -Recurse -Force
-    }
+    $managedDest = Join-Path $Destination 'managed'
+    New-Item -ItemType Directory -Force -Path $managedDest | Out-Null
+    Copy-Item -Path (Join-Path $ManagedServerDir '*') -Destination $managedDest -Recurse -Force
+    $managedDbgDest = Join-Path $Destination 'FrostManagedDebug'
+    New-Item -ItemType Directory -Force -Path $managedDbgDest | Out-Null
+    Copy-Item -Path (Join-Path $ManagedDebugDir '*') -Destination $managedDbgDest -Recurse -Force
 }
 
 # 4. The Qt runtime for frost_app.dll, then the build's platform plugins (offscreen for --selftest).
+# --no-svg: icons are baked to raster atlases at build time by tools/icon_baker, the only QtSvg user
+# (ADR 0015, "Runtime QtSvg" rejected); frost_app.dll imports no Qt6Svg, and the glacial logo is painted.
 $mode = if ($Config -eq 'Debug') { '--debug' } else { '--release' }
 $deployArgs = @($mode, '--no-translations', '--no-compiler-runtime', '--no-system-d3d-compiler',
     '--no-system-dxc-compiler', '--no-opengl-sw', '--no-ffmpeg',
-    '--no-plugins', '--dir', $Destination,
+    '--no-plugins', '--no-svg', '--dir', $Destination,
     (Join-Path $Destination 'frost_app.dll'))
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
@@ -227,6 +272,8 @@ foreach ($file in @(Get-ChildItem -LiteralPath $thirdParty -Recurse -File -Filte
     $target = Join-Path $licenses ("$relative-$($file.Name)".TrimStart('-'))
     Copy-Item -LiteralPath $file.FullName -Destination $target
 }
+# LuaLS's MIT licence beside FrostIDE's notices too (it also stays in the LuaLS folder).
+if ($bundle) { Copy-Item -LiteralPath (Join-Path $lualsSource 'LICENSE') -Destination (Join-Path $licenses 'luals-LICENSE.txt') }
 
 # 6. The checks.
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }
@@ -257,7 +304,24 @@ if ($QtSourceArchive) {
 else {
     Write-Host 'stage: local Debug preview; dependency source/notice packaging was not requested'
 }
+if ($bundle) {
+    foreach ($name in @("$llvmRel\bin\clangd.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
+            'managed\CSharpLanguageServer.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) { Fail "the staged folder has no $name" }
+    }
+}
+
+# 7. The symbol archive: frost.exe and frost_app.dll must each have the PDB their RSDS record names,
+# with the same GUID and age, in the build tree.
+$previous = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $Destination --pdb-dir $binDir `
+    --output $symbolArchive --require frost.exe --require frost_app.dll 2>&1
+$code = $LASTEXITCODE
+$ErrorActionPreference = $previous
+$out | ForEach-Object { Write-Host "stage: symbols: $_" }
+if ($code -ne 0 -or -not (Test-Path -LiteralPath $symbolArchive -PathType Leaf)) { Fail "the symbol archive failed ($code)" }
 $files = @(Get-ChildItem -LiteralPath $Destination -Recurse -File)
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
-Write-Host ("stage: ok {0} ({1} files, {2:N1} MB)" -f $Destination, $files.Count, ($bytes / 1MB))
+Write-Host ("stage: ok {0} ({1} files, {2:N1} MB); symbols {3}" -f $Destination, $files.Count, ($bytes / 1MB), $symbolArchive)
 exit 0

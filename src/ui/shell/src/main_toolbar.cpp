@@ -400,7 +400,8 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     setContextMenuPolicy(Qt::PreventContextMenu);
     setContentsMargins(scaledPx(6), scaledPx(3), scaledPx(6), scaledPx(4));
     setMinimumHeight(scaledPx(40));
-    setStyleSheet(QStringLiteral("QToolBar#mainToolbar::separator { background: transparent; width: 4px; height: 0px; }"));
+    setStyleSheet(
+        QStringLiteral("QToolBar#mainToolbar::separator { background: transparent; width: 4px; height: 0px; }"));
 
     // 1. Far-left FrostIDE badge + Main Menu button.
     m_mainMenuButton->setObjectName(QStringLiteral("toolbar.mainMenu"));
@@ -723,25 +724,23 @@ void MainToolbar::paintEvent(QPaintEvent*) {
     projectWash.setColorAt(1.00, withAlpha(projColor, 0));
     painter.fillRect(QRectF(0.0, 0.0, washSpan, height()), projectWash);
 
-    const int projGlowAlpha = (m_project != nullptr && m_project->underMouse()) ? (isDark ? 88 : 54)
-                                                                                : (isDark ? 68 : 42);
-    shell_detail::paintEllipticalGlow(painter, projCenter,
-                                      std::max<qreal>(scaledPx(280), width() * 0.22),
+    const int projGlowAlpha =
+        (m_project != nullptr && m_project->underMouse()) ? (isDark ? 88 : 54) : (isDark ? 68 : 42);
+    shell_detail::paintEllipticalGlow(painter, projCenter, std::max<qreal>(scaledPx(280), width() * 0.22),
                                       height() * 2.5, projColor, projGlowAlpha);
 
     // 2. Frost Brand Badge top-left glacial cyan spill.
     const QPointF menuCenter = (m_mainMenuButton != nullptr && m_mainMenuButton->isVisible())
                                    ? QPointF(m_mainMenuButton->geometry().left() + scaledPx(18), height() * 0.5)
                                    : QPointF(scaledPx(22), height() * 0.5);
-    shell_detail::paintEllipticalGlow(painter, menuCenter, scaledPx(95), height() * 1.9,
-                                      QColor(0x21, 0xD4, 0xFD), isDark ? 28 : 16);
+    shell_detail::paintEllipticalGlow(painter, menuCenter, scaledPx(95), height() * 1.9, QColor(0x21, 0xD4, 0xFD),
+                                      isDark ? 28 : 16);
 
     // 3. VCS Branch pill subtle cool-indigo spill when visible.
     if (m_vcsBranch != nullptr && m_vcsBranch->isVisible()) {
         const int vcsAlpha = m_vcsBranch->underMouse() ? (isDark ? 46 : 28) : (isDark ? 22 : 14);
-        shell_detail::paintEllipticalGlow(painter, QPointF(m_vcsBranch->geometry().center()),
-                                          scaledPx(115), height() * 1.8,
-                                          QColor(0x5C, 0x7C, 0xFA), vcsAlpha);
+        shell_detail::paintEllipticalGlow(painter, QPointF(m_vcsBranch->geometry().center()), scaledPx(115),
+                                          height() * 1.8, QColor(0x5C, 0x7C, 0xFA), vcsAlpha);
     }
 
     // 4. Run / Debug / Stop cluster ambient color spill into the frosted header.

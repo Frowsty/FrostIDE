@@ -28,7 +28,7 @@
 
 namespace frost::ui::test {
 
-// Per-row ink of an image: pixels that differ from the row's most common colour by more than 48 in
+// Per-row ink of an image: pixels that differ from the row's background colour by more than 48 in
 // a channel, and the leftmost and rightmost of them.
 struct RowInk {
     int count = 0;
@@ -36,26 +36,43 @@ struct RowInk {
     int right = 0;
 };
 
-inline std::vector<RowInk> inkRows(const QImage& source) {
+// Each row's most common colour: the background that row's ink is measured against.
+inline std::vector<QRgb> rowBackgrounds(const QImage& source) {
     const QImage image = source.convertToFormat(QImage::Format_ARGB32);
-    std::vector<RowInk> rows(static_cast<std::size_t>(image.height()));
+    std::vector<QRgb> modes(static_cast<std::size_t>(image.height()));
     for (int y = 0; y < image.height(); ++y) {
         const auto* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
-        RowInk& row = rows[static_cast<std::size_t>(y)];
-        if (std::all_of(line, line + image.width(), [&](QRgb p) { return p == line[0]; })) {
-            row = RowInk{0, image.width(), -1}; // One colour: its own mode, so no ink (a fast path).
-            continue;
-        }
-        QHash<QRgb, int> counts;
-        for (int x = 0; x < image.width(); ++x) {
-            ++counts[line[x]];
-        }
-        QRgb mode = line[0];
-        for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
-            if (it.value() > counts.value(mode)) {
-                mode = it.key();
+        QRgb mode = image.width() > 0 ? line[0] : QRgb{};
+        if (!std::all_of(line, line + image.width(), [&](QRgb p) { return p == line[0]; })) {
+            QHash<QRgb, int> counts;
+            for (int x = 0; x < image.width(); ++x) {
+                ++counts[line[x]];
+            }
+            for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+                if (it.value() > counts.value(mode)) {
+                    mode = it.key();
+                }
             }
         }
+        modes[static_cast<std::size_t>(y)] = mode;
+    }
+    return modes;
+}
+
+/*
+ * The ink of `source` per row against `backgrounds` (one colour per row, rowBackgrounds() of the
+ * oracle image). Both images of a comparison are measured against the same colours: a row whose two
+ * most common colours are nearly tied (a squiggle's red beside the editor background) would
+ * otherwise get a different background in each image from a one-level rounding difference, and
+ * measure the background itself as ink in one of them.
+ */
+inline std::vector<RowInk> inkRows(const QImage& source, const std::vector<QRgb>& backgrounds) {
+    const QImage image = source.convertToFormat(QImage::Format_ARGB32);
+    std::vector<RowInk> rows(static_cast<std::size_t>(image.height()));
+    for (int y = 0; y < image.height() && static_cast<std::size_t>(y) < backgrounds.size(); ++y) {
+        const auto* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+        const QRgb mode = backgrounds[static_cast<std::size_t>(y)];
+        RowInk& row = rows[static_cast<std::size_t>(y)];
         row.left = image.width();
         row.right = -1;
         for (int x = 0; x < image.width(); ++x) {
@@ -184,7 +201,8 @@ inline QImage renderWithRaster(const EditorDisplayList& list, double dpr) {
 
 /*
  * Coarse agreement of two renderings of one list (not a golden): solid colours at a few points
- * match within 2 levels; every inked row of one image has ink within a row in the other; inked
+ * match within 2 levels; ink is measured in both images against the raster image's row
+ * backgrounds; every inked row of one image has ink within a row in the other; inked
  * spans start and end within 3 px; the total ink is within 30 %. `minimumInk` is the raster
  * image's least total ink, a check that the frame is not blank (200 for a whole frame; smaller
  * for a crop or a frame of one element kind, 0 for a kind that may draw no ink at all).
@@ -199,8 +217,10 @@ inline void expectSameInk(const QImage& raster, const QImage& gpu, const std::ve
             std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)), std::abs(qBlue(a) - qBlue(b))}), 2)
             << "at " << at.x() << "," << at.y();
     }
-    const std::vector<RowInk> want = inkRows(raster);
-    const std::vector<RowInk> got = inkRows(gpu);
+    // Both images against the raster (oracle) image's row backgrounds (see inkRows).
+    const std::vector<QRgb> backgrounds = rowBackgrounds(raster);
+    const std::vector<RowInk> want = inkRows(raster, backgrounds);
+    const std::vector<RowInk> got = inkRows(gpu, backgrounds);
     int wantTotal = 0;
     int gotTotal = 0;
     for (std::size_t y = 0; y < want.size(); ++y) {

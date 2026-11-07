@@ -271,19 +271,19 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
                 .set("selectionRange", Json::object()
                                            .set("start", Json::object().set("line", 0).set("character", 6))
                                            .set("end", Json::object().set("line", 0).set("character", 12)))
-                .set("children",
-                     Json::array({
-                         Json::object()
-                             .set("name", "compute")
-                             .set("kind", 6)
-                             .set("range", Json::object()
-                                               .set("start", Json::object().set("line", 1).set("character", 2))
-                                               .set("end", Json::object().set("line", 4).set("character", 3)))
-                             .set("selectionRange",
-                                  Json::object()
-                                      .set("start", Json::object().set("line", 1).set("character", 6))
-                                      .set("end", Json::object().set("line", 1).set("character", 13))),
-                     })),
+                .set(
+                    "children",
+                    Json::array({
+                        Json::object()
+                            .set("name", "compute")
+                            .set("kind", 6)
+                            .set("range", Json::object()
+                                              .set("start", Json::object().set("line", 1).set("character", 2))
+                                              .set("end", Json::object().set("line", 4).set("character", 3)))
+                            .set("selectionRange", Json::object()
+                                                       .set("start", Json::object().set("line", 1).set("character", 6))
+                                                       .set("end", Json::object().set("line", 1).set("character", 13))),
+                    })),
         });
     });
 
@@ -293,9 +293,7 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     binding->setAuthorProvider([](int line) { return line == 1 ? std::string("Alice") : std::string(); });
     binding->refreshSemanticTokens();
 
-    ASSERT_TRUE(pumpUntil([&] {
-        return h.view->inlayHints().size() == 2U && !h.view->codeVisionLenses().empty();
-    }));
+    ASSERT_TRUE(pumpUntil([&] { return h.view->inlayHints().size() == 2U && !h.view->codeVisionLenses().empty(); }));
 
     h.view->setInlineDebuggerValues({
         frost::ui::EditorInlineValue{frost::LineIndex{2}, "value = 42", "Debugger value"},
@@ -307,8 +305,11 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     const frost::ui::EditorDisplayList list = h.view->buildDisplayList();
     EXPECT_NE(list.findText(QStringLiteral(": int")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("count:")), nullptr);
-    EXPECT_NE(list.findText(QStringLiteral("1 usage")), nullptr);
-    EXPECT_NE(list.findText(QStringLiteral("implementations")), nullptr);
+    // FND-3 (D32): no usage count guessed from the text and no fixed "implementations" label
+    // (counts arrive with CPP-9); the Git author lens is real data and stays.
+    EXPECT_EQ(list.findText(QStringLiteral("1 usage")), nullptr);
+    EXPECT_EQ(list.findText(QStringLiteral("usages")), nullptr);
+    EXPECT_EQ(list.findText(QStringLiteral("implementations")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("Alice")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("value = 42")), nullptr);
 }

@@ -436,8 +436,8 @@ std::vector<LspInlayHint> parseInlayHints(const Json& json) {
     return out;
 }
 
-sched::Task<Result<std::vector<LspInlayHint>>>
-requestInlayHints(ILspRequester& server, std::string path, LspRange range, std::stop_token token) {
+sched::Task<Result<std::vector<LspInlayHint>>> requestInlayHints(ILspRequester& server, std::string path,
+                                                                 LspRange range, std::stop_token token) {
     auto document = textDocumentIdentifier(path);
     if (!document) {
         co_return std::unexpected(std::move(document.error()));

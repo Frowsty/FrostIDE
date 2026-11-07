@@ -3,6 +3,163 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-07: R0 integration (FND-1, FND-3 harm wave, FND-9a/13 + LUA-1, FND-5/2/4/15)
+
+- **Merged into `r0/integration`** (each slice was implemented in its own worktree, then re-tested and approved
+  by an independent reviewer with no blockers): `r0/fnd-1-green-head`, `r0/fnd-3a-project-dialogs`,
+  `r0/fnd-3b-workbench`, `r0/fnd-3c-language`, `r0/fnd-9a-13-lua-1`, `r0/fnd-5-4-15-2`. Two trivial conflicts
+  (an include list, a CMake comment). The temporary "FND-3 harm, removed at integration" lint allowances
+  were deleted; frost-lint is clean without them.
+- **Integration fixes** (`r0/integration-fixes`, from the independent review of the combined tree):
+  - The keymaps still bound the removed `window.services`, which failed the new keymap coverage test on
+    both legs; the three entries are deleted (Alt+8 stays Unit Tests through the module default).
+  - FND-3 started clangd restricted in untrusted folders and FND-9a stopped restarting it on an unchanged
+    CMake model, so trusting a configured CMake folder left clangd restricted for the session. The running
+    clangd's trust is now part of the restart check, and the trust grant restarts it once
+    (`WorkbenchClangdSpawn.TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullModeAndRevokingRestrictsIt`, real cmake
+    and clangd).
+  - The compound run group in Run/Debug Configurations is disabled with a RUN-5 tooltip instead of
+    offering a launch that only reports it is unavailable; "NuGet Package Manager" is now "NuGet
+    Packages" and the IL/assembly window title says it is unavailable.
+  - A CMake or plain-folder clangd also follows trust granted or revoked by other routes (Settings, the
+    Attach prompt, revocation) through the 1 s trust watch. Neither the watch nor the trust dialog restarts
+    clangd while a CMake configure runs (the grant itself resumes one), so a trust grant that configures a
+    never-configured folder restarts clangd once
+    (`WorkbenchClangdSpawn.TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNewDatabase`).
+  - The LuaLS and managed-server lifecycle callbacks refresh the Structure only when the current file is
+    theirs; before, a LuaLS state change cancelled a Structure request clangd was answering for a C++ file.
+  - Attach to Process listed no processes on Linux (the function had no Linux path, also on `main`); it
+    now walks `/proc`. The WSL leg had failed two Workbench tests on it.
+  - The pinned LuaLS is now found by default, so every trusted open in the workbench test rig started a
+    real LuaLS beside the processes the test scripted or counted (three launch-count failures). Rigs now
+    search for no LuaLS unless the test asks;
+    `WorkbenchLua.DefaultSearchStartsThePinnedLuaLs` covers the product's default search.
+  - The keymap goldens were regenerated without `window.services` (216 -> 215 actions).
+  - The workbench rigs' `waitFor` evaluated its condition once more after the loop ended, so a state that
+    another thread changed in between (here a CMake configure starting again) turned a reached condition
+    into a failure in well under the timeout (`WorkbenchCMake.TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved`
+    on WSL, 1.2 s of a 60 s wait). It now returns the evaluation that ended the wait.
+- **What changed for the user.**
+  - Unit Tests lists tests found in source as "Discovered, not run"; every run button is disabled (RUN-7).
+  - NuGet is a read-only list of the project's PackageReferences (LTR-7); ASM/IL views are disabled with reasons.
+  - Configuration Manager, Run/Debug Configurations and project references are read-only; solution and
+    project membership edits other than single-file add/remove (through ProjectHost) are refused (SLN-6).
+  - Attach to Process asks for trust; compound launch is disabled (RUN-5); git clone runs off the GUI thread.
+  - Save actions now run on autosave too (caret lines spared). With this repository's `.editorconfig`
+    (`trim_trailing_whitespace = true`) every other line is trimmed on autosave.
+  - "Debug Lua (experimental)" is gone until FER-8; the FrostEngine tool window appears only for
+    `.frostproj`/`.feproject` projects; engine errors show the engine's code and a redacted message.
+  - Decompiled/hover-synthesized sources, text-hack refactorings and text-counted Code Vision are gone;
+    clangd tweaks and the include cleaner are used instead, the rest are disabled naming REF-6..REF-9.
+  - One clangd per project open, LSP 3.17 positionEncodings; clangd in untrusted projects runs restricted.
+  - LuaLS 3.19.1 is pinned, bootstrapped (Windows and WSL) and staged on Windows; its tests fail instead of
+    skipping when it is missing. The stage fails without its bundled tools and writes a symbol archive.
+  - New gates: truth-rule lint (fabricated results, synthesized tool output, parity claims), a test ratchet,
+    and the verify-stamp commit-msg hook (`git config core.hooksPath tools/hooks`).
+- **Harm register (FND-3; D32), current.**
+
+  | Harm | Status |
+  |---|---|
+  | Unit Tests window invents pass/fail, durations, output; a test asserts them | removed (test replaced) |
+  | NuGet constant catalogue; regex NuGet writers | removed (read-only Installed list) |
+  | IL viewer placeholder; ASM via QProcess with a hard-coded `-std` | removed (both disabled: CPP-3, LTR-3) |
+  | Decompiler writes synthetic source into the workspace; hover-text C++ projection | removed |
+  | Text-hack refactorings, line-sorting Optimize Includes, codegen text fallbacks | removed (clangd or disabled, REF-6..9) |
+  | Code Vision text-counted usages, fixed "implementations" | removed (git author lens kept) |
+  | Silent trust grants on Attach to Process and compound launch | removed |
+  | Services window alias | removed (the stale `window.services` keymap entries were deleted at integration) |
+  | Settings toggles shown but not applied (trim, final newline, confirm exit, reopen last, detect indentation) | removed (applied or hidden) |
+  | Engine helper 15 s blanket deadline; hidden engine errors | removed (per-method deadlines, real codes) |
+  | Regex solution/project edits (SLN-1) | partly guarded: membership edits refused. Still text/regex writers: `updatePathInVcxproj` on rename, move and delete; the property pages `applyVcxprojPropertiesForConfig` and `applyCsprojProperties` (SLN-8); and the CMakeLists.txt source edits on create/rename/delete (`add`/`rename`/`removeSourceInCMakeLists`) |
+  | LocalDebugger* written into the shared .vcxproj | partly removed: Run/Debug Configurations is read-only, the Project Properties Debugging page still writes them |
+  | 3-way merge Apply writing marker text and git-adding it | guarded |
+  | clangd honouring `.clangd`/`--query-driver` in untrusted projects | guarded (restricted mode; trust granted or revoked by any route restarts clangd with the matching flags) |
+  | Updater overwrites the live install without rollback | guarded by policy (auto-updates frozen, D38) |
+
+  Tests removed or inverted with their feature (D32 or spec change): the fake Passed/Failed counts; the regex
+  NuGet and solution-edit round trips (replaced by parse and refusal tests); 21 WorkbenchEngine Lua-debug tests
+  and 2 EngineAutomation `script.debug.*` tests (feature removed until FER-8); the decompiler test (replaced by
+  two metadata-cache tests); the Code Vision count expectations; the run-marker count 3 -> 1; the LSP
+  `offsetEncoding` offer (spec change, FND-9a). Every missing-LuaLS skip became a failure. One skip became a pass
+  on a synthetic fixture: without `FROST_TEST_LUA_API`, `LuaLsE2E.CompletesGeneratedFrostEngineApi` and
+  `WorkbenchLua.TrustGateAndGeneratedApiReachEditor` use a hand-written stand-in API, so the engine-generated
+  API is only exercised when that variable is set (FEC-10a covers it with the pinned corpus).
+- **Verification.** The combined tree is verified on Windows and WSL by `tools\verify.ps1 -Quick`; the real summary
+  is the `Verified:` footer of the merge into `main`.
+- **Open R0 follow-ups** (from the reviews; next slice wave):
+  1. TrustPurpose for debug attach: cancelling the attach prompt can cancel a build waiting for trust.
+  2. Project Properties Debugging page: stop writing LocalDebugger* into the shared project (read-only, RUN-1).
+  3. Dead code: `EngineIntegration::luaReservationPending()` is constant false but still checked in
+     `workbench.cpp` and `workbench_project_edit.cpp`. FrostEngine detection differs: the tool window
+     accepts `.frostproj`/`.feproject`, LuaLS defaults only `.frostproj` (`lua_config.cpp`).
+  4. Wire `LanguageServices::metadataCacheDir`, `readiness` and a read-only `openReadOnlyLocation` in src/app;
+     name LTR-6 when a C# metadata result has no cache.
+  5. Refuse or route `updatePathInVcxproj` (regex writer on rename, move and delete); move `.fmeta` siblings on
+     rename/move.
+  6. Disable refused explorer actions up front instead of after their dialogs.
+  7. stage.ps1: check symbols before populating the destination; Linux staging of LuaLS.
+  8. Lint: join adjacent literals for the tool-output rule; per-entry occurrence counts; footer check must
+     require the test-count items. Spawn log (IProcessLauncher decorator) is not implemented.
+  9. E:\sdk defaults in `lldb_dap.cpp`, `clangd_locator.cpp`, `lua_config.cpp` (FND-10).
+  10. Profile switch still starts clangd about 3 times.
+  11. Autosave trimming spares only the primary caret's line; the `main` gutter marker runs the startup
+      project, not necessarily the one that owns that `main`.
+  12. Linux process list: skip kernel threads (no `exe`, empty `cmdline`), prefer the `exe` basename over
+      the 15-byte `comm`, strip " (deleted)", and match dotted .NET apphost names.
+  13. No test runs FrostEngine engine helpers beside a running LuaLS.
+  14. Intermittent, cause open: `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` failed twice
+      under load, both times at its last 20 s wait for the "new" Structure after the fake server's restart,
+      after the server had received the request. The first failure had a real LuaLS running in the rig;
+      the second came after the rig stopped starting LuaLS, so LuaLS is not required for it. The managed
+      server also starts for any trusted folder when dotnet and the server are found, and its lifecycle
+      events took the same path. The suspected mechanism, another server's lifecycle event cancelling the
+      clangd Structure request, is fixed above for both; unproven. It
+      passed in about 60 later runs, including two full Windows suites and parallel stress, also with
+      diagnostics on the Structure reply check. The test is not changed or weakened.
+
+## 2026-11-07: Audit, Roadmap v2 (R-ladder) and definition of done v2
+
+- **Audit of ec3d580.** Eleven area analysts each had their claims re-checked in code by a skeptic, and an
+  empirical leg built the tree and ran the tests. Findings:
+  - The foundation is solid.
+  - The 2026-11-04..06 parity layer is thin and partly fabricated: the Unit Tests window invents results, NuGet is
+    a constant list, the IL viewer is a placeholder, the decompiler writes into the workspace, refactorings are
+    text hacks, and Code Vision counts usages by text.
+  - HEAD has 5 deterministic failures: `ctest` gives 3111/3152 passed, 5 failed, 35 skipped and 1 disabled.
+  - The user's logs show 145 UI stalls over 50 ms in 5 days, and LuaLS is not bundled.
+  - Estimated readiness: about 22% of CLion and 13% of Rider.
+- **Roadmap v2.** The user decided the order C++ > Lua > FrostEngine > later tiers and accepted every
+  recommendation (PLAN.md section 9, D30-D41).
+  - ADR 0077: the R-ladder, R0..R19 (PLAN.md section 7, "Roadmap v2"), with 226 epics in PLAN.md Appendix C. About
+    402u reach the C++/Lua/FrostEngine 1.0 and about 508u cover everything.
+  - ADR 0078: definition of done v2 (truth rule, real-tool acceptance, independent review that re-runs the tests,
+    mandatory footer). CLAUDE.md is updated to match.
+  - The feature-first phase (ADR 0031) has ended.
+- **Working files** (outside the repository): `E:\FrostBuilds\orchestration\roadmap-2026-11-07\` holds ROADMAP.md
+  plus the raw audit and roadmap JSON.
+- **Harm register (FND-3; D32).** Each harm is removed or guarded by its owning slice. (Superseded by the
+  register in the R0 integration entry above.)
+
+  | Harm | Where | Owner | Status |
+  |---|---|---|---|
+  | Unit Tests window invents pass/fail, durations and console output; a test asserts them | `src/app/src/project_properties_dialog.cpp` (executeTestIndices), `tests/app/workbench_test.cpp` | FND-3 | open |
+  | NuGet "manager" is a constant list of 8 packages | `project_properties_dialog.cpp` (kCatalog) | FND-3 | open |
+  | IL viewer placeholder | `project_properties_dialog.cpp` | FND-3 | open |
+  | Decompiler writes synthetic source into the workspace | `src/ui/lang/src/language_controller.cpp` | FND-3 | open |
+  | Text-hack refactorings (Inline, Move, Change Signature, Extract, Optimize Includes/Usings) | `language_controller_refactor.cpp` | FND-3 | open |
+  | Code Vision usages counted by text; fixed "implementations" label | `src/ui/lang/src/editor_insight_binding.cpp` | FND-3 | open |
+  | Silent trust grants on Attach to Process and compound launch | `src/app/src/workbench.cpp` | FND-3 | open |
+  | Services window duplicates the Unit Tests toggle | `workbench.cpp` | FND-3 | open |
+  | Settings toggles shown but never applied | settings pages | FND-3 | open |
+  | FrostEngine request helper kills calls at 15 s; engine errors hidden | `engine_request_helper.cpp`, `engine_automation.cpp` | FND-3 | open |
+  | Updater overwrites the live install without rollback | updater | FND-11 (auto-updates frozen, D38) | guarded by policy |
+
+- **Next.** R0:
+  1. FND-1 (green HEAD) is in progress on `r0/fnd-1-green-head`.
+  2. Then three tracks in parallel: the FND-3 harm wave; FND-5, FND-15 and FND-4; FND-9a, FND-10, FND-13 and LUA-1.
+  3. UX-1 after FND-3, and FND-2 at any time.
+- **Blockers / questions.** None open; all D30-D41 decisions were answered on 2026-11-07.
+
 ## 2026-11-04: Rider 1:1 parity vertical slice (Editor selection/occurrences/column mode/zoom/guides, Explorer Rename & Delete, and Navigation/Search Everywhere/Bookmarks/TODO)
 
 - Completed a three-track Rider 1:1 parity vertical slice across Editor (`EDIT-01`, `EDIT-02`, rows 38, 39,

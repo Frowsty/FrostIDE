@@ -5,16 +5,21 @@
 // Enter commits and Esc cancels, parameter info on '(', go to declaration into another file,
 // related files, find usages into the panel, highlight usages after the caret debounce, the
 // file structure popup, rename and quick fixes through the edit applier (a refusal reaches the
-// status bar), reformat, and the registered IntelliJ action ids.
+// status bar), reformat, and the registered IntelliJ action ids; and (FND-3, ADR 0078) metadata
+// sources only from the server and only into the metadata cache, honest empty-result messages,
+// Refactor This and the named commands through clangd tweaks (or disabled with their epic), the
+// include cleaner, and the language capability table keeping C++/C# features out of Lua files.
 
 #include "frost/input/action.hpp"
 #include "frost/io/mem_fs.hpp"
+#include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/text/text_buffer.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
 #include "lang/feature_server.hpp"
 #include <QApplication>
+#include <QCheckBox>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QScopeGuard>
@@ -24,6 +29,7 @@
 #include <QWidget>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -59,6 +65,9 @@ Json rangeJson(std::uint32_t line, std::uint32_t from, std::uint32_t to) {
 }
 
 std::string uriOf(const std::string& path) { return fl::pathToUri(path).value(); }
+
+// The directory of the test documents (workPath's parent).
+std::string workDir() { return std::string(frost::io::parentPath(workPath("x"))); }
 
 // The active editor: one document in a TextBuffer.
 class FakeHost final : public frost::ui::lang::IEditorLanguageHost {
@@ -882,55 +891,170 @@ TEST(LanguageControllerNavigation, StructurePreservesCollapsedHierarchyOnJumpAnd
     EXPECT_FALSE(tree->topLevelItem(0)->isExpanded());
 }
 
-TEST(LanguageControllerNavigation, GotoDeclarationDecompilesExternalDotNetAndCppSymbolsWhenNoLocalSource) {
+TEST(LanguageControllerNavigation, StructureKeepsTheTreeWhileTypingButClearsItWhenTheTextIsReplaced) {
     FeatureServer server;
-    server.on("textDocument/definition", [](const Json&) {
+    std::atomic<int> requests = 0;
+    server.on("textDocument/documentSymbol", [&](const Json&) {
+        ++requests;
         return Json::array({Json::object()
-                                .set("uri", "csharp:/metadata/projects/App/assemblies/System.Console/symbols/Console.cs")
-                                .set("range", rangeJson(10, 4, 13))});
+                                .set("name", "Holder")
+                                .set("kind", 5)
+                                .set("range", rangeJson(0, 0, 12))
+                                .set("selectionRange", rangeJson(0, 6, 12))});
     });
+    FakeHost host("class Holder {};\n");
+    Rig rig(server, host);
+    auto* tree = rig.controller.structurePanel().findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    rig.controller.setStructureVisible(true);
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+
+    // An edit keeps the (inert) tree until the reply arrives.
+    host.type("\n");
+    rig.controller.structureChanged();
+    EXPECT_EQ(tree->topLevelItemCount(), 1);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 2; }));
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1; }));
+
+    // A replacement of the whole text (a reload from disk) clears it at once, then the reply refills it.
+    host.type("\n");
+    rig.controller.structureReplaced();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    ASSERT_TRUE(pumpUntil([&] { return requests.load() == 3 && tree->topLevelItemCount() == 1; }));
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("Holder"));
+}
+
+// The metadata cache of the tests: a profile directory, never the workspace (workPath).
+std::string metadataCache() {
+#ifdef _WIN32
+    return "C:\\profile\\caches\\metadata";
+#else
+    return "/profile/caches/metadata";
+#endif
+}
+
+// FND-3 (LTR-1, D32 replaces the old synthesis test): a C# server's real metadata source is shown
+// from the metadata cache, byte for byte, and nothing is written into the workspace.
+TEST(LanguageControllerNavigation, GotoDeclarationShowsServerMetadataFromTheCacheOnly) {
+    FeatureServer server;
+    constexpr std::string_view kSource = "namespace System\n{\n    public static class Console\n    {\n        "
+                                         "public static void WriteLine(string? value);\n    }\n}\n";
     server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
-    server.on("textDocument/references", [](const Json&) { return Json::array(); });
-    server.on("csharp/metadata", [](const Json&) {
-        return Json::object().set(
-            "source",
-            "namespace System\n{\n    public static class Console\n    {\n        public static void WriteLine(string? value);\n    }\n}\n");
+    server.on("textDocument/definition", [](const Json&) {
+        return Json::array(
+            {Json::object()
+                 .set("uri", "csharp:/metadata/projects/App/assemblies/System.Console/symbols/Console.cs")
+                 .set("range", rangeJson(4, 27, 36))});
     });
+    server.on("csharp/metadata", [&](const Json&) { return Json::object().set("source", std::string(kSource)); });
+    FakeHost host("using System;\nclass Program {\n    static void Main() {\n        "
+                  "System.Console.WriteLine(\"hi\");\n    }\n}\n",
+                  workPath("Program.cs"));
+    host.caretAfter("System.Console.Write");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    LanguageController controller(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = host,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .metadataCacheDir = metadataCache(),
+    });
+    controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
+    const std::string& shown = host.opened[0].first;
+    EXPECT_TRUE(shown.starts_with(metadataCache())) << shown;
+    EXPECT_EQ(host.opened[0].second, (fl::LspPosition{4, 27})); // The server's range.
+    EXPECT_EQ(fs.readFile(shown).value_or(""), kSource);        // Exactly what the server sent.
+    EXPECT_FALSE(fs.exists(workDir()).value_or(true));          // Nothing under the workspace.
 
-    FakeHost csHost("using System;\nclass Program {\n    static void Main() {\n        System.Console.WriteLine(\"hi\");\n    }\n}\n",
-                    workPath("Program.cs"));
-    csHost.caretAfter("System.Console.Write");
-    Rig csRig(server, csHost);
-    csRig.controller.gotoDeclaration();
-    ASSERT_TRUE(pumpUntil([&] { return csHost.opened.size() == 1; }));
-    EXPECT_TRUE(csHost.opened[0].first.contains("[Decompiled] WriteLine.cs"));
-    const auto decompiledCs = csRig.fs.readFile(csHost.opened[0].first);
-    ASSERT_TRUE(decompiledCs.has_value());
-    EXPECT_TRUE(decompiledCs->contains("[Decompiled] External Symbol Metadata-as-Source"));
-    EXPECT_TRUE(decompiledCs->contains("public static void WriteLine(string? value);"));
+    // Without a cache directory the source is not shown, and nothing is written anywhere.
+    FakeHost noCacheHost(host.text(), workPath("Program.cs"));
+    noCacheHost.caretAfter("System.Console.Write");
+    frost::io::MemFs emptyFs(frost::systemClock());
+    LanguageController noCache(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = noCacheHost,
+        .applier = applier,
+        .fs = emptyFs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+    });
+    std::vector<QString> status;
+    QObject::connect(&noCache, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    noCache.decompileExternalSymbol();
+    EXPECT_TRUE(noCacheHost.opened.empty());
+    ASSERT_EQ(status.size(), 1U);
+    EXPECT_TRUE(status[0].contains(QStringLiteral("Source not available"))) << status[0].toStdString();
+    EXPECT_TRUE(status[0].contains(QStringLiteral("LTR-6")));
+}
 
-    // Also test hover-based metadata projection when csharp/metadata is not available (e.g. C++ external symbol).
-    FeatureServer cppServer;
-    cppServer.on("textDocument/definition", [](const Json&) { return Json::array(); });
-    cppServer.on("textDocument/declaration", [](const Json&) { return Json::array(); });
-    cppServer.on("textDocument/references", [](const Json&) { return Json::array(); });
-    cppServer.on("textDocument/hover", [](const Json&) {
+// FND-3 (D32): a C++ symbol clangd cannot resolve is not "decompiled" from hover text: nothing is
+// written or opened, and the message says why the result is empty.
+TEST(LanguageControllerNavigation, EmptyCppDeclarationWritesNothingAndExplainsWhy) {
+    FeatureServer server;
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/hover", [](const Json&) {
         return Json::object().set(
             "contents",
-            Json::object()
-                .set("kind", "markdown")
-                .set("value", "```cpp\ntemplate <class T> class vector\n```\n---\nSequence container encapsulating dynamic size arrays."));
+            Json::object().set("kind", "markdown").set("value", "```cpp\ntemplate <class T> class vector\n```"));
     });
-    FakeHost cppHost("#include <vector>\nint main() {\n    std::vector<int> items;\n}\n", workPath("main.cpp"));
-    cppHost.caretAfter("std::vec");
-    Rig cppRig(cppServer, cppHost);
-    cppRig.controller.gotoDeclaration();
-    ASSERT_TRUE(pumpUntil([&] { return cppHost.opened.size() == 1; }));
-    EXPECT_TRUE(cppHost.opened[0].first.contains("[Decompiled] vector.hpp"));
-    const auto decompiledCpp = cppRig.fs.readFile(cppHost.opened[0].first);
-    ASSERT_TRUE(decompiledCpp.has_value());
-    EXPECT_TRUE(decompiledCpp->contains("Sequence container encapsulating dynamic size arrays."));
-    EXPECT_TRUE(decompiledCpp->contains("template <class T> class vector;"));
+    FakeHost host("#include <vector>\nint main() {\n    std::vector<int> items;\n}\n", workPath("main.cpp"));
+    host.caretAfter("std::vec");
+    Rig rig(server, host);
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+
+    rig.controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_TRUE(host.opened.empty());
+    EXPECT_FALSE(rig.fs.exists(workDir()).value_or(true));
+    EXPECT_TRUE(server.paramsOf("textDocument/hover").empty()); // No hover-text synthesis.
+    EXPECT_TRUE(status[0].contains(QStringLiteral("Cannot find a declaration"))) << status[0].toStdString();
+    EXPECT_TRUE(status[0].contains(QStringLiteral("clangd returned no result"))) << status[0].toStdString();
+
+    rig.controller.decompileExternalSymbol();
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 2; }));
+    EXPECT_TRUE(status[1].contains(QStringLiteral("Source not available"))) << status[1].toStdString();
+    EXPECT_TRUE(host.opened.empty());
+    EXPECT_FALSE(rig.fs.exists(workDir()).value_or(true));
+}
+
+// FND-3: the reason for an empty answer comes from the readiness hook (no compile command,
+// indexing) when the workbench provides one.
+TEST(LanguageControllerNavigation, EmptyImplementationNamesTheServerReadiness) {
+    FeatureServer server;
+    server.on("textDocument/implementation", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    FakeHost host("int compute();\n", workPath("main.cpp"));
+    host.caretAfter("comp");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    frost::ui::lang::ServerReadiness readiness = frost::ui::lang::ServerReadiness::NoCompileCommand;
+    LanguageController controller(frost::ui::lang::LanguageServices{
+        .server = server.client(),
+        .scheduler = server.scheduler(),
+        .host = host,
+        .applier = applier,
+        .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .readiness = [&](std::string_view) { return readiness; },
+    });
+    std::vector<QString> status;
+    QObject::connect(&controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    controller.gotoImplementation();
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 1; }));
+    EXPECT_TRUE(status[0].contains(QStringLiteral("no compile command"))) << status[0].toStdString();
+    readiness = frost::ui::lang::ServerReadiness::Indexing;
+    controller.gotoImplementation();
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 2; }));
+    EXPECT_TRUE(status[1].contains(QStringLiteral("still indexing"))) << status[1].toStdString();
 }
 
 TEST(LanguageControllerNavigation, QuickDefinitionAndGotoSuperMethodRunSafelyOnScheduler) {
@@ -999,6 +1123,328 @@ TEST(LanguageControllerNavigation, GotoDeclarationGoesToHeaderAndGotoImplementat
     ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 2; }));
     EXPECT_EQ(fl::documentKey(host.opened[1].first), fl::documentKey(impl));
     EXPECT_EQ(host.opened[1].second, (fl::LspPosition{8, 4}));
+}
+
+// A clangd tweak action as clangd 23 sends it (command clangd.applyTweak with {file, selection, tweakID}).
+Json tweakAction(const std::string& path, std::string id, std::string title, std::string kind = "refactor") {
+    Json argument = Json::object()
+                        .set("file", uriOf(path))
+                        .set("selection", fl::toJson(fl::LspRange{{0, 0}, {0, 0}}))
+                        .set("tweakID", std::move(id));
+    return Json::object()
+        .set("title", title)
+        .set("kind", std::move(kind))
+        .set("command", Json::object()
+                            .set("title", title)
+                            .set("command", "clangd.applyTweak")
+                            .set("arguments", Json::array({std::move(argument)})));
+}
+
+// FND-3 (REF-0): Refactor This lists Rename, then the server's refactorings in the defined order
+// (known tweaks first, then the rest in server order); quick fixes and source actions stay with
+// Alt+Enter. Choosing a tweak executes it on the server; nothing edits text locally.
+TEST(LanguageControllerRefactoring, RefactorThisListsRenameThenServerActionsInOrder) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/codeAction", [&](const Json&) {
+        return Json::array({
+            tweakAction(path, "SwapBinaryOperands", "Swap operands to *"),
+            Json::object()
+                .set("title", "Insert ';'")
+                .set("kind", "quickfix")
+                .set("edit", Json::object().set("changes", Json::object())),
+            tweakAction(path, "ExtractVariable", "Extract subexpression to variable"),
+            tweakAction(path, "OverridePureVirtuals", "Override pure virtual methods", "quickfix"),
+            Json::object()
+                .set("title", "Organize")
+                .set("kind", "source.organizeImports")
+                .set("command", Json::object().set("title", "Organize").set("command", "x.organize")),
+        });
+    });
+    server.on("workspace/executeCommand", [](const Json&) { return Json("Tweak applied."); });
+    FakeHost host("int total = a * b;\n", path);
+    host.caretAfter("a *");
+    Rig rig(server, host);
+
+    rig.controller.refactorThis();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_EQ(choice.list()->count(), 4);
+    EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Rename..."));
+    EXPECT_EQ(choice.list()->item(1)->text(), QStringLiteral("Extract subexpression to variable"));
+    EXPECT_EQ(choice.list()->item(2)->text(), QStringLiteral("Override pure virtual methods"));
+    EXPECT_EQ(choice.list()->item(3)->text(), QStringLiteral("Swap operands to *"));
+    emit choice.chosen(1);
+    ASSERT_TRUE(pumpUntil([&] { return server.paramsOf("workspace/executeCommand").size() == 1; }));
+    const Json sent = server.paramsOf("workspace/executeCommand")[0];
+    EXPECT_EQ(sent.stringAt("command"), "clangd.applyTweak");
+    EXPECT_EQ(sent.find("arguments")->items().at(0).stringAt("tweakID"), "ExtractVariable");
+    EXPECT_EQ(host.undoSteps, 0); // The edit arrives as the server's workspace/applyEdit.
+    EXPECT_EQ(host.text(), "int total = a * b;\n");
+}
+
+// FND-3: named commands map to clangd tweaks by id; commands without an engine stay registered but
+// disabled with the epic in their description, and report it without touching the text.
+TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpic) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/codeAction", [&](const Json&) {
+        return Json::array({tweakAction(path, "ExtractFunction", "Extract to function"),
+                            tweakAction(path, "MemberwiseConstructor", "Define constructor")});
+    });
+    server.on("workspace/executeCommand", [](const Json&) { return Json("Tweak applied."); });
+    FakeHost host("struct P { int x; };\nint f() { int a = 1; return a; }\n", path);
+    host.caretAfter("int a");
+    Rig rig(server, host);
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    frost::input::ActionRegistry registry;
+    ASSERT_TRUE(rig.controller.registerActions(registry).has_value());
+    frost::input::ActionContext inEditor;
+    inEditor.keys.set(frost::input::ContextKey::EditorFocus);
+    for (const char* id : {"refactor.extractVariable", "refactor.extractMethod", "code.generate",
+                           "code.implementMethods", "code.optimizeImports", "refactor.this"}) {
+        EXPECT_TRUE(registry.isEnabled(*registry.find(id), inEditor)) << id;
+    }
+    struct Disabled {
+        const char* id;
+        const char* epic;
+    };
+    for (const Disabled& d : {Disabled{"refactor.inline", "REF-6"}, Disabled{"refactor.changeSignature", "REF-6"},
+                              Disabled{"refactor.extractConstant", "REF-7"}, Disabled{"refactor.extractField", "REF-7"},
+                              Disabled{"refactor.extractParameter", "REF-7"}, Disabled{"refactor.move", "REF-8"},
+                              Disabled{"refactor.safeDelete", "REF-8"}, Disabled{"code.overrideMethods", "REF-9"}}) {
+        const auto action = registry.find(d.id);
+        ASSERT_TRUE(action.has_value()) << d.id; // Still visible (Find Action, menus).
+        EXPECT_FALSE(registry.isEnabled(*action, inEditor)) << d.id;
+        EXPECT_NE(registry.info(*action).description.find(d.epic), std::string::npos) << d.id;
+    }
+
+    rig.controller.inlineSymbol();
+    rig.controller.changeSignature();
+    rig.controller.moveSymbol();
+    rig.controller.safeDelete();
+    rig.controller.extractField();
+    ASSERT_EQ(status.size(), 5U);
+    EXPECT_TRUE(status[0].contains(QStringLiteral("REF-6")));
+    EXPECT_TRUE(status[2].contains(QStringLiteral("REF-8")));
+    EXPECT_TRUE(status[4].contains(QStringLiteral("REF-7")));
+    EXPECT_EQ(host.undoSteps, 0);
+    EXPECT_TRUE(rig.applier.edits.empty());
+
+    rig.controller.extractMethod();
+    ASSERT_TRUE(pumpUntil([&] { return server.paramsOf("workspace/executeCommand").size() == 1; }));
+    EXPECT_EQ(server.paramsOf("workspace/executeCommand")[0].find("arguments")->items().at(0).stringAt("tweakID"),
+              "ExtractFunction");
+    rig.controller.generateConstructor();
+    ASSERT_TRUE(pumpUntil([&] { return server.paramsOf("workspace/executeCommand").size() == 2; }));
+    EXPECT_EQ(server.paramsOf("workspace/executeCommand")[1].find("arguments")->items().at(0).stringAt("tweakID"),
+              "MemberwiseConstructor");
+    // A tweak clangd does not offer here: a message, no edit.
+    rig.controller.extractVariable();
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 6; }));
+    EXPECT_TRUE(status[5].contains(QStringLiteral("Extract Variable")));
+    EXPECT_EQ(server.paramsOf("workspace/executeCommand").size(), 2U);
+    EXPECT_EQ(host.undoSteps, 0);
+}
+
+// FND-3: Generate lists what clangd offers, and the generators without an engine disabled (REF-9).
+TEST(LanguageControllerRefactoring, GenerateShowsClangdTweaksAndDisabledGenerators) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/codeAction", [&](const Json&) {
+        return Json::array({tweakAction(path, "SpecialMembers", "Declare implicit copy/move members"),
+                            tweakAction(path, "MemberwiseConstructor", "Define constructor")});
+    });
+    FakeHost host("struct P {\n    int x;\n};\n", path);
+    host.caretAfter("struct P");
+    Rig rig(server, host);
+    rig.controller.generateCode();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_EQ(choice.list()->count(), 6);
+    EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Define constructor"));
+    EXPECT_EQ(choice.list()->item(1)->text(), QStringLiteral("Declare implicit copy/move members"));
+    EXPECT_TRUE(choice.list()->item(0)->flags().testFlag(Qt::ItemIsEnabled));
+    for (int row = 2; row < 6; ++row) {
+        EXPECT_FALSE(choice.list()->item(row)->flags().testFlag(Qt::ItemIsEnabled)) << row;
+        EXPECT_TRUE(choice.list()->item(row)->toolTip().contains(QStringLiteral("REF-9"))) << row;
+    }
+    EXPECT_EQ(choice.list()->currentRow(), 0);
+}
+
+// FND-3 (REF-11): Optimize Includes applies clangd's include-cleaner fix for its diagnostics; the
+// old line sorting is gone.
+TEST(LanguageControllerRefactoring, OptimizeIncludesAppliesClangdsIncludeCleanerFix) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/codeAction", [&](const Json&) {
+        const auto remove = [&](std::string title, std::uint32_t lines) {
+            Json edits = Json::array();
+            for (std::uint32_t line = 0; line < lines; ++line) {
+                edits.push(
+                    Json::object().set("range", fl::toJson(fl::LspRange{{line, 0}, {line + 1, 0}})).set("newText", ""));
+            }
+            return Json::object()
+                .set("title", std::move(title))
+                .set("kind", "quickfix")
+                .set("edit", Json::object().set("changes", Json::object().set(uriOf(path), std::move(edits))));
+        };
+        return Json::array({remove("remove #include directive", 1), remove("remove all unused includes", 2)});
+    });
+    FakeHost host("#include \"b.h\"\n#include \"a.h\"\nint main() {}\n", path);
+    Rig rig(server, host);
+    for (std::uint32_t line = 0; line < 2; ++line) {
+        fl::LiveDiagnostic unused;
+        unused.code = "unused-includes";
+        unused.source = "clangd";
+        unused.message = "Included header is not used directly (fixes available)";
+        unused.lspRange = fl::LspRange{{line, 0}, {line, 14}};
+        rig.diagnostics.push_back(unused);
+    }
+    rig.controller.optimizeImports();
+    ASSERT_TRUE(pumpUntil([&] { return rig.applier.edits.size() == 1; }));
+    EXPECT_EQ(rig.applier.labels[0], "Optimize Includes");
+    EXPECT_EQ(rig.applier.edits[0].files.at(0).edits.size(), 2U); // "remove all unused includes".
+    const auto sent = server.paramsOf("textDocument/codeAction");
+    ASSERT_EQ(sent.size(), 1U);
+    EXPECT_EQ(sent[0].find("context")->find("diagnostics")->size(), 2U);
+    EXPECT_EQ(host.undoSteps, 0);
+}
+
+// FND-3 (LUA-2): C++/C# editor features never fire in a .lua file, and Lua's commands that need
+// an engine are disabled; Lua keeps the LSP-backed ones.
+TEST(LanguageControllerRefactoring, CppFeaturesNeverTouchLuaFiles) {
+    FeatureServer server;
+    const std::string original = "local items = {}\nitems.if";
+    FakeHost host(original, workPath("init.lua"));
+    host.caretAfter("items.if");
+    Rig rig(server, host);
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    EXPECT_FALSE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier)); // No postfix template.
+    rig.controller.surroundWith();
+    rig.controller.completeStatement();
+    rig.controller.insertLiveTemplate();
+    rig.controller.optimizeImports();
+    rig.controller.extractVariable();
+    rig.controller.generateCode();
+    EXPECT_EQ(host.text(), original);
+    EXPECT_EQ(host.undoSteps, 0);
+    EXPECT_FALSE(rig.controller.choicePopup().isVisible());
+    EXPECT_EQ(status.size(), 6U);
+    EXPECT_TRUE(server.paramsOf("textDocument/codeAction").empty());
+
+    frost::input::ActionRegistry registry;
+    ASSERT_TRUE(rig.controller.registerActions(registry).has_value());
+    frost::input::ActionContext inEditor;
+    inEditor.keys.set(frost::input::ContextKey::EditorFocus);
+    for (const char* id :
+         {"code.surroundWith", "code.completeStatement", "code.insertLiveTemplate", "code.optimizeImports",
+          "refactor.extractVariable", "refactor.extractMethod", "code.generate", "code.implementMethods"}) {
+        EXPECT_FALSE(registry.isEnabled(*registry.find(id), inEditor)) << id;
+    }
+    for (const char* id : {"code.completion", "refactor.rename", "navigate.declaration", "code.reformat",
+                           "code.showIntentions", "refactor.this"}) {
+        EXPECT_TRUE(registry.isEnabled(*registry.find(id), inEditor)) << id;
+    }
+}
+
+// FND-3: live templates are per language (no C# 'prop' in C++), and a postfix template takes only
+// the operand that ends at the dot and only at the start of a statement.
+TEST(LanguageControllerRefactoring, LiveAndPostfixTemplatesFollowTheLanguage) {
+    FeatureServer server;
+    {
+        FakeHost host("int main() {\n    \n}\n", workPath("main.cpp"));
+        host.caretAfter("{\n    ");
+        Rig rig(server, host);
+        rig.controller.insertLiveTemplate();
+        auto& choice = rig.controller.choicePopup();
+        ASSERT_TRUE(choice.isVisible());
+        bool hasProp = false;
+        bool hasFor = false;
+        for (int row = 0; row < choice.list()->count(); ++row) {
+            hasProp = hasProp || choice.list()->item(row)->text().startsWith(QStringLiteral("prop"));
+            hasFor = hasFor || choice.list()->item(row)->text().startsWith(QStringLiteral("for"));
+        }
+        EXPECT_FALSE(hasProp);
+        EXPECT_TRUE(hasFor);
+        choice.hide();
+    }
+    {
+        FakeHost host("class C {\n    \n}\n", workPath("C.cs"));
+        host.caretAfter("{\n    ");
+        Rig rig(server, host);
+        rig.controller.insertLiveTemplate();
+        auto& choice = rig.controller.choicePopup();
+        ASSERT_TRUE(choice.isVisible());
+        bool hasProp = false;
+        for (int row = 0; row < choice.list()->count(); ++row) {
+            hasProp = hasProp || choice.list()->item(row)->text().startsWith(QStringLiteral("prop"));
+        }
+        EXPECT_TRUE(hasProp);
+        choice.hide();
+    }
+    {
+        FakeHost host("void f() {\n    items.size().if\n}\n", workPath("main.cpp"));
+        host.caretAfter("items.size().if");
+        Rig rig(server, host);
+        EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+        EXPECT_EQ(host.text(), "void f() {\n    if (items.size()) {\n    \n}\n}\n");
+    }
+    {
+        // Not at the start of a statement: the old whole-line expansion produced
+        // "if (total += items.size()) {...}"; now nothing happens.
+        const std::string text = "void f() {\n    total += items.size().if\n}\n";
+        FakeHost host(text, workPath("main.cpp"));
+        host.caretAfter("items.size().if");
+        Rig rig(server, host);
+        EXPECT_FALSE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+        EXPECT_EQ(host.text(), text);
+    }
+}
+
+// Rename's "search in comments and strings" adds occurrences inside comments and string literals
+// only: an unrelated identifier with the same name in code is left alone.
+TEST(LanguageControllerRefactoring, RenameInCommentsAndStringsLeavesCodeAlone) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/prepareRename", [](const Json&) { return rangeJson(1, 4, 9); });
+    server.on("textDocument/rename", [&](const Json& params) {
+        return Json::object().set(
+            "changes",
+            Json::object().set(
+                uriOf(path),
+                Json::array(
+                    {Json::object().set("range", rangeJson(1, 4, 9)).set("newText", params.stringAt("newName"))})));
+    });
+    // Line 1 holds the renamed symbol; "value" on line 2 is another variable in another scope.
+    FakeHost host("// value is the count\nint value = 1;\nvoid g() { int value = 2; const char* s = \"value\"; }\n",
+                  path);
+    host.caretAfter("int va");
+    Rig rig(server, host);
+    rig.controller.rename();
+    auto& input = rig.controller.renameInput();
+    ASSERT_TRUE(pumpUntil([&] { return input.isVisible(); }));
+    input.searchCommentsCheckbox()->setChecked(true);
+    emit input.accepted(QStringLiteral("amount"));
+    ASSERT_TRUE(pumpUntil([&] { return rig.applier.edits.size() == 1; }));
+    const auto& edits = rig.applier.edits[0].files.at(0).edits;
+    ASSERT_EQ(edits.size(), 3U); // The server's, the comment's and the string's.
+    std::vector<std::uint32_t> lines;
+    for (const fl::TextEdit& edit : edits) {
+        lines.push_back(edit.range.start.line);
+        EXPECT_EQ(edit.newText, "amount");
+    }
+    std::ranges::sort(lines);
+    EXPECT_EQ(lines, (std::vector<std::uint32_t>{0, 1, 2}));
+    for (const fl::TextEdit& edit : edits) {
+        if (edit.range.start.line == 2) {
+            EXPECT_GT(edit.range.start.character, 40U); // Inside the string, not "int value".
+        }
+    }
 }
 
 } // namespace

@@ -119,9 +119,8 @@ public:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
-        if (event != nullptr &&
-            (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress ||
-             event->type() == QEvent::Show)) {
+        if (event != nullptr && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress ||
+                                 event->type() == QEvent::Show)) {
             if (auto* combo = qobject_cast<QComboBox*>(watched)) {
                 if (QAbstractItemView* view = combo->view()) {
                     const QFontMetrics fm(combo->font());
@@ -161,17 +160,18 @@ void applyRoundedPopupDwmShadow(QWidget* popup) {
         if (mod == nullptr) {
             mod = LoadLibraryW(L"dwmapi.dll");
         }
-        return mod != nullptr
-                   ? reinterpret_cast<DwmSetWindowAttributeFn>(GetProcAddress(mod, "DwmSetWindowAttribute"))
-                   : nullptr;
+        return mod != nullptr ? reinterpret_cast<DwmSetWindowAttributeFn>(GetProcAddress(mod, "DwmSetWindowAttribute"))
+                              : nullptr;
     }();
     if (dwmSetAttr == nullptr) {
         return;
     }
 
     const FrostStyle* frost = FrostStyle::current();
-    const QColor bg = frost != nullptr ? frost->color(ColorKey::MenuBackground) : popup->palette().color(QPalette::Window);
-    const QColor border = frost != nullptr ? frost->color(ColorKey::PopupBorderColor) : popup->palette().color(QPalette::Mid);
+    const QColor bg =
+        frost != nullptr ? frost->color(ColorKey::MenuBackground) : popup->palette().color(QPalette::Window);
+    const QColor border =
+        frost != nullptr ? frost->color(ColorKey::PopupBorderColor) : popup->palette().color(QPalette::Mid);
 
     // DWMWA_USE_IMMERSIVE_DARK_MODE (20)
     const BOOL darkMode = bg.lightness() < 128 ? TRUE : FALSE;
@@ -591,8 +591,8 @@ void FrostStyle::drawComplexControl(ComplexControl control, const QStyleOptionCo
             const QRect arrow = subControlRect(CC_ComboBox, combo, SC_ComboBoxArrow, widget);
             const QColor chevronColor =
                 enabled ? color(ColorKey::LabelSecondaryForeground) : color(ColorKey::LabelDisabledForeground);
-            painter->setPen(QPen(chevronColor, std::max<qreal>(1.4, m_scale.px(1.5)), Qt::SolidLine, Qt::RoundCap,
-                                 Qt::RoundJoin));
+            painter->setPen(
+                QPen(chevronColor, std::max<qreal>(1.4, m_scale.px(1.5)), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             painter->setBrush(Qt::NoBrush);
             const QPointF c = QRectF(arrow).center();
             const qreal d = m_scale.px(3.0);
@@ -646,10 +646,9 @@ void FrostStyle::drawPrimitive(PrimitiveElement element, const QStyleOption* opt
             painter->setClipRect(option->rect);
             const bool isDark = bg.lightness() < 128;
             const QColor accent = color(ColorKey::TabbedPaneUnderlineColor);
-            paintMenuEllipticalGlow(painter,
-                                    QPointF(option->rect.left() + option->rect.width() * 0.25, option->rect.top()),
-                                    option->rect.width() * 0.85, std::min(180, option->rect.height()),
-                                    accent, isDark ? 34 : 18);
+            paintMenuEllipticalGlow(
+                painter, QPointF(option->rect.left() + option->rect.width() * 0.25, option->rect.top()),
+                option->rect.width() * 0.85, std::min(180, option->rect.height()), accent, isDark ? 34 : 18);
             paintMenuEllipticalGlow(painter,
                                     QPointF(option->rect.right() - option->rect.width() * 0.20, option->rect.bottom()),
                                     option->rect.width() * 0.70, std::min(160, option->rect.height()),
@@ -768,8 +767,7 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
             if (item->menuItemType == QStyleOptionMenuItem::Separator) {
                 const int pad = m_scale.px(10);
                 const int y = item->rect.center().y();
-                painter->fillRect(QRect(item->rect.left() + pad, y,
-                                        std::max(1, item->rect.width() - pad * 2), 1),
+                painter->fillRect(QRect(item->rect.left() + pad, y, std::max(1, item->rect.width() - pad * 2), 1),
                                   color(ColorKey::SeparatorColor));
                 painter->restore();
                 return;
@@ -801,16 +799,15 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
 
             const int iconPx = metricPx(MetricKey::IconSize);
             const int iconColWidth = m_scale.px(28);
-            const QRect iconRect(item->rect.left() + m_scale.px(8),
-                                 item->rect.center().y() - iconPx / 2, iconPx, iconPx);
+            const QRect iconRect(item->rect.left() + m_scale.px(8), item->rect.center().y() - iconPx / 2, iconPx,
+                                 iconPx);
 
             if (!item->icon.isNull()) {
                 const QIcon::Mode mode = !enabled ? QIcon::Disabled : (selected ? QIcon::Active : QIcon::Normal);
-                item->icon.paint(painter, iconRect, Qt::AlignCenter, mode,
-                                 item->checked ? QIcon::On : QIcon::Off);
+                item->icon.paint(painter, iconRect, Qt::AlignCenter, mode, item->checked ? QIcon::On : QIcon::Off);
             } else if (item->checked && isMenuWidget) {
-                painter->setPen(QPen(fg, std::max<qreal>(1.6, m_scale.px(1.6)),
-                                     Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                painter->setPen(
+                    QPen(fg, std::max<qreal>(1.6, m_scale.px(1.6)), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 painter->setBrush(Qt::NoBrush);
                 const QPointF c = QRectF(iconRect).center();
                 const qreal d = m_scale.px(4);
@@ -825,15 +822,14 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
             const QString mainText = tabPos >= 0 ? item->text.left(tabPos) : item->text;
             const QString shortcutText = tabPos >= 0 ? item->text.mid(tabPos + 1) : QString();
 
-            const int textLeft = isMenuWidget
-                                     ? (item->rect.left() + iconColWidth + m_scale.px(2))
-                                     : (!item->icon.isNull() ? (item->rect.left() + m_scale.px(12) + iconPx)
-                                                             : (item->rect.left() + m_scale.px(8)));
-            const int rightPad =
-                isMenuWidget ? m_scale.px(item->menuItemType == QStyleOptionMenuItem::SubMenu ? 24 : 12)
-                             : m_scale.px(8);
-            const QRect textRect(textLeft, item->rect.top(),
-                                 std::max(0, item->rect.right() - rightPad - textLeft), item->rect.height());
+            const int textLeft = isMenuWidget ? (item->rect.left() + iconColWidth + m_scale.px(2))
+                                              : (!item->icon.isNull() ? (item->rect.left() + m_scale.px(12) + iconPx)
+                                                                      : (item->rect.left() + m_scale.px(8)));
+            const int rightPad = isMenuWidget
+                                     ? m_scale.px(item->menuItemType == QStyleOptionMenuItem::SubMenu ? 24 : 12)
+                                     : m_scale.px(8);
+            const QRect textRect(textLeft, item->rect.top(), std::max(0, item->rect.right() - rightPad - textLeft),
+                                 item->rect.height());
 
             painter->setFont(item->font);
             painter->setPen(fg);
@@ -845,8 +841,8 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
             }
 
             if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
-                painter->setPen(QPen(shortcutFg, std::max<qreal>(1.4, m_scale.px(1.4)),
-                                     Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                painter->setPen(QPen(shortcutFg, std::max<qreal>(1.4, m_scale.px(1.4)), Qt::SolidLine, Qt::RoundCap,
+                                     Qt::RoundJoin));
                 painter->setBrush(Qt::NoBrush);
                 const qreal cx = item->rect.right() - m_scale.px(13);
                 const qreal cy = item->rect.center().y();
@@ -920,10 +916,9 @@ void FrostStyle::drawControl(ControlElement element, const QStyleOption* option,
     const QRectF rect(option->rect);
     painter->save();
     if (widget != nullptr && widget->objectName() == QStringLiteral("editorTabBar")) {
-        painter->fillRect(rect,
-                          color(selected ? ColorKey::EditorBackground
-                                : hover  ? ColorKey::ButtonHoverBackground
-                                         : ColorKey::MainWindowBackground));
+        painter->fillRect(rect, color(selected ? ColorKey::EditorBackground
+                                      : hover  ? ColorKey::ButtonHoverBackground
+                                               : ColorKey::MainWindowBackground));
         const QColor sep = color(ColorKey::SeparatorColor);
         painter->fillRect(QRectF(rect.right() - 1.0, rect.top() + 6.0, 1.0, std::max(0.0, rect.height() - 12.0)), sep);
         if (selected) {

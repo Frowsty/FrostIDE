@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// LuaLS discovery and workspace configuration.
+// LuaLS discovery (the bundled and pinned SDK installs first, ADR 0079), its launch arguments and the
+// workspace configuration, including the FrostEngine defaults for a workspace with a .frostproj.
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/utf.hpp"
@@ -39,7 +40,57 @@ std::optional<std::string> candidate(io::IFileSystem& fs, std::string_view dir) 
         return std::move(*normalized);
     return std::nullopt;
 }
+// The value of an environment variable (UTF-8), or "" when unset.
+std::string environment(const char* name) {
+#ifdef _WIN32
+    auto wide = io::toWide(name);
+    if (!wide)
+        return {};
+    const DWORD needed = GetEnvironmentVariableW(wide->c_str(), nullptr, 0);
+    if (needed == 0)
+        return {};
+    std::wstring value(needed, L'\0');
+    const DWORD length = GetEnvironmentVariableW(wide->c_str(), value.data(), needed);
+    if (length == 0 || length >= needed)
+        return {};
+    value.resize(length);
+    auto utf8 = io::fromWide(value);
+    return utf8 ? std::move(*utf8) : std::string();
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+// The directory of this process's executable, or "" when it cannot be read.
+std::string executableDirectory() {
+#ifdef _WIN32
+    std::wstring buffer(32768, L'\0');
+    const DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (len == 0 || len >= buffer.size())
+        return {};
+    buffer.resize(len);
+    auto exePath = io::fromWide(buffer);
+    return exePath ? std::string(io::parentPath(*exePath)) : std::string();
+#elif defined(__linux__)
+    std::string buffer(4096, '\0');
+    const ssize_t len = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (len <= 0)
+        return {};
+    buffer.resize(static_cast<std::size_t>(len));
+    return std::string(io::parentPath(buffer));
+#else
+    return {};
+#endif
+}
+// <root>/luals-<pinned version>/bin, the layout of bootstrap's SDK install and of tools/stage.ps1.
+void addPinnedBin(std::vector<std::string>& out, std::string_view root) {
+    if (root.empty())
+        return;
+    if (auto bin = io::joinPath(root, std::format("luals-{}/bin", pinnedLuaLanguageServerVersion())))
+        out.push_back(std::move(*bin));
+}
 } // namespace
+std::string_view pinnedLuaLanguageServerVersion() noexcept { return FROST_PINNED_LUALS_VERSION; }
 Result<std::string> findLuaLanguageServer(io::IFileSystem& fs, const LuaSearch& search) {
     if (!search.configuredPath.empty()) {
         if (!io::isAbsolutePath(search.configuredPath))
@@ -62,57 +113,52 @@ Result<std::string> findLuaLanguageServer(io::IFileSystem& fs, const LuaSearch& 
             break;
         rest.remove_prefix(pos + 1);
     }
-    return fail(ErrorCode::NotFound, "Lua language server not found");
+    return fail(ErrorCode::NotFound, std::format("LuaLS {} was not found in the bundled folder, the pinned SDK or PATH",
+                                                 pinnedLuaLanguageServerVersion()));
 }
 LuaSearch defaultLuaSearch(std::string configuredPath) {
     LuaSearch search;
     search.configuredPath = std::move(configuredPath);
+    // A staged FrostIDE bundles the pinned LuaLS beside the executable (tools/stage.ps1).
+    if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
+        addPinnedBin(search.directories, exeDir);
+        if (auto sub = io::joinPath(exeDir, "lua-language-server/bin")) // Layout of earlier previews.
+            search.directories.push_back(std::move(*sub));
+        search.directories.push_back(exeDir);
+    }
+    // Development: the pinned install from tools/bootstrap.ps1 or tools/bootstrap-wsl.sh.
+    addPinnedBin(search.directories, environment("FROST_SDK"));
 #ifdef _WIN32
-    {
-        std::wstring buffer(32768, L'\0');
-        const DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (len > 0 && len < buffer.size()) {
-            buffer.resize(len);
-            if (auto exePath = io::fromWide(buffer)) {
-                const std::string exeDir(io::parentPath(*exePath));
-                if (!exeDir.empty()) {
-                    if (auto sub = io::joinPath(exeDir, "lua-language-server/bin"))
-                        search.directories.push_back(std::move(*sub));
-                    search.directories.push_back(exeDir);
-                }
-            }
-        }
-    }
-    DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
-    if (size) {
-        std::wstring value(size, L'\0');
-        DWORD length = GetEnvironmentVariableW(L"PATH", value.data(), size);
-        if (length && length < size) {
-            value.resize(length);
-            if (auto path = io::fromWide(value))
-                search.pathVariable = std::move(*path);
-        }
-    }
+    addPinnedBin(search.directories, "E:\\sdk"); // tools/bootstrap.ps1's default -SdkRoot.
 #else
-#if defined(__linux__)
-    {
-        std::string buffer(4096, '\0');
-        const ssize_t len = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-        if (len > 0) {
-            buffer.resize(static_cast<std::size_t>(len));
-            const std::string exeDir(io::parentPath(buffer));
-            if (!exeDir.empty()) {
-                if (auto sub = io::joinPath(exeDir, "lua-language-server/bin"))
-                    search.directories.push_back(std::move(*sub));
-                search.directories.push_back(exeDir);
-            }
-        }
-    }
+    if (const std::string home = environment("HOME"); !home.empty())
+        if (auto sdk = io::joinPath(home, "sdk")) // tools/bootstrap-wsl.sh's root.
+            addPinnedBin(search.directories, *sdk);
 #endif
-    if (const char* path = std::getenv("PATH"))
-        search.pathVariable = path;
-#endif
+    search.pathVariable = environment("PATH");
     return search;
+}
+Result<std::vector<std::string>> luaLanguageServerArguments(std::string_view stateDirectory) {
+    if (!io::isAbsolutePath(stateDirectory))
+        return fail(ErrorCode::InvalidArgument, "the LuaLS state directory must be absolute");
+    auto log = io::joinPath(stateDirectory, "log");
+    if (!log)
+        return std::unexpected(std::move(log.error()));
+    auto meta = io::joinPath(stateDirectory, "meta");
+    if (!meta)
+        return std::unexpected(std::move(meta.error()));
+    return std::vector<std::string>{"--logpath=" + *log, "--metapath=" + *meta};
+}
+bool isFrostEngineLuaWorkspace(io::IFileSystem& fs, std::string_view root) {
+    auto entries = fs.listDirectory(root);
+    if (!entries)
+        return false;
+    for (const auto& entry : *entries) {
+        const std::string_view name = entry.name;
+        if (entry.type == io::FileType::Regular && name.size() > 10 && name.ends_with(".frostproj"))
+            return true;
+    }
+    return false;
 }
 Json luaDefaults(std::string runtimeVersion, bool frostEngine) {
     Json runtime = Json::object().set("version", std::move(runtimeVersion));

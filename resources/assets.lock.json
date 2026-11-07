@@ -422,7 +422,7 @@
       "copyright": [
         "Copyright (c) 2021 Microsoft Corporation"
       ],
-      "reservedFontNames": [],
+      "reservedFontNames": ["Cascadia Code"],
       "modified": false,
       "homepage": "https://github.com/microsoft/cascadia-code",
       "dest": "resources/fonts/cascadia-code",
@@ -490,7 +490,7 @@
       "copyright": [
         "Copyright 2023 Adobe (http://www.adobe.com/)"
       ],
-      "reservedFontNames": [],
+      "reservedFontNames": ["Source"],
       "modified": false,
       "homepage": "https://github.com/adobe-fonts/source-code-pro",
       "dest": "resources/fonts/source-code-pro",
@@ -538,7 +538,7 @@
       "copyright": [
         "Copyright 2017 IBM Corp."
       ],
-      "reservedFontNames": [],
+      "reservedFontNames": ["Plex"],
       "modified": false,
       "homepage": "https://github.com/IBM/plex",
       "dest": "resources/fonts/ibm-plex-mono",
@@ -632,7 +632,7 @@
       "copyright": [
         "Copyright 2023-2024 The Intel One Mono Project Authors (https://github.com/intel/intel-one-mono)"
       ],
-      "reservedFontNames": [],
+      "reservedFontNames": ["Intel"],
       "modified": false,
       "homepage": "https://github.com/intel/intel-one-mono",
       "dest": "resources/fonts/intel-one-mono",

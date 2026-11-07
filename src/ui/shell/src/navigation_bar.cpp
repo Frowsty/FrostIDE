@@ -73,9 +73,9 @@ protected:
         const bool down = isDown() || (menu() != nullptr && menu()->isVisible());
 
         if (down || hovered) {
-            const QColor fill = frost != nullptr
-                                    ? frost->color(down ? ColorKey::ButtonPressedBackground : ColorKey::ButtonHoverBackground)
-                                    : palette().color(QPalette::AlternateBase);
+            const QColor fill = frost != nullptr ? frost->color(down ? ColorKey::ButtonPressedBackground
+                                                                     : ColorKey::ButtonHoverBackground)
+                                                 : palette().color(QPalette::AlternateBase);
             painter.setPen(Qt::NoPen);
             painter.setBrush(fill);
             painter.drawRoundedRect(QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0), 4.0, 4.0);

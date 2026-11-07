@@ -161,6 +161,7 @@ class ProjectEditProcess;
 class EngineIntegration;
 class UnityControlIntegration;
 class GitIntegration;
+struct GitClone;
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -259,6 +260,11 @@ public:
     [[nodiscard]] virtual bool confirmRerun(QWidget* parent, const QString& project) = 0;
     // Restore the recorded pre-edit definitions after an interrupted owned project edit.
     [[nodiscard]] virtual bool confirmProjectRecovery(QWidget* parent, const QString& project) = 0;
+    // The IDE window is closing and general.confirmExit is on: true exits.
+    [[nodiscard]] virtual bool confirmExit(QWidget* parent) {
+        (void)parent;
+        return true;
+    }
 
 protected:
     IWorkbenchPrompts() = default;
@@ -280,6 +286,7 @@ public:
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
     [[nodiscard]] bool confirmRerun(QWidget* parent, const QString& project) override;
     [[nodiscard]] bool confirmProjectRecovery(QWidget* parent, const QString& project) override;
+    [[nodiscard]] bool confirmExit(QWidget* parent) override;
 };
 
 // What the workbench borrows; everything outlives it.
@@ -325,6 +332,12 @@ struct WorkbenchOptions {
     std::string cmakeStatePath;
     // The run service's persisted startup projects (absolute); "" persists nothing.
     std::string runStatePath;
+    // Where LuaLS writes its log and meta files (absolute; --logpath/--metapath, ADR 0079); "" uses
+    // <FrostIDE data directory>/luals in the user profile.
+    std::string luaStateDirectory;
+    // Test seam: the LuaLS search instead of lang::defaultLuaSearch's bundled, SDK and PATH
+    // locations (the tools.lua.languageServer.path setting still applies on top).
+    std::optional<lang::LuaSearch> luaSearch;
     // Test seam: the FrostIDE executable that provides the isolated discovery helper.
     // Empty uses this application's own executable.
     std::string engineDiscoveryHelperPath;
@@ -427,11 +440,29 @@ public:
     void promptAndRenameItem(std::string_view path = {});
     // Prompts for confirmation and deletes `path` (empty: active tree selection or editor path).
     void promptAndDeleteItem(std::string_view path = {});
-    // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and adds it to the .vcxproj.
+    // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and asks the
+    // ProjectHost helper to add it to the .vcxproj (asynchronous; a refusal is a notification).
     [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
                                                              std::string_view relativeName);
     // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt.
     [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
+    /*
+     * Get from Version Control: clones `url` (a URL or a local path) into `directory` (absolute)
+     * with the git that tools.git.path, Git for Windows' install folder or PATH resolves to
+     * (vcs::findGit; started through IProcessLauncher, never by bare name), then opens it. Returns
+     * once the clone has started: git runs on a worker thread, its --progress lines update a
+     * progress dialog with Cancel, and the GUI thread never waits for it (FND-9a). The outcome
+     * arrives as a notification with git's own last output lines, or as the opened project.
+     * Userinfo in the URL (https://user:token@host/...) is shown as "***@" in every label and
+     * notification, including git's quoted lines; git itself gets the URL unchanged.
+     * Errors: Busy (a clone is running), InvalidArgument (empty or option-like `url`, relative
+     * `directory`), Cancelled (shutting down). GUI thread only.
+     */
+    [[nodiscard]] Result<void> cloneRepository(const std::string& url, const std::string& directory);
+    // Whether a clone started by cloneRepository() is still running.
+    [[nodiscard]] bool cloneRunning() const noexcept;
+    // Ends the running clone's git process tree (Cancel); the dialog closes when it has stopped.
+    void cancelClone();
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
     // Canonical directory of the current project, empty when none is open.
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
@@ -500,6 +531,9 @@ public:
     [[nodiscard]] WelcomeScreen* welcomeScreen() const noexcept { return m_welcome.data(); }
     [[nodiscard]] LauncherWindow* launcherWindow() const noexcept { return m_launcherWindow.data(); }
     void showLauncherWindow();
+    // Startup without project or file arguments: reopens the last project in the IDE window when
+    // general.reopenLastProject is on and there is one (true), else shows the launcher (false).
+    bool showStartupWindow();
     [[nodiscard]] ui::ShellWindow* window() const noexcept { return m_window.data(); }
     // The view of the active tab, or nullptr.
     [[nodiscard]] DocumentEditorView* currentView() const;
@@ -556,7 +590,8 @@ private:
     void showVersionSwitcher();
     void applyVerifiedUpdate();
     void showAttachToProcess();
-    void attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName, bool attachAsDotNet);
+    void attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName,
+                         bool attachAsDotNet);
     void launchCompoundConfiguration(const std::vector<project::ProjectId>& targets);
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
     [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
@@ -587,6 +622,13 @@ private:
     void stopProjectEvaluation();
     void stopClangd();
     void restartClangd();
+    // A CMake model change, or a trust change, restarts clangd only when the compile-commands
+    // location or the trust its launch flags came from changed.
+    void restartClangdIfCMakeStateChanged();
+    // Starts the clangd that openFolder deferred until its configure finished (FND-9a). With
+    // `retryUntilIdle`, a CMake service that is not idle yet is asked again shortly.
+    void resumeDeferredClangd(bool retryUntilIdle = false);
+    void notifyLuaUnavailable();
     void onLiveDiagnostics(const std::string& file);
     void onSettingsChanged();
     void onClangdProgress(const lang::ClangdProgress& progress);
@@ -615,6 +657,10 @@ private:
     void notify(const QString& title, const QString& text, ui::NotificationKind kind);
     // Saves without notifying (the close path shows the error in its prompt).
     [[nodiscard]] Result<void> saveQuietly(document::FileDocument& document);
+    // The pre-save transform for `document`: editor.trimTrailingWhitespace and
+    // editor.insertFinalNewline resolved for its file (settings plus .editorconfig), keeping the
+    // line each of its views' primary caret is on.
+    [[nodiscard]] document::SaveTransform saveTransformFor(const document::FileDocument& document) const;
 
     WorkbenchServices m_services;
     WorkbenchOptions m_options;
@@ -684,6 +730,9 @@ private:
     QPointer<ui::TrustDialog> m_managedTrustDialog;
     std::string m_unityRevisionRoot;
     std::string m_unityRevision;
+    // "<root>\n<revision>" of the Unity generation whose unmodelled compiler options were last
+    // notified; a restart for the same generation (settings, trust) does not notify again.
+    std::string m_unityNotifiedGeneration;
     std::string m_managedDotnetPath;
     std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;
@@ -694,9 +743,21 @@ private:
     bool m_luaObservedTrust = false;
     std::string m_luaConfiguredPath;
     std::string m_luaRuntimeVersion;
+    // Why LuaLS could not start for the open project ("" when it runs or was not needed), and the
+    // root that was already told so: the notification appears once per project (LUA-1).
+    std::string m_luaUnavailable;
+    std::string m_luaUnavailableNotifiedRoot;
     std::shared_ptr<lang::ClangdService> m_clangd;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
     std::uint64_t m_clangdGeneration = 0;
+    // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
+    // started with (cmakeClangdState), and the root whose start waits for the open's configure.
+    std::string m_clangdCMakeState;
+    // Whether the running clangd was started trusted (full mode) or restricted (FND-3); a trust
+    // grant on a CMake folder must restart it even when the compile commands did not move.
+    bool m_clangdTrusted = false;
+    std::string m_clangdDeferredRoot;
+    QMetaObject::Connection m_clangdDeferral;
     std::uint64_t m_projectTrustRevision = 0;
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
@@ -728,7 +789,10 @@ private:
     bool m_launcherModeEnabled = false;
     project::CppHierarchyMode m_cppHierarchyMode = project::CppHierarchyMode::FiltersAndFolders;
     std::vector<std::string> m_unloadedProjectPaths;
-    std::vector<project::ProjectId> m_pendingCompoundTargets;
+    std::unique_ptr<GitClone> m_clone; // The running cloneRepository(), if any.
+    bool m_exitConfirmed = false;      // The IDE closes its own window (restart): no general.confirmExit prompt.
+    void cloneProgress(const std::string& line);
+    void finishClone(bool ok, const std::string& message);
     std::vector<std::string> m_clipboardPaths;
     bool m_clipboardIsCut = false;
     void transitionLauncherToMainWindow();
@@ -739,10 +803,10 @@ private:
     [[nodiscard]] bool canPastePaths() const noexcept { return !m_clipboardPaths.empty(); }
     void pasteClipboardIntoDirectory(const std::string& targetDirectory, const std::string& targetProjectPath = {},
                                      const std::string& targetFilterPath = {});
-    void duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory,
-                                 const std::string& projectPath = {}, const std::string& filterPath = {});
-    void movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths,
-                                      const std::string& targetDirectory, const std::string& projectPath = {});
+    void duplicatePathInExplorer(const std::string& sourcePath, bool isDirectory, const std::string& projectPath = {},
+                                 const std::string& filterPath = {});
+    void movePhysicalPathsToDirectory(const std::vector<std::string>& sourcePaths, const std::string& targetDirectory,
+                                      const std::string& projectPath = {});
     [[nodiscard]] QWidget* activeTopWindow() const noexcept;
     ui::TrustPrompter* m_trustPrompter = nullptr; // Child of this.
 

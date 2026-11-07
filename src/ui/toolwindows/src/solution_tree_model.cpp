@@ -343,8 +343,7 @@ QMimeData* SolutionTreeModel::mimeData(const QModelIndexList& indexes) const {
         const project::Node& node = m_solution->node(*id);
         if (node.kind == NodeKind::Project && !node.path.empty()) {
             auto* mime = new QMimeData();
-            mime->setData(QStringLiteral("application/x-frostide-solution-project"),
-                          qs(node.path).toUtf8());
+            mime->setData(QStringLiteral("application/x-frostide-solution-project"), qs(node.path).toUtf8());
             return mime;
         }
     }
@@ -425,7 +424,8 @@ bool SolutionTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction actio
     }
     if (data->hasFormat(QStringLiteral("application/x-frostide-solution-project"))) {
         const project::Node& targetNode = m_solution->node(*targetId);
-        const QString projPath = QString::fromUtf8(data->data(QStringLiteral("application/x-frostide-solution-project")));
+        const QString projPath =
+            QString::fromUtf8(data->data(QStringLiteral("application/x-frostide-solution-project")));
         const QString folderId = targetNode.kind == NodeKind::SolutionFolder ? qs(targetNode.filterPath) : QString();
         if (!projPath.isEmpty()) {
             emit projectDroppedOnSolutionFolder(projPath, folderId);
@@ -461,20 +461,17 @@ bool SolutionTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction actio
     if (files.isEmpty()) {
         return false;
     }
-    const bool isPhysicalTarget =
-        (targetNode.kind == NodeKind::Filter && !targetNode.path.empty()) ||
-        (targetNode.kind == NodeKind::Project &&
-         (m_solution->cppHierarchyMode() == project::CppHierarchyMode::PhysicalFolders ||
-          projInfo.kind == project::ProjectKind::CSharp));
+    const bool isPhysicalTarget = (targetNode.kind == NodeKind::Filter && !targetNode.path.empty()) ||
+                                  (targetNode.kind == NodeKind::Project &&
+                                   (m_solution->cppHierarchyMode() == project::CppHierarchyMode::PhysicalFolders ||
+                                    projInfo.kind == project::ProjectKind::CSharp));
     if (isPhysicalTarget) {
-        const QString targetDir = targetNode.kind == NodeKind::Filter
-                                      ? qs(targetNode.path)
-                                      : qs(std::string(io::parentPath(projInfo.path)));
+        const QString targetDir =
+            targetNode.kind == NodeKind::Filter ? qs(targetNode.path) : qs(std::string(io::parentPath(projInfo.path)));
         emit physicalFilesDroppedOnDirectory(targetProjectPath, files, targetDir);
         return true;
     }
-    const QString targetFilterPath =
-        targetNode.kind == NodeKind::Filter ? qs(targetNode.filterPath) : QString();
+    const QString targetFilterPath = targetNode.kind == NodeKind::Filter ? qs(targetNode.filterPath) : QString();
     emit filesDroppedOnFilter(targetProjectPath, files, targetFilterPath);
     return true;
 }

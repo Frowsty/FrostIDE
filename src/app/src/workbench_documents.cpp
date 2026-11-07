@@ -10,6 +10,7 @@
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/settings/editorconfig.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -23,8 +24,6 @@
 #include "project_properties_dialog.hpp"
 #include <QDir>
 #include <QFileInfo>
-#include <QLineEdit>
-#include <QPushButton>
 
 #include <algorithm>
 #include <chrono>
@@ -138,48 +137,29 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             (void)m_window->invoke(actionId.toStdString());
         }
     });
-    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this,
-            [this, editor](int lineZeroBased, QPoint) {
-                DocumentEditorView* targetView = nullptr;
-                for (DocumentEditorView* v : m_editors->views()) {
-                    if (&v->editor() == editor) {
-                        targetView = v;
-                        break;
-                    }
-                }
-                if (!targetView)
-                    return;
-                const auto entries =
-                    discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
-                const int targetLine = lineZeroBased + 1;
-                for (const auto& entry : entries) {
-                    if (entry.line == targetLine) {
-                        if (entry.isEntryPoint) {
-                            if (m_window)
-                                (void)m_window->invoke("run.run");
-                            return;
-                        }
-                        if (m_window) {
-                            m_window->toolWindows().show(kUnitTestsToolWindow, false);
-                            if (QWidget* content = m_window->toolWindows().content(kUnitTestsToolWindow)) {
-                                if (auto* refreshBtn =
-                                        content->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"))) {
-                                    refreshBtn->click();
-                                }
-                                if (auto* filterEdit =
-                                        content->findChild<QLineEdit*>(QStringLiteral("unitTestsFilterEdit"))) {
-                                    filterEdit->setText(qs(entry.testName));
-                                }
-                                if (auto* runAllBtn =
-                                        content->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"))) {
-                                    runAllBtn->click();
-                                }
-                            }
-                        }
-                        return;
-                    }
-                }
-            });
+    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this, [this, editor](int lineZeroBased, QPoint) {
+        DocumentEditorView* targetView = nullptr;
+        for (DocumentEditorView* v : m_editors->views()) {
+            if (&v->editor() == editor) {
+                targetView = v;
+                break;
+            }
+        }
+        if (!targetView)
+            return;
+        const auto entries =
+            discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
+        const int targetLine = lineZeroBased + 1;
+        // Only entry points have run markers (refreshMarkers); they run the startup configuration.
+        // Test markers stay hidden until a real test runner exists (RUN-10).
+        for (const auto& entry : entries) {
+            if (entry.line == targetLine && entry.isEntryPoint) {
+                if (m_window)
+                    (void)m_window->invoke("run.run");
+                return;
+            }
+        }
+    });
     transitionLauncherToMainWindow();
 }
 
@@ -297,8 +277,9 @@ void Workbench::documentChanged(const std::string& path) {
                     binding->refreshSemanticTokens();
             }
         }
+        // A reload replaced the whole text: the old Structure tree describes text that is gone.
         if (DocumentEditorView* current = currentView(); current && &current->document() == &view->document())
-            m_language->structureChanged();
+            m_language->structureReplaced();
     } else if (saved) {
         if (m_managed && isManagedSource(view->path()))
             (void)m_managed->saveDocument(view->path());
@@ -310,6 +291,34 @@ void Workbench::documentChanged(const std::string& path) {
 }
 
 // --- Saving ---
+
+document::SaveTransform Workbench::saveTransformFor(const document::FileDocument& document) const {
+    document::SaveTransform transform;
+    const auto snapshot = m_services.settings.snapshot();
+    std::string trim = snapshot->get(settings::key::editorTrimTrailingWhitespace);
+    bool finalNewline = snapshot->get(settings::key::editorInsertFinalNewline);
+    // EditorConfig's trim_trailing_whitespace and insert_final_newline override the settings for
+    // this file (settingsForFile; editor.editorConfig turns that off).
+    if (!document.untitled()) {
+        if (auto file = settings::settingsForFile(snapshot, m_services.fs, document.path()); file) {
+            trim = file->get(settings::key::editorTrimTrailingWhitespace);
+            finalNewline = file->get(settings::key::editorInsertFinalNewline);
+        } else {
+            log::warn(kLog, "save actions for {}: {}", document.path(), file.error().describe());
+        }
+    }
+    transform.trim = trim == "all"        ? document::TrimTrailingWhitespace::All
+                     : trim == "modified" ? document::TrimTrailingWhitespace::Modified
+                                          : document::TrimTrailingWhitespace::None;
+    transform.insertFinalNewline = finalNewline;
+    if (m_editors) {
+        for (DocumentEditorView* view : m_editors->views()) {
+            if (&view->document() == &document && view->editor().status().line >= 1)
+                transform.keepLines.push_back(LineIndex{static_cast<std::uint32_t>(view->editor().status().line - 1)});
+        }
+    }
+    return transform;
+}
 
 Result<void> Workbench::saveQuietly(document::FileDocument& document) {
     Result<document::SaveOutcome> outcome = m_documents->save(document);
@@ -645,14 +654,13 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
     if (!view.path().empty() && !view.editor().fileInfo().largeFile) {
         const auto runnable = discoverTestsAndEntryPointsInFile(view.path(), view.document().document().text().text());
         for (const auto& entry : runnable) {
-            if (entry.line <= 0)
+            // Test markers are hidden until RUN-10's test runner can run and debug one test; a
+            // marker for a test it cannot run would promise a result nothing produces.
+            if (entry.line <= 0 || !entry.isEntryPoint)
                 continue;
-            const std::string msg =
-                entry.isEntryPoint
-                    ? std::format("Run '{}' ({})", entry.testName, entry.suiteName)
-                    : std::format("Run Test '{}.{}' / Debug Test", entry.suiteName, entry.testName);
             markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(entry.line - 1)},
-                                             ui::MarkerSeverity::RunTest, msg});
+                                             ui::MarkerSeverity::RunTest,
+                                             std::format("Run '{}' ({})", entry.testName, entry.suiteName)});
         }
     }
     view.editor().setLineMarkers(std::move(markers));
