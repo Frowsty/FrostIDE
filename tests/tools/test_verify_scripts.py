@@ -240,6 +240,10 @@ class VerifyShTest(TempDirTestCase):
         (mirror / "deleted.txt").write_text("gone", encoding="utf-8")
         (mirror / "build").mkdir()
         (mirror / "build" / "object.o").write_text("keep", encoding="utf-8")
+        # A git worktree's .git file (naming a Windows git directory) is not copied, and a stale copy
+        # from an older run is removed: git inside the mirror must not find a broken repository.
+        (source / ".git").write_text("gitdir: E:/dev/FrostIDE/.git/worktrees/x\n", encoding="utf-8")
+        (mirror / ".git").write_text("gitdir: E:/dev/FrostIDE/.git/worktrees/x\n", encoding="utf-8")
         script = _bash_function("mirror_source") + 'mirror_source "$1" "$2"\n'
         result = self._bash(script, str(source), str(mirror))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -250,6 +254,7 @@ class VerifyShTest(TempDirTestCase):
         self.assertEqual((mirror / "unchanged.hpp").stat().st_mtime_ns, unchanged_time)
         self.assertFalse((mirror / "deleted.txt").exists())
         self.assertTrue((mirror / "build" / "object.o").exists())
+        self.assertFalse((mirror / ".git").exists())
 
     def test_ctest_counts_matches_the_fixture_table(self):
         table = _table("ctest_counts.json")

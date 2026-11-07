@@ -4,7 +4,7 @@
 // TrustPurpose::DebugAttach, which never cancels a build waiting for trust; with no project open
 // it confirms one attach through a session grant, so the program's (system) folder is never saved
 // as a trusted root. The attach itself runs the pinned lldb-dap against a real child process
-// (PING.EXE in System32 on Windows, /bin/sleep on Linux); the waiting build is a real CMake
+// (PING.EXE in System32 on Windows, the system python3 on Linux); the waiting build is a real CMake
 // configure of an untrusted folder held in NeedsTrust (no cmake runs before trust).
 
 #include "frost/build/cmake_service.hpp"
@@ -30,8 +30,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 
 namespace {
 using namespace std::chrono_literals;
@@ -40,17 +42,32 @@ using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
 
-// A real child that sleeps in a system folder (never trusted by a test). Killed by the returned
-// guard's owner (terminate()).
-std::unique_ptr<frost::io::IProcess> startSleeper(std::string& executable) {
+/*
+ * A real child that sleeps in a system folder (never trusted by a test). Killed by the returned
+ * guard's owner (terminate()). Returns once the child is ready to be attached to.
+ *
+ * On Linux the debugger and the child are siblings (both children of this test), and the Yama
+ * ptrace policy of Ubuntu and WSL (kernel.yama.ptrace_scope = 1) lets a process attach only to its
+ * own descendants. So the child is the system python3, which first allows any tracer
+ * (prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY), what a debuggee does for an IDE under that policy),
+ * then writes `readyMarker` and sleeps. Without it lldb-dap's attach is refused by the kernel.
+ */
+std::unique_ptr<frost::io::IProcess> startSleeper(std::string& executable, const std::string& readyMarker) {
     frost::io::ProcessSpec spec;
 #ifdef _WIN32
+    static_cast<void>(readyMarker);
     spec.executable =
         QDir(qEnvironmentVariable("SystemRoot")).filePath(QStringLiteral("System32/PING.EXE")).toStdString();
     spec.arguments = {"-n", "120", "127.0.0.1"};
 #else
-    spec.executable = "/bin/sleep";
-    spec.arguments = {"120"};
+    spec.executable = "/usr/bin/python3";
+    spec.arguments = {"-I", "-c",
+                      "import ctypes, sys, time\n"
+                      "if ctypes.CDLL(None, use_errno=True).prctl(0x59616d61, ctypes.c_ulong(-1), 0, 0, 0) != 0:\n"
+                      "    sys.exit('prctl(PR_SET_PTRACER) failed')\n"
+                      "open(sys.argv[1], 'w').close()\n"
+                      "time.sleep(120)\n",
+                      readyMarker};
 #endif
     spec.executable = QDir::toNativeSeparators(QString::fromStdString(spec.executable)).toStdString();
     spec.stdoutMode = frost::io::Stdio::Null;
@@ -58,7 +75,26 @@ std::unique_ptr<frost::io::IProcess> startSleeper(std::string& executable) {
     executable = spec.executable;
     auto child = frost::io::realProcessLauncher().launch(spec);
     EXPECT_TRUE(child) << child.error().describe();
-    return child ? std::move(*child) : nullptr;
+    if (!child)
+        return nullptr;
+#ifndef _WIN32
+    EXPECT_TRUE(waitFor([&] { return frost::io::realFileSystem().exists(readyMarker).value_or(false); }, 30s))
+        << "the python3 sleeper did not start";
+#endif
+    return std::move(*child);
+}
+
+// The folder the OS reports for the running image of `executable`: on Linux the kernel resolves
+// symlinks (/bin/x and /usr/bin/python3 are links on Ubuntu), so it is the realpath's folder.
+std::string imageFolder(const std::string& executable) {
+#ifdef _WIN32
+    return std::string(frost::io::parentPath(executable));
+#else
+    std::error_code error;
+    const std::filesystem::path resolved = std::filesystem::canonical(executable, error);
+    EXPECT_FALSE(error) << executable << ": " << error.message();
+    return resolved.parent_path().string();
+#endif
 }
 
 // Picks `pid` in the Attach to Process dialog that debug.attachToProcess opens.
@@ -110,10 +146,10 @@ TEST(WorkbenchAttach, WithoutAProjectAttachesOnceAndSavesNoTrust) {
     WorkbenchRig rig(dir, std::move(options));
     rig.show();
     std::string executable;
-    auto child = startSleeper(executable);
+    auto child = startSleeper(executable, dir.join("sleeper-ready"));
     ASSERT_NE(child, nullptr);
     const auto killChild = qScopeGuard([&] { static_cast<void>(child->terminate()); });
-    const std::string folder = std::string(frost::io::parentPath(executable));
+    const std::string folder = imageFolder(executable);
     ASSERT_FALSE(rig.trust->isTrusted(folder));
     const std::string storeBefore = dir.read("data/trusted-roots.txt");
 
@@ -177,7 +213,7 @@ TEST(WorkbenchAttach, CancellingTheAttachPromptLeavesAWaitingBuildUntouched) {
     ASSERT_TRUE(waitFor([&] { return rig.workbench->build().state() == frost::build::BuildState::NeedsTrust; }, 30s));
     const auto cleanup = qScopeGuard([&] { rig.workbench->cmakeService()->cancel(); });
     std::string executable;
-    auto child = startSleeper(executable);
+    auto child = startSleeper(executable, dir.join("sleeper-ready"));
     ASSERT_NE(child, nullptr);
     const auto killChild = qScopeGuard([&] { static_cast<void>(child->terminate()); });
 

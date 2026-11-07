@@ -190,8 +190,13 @@ fi
 # Copy changed content with a fresh mtime so Ninja sees it even when the source came from an older
 # snapshot. Checksum comparison avoids touching identical files merely because their times differ.
 # The mirror keeps its own build trees (protected from --delete because they are excluded).
+# The mirror has no .git: '/.git' (not '/.git/') also excludes a worktree's .git file, whose
+# "gitdir: E:/..." names a directory git cannot open here, so every git run inside the mirror (a
+# test's `git ls-remote`, say) failed with "not a git repository". Runs before this fix copied
+# that file, and --delete spares excluded names, so a stale one is removed.
 mirror_source() {
-    rsync -a --checksum --no-times --delete --exclude '/build/' --exclude '/.git/' --exclude '/.claude/' "$1/" "$2/"
+    rsync -a --checksum --no-times --delete --exclude '/build/' --exclude '/.git' --exclude '/.claude/' "$1/" "$2/"
+    if [[ -f "$2/.git" ]]; then rm -f "$2/.git"; fi
 }
 # The tree hash of the source tree, taken before the copy (FND-2; tools/hooks/verify_stamp.py), for a
 # standalone run only: under verify.ps1 (--no-checks) verify.ps1 stamps the combined summary itself.

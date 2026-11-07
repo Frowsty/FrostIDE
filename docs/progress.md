@@ -18,6 +18,18 @@ what is next, blockers and open questions for the user.
   - Follow-up 16 (unowned): the five file-local wait helpers (`managed_debug_preparation_test.cpp`,
     `lua_e2e_test.cpp`, `editor_rhi_parity_test.cpp`, `editor_rhi_test.cpp`, `change_markers_test.cpp`) return the
     evaluation that ended the wait, as the workbench, shell, LSP-fake and sched helpers already do.
+  - The first combined verify failed two WSL tests that the slices had only run on Windows:
+    - `WorkbenchAttach.WithoutAProjectAttachesOnceAndSavesNoTrust` (language slice) could never pass on Linux.
+      Ubuntu/WSL's Yama policy (`kernel.yama.ptrace_scope = 1`, checked with a direct `PTRACE_ATTACH`: EPERM)
+      lets a process attach only to its descendants, and lldb-dap and the `/bin/sleep` target were siblings, so
+      lldb-dap's attach was refused ("Trying to resume but the async thread is dead"). The test also expected
+      `/bin` while the kernel reports the image as `/usr/bin/sleep`. The Linux target is now the system
+      `python3`, which allows any tracer (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)`) and then signals ready, and
+      the expected trust folder is the realpath's folder. Same assertions; passes on both legs.
+    - `tools.corpora` (acceptance slice): `verify.sh` mirrored a worktree's `.git` file (its rsync excluded only
+      a `.git/` directory), whose Windows gitdir made every git run in the mirror fail, here `git ls-remote` in
+      `corpora.py pin`. The mirror now excludes `/.git` and removes a stale copy;
+      `test_mirror_replaces_older_and_same_time_changes_without_touching_identical_files` covers it.
   - Follow-up 14 needed no integration change: the acceptance branch still saw
     `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` fail, but it lacked the language slice's fix (the
     structure fixture aborted on a delete-pending hold file under load); the merged tree has it.
@@ -101,17 +113,21 @@ what is next, blockers and open questions for the user.
      loads; a misplaced test comment above `RenamingOrMovingAnAssetMovesItsFmetaSidecar`; the `moveWithSidecar`
      rollback has no test; deleting an asset leaves its `.fmeta`, and folder `.fmeta` files do not move;
      `project_open_broker.cpp`, `main.cpp` and the `--project` routing still accept only `.frostproj`.
-  4. Language: readiness ignores a `CompileFlags: CompilationDatabase` directive in a trusted `.clangd` or the user
+  4. Attach to Process on Linux: under the default Yama policy (`ptrace_scope = 1`) attaching to a process that
+     did not opt in fails with lldb-dap's "Trying to resume but the async thread is dead". The product should
+     read `/proc/sys/kernel/yama/ptrace_scope` and say why (and how: `PR_SET_PTRACER`, the sysctl, or
+     CAP_SYS_PTRACE) instead of showing that message.
+  5. Language: readiness ignores a `CompileFlags: CompilationDatabase` directive in a trusted `.clangd` or the user
      config (should claim nothing then); `openReadOnlyLocation` makes only the current view read-only;
      `fallbackAgreesWithClangd` waits only 3 s for a late false claim; the spawn tests' fixed 2 s "no late restart"
      waits remain.
-  5. Tooling: spawn-log session names can collide within one millisecond; its start time is taken after launch
+  6. Tooling: spawn-log session names can collide within one millisecond; its start time is taken after launch
      and the image is hashed before it; non-UTF-8 path bytes make the JSONL invalid; `stage.ps1` copies the
      managed folders through wildcard paths; the commit-msg hook does not require both legs' records; the
      fabricated-result lint misses `return {...}`. Recorded deviations: lldb-dap never searches PATH; the Linux
      stage loads Qt through the SDK RUNPATH (TODO(M5)); the spawn log hashes the whole image in memory;
      `FROST_ENABLE_SPAWN_LOG` is on in every Debug build with tests.
-  6. Acceptance: the clangd-unavailable notice also fires for Lua-only and `.frostproj` folders and its per-root
+  7. Acceptance: the clangd-unavailable notice also fires for Lua-only and `.frostproj` folders and its per-root
      guard is never cleared; `R0Trust` CMake asserts at least one cmake launch after the grant, not exactly one;
      the absence checks use fixed settle windows.
 - **Verification.** The combined tree is verified with `tools\verify.ps1 -Quick` on both legs (Windows and WSL);
