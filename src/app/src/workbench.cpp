@@ -14,6 +14,7 @@
 #include "frost/input/keymap.hpp"
 #include "frost/input/simulated_keyboard.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/process.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
@@ -41,6 +42,7 @@
 #include "frost/ui/tr.hpp"
 #include "frost/ui/vcs/git_actions.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
+#include "frost/vcs/git_locator.hpp"
 
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
@@ -75,7 +77,6 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
-#include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QScreen>
@@ -90,7 +91,13 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <stop_token>
+#include <thread>
 #include <utility>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace frost::app {
 
@@ -117,7 +124,60 @@ QString typedText(const QKeyEvent& event) {
     return typed;
 }
 
+// Starts `executable` (absolute) so that it outlives FrostIDE: not contained (killOnClose off), no
+// handle of this process inherited. Qt's detached start is not used (CLAUDE.md: child processes
+// only through IProcessLauncher). Errors: the launcher's.
+Result<void> launchDetached(io::IProcessLauncher& launcher, const QString& executable, std::vector<std::string> args,
+                            const QString& workingDirectory) {
+    io::ProcessSpec spec;
+    spec.executable = QDir::toNativeSeparators(executable).toStdString();
+    spec.arguments = std::move(args);
+    spec.workingDirectory = QDir::toNativeSeparators(workingDirectory).toStdString();
+    spec.stdinMode = io::Stdio::Null;
+    spec.stdoutMode = io::Stdio::Null;
+    spec.stderrMode = io::Stdio::Null;
+    spec.killOnClose = false;
+    auto started = launcher.launch(spec);
+    if (!started)
+        return std::unexpected(std::move(started.error()));
+    return {}; // Destroying the uncontained IProcess leaves the child running.
+}
+
+// Windows PowerShell 5.1 by absolute path (<system directory>\WindowsPowerShell\v1.0), never by
+// bare name. Errors: Unsupported off Windows, NotFound.
+Result<QString> windowsPowerShell() {
+#ifdef _WIN32
+    std::array<wchar_t, MAX_PATH> buffer{};
+    const UINT length = GetSystemDirectoryW(buffer.data(), static_cast<UINT>(buffer.size()));
+    if (length == 0 || length >= buffer.size())
+        return fail(ErrorCode::IoError, "GetSystemDirectoryW failed");
+    const QString path = QString::fromWCharArray(buffer.data(), static_cast<qsizetype>(length)) +
+                         QStringLiteral("\\WindowsPowerShell\\v1.0\\powershell.exe");
+    if (!QFileInfo(path).isFile())
+        return fail(ErrorCode::NotFound, "Windows PowerShell was not found at " + path.toStdString());
+    return path;
+#else
+    return fail(ErrorCode::Unsupported, "installing updates is only implemented on Windows (FND-11)");
+#endif
+}
+
 } // namespace
+
+/*
+ * One running `git clone` (Workbench::cloneRepository): the worker thread that owns the child
+ * process, and the progress dialog. The worker launches the resolved, absolute git through
+ * IProcessLauncher (never PATH), reads its --progress output from stderr and posts it to the GUI
+ * thread; a stop request (Cancel, shutdown) terminates the contained process tree, which ends the
+ * read. Owned by Workbench::m_clone; the worker is joined before the Workbench goes away, so its
+ * queued posts never outlive it.
+ */
+struct GitClone {
+    std::string url;
+    std::string directory;
+    bool cancelled = false; // GUI thread only.
+    QPointer<QProgressDialog> dialog;
+    std::jthread worker;
+};
 
 // --- DialogWorkbenchPrompts ---
 
@@ -398,6 +458,11 @@ bool DialogWorkbenchPrompts::confirmRerun(QWidget* parent, const QString& projec
     return answer == QMessageBox::Yes;
 }
 
+bool DialogWorkbenchPrompts::confirmExit(QWidget* parent) {
+    return QMessageBox::question(parent, text("Confirm Exit"), text("Are you sure you want to exit FrostIDE?"),
+                                 QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes) == QMessageBox::Yes;
+}
+
 bool DialogWorkbenchPrompts::confirmProjectRecovery(QWidget* parent, const QString& project) {
     return QMessageBox::question(
                parent, text("Recover Project Edit"),
@@ -460,6 +525,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         document::SaveManagerServices{&m_services.fs, &m_services.clock, m_journal ? &*m_journal : nullptr,
                                       m_history ? &*m_history : nullptr, &m_services.settings, nullptr});
     m_documents->applySettings(*m_services.settings.snapshot());
+    m_documents->setSaveTransform(
+        [this](const document::FileDocument& document, document::SaveReason) { return saveTransformFor(document); });
     m_autosave = std::make_unique<document::AutosaveController>(*m_documents, m_services.clock);
     if (!m_options.sessionDirectory.empty()) {
         m_sessions = std::make_unique<ui::nav::SessionStore>(m_services.fs, m_options.sessionDirectory);
@@ -820,15 +887,6 @@ void Workbench::createRunService() {
         if (m_window && m_runController->running()) {
             m_window->toolWindows().show(ui::tool_windows::kRun, false);
         }
-        if (!m_pendingCompoundTargets.empty() && m_runService && m_buildService &&
-            m_buildService->state() == build::BuildState::Idle) {
-            const project::ProjectId nextProj = m_pendingCompoundTargets.front();
-            if (auto started = m_runService->run(nextProj); started) {
-                m_pendingCompoundTargets.erase(m_pendingCompoundTargets.begin());
-            } else if (started.error().code() != ErrorCode::Busy) {
-                m_pendingCompoundTargets.erase(m_pendingCompoundTargets.begin());
-            }
-        }
     });
 }
 
@@ -999,7 +1057,8 @@ void Workbench::registerActions() {
                 [this] { refreshSolutionExplorerForFsChange(); },
                 [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
         },
-        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+        // Disabled until compound run configurations exist (RUN-5); see launchCompoundConfiguration.
+        [] { return false; });
     add(
         "run.selectConfiguration", "Select Run Configuration...",
         [this] {
@@ -1120,13 +1179,8 @@ void Workbench::registerActions() {
                 m_window->toolWindows().toggle(kUnitTestsToolWindow);
         },
         [this] { return m_window != nullptr; });
-    add(
-        "window.services", "Unit Tests (Alt+8)",
-        [this] {
-            if (m_window)
-                m_window->toolWindows().toggle(kUnitTestsToolWindow);
-        },
-        [this] { return m_window != nullptr; });
+    // No "window.services" alias for the Unit Tests window: the Services window is UX-9's, and
+    // Alt+8 is bound to window.unitTests in the module defaults.
     add(
         "application.switchVersion", "Switch IDE Version...", [this] { showVersionSwitcher(); },
         [this] { return activeTopWindow() != nullptr; });
@@ -1205,6 +1259,21 @@ void Workbench::showLauncherWindow() {
     m_launcherWindow->activateWindow();
 }
 
+bool Workbench::showStartupWindow() {
+    // general.reopenLastProject: the last project with its tabs (restoreLastProject checks the
+    // setting and that the project was not closed explicitly); otherwise the launcher.
+    if (!hasProject() && restoreLastProject() && m_window) {
+        if (m_launcherWindow && m_launcherWindow->isVisible())
+            m_launcherWindow->hide();
+        m_window->show();
+        m_window->raise();
+        m_window->activateWindow();
+        return true;
+    }
+    showLauncherWindow();
+    return false;
+}
+
 void Workbench::transitionLauncherToMainWindow() {
     if (!m_launcherWindow || !m_launcherWindow->isVisible()) {
         return;
@@ -1267,13 +1336,11 @@ void Workbench::wireWelcomeScreen(WelcomeScreen* welcome) {
         ui::installDialogChrome(&dialog, false);
         if (dialog.exec() == QDialog::Accepted) {
             const QString url = urlEdit->text().trimmed();
-            const QString targetDir = dirEdit->text().trimmed();
+            const QString targetDir = QDir::toNativeSeparators(dirEdit->text().trimmed());
             if (!url.isEmpty() && !targetDir.isEmpty()) {
-                if (QProcess::execute(QStringLiteral("git"), {QStringLiteral("clone"), url, targetDir}) == 0)
-                    (void)openPath(targetDir.toStdString());
-                else
-                    notify(text("Git Clone"), text("Failed to clone repository from %1").arg(url),
-                           ui::NotificationKind::Warning);
+                // Runs off the GUI thread with progress and Cancel (cloneRepository).
+                if (auto started = cloneRepository(url.toStdString(), targetDir.toStdString()); !started)
+                    notify(text("Git Clone"), qs(started.error().message()), ui::NotificationKind::Warning);
             }
         }
     });
@@ -1496,6 +1563,7 @@ void Workbench::attach(ui::ShellWindow& window) {
         });
     }
     connect(launcher, &LauncherWindow::closedByUser, this, [this] {
+        m_exitConfirmed = true; // The user closed the launcher; the IDE window is not showing.
         if (m_window) {
             m_window->close();
         }
@@ -2166,12 +2234,9 @@ void Workbench::attachToolWindows() {
         return createUnitTestsToolWindowWidget(
             m_window, m_services.fs, [this]() -> const project::SolutionModel* { return m_solution.get(); },
             [this]() -> std::string { return m_projectRoot; },
-            [this](const std::string& path, int line) { openLocation(qs(path), line, 1); },
-            [this](const DiscoveredTestEntry& test) {
-                openLocation(qs(test.filePath), test.line, 1);
-                if (m_window)
-                    (void)m_window->invoke("run.debug");
-            });
+            [this](const std::string& path, int line) { openLocation(qs(path), line, 1); });
+        // No "Debug Selected Test" callback: it started the whole program under the debugger, not
+        // the test. Debugging one test is RUN-10's.
     };
     if (auto added = windows.add(std::move(unitTestsSpec)); !added) {
         log::warn(kLog, "unit tests tool window: {}", added.error().describe());
@@ -2388,6 +2453,14 @@ void Workbench::onSettingsChanged() {
 }
 
 bool Workbench::eventFilter(QObject* watched, QEvent* event) {
+    // general.confirmExit: closing the IDE window (title bar, Alt+F4, File > Exit) asks first. This
+    // application-wide filter runs before the navigation workbench's own close handling. Closes the
+    // IDE starts itself (update restart, version switch) set m_exitConfirmed and are not asked.
+    if (event->type() == QEvent::Close && m_window && watched == m_window.data() && !m_exitConfirmed && !m_shutDown &&
+        m_services.settings.snapshot()->get(key::generalConfirmExit) && !m_services.prompts.confirmExit(m_window)) {
+        event->ignore();
+        return true;
+    }
     if (event->type() != QEvent::KeyPress || m_language == nullptr) {
         return QObject::eventFilter(watched, event);
     }
@@ -2659,12 +2732,10 @@ void Workbench::applyVerifiedUpdate() {
     const std::uint64_t buildNum = m_verifiedRelease->release.build;
     const QString zipPath = QDir::toNativeSeparators(m_verifiedUpdate->fileName());
 
-    QString defaultBaseDir = QStringLiteral("E:/FrostBuilds/beta");
-    if (!QDir(defaultBaseDir).exists()) {
-        QDir appParent(QCoreApplication::applicationDirPath());
-        appParent.cdUp();
-        defaultBaseDir = appParent.absolutePath();
-    }
+    // Side-by-side builds go next to the running one; no developer machine path is assumed.
+    QDir appParent(QCoreApplication::applicationDirPath());
+    appParent.cdUp();
+    const QString defaultBaseDir = appParent.absolutePath();
     const QString folderVersion =
         versionStr.contains(QLatin1Char('-')) ? versionStr : (versionStr + QStringLiteral("-beta"));
     const QString defaultSideBySideDir =
@@ -2756,7 +2827,11 @@ void Workbench::applyVerifiedUpdate() {
         extractProgress.show();
         QCoreApplication::processEvents();
 
-        QProcess proc;
+        auto powershell = windowsPowerShell();
+        if (!powershell) {
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"), qs(powershell.error().message()));
+            return;
+        }
         QString psZip = zipPath;
         psZip.replace(QLatin1Char('\''), QStringLiteral("''"));
         QString psDest = QDir::toNativeSeparators(targetDir);
@@ -2779,14 +2854,22 @@ void Workbench::applyVerifiedUpdate() {
                            "}\n"
                            "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n")
                 .arg(psZip, psDest);
-        proc.start(QStringLiteral("powershell.exe"),
-                   {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"), QStringLiteral("-ExecutionPolicy"),
-                    QStringLiteral("Bypass"), QStringLiteral("-Command"), psScript});
-        if (!proc.waitForFinished(120000) || proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
-            const QString errOut = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+        // TODO(M2): (FND-11) the extraction still blocks the GUI thread (up to 120 s) as before; the safe
+        // updater with rollback replaces this whole path. Auto-updates are frozen (D38).
+        io::ProcessSpec extract;
+        extract.executable = QDir::toNativeSeparators(*powershell).toStdString();
+        extract.arguments = {"-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                             "Bypass",     "-Command",        psScript.toStdString()};
+        auto extracted = io::runToCompletion(m_services.launcher, extract, {}, std::chrono::seconds(120));
+        if (!extracted || extracted->exitCode != 0) {
+            const QString errOut =
+                extracted ? QString::fromStdString(extracted->stderrBytes).trimmed() : qs(extracted.error().message());
             QMessageBox::warning(
                 parentWin, tr("Update Installation Failed"),
-                tr("Failed to extract update archive:\n%1").arg(errOut.isEmpty() ? proc.errorString() : errOut));
+                tr("Failed to extract update archive:\n%1")
+                    .arg(errOut.isEmpty()
+                             ? tr("PowerShell exited with code %1").arg(extracted ? extracted->exitCode : -1)
+                             : errOut));
             return;
         }
 
@@ -2797,10 +2880,15 @@ void Workbench::applyVerifiedUpdate() {
                                      .arg(QDir::toNativeSeparators(targetDir)));
             return;
         }
-        if (QProcess::startDetached(newExe, {}, QFileInfo(newExe).absolutePath())) {
+        if (auto started = launchDetached(m_services.launcher, newExe, {}, QFileInfo(newExe).absolutePath()); started) {
+            m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
             if (m_window)
                 m_window->close();
             QCoreApplication::quit();
+        } else {
+            QMessageBox::warning(parentWin, tr("Update Installed"),
+                                 tr("Update extracted, but %1 could not be started: %2")
+                                     .arg(QDir::toNativeSeparators(newExe), qs(started.error().message())));
         }
         return;
     }
@@ -2866,14 +2954,24 @@ void Workbench::applyVerifiedUpdate() {
         scriptFile.write(scriptContent.toUtf8());
         scriptFile.close();
 
-        if (QProcess::startDetached(QStringLiteral("powershell.exe"),
-                                    {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
-                                     QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
-                                     QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-File"),
-                                     scriptPath})) {
+        auto powershell = windowsPowerShell();
+        if (!powershell) {
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"), qs(powershell.error().message()));
+            return;
+        }
+        // The script waits for this process to exit, so it must not be contained (launchDetached).
+        if (auto started = launchDetached(m_services.launcher, *powershell,
+                                          {"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                           "-WindowStyle", "Hidden", "-File", scriptPath.toStdString()},
+                                          updatesDir);
+            started) {
+            m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
             if (m_window)
                 m_window->close();
             QCoreApplication::quit();
+        } else {
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"),
+                                 tr("Could not start the updater script: %1").arg(qs(started.error().message())));
         }
     }
 }
@@ -2903,8 +3001,8 @@ void Workbench::showVersionSwitcher() {
     listWidget->setObjectName(QStringLiteral("installedVersionsList"));
 
     const QString currentAppDir = QFileInfo(QCoreApplication::applicationDirPath()).canonicalFilePath();
+    // Side-by-side builds live next to the running one (applyVerifiedUpdate's default folder).
     QStringList scanRoots;
-    scanRoots.append(QStringLiteral("E:/FrostBuilds/beta"));
     {
         QDir parentDir(QCoreApplication::applicationDirPath());
         if (parentDir.cdUp()) {
@@ -3000,20 +3098,26 @@ void Workbench::showVersionSwitcher() {
         const QString exePath = cur->data(Qt::UserRole).toString();
         if (exePath.isEmpty() || !QFileInfo::exists(exePath))
             return;
-        if (QProcess::startDetached(exePath, {}, QFileInfo(exePath).absolutePath())) {
+        if (auto started = launchDetached(m_services.launcher, exePath, {}, QFileInfo(exePath).absolutePath());
+            started) {
             dialog.accept();
+            m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
             if (m_window)
                 m_window->close();
             QCoreApplication::quit();
+        } else {
+            QMessageBox::warning(&dialog, tr("Switch FrostIDE Version"), qs(started.error().message()));
         }
     });
-    QObject::connect(sideBySideBtn, &QPushButton::clicked, &dialog, [listWidget] {
+    QObject::connect(sideBySideBtn, &QPushButton::clicked, &dialog, [&dialog, listWidget, this] {
         QListWidgetItem* cur = listWidget->currentItem();
         if (!cur)
             return;
         const QString exePath = cur->data(Qt::UserRole).toString();
         if (!exePath.isEmpty() && QFileInfo::exists(exePath)) {
-            QProcess::startDetached(exePath, {}, QFileInfo(exePath).absolutePath());
+            if (auto started = launchDetached(m_services.launcher, exePath, {}, QFileInfo(exePath).absolutePath());
+                !started)
+                QMessageBox::warning(&dialog, tr("Launch Side-by-Side"), qs(started.error().message()));
         }
     });
     QObject::connect(openFolderBtn, &QPushButton::clicked, &dialog, [listWidget, this] {
@@ -3038,6 +3142,186 @@ void Workbench::showVersionSwitcher() {
     dialog.exec();
 }
 
+// --- Git clone (FND-9a) ---
+
+namespace {
+
+// The percentage in a git progress line ("Receiving objects:  45% (9/20)"), or -1.
+int clonePercent(std::string_view line) {
+    const std::size_t percent = line.find('%');
+    if (percent == std::string_view::npos || percent == 0)
+        return -1;
+    std::size_t begin = percent;
+    while (begin > 0 && line[begin - 1] >= '0' && line[begin - 1] <= '9')
+        --begin;
+    if (begin == percent || percent - begin > 3)
+        return -1;
+    int value = 0;
+    for (std::size_t i = begin; i < percent; ++i)
+        value = value * 10 + (line[i] - '0');
+    return std::min(value, 100);
+}
+
+} // namespace
+
+Result<void> Workbench::cloneRepository(const std::string& url, const std::string& directory) {
+    if (m_shutDown)
+        return fail(ErrorCode::Cancelled, "FrostIDE is shutting down");
+    if (m_clone)
+        return fail(ErrorCode::Busy, "A repository is already being cloned");
+    // A leading '-' would be read as an option even before "--" by some transports; refuse it.
+    if (url.empty() || url.front() == '-' || url.find('\0') != std::string::npos)
+        return fail(ErrorCode::InvalidArgument, "Enter the URL or path of the repository to clone");
+    if (!io::isAbsolutePath(directory))
+        return fail(ErrorCode::InvalidArgument, "The clone directory must be an absolute path");
+
+    auto clone = std::make_unique<GitClone>();
+    clone->url = url;
+    clone->directory = directory;
+    auto* dialog = new QProgressDialog(text("Cloning %1…").arg(qs(url)), text("Cancel"), 0, 0, activeTopWindow());
+    dialog->setObjectName(QStringLiteral("gitCloneProgressDialog"));
+    dialog->setWindowTitle(text("Git Clone"));
+    dialog->setAutoClose(false);
+    dialog->setAutoReset(false);
+    dialog->setMinimumDuration(0);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QProgressDialog::canceled, this, [this] { cancelClone(); });
+    clone->dialog = dialog;
+
+    const std::string configured = vcs::configuredGitPath(*m_services.settings.snapshot());
+    io::IFileSystem* fs = &m_services.fs;
+    io::IProcessLauncher* launcher = &m_services.launcher;
+    clone->worker = std::jthread([this, fs, launcher, configured, url, directory](std::stop_token stop) {
+        // Every post is queued to this Workbench; the worker is joined before it is destroyed.
+        const auto finish = [this](bool ok, std::string message) {
+            QMetaObject::invokeMethod(
+                this, [this, ok, message = std::move(message)] { finishClone(ok, message); }, Qt::QueuedConnection);
+        };
+        auto git = vcs::findGit(*fs, vcs::defaultGitSearch(configured));
+        if (!git) {
+            finish(false, git.error().message());
+            return;
+        }
+        io::ProcessSpec spec;
+        spec.executable = git->path;
+        // ext:: runs arbitrary commands; refuse it explicitly. "--" ends the options.
+        spec.arguments = {"-c", "protocol.ext.allow=never", "clone", "--progress", "--", url, directory};
+        // No terminal exists to answer a credential prompt; fail instead of waiting forever.
+        spec.environment = {{"GIT_TERMINAL_PROMPT", std::string("0")}};
+        spec.stdinMode = io::Stdio::Null;
+        spec.stdoutMode = io::Stdio::Null;
+        spec.stderrMode = io::Stdio::Pipe;
+        auto process = launcher->launch(spec);
+        if (!process) {
+            finish(false, std::format("Cannot start {}: {}", git->path, process.error().message()));
+            return;
+        }
+        io::IProcess& child = **process;
+        // Cancel and shutdown end the whole contained tree (git-remote-*, index-pack), which closes stderr.
+        const std::stop_callback onStop(stop, [&child] { (void)child.terminate(); });
+        std::vector<std::string> tail; // The last lines of git's own output, for the failure message.
+        std::string line;
+        auto lastPost = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        const auto flushLine = [&] {
+            if (line.empty())
+                return;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastPost >= std::chrono::milliseconds(50)) {
+                lastPost = now;
+                QMetaObject::invokeMethod(
+                    this, [this, progress = line] { cloneProgress(progress); }, Qt::QueuedConnection);
+            }
+            if (!line.starts_with("Receiving objects") && !line.starts_with("Resolving deltas") &&
+                !line.starts_with("remote: Counting") && !line.starts_with("remote: Compressing")) {
+                tail.push_back(line);
+                if (tail.size() > 8)
+                    tail.erase(tail.begin());
+            }
+            line.clear();
+        };
+        std::array<char, 4096> buffer{};
+        for (;;) {
+            auto read = child.readStderr(buffer);
+            if (!read || *read == 0)
+                break;
+            for (std::size_t i = 0; i < *read; ++i) {
+                const char c = buffer[i];
+                if (c == '\r' || c == '\n')
+                    flushLine();
+                else if (line.size() < 4096)
+                    line.push_back(c);
+            }
+        }
+        flushLine();
+        auto status = child.wait();
+        if (stop.stop_requested()) {
+            finish(false, "cancelled");
+            return;
+        }
+        if (!status) {
+            finish(false, status.error().message());
+            return;
+        }
+        if (status->exitCode != 0) {
+            std::string message;
+            for (const std::string& t : tail)
+                message += (message.empty() ? "" : "\n") + t;
+            finish(false, message.empty() ? std::format("git clone exited with code {}", status->exitCode) : message);
+            return;
+        }
+        finish(true, {});
+    });
+    m_clone = std::move(clone);
+    dialog->show();
+    return {};
+}
+
+bool Workbench::cloneRunning() const noexcept { return m_clone != nullptr; }
+
+void Workbench::cancelClone() {
+    if (!m_clone)
+        return;
+    m_clone->cancelled = true;
+    m_clone->worker.request_stop();
+}
+
+void Workbench::cloneProgress(const std::string& line) {
+    if (!m_clone || !m_clone->dialog)
+        return;
+    m_clone->dialog->setLabelText(text("Cloning %1…\n%2").arg(qs(m_clone->url), qs(line)));
+    if (const int percent = clonePercent(line); percent >= 0) {
+        m_clone->dialog->setRange(0, 100);
+        m_clone->dialog->setValue(percent);
+    }
+}
+
+void Workbench::finishClone(bool ok, const std::string& message) {
+    if (!m_clone)
+        return;
+    std::unique_ptr<GitClone> clone = std::move(m_clone);
+    clone->worker.join(); // Posting this was the worker's last step.
+    if (clone->dialog) {
+        clone->dialog->blockSignals(true); // close() must not report a cancel.
+        clone->dialog->close();
+    }
+    if (m_shutDown)
+        return;
+    if (ok) {
+        if (auto opened = openPath(clone->directory); !opened)
+            notify(text("Git Clone"), qs(opened.error().message()), ui::NotificationKind::Warning);
+        return;
+    }
+    if (clone->cancelled) {
+        notify(text("Git Clone cancelled"),
+               text("Cloning %1 was cancelled; %2 may hold a partial clone.")
+                   .arg(qs(clone->url), QDir::toNativeSeparators(qs(clone->directory))),
+               ui::NotificationKind::Info);
+        return;
+    }
+    notify(text("Git Clone failed"), text("Cloning %1 failed:\n%2").arg(qs(clone->url), qs(message)),
+           ui::NotificationKind::Warning);
+}
+
 void Workbench::showAttachToProcess() {
     QWidget* parentWin = activeTopWindow();
     if (!parentWin)
@@ -3056,27 +3340,34 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
     }
     debug::DebugTarget target;
     target.name = std::format("{} (PID {})", exeName.empty() ? "Process" : exeName, pid);
-    if (!exePath.empty() && io::isAbsolutePath(exePath)) {
-        target.program = exePath;
-    } else if (!m_projectRoot.empty()) {
-        target.program = io::joinPath(m_projectRoot, exeName.empty() ? "process.exe" : exeName).value_or(m_projectRoot);
-    } else {
-        target.program = QCoreApplication::applicationFilePath().toStdString();
+    // The program is the process's own image path as the OS reported it; nothing is guessed. A
+    // process whose path cannot be read (another user's, protected) cannot be attached to here.
+    if (exePath.empty() || !io::isAbsolutePath(exePath)) {
+        notify(text("Attach to Process"),
+               text("Cannot attach to PID %1: its executable path is unavailable (the process may belong to another "
+                    "user or be protected).")
+                   .arg(pid),
+               ui::NotificationKind::Warning);
+        return;
     }
+    target.program = exePath;
     target.workingDirectory = !m_projectRoot.empty() ? m_projectRoot : std::string(io::parentPath(target.program));
-    if (!m_projectRoot.empty()) {
-        target.trustRoots = {m_projectRoot};
-        if (!m_services.trust.isTrusted(m_projectRoot)) {
-            (void)m_services.trust.trust(m_projectRoot);
-        }
-    } else {
-        const std::string parentDir(io::parentPath(target.program));
-        if (!parentDir.empty()) {
-            target.trustRoots = {parentDir};
-            if (!m_services.trust.isTrusted(parentDir)) {
-                (void)m_services.trust.trust(parentDir);
-            }
-        }
+    // The folder that must be trusted: the open project, else the program's own folder. Trust is
+    // only ever granted by the user through the normal trust prompt, never silently here.
+    const std::string trustRoot = !m_projectRoot.empty() ? m_projectRoot : std::string(io::parentPath(target.program));
+    target.trustRoots = {trustRoot};
+    if (!m_services.trust.isTrusted(trustRoot)) {
+        if (!m_window || !m_build)
+            return;
+        auto* dialog = new ui::TrustDialog(*m_build, {qs(trustRoot)}, m_window, ui::TrustPurpose::Build);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dialog, &QDialog::accepted, this, [this, pid, exePath, exeName, attachAsDotNet, trustRoot] {
+            // Retry only when the user actually trusted the folder; a cancelled prompt attaches nothing.
+            if (m_services.trust.isTrusted(trustRoot))
+                attachToProcess(pid, exePath, exeName, attachAsDotNet);
+        });
+        dialog->open();
+        return;
     }
 
     debug::AdapterFactory factory;
@@ -3137,49 +3428,19 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
     }
 }
 
+/*
+ * Compound launches are unavailable until RUN-5 (before-launch steps, compound run and attach
+ * configurations). The previous implementation granted trust silently and started `dotnet` by bare
+ * name through Qt's process class, outside IProcessLauncher; nothing is launched here now, and the user is
+ * told why. The dialogs keep their compound section, which reaches this refusal.
+ */
 void Workbench::launchCompoundConfiguration(const std::vector<project::ProjectId>& targets) {
-    if (!m_solution || !m_runService || !m_runController || targets.empty())
+    if (targets.empty())
         return;
-    m_pendingCompoundTargets.clear();
-    if (!m_projectRoot.empty() && !m_services.trust.isTrusted(m_projectRoot)) {
-        (void)m_services.trust.trust(m_projectRoot);
-    }
-    bool firstCppLaunched = false;
-    for (const project::ProjectId projId : targets) {
-        if (projId.value() >= m_solution->projects().size())
-            continue;
-        const project::ProjectInfo& proj = m_solution->project(projId);
-        if (proj.kind == project::ProjectKind::CSharp && !proj.path.empty()) {
-            const QString projPath = QDir::toNativeSeparators(qs(proj.path));
-            const QString workDir = QFileInfo(projPath).absolutePath();
-            if (m_runConsole) {
-                m_runConsole->appendOutput(build::RunOutputKind::System,
-                                           std::format("[Compound Launch] Starting .NET project '{}'...\n", proj.name));
-            }
-            QProcess::startDetached(QStringLiteral("dotnet"),
-                                    {QStringLiteral("run"), QStringLiteral("--project"), projPath}, workDir);
-            if (m_window) {
-                m_window->toolWindows().show(ui::tool_windows::kRun, false);
-            }
-            continue;
-        }
-        if (!firstCppLaunched) {
-            firstCppLaunched = true;
-            if (auto res = m_runController->run(projId); !res) {
-                if (res.error().code() == ErrorCode::Busy) {
-                    m_pendingCompoundTargets.push_back(projId);
-                } else {
-                    notify(text("Compound Run"), qs(res.error().message()), ui::NotificationKind::Error);
-                }
-            }
-        } else {
-            if (auto res = m_runService->run(projId); !res) {
-                if (res.error().code() == ErrorCode::Busy) {
-                    m_pendingCompoundTargets.push_back(projId);
-                }
-            }
-        }
-    }
+    notify(text("Compound Run unavailable"),
+           text("Running several targets together requires compound run configurations (RUN-5). Nothing was "
+                "started."),
+           ui::NotificationKind::Warning);
 }
 
 void Workbench::showSettings() {
@@ -3241,6 +3502,18 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    if (m_clone) {
+        // Ends git's process tree and waits for the worker; its queued result is then ignored.
+        m_clone->cancelled = true;
+        m_clone->worker.request_stop();
+        if (m_clone->worker.joinable())
+            m_clone->worker.join();
+        if (m_clone->dialog) {
+            m_clone->dialog->blockSignals(true);
+            m_clone->dialog->close();
+        }
+        m_clone.reset();
+    }
     if (m_projectEdit)
         m_projectEdit->stop();
     if (m_language)

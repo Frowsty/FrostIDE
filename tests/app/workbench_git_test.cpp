@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Actual Workbench Git actions on isolated throwaway repositories.
+#include "frost/io/scripted_process_launcher.hpp"
+#include "frost/settings/keys.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
@@ -13,14 +15,18 @@
 
 #include "vcs/git_fixture.hpp"
 #include "workbench_rig.hpp"
+#include <QFileInfo>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QTimer>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <string>
 
 namespace {
 using namespace std::chrono_literals;
@@ -491,5 +497,94 @@ TEST(WorkbenchGit, RevokedTrustAndUnsavedRollbackDoNotModifyDocuments) {
     EXPECT_EQ(repo.read("file.txt"), "original\n");
     ASSERT_TRUE(controller(rig)->lastResult().has_value());
     EXPECT_FALSE(controller(rig)->lastResult()->succeeded());
+}
+
+// --- Get from VCS (welcome screen Clone): git clone off the GUI thread ---
+
+TEST(WorkbenchGit, CloneRunsOffTheGuiThreadWithTheResolvedGitAndOpensTheClone) {
+    TempRepo repo("app-git-clone");
+    GitConfig config(repo);
+    repo.init();
+    for (int i = 0; i < 40; ++i)
+        repo.write("src/file" + std::to_string(i) + ".cpp", std::string(4096, static_cast<char>('a' + i % 26)) + "\n");
+    repo.commitAll("initial");
+    WorkDir dir("git-clone");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.settings->set(settings::Scope::Application, settings::key::toolsGitPath, vcs::test::testGitPath()));
+    const std::string target = dir.join("cloned");
+    int ticks = 0;
+    QTimer ticker;
+    QObject::connect(&ticker, &QTimer::timeout, [&] { ++ticks; });
+    ticker.start(1);
+    const auto started = std::chrono::steady_clock::now();
+    ASSERT_TRUE(rig.workbench->cloneRepository(repo.work(), target));
+    // The call returns at once: git runs on a worker while the event loop keeps turning.
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 1s);
+    EXPECT_TRUE(rig.workbench->cloneRunning());
+    const QPointer<QWidget> progress = rig.window->findChild<QWidget*>(QStringLiteral("gitCloneProgressDialog"));
+    EXPECT_NE(progress, nullptr);
+    // A second clone while one runs is refused.
+    EXPECT_EQ(rig.workbench->cloneRepository(repo.work(), dir.join("other")).error().code(), ErrorCode::Busy);
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->cloneRunning(); }, 60s));
+    EXPECT_GT(ticks, 0);
+    EXPECT_TRUE(QFileInfo::exists(QString::fromStdString(dir.join("cloned/src/file0.cpp"))));
+    EXPECT_EQ(rig.workbench->projectRoot(), target);
+    EXPECT_TRUE(!progress || !progress->isVisible()); // Closed (deleted at the next deferred delete).
+}
+
+TEST(WorkbenchGit, CloneRefusesBadArgumentsAndAFailedCloneShowsGitsOwnMessage) {
+    TempRepo repo("app-git-clone-fail");
+    GitConfig config(repo);
+    WorkDir dir("git-clone-fail");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.settings->set(settings::Scope::Application, settings::key::toolsGitPath, vcs::test::testGitPath()));
+    EXPECT_EQ(rig.workbench->cloneRepository("", dir.join("a")).error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(rig.workbench->cloneRepository("--upload-pack=evil", dir.join("a")).error().code(),
+              ErrorCode::InvalidArgument);
+    EXPECT_EQ(rig.workbench->cloneRepository(repo.work(), "relative/dir").error().code(), ErrorCode::InvalidArgument);
+    EXPECT_FALSE(rig.workbench->cloneRunning());
+    // Not a repository: git fails and its own words reach the notification.
+    ASSERT_TRUE(rig.workbench->cloneRepository(dir.join("no-such-repository"), dir.join("b")));
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->cloneRunning(); }, 30s));
+    const auto& log = rig.window->notifications().log();
+    ASSERT_FALSE(log.empty());
+    EXPECT_EQ(log.back().notification.kind, ui::NotificationKind::Warning);
+    EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("fatal")))
+        << log.back().notification.text.toStdString();
+    EXPECT_FALSE(rig.workbench->hasProject());
+}
+
+TEST(WorkbenchGit, CancellingACloneTerminatesGitAndOpensNothing) {
+    WorkDir dir("git-clone-cancel");
+    dir.write("tools/git.exe", "fixture");
+    io::ScriptedProcessLauncher launcher;
+    // A clone that reports progress and then hangs (a stalled server) until it is terminated.
+    launcher.expect(io::ScriptedProcess{.expectExecutable = dir.join("tools/git.exe"),
+                                        .stderrBytes = "Receiving objects:  10% (1/10)\r",
+                                        .neverExits = true,
+                                        .outputHeld = true});
+    app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(
+        rig.settings->set(settings::Scope::Application, settings::key::toolsGitPath, dir.join("tools/git.exe")));
+    ASSERT_TRUE(rig.workbench->cloneRepository("https://example.invalid/repo.git", dir.join("cloned")));
+    ASSERT_TRUE(waitFor([&] { return !launcher.launches().empty(); }, 5s));
+    const auto spec = launcher.launches().front().spec; // launches() returns a copy.
+    EXPECT_EQ(spec.executable, dir.join("tools/git.exe"));
+    EXPECT_NE(std::ranges::find(spec.arguments, std::string("--")), spec.arguments.end());
+    EXPECT_NE(std::ranges::find(spec.arguments, std::string("protocol.ext.allow=never")), spec.arguments.end());
+    static_cast<void>(waitFor([] { return false; }, 200ms));
+    EXPECT_TRUE(rig.workbench->cloneRunning());
+    rig.workbench->cancelClone();
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->cloneRunning(); }, 5s));
+    EXPECT_TRUE(launcher.launches().front().terminated);
+    EXPECT_FALSE(rig.workbench->hasProject());
+    const auto& log = rig.window->notifications().log();
+    ASSERT_FALSE(log.empty());
+    EXPECT_TRUE(log.back().notification.title.contains(QStringLiteral("cancel"), Qt::CaseInsensitive) ||
+                log.back().notification.text.contains(QStringLiteral("cancel"), Qt::CaseInsensitive))
+        << log.back().notification.text.toStdString();
 }
 } // namespace

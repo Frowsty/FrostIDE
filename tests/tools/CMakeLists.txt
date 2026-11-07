@@ -28,6 +28,14 @@ set_tests_properties(managed_pdb_guard PROPERTIES
     RESOURCE_LOCK frost_desktop
     SKIP_RETURN_CODE 77
     ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
+# The Unity package's csc.rsp / compiler-argument model (ProjectContext.cs), built with the same SDK.
+add_test(NAME unity_compiler_arguments
+    COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/unity/test_compiler_arguments.py")
+set_tests_properties(unity_compiler_arguments PROPERTIES
+    LABELS integration
+    RESOURCE_LOCK frost_desktop
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 
 set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch asset_fetch budgets symbolize
     verify_support frost_perf verify_scripts build_lldb managed_server package_notices)

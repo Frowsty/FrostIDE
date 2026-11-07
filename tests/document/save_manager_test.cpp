@@ -372,4 +372,86 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     EXPECT_NE(rewritten->warnings[0].describe().find("/work/closed.txt"), std::string::npos);
     EXPECT_EQ(read("closed.txt"), "new");
 }
+
+// --- The pre-save transform (editor.trimTrailingWhitespace, editor.insertFinalNewline) ---
+
+text::Snapshot snapshotOf(std::string text) {
+    auto buffer = text::TextBuffer::fromUtf8(std::move(text));
+    EXPECT_TRUE(buffer);
+    return buffer->snapshot();
+}
+
+std::string applied(std::string text, const std::vector<SaveEdit>& edits) {
+    for (auto edit = edits.rbegin(); edit != edits.rend(); ++edit)
+        text.replace(edit->range.begin.value(), edit->range.size(), edit->text);
+    return text;
+}
+
+TEST(SaveTransformEdits, TrimsEveryLineOrOnlyModifiedOnesAndKeepsCaretLines) {
+    const std::string base = "a  \nb\t\nc \n";
+    const std::string current = "a  \nb2\t \nc \r\nd  ";
+    SaveTransform all;
+    all.trim = TrimTrailingWhitespace::All;
+    EXPECT_EQ(applied(current, saveTransformEdits(snapshotOf(current), snapshotOf(base), all, "\n")), "a\nb2\nc\r\nd");
+    // Modified: only the lines that differ from the saved text (b2, c's line break changed, d).
+    SaveTransform modified;
+    modified.trim = TrimTrailingWhitespace::Modified;
+    EXPECT_EQ(applied(current, saveTransformEdits(snapshotOf(current), snapshotOf(base), modified, "\n")),
+              "a  \nb2\nc\r\nd");
+    // A caret line keeps its whitespace (typing is never undone under the caret).
+    all.keepLines = {LineIndex{1}};
+    EXPECT_EQ(applied(current, saveTransformEdits(snapshotOf(current), snapshotOf(base), all, "\n")),
+              "a\nb2\t \nc\r\nd");
+    SaveTransform none;
+    EXPECT_TRUE(saveTransformEdits(snapshotOf(current), snapshotOf(base), none, "\n").empty());
+}
+
+TEST(SaveTransformEdits, InsertsTheFinalNewlineWithTheDocumentSeparator) {
+    SaveTransform transform;
+    transform.insertFinalNewline = true;
+    const auto empty = snapshotOf("");
+    EXPECT_EQ(applied("x\r\ny", saveTransformEdits(snapshotOf("x\r\ny"), empty, transform, "\r\n")), "x\r\ny\r\n");
+    EXPECT_TRUE(saveTransformEdits(snapshotOf("x\n"), empty, transform, "\n").empty());
+    EXPECT_TRUE(saveTransformEdits(snapshotOf("x\r"), empty, transform, "\n").empty());
+    EXPECT_TRUE(saveTransformEdits(empty, empty, transform, "\n").empty()); // An empty file stays empty.
+    // Trimming the last line and adding the newline is one edit.
+    transform.trim = TrimTrailingWhitespace::All;
+    const auto edits = saveTransformEdits(snapshotOf("x  "), empty, transform, "\n");
+    ASSERT_EQ(edits.size(), 1U);
+    EXPECT_EQ(applied("x  ", edits), "x\n");
+}
+
+TEST_F(SaveManagerTest, SaveTransformRunsOnExplicitSavesAsOneUndoableEditButNeverOnAutosave) {
+    policies.localHistory = false;
+    writeExternally("t.txt", "one  \ntwo");
+    FileDocument* document = open("t.txt");
+    ASSERT_NE(document, nullptr);
+    std::vector<SaveReason> asked;
+    manager().setSaveTransform([&](const FileDocument&, SaveReason reason) {
+        asked.push_back(reason);
+        SaveTransform transform;
+        transform.trim = TrimTrailingWhitespace::All;
+        transform.insertFinalNewline = true;
+        return transform;
+    });
+    // A clean document is not touched.
+    ASSERT_TRUE(manager().save(*document));
+    EXPECT_TRUE(asked.empty());
+    EXPECT_EQ(read("t.txt"), "one  \ntwo");
+    edit(*document, 9, 9, "!  ");
+    SaveOptions autosave;
+    autosave.reason = SaveReason::Autosave;
+    ASSERT_TRUE(manager().save(*document, autosave));
+    EXPECT_TRUE(asked.empty());
+    EXPECT_EQ(read("t.txt"), "one  \ntwo!  ");
+    edit(*document, 0, 0, "#");
+    auto saved = manager().save(*document);
+    ASSERT_TRUE(saved) << saved.error().describe();
+    EXPECT_EQ(asked, std::vector<SaveReason>{SaveReason::Explicit});
+    EXPECT_EQ(read("t.txt"), "#one\ntwo!\n");
+    EXPECT_EQ(textOf(*document), "#one\ntwo!\n"); // The editor shows what was written...
+    EXPECT_FALSE(document->dirty());
+    ASSERT_TRUE(document->document().undo()); // ...and one undo takes the save actions back.
+    EXPECT_EQ(textOf(*document), "#one  \ntwo!  ");
+}
 } // namespace frost::document::test

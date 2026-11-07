@@ -107,6 +107,41 @@ struct SaveOptions {
     SaveReason reason = SaveReason::Explicit;
 };
 
+// editor.trimTrailingWhitespace ("none", "modified", "all"; EditorConfig's trim_trailing_whitespace
+// maps true to All and false to None).
+enum class TrimTrailingWhitespace : std::uint8_t { None, Modified, All };
+
+/*
+ * What a save does to the text before it is encoded (the pre-save transform; editor.* "On Save"
+ * settings). Trailing spaces and tabs are removed on every line (All) or on the lines that differ
+ * from the last saved text (Modified, by line diff; none when the file is above the diff's
+ * limits), except on keepLines, the lines a caret is on, so typing is never undone under the caret
+ * (Rider's default). insertFinalNewline appends the document's line separator to a non-empty text
+ * that does not end with a line break. Plain value.
+ */
+struct SaveTransform {
+    TrimTrailingWhitespace trim = TrimTrailingWhitespace::None;
+    bool insertFinalNewline = false;
+    std::vector<LineIndex> keepLines;
+};
+
+// One replacement of saveTransformEdits: [range) of the text becomes `text`.
+struct SaveEdit {
+    text::ByteRange range;
+    std::string text;
+
+    friend bool operator==(const SaveEdit&, const SaveEdit&) = default;
+};
+
+/*
+ * The edits that apply `transform` to `current` (lines as frost::text counts them: LF, CR and CRLF
+ * end a line), ascending and non-overlapping, in `current`'s byte coordinates; empty when nothing
+ * changes. `base` is the last saved text (for Modified); `newLine` is the separator a final newline
+ * uses. Pure; O(size) plus the line diff for Modified (Budget: B21).
+ */
+[[nodiscard]] std::vector<SaveEdit> saveTransformEdits(const text::Snapshot& current, const text::Snapshot& base,
+                                                       const SaveTransform& transform, std::string_view newLine);
+
 struct SaveOutcome {
     bool written = false; // false: the document was clean and in sync, so nothing was written.
     std::string target;   // The file written (a symlink's target).
@@ -221,6 +256,17 @@ public:
 
     // Owner-thread guard for temporary external operations; empty removes it.
     void setWriteGuard(std::function<Result<void>(std::string_view)> guard) { m_writeGuard = std::move(guard); }
+    /*
+     * The pre-save transform: before a dirty document (or a Save As) is encoded, `provider` says
+     * what to do to its text (SaveTransform; the caller resolves the file's settings and
+     * EditorConfig), and the edits are applied to the document as one undoable step, so the editor
+     * shows exactly what was written. Not run for SaveReason::Autosave, which must never change
+     * the text under the user, nor while an IME composition is active. Empty removes it. Owner
+     * thread; the provider must not save or close documents.
+     */
+    void setSaveTransform(std::function<SaveTransform(const FileDocument&, SaveReason)> provider) {
+        m_saveTransform = std::move(provider);
+    }
 
     // --- Documents ---
 
@@ -368,6 +414,7 @@ private:
     std::vector<std::unique_ptr<FileDocument>> m_documents;
     std::function<void(const ExternalChange&)> m_listener;
     std::function<Result<void>(std::string_view)> m_writeGuard;
+    std::function<SaveTransform(const FileDocument&, SaveReason)> m_saveTransform;
     std::set<std::string, std::less<>> m_sweptDirectories;
     std::int64_t m_nextGeneration = 0;
     std::uint64_t m_nextUntitled = 0;

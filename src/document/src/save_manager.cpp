@@ -6,14 +6,75 @@
 #include "frost/document/save_manager.hpp"
 
 #include "frost/core/assert.hpp"
+#include "frost/diff/line_diff.hpp"
+#include "frost/diff/line_sequence.hpp"
 #include "frost/storage/fingerprint.hpp"
+#include "frost/text/line_separator.hpp"
 #include "frost/text/text_buffer.hpp"
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <utility>
 
 namespace frost::document {
+
+// --- The pre-save transform ---
+
+std::vector<SaveEdit> saveTransformEdits(const text::Snapshot& current, const text::Snapshot& base,
+                                         const SaveTransform& transform, std::string_view newLine) {
+    std::vector<SaveEdit> edits;
+    if (transform.trim == TrimTrailingWhitespace::None && !transform.insertFinalNewline)
+        return edits;
+    const std::string text = current.text();
+    // Modified: the lines of `current` inside the line diff's hunks. Above the diff's limits no line
+    // counts as modified; rewriting a whole huge file the user only touched is worse.
+    std::vector<bool> modified;
+    if (transform.trim == TrimTrailingWhitespace::Modified) {
+        auto before = diff::LineSequence::fromSnapshot(base);
+        auto after = diff::LineSequence::fromSnapshot(current);
+        if (before && after) {
+            if (auto lineDiff = diff::diffLines(*before, *after)) {
+                modified.assign(after->size(), false);
+                for (const diff::Hunk& hunk : lineDiff->hunks)
+                    for (std::uint32_t line = hunk.b.begin.value(); line < hunk.b.end.value(); ++line)
+                        modified[line] = true;
+            }
+        }
+    }
+    const auto keep = [&](std::uint32_t line) {
+        return std::ranges::find(transform.keepLines, LineIndex{line}) != transform.keepLines.end();
+    };
+    const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\f' || c == '\v'; };
+    std::size_t start = 0;
+    for (std::uint32_t line = 0;; ++line) {
+        std::size_t end = start;
+        while (end < text.size() && text[end] != '\n' && text[end] != '\r')
+            ++end;
+        const bool trim =
+            transform.trim == TrimTrailingWhitespace::All ||
+            (transform.trim == TrimTrailingWhitespace::Modified && line < modified.size() && modified[line]);
+        if (trim && !keep(line)) {
+            std::size_t cut = end;
+            while (cut > start && blank(text[cut - 1]))
+                --cut;
+            if (cut < end)
+                edits.push_back(SaveEdit{text::ByteRange{ByteOffset{cut}, ByteOffset{end}}, {}});
+        }
+        if (end >= text.size())
+            break;
+        start = end + (text[end] == '\r' && end + 1 < text.size() && text[end + 1] == '\n' ? 2 : 1);
+    }
+    if (transform.insertFinalNewline && !text.empty() && text.back() != '\n' && text.back() != '\r') {
+        const ByteOffset at{text.size()};
+        // A trim that ends at the end of the text is followed directly by the line break.
+        if (!edits.empty() && edits.back().range.end == at)
+            edits.back().text = std::string(newLine);
+        else
+            edits.push_back(SaveEdit{text::ByteRange{at, at}, std::string(newLine)});
+    }
+    return edits;
+}
 
 // --- FileDocument ---
 
@@ -217,6 +278,26 @@ Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::strin
     }
     if (!saveAs && !document.dirty() && document.m_diskState == DiskState::InSync) {
         return outcome; // Clean and in sync: nothing to write.
+    }
+    // The pre-save transform (setSaveTransform): one undoable edit the editor shows, then the save.
+    if (m_saveTransform && options.reason != SaveReason::Autosave && !document.m_document.compositionRange()) {
+        const SaveTransform transform = m_saveTransform(document, options.reason);
+        const std::vector<SaveEdit> owned =
+            saveTransformEdits(document.m_document.committedText(), document.m_baseText, transform,
+                               text::separatorBytes(document.m_encoding.format.lineSeparator));
+        if (!owned.empty()) {
+            std::vector<text::Edit> edits;
+            edits.reserve(owned.size());
+            for (const SaveEdit& edit : owned)
+                edits.push_back(text::Edit{edit.range, edit.text});
+            // Its own undo step: neither merged into the typing before it nor into the next.
+            document.m_document.breakCoalescing();
+            if (auto applied = document.m_document.edit(edits, text::EditContext{}); !applied) {
+                applied.error().withContext("while applying the save actions");
+                outcome.warnings.push_back(std::move(applied.error()));
+            }
+            document.m_document.breakCoalescing();
+        }
     }
 
     // Captured on the owner thread; everything up to the write only reads these immutable values.

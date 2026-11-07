@@ -169,6 +169,12 @@ public:
         ++recoveryCalls;
         return recover;
     }
+    [[nodiscard]] bool confirmExit(QWidget*) override {
+        ++exitPrompts;
+        return exitAnswer;
+    }
+    int exitPrompts = 0;    // general.confirmExit prompts.
+    bool exitAnswer = true; // What they answer.
     [[nodiscard]] std::string chooseRenameName(QWidget*, const std::string& currentPath, bool folder) override {
         ++renamePrompts;
         lastRenameCurrentPath = currentPath;
