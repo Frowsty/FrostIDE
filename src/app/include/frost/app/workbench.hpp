@@ -427,7 +427,8 @@ public:
     void promptAndRenameItem(std::string_view path = {});
     // Prompts for confirmation and deletes `path` (empty: active tree selection or editor path).
     void promptAndDeleteItem(std::string_view path = {});
-    // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and adds it to the .vcxproj.
+    // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and asks the
+    // ProjectHost helper to add it to the .vcxproj (asynchronous; a refusal is a notification).
     [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
                                                              std::string_view relativeName);
     // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt.

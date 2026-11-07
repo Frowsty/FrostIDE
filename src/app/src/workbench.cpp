@@ -1604,23 +1604,11 @@ void Workbench::attachToolWindows() {
     m_projectEdit = std::make_unique<ProjectEditProcess>(m_services.launcher, m_services.clock);
     explorer->setController(m_build.get());
     explorer->setProcessLauncher(&m_services.launcher);
-    explorer->setRemoveProjectFileHandler([this](const QString& project, const QString& source) {
-        if (!m_options.projectEditHostPath.empty()) {
-            removeProjectFile(project, source);
-            return;
-        }
-        const std::array<std::string, 1> files{QDir::toNativeSeparators(source).toStdString()};
-        if (auto removed = removeFilesFromVcxproj(m_services.fs, project.toStdString(), files); !removed) {
-            notify(text("Remove from Project"), qs(removed.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        refreshSolutionExplorerForFsChange();
-        startProjectEvaluation(m_projectRoot);
-        if (m_clangd) {
-            restartClangd();
-        }
-    });
-    explorer->setAddProjectFileHandler([this, explorer](const QString& project) {
+    // Project membership edits go only through the ProjectHost helper (removeProjectFile finds it
+    // beside the application when no override is set); the regex writers are gone (SLN-1, FND-3).
+    explorer->setRemoveProjectFileHandler(
+        [this](const QString& project, const QString& source) { removeProjectFile(project, source); });
+    explorer->setAddProjectFileHandler([this](const QString& project) {
         if (m_options.selectExistingProjectSource) {
             const QString source = m_options.selectExistingProjectSource(project);
             if (!source.isEmpty()) {
@@ -1628,28 +1616,11 @@ void Workbench::attachToolWindows() {
             }
             return;
         }
-        const QStringList selected = QFileDialog::getOpenFileNames(
-            m_window, text("Add Existing C/C++ Files"), QFileInfo(project).absolutePath(),
-            text("C/C++ and Project Files (*.c *.cc *.cpp *.cxx *.c++ *.cppm *.ixx *.h *.hh *.hpp *.hxx *.inl *.rc "
-                 "*.natvis *.hlsl *.glsl);;All Files (*.*)"));
-        if (selected.isEmpty()) {
-            return;
-        }
-        std::vector<std::string> files;
-        files.reserve(static_cast<std::size_t>(selected.size()));
-        for (const QString& s : selected) {
-            files.push_back(QDir::toNativeSeparators(s).toStdString());
-        }
-        const std::string targetFilter = explorer ? explorer->contextFilterPath().toStdString() : std::string{};
-        auto added = addExistingFilesToVcxproj(m_services.fs, project.toStdString(), files, targetFilter);
-        if (!added) {
-            notify(text("Add Existing Files"), qs(added.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        refreshSolutionExplorerForFsChange(files.front());
-        startProjectEvaluation(m_projectRoot);
-        if (m_clangd) {
-            restartClangd();
+        const QString selected =
+            QFileDialog::getOpenFileName(m_window, text("Add Existing C/C++ File"), QFileInfo(project).absolutePath(),
+                                         text("C/C++ Sources and Headers (*.c *.cpp *.h *.hpp)"));
+        if (!selected.isEmpty()) {
+            removeProjectFile(project, selected, true);
         }
     });
     explorer->setAddNewProjectFileHandler([this, explorer](const QString& project) {
@@ -1661,9 +1632,12 @@ void Workbench::attachToolWindows() {
         }
         auto created = createNewProjectSource(project.toStdString(), name);
         if (created && !targetFilter.empty()) {
-            const std::array<std::string, 1> files{*created};
-            (void)moveFilesToVcxprojFilter(m_services.fs, project.toStdString(), files, targetFilter);
-            refreshSolutionExplorerForFsChange(*created);
+            // ProjectHost files the new item itself; choosing the filter needs SLN-6.
+            notify(text("Add New File"),
+                   text("The file was not placed in filter '%1': moving files to a filter requires safe solution "
+                        "and project edits (SLN-6).")
+                       .arg(qs(targetFilter)),
+                   ui::NotificationKind::Warning);
         }
     });
     explorer->setNewItemHandlers(
