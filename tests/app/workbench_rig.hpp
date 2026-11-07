@@ -40,13 +40,19 @@
 
 namespace frost::app::test {
 
-// Processes events until `done` or `timeout` passes; returns done().
+// Processes events until `done` or `timeout` passes; true when `done` was reached.
 inline bool waitFor(const std::function<bool()>& done, std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
+    // Returns the evaluation that ended the wait: evaluating `done` a second time could see a state
+    // that another thread (a CMake service, a language server) changed in between, and report a
+    // condition that was reached as not reached.
     const QDeadlineTimer deadline(timeout);
-    while (!done() && !deadline.hasExpired()) {
+    for (;;) {
+        if (done())
+            return true;
+        if (deadline.hasExpired())
+            return false;
         QApplication::processEvents(QEventLoop::AllEvents, 10);
     }
-    return done();
 }
 
 // Sends a key press and release to `target` as the platform would.

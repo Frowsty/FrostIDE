@@ -34,6 +34,10 @@ what is next, blockers and open questions for the user.
     search for no LuaLS unless the test asks;
     `WorkbenchLua.DefaultSearchStartsThePinnedLuaLs` covers the product's default search.
   - The keymap goldens were regenerated without `window.services` (216 -> 215 actions).
+  - The workbench rigs' `waitFor` evaluated its condition once more after the loop ended, so a state that
+    another thread changed in between (here a CMake configure starting again) turned a reached condition
+    into a failure in well under the timeout (`WorkbenchCMake.TargetSurvivesRefreshAndReopenAndFallsBackWhenRemoved`
+    on WSL, 1.2 s of a 60 s wait). It now returns the evaluation that ended the wait.
 - **What changed for the user.**
   - Unit Tests lists tests found in source as "Discovered, not run"; every run button is disabled (RUN-7).
   - NuGet is a read-only list of the project's PackageReferences (LTR-7); ASM/IL views are disabled with reasons.
