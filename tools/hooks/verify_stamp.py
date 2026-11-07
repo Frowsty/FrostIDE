@@ -10,8 +10,9 @@
 #   python tools/hooks/verify_stamp.py check-msg MESSAGE_FILE [--repo R]
 #
 # `tree` prints the tree hash of the working tree as a commit of everything would record it:
-# tracked and untracked files that are not ignored, through a temporary copy of the index, so
-# the real index is never touched (`git add -A` then `git write-tree` on the copy).
+# tracked and untracked files that are not ignored, through a temporary index holding the real
+# index's entries without their stat data, so the real index is never touched and every file is
+# compared by content (`git add -A` then `git write-tree` on the temporary index).
 #
 # `write` is run by tools/verify.ps1 and tools/verify.sh after a passing run. It records the
 # summary line ("Verified: win debug 3/3, ...", or verify.sh's "wsl: debug 3/3, ..." whose items
@@ -74,12 +75,16 @@ class Git:
 
     def run(self, *args: str, env: dict[str, str] | None = None) -> str:
         """Runs git (no shell); returns stdout without the trailing newline; raises StampError."""
-        result = subprocess.run([*self.base, *args], capture_output=True, stdin=subprocess.DEVNULL, env=env,
-                                check=False)
+        return self.run_bytes(*args, env=env).decode("utf-8", "replace").rstrip("\n")
+
+    def run_bytes(self, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None) -> bytes:
+        """Runs git (no shell) with `stdin` (none: the null device); returns raw stdout; raises StampError."""
+        result = subprocess.run([*self.base, *args], capture_output=True, env=env, check=False,
+                                **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}))
         if result.returncode != 0:
             lines = result.stderr.decode("utf-8", "replace").strip().splitlines()
             raise StampError(f"git {' '.join(args)} failed: {lines[-1] if lines else result.returncode}")
-        return result.stdout.decode("utf-8", "replace").rstrip("\n")
+        return result.stdout
 
     def path(self, option: str) -> Path:
         """An absolute path from `git rev-parse <option>` (--git-common-dir, --git-path index)."""
@@ -124,11 +129,17 @@ def working_tree_hash(git: Git) -> str:
     index = git.path("--git-path index")
     with tempfile.TemporaryDirectory(prefix="frost-stamp-") as tmp:
         scratch = Path(tmp) / "index"
-        if index.is_file():
-            shutil.copyfile(index, scratch)
         env = dict(os.environ, GIT_INDEX_FILE=str(scratch))
-        # Minimal stat checks: an index written by Git for Windows is read from WSL too.
-        git.run("-c", "core.checkStat=minimal", "-c", "core.trustctime=false", "add", "-A", env=env)
+        if index.is_file():
+            # The real index's entries (paths, modes, staged blobs; the executable bits a Windows
+            # checkout cannot see) but no stat data, so `add -A` compares every file by content. A
+            # copy of the index file kept its stat data under a newer file time: git then took an
+            # entry whose second and size still matched as clean (no racy-entry recheck), and a
+            # same-size edit made in the second of the last index write was stamped as the old
+            # tree. Stat data also differ between Git for Windows and WSL reading one index.
+            entries = git.run_bytes("ls-files", "--stage", "-z")
+            git.run_bytes("update-index", "-z", "--index-info", env=env, stdin=entries)
+        git.run("add", "-A", env=env)
         return git.run("write-tree", env=env)
 
 

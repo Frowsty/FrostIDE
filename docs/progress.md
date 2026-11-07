@@ -30,6 +30,15 @@ what is next, blockers and open questions for the user.
       a `.git/` directory), whose Windows gitdir made every git run in the mirror fail, here `git ls-remote` in
       `corpora.py pin`. The mirror now excludes `/.git` and removes a stale copy;
       `test_mirror_replaces_older_and_same_time_changes_without_touching_identical_files` covers it.
+  - The second combined verify failed `tools.hooks` once (`test_commit_all_checks_the_index_git_commits`; 10 of
+    10 alone). Root cause, reproduced 3 of 3 with a probe: `verify_stamp.py tree` hashed the working tree through
+    a copy of the index under `core.checkStat=minimal`. The copy's newer file time switched off git's racy-entry
+    recheck, so a same-size edit made in the second of the last index write counted as clean and **the stamp
+    named the old tree** (a verify could stamp a tree it did not build). The scratch index now takes the real
+    index's entries (paths, modes, staged blobs) without stat data (`ls-files --stage` into
+    `update-index --index-info`), so every file is compared by content; WSL computes the same hash (about 20 s on
+    drvfs in a standalone `verify.sh`). Test: `StampTest.test_tree_compares_contents_not_the_stat_data_of_the_index`
+    (fails on the old code; also checks the index's executable bit is kept).
   - Follow-up 14 needed no integration change: the acceptance branch still saw
     `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` fail, but it lacked the language slice's fix (the
     structure fixture aborted on a delete-pending hold file under load); the merged tree has it.
