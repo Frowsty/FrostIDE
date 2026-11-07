@@ -7,7 +7,10 @@
 #                         frost.exe launcher and frost_app.dll) through frost::io's
 #                         IProcessLauncher;
 #   app_workbench_*       the workbench composition (W1): offscreen functional tests, and the
-#                         real MSBuild and clangd suites (see the end of this file).
+#                         real MSBuild and clangd suites (see the end of this file);
+#   app_r0_exit_tests     the R0 exit criteria over the real tools (r0_exit_test.cpp);
+#   app_corpus_tests      the corpus tier on the pinned FrostEngine clone (label corpus, verify
+#                         -Corpus only).
 #
 # Parallel ctest (frost_add_test's policy; ADR 0027 decision 3): frost_process_tests (label
 # integration, so by default) and app_startup_tests (explicitly) hold RESOURCE_LOCK frost_desktop
@@ -187,3 +190,46 @@ target_compile_definitions(app_workbench_managed_tests PRIVATE ${_frost_workbenc
 if(WIN32)
     target_link_libraries(app_workbench_managed_tests PRIVATE shell32 ole32 uuid)
 endif()
+
+# The R0 exit criteria (PLAN.md section 7, R0; ADR 0078) over the real tools: tool ablation, Go to
+# Definition into a library header that writes nothing into the workspace, untrusted CMake and
+# FrostEngine folders that start nothing before trust, and engine helpers beside a running LuaLS
+# (R0 follow-up 13). Real cmake, clangd and LuaLS, so label integration (frost_desktop lock).
+frost_add_test(app_r0_exit_tests QT
+    SOURCES r0_exit_test.cpp
+    DEPS frost::app frost::build frost::lang frost::io
+    LABELS integration)
+target_include_directories(app_r0_exit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_r0_exit_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}")
+
+# The corpus tier (label corpus; tools/verify.ps1 -Corpus and verify.sh --corpus run it, -Quick and
+# -Full exclude it): the pinned FrostEngine clone of tests/corpus/corpora.lock.json, which
+# tools/corpora.py fetches. The pin and this platform's preset are compiled in from the lock file.
+set(_frost_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_frost_corpora_lock_file}")
+file(READ "${_frost_corpora_lock_file}" _frost_corpora_lock)
+string(JSON _frost_corpora_count LENGTH "${_frost_corpora_lock}" corpora)
+set(_frost_engine_sha "")
+math(EXPR _frost_corpora_last "${_frost_corpora_count} - 1")
+foreach(_frost_index RANGE ${_frost_corpora_last})
+    string(JSON _frost_corpus_id GET "${_frost_corpora_lock}" corpora ${_frost_index} id)
+    if(_frost_corpus_id STREQUAL "frostengine")
+        string(JSON _frost_engine_sha GET "${_frost_corpora_lock}" corpora ${_frost_index} sha)
+        if(WIN32)
+            string(JSON _frost_engine_preset GET "${_frost_corpora_lock}" corpora ${_frost_index} presets windows)
+        else()
+            string(JSON _frost_engine_preset GET "${_frost_corpora_lock}" corpora ${_frost_index} presets linux)
+        endif()
+    endif()
+endforeach()
+if(NOT _frost_engine_sha MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "${_frost_corpora_lock_file} pins no frostengine corpus")
+endif()
+frost_add_test(app_corpus_tests QT
+    SOURCES corpus_test.cpp
+    DEPS frost::app frost::build frost::diag frost::lang frost::io
+    LABELS integration corpus)
+target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}")

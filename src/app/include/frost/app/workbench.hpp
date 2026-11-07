@@ -748,6 +748,8 @@ private:
     std::string m_luaUnavailable;
     std::string m_luaUnavailableNotifiedRoot;
     std::shared_ptr<lang::ClangdService> m_clangd;
+    // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
+    std::string m_clangdUnavailableNotifiedRoot;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
     std::uint64_t m_clangdGeneration = 0;
     // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
