@@ -606,10 +606,13 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             if (m_clangd)
                 restartClangd();
         }
-        // A CMake or plain-folder clangd follows trust granted or revoked by any route (Settings,
-        // the Attach prompt, revocation); its launch flags depend on it (FND-3). The project trust
-        // dialog's own restart has already updated m_clangdTrusted, so this does not restart twice.
-        if (!m_solution && m_clangd && trusted != m_clangdTrusted) {
+        /* A CMake or plain-folder clangd follows trust granted or revoked by any route (Settings,
+         * the Attach prompt, revocation); its launch flags depend on it (FND-3). While a CMake
+         * configure runs, its model publication compares the trust too and restarts clangd once
+         * with the database it writes, so the watch waits (FND-9a: no second restart); if the
+         * configure fails, the next tick restarts it. */
+        const bool cmakeBusy = m_cmake && m_cmake->service().state() != build::BuildState::Idle;
+        if (!m_solution && m_clangd && !cmakeBusy && trusted != m_clangdTrusted) {
             if (m_cmake)
                 restartClangdIfCMakeStateChanged();
             else

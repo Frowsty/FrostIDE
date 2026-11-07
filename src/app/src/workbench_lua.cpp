@@ -128,7 +128,9 @@ void Workbench::startLua(const std::string& root) {
             QMetaObject::invokeMethod(
                 self.data(),
                 [self] {
-                    if (self && self->m_language)
+                    // Only the LuaLS's own documents: a lifecycle change must not cancel a
+                    // Structure request another server (clangd) is answering for the current file.
+                    if (self && self->m_language && self->currentView() && isLuaSource(self->currentView()->path()))
                         self->m_language->structureChanged();
                 },
                 Qt::QueuedConnection);

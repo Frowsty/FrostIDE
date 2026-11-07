@@ -2799,7 +2799,7 @@ void Workbench::startClangd(const std::string& root) {
 void Workbench::restartClangd() {
     // A configuration switch: other flags, so another database (the chain regenerates it).
     if (hasProject()) {
-        log::info(kLog, "the solution configuration changed: clangd restarts");
+        log::info(kLog, "the configuration or trust of the project changed: clangd restarts");
         startClangd(m_projectRoot);
     }
 }

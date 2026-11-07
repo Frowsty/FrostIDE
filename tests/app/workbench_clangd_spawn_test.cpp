@@ -182,4 +182,33 @@ TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdO
     EXPECT_TRUE(restricted(launcher.lastClangdArguments())) << "an untrusted folder's clangd must be restricted again";
 }
 
+// An untrusted CMake folder that was never configured: clangd starts restricted without a
+// database, and the trust grant's configure writes the first one. The configure's publication
+// restarts clangd once, trusted, on that database; the 1 s trust watch must not add a restart
+// while the configure runs (FND-9a).
+TEST(WorkbenchClangdSpawn, TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNewDatabase) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
+    WorkDir dir("cmake-clangd-trust-unconfigured");
+    writeProject(dir);
+    const std::string debugDir = dir.join("cmake-build-debug");
+    CountingLauncher launcher;
+    WorkbenchRig rig(dir, clangdOptions(launcher));
+    ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 1; }, 60s)) << "no clangd for the untrusted folder";
+    (void)waitFor([] { return false; }, 2s); // No configure may run before trust.
+    ASSERT_EQ(launcher.clangdStarts(), 1);
+    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
+
+    auto* dialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
+    ASSERT_NE(dialog, nullptr) << "opening an untrusted folder offers trust";
+    dialog->trustButton()->click();
+    ASSERT_TRUE(rig.trust->isTrusted(dir.path()));
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on the database the configure wrote";
+    (void)waitFor([] { return false; }, 2s); // Two more trust-watch ticks: no late restart.
+    EXPECT_EQ(launcher.clangdStarts(), 2) << "the trust grant and its configure restarted clangd more than once";
+    EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
+}
+
 } // namespace

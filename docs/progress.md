@@ -22,12 +22,16 @@ what is next, blockers and open questions for the user.
     offering a launch that only reports it is unavailable; "NuGet Package Manager" is now "NuGet
     Packages" and the IL/assembly window title says it is unavailable.
   - A CMake or plain-folder clangd also follows trust granted or revoked by other routes (Settings, the
-    Attach prompt, revocation) through the 1 s trust watch.
+    Attach prompt, revocation) through the 1 s trust watch, which waits while a CMake configure runs so a
+    trust grant that configures a never-configured folder restarts clangd once
+    (`WorkbenchClangdSpawn.TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNewDatabase`).
+  - The LuaLS and managed-server lifecycle callbacks refresh the Structure only when the current file is
+    theirs; before, a LuaLS state change cancelled a Structure request clangd was answering for a C++ file.
   - Attach to Process listed no processes on Linux (the function had no Linux path, also on `main`); it
     now walks `/proc`. The WSL leg had failed two Workbench tests on it.
   - The pinned LuaLS is now found by default, so every trusted open in the workbench test rig started a
-    real LuaLS beside the processes the test scripted or counted (three launch-count failures, and a
-    load-dependent Structure test failure). Rigs now search for no LuaLS unless the test asks;
+    real LuaLS beside the processes the test scripted or counted (three launch-count failures). Rigs now
+    search for no LuaLS unless the test asks;
     `WorkbenchLua.DefaultSearchStartsThePinnedLuaLs` covers the product's default search.
   - The keymap goldens were regenerated without `window.services` (216 -> 215 actions).
 - **What changed for the user.**
@@ -98,13 +102,15 @@ what is next, blockers and open questions for the user.
   12. Linux process list: skip kernel threads (no `exe`, empty `cmdline`), prefer the `exe` basename over
       the 15-byte `comm`, strip " (deleted)", and match dotted .NET apphost names.
   13. No test runs FrostEngine engine helpers beside a running LuaLS.
-  14. Intermittent: `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` failed twice under load
-      (one full verify, one targeted run right after a build), both times at its last 20 s wait for the
-      "new" Structure after the fake server's restart, after the server had received the request. It passed
-      in about 60 later runs, including two full Windows suites and parallel stress, also with diagnostics
-      on the Structure reply check. Not changed or weakened; the cause is still open.
-- **Process note.** The DoD asks for GPT-6.1 Terra / GPT-6 Astra agents where available; they are not
-  available in this session, so Claude agents did the implementation and the independent reviews.
+  14. Intermittent, cause open: `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` failed twice
+      under load, both times at its last 20 s wait for the "new" Structure after the fake server's restart,
+      after the server had received the request. The first failure had a real LuaLS running in the rig;
+      the second came after the rig stopped starting LuaLS, so LuaLS is not required for it. The managed
+      server also starts for any trusted folder when dotnet and the server are found, and its lifecycle
+      events took the same path. The suspected mechanism, another server's lifecycle event cancelling the
+      clangd Structure request, is fixed above for both; unproven. It
+      passed in about 60 later runs, including two full Windows suites and parallel stress, also with
+      diagnostics on the Structure reply check. The test is not changed or weakened.
 
 ## 2026-11-07: Audit, Roadmap v2 (R-ladder) and definition of done v2
 
