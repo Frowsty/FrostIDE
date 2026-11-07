@@ -728,13 +728,19 @@ void Workbench::offerProjectTrust() {
                 restartClangd();
             }
         } else if (m_cmake) {
-            if (m_cmake->service().state() == build::BuildState::Idle && !m_cmake->service().model()) {
-                // The configure's model publication restarts clangd if the database or trust moved.
-                (void)m_cmake->service().configure();
-            } else {
-                // A clangd started restricted on an existing database restarts trusted (.clangd,
-                // --query-driver); without a running clangd this does nothing.
-                restartClangdIfCMakeStateChanged();
+            /* While a configure the grant resumed is running, nothing happens here: its model
+             * publication restarts clangd once, trusted, on the database it writes, and the trust
+             * watch covers an operation that publishes none once the service is idle (FND-9a: no
+             * restart in between). */
+            if (m_cmake->service().state() == build::BuildState::Idle) {
+                if (!m_cmake->service().model()) {
+                    // The configure's model publication restarts clangd if the database or trust moved.
+                    (void)m_cmake->service().configure();
+                } else {
+                    // A clangd started restricted on an existing database restarts trusted (.clangd,
+                    // --query-driver); without a running clangd this does nothing.
+                    restartClangdIfCMakeStateChanged();
+                }
             }
         }
         m_luaObservedTrust = true;

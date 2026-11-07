@@ -22,8 +22,9 @@ what is next, blockers and open questions for the user.
     offering a launch that only reports it is unavailable; "NuGet Package Manager" is now "NuGet
     Packages" and the IL/assembly window title says it is unavailable.
   - A CMake or plain-folder clangd also follows trust granted or revoked by other routes (Settings, the
-    Attach prompt, revocation) through the 1 s trust watch, which waits while a CMake configure runs so a
-    trust grant that configures a never-configured folder restarts clangd once
+    Attach prompt, revocation) through the 1 s trust watch. Neither the watch nor the trust dialog restarts
+    clangd while a CMake configure runs (the grant itself resumes one), so a trust grant that configures a
+    never-configured folder restarts clangd once
     (`WorkbenchClangdSpawn.TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNewDatabase`).
   - The LuaLS and managed-server lifecycle callbacks refresh the Structure only when the current file is
     theirs; before, a LuaLS state change cancelled a Structure request clangd was answering for a C++ file.
