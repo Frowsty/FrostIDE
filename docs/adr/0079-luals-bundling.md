@@ -78,12 +78,20 @@ digest equals the one GitHub publishes for the asset.
 ## Update (R0-close): staging never leaves a partial folder
 
 Both stage scripts run every check on their inputs before they create the
-destination: the build tree, the bundled tools, and on Windows the PDB
-identities of frost.exe and frost_app.dll (`tools/symbolize.py archive
---check` on the build tree). A failure after that point, for example a
-missing notice or a failed copy, removes what the run created. A destination
-folder that already existed empty is emptied again, not removed. The
-Windows and Linux script tests assert that no partial folder is left.
+destination: the build tree (on Windows also the ProjectHost, the HTTPS
+backend and the libsodium notice), the resources, the bundled tools, and on
+Windows the PDB identities of frost.exe and frost_app.dll
+(`tools/symbolize.py archive --check` on the build tree). A failure after
+that point removes what the run created. That covers the checks of the
+staged folder (a failed windeployqt, a staged file that differs from its
+source, a failed symbol archive) and unexpected errors: a failed copy, a
+locked or unreadable file, a full disk. `stage.ps1` routes every terminating
+error through a script-scope `trap`, and `stage.sh` uses an `ERR` trap. A
+destination folder that already existed empty is emptied again, not
+removed. Paths are taken literally, so a destination whose name holds `[`
+or `]` is cleaned up like any other. The Windows and Linux script tests
+assert that no partial folder is left, including after a copy fails on an
+input held open without sharing.
 
 ## Licence
 
