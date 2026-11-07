@@ -26,6 +26,7 @@
 #include "frost/ui/vcs/git_console.hpp"
 #include "frost/ui/vcs/git_controller.hpp"
 #include "frost/ui/vcs/git_log_window.hpp"
+#include "frost/ui/vcs/merge_guard.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
@@ -1046,7 +1047,19 @@ void GitIntegration::showResolveConflictsDialog() {
             statusLabel->setText(unresolved == 0 ? tr("All conflicts resolved.")
                                                  : tr("%1 conflict(s) unresolved.").arg(unresolved));
         };
+        // FND-3: Apply refuses while chunks are unresolved or conflict markers remain in the result.
+        const auto applyBlocker = [&] {
+            return QString::fromStdString(
+                ui::mergeApplyBlocker(model.unresolvedCount(), resultPane->toPlainText().toStdString()));
+        };
+        const auto refreshApply = [&] {
+            const QString blocker = applyBlocker();
+            applyBtn->setEnabled(blocker.isEmpty());
+            applyBtn->setToolTip(blocker);
+        };
+        connect(resultPane, &QPlainTextEdit::textChanged, &mergeDialog, refreshApply);
         refreshMergeState();
+        refreshApply();
 
         connect(acceptLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
             const int row = chunkList->currentRow();
@@ -1073,6 +1086,10 @@ void GitIntegration::showResolveConflictsDialog() {
             refreshMergeState();
         });
         connect(applyBtn, &QPushButton::clicked, &mergeDialog, [&] {
+            if (const QString blocker = applyBlocker(); !blocker.isEmpty()) {
+                statusLabel->setText(blocker);
+                return;
+            }
             const std::string mergedText = resultPane->toPlainText().toStdString();
             if (applyResolved(absPath, relPath, mergedText)) {
                 mergeDialog.accept();

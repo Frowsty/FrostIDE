@@ -1283,7 +1283,10 @@ ChoicePopup::ChoicePopup(QWidget* parent) : QFrame(parent) {
     layout->addWidget(m_title);
     layout->addWidget(m_list);
     m_list->installEventFilter(this);
-    connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem*) {
+    connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
+        if (item != nullptr && !item->flags().testFlag(Qt::ItemIsEnabled)) {
+            return; // A disabled row (start's disabledReasons).
+        }
         if (!m_done && m_list->currentRow() >= 0) {
             m_done = true;
             hide();
@@ -1293,11 +1296,12 @@ ChoicePopup::ChoicePopup(QWidget* parent) : QFrame(parent) {
 }
 
 void ChoicePopup::start(const QString& title, const std::vector<QString>& choices, const QRect& anchor,
-                        std::vector<bool> preferred) {
+                        std::vector<bool> preferred, std::vector<QString> disabledReasons) {
     m_done = false;
     m_title->setText(title);
     m_title->setVisible(!title.isEmpty());
     m_list->clear();
+    int firstEnabled = -1;
     for (std::size_t i = 0; i < choices.size(); ++i) {
         auto* row = new QListWidgetItem(choices[i]);
         if (i < preferred.size() && preferred[i]) {
@@ -1305,9 +1309,16 @@ void ChoicePopup::start(const QString& title, const std::vector<QString>& choice
             font.setBold(true);
             row->setFont(font);
         }
+        if (i < disabledReasons.size() && !disabledReasons[i].isEmpty()) {
+            // Visible but inert: the reason names the owning epic.
+            row->setFlags(row->flags() & ~(Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+            row->setToolTip(disabledReasons[i]);
+        } else if (firstEnabled < 0) {
+            firstEnabled = static_cast<int>(i);
+        }
         m_list->addItem(row);
     }
-    m_list->setCurrentRow(choices.empty() ? -1 : 0);
+    m_list->setCurrentRow(firstEnabled);
     const int rows = std::clamp(static_cast<int>(choices.size()), 1, 12);
     m_list->setFixedHeight(rows * std::max(m_list->sizeHintForRow(0), 18) + 2 * m_list->frameWidth());
     m_list->setMinimumWidth(std::min(640, std::max(240, m_list->sizeHintForColumn(0) + 24)));

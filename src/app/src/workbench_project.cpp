@@ -2682,6 +2682,8 @@ void Workbench::startClangd(const std::string& root) {
     options.clangdPath = found->path;
     options.workspaceRoot = root;
     options.launch.jobs = m_options.clangdJobs;
+    // Restricted mode (no project config, default limits) unless the root is trusted (clangd.hpp).
+    options.launch.trusted = m_services.trust.isTrusted(root);
     options.compileCommands = m_compileCommands;
     const auto generation = m_clangdGeneration;
     // The owned server supervisors are joined before Workbench's QObject base is destroyed;

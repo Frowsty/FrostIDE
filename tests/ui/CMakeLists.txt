@@ -48,7 +48,8 @@
 #   ui_toolwindows_tests         the build tool windows (see below);
 #   ui_vcs_tests                 frost::ui_vcs without git (ADR 0048), offscreen: the Commit window's
 #                                model, the diff viewer, the VCS colours of every theme, the change
-#                                markers on an EditorView and the VCS shortcut defaults;
+#                                markers on an EditorView, the VCS shortcut defaults and the 3-way
+#                                merge dialog's Apply guard;
 #   ui_vcs_git_tests             frost::ui_vcs against real git on temporary repositories
 #                                (GitUiE2E.*), offscreen; label "integration" with the tag "git".
 #   ui_lang_tests                the language-feature widgets and LanguageController (ADR 0041)
@@ -297,6 +298,7 @@ endif()
 frost_add_test(ui_vcs_tests QT
     SOURCES
         vcs/change_markers_test.cpp
+        vcs/merge_guard_test.cpp
         vcs/vcs_ui_test.cpp
     DEPS frost::ui_vcs frost::ui_editor frost::ui_shell frost::ui frost::ui_input frost::vcs frost::diff
          frost::text_editor frost::text frost::syntax frost::settings frost::input frost::sched frost::io

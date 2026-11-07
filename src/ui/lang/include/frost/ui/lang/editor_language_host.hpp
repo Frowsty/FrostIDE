@@ -73,6 +73,15 @@ public:
     virtual void select(text::ByteRange range) = 0;
     // Opens `path` (another file opens in a new tab) and puts the caret at `position`.
     virtual void openLocation(std::string_view path, ::frost::lang::LspPosition position) = 0;
+    /*
+     * Opens a file of the metadata cache (LanguageServices::metadataCacheDir: source the language
+     * server generated for a library symbol) at `position`. A host should open it read-only; the
+     * default opens it like openLocation. A read-only editor tab for it in the workbench is LTR-6
+     * work.
+     */
+    virtual void openReadOnlyLocation(std::string_view path, ::frost::lang::LspPosition position) {
+        openLocation(path, position);
+    }
     // Highlights the usages of the symbol under the caret; an empty list clears them.
     virtual void setUsageHighlights(std::vector<::frost::lang::DocumentHighlight> highlights) = 0;
     // Every open document and its current text, for find usages' line previews.
