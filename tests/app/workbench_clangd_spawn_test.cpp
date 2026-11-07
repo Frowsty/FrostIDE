@@ -7,7 +7,7 @@
 // reopen of the configured folder (clangd starts at once and the configure's model does not
 // restart it), a later profile switch, which moves the database and must restart clangd, and a
 // trust grant on an untrusted configured folder, which must restart the restricted clangd
-// (--enable-config=false) once in full mode.
+// (--enable-config=false) once in full mode, and its revocation, which restricts it again.
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/io/path.hpp"
@@ -142,7 +142,7 @@ TEST(WorkbenchClangdSpawn, OpeningACMakeProjectStartsOneClangd) {
     }
 }
 
-TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullMode) {
+TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullModeAndRevokingRestrictsIt) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
     WorkDir dir("cmake-clangd-trust");
@@ -173,6 +173,13 @@ TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdO
     ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the restarted clangd never ran";
     EXPECT_EQ(launcher.clangdStarts(), 2) << "the trust grant restarted clangd more than once";
     EXPECT_FALSE(restricted(launcher.lastClangdArguments())) << "the restarted clangd is still restricted";
+
+    // Revoking the trust (outside the dialog) restarts clangd once more, restricted again.
+    ASSERT_TRUE(rig.trust->untrust(dir.path()).has_value());
+    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 3; }, 60s)) << "revoking trust did not restart clangd";
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the clangd restarted after revocation never ran";
+    EXPECT_EQ(launcher.clangdStarts(), 3) << "the revocation restarted clangd more than once";
+    EXPECT_TRUE(restricted(launcher.lastClangdArguments())) << "an untrusted folder's clangd must be restricted again";
 }
 
 } // namespace

@@ -287,10 +287,11 @@ public:
         if (wb.luaStateDirectory.empty()) {
             wb.luaStateDirectory = dir.join("data/luals"); // LuaLS's log and meta, not the profile's.
         }
-        if (options.launcher && !wb.luaSearch) {
-            // A supplied (scripted or counting) launcher sees only the processes its test expects:
-            // the pinned LuaLS (LUA-1) is not searched for unless the test sets luaSearch or the
-            // LuaLS path setting. Rigs on the real launcher find it as the product does.
+        if (!wb.luaSearch) {
+            // No LuaLS unless the test asks for one, as before the pin (LUA-1): a test sets the LuaLS
+            // path setting or luaSearch (WorkbenchLua.DefaultSearchStartsThePinnedLuaLs uses the
+            // product's default search). Otherwise every trusted open would start a real LuaLS
+            // beside the processes the test drives or scripts.
             wb.luaSearch = lang::LuaSearch{};
         }
         if (wb.applicationSettingsFile.empty()) {

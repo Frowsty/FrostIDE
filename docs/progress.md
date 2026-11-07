@@ -16,11 +16,20 @@ what is next, blockers and open questions for the user.
   - FND-3 started clangd restricted in untrusted folders and FND-9a stopped restarting it on an unchanged
     CMake model, so trusting a configured CMake folder left clangd restricted for the session. The running
     clangd's trust is now part of the restart check, and the trust grant restarts it once
-    (`WorkbenchClangdSpawn.TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullMode`, real cmake
+    (`WorkbenchClangdSpawn.TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullModeAndRevokingRestrictsIt`, real cmake
     and clangd).
   - The compound run group in Run/Debug Configurations is disabled with a RUN-5 tooltip instead of
     offering a launch that only reports it is unavailable; "NuGet Package Manager" is now "NuGet
     Packages" and the IL/assembly window title says it is unavailable.
+  - A CMake or plain-folder clangd also follows trust granted or revoked by other routes (Settings, the
+    Attach prompt, revocation) through the 1 s trust watch.
+  - Attach to Process listed no processes on Linux (the function had no Linux path, also on `main`); it
+    now walks `/proc`. The WSL leg had failed two Workbench tests on it.
+  - The pinned LuaLS is now found by default, so every trusted open in the workbench test rig started a
+    real LuaLS beside the processes the test scripted or counted (three launch-count failures, and a
+    load-dependent Structure test failure). Rigs now search for no LuaLS unless the test asks;
+    `WorkbenchLua.DefaultSearchStartsThePinnedLuaLs` covers the product's default search.
+  - The keymap goldens were regenerated without `window.services` (216 -> 215 actions).
 - **What changed for the user.**
   - Unit Tests lists tests found in source as "Discovered, not run"; every run button is disabled (RUN-7).
   - NuGet is a read-only list of the project's PackageReferences (LTR-7); ASM/IL views are disabled with reasons.
@@ -55,7 +64,7 @@ what is next, blockers and open questions for the user.
   | Regex solution/project edits (SLN-1) | partly guarded: membership edits refused. Still text/regex writers: `updatePathInVcxproj` on rename, move and delete; the property pages `applyVcxprojPropertiesForConfig` and `applyCsprojProperties` (SLN-8); and the CMakeLists.txt source edits on create/rename/delete (`add`/`rename`/`removeSourceInCMakeLists`) |
   | LocalDebugger* written into the shared .vcxproj | partly removed: Run/Debug Configurations is read-only, the Project Properties Debugging page still writes them |
   | 3-way merge Apply writing marker text and git-adding it | guarded |
-  | clangd honouring `.clangd`/`--query-driver` in untrusted projects | guarded (restricted mode; a trust grant restarts clangd in full mode) |
+  | clangd honouring `.clangd`/`--query-driver` in untrusted projects | guarded (restricted mode; trust granted or revoked by any route restarts clangd with the matching flags) |
   | Updater overwrites the live install without rollback | guarded by policy (auto-updates frozen, D38) |
 
   Tests removed or inverted with their feature (D32 or spec change): the fake Passed/Failed counts; the regex
@@ -76,7 +85,8 @@ what is next, blockers and open questions for the user.
      accepts `.frostproj`/`.feproject`, LuaLS defaults only `.frostproj` (`lua_config.cpp`).
   4. Wire `LanguageServices::metadataCacheDir`, `readiness` and a read-only `openReadOnlyLocation` in src/app;
      name LTR-6 when a C# metadata result has no cache.
-  5. Refuse or route `updatePathInVcxproj` (rename/move regex writer); move `.fmeta` siblings on rename/move.
+  5. Refuse or route `updatePathInVcxproj` (regex writer on rename, move and delete); move `.fmeta` siblings on
+     rename/move.
   6. Disable refused explorer actions up front instead of after their dialogs.
   7. stage.ps1: check symbols before populating the destination; Linux staging of LuaLS.
   8. Lint: join adjacent literals for the tool-output rule; per-entry occurrence counts; footer check must
@@ -85,6 +95,14 @@ what is next, blockers and open questions for the user.
   10. Profile switch still starts clangd about 3 times.
   11. Autosave trimming spares only the primary caret's line; the `main` gutter marker runs the startup
       project, not necessarily the one that owns that `main`.
+  12. Linux process list: skip kernel threads (no `exe`, empty `cmdline`), prefer the `exe` basename over
+      the 15-byte `comm`, strip " (deleted)", and match dotted .NET apphost names.
+  13. No test runs FrostEngine engine helpers beside a running LuaLS.
+  14. Intermittent: `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` failed twice under load
+      (one full verify, one targeted run right after a build), both times at its last 20 s wait for the
+      "new" Structure after the fake server's restart, after the server had received the request. It passed
+      in about 60 later runs, including two full Windows suites and parallel stress, also with diagnostics
+      on the Structure reply check. Not changed or weakened; the cause is still open.
 - **Process note.** The DoD asks for GPT-6.1 Terra / GPT-6 Astra agents where available; they are not
   available in this session, so Claude agents did the implementation and the independent reviews.
 

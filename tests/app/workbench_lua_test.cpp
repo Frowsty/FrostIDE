@@ -3,6 +3,8 @@
 // (required: these tests fail when it is not installed) with engine-generated API definitions.
 #include "frost/app/welcome_screen.hpp"
 #include "frost/io/file_system.hpp"
+#include "frost/io/path.hpp"
+#include "frost/io/process.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -22,6 +24,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace {
 using namespace std::chrono_literals;
@@ -38,6 +43,32 @@ frost::Result<std::string> pinnedLuaLs() {
                                " is required (tools/bootstrap): " + found.error().describe());
     return found;
 }
+
+// The real launcher, recording the executable of every process it starts.
+class RecordingLauncher final : public frost::io::IProcessLauncher {
+public:
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        record(spec);
+        return frost::io::realProcessLauncher().launch(spec);
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        record(spec);
+        return frost::io::realProcessLauncher().launchAsync(spec, context);
+    }
+    [[nodiscard]] std::vector<std::string> executables() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_executables;
+    }
+
+private:
+    void record(const frost::io::ProcessSpec& spec) {
+        const std::scoped_lock lock(m_mutex);
+        m_executables.push_back(spec.executable);
+    }
+    mutable std::mutex m_mutex;
+    std::vector<std::string> m_executables;
+};
 
 // The engine-generated API when FROST_TEST_LUA_API names it, else a hand-written stand-in of the
 // same shape: the AI table and AI.Wake(entity).
@@ -177,6 +208,34 @@ TEST(WorkbenchStructure, SplitViewsSendOneDocumentChangeAndRetainOpenUntilLastVi
     tabs.activate(tabs.currentIndex());
     ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
     EXPECT_EQ(count("notification textDocument/didClose"), 1);
+}
+
+// The product's default search (no LuaLS setting) finds the pinned LuaLS that tools/bootstrap
+// installs and starts it for a trusted folder (LUA-1). The other rigs search for no LuaLS.
+TEST(WorkbenchLua, DefaultSearchStartsThePinnedLuaLs) {
+    auto pinned = pinnedLuaLs();
+    ASSERT_TRUE(pinned.has_value()) << pinned.error().describe();
+    WorkDir dir("lua-default-search");
+    dir.write("main.lua", "local x = 1\nprint(x)\n");
+    RecordingLauncher launcher;
+    frost::app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.luaSearch = frost::lang::defaultLuaSearch();
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->snapshot()->get(frost::settings::key::toolsLuaLanguageServerPath).empty());
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->lua() && rig.workbench->lua()->state() == frost::lang::LuaState::Running; }, 30s))
+        << "the pinned LuaLS did not start from the default search";
+    const auto launched = launcher.executables();
+    EXPECT_TRUE(std::ranges::any_of(launched,
+                                    [&](const std::string& exe) {
+                                        return frost::io::fileName(exe) == frost::io::fileName(*pinned) &&
+                                               frost::io::parentPath(exe) == frost::io::parentPath(*pinned);
+                                    }))
+        << "expected a launch of " << *pinned;
 }
 
 TEST(WorkbenchLua, FrostProjectIdentitySurvivesRecentAndSessionReopen) {
