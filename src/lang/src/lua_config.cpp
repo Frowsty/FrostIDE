@@ -82,7 +82,7 @@ std::string executableDirectory() {
     return {};
 #endif
 }
-// <root>/luals-<pinned version>/bin, the layout of bootstrap's SDK install and of tools/stage.ps1.
+// <root>/luals-<pinned version>/bin, the layout of bootstrap's SDK install, tools/stage.ps1 and tools/stage.sh.
 void addPinnedBin(std::vector<std::string>& out, std::string_view root) {
     if (root.empty())
         return;
@@ -119,22 +119,16 @@ Result<std::string> findLuaLanguageServer(io::IFileSystem& fs, const LuaSearch& 
 LuaSearch defaultLuaSearch(std::string configuredPath) {
     LuaSearch search;
     search.configuredPath = std::move(configuredPath);
-    // A staged FrostIDE bundles the pinned LuaLS beside the executable (tools/stage.ps1).
+    // A staged FrostIDE bundles the pinned LuaLS beside the executable (tools/stage.ps1, tools/stage.sh).
     if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
         addPinnedBin(search.directories, exeDir);
         if (auto sub = io::joinPath(exeDir, "lua-language-server/bin")) // Layout of earlier previews.
             search.directories.push_back(std::move(*sub));
         search.directories.push_back(exeDir);
     }
-    // Development: the pinned install from tools/bootstrap.ps1 or tools/bootstrap-wsl.sh.
+    // Development and tests: the pinned install of tools/bootstrap.ps1 or tools/bootstrap-wsl.sh,
+    // named by FROST_SDK (tools/env.ps1, ~/sdk/env.sh). No machine-specific default root (FND-10).
     addPinnedBin(search.directories, environment("FROST_SDK"));
-#ifdef _WIN32
-    addPinnedBin(search.directories, "E:\\sdk"); // tools/bootstrap.ps1's default -SdkRoot.
-#else
-    if (const std::string home = environment("HOME"); !home.empty())
-        if (auto sdk = io::joinPath(home, "sdk")) // tools/bootstrap-wsl.sh's root.
-            addPinnedBin(search.directories, *sdk);
-#endif
     search.pathVariable = environment("PATH");
     return search;
 }

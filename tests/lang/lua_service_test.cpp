@@ -10,6 +10,7 @@
 #include "frost/sched/sim_executor.hpp"
 #include "frost/text/document.hpp"
 
+#include "support/test_env.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -46,8 +47,15 @@ TEST(LuaService, DefaultSearchPrefersThePinnedInstall) {
     const std::string pinned = "luals-" + std::string(frost::lang::pinnedLuaLanguageServerVersion());
     const auto pinnedDirs = std::ranges::count_if(
         search.directories, [&](const std::string& dir) { return dir.find(pinned) != std::string::npos; });
-    EXPECT_GE(pinnedDirs, 2) << "the staged folder and the SDK root";
+    // The staged folder, and the SDK root when FROST_SDK names one (FND-10: no machine-specific
+    // default root such as the bootstrap roots; tools/env.ps1 and ~/sdk/env.sh set FROST_SDK).
+    const std::string sdk = frost::test::environment("FROST_SDK");
+    EXPECT_EQ(pinnedDirs, sdk.empty() ? 1 : 2) << "the staged folder and the SDK root";
     EXPECT_NE(search.directories.front().find(pinned), std::string::npos) << search.directories.front();
+    // <exe>/luals-<pinned>/bin, <exe>/lua-language-server/bin, <exe>, then $FROST_SDK/luals-<pinned>/bin.
+    ASSERT_EQ(search.directories.size(), sdk.empty() ? 3U : 4U);
+    if (!sdk.empty())
+        EXPECT_EQ(search.directories.back(), frost::io::joinPath(sdk, pinned + "/bin").value());
     for (const auto& dir : search.directories)
         EXPECT_TRUE(frost::io::isAbsolutePath(dir)) << dir;
 }

@@ -46,7 +46,7 @@ constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::W
 constexpr auto kPatience = 60s;
 
 // <sdk>/lldb-<version>/bin/lldb-dap[.exe], where <sdk> is $FROST_SDK (tools/env.ps1, ~/sdk/env.sh)
-// or the default SDK root, and <version> is the lock file's pin.
+// or else the FROST_SDK the build was configured with, and <version> is the lock file's pin.
 std::string pinnedLldbDap() {
     std::string sdk = frost::test::environment("FROST_SDK");
     if (sdk.empty()) {

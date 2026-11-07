@@ -646,6 +646,30 @@ class SymbolArchiveTest(TempDirTestCase):
         self.assertEqual(status, 0, "an image nobody requires is skipped")
         self.assertIn("skip   frost.exe: x.pdb not found", out)
 
+    def test_check_only_runs_the_identity_checks_and_writes_nothing(self) -> None:
+        # stage.ps1's preflight before it creates the destination (R0-close item 7).
+        def check(stage: Path, pdbs: Path, *required: str) -> tuple[int, str]:
+            argv = ["archive", "--stage", str(stage), "--pdb-dir", str(pdbs), "--check"]
+            for name in required:
+                argv += ["--require", name]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                status = symbolize.main(argv)
+            return status, out.getvalue()
+
+        stage, pdbs = self.stage(msf_bytes())
+        status, out = check(stage, pdbs, "frost.exe")
+        self.assertEqual(status, 0, out)
+        self.assertIn("check: 1 modules match their PDBs", out)
+        (pdbs / "x.pdb").write_bytes(msf_bytes(dbi_age=2))
+        status, out = check(stage, pdbs, "frost.exe")
+        self.assertEqual(status, 1)
+        self.assertIn(f"the image wants pdb70 {GUID_TEXT}/1", out)
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["pdbs", "stage"], "nothing written")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(symbolize.main(["archive", "--stage", str(stage), "--pdb-dir", str(pdbs)]), 2,
+                             "--output or --check is required")
+
     def test_unpacking_rejects_tampered_members_and_paths(self) -> None:
         stage, pdbs = self.stage(msf_bytes())
         status, out, output = self.archive(stage, pdbs, "frost.exe")

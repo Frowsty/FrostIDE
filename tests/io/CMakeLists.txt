@@ -3,7 +3,8 @@
 # Tests for frost::io:
 #   io_unit_tests          pure logic (including private helpers of src/io/src/internal.hpp), the
 #                          doubles (MemFs, MemFsWatcher, ScriptedProcessLauncher with its async
-#                          processes), the change coalescer, the reactor, the gitignore matcher and
+#                          processes), the spawn-log decorator and SHA-256 (FND-8), the change
+#                          coalescer, the reactor, the gitignore matcher and
 #                          the tree scan on MemFs, label "unit";
 #   io_integration_tests   the real file system, real watchers and real processes (blocking and
 #                          async), and the gitignore matcher against git, label "integration";
@@ -28,6 +29,7 @@ frost_add_test(io_unit_tests
         replacement_mode_test.cpp
         scripted_async_process_test.cpp
         scripted_process_test.cpp
+        spawn_log_test.cpp
         temp_files_test.cpp
         tree_scan_test.cpp
         utf_test.cpp

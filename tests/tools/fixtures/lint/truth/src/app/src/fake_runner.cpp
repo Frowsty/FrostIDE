@@ -22,3 +22,14 @@ const char* kFakeOutput = "[ RUN      ] Suite.Case\n"
                           "[       OK ] Suite.Case (3 ms)\n";
 const char* kFakeXunit = "[xUnit.net 00:00:00.01]   Suite.Case [PASS]";
 const char* kFakeIl = ".assembly extern System.Runtime {}";
+
+void moreFakes(std::vector<TestResult>& rows, int n) {
+    TestResult paren("a", true, 3);
+    rows.push_back(TestResult("b", false, 1));
+    rows.push_back({.name = "c", .passed = true});
+    rows.emplace_back("d", true, 2);
+    TestResult batch[2] = {};
+    auto state = static_cast<UnitTestRunState>(n);
+    rows.emplace_back();
+}
+const char* kSplit = "[ RUN " "     ] Split.Case";

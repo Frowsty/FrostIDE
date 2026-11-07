@@ -109,6 +109,9 @@ if(NOT WIN32)
         THIRD_PARTY Qt6::Widgets)
     # The crash handler frost starts lives beside the executable (frost/app/diagnostics_qt.hpp).
     frost_deploy_crashpad_handler(frost)
+    if(FROST_ENABLE_SPAWN_LOG)
+        target_compile_definitions(frost PRIVATE $<$<CONFIG:Debug>:FROST_SPAWN_LOG=1>)
+    endif()
     return()
 endif()
 
@@ -134,6 +137,10 @@ set_target_properties(frost_app_shared PROPERTIES OUTPUT_NAME frost_app ARCHIVE_
 target_link_options(frost_app_shared PRIVATE /MANIFEST:NO)
 # CommandLineToArgvW (shell32) and MessageBoxW (user32) in main.cpp.
 target_link_libraries(frost_app_shared PRIVATE shell32 user32)
+# The spawn log in Debug test builds only (FROST_ENABLE_SPAWN_LOG, frost/io/spawn_log.hpp).
+if(FROST_ENABLE_SPAWN_LOG)
+    target_compile_definitions(frost_app_shared PRIVATE $<$<CONFIG:Debug>:FROST_SPAWN_LOG=1>)
+endif()
 
 # frost.exe, the launcher. The version resource carries the project version; the manifest
 # comes from the root CMakeLists.txt, and the application icon comes from resources/icons/frost.

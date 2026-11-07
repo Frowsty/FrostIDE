@@ -21,17 +21,20 @@ using frost::test::kOptimized;
 using frost::test::kSanitized;
 using frost::test::stressFull;
 
-// Polls `predicate` until it is true or `timeout` passes; returns its last value.
+// Polls `predicate` until it is true or `timeout` passes; returns the evaluation that ended the
+// wait (each check of the deadline follows one evaluation, never a second one after it).
 template<class Predicate>
 bool waitFor(Predicate predicate, std::chrono::milliseconds timeout = std::chrono::seconds(20)) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (!predicate()) {
+    for (;;) {
+        if (predicate()) {
+            return true;
+        }
         if (std::chrono::steady_clock::now() >= deadline) {
-            return predicate();
+            return false;
         }
         std::this_thread::yield();
     }
-    return true;
 }
 
 } // namespace frost::sched::test

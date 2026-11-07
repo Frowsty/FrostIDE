@@ -9,7 +9,13 @@
 # bundle the pinned clangd with its resource directory, lldb-dap, LuaLS (ADR 0079), the managed
 # language server and the managed debugger; a missing one fails the stage (FND-13). Next to the
 # folder, <Destination>-symbols.zip holds frost.exe and frost_app.dll with the PDBs whose GUID and
-# age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only.
+# age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only;
+# tools/stage.sh stages a Linux build.
+#
+# Every check that can fail on the inputs (the build tree, the bundled tools, the PDB identities of
+# frost.exe and frost_app.dll) runs before the destination is touched, and a failure after that
+# removes the destination and symbol archive this run created, so a failed stage never leaves a
+# partial folder behind (R0-close item 7).
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage.ps1 -Destination E:\FrostBuilds\preview\x
 #              -QtSourceArchive <pinned-qtbase-source.tar.xz>
@@ -48,8 +54,17 @@ if (-not $BuildDir) { $BuildDir = Join-Path $repoRoot 'build\win-clangcl' }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 $Destination = [System.IO.Path]::GetFullPath($Destination)
 
+# What this run created, removed again by Fail (no partial stage survives a failure).
+$script:created = @()
 function Fail([string]$message) {
     Write-Host "stage: FAIL $message"
+    foreach ($path in $script:created) {
+        if (Test-Path -Path $path) {
+            Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -Path $path) { Write-Host "stage: could not remove the partial $path" }
+            else { Write-Host "stage: removed the partial $path" }
+        }
+    }
     exit 1
 }
 
@@ -135,6 +150,19 @@ if (-not [System.IO.Path]::IsPathRooted($Python) -or -not (Test-Path -LiteralPat
 }
 $symbolArchive = $Destination.TrimEnd('\', '/') + '-symbols.zip'
 
+# The PDB identities, before the destination is touched: the staged frost.exe and frost_app.dll are
+# copies of the build tree's, so a stale or missing PDB fails here (step 7 writes the archive).
+$previous = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $binDir --pdb-dir $binDir `
+    --check --require frost.exe --require frost_app.dll 2>&1
+$code = $LASTEXITCODE
+$ErrorActionPreference = $previous
+if ($code -ne 0) {
+    $out | ForEach-Object { Write-Host "stage: symbols: $_" }
+    Fail "the build tree's frost.exe and frost_app.dll have no matching PDBs ($code)"
+}
+
 # 2. A fresh destination (and symbol archive).
 if (Test-Path -LiteralPath $Destination) {
     $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
@@ -147,7 +175,10 @@ if (Test-Path -LiteralPath $symbolArchive) {
     if (-not $Force) { Fail "$symbolArchive exists (use -Force to replace it)" }
     Remove-Item -LiteralPath $symbolArchive -Force
 }
+# An empty folder that was already there is emptied again on failure rather than removed.
+$destinationExisted = Test-Path -LiteralPath $Destination
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+$script:created = if ($destinationExisted) { @((Join-Path $Destination '*'), $symbolArchive) } else { @($Destination, $symbolArchive) }
 
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {

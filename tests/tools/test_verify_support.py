@@ -401,24 +401,24 @@ class StripPathTest(unittest.TestCase):
 
     def test_table(self):
         value = ":".join([
-            "/home/u/sdk/llvm/bin", "/mnt/c/Windows/system32", "/usr/bin", "", "/mnt/e/sdk/tool",
-            "/mnt/c", "/mnt/wslg/runtime", "/mnt/cd/x", "/mnt/C/Upper", "/mnt/e/sdkx/bin", "/opt/mnt/c/x",
+            "/home/u/sdk/llvm/bin", "/mnt/c/Windows/system32", "/usr/bin", "", "/mnt/q/sdk/tool",
+            "/mnt/c", "/mnt/wslg/runtime", "/mnt/cd/x", "/mnt/C/Upper", "/mnt/q/sdkx/bin", "/opt/mnt/c/x",
             "/mnt/d/",
         ])
-        out, dropped = vs.strip_drvfs(value, ["/mnt/e/sdk/"])
-        self.assertEqual(out.split(":"), ["/home/u/sdk/llvm/bin", "/usr/bin", "", "/mnt/e/sdk/tool",
+        out, dropped = vs.strip_drvfs(value, ["/mnt/q/sdk/"])
+        self.assertEqual(out.split(":"), ["/home/u/sdk/llvm/bin", "/usr/bin", "", "/mnt/q/sdk/tool",
                                           "/mnt/wslg/runtime", "/mnt/cd/x", "/mnt/C/Upper", "/opt/mnt/c/x"])
         self.assertEqual(dropped, 4)
         self.assertEqual(vs.strip_drvfs("", []), ("", 0))
-        self.assertEqual(vs.strip_drvfs("/mnt/e/sdk", ["/mnt/e/sdk"]), ("/mnt/e/sdk", 0))
+        self.assertEqual(vs.strip_drvfs("/mnt/q/sdk", ["/mnt/q/sdk"]), ("/mnt/q/sdk", 0))
 
     def test_properties(self):
         rng = random.Random(4)
-        entries = ["/usr/bin", "/mnt/c/Windows", "/mnt/e/sdk/bin", "/mnt/e/sdk", "/mnt/wslg", "", "/bin",
-                   "/mnt/z", "/mnt/e/dev", "/home/u/sdk/bin"]
+        entries = ["/usr/bin", "/mnt/c/Windows", "/mnt/q/sdk/bin", "/mnt/q/sdk", "/mnt/wslg", "", "/bin",
+                   "/mnt/z", "/mnt/q/dev", "/home/u/sdk/bin"]
         for _ in range(500):
             items = [rng.choice(entries) for _ in range(rng.randint(0, 8))]
-            keep = rng.choice([[], ["/mnt/e/sdk"], ["/home/u/sdk"]])
+            keep = rng.choice([[], ["/mnt/q/sdk"], ["/home/u/sdk"]])
             out, dropped = vs.strip_drvfs(":".join(items), keep)
             # The oracle: every entry in order, except a drive mount entry outside every kept directory.
             expected = [e for e in items if not (re.match(r"^/mnt/[a-z](/|$)", e) and
@@ -428,10 +428,10 @@ class StripPathTest(unittest.TestCase):
             self.assertEqual(vs.strip_drvfs(out, keep), (out, 0))
 
     def test_cli(self):
-        result = run_tool("verify_support.py", "strip-path", "--keep", "/mnt/e/sdk",
-                          "/usr/bin:/mnt/c/Windows:/mnt/e/sdk/x")
+        result = run_tool("verify_support.py", "strip-path", "--keep", "/mnt/q/sdk",
+                          "/usr/bin:/mnt/c/Windows:/mnt/q/sdk/x")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "/usr/bin:/mnt/e/sdk/x\n")
+        self.assertEqual(result.stdout, "/usr/bin:/mnt/q/sdk/x\n")
         self.assertEqual(result.stderr.strip(), "dropped 1")
 
 

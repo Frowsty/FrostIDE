@@ -289,8 +289,33 @@ class StageScriptTest(TempDirTestCase):
         result = self._stage(build, destination)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("FAIL   frost_app.dll:", result.stdout)
-        self.assertIn("the symbol archive failed", result.stdout)
+        # The identities are checked in the build tree before the destination is created (item 7).
+        self.assertIn("have no matching PDBs", result.stdout)
+        self.assertFalse(destination.exists(), "no partial stage is left behind")
         self.assertFalse((self.tmp / "stale-symbols.zip").exists())
+
+    def test_a_late_failure_removes_the_partial_stage(self) -> None:
+        # The libsodium notice is checked after FrostIDE's files are copied (step 5).
+        build = self._fake_build()
+        (self.tmp / "installed/x64-fixture/share/libsodium/copyright").unlink()
+        destination = self.tmp / "late"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("missing upstream libsodium copyright notice", result.stdout)
+        self.assertIn(f"removed the partial {destination}", result.stdout)
+        self.assertFalse(destination.exists(), "no partial stage is left behind")
+        self.assertFalse((self.tmp / "late-symbols.zip").exists())
+
+    def test_a_late_failure_empties_an_existing_empty_destination(self) -> None:
+        build = self._fake_build()
+        (build / "src/app/Debug/tls/qschannelbackendd.dll").unlink()
+        destination = self.tmp / "given"
+        destination.mkdir()
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("the build has no HTTPS backend", result.stdout)
+        self.assertTrue(destination.is_dir(), "a folder the caller made stays")
+        self.assertEqual(list(destination.iterdir()), [], "but holds nothing of the failed stage")
 
     def test_the_staged_folder_holds_frost_qt_and_the_platform_plugin(self) -> None:
         build = self._fake_build()

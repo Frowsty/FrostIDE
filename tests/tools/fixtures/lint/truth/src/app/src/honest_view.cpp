@@ -25,3 +25,15 @@ int countPassed(const std::vector<TestResult>& results, UnitTestRunState state) 
 auto parsedBy(Parser& parser) -> TestResult { return parser.next(); }
 
 const char* kLabel = "Run the tests to see results";
+
+// Declarations, types and copies of existing results are not constructions.
+TestResult parse(std::string_view line);
+TestResult parseNamed(const std::string& name, int code);
+TestResult parsedLine(Parser& parser) { return parser.next(); }
+std::function<TestResult()> makeLater;
+void keep(std::vector<TestResult>& rows, TestResult existing, const Other& other) {
+    rows.push_back(existing);
+    rows.emplace_back(std::move(existing));
+    const auto& view = static_cast<const TestResult&>(other);
+    Config config{.all = {1, 2}};
+}

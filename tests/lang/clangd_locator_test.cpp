@@ -8,6 +8,7 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
 
+#include "support/test_env.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -98,6 +99,31 @@ TEST(FindClangd, DefaultSearchNamesThePinnedVersion) {
         return d.find(std::string("llvm-") + std::string(frost::lang::pinnedLlvmVersion())) != std::string::npos;
     });
     EXPECT_TRUE(namesPinned);
+}
+
+// FND-10: the bundled clangd beside the executable comes first, then FROST_SDK and FROST_LLVM_ROOT
+// when they are set; there is no machine-specific default root (the bootstrap roots) any more.
+TEST(FindClangd, DefaultSearchPutsTheBundledCopyFirstAndGuessesNoSdkRoot) {
+    const ClangdSearch search = frost::lang::defaultClangdSearch();
+    const std::string sdk = frost::test::environment("FROST_SDK");
+    const std::string llvmRoot = frost::test::environment("FROST_LLVM_ROOT");
+    // <exe>/llvm-<pinned>/bin, <exe>/llvm/bin, <exe>/bin, <exe>; then the environment's roots.
+    ASSERT_EQ(search.sdkDirectories.size(), 4U + (sdk.empty() ? 0U : 1U) + (llvmRoot.empty() ? 0U : 1U));
+    const std::string exeDir = search.sdkDirectories[3];
+    EXPECT_TRUE(frost::io::isAbsolutePath(exeDir)) << exeDir;
+    const auto pinnedBin = [](const std::string& root) {
+        return frost::io::joinPath(root, std::string("llvm-") + std::string(frost::lang::pinnedLlvmVersion()))
+            .and_then([](const std::string& llvm) { return frost::io::joinPath(llvm, "bin"); })
+            .value();
+    };
+    EXPECT_EQ(search.sdkDirectories[0], pinnedBin(exeDir));
+    std::size_t next = 4;
+    if (!sdk.empty()) {
+        EXPECT_EQ(search.sdkDirectories[next++], pinnedBin(sdk));
+    }
+    if (!llvmRoot.empty()) {
+        EXPECT_EQ(search.sdkDirectories[next], frost::io::joinPath(llvmRoot, "bin").value());
+    }
 }
 
 TEST(ClangdArguments, CarryThePolicyFlags) {

@@ -12,6 +12,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/project/vcxproj.hpp"
 
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
@@ -43,8 +44,13 @@ TEST(LldbDap, ThePinnedPathFollowsTheSdkLock) {
     EXPECT_EQ(pinnedLldbDapPath(workPath("sdk")).value(), expected);
     const LldbDapSearch search = defaultLldbDapSearch("X");
     EXPECT_EQ(search.configured, "X");
-    if constexpr (kWindows) {
-        EXPECT_NE(std::ranges::find(search.sdkRoots, std::string("E:\\sdk")), search.sdkRoots.end());
+    // FND-10: the bundled copy beside this executable, then FROST_SDK when it is set, and no
+    // machine-specific default root (the old bootstrap-root fallbacks are gone).
+    const std::string sdk = project::processEnvironmentVariable("FROST_SDK").value_or(std::string());
+    ASSERT_EQ(search.sdkRoots.size(), sdk.empty() ? 1U : 2U);
+    EXPECT_TRUE(io::isAbsolutePath(search.sdkRoots.front())) << search.sdkRoots.front();
+    if (!sdk.empty()) {
+        EXPECT_EQ(search.sdkRoots.back(), sdk);
     }
 }
 

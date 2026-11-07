@@ -236,6 +236,11 @@ void Workbench::onLuaDiagnostics(const std::string& file) {
         view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
                                       set ? ui::lang::toEditorDiagnostics(*set) : std::vector<ui::EditorDiagnostic>{});
         refreshMarkers(*view);
+        // What the editor now shows, for the staged-build exit test (tests/tools/test_staged_luals.py,
+        // run with FROST_LOG_LEVEL=debug). Every value is LuaLS's own.
+        if (set)
+            for (const auto& d : set->diagnostics)
+                log::debug("workbench", "Lua diagnostic shown: {}:{} [{}] {}", file, d.line, d.code, d.message);
     }
     refreshLiveProblems();
 }
