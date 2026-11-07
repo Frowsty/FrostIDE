@@ -3,6 +3,48 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-07: Audit, Roadmap v2 (R-ladder) and definition of done v2
+
+- **Audit of ec3d580.** Eleven area analysts each had their claims re-checked in code by a skeptic, and an
+  empirical leg built the tree and ran the tests. Findings:
+  - The foundation is solid.
+  - The 2026-11-04..06 parity layer is thin and partly fabricated: the Unit Tests window invents results, NuGet is
+    a constant list, the IL viewer is a placeholder, the decompiler writes into the workspace, refactorings are
+    text hacks, and Code Vision counts usages by text.
+  - HEAD has 5 deterministic failures: `ctest` gives 3111/3152 passed, 5 failed, 35 skipped and 1 disabled.
+  - The user's logs show 145 UI stalls over 50 ms in 5 days, and LuaLS is not bundled.
+  - Estimated readiness: about 22% of CLion and 13% of Rider.
+- **Roadmap v2.** The user decided the order C++ > Lua > FrostEngine > later tiers and accepted every
+  recommendation (PLAN.md section 9, D30-D41).
+  - ADR 0077: the R-ladder, R0..R19 (PLAN.md section 7, "Roadmap v2"), with 226 epics in PLAN.md Appendix C. About
+    402u reach the C++/Lua/FrostEngine 1.0 and about 508u cover everything.
+  - ADR 0078: definition of done v2 (truth rule, real-tool acceptance, independent review that re-runs the tests,
+    mandatory footer). CLAUDE.md is updated to match.
+  - The feature-first phase (ADR 0031) has ended.
+- **Working files** (outside the repository): `E:\FrostBuilds\orchestration\roadmap-2026-11-07\` holds ROADMAP.md
+  plus the raw audit and roadmap JSON.
+- **Harm register (FND-3; D32).** Each harm is removed or guarded by its owning slice.
+
+  | Harm | Where | Owner | Status |
+  |---|---|---|---|
+  | Unit Tests window invents pass/fail, durations and console output; a test asserts them | `src/app/src/project_properties_dialog.cpp` (executeTestIndices), `tests/app/workbench_test.cpp` | FND-3 | open |
+  | NuGet "manager" is a constant list of 8 packages | `project_properties_dialog.cpp` (kCatalog) | FND-3 | open |
+  | IL viewer placeholder | `project_properties_dialog.cpp` | FND-3 | open |
+  | Decompiler writes synthetic source into the workspace | `src/ui/lang/src/language_controller.cpp` | FND-3 | open |
+  | Text-hack refactorings (Inline, Move, Change Signature, Extract, Optimize Includes/Usings) | `language_controller_refactor.cpp` | FND-3 | open |
+  | Code Vision usages counted by text; fixed "implementations" label | `src/ui/lang/src/editor_insight_binding.cpp` | FND-3 | open |
+  | Silent trust grants on Attach to Process and compound launch | `src/app/src/workbench.cpp` | FND-3 | open |
+  | Services window duplicates the Unit Tests toggle | `workbench.cpp` | FND-3 | open |
+  | Settings toggles shown but never applied | settings pages | FND-3 | open |
+  | FrostEngine request helper kills calls at 15 s; engine errors hidden | `engine_request_helper.cpp`, `engine_automation.cpp` | FND-3 | open |
+  | Updater overwrites the live install without rollback | updater | FND-11 (auto-updates frozen, D38) | guarded by policy |
+
+- **Next.** R0:
+  1. FND-1 (green HEAD) is in progress on `r0/fnd-1-green-head`.
+  2. Then three tracks in parallel: the FND-3 harm wave; FND-5, FND-15 and FND-4; FND-9a, FND-10, FND-13 and LUA-1.
+  3. UX-1 after FND-3, and FND-2 at any time.
+- **Blockers / questions.** None open; all D30-D41 decisions were answered on 2026-11-07.
+
 ## 2026-11-04: Rider 1:1 parity vertical slice (Editor selection/occurrences/column mode/zoom/guides, Explorer Rename & Delete, and Navigation/Search Everywhere/Bookmarks/TODO)
 
 - Completed a three-track Rider 1:1 parity vertical slice across Editor (`EDIT-01`, `EDIT-02`, rows 38, 39,
