@@ -9,5 +9,5 @@ namespace UnityEditor.Compilation {
     [System.Flags] public enum AssemblyFlags { EditorAssembly = 1 }
     public class ScriptCompilerOptions { public string[] ResponseFiles, AdditionalCompilerArguments; public bool AllowUnsafeCode; public string LanguageVersion; public ApiCompatibilityLevel ApiCompatibilityLevel; public EditorAssembliesCompatibilityLevel EditorAssembliesCompatibilityLevel; }
     public class Assembly { public string name; public string[] sourceFiles, compiledAssemblyReferences, defines; public Assembly[] assemblyReferences; public AssemblyFlags flags; public ScriptCompilerOptions compilerOptions; }
-    public static class CompilationPipeline { public static Assembly[] GetAssemblies(AssembliesType type) => System.Array.Empty<Assembly>(); }
+    public static class CompilationPipeline { public static Assembly[] Assemblies = System.Array.Empty<Assembly>(); public static Assembly[] GetAssemblies(AssembliesType type) => Assemblies; }
 }

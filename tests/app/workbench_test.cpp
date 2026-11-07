@@ -15,6 +15,7 @@
 #include "frost/core/build_info.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/async_process.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
@@ -39,6 +40,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -48,6 +50,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTimer>
@@ -133,7 +136,10 @@ TEST(Workbench, ExplicitEditorSaveReportsCommittedWarning) {
 
 TEST(Workbench, TopLevelMenusReceiveClicksWithoutOpeningAnotherMenu) {
     WorkDir dir("menu-hit-testing");
+    // The FrostEngine tool window is registered only for FrostEngine projects.
+    dir.write("Game.frostproj", "{}");
     WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
     rig.show();
     auto* bar = rig.window->menuBar();
     const auto checkMenus = [&] {
@@ -842,6 +848,11 @@ TEST(Workbench, SettingsDialogAppliesResetsAndDetectsExternalChanges) {
     search->setText(QStringLiteral("no matching setting exists"));
     auto* empty = dialog->findChild<QLabel*>(QStringLiteral("settingsNoResults"));
     ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->isVisible());
+    // No indentation detector exists, so its toggle is not offered (neither as a control nor in search).
+    EXPECT_NE(dialog->findChild<QWidget*>(QStringLiteral("setting.editor.insertSpaces")), nullptr);
+    EXPECT_EQ(dialog->findChild<QWidget*>(QStringLiteral("setting.editor.detectIndentation")), nullptr);
+    search->setText(QStringLiteral("Detect and use existing file indents"));
     EXPECT_TRUE(empty->isVisible());
     search->setText(QStringLiteral("tab size"));
     EXPECT_TRUE(tabSize->isVisible());
@@ -2048,7 +2059,8 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
         if (m.severity == frost::ui::MarkerSeverity::RunTest)
             ++runTestMarkerCount;
     }
-    EXPECT_EQ(runTestMarkerCount, 3); // TEST, TEST_F, and main()
+    // Only main() gets a run marker: per-test gutter markers stay hidden until RUN-10 runs one test.
+    EXPECT_EQ(runTestMarkerCount, 1);
 
     rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
     QWidget* unitTestsWidget = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
@@ -2495,6 +2507,294 @@ TEST(Workbench, OpeningUntrustedProjectOrFolderPromptsForTrustImmediately) {
     slnDialog->trustButton()->click();
     EXPECT_TRUE(rig.trust->isTrusted(dir.path()));
     EXPECT_TRUE(rig.window->projectTrusted());
+}
+
+// --- Settings that are shown are applied: save actions, confirm exit, reopen last project ---
+
+TEST(Workbench, SaveActionsFollowTheSettingsAndEditorConfigAndSpareTheCaretLine) {
+    WorkDir dir("save-actions");
+    dir.write("proj/code.txt", "first  \nsecond  \nthird\t");
+    dir.write("proj/notes.md", "keep  \nme  ");
+    dir.write("proj/.editorconfig",
+              "root = true\n[*.md]\ntrim_trailing_whitespace = false\ninsert_final_newline = true\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application,
+                                  frost::settings::key::editorTrimTrailingWhitespace, std::string("all")));
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::editorInsertFinalNewline, true));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj/code.txt")));
+    ASSERT_NE(rig.view(), nullptr);
+    ASSERT_TRUE(rig.view()->editor().typeText("#")); // The caret stays on line 1.
+    ASSERT_TRUE(rig.workbench->save(*rig.view()));
+    // Line 1 keeps its whitespace (the caret is there); the others are trimmed; a final newline is added.
+    EXPECT_EQ(dir.read("proj/code.txt"), "#first  \nsecond\nthird\n");
+    EXPECT_EQ(rig.view()->document().document().committedText().text(), "#first  \nsecond\nthird\n");
+    EXPECT_FALSE(rig.view()->document().dirty());
+
+    // .editorconfig turns trimming off for *.md and keeps the final newline.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj/notes.md")));
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("!"));
+    ASSERT_TRUE(rig.workbench->save(*rig.workbench->currentView()));
+    EXPECT_EQ(dir.read("proj/notes.md"), "!keep  \nme  \n");
+
+    // "none" and no final newline: the save writes the text as it is.
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application,
+                                  frost::settings::key::editorTrimTrailingWhitespace, std::string("none")));
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::editorInsertFinalNewline, false));
+    dir.write("proj/plain.txt", "a  \nb  ");
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj/plain.txt")));
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("x"));
+    ASSERT_TRUE(rig.workbench->save(*rig.workbench->currentView()));
+    EXPECT_EQ(dir.read("proj/plain.txt"), "xa  \nb  ");
+}
+
+TEST(Workbench, SaveActionsReachTheFileWhenAutosavesRanFirstWithTheDefaultSettings) {
+    WorkDir dir("save-actions-autosave");
+    dir.write("proj/code.txt", "keep  \nb\nc\n");
+    // Keeps the checkout's own .editorconfig (trim_trailing_whitespace = true) out of the test.
+    dir.write("proj/.editorconfig", "root = true\n");
+    RigOptions options;
+    options.autosave = true; // As the defaults: autosave on idle and on frame deactivation.
+    WorkbenchRig rig(dir, std::move(options));
+    // The default save action: trim the modified lines, except a caret line.
+    ASSERT_EQ(rig.settings->snapshot()->get(frost::settings::key::editorTrimTrailingWhitespace), "modified");
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::saveAutosaveIdleSeconds,
+                                  std::int64_t{1}));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj/code.txt")));
+    DocumentEditorView* view = rig.view();
+    ASSERT_NE(view, nullptr);
+    QWidget* editor = view->widget();
+    editor->setFocus();
+    QApplication::processEvents();
+    const auto typeSpaces = [&] {
+        sendKey(editor, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+        sendKey(editor, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+    };
+    view->editor().goToLine(3, 2);
+    typeSpaces(); // "c  "
+    view->editor().goToLine(2, 2);
+    typeSpaces(); // "b  ", where the caret stays
+    EXPECT_EQ(view->document().document().committedText().text(), "keep  \nb  \nc  \n");
+    // The idle autosave applies the save actions and spares the caret line.
+    EXPECT_TRUE(waitFor([&] { return dir.read("proj/code.txt") == "keep  \nb  \nc\n"; }, std::chrono::seconds(10)))
+        << dir.read("proj/code.txt");
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+    // The caret moves away and Ctrl+S (Save All) of the now clean document trims the line the
+    // autosave spared; the unedited "keep  " stays.
+    view->editor().goToLine(1, 1);
+    sendKey(editor, Qt::Key_S, Qt::ControlModifier);
+    EXPECT_EQ(dir.read("proj/code.txt"), "keep  \nb\nc\n");
+    EXPECT_EQ(view->document().document().committedText().text(), "keep  \nb\nc\n");
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+
+    // Frame deactivation (Alt+Tab) applies them as well.
+    view->editor().goToLine(3, 2);
+    typeSpaces(); // "c  "
+    view->editor().goToLine(1, 1);
+    rig.workbench->frameDeactivated();
+    EXPECT_EQ(dir.read("proj/code.txt"), "keep  \nb\nc\n");
+    EXPECT_EQ(view->document().document().committedText().text(), "keep  \nb\nc\n");
+    EXPECT_FALSE(rig.window->tabs().isDirty(0));
+}
+
+TEST(Workbench, ConfirmExitAsksBeforeTheIdeWindowClosesOnlyWhenEnabled) {
+    WorkDir dir("confirm-exit");
+    WorkbenchRig rig(dir);
+    rig.show();
+    // Off by default: closing does not ask.
+    ASSERT_FALSE(rig.settings->snapshot()->get(frost::settings::key::generalConfirmExit));
+    rig.window->close();
+    EXPECT_EQ(rig.prompts.exitPrompts, 0);
+    EXPECT_FALSE(rig.window->isVisible());
+    rig.show();
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::generalConfirmExit, true));
+    rig.prompts.exitAnswer = false;
+    EXPECT_FALSE(rig.window->close()); // Cancel keeps the IDE open.
+    EXPECT_EQ(rig.prompts.exitPrompts, 1);
+    EXPECT_TRUE(rig.window->isVisible());
+    rig.prompts.exitAnswer = true;
+    EXPECT_TRUE(rig.window->close());
+    EXPECT_EQ(rig.prompts.exitPrompts, 2);
+    EXPECT_FALSE(rig.window->isVisible());
+}
+
+TEST(Workbench, ReopenLastProjectOffStartsInTheLauncher) {
+    WorkDir dir("reopen-off");
+    dir.write("proj/main.cpp", "int main() { return 0; }\n");
+    {
+        WorkbenchRig first(dir);
+        ASSERT_TRUE(first.workbench->openPath(dir.join("proj")));
+    }
+    {
+        WorkbenchRig second(dir);
+        ASSERT_TRUE(second.settings->snapshot()->get(frost::settings::key::generalReopenLastProject));
+        EXPECT_TRUE(second.workbench->showStartupWindow()); // On: startup reopens it in the IDE window.
+        EXPECT_EQ(second.workbench->projectRoot(), dir.join("proj"));
+        EXPECT_TRUE(second.window->isVisible());
+        ASSERT_NE(second.workbench->launcherWindow(), nullptr);
+        EXPECT_FALSE(second.workbench->launcherWindow()->isVisible());
+    }
+    WorkbenchRig third(dir);
+    ASSERT_TRUE(third.settings->set(frost::settings::Scope::Application, frost::settings::key::generalReopenLastProject,
+                                    false));
+    EXPECT_FALSE(third.workbench->showStartupWindow());
+    EXPECT_FALSE(third.workbench->hasProject());
+    ASSERT_NE(third.workbench->launcherWindow(), nullptr);
+    EXPECT_TRUE(third.workbench->launcherWindow()->isVisible());
+    EXPECT_FALSE(third.window->isVisible());
+}
+
+// --- Attach to Process and compound runs never start anything silently ---
+
+TEST(Workbench, AttachToProcessPromptsForTrustInsteadOfGrantingIt) {
+    WorkDir dir("attach-trust");
+    WorkbenchRig rig(dir);
+    rig.show();
+    const auto pickProcess = [&](std::uint32_t pid) {
+        QTimer::singleShot(0, rig.window.get(), [&, pid] {
+            auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("attachToProcessDialog"));
+            ASSERT_NE(dialog, nullptr);
+            auto* table = dialog->findChild<QTableWidget*>(QStringLiteral("attachProcessTable"));
+            ASSERT_NE(table, nullptr);
+            dialog->findChild<QLineEdit*>(QStringLiteral("attachProcessFilterEdit"))->setText(QString::number(pid));
+            for (int row = 0; row < table->rowCount(); ++row)
+                if (table->item(row, 0)->text() == QString::number(pid))
+                    table->setCurrentCell(row, 0);
+            dialog->accept();
+        });
+        auto id = rig.workbench->registry().find("debug.attachToProcess");
+        ASSERT_TRUE(id);
+        ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, frost::input::ActionContext{}),
+                  frost::input::InvokeResult::Ran);
+    };
+    // A process whose image path the OS does not report (System, another user's) is refused, not guessed.
+    const auto processes = frost::app::enumerateRunningProcesses();
+    const auto pathless = std::ranges::find_if(processes, [](const auto& p) { return p.executablePath.empty(); });
+    if (pathless != processes.end()) {
+        pickProcess(pathless->pid);
+        const auto& log = rig.window->notifications().log();
+        ASSERT_FALSE(log.empty());
+        EXPECT_TRUE(log.back().notification.text.contains(QStringLiteral("executable path is unavailable")))
+            << log.back().notification.text.toStdString();
+        EXPECT_EQ(rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog")), nullptr);
+    }
+    // A child in an untrusted system folder (the list leaves out this test process itself): the
+    // normal trust prompt opens and nothing is trusted or attached. Killed when `child` goes.
+    frost::io::ProcessSpec spec;
+#ifdef _WIN32
+    spec.executable =
+        QDir(qEnvironmentVariable("SystemRoot")).filePath(QStringLiteral("System32/PING.EXE")).toStdString();
+    spec.arguments = {"-n", "60", "127.0.0.1"};
+#else
+    spec.executable = "/bin/sleep";
+    spec.arguments = {"60"};
+#endif
+    spec.executable = QDir::toNativeSeparators(QString::fromStdString(spec.executable)).toStdString();
+    spec.stdoutMode = frost::io::Stdio::Null;
+    spec.stderrMode = frost::io::Stdio::Null;
+    auto child = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_TRUE(child) << child.error().describe();
+    const auto killChild = qScopeGuard([&] { static_cast<void>((*child)->terminate()); });
+    const std::string exeFolder = std::string(frost::io::parentPath(spec.executable));
+    ASSERT_FALSE(rig.trust->isTrusted(exeFolder));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return std::ranges::any_of(frost::app::enumerateRunningProcesses(),
+                                       [&](const auto& p) { return p.pid == (*child)->pid(); });
+        },
+        std::chrono::seconds(5)));
+    pickProcess(static_cast<std::uint32_t>((*child)->pid()));
+    auto* trust = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
+    ASSERT_NE(trust, nullptr) << (rig.window->notifications().log().empty()
+                                      ? std::string("no notification")
+                                      : rig.window->notifications().log().back().notification.text.toStdString());
+    EXPECT_TRUE(trust->isVisible());
+    EXPECT_FALSE(rig.trust->isTrusted(exeFolder));
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
+    trust->reject();
+    QApplication::processEvents();
+    EXPECT_FALSE(rig.trust->isTrusted(exeFolder));
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
+}
+
+TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
+    WorkDir dir("compound-run", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto id = rig.workbench->registry().find("run.runCompound");
+    ASSERT_TRUE(id);
+    frost::input::ActionContext context;
+    context.trusted = true;
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Disabled);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+// The Edit Run Configurations dialog's compound section reaches the same refusal: the RUN-5 notice
+// and no launch.
+TEST(Workbench, CompoundRunFromTheRunConfigurationsDialogShowsTheRunFiveNoticeAndStartsNothing) {
+    WorkDir dir("compound-run-dialog", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto id = rig.workbench->registry().find("run.editConfigurations");
+    ASSERT_TRUE(id);
+    int checked = 0;
+    bool clicked = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("compoundProjectsList"));
+        auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
+        if (list != nullptr && launch != nullptr) {
+            for (int row = 0; row < list->count(); ++row) {
+                list->item(row)->setCheckState(Qt::Checked);
+                ++checked;
+            }
+            launch->click();
+            clicked = true;
+        }
+        // Whatever happened, no dialog stays open.
+        for (QDialog* dialog : rig.window->findChildren<QDialog*>())
+            if (dialog->isVisible())
+                dialog->reject();
+    });
+    frost::input::ActionContext context;
+    context.trusted = true;
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(clicked);
+    EXPECT_EQ(checked, 2); // App and Lib.
+    bool notice = false;
+    for (const auto& entry : rig.window->notifications().log())
+        notice = notice || (entry.notification.title.contains(QStringLiteral("Compound Run unavailable")) &&
+                            entry.notification.text.contains(QStringLiteral("RUN-5")));
+    EXPECT_TRUE(notice);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+// The "Debug Selected Test" and window.services shortcuts are gone: neither did what it said.
+TEST(Workbench, NoActionPretendsToDebugOneTestOrOpenAServicesWindow) {
+    WorkDir dir("removed-actions");
+    WorkbenchRig rig(dir);
+    EXPECT_FALSE(rig.workbench->registry().find("window.services").has_value());
+    EXPECT_TRUE(rig.workbench->registry().find("window.unitTests").has_value());
+    // The IntelliJ keymap still names window.services for Alt+8; with no such action that binding
+    // resolves to nothing, and Alt+8 still toggles the Unit Tests window (module default).
+    rig.show();
+    rig.window->refreshActions();
+    ASSERT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
+    sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
+    EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
+    sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
+    EXPECT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
 }
 
 } // namespace

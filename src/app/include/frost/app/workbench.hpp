@@ -161,6 +161,7 @@ class ProjectEditProcess;
 class EngineIntegration;
 class UnityControlIntegration;
 class GitIntegration;
+struct GitClone;
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -259,6 +260,11 @@ public:
     [[nodiscard]] virtual bool confirmRerun(QWidget* parent, const QString& project) = 0;
     // Restore the recorded pre-edit definitions after an interrupted owned project edit.
     [[nodiscard]] virtual bool confirmProjectRecovery(QWidget* parent, const QString& project) = 0;
+    // The IDE window is closing and general.confirmExit is on: true exits.
+    [[nodiscard]] virtual bool confirmExit(QWidget* parent) {
+        (void)parent;
+        return true;
+    }
 
 protected:
     IWorkbenchPrompts() = default;
@@ -280,6 +286,7 @@ public:
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
     [[nodiscard]] bool confirmRerun(QWidget* parent, const QString& project) override;
     [[nodiscard]] bool confirmProjectRecovery(QWidget* parent, const QString& project) override;
+    [[nodiscard]] bool confirmExit(QWidget* parent) override;
 };
 
 // What the workbench borrows; everything outlives it.
@@ -433,6 +440,23 @@ public:
                                                              std::string_view relativeName);
     // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt.
     [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
+    /*
+     * Get from Version Control: clones `url` (a URL or a local path) into `directory` (absolute)
+     * with the git that tools.git.path, Git for Windows' install folder or PATH resolves to
+     * (vcs::findGit; started through IProcessLauncher, never by bare name), then opens it. Returns
+     * once the clone has started: git runs on a worker thread, its --progress lines update a
+     * progress dialog with Cancel, and the GUI thread never waits for it (FND-9a). The outcome
+     * arrives as a notification with git's own last output lines, or as the opened project.
+     * Userinfo in the URL (https://user:token@host/...) is shown as "***@" in every label and
+     * notification, including git's quoted lines; git itself gets the URL unchanged.
+     * Errors: Busy (a clone is running), InvalidArgument (empty or option-like `url`, relative
+     * `directory`), Cancelled (shutting down). GUI thread only.
+     */
+    [[nodiscard]] Result<void> cloneRepository(const std::string& url, const std::string& directory);
+    // Whether a clone started by cloneRepository() is still running.
+    [[nodiscard]] bool cloneRunning() const noexcept;
+    // Ends the running clone's git process tree (Cancel); the dialog closes when it has stopped.
+    void cancelClone();
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
     // Canonical directory of the current project, empty when none is open.
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
@@ -501,6 +525,9 @@ public:
     [[nodiscard]] WelcomeScreen* welcomeScreen() const noexcept { return m_welcome.data(); }
     [[nodiscard]] LauncherWindow* launcherWindow() const noexcept { return m_launcherWindow.data(); }
     void showLauncherWindow();
+    // Startup without project or file arguments: reopens the last project in the IDE window when
+    // general.reopenLastProject is on and there is one (true), else shows the launcher (false).
+    bool showStartupWindow();
     [[nodiscard]] ui::ShellWindow* window() const noexcept { return m_window.data(); }
     // The view of the active tab, or nullptr.
     [[nodiscard]] DocumentEditorView* currentView() const;
@@ -617,6 +644,10 @@ private:
     void notify(const QString& title, const QString& text, ui::NotificationKind kind);
     // Saves without notifying (the close path shows the error in its prompt).
     [[nodiscard]] Result<void> saveQuietly(document::FileDocument& document);
+    // The pre-save transform for `document`: editor.trimTrailingWhitespace and
+    // editor.insertFinalNewline resolved for its file (settings plus .editorconfig), keeping the
+    // line each of its views' primary caret is on.
+    [[nodiscard]] document::SaveTransform saveTransformFor(const document::FileDocument& document) const;
 
     WorkbenchServices m_services;
     WorkbenchOptions m_options;
@@ -686,6 +717,9 @@ private:
     QPointer<ui::TrustDialog> m_managedTrustDialog;
     std::string m_unityRevisionRoot;
     std::string m_unityRevision;
+    // "<root>\n<revision>" of the Unity generation whose unmodelled compiler options were last
+    // notified; a restart for the same generation (settings, trust) does not notify again.
+    std::string m_unityNotifiedGeneration;
     std::string m_managedDotnetPath;
     std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;
@@ -730,7 +764,10 @@ private:
     bool m_launcherModeEnabled = false;
     project::CppHierarchyMode m_cppHierarchyMode = project::CppHierarchyMode::FiltersAndFolders;
     std::vector<std::string> m_unloadedProjectPaths;
-    std::vector<project::ProjectId> m_pendingCompoundTargets;
+    std::unique_ptr<GitClone> m_clone; // The running cloneRepository(), if any.
+    bool m_exitConfirmed = false;      // The IDE closes its own window (restart): no general.confirmExit prompt.
+    void cloneProgress(const std::string& line);
+    void finishClone(bool ok, const std::string& message);
     std::vector<std::string> m_clipboardPaths;
     bool m_clipboardIsCut = false;
     void transitionLauncherToMainWindow();

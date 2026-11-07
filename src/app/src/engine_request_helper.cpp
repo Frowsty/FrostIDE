@@ -155,8 +155,12 @@ Result<lang::Json> executeEngineHelper(const lang::Json& input, const lang::Engi
         auto fresh = project::TrustStore::open(io::realFileSystem(), trustPath);
         return fresh && (*fresh)->isTrusted(root);
     };
-    auto result = lang::runEngineCommand(*record, root, method, *params, sameProject, stillTrusted, connect,
-                                         std::chrono::steady_clock::now() + std::chrono::seconds(15));
+    // Per-method deadline (engineMethodTimeout): test.run has none and ends only when the parent
+    // cancels this helper (which destroys its process); play.* and log.get get a short one.
+    const auto timeout = lang::engineMethodTimeout(method);
+    const auto deadline =
+        timeout ? std::chrono::steady_clock::now() + *timeout : std::chrono::steady_clock::time_point::max();
+    auto result = lang::runEngineCommand(*record, root, method, *params, sameProject, stillTrusted, connect, deadline);
     if (!result)
         return std::unexpected(std::move(result.error()));
     auto locations = lang::Json::object();

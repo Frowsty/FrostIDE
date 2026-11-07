@@ -718,10 +718,10 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QObject::connect(&workbench, &frost::app::Workbench::projectChanged, &broker,
                          [&broker](const QString&) { broker.projectChanged(); });
         workbench.markInteractiveStartupComplete();
-        const bool startInLauncher = parsed->project.empty() && projects.empty() && files.empty();
-        if (startInLauncher) {
-            workbench.showLauncherWindow();
-        } else {
+        // Without arguments: the last project (general.reopenLastProject) or the launcher.
+        const bool startInLauncher =
+            parsed->project.empty() && projects.empty() && files.empty() && !workbench.showStartupWindow();
+        if (!startInLauncher && !window.isVisible()) {
             window.show();
         }
         QWidget& initialWindow = (startInLauncher && workbench.launcherWindow() != nullptr)

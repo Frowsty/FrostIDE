@@ -210,6 +210,7 @@ ExternalChange SaveManager::reloadClean(FileDocument& document, LoadedDocument t
     document.m_readOnly = theirs.readOnly;
     document.m_disk = theirs.disk;
     document.m_baseText = document.m_document.committedText();
+    document.m_transformBase.reset(); // The disk text is the new starting point.
     document.m_savedStateId = document.m_document.undoState().stateId;
     document.m_formatDirty = false;
     document.m_diskState = DiskState::InSync;
@@ -245,6 +246,7 @@ ExternalChange SaveManager::prepareMerge(FileDocument& document, Theirs theirs) 
 
 void SaveManager::adoptTheirs(FileDocument& document, PendingMerge& merge) {
     document.m_baseText = merge.theirs;
+    document.m_transformBase.reset(); // The user's own edits now differ from theirs.
     document.m_disk = merge.theirsDisk;
     document.m_diskState = DiskState::InSync;
     document.m_outOfDate.reset();
