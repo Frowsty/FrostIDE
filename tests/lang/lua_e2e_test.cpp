@@ -35,10 +35,16 @@ namespace {
 using namespace std::chrono_literals;
 template<class Predicate>
 bool waitFor(Predicate ready) {
-    auto until = std::chrono::steady_clock::now() + 20s;
-    while (!ready() && std::chrono::steady_clock::now() < until)
+    const auto until = std::chrono::steady_clock::now() + 20s;
+    // Returns the evaluation that ended the wait (as tests/app/workbench_rig.hpp does): evaluating
+    // again after the loop could see a state changed in between (R0 follow-up 16).
+    for (;;) {
+        if (ready())
+            return true;
+        if (std::chrono::steady_clock::now() >= until)
+            return false;
         std::this_thread::sleep_for(20ms);
-    return ready();
+    }
 }
 // The deadline owns its cancellation state until the request completes; its timer keeps shared
 // state after disarm, so a late timer cannot access this coroutine's stack.

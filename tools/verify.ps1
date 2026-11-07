@@ -270,6 +270,8 @@ try {
             $summary.Add('win corpus not-run (debug build failed)'); $failed = $true
         } else {
             Write-Host '=== corpus test'
+            # The corpus tests read the corpora root from here, so they name no machine path (FND-10).
+            $env:FROST_CORPORA_ROOT = (& $python -I (Join-Path $PSScriptRoot 'corpora.py') --repo $repo root | Select-Object -Last 1)
             $out = Invoke-Native { ctest --test-dir $script:debugDir -C Debug --output-on-failure --interactive-debug-mode 0 -L '^corpus$' --timeout 3600 }
             $ok = ($LASTEXITCODE -eq 0)
             $counts = Get-CtestCounts $out

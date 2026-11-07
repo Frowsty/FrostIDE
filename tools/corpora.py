@@ -8,6 +8,7 @@
 #   python tools/corpora.py ... fetch [--only <id>] [--fallback-source <path>] [--replace] [--keep-old]
 #   python tools/corpora.py ... verify [--only <id>]
 #   python tools/corpora.py ... path <id>
+#   python tools/corpora.py ... root
 #   python tools/corpora.py ... pin [--only <id>] [--sha <sha>]
 #
 # Each corpus is a full `git clone --no-hardlinks` of its 'url', checked out detached at its pinned
@@ -28,6 +29,8 @@
 #           download caches) are allowed: the corpus tests configure and index the corpus in place.
 #           A missing corpus is a failure, never a skip (the -Corpus tier relies on this).
 #   path    prints the directory of corpus <id>.
+#   root    prints the corpora root. The verify scripts' corpus tier exports it as FROST_CORPORA_ROOT,
+#           so the corpus tests (tests/app/corpus_test.cpp) name no developer machine path (FND-10).
 #   pin     re-pins 'sha' (and 'pinned', today's date) to the tip of 'branch' (git ls-remote), or to
 #           --sha, and rewrites the lock file.
 #
@@ -259,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--only", action="append", metavar="ID", help="only this corpus (repeatable)")
     path_parser = commands.add_parser("path", help="print the directory of a corpus")
     path_parser.add_argument("id")
+    commands.add_parser("root", help="print the corpora root (the verify scripts export it as "
+                                     "FROST_CORPORA_ROOT for the corpus tests)")
     pin_parser = commands.add_parser("pin", help="re-pin to the branch tip (or --sha)")
     pin_parser.add_argument("--only", action="append", metavar="ID", help="only this corpus (repeatable)")
     pin_parser.add_argument("--sha", default=None, help="pin this commit instead of the branch tip")
@@ -273,6 +278,9 @@ def main(argv: list[str] | None = None) -> int:
     corpora = document["corpora"]
     by_id = {entry["id"]: entry for entry in corpora}
     root = (args.root or default_root()).absolute()
+    if args.command == "root":
+        print(root)
+        return 0
     wanted = getattr(args, "only", None) or list(by_id)
     if args.command == "path":
         wanted = [args.id]

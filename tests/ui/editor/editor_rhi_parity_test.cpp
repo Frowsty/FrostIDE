@@ -81,14 +81,19 @@ EditorDiagnostic problem(InsightSeverity severity, text::ByteRange range, std::s
     return diagnostic;
 }
 
-// Delivers events until `done` holds or `ms` pass; returns `done()`.
+// Delivers events until `done` holds or `ms` pass; true when `done` was reached.
 bool pumpUntil(const std::function<bool()>& done, int ms = 5000) {
     QElapsedTimer timer;
     timer.start();
-    while (!done() && timer.elapsed() < ms) {
+    // Returns the evaluation that ended the wait (as tests/app/workbench_rig.hpp does): evaluating
+    // again after the loop could see a state changed in between (R0 follow-up 16).
+    for (;;) {
+        if (done())
+            return true;
+        if (timer.elapsed() >= ms)
+            return false;
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
-    return done();
 }
 
 /*

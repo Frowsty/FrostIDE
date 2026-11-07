@@ -115,6 +115,18 @@ class CorporaToolTest(TempDirTestCase):
         path = self._run(lock, "path", "engine")
         self.assertEqual(Path(path.stdout.strip()), clone)
 
+    def test_root_prints_the_root_the_corpus_tests_read(self) -> None:
+        # --root wins; without it $FROST_CORPORA_ROOT. The verify scripts export what `root` prints.
+        lock = self._lock(self.first)
+        given = self._run(lock, "root")
+        self.assertEqual(given.returncode, 0, given.stdout + given.stderr)
+        self.assertEqual(Path(given.stdout.strip()), self.root.absolute())
+        elsewhere = self.tmp / "elsewhere"
+        from_env = run_tool("corpora.py", "--lock", str(lock), "root",
+                            env=clean_env(FROST_CORPORA_ROOT=str(elsewhere)))
+        self.assertEqual(from_env.returncode, 0, from_env.stdout + from_env.stderr)
+        self.assertEqual(Path(from_env.stdout.strip()), elsewhere.absolute())
+
     def test_a_missing_corpus_fails_verify(self) -> None:
         result = self._run(self._lock(self.first), "verify")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -238,6 +250,9 @@ class VerifyCorpusTierTest(unittest.TestCase):
         self.assertIn("corpora.py", text)
         self.assertIn("-L '^corpus$'", text)
         self.assertRegex(text, r"corpus[^\n]*no-tests")
+        # The corpus tests get the root from corpora.py, not from a path of their own (FND-10).
+        self.assertIn("$env:FROST_CORPORA_ROOT = (& $python -I (Join-Path $PSScriptRoot 'corpora.py') "
+                      "--repo $repo root", text)
 
     def test_verify_sh_has_a_corpus_tier_that_quick_excludes(self) -> None:
         text = (TOOLS / "verify.sh").read_text(encoding="utf-8")
@@ -245,6 +260,8 @@ class VerifyCorpusTierTest(unittest.TestCase):
         self.assertIn("-LE '^(stress|corpus)$'", text)
         self.assertIn("-L '^corpus$'", text)
         self.assertIn("corpora.py", text)
+        self.assertIn('FROST_CORPORA_ROOT="$(python3 -I tools/corpora.py --repo "$MIRROR" root)"', text)
+        self.assertIn("export FROST_CORPORA_ROOT", text)
 
     def test_corpus_tests_carry_the_corpus_label(self) -> None:
         text = (REPO / "tests" / "app" / "CMakeLists.txt").read_text(encoding="utf-8")

@@ -23,11 +23,16 @@ namespace {
 bool waitForResult(const std::function<bool()>& ready) {
     QElapsedTimer timer;
     timer.start();
-    while (!ready() && timer.elapsed() < 10000) {
+    // Returns the evaluation that ended the wait (as tests/app/workbench_rig.hpp does): evaluating
+    // again after the loop could see a state changed in between (R0 follow-up 16).
+    for (;;) {
+        if (ready())
+            return true;
+        if (timer.elapsed() >= 10000)
+            return false;
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         QThread::msleep(1);
     }
-    return ready();
 }
 
 rpc::Json manifest(std::string_view source) {

@@ -51,15 +51,16 @@ using frost::app::test::WorkDir;
 // The longest GUI stall the R0 exit allows (PLAN.md section 7, R0; FND-2's interim policy).
 constexpr auto kStallLimit = 250ms;
 
-// <root>/frostengine-<sha12>: root is $FROST_CORPORA_ROOT, else tools/corpora.py's default.
+/*
+ * <root>/frostengine-<sha12>, where root is $FROST_CORPORA_ROOT. The corpus tier of the verify
+ * scripts sets it from `tools/corpora.py root`, the one place that knows the default root, so this
+ * test names no developer machine path (FND-10). Empty when the variable is unset; the test then
+ * fails and says how to run it.
+ */
 std::string corpusDirectory() {
-    std::string root = qEnvironmentVariable("FROST_CORPORA_ROOT").toStdString();
-    if (root.empty()) {
-        if constexpr (frost::io::kNativePathStyle == frost::io::PathStyle::Windows)
-            root = "E:/FrostBuilds/corpora";
-        else
-            root = qEnvironmentVariable("HOME").toStdString() + "/FrostBuilds/corpora";
-    }
+    const std::string root = qEnvironmentVariable("FROST_CORPORA_ROOT").toStdString();
+    if (root.empty())
+        return {};
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
     return frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
 }
@@ -128,6 +129,8 @@ std::string ms(frost::IClock::Duration duration) {
 TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneClangdAndNegotiatesPositionEncoding) {
     frost::test::disableCrashDialogs(); // clangd and the compilers inherit the error mode.
     const std::string corpus = corpusDirectory();
+    ASSERT_FALSE(corpus.empty()) << "FROST_CORPORA_ROOT is not set; run the corpus tier through tools\verify.ps1 "
+                                    "-Corpus or tools/verify.sh --corpus, which set it from tools/corpora.py root";
     auto& fs = frost::io::realFileSystem();
     ASSERT_TRUE(fs.exists(corpus + "/CMakePresets.json").value_or(false))
         << "the pinned FrostEngine corpus is missing at " << corpus

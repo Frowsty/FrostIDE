@@ -3,6 +3,121 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-07: R0-close (R0 exit acceptance and the 16 R0 follow-ups)
+
+- **Merged into `r0/close`** with `--no-ff`, in this order, each implemented in its own worktree and approved by
+  an independent reviewer with no blockers: `r0c/project`, `r0c/language`, `r0c/tooling` (its last fix,
+  `stage.ps1` cleanup after unexpected errors, was committed from the reviewer-verified tree 7511b1c), and
+  `r0c/acceptance`. No textual conflicts.
+- **Integration fixes** (cross-slice):
+  - The tooling slice's FND-10 dev-path lint rejected the acceptance slice's corpus test, which fell back to
+    `E:/FrostBuilds/corpora`. `tools/corpora.py root` now prints the corpora root (`--root`, then
+    `$FROST_CORPORA_ROOT`, then the default), the corpus tier of `verify.ps1 -Corpus` and `verify.sh --corpus`
+    exports it as `FROST_CORPORA_ROOT`, and the corpus test fails with that instruction when it is unset. Tests:
+    `test_corpora` `test_root_prints_the_root_the_corpus_tests_read` and the two `VerifyCorpusTierTest` checks.
+  - Follow-up 16 (unowned): the five file-local wait helpers (`managed_debug_preparation_test.cpp`,
+    `lua_e2e_test.cpp`, `editor_rhi_parity_test.cpp`, `editor_rhi_test.cpp`, `change_markers_test.cpp`) return the
+    evaluation that ended the wait, as the workbench, shell, LSP-fake and sched helpers already do.
+  - Follow-up 14 needed no integration change: the acceptance branch still saw
+    `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` fail, but it lacked the language slice's fix (the
+    structure fixture aborted on a delete-pending hold file under load); the merged tree has it.
+- **What changed for the user.**
+  - Project files are no longer rewritten by regexes on rename, move or delete: the file operation proceeds and a
+    warning names the `.vcxproj`/`.csproj` files that still list the path (SLN-6). CMakeLists.txt source edits on
+    add, rename and remove show a preview (the - and + lines) and are written only after Apply; Cancel leaves the
+    file untouched and says so.
+  - Project Properties' Debugging page is read-only (RUN-1), showing the `.vcxproj.user` values.
+  - Solution Explorer edits that are not supported (solution folders, filters, existing projects, multi-file
+    remove, moves) are disabled up front with the SLN-6 reason as tooltip, instead of failing after a dialog.
+  - Renaming or moving an asset moves its `.fmeta` sidecar too, or neither (a taken sidecar name refuses).
+  - Save actions spare the line of every caret in every view. The `main` gutter marker runs the C++ project that
+    builds the file ("Run 'App'"), or says why it cannot (no owner, several, or a CMake project with more than
+    one executable target, RUN-1).
+  - FrostEngine projects are recognised by one rule (`.frostproj` or `.feproject`, any ASCII case) for the tool
+    window and the Lua defaults.
+  - Debug attach has its own trust wording and never cancels a build waiting for trust; with no project open,
+    "Attach Once" trusts the program's folder for that attach only (never saved).
+  - Language readiness: "Indexing" follows clangd's own progress; "no compile command" is claimed only when
+    clangd itself would use its fallback command (its own compile_commands.json / compile_flags.txt search);
+    language-server metadata sources open read-only from `<profile>/caches/metadata`; a C# metadata result with
+    no cache names LTR-6.
+  - A CMake profile switch restarts clangd once, after the configure. Trust granted or revoked in Settings follows
+    the store without writing to it (a parent grant stays on the parent; a revocation is never undone), runs the
+    configure a never-configured folder was waiting for, and restricts clangd at once during a long build.
+  - A missing clangd shows "C++ language server unavailable" (once per project) instead of only logging.
+  - Staging: `tools/stage.sh` stages Linux with the bundled LuaLS; `stage.ps1` checks every input before touching
+    the destination and removes (or empties) a partial stage after any error. Debug test builds can record every
+    child process in a spawn log (`FROST_SPAWN_LOG_DIR`), which the staged-LuaLS exit test uses.
+  - Tools: no `E:\sdk` defaults remain in the clangd, lldb-dap and LuaLS searches (FND-10, FROST_SDK only;
+    lldb-dap never searches PATH, a security decision documented in `lldb_dap.hpp`). The truth-rule lint joins
+    adjacent literals and counts occurrences per entry; the commit-msg hook requires the test-count items.
+  - New corpus tier: `tools/corpora.py` (list, fetch, verify, path, root, pin) and `tests/corpus/corpora.lock.json`
+    pin FrostEngine-AI-Claude `main` at 8237e1ec; `verify.ps1 -Corpus` / `verify.sh --corpus` run the `corpus`
+    label, where a missing corpus or a skip fails.
+- **R0 exit acceptance** (PLAN.md section 7, R0): tool ablation (`R0ToolAblation.*`), Go to Definition into a
+  library leaving the workspace unchanged (`R0Navigation.*`), untrusted CMake and `.frostproj` folders starting no
+  process before the trust grant (`R0Trust.*`, driven through `Workbench::openPath`: the automation endpoint,
+  FND-7a, does not exist yet), engine helpers beside a running pinned LuaLS (`R0Engine.*`, follow-up 13), the
+  staged LuaLS test on both legs (`tools.staged_luals`) and the stage failure tests. **Not met:** "no GUI stall
+  above 250 ms opening the FrostEngine clone". `CorpusFrostEngine.OpeningThePinnedClone...` measured 552 ms and
+  529 ms (Debug), from `CMakeService::openFolder` reading the existing CMake File API reply on the GUI thread
+  (`State::readReply` -> `readCMakeFileApiReply` -> `parseJson`; `selectProfile` does the same). Its one-clangd
+  and positionEncoding checks pass. The test stays strict, so R0 cannot be signed off until the reply is read on
+  a worker (a `src/build` contract change with its own review).
+- **Tests replaced or removed (D32).**
+  - `Workbench.RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs` became
+    `RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuildProjects`. Its part 2 asserted the harmful
+    regex rewrite of `Include="app.cpp"` in `.vcxproj` and `.filters`; it now asserts byte-identical project files
+    and the SLN-6 warning on rename, move and delete.
+  - `WorkbenchClangd.ReadinessFollowsCompileCommandsAndIndexing` asserted a fabricated "no compile command" for a
+    file real clangd parses with an inferred command. It was added and replaced inside `r0c/language`, so no test
+    on `main` changed; its oracle is now `clangd --check` per file and clangd's own `$/progress`.
+  - Changed without weakening: the CMake add test checks the declined preview first and that the written file
+    equals the preview; the explorer refusal and NuGet/run-marker tests gained checks; two `stage.ps1` late-failure
+    tests use a failing windeployqt as trigger (their old triggers are preflight checks now) and add bracketed
+    destinations; `test_verify_scripts` expects `-LE '^(stress|corpus)$'`.
+- **Harm register changes.**
+
+  | Harm | Status |
+  |---|---|
+  | `updatePathInVcxproj` regex rewrite on rename, move and delete (SLN-1) | removed (writes nothing; SLN-6 warning) |
+  | CMakeLists.txt source edits on create, rename and delete | guarded (preview, written only on Apply) |
+  | Property pages `applyVcxprojPropertiesForConfig` / `applyCsprojProperties` (SLN-8) | open (unchanged) |
+  | LocalDebugger* written into the shared .vcxproj by the Debugging page | removed (page read-only, RUN-1) |
+  | Refused Solution Explorer edits offered a picker or dialog first | removed (disabled up front, SLN-6) |
+  | Missing clangd only logged while C++ features stay silent | removed (notice) |
+  | Readiness claimed "no compile command" for files clangd parses (branch-internal) | removed before merge |
+
+- **Open follow-ups** (from the slice reports and reviews; none blocks the merge, the first blocks R0 sign-off):
+  1. Move the CMake File API reply read in `CMakeService::openFolder` and `selectProfile` off the GUI thread (the
+     250 ms corpus stall, above); measure Release too.
+  2. `verify.ps1 -Corpus` and `verify.sh --corpus` have not been run end to end; WSL has no corpus clone yet
+     (`python3 tools/corpora.py fetch` in WSL). `corpora.py fetch` prunes older pins unless `--keep-old`.
+  3. Project: FileSystemView "Add Existing Folder/Files to Project" still opens a picker and then refuses
+     (SLN-6); `writeCMakeListsWithPreview` writes the previewed text without re-reading the file after the modal
+     preview (an external change made meanwhile is overwritten); `updatePathInVcxproj`'s C# folder notice misses
+     `Include="Sub/x.cs"` when the folder has no separator and has no separator-boundary check, and its `names`
+     lambda indexes the unnormalised path; run-marker tooltips are not refreshed when the solution or CMake model
+     loads; a misplaced test comment above `RenamingOrMovingAnAssetMovesItsFmetaSidecar`; the `moveWithSidecar`
+     rollback has no test; deleting an asset leaves its `.fmeta`, and folder `.fmeta` files do not move;
+     `project_open_broker.cpp`, `main.cpp` and the `--project` routing still accept only `.frostproj`.
+  4. Language: readiness ignores a `CompileFlags: CompilationDatabase` directive in a trusted `.clangd` or the user
+     config (should claim nothing then); `openReadOnlyLocation` makes only the current view read-only;
+     `fallbackAgreesWithClangd` waits only 3 s for a late false claim; the spawn tests' fixed 2 s "no late restart"
+     waits remain.
+  5. Tooling: spawn-log session names can collide within one millisecond; its start time is taken after launch
+     and the image is hashed before it; non-UTF-8 path bytes make the JSONL invalid; `stage.ps1` copies the
+     managed folders through wildcard paths; the commit-msg hook does not require both legs' records; the
+     fabricated-result lint misses `return {...}`. Recorded deviations: lldb-dap never searches PATH; the Linux
+     stage loads Qt through the SDK RUNPATH (TODO(M5)); the spawn log hashes the whole image in memory;
+     `FROST_ENABLE_SPAWN_LOG` is on in every Debug build with tests.
+  6. Acceptance: the clangd-unavailable notice also fires for Lua-only and `.frostproj` folders and its per-root
+     guard is never cleared; `R0Trust` CMake asserts at least one cmake launch after the grant, not exactly one;
+     the absence checks use fixed settle windows.
+- **Verification.** The combined tree is verified with `tools\verify.ps1 -Quick` on both legs (Windows and WSL);
+  the real summary line is the `Verified:` footer of the `r0/close` head commit, which records this tree. Not
+  merged to `main` and not pushed yet.
+
 ## 2026-11-07: R0 integration (FND-1, FND-3 harm wave, FND-9a/13 + LUA-1, FND-5/2/4/15)
 
 - **Merged into `r0/integration`** (each slice was implemented in its own worktree, then re-tested and approved

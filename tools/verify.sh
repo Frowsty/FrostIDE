@@ -308,6 +308,9 @@ run_corpus() {
     fi
     if [[ $debug_built -ne 1 ]]; then summary+=("corpus not-run (debug build failed)"); status=1; return; fi
     echo "=== corpus: test (linux-clang-debug)"
+    # The corpus tests read the corpora root from here, so they name no machine path (FND-10).
+    FROST_CORPORA_ROOT="$(python3 -I tools/corpora.py --repo "$MIRROR" root)" || { summary+=("corpus FAILED (corpora.py root)"); status=1; return; }
+    export FROST_CORPORA_ROOT
     local out counts
     out="$(ctest --preset linux-clang-debug -L '^corpus$' --timeout 3600 2>&1)" || status=1
     echo "$out" | tail -15
