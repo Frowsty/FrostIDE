@@ -223,10 +223,25 @@ std::vector<std::string> clangdArguments(const ClangdLaunchOptions& options,
     arguments.push_back("--log=" + (options.logLevel.empty() ? std::string("error") : options.logLevel));
     arguments.emplace_back("--pch-storage=memory");
     arguments.push_back(std::format("-j={}", options.jobs != 0 ? options.jobs : defaultClangdJobs()));
+    // Never cut a rename at clangd's default of 50 files (clangd.hpp, "Trust").
+    arguments.emplace_back("--rename-file-limit=0");
+    if (options.trusted) {
+        arguments.emplace_back("--limit-references=0");
+        arguments.emplace_back("--limit-results=1000");
+    } else {
+        arguments.emplace_back("--enable-config=false");
+    }
     if (compileCommands) {
         arguments.push_back("--compile-commands-dir=" + compileCommands->directory);
     }
-    arguments.insert(arguments.end(), options.extraArguments.begin(), options.extraArguments.end());
+    for (const std::string& extra : options.extraArguments) {
+        // Restricted mode: nothing may re-enable project config or name a driver to execute.
+        if (!options.trusted && (extra.starts_with("--query-driver") || extra.starts_with("-query-driver") ||
+                                 extra.starts_with("--enable-config") || extra.starts_with("-enable-config"))) {
+            continue;
+        }
+        arguments.push_back(extra);
+    }
     return arguments;
 }
 

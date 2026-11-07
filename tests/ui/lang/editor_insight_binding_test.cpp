@@ -305,8 +305,11 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     const frost::ui::EditorDisplayList list = h.view->buildDisplayList();
     EXPECT_NE(list.findText(QStringLiteral(": int")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("count:")), nullptr);
-    EXPECT_NE(list.findText(QStringLiteral("1 usage")), nullptr);
-    EXPECT_NE(list.findText(QStringLiteral("implementations")), nullptr);
+    // FND-3 (D32): no usage count guessed from the text and no fixed "implementations" label
+    // (counts arrive with CPP-9); the Git author lens is real data and stays.
+    EXPECT_EQ(list.findText(QStringLiteral("1 usage")), nullptr);
+    EXPECT_EQ(list.findText(QStringLiteral("usages")), nullptr);
+    EXPECT_EQ(list.findText(QStringLiteral("implementations")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("Alice")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("value = 42")), nullptr);
 }

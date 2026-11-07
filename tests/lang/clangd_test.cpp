@@ -6,7 +6,9 @@
 // directory and defines from its ItemDefinitionGroup), where only the planted error remains; and
 // a restart after clangd is killed, after which the open document is diagnosed again; and (ADR
 // 0047) semantic tokens for a local, a parameter, a field and a macro plus the inactive region of
-// an #ifdef block. Each test starts one clangd (two for the restart) and stops it before returning.
+// an #ifdef block; and (FND-3) the clangd tweaks behind the named refactorings and the
+// include-cleaner fix behind Optimize Includes, whose edits must compile. Each test starts one
+// clangd (two for the restart) and stops it before returning.
 
 #include "frost/core/log.hpp"
 #include "frost/io/file_system.hpp"
@@ -16,9 +18,13 @@
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/io/utf.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/clangd_actions.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
+#include "frost/lang/refactoring.hpp"
 #include "frost/lang/semantic_tokens.hpp"
+#include "frost/lang/uri.hpp"
+#include "frost/lang/workspace_edit.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/thread_pool.hpp"
@@ -813,6 +819,241 @@ TEST(ClangdE2E, SemanticTokensAndInactiveRegionsOnAFixture) {
         ASSERT_TRUE(again.has_value()) << again.error().describe();
         EXPECT_EQ(again->data, data->data);
     }
+    ASSERT_TRUE(service->closeDocument(source).has_value());
+    stopAndCheck(env, *service);
+}
+
+// --- clangd tweaks and the include cleaner through the real clangd (FND-3, ADR 0078) ---------------
+
+// The source the tweak tests run on: two unused includes, a class with fields, a class missing a
+// pure virtual override, and an expression and statements to extract.
+constexpr std::string_view kTweakSource = "#include \"a.h\"\n"
+                                          "#include \"b.h\"\n"
+                                          "\n"
+                                          "struct Base {\n"
+                                          "    virtual ~Base() = default;\n"
+                                          "    virtual int area() const = 0;\n"
+                                          "};\n"
+                                          "\n"
+                                          "struct Point {\n"
+                                          "    int x;\n"
+                                          "    int y;\n"
+                                          "};\n"
+                                          "\n"
+                                          "struct Shape : Base {\n"
+                                          "};\n"
+                                          "\n"
+                                          "int compute(int a, int b) {\n"
+                                          "    int total = a * b + 42;\n"
+                                          "    return total;\n"
+                                          "}\n";
+
+// The LSP position (UTF-8 columns: the source is ASCII) of the first `marker` in kTweakSource.
+frost::lang::LspPosition positionOf(std::string_view marker, std::size_t offsetInMarker = 0) {
+    const std::size_t at = kTweakSource.find(marker);
+    EXPECT_NE(at, std::string_view::npos) << marker;
+    const std::size_t target = at + offsetInMarker;
+    const std::string_view before = kTweakSource.substr(0, target);
+    const auto line = static_cast<std::uint32_t>(std::ranges::count(before, '\n'));
+    const std::size_t lineStart = before.rfind('\n') == std::string_view::npos ? 0 : before.rfind('\n') + 1;
+    return frost::lang::LspPosition{line, static_cast<std::uint32_t>(target - lineStart)};
+}
+
+// The workspace/applyEdit requests clangd sends while executing a tweak.
+class EditSink {
+public:
+    void attach(ClangdService& service) {
+        service.setApplyEditHandler([this](const frost::lang::Json& params) {
+            const frost::lang::Json* edit = params.find("edit");
+            auto parsed = frost::lang::parseWorkspaceEdit(edit != nullptr ? *edit : params);
+            std::lock_guard lock(m_mutex);
+            if (!parsed) {
+                ADD_FAILURE() << parsed.error().describe();
+                return false;
+            }
+            m_edits.push_back(std::move(*parsed));
+            return true;
+        });
+    }
+    [[nodiscard]] std::size_t count() {
+        std::lock_guard lock(m_mutex);
+        return m_edits.size();
+    }
+    [[nodiscard]] frost::lang::WorkspaceEdit at(std::size_t index) {
+        std::lock_guard lock(m_mutex);
+        return m_edits.at(index);
+    }
+
+private:
+    std::mutex m_mutex;
+    std::vector<frost::lang::WorkspaceEdit> m_edits;
+};
+
+// kTweakSource with the edits of `edit` for `path` applied.
+std::string applied(const frost::lang::WorkspaceEdit& edit, const std::string& path,
+                    frost::lang::PositionEncoding encoding) {
+    for (const frost::lang::FileEdit& file : edit.files) {
+        if (frost::lang::documentKey(file.path) == frost::lang::documentKey(path)) {
+            auto text = frost::lang::applyTextEdits(kTweakSource, file.edits, encoding);
+            EXPECT_TRUE(text.has_value()) << text.error().describe();
+            return text.value_or("");
+        }
+    }
+    ADD_FAILURE() << "the edit does not touch " << path;
+    return {};
+}
+
+// Whether `text`, saved as `name` beside the scratch headers, compiles (clang++ -fsyntax-only from
+// the pinned LLVM next to clangd). The compiler's messages go to the failure output.
+::testing::AssertionResult compiles(const frost::test::ScratchDir& scratch, std::string_view name,
+                                    std::string_view text) {
+    const std::string file = scratch.join(name);
+    if (!frost::io::realFileSystem().writeFileAtomic(file, text)) {
+        return ::testing::AssertionFailure() << "cannot write " << file;
+    }
+    const std::string compiler =
+        frost::io::joinPath(frost::io::parentPath(clangdPath()), kWindows ? "clang++.exe" : "clang++").value_or("");
+    frost::io::ProcessSpec spec;
+    spec.executable = compiler;
+    spec.arguments = {"-fsyntax-only", "-std=c++20", "-I" + scratch.path(), file};
+    spec.workingDirectory = scratch.path();
+    auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 60s);
+    if (!result) {
+        return ::testing::AssertionFailure() << result.error().describe();
+    }
+    if (result->exitCode != 0) {
+        return ::testing::AssertionFailure() << text << "\n" << result->stderrBytes;
+    }
+    return ::testing::AssertionSuccess();
+}
+
+/*
+ * The named commands' tweaks (ExtractVariable, ExtractFunction, MemberwiseConstructor,
+ * SpecialMembers, OverridePureVirtuals) as the real clangd 23 offers them: found by tweak id
+ * (clangd_actions.hpp), executed with workspace/executeCommand, their edits arriving as
+ * workspace/applyEdit; each result compiles (OverridePureVirtuals' stub, which must not, equals
+ * the expected text). Then Optimize Includes: the include-cleaner fix for
+ * clangd's unused-includes diagnostics removes both unused includes. clangd runs in restricted
+ * mode (--enable-config=false), as for an untrusted project.
+ */
+TEST(ClangdE2E, TweaksAndIncludeCleanerProduceCompilingEdits) {
+    namespace fl = frost::lang;
+    frost::test::ScratchDir scratch("lang-clangd-tweaks");
+    auto& fs = frost::io::realFileSystem();
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("a.h"), "#pragma once\nint helper(int x);\n").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("b.h"), "#pragma once\nint other(int x);\n").has_value());
+    const std::string source = scratch.join("tweaks.cpp");
+    ASSERT_TRUE(fs.writeFileAtomic(source, kTweakSource).has_value());
+    ASSERT_TRUE(compiles(scratch, "original.cpp", kTweakSource));
+    const std::vector<fl::CompileCommand> commands = {
+        fl::CompileCommand{.directory = scratch.path(),
+                           .file = source,
+                           .arguments = {"clang++", "-std=c++20", "-I" + scratch.path(), "-c", source}}};
+    ASSERT_TRUE(fl::writeCompileCommands(fs, scratch.join("build"), commands).has_value());
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto provider = std::make_shared<fl::ExistingCompileCommandsProvider>(fs, scratch.path());
+    auto service = startService(env, scratch.path(), provider);
+    ASSERT_TRUE(waitFor([&] { return running(*service) || service->state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(*service)) << describe(*service);
+    EditSink sink;
+    sink.attach(*service);
+    frost::text::Document document = load(source);
+    ASSERT_TRUE(service->openDocument(source, document.text()).has_value());
+    // The include cleaner's diagnostics also say the first AST is built.
+    const auto cleanerDiagnostics = [&] {
+        std::vector<fl::LiveDiagnostic> out;
+        if (const auto set = service->diagnostics().forFile(source)) {
+            for (const fl::LiveDiagnostic& d : set->diagnostics) {
+                if (fl::isIncludeCleanerDiagnostic(d)) {
+                    out.push_back(d);
+                }
+            }
+        }
+        return out;
+    };
+    ASSERT_TRUE(waitFor([&] { return cleanerDiagnostics().size() == 2; })) << describe(*service);
+    const fl::PositionEncoding encoding = service->encoding();
+
+    struct Case {
+        std::string_view tweak;
+        fl::LspRange range;
+        std::string_view expected; // A line the result must contain.
+    };
+    const Case cases[] = {
+        {"ExtractVariable", {positionOf("a * b"), positionOf("a * b", 5)}, "placeholder = a * b;"},
+        {"ExtractFunction", {positionOf("int total"), positionOf("return total;", 13)}, "extracted("},
+        {"MemberwiseConstructor", {positionOf("Point", 2), positionOf("Point", 2)}, "Point(int x, int y)"},
+        {"SpecialMembers", {positionOf("Point", 2), positionOf("Point", 2)}, "Point(const Point &)"},
+        {"OverridePureVirtuals", {positionOf("Shape", 2), positionOf("Shape", 2)}, "int area() const override"},
+    };
+    /*
+     * OverridePureVirtuals' stub deliberately fails to compile until it is implemented (a
+     * static_assert(false)), so its result is checked against clangd 23's exact text instead.
+     */
+    const std::string overridden = [] {
+        std::string text(kTweakSource);
+        const std::string_view marker = "struct Shape : Base {\n";
+        text.insert(text.find(marker) + marker.size(),
+                    "\npublic:\n"
+                    "  int area() const override {\n"
+                    "    // TODO: Implement this pure virtual method.\n"
+                    "    static_assert(false, \"Method `area` is not implemented.\");\n"
+                    "  }\n");
+        return text;
+    }();
+    for (const Case& c : cases) {
+        SCOPED_TRACE(std::string(c.tweak));
+        frost::Result<std::vector<fl::CodeActionItem>> actions;
+        env.run([&]() -> frost::sched::Task<void> {
+            actions = co_await fl::requestCodeActions(*service, source, c.range, {});
+        }());
+        ASSERT_TRUE(actions.has_value()) << actions.error().describe();
+        const fl::CodeActionItem* tweak = fl::findTweak(*actions, c.tweak);
+        ASSERT_NE(tweak, nullptr);
+        EXPECT_EQ(tweak->commandName, fl::kClangdApplyTweak);
+        EXPECT_EQ(fl::tweakIdOf(*tweak), c.tweak);
+        // Refactor This keeps it among the refactorings.
+        const auto ordered = fl::orderRefactorActions(*actions);
+        EXPECT_TRUE(
+            std::ranges::any_of(ordered, [&](const fl::CodeActionItem& a) { return fl::tweakIdOf(a) == c.tweak; }));
+        const std::size_t before = sink.count();
+        frost::Result<fl::Json> executed;
+        env.run([&]() -> frost::sched::Task<void> {
+            executed = co_await fl::requestExecuteCommand(*service, tweak->commandName, tweak->commandArguments);
+        }());
+        ASSERT_TRUE(executed.has_value()) << executed.error().describe();
+        ASSERT_TRUE(waitFor([&] { return sink.count() == before + 1; })) << describe(*service);
+        const std::string result = applied(sink.at(before), source, encoding);
+        EXPECT_NE(result, kTweakSource);
+        EXPECT_NE(result.find(c.expected), std::string::npos) << result;
+        if (c.tweak == "OverridePureVirtuals") {
+            EXPECT_EQ(result, overridden);
+        } else {
+            EXPECT_TRUE(compiles(scratch, std::string(c.tweak) + ".cpp", result));
+        }
+    }
+
+    // Optimize Includes: clangd's include-cleaner fix for its diagnostics.
+    const std::vector<fl::LiveDiagnostic> cleaner = cleanerDiagnostics();
+    fl::LspRange range = cleaner.front().lspRange;
+    for (const fl::LiveDiagnostic& d : cleaner) {
+        range.start = std::min(range.start, d.lspRange.start);
+        range.end = std::max(range.end, d.lspRange.end);
+    }
+    frost::Result<std::vector<fl::CodeActionItem>> fixes;
+    env.run([&]() -> frost::sched::Task<void> {
+        fixes = co_await fl::requestCodeActions(*service, source, range, cleaner);
+    }());
+    ASSERT_TRUE(fixes.has_value()) << fixes.error().describe();
+    const auto fix = fl::pickIncludeCleanerFix(*fixes);
+    ASSERT_TRUE(fix.has_value());
+    EXPECT_EQ(fix->title, "remove all unused includes");
+    const std::string cleaned = applied(fix->edit, source, encoding);
+    EXPECT_EQ(cleaned.find("#include"), std::string::npos) << cleaned;
+    EXPECT_EQ(cleaned, kTweakSource.substr(kTweakSource.find("\nstruct Base")));
+    EXPECT_TRUE(compiles(scratch, "cleaned.cpp", cleaned));
+
     ASSERT_TRUE(service->closeDocument(source).has_value());
     stopAndCheck(env, *service);
 }

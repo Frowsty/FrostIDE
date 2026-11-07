@@ -40,12 +40,14 @@
 #include "frost/text/positions.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
 #include "frost/ui/lang/lang_widgets.hpp"
+#include "frost/ui/lang/language_capabilities.hpp"
 
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -60,6 +62,14 @@ class IFileSystem;
 
 namespace frost::ui::lang {
 
+// Why a language server may have no answer for a document (navigation messages, ADR 0078).
+enum class ServerReadiness : std::uint8_t {
+    Unknown,          // Ready as far as the client knows.
+    NotRunning,       // No server for the document.
+    NoCompileCommand, // clangd parses the file with fallback flags.
+    Indexing,         // The background index is still being built.
+};
+
 // What the controller talks to (see the lifetime rules in the header comment).
 struct LanguageServices {
     ::frost::lang::ILspRequester& server; // ClangdService.
@@ -71,6 +81,15 @@ struct LanguageServices {
     std::function<std::vector<::frost::lang::LiveDiagnostic>(std::string_view path)> diagnostics;
     // Known project/workspace files for header/source switching when LSP cannot resolve it.
     std::function<std::vector<std::string>()> projectFiles{};
+    /*
+     * Where real metadata-as-source from the language server (csharp/metadata) is written to be
+     * shown: absolute, <profile>/caches/metadata, never a workspace directory. Empty: such
+     * sources are not shown and navigation reports "source not available" (LTR-6).
+     */
+    std::string metadataCacheDir{};
+    // Why the server may have answered nothing for `path`, for navigation messages. Unset: only a
+    // server that is not running is told apart (ServerReadiness::Unknown otherwise).
+    std::function<ServerReadiness(std::string_view path)> readiness{};
 };
 
 class LanguageController final : public QObject {
@@ -104,7 +123,21 @@ public:
     void showIntentions();
     void reformat();
 
-    // --- Refactorings (Milestone 2) ---
+    /*
+     * Refactorings and code generation (FND-3, ADR 0078: every edit comes from the language server).
+     * Refactor This lists Rename, then the refactor actions and tweaks the server offers at the caret
+     * (clangd_actions.hpp order). For C++, Extract Variable and Extract Method run clangd's
+     * ExtractVariable and ExtractFunction tweaks, Generate lists clangd's MemberwiseConstructor,
+     * SpecialMembers and OverridePureVirtuals, Generate Constructor and Implement Methods run the
+     * first and the last, and Optimize Includes applies clangd's include-cleaner fix (C#: the
+     * server's source.organizeImports action). Commands without a correct engine (Extract
+     * Constant/Field/Parameter: REF-7; Inline, Change Signature: REF-6; Move, Safe Delete: REF-8;
+     * Override Methods, getters/setters, equality and formatting members: REF-9; and every clangd
+     * command outside C++) stay registered but disabled, with the epic in their description, and
+     * report it on the status bar when called. Postfix templates, live templates, Surround With
+     * and Complete Current Statement run only where language_capabilities.hpp allows them.
+     */
+    // --- Refactorings ---
     void refactorThis();
     void extractVariable();
     void extractConstant();
@@ -116,7 +149,7 @@ public:
     void safeDelete();
     void moveSymbol();
 
-    // --- Code Generation & Editing Assistance (Milestone 2) ---
+    // --- Code generation and editing assistance ---
     void generateCode();
     void generateConstructor();
     void generateGettersSetters();
@@ -136,6 +169,8 @@ public:
     void typeHierarchy();
     void gotoSuperMethod();
     void gotoTypeDeclaration();
+    // Shows real metadata-as-source from the language server for the symbol at the caret, written
+    // under metadataCacheDir; never writes into the workspace and never synthesises a source.
     void decompileExternalSymbol();
 
     // --- Editor hooks ---
@@ -221,8 +256,19 @@ private:
     bool nextTabStop();
     bool tryExpandPostfixCompletion();
     void insertSnippetAt(text::ByteRange replaceRange, std::string_view rawSnippet, std::string_view undoLabel);
-    void extractWithKind(std::string_view lspKindPrefix, const QString& promptLabel, const QString& defaultName,
-                         int mode);
+    // The capability row of the active document (language_capabilities.hpp).
+    [[nodiscard]] const LanguageCapabilities& capabilities() const;
+    // Runs clangd tweak `tweakId` (clangd_actions.hpp) at the caret or selection; `none` goes to
+    // the status bar when clangd does not offer it there. C++ only (capabilities().clangdTweaks).
+    void runClangdTweak(std::string_view tweakId, const QString& label, const QString& none);
+    // A server code action: its edit through the applier, then its command on the server.
+    void runCodeAction(::frost::lang::CodeActionItem action);
+    // A command without a correct engine for the active document: `reason` names the owning epic.
+    void unavailable(const QString& reason);
+    // `none` plus why the server may have found nothing (ServerReadiness).
+    [[nodiscard]] QString emptyResultMessage(const QString& none) const;
+    // Opens real metadata-as-source the server returned (written under metadataCacheDir).
+    void openMetadataLocation(const ::frost::lang::Location& location, const QString& symbol);
     void refreshCallHierarchy(bool outgoing);
     void refreshTypeHierarchy(bool subtypes);
 
@@ -270,11 +316,10 @@ private:
     // Snippet tab stops still to visit after a commit, and the document size they assume.
     std::vector<text::ByteRange> m_tabStops;
     std::uint64_t m_tabStopsDocumentSize = 0;
-    // The rename in progress, or a custom prompt callback for extract refactorings.
+    // The rename in progress.
     std::string m_renamePath;
     std::string m_renameOldName;
     ::frost::lang::LspPosition m_renamePosition;
-    std::function<void(const QString&)> m_customRenameCallback;
     // Active hierarchy root.
     std::string m_hierarchyPath;
     ::frost::lang::LspPosition m_hierarchyPosition{};

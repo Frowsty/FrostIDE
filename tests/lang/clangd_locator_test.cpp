@@ -109,13 +109,46 @@ TEST(ClangdArguments, CarryThePolicyFlags) {
         frost::lang::ClangdLaunchOptions{
             .backgroundIndex = true, .jobs = 3, .logLevel = "error", .extraArguments = {"--x"}},
         location);
+    // Untrusted (the default): restricted mode.
     EXPECT_EQ(arguments,
               (std::vector<std::string>{"--background-index", "--header-insertion=never", "--log=error",
-                                        "--pch-storage=memory", "-j=3", "--compile-commands-dir=" + dir("db"), "--x"}));
+                                        "--pch-storage=memory", "-j=3", "--rename-file-limit=0",
+                                        "--enable-config=false", "--compile-commands-dir=" + dir("db"), "--x"}));
     const auto plain = frost::lang::clangdArguments(frost::lang::ClangdLaunchOptions{}, std::nullopt);
     EXPECT_EQ(
         std::ranges::count_if(plain, [](const std::string& a) { return a.starts_with("--compile-commands-dir"); }), 0);
     EXPECT_EQ(std::ranges::count_if(plain, [](const std::string& a) { return a.starts_with("-j="); }), 1);
+}
+
+// clangd.hpp "Trust": a trusted workspace raises the result limits; the restricted mode disables
+// project configuration and drops anything that would name a driver or re-enable the config.
+TEST(ClangdArguments, TrustSelectsLimitsOrRestrictedMode) {
+    const auto has = [](const std::vector<std::string>& args, std::string_view flag) {
+        return std::ranges::find(args, flag) != args.end();
+    };
+    const auto startsWith = [](const std::vector<std::string>& args, std::string_view prefix) {
+        return std::ranges::count_if(args, [&](const std::string& a) { return a.starts_with(prefix); });
+    };
+    const std::vector<std::string> extras{"--query-driver=C:/x/**/g++*", "--enable-config", "-query-driver=/usr/**",
+                                          "--clang-tidy"};
+    const auto trusted = frost::lang::clangdArguments(
+        frost::lang::ClangdLaunchOptions{.trusted = true, .extraArguments = extras}, std::nullopt);
+    EXPECT_TRUE(has(trusted, "--rename-file-limit=0"));
+    EXPECT_TRUE(has(trusted, "--limit-references=0"));
+    EXPECT_TRUE(has(trusted, "--limit-results=1000"));
+    EXPECT_FALSE(has(trusted, "--enable-config=false"));
+    EXPECT_EQ(startsWith(trusted, "--query-driver"), 1); // A trusted caller's own extras pass through.
+    EXPECT_TRUE(has(trusted, "--clang-tidy"));
+
+    const auto restricted = frost::lang::clangdArguments(
+        frost::lang::ClangdLaunchOptions{.trusted = false, .extraArguments = extras}, std::nullopt);
+    EXPECT_TRUE(has(restricted, "--rename-file-limit=0"));
+    EXPECT_TRUE(has(restricted, "--enable-config=false"));
+    EXPECT_EQ(startsWith(restricted, "--limit-"), 0);
+    EXPECT_EQ(startsWith(restricted, "--query-driver"), 0);
+    EXPECT_EQ(startsWith(restricted, "-query-driver"), 0);
+    EXPECT_FALSE(has(restricted, "--enable-config"));
+    EXPECT_TRUE(has(restricted, "--clang-tidy"));
 }
 
 TEST(ClangdArguments, JobsFollowTheCoreCount) {
