@@ -125,13 +125,19 @@ struct ShellRig {
     FakeEditorFactory editors;
 };
 
-// Pumps events until `done` or about two seconds pass.
+// Pumps events until `done` or about two seconds pass; true when `done` was reached.
 inline bool waitFor(const std::function<bool()>& done) {
+    // Returns the evaluation that ended the wait, as tests/app/workbench_rig.hpp does: a second
+    // evaluation after the loop could see a state changed in between and report a reached
+    // condition as not reached.
     const QDeadlineTimer deadline(2000);
-    while (!done() && !deadline.hasExpired()) {
+    for (;;) {
+        if (done())
+            return true;
+        if (deadline.hasExpired())
+            return false;
         QApplication::processEvents(QEventLoop::AllEvents, 10);
     }
-    return done();
 }
 
 // Shows `window` on the offscreen platform and waits until it is exposed.

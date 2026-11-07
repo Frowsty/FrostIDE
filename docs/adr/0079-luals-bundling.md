@@ -36,8 +36,10 @@ digest equals the one GitHub publishes for the asset.
 - **Locate.** `lang::defaultLuaSearch` looks in this order: the setting
   `tools.luaLanguageServerPath`; `<exe dir>/luals-3.19.1/bin`, the staged
   copy; then `<exe dir>/lua-language-server/bin` and `<exe dir>`;
-  `$FROST_SDK/luals-3.19.1/bin`; the default SDK (`E:\sdk` on Windows,
-  `~/sdk` on Linux); and finally PATH. The version comes from the lock file
+  `$FROST_SDK/luals-3.19.1/bin`; and finally PATH. There is no built-in
+  SDK root (FND-10, R0-close): the product never guesses a developer's
+  drive, and development and test runs name the SDK with `FROST_SDK`
+  (`tools/env.ps1`, `~/sdk/env.sh`). The version comes from the lock file
   at configure time (`FROST_PINNED_LUALS_VERSION`).
 - **Launch.** LuaLS is started only through `IProcessLauncher`, from its
   absolute path, and only for a trusted workspace. By default it writes its
@@ -54,12 +56,42 @@ digest equals the one GitHub publishes for the asset.
 - **Stage.** `tools/stage.ps1` copies `<sdk>/luals-3.19.1` to
   `<stage>/luals-3.19.1`, leaving out the install marker and any `log`. It
   also copies the LICENSE to `licenses/luals-LICENSE.txt`. The stage fails if
-  LuaLS is missing, as it does for every other bundled tool (FND-13). There
-  is no Linux stage script yet. The Linux locator already supports the same
-  `<exe dir>/luals-3.19.1/bin` layout.
+  LuaLS is missing, as it does for every other bundled tool (FND-13).
+  `tools/stage.sh` (R0-close) does the same for a Linux build: frost, the
+  crash handler, the resources, the licences, clangd, lldb-dap and
+  `<stage>/luals-3.19.1` in the layout the locator expects. A Linux stage
+  still loads Qt from the pinned SDK through frost's RUNPATH; deploying Qt
+  into it belongs to Linux packaging.
 - **Tests.** The LuaLS tests (`tests/lang/lua_e2e_test.cpp`,
   `tests/app/workbench_lua_test.cpp`) require the pinned server. They fail
   rather than skip when it is missing.
+- **Exit test (R0-close).** `tests/tools/test_staged_luals.py` stages the
+  Debug build of the ctest tree on each leg and runs the staged frost
+  offscreen on a fresh profile with `FROST_SDK` removed. It checks that the
+  SDK's archive matches the pinned SHA-256, that the staged executable is
+  that archive's `bin/lua-language-server`, that frost started exactly that
+  image through `IProcessLauncher` (the spawn log of
+  `frost/io/spawn_log.hpp`, in Debug builds with `FROST_ENABLE_SPAWN_LOG`,
+  records each launch with its SHA-256), and that frost shows LuaLS's
+  `undefined-global` diagnostic.
+
+## Update (R0-close): staging never leaves a partial folder
+
+Both stage scripts run every check on their inputs before they create the
+destination: the build tree (on Windows also the ProjectHost, the HTTPS
+backend and the libsodium notice), the resources, the bundled tools, and on
+Windows the PDB identities of frost.exe and frost_app.dll
+(`tools/symbolize.py archive --check` on the build tree). A failure after
+that point removes what the run created. That covers the checks of the
+staged folder (a failed windeployqt, a staged file that differs from its
+source, a failed symbol archive) and unexpected errors: a failed copy, a
+locked or unreadable file, a full disk. `stage.ps1` routes every terminating
+error through a script-scope `trap`, and `stage.sh` uses an `ERR` trap. A
+destination folder that already existed empty is emptied again, not
+removed. Paths are taken literally, so a destination whose name holds `[`
+or `]` is cleaned up like any other. The Windows and Linux script tests
+assert that no partial folder is left, including after a copy fails on an
+input held open without sharing.
 
 ## Licence
 

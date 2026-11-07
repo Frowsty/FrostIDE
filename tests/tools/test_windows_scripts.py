@@ -5,12 +5,15 @@
 # so the bootstrap itself never runs, env.ps1's cache redirection (D1: no tool
 # caches on the system drive), dot-sourced in a child PowerShell, and stage.ps1's
 # folder layout over a fake build tree and a fake windeployqt: the bundled tools it requires
-# (FND-13), LuaLS among them, and the symbol archive next to the folder. Windows only: the
+# (FND-13), LuaLS among them, the symbol archive next to the folder, and that a failed stage leaves
+# no partial folder (input checks first, cleanup after late and unexpected errors). Windows only: the
 # scripts target Windows PowerShell 5.1. tests/tools/CMakeLists.txt registers this
 # suite on Windows only.
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import json
 import ntpath
 import os
@@ -19,6 +22,7 @@ import subprocess
 import sys
 import unittest
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 from tools_test_support import TOOLS, TempDirTestCase, clean_env
@@ -29,6 +33,25 @@ import test_symbolize as symbol_fixtures
 
 _FROST_GUID = bytes(range(16, 32))
 _APP_GUID = bytes(range(32, 48))
+
+
+@contextlib.contextmanager
+def _exclusively_open(path: Path) -> Iterator[None]:
+    """Holds `path` open with no sharing (CreateFileW, share mode 0), so every other open of it fails
+    with a sharing violation until the block ends. Windows only."""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    kernel32.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                     ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    generic_read, open_existing, invalid_handle = 0x80000000, 3, ctypes.c_void_p(-1).value
+    handle = kernel32.CreateFileW(str(path), generic_read, 0, None, open_existing, 0, None)
+    if handle in (None, invalid_handle):
+        raise OSError(ctypes.get_last_error(), f"cannot open {path} exclusively")
+    try:
+        yield
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _powershell() -> str:
@@ -246,6 +269,27 @@ class StageScriptTest(TempDirTestCase):
         self.assertFalse((destination / luals / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / luals / "log").exists(), "a log a run left in the SDK")
 
+    def test_the_managed_folders_default_to_their_environment_variables(self) -> None:
+        build = self._fake_build()
+        arguments = self._fake_tools()
+        # Without -ManagedServerDir and -ManagedDebugDir, the FROST_MANAGED_* variables name them.
+        explicit = arguments.index("-ManagedServerDir")
+        arguments = arguments[:explicit]
+        deploy = self.tmp / "windeployqt.cmd"
+        deploy.write_text(_FAKE_WINDEPLOYQT, encoding="ascii", newline="\r\n")
+        destination = self.tmp / "from-env"
+        result = subprocess.run(
+            [_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+             str(TOOLS / "stage.ps1"), "-Destination", str(destination), "-Config", "Debug", "-BuildDir", str(build),
+             "-WinDeployQt", str(deploy), "-Python", sys.executable, "-SkipBuild", *arguments],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            env=clean_env(FROST_MANAGED_SERVER_DIR=str(self.tmp / "managed-server"),
+                          FROST_MANAGED_DEBUG_DIR=str(self.tmp / "managed-debug")))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((destination / "managed/CSharpLanguageServer.dll").read_bytes(),
+                         (self.tmp / "managed-server/CSharpLanguageServer.dll").read_bytes())
+        self.assertTrue((destination / "FrostManagedDebug/adapter/netcoredbg.exe").is_file())
+
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
         lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
         cases = {"clangd": f"sdk/llvm-{lock['llvm']['version']}/bin/clangd.exe",
@@ -289,8 +333,94 @@ class StageScriptTest(TempDirTestCase):
         result = self._stage(build, destination)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("FAIL   frost_app.dll:", result.stdout)
-        self.assertIn("the symbol archive failed", result.stdout)
+        # The identities are checked in the build tree before the destination is created (item 7).
+        self.assertIn("have no matching PDBs", result.stdout)
+        self.assertFalse(destination.exists(), "no partial stage is left behind")
         self.assertFalse((self.tmp / "stale-symbols.zip").exists())
+
+    def _stage_with_failing_deploy(self, build: Path, destination: Path) -> subprocess.CompletedProcess:
+        """Stages with a windeployqt that fails (step 4, after FrostIDE's files are copied)."""
+        deploy = self.tmp / "failing-deploy.cmd"
+        deploy.write_text("@echo off\r\necho deploy failed\r\nexit /b 3\r\n", encoding="ascii", newline="")
+        return run_powershell(TOOLS / "stage.ps1", "-Destination", str(destination), "-Config", "Debug",
+                              "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-Python", sys.executable,
+                              "-SkipBuild")
+
+    def test_a_late_failure_removes_the_partial_stage(self) -> None:
+        # windeployqt runs after FrostIDE's files are copied (step 4). The brackets check that the
+        # cleanup takes the destination literally, not as a wildcard pattern.
+        for name in ("late", "late[1]"):
+            with self.subTest(destination=name):
+                build = self._fake_build()
+                destination = self.tmp / name
+                result = self._stage_with_failing_deploy(build, destination)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("windeployqt failed (3)", result.stdout)
+                self.assertIn(f"removed the partial {destination}", result.stdout)
+                self.assertFalse(destination.exists(), "no partial stage is left behind")
+                self.assertFalse((self.tmp / f"{name}-symbols.zip").exists())
+
+    def test_a_late_failure_empties_an_existing_empty_destination(self) -> None:
+        for name in ("given", "given[1]"):
+            with self.subTest(destination=name):
+                build = self._fake_build()
+                destination = self.tmp / name
+                destination.mkdir()
+                result = self._stage_with_failing_deploy(build, destination)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("windeployqt failed (3)", result.stdout)
+                self.assertIn(f"emptied the partial {destination}", result.stdout)
+                self.assertTrue(destination.is_dir(), "a folder the caller made stays")
+                self.assertEqual(list(destination.iterdir()), [], "but holds nothing of the failed stage")
+
+    def test_an_unexpected_copy_error_removes_the_partial_stage(self) -> None:
+        # An input held open without sharing makes Copy-Item fail with a terminating error after the
+        # destination exists (steps 3 and 3b; the preflight only tests that these files exist, while
+        # the PDB check reads the images, so none of them is locked here). The trap must clean up.
+        luals = "sdk/luals-" + json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(
+            encoding="utf-8"))["windows"]["luals"]["version"] + "/main.lua"
+        for locked, existed in (("build/src/app/Debug/project-host/ProjectHostVsProbe.exe.config", False),
+                                ("build/src/app/Debug/resources/themes/dark.json", False),
+                                (luals, False),
+                                ("build/src/app/Debug/resources/themes/dark.json", True)):
+            with self.subTest(locked=locked, existing_destination=existed):
+                build = self._fake_build()
+                arguments = self._fake_tools()
+                destination = self.tmp / ("given-locked" if existed else "locked")
+                if existed:
+                    destination.mkdir()
+                with _exclusively_open(self.tmp / locked):
+                    result = self._stage(build, destination, *arguments)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("stage: FAIL unexpected error at line", result.stdout)
+                self.assertIn(Path(locked).name, result.stdout)
+                if existed:
+                    self.assertTrue(destination.is_dir(), "a folder the caller made stays")
+                    self.assertEqual(list(destination.iterdir()), [], "but holds nothing of the failed stage")
+                else:
+                    self.assertIn(f"removed the partial {destination}", result.stdout)
+                    self.assertFalse(destination.exists(), "no partial stage is left behind")
+                self.assertFalse((self.tmp / f"{destination.name}-symbols.zip").exists())
+                if existed:
+                    destination.rmdir()
+
+    def test_input_checks_run_before_the_destination_is_touched(self) -> None:
+        cases = {"no ProjectHost": "build/src/app/Debug/project-host/ProjectHostVsProbe.exe.config",
+                 "no resources": "build/src/app/Debug/resources",
+                 "no HTTPS backend": "build/src/app/Debug/tls/qschannelbackendd.dll",
+                 "missing upstream libsodium copyright notice": "installed/x64-fixture/share/libsodium/copyright",
+                 "no CMake cache": "build/CMakeCache.txt"}
+        for message, missing in cases.items():
+            with self.subTest(missing=missing):
+                self._fake_build()
+                path = self.tmp / missing
+                shutil.rmtree(path) if path.is_dir() else path.unlink()
+                destination = self.tmp / "preflight"
+                result = self._stage(self.tmp / "build", destination)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(message, result.stdout)
+                self.assertNotIn("partial", result.stdout, "the preflight fails before anything is created")
+                self.assertFalse(destination.exists(), "nothing is staged")
 
     def test_the_staged_folder_holds_frost_qt_and_the_platform_plugin(self) -> None:
         build = self._fake_build()

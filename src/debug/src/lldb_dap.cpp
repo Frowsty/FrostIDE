@@ -93,19 +93,14 @@ Result<std::string> pinnedLldbDapPath(std::string_view sdkRoot) {
 LldbDapSearch defaultLldbDapSearch(std::string configured) {
     LldbDapSearch search;
     search.configured = std::move(configured);
-    if (const auto sdk = project::processEnvironmentVariable("FROST_SDK"); sdk && !sdk->empty()) {
-        search.sdkRoots.push_back(*sdk);
-    }
+    // The copy bundled beside this executable (tools/stage.ps1, tools/stage.sh) first, then the
+    // pinned SDK that FROST_SDK names (tools/env.ps1 and ~/sdk/env.sh set it for development and
+    // tests). No machine-specific default root (FND-10): the product never guesses a developer's drive.
     if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
         search.sdkRoots.push_back(exeDir);
     }
-#ifdef _WIN32
-    search.sdkRoots.emplace_back("E:\\sdk"); // tools/bootstrap.ps1's default -SdkRoot.
-#endif
-    if (const auto home = project::processEnvironmentVariable("HOME"); home && !home->empty()) {
-        if (auto sdk = io::joinPath(*home, "sdk")) { // tools/bootstrap-wsl.sh's root.
-            search.sdkRoots.push_back(std::move(*sdk));
-        }
+    if (const auto sdk = project::processEnvironmentVariable("FROST_SDK"); sdk && !sdk->empty()) {
+        search.sdkRoots.push_back(*sdk);
     }
     return search;
 }

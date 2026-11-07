@@ -272,9 +272,13 @@ class TruthRuleTest(TempDirTestCase):
         expected = sorted(
             [("README.md", 3, "parity-claim"), ("README.md", 7, "parity-claim")]
             # TestResult braced, declared with an initializer, default-constructed, from make_shared;
-            # the NuGet-like catalogue literal and a produced outcome enumerator.
-            + [("src/app/src/fake_runner.cpp", line, "fabricated-result") for line in (6, 11, 12, 14, 17, 19)]
-            + [("src/app/src/fake_runner.cpp", line, "synthesized-output") for line in (21, 22, 23, 24)]
+            # the NuGet-like catalogue literal and a produced outcome enumerator; then (FND-5 review)
+            # T x(...), a T(...) temporary, an implicit braced push_back({...}), emplace_back with
+            # arguments, a C array, a static_cast to the outcome enum and emplace_back().
+            + [("src/app/src/fake_runner.cpp", line, "fabricated-result")
+               for line in (6, 11, 12, 14, 17, 19, 27, 28, 29, 30, 31, 32, 33)]
+            # The last one is split across two adjacent literals.
+            + [("src/app/src/fake_runner.cpp", line, "synthesized-output") for line in (21, 22, 23, 24, 35)]
             + [("src/app/src/fake_runner.hpp", 19, "result-type-registry")]
             + [("src/ui/shell/src/about.cpp", 7, "parity-claim"), ("src/ui/shell/src/about.cpp", 11, "parity-claim")]
         )
@@ -324,7 +328,7 @@ class TruthRuleTest(TempDirTestCase):
                                              "test", context="TestResult second;")
         with mock.patch.object(frost_lint, "SITE_ALLOWANCES", (allowance,)):
             lines = [v.line for v in frost_lint.lint(repo, [rel]) if v.rule == "fabricated-result"]
-        self.assertEqual(lines, [6, 12, 14, 17, 19])
+        self.assertEqual(lines, [6, 12, 14, 17, 19, 27, 28, 29, 30, 31, 32, 33])
         # A context that is not there does not match, and the unused entry is reported as stale.
         wrong = frost_lint.SiteAllowance(rel, "TestResult", allowance.line, "test", context="never")
         with mock.patch.object(frost_lint, "SITE_ALLOWANCES", (wrong,)):
@@ -332,6 +336,86 @@ class TruthRuleTest(TempDirTestCase):
                      if v.rule == "fabricated-result"]
         self.assertIn((11, "(test"), found)
         self.assertIn((1, "site"), found)
+
+    def test_an_allowance_covers_exactly_its_count_of_identical_sites(self) -> None:
+        # FND-5 review: one reviewed entry must not silently cover a new copy of the same line.
+        rel = "src/app/src/runner.cpp"
+        site = "    TestResult entry;\n    entry.name = \"x\";\n"
+        _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// Identical result sites.\n"
+                               "void f() {\n" + site * 3 + "}\n")
+        sites = [4, 6, 8]
+
+        def run(count: int) -> list[tuple[int, str]]:
+            entry = frost_lint.SiteAllowance(rel, "TestResult", "TestResult entry;", "test", count=count)
+            with mock.patch.object(frost_lint, "SITE_ALLOWANCES", (entry,)):
+                return [(v.line, v.message) for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "fabricated-result"]
+
+        self.assertEqual(run(3), [])
+        two = run(2)
+        self.assertEqual([line for line, _ in two], [sites[2]])
+        self.assertIn("covers 2 finding(s) and they are all taken", two[0][1])
+        # A count above the sites is stale too, so a removed copy cannot leave a loose entry behind.
+        four = run(4)
+        self.assertEqual([line for line, _ in four], [1])
+        self.assertIn("only 3 of its 4 findings match", four[0][1])
+        self.assertEqual(frost_lint.SiteAllowance(rel, "T", "x", "y").count, 1, "one site unless stated")
+
+    def test_one_finding_per_line_and_type(self) -> None:
+        rel = "src/app/src/one.cpp"
+        # A braced declaration that is also a C array and pushed into a container of results.
+        _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// One line, several forms.\n"
+                               "std::vector<TestResult> rows; void f() { TestResult a[1] = {TestResult{}}; "
+                               "rows.push_back({}); }\n")
+        found = [(v.line, v.rule) for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "fabricated-result"]
+        self.assertEqual(found, [(3, "fabricated-result")])
+
+    def test_construction_forms_and_their_look_alikes(self) -> None:
+        cases = {
+            # Constructions.
+            "void f() { TestResult r(name, true); }": True,
+            "void f() { show(TestResult(\"a\", 1)); }": True,
+            "void f() { auto r = TestResult(); }": True,
+            "void f(std::vector<TestResult>& out) { out.push_back({.name = n}); }": True,
+            "void f(QList<TestResult>& out) { out.emplace_back(n, true); }": True,
+            "void f(std::vector<TestResult>& out) { out.emplace_back(); }": True,
+            "void f(std::vector<TestResult>& out) { out.insert(out.end(), {n, true}); }": True,
+            "void f(std::vector<TestResult>& out) { out = {{n, true}}; }": True,
+            "TestResult kAll[] = {{\"a\", true}};": True,
+            "void f(int n) { auto s = static_cast<UnitTestRunState>(n); }": True,
+            "void f(int n) { auto s = std::bit_cast<TestResult>(n); }": True,
+            # Look-alikes that construct nothing.
+            "TestResult parse(std::string_view line);": False,
+            "TestResult parse(std::string_view);": False,
+            "TestResult parse(const Json& reply) const;": False,
+            "TestResult make();": False,
+            "TestResult run(Runner& r) { return r.next(); }": False,
+            "std::function<TestResult()> later;": False,
+            "using Factory = TestResult (*)(int);": False,
+            "void f(std::vector<TestResult>& out, TestResult r) { out.push_back(r); out.emplace_back(std::move(r)); }":
+                False,
+            "void f(const Base& b) { const auto& r = static_cast<const TestResult&>(b); }": False,
+            "struct TestResult { TestResult(); explicit TestResult(int code); ~TestResult(); };": False,
+            "TestResult::TestResult() = default;": False,
+            "void f(std::vector<TestResult>& all) { Config c{.all = {1}}; }": False,
+        }
+        for body, construction in cases.items():
+            with self.subTest(body=body):
+                rel = "src/app/src/case.cpp"
+                _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// A construction case.\n" + body + "\n")
+                found = [v for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "fabricated-result"]
+                self.assertEqual(bool(found), construction, [v.message for v in found])
+
+    def test_tool_output_split_across_adjacent_literals_is_found(self) -> None:
+        rel = "src/app/src/split.cpp"
+        # Split three ways, over two lines, and a marker made of two literals that are not adjacent.
+        _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// Split markers.\n"
+                               "const char* a = \"[  PAS\" \"SED  \"\n"
+                               "                \"] 3 tests.\";\n"
+                               "const char* b = \"[ RUN\"; const char* c = \"      ]\";\n"
+                               "const wchar_t* d = L\"tests fail\" L\"ed out of 3\";\n")
+        found = [(v.line, v.rule, "split" in v.message) for v in frost_lint.lint(self.tmp, [rel])
+                 if v.rule == "synthesized-output"]
+        self.assertEqual(found, [(3, "synthesized-output", True), (6, "synthesized-output", True)])
 
     def test_stale_allowances_are_reported_only_for_linted_files(self) -> None:
         entry = frost_lint.SiteAllowance("src/gone.cpp", "TestResult", "TestResult r{};", "FND-3 harm, removed at integration")
@@ -343,14 +427,17 @@ class TruthRuleTest(TempDirTestCase):
             self.assertEqual(frost_lint.lint(self.tmp, []), [])
 
     def test_repository_allowances_all_match(self) -> None:
-        # Every entry of the real table covers a site in this checkout (no stale entries), and each
-        # temporary FND-3 entry names its harm tag so the integrator can find them.
+        # Every entry of the real table covers exactly its count of sites in this checkout (no stale
+        # entries, no extra copies), and each temporary FND-3 entry names its harm tag so the
+        # integrator can find them.
         files = sorted({e.path for e in frost_lint.SITE_ALLOWANCES})
-        used: set[int] = set()
+        used: dict[int, int] = {}
         for rel in files:
             self.assertTrue((REPO / rel).is_file(), rel)
-            frost_lint.lint_file(REPO, rel, None, used)
+            remaining = [v for v in frost_lint.lint_file(REPO, rel, None, used) if v.rule == "fabricated-result"]
+            self.assertEqual(remaining, [], rel)
         self.assertEqual(frost_lint.stale_site_allowances(set(files), used), [])
+        self.assertEqual(used, {i: e.count for i, e in enumerate(frost_lint.SITE_ALLOWANCES)})
         for entry in frost_lint.SITE_ALLOWANCES:
             self.assertTrue(entry.reason)
 
@@ -371,6 +458,45 @@ class TruthRuleTest(TempDirTestCase):
             with self.subTest(line=line):
                 found = frost_lint.check_parity_claims_in_document("README.md", line)
                 self.assertEqual(bool(found), claim)
+
+
+class DevPathTest(TempDirTestCase):
+    """The dev-path rule (FND-10): no developer machine path in src/ or tests/ sources."""
+
+    # Assembled here so this test file itself names no such path.
+    E, D = "E" + ":", "D" + ":"
+
+    def _rules(self, rel: str, body: str) -> list[int]:
+        _write(self.tmp / rel, "// SPDX-License-Identifier: Apache-2.0\n// Paths in code.\n" + body + "\n")
+        return [v.line for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "dev-path"]
+
+    def test_machine_paths_fail_in_code_strings_and_comments(self) -> None:
+        cases = [
+            f'const char* sdk = "{self.E}\\\\sdk";',            # an escaped C++ string
+            f"// installed under {self.E}\\sdk\\llvm-23.1.4",   # a comment
+            f'auto out = "{self.E}/FrostBuilds/corpora";',      # forward slashes
+            f'auto engine = "{self.D}\\\\dev\\\\FrostEngine-AI-Claude";',
+            'auto mount = "/mnt/' + 'e/sdk/lldb-23.1.4";',     # the WSL spelling
+            f'auto lower = "{self.E.lower()}\\\\SDK";',
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(self._rules("src/lang/src/a.cpp", body), [3])
+                self.assertEqual(self._rules("tests/lang/a_test.cpp", body), [3])
+
+    def test_other_paths_and_places_pass(self) -> None:
+        for body in ('auto made_up = "C:\\\\sdk";',            # a MemFs root in a unit test
+                     f'auto other = "{self.E}\\\\sdkx";',       # a longer name
+                     'auto env = std::getenv("FROST_SDK");',
+                     'auto home = "~/sdk/env.sh";'):
+            with self.subTest(body=body):
+                self.assertEqual(self._rules("src/lang/src/b.cpp", body), [])
+        body = f'auto sdk = "{self.E}\\\\sdk";'
+        # tools/ may name the bootstrap defaults; fixtures are data.
+        self.assertEqual(self._rules("tools/c.py", "# " + body), [])
+        _write(self.tmp / "tests/x/fixtures/db.json", body)
+        self.assertEqual([v for v in frost_lint.lint(self.tmp, ["tests/x/fixtures/db.json"]) if v.rule == "dev-path"],
+                         [])
 
 
 class RatchetTest(TempDirTestCase):

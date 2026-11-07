@@ -19,3 +19,10 @@ struct Row {
 struct FakeTestResult {
     int code = 0;
 };
+
+struct UsageGroup {
+    UsageGroup();
+    explicit UsageGroup(int size);
+    ~UsageGroup();
+};
+inline UsageGroup::UsageGroup() = default;

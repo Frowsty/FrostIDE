@@ -19,9 +19,10 @@ struct LuaSearch {
 [[nodiscard]] Result<std::string> findLuaLanguageServer(io::IFileSystem& fs, const LuaSearch& search);
 /*
  * The default search, in priority order: the LuaLS bundled beside this executable
- * (<exe dir>/luals-<pinned>/bin from tools/stage.ps1, then the older lua-language-server/bin and the
- * executable's own directory), the pinned SDK install (<$FROST_SDK>/luals-<pinned>/bin, then
- * E:\sdk on Windows or ~/sdk on Linux, the bootstrap scripts' roots), then this process's PATH.
+ * (<exe dir>/luals-<pinned>/bin from tools/stage.ps1 and tools/stage.sh, then the older
+ * lua-language-server/bin and the executable's own directory), the pinned SDK install
+ * <$FROST_SDK>/luals-<pinned>/bin when FROST_SDK is set (tools/env.ps1 and ~/sdk/env.sh set it for
+ * development and tests; there is no machine-specific default root, FND-10), then this process's PATH.
  * Reads the environment once; thread-safe.
  */
 [[nodiscard]] LuaSearch defaultLuaSearch(std::string configuredPath = {});

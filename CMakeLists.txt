@@ -69,6 +69,10 @@ if(NOT FROST_UPDATE_BUILD_NUMBER MATCHES "^[0-9]+$")
 endif()
 option(FROST_BUILD_TESTS "Build the test suites" ON)
 option(FROST_BUILD_UI "Build Qt-based targets (src/ui, src/app)" ON)
+# The spawn log (frost/io/spawn_log.hpp, FND-8): with this ON, Debug builds of frost write every
+# child process they start to FROST_SPAWN_LOG_DIR when that variable is set, so the staged-build
+# tests can prove which tool produced a result. Release builds never contain it.
+option(FROST_ENABLE_SPAWN_LOG "Debug frost honours FROST_SPAWN_LOG_DIR (test builds)" ${FROST_BUILD_TESTS})
 set(FROST_SANITIZE "" CACHE STRING "Sanitizers to enable: address;undefined, thread or memory")
 # Fuzz trees (presets win-clangcl-fuzz, linux-clang-fuzz; cmake/FrostFuzz.cmake, ADR 0013). -Full
 # runs each target for FROST_FUZZ_SECONDS = 60; longer runs (600 s for the M1 exit, 1800 s for a

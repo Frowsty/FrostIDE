@@ -52,6 +52,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/spawn_log.hpp"
 #include "frost/io/utf.hpp"
 #include "frost/lang/engine_automation.hpp"
 #include "frost/project/trust_store.hpp"
@@ -75,6 +76,7 @@
 #include <chrono>
 #include <cstdio>
 #include <format>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -340,6 +342,25 @@ int runRenderSelfTest(int argc, char** argv) {
     print(stdout, report.format());
     return report.passed() ? 0 : 1;
 }
+
+#ifdef FROST_SPAWN_LOG
+// Debug test builds only (FROST_ENABLE_SPAWN_LOG, frost/io/spawn_log.hpp): when FROST_SPAWN_LOG_DIR
+// names an absolute directory, every child the workbench starts is recorded there, so the staged-build
+// tests can prove which tool produced a result. Unset: nullptr, the plain launcher.
+std::unique_ptr<frost::io::SpawnLogLauncher> openSpawnLog() {
+    const QString directory = qEnvironmentVariable("FROST_SPAWN_LOG_DIR");
+    if (directory.isEmpty())
+        return nullptr;
+    auto opened = frost::io::SpawnLogLauncher::open(frost::io::realProcessLauncher(), frost::io::realFileSystem(),
+                                                    frost::systemClock(), directory.toStdString());
+    if (!opened) {
+        frost::log::warn("app", "spawn log disabled: {}", opened.error().message());
+        return nullptr;
+    }
+    frost::log::info("app", "spawn log: {}", (*opened)->path());
+    return std::move(*opened);
+}
+#endif
 
 // The GUI's settings and trust stores. A store that cannot open on its file falls back to an
 // in-memory one (settings) or a file in the temporary directory (trust), with a warning.
@@ -624,10 +645,17 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         // The workbench and what it borrows outlive the window (declared first, destroyed last).
         GuiStores stores = openGuiStores();
         frost::app::DialogWorkbenchPrompts prompts;
-        frost::app::Workbench workbench(
-            frost::app::WorkbenchServices{frost::io::realFileSystem(), frost::io::realProcessLauncher(),
-                                          frost::systemClock(), *stores.settings, *stores.trust, prompts},
-            workbenchOptions(stores));
+#ifdef FROST_SPAWN_LOG
+        const std::unique_ptr<frost::io::SpawnLogLauncher> spawnLog = openSpawnLog();
+        frost::io::IProcessLauncher& launcher =
+            spawnLog ? static_cast<frost::io::IProcessLauncher&>(*spawnLog) : frost::io::realProcessLauncher();
+#else
+        frost::io::IProcessLauncher& launcher = frost::io::realProcessLauncher();
+#endif
+        frost::app::Workbench workbench(frost::app::WorkbenchServices{frost::io::realFileSystem(), launcher,
+                                                                      frost::systemClock(), *stores.settings,
+                                                                      *stores.trust, prompts},
+                                        workbenchOptions(stores));
         // The appearance comes from the resources deployed next to frost (ADR 0015). Without them the
         // window still opens on Qt's own style and says why (ADR 0038), instead of not starting.
         const QByteArray resources = (QCoreApplication::applicationDirPath() + QStringLiteral("/resources")).toUtf8();

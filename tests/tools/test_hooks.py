@@ -95,8 +95,37 @@ class CommitMsgHookTest(ScratchRepo):
         result = self.commit("feat: two\n\nVerified: win debug 4/4, frost_lint ok")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("'win debug 4/4'", result.stderr)
-        # A subset of the stamped items is still true.
+        # A subset of the stamped items is still true, as long as it keeps the test counts.
         self.assertEqual(self.commit("feat: two\n\nVerified: win debug 3/3 (1 skipped)").returncode, 0)
+
+    def test_the_footer_must_quote_every_test_count_of_its_stamp(self) -> None:
+        # FND-2 review: "Verified: frost_lint ok" is stamped, but it drops the test counts.
+        self.write("a.txt", "two\n")
+        self.git("add", "a.txt")
+        self.assertEqual(self.stamp("write", "--summary", SUMMARY).returncode, 0)
+        result = self.commit("feat: two\n\nVerified: format ok, frost_lint ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("leaves out the test counts 'win debug 3/3 (1 skipped)'", result.stderr)
+        self.assertEqual(self.commit(f"feat: two\n\n{SUMMARY}").returncode, 0)
+
+    def test_quoting_a_wsl_item_needs_the_wsl_counts_too(self) -> None:
+        self.write("a.txt", "two\n")
+        self.git("add", "a.txt")
+        self.assertEqual(self.stamp("write", "--summary", "Verified: win debug 3/3, frost_lint ok").returncode, 0)
+        self.assertEqual(self.stamp("write", "--script", "verify.sh", "--summary",
+                                    "wsl: debug 2/3 (1 skipped), licensecheck ok").returncode, 0)
+        # The Windows counts alone are true for the Windows record...
+        result = self.commit("feat: two\n\nVerified: win debug 3/3, wsl licensecheck ok")
+        self.assertNotEqual(result.returncode, 0, "...but quoting the WSL record needs its counts")
+        self.assertIn("'wsl debug 2/3 (1 skipped)'", result.stderr)
+        self.assertEqual(self.commit("feat: two\n\nVerified: win debug 3/3, frost_lint ok").returncode, 0)
+
+    def test_test_count_items(self) -> None:
+        for item, counts in {"win debug 3167/3195 (28 skipped, 1 disabled)": True, "wsl release 12/12": True,
+                             "wsl debug 2/2 (1 disabled)": True, "frost_lint ok": False, "wsl licensecheck ok": False,
+                             "ratchet ok (src +10 net, tests +5)": False, "tidy ok (2 TUs)": False}.items():
+            with self.subTest(item=item):
+                self.assertEqual(bool(verify_stamp.TEST_COUNT_ITEM.match(item)), counts)
 
     def test_main_needs_a_footer(self) -> None:
         self.write("a.txt", "two\n")

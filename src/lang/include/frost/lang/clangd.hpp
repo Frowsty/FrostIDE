@@ -7,10 +7,12 @@
 /*
  * Finding clangd (findClangd): the tools.clangd.path setting when it is set (it must then name
  * an existing absolute file; there is no fallback, so a typo is reported, not papered over); else
- * the pinned LLVM (sdk/sdk.lock.json): $FROST_LLVM_ROOT/bin, then <FROST_SDK or the bootstrap's
- * default root>/llvm-<pinned version>/bin (E:\sdk on Windows, ~/sdk on Linux); else the
- * directories of PATH, searched here (never by the OS) so the result is an absolute path that
- * IProcessLauncher can start. TODO(M5): the clangd bundled with the installer comes first.
+ * the pinned LLVM (sdk/sdk.lock.json): first the clangd bundled beside this executable (<exe
+ * dir>/llvm-<pinned version>/bin, staged by tools/stage.ps1 and tools/stage.sh, then <exe
+ * dir>/llvm/bin, <exe dir>/bin and <exe dir>), then $FROST_SDK/llvm-<pinned version>/bin and
+ * $FROST_LLVM_ROOT/bin when they are set (tools/env.ps1 and ~/sdk/env.sh set them for development
+ * and tests; there is no machine-specific default root, FND-10); else the directories of PATH,
+ * searched here (never by the OS) so the result is an absolute path that IProcessLauncher can start.
  *
  * Command line (clangdArguments): --background-index, --header-insertion=never, --log=error,
  * --pch-storage=memory, -j=<cores / 2, at most 8> (ADR 0008 decision 4: a first index build of R3
@@ -103,8 +105,8 @@ struct ClangdSearch {
 // tools.clangd.path from a settings snapshot.
 [[nodiscard]] std::string configuredClangdPath(const settings::SettingsSnapshot& settings);
 
-// The search this process would run: `configuredPath`, the SDK directories from FROST_LLVM_ROOT,
-// FROST_SDK and the bootstrap default, and PATH (see the header comment).
+// The search this process would run: `configuredPath`, the bundled directories beside the
+// executable, the SDK directories from FROST_SDK and FROST_LLVM_ROOT, and PATH (header comment).
 [[nodiscard]] ClangdSearch defaultClangdSearch(std::string configuredPath = {});
 
 // Errors: NotFound (the configured path is missing, or no candidate exists; the message lists

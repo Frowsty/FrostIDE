@@ -21,7 +21,9 @@
 #
 # `check-msg` is the commit-msg hook (tools/hooks/commit-msg). On the protected branches
 # (PROTECTED_BRANCHES) a commit needs a "Verified:" footer, a stamp for the tree being committed
-# (`git write-tree` of the index git commits), and every footer item among that stamp's items.
+# (`git write-tree` of the index git commits), every footer item among that stamp's items, and
+# every test-count item (TEST_COUNT_ITEM: "win debug 3/3 ...", "wsl debug 2/2 ...") of each stamp
+# record the footer quotes from, so a footer cannot keep the "ok" items and drop the counts.
 # Other branches pass. Install the hook in a checkout with
 #   git config core.hooksPath tools/hooks
 # A fast-forward merge creates no commit and runs no hook: merge to main with --no-ff after
@@ -47,6 +49,9 @@ from pathlib import Path
 PROTECTED_BRANCHES = ("main",)
 STAMP_DIR = ("frost", "verify-stamps")
 FOOTER = re.compile(r"^Verified:\s*(.*\S)\s*$")
+# A test-count item of a summary: a leg ("win", "wsl"), its configuration and passed/total, e.g.
+# "win debug 3167/3195 (28 skipped, 1 disabled)" or "wsl release 12/12".
+TEST_COUNT_ITEM = re.compile(r"^(?:win|wsl)\b[^,]*?\b\d+/\d+\b")
 
 
 class StampError(Exception):
@@ -214,11 +219,21 @@ def check_message(git: Git, message: str) -> tuple[bool, str]:
     if not stamp["records"]:
         return False, (f"no verify-stamp for the tree being committed ({tree}); run tools\\verify.ps1 "
                        f"(or tools/verify.sh) on exactly this tree, then commit it unchanged")
+    footer_items = split_items(footer)
     backed = {item for record in stamp["records"] for item in record.get("items", [])}
-    unbacked = [item for item in split_items(footer) if item not in backed]
+    unbacked = [item for item in footer_items if item not in backed]
     if unbacked:
         return False, (f"the footer claims {', '.join(repr(i) for i in unbacked)}, which no verify-stamp of tree "
                        f"{tree[:12]} records; copy the summary line verify printed")
+    # Every record the footer draws on must be quoted with all its test counts (FND-2 review): a
+    # footer of "lint ok" items, or one leg's counts without the other's from the same record,
+    # would hide failed, skipped or missing tests.
+    matched = [record for record in stamp["records"] if set(record.get("items", [])) & set(footer_items)]
+    missing = [item for record in matched for item in record.get("items", [])
+               if TEST_COUNT_ITEM.match(item) and item not in footer_items]
+    if missing:
+        return False, (f"the footer leaves out the test counts {', '.join(repr(i) for i in missing)} of the "
+                       f"verify-stamp it quotes (tree {tree[:12]}); copy every test-count item verify printed")
     return True, f"stamped tree {tree}"
 
 
