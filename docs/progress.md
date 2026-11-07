@@ -10,6 +10,17 @@ what is next, blockers and open questions for the user.
   `r0/fnd-3b-workbench`, `r0/fnd-3c-language`, `r0/fnd-9a-13-lua-1`, `r0/fnd-5-4-15-2`. Two trivial conflicts
   (an include list, a CMake comment). The temporary "FND-3 harm, removed at integration" lint allowances
   were deleted; frost-lint is clean without them.
+- **Integration fixes** (`r0/integration-fixes`, from the independent review of the combined tree):
+  - The keymaps still bound the removed `window.services`, which failed the new keymap coverage test on
+    both legs; the three entries are deleted (Alt+8 stays Unit Tests through the module default).
+  - FND-3 started clangd restricted in untrusted folders and FND-9a stopped restarting it on an unchanged
+    CMake model, so trusting a configured CMake folder left clangd restricted for the session. The running
+    clangd's trust is now part of the restart check, and the trust grant restarts it once
+    (`WorkbenchClangdSpawn.TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullMode`, real cmake
+    and clangd).
+  - The compound run group in Run/Debug Configurations is disabled with a RUN-5 tooltip instead of
+    offering a launch that only reports it is unavailable; "NuGet Package Manager" is now "NuGet
+    Packages" and the IL/assembly window title says it is unavailable.
 - **What changed for the user.**
   - Unit Tests lists tests found in source as "Discovered, not run"; every run button is disabled (RUN-7).
   - NuGet is a read-only list of the project's PackageReferences (LTR-7); ASM/IL views are disabled with reasons.
@@ -38,28 +49,33 @@ what is next, blockers and open questions for the user.
   | Text-hack refactorings, line-sorting Optimize Includes, codegen text fallbacks | removed (clangd or disabled, REF-6..9) |
   | Code Vision text-counted usages, fixed "implementations" | removed (git author lens kept) |
   | Silent trust grants on Attach to Process and compound launch | removed |
-  | Services window alias | removed (keymap entries `window.services` still bound to nothing: open) |
+  | Services window alias | removed (the stale `window.services` keymap entries were deleted at integration) |
   | Settings toggles shown but not applied (trim, final newline, confirm exit, reopen last, detect indentation) | removed (applied or hidden) |
   | Engine helper 15 s blanket deadline; hidden engine errors | removed (per-method deadlines, real codes) |
-  | Regex solution/project edits (SLN-1) | partly guarded: membership edits refused; rename/move (`updatePathInVcxproj`) and the property pages (`applyVcxprojPropertiesForConfig`, SLN-8) still use regex writers |
+  | Regex solution/project edits (SLN-1) | partly guarded: membership edits refused. Still text/regex writers: `updatePathInVcxproj` on rename, move and delete; the property pages `applyVcxprojPropertiesForConfig` and `applyCsprojProperties` (SLN-8); and the CMakeLists.txt source edits on create/rename/delete (`add`/`rename`/`removeSourceInCMakeLists`) |
   | LocalDebugger* written into the shared .vcxproj | partly removed: Run/Debug Configurations is read-only, the Project Properties Debugging page still writes them |
   | 3-way merge Apply writing marker text and git-adding it | guarded |
-  | clangd honouring `.clangd`/`--query-driver` in untrusted projects | guarded (restricted mode) |
+  | clangd honouring `.clangd`/`--query-driver` in untrusted projects | guarded (restricted mode; a trust grant restarts clangd in full mode) |
   | Updater overwrites the live install without rollback | guarded by policy (auto-updates frozen, D38) |
 
   Tests removed or inverted with their feature (D32 or spec change): the fake Passed/Failed counts; the regex
   NuGet and solution-edit round trips (replaced by parse and refusal tests); 21 WorkbenchEngine Lua-debug tests
   and 2 EngineAutomation `script.debug.*` tests (feature removed until FER-8); the decompiler test (replaced by
   two metadata-cache tests); the Code Vision count expectations; the run-marker count 3 -> 1; the LSP
-  `offsetEncoding` offer (spec change, FND-9a). Every LuaLS skip became a failure.
+  `offsetEncoding` offer (spec change, FND-9a). Every missing-LuaLS skip became a failure. One skip became a pass
+  on a synthetic fixture: without `FROST_TEST_LUA_API`, `LuaLsE2E.CompletesGeneratedFrostEngineApi` and
+  `WorkbenchLua.TrustGateAndGeneratedApiReachEditor` use a hand-written stand-in API, so the engine-generated
+  API is only exercised when that variable is set (FEC-10a covers it with the pinned corpus).
 - **Verification.** The combined tree is verified on Windows and WSL by `tools\verify.ps1 -Quick`; the real summary
   is the `Verified:` footer of the merge into `main`.
 - **Open R0 follow-ups** (from the reviews; next slice wave):
   1. TrustPurpose for debug attach: cancelling the attach prompt can cancel a build waiting for trust.
   2. Project Properties Debugging page: stop writing LocalDebugger* into the shared project (read-only, RUN-1).
-  3. "Debug Selected Test" button is a silent no-op: disable it naming RUN-10; drop `window.services` keymap entries.
+  3. Dead code: `EngineIntegration::luaReservationPending()` is constant false but still checked in
+     `workbench.cpp` and `workbench_project_edit.cpp`. FrostEngine detection differs: the tool window
+     accepts `.frostproj`/`.feproject`, LuaLS defaults only `.frostproj` (`lua_config.cpp`).
   4. Wire `LanguageServices::metadataCacheDir`, `readiness` and a read-only `openReadOnlyLocation` in src/app;
-     restart clangd on a trust change; name LTR-6 when a C# metadata result has no cache.
+     name LTR-6 when a C# metadata result has no cache.
   5. Refuse or route `updatePathInVcxproj` (rename/move regex writer); move `.fmeta` siblings on rename/move.
   6. Disable refused explorer actions up front instead of after their dialogs.
   7. stage.ps1: check symbols before populating the destination; Linux staging of LuaLS.
@@ -67,6 +83,8 @@ what is next, blockers and open questions for the user.
      require the test-count items. Spawn log (IProcessLauncher decorator) is not implemented.
   9. E:\sdk defaults in `lldb_dap.cpp`, `clangd_locator.cpp`, `lua_config.cpp` (FND-10).
   10. Profile switch still starts clangd about 3 times.
+  11. Autosave trimming spares only the primary caret's line; the `main` gutter marker runs the startup
+      project, not necessarily the one that owns that `main`.
 - **Process note.** The DoD asks for GPT-6.1 Terra / GPT-6 Astra agents where available; they are not
   available in this session, so Claude agents did the implementation and the independent reviews.
 

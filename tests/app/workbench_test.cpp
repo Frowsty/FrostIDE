@@ -2738,7 +2738,7 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
 
 // The Edit Run Configurations dialog's compound section reaches the same refusal: the RUN-5 notice
 // and no launch.
-TEST(Workbench, CompoundRunFromTheRunConfigurationsDialogShowsTheRunFiveNoticeAndStartsNothing) {
+TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAndStartsNothing) {
     WorkDir dir("compound-run-dialog", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
     RigOptions options;
@@ -2751,15 +2751,19 @@ TEST(Workbench, CompoundRunFromTheRunConfigurationsDialogShowsTheRunFiveNoticeAn
     ASSERT_TRUE(id);
     int checked = 0;
     bool clicked = false;
+    bool disabled = false;
+    QString tooltip;
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("compoundProjectsList"));
         auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
         if (list != nullptr && launch != nullptr) {
+            disabled = !launch->isEnabled() && !list->isEnabled();
+            tooltip = launch->toolTip();
             for (int row = 0; row < list->count(); ++row) {
                 list->item(row)->setCheckState(Qt::Checked);
                 ++checked;
             }
-            launch->click();
+            launch->click(); // A disabled button ignores the click.
             clicked = true;
         }
         // Whatever happened, no dialog stays open.
@@ -2772,11 +2776,8 @@ TEST(Workbench, CompoundRunFromTheRunConfigurationsDialogShowsTheRunFiveNoticeAn
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
     ASSERT_TRUE(clicked);
     EXPECT_EQ(checked, 2); // App and Lib.
-    bool notice = false;
-    for (const auto& entry : rig.window->notifications().log())
-        notice = notice || (entry.notification.title.contains(QStringLiteral("Compound Run unavailable")) &&
-                            entry.notification.text.contains(QStringLiteral("RUN-5")));
-    EXPECT_TRUE(notice);
+    EXPECT_TRUE(disabled) << "the compound launch controls must not be offered before RUN-5";
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("RUN-5"))) << tooltip.toStdString();
     EXPECT_TRUE(launcher.launches().empty());
 }
 

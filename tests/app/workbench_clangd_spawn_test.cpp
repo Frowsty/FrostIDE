@@ -5,20 +5,26 @@
 // through a counting IProcessLauncher over the real launcher, which is the spawn log. Covered: a
 // trusted folder whose configure-on-open writes the first database (clangd waits for it), the
 // reopen of the configured folder (clangd starts at once and the configure's model does not
-// restart it), and a later profile switch, which moves the database and must restart clangd.
+// restart it), a later profile switch, which moves the database and must restart clangd, and a
+// trust grant on an untrusted configured folder, which must restart the restricted clangd
+// (--enable-config=false) once in full mode.
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "workbench_rig.hpp"
 #include <QApplication>
+#include <QPushButton>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace {
 using namespace std::chrono_literals;
@@ -40,15 +46,29 @@ public:
         return frost::io::realProcessLauncher().launchAsync(spec, context);
     }
     [[nodiscard]] int clangdStarts() const { return m_clangd.load(); }
+    // The arguments of the latest clangd start (empty before the first).
+    [[nodiscard]] std::vector<std::string> lastClangdArguments() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_lastArguments;
+    }
 
 private:
     void count(const frost::io::ProcessSpec& spec) {
         const std::string_view name = frost::io::fileName(spec.executable);
-        if (name == "clangd" || name == "clangd.exe")
+        if (name == "clangd" || name == "clangd.exe") {
+            const std::scoped_lock lock(m_mutex);
+            m_lastArguments = spec.arguments;
             ++m_clangd;
+        }
     }
     std::atomic<int> m_clangd{0};
+    mutable std::mutex m_mutex;
+    std::vector<std::string> m_lastArguments;
 };
+
+bool restricted(const std::vector<std::string>& arguments) {
+    return std::ranges::find(arguments, std::string("--enable-config=false")) != arguments.end();
+}
 
 // A C project with a Debug and a Release Ninja profile; the compiler is the build's own.
 void writeProject(WorkDir& dir) {
@@ -120,6 +140,39 @@ TEST(WorkbenchClangdSpawn, OpeningACMakeProjectStartsOneClangd) {
             << "clangd did not follow the Release profile's database";
         EXPECT_GE(launcher.clangdStarts(), 2);
     }
+}
+
+TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullMode) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
+    WorkDir dir("cmake-clangd-trust");
+    writeProject(dir);
+    const std::string debugDir = dir.join("cmake-build-debug");
+    {
+        // Configure once as a trusted folder so the database exists, then forget the grant.
+        CountingLauncher launcher;
+        WorkbenchRig rig(dir, clangdOptions(launcher));
+        ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+        ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+        ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on the configured database";
+        ASSERT_TRUE(rig.trust->untrust(dir.path()).has_value());
+    }
+    CountingLauncher launcher;
+    WorkbenchRig rig(dir, clangdOptions(launcher));
+    ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on the existing database untrusted";
+    ASSERT_EQ(launcher.clangdStarts(), 1);
+    EXPECT_TRUE(restricted(launcher.lastClangdArguments())) << "an untrusted folder's clangd must be restricted";
+
+    auto* dialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
+    ASSERT_NE(dialog, nullptr) << "opening an untrusted folder offers trust";
+    dialog->trustButton()->click();
+    ASSERT_TRUE(rig.trust->isTrusted(dir.path()));
+    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 2; }, 60s)) << "the trust grant did not restart clangd";
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the restarted clangd never ran";
+    EXPECT_EQ(launcher.clangdStarts(), 2) << "the trust grant restarted clangd more than once";
+    EXPECT_FALSE(restricted(launcher.lastClangdArguments())) << "the restarted clangd is still restricted";
 }
 
 } // namespace

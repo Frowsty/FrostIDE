@@ -622,7 +622,8 @@ private:
     void stopProjectEvaluation();
     void stopClangd();
     void restartClangd();
-    // A CMake model change restarts clangd only when the compile-commands location changed.
+    // A CMake model change, or a trust change, restarts clangd only when the compile-commands
+    // location or the trust its launch flags came from changed.
     void restartClangdIfCMakeStateChanged();
     // Starts the clangd that openFolder deferred until its configure finished (FND-9a). With
     // `retryUntilIdle`, a CMake service that is not idle yet is asked again shortly.
@@ -752,6 +753,9 @@ private:
     // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
     // started with (cmakeClangdState), and the root whose start waits for the open's configure.
     std::string m_clangdCMakeState;
+    // Whether the running clangd was started trusted (full mode) or restricted (FND-3); a trust
+    // grant on a CMake folder must restart it even when the compile commands did not move.
+    bool m_clangdTrusted = false;
     std::string m_clangdDeferredRoot;
     QMetaObject::Connection m_clangdDeferral;
     std::uint64_t m_projectTrustRevision = 0;

@@ -965,6 +965,12 @@ void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const
     }
     compoundLayout->addWidget(compoundList, 1);
     outer->addWidget(compoundGroup, 1);
+    // Compound launches need real run configurations (RUN-5); the group is shown, but nothing in
+    // it can be used, so no control advertises a launch that cannot happen.
+    const QString compoundReason = QStringLiteral("Compound runs require run configurations (RUN-5).");
+    compoundGroup->setEnabled(false);
+    compoundGroup->setToolTip(compoundReason);
+    launchCompoundBtn->setToolTip(compoundReason);
 
     QObject::connect(launchCompoundBtn, &QPushButton::clicked, &dialog, [&] {
         std::vector<project::ProjectId> selectedIds;

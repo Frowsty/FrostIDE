@@ -1155,14 +1155,14 @@ void Workbench::registerActions() {
         },
         [this] { return m_window != nullptr && m_history.has_value() && currentView() != nullptr; });
     add(
-        "window.nuget", "NuGet Package Manager",
+        "window.nuget", "NuGet Packages",
         [this] {
             if (m_window)
                 m_window->toolWindows().toggle(kNuGetToolWindow);
         },
         [this] { return m_window != nullptr; });
     add(
-        "window.asmViewer", "IL / Native Assembly Viewer",
+        "window.asmViewer", "IL / Assembly View (unavailable)",
         [this] {
             if (m_window)
                 m_window->toolWindows().toggle(kAsmViewerToolWindow);

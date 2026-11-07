@@ -727,8 +727,15 @@ void Workbench::offerProjectTrust() {
             if (m_clangd) {
                 restartClangd();
             }
-        } else if (m_cmake && m_cmake->service().state() == build::BuildState::Idle && !m_cmake->service().model()) {
-            (void)m_cmake->service().configure();
+        } else if (m_cmake) {
+            if (m_cmake->service().state() == build::BuildState::Idle && !m_cmake->service().model()) {
+                // The configure's model publication restarts clangd if the database or trust moved.
+                (void)m_cmake->service().configure();
+            } else {
+                // A clangd started restricted on an existing database restarts trusted (.clangd,
+                // --query-driver); without a running clangd this does nothing.
+                restartClangdIfCMakeStateChanged();
+            }
         }
         m_luaObservedTrust = true;
         startLua(root);
@@ -2734,6 +2741,7 @@ void Workbench::startClangd(const std::string& root) {
     options.launch.jobs = m_options.clangdJobs;
     // Restricted mode (no project config, default limits) unless the root is trusted (clangd.hpp).
     options.launch.trusted = m_services.trust.isTrusted(root);
+    m_clangdTrusted = options.launch.trusted;
     options.compileCommands = m_compileCommands;
     const auto generation = m_clangdGeneration;
     // The owned server supervisors are joined before Workbench's QObject base is destroyed;
@@ -2800,12 +2808,18 @@ void Workbench::restartClangdIfCMakeStateChanged() {
     if (!m_cmake || !m_clangd)
         return;
     const std::string state = cmakeClangdState(m_services.fs, m_cmake->service());
-    if (state == m_clangdCMakeState) {
-        // Same build directory, database present or absent as before: clangd already reads it.
+    const bool trusted = m_services.trust.isTrusted(m_projectRoot);
+    if (state == m_clangdCMakeState && trusted == m_clangdTrusted) {
+        // Same build directory, database present or absent as before, same trust: clangd already
+        // reads it with the right launch flags.
         log::info(kLog, "the CMake model changed; clangd's compile commands did not, so it keeps running");
         return;
     }
-    log::info(kLog, "the CMake compile commands moved ({} -> {}): clangd restarts", m_clangdCMakeState, state);
+    if (trusted != m_clangdTrusted)
+        log::info(kLog, "the project's trust changed ({} -> {}): clangd restarts with the new launch flags",
+                  m_clangdTrusted, trusted);
+    else
+        log::info(kLog, "the CMake compile commands moved ({} -> {}): clangd restarts", m_clangdCMakeState, state);
     restartClangd();
 }
 
@@ -2833,6 +2847,7 @@ void Workbench::stopClangd() {
     m_clangdDeferredRoot.clear();
     QObject::disconnect(m_clangdDeferral);
     m_clangdCMakeState.clear();
+    m_clangdTrusted = false;
     ++m_clangdGeneration;
     std::erase_if(m_retiredClangd, [](auto& stopped) {
         if (!stopped.ready())
