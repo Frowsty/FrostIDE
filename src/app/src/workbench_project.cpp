@@ -2747,6 +2747,17 @@ void Workbench::startClangd(const std::string& root) {
         lang::findClangd(m_services.fs, lang::defaultClangdSearch(lang::configuredClangdPath(*snapshot)));
     if (!found) {
         log::info(kLog, "no clangd, code insight is off: {}", found.error().describe());
+        // The truth rule (ADR 0078): no C++ results without clangd, and the user is told why, once
+        // per project (as for LuaLS), not only in the log.
+        if (m_clangdUnavailableNotifiedRoot != root) {
+            m_clangdUnavailableNotifiedRoot = root;
+            notify(text("C++ language server unavailable"),
+                   qs(std::format("{}. C++ diagnostics, completion, navigation and the Structure view are off until "
+                                  "clangd {} is installed (tools/bootstrap) or Settings > Tools names a clangd "
+                                  "executable.",
+                                  found.error().message(), lang::pinnedLlvmVersion())),
+                   ui::NotificationKind::Warning);
+        }
         return;
     }
     if (!m_reactor) {

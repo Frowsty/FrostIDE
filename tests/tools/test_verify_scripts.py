@@ -166,7 +166,8 @@ if ($ast.ParamBlock) { foreach ($p in $ast.ParamBlock.Parameters) { "param: $($p
         text = (TOOLS / "verify.ps1").read_text(encoding="utf-8")
         # An unanchored -L fuzz would also select the mod.fuzz corpus replays (ADR 0027 decision 8).
         self.assertIn("'-L', '^fuzz$'", text)
-        self.assertIn("'-LE', '^stress$'", text)
+        # The Debug run excludes stress and (outside the -Corpus tier) corpus tests.
+        self.assertIn("'-LE', '^(stress|corpus)$'", text)
         self.assertNotRegex(text, r"'-LE?', '(?!\^)")
 
     def test_ctest_starts_tests_with_error_boxes_off(self):

@@ -5,7 +5,7 @@
 # PLAN.md section 6.4). Run inside WSL:
 #
 #   wsl -d Ubuntu-24.04 --exec bash /mnt/e/dev/FrostIDE/tools/verify.sh [--quick | --full] [--no-checks]
-#       [--tidy] [--tsan-quick]
+#       [--tidy] [--tsan-quick] [--corpus]
 #
 # It mirrors the working tree onto ext4 (building on the /mnt/e 9P mount is
 # several times slower), then configures, builds and tests:
@@ -17,10 +17,16 @@
 #   --full        additionally ASan+UBSan (Debug), TSan (RelWithDebInfo, every module) and the fuzz
 #                 smoke: the linux-clang-fuzz tree (libFuzzer + ASan + UBSan, RelWithDebInfo) runs
 #                 each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L '^fuzz$'
-# The PowerShell spellings -Quick, -Full, -Tidy and -TsanQuick are accepted too.
+#   --corpus      additionally the corpus tier (ADR 0077 decision 7, ADR 0078): tools/corpora.py
+#                 verify must find every pinned corpus of tests/corpus/corpora.lock.json under
+#                 ~/FrostBuilds/corpora (ext4; a missing or changed corpus fails, it is never
+#                 skipped), then the Debug tree's tests labelled `corpus` run with a 3600 s
+#                 per-test limit; no such test ("corpus no-tests") or a skipped one fails
+# The PowerShell spellings -Quick, -Full, -Tidy, -TsanQuick and -Corpus are accepted too.
 #
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
-# configuration and run in the --full configurations. Afterwards, with --tidy, clang-tidy checks
+# configuration and run in the --full configurations. Tests labelled `corpus` run only in the
+# --corpus tier. Afterwards, with --tidy, clang-tidy checks
 # the changed files' translation units over the Debug compile database (every TU under --full,
 # with the fuzz tree's own TUs, or when there is no changed-file list), and the licence
 # check inspects the Linux build trees and Qt. Both run even with --no-checks, because they
@@ -65,13 +71,14 @@
 
 set -euo pipefail
 
-# Sets FULL, CHECKS, TIDY and TSAN_QUICK (0 or 1) from the command line; exits 2 with the usage
+# Sets FULL, CHECKS, TIDY, TSAN_QUICK and CORPUS (0 or 1) from the command line; exits 2 with the usage
 # line for anything else. No other side effects; tests/tools/test_verify_scripts.py runs it alone.
 parse_args() {
     FULL=0
     CHECKS=1
     TIDY=0
     TSAN_QUICK=0
+    CORPUS=0
     local arg
     for arg in "$@"; do
         case "$arg" in
@@ -80,7 +87,8 @@ parse_args() {
             --no-checks) CHECKS=0 ;;
             --tidy | -Tidy) TIDY=1 ;;
             --tsan-quick | -TsanQuick) TSAN_QUICK=1 ;;
-            *) echo "usage: verify.sh [--quick | --full] [--no-checks] [--tidy] [--tsan-quick]" >&2; exit 2 ;;
+            --corpus | -Corpus) CORPUS=1 ;;
+            *) echo "usage: verify.sh [--quick | --full] [--no-checks] [--tidy] [--tsan-quick] [--corpus]" >&2; exit 2 ;;
         esac
     done
 }
@@ -288,7 +296,28 @@ run_tsan_quick() {
     run_config tsan-quick linux-clang-tsan linux-clang-tsan -LE '^stress$' -L "$regex"
 }
 
-run_config debug linux-clang linux-clang-debug -LE '^stress$'
+run_config debug linux-clang linux-clang-debug -LE '^(stress|corpus)$'
+
+# The corpus tier (--corpus only; see the header). The corpora are checked first, so a missing corpus
+# is reported as such and fails, rather than surfacing as a test's failure.
+run_corpus() {
+    if [[ $CORPUS -ne 1 ]]; then return; fi
+    echo "=== corpus: verify"
+    if ! python3 -I tools/corpora.py --repo "$MIRROR" verify 2>&1; then
+        summary+=("corpus FAILED (corpus missing or not at its pin; tools/corpora.py fetch)"); status=1; return
+    fi
+    if [[ $debug_built -ne 1 ]]; then summary+=("corpus not-run (debug build failed)"); status=1; return; fi
+    echo "=== corpus: test (linux-clang-debug)"
+    local out counts
+    out="$(ctest --preset linux-clang-debug -L '^corpus$' --timeout 3600 2>&1)" || status=1
+    echo "$out" | tail -15
+    counts="$(ctest_counts <<< "$out")"
+    if [[ -z "$counts" ]]; then summary+=("corpus no-tests"); status=1; return; fi
+    summary+=("corpus $counts")
+    # In the corpus tier a skipped test is a failure (PLAN.md section 7, Principles).
+    if [[ "$counts" == *skipped* ]]; then status=1; fi
+}
+run_corpus
 
 # Symbolization of the self-test artifacts (--full only; ADR 0022). The Debug ctest run above
 # leaves a crash dump, a contract-violation dump and a freeze report in
@@ -311,8 +340,8 @@ if [[ $FULL -eq 1 ]]; then
 fi
 
 if [[ $FULL -eq 1 ]]; then
-    run_config asan linux-clang-asan linux-clang-asan
-    run_config tsan linux-clang-tsan linux-clang-tsan
+    run_config asan linux-clang-asan linux-clang-asan -LE '^corpus$'
+    run_config tsan linux-clang-tsan linux-clang-tsan -LE '^corpus$'
     run_config fuzz linux-clang-fuzz linux-clang-fuzz -L '^fuzz$'
 else
     run_tsan_quick
