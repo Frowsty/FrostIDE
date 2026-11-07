@@ -21,8 +21,10 @@
 #      parallel, and the /MT fuzz smoke: the win-clangcl-fuzz tree (libFuzzer + ASan,
 #      RelWithDebInfo) runs each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L fuzz,
 #      serially so each target gets its full CPU time.
+#   0. The tree hash of the working tree (tools/hooks/verify_stamp.py tree; FND-2).
 #   4. Repository checks: clang-format on tracked C/C++ files, frost-lint, the
-#      licence check (Windows build trees) and the feature-matrix check. A check
+#      licence check (Windows build trees), the feature-matrix check and the source-to-test
+#      line ratchet against the merge base with -Base (frost_lint.py ratchet; FND-5). A check
 #      whose tool does not exist yet is reported as "not-run", never silently dropped.
 #   5. With -Tidy: clang-tidy (pinned LLVM, the checked-in .clang-tidy files) over the Debug
 #      compile database: on the changed files' translation units, a changed header through one
@@ -44,7 +46,9 @@
 # Skipped tests are never counted as passed. Exit status: 0 only if every step
 # that ran succeeded (skips and not-run checks do not fail the gate, but are visible).
 # Side effects: build trees under build\, the changed-file list build\verify-changed-<pid>.txt
-# (deleted at the end), and with -Tidy the frost-tidy compile database in the Debug tree.
+# (deleted at the end), with -Tidy the frost-tidy compile database in the Debug tree, and after a
+# passing run whose tree did not change meanwhile the verify-stamp <git common dir>\frost\verify-stamps\
+# <tree>.json that the commit-msg hook checks (step 9; install: git config core.hooksPath tools/hooks).
 
 [CmdletBinding()]
 param(
@@ -200,7 +204,18 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
 }
 
 $changedList = Join-Path $repo "build\verify-changed-$PID.txt"
+# The verify-stamp tool (FND-2, ADR 0078 decision 5) and the tree this run verifies, taken now so a
+# file changed mid-run leaves the tree unstamped (step 9).
+$stampScript = Join-Path $PSScriptRoot 'hooks\verify_stamp.py'
+$stampTree = ''
+$stampReason = ''
 try {
+    # 0. The tree hash of the working tree (tracked and untracked files, through a copy of the index).
+    Write-Host '=== verify-stamp tree'
+    $out = Invoke-Native { & $python -I $stampScript tree --repo $repo }
+    if ($LASTEXITCODE -eq 0) { $stampTree = ($out | Where-Object { $_ -match '^[0-9a-f]{40,64}$' } | Select-Object -Last 1) }
+    if (-not $stampTree) { $stampReason = "no tree hash: $($out | Select-Object -Last 1)" }
+
     # 1. The changed-file list, only for the steps that use it (-Tidy, -TsanQuick; -Full checks
     # everything). A failure is not fatal: tidy then checks every TU and WSL runs all four TSan
     # modules, with the reason in the log.
@@ -297,6 +312,17 @@ try {
         if ($LASTEXITCODE -eq 0) { $checks.Add("$name ok") } else { $checks.Add("$name FAILED"); $failed = $true }
     }
 
+    # The source-to-test line ratchet of this slice, against the merge base with -Base (FND-5, ADR 0078
+    # decision 6; the threshold is in tools/frost_lint.py). "ratchet not-run (...)" when the base does
+    # not resolve, which does not fail the gate.
+    Write-Host '=== ratchet'
+    $out = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'frost_lint.py') ratchet --repo $repo --base $Base }
+    $ratchetCode = $LASTEXITCODE
+    $ratchetLine = $out | Where-Object { $_ -match '^ratchet ' } | Select-Object -Last 1
+    if (-not $ratchetLine) { $ratchetLine = "ratchet FAILED (exit $ratchetCode without a summary)"; $ratchetCode = 1 }
+    $checks.Add($ratchetLine)
+    if ($ratchetCode -ne 0) { $failed = $true }
+
     # 5. clang-tidy over the Debug compile database (PLAN.md 6.4 step 2; ADR 0027 decision 1),
     # with -Tidy only (decision 9). Budget: B28. -Quick checks only the changed files' TUs; every
     # TU runs only without a list.
@@ -349,7 +375,18 @@ try {
 }
 
 $line = 'Verified: ' + (($summary + $checks) -join ', ')
-if ($failed) { $line = "FAILED: $line" }
+if ($failed) {
+    $line = "FAILED: $line"
+} elseif ($stampTree) {
+    # 9. The verify-stamp: this summary, recorded under the verified tree's hash, which the commit-msg
+    # hook (tools/hooks/commit-msg) matches against a footer on main. Not written when the tree changed
+    # during the run; a missing stamp does not fail the gate, it only blocks the commit on main.
+    Write-Host '=== verify-stamp'
+    $null = Invoke-Native { & $python -I $stampScript write --repo $repo --script verify.ps1 --summary $line `
+            --expect-tree $stampTree }
+} else {
+    Write-Host "verify-stamp: not written ($stampReason)"
+}
 Write-Host $line
 if ($failed) { exit 1 }
 exit 0

@@ -23,7 +23,22 @@
 #   cpp26         banned C++26 constructs in C/C++ outside the exempt directories;
 #   qt-svg        Qt Svg headers are included only under **/icon_baker/** (ADR 0015 decision 7:
 #                 the runtime draws baked atlases and never renders SVG);
-#   no-ci         there is no .github/workflows directory (D24).
+#   no-ci         there is no .github/workflows directory (D24);
+# and the truth rule (ADR 0078 decision 1, FND-5), in C, C++ and C# outside tests/**:
+#   fabricated-result     values of the result types (RESULT_TYPES: test outcomes, packages,
+#                         usages, disassembly, diagnostics) are built only in their allowlisted
+#                         parsers, or at an exact SITE_ALLOWANCES site (stale entries fail too);
+#   result-type-registry  a type under src/** named like a result is listed in RESULT_TYPES;
+#   synthesized-output    no string literal imitates a tool's output (TOOL_OUTPUT_MARKERS);
+#   parity-claim          README and the other PARITY_CLAIM_DOC_GLOBS documents, and string
+#                         literals under src/ui and src/app, claim no parity or complete
+#                         replacement (FND-4).
+#
+#   python tools/frost_lint.py [--repo <path>] ratchet [--base main]
+#
+# runs the source-to-test line ratchet of the current slice instead (RATCHET_MIN_SOURCE_LINES
+# below; ADR 0078 decision 6) and prints "ratchet ok (...)", "ratchet FAILED (...)" or
+# "ratchet not-run (...)" last.
 # Byte-exact data (fixtures, goldens, fuzz corpora; DATA_GLOBS) and vendored third-party
 # sources (VENDORED_GLOBS) only need REUSE coverage.
 #
@@ -146,6 +161,171 @@ EXE_SEARCH_EXEMPT_GLOBS = ("tests/app/startup_test.cpp",)
 QT_SVG_ALLOWED_GLOBS = ("**/icon_baker/**",)
 
 # ---------------------------------------------------------------------------------------
+# Truth rule (ADR 0078 decision 1, FND-5): result types, tool-output strings, parity claims
+# ---------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResultType:
+    """
+    A type whose values the IDE shows as a tool's result. Values may be constructed only in
+    `parsers`: files (REUSE globs) that build them from a process stream started through
+    IProcessLauncher, from an LSP or DAP message, or from another result type that one of
+    those produced. For an enum, `outcomes` are the enumerators that state a result (Passed,
+    Failed); producing one of them counts as constructing the result.
+    """
+
+    name: str
+    category: str
+    parsers: tuple[str, ...] = ()
+    outcomes: tuple[str, ...] = ()
+
+
+# The result types of the truth rule. A type listed with no parser has no real source yet:
+# every construction is a violation until its owning epic adds a parser and lists it here, and
+# that change goes through the independent review (ADR 0078 decision 4). Types are matched by
+# name in C, C++ and C# code outside tests/** (test doubles are welcome there, decision 2).
+# Names declared in several modules (Diagnostic) list every module's own parser.
+RESULT_TYPES: tuple[ResultType, ...] = (
+    # Test outcomes and test discovery. RUN-7 (gtest, CTest), RUN-8 (doctest), RUN-10 (the Unit
+    # Tests window) and LTR-8 (dotnet test) add the parsers of ctest -N, --gtest_list_tests and
+    # the test processes' own output.
+    ResultType("UnitTestRunState", "test outcome", (), ("Passed", "Failed", "Skipped")),
+    ResultType("DiscoveredTestEntry", "test discovery"),
+    # Reserved for RUN-7's result model, so it starts behind the rule (R0 exit criterion).
+    ResultType("TestResult", "test outcome"),
+    ResultType("TestOutcome", "test outcome", (), ("Passed", "Failed", "Skipped")),
+    # Packages: PackageReference items read from the user's own .csproj are file contents, not
+    # invented; a package catalogue needs a real feed (LTR-7).
+    ResultType("NuGetPackageEntry", "package", ("src/app/src/project_properties_xml.cpp",)),
+    ResultType("CatalogItem", "package"),
+    # Usage counts and usages: LSP textDocument/references and Code Vision lenses.
+    ResultType("Usage", "usage", ("src/lang/src/navigation.cpp",)),
+    ResultType("UsageGroup", "usage", ("src/lang/src/navigation.cpp",)),
+    ResultType("EditorCodeVisionLens", "usage count"),
+    # IL and disassembly: the DAP disassemble response.
+    ResultType("DisassembledInstruction", "disassembly", ("src/debug/src/dap_types.cpp",)),
+    # Diagnostics: LSP publishDiagnostics, the build output parsers and their editor adapter.
+    # settings::Diagnostic, theme_compiler::Diagnostic and io::IgnoreDiagnostic are FrostIDE's
+    # own validators reporting on its own inputs, never a tool's result.
+    ResultType("LiveDiagnostic", "diagnostic", ("src/lang/src/diagnostics.cpp",)),
+    ResultType("BuildDiagnostic", "diagnostic", ("src/build/src/**",)),
+    ResultType("Diagnostic", "diagnostic",
+               ("src/build/src/**", "src/settings/src/**", "src/ui/theme_compiler/**")),
+    ResultType("EditorDiagnostic", "diagnostic", ("src/ui/lang/src/editor_insight_binding.cpp",)),
+)
+
+# Declared types whose names end like a result type's (RESULT_NAME_SUFFIX) but are not results:
+# counters, folders, highlights and settings types. Anything else declared under that suffix in
+# src/** must join RESULT_TYPES (rule result-type-registry), so a new result type cannot skip
+# the allowlist by being new.
+RESULT_NAME_SUFFIX = re.compile(r"(?:TestEntry|TestResult|TestOutcome|TestRunState|PackageEntry|Instruction|"
+                                r"Diagnostic|Usage|UsageGroup|CodeVisionLens)$")
+NOT_RESULT_TYPES = frozenset({
+    "IgnoreDiagnostic",  # io: a malformed line in a .gitignore the IDE itself parsed
+    "ActiveDiagnostic",  # ui/editor: which EditorDiagnostic is under the caret (no new data)
+})
+
+
+@dataclass(frozen=True)
+class SiteAllowance:
+    """
+    One construction site allowed by exact text, for files that mix a real result with a
+    harm that another slice removes. `line` is the reported source line, stripped and with
+    whitespace runs collapsed; `context`, when given, must appear (collapsed the same way) in
+    that line and the SITE_CONTEXT_LINES after it, which tells apart sites whose first lines
+    are equal. A moved site still matches, an edited one does not. An entry that matches
+    nothing is itself a violation, so a removed harm cannot leave its entry behind.
+    """
+
+    path: str
+    symbol: str  # the result type or tool-output marker name
+    line: str
+    reason: str
+    context: str = ""
+
+
+SITE_CONTEXT_LINES = 8
+
+
+_FND3 = "FND-3 harm, removed at integration"
+# TEMPORARY entries (tagged _FND3) cover fabrications still on this branch while FND-3 removes
+# them in parallel; the integrator deletes each entry with its harm. The others are reviewed
+# real sites in files that also hold a harm.
+SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
+    # The Unit Tests window invents pass/fail and output (project_properties_dialog.cpp).
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "UnitTestRunState",
+                  "state->states[idx] = failed ? UnitTestRunState::Failed : UnitTestRunState::Passed;", _FND3),
+    # The tree's suite and project rows aggregate the invented leaf states.
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "UnitTestRunState",
+                  "agg = UnitTestRunState::Failed;", _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "UnitTestRunState",
+                  "agg = UnitTestRunState::Passed;", _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", 'state->outputs[idx] = failed ? '
+                  'QStringLiteral("[ RUN      ] %1.%2\\n"', _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", '"[  FAILED  ] %1.%2 (%5 ms)\\n")', _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", ': QStringLiteral("[ RUN      ] %1.%2\\n"',
+                  _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "gtest", '"[       OK ] %1.%2 (%3 ms)\\n"', _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "xunit", 'state->outputs[idx] = failed ? '
+                  'QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [FAIL]\\n"', _FND3),
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "xunit",
+                  ': QStringLiteral("[xUnit.net 00:00:00.00%1]   %2.%3 [PASS] (%1 ms)\\n"', _FND3),
+    # Test discovery by regular expressions over source text, not ctest -N or --gtest_list_tests.
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
+                  _FND3),
+    # The constant NuGet "catalogue" of 8 packages.
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "CatalogItem",
+                  "static constexpr std::array<CatalogItem, 8> kCatalog{{", _FND3),
+    # The IL viewer placeholder.
+    SiteAllowance("src/app/src/project_properties_dialog.cpp", "il", '".assembly extern System.Runtime {}\\n"',
+                  _FND3),
+    # Code Vision: usages counted by text match, and a fixed "implementations" label.
+    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
+                  "out.push_back(EditorCodeVisionLens{", _FND3, context=".label = usageLabel,"),
+    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
+                  "out.push_back(EditorCodeVisionLens{", _FND3, context='.label = "implementations",'),
+    # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
+    # the managed server) into BuildDiagnostic rows field by field.
+    SiteAllowance("src/app/src/workbench_project.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = d.message;"),
+    # Reviewed real site: the author lens shows git blame's author (VcsService through authorForLine).
+    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
+                  "out.push_back(EditorCodeVisionLens{", "git blame author from VcsService (authorForLine)",
+                  context=".label = author,"),
+)
+
+# Synthesized tool output: literals that imitate a tool's own output lines. Outside the files
+# that parse that output (`parsers`, REUSE globs) and outside tests/**, a string literal that
+# contains one is invented output (ADR 0078 decision 1). Each entry: name, pattern, parsers.
+TOOL_OUTPUT_MARKERS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = (
+    ("gtest", re.compile(r"\[ RUN      \]|\[       OK \]|\[  FAILED  \]|\[  PASSED  \]|\[  SKIPPED \]|"
+                         r"\[==========\]|\[----------\]"), ()),
+    ("xunit", re.compile(r"\[xUnit\.net"), ()),
+    ("doctest", re.compile(r"\[doctest\]"), ()),
+    ("ctest", re.compile(r"tests failed out of"), ()),
+    ("dotnet-test", re.compile(r"(?:Passed|Failed)!\s+-\s+Failed:"), ()),
+    ("il", re.compile(r"\.assembly extern\b|\bIL_[0-9A-Fa-f]{4}:|\.maxstack\b"), ()),
+)
+
+# Parity claims (FND-4). The checked documents and the UI string literals may describe goals
+# and the evidence, never claim parity or a complete replacement: PLAN.md section 7 "Roadmap
+# v2" and tests/features/matrix.json hold the evidence. PLAN.md, the ADRs and docs/progress.md
+# are history and quote the old claims, so they are not checked.
+PARITY_CLAIM_DOC_GLOBS = ("README.md", "RIDER_PARITY_TODO.md", "CONTRIBUTING.md", "SECURITY.md",
+                          "integrations/**/*.md", "integrations/**/package.json")
+PARITY_CLAIM_UI_GLOBS = ("src/ui/**", "src/app/**")
+PARITY_CLAIMS: tuple[re.Pattern[str], ...] = tuple(re.compile(p, re.I) for p in (
+    r"\bcomplete replacement\b",
+    r"\bdrop-in replacement\b",
+    r"\b(?:full|complete|total)\s+(?:JetBrains\s+)?(?:Rider|CLion|ReSharper|Visual Studio)\s+replacement\b",
+    r"\b1\s*:\s*1\b[^.\n]{0,40}\b(?:parity|Rider|CLion|JetBrains|ReSharper|Visual Studio)\b",
+    r"\b(?:parity|Rider|CLion)\b[^.\n]{0,20}\b1\s*:\s*1\b",
+    r"\b(?:full|complete|total|100\s*%)\s+(?:[\w-]+\s+){0,3}parity\b",
+    r"\bfeature[- ]complete\b",
+))
+
+# ---------------------------------------------------------------------------------------
 # Comment syntax table
 # ---------------------------------------------------------------------------------------
 
@@ -219,6 +399,8 @@ SOURCE_SYNTAX_BY_NAME: dict[str, Syntax] = {
     ".editorconfig": INI,
     ".gitignore": GIT_PATTERNS,
     ".gitattributes": GIT_PATTERNS,
+    # git hooks (tools/hooks) are POSIX shell scripts without an extension.
+    "commit-msg": SHELL,
 }
 
 
@@ -439,6 +621,9 @@ class Comment:
 class Scan:
     code: str  # the file text with comments and string contents replaced by spaces
     comments: list[Comment] = field(default_factory=list)
+    # (start, end) offsets of string and character literal contents (C, C++ and C# only), so
+    # rules can read what a literal says; `code` has them blanked.
+    strings: list[tuple[int, int]] = field(default_factory=list)
 
 
 def _blank(buf: list[str], start: int, end: int) -> None:
@@ -473,6 +658,7 @@ def _scan_c(text: str, csharp: bool) -> Scan:
     """Lexes C, C++, C# and resource scripts: // and /* */ comments, string and char literals."""
     buf = list(text)
     comments: list[Comment] = []
+    strings: list[tuple[int, int]] = []
     i, n, line = 0, len(text), 1
     while i < n:
         c = text[i]
@@ -502,6 +688,7 @@ def _scan_c(text: str, csharp: bool) -> Scan:
                     j = text.find(close, m.end())
                     end = n if j < 0 else j + len(close)
                     line += text.count("\n", i, end)
+                    strings.append((m.end(), n if j < 0 else j))
                     _blank(buf, i + 1, end - 1)
                     i = end
                     continue
@@ -516,6 +703,7 @@ def _scan_c(text: str, csharp: bool) -> Scan:
                     j += 1
                 end = min(j + 1, n)
                 line += text.count("\n", i, end)
+                strings.append((i + 1, min(j, n)))
                 _blank(buf, i + 1, end - 1)
                 i = end
                 continue
@@ -529,11 +717,12 @@ def _scan_c(text: str, csharp: bool) -> Scan:
             terminated = j < n and text[j] == c
             end = j + 1 if terminated else j
             line += text.count("\n", i, end)
+            strings.append((i + 1, j))
             _blank(buf, i + 1, end - 1 if terminated else end)
             i = end
         else:
             i += 1
-    return Scan("".join(buf), comments)
+    return Scan("".join(buf), comments, strings)
 
 
 _CMAKE_BRACKET = re.compile(r"\[(=*)\[")
@@ -968,6 +1157,213 @@ def check_cpp26(rel: str, code: str, lines: _Lines) -> list[Violation]:
 
 
 # ---------------------------------------------------------------------------------------
+# Truth-rule checks: fabricated-result, result-type-registry, synthesized-output, parity-claim
+# ---------------------------------------------------------------------------------------
+
+# tests/** may build results and imitate tool output: doubles feed the parsers (ADR 0078 decision 2).
+_TRUTH_EXEMPT_RE = compile_globs(("tests/**",))
+_HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp")
+_PARITY_DOC_RE = compile_globs(PARITY_CLAIM_DOC_GLOBS)
+_PARITY_UI_RE = compile_globs(PARITY_CLAIM_UI_GLOBS)
+_RESULT_BY_NAME = {t.name: t for t in RESULT_TYPES}
+
+
+@dataclass(frozen=True)
+class _Hit:
+    """A truth-rule finding before the site allowances are applied."""
+
+    line: int
+    rule: str
+    symbol: str
+    message: str
+
+
+def _qualified(name: str) -> str:
+    """A regex for `name` as a whole identifier, optionally namespace-qualified, not a member."""
+    return r"(?<![\w.>])(?:\w+\s*::\s*)*\b" + re.escape(name) + r"\b"
+
+
+def _before(code: str, start: int, width: int = 120) -> str:
+    return code[max(0, start - width) : start]
+
+
+# A type definition or base-class list right before the name: `struct T {`, `class X : public T {`.
+_DEFINITION_TAIL = re.compile(r"\b(?:struct|class|union|enum|public|private|protected|typename|friend)\s+"
+                              r"(?:\[\[[^\]]*\]\]\s*)?(?:\w+\s*::\s*)*$")
+# A trailing return type right before the name: `auto f() -> T {` opens a function body.
+_TRAILING_ARROW = re.compile(r"->\s*(?:[\w:]+\s*<?\s*)*$")
+_COMPARISON_TAIL = re.compile(r"(?:==|!=|\bcase)\s*$")
+
+
+def _construction_patterns(result: ResultType, header: bool) -> list[tuple[re.Pattern[str], str]]:
+    """The construction forms of `result` (see check_fabricated_results), each with a label."""
+    name = _qualified(result.name)
+    # In a header, `T member;` and `T member{};` declare a defaulted member, not a result.
+    brace = r"\{(?!\s*\})" if header else r"\{"
+    forms = [
+        # T{...}: a braced temporary or aggregate, designated initializers included.
+        (re.compile(name + r"\s*\{"), "braced"),
+        # T x{...}; T x = {...}; T x = T{...}; and, outside headers, T x; and T x{};
+        (re.compile(name + r"\s+[A-Za-z_]\w*\s*(?:" + brace + r"|=\s*" + brace + r"|=\s*(?:\w+\s*::\s*)*" +
+                    re.escape(result.name) + r"\s*" + brace + ("" if header else r"|;") + ")"), "declaration"),
+        # A container literal: std::array<T, 8> k{{...}}, std::vector<T>{...}.
+        (re.compile(r"<\s*(?:const\s+)?" + name + r"\s*(?:,[^<>;{}]*)?>\s*(?:[A-Za-z_]\w*\s*)?(?:=\s*)?\{(?!\s*\})"),
+         "container literal"),
+        # make_shared<T>, make_unique<T>, make_optional<T>.
+        (re.compile(r"\bmake_(?:shared|unique|optional)\s*<\s*" + name + r"\s*>"), "factory"),
+    ]
+    if result.outcomes:
+        forms.append((re.compile(name + r"\s*::\s*(?:" + "|".join(result.outcomes) + r")\b"), "outcome"))
+    return forms
+
+
+def check_fabricated_results(rel: str, code: str, lines: _Lines) -> list[_Hit]:
+    """
+    fabricated-result: a RESULT_TYPES value constructed outside the type's allowlisted parsers.
+    Constructions are recognised structurally in lexed code (comments and strings blanked):
+    braced temporaries and aggregates, declarations with an initializer (or default-constructed
+    outside headers), container literals, make_shared/make_unique/make_optional, and, for
+    enums, producing an outcome enumerator (anything but comparing with == or != or a case
+    label). Not recognised: emplace_back arguments and conversions hidden behind a function,
+    which the independent review still reads (ADR 0078 decision 4).
+    """
+    if _TRUTH_EXEMPT_RE.match(rel):
+        return []
+    header = rel.endswith(_HEADER_SUFFIXES)
+    out = []
+    for result in RESULT_TYPES:
+        if result.name not in code:
+            continue
+        if result.parsers and compile_globs(result.parsers).match(rel):
+            continue
+        for pattern, form in _construction_patterns(result, header):
+            for m in pattern.finditer(code):
+                before = _before(code, m.start())
+                if form in ("braced", "declaration") and _DEFINITION_TAIL.search(before):
+                    continue
+                if form in ("braced", "container literal") and _TRAILING_ARROW.search(before):
+                    continue
+                if form == "outcome" and (_COMPARISON_TAIL.search(before) or
+                                          re.match(r"\s*(?:==|!=)", code[m.end() : m.end() + 4])):
+                    continue
+                where = ("; allowed only in " + ", ".join(result.parsers)) if result.parsers else \
+                        "; no parser feeds it yet, so its owning epic must add one and list it in RESULT_TYPES"
+                out.append(_Hit(lines.line(m.start()), "fabricated-result", result.name,
+                                f"{result.name} ({result.category}, {form}) is built outside a parser of a real "
+                                f"tool's output{where} (ADR 0078 decision 1)"))
+    return out
+
+
+_TYPE_DECLARATION = re.compile(r"\b(?:struct|class|enum\s+class|enum\s+struct|enum)\s+(?:\[\[[^\]]*\]\]\s*)?"
+                               r"([A-Za-z_]\w*)\s*(?:final\s*)?(?::[^;{()]*)?\{")
+
+
+def check_result_registry(rel: str, code: str, lines: _Lines) -> list[_Hit]:
+    """result-type-registry: types under src/** named like a result type are in RESULT_TYPES."""
+    if not rel.startswith("src/"):
+        return []
+    out = []
+    for m in _TYPE_DECLARATION.finditer(code):
+        name = m.group(1)
+        if RESULT_NAME_SUFFIX.search(name) and name not in _RESULT_BY_NAME and name not in NOT_RESULT_TYPES:
+            out.append(_Hit(lines.line(m.start(1)), "result-type-registry", name,
+                            f"{name} is named like a tool result; list it in RESULT_TYPES with the parsers that "
+                            f"may build it (or in NOT_RESULT_TYPES with a reason) in tools/frost_lint.py"))
+    return out
+
+
+def _joined_literals(text: str, strings: list[tuple[int, int]]) -> list[tuple[int, str]]:
+    """String literal contents, with adjacent literals ("a" "b") joined; each with its start offset."""
+    joined: list[tuple[int, str]] = []
+    previous_end = -2
+    for start, end in strings:
+        gap = text[previous_end + 1 : start - 1] if previous_end >= 0 else None
+        if joined and gap is not None and gap.strip() == "" and start - 1 > previous_end:
+            joined[-1] = (joined[-1][0], joined[-1][1] + text[start:end])
+        else:
+            joined.append((start, text[start:end]))
+        previous_end = end
+    return joined
+
+
+def check_tool_output_strings(rel: str, text: str, scanned: Scan, lines: _Lines) -> list[_Hit]:
+    """synthesized-output: string literals that imitate a tool's output lines (TOOL_OUTPUT_MARKERS)."""
+    if _TRUTH_EXEMPT_RE.match(rel):
+        return []
+    out = []
+    for start, end in scanned.strings:
+        literal = text[start:end]
+        for name, pattern, parsers in TOOL_OUTPUT_MARKERS:
+            if parsers and compile_globs(parsers).match(rel):
+                continue
+            m = pattern.search(literal)
+            if m:
+                out.append(_Hit(lines.line(start + m.start()), "synthesized-output", name,
+                                f"string literal imitates {name} output ({m.group(0)!r}); show only what the tool "
+                                f"printed, parsed from its process stream (ADR 0078 decision 1)"))
+    return out
+
+
+def check_parity_claims_in_document(rel: str, text: str) -> list[Violation]:
+    """parity-claim (documents): no parity or complete-replacement claims in PARITY_CLAIM_DOC_GLOBS."""
+    out = []
+    for number, line in enumerate(text.split("\n"), start=1):
+        for pattern in PARITY_CLAIMS:
+            m = pattern.search(line)
+            if m:
+                out.append(Violation(rel, number, "parity-claim",
+                                     f"claims {m.group(0)!r}; state goals and the evidence instead (PLAN.md section 7 "
+                                     f"'Roadmap v2', tests/features/matrix.json; FND-4)"))
+    return out
+
+
+def check_parity_claims_in_strings(rel: str, text: str, scanned: Scan, lines: _Lines) -> list[Violation]:
+    """parity-claim (UI strings): no parity claims in string literals under PARITY_CLAIM_UI_GLOBS."""
+    if not _PARITY_UI_RE.match(rel):
+        return []
+    out = []
+    for start, literal in _joined_literals(text, scanned.strings):
+        for pattern in PARITY_CLAIMS:
+            m = pattern.search(literal)
+            if m:
+                out.append(Violation(rel, lines.line(start), "parity-claim",
+                                     f"UI string claims {m.group(0)!r}; describe goals and evidence instead (FND-4)"))
+    return out
+
+
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
+
+
+def apply_site_allowances(rel: str, text: str, hits: list[_Hit], used: set[int]) -> list[Violation]:
+    """Drops hits that a SITE_ALLOWANCES entry covers (recording the entry in `used`)."""
+    source_lines = text.split("\n")
+    out = []
+    for hit in hits:
+        reported = _collapse(source_lines[hit.line - 1]) if 0 < hit.line <= len(source_lines) else ""
+        window = _collapse(" ".join(source_lines[hit.line - 1 : hit.line - 1 + SITE_CONTEXT_LINES + 1]))
+        allowed = False
+        for index, entry in enumerate(SITE_ALLOWANCES):
+            if entry.path == rel and entry.symbol == hit.symbol and _collapse(entry.line) == reported and \
+                    (not entry.context or _collapse(entry.context) in window):
+                used.add(index)
+                allowed = True
+                break
+        if not allowed:
+            out.append(Violation(rel, hit.line, hit.rule, hit.message))
+    return out
+
+
+def stale_site_allowances(linted: set[str], used: set[int]) -> list[Violation]:
+    """Every SITE_ALLOWANCES entry for a linted file that covered nothing."""
+    return [Violation(entry.path, 1, "fabricated-result",
+                      f"stale site allowance for {entry.symbol} ({entry.reason}): no site matches "
+                      f"{entry.line!r}{' with ' + repr(entry.context) if entry.context else ''}; delete the entry "
+                      f"from SITE_ALLOWANCES in tools/frost_lint.py")
+            for index, entry in enumerate(SITE_ALLOWANCES) if entry.path in linted and index not in used]
+
+
+# ---------------------------------------------------------------------------------------
 # REUSE.toml coverage
 # ---------------------------------------------------------------------------------------
 
@@ -1021,6 +1417,147 @@ def reuse_covered(rel: str, reuse: list[_ReuseFile], file_set: set[str]) -> bool
 
 
 # ---------------------------------------------------------------------------------------
+# Source-to-test line ratchet (ADR 0078 decision 6, FND-5)
+# ---------------------------------------------------------------------------------------
+
+# A slice is the difference between the merge base of HEAD and the verify base (main) and the
+# working tree, untracked files included. Source lines grow by the added minus the deleted lines
+# of code files under RATCHET_SOURCE_GLOBS, so moving or reformatting code costs nothing; test
+# lines are the added lines of code files under tests/** outside the data globs (fixtures,
+# goldens and corpora do not count). When the source grows by RATCHET_MIN_SOURCE_LINES or more,
+# the slice needs at least RATCHET_MIN_TEST_RATIO test lines per source line. Calibrated on the
+# history: the reviewed M0-M5 slices ran 0.19 to 2.2 test lines per source line, the
+# feature-first commits that ADR 0077 audited 0.00 to 0.16 (1c29790: 9,372 against 196). Only
+# files with comment syntax (SOURCE_SYNTAX_BY_SUFFIX) count; Markdown and JSON do not.
+RATCHET_SOURCE_GLOBS = ("src/**", "integrations/**")
+RATCHET_TEST_GLOBS = ("tests/**",)
+RATCHET_MIN_SOURCE_LINES = 200
+RATCHET_MIN_TEST_PERCENT = 20
+
+_RATCHET_SOURCE_RE = compile_globs(RATCHET_SOURCE_GLOBS)
+_RATCHET_TEST_RE = compile_globs(RATCHET_TEST_GLOBS)
+
+
+class RatchetError(Exception):
+    """The slice could not be measured (git missing, the base does not resolve)."""
+
+
+@dataclass
+class RatchetCounts:
+    """Lines a slice adds and deletes (see RATCHET_MIN_SOURCE_LINES)."""
+
+    source_added: int = 0
+    source_deleted: int = 0
+    test_added: int = 0
+
+    @property
+    def source_net(self) -> int:
+        return self.source_added - self.source_deleted
+
+
+def ratchet_kind(rel: str) -> str | None:
+    """'source', 'test' or None (not counted) for a repository-relative path."""
+    if source_syntax(rel) is None or is_vendored_path(rel) or is_data_path(rel):
+        return None
+    if _RATCHET_SOURCE_RE.match(rel):
+        return "source"
+    if _RATCHET_TEST_RE.match(rel):
+        return "test"
+    return None
+
+
+def ratchet_verdict(counts: RatchetCounts) -> tuple[bool, str]:
+    """(passed, summary item) for a measured slice; the item reads 'ratchet ok (...)' or 'ratchet FAILED (...)'."""
+    net, tests = counts.source_net, counts.test_added
+    measured = f"src {net:+d} net, tests +{tests}"
+    if net < RATCHET_MIN_SOURCE_LINES:
+        return True, f"ratchet ok ({measured})"
+    needed = -(-net * RATCHET_MIN_TEST_PERCENT // 100)  # the ceiling of net * percent / 100
+    if tests >= needed:
+        return True, f"ratchet ok ({measured})"
+    return False, (f"ratchet FAILED ({measured}; {net} source lines need {needed} test lines, "
+                   f"{RATCHET_MIN_TEST_PERCENT} per 100)")
+
+
+def _git_run(repo: Path, git_dir: str | None, work_tree: str | None, *args: str) -> bytes:
+    """Runs git (absolute path, no shell) in `repo`; raises RatchetError on failure."""
+    exe = shutil.which("git")
+    if exe is None:
+        raise RatchetError("git is not on PATH")
+    cmd = [os.path.abspath(exe), "-C", str(repo)]
+    if git_dir:
+        cmd.append(f"--git-dir={git_dir}")
+    if work_tree:
+        cmd.append(f"--work-tree={work_tree}")
+    result = subprocess.run([*cmd, *args], capture_output=True, stdin=subprocess.DEVNULL, check=False)
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise RatchetError(f"git {' '.join(args)} failed: {message[-1] if message else result.returncode}")
+    return result.stdout
+
+
+def _count_lines(data: bytes) -> int:
+    """Lines in a text file's bytes; 0 for binary data."""
+    if not data or b"\0" in data[:8192]:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
+def measure_slice(repo: Path, base: str = "main", git_dir: str | None = None,
+                  work_tree: str | None = None) -> RatchetCounts:
+    """Counts the slice's source and test lines against merge-base(HEAD, base); raises RatchetError."""
+    commit = None
+    for candidate in (base, f"origin/{base}"):
+        try:
+            commit = _git_run(repo, git_dir, work_tree, "rev-parse", "--verify", "--quiet",
+                              f"{candidate}^{{commit}}").decode("utf-8").strip()
+            break
+        except RatchetError:
+            continue
+    if not commit:
+        raise RatchetError(f"the base {base!r} does not resolve (tried {base} and origin/{base})")
+    merge_base = _git_run(repo, git_dir, work_tree, "merge-base", "HEAD", commit).decode("utf-8").strip()
+    counts = RatchetCounts()
+    numstat = _git_run(repo, git_dir, work_tree, "diff", "--numstat", "-z", "--no-renames", merge_base, "--")
+    for record in numstat.decode("utf-8", "replace").split("\0"):
+        parts = record.split("\t", 2)
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue  # a binary file ("-") or the empty tail
+        kind = ratchet_kind(parts[2])
+        if kind == "source":
+            counts.source_added += int(parts[0])
+            counts.source_deleted += int(parts[1])
+        elif kind == "test":
+            counts.test_added += int(parts[0])
+    untracked = _git_run(repo, git_dir, work_tree, "ls-files", "--others", "--exclude-standard", "-z")
+    for rel in untracked.decode("utf-8", "replace").split("\0"):
+        kind = ratchet_kind(rel) if rel else None
+        path = Path(work_tree or repo) / rel
+        if kind is None or not path.is_file():
+            continue
+        lines = _count_lines(path.read_bytes())
+        if kind == "source":
+            counts.source_added += lines
+        else:
+            counts.test_added += lines
+    return counts
+
+
+def ratchet_main(repo: Path, base: str, git_dir: str | None, work_tree: str | None) -> int:
+    """Prints the ratchet's summary item as the last stdout line; returns 0 (ok, not-run) or 1 (failed)."""
+    try:
+        counts = measure_slice(repo, base, git_dir, work_tree)
+    except (RatchetError, OSError) as error:
+        print(f"ratchet not-run ({error})")
+        return 0
+    passed, item = ratchet_verdict(counts)
+    print(f"frost-lint ratchet: against the merge base with {base}: source +{counts.source_added} "
+          f"-{counts.source_deleted}, tests +{counts.test_added}", file=sys.stderr)
+    print(item)
+    return 0 if passed else 1
+
+
+# ---------------------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------------------
 
@@ -1045,8 +1582,8 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-def lint_file(repo: Path, rel: str, budget_ids: set[str] | None) -> list[Violation]:
-    """Runs the content rules on one source file."""
+def lint_file(repo: Path, rel: str, budget_ids: set[str] | None, used: set[int] | None = None) -> list[Violation]:
+    """Runs the content rules on one source file; `used` collects the SITE_ALLOWANCES it applied."""
     syntax = source_syntax(rel)
     assert syntax is not None
     text = _read_text(repo / rel)
@@ -1066,6 +1603,13 @@ def lint_file(repo: Path, rel: str, budget_ids: set[str] | None) -> list[Violati
             out += check_cpp26(rel, scanned.code, lines)
         if not _QT_SVG_ALLOWED_RE.match(rel):
             out += check_qt_svg(rel, text, scanned.code, lines)
+    if syntax.lexer in ("c", "csharp"):
+        lines = _Lines(scanned.code)
+        hits = check_fabricated_results(rel, scanned.code, lines)
+        hits += check_result_registry(rel, scanned.code, lines)
+        hits += check_tool_output_strings(rel, text, scanned, lines)
+        out += apply_site_allowances(rel, text, hits, set() if used is None else used)
+        out += check_parity_claims_in_strings(rel, text, scanned, lines)
     return out
 
 
@@ -1079,7 +1623,10 @@ def lint(repo: Path, files: list[str] | None = None) -> list[Violation]:
     if (repo / ".github" / "workflows").is_dir() or any(f.startswith(".github/workflows/") for f in files):
         violations.append(Violation(".github/workflows", 1, "no-ci",
                                     "CI workflows are banned; verification is local only (D24)"))
+    used: set[int] = set()
     for rel in files:
+        if _PARITY_DOC_RE.match(rel):
+            violations.extend(check_parity_claims_in_document(rel, (_read_text(repo / rel) or "").replace("\r\n", "\n")))
         if rel.endswith(".license"):
             text = _read_text(repo / rel) or ""
             if "SPDX-License-Identifier:" not in text:
@@ -1093,7 +1640,8 @@ def lint(repo: Path, files: list[str] | None = None) -> list[Violation]:
                     "syntax, add its extension to SOURCE_SYNTAX_BY_SUFFIX (or its name to "
                     "SOURCE_SYNTAX_BY_NAME) in tools/frost_lint.py and give it a header)"))
             continue
-        violations.extend(lint_file(repo, rel, budget_ids))
+        violations.extend(lint_file(repo, rel, budget_ids, used))
+    violations.extend(stale_site_allowances(file_set, used))
     return sorted(set(violations))
 
 
@@ -1101,11 +1649,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="frost-lint v0: FrostIDE repository conventions")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent,
                         help="repository root (default: the checkout containing this script)")
+    parser.add_argument("command", nargs="?", choices=("lint", "ratchet"), default="lint",
+                        help="lint (default), or ratchet: the source-to-test line ratchet of this slice")
+    parser.add_argument("--base", default="main", help="ratchet: the base whose merge base with HEAD starts the slice")
+    parser.add_argument("--git-dir", default=None, help="ratchet: passed to git as --git-dir (verify.sh)")
+    parser.add_argument("--work-tree", default=None, help="ratchet: passed to git as --work-tree (verify.sh)")
     args = parser.parse_args(argv)
     repo = args.repo.resolve()
     if not repo.is_dir():
         print(f"frost-lint: {repo} is not a directory", file=sys.stderr)
         return 2
+    if args.command == "ratchet":
+        return ratchet_main(repo, args.base, args.git_dir, args.work_tree)
     # A failing git or an unreadable tree is an environment error, not a violation.
     try:
         files = list_repo_files(repo)

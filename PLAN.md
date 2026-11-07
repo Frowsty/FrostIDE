@@ -1390,6 +1390,107 @@ Every P0 and P1 row of `tests/features/matrix.json` is listed under the mileston
 - **M6:** I16 unsigned installers (MSI, AppImage); I17 updater and ComponentDownloader.
 - **P1:** I18 Power Save Mode (M7); I19 settings importers, export/import (M11); I20 signed installers (M14).
 
+**Epic mapping** (Roadmap v2, FND-15). The milestones above are the historical M-ladder. The table below says which Appendix C epics deliver each row; a row can need several epics. `featurecheck` checks it:
+- Every epic id must exist in Appendix C and must not be merged.
+- Every row must be mapped or out of epic scope, never both.
+- `tests/features/matrix.json` carries each row's `epics`, and each epic's rows and M-ids, under `roadmap`.
+
+Epics that are not listed have no Appendix A row: process, harness, Lua, FrostEngine and later-tier epics (Appendix A predates them). The matrix shows them with empty `rows`.
+
+| Epic | Rows |
+|---|---|
+| FND-13 | I3, I15 |
+| UX-1 | 227 |
+| UX-23 | 23, 86 |
+| CMK-1 | 8, 11 |
+| CMK-2 | 9, 10, 152 |
+| CMK-4 | 8, 15 |
+| CPP-3 | 15, 21, 154 |
+| RUN-1 | 159 |
+| RUN-2 | 161 |
+| RUN-3 | 160, 163 |
+| RUN-7 | 196 |
+| RUN-8 | 196 |
+| DBG-1 | 167 |
+| DBG-2a | 169, 170, 172 |
+| SLN-2 | 4 |
+| SLN-3 | 1, 2, 4, 5, 27, 30 |
+| SLN-5 | 119, 120 |
+| SLN-6 | 3, 6, 31 |
+| SLN-7 | 154 |
+| SLN-9 | 150, 151 |
+| SLN-14 | 20 |
+| RUN-5 | 162, 186 |
+| DBG-0 | 167 |
+| DBG-2b | 170 |
+| DBG-4a | 176 |
+| FND-8 | 25, I8, I9 |
+| UX-21 | 227 |
+| CPP-5 | 36, 37, 50, 51, 68, 98 |
+| REF-12 | 122, 126 |
+| UX-3 | 38, 39, 44, 45, 78, 94, 254 |
+| FND-18 | I11, I18 |
+| CPP-4 | 22 |
+| CPP-6 | 52, 77, 80, 81, 82, 83, 84, 87, 88, 89 |
+| UX-4 | 40, 42, 57, 256 |
+| CPP-10 | 58, 99, 104, 112 |
+| RUN-10 | 164, 197 |
+| REF-3 | 100, 101 |
+| REF-11 | 69, 106, 125 |
+| FND-11 | I17 |
+| FND-16 | I4, I14 |
+| REF-1 | 130, 144 |
+| REF-2 | 144 |
+| REF-5 | 131, 132 |
+| CMK-10 | 6 |
+| DBG-3 | 173 |
+| DBG-4b | 176 |
+| DBG-5 | 176 |
+| DBG-6 | 175, 177, 178, 179, 184 |
+| DBG-7 | 171 |
+| DBG-8 | 189 |
+| DBG-9 | 186 |
+| DBG-12 | 180, 181 |
+| CMK-3 | 9, 20 |
+| CMK-5 | 12, 13 |
+| CMK-8 | 66 |
+| CMK-11 | 193 |
+| CMK-12 | 150, 152 |
+| CMK-17 | 15 |
+| SLN-10 | 151, 153, I12 |
+| UX-6 | 46, 49 |
+| REF-6 | 133, 135 |
+| REF-7 | 134, 135 |
+| REF-8 | 140, 141 |
+| REF-9 | 54, 145, 146, 147, 148 |
+| REF-10 | 127 |
+| REF-13 | 46, 47 |
+| CMK-14 | 26, 49 |
+| SLN-12 | 26, 49 |
+| CPP-14 | 42, 70 |
+| RUN-9 | 196 |
+| CPP-7 | 118 |
+| CPP-11 | 111, 112 |
+| CPP-12 | 102, 107, 109, 124 |
+| CPP-13 | 53, 90 |
+| CPP-15 | 118 |
+| CPP-16 | 103 |
+| UX-7 | 41, 56, 93, 95, 114, 115 |
+| UX-8 | 35, 55, 245 |
+| UX-9 | 240 |
+| UX-10 | 76 |
+| UX-11 | 226, 229, I1, I19 |
+| UX-12 | 32, 203, 204, 207, 208, 209, 210 |
+| UX-13 | 96, 205, 206 |
+| UX-15 | 217, I13 |
+| UX-16 | 218, I3 |
+| UX-17 | 232 |
+| UX-19 | 244, 246 |
+| FND-17 | I10, I16, I20 |
+| UX-18 | 233, 234, 257 |
+
+**Out of epic scope** (foundation built before Roadmap v2, so no epic owns more work; a regression is fixed under FND-1 or by the epic that touches it): 28, 29, 59, 60, 85, 91, 92, 219, 239, 241, 242, 243, 250, 251, 252, 253, 255, I2, I5, I6, I7.
+
 ## Appendix B: Expanded product acceptance tracks (2026-11-02)
 
 ADR 0054 records the user's expanded scope. These additional tracks are required product work, not
@@ -1560,7 +1661,7 @@ debugger fixture closes only its demonstrated workflow; it does not mark all C++
 
 ## Appendix C: Roadmap v2 epic catalogue (2026-11-07, ADR 0077)
 
-Every epic of the R-ladder (section 7, "Roadmap v2"), grouped by milestone. Priorities: P0 = needed to daily-drive C++, Lua or FrostEngine; P1 = parity in the priority domains; P2 = later-tier parity; P3 = nice to have; "merged" = folded into the epic named in its summary. Units are agent-assisted weeks. Acceptance tests run real tools (ADR 0078). FND-15 maps each epic onto Appendix A rows and teaches featurecheck these ids; until then this list is maintained by hand.
+Every epic of the R-ladder (section 7, "Roadmap v2"), grouped by milestone. Priorities: P0 = needed to daily-drive C++, Lua or FrostEngine; P1 = parity in the priority domains; P2 = later-tier parity; P3 = nice to have; "merged" = folded into the epic named in its summary. Units are agent-assisted weeks. Acceptance tests run real tools (ADR 0078). `featurecheck` parses this list (FND-15). It rejects duplicate ids, unknown priorities, unknown `after` dependencies and merged epics that name no live owner. It also checks that each `#### Rn` section's epic list matches the epics grouped here. Appendix A's "Epic mapping" maps these epics onto the Appendix A rows.
 
 ### R0
 

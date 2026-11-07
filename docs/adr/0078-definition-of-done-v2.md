@@ -49,14 +49,29 @@ The user ended the phase on 2026-11-07 by accepting the roadmap's recommendation
    and `verify.sh` (`Verified: win ..., wsl ..., lint ok`), followed by the co-author line. FND-2 adds a local
    `commit-msg` hook that rejects a footer whose verify-stamp does not match the committed tree hash. There is still
    no CI (D24).
+   - After a passing run, `verify.ps1` and a standalone `verify.sh` record their summary line under the verified
+     working tree's hash (`tools/hooks/verify_stamp.py`, in `<git common dir>/frost/verify-stamps`).
+   - On `main` the hook (`tools/hooks/commit-msg`) requires a `Verified:` footer and a stamp for the tree being
+     committed, and every footer item must be in that stamp.
+   - Install it once per clone with `git config core.hooksPath tools/hooks`. Merge to `main` with `--no-ff` after
+     verifying the merged tree, because a fast-forward runs no hook.
 6. **Test discipline.**
    - Tests are not weakened or deleted without an ADR and the user's approval. One exception: the user approved
      replacing tests that assert fabricated behaviour. Each such test is replaced by a real-tool test or a "feature
      unavailable" test and listed in the harm register.
-   - FND-5 adds a ratchet on the ratio of source lines to test lines per slice.
-7. **Stall policy.** UI-thread stalls of 50 ms or more are recorded, as today. Interim gate: no stall over 250 ms in
-   the milestone journeys (FND-9a for R0, FND-9b for R3). The budgets in section 4 stay the targets and become gates
-   at R16 (REL-1).
+   - FND-5 adds a ratchet on the ratio of source lines to test lines per slice (`frost_lint.py ratchet`, a check
+     of both verify scripts). A slice runs from the merge base with `main` to the working tree. When its code
+     under `src/` and `integrations/` grows by 200 or more net lines, it needs at least 20 added test lines per
+     100 of them under `tests/`; fixtures, goldens and corpora do not count.
+   - Calibration: the reviewed M0-M5 slices ran 19 to 220 test lines per 100. The audited feature-first commits
+     ran 0 to 16 per 100.
+7. **Stall policy.** The budgets in section 4 stay the targets and become gates at R16 (REL-1).
+
+   | UI-thread stall | Until R16 | Where |
+   |---|---|---|
+   | 50 ms or more | Recorded: a freeze report with the stalled stack, as today | Every build |
+   | Over 250 ms | Fails the gate (interim) | The milestone journeys (FND-9a for R0, FND-9b for R3) |
+   | Over the section 4 budget | Tracked against the target | Perf suites; a gate from R16 (REL-1) |
 8. **Milestone exit.** A milestone exits only when all of these pass:
    - `-Quick` on both platforms and `-Corpus`.
    - The milestone's automated journeys (j1_cmake, j2_msvc, j3_frostengine_lua) driven through the test-only
