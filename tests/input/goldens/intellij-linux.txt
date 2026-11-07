@@ -147,7 +147,6 @@ window.run = Alt+Digit4
 window.debug = Alt+Digit5
 window.problems = Alt+Digit6
 window.structure = Alt+Digit7
-window.services = Alt+Digit8
 window.git = Alt+Digit9
 window.commit = Alt+Digit0
 window.terminal = Alt+F12
