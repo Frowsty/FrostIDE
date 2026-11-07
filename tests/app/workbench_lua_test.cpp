@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Workbench Lua routing, trust and real LuaLS with engine-generated API definitions.
+// Workbench Lua routing, trust, the visible notice when LuaLS is missing, and the pinned real LuaLS
+// (required: these tests fail when it is not installed) with engine-generated API definitions.
 #include "frost/app/welcome_screen.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
+#include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
@@ -26,6 +28,26 @@ using namespace std::chrono_literals;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
+
+// The pinned LuaLS (ADR 0079) that tools/bootstrap installs; a missing one fails the test (LUA-1).
+frost::Result<std::string> pinnedLuaLs() {
+    auto found = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
+    if (!found)
+        return frost::fail(frost::ErrorCode::NotFound,
+                           "the pinned LuaLS " + std::string(frost::lang::pinnedLuaLanguageServerVersion()) +
+                               " is required (tools/bootstrap): " + found.error().describe());
+    return found;
+}
+
+// The engine-generated API when FROST_TEST_LUA_API names it, else a hand-written stand-in of the
+// same shape: the AI table and AI.Wake(entity).
+frost::Result<std::string> engineApi() {
+    const QByteArray apiPath = qgetenv("FROST_TEST_LUA_API");
+    if (!apiPath.isEmpty())
+        return frost::io::realFileSystem().readFile(apiPath.toStdString());
+    return std::string("---@meta\n---@class AI\nAI = {}\n---Wakes the entity.\n---@param entity any\n"
+                       "function AI.Wake(entity) end\n");
+}
 
 TEST(WorkbenchLua, StructureRejectsReplyAfterSamePathReopen) {
     WorkDir dir("structure-reopen-lua");
@@ -218,10 +240,71 @@ TEST(WorkbenchLua, QueuedTrustAndSettingsCannotRestartAfterShutdown) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
+// The number of "Lua language server unavailable" notifications so far.
+std::size_t luaUnavailableNotices(WorkbenchRig& rig) {
+    return static_cast<std::size_t>(std::ranges::count_if(rig.window->notifications().log(), [](const auto& entry) {
+        return entry.notification.title == QStringLiteral("Lua language server unavailable");
+    }));
+}
+
+// Tool ablation (ADR 0078): with no LuaLS anywhere, a FrostEngine project shows a visible notice
+// naming the reason and LUA-1, and no Lua process or Lua result appears.
+TEST(WorkbenchLua, MissingLuaLsIsAVisibleNoticeForAFrostEngineProject) {
+    WorkDir dir("lua-missing-engine");
+    dir.write("Game.frostproj", "{}");
+    dir.write("main.lua", "print(undefinedThing)\n");
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.luaSearch = frost::lang::LuaSearch{};
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Game.frostproj")));
+    ASSERT_EQ(luaUnavailableNotices(rig), 1U);
+    const auto it = std::ranges::find_if(rig.window->notifications().log(), [](const auto& entry) {
+        return entry.notification.title == QStringLiteral("Lua language server unavailable");
+    });
+    EXPECT_TRUE(it->notification.text.contains(QStringLiteral("LUA-1"))) << it->notification.text.toStdString();
+    EXPECT_TRUE(it->notification.text.contains(QString::fromUtf8(frost::lang::pinnedLuaLanguageServerVersion().data())))
+        << it->notification.text.toStdString();
+    EXPECT_EQ(it->notification.kind, frost::ui::NotificationKind::Warning);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    EXPECT_EQ(luaUnavailableNotices(rig), 1U) << "the notice appears once per project";
+    EXPECT_EQ(rig.workbench->lua(), nullptr);
+    EXPECT_FALSE(std::ranges::any_of(launcher.launches(), [](const auto& record) {
+        return record.spec.executable.find("lua") != std::string::npos;
+    })) << "no Lua process without LuaLS";
+    EXPECT_TRUE(rig.workbench->currentView()->editor().diagnostics().empty());
+}
+
+// In a project that is not a FrostEngine one, the notice waits for the first Lua file.
+TEST(WorkbenchLua, MissingLuaLsIsReportedWhenTheFirstLuaFileOpens) {
+    WorkDir dir("lua-missing-folder");
+    dir.write("main.lua", "print('hello')\n");
+    dir.write("other.lua", "print('other')\n");
+    dir.write("main.cpp", "int main() { return 0; }\n");
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.luaSearch = frost::lang::LuaSearch{};
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
+    EXPECT_EQ(luaUnavailableNotices(rig), 0U) << "no Lua in sight yet";
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    EXPECT_EQ(luaUnavailableNotices(rig), 1U);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("other.lua")));
+    EXPECT_EQ(luaUnavailableNotices(rig), 1U);
+    EXPECT_EQ(rig.workbench->lua(), nullptr);
+    EXPECT_FALSE(std::ranges::any_of(launcher.launches(), [](const auto& record) {
+        return record.spec.executable.find("lua") != std::string::npos;
+    })) << "no Lua process without LuaLS";
+}
+
 TEST(WorkbenchLua, FormatsSelectionAndDocumentWithEditorConfigAndUndo) {
-    auto server = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
-    if (!server)
-        GTEST_SKIP() << "LuaLS is not available";
+    auto server = pinnedLuaLs();
+    ASSERT_TRUE(server.has_value()) << server.error().describe();
     WorkDir dir("lua-formatting");
     const std::string original = "local function add(a,b) -- caf\xc3\xa9 \xf0\x9f\x98\x80\nreturn a+b\nend\n\n"
                                  "local function sub(a,b)\nreturn a-b\nend\n";
@@ -279,9 +362,8 @@ TEST(WorkbenchLua, FormatsSelectionAndDocumentWithEditorConfigAndUndo) {
 }
 
 TEST(WorkbenchLua, GenericAnnotationsAndRequireNavigateAcrossFiles) {
-    auto server = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
-    if (!server)
-        GTEST_SKIP() << "LuaLS is not available";
+    auto server = pinnedLuaLs();
+    ASSERT_TRUE(server.has_value()) << server.error().describe();
     WorkDir dir("lua-generic-module");
     const std::string main =
         "local M = require(\"module\")\nlocal s = \"\xf0\x9f\x98\x80\"; local x = M.identity(\"h\xc3\xa9\")\n";
@@ -332,12 +414,10 @@ TEST(WorkbenchLua, GenericAnnotationsAndRequireNavigateAcrossFiles) {
 }
 
 TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
-    auto luals = frost::lang::findLuaLanguageServer(frost::io::realFileSystem(), frost::lang::defaultLuaSearch());
-    QByteArray apiPath = qgetenv("FROST_TEST_LUA_API");
-    if (!luals || apiPath.isEmpty())
-        GTEST_SKIP() << "LuaLS or FROST_TEST_LUA_API not available";
-    auto api = frost::io::realFileSystem().readFile(apiPath.toStdString());
-    ASSERT_TRUE(api.has_value());
+    auto luals = pinnedLuaLs();
+    ASSERT_TRUE(luals.has_value()) << luals.error().describe();
+    auto api = engineApi();
+    ASSERT_TRUE(api.has_value()) << api.error().describe();
     WorkDir dir("lua-workbench");
     dir.write("Game.frostproj", "{}");
     dir.write("Unrelated.sln", "not a solution"); // A frostproj selects its own directory, not this file.

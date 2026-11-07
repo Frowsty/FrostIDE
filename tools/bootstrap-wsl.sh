@@ -9,13 +9,15 @@
 #       apt packages: libstdc++ 14 (the floor), zstd, bsdtar, Qt's X11/xcb
 #       runtime libraries, python3-venv, rsync, gdb.
 #   user phase:            wsl -d Ubuntu-24.04 -- bash tools/bootstrap-wsl.sh
-#       LLVM, CMake and Ninja from sdk/sdk.lock.json into ~/sdk (ext4, not
+#       LLVM, CMake, Ninja and LuaLS (ADR 0079) from sdk/sdk.lock.json into ~/sdk (ext4, not
 #       /mnt/e, because builds on the 9P mount are several times slower), Qt
 #       through tools/qt-fetch.py, vcpkg at the pinned tag, ~/sdk/env.sh, and the
 #       self-built lldb-dap: the official package's links a libpython Ubuntu 24.04
 #       lacks (spike S5), so tools/build-lldb.sh builds it from the pinned LLVM
 #       sources when it is missing (a long build) and checks its pinned hashes
 #       otherwise (ADR 0049). FROST_SKIP_LLDB=1 skips that last step.
+#   one component:         wsl -d Ubuntu-24.04 -- bash tools/bootstrap-wsl.sh --only luals
+#       installs (or confirms) just that archive component of the lock file.
 #
 # Archives are taken from the Windows download cache (/mnt/e/sdk/_downloads)
 # when present, otherwise downloaded. Every archive, Qt's included, is checked
@@ -242,9 +244,14 @@ if [[ "${1:-}" == "--system" ]]; then
     system_phase
     exit 0
 fi
+if [[ "${1:-}" == "--only" ]]; then
+    mkdir -p "$SDK"
+    install_archive "${2:?--only needs an archive component of the lock file, e.g. luals}"
+    exit 0
+fi
 
 mkdir -p "$SDK"
-for component in llvm cmake ninja dotnet; do install_archive "$component"; done
+for component in llvm cmake ninja dotnet luals; do install_archive "$component"; done
 install_managed
 install_qt
 install_vcpkg

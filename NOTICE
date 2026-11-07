@@ -80,6 +80,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
+LuaLS (lua-language-server) 3.19.1, the bundled Lua language server (ADR 0079,
+pinned in sdk/sdk.lock.json), Copyright (c) 2018 最萌小汐, MIT License; the
+MIT permission text above applies to it. Its original LICENSE is staged as
+licenses/luals-LICENSE.txt and in its own folder, which also keeps the LuaCATS
+definition libraries' licences (meta/3rd).
+
 The optional csharp-ls 0.28.0 language server and its managed dependencies are
 listed with version, licence, copyright, source metadata, archive hash and
 third-party notice mapping in sdk/managed-dependencies.json. Original server,

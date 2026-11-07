@@ -7,17 +7,24 @@
 # llvm-symbolizer is replaced by a fake that answers from a table and records each call, so the
 # tests pin what symbolize.py passes (RVAs with --relative-address for PE, file-start-adjusted
 # addresses for ELF) and how it reads llvm-symbolizer's JSON array. The command-line contract
-# (exit 0 ok, 1 failed, 2 usage) is checked in process and through a child interpreter.
+# (exit 0 ok, 1 failed, 2 usage) is checked in process and through a child interpreter. Symbol
+# archives (FND-13) are checked over a synthetic MSF 7.0 PDB and, on Windows, end to end: clang-cl
+# builds a program that writes its own minidump, and only the archive symbolizes its crash frame.
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
+import os
 import re
+import shutil
 import struct
+import subprocess
 import sys
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -33,8 +40,9 @@ BUILD_ID = bytes.fromhex("0123456789abcdef0123456789abcdef01234567")
 CRASH_LINE, FREEZE_LINE, CONTRACT_LINE = 4, 9, 3
 
 
-def pe_bytes(guid: bytes = GUID, age: int = 1) -> bytes:
-    """A PE32+ image: one section at RVA 0x1000 holding the debug directory and its RSDS record."""
+def pe_bytes(guid: bytes = GUID, age: int = 1, pdb: str = "x.pdb") -> bytes:
+    """A PE32+ image: one section at RVA 0x1000 holding the debug directory and its RSDS record
+    (which names `pdb`)."""
     image = bytearray(0x400)
     image[0:2] = b"MZ"
     struct.pack_into("<I", image, 0x3C, 0x40)
@@ -47,7 +55,7 @@ def pe_bytes(guid: bytes = GUID, age: int = 1) -> bytes:
     section = optional + 240
     image[section : section + 8] = b".rdata\0\0"
     struct.pack_into("<IIII", image, section + 8, 0x200, 0x1000, 0x200, 0x200)
-    record = b"RSDS" + guid + struct.pack("<I", age) + b"x.pdb\0"
+    record = b"RSDS" + guid + struct.pack("<I", age) + pdb.encode() + b"\0"
     struct.pack_into("<IIHHIIII", image, 0x200, 0, 0, 0, 0, 2, len(record), 0x101C, 0x21C)
     image[0x21C : 0x21C + len(record)] = record
     return bytes(image)
@@ -552,6 +560,213 @@ class CommandLineTest(TempDirTestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual([line.split(":")[0] for line in result.stdout.splitlines()[:3]],
                          ["FAILED crash artifact", "FAILED contract artifact", "FAILED freeze artifact"])
+
+
+def msf_bytes(guid: bytes = GUID, info_age: int = 1, dbi_age: int | None = 1) -> bytes:
+    """A minimal MSF 7.0 file (a PDB) with 512-byte blocks: the superblock, a free-block map, the
+    block map, the stream directory, the PDB info stream (stream 1) and, when `dbi_age` is given, a
+    DBI stream (stream 3) whose age field is `dbi_age`."""
+    block = 512
+    info = struct.pack("<III", 20000404, 0x12345678, info_age) + guid
+    dbi = struct.pack("<iII", -1, 19990903, dbi_age) if dbi_age is not None else b""
+    sizes = [0, len(info), 0, len(dbi)] if dbi_age is not None else [0, len(info)]
+    lists = [[], [4], [], [5]] if dbi_age is not None else [[], [4]]
+    directory = struct.pack("<I", len(sizes)) + struct.pack(f"<{len(sizes)}I", *sizes)
+    for blocks in lists:
+        directory += struct.pack(f"<{len(blocks)}I", *blocks)
+    superblock = symbolize.MSF_MAGIC + struct.pack("<IIIIII", block, 1, 6, len(directory), 0, 2)
+    pages = [superblock, b"", struct.pack("<I", 3), directory, info, dbi]
+    return b"".join(page.ljust(block, b"\0") for page in pages)
+
+
+class SymbolArchiveTest(TempDirTestCase):
+    """The symbol archive tools/stage.ps1 writes (FND-13): images with the PDBs that match them."""
+
+    def stage(self, pdb: bytes | None) -> tuple[Path, Path]:
+        stage, pdbs = self.tmp / "stage", self.tmp / "pdbs"
+        stage.mkdir()
+        pdbs.mkdir()
+        (stage / "frost.exe").write_bytes(pe_bytes())  # Its RSDS record names x.pdb.
+        (stage / "notes.txt").write_text("not an image")
+        if pdb is not None:
+            (pdbs / "x.pdb").write_bytes(pdb)
+        return stage, pdbs
+
+    def archive(self, stage: Path, pdbs: Path, *required: str) -> tuple[int, str, Path]:
+        output = self.tmp / "stage-symbols.zip"
+        argv = ["archive", "--stage", str(stage), "--pdb-dir", str(pdbs), "--output", str(output)]
+        for name in required:
+            argv += ["--require", name]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = symbolize.main(argv)
+        return status, out.getvalue(), output
+
+    def test_pdb_identity_reads_the_info_guid_and_the_dbi_age(self) -> None:
+        self.assertEqual(symbolize.pdb_identity(msf_bytes(info_age=1, dbi_age=3)),
+                         symbolize.Identity("pdb70", guid=GUID_TEXT, age=3))
+        self.assertEqual(symbolize.pdb_identity(msf_bytes(info_age=2, dbi_age=None)).age, 2)
+        with self.assertRaises(symbolize.InputError):
+            symbolize.pdb_identity(b"not a pdb")
+        with self.assertRaises(symbolize.InputError):
+            symbolize.pdb_identity(msf_bytes()[:700])
+
+    def test_archives_each_image_with_its_matching_pdb_and_a_manifest(self) -> None:
+        stage, pdbs = self.stage(msf_bytes())
+        status, out, output = self.archive(stage, pdbs, "frost.exe")
+        self.assertEqual(status, 0, out)
+        self.assertIn(f"module frost.exe + x.pdb (pdb70 {GUID_TEXT}/1)", out)
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(sorted(archive.namelist()), ["frost.exe", "symbols.json", "x.pdb"])
+            manifest = json.loads(archive.read("symbols.json"))
+        self.assertEqual(manifest["schema"], "frost-symbol-archive/1")
+        self.assertEqual(manifest["modules"][0]["identity"], f"pdb70 {GUID_TEXT}/1")
+        self.assertEqual(manifest["modules"][0]["pdbSha256"], hashlib.sha256(msf_bytes()).hexdigest())
+        unpacked = self.tmp / "unpacked"
+        unpacked.mkdir()
+        symbolize.unpack_symbol_archive(output, unpacked)
+        self.assertEqual((unpacked / "x.pdb").read_bytes(), msf_bytes())
+        self.assertEqual(symbolize.local_image(unpacked / "frost.exe").identity.guid, GUID_TEXT)
+
+    def test_a_stale_or_missing_pdb_fails_a_required_image_and_writes_nothing(self) -> None:
+        stage, pdbs = self.stage(msf_bytes(dbi_age=2))
+        status, out, output = self.archive(stage, pdbs, "frost.exe")
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL   frost.exe:", out)
+        self.assertIn(f"the image wants pdb70 {GUID_TEXT}/1", out)
+        self.assertFalse(output.exists())
+        (pdbs / "x.pdb").unlink()
+        status, out, _ = self.archive(stage, pdbs, "frost.exe")
+        self.assertEqual(status, 1)
+        self.assertIn("x.pdb not found", out)
+        status, out, _ = self.archive(stage, pdbs, "frost_app.dll")
+        self.assertEqual(status, 1)
+        self.assertIn("frost_app.dll: not in the stage", out)
+        status, out, output = self.archive(stage, pdbs)
+        self.assertEqual(status, 0, "an image nobody requires is skipped")
+        self.assertIn("skip   frost.exe: x.pdb not found", out)
+
+    def test_unpacking_rejects_tampered_members_and_paths(self) -> None:
+        stage, pdbs = self.stage(msf_bytes())
+        status, out, output = self.archive(stage, pdbs, "frost.exe")
+        self.assertEqual(status, 0, out)
+        with zipfile.ZipFile(output) as archive:
+            manifest = json.loads(archive.read("symbols.json"))
+        for name, member, content in (("digest", "x.pdb", b"other"), ("path", "../x.pdb", msf_bytes())):
+            tampered = self.tmp / f"{name}.zip"
+            changed = json.loads(json.dumps(manifest))
+            changed["modules"][0]["pdb"] = member
+            with zipfile.ZipFile(tampered, "w") as archive:
+                archive.writestr("symbols.json", json.dumps(changed))
+                archive.writestr("frost.exe", pe_bytes())
+                archive.writestr(member, content)
+            destination = self.tmp / f"{name}-out"
+            destination.mkdir()
+            with self.assertRaises(symbolize.InputError, msg=name):
+                symbolize.unpack_symbol_archive(tampered, destination)
+        self.assertFalse((self.tmp / "x.pdb").exists())
+
+    def test_symbol_archive_is_searched_like_a_search_dir(self) -> None:
+        stage, pdbs = self.stage(msf_bytes())
+        _, _, output = self.archive(stage, pdbs, "frost.exe")
+        seen: list[list[Path]] = []
+
+        class Recording(symbolize.Symbolizer):
+            def __init__(self, executable: str, search_dirs: list[Path]) -> None:
+                super().__init__(executable, search_dirs)
+                seen.append(list(search_dirs))
+                if not (search_dirs[-1] / "frost.exe").is_file() or not (search_dirs[-1] / "x.pdb").is_file():
+                    raise AssertionError("the archive is unpacked before symbolizing")
+
+        with mock.patch.object(symbolize, "Symbolizer", Recording), contextlib.redirect_stderr(io.StringIO()):
+            status = symbolize.main(["minidump", str(self.tmp / "none.dmp"), "--llvm-symbolizer", sys.executable,
+                                     "--search-dir", str(self.tmp), "--symbol-archive", str(output)])
+        self.assertEqual(status, 2, "the dump is unreadable")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0], self.tmp)
+        self.assertFalse(seen[0][1].exists(), "the unpacked archive is removed afterwards")
+
+
+# A program that faults at a marked line and writes its own minidump (MiniDumpWriteDump from an
+# SEH filter, so no crash dialog or WER report), for the real-toolchain archive test.
+ARCHIVE_PROBE = r"""// Symbol-archive probe for tests/tools/test_symbolize.py.
+#include <windows.h>
+#include <dbghelp.h>
+
+static int writeDump(const wchar_t* path, EXCEPTION_POINTERS* info) {
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION exception = {GetCurrentThreadId(), info, FALSE};
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal, &exception, NULL, NULL);
+        CloseHandle(file);
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+__declspec(noinline) void archiveCrashSite(volatile int* target) {
+    *target = 7; // FROST-ARCHIVE-CRASH-SITE
+}
+
+int wmain(int argc, wchar_t** argv) {
+    if (argc < 2)
+        return 2;
+    __try {
+        archiveCrashSite((volatile int*)(ULONG_PTR)0xf00d);
+    } __except (writeDump(argv[1], GetExceptionInformation())) {
+        return 3;
+    }
+    return 0;
+}
+"""
+
+
+def llvm_tool(name: str) -> str | None:
+    """`name` from $FROST_LLVM_ROOT/bin, else PATH (the pinned LLVM that tools/env.ps1 puts there)."""
+    root = os.environ.get("FROST_LLVM_ROOT")
+    if root and (Path(root) / "bin" / f"{name}.exe").is_file():
+        return str(Path(root) / "bin" / f"{name}.exe")
+    return shutil.which(name)
+
+
+@unittest.skipUnless(os.name == "nt", "PE images and PDBs: the Windows leg")
+class RealSymbolArchiveTest(TempDirTestCase):
+    """FND-13 end to end with the real toolchain: clang-cl and lld-link build a program and its PDB,
+    `archive` packs them, the program writes a real minidump, the build and the stage are deleted,
+    and only --symbol-archive lets llvm-symbolizer name the faulting function and line."""
+
+    def test_a_minidump_frame_symbolizes_from_the_archive_alone(self) -> None:
+        clang_cl, llvm_symbolizer = llvm_tool("clang-cl"), llvm_tool("llvm-symbolizer")
+        if clang_cl is None or llvm_symbolizer is None:
+            self.fail("clang-cl and llvm-symbolizer of the pinned LLVM are required (tools/env.ps1)")
+        build, stage = self.tmp / "build", self.tmp / "stage"
+        build.mkdir()
+        stage.mkdir()
+        source = build / "probe.c"
+        source.write_text(ARCHIVE_PROBE, encoding="utf-8")
+        line = next(i for i, text in enumerate(ARCHIVE_PROBE.splitlines(), 1) if "FROST-ARCHIVE-CRASH-SITE" in text)
+        compiled = subprocess.run([clang_cl, "/nologo", "/Z7", "/Od", str(source), f"/Fo{build}\\",
+                                   f"/Fe{build / 'probe.exe'}", "/link", "/DEBUG", "/INCREMENTAL:NO", "dbghelp.lib"],
+                                  capture_output=True, text=True, cwd=build, timeout=120, check=False)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        self.assertTrue((build / "probe.pdb").is_file())
+        shutil.copy2(build / "probe.exe", stage / "probe.exe")
+        archive = self.tmp / "stage-symbols.zip"
+        packed = run_tool("symbolize.py", "archive", "--stage", str(stage), "--pdb-dir", str(build), "--output",
+                          str(archive), "--require", "probe.exe")
+        self.assertEqual(packed.returncode, 0, packed.stdout + packed.stderr)
+        dump = self.tmp / "probe.dmp"
+        ran = subprocess.run([str(stage / "probe.exe"), str(dump)], capture_output=True, timeout=60, check=False)
+        self.assertEqual(ran.returncode, 3, "the probe faults and writes its dump")
+        self.assertTrue(dump.is_file())
+        # Nothing but the archive is left: neither the recorded image path nor the linker's PDB path.
+        shutil.rmtree(build)
+        shutil.rmtree(stage)
+        without = run_tool("symbolize.py", "minidump", str(dump), "--llvm-symbolizer", llvm_symbolizer)
+        self.assertEqual(without.returncode, 1, without.stdout + without.stderr)
+        result = run_tool("symbolize.py", "minidump", str(dump), "--llvm-symbolizer", llvm_symbolizer,
+                          "--symbol-archive", str(archive))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, rf"crash  probe\.exe\+0x[0-9a-f]+  archiveCrashSite  probe\.c:{line}\b")
 
 
 if __name__ == "__main__":

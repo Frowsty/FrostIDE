@@ -4,7 +4,7 @@
 #
 # Everything goes under -SdkRoot (default E:\sdk) so the system drive stays
 # untouched: LLVM, CMake, Ninja, gh, sccache, the .NET SDK, vcpkg, a Python
-# venv for tooling, a subset of Qt and the self-built lldb-dap. Versions, URLs and
+# venv for tooling, a subset of Qt, LuaLS (ADR 0079) and the self-built lldb-dap. Versions, URLs and
 # hashes come from sdk/sdk.lock.json; an archive whose hash differs from the pin is
 # rejected. lldb-dap has no official Windows binary (spike S5), so it is built from
 # the pinned LLVM sources by tools/build-lldb.ps1 (about 15 minutes) when it is missing,
@@ -22,7 +22,7 @@
 param(
     # Root directory for every installed component.
     [string]$SdkRoot = 'E:\sdk',
-    # Optional subset (llvm, cmake, ninja, gh, sccache, dotnet, conpty, python, managed, qt, vcpkg, lldb).
+    # Optional subset (llvm, cmake, ninja, gh, sccache, dotnet, conpty, luals, python, managed, qt, vcpkg, lldb).
     [string[]]$Only = @()
 )
 
@@ -267,7 +267,9 @@ Assert-FreeSpace
 Assert-Msvc
 New-Item -ItemType Directory -Force -Path $Downloads | Out-Null
 
-foreach ($name in @('llvm', 'cmake', 'ninja', 'gh', 'sccache', 'dotnet', 'conpty')) {
+# luals: the pinned LuaLS release (MIT, ADR 0079) lands in <SdkRoot>\luals-<version>, where
+# frost::lang::defaultLuaSearch and tools\stage.ps1 look for bin\lua-language-server.exe.
+foreach ($name in @('llvm', 'cmake', 'ninja', 'gh', 'sccache', 'dotnet', 'conpty', 'luals')) {
     if (Test-Wanted $name) { Install-Archive $name }
 }
 if (Test-Wanted 'python') { Install-PythonTools }
