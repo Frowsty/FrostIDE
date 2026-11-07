@@ -293,6 +293,15 @@ public:
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no
     // configured model yet, configures it (configureOnOpen). Errors: those of TrustStore::trust.
     [[nodiscard]] Result<void> trust(std::string_view root);
+    /*
+     * The trust store changed by another route (Settings, another instance, a revocation): what
+     * trust() does after its grant, and nothing else. It never writes the store, so it can neither
+     * re-grant a root revoked meanwhile nor save a folder covered by a trusted parent as a root of
+     * its own (R0 follow-up 15). A job waiting in NeedsTrust goes on when the folder and every root
+     * it waits for are trusted now; an idle, trusted folder without a configured model configures
+     * (configureOnOpen). Any thread; reads the store once per root.
+     */
+    void trustChanged();
 
     [[nodiscard]] BuildState state() const;
     [[nodiscard]] std::optional<CMakeStep> currentStep() const;

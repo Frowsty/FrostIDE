@@ -603,6 +603,37 @@ TEST(Workbench, LanguageLocationUsesActiveSplitAndDocumentsAreUnique) {
     EXPECT_EQ(first->status().line, 1);
 }
 
+// R0 follow-up 4: the language features get the profile's metadata cache (never the workspace),
+// and a metadata source opens in an editor that stays read-only through a refresh; a normal
+// location of the same workbench stays editable.
+TEST(Workbench, MetadataSourcesOpenReadOnlyFromTheProfileCache) {
+    WorkDir dir("metadata-read-only");
+    dir.write("proj/a.cs", "class A {}\n");
+    dir.write("data/caches/metadata/0123-Console.cs", "namespace System\n{\n    public static class Console {}\n}\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+    EXPECT_EQ(rig.workbench->metadataCacheDirectory(), dir.join("data/caches/metadata"));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj")));
+    frost::app::LanguageBridge bridge(*rig.workbench);
+    bridge.openLocation(dir.join("proj/a.cs"), frost::lang::LspPosition{0, 0});
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_FALSE(rig.workbench->currentView()->editor().isReadOnly());
+
+    const std::string cached = dir.join("data/caches/metadata/0123-Console.cs");
+    bridge.openReadOnlyLocation(cached, frost::lang::LspPosition{2, 24});
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    EXPECT_EQ(view->path(), cached);
+    EXPECT_EQ(view->status().line, 3);
+    EXPECT_TRUE(view->forcedReadOnly());
+    EXPECT_TRUE(view->editor().isReadOnly());
+    view->refresh(); // A refresh (save, reload) re-reads the file facts: still read-only.
+    EXPECT_TRUE(view->editor().isReadOnly());
+    EXPECT_FALSE(view->editor().typeText("x"));
+    EXPECT_EQ(dir.read("data/caches/metadata/0123-Console.cs"),
+              "namespace System\n{\n    public static class Console {}\n}\n");
+}
+
 TEST(Workbench, ClosingADirtyTabSavesIt) {
     WorkDir dir("close");
     dir.write("a.txt", "one\n");
