@@ -769,7 +769,7 @@ void Workbench::createRunService() {
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
     hooks.mayRun = [this] {
-        return (!m_engine || !m_engine->luaReservationPending()) && !m_buildService->projectEditInProgress() &&
+        return !m_buildService->projectEditInProgress() &&
                (!m_debug || (!m_debug->debugging() && !m_debug->rerunPending()));
     };
     hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
@@ -822,8 +822,8 @@ void Workbench::createRunService() {
     };
     debugHooks.alternateAvailable = [this] { return m_cmake != nullptr; };
     debugHooks.mayStart = [this] {
-        return (!m_engine || !m_engine->luaReservationPending()) && !m_buildService->projectEditInProgress() &&
-               !m_runController->running() && m_runService->activeRuns().empty() &&
+        return !m_buildService->projectEditInProgress() && !m_runController->running() &&
+               m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     debugHooks.startAlternate = [this](auto done) { return m_cmake->debug(std::move(done)); };
@@ -848,8 +848,7 @@ void Workbench::createRunService() {
     managedDebug.group = "Debug";
     managedDebug.executesProjectCode = true;
     managedDebug.enabled = [this](const input::ActionContext&) {
-        return (!m_engine || !m_engine->luaReservationPending()) && !m_projectRoot.empty() &&
-               !m_buildService->projectEditInProgress() && m_debug && !m_debug->debugging() &&
+        return !m_projectRoot.empty() && !m_buildService->projectEditInProgress() && m_debug && !m_debug->debugging() &&
                m_managedDebugPreparation && !m_managedDebugPreparation->active() && !m_managedSnapshotJob;
     };
     managedDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startManagedDebug(); };
@@ -1804,40 +1803,27 @@ void Workbench::attachToolWindows() {
             },
             [this] { refreshSolutionExplorerForFsChange(); });
     });
-    connect(explorer, &ui::SolutionExplorer::addExistingProjectRequested, this, [this](const QString& solutionPath) {
-        if (!m_window || !m_solution)
-            return;
-        const QString chosen = QFileDialog::getOpenFileName(
-            m_window, text("Add Existing Project"), QFileInfo(solutionPath).absolutePath(),
-            text("Projects (*.vcxproj *.csproj *.fsproj *.vbproj);;C++ Projects (*.vcxproj);;C# Projects (*.csproj)"));
-        if (chosen.isEmpty())
-            return;
-        if (auto added =
-                addExistingProjectToSolutionFile(m_services.fs, solutionPath.toStdString(), chosen.toStdString());
-            !added) {
-            notify(text("Add Existing Project"), qs(added.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        refreshSolutionExplorerForFsChange();
+    /*
+     * Solution and project edits other than the single-file add and remove ProjectHost makes are
+     * refused until SLN-6 (safe solution and project edits). The explorer disables their menu
+     * actions up front with this reason as the tooltip; a request that still arrives (a key, a drop)
+     * is refused at once with a notification, before any picker or confirmation, and nothing is
+     * written.
+     */
+    explorer->setUnsupportedEditsReason(text("Requires safe solution and project edits (SLN-6)."));
+    const auto refuseSolutionEdit = [this](const QString& title, const QString& what) {
+        notify(title,
+               text("%1 is not available yet: it requires safe solution and project edits (SLN-6). No file was "
+                    "changed.")
+                   .arg(what),
+               ui::NotificationKind::Error);
+    };
+    connect(explorer, &ui::SolutionExplorer::addExistingProjectRequested, this, [refuseSolutionEdit](const QString&) {
+        refuseSolutionEdit(text("Add Existing Project"), text("Adding a project to the solution"));
     });
     connect(explorer, &ui::SolutionExplorer::removeProjectFromSolutionRequested, this,
-            [this](const QString& projectPath) {
-                if (!m_window || !m_solution)
-                    return;
-                const QString projName = QFileInfo(projectPath).completeBaseName();
-                if (QMessageBox::question(
-                        m_window, text("Remove Project from Solution"),
-                        text("Remove '%1' from the solution? (Project files on disk are not deleted)").arg(projName),
-                        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
-                    return;
-                }
-                const std::string slnPath = m_solution->path();
-                if (auto removed = removeProjectFromSolutionFile(m_services.fs, slnPath, projectPath.toStdString());
-                    !removed) {
-                    notify(text("Remove Project"), qs(removed.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&) {
+                refuseSolutionEdit(text("Remove Project"), text("Removing a project from the solution"));
             });
     connect(explorer, &ui::SolutionExplorer::addProjectReferenceRequested, this, [this](const QString& projectPath) {
         if (!m_window || !m_solution)
@@ -1856,145 +1842,32 @@ void Workbench::attachToolWindows() {
         refreshSolutionExplorerForFsChange();
     });
     connect(explorer, &ui::SolutionExplorer::addFilterRequested, this,
-            [this](const QString& projectPath, const QString& parentFilterPath) {
-                if (!m_window || !m_solution)
-                    return;
-                bool ok = false;
-                const QString name = QInputDialog::getText(m_window, text("New Filter"), text("Filter name:"),
-                                                           QLineEdit::Normal, QString(), &ok)
-                                         .trimmed();
-                if (!ok || name.isEmpty())
-                    return;
-                const QString fullFilter =
-                    parentFilterPath.isEmpty() ? name : (parentFilterPath + QLatin1Char('\\') + name);
-                if (auto res =
-                        addFilterToVcxprojFilters(m_services.fs, projectPath.toStdString(), fullFilter.toStdString());
-                    !res) {
-                    notify(text("Add Filter"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&, const QString&) {
+                refuseSolutionEdit(text("Add Filter"), text("Adding a filter"));
             });
     connect(explorer, &ui::SolutionExplorer::renameFilterRequested, this,
-            [this](const QString& projectPath, const QString& filterPath) {
-                if (!m_window || !m_solution || filterPath.isEmpty())
-                    return;
-                const qsizetype lastSep = filterPath.lastIndexOf(QLatin1Char('\\'));
-                const QString prefix = lastSep >= 0 ? filterPath.left(lastSep) : QString();
-                const QString leaf = lastSep >= 0 ? filterPath.mid(lastSep + 1) : filterPath;
-                bool ok = false;
-                const QString newName = QInputDialog::getText(m_window, text("Rename Filter"), text("New filter name:"),
-                                                              QLineEdit::Normal, leaf, &ok)
-                                            .trimmed();
-                if (!ok || newName.isEmpty() || newName == leaf)
-                    return;
-                const QString newFilterPath =
-                    (newName.contains(QLatin1Char('\\')) || newName.contains(QLatin1Char('/')) || prefix.isEmpty())
-                        ? newName
-                        : (prefix + QLatin1Char('\\') + newName);
-                if (auto res = renameFilterInVcxprojFilters(m_services.fs, projectPath.toStdString(),
-                                                            filterPath.toStdString(), newFilterPath.toStdString());
-                    !res) {
-                    notify(text("Rename Filter"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&, const QString&) {
+                refuseSolutionEdit(text("Rename Filter"), text("Renaming a filter"));
             });
     connect(explorer, &ui::SolutionExplorer::removeFilterRequested, this,
-            [this](const QString& projectPath, const QString& filterPath) {
-                if (!m_window || !m_solution || filterPath.isEmpty())
-                    return;
-                if (auto res = removeFilterFromVcxprojFilters(m_services.fs, projectPath.toStdString(),
-                                                              filterPath.toStdString());
-                    !res) {
-                    notify(text("Remove Filter"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&, const QString&) {
+                refuseSolutionEdit(text("Remove Filter"), text("Removing a filter"));
             });
     connect(explorer, &ui::SolutionExplorer::moveFilesToFilterRequested, this,
-            [this](const QString& projectPath, const QStringList& filePaths, const QString& targetFilterPath) {
-                if (!m_solution || filePaths.isEmpty())
-                    return;
-                std::vector<std::string> files;
-                files.reserve(static_cast<std::size_t>(filePaths.size()));
-                for (const QString& f : filePaths) {
-                    files.push_back(QDir::toNativeSeparators(f).toStdString());
-                }
-                if (auto res = moveFilesToVcxprojFilter(m_services.fs, projectPath.toStdString(), files,
-                                                        targetFilterPath.toStdString());
-                    !res) {
-                    notify(text("Move to Filter"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange(files.front());
+            [refuseSolutionEdit](const QString&, const QStringList&, const QString&) {
+                refuseSolutionEdit(text("Move to Filter"), text("Moving files to a filter"));
             });
     connect(explorer, &ui::SolutionExplorer::moveFilesToNewFilterRequested, this,
-            [this](const QString& projectPath, const QStringList& filePaths) {
-                if (!m_window || !m_solution || filePaths.isEmpty())
-                    return;
-                bool ok = false;
-                const QString filterName = QInputDialog::getText(m_window, text("Move to New Filter"),
-                                                                 text("Filter path (e.g. Source Files\\Subfilter):"),
-                                                                 QLineEdit::Normal, QString(), &ok)
-                                               .trimmed();
-                if (!ok || filterName.isEmpty())
-                    return;
-                std::vector<std::string> files;
-                files.reserve(static_cast<std::size_t>(filePaths.size()));
-                for (const QString& f : filePaths) {
-                    files.push_back(QDir::toNativeSeparators(f).toStdString());
-                }
-                if (auto res = moveFilesToVcxprojFilter(m_services.fs, projectPath.toStdString(), files,
-                                                        filterName.toStdString());
-                    !res) {
-                    notify(text("Move to Filter"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange(files.front());
+            [refuseSolutionEdit](const QString&, const QStringList&) {
+                refuseSolutionEdit(text("Move to Filter"), text("Moving files to a new filter"));
             });
     connect(explorer, &ui::SolutionExplorer::addExistingFolderToFilterRequested, this,
-            [this](const QString& projectPath, const QString& targetFilterPath) {
-                if (!m_window || !m_solution)
-                    return;
-                const QString chosen = QFileDialog::getExistingDirectory(
-                    m_window, text("Add Existing Folder to Project"), QFileInfo(projectPath).absolutePath());
-                if (chosen.isEmpty())
-                    return;
-                const std::array<std::string, 1> dirs{QDir::toNativeSeparators(chosen).toStdString()};
-                auto added = addExistingFilesToVcxproj(m_services.fs, projectPath.toStdString(), dirs,
-                                                       targetFilterPath.toStdString());
-                if (!added) {
-                    notify(text("Add Existing Folder"), qs(added.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
-                startProjectEvaluation(m_projectRoot);
-                if (m_clangd) {
-                    restartClangd();
-                }
-                notify(text("Added Folder to Project"),
-                       text("Added %1 file(s) from '%2'.").arg(*added).arg(QFileInfo(chosen).fileName()),
-                       ui::NotificationKind::Info);
+            [refuseSolutionEdit](const QString&, const QString&) {
+                refuseSolutionEdit(text("Add Existing Folder"), text("Adding a folder to a project"));
             });
     connect(explorer, &ui::SolutionExplorer::removeMultipleProjectFilesRequested, this,
-            [this](const QString& projectPath, const QStringList& filePaths) {
-                if (!m_solution || filePaths.isEmpty())
-                    return;
-                std::vector<std::string> files;
-                files.reserve(static_cast<std::size_t>(filePaths.size()));
-                for (const QString& f : filePaths) {
-                    files.push_back(QDir::toNativeSeparators(f).toStdString());
-                }
-                if (auto removed = removeFilesFromVcxproj(m_services.fs, projectPath.toStdString(), files); !removed) {
-                    notify(text("Remove from Project"), qs(removed.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
-                startProjectEvaluation(m_projectRoot);
-                if (m_clangd) {
-                    restartClangd();
-                }
+            [refuseSolutionEdit](const QString&, const QStringList&) {
+                refuseSolutionEdit(text("Remove from Project"), text("Removing several files from a project"));
             });
     explorer->setCanPasteProvider([this] { return canPastePaths(); });
     connect(explorer, &ui::SolutionExplorer::copyPathsRequested, this, [this](const QStringList& paths) {
@@ -2034,88 +1907,23 @@ void Workbench::attachToolWindows() {
                 movePhysicalPathsToDirectory(stdPaths, QDir::toNativeSeparators(targetDirectory).toStdString(),
                                              QDir::toNativeSeparators(projectPath).toStdString());
             });
-    connect(explorer, &ui::SolutionExplorer::addSolutionFolderRequested, this, [this](const QString& parentFolderId) {
-        if (!m_window || !m_solution)
-            return;
-        bool ok = false;
-        const QString name = QInputDialog::getText(m_window, text("New Solution Folder"), text("Solution folder name:"),
-                                                   QLineEdit::Normal, QString(), &ok)
-                                 .trimmed();
-        if (!ok || name.isEmpty())
-            return;
-        if (auto res = addSolutionFolderToSolutionFile(m_services.fs, m_solution->path(), parentFolderId.toStdString(),
-                                                       name.toStdString());
-            !res) {
-            notify(text("Add Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        refreshSolutionExplorerForFsChange();
+    connect(explorer, &ui::SolutionExplorer::addSolutionFolderRequested, this, [refuseSolutionEdit](const QString&) {
+        refuseSolutionEdit(text("Add Solution Folder"), text("Adding a solution folder"));
     });
     connect(explorer, &ui::SolutionExplorer::renameSolutionFolderRequested, this,
-            [this](const QString& folderId, const QString& currentName) {
-                if (!m_window || !m_solution || folderId.isEmpty())
-                    return;
-                bool ok = false;
-                const QString newName =
-                    QInputDialog::getText(m_window, text("Rename Solution Folder"), text("New solution folder name:"),
-                                          QLineEdit::Normal, currentName, &ok)
-                        .trimmed();
-                if (!ok || newName.isEmpty() || newName == currentName)
-                    return;
-                if (auto res = renameSolutionFolderInSolutionFile(m_services.fs, m_solution->path(),
-                                                                  folderId.toStdString(), newName.toStdString());
-                    !res) {
-                    notify(text("Rename Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&, const QString&) {
+                refuseSolutionEdit(text("Rename Solution Folder"), text("Renaming a solution folder"));
             });
-    connect(explorer, &ui::SolutionExplorer::removeSolutionFolderRequested, this, [this](const QString& folderId) {
-        if (!m_window || !m_solution || folderId.isEmpty())
-            return;
-        if (auto res = removeSolutionFolderFromSolutionFile(m_services.fs, m_solution->path(), folderId.toStdString());
-            !res) {
-            notify(text("Remove Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        refreshSolutionExplorerForFsChange();
+    connect(explorer, &ui::SolutionExplorer::removeSolutionFolderRequested, this, [refuseSolutionEdit](const QString&) {
+        refuseSolutionEdit(text("Remove Solution Folder"), text("Removing a solution folder"));
     });
     connect(explorer, &ui::SolutionExplorer::moveProjectToSolutionFolderRequested, this,
-            [this](const QString& projectPath, const QString& targetFolderId) {
-                if (!m_solution || projectPath.isEmpty())
-                    return;
-                if (auto res = moveProjectToSolutionFolderInSolutionFile(
-                        m_services.fs, m_solution->path(), projectPath.toStdString(), targetFolderId.toStdString());
-                    !res) {
-                    notify(text("Move to Solution Folder"), qs(res.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&, const QString&) {
+                refuseSolutionEdit(text("Move to Solution Folder"), text("Moving a project to a solution folder"));
             });
     connect(explorer, &ui::SolutionExplorer::moveProjectToNewSolutionFolderRequested, this,
-            [this](const QString& projectPath) {
-                if (!m_window || !m_solution || projectPath.isEmpty())
-                    return;
-                bool ok = false;
-                const QString name =
-                    QInputDialog::getText(m_window, text("Move to New Solution Folder"), text("Solution folder name:"),
-                                          QLineEdit::Normal, QString(), &ok)
-                        .trimmed();
-                if (!ok || name.isEmpty())
-                    return;
-                auto created =
-                    addSolutionFolderToSolutionFile(m_services.fs, m_solution->path(), {}, name.toStdString());
-                if (!created) {
-                    notify(text("Move to Solution Folder"), qs(created.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                if (auto moved = moveProjectToSolutionFolderInSolutionFile(m_services.fs, m_solution->path(),
-                                                                           projectPath.toStdString(), *created);
-                    !moved) {
-                    notify(text("Move to Solution Folder"), qs(moved.error().message()), ui::NotificationKind::Error);
-                    return;
-                }
-                refreshSolutionExplorerForFsChange();
+            [refuseSolutionEdit](const QString&) {
+                refuseSolutionEdit(text("Move to Solution Folder"), text("Moving a project to a new solution folder"));
             });
     connect(explorer, &ui::SolutionExplorer::unloadProjectRequested, this, [this](const QString& projectPath) {
         if (!m_solution || projectPath.isEmpty())

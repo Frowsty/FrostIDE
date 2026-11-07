@@ -94,6 +94,15 @@ public:
         m_newFileHandler = std::move(newFile);
         m_newFolderHandler = std::move(newFolder);
     }
+    /*
+     * Solution and project edits the owner cannot make yet. With a non-empty `reason`, the context
+     * menu's actions for them are created disabled with `reason` as their tooltip: Add New Solution
+     * Folder, Rename and Remove Solution Folder, Move to Solution Folder, Add Existing Project,
+     * Remove from Solution, Add New Filter, Rename and Remove Filter, Add Existing Folder, Move to
+     * Filter and Remove N Files from Project (several files). Their signals can still come from a
+     * key (F2, Delete) or a drop, which the owner refuses. Empty (the default) offers them all.
+     */
+    void setUnsupportedEditsReason(QString reason) { m_unsupportedEditsReason = std::move(reason); }
     // Recovery is offered for a project when the caller reports a pending journal.
     void setRecoverProjectHandler(std::function<bool(const QString&)> available,
                                   std::function<void(const QString&)> handler) {
@@ -195,6 +204,7 @@ private:
     void restoreExpansion(const QStringList& keys);
     void openContainingFolder(const QString& path);
 
+    QString m_unsupportedEditsReason;
     QComboBox* m_hierarchyCombo = nullptr;
     QTreeView* m_view = nullptr;
     QLineEdit* m_searchField = nullptr;

@@ -14,11 +14,13 @@
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/tr.hpp"
 #include "frost/ui/vcs/change_markers.hpp"
 
+#include "cmake_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
@@ -41,6 +43,82 @@ QString text(const char* source) { return ui::qtr("frost::app::Workbench", sourc
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
 
 QString displayName(std::string_view path) { return QFileInfo(qs(path)).fileName(); }
+
+/*
+ * What the gutter run marker of an entry point (main) in `path` runs. With an open solution (and no
+ * CMake project, whose targets the Run action runs instead whenever one is open): the
+ * loaded C++ project that builds the file (a project item with that path), run as that project
+ * whatever the startup project is; none or several such projects give no run and say why. With a
+ * CMake project, Run builds and runs the selected target, so the marker runs only when the
+ * configured model has exactly one executable target and that target builds the file (it is then
+ * the selected one); otherwise choosing the owning target requires run configurations (RUN-1).
+ * Nothing is guessed: `unavailable` says why when neither `project` nor `cmakeTarget` is set.
+ * O(solution nodes) or O(CMake sources).
+ */
+struct EntryPointRun {
+    std::optional<project::ProjectId> project;
+    bool cmakeTarget = false;
+    QString label;       // The marker's tooltip when it runs something.
+    QString unavailable; // Why it runs nothing.
+};
+
+EntryPointRun entryPointRun(const project::SolutionModel* solution, const project::CMakeProject* cmake, bool cmakeOpen,
+                            std::string_view path) {
+    EntryPointRun result;
+    const std::string key = lang::documentKey(path);
+    if (solution != nullptr && !cmakeOpen) {
+        std::vector<project::ProjectId> owners;
+        for (std::size_t i = 0; i < solution->nodeCount(); ++i) {
+            const project::Node& node = solution->node(project::NodeId{static_cast<std::uint32_t>(i)});
+            if (node.kind != project::NodeKind::File || !node.project || lang::documentKey(node.path) != key)
+                continue;
+            const project::ProjectInfo& info = solution->project(*node.project);
+            if (info.kind == project::ProjectKind::Cpp && info.nodeKind == project::NodeKind::Project &&
+                !std::ranges::contains(owners, *node.project))
+                owners.push_back(*node.project);
+        }
+        if (owners.size() == 1) {
+            result.project = owners.front();
+            result.label = text("Run '%1'").arg(qs(solution->project(owners.front()).name));
+        } else if (owners.empty()) {
+            result.unavailable = text("No loaded C++ project of the solution builds %1, so there is nothing to run.")
+                                     .arg(displayName(path));
+        } else {
+            result.unavailable = text("%1 is built by %2 projects; run one of them from the Run toolbar.")
+                                     .arg(displayName(path))
+                                     .arg(owners.size());
+        }
+        return result;
+    }
+    if (cmakeOpen) {
+        if (cmake == nullptr) {
+            result.unavailable = text("Configure the CMake project first.");
+            return result;
+        }
+        std::vector<const project::CMakeTarget*> executables;
+        for (const project::CMakeTarget& target : cmake->targets) {
+            if (target.type == project::CMakeTargetType::Executable)
+                executables.push_back(&target);
+        }
+        const auto builds = [&key](const project::CMakeTarget& target) {
+            return std::ranges::any_of(target.sources, [&key](const project::CMakeSource& source) {
+                return lang::documentKey(source.path) == key;
+            });
+        };
+        if (executables.size() == 1 && builds(*executables.front())) {
+            result.cmakeTarget = true;
+            result.label = text("Run '%1'").arg(qs(executables.front()->name));
+        } else {
+            result.unavailable =
+                text("Running the CMake target that builds %1 requires run configurations (RUN-1); Run (Shift+F10) "
+                     "runs the selected target.")
+                    .arg(displayName(path));
+        }
+        return result;
+    }
+    result.unavailable = text("Open a solution or a CMake project to run %1.").arg(displayName(path));
+    return result;
+}
 
 } // namespace
 
@@ -150,14 +228,24 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         const auto entries =
             discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
         const int targetLine = lineZeroBased + 1;
-        // Only entry points have run markers (refreshMarkers); they run the startup configuration.
-        // Test markers stay hidden until a real test runner exists (RUN-10).
+        // Only entry points have run markers (refreshMarkers); they run the project that builds the
+        // file (entryPointRun), not the startup project. Test markers stay hidden until RUN-10.
         for (const auto& entry : entries) {
-            if (entry.line == targetLine && entry.isEntryPoint) {
-                if (m_window)
-                    (void)m_window->invoke("run.run");
+            if (entry.line != targetLine || !entry.isEntryPoint)
+                continue;
+            const auto model = m_cmake ? m_cmake->service().model() : nullptr;
+            const EntryPointRun run =
+                entryPointRun(m_solution.get(), model.get(), m_cmake != nullptr, targetView->path());
+            if (!run.project && !run.cmakeTarget) {
+                notify(text("Run"), run.unavailable, ui::NotificationKind::Warning);
                 return;
             }
+            if (!m_runController)
+                return;
+            if (auto started = m_runController->run(run.project);
+                !started && started.error().code() != ErrorCode::Cancelled)
+                notify(text("Run"), qs(started.error().message()), ui::NotificationKind::Error);
+            return;
         }
     });
     transitionLauncherToMainWindow();
@@ -311,10 +399,15 @@ document::SaveTransform Workbench::saveTransformFor(const document::FileDocument
                      : trim == "modified" ? document::TrimTrailingWhitespace::Modified
                                           : document::TrimTrailingWhitespace::None;
     transform.insertFinalNewline = finalNewline;
+    // Every caret's line is spared (multi-caret included), in every view of the document, so a save
+    // never trims whitespace the user just typed under any caret.
     if (m_editors) {
         for (DocumentEditorView* view : m_editors->views()) {
-            if (&view->document() == &document && view->editor().status().line >= 1)
-                transform.keepLines.push_back(LineIndex{static_cast<std::uint32_t>(view->editor().status().line - 1)});
+            if (&view->document() != &document)
+                continue;
+            const text::Editor& editor = view->editor().editor();
+            for (const text::Selection& selection : editor.state().selections.all())
+                transform.keepLines.push_back(editor.text().lineAt(selection.head));
         }
     }
     return transform;
@@ -653,14 +746,20 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
     }
     if (!view.path().empty() && !view.editor().fileInfo().largeFile) {
         const auto runnable = discoverTestsAndEntryPointsInFile(view.path(), view.document().document().text().text());
+        std::optional<EntryPointRun> run;
         for (const auto& entry : runnable) {
             // Test markers are hidden until RUN-10's test runner can run and debug one test; a
             // marker for a test it cannot run would promise a result nothing produces.
             if (entry.line <= 0 || !entry.isEntryPoint)
                 continue;
+            if (!run) {
+                const auto model = m_cmake ? m_cmake->service().model() : nullptr;
+                run = entryPointRun(m_solution.get(), model.get(), m_cmake != nullptr, view.path());
+            }
+            // The tooltip says what a click runs, or why it runs nothing.
+            const QString tip = run->project || run->cmakeTarget ? run->label : run->unavailable;
             markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(entry.line - 1)},
-                                             ui::MarkerSeverity::RunTest,
-                                             std::format("Run '{}' ({})", entry.testName, entry.suiteName)});
+                                             ui::MarkerSeverity::RunTest, tip.toStdString()});
         }
     }
     view.editor().setLineMarkers(std::move(markers));

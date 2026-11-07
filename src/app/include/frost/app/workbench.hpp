@@ -126,6 +126,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class QApplication;
@@ -247,6 +248,16 @@ public:
         (void)folder;
         return false;
     }
+    // Shows the text edit FrostIDE would make to `listsPath` (a CMakeLists.txt) from `before` to
+    // `after`: true writes it. The default writes nothing.
+    [[nodiscard]] virtual bool confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath,
+                                                     const std::string& before, const std::string& after) {
+        (void)parent;
+        (void)listsPath;
+        (void)before;
+        (void)after;
+        return false;
+    }
     // The specification chosen in File > New Project; nullopt when cancelled.
     [[nodiscard]] virtual std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
                                                                          const std::string& defaultLocation) {
@@ -281,6 +292,9 @@ public:
     [[nodiscard]] std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) override;
     [[nodiscard]] std::string chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) override;
     [[nodiscard]] bool confirmDelete(QWidget* parent, const QString& name, bool folder) override;
+    // A modal preview of the changed lines with Apply and Cancel (workbench_project.cpp).
+    [[nodiscard]] bool confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath, const std::string& before,
+                                             const std::string& after) override;
     [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
                                                                  const std::string& defaultLocation) override;
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
@@ -432,9 +446,16 @@ public:
     // Creates a new file or folder in `directory` (empty: active tree/editor/project directory).
     [[nodiscard]] Result<std::string> createNewFile(std::string_view directory, std::string_view relativeName);
     [[nodiscard]] Result<std::string> createNewFolder(std::string_view directory, std::string_view relativeName);
-    // Renames a file or folder on disk and updates open tabs, project files (CMakeLists.txt/.vcxproj/.csproj), and LSP.
+    /*
+     * Renames a file or folder on disk and updates open tabs and LSP. A FrostEngine asset's .fmeta
+     * sidecar (<name>.fmeta beside it) is renamed with it, both or neither. CMakeLists.txt is
+     * edited only after the user confirms a preview (IWorkbenchPrompts::confirmCMakeListsEdit).
+     * .vcxproj, .vcxproj.filters and .csproj files are never edited (SLN-6): a notification names
+     * the projects that still list the old path.
+     */
     [[nodiscard]] Result<std::string> renameItem(std::string_view oldPath, std::string_view newRelativeName);
-    // Deletes a file or folder on disk, closes open tabs under it, and updates project files and LSP.
+    // Deletes a file or folder on disk, closes open tabs under it and updates LSP; project files as
+    // renameItem (CMakeLists.txt after a confirmed preview; MSBuild project files never, SLN-6).
     [[nodiscard]] Result<void> deleteItem(std::string_view path);
     // Prompts for a new name and renames `path` (empty: active tree selection or editor path).
     void promptAndRenameItem(std::string_view path = {});
@@ -444,7 +465,8 @@ public:
     // ProjectHost helper to add it to the .vcxproj (asynchronous; a refusal is a notification).
     [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
                                                              std::string_view relativeName);
-    // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt.
+    // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt, once the
+    // user confirmed the preview (Cancelled, nothing written, when declined).
     [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
     /*
      * Get from Version Control: clones `url` (a URL or a local path) into `directory` (absolute)
@@ -650,7 +672,15 @@ private:
     void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
     void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
     void removeSourceFromCMakeLists(const std::string& deletedPath, bool directory);
+    // Writes `after` over `before` in `canonicalLists` only after a confirmed preview (`change`
+    // describes it in the declined notice); Cancelled when declined.
+    [[nodiscard]] Result<void> writeCMakeListsWithPreview(const std::string& canonicalLists, const std::string& before,
+                                                          const std::string& after, const QString& change);
+    // Never writes: tells the user which loaded projects still list `oldPath` (SLN-6).
     void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
+    // Renames `from` to `to` with its .fmeta sidecar move (from, to) if any, both or neither.
+    [[nodiscard]] Result<void> moveWithSidecar(const std::string& from, const std::string& to,
+                                               const std::optional<std::pair<std::string, std::string>>& sidecar);
     void queryWorkspaceSymbols(std::string_view query, bool classesOnly,
                                std::function<void(std::vector<ui::WorkbenchSymbol>)> done);
     void openLocation(const QString& path, int line, int column);

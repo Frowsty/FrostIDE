@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -70,6 +71,31 @@ TEST(LuaService, FrostEngineWorkspaceNeedsAFrostprojInTheRoot) {
     ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root, "Game.frostproj").value(), "{}").has_value());
     EXPECT_TRUE(frost::lang::isFrostEngineLuaWorkspace(fs, root));
     EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, frost::io::joinPath(root, "missing").value()));
+}
+// One rule for the LuaLS defaults and the FrostEngine tool window: .frostproj or .feproject, ASCII
+// case ignored on every platform, a non-empty stem, a regular file directly in the root.
+TEST(LuaService, FrostEngineProjectDetectionIsOneRuleForBothSuffixesAndAnyCase) {
+    using frost::lang::isFrostEngineProjectFileName;
+    for (const char* name : {"Game.frostproj", "Game.FROSTPROJ", "Old.feproject", "Old.FeProject", "a.b.frostproj"})
+        EXPECT_TRUE(isFrostEngineProjectFileName(name)) << name;
+    for (const char* name : {".frostproj", ".feproject", "Game.frostproj.bak", "Game.frost", "frostproj", ""})
+        EXPECT_FALSE(isFrostEngineProjectFileName(name)) << name;
+
+    frost::io::MemFs fs(frost::systemClock());
+    const std::string legacy = frost::io::joinPath(root, "legacy").value();
+    const std::string upper = frost::io::joinPath(root, "upper").value();
+    const std::string hidden = frost::io::joinPath(root, "hidden").value();
+    ASSERT_TRUE(fs.createDirectories(legacy).has_value());
+    ASSERT_TRUE(fs.createDirectories(upper).has_value());
+    ASSERT_TRUE(fs.createDirectories(hidden).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(legacy, "Old.feproject").value(), "{}").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(upper, "GAME.FROSTPROJ").value(), "{}").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(hidden, ".frostproj").value(), "{}").has_value());
+    for (const auto& [dir, expected] : {std::pair{legacy, true}, std::pair{upper, true}, std::pair{hidden, false}}) {
+        EXPECT_EQ(frost::lang::isFrostEngineProjectRoot(fs, dir), expected) << dir;
+        EXPECT_EQ(frost::lang::isFrostEngineLuaWorkspace(fs, dir), expected) << dir;
+    }
+    EXPECT_FALSE(frost::lang::isFrostEngineProjectRoot(fs, ""));
 }
 TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
     auto reactor = frost::io::Reactor::create();

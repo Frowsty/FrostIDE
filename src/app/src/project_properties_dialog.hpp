@@ -129,9 +129,24 @@ struct RunningProcessInfo {
 
 // The processes Attach to Process can offer, excluding this one, sorted with windowed processes
 // first, then by name. Windows: a Toolhelp snapshot plus visible top-level window titles. Linux:
-// /proc (no window titles; other users' processes have no executable path). Never fails: an
-// unreadable source yields fewer entries. GUI thread; O(processes).
+// /proc through readProcProcesses (no window titles). Never fails: an unreadable source yields
+// fewer entries. GUI thread; O(processes).
 [[nodiscard]] std::vector<RunningProcessInfo> enumerateRunningProcesses();
+
+/*
+ * The Linux process walk behind enumerateRunningProcesses, over any /proc-like `procRoot` so tests
+ * can use a synthetic tree (it is plain file reading and builds on every platform). For each
+ * numeric directory except 0 and `selfPid`: `readLink(<dir>/exe)` gives the executable ("" when
+ * unreadable, as for other users' processes), with a trailing " (deleted)" removed; entries with
+ * no executable and an empty `cmdline` (kernel threads, exited processes, zombies) are skipped.
+ * The name is the executable's file name; without one, `comm`, or argv[0]'s file name when comm
+ * is empty or is argv[0]'s first 15 bytes (the kernel's comm limit). isDotNet follows the dotnet
+ * host's name or an apphost's <file name without .exe>.runtimeconfig.json beside it. Unsorted
+ * (directory order). Never fails; O(processes).
+ */
+using ReadProcLink = std::function<std::string(const std::string& linkPath)>;
+[[nodiscard]] std::vector<RunningProcessInfo> readProcProcesses(const std::string& procRoot, std::uint32_t selfPid,
+                                                                const ReadProcLink& readLink);
 
 void showAttachToProcessDialog(QWidget* parent,
                                std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach);
