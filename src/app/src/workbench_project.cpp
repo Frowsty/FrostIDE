@@ -1424,17 +1424,9 @@ Result<std::string> Workbench::createNewProjectSource(std::string_view projectPa
     if (!created) {
         return created;
     }
-    if (!m_options.projectEditHostPath.empty()) {
-        removeProjectFile(qs(canonicalProject), qs(*created), true);
-    } else {
-        const std::array<std::string, 1> files{*created};
-        (void)addExistingFilesToVcxproj(m_services.fs, canonicalProject, files);
-        refreshSolutionExplorerForFsChange(*created);
-        startProjectEvaluation(m_projectRoot);
-        if (m_clangd) {
-            restartClangd();
-        }
-    }
+    // Membership goes through the ProjectHost helper only (SLN-1, FND-3); its failures, including a
+    // missing helper, arrive as notifications while the new file stays on disk.
+    removeProjectFile(qs(canonicalProject), qs(*created), true);
     return created;
 }
 
@@ -1709,6 +1701,13 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
         }
         if (targetVcxproj.empty()) {
             return;
+        }
+        // One regular C/C++ file is the edit ProjectHost supports; anything else is refused (SLN-6).
+        if (paths.size() == 1 && targetFilterPath.empty()) {
+            if (const auto st = m_services.fs.status(paths.front()); st && st->type == io::FileType::Regular) {
+                removeProjectFile(qs(targetVcxproj), qs(paths.front()), true);
+                return;
+            }
         }
         auto added = addExistingFilesToVcxproj(m_services.fs, targetVcxproj, paths, targetFilterPath);
         if (!added) {
@@ -2401,7 +2400,10 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
         return;
     }
     if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
-        (void)addExistingFilesToVcxproj(m_services.fs, projectPath, movedFiles);
+        if (auto added = addExistingFilesToVcxproj(m_services.fs, projectPath, movedFiles); !added) {
+            notify(text("Moved files were not added to %1").arg(qs(io::fileName(projectPath))),
+                   qs(added.error().message()), ui::NotificationKind::Warning);
+        }
     }
     if (m_nav) {
         m_nav->refresh();
@@ -2455,7 +2457,11 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
         return;
     }
     if (!targetProjectPath.empty() && targetProjectPath.ends_with(".vcxproj")) {
-        (void)addExistingFilesToVcxproj(m_services.fs, targetProjectPath, createdPaths, targetFilterPath);
+        if (auto added = addExistingFilesToVcxproj(m_services.fs, targetProjectPath, createdPaths, targetFilterPath);
+            !added) {
+            notify(text("Pasted files were not added to %1").arg(qs(io::fileName(targetProjectPath))),
+                   qs(added.error().message()), ui::NotificationKind::Warning);
+        }
     }
     if (m_nav) {
         m_nav->refresh();
@@ -2522,8 +2528,11 @@ void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDi
     }
     const std::string canonicalDst = m_documentRegistry->canonicalize(*dstJoined);
     if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
-        const std::array<std::string, 1> added{canonicalDst};
-        (void)addExistingFilesToVcxproj(m_services.fs, projectPath, added, filterPath);
+        const std::array<std::string, 1> duplicate{canonicalDst};
+        if (auto added = addExistingFilesToVcxproj(m_services.fs, projectPath, duplicate, filterPath); !added) {
+            notify(text("The copy was not added to %1").arg(qs(io::fileName(projectPath))), qs(added.error().message()),
+                   ui::NotificationKind::Warning);
+        }
     }
     if (m_nav) {
         m_nav->refresh();

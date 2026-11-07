@@ -6,18 +6,21 @@
 // Ctrl+S (Save All), save on close, Close Project keeping a tab whose save was cancelled, Save All
 // before a build (a fake MSBuild), the Welcome screen and recent projects, the session of the last
 // project, a folder project's File System view, external changes (Compare opens the merge view),
-// autosave on frame deactivation, the one hot-exit restore prompt, and the Run tool window. No real
-// tool runs here (the msbuild and clangd suites do that).
+// autosave on frame deactivation, the one hot-exit restore prompt, the Run tool window, and the
+// read-only or refusing project dialogs and project-file edits (FND-3). No real tool runs here (the
+// msbuild and clangd suites do that).
 
 #include "frost/app/welcome_screen.hpp"
 #include "frost/build/build_session.hpp"
 #include "frost/core/build_info.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/io/async_process.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/navigation_bar.hpp"
+#include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/popup.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/shell_menus.hpp"
@@ -33,6 +36,7 @@
 #include "workbench_rig.hpp"
 #include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -41,20 +45,27 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <functional>
+#include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -1921,7 +1932,14 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
         EXPECT_NE(depsEdit, nullptr);
         if (depsEdit != nullptr)
             depsEdit->setText(QStringLiteral("ws2_32.lib;advapi32.lib"));
-        dlg->accept();
+        // OK saves and then closes (QDialog::accept alone would skip the save).
+        auto* buttons = dlg->findChild<QDialogButtonBox*>();
+        QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
+        EXPECT_NE(ok, nullptr);
+        if (ok != nullptr)
+            ok->click();
+        if (dlg->isVisible())
+            dlg->reject();
     });
     frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), appVcxprojPath, "Debug|x64",
                                             [&] { savedCalled = true; });
@@ -1950,29 +1968,38 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     EXPECT_EQ(reparsedCs["Prop.PackageId"], "Frost.Sample");
     EXPECT_EQ(reparsedCs["Prop.Version"], "2.1.0");
 
-    const std::string withPkg = frost::app::upsertCsprojNuGetPackage(updatedCsproj, "Newtonsoft.Json", "13.0.3");
-    const auto pkgs = frost::app::parseCsprojNuGetPackages(withPkg);
-    ASSERT_EQ(pkgs.size(), 1U);
-    EXPECT_EQ(pkgs[0].id, "Newtonsoft.Json");
-    EXPECT_EQ(pkgs[0].version, "13.0.3");
-    const std::string withoutPkg = frost::app::removeCsprojNuGetPackage(withPkg, "Newtonsoft.Json");
-    EXPECT_TRUE(frost::app::parseCsprojNuGetPackages(withoutPkg).empty());
+    // NuGet (read-only until LTR-7): exactly the PackageReference items the project file lists.
+    EXPECT_TRUE(frost::app::parseCsprojNuGetPackages(updatedCsproj).empty());
+    const std::string packagesCsproj = "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
+                                       "  <ItemGroup>\n"
+                                       "    <PackageReference Include=\"Serilog\" Version=\"4.0.1\" />\n"
+                                       "    <PackageReference Update=\"Dapper\"><Version>2.1.35</Version>"
+                                       "</PackageReference>\n"
+                                       "    <PackageReference Include=\"Central.Managed\" />\n"
+                                       "  </ItemGroup>\n"
+                                       "</Project>\n";
+    const auto pkgs = frost::app::parseCsprojNuGetPackages(packagesCsproj);
+    ASSERT_EQ(pkgs.size(), 3U);
+    EXPECT_EQ(pkgs[0].id, "Serilog");
+    EXPECT_EQ(pkgs[0].version, "4.0.1");
+    EXPECT_EQ(pkgs[1].id, "Dapper");
+    EXPECT_EQ(pkgs[1].version, "2.1.35");
+    EXPECT_EQ(pkgs[2].id, "Central.Managed");
+    EXPECT_EQ(pkgs[2].version, "");
 
-    // 4. Add/Remove ProjectReference & Add/Remove Project in Solution.
-    const std::string withRef = frost::app::addProjectReferenceXml(updatedCsproj, "../Lib/Lib.csproj", "");
-    EXPECT_TRUE(withRef.contains("<ProjectReference Include=\"../Lib/Lib.csproj\""));
-    const std::string withoutRef = frost::app::removeProjectReferenceXml(withRef, "../Lib/Lib.csproj");
-    EXPECT_FALSE(withoutRef.contains("Lib.csproj"));
-
+    // 4. Adding and removing a project in the solution is refused (SLN-6) and leaves Tiny.sln as it was.
     dir.write("Extra/Extra.vcxproj", initialXml);
-    ASSERT_TRUE(frost::app::addExistingProjectToSolutionFile(frost::io::realFileSystem(), dir.join("Tiny.sln"),
-                                                             dir.join("Extra/Extra.vcxproj"))
-                    .has_value());
-    EXPECT_TRUE(dir.read("Tiny.sln").contains("Extra.vcxproj"));
-    ASSERT_TRUE(frost::app::removeProjectFromSolutionFile(frost::io::realFileSystem(), dir.join("Tiny.sln"),
-                                                          dir.join("Extra/Extra.vcxproj"))
-                    .has_value());
-    EXPECT_FALSE(dir.read("Tiny.sln").contains("Extra.vcxproj"));
+    const std::string slnBefore = dir.read("Tiny.sln");
+    const auto addedProject = frost::app::addExistingProjectToSolutionFile(
+        frost::io::realFileSystem(), dir.join("Tiny.sln"), dir.join("Extra/Extra.vcxproj"));
+    ASSERT_FALSE(addedProject.has_value());
+    EXPECT_EQ(addedProject.error().code(), frost::ErrorCode::Unsupported);
+    EXPECT_TRUE(addedProject.error().message().contains("SLN-6")) << addedProject.error().message();
+    const auto removedProject = frost::app::removeProjectFromSolutionFile(
+        frost::io::realFileSystem(), dir.join("Tiny.sln"), dir.join("App/App.vcxproj"));
+    ASSERT_FALSE(removedProject.has_value());
+    EXPECT_EQ(removedProject.error().code(), frost::ErrorCode::Unsupported);
+    EXPECT_EQ(dir.read("Tiny.sln"), slnBefore);
 
     // 5. Attach to Process enumeration & dialog and Compound Run Configuration launch.
     EXPECT_TRUE(rig.workbench->registry().find("debug.attachToProcess").has_value());
@@ -2033,15 +2060,21 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     ASSERT_NE(tree, nullptr);
     EXPECT_GE(tree->topLevelItemCount(), 1);
 
+    // There is no test runner yet (RUN-7): Run All is disabled, clicking it does nothing, and the
+    // window shows discoveries without any outcome or pass/fail count.
     auto* runAllBtn = unitTestsWidget->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
     ASSERT_NE(runAllBtn, nullptr);
+    EXPECT_FALSE(runAllBtn->isEnabled());
+    EXPECT_TRUE(runAllBtn->toolTip().contains(QStringLiteral("RUN-7")));
     runAllBtn->click();
 
     auto* summaryLbl = unitTestsWidget->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
     ASSERT_NE(summaryLbl, nullptr);
-    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("Passed: 2")));
-    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("Failed: 1")));
+    EXPECT_FALSE(summaryLbl->text().contains(QStringLiteral("Passed")));
+    EXPECT_FALSE(summaryLbl->text().contains(QStringLiteral("Failed")));
+    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("RUN-7")));
 
+    // The location list holds the declaration, not a stack trace.
     auto* stackLinks = unitTestsWidget->findChild<QListWidget*>(QStringLiteral("unitTestsStackTraceLinks"));
     ASSERT_NE(stackLinks, nullptr);
     EXPECT_GT(stackLinks->count(), 0);
@@ -2053,6 +2086,385 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     popup->setFilterText(QStringLiteral("MathSuite"));
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     popup->close();
+}
+
+/*
+ * FND-3 slice A (RUN-0, SLN-1, LTR-1): the project dialogs and project-file writers show only what
+ * real files say and refuse what has no safe writer yet. The tests run on copies of the tiny_sln
+ * fixture and compare every project and solution file byte for byte before and after.
+ */
+
+// The real launcher, counting every start, so a test can prove that a view started nothing.
+class CountingLauncher final : public frost::io::IProcessLauncher {
+public:
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        ++launches;
+        return frost::io::realProcessLauncher().launch(spec);
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        ++launches;
+        return frost::io::realProcessLauncher().launchAsync(spec, context);
+    }
+    std::atomic<int> launches{0};
+};
+
+// The tiny_sln project and solution files under `dir` with their bytes (the rig's data/ excluded).
+std::map<std::string, std::string> tinySolutionFiles(const WorkDir& dir) {
+    std::map<std::string, std::string> files;
+    auto& fs = frost::io::realFileSystem();
+    for (const char* sub : {"", "App", "Lib"}) {
+        const std::string folder = *sub ? dir.join(sub) : dir.path();
+        auto entries = fs.listDirectory(folder);
+        if (!entries) {
+            ADD_FAILURE() << entries.error().describe();
+            continue;
+        }
+        for (const auto& entry : *entries) {
+            if (entry.type != frost::io::FileType::Regular)
+                continue;
+            const std::string path = frost::io::joinPath(folder, entry.name).value_or("");
+            files[path] = fs.readFile(path).value_or("<unreadable>");
+        }
+    }
+    return files;
+}
+
+// Inspects the modal dialog `name` once its event loop runs, then closes it if `inspect` did not.
+void inspectModal(QWidget* parent, const QString& name, std::function<void(QDialog&)> inspect) {
+    QTimer::singleShot(0, parent, [parent, name, inspect = std::move(inspect)] {
+        auto* dlg = parent->findChild<QDialog*>(name);
+        if (dlg == nullptr) {
+            ADD_FAILURE() << "no dialog " << name.toStdString();
+            if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                modal->reject();
+            return;
+        }
+        inspect(*dlg);
+        if (dlg->isVisible())
+            dlg->reject();
+    });
+}
+
+// Clicks the dialog's OK button, which runs its accept handler (QDialog::accept would skip it).
+void clickOk(QDialog& dlg) {
+    auto* buttons = dlg.findChild<QDialogButtonBox*>();
+    QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
+    ASSERT_NE(ok, nullptr) << dlg.objectName().toStdString();
+    ok->click();
+}
+
+TEST(Workbench, ProjectMembershipEditsAreRefusedAndLeaveSolutionFilesUnchanged) {
+    WorkDir dir("project-edit-refusals", "tiny_sln");
+    dir.write("App/App.vcxproj.filters",
+              "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+              "<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n"
+              "  <ItemGroup>\n    <Filter Include=\"Source Files\">\n"
+              "      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>\n"
+              "    </Filter>\n  </ItemGroup>\n"
+              "  <ItemGroup>\n    <ClCompile Include=\"main.cpp\">\n      <Filter>Source Files</Filter>\n"
+              "    </ClCompile>\n  </ItemGroup>\n</Project>\n");
+    dir.write("App/extra.cpp", "int extra;\n");
+    const auto before = tinySolutionFiles(dir);
+    ASSERT_GE(before.size(), 9U);
+
+    auto& fs = frost::io::realFileSystem();
+    const std::string app = dir.join("App/App.vcxproj");
+    const std::vector<std::string> sources{dir.join("App/main.cpp"), dir.join("App/extra.cpp")};
+    const std::vector<std::string> folder{dir.join("App")};
+    const auto expectRefused = [](const auto& result, std::string_view what) {
+        ASSERT_FALSE(result.has_value()) << what;
+        EXPECT_EQ(result.error().code(), frost::ErrorCode::Unsupported) << what;
+        EXPECT_TRUE(result.error().message().contains("SLN-6")) << what << ": " << result.error().message();
+        EXPECT_TRUE(result.error().message().contains("No file was changed")) << what;
+    };
+    for (const char* solutionName : {"Tiny.sln", "Tiny.slnx"}) {
+        const std::string sln = dir.join(solutionName);
+        expectRefused(frost::app::addExistingProjectToSolutionFile(fs, sln, dir.join("Lib/Lib.vcxproj")),
+                      "add existing project");
+        expectRefused(frost::app::removeProjectFromSolutionFile(fs, sln, app), "remove project");
+        expectRefused(frost::app::addSolutionFolderToSolutionFile(fs, sln, "", "Folder"), "add solution folder");
+        expectRefused(frost::app::renameSolutionFolderInSolutionFile(fs, sln, "/Folder/", "Renamed"),
+                      "rename solution folder");
+        expectRefused(frost::app::removeSolutionFolderFromSolutionFile(fs, sln, "/Folder/"), "remove solution folder");
+        expectRefused(frost::app::moveProjectToSolutionFolderInSolutionFile(fs, sln, app, "/Folder/"),
+                      "move project to solution folder");
+    }
+    expectRefused(frost::app::addFilterToVcxprojFilters(fs, app, "Source Files\\New"), "add filter");
+    expectRefused(frost::app::renameFilterInVcxprojFilters(fs, app, "Source Files", "Sources"), "rename filter");
+    expectRefused(frost::app::removeFilterFromVcxprojFilters(fs, app, "Source Files"), "remove filter");
+    expectRefused(frost::app::moveFilesToVcxprojFilter(fs, app, sources, "Header Files"), "move to filter");
+    expectRefused(frost::app::addExistingFilesToVcxproj(fs, app, sources, {}), "add files");
+    expectRefused(frost::app::addExistingFilesToVcxproj(fs, app, folder, {}), "add folder");
+    expectRefused(frost::app::removeFilesFromVcxproj(fs, app, sources), "remove files");
+    EXPECT_EQ(tinySolutionFiles(dir), before);
+}
+
+TEST(Workbench, SolutionExplorerProjectEditsNotifyRefusalAndChangeNothing) {
+    WorkDir dir("explorer-edit-refusals", "tiny_sln");
+    RigOptions options;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    auto* explorer = rig.workbench->solutionExplorer();
+    ASSERT_NE(explorer, nullptr);
+    const auto before = tinySolutionFiles(dir);
+
+    const QString app = QString::fromStdString(dir.join("App/App.vcxproj"));
+    const QString mainCpp = QString::fromStdString(dir.join("App/main.cpp"));
+    const auto expectRefusalNotice = [&](const std::function<void()>& request, const char* what) {
+        const auto count = rig.window->notifications().log().size();
+        request();
+        ASSERT_GT(rig.window->notifications().log().size(), count) << what;
+        const auto& last = rig.window->notifications().log().back().notification;
+        EXPECT_EQ(last.kind, frost::ui::NotificationKind::Error) << what;
+        EXPECT_TRUE(last.text.contains(QStringLiteral("SLN-6"))) << what << ": " << last.text.toStdString();
+    };
+    expectRefusalNotice(
+        [&] { emit explorer->moveFilesToFilterRequested(app, {mainCpp}, QStringLiteral("Header Files")); },
+        "move to filter");
+    expectRefusalNotice([&] { emit explorer->removeMultipleProjectFilesRequested(app, {mainCpp}); },
+                        "remove several files");
+    expectRefusalNotice([&] { emit explorer->removeFilterRequested(app, QStringLiteral("Source Files")); },
+                        "remove filter");
+    expectRefusalNotice([&] { emit explorer->removeSolutionFolderRequested(QStringLiteral("/Folder/")); },
+                        "remove solution folder");
+    expectRefusalNotice([&] { emit explorer->moveProjectToSolutionFolderRequested(app, QStringLiteral("/Folder/")); },
+                        "move project to solution folder");
+
+    // Remove from Project goes to the ProjectHost helper. None is installed beside the test binary
+    // and none is configured, so the request is refused with a notification (on Linux: Windows only).
+    const QModelIndex mainIndex =
+        explorer->filterModel()->mapFromSource(explorer->model()->indexOfPath(dir.join("App/main.cpp")));
+    ASSERT_TRUE(mainIndex.isValid());
+    std::unique_ptr<QMenu> menu(explorer->createContextMenu(mainIndex));
+    ASSERT_NE(menu, nullptr);
+    const auto actions = menu->actions();
+    const auto remove = std::ranges::find_if(
+        actions, [](QAction* action) { return action->objectName() == QStringLiteral("removeFromProject"); });
+    ASSERT_NE(remove, actions.end());
+    const auto count = rig.window->notifications().log().size();
+    (*remove)->trigger();
+    ASSERT_GT(rig.window->notifications().log().size(), count);
+    EXPECT_EQ(rig.window->notifications().log().back().notification.kind, frost::ui::NotificationKind::Error);
+
+    EXPECT_EQ(tinySolutionFiles(dir), before);
+}
+
+TEST(Workbench, UnitTestsWindowListsDiscoveredTestsAndStartsNothing) {
+    WorkDir dir("unit-tests-discovery");
+    dir.write("Tests/math_tests.cpp", "TEST(MathSuite, AddsNumbers) {\n"
+                                      "    EXPECT_EQ(2 + 2, 4);\n"
+                                      "}\n"
+                                      "TEST_F(MathFixture, FailsIntentionally) {\n"
+                                      "    EXPECT_TRUE(false);\n"
+                                      "}\n");
+    CountingLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tests")).has_value());
+
+    rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
+    QWidget* window = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
+    ASSERT_NE(window, nullptr);
+    auto* refresh = window->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
+    ASSERT_NE(refresh, nullptr);
+    refresh->click();
+    auto* tree = window->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
+    ASSERT_NE(tree, nullptr);
+    EXPECT_EQ(tree->columnCount(), 2); // Name and status; no duration column.
+
+    const auto leaves = [tree] {
+        std::vector<QTreeWidgetItem*> found;
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+            if ((*it)->data(0, Qt::UserRole).toInt() >= 0)
+                found.push_back(*it);
+        }
+        return found;
+    };
+    ASSERT_EQ(leaves().size(), 2U);
+    auto* summary = window->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
+    ASSERT_NE(summary, nullptr);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("2 test(s) discovered"))) << summary->text().toStdString();
+
+    const int launchesBefore = launcher.launches.load();
+    for (const char* name :
+         {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton",
+          "unitTestsRepeatUntilFailureButton", "unitTestsDebugSelectedButton", "unitTestsStopButton"}) {
+        auto* button = window->findChild<QPushButton*>(QLatin1String(name));
+        ASSERT_NE(button, nullptr) << name;
+        EXPECT_FALSE(button->isEnabled()) << name;
+        EXPECT_TRUE(button->toolTip().contains(QStringLiteral("RUN-7"))) << name;
+        button->click();
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+    EXPECT_EQ(launcher.launches.load(), launchesBefore);
+
+    // Nothing ran, so no test shows an outcome, even the one whose body fails.
+    for (QTreeWidgetItem* leaf : leaves())
+        EXPECT_EQ(leaf->text(1), QStringLiteral("Discovered, not run")) << leaf->text(0).toStdString();
+    EXPECT_FALSE(summary->text().contains(QStringLiteral("Passed")));
+    EXPECT_FALSE(summary->text().contains(QStringLiteral("Failed")));
+    auto* details = window->findChild<QPlainTextEdit*>(QStringLiteral("unitTestsOutputView"));
+    ASSERT_NE(details, nullptr);
+    EXPECT_TRUE(details->toPlainText().contains(QStringLiteral("not run")));
+    EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("[       OK ]")));
+    EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("FAILED")));
+}
+
+TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
+    WorkDir dir("project-dialogs-read-only", "tiny_sln");
+    CountingLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    const auto solution = rig.workbench->solution();
+    ASSERT_NE(solution, nullptr);
+    dir.write("App/Managed.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n"
+                                    "    <PackageReference Include=\"Serilog\" Version=\"4.0.1\" />\n"
+                                    "    <PackageReference Include=\"Central.Managed\" />\n"
+                                    "  </ItemGroup>\n</Project>\n");
+    const auto before = tinySolutionFiles(dir);
+    auto& fs = frost::io::realFileSystem();
+    const std::string app = dir.join("App/App.vcxproj");
+    bool written = false;
+    const auto onWrite = [&] { written = true; };
+
+    // Configuration Manager: the mappings as loaded, not editable; "Set Active" only selects.
+    std::optional<int> activeChosen;
+    inspectModal(rig.window.get(), QStringLiteral("configurationManagerDialog"), [](QDialog& dlg) {
+        auto* table = dlg.findChild<QTableWidget*>(QStringLiteral("cfgManagerProjectTable"));
+        ASSERT_NE(table, nullptr);
+        EXPECT_EQ(table->rowCount(), 2);
+        for (int row = 0; row < table->rowCount(); ++row) {
+            for (int column = 0; column < table->columnCount(); ++column) {
+                ASSERT_NE(table->item(row, column), nullptr);
+                EXPECT_FALSE(table->item(row, column)->flags().testFlag(Qt::ItemIsEditable));
+            }
+            EXPECT_FALSE(table->item(row, 3)->flags().testFlag(Qt::ItemIsEnabled));
+            EXPECT_EQ(table->item(row, 1)->text(), QStringLiteral("Debug"));
+            EXPECT_EQ(table->item(row, 2)->text(), QStringLiteral("x64"));
+        }
+        auto* note = dlg.findChild<QLabel*>(QStringLiteral("cfgManagerReadOnlyNote"));
+        ASSERT_NE(note, nullptr);
+        EXPECT_TRUE(note->text().contains(QStringLiteral("SLN-6")));
+        auto* buttons = dlg.findChild<QDialogButtonBox*>();
+        ASSERT_NE(buttons, nullptr);
+        EXPECT_EQ(buttons->button(QDialogButtonBox::Ok), nullptr);
+        auto* setActive = dlg.findChild<QPushButton*>(QStringLiteral("cfgManagerSetActiveButton"));
+        ASSERT_NE(setActive, nullptr);
+        setActive->click();
+    });
+    frost::app::showConfigurationManagerDialog(
+        rig.window.get(), fs, *solution, 0, [&](int index) { activeChosen = index; }, onWrite);
+    EXPECT_EQ(activeChosen, 0);
+
+    // Run/Debug Configurations: the debugger settings as App.vcxproj.user declares them, read-only.
+    bool externalConsole = false;
+    inspectModal(rig.window.get(), QStringLiteral("editRunConfigurationsDialog"), [](QDialog& dlg) {
+        auto* project = dlg.findChild<QComboBox*>(QStringLiteral("runConfigProjectCombo"));
+        ASSERT_NE(project, nullptr);
+        ASSERT_GE(project->findText(QStringLiteral("App")), 0);
+        project->setCurrentIndex(project->findText(QStringLiteral("App")));
+        auto* args = dlg.findChild<QLineEdit*>(QStringLiteral("runConfigArgumentsEdit"));
+        auto* cwd = dlg.findChild<QLineEdit*>(QStringLiteral("runConfigWorkingDirEdit"));
+        auto* source = dlg.findChild<QLabel*>(QStringLiteral("runConfigSourceLabel"));
+        ASSERT_NE(args, nullptr);
+        ASSERT_NE(cwd, nullptr);
+        ASSERT_NE(source, nullptr);
+        EXPECT_TRUE(args->isReadOnly());
+        EXPECT_TRUE(cwd->isReadOnly());
+        EXPECT_EQ(args->text(), QStringLiteral("--print \"two words\" --echo --exit 3"));
+        EXPECT_EQ(cwd->text(), QStringLiteral("$(SolutionDir)Lib"));
+        EXPECT_TRUE(source->text().contains(QStringLiteral("App.vcxproj.user"))) << source->text().toStdString();
+        EXPECT_TRUE(source->text().contains(QStringLiteral("RUN-1")));
+        if (auto* check = dlg.findChild<QCheckBox*>())
+            check->setChecked(true);
+        clickOk(dlg);
+    });
+    frost::app::showEditRunConfigurationsDialog(
+        rig.window.get(), fs, solution.get(), app, "Debug|x64", false,
+        [&](bool external) { externalConsole = external; }, onWrite);
+    EXPECT_TRUE(externalConsole);
+
+    // Add Project Reference and Solution Properties: references as loaded, not editable.
+    const auto expectReadOnlyList = [](QDialog& dlg, const char* listName, const char* noteName) {
+        auto* list = dlg.findChild<QListWidget*>(QLatin1String(listName));
+        ASSERT_NE(list, nullptr);
+        EXPECT_GT(list->count(), 0);
+        for (int row = 0; row < list->count(); ++row)
+            EXPECT_FALSE(list->item(row)->flags().testFlag(Qt::ItemIsEnabled));
+        auto* note = dlg.findChild<QLabel*>(QLatin1String(noteName));
+        ASSERT_NE(note, nullptr);
+        EXPECT_TRUE(note->text().contains(QStringLiteral("SLN-6")));
+    };
+    inspectModal(rig.window.get(), QStringLiteral("addProjectReferenceDialog"), [&](QDialog& dlg) {
+        expectReadOnlyList(dlg, "projectReferenceList", "projectReferenceReadOnlyNote");
+    });
+    frost::app::showAddProjectReferenceDialog(rig.window.get(), fs, *solution, app, onWrite);
+    inspectModal(rig.window.get(), QStringLiteral("solutionPropertiesDialog"), [&](QDialog& dlg) {
+        expectReadOnlyList(dlg, "solutionDependenciesList", "solutionDependenciesReadOnlyNote");
+        clickOk(dlg);
+    });
+    bool startupChosen = false;
+    frost::app::showSolutionPropertiesDialog(
+        rig.window.get(), fs, *solution, std::nullopt, [&](frost::project::ProjectId) { startupChosen = true; },
+        onWrite);
+    EXPECT_TRUE(startupChosen);
+
+    // NuGet: only the project file's PackageReference items; no catalogue, browse or install.
+    {
+        std::unique_ptr<QWidget> nuget(
+            frost::app::createNuGetToolWindowWidget(nullptr, fs, {}, dir.join("App/Managed.csproj"), onWrite));
+        auto* table = nuget->findChild<QTableWidget*>(QStringLiteral("nugetPackagesTable"));
+        ASSERT_NE(table, nullptr);
+        ASSERT_EQ(table->rowCount(), 2);
+        EXPECT_EQ(table->item(0, 0)->text(), QStringLiteral("Serilog"));
+        EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("4.0.1"));
+        EXPECT_EQ(table->item(1, 0)->text(), QStringLiteral("Central.Managed"));
+        EXPECT_TRUE(table->item(1, 1)->text().contains(QStringLiteral("not set")));
+        for (const char* gone : {"nugetBrowseTable", "nugetUpdatesTable", "nugetInstallButton", "nugetRemoveButton",
+                                 "nugetUpdateAllButton", "nugetFeedCombo"})
+            EXPECT_EQ(nuget->findChild<QWidget*>(QLatin1String(gone)), nullptr) << gone;
+        auto* note = nuget->findChild<QLabel*>(QStringLiteral("nugetReadOnlyNote"));
+        ASSERT_NE(note, nullptr);
+        EXPECT_TRUE(note->text().contains(QStringLiteral("LTR-7")));
+    }
+
+    // ASM / IL: disabled with its reasons; no compiler is started for the active file.
+    {
+        const int launchesBefore = launcher.launches.load();
+        const std::string mainCpp = dir.join("App/main.cpp");
+        std::unique_ptr<QWidget> asmView(frost::app::createAsmViewerToolWindowWidget(
+            nullptr, [&]() -> std::pair<std::string, int> { return {mainCpp, 1}; }));
+        auto* button = asmView->findChild<QPushButton*>(QStringLiteral("asmRefreshButton"));
+        ASSERT_NE(button, nullptr);
+        EXPECT_FALSE(button->isEnabled());
+        button->click();
+        auto* output = asmView->findChild<QPlainTextEdit*>(QStringLiteral("asmViewerOutput"));
+        ASSERT_NE(output, nullptr);
+        EXPECT_TRUE(output->toPlainText().contains(QStringLiteral("CPP-3")));
+        EXPECT_TRUE(output->toPlainText().contains(QStringLiteral("LTR-3")));
+        EXPECT_TRUE(output->toPlainText().contains(QString::fromStdString(mainCpp)));
+        EXPECT_FALSE(output->toPlainText().contains(QStringLiteral(".assembly")));
+        EXPECT_TRUE(asmView->findChildren<QProcess*>().isEmpty());
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        EXPECT_EQ(launcher.launches.load(), launchesBefore);
+    }
+
+    EXPECT_FALSE(written);
+    EXPECT_EQ(tinySolutionFiles(dir), before);
+    EXPECT_FALSE(fs.exists(dir.join("App/App.vcxproj.filters")).value_or(true));
 }
 
 TEST(Workbench, OpeningUntrustedProjectOrFolderPromptsForTrustImmediately) {

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// ProjectPropertiesDialog and Solution Management dialogs: Visual Studio / JetBrains Rider-style
-// Project Properties (.vcxproj C++ & .csproj .NET), Solution Properties, Solution Configuration
-// Manager, Run/Debug Configurations, Project References, NuGet Package Manager, and Local History.
+// ProjectPropertiesDialog and Solution Management dialogs: Project Properties (.vcxproj C++ and
+// .csproj .NET), Solution Properties, Configuration Manager, Run/Debug Configurations, Project
+// References, NuGet, ASM/IL, Unit Tests and Local History. Views without a real tool behind them
+// are read-only or disabled and name their owning epic (ADR 0078 truth rule, FND-3).
 
 #pragma once
 
@@ -48,28 +49,29 @@ using ProjectPropertyMap = std::map<std::string, std::string, std::less<>>;
 // Applies modified `Prop.<ElementName>` properties into `.csproj` XML content.
 [[nodiscard]] std::string applyCsprojProperties(std::string_view xmlContent, const ProjectPropertyMap& updates);
 
-// Parses `<PackageReference Include="..." Version="..." />` items from `.csproj` XML content.
+// Parses `<PackageReference Include="..." Version="..." />` items (or `Update=` items, or a
+// `<Version>` child element) from `.csproj` XML content, in document order. `version` is empty
+// when the project file does not set one (for example under central package management). Pure;
+// malformed XML yields the items read before the error. FrostIDE has no NuGet client yet (LTR-7),
+// so these entries are only ever shown read-only.
 struct NuGetPackageEntry {
     std::string id;
     std::string version;
 };
 [[nodiscard]] std::vector<NuGetPackageEntry> parseCsprojNuGetPackages(std::string_view xmlContent);
-[[nodiscard]] std::string upsertCsprojNuGetPackage(std::string_view xmlContent, std::string_view packageId,
-                                                   std::string_view version);
-[[nodiscard]] std::string removeCsprojNuGetPackage(std::string_view xmlContent, std::string_view packageId);
 
-// Adds or removes a `<ProjectReference Include="..." />` in `.vcxproj` or `.csproj` XML content.
-[[nodiscard]] std::string addProjectReferenceXml(std::string_view xmlContent, std::string_view relativeRefPath,
-                                                 std::string_view referencedGuid = {});
-[[nodiscard]] std::string removeProjectReferenceXml(std::string_view xmlContent, std::string_view relativeRefPath);
-
-// Adds or removes a project entry in a `.sln` or `.slnx` solution file on disk.
+/*
+ * Solution and project-membership edits. Until SLN-6 ("Safe solution and project edits") every
+ * function below refuses: it reads and writes nothing and returns ErrorCode::Unsupported with a
+ * message that names the operation and SLN-6, for the caller to show as a notification. The
+ * single-source add/remove that ProjectHost supports goes through Workbench::removeProjectFile.
+ * Thread safety: none needed (no state, no I/O).
+ */
 [[nodiscard]] Result<void> addExistingProjectToSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
                                                             std::string_view projectPath);
 [[nodiscard]] Result<void> removeProjectFromSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
                                                          std::string_view projectPath);
 
-// Solution Folder management in `.sln` and `.slnx` solution files on disk.
 [[nodiscard]] Result<std::string> addSolutionFolderToSolutionFile(io::IFileSystem& fs, std::string_view solutionPath,
                                                                   std::string_view parentFolderId,
                                                                   std::string_view folderName);
@@ -81,7 +83,6 @@ struct NuGetPackageEntry {
                                                                      std::string_view projectPath,
                                                                      std::string_view targetFolderId);
 
-// C++ (.vcxproj / .vcxproj.filters) filter management and batch file/folder operations.
 [[nodiscard]] Result<void> addFilterToVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
                                                      std::string_view filterPath);
 [[nodiscard]] Result<void> renameFilterInVcxprojFilters(io::IFileSystem& fs, std::string_view vcxprojPath,
@@ -101,11 +102,19 @@ struct NuGetPackageEntry {
 void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std::string& projectPath,
                                  const std::string& activeConfigPlatform, std::function<void()> onSaved);
 
+// Startup project (applied through `onSetStartup` on OK) and a read-only view of each project's
+// dependencies as loaded in `solution`. Editing project references is refused until SLN-6, so the
+// dialog never writes a project file; `fs` and `onDependenciesChanged` are unused until then.
 void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                   std::optional<project::ProjectId> currentStartup,
                                   std::function<void(project::ProjectId)> onSetStartup,
                                   std::function<void()> onDependenciesChanged);
 
+// Read-only Configuration Manager: the solution's project configuration mappings exactly as
+// loaded ("not mapped" where the solution has none), with a note that editing arrives with SLN-6.
+// The only action is choosing the active solution configuration, applied through
+// `onActiveConfigurationChanged`; nothing is written, so `fs` and `onSolutionFileModified` are
+// unused until SLN-6/SLN-7.
 void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                     int activeConfigurationIndex, std::function<void(int)> onActiveConfigurationChanged,
                                     std::function<void()> onSolutionFileModified);
@@ -123,26 +132,51 @@ struct RunningProcessInfo {
 void showAttachToProcessDialog(QWidget* parent,
                                std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach);
 
+/*
+ * Run/Debug Configurations. The external-console choice is applied through
+ * `onExternalConsoleChanged` and the compound launch through `onLaunchCompound`. The debugger
+ * command, arguments, working directory and environment are shown read-only, as read from the
+ * project's .vcxproj.user (else its .vcxproj) for `activeConfigPlatform`; editing them requires
+ * run configurations (RUN-1), so the dialog never writes a project file and `onSaved` is unused.
+ */
 void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
                                      const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
                                      bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
                                      std::function<void()> onSaved,
                                      std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound = {});
 
+// Read-only list of the projects `projectPath` references as loaded in `solution`. Adding or
+// removing references requires SLN-6, so nothing is written and `fs` and `onSaved` are unused.
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                    const std::string& projectPath, std::function<void()> onSaved);
 
+// Modal wrapper around createNuGetToolWindowWidget for one project; `onSaved` is unused (read-only).
 void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const std::string& csprojPath,
                                    std::function<void()> onSaved);
 
+/*
+ * NuGet tool window, read-only: the PackageReference items parsed from the selected C# project
+ * file (parseCsprojNuGetPackages), with a note that search, install and update require the NuGet
+ * client (LTR-7). It shows no package that is not in the project file and writes nothing; the
+ * file is read on the GUI thread when the project or filter changes. `fs` must outlive the
+ * widget; `onSaved` is unused until LTR-7.
+ */
 [[nodiscard]] QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                                                    std::function<const project::SolutionModel*()> solutionProvider,
                                                    std::string initialCsprojPath, std::function<void()> onSaved);
 
+/*
+ * ASM / IL tool window, disabled: it shows why the view is unavailable and starts no process.
+ * Disassembly needs the file's real compile command from the compile database (CPP-3) run through
+ * IProcessLauncher; IL needs the .NET toolchain (LTR-3). `activeFileAndLineProvider` is only used
+ * to name the active file in the message.
+ */
 [[nodiscard]] QWidget*
 createAsmViewerToolWindowWidget(QWidget* parent,
                                 std::function<std::pair<std::string, int>()> activeFileAndLineProvider);
 
+// A test or entry point found by scanning source text (not by running a test binary). It says
+// where a test is declared, never how it ran.
 struct DiscoveredTestEntry {
     std::string solutionName;
     std::string projectName;
@@ -153,7 +187,6 @@ struct DiscoveredTestEntry {
     int line = 1; // 1-based source line
     bool isDotNet = false;
     bool isEntryPoint = false;
-    bool expectsFailureInSource = false;
 };
 
 [[nodiscard]] std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_view filePath,
@@ -165,6 +198,14 @@ struct DiscoveredTestEntry {
 [[nodiscard]] std::vector<DiscoveredTestEntry>
 discoverWorkspaceUnitTests(io::IFileSystem& fs, const project::SolutionModel* solution, std::string_view workspaceRoot);
 
+/*
+ * Unit Tests tool window, discovery only: the tree lists the tests discoverWorkspaceUnitTests
+ * finds in source text, each marked "Discovered, not run", and double-click navigates to the
+ * declaration. Run All, Run Selected, Run Failed, Repeat Until Failure, Debug Selected and Stop
+ * are disabled with "Requires the test runner (RUN-7)": the window starts no process and shows no
+ * outcome, duration or count of passed/failed tests. `onDebugTest` is unused until RUN-10. `fs`
+ * must outlive the widget; discovery runs on the GUI thread on Refresh and on filter changes.
+ */
 [[nodiscard]] QWidget*
 createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                                 std::function<const project::SolutionModel*()> solutionProvider,
