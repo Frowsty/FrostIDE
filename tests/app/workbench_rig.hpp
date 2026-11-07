@@ -287,6 +287,12 @@ public:
         if (wb.luaStateDirectory.empty()) {
             wb.luaStateDirectory = dir.join("data/luals"); // LuaLS's log and meta, not the profile's.
         }
+        if (options.launcher && !wb.luaSearch) {
+            // A supplied (scripted or counting) launcher sees only the processes its test expects:
+            // the pinned LuaLS (LUA-1) is not searched for unless the test sets luaSearch or the
+            // LuaLS path setting. Rigs on the real launcher find it as the product does.
+            wb.luaSearch = lang::LuaSearch{};
+        }
         if (wb.applicationSettingsFile.empty()) {
             wb.applicationSettingsFile = dir.join("data/settings.json");
         }

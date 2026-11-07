@@ -127,6 +127,10 @@ struct RunningProcessInfo {
     bool isDotNet = false;
 };
 
+// The processes Attach to Process can offer, excluding this one, sorted with windowed processes
+// first, then by name. Windows: a Toolhelp snapshot plus visible top-level window titles. Linux:
+// /proc (no window titles; other users' processes have no executable path). Never fails: an
+// unreadable source yields fewer entries. GUI thread; O(processes).
 [[nodiscard]] std::vector<RunningProcessInfo> enumerateRunningProcesses();
 
 void showAttachToProcessDialog(QWidget* parent,

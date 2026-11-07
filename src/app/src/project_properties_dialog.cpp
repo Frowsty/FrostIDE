@@ -17,10 +17,12 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFormLayout>
@@ -676,6 +678,23 @@ void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const 
     dialog.exec();
 }
 
+namespace {
+// A .NET process: the dotnet host itself, or an apphost with its <name>.runtimeconfig.json beside it.
+void markDotNet(RunningProcessInfo& info) {
+    const QString qName = toQs(info.name);
+    if (qName.compare(QStringLiteral("dotnet.exe"), Qt::CaseInsensitive) == 0 ||
+        qName.compare(QStringLiteral("dotnet"), Qt::CaseInsensitive) == 0) {
+        info.isDotNet = true;
+    } else if (!info.executablePath.empty()) {
+        const QFileInfo exeInfo(toQs(info.executablePath));
+        const QString runtimeCfg =
+            exeInfo.dir().filePath(exeInfo.completeBaseName() + QStringLiteral(".runtimeconfig.json"));
+        if (QFileInfo::exists(runtimeCfg))
+            info.isDotNet = true;
+    }
+}
+} // namespace
+
 std::vector<RunningProcessInfo> enumerateRunningProcesses() {
     std::vector<RunningProcessInfo> processes;
 #ifdef _WIN32
@@ -731,21 +750,37 @@ std::vector<RunningProcessInfo> enumerateRunningProcesses() {
                     CloseHandle(proc);
                 }
 
-                const QString qName = toQs(info.name);
-                if (qName.compare(QStringLiteral("dotnet.exe"), Qt::CaseInsensitive) == 0 ||
-                    qName.compare(QStringLiteral("dotnet"), Qt::CaseInsensitive) == 0) {
-                    info.isDotNet = true;
-                } else if (!info.executablePath.empty()) {
-                    const QFileInfo exeInfo(toQs(info.executablePath));
-                    const QString runtimeCfg =
-                        exeInfo.dir().filePath(exeInfo.completeBaseName() + QStringLiteral(".runtimeconfig.json"));
-                    if (QFileInfo::exists(runtimeCfg))
-                        info.isDotNet = true;
-                }
+                markDotNet(info);
                 processes.push_back(std::move(info));
             } while (Process32NextW(snapshot, &entry));
         }
         CloseHandle(snapshot);
+    }
+#else
+    /* Linux: every numeric /proc entry, its name from /proc/<pid>/comm and its executable from the
+     * /proc/<pid>/exe link. The link is unreadable for other users' processes, which then have no
+     * path (and Attach refuses them); a process that exits during the walk is skipped. There are
+     * no window titles on this path. O(processes). */
+    const auto selfPid = static_cast<std::uint32_t>(QCoreApplication::applicationPid());
+    const QDir procRoot(QStringLiteral("/proc"));
+    for (const QString& entry : procRoot.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool numeric = false;
+        const uint pid = entry.toUInt(&numeric);
+        if (!numeric || pid == 0 || pid == selfPid)
+            continue;
+        RunningProcessInfo info;
+        info.pid = static_cast<std::uint32_t>(pid);
+        if (QFile comm(procRoot.filePath(entry + QStringLiteral("/comm"))); comm.open(QIODevice::ReadOnly))
+            info.name = QString::fromUtf8(comm.readAll()).trimmed().toStdString();
+        const QString exe = QFileInfo(procRoot.filePath(entry + QStringLiteral("/exe"))).symLinkTarget();
+        if (!exe.isEmpty())
+            info.executablePath = exe.toStdString();
+        if (info.name.empty() && !exe.isEmpty())
+            info.name = QFileInfo(exe).fileName().toStdString();
+        if (info.name.empty())
+            continue; // Gone, or a kernel thread without a readable name.
+        markDotNet(info);
+        processes.push_back(std::move(info));
     }
 #endif
     std::ranges::sort(processes, [](const RunningProcessInfo& a, const RunningProcessInfo& b) {
