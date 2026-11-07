@@ -2763,7 +2763,8 @@ void Workbench::startClangd(const std::string& root) {
                         self->m_language->structureChanged();
                     // Reads the new server's database for languageReadiness before anyone asks.
                     if (self->m_clangd && self->m_clangd->state() == lang::ClangdState::Running)
-                        (void)self->currentCompileCommandFiles();
+                        if (const auto location = self->m_clangd->compileCommands())
+                            (void)self->compileDatabaseState(location->file);
                 },
                 Qt::QueuedConnection);
     };
@@ -2831,9 +2832,11 @@ void Workbench::restartClangdIfCMakeStateChanged() {
      * would run clangd without a database and once more when the configure writes it, so clangd
      * keeps the old database until the configure ends: its publication restarts clangd once, and
      * when it writes no database the trust watch restarts it once the service is idle. A trust
-     * change does not wait (its launch flags apply at once). */
-    if (trusted == m_clangdTrusted && !state.ends_with(kCMakeDatabasePresent) &&
-        m_cmake->service().state() != build::BuildState::Idle) {
+     * change does not wait (its launch flags apply at once), and neither does a job held in
+     * NeedsTrust: it runs nothing until the user answers, which may be never. */
+    const build::BuildState job = m_cmake->service().state();
+    if (trusted == m_clangdTrusted && !state.ends_with(kCMakeDatabasePresent) && job != build::BuildState::Idle &&
+        job != build::BuildState::NeedsTrust) {
         log::info(kLog, "the CMake compile commands moved ({} -> {}); clangd waits for the running CMake job",
                   m_clangdCMakeState, state);
         return;

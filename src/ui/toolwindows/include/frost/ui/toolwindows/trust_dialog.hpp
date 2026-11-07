@@ -58,7 +58,10 @@ public:
     /*
      * Trust calls `grant` for each listed folder instead of BuildController::trust (nothing is saved
      * through the controller); the explanation and the button say the permission is for this
-     * operation only. Call before the dialog is shown. Null restores the controller's trust.
+     * operation only. Call before the dialog is shown. Null restores the controller's trust. The
+     * dialog never ends a grant: if a later folder fails and the user then cancels, the grants for
+     * the folders before it stay, so the caller ends its grants when the dialog finishes, accepted
+     * or rejected (the workbench's one-off attach does).
      */
     void setSessionGrant(std::function<Result<void>(std::string_view root)> grant);
     [[nodiscard]] bool sessionOnly() const noexcept { return static_cast<bool>(m_sessionGrant); }

@@ -9,13 +9,15 @@
 // once (R0 follow-up 10), a trust grant on an untrusted configured folder, which must restart the
 // restricted clangd (--enable-config=false) once in full mode, and its revocation, which restricts
 // it again; a grant made straight in the trust store, which configures a never-configured folder
-// as the prompt does, and a revocation during a long build, which restricts clangd at once (R0
-// follow-up 15).
+// as the prompt does, a trusted parent folder that the watch never saves as a root of the project's
+// own, and a revocation during a long build, which restricts clangd at once (R0 follow-up 15).
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/uri.hpp"
+#include "frost/project/trust_store.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "workbench_rig.hpp"
@@ -74,17 +76,18 @@ bool restricted(const std::vector<std::string>& arguments) {
     return std::ranges::find(arguments, std::string("--enable-config=false")) != arguments.end();
 }
 
-// A C project with a Debug and a Release Ninja profile; the compiler is the build's own.
-void writeProject(WorkDir& dir) {
+// A C project with a Debug and a Release Ninja profile; the compiler is the build's own. In the
+// folder `sub` below `dir` (with a trailing '/') when given.
+void writeProject(WorkDir& dir, const std::string& sub = {}) {
     std::string compiler = FROST_TEST_C_COMPILER;
     std::ranges::replace(compiler, '\\', '/');
-    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\n"
-                                "set(CMAKE_C_COMPILER \"" +
-                                    compiler +
-                                    "\" CACHE FILEPATH \"\" FORCE)\n"
-                                    "project(Spawn C)\nadd_executable(hello main.c)\n");
-    dir.write("main.c", "int main(void) { return 0; }\n");
-    dir.write("CMakePresets.json", R"({"version":3,"configurePresets":[
+    dir.write(sub + "CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\n"
+                                      "set(CMAKE_C_COMPILER \"" +
+                                          compiler +
+                                          "\" CACHE FILEPATH \"\" FORCE)\n"
+                                          "project(Spawn C)\nadd_executable(hello main.c)\n");
+    dir.write(sub + "main.c", "int main(void) { return 0; }\n");
+    dir.write(sub + "CMakePresets.json", R"({"version":3,"configurePresets":[
         {"name":"Debug","generator":"Ninja","binaryDir":"${sourceDir}/cmake-build-debug"},
         {"name":"Release","generator":"Ninja","binaryDir":"${sourceDir}/cmake-build-release"}]})");
 }
@@ -219,7 +222,7 @@ TEST(WorkbenchClangdSpawn, TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNe
 
 // R0 follow-up 15: trust granted straight to the trust store (Settings, another instance) for a
 // never-configured CMake folder gets the configure-on-open the trust prompt gets: the trust
-// watch asks CMakeService::trust, the configure writes the first database, and its publication
+// watch asks CMakeService::trustChanged, the configure writes the first database, and its publication
 // restarts the restricted clangd once, trusted, on it.
 TEST(WorkbenchClangdSpawn, TrustGrantedInTheStoreConfiguresAndRestartsClangdOnce) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
@@ -246,6 +249,54 @@ TEST(WorkbenchClangdSpawn, TrustGrantedInTheStoreConfiguresAndRestartsClangdOnce
     EXPECT_NE(service->model(), nullptr) << "the configure-on-open did not run";
     EXPECT_EQ(launcher.clangdStarts(), 2) << "the grant and its configure restarted clangd more than once";
     EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
+}
+
+/* R0 follow-up 15: a parent folder trusted in the store (Settings) while a CMake folder below it
+ * is open configures the folder and restarts clangd trusted, but the watch saves nothing: the
+ * parent stays the only trusted root (in this store and in the file a new instance reads), so
+ * revoking the parent untrusts the project and clangd restarts restricted. */
+TEST(WorkbenchClangdSpawn, RevokingATrustedParentUntrustsTheOpenProject) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
+    WorkDir dir("cmake-clangd-parent-trust");
+    writeProject(dir, "work/proj/");
+    const std::string parent = dir.join("work");
+    const std::string project = dir.join("work/proj");
+    const std::string debugDir = dir.join("work/proj/cmake-build-debug");
+    CountingLauncher launcher;
+    WorkbenchRig rig(dir, clangdOptions(launcher));
+    ASSERT_TRUE(rig.workbench->openPath(project).has_value());
+    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 1; }, 60s)) << "no clangd for the untrusted folder";
+    ASSERT_TRUE(restricted(launcher.lastClangdArguments()));
+
+    ASSERT_TRUE(rig.trust->trust(parent).has_value()); // The Settings route: the store only.
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the parent grant did not configure the folder";
+    ASSERT_NE(rig.workbench->cmakeService()->model(), nullptr);
+    EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
+    const auto onlyTheParent = [&](const frost::project::TrustStore& store) {
+        const std::vector<std::string> roots = store.roots();
+        return roots.size() == 1 && frost::lang::documentKey(roots[0]) == frost::lang::documentKey(parent);
+    };
+    EXPECT_TRUE(onlyTheParent(*rig.trust)) << "the trust watch saved a root of its own";
+    {
+        auto reopened = frost::project::TrustStore::open(frost::io::realFileSystem(), rig.trust->storePath());
+        ASSERT_TRUE(reopened.has_value()) << reopened.error().describe();
+        EXPECT_TRUE(onlyTheParent(**reopened)) << "the store file holds more than the parent";
+    }
+
+    const int startsBefore = launcher.clangdStarts();
+    ASSERT_TRUE(rig.trust->untrust(parent).has_value());
+    EXPECT_FALSE(rig.trust->isTrusted(project)) << "revoking the parent left the project trusted";
+    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() > startsBefore; }, 60s))
+        << "revoking the parent did not restart clangd";
+    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir));
+    EXPECT_FALSE(rig.trust->isTrusted(project)) << "the project became trusted again";
+    EXPECT_TRUE(rig.trust->roots().empty());
+    auto reopened = frost::project::TrustStore::open(frost::io::realFileSystem(), rig.trust->storePath());
+    ASSERT_TRUE(reopened.has_value()) << reopened.error().describe();
+    EXPECT_TRUE((*reopened)->roots().empty()) << "the store file still trusts something";
+    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
 }
 
 // R0 follow-up 15: revoking trust while a long CMake build runs restricts clangd at once (it used

@@ -612,6 +612,53 @@ TEST_F(CMakeServiceTest, ConfiguresOnceTrusted) {
     }
 }
 
+// R0 follow-up 15: trustChanged follows trust granted elsewhere (a parent in Settings, another
+// instance) and never writes the store: it neither saves the folder as a root of its own nor
+// re-grants a root revoked before the call.
+TEST_F(CMakeServiceTest, TrustChangedFollowsTheStoreAndWritesNothing) {
+    start();
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    service->trustChanged(); // Untrusted: nothing starts.
+    waitIdle();
+    EXPECT_EQ(service->state(), BuildState::Idle);
+    EXPECT_TRUE(launcher.launches().empty());
+    ASSERT_TRUE(service->configure().has_value());
+    ASSERT_EQ(service->state(), BuildState::NeedsTrust);
+    service->trustChanged(); // Still untrusted: the job keeps waiting.
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(trustStore->roots().empty());
+    EXPECT_FALSE(tree.fs.exists(trustStore->storePath()).value_or(true)) << "trustChanged wrote the store";
+    service->cancel();
+    waitIdle();
+
+    // A parent granted in the store: the folder configures (configure-on-open, never configured yet)
+    // and the parent stays the only root.
+    const std::string parent(io::parentPath(folder()));
+    ASSERT_TRUE(trustStore->trust(parent).has_value());
+    installReply(); // As if cmake wrote it.
+    expectFirstConfigure();
+    service->trustChanged();
+    waitIdle();
+    EXPECT_EQ(launcher.launches().size(), 2U) << "the store grant did not configure the folder";
+    EXPECT_NE(service->model(), nullptr);
+    EXPECT_EQ(trustStore->roots(), std::vector<std::string>{parent});
+    auto reopened = project::TrustStore::open(tree.fs, trustStore->storePath());
+    ASSERT_TRUE(reopened.has_value()) << reopened.error().describe();
+    EXPECT_EQ((*reopened)->roots(), std::vector<std::string>{parent}) << "the folder was saved as a root of its own";
+
+    // Revoking the parent untrusts the folder; a trustChanged after it grants nothing back.
+    ASSERT_TRUE(trustStore->untrust(parent).has_value());
+    service->trustChanged();
+    waitIdle();
+    EXPECT_FALSE(trustStore->isTrusted(folder()));
+    EXPECT_TRUE(trustStore->roots().empty());
+    reopened = project::TrustStore::open(tree.fs, trustStore->storePath());
+    ASSERT_TRUE(reopened.has_value()) << reopened.error().describe();
+    EXPECT_TRUE((*reopened)->roots().empty());
+    EXPECT_EQ(launcher.launches().size(), 2U);
+}
+
 TEST_F(CMakeServiceTest, ReportsCMakeErrors) {
     ASSERT_TRUE(trustStore->trust(folder()).has_value());
     start();

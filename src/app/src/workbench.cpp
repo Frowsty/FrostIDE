@@ -612,13 +612,13 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                 restartClangd();
         }
         /* Trust granted straight to the store (Settings, another instance) gets the same
-         * configure-on-open as the trust prompt: CMakeService::trust configures a folder that was
-         * not configured yet in this session (R0 follow-up 15). Asked before the clangd check, so
-         * the configure it starts makes that check wait for its publication. */
-        if (!m_solution && m_cmake && trusted && !m_luaObservedTrust) {
-            if (auto configured = m_cmake->service().trust(m_projectRoot); !configured)
-                log::warn(kLog, "configure after a trust grant: {}", configured.error().describe());
-        }
+         * configure-on-open as the trust prompt (R0 follow-up 15): CMakeService::trustChanged
+         * configures a folder that was not configured yet in this session. It writes nothing:
+         * trust granted to a parent stays the parent's (revoking it untrusts the project), and a
+         * revocation between the snapshot and the call is never undone. Asked before the clangd
+         * check, so the configure it starts makes that check wait for its publication. */
+        if (!m_solution && m_cmake && trusted && !m_luaObservedTrust)
+            m_cmake->service().trustChanged();
         /* A CMake or plain-folder clangd follows trust granted or revoked by any route (Settings,
          * the Attach prompt, revocation); its launch flags depend on it (FND-3). While a CMake
          * configure runs, its model publication compares the trust too and restarts clangd once
@@ -627,8 +627,10 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
          * at once, even during a long build: .clangd and --query-driver must stop applying now (R0
          * follow-up 15); a configure that then writes a first database restarts it once more.
          * Once the service is idle, the watch also restarts a clangd whose compile commands moved
-         * without a publication saying so (a profile's configure that failed, R0 follow-up 10). */
-        const bool cmakeBusy = m_cmake && m_cmake->service().state() != build::BuildState::Idle;
+         * without a publication saying so (a profile's configure that failed, R0 follow-up 10). A
+         * job held in NeedsTrust runs nothing until the user answers, so it does not count as busy. */
+        const build::BuildState cmakeState = m_cmake ? m_cmake->service().state() : build::BuildState::Idle;
+        const bool cmakeBusy = cmakeState != build::BuildState::Idle && cmakeState != build::BuildState::NeedsTrust;
         if (!m_solution && m_clangd) {
             if (trusted != m_clangdTrusted && (!trusted || !cmakeBusy)) {
                 if (m_cmake)
@@ -3406,6 +3408,9 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
         if (oneOff) {
             dialog->setSessionGrant(
                 [this](std::string_view root) -> Result<void> { return m_services.trust.trustForSession(root); });
+            // Cancelled after a grant (a failed retry, then Cancel): the grant ends with the prompt.
+            connect(dialog, &QDialog::rejected, this,
+                    [this, trustRoot] { m_services.trust.endSessionTrust(trustRoot); });
         }
         connect(dialog, &QDialog::accepted, this, [this, pid, exePath, exeName, attachAsDotNet, trustRoot, oneOff] {
             // The session grant ends with this handler, whatever the attach does.

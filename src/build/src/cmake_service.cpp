@@ -1633,6 +1633,23 @@ Result<void> CMakeService::trust(std::string_view root) {
     return {};
 }
 
+void CMakeService::trustChanged() {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (s.state == BuildState::NeedsTrust && s.job) {
+        const bool all = std::ranges::all_of(s.job->untrusted,
+                                             [&](const std::string& root) { return s.trustStore.isTrusted(root); });
+        if (all && s.folderTrustedLocked()) {
+            s.afterTrustLocked();
+        }
+        return;
+    }
+    if (s.state == BuildState::Idle && !s.sourceDir.empty() && s.options.configureOnOpen && !s.configuredOnce &&
+        s.folderTrustedLocked()) {
+        static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
+    }
+}
+
 BuildState CMakeService::state() const {
     LockGuard lock(m_state->mutex);
     return m_state->state;

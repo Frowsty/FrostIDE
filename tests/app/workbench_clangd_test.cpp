@@ -5,8 +5,12 @@
 // main.cpp shows clangd's error as a Live row in Problems, a squiggle (range decoration) and a
 // gutter marker; typing the declaration clears all three. A second folder checks the language
 // controller: Ctrl+B and Ctrl+click open a declaration, Alt+F7 shows Find Usages. A third checks
-// the readiness that empty answers name (fallback flags, indexing) against clangd itself.
+// the readiness that empty answers name (fallback flags, indexing) against clangd itself: its
+// `--check` verdict on each file's command and the $/progress it writes.
 
+#include "frost/io/async_process.hpp"
+#include "frost/io/path.hpp"
+#include "frost/io/process.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/ui/find/find_feature.hpp"
@@ -26,6 +30,7 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QSet>
 #include <QTreeView>
 
 #include <algorithm>
@@ -33,7 +38,13 @@
 #include <chrono>
 #include <format>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
@@ -751,11 +762,181 @@ TEST(WorkbenchClangd, CtrlBOpensTheDeclarationAndFindUsagesShowsItsWindow) {
         waitFor([&] { return rig.window->toolWindows().isVisible(frost::app::kFindUsagesToolWindow); }, kPatience));
 }
 
-// R0 follow-up 4: the reason the language features give for an empty answer comes from the real
-// clangd. The oracles: clangd's own state (NotRunning before it runs), the compile_commands.json it
-// was started with (a source missing from it is parsed with fallback flags; a header is not
-// claimed), and clangd's "indexing" work-done progress, which the workbench shows as the
-// "clangd: indexing" background task: whenever that task runs, readiness is Indexing, and only then.
+// What clangd wrote about its "indexing" work-done progress ($/progress notifications on its stdout,
+// R0 follow-up 4): the oracle for readiness Indexing. Fed on reactor threads.
+class ProgressWire {
+public:
+    void feed(std::string_view bytes) {
+        const std::scoped_lock lock(m_mutex);
+        m_buffer.append(bytes);
+        // LSP base protocol: "Content-Length: N\r\n...\r\n\r\n" then N bytes of JSON.
+        for (;;) {
+            const std::size_t headerEnd = m_buffer.find("\r\n\r\n");
+            if (headerEnd == std::string::npos)
+                return;
+            const std::size_t at = m_buffer.find("Content-Length:");
+            if (at == std::string::npos || at > headerEnd) {
+                m_buffer.erase(0, headerEnd + 4); // Not a header we understand: skip it.
+                continue;
+            }
+            const std::size_t length = std::stoul(m_buffer.substr(at + 15, headerEnd - at - 15));
+            if (m_buffer.size() < headerEnd + 4 + length)
+                return;
+            onMessage(QJsonDocument::fromJson(QByteArray::fromStdString(m_buffer.substr(headerEnd + 4, length))));
+            m_buffer.erase(0, headerEnd + 4 + length);
+        }
+    }
+    // Indexing progress begun and not ended yet, as clangd wrote it.
+    [[nodiscard]] bool indexing() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_begins > m_ends;
+    }
+    [[nodiscard]] int begins() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_begins;
+    }
+    [[nodiscard]] int ends() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_ends;
+    }
+
+private:
+    void onMessage(const QJsonDocument& message) {
+        const QJsonObject object = message.object();
+        if (object.value("method").toString() != QStringLiteral("$/progress"))
+            return;
+        const QJsonObject params = object.value("params").toObject();
+        const QString token = params.value("token").toVariant().toString();
+        const QJsonObject value = params.value("value").toObject();
+        const QString kind = value.value("kind").toString();
+        if (kind == QStringLiteral("begin") && value.value("title").toString().contains(QStringLiteral("index"))) {
+            m_indexTokens.insert(token);
+            ++m_begins;
+        } else if (kind == QStringLiteral("end") && m_indexTokens.remove(token)) {
+            ++m_ends;
+        }
+    }
+    mutable std::mutex m_mutex;
+    std::string m_buffer;
+    QSet<QString> m_indexTokens;
+    int m_begins = 0;
+    int m_ends = 0;
+};
+
+// A real process whose stdout also goes to a ProgressWire.
+class TeeProcess final : public frost::io::IAsyncProcess {
+public:
+    TeeProcess(std::unique_ptr<frost::io::IAsyncProcess> inner, std::shared_ptr<ProgressWire> wire)
+        : m_inner(std::move(inner)), m_wire(std::move(wire)) {}
+    frost::io::ProcessId pid() const noexcept override { return m_inner->pid(); }
+    frost::sched::Task<frost::Result<std::size_t>> readStdout(std::span<char> buffer, std::stop_token token) override {
+        // Only locals after the await: this object may be gone when a cancelled read resumes.
+        const std::shared_ptr<ProgressWire> wire = m_wire;
+        auto read = co_await m_inner->readStdout(buffer, std::move(token));
+        if (read && *read > 0)
+            wire->feed(std::string_view(buffer.data(), *read));
+        co_return read;
+    }
+    frost::sched::Task<frost::Result<std::size_t>> readStderr(std::span<char> buffer, std::stop_token token) override {
+        return m_inner->readStderr(buffer, std::move(token));
+    }
+    frost::sched::Task<frost::Result<void>> writeStdin(std::string bytes, std::stop_token token) override {
+        return m_inner->writeStdin(std::move(bytes), std::move(token));
+    }
+    void closeStdin() noexcept override { m_inner->closeStdin(); }
+    frost::sched::Task<frost::Result<frost::io::ExitStatus>> exited(std::stop_token token) override {
+        return m_inner->exited(std::move(token));
+    }
+    frost::Result<void> terminate() override { return m_inner->terminate(); }
+    frost::sched::Task<frost::Result<frost::io::ProcessResult>>
+    communicate(std::string stdinData, frost::IClock::Duration timeout, std::stop_token token) override {
+        return m_inner->communicate(std::move(stdinData), timeout, std::move(token));
+    }
+
+private:
+    std::unique_ptr<frost::io::IAsyncProcess> m_inner;
+    std::shared_ptr<ProgressWire> m_wire;
+};
+
+// The real launcher; clangd's stdout is teed to `wire`.
+class TeeLauncher final : public frost::io::IProcessLauncher {
+public:
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        return frost::io::realProcessLauncher().launch(spec);
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        auto process = frost::io::realProcessLauncher().launchAsync(spec, context);
+        const std::string_view name = frost::io::fileName(spec.executable);
+        if (!process || (name != "clangd" && name != "clangd.exe"))
+            return process;
+        return std::make_unique<TeeProcess>(std::move(*process), wire);
+    }
+    std::shared_ptr<ProgressWire> wire = std::make_shared<ProgressWire>();
+};
+
+/*
+ * The oracle for fallback flags: `clangd --check=<file>` (the pinned clangd, with the
+ * --compile-commands-dir the workbench's clangd got, if any) names the command it parses the file
+ * with: "Compile command from CDB", "... inferred from <file>", or "Generic fallback command".
+ * true for the fallback, false for a database command, nullopt (with `why`) when it says neither.
+ */
+std::optional<bool> clangdCheckUsesFallback(const std::string& clangd, const std::string& file,
+                                            const std::optional<frost::lang::CompileCommandsLocation>& location,
+                                            std::string& why) {
+    frost::io::ProcessSpec spec;
+    spec.executable = clangd;
+    spec.arguments = {"--check=" + file, "--log=info", "--enable-config=false"};
+    if (location)
+        spec.arguments.push_back("--compile-commands-dir=" + location->directory);
+    spec.workingDirectory = std::string(frost::io::parentPath(file));
+    auto process = frost::io::realProcessLauncher().launch(spec);
+    if (!process) {
+        why = process.error().describe();
+        return std::nullopt;
+    }
+    auto result = (*process)->communicate({}, 120s);
+    if (!result) {
+        why = result.error().describe();
+        return std::nullopt;
+    }
+    const std::string log = result->stdoutBytes + result->stderrBytes;
+    if (log.find("Generic fallback command is") != std::string::npos)
+        return true;
+    if (log.find("Compile command from CDB is") != std::string::npos ||
+        log.find("Compile command inferred from") != std::string::npos)
+        return false;
+    why = "clangd --check named no compile command:\n" + log;
+    return std::nullopt;
+}
+
+// Readiness for `path` agrees with `clangd --check` about fallback flags (the database is read on
+// a worker, so a NoCompileCommand answer may take a moment; a database command must stay Unknown).
+::testing::AssertionResult fallbackAgreesWithClangd(WorkbenchRig& rig, const std::string& clangd,
+                                                    const std::string& path) {
+    using Readiness = frost::ui::lang::ServerReadiness;
+    std::string why;
+    const std::optional<bool> fallback =
+        clangdCheckUsesFallback(clangd, path, rig.workbench->clangd()->compileCommands(), why);
+    if (!fallback)
+        return ::testing::AssertionFailure() << path << ": " << why;
+    const auto said = [&] { return rig.workbench->languageReadiness(path) == Readiness::NoCompileCommand; };
+    if (*fallback) {
+        if (!waitFor(said, kPatience))
+            return ::testing::AssertionFailure() << path << ": clangd uses fallback flags, readiness never said so";
+    } else if (waitFor(said, 3s)) {
+        return ::testing::AssertionFailure() << path << ": readiness claims fallback flags, clangd has a command";
+    }
+    return ::testing::AssertionSuccess() << path << (*fallback ? ": fallback" : ": database command");
+}
+
+/* R0 follow-up 4: the reason the language features give for an empty answer comes from the real
+ * clangd. The oracles: clangd's own state (NotRunning before it runs); `clangd --check` for
+ * whether a file is parsed with fallback flags (a database with entries gives every file a
+ * command, a listed one or one clangd infers, so neither an unlisted source nor a header is
+ * claimed; an empty database leaves the fallback); and the "indexing" $/progress notifications
+ * clangd wrote on its stdout: readiness is Indexing only after clangd began that progress, and
+ * follows its end. */
 TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
     frost::test::disableCrashDialogs();
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
@@ -785,9 +966,11 @@ TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
     }
     ASSERT_TRUE(frost::lang::writeCompileCommands(frost::io::realFileSystem(), dir.join("build"), commands));
 
+    TeeLauncher launcher;
     RigOptions options;
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
+    options.launcher = &launcher;
     WorkbenchRig rig(dir, std::move(options));
     rig.show();
     EXPECT_EQ(rig.workbench->languageReadiness(dir.join("listed.cpp")), Readiness::NotRunning);
@@ -797,41 +980,45 @@ TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
             return rig.workbench->clangd() && rig.workbench->clangd()->state() == frost::lang::ClangdState::Running;
         },
         kPatience));
+    ASSERT_TRUE(rig.workbench->clangd()->compileCommands().has_value());
     EXPECT_EQ(rig.workbench->languageReadiness(dir.join("notes.txt")), Readiness::NotRunning);
     // clangd loads the database, and starts its background index, for the first open document.
     ASSERT_TRUE(rig.workbench->openPath(dir.join("listed.cpp")).has_value());
 
-    // Indexing exactly while clangd's progress runs; the database read settles the rest.
-    const auto indexingTask = [&] {
-        const auto tasks = rig.window->backgroundTasks().tasks();
-        return std::ranges::any_of(
-            tasks, [](const auto& task) { return task->state().title == QStringLiteral("clangd: indexing"); });
+    // Indexing follows clangd's own begin and end. clangd's message reaches the wire before the
+    // workbench handles it, so readiness may lag the wire, never lead it.
+    const ProgressWire& wire = *launcher.wire;
+    bool ledTheWire = false;
+    const auto readiness = [&] {
+        const int begins = wire.begins();
+        const Readiness now = rig.workbench->languageReadiness(dir.join("listed.cpp"));
+        ledTheWire = ledTheWire || (now == Readiness::Indexing && begins == 0);
+        return now;
     };
-    bool sawIndexing = false;
-    bool consistent = true;
-    std::string mismatch;
-    const auto check = [&] {
-        const bool running = indexingTask();
-        const Readiness readiness = rig.workbench->languageReadiness(dir.join("listed.cpp"));
-        sawIndexing = sawIndexing || running;
-        if (running != (readiness == Readiness::Indexing) && consistent) {
-            consistent = false;
-            mismatch = std::format("task running {}, readiness {}", running, static_cast<int>(readiness));
-        }
-        return running;
-    };
-    ASSERT_TRUE(waitFor(check, kPatience)) << "clangd never reported its background index";
-    ASSERT_TRUE(waitFor([&] { return !check(); }, 240s)) << "clangd's background index never ended";
-    EXPECT_TRUE(sawIndexing);
-    EXPECT_TRUE(consistent) << mismatch;
-    ASSERT_TRUE(waitFor(
-        [&] { return rig.workbench->languageReadiness(dir.join("unlisted.cpp")) == Readiness::NoCompileCommand; },
-        kPatience))
-        << "a source missing from the database was not reported";
-    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("listed.cpp")), Readiness::Unknown);
-    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("lib.h")), Readiness::Unknown); // Interpolated.
+    ASSERT_TRUE(waitFor([&] { return readiness() == Readiness::Indexing; }, kPatience))
+        << "readiness never said Indexing (clangd began " << wire.begins() << " indexing progress)";
+    EXPECT_GE(wire.begins(), 1) << "Indexing without clangd's progress";
+    ASSERT_TRUE(waitFor([&] { return !wire.indexing() && readiness() != Readiness::Indexing; }, 240s))
+        << "clangd's background index never ended (begins " << wire.begins() << ", ends " << wire.ends() << ")";
+    EXPECT_FALSE(ledTheWire) << "readiness said Indexing before clangd began its progress";
+    EXPECT_GE(wire.ends(), 1);
+    // Ended on the wire and handled: readiness stays off Indexing unless clangd begins again.
+    const int settledBegins = wire.begins();
+    EXPECT_FALSE(waitFor(
+        [&] { return readiness() == Readiness::Indexing && !wire.indexing() && wire.begins() == settledBegins; }, 2s));
 
-    // The message of an empty answer for the unlisted file names the fallback flags.
+    // A database with entries: clangd has a command for the listed file, an unlisted source and a
+    // header alike (`clangd --check`), so nothing is claimed.
+    for (const char* file : {"listed.cpp", "unlisted.cpp", "lib.h"})
+        EXPECT_TRUE(fallbackAgreesWithClangd(rig, found->path, dir.join(file)));
+    EXPECT_EQ(rig.workbench->languageReadiness(dir.join("unlisted.cpp")), Readiness::Unknown);
+
+    // An empty database (a configure that produced no entries): clangd falls back for every file.
+    dir.write("build/compile_commands.json", "[]\n");
+    for (const char* file : {"listed.cpp", "unlisted.cpp"})
+        EXPECT_TRUE(fallbackAgreesWithClangd(rig, found->path, dir.join(file)));
+
+    // The message of an empty answer for a file clangd parses with fallback flags names them.
     std::vector<QString> status;
     QObject::connect(rig.workbench->language(), &frost::ui::lang::LanguageController::statusMessage,
                      [&](const QString& message) { status.push_back(message); });
@@ -846,6 +1033,44 @@ TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
     }
     EXPECT_TRUE(said(QStringLiteral("no compile command")))
         << (status.empty() ? std::string("no status message") : status.back().toStdString());
+}
+
+/* R0 follow-up 4: a clangd started without --compile-commands-dir (the folder has no database the
+ * workbench finds) searches each file's folders upward for compile_commands.json,
+ * build/compile_commands.json or compile_flags.txt. Readiness follows that search, checked against
+ * `clangd --check` without the flag: a file below a nested database or a flags file has a
+ * command; a file with nothing above it (the oracle decides, the temporary folder's ancestors
+ * included) falls back. */
+TEST(WorkbenchClangd, FallbackFlagsFollowClangdsOwnDatabaseSearch) {
+    frost::test::disableCrashDialogs();
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << found.error().describe();
+
+    WorkDir dir("clangd-readiness-search");
+    dir.write("top.cpp", "int top() { return 1; }\n");
+    dir.write("nested/src/inner.cpp", "int inner() { return 2; }\n");
+    dir.write("nested/src/other.cpp", "int other() { return 3; }\n");
+    dir.write("flags/sub/flagged.cpp", "int flagged() { return 4; }\n");
+    dir.write("flags/compile_flags.txt", "-std=c++20\n");
+    const std::string inner = dir.join("nested/src/inner.cpp");
+    const std::vector<frost::lang::CompileCommand> commands = {frost::lang::CompileCommand{
+        .directory = dir.join("nested"), .file = inner, .arguments = {"clang++", "-std=c++20", "-c", inner}}};
+    // nested/build/: clangd's search finds it from nested/src/; the workbench's root search does not.
+    ASSERT_TRUE(frost::lang::writeCompileCommands(frost::io::realFileSystem(), dir.join("nested/build"), commands));
+
+    RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return rig.workbench->clangd() && rig.workbench->clangd()->state() == frost::lang::ClangdState::Running;
+        },
+        kPatience));
+    ASSERT_FALSE(rig.workbench->clangd()->compileCommands().has_value()) << "clangd got a --compile-commands-dir";
+    for (const char* file : {"top.cpp", "nested/src/inner.cpp", "nested/src/other.cpp", "flags/sub/flagged.cpp"})
+        EXPECT_TRUE(fallbackAgreesWithClangd(rig, found->path, dir.join(file)));
 }
 
 } // namespace
