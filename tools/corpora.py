@@ -76,7 +76,7 @@ import stat
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 LOCK_FILE = "tests/corpus/corpora.lock.json"
 SDK_LOCK_FILE = "sdk/sdk.lock.json"
@@ -474,9 +474,17 @@ def configure_engine(repo: Path, root: Path, entry: dict, preset: str) -> str:
                 f"{len(seeded)} seeded, {len(shared)} copied to {root / CPM_CACHE_NAME})")
 
 
-def to_wsl_path(path: Path) -> str:
-    """/mnt/<drive>/... for a Windows drive path (tools/verify.ps1's ConvertTo-WslPath)."""
-    text = str(path.resolve())
+def to_wsl_path(path: Path | str) -> str:
+    """
+    /mnt/<drive>/... for a Windows drive path (tools/verify.ps1's ConvertTo-WslPath). On Windows a
+    relative path is resolved first; elsewhere (the unit tests' Linux runs) the path is taken as
+    written, parsed with Windows rules, because Path.resolve() there would treat "F:/x" as relative.
+    Raises ValueError for a path without a drive letter (UNC or POSIX), which WSL cannot mount.
+    """
+    native = Path(path).resolve() if os.name == "nt" else path
+    text = str(PureWindowsPath(native))
+    if not re.match(r"^[A-Za-z]:\\", text):  # PureWindowsPath writes backslashes
+        raise ValueError(f"not a drive path: {text!r}")
     return "/mnt/" + text[0].lower() + text[2:].replace("\\", "/")
 
 

@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -198,8 +199,9 @@ def tools_seen(records: list[dict]) -> dict[str, dict]:
         if record.get("event") != "start":
             continue
         executable = record.get("executable", "")
-        entry = tools.setdefault(Path(executable).name.lower(), {"executable": executable,
-                                                                  "sha256": record.get("sha256"), "starts": 0})
+        # The base name at either separator: the log may come from the other OS (Path splits only at /).
+        name = re.split(r"[\\/]", executable)[-1].lower()
+        entry = tools.setdefault(name, {"executable": executable, "sha256": record.get("sha256"), "starts": 0})
         entry["starts"] += 1
     return tools
 

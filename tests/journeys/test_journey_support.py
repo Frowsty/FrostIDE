@@ -64,6 +64,15 @@ class EvidenceTest(unittest.TestCase):
         self.assertEqual(tools["clangd.exe"]["starts"], 2)
         self.assertEqual(tools["clangd.exe"]["sha256"], "aa")
 
+    def test_tool_names_split_at_either_separator_on_any_os(self) -> None:
+        # A Windows log read on Linux and a Linux log read on Windows give the same base names.
+        records = [
+            {"event": "start", "id": 1, "executable": "/home/u/sdk/bin/ninja", "sha256": "bb"},
+            {"event": "start", "id": 2, "executable": "F:/tools/cmake/bin/cmake.exe", "sha256": "cc"},
+            {"event": "start", "id": 3, "executable": "F:\\tools\\cmake\\bin\\ctest.exe", "sha256": "dd"},
+        ]
+        self.assertEqual(list(j1_cmake.tools_seen(records)), ["ninja", "cmake.exe", "ctest.exe"])
+
 
 class OracleParsingTest(unittest.TestCase):
     def test_list_presets_output_is_split_into_its_sections(self) -> None:

@@ -332,7 +332,12 @@ class EngineTest(TempDirTestCase):
         self.assertTrue((self.corpus / ".cache" / "cpm" / "fmt" / "h1" / "f.txt").is_file())
 
     def test_wsl_paths(self) -> None:
+        # Both separators, on Windows and on Linux (where Path.resolve() would treat these as relative).
         self.assertEqual(corpora.to_wsl_path(Path("F:/Builds/corpora")), "/mnt/f/Builds/corpora")
+        self.assertEqual(corpora.to_wsl_path(r"F:\Builds\x y"), "/mnt/f/Builds/x y")
+        self.assertEqual(corpora.to_wsl_path("e:\\"), "/mnt/e/")
+        with self.assertRaises(ValueError):
+            corpora.to_wsl_path(r"\\server\share\corpora")
 
 
 class VerifyCorpusTierTest(unittest.TestCase):
