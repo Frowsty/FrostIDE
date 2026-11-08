@@ -11,6 +11,10 @@
 // stall above 250 ms either (FND-9a's acceptance). The R1 CMake tests: the presets FrostIDE lists
 // for the engine equal `cmake --list-presets=all` (CMK-2), and reconfiguring it from the CMake
 // tool window records no GUI stall above 250 ms, shows its progress and can be stopped (CMK-15).
+// CMK-4: the compile commands synthesized from the engine's File API codemodel give the pinned
+// clangd the flags of the compile_commands.json the Ninja preset wrote (the oracle) for five engine
+// files, and CPP-3: the IDE's own directory for that configuration holds that database, not the
+// build tree.
 //
 // A missing corpus, or one that is not at its pin, fails the test: the tier never skips. Stalls are
 // measured with the product's own StallWatchdog and StallHooks on this GUI thread (the hooks the
@@ -28,11 +32,14 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/cmake_compile_commands.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/project/cmake_presets.hpp"
 #include "frost/rpc/json.hpp"
 #include "frost/ui/shell/background_tasks.hpp"
 #include "frost/vcs/git_locator.hpp"
 
+#include "support/clangd_check.hpp"
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
 #include <QApplication>
@@ -324,7 +331,8 @@ TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneCla
                 const auto* clangd = rig.workbench->clangd();
                 const auto location = clangd ? clangd->compileCommands() : std::nullopt;
                 return clangd && clangd->state() == frost::lang::ClangdState::Running && location &&
-                       location->directory == buildDir && service->state() == frost::build::BuildState::Idle;
+                       location->origin == buildDir && location->directory != buildDir &&
+                       service->state() == frost::build::BuildState::Idle;
             },
             40min);
         const auto outcome = service->lastConfigure();
@@ -586,6 +594,105 @@ TEST(CorpusFrostEngine, ReconfiguringShowsProgressRecordsNoStallOver250msAndStop
     reload->click();
     ASSERT_TRUE(runUntil([&] { return settled() && service->lastConfigure()->result.success; }, 10min));
     EXPECT_FALSE(service->modelStale());
+}
+
+/*
+ * CMK-4's acceptance: clangd's flags for five engine files, from the commands FrostIDE synthesizes
+ * out of the File API codemodel, equal those from the compile_commands.json the pinned Ninja
+ * preset's configure wrote (the oracle). "clangd's flags" are what `clangd --check` (the pinned
+ * clangd) reports: the cc1 arguments its driver derives (compared whole), the database command
+ * after clangd's adjustments (compared without the output switches /Fo, /Fd and /FS, which the
+ * synthesis leaves out: they name build artifacts and change no parse) and its diagnostics. The
+ * five files cover the engine's own libraries with and without a precompiled header, an executable,
+ * a C library and a .c++ source of a CPM dependency; each is listed once in the oracle. The
+ * corpus is configured through the workbench (configure-on-open) first. CPP-3: the owned
+ * directory of the configuration (under the profile's cache) holds the oracle byte for byte.
+ */
+TEST(CorpusFrostEngine, CodeModelCommandsGiveClangdTheFlagsOfTheNinjaDatabaseForFiveEngineFiles) {
+    frost::test::disableCrashDialogs(); // clangd and cmake inherit the error mode.
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    auto& fs = frost::io::realFileSystem();
+    auto clangd = frost::lang::findClangd(fs, frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(clangd.has_value()) << "the pinned clangd is required: " << clangd.error().describe();
+    WorkDir profileDir("corpus-frostengine-cdb-profile");
+    WorkbenchRig rig(profileDir);
+    ASSERT_TRUE(rig.trust->trust(corpus).has_value());
+    rig.show();
+    frost::Result<void> opened = frost::fail(frost::ErrorCode::Cancelled, "not opened");
+    QTimer::singleShot(0, [&] { opened = rig.workbench->openPath(corpus); });
+    ASSERT_TRUE(runUntil([&] { return rig.workbench->projectRoot() == corpus; }, 60s)) << "the open did not run";
+    ASSERT_TRUE(opened.has_value()) << opened.error().describe();
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_EQ(service->activeProfile()->name, FROST_CORPUS_FROSTENGINE_PRESET);
+    ASSERT_TRUE(runUntil(
+        [&] {
+            return service->state() == frost::build::BuildState::Idle && service->lastConfigure().has_value() &&
+                   service->model() != nullptr;
+        },
+        40min))
+        << "the open's configure never ended";
+    ASSERT_TRUE(service->lastConfigure()->succeeded())
+        << (service->lastConfigure()->error ? service->lastConfigure()->error->describe() : "failed");
+    const auto model = service->model();
+    const std::string buildDir = service->activeBuildDirectory();
+    const std::string oracle = buildDir + "/compile_commands.json";
+    auto oracleText = fs.readFile(oracle);
+    ASSERT_TRUE(oracleText.has_value()) << "the Ninja preset wrote no " << oracle;
+    auto oracleJson = frost::rpc::parseJson(*oracleText);
+    ASSERT_TRUE(oracleJson.has_value());
+
+    // The synthesis, written where the oracle cannot be confused with it.
+    const std::string synthesized = profileDir.join("synthesized");
+    const auto commands = frost::lang::cmakeCodeModelCompileCommands(*model);
+    ASSERT_TRUE(frost::lang::writeCompileCommands(fs, synthesized, commands).has_value());
+
+    const std::vector<std::string> files = {
+        "Frost/src/Frost/Core/Application.cpp",           // FrostFoundation, precompiled header.
+        "Frost-Editor/src/EditorApp.cpp",                 // The editor executable.
+        "Frost-Runtime/src/RuntimeApp.cpp",               // The runtime executable.
+        ".cache/cpm/lua/d92f/lapi.c",                     // A C library (no /TP).
+        ".cache/cpm/capnproto/a28f/c++/src/kj/array.c++", // A CPM dependency's .c++ source.
+    };
+    for (const std::string& relative : files) {
+        const std::string file = frost::io::normalizePath(corpus + "/" + relative).value_or("");
+        SCOPED_TRACE(file);
+        ASSERT_TRUE(fs.exists(file).value_or(false));
+        const auto listed = [&](const frost::rpc::Json& database) {
+            int count = 0;
+            for (const auto& entry : database.items())
+                if (const auto* path = entry.find("file");
+                    path && path->asString() &&
+                    frost::lang::documentKey(*path->asString()) == frost::lang::documentKey(file))
+                    ++count;
+            return count;
+        };
+        ASSERT_EQ(listed(*oracleJson), 1) << "the oracle must list the file once";
+        auto fromCMake = frost::test::runClangdCheck(clangd->path, file, buildDir);
+        auto fromModel = frost::test::runClangdCheck(clangd->path, file, synthesized);
+        ASSERT_TRUE(fromCMake.has_value()) << fromCMake.error().describe();
+        ASSERT_TRUE(fromModel.has_value()) << fromModel.error().describe();
+        ASSERT_EQ(fromCMake->origin, "from CDB") << fromCMake->log;
+        ASSERT_EQ(fromModel->origin, "from CDB") << fromModel->log;
+        ASSERT_FALSE(fromCMake->cc1.empty()) << fromCMake->log;
+        EXPECT_EQ(fromModel->cc1, fromCMake->cc1) << "clangd's parse flags differ";
+        EXPECT_EQ(frost::test::withoutOutputSwitches(fromModel->command),
+                  frost::test::withoutOutputSwitches(fromCMake->command));
+        EXPECT_EQ(fromModel->errors, fromCMake->errors);
+    }
+
+    // CPP-3: the configuration's own directory, under the profile's cache, holds the oracle.
+    const std::string cacheRoot = profileDir.join("data/compile-commands/corpus");
+    frost::lang::CMakeCompileCommandsProvider provider(fs, cacheRoot, [&] {
+        return frost::lang::CMakeCompileCommandsInput{.buildDirectory = buildDir, .configuration = {}, .model = model};
+    });
+    auto located = provider.locate();
+    ASSERT_TRUE(located.has_value()) << located.error().describe();
+    ASSERT_TRUE(located->has_value());
+    EXPECT_EQ((*located)->source, frost::lang::CompileCommandsSource::CMakeCopy);
+    EXPECT_TRUE((*located)->directory.starts_with(frost::io::normalizePath(cacheRoot).value_or("?")));
+    EXPECT_TRUE(fs.readFile((*located)->file).value_or("") == *oracleText) << "the owned copy differs";
 }
 
 } // namespace

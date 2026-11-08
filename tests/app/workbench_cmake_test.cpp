@@ -249,7 +249,9 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     ASSERT_TRUE(waitFor(
         [&] {
             const auto location = rig.workbench->clangd()->compileCommands();
-            return location && location->directory == dir.join("cmake-build-debug");
+            // CPP-3: the IDE's own directory for the configuration, holding its database.
+            return location && location->origin == dir.join("cmake-build-debug") &&
+                   location->directory != location->origin;
         },
         60s));
     auto* tree = rig.window->findChild<QTreeView*>(QStringLiteral("cmakeTargets"));
@@ -358,7 +360,8 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
         [&] {
             const auto* clangd = rig.workbench->clangd();
             const auto location = clangd ? clangd->compileCommands() : std::nullopt;
-            return location && location->directory == dir.join("cmake-build-release");
+            return location && location->origin == dir.join("cmake-build-release") &&
+                   location->directory != location->origin;
         },
         120s))
         << "profile=" << profiles->currentText().toStdString()

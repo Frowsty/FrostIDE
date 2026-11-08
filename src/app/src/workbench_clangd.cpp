@@ -9,14 +9,17 @@
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/cmake_compile_database.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/lang/resolve_context.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
@@ -29,6 +32,7 @@
 #include "language_bridge.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
+#include <QStatusBar>
 #include <QTimer>
 
 #include <algorithm>
@@ -49,6 +53,13 @@ constexpr std::string_view kLog = "workbench";
 sched::Task<void> stopOwnedClangd(std::shared_ptr<lang::ClangdService> service, sched::Task<void> stopped) {
     (void)service;
     co_await std::move(stopped);
+}
+
+// CPP-3: rewrites the owned database (blocking I/O, so on a worker); retained by the task.
+sched::Task<void> refreshOwnedCommands(std::shared_ptr<lang::CMakeCompileCommandsProvider> provider) {
+    if (auto located = provider->locate(); !located)
+        log::warn(kLog, "the owned compile commands were not rewritten: {}", located.error().describe());
+    co_return;
 }
 
 sched::Task<void> stopOwnedProjectEvaluation(std::shared_ptr<lang::IndependentProjectEvaluation> service) {
@@ -175,10 +186,19 @@ void Workbench::startClangd(const std::string& root) {
     if (m_cmake) {
         m_clangdCMakeState = cmakeClangdState(m_services.fs, m_cmake->service());
         std::weak_ptr<build::CMakeService> service = m_cmake->sharedService();
-        m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(m_services.fs, [service] {
-            const auto current = service.lock();
-            return current ? current->activeBuildDirectory() : std::string();
-        });
+        if (cache) {
+            // CPP-3: one directory of the IDE's per configuration, never the build tree (shards).
+            m_cmakeCommands = std::make_shared<lang::CMakeCompileCommandsProvider>(m_services.fs, *cache, [service] {
+                const auto current = service.lock();
+                return current ? cmakeCompileCommandsInput(*current) : lang::CMakeCompileCommandsInput{};
+            });
+            m_compileCommands = m_cmakeCommands;
+        } else {
+            m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(m_services.fs, [service] {
+                const auto current = service.lock();
+                return current ? current->activeBuildDirectory() : std::string();
+            });
+        }
     } else if (m_solution && cache) {
         lang::MsBuildProviderOptions options;
         options.retirement = m_commandsRetirement;
@@ -219,6 +239,9 @@ void Workbench::startClangd(const std::string& root) {
     options.clangdPath = found->path;
     options.workspaceRoot = root;
     options.launch.jobs = m_options.clangdJobs;
+    if (!m_options.clangdLogLevel.empty())
+        options.launch.logLevel = m_options.clangdLogLevel;
+    options.onLog = m_options.clangdLog;
     // Restricted mode (no project config, default limits) unless the root is trusted (clangd.hpp).
     options.launch.trusted = m_services.trust.isTrusted(root);
     m_clangdTrusted = options.launch.trusted;
@@ -284,6 +307,7 @@ void Workbench::startClangd(const std::string& root) {
         }
     }
     m_language->structureChanged();
+    updateResolveContext();
 }
 
 void Workbench::restartClangd() {
@@ -303,6 +327,8 @@ void Workbench::restartClangdIfCMakeStateChanged() {
         // Same build directory, database present or absent as before, same trust: clangd already
         // reads it with the right launch flags.
         log::info(kLog, "the CMake model changed; clangd's compile commands did not, so it keeps running");
+        refreshOwnedCompileCommands(); // A reconfigure may have changed the commands in place.
+        updateResolveContext();
         return;
     }
     /* R0 follow-up 10: a profile switch to a never-configured build directory starts its configure
@@ -327,6 +353,84 @@ void Workbench::restartClangdIfCMakeStateChanged() {
                   m_clangdTrusted, trusted);
     else
         log::info(kLog, "the CMake compile commands moved ({} -> {}): clangd restarts", m_clangdCMakeState, state);
+    restartClangd();
+}
+
+void Workbench::refreshOwnedCompileCommands() {
+    if (!m_cmakeCommands || !m_clangd)
+        return;
+    std::erase_if(m_retiredClangd, [](auto& task) {
+        if (!task.ready())
+            return false;
+        task.join();
+        return true;
+    });
+    m_retiredClangd.push_back(m_pool->spawn(sched::Lane::Background, refreshOwnedCommands(m_cmakeCommands)));
+}
+
+void Workbench::attachResolveContext() {
+    if (!m_window)
+        return;
+    auto* button = new ui::lang::ResolveContextButton(m_window->statusBar());
+    m_window->statusBar()->addPermanentWidget(button);
+    m_resolveContext = button;
+    connect(
+        button, &ui::lang::ResolveContextButton::contextChosen, this, [this, button](const QString& file, int index) {
+            const QStringList targets = button->targets();
+            chooseResolveContext(file.toStdString(),
+                                 index >= 0 && index < targets.size() ? targets[index].toStdString() : std::string());
+        });
+}
+
+void Workbench::updateResolveContext() {
+    auto* button = qobject_cast<ui::lang::ResolveContextButton*>(m_resolveContext.data());
+    if (button == nullptr)
+        return;
+    DocumentEditorView* view = currentView();
+    if (!view || !m_cmake || !m_cmakeCommands || !m_clangd || !isCFamilySource(view->path())) {
+        button->hideContexts();
+        return;
+    }
+    const lang::CMakeCompileCommandsInput input = cmakeCompileCommandsInput(m_cmake->service());
+    if (!input.model || !lang::cmakeModelDescribes(*input.model, input.buildDirectory, input.configuration)) {
+        button->hideContexts();
+        return;
+    }
+    // A file only one target lists has one context; the selector is for shared headers and sources.
+    const std::vector<std::size_t> owners = project::cmakeTargetsListing(*input.model, view->path());
+    if (owners.size() < 2) {
+        button->hideContexts();
+        return;
+    }
+    const std::string chosen = m_cmakeCommands->context(view->path());
+    QStringList names;
+    int current = -1;
+    for (const std::size_t owner : owners) {
+        const std::string& name = input.model->targets[owner].name;
+        if (name == chosen)
+            current = static_cast<int>(names.size());
+        names.push_back(qs(name));
+    }
+    button->showContexts(qs(view->path()), names, current);
+}
+
+void Workbench::chooseResolveContext(const std::string& file, const std::string& target) {
+    if (!m_cmake || !m_cmakeCommands)
+        return;
+    if (auto saved = m_cmakeCommands->setContext(file, target); !saved)
+        log::warn(kLog, "the resolve context of {} was not saved: {}", file, saved.error().describe());
+    log::info(kLog, "resolve context of {}: {}", file, target.empty() ? std::string("automatic") : target);
+    const auto model = m_cmake->service().model();
+    const auto command = model && !target.empty() ? m_cmakeCommands->contextCommand(*model, file) : std::nullopt;
+    /* A running clangd takes a chosen command at once (compilationDatabaseChanges reparses the open
+     * file) and the owned database keeps it for the background index and later starts. clangd's
+     * overlay cannot forget a command, so Automatic, or a choice clangd could not take, restarts
+     * it on the rewritten database (its start rewrites it before launching). */
+    if (command && m_clangd &&
+        m_clangd->notify("workspace/didChangeConfiguration", lang::compilationDatabaseChange(*command))) {
+        refreshOwnedCompileCommands();
+        return;
+    }
     restartClangd();
 }
 
@@ -382,6 +486,8 @@ void Workbench::stopClangd() {
     m_retiredClangd.push_back(
         m_pool->spawn(sched::Lane::Background, stopOwnedClangd(std::move(old), std::move(stopped))));
     m_compileCommands.reset();
+    m_cmakeCommands.reset();
+    updateResolveContext();
     if (m_indexing) {
         m_indexing->finish();
         m_indexing.reset();

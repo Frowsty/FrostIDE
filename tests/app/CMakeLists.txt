@@ -164,7 +164,8 @@ frost_add_test(app_workbench_cmake_tests QT
     LABELS integration cmake clangd)
 target_include_directories(app_workbench_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_definitions}
-    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}")
 
 # Attach to Process and its trust prompt (R0 follow-up 1): the pinned lldb-dap attaches to a real
 # child; no clangd and no cmake run, so the suite carries no tag.

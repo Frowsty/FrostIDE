@@ -29,6 +29,7 @@
 frost_add_test(lang_unit_tests
     SOURCES
         clangd_actions_test.cpp
+        cmake_compile_commands_unit_test.cpp
         compile_commands_test.cpp
         completion_test.cpp
         clangd_locator_test.cpp
@@ -72,6 +73,21 @@ if(WIN32)
     target_include_directories(lang_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
     target_compile_definitions(lang_msbuild_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 endif()
+
+# CMK-4 and CPP-3 with the real cmake, Ninja (and on Windows the Visual Studio 2022 generator) on
+# fixtures/cmake_contexts, checked with the real clangd (`clangd --check`): the codemodel's commands
+# against CMake's own database, the owned directory and the resolve context. Label "integration"
+# with the tags "cmake" and "clangd". About a minute (two configures and a dozen clangd checks).
+frost_add_test(lang_cmake_tests
+    SOURCES cmake_compile_commands_test.cpp
+    DEPS frost::lang frost::build frost::project frost::text frost::io frost::sched
+    LABELS integration cmake clangd)
+target_include_directories(lang_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_cmake_tests PRIVATE
+    FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}"
+    FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
 frost_add_test(lang_lua_tests
     SOURCES lua_e2e_test.cpp

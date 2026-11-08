@@ -10,6 +10,7 @@
 
 frost_add_test(project_unit_tests
     SOURCES
+        cmake_compile_database_test.cpp
         cmake_file_api_test.cpp
         cmake_presets_test.cpp
         cmake_profile_test.cpp

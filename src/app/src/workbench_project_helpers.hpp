@@ -3,7 +3,8 @@
 // Helpers shared by the Workbench's project translation units (workbench_project.cpp,
 // workbench_new_project.cpp, workbench_project_sources.cpp, workbench_file_ops.cpp and
 // workbench_clangd.cpp), moved here unchanged when workbench_project.cpp was split (FND-12a).
-// Private to frost::app; every function is pure apart from cmakeClangdState's one stat.
+// Private to frost::app; every function is pure apart from cmakeClangdState's one stat and the
+// CMake service reads of cmakeCompileCommandsInput.
 
 #pragma once
 
@@ -11,6 +12,8 @@
 #include "frost/core/error.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/cmake_compile_commands.hpp"
+#include "frost/project/cmake_profile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,26 +23,50 @@
 
 namespace frost::app {
 
-// Suffix of cmakeClangdState when the active build directory holds compile_commands.json.
+// Suffix of cmakeClangdState when the active configuration has a database clangd can read.
 inline constexpr std::string_view kCMakeDatabasePresent = "|database";
 
 /*
- * Where a CMake folder's clangd would read its compile commands right now, as
- * BuildDirectoryCompileCommandsProvider resolves them at clangd's start: the active profile's build
- * directory and whether compile_commands.json is there ("" when there is no active profile). Two
- * equal states give clangd the same --compile-commands-dir, so no restart is needed: clangd reloads
- * a database that changes in place. One stat, on the UI thread.
+ * CPP-3: the configuration clangd reads for a CMake folder (lang::CMakeCompileCommandsProvider's
+ * input): the active profile's build directory, its configuration when the generator is
+ * multi-config (the rule CMakeService reads the reply by), and the current model. Thread-safe (the
+ * service's getters are); called on the GUI thread and on the provider's worker.
+ */
+inline lang::CMakeCompileCommandsInput cmakeCompileCommandsInput(const build::CMakeService& service) {
+    lang::CMakeCompileCommandsInput input;
+    input.buildDirectory = service.activeBuildDirectory();
+    if (const auto profile = service.activeProfile(); profile && project::isMultiConfigGenerator(profile->generator))
+        input.configuration = profile->effectiveConfiguration();
+    input.model = service.model();
+    return input;
+}
+
+/*
+ * Where a CMake folder's clangd would read its compile commands right now: the active
+ * configuration (build directory and, multi-config, the configuration) and whether it has a
+ * database: CMake's compile_commands.json in the build directory, or (CMK-4, the Visual Studio
+ * generators, which write none) a model of that configuration that compiles C or C++. "" when
+ * there is no active profile. Two equal states give clangd the same --compile-commands-dir (the
+ * owned directory of the configuration, CPP-3), so no restart is needed: the workbench rewrites
+ * the owned copy and clangd reloads a database that changes in place. One stat, on the UI thread.
  */
 inline std::string cmakeClangdState(io::IFileSystem& fs, const build::CMakeService& service) {
-    std::string directory = service.activeBuildDirectory();
-    if (directory.empty())
+    const lang::CMakeCompileCommandsInput input = cmakeCompileCommandsInput(service);
+    if (input.buildDirectory.empty())
         return {};
     bool present = false;
-    if (auto database = io::joinPath(directory, "compile_commands.json")) {
+    if (auto database = io::joinPath(input.buildDirectory, "compile_commands.json")) {
         auto status = fs.status(*database);
         present = status && status->type == io::FileType::Regular;
     }
-    return directory + std::string(present ? kCMakeDatabasePresent : std::string_view("|none"));
+    if (!present && input.model && lang::cmakeModelDescribes(*input.model, input.buildDirectory, input.configuration))
+        present = std::ranges::any_of(input.model->targets, [](const project::CMakeTarget& target) {
+            return std::ranges::any_of(target.compileGroups, [](const project::CMakeCompileGroup& group) {
+                return group.language == "C" || group.language == "CXX";
+            });
+        });
+    return input.buildDirectory + "|" + input.configuration +
+           std::string(present ? kCMakeDatabasePresent : std::string_view("|none"));
 }
 
 // The lower-cased extension of the last component, with its dot ("" for none).
