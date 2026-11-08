@@ -8,9 +8,11 @@
 
 #include "frost/core/mutex.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/utf.hpp"
 #include "frost/sched/task.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -86,10 +88,8 @@ void compress(std::array<std::uint32_t, 8>& h, const unsigned char* block) noexc
 
 // --- JSON output ----------------------------------------------------------------------------------
 
-// `text` as a JSON string literal. Bytes that are not valid UTF-8 are passed through (paths on POSIX
-// may hold them); control characters are escaped.
-std::string jsonString(std::string_view text) {
-    std::string out = "\"";
+// Appends well-formed UTF-8 `text` to `out` with JSON's mandatory escapes.
+void appendEscaped(std::string& out, std::string_view text) {
     for (const char c : text) {
         switch (c) {
         case '"': out += "\\\""; break;
@@ -104,6 +104,20 @@ std::string jsonString(std::string_view text) {
                 out += c;
             }
         }
+    }
+}
+
+// `text` as a JSON string literal. Control characters are escaped; each byte that is not part of
+// well-formed UTF-8 (a POSIX path may hold one) becomes U+FFFD, so every record stays valid JSON.
+std::string jsonString(std::string_view text) {
+    std::string out = "\"";
+    while (!text.empty()) {
+        const std::size_t valid = validUtf8Prefix(text);
+        appendEscaped(out, text.substr(0, valid));
+        if (valid == text.size())
+            break;
+        out += "\xEF\xBF\xBD"; // U+FFFD for the ill-formed byte.
+        text.remove_prefix(valid + 1);
     }
     out += '"';
     return out;
@@ -216,10 +230,12 @@ struct SpawnLogLauncher::State {
     }
 
     // The fields every launch record shares: id, time, executable, argv (or rawArguments) and cwd.
-    std::string launchFields(std::string_view event, std::uint64_t id, const ProcessSpec& spec) const {
-        std::string out = std::format(R"({{"event":{},"id":{},"time":{},"executable":{},"argv":[{})", jsonString(event),
-                                      id, jsonString(isoTime(clock.systemNow())), jsonString(spec.executable),
-                                      jsonString(spec.executable));
+    // `time` is when the launch began (taken before it, so a slow launch cannot make the start look late).
+    std::string launchFields(std::string_view event, std::uint64_t id, const ProcessSpec& spec,
+                             IClock::SystemTime time) const {
+        std::string out =
+            std::format(R"({{"event":{},"id":{},"time":{},"executable":{},"argv":[{})", jsonString(event), id,
+                        jsonString(isoTime(time)), jsonString(spec.executable), jsonString(spec.executable));
         for (const std::string& argument : spec.arguments) {
             out += ',';
             out += jsonString(argument);
@@ -364,10 +380,13 @@ Result<std::unique_ptr<SpawnLogLauncher>> SpawnLogLauncher::open(IProcessLaunche
     if (auto created = fs.createDirectories(*normalized); !created) {
         return std::unexpected(std::move(created.error()));
     }
+    // The process-wide session number keeps two sessions opened in one millisecond apart.
+    static constinit std::atomic<std::uint32_t> sessions{0};
+    const std::uint32_t session = sessions.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto now = std::chrono::floor<std::chrono::milliseconds>(clock.systemNow());
     const auto seconds = std::chrono::floor<std::chrono::seconds>(now);
-    const std::string name = std::format("spawn-{:%Y%m%dT%H%M%S}.{:03d}-{}.jsonl", seconds,
-                                         static_cast<int>((now - seconds).count()), currentProcessId());
+    const std::string name = std::format("spawn-{:%Y%m%dT%H%M%S}.{:03d}-{}-{}.jsonl", seconds,
+                                         static_cast<int>((now - seconds).count()), currentProcessId(), session);
     auto file = joinPath(*normalized, name);
     if (!file) {
         return std::unexpected(std::move(file.error()));
@@ -386,14 +405,16 @@ SpawnLogLauncher::~SpawnLogLauncher() = default;
 
 Result<std::unique_ptr<IProcess>> SpawnLogLauncher::launch(const ProcessSpec& spec) {
     const std::uint64_t id = m_state->takeId();
-    const std::string digest = m_state->digestField(spec.executable);
+    const IClock::SystemTime started = m_state->clock.systemNow();
     auto process = m_inner.launch(spec);
     if (!process) {
-        m_state->append(m_state->launchFields("launch-failed", id, spec) + R"(,"error":)" +
+        m_state->append(m_state->launchFields("launch-failed", id, spec, started) + R"(,"error":)" +
                         jsonString(process.error().describe()) + "}");
         return process;
     }
-    m_state->append(m_state->launchFields("start", id, spec) + "," + digest +
+    // Hashed after the launch: the image the process runs (Windows keeps a running image locked).
+    const std::string digest = m_state->digestField(spec.executable);
+    m_state->append(m_state->launchFields("start", id, spec, started) + "," + digest +
                     std::format(R"(,"pid":{},"async":false}})", (*process)->pid()));
     return std::unique_ptr<IProcess>(
         std::make_unique<LoggedProcess>(std::move(*process), std::make_shared<ExitRecorder>(m_state, id)));
@@ -402,14 +423,15 @@ Result<std::unique_ptr<IProcess>> SpawnLogLauncher::launch(const ProcessSpec& sp
 Result<std::unique_ptr<IAsyncProcess>> SpawnLogLauncher::launchAsync(const ProcessSpec& spec,
                                                                      const AsyncContext& context) {
     const std::uint64_t id = m_state->takeId();
-    const std::string digest = m_state->digestField(spec.executable);
+    const IClock::SystemTime started = m_state->clock.systemNow();
     auto process = m_inner.launchAsync(spec, context);
     if (!process) {
-        m_state->append(m_state->launchFields("launch-failed", id, spec) + R"(,"error":)" +
+        m_state->append(m_state->launchFields("launch-failed", id, spec, started) + R"(,"error":)" +
                         jsonString(process.error().describe()) + "}");
         return process;
     }
-    m_state->append(m_state->launchFields("start", id, spec) + "," + digest +
+    const std::string digest = m_state->digestField(spec.executable);
+    m_state->append(m_state->launchFields("start", id, spec, started) + "," + digest +
                     std::format(R"(,"pid":{},"async":true}})", (*process)->pid()));
     return std::unique_ptr<IAsyncProcess>(
         std::make_unique<LoggedAsyncProcess>(std::move(*process), std::make_shared<ExitRecorder>(m_state, id)));

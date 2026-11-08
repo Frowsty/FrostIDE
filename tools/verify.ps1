@@ -17,14 +17,19 @@
 #      Tests that must not overlap hold ctest resource locks, RUN_SERIAL or PROCESSORS
 #      (frost_add_test, cmake/FrostLayers.cmake: integration suites share the frost_desktop lock,
 #      perf suites run serially). ctest runs in
-#      non-interactive mode, so no test can raise an error box (see Test-WindowsConfig).
+#      non-interactive mode, so no test can raise an error box (see Test-WindowsConfig). After
+#      each test leg, `frost_lint.py skips` lists every skipped test with its reason from ctest's
+#      log; a skip whose reason names a pinned tool fails the gate (FND-6: a missing pinned tool
+#      is a failure, never a skip).
 #   3. -Full adds Release and the ASan configuration (RelWithDebInfo), every label but corpus, also in
 #      parallel, and the /MT fuzz smoke: the win-clangcl-fuzz tree (libFuzzer + ASan,
 #      RelWithDebInfo) runs each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L fuzz,
 #      serially so each target gets its full CPU time.
 #   3b. -Corpus adds the corpus tier (ADR 0077 decision 7, ADR 0078): tools\corpora.py verify must
 #      find every pinned corpus of tests\corpus\corpora.lock.json (a missing or changed corpus
-#      fails the tier, it is never skipped), then the Debug tree's tests labelled `corpus` run alone
+#      fails the tier, it is never skipped), `corpora.py engine --configure` must reuse or configure
+#      the pinned engine's preset (FND-6b; it fails the tier when it cannot), then the Debug tree's
+#      tests labelled `corpus` (the corpus tests and the j1 journey, tests/journeys) run alone
 #      and serially with a 3600 s per-test limit (they configure and index a whole engine). No
 #      corpus test, or a skipped one, fails the tier ("win corpus no-tests", "... (1 skipped)").
 #      Without -Corpus no corpus test runs, in -Quick or -Full.
@@ -211,6 +216,14 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     if (-not $counts) { $counts = 'no-results'; $ok = $false }
     $script:summary.Add("win $Label $counts")
     if (-not $ok) { $script:failed = $true }
+    # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
+    # fails the gate ("win <label> skips FAILED (...)"), environment skips are only listed.
+    $audit = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'frost_lint.py') skips --log (Join-Path $Dir 'Testing\Temporary\LastTest.log') }
+    if ($LASTEXITCODE -ne 0) {
+        $auditLine = $audit | Where-Object { $_ -match '^skips ' } | Select-Object -Last 1
+        if (-not $auditLine) { $auditLine = "skips FAILED (exit $LASTEXITCODE)" }
+        $script:summary.Add("win $Label $auditLine"); $script:failed = $true
+    }
 }
 
 $changedList = Join-Path $repo "build\verify-changed-$PID.txt"
@@ -264,8 +277,18 @@ try {
     if ($Corpus) {
         Write-Host '=== corpus verify'
         $null = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'corpora.py') --repo $repo verify }
-        if ($LASTEXITCODE -ne 0) {
+        $corpusOk = ($LASTEXITCODE -eq 0)
+        if ($corpusOk) {
+            # The one configured engine per pinned sha and preset (FND-6b): reused when it is there,
+            # configured (never built) under the build lock when it is not; a failure fails the tier.
+            Write-Host '=== corpus engine'
+            $null = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'corpora.py') --repo $repo engine --configure }
+            $engineOk = ($LASTEXITCODE -eq 0)
+        }
+        if (-not $corpusOk) {
             $summary.Add('win corpus FAILED (corpus missing or not at its pin; tools\corpora.py fetch)'); $failed = $true
+        } elseif (-not $engineOk) {
+            $summary.Add('win corpus FAILED (pinned engine not configured; tools\corpora.py engine --configure)'); $failed = $true
         } elseif (-not $script:debugBuilt) {
             $summary.Add('win corpus not-run (debug build failed)'); $failed = $true
         } else {

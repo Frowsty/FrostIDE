@@ -8,7 +8,13 @@
 // and negotiate the LSP 3.17 position encoding (clangd answers capabilities.positionEncoding).
 // Cloning a real repository (that clone's whole history, over git's file:// transport, with the git
 // the product resolves) through the workbench's Clone, until the clone is open, must record no GUI
-// stall above 250 ms either (FND-9a's acceptance).
+// stall above 250 ms either (FND-9a's acceptance). The R1 CMake tests: the presets FrostIDE lists
+// for the engine equal `cmake --list-presets=all` (CMK-2), and reconfiguring it from the CMake
+// tool window records no GUI stall above 250 ms, shows its progress and can be stopped (CMK-15).
+// CMK-4: the compile commands synthesized from the engine's File API codemodel give the pinned
+// clangd the flags of the compile_commands.json the Ninja preset wrote (the oracle) for five engine
+// files, and CPP-3: the IDE's own directory for that configuration holds that database, not the
+// build tree.
 //
 // A missing corpus, or one that is not at its pin, fails the test: the tier never skips. Stalls are
 // measured with the product's own StallWatchdog and StallHooks on this GUI thread (the hooks the
@@ -26,14 +32,23 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/cmake_compile_commands.hpp"
+#include "frost/lang/uri.hpp"
+#include "frost/project/cmake_presets.hpp"
 #include "frost/rpc/json.hpp"
+#include "frost/ui/shell/background_tasks.hpp"
 #include "frost/vcs/git_locator.hpp"
 
+#include "support/clangd_check.hpp"
 #include "support/crash_dialogs.hpp"
+#include "support/engine_lock.hpp"
 #include "workbench_rig.hpp"
+#include <QApplication>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QLabel>
 #include <QTimer>
+#include <QToolButton>
 #include <QUrl>
 
 #include <atomic>
@@ -279,6 +294,11 @@ TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneCla
     frost::test::disableCrashDialogs(); // clangd and the compilers inherit the error mode.
     const std::string corpus = checkedCorpus();
     ASSERT_FALSE(corpus.empty());
+    // The clone is configured in place: hold its build lock, as tools/corpora.py and the journeys do.
+    const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
+    const frost::test::EngineBuildLock buildLock(qEnvironmentVariable("FROST_CORPORA_ROOT").toStdString() +
+                                                 "/frostengine-" + sha.substr(0, 12) + ".build.lock");
+    ASSERT_TRUE(buildLock.held()) << "the corpus build lock stayed taken (tools/corpora.py BuildLock)";
     auto& fs = frost::io::realFileSystem();
     auto found = frost::lang::findClangd(fs, frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
@@ -317,7 +337,8 @@ TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneCla
                 const auto* clangd = rig.workbench->clangd();
                 const auto location = clangd ? clangd->compileCommands() : std::nullopt;
                 return clangd && clangd->state() == frost::lang::ClangdState::Running && location &&
-                       location->directory == buildDir && service->state() == frost::build::BuildState::Idle;
+                       location->origin == buildDir && location->directory != buildDir &&
+                       service->state() == frost::build::BuildState::Idle;
             },
             40min);
         const auto outcome = service->lastConfigure();
@@ -413,6 +434,271 @@ TEST(CorpusFrostEngine, CloningARealRepositoryRecordsNoStallOver250msAndOpensThe
         static_cast<void>(runUntil([] { return false; }, 5s));
         meter.stop(); // Before the rig's shutdown, which is not part of the clone.
     }
+}
+
+/*
+ * CMK-2: the presets FrostIDE lists for the engine are exactly what `cmake --list-presets=all`
+ * (the pinned cmake that configured FrostIDE) prints in the corpus: the same configure, build,
+ * test, package and workflow presets, in cmake's order, with the same display names.
+ */
+TEST(CorpusFrostEngine, ThePresetsListedAreWhatCMakeListPresetsPrints) {
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    auto loaded = frost::project::loadCMakePresets(frost::io::realFileSystem(), corpus);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    ASSERT_TRUE(loaded->has_value()) << "the corpus has no presets";
+
+    frost::io::ProcessSpec spec;
+    spec.executable = frost::io::normalizePath(FROST_TEST_CMAKE).value_or("");
+    spec.arguments = {"--list-presets=all"};
+    spec.workingDirectory = corpus;
+    auto listed = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 2min);
+    ASSERT_TRUE(listed.has_value()) << listed.error().describe();
+    ASSERT_EQ(listed->exitCode, 0) << listed->stderrBytes;
+    std::string expected = listed->stdoutBytes;
+    std::erase(expected, '\r');
+    ASSERT_NE(expected.find("Available configure presets"), std::string::npos) << expected;
+    EXPECT_EQ(frost::project::formatCMakePresetListing((*loaded)->listing()), expected);
+}
+
+// The widget named `name` of type T anywhere in the application (the CMake tool window's
+// children), or nullptr.
+template<class T>
+T* findWidget(const QString& name) {
+    for (QWidget* widget : QApplication::allWidgets()) {
+        if (widget->objectName() == name) {
+            if (auto* typed = qobject_cast<T*>(widget))
+                return typed;
+        }
+    }
+    return nullptr;
+}
+
+/*
+ * CMK-15: configuring the engine runs off the GUI thread with visible progress and a working
+ * Stop. The trusted corpus opens and configures; then Reload in the CMake tool window
+ * reconfigures it while the stall meter runs: no GUI stall above 250 ms, the tool window's
+ * progress row and the status bar's processes indicator show "Configuring <preset>" while cmake
+ * runs, and both clear when it ends. Then a second Reload is stopped with the tool window's Stop
+ * while cmake configures: the configure ends cancelled (the service ends cmake's process tree),
+ * and a last Reload configures the corpus again, so its build tree is left configured.
+ */
+TEST(CorpusFrostEngine, ReconfiguringShowsProgressRecordsNoStallOver250msAndStops) {
+    frost::test::disableCrashDialogs(); // cmake and the compilers inherit the error mode.
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    auto& fs = frost::io::realFileSystem();
+    WorkDir profileDir("corpus-frostengine-cmake-profile");
+    WorkbenchRig rig(profileDir);
+    ASSERT_TRUE(rig.trust->trust(corpus).has_value());
+    rig.show();
+
+    frost::Result<void> opened = frost::fail(frost::ErrorCode::Cancelled, "not opened");
+    QTimer::singleShot(0, [&] { opened = rig.workbench->openPath(corpus); });
+    ASSERT_TRUE(runUntil([&] { return rig.workbench->projectRoot() == corpus; }, 60s)) << "the open did not run";
+    ASSERT_TRUE(opened.has_value()) << opened.error().describe();
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_EQ(service->activeProfile()->name, FROST_CORPUS_FROSTENGINE_PRESET);
+    const auto settled = [&] {
+        const auto outcome = service->lastConfigure();
+        return service->state() == frost::build::BuildState::Idle && outcome.has_value() &&
+               service->progress().activity == frost::build::CMakeActivity::Idle;
+    };
+    ASSERT_TRUE(runUntil(settled, 40min)) << "the open's configure never ended";
+    ASSERT_TRUE(service->lastConfigure()->succeeded())
+        << (service->lastConfigure()->error ? service->lastConfigure()->error->describe() : "failed");
+
+    auto* reload = findWidget<QToolButton>(QStringLiteral("cmakeReload"));
+    auto* stop = findWidget<QToolButton>(QStringLiteral("cmakeStop"));
+    auto* label = findWidget<QLabel>(QStringLiteral("cmakeProgressLabel"));
+    auto* row = findWidget<QWidget>(QStringLiteral("cmakeProgress"));
+    ASSERT_TRUE(reload && stop && label && row) << "the CMake tool window is missing";
+    const std::string configuring = std::string("Configuring ") + FROST_CORPUS_FROSTENGINE_PRESET;
+
+    {
+        StallMeter meter(fs, "reconfiguring FrostEngine", "corpus-cmake-freezes");
+        ASSERT_TRUE(meter.running());
+        static_cast<void>(runUntil([] { return false; }, 200ms)); // Arms the detector.
+        bool rowShown = false;
+        bool taskShown = false;
+        bool started = false;
+        QStringList labels; // Every progress text the row showed, for the failure message.
+        const auto sample = [&] {
+            if (service->progress().activity != frost::build::CMakeActivity::Idle)
+                started = true;
+            if (row->isVisibleTo(row->parentWidget())) {
+                const QString text = label->text().section(QLatin1Char('('), 0, 0).trimmed();
+                if (labels.isEmpty() || labels.back() != text)
+                    labels.push_back(text);
+                if (label->text().startsWith(QString::fromStdString(configuring)))
+                    rowShown = true;
+            }
+            for (const auto& task : rig.window->backgroundTasks().tasks()) {
+                if (task->state().detail.startsWith(QString::fromStdString(configuring)))
+                    taskShown = true;
+            }
+        };
+        bool clicked = false;
+        QObject::connect(reload, &QToolButton::clicked, [&] { clicked = true; });
+        ASSERT_TRUE(runUntil([&] { return reload->isEnabled(); }, 60s)) << "Reload stayed disabled";
+        reload->click(); // Returns at once: the configure runs on the service thread.
+        ASSERT_TRUE(clicked) << "the Reload button did not click";
+        ASSERT_TRUE(runUntil(
+            [&] {
+                sample();
+                return started;
+            },
+            2min))
+            << "Reload started nothing; the banner: "
+            << findWidget<QLabel>(QStringLiteral("cmakeErrorBanner"))->text().toStdString()
+            << "; Reload enabled: " << reload->isEnabled()
+            << "; service state: " << frost::build::toString(service->state())
+            << "; progress: " << frost::build::toString(service->progress().activity) << "; clicked: " << clicked;
+        ASSERT_TRUE(runUntil(
+            [&] {
+                sample();
+                return settled();
+            },
+            10min))
+            << "the reconfigure never ended";
+        EXPECT_TRUE(rowShown) << "the progress row never showed \"" << configuring
+                              << "\"; it showed: " << labels.join(QStringLiteral(" | ")).toStdString();
+        EXPECT_TRUE(taskShown) << "the status bar showed no CMake task";
+        ASSERT_TRUE(service->lastConfigure()->succeeded())
+            << (service->lastConfigure()->error ? service->lastConfigure()->error->describe() : "failed");
+        ASSERT_TRUE(runUntil([&] { return !row->isVisibleTo(row->parentWidget()); }, 10s)) << "the progress row stayed";
+        const auto cmakeTasks = [&] {
+            QStringList titles;
+            for (const auto& task : rig.window->backgroundTasks().tasks()) {
+                if (task->state().title == QStringLiteral("CMake"))
+                    titles.push_back(task->state().title + QStringLiteral(": ") + task->state().detail);
+            }
+            return titles;
+        };
+        EXPECT_TRUE(runUntil([&] { return cmakeTasks().isEmpty(); }, 10s))
+            << "the CMake task stayed in the status bar: " << cmakeTasks().join(QStringLiteral(" | ")).toStdString();
+        static_cast<void>(runUntil([] { return false; }, 2s)); // The queued model events.
+        meter.stop();
+    }
+
+    // Stop during cmake's configure ends it, cancelled.
+    ASSERT_TRUE(runUntil([&] { return reload->isEnabled(); }, 60s)) << "Reload stayed disabled";
+    reload->click();
+    ASSERT_TRUE(
+        runUntil([&] { return service->progress().activity == frost::build::CMakeActivity::Configuring; }, 5min))
+        << "cmake never started configuring";
+    ASSERT_TRUE(runUntil([&] { return stop->isEnabled(); }, 10s)) << "Stop is off while cmake configures";
+    stop->click();
+    ASSERT_TRUE(runUntil(settled, 2min)) << "Stop did not end the configure";
+    ASSERT_TRUE(service->lastConfigure().has_value());
+    EXPECT_TRUE(service->lastConfigure()->result.cancelled);
+    EXPECT_TRUE(service->modelStale()) << "a cancelled configure leaves the model stale";
+
+    // Configured again, so the corpus build tree is left as the open found it.
+    ASSERT_TRUE(runUntil([&] { return reload->isEnabled(); }, 60s)) << "Reload stayed disabled";
+    reload->click();
+    ASSERT_TRUE(runUntil([&] { return settled() && service->lastConfigure()->result.success; }, 10min));
+    EXPECT_FALSE(service->modelStale());
+}
+
+/*
+ * CMK-4's acceptance: clangd's flags for five engine files, from the commands FrostIDE synthesizes
+ * out of the File API codemodel, equal those from the compile_commands.json the pinned Ninja
+ * preset's configure wrote (the oracle). "clangd's flags" are what `clangd --check` (the pinned
+ * clangd) reports: the cc1 arguments its driver derives (compared whole), the database command
+ * after clangd's adjustments (compared without the output switches /Fo, /Fd and /FS, which the
+ * synthesis leaves out: they name build artifacts and change no parse) and its diagnostics. The
+ * five files cover the engine's own libraries with and without a precompiled header, an executable,
+ * a C library and a .c++ source of a CPM dependency; each is listed once in the oracle. The
+ * corpus is configured through the workbench (configure-on-open) first. CPP-3: the owned
+ * directory of the configuration (under the profile's cache) holds the oracle byte for byte.
+ */
+TEST(CorpusFrostEngine, CodeModelCommandsGiveClangdTheFlagsOfTheNinjaDatabaseForFiveEngineFiles) {
+    frost::test::disableCrashDialogs(); // clangd and cmake inherit the error mode.
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    auto& fs = frost::io::realFileSystem();
+    auto clangd = frost::lang::findClangd(fs, frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(clangd.has_value()) << "the pinned clangd is required: " << clangd.error().describe();
+    WorkDir profileDir("corpus-frostengine-cdb-profile");
+    WorkbenchRig rig(profileDir);
+    ASSERT_TRUE(rig.trust->trust(corpus).has_value());
+    rig.show();
+    frost::Result<void> opened = frost::fail(frost::ErrorCode::Cancelled, "not opened");
+    QTimer::singleShot(0, [&] { opened = rig.workbench->openPath(corpus); });
+    ASSERT_TRUE(runUntil([&] { return rig.workbench->projectRoot() == corpus; }, 60s)) << "the open did not run";
+    ASSERT_TRUE(opened.has_value()) << opened.error().describe();
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_EQ(service->activeProfile()->name, FROST_CORPUS_FROSTENGINE_PRESET);
+    ASSERT_TRUE(runUntil(
+        [&] {
+            return service->state() == frost::build::BuildState::Idle && service->lastConfigure().has_value() &&
+                   service->model() != nullptr;
+        },
+        40min))
+        << "the open's configure never ended";
+    ASSERT_TRUE(service->lastConfigure()->succeeded())
+        << (service->lastConfigure()->error ? service->lastConfigure()->error->describe() : "failed");
+    const auto model = service->model();
+    const std::string buildDir = service->activeBuildDirectory();
+    const std::string oracle = buildDir + "/compile_commands.json";
+    auto oracleText = fs.readFile(oracle);
+    ASSERT_TRUE(oracleText.has_value()) << "the Ninja preset wrote no " << oracle;
+    auto oracleJson = frost::rpc::parseJson(*oracleText);
+    ASSERT_TRUE(oracleJson.has_value());
+
+    // The synthesis, written where the oracle cannot be confused with it.
+    const std::string synthesized = profileDir.join("synthesized");
+    const auto commands = frost::lang::cmakeCodeModelCompileCommands(*model);
+    ASSERT_TRUE(frost::lang::writeCompileCommands(fs, synthesized, commands).has_value());
+
+    const std::vector<std::string> files = {
+        "Frost/src/Frost/Core/Application.cpp",           // FrostFoundation, precompiled header.
+        "Frost-Editor/src/EditorApp.cpp",                 // The editor executable.
+        "Frost-Runtime/src/RuntimeApp.cpp",               // The runtime executable.
+        ".cache/cpm/lua/d92f/lapi.c",                     // A C library (no /TP).
+        ".cache/cpm/capnproto/a28f/c++/src/kj/array.c++", // A CPM dependency's .c++ source.
+    };
+    for (const std::string& relative : files) {
+        const std::string file = frost::io::normalizePath(corpus + "/" + relative).value_or("");
+        SCOPED_TRACE(file);
+        ASSERT_TRUE(fs.exists(file).value_or(false));
+        const auto listed = [&](const frost::rpc::Json& database) {
+            int count = 0;
+            for (const auto& entry : database.items())
+                if (const auto* path = entry.find("file");
+                    path && path->asString() &&
+                    frost::lang::documentKey(*path->asString()) == frost::lang::documentKey(file))
+                    ++count;
+            return count;
+        };
+        ASSERT_EQ(listed(*oracleJson), 1) << "the oracle must list the file once";
+        auto fromCMake = frost::test::runClangdCheck(clangd->path, file, buildDir);
+        auto fromModel = frost::test::runClangdCheck(clangd->path, file, synthesized);
+        ASSERT_TRUE(fromCMake.has_value()) << fromCMake.error().describe();
+        ASSERT_TRUE(fromModel.has_value()) << fromModel.error().describe();
+        ASSERT_EQ(fromCMake->origin, "from CDB") << fromCMake->log;
+        ASSERT_EQ(fromModel->origin, "from CDB") << fromModel->log;
+        ASSERT_FALSE(fromCMake->cc1.empty()) << fromCMake->log;
+        EXPECT_EQ(fromModel->cc1, fromCMake->cc1) << "clangd's parse flags differ";
+        EXPECT_EQ(frost::test::withoutOutputSwitches(fromModel->command),
+                  frost::test::withoutOutputSwitches(fromCMake->command));
+        EXPECT_EQ(fromModel->errors, fromCMake->errors);
+    }
+
+    // CPP-3: the configuration's own directory, under the profile's cache, holds the oracle.
+    const std::string cacheRoot = profileDir.join("data/compile-commands/corpus");
+    frost::lang::CMakeCompileCommandsProvider provider(fs, cacheRoot, [&] {
+        return frost::lang::CMakeCompileCommandsInput{.buildDirectory = buildDir, .configuration = {}, .model = model};
+    });
+    auto located = provider.locate();
+    ASSERT_TRUE(located.has_value()) << located.error().describe();
+    ASSERT_TRUE(located->has_value());
+    EXPECT_EQ((*located)->source, frost::lang::CompileCommandsSource::CMakeCopy);
+    EXPECT_TRUE((*located)->directory.starts_with(frost::io::normalizePath(cacheRoot).value_or("?")));
+    EXPECT_TRUE(fs.readFile((*located)->file).value_or("") == *oracleText) << "the owned copy differs";
 }
 
 } // namespace

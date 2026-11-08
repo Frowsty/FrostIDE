@@ -28,6 +28,8 @@
 #                 E:\sdk, E:\FrostBuilds, D:\dev\FrostEngine-AI-Claude and their /mnt/<drive> forms;
 #                 FND-10): products search beside the executable, then FROST_SDK, then PATH, and
 #                 tests take the SDK from FROST_SDK (tools/env.ps1, ~/sdk/env.sh);
+#   tool-skip     no skip statement under tests/** (C/C++ and Python) names a pinned tool
+#                 (PINNED_TOOL_WORDS): a missing pinned tool fails a test, never skips it (FND-6);
 # and the truth rule (ADR 0078 decision 1, FND-5), in C, C++ and C# outside tests/**:
 #   fabricated-result     values of the result types (RESULT_TYPES: test outcomes, packages,
 #                         usages, disassembly, diagnostics) are built only in their allowlisted
@@ -43,6 +45,12 @@
 # runs the source-to-test line ratchet of the current slice instead (RATCHET_MIN_SOURCE_LINES
 # below; ADR 0078 decision 6) and prints "ratchet ok (...)", "ratchet FAILED (...)" or
 # "ratchet not-run (...)" last.
+#
+#   python tools/frost_lint.py skips --log <build>/Testing/Temporary/LastTest.log [--log ...]
+#
+# lists every skipped test of those ctest runs with its reason and prints "skips ok (...)" or, when
+# a reason names a pinned tool (FND-6), "skips FAILED (...)" last (exit 1); the verify scripts run it
+# after each test leg.
 # Byte-exact data (fixtures, goldens, fuzz corpora; DATA_GLOBS) and vendored third-party
 # sources (VENDORED_GLOBS) only need REUSE coverage.
 #
@@ -178,6 +186,20 @@ DEV_PATH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
      re.compile(r"(?i)(?:\b[a-z]:|/mnt/[a-z])[\\/]+dev[\\/]+FrostEngine-AI-Claude(?![\w.-])")),
 )
 
+# Real-tool fixtures by default (FND-6, ADR 0078 decision 4): a test that needs a pinned tool
+# (sdk/sdk.lock.json: clangd and the LLVM tools, cmake, ninja, lldb-dap, LuaLS; git, which the build
+# itself needs) fails when the tool is missing; it never skips. The `tool-skip` rule flags a skip
+# statement under tests/** (GTEST_SKIP, QSKIP, Python's skipTest and unittest.skip*, pytest.skip)
+# whose own text names one of these tools, and `frost_lint.py skips` flags a skipped test whose
+# reason does (the verify scripts run it over ctest's log). Environment skips (symlink privilege,
+# no GPU device, a Windows-only API, opt-in fixtures of later tiers) name no tool and stay skips.
+TOOL_SKIP_GLOBS = ("tests/**",)
+PINNED_TOOL_WORDS = re.compile(
+    r"(?i)(?<![\w.-])(clangd|clang-tidy|clang-format|cmake|ninja|lldb-dap|lldb|lua-language-server|luals|git)"
+    r"(?![\w-])")
+_C_SKIP_CALL = re.compile(r"\bGTEST_SKIP\s*\(\s*\)|\bQSKIP\s*\(")
+_PY_SKIP_CALL = re.compile(r"\.skipTest\s*\(|\bunittest\.skip(?:If|Unless)?\s*\(|\bpytest\.skip\s*\(")
+
 # ---------------------------------------------------------------------------------------
 # Truth rule (ADR 0078 decision 1, FND-5): result types, tool-output strings, parity claims
 # ---------------------------------------------------------------------------------------
@@ -277,11 +299,11 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     # over the source text and labels every one "Discovered, not run"; no outcome is shown. RUN-7
     # replaces it with ctest -N / --gtest_list_tests. Five sites, one per recogniser: C# test
     # attributes and Main, C++ gtest, Catch2 and main.
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
+    SiteAllowance("src/app/src/project_unit_tests.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
                   "source-text discovery shown as 'Discovered, not run' until RUN-7", count=5),
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
-    SiteAllowance("src/app/src/workbench_project.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+    SiteAllowance("src/app/src/workbench_clangd.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
                   "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = d.message;"),
     # Reviewed real site: the author lens shows git blame's author (VcsService through authorForLine).
     SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
@@ -480,6 +502,7 @@ _VENDORED_RE = compile_globs(VENDORED_GLOBS)
 _CPP26_EXEMPT_RE = compile_globs(CPP26_EXEMPT_GLOBS)
 _EXE_SEARCH_EXEMPT_RE = compile_globs(EXE_SEARCH_EXEMPT_GLOBS)
 _DEV_PATH_RE = compile_globs(DEV_PATH_GLOBS)
+_TOOL_SKIP_RE = compile_globs(TOOL_SKIP_GLOBS)
 _QT_SVG_ALLOWED_RE = compile_globs(QT_SVG_ALLOWED_GLOBS)
 
 
@@ -1025,6 +1048,39 @@ def check_dev_paths(rel: str, text: str) -> list[Violation]:
                       f"{m.group(0)!r} is a developer machine path ({what}); search beside the executable, then "
                       f"FROST_SDK, then PATH, and let tests read FROST_SDK or FROST_CORPUS_ROOT (FND-10)")
             for what, pattern in DEV_PATH_PATTERNS for m in pattern.finditer(text)]
+
+
+def _statement_end(code: str, start: int, c_family: bool) -> int:
+    """The end offset of the skip statement starting at `start` in `code` (comments and string
+    contents blanked): the next ';' in C/C++, the parenthesis closing the call's first '(' in Python."""
+    if c_family:
+        end = code.find(";", start)
+        return len(code) if end < 0 else end
+    depth = 0
+    for k in range(code.find("(", start), len(code)):
+        if code[k] == "(":
+            depth += 1
+        elif code[k] == ")":
+            depth -= 1
+            if depth == 0:
+                return k
+    return len(code)
+
+
+def check_tool_skips(rel: str, text: str, code: str, c_family: bool) -> list[Violation]:
+    """tool-skip: no skip statement under TOOL_SKIP_GLOBS names a pinned tool (PINNED_TOOL_WORDS, FND-6)."""
+    if not _TOOL_SKIP_RE.match(rel):
+        return []
+    lines = _Lines(code)
+    out = []
+    for m in (_C_SKIP_CALL if c_family else _PY_SKIP_CALL).finditer(code):
+        statement = text[m.start():_statement_end(code, m.start(), c_family)]
+        tool = PINNED_TOOL_WORDS.search(statement)
+        if tool:
+            out.append(Violation(rel, lines.line(m.start()), "tool-skip",
+                                 f"a skip that names {tool.group(1)!r}: a missing pinned tool fails the test "
+                                 f"(ASSERT/FAIL, self.fail), it never skips it (FND-6)"))
+    return out
 
 
 def check_exe_search(rel: str, code: str, lines: _Lines) -> list[Violation]:
@@ -1764,6 +1820,61 @@ def ratchet_main(repo: Path, base: str, git_dir: str | None, work_tree: str | No
 
 
 # ---------------------------------------------------------------------------------------
+# Skip audit (FND-6): the skipped tests of a ctest run and their reasons
+# ---------------------------------------------------------------------------------------
+
+_CTEST_BLOCK = re.compile(r"^\d+/\d+ Testing: (.+)$", re.M)
+_CTEST_SKIPPED = re.compile(r"^Test Pass Reason:\n(?:Skip regular expression found|Skip return code)", re.M)
+_GTEST_SKIP_AT = re.compile(r"(?:\(\d+\)|:\d+): Skipped$")
+_UNITTEST_SKIP = re.compile(r"skipped '(.*)'$", re.M)
+
+
+def ctest_skips(log_text: str) -> list[tuple[str, str]]:
+    """(test name, reason) of every test ctest ran as skipped in `log_text` (LastTest.log): gtest's
+    "file(line): Skipped" message, or unittest's "skipped '...'" reasons; "" when none is printed."""
+    text = log_text.replace("\r\n", "\n")
+    starts = list(_CTEST_BLOCK.finditer(text))
+    out = []
+    for k, start in enumerate(starts):
+        block = text[start.end():starts[k + 1].start() if k + 1 < len(starts) else len(text)]
+        if not _CTEST_SKIPPED.search(block):
+            continue
+        reasons = []
+        lines = block.split("\n")
+        for i, line in enumerate(lines):
+            if _GTEST_SKIP_AT.search(line.rstrip()):
+                for following in lines[i + 1:]:
+                    if not following.strip() or following.startswith("[  SKIPPED ]"):
+                        break
+                    reasons.append(following.strip())
+        reasons += _UNITTEST_SKIP.findall(block)
+        if start.group(1).strip() not in {name for name, _ in out}:
+            out.append((start.group(1).strip(), " ".join(dict.fromkeys(reasons))))
+    return out
+
+
+def skips_main(logs: list[Path]) -> int:
+    """Prints every skipped test of the ctest `logs` with its reason, then one summary item last:
+    "skips ok (...)", "skips FAILED (...)" (a reason names a pinned tool: exit 1) or "skips not-run (...)"."""
+    found: list[tuple[str, str]] = []
+    for log in logs:
+        try:
+            found += ctest_skips(log.read_text(encoding="utf-8", errors="replace"))
+        except OSError as error:
+            print(f"skips not-run (cannot read {log}: {error.strerror or error})")
+            return 0
+    flagged = [(name, reason) for name, reason in found if PINNED_TOOL_WORDS.search(reason)]
+    for name, reason in found:
+        mark = "MISSING TOOL" if (name, reason) in flagged else "environment"
+        print(f"skipped ({mark}): {name}: {reason or '(no reason printed)'}")
+    if flagged:
+        print(f"skips FAILED ({len(flagged)} of {len(found)} skipped for a missing pinned tool)")
+        return 1
+    print(f"skips ok ({len(found)} skipped, none for a missing pinned tool)")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------------------
 
@@ -1801,6 +1912,8 @@ def lint_file(repo: Path, rel: str, budget_ids: set[str] | None, used: dict[int,
     out += check_todos(rel, scanned.comments)
     out += check_budgets(rel, scanned.comments, budget_ids)
     out += check_dev_paths(rel, text)
+    if syntax.c_family or syntax is PYTHON:
+        out += check_tool_skips(rel, text, scanned.code, syntax.c_family)
     if syntax.c_family:
         lines = _Lines(scanned.code)
         out += check_narrow_win32(rel, scanned.code, lines)
@@ -1856,8 +1969,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="frost-lint v0: FrostIDE repository conventions")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent,
                         help="repository root (default: the checkout containing this script)")
-    parser.add_argument("command", nargs="?", choices=("lint", "ratchet"), default="lint",
-                        help="lint (default), or ratchet: the source-to-test line ratchet of this slice")
+    parser.add_argument("command", nargs="?", choices=("lint", "ratchet", "skips"), default="lint",
+                        help="lint (default); ratchet: the source-to-test line ratchet of this slice; skips: the "
+                             "skipped tests of the ctest logs given with --log, failing on a missing pinned tool")
+    parser.add_argument("--log", action="append", type=Path, default=[],
+                        help="skips: a ctest log (<build>/Testing/Temporary/LastTest.log); repeatable")
     parser.add_argument("--base", default="main", help="ratchet: the base whose merge base with HEAD starts the slice")
     parser.add_argument("--git-dir", default=None, help="ratchet: passed to git as --git-dir (verify.sh)")
     parser.add_argument("--work-tree", default=None, help="ratchet: passed to git as --work-tree (verify.sh)")
@@ -1868,6 +1984,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "ratchet":
         return ratchet_main(repo, args.base, args.git_dir, args.work_tree)
+    if args.command == "skips":
+        return skips_main(args.log)
     # A failing git or an unreadable tree is an environment error, not a violation.
     try:
         files = list_repo_files(repo)

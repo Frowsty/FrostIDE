@@ -78,12 +78,14 @@
 #include "frost/io/process.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
+#include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/latest_wins.hpp"
@@ -294,7 +296,7 @@ public:
     [[nodiscard]] std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) override;
     [[nodiscard]] std::string chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) override;
     [[nodiscard]] bool confirmDelete(QWidget* parent, const QString& name, bool folder) override;
-    // A modal preview of the changed lines with Apply and Cancel (workbench_project.cpp).
+    // A modal preview of the changed lines with Apply and Cancel (workbench_project_sources.cpp).
     [[nodiscard]] bool confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath, const std::string& before,
                                              const std::string& after) override;
     [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
@@ -350,6 +352,9 @@ struct WorkbenchOptions {
     std::string buildStatePath;
     // The CMake service's selected profiles (absolute); "" persists nothing.
     std::string cmakeStatePath;
+    // The "Mark Directory as" overrides (absolute; project::DirectoryRoleStore, UX-23); "" keeps them
+    // in memory for this run only.
+    std::string directoryRolesPath;
     // The run service's persisted startup projects (absolute); "" persists nothing.
     std::string runStatePath;
     // Where LuaLS writes its log and meta files (absolute; --logpath/--metapath, ADR 0079); "" uses
@@ -377,6 +382,10 @@ struct WorkbenchOptions {
     bool git = true;
     // clangd's parallel jobs (0: its default).
     unsigned clangdJobs = 0;
+    // clangd's --log level ("" keeps clangd.hpp's default, error) and a sink for every line of its
+    // log, called on a worker thread (tests and log collection; must be quick and thread-safe).
+    std::string clangdLogLevel;
+    std::function<void(std::string_view line)> clangdLog;
     // Optional terminal test seam; when absent the workbench owns a real PTY launcher.
     term::IPtyLauncher* terminalLauncher = nullptr;
     std::optional<term::ShellProbe> terminalProbe;
@@ -534,6 +543,9 @@ public:
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
+    // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
+    // resolve-context choices; null without a CMake folder, a compile-commands cache or clangd.
+    [[nodiscard]] lang::CMakeCompileCommandsProvider* cmakeCompileCommands() noexcept { return m_cmakeCommands.get(); }
     // Current generation's completed MSBuild contexts, copied safely from the evaluator thread.
     [[nodiscard]] std::vector<std::shared_ptr<const lang::StreamedProjectContext>> streamedProjectContexts() const {
         const auto trust = m_services.trust.snapshot(m_projectRoot);
@@ -668,6 +680,14 @@ private:
     // Where a CMake folder's clangd would read its compile commands now (the active build
     // directory and whether its database exists; "" without CMake). One stat, GUI thread.
     [[nodiscard]] std::string clangdCMakeStateNow() const;
+    // CPP-3: rewrites the owned database of the running clangd on a worker (a reconfigure that
+    // kept the directory); clangd reloads a database that changes in place.
+    void refreshOwnedCompileCommands();
+    // CPP-3, the resolve context: the status-bar selector for the current file when several CMake
+    // targets list it, and the user's choice (a target name; "" for automatic).
+    void attachResolveContext();
+    void updateResolveContext();
+    void chooseResolveContext(const std::string& file, const std::string& target);
     /*
      * Whether clangd 23 parses `path` with its generic fallback command (languageReadiness). The
      * model, checked against `clangd --check` (WorkbenchClangd.ReadinessFollowsCompileCommandsAndIndexing):
@@ -740,6 +760,8 @@ private:
     std::shared_ptr<lang::GeneratedCommandsRetirement> m_commandsRetirement;
     std::unique_ptr<io::Reactor> m_reactor;
     std::unique_ptr<io::RealFileWatcher> m_watcher;
+    // Directory role overrides (UX-23); outlives the navigation workbench that reads them.
+    std::unique_ptr<project::DirectoryRoleStore> m_directoryRoleStore;
 
     StoreShellSettings m_shellSettings;
     StoreKeymapSettings m_keymapSettings;
@@ -786,6 +808,8 @@ private:
     std::string m_managedDebugRoot;
 
     std::shared_ptr<lang::ICompileCommandsProvider> m_compileCommands;
+    std::shared_ptr<lang::CMakeCompileCommandsProvider> m_cmakeCommands; // CPP-3; a CMake folder's.
+    QPointer<QWidget> m_resolveContext;                                  // ui::lang::ResolveContextButton.
     std::shared_ptr<lang::StreamedProjectContexts> m_streamedProjects;
     std::shared_ptr<lang::IndependentProjectEvaluation> m_projectEvaluation;
     bool m_closingSolution = false;

@@ -20,6 +20,7 @@
 #include "frost/sched/task.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -27,18 +28,25 @@
 #include <vector>
 
 namespace frost::project {
+class DirectoryRoles;
 class SolutionModel;
 } // namespace frost::project
 
 namespace frost::ui::nav {
 
-// The scan options of a project tree: .gitignore and .ignore files, defaultProjectExcludes() at the
-// bottom of the stack, defaultProjectSkipNames(), recursive.
-[[nodiscard]] io::ScanOptions projectScanOptions();
+/*
+ * The scan options of a project tree: .gitignore and .ignore files, defaultProjectSkipNames(),
+ * recursive; and either the project's directory roles (UX-23, frost/project/directory_roles.hpp:
+ * a Generated or Excluded folder is listed in its parent but never descended, so the tree shows it
+ * empty and the user can mark it again) or, without roles, defaultProjectExcludes() at the bottom
+ * of the ignore stack.
+ */
+[[nodiscard]] io::ScanOptions projectScanOptions(std::shared_ptr<const project::DirectoryRoles> roles = nullptr);
 
-// scanTree(fs, scheduler, root, projectScanOptions(), token). Errors: scanTree's.
-[[nodiscard]] sched::Task<Result<io::TreeScan>> scanProject(io::IFileSystem& fs, sched::IScheduler& scheduler,
-                                                            std::string root, std::stop_token token = {});
+// scanTree(fs, scheduler, root, projectScanOptions(roles), token). Errors: scanTree's.
+[[nodiscard]] sched::Task<Result<io::TreeScan>>
+scanProject(io::IFileSystem& fs, sched::IScheduler& scheduler, std::string root, std::stop_token token = {},
+            std::shared_ptr<const project::DirectoryRoles> roles = nullptr);
 
 // The absolute paths of the solution's file nodes (project items and solution items), in node order.
 [[nodiscard]] std::vector<std::string> solutionFiles(const project::SolutionModel& solution);

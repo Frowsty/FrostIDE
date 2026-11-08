@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Unit tests for the CMake toolchain (cmake_toolchain.hpp) over a MemFs and the scripted launcher:
-// cmake and ninja discovery (settings, Visual Studio's bundled tools, PATH), PATH splitting, the
+// cmake and ninja discovery (settings, the pinned SDK, Visual Studio's bundled tools, PATH), PATH splitting, the
 // version probe, the vcvarsall command line and its refusals, the capture's difference, UTF-16LE
 // decoding, the cache file format and MsvcEnvironmentCache's memory, file and version rules.
 
@@ -11,6 +11,7 @@
 #include "build_test_util.hpp"
 #include <gtest/gtest.h>
 
+#include <format>
 #include <map>
 #include <optional>
 #include <string>
@@ -89,6 +90,71 @@ TEST(CMakeTools, SettingsThenVisualStudioThenPath) {
         EXPECT_EQ(bundled->cmake, vsBundledCMakePath(instance.installationPath).value());
         EXPECT_EQ(bundled->ninjaOrigin, ToolOrigin::VisualStudio);
     }
+}
+
+// The pinned SDK (FROST_SDK) comes after the settings and before Visual Studio and PATH (step 2),
+// each tool on its own: an SDK without Ninja still takes the SDK's cmake and the next Ninja.
+TEST(CMakeTools, ThePinnedSdkComesAfterTheSettingsAndBeforeVisualStudioAndPath) {
+    MemTree tree;
+    tree.write("bin/" + exe("cmake"), "x");
+    tree.write("bin/" + exe("ninja"), "x");
+    tree.write("custom/" + exe("cmake"), "x");
+    const std::string sdk = MemTree::path("sdk");
+    const std::string sdkCMake = std::format("sdk/cmake-{}/bin/{}", pinnedCMakeVersion(), exe("cmake"));
+    const std::string sdkNinja = std::format("sdk/ninja-{}/{}", pinnedNinjaVersion(), exe("ninja"));
+    tree.write(sdkCMake, "x");
+    tree.write(sdkNinja, "x");
+    // An SDK of another pin is not the pinned one.
+    tree.write("sdk/cmake-0.0.1/bin/" + exe("cmake"), "x");
+    std::vector<VsInstance> instances;
+    if constexpr (kWindows) {
+        VsInstance instance;
+        instance.installationPath = MemTree::path("VS");
+        tree.write("VS/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe", "x");
+        tree.write("VS/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe", "x");
+        instances.push_back(instance);
+    }
+    const std::string path = pathList({MemTree::path("bin")});
+    EXPECT_FALSE(pinnedCMakeVersion().empty());
+    EXPECT_FALSE(pinnedNinjaVersion().empty());
+    EXPECT_EQ(sdkCMakePath(sdk).value(), MemTree::path(sdkCMake));
+    EXPECT_EQ(sdkCMakePath("relative").error().code(), ErrorCode::InvalidArgument);
+
+    auto pinned = findCMakeTools(
+        tree.fs,
+        {.cmakePath = {}, .ninjaPath = {}, .vsInstances = instances, .pathVariable = path, .sdkDirectory = sdk});
+    ASSERT_TRUE(pinned.has_value()) << pinned.error().describe();
+    EXPECT_EQ(pinned->cmake, MemTree::path(sdkCMake));
+    EXPECT_EQ(pinned->cmakeOrigin, ToolOrigin::Sdk);
+    EXPECT_EQ(pinned->ninja, MemTree::path(sdkNinja));
+    EXPECT_EQ(pinned->ninjaOrigin, ToolOrigin::Sdk);
+    EXPECT_EQ(toString(ToolOrigin::Sdk), "pinned SDK");
+
+    // The settings still win.
+    auto configured = findCMakeTools(tree.fs, {.cmakePath = MemTree::path("custom/" + exe("cmake")),
+                                               .ninjaPath = {},
+                                               .vsInstances = instances,
+                                               .pathVariable = path,
+                                               .sdkDirectory = sdk});
+    ASSERT_TRUE(configured.has_value());
+    EXPECT_EQ(configured->cmakeOrigin, ToolOrigin::Settings);
+    EXPECT_EQ(configured->ninjaOrigin, ToolOrigin::Sdk);
+
+    // An SDK without the pinned Ninja: the next step's Ninja (Visual Studio's, else PATH's).
+    ASSERT_TRUE(tree.fs.removeFile(MemTree::path(sdkNinja)).has_value());
+    auto partial = findCMakeTools(
+        tree.fs,
+        {.cmakePath = {}, .ninjaPath = {}, .vsInstances = instances, .pathVariable = path, .sdkDirectory = sdk});
+    ASSERT_TRUE(partial.has_value());
+    EXPECT_EQ(partial->cmakeOrigin, ToolOrigin::Sdk);
+    EXPECT_EQ(partial->ninjaOrigin, kWindows ? ToolOrigin::VisualStudio : ToolOrigin::Path);
+
+    // No SDK directory: the earlier order, unchanged.
+    auto without = findCMakeTools(
+        tree.fs,
+        {.cmakePath = {}, .ninjaPath = {}, .vsInstances = instances, .pathVariable = path, .sdkDirectory = {}});
+    ASSERT_TRUE(without.has_value());
+    EXPECT_EQ(without->cmakeOrigin, kWindows ? ToolOrigin::VisualStudio : ToolOrigin::Path);
 }
 
 TEST(CMakeTools, SplitsPathAndComparesVersions) {

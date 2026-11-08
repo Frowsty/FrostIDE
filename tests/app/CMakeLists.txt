@@ -23,6 +23,7 @@
 
 frost_add_test(app_tests QT
     SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp
+            workbench_project_helpers_test.cpp
     DEPS frost::app frost::diag frost::io)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
 target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
@@ -163,7 +164,8 @@ frost_add_test(app_workbench_cmake_tests QT
     LABELS integration cmake clangd)
 target_include_directories(app_workbench_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_definitions}
-    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}")
 
 # Attach to Process and its trust prompt (R0 follow-up 1): the pinned lldb-dap attaches to a real
 # child; no clangd and no cmake run, so the suite carries no tag.
@@ -236,9 +238,28 @@ if(NOT _frost_engine_sha MATCHES "^[0-9a-f]+$")
     message(FATAL_ERROR "${_frost_corpora_lock_file} pins no frostengine corpus")
 endif()
 frost_add_test(app_corpus_tests QT
-    SOURCES corpus_test.cpp
-    DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs
+    SOURCES corpus_test.cpp corpus_dirs_lua_test.cpp
+    DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs frost::search frost::ui_nav
+         frost::project frost::document
     LABELS integration corpus)
 target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}
-    FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}")
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+
+# The automation endpoint (FND-7a, ADR 0080) in this process over a WorkbenchRig: the session token,
+# the R0 trust criterion through the endpoint, and a small j1 over a C project with this build's
+# cmake, Ninja and compiler (label integration, frost_desktop lock; tags cmake). The endpoint's code
+# is in Debug only (FROST_AUTOMATION_ENDPOINT), so the other configurations test its absence.
+frost_add_test(app_automation_endpoint_tests QT
+    SOURCES automation_endpoint_test.cpp
+    DEPS frost::app frost::build frost::io frost::rpc
+    THIRD_PARTY Qt6::Network
+    LABELS integration cmake)
+target_include_directories(app_automation_endpoint_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+    ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_automation_endpoint_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+if(FROST_ENABLE_AUTOMATION_ENDPOINT)
+    target_compile_definitions(app_automation_endpoint_tests PRIVATE $<$<CONFIG:Debug>:FROST_AUTOMATION_ENDPOINT=1>)
+endif()

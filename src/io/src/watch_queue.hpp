@@ -20,7 +20,8 @@
  * source fed by the caller's token, the queue's close token and the scheduler's stop token.
  *
  * Filters (in push, before the coalescer): paths outside the root; entries strictly below an excluded
- * directory (ordinal case-insensitive when configured, as on Windows); entries deeper than the root's
+ * directory (ordinal case-insensitive when configured, as on Windows) or for which the caller's
+ * WatchOptions::excludedBelow says so; entries deeper than the root's
  * children for non-recursive watches (an overflow there becomes Rescan(root)); and final names
  * containing ".frost-tmp-" unless reportFrostTempFiles.
  */

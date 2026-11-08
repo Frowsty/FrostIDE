@@ -37,6 +37,19 @@ set(frost_build_sources
 frost_add_library(build LAYER build
     SOURCES ${frost_build_sources}
     DEPS frost::project frost::settings frost::io frost::sched)
+# The cmake and Ninja versions pinned in sdk/sdk.lock.json, so findCMakeTools can name the pinned
+# SDK's tools (cmake_toolchain.hpp, step 2).
+file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_build_sdk_lock)
+if(WIN32)
+    set(_frost_build_lock_platform windows)
+else()
+    set(_frost_build_lock_platform linux)
+endif()
+string(JSON _frost_pinned_cmake_version GET "${_frost_build_sdk_lock}" ${_frost_build_lock_platform} cmake version)
+string(JSON _frost_pinned_ninja_version GET "${_frost_build_sdk_lock}" ${_frost_build_lock_platform} ninja version)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_DIR}/sdk/sdk.lock.json")
+target_compile_definitions(frost_build PRIVATE FROST_PINNED_CMAKE_VERSION="${_frost_pinned_cmake_version}"
+    FROST_PINNED_NINJA_VERSION="${_frost_pinned_ninja_version}")
 if(WIN32)
     # shell32: SHGetFolderPathW (the Program Files (x86) folder that holds vswhere.exe).
     target_link_libraries(frost_build PRIVATE shell32)

@@ -21,6 +21,10 @@ void Workbench::attachFind() {
         return view ? view->path() : std::string();
     };
     services.defaultDirectory = [this] { return m_projectRoot; };
+    // The project tree's directory roles (UX-23), so search skips the same build folders.
+    services.directoryRoles = [this] {
+        return m_nav ? m_nav->directoryRoles() : std::shared_ptr<const project::DirectoryRoles>();
+    };
     services.selectedText = [this] {
         DocumentEditorView* view = currentView();
         if (!view)

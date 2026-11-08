@@ -3,7 +3,8 @@
 // CMakeController: the UI-thread side of an opened CMake folder (ADR 0046). It turns the
 // CMakeService's callbacks (service thread) into Qt signals on its own thread, keeps what the
 // CMake tool window and the Solution Explorer show (the profile labels, the active profile, the
-// error banner text, the busy flag, the CMake tree model) and forwards Reload and the profile
+// error banner text, the busy flag, the service's progress (CMK-15; the newest sequence number
+// wins), the presets listing, the CMake tree model) and forwards Reload and the profile
 // choice to an ICMakeBackend. The W1 workbench creates one per opened CMake folder.
 /*
  * Wiring (the order matters because the service takes its callbacks when it is created):
@@ -59,6 +60,8 @@ public:
     // The presets files shown under the CMake node, and why the presets could not be read.
     [[nodiscard]] virtual std::vector<std::string> presetFiles() const = 0;
     [[nodiscard]] virtual std::optional<std::string> presetsError() const = 0;
+    // What `cmake --list-presets=all` lists for the folder (the Presets tab); empty by default.
+    [[nodiscard]] virtual project::CMakePresetListing presetListing() const { return {}; }
 
 protected:
     ICMakeBackend() = default;
@@ -84,6 +87,7 @@ public:
     void cancel() override { m_service.cancel(); }
     [[nodiscard]] std::vector<std::string> presetFiles() const override { return m_service.presetFiles(); }
     [[nodiscard]] std::optional<std::string> presetsError() const override { return m_service.presetsError(); }
+    [[nodiscard]] project::CMakePresetListing presetListing() const override { return m_service.presetListing(); }
 
 private:
     build::CMakeService& m_service;
@@ -113,6 +117,12 @@ public:
     [[nodiscard]] int activeProfile() const noexcept { return m_activeProfile; } // -1: none.
     [[nodiscard]] const QString& problem() const noexcept { return m_problem; }
     [[nodiscard]] bool busy() const noexcept { return m_busy; }
+    // The service's latest activity (CMakeProgress; CMK-15), for the progress row and the status bar.
+    [[nodiscard]] const build::CMakeProgress& progress() const noexcept { return m_progress; }
+    // "Configuring windows-debug", "Reading the CMake project model", ...; "" when idle.
+    [[nodiscard]] QString progressText() const;
+    // The folder's presets as `cmake --list-presets=all` lists them, read when the profiles change.
+    [[nodiscard]] const project::CMakePresetListing& presetListing() const noexcept { return m_presetListing; }
 
 public slots:
     void reload();
@@ -127,6 +137,7 @@ signals:
     void problemChanged(const QString& problem);
     void busyChanged(bool busy);
     void modelChanged();
+    void progressChanged();
 
 private:
     struct Bridge; // Shared with the callbacks; cleared by the destructor.
@@ -137,6 +148,7 @@ private:
     void applyConfigureFinished(const build::CMakeConfigureOutcome& outcome);
     void setProblem(QString problem);
     void setBusy(bool busy);
+    void applyProgress(const build::CMakeProgress& progress);
 
     std::shared_ptr<Bridge> m_bridge;
     ICMakeBackend* m_backend = nullptr;
@@ -148,6 +160,8 @@ private:
     QString m_problem;
     QString m_configureProblem;
     bool m_busy = false;
+    build::CMakeProgress m_progress;
+    project::CMakePresetListing m_presetListing;
 };
 
 } // namespace frost::ui::cmake

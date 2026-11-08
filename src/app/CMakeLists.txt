@@ -19,6 +19,18 @@
 
 set(frost_startup_core_sources include/frost/app/startup_core.hpp src/startup_core.cpp)
 
+# The automation endpoint (src/automation_endpoint.hpp; FND-7a, ADR 0080): with this ON, Debug
+# builds define FROST_AUTOMATION_ENDPOINT, and frost listens on a local socket when
+# FROST_AUTOMATION_CONNECTION names a connection file. Release and the other configurations compile
+# only its "not available" stub; tests/tools/test_automation_release_probe.py checks that the
+# Release image holds no trace of the protocol.
+option(FROST_ENABLE_AUTOMATION_ENDPOINT "Debug frost has the test automation endpoint (test builds)"
+       ${FROST_BUILD_TESTS})
+set(frost_automation_definitions "")
+if(FROST_ENABLE_AUTOMATION_ENDPOINT)
+    set(frost_automation_definitions $<$<CONFIG:Debug>:FROST_AUTOMATION_ENDPOINT=1>)
+endif()
+
 frost_add_library(app LAYER app
     SOURCES
         include/frost/app/diagnostics_qt.hpp
@@ -27,6 +39,8 @@ frost_add_library(app LAYER app
         include/frost/app/settings_adapters.hpp
         include/frost/app/welcome_screen.hpp
         include/frost/app/workbench.hpp
+        src/automation_endpoint.cpp
+        src/automation_endpoint.hpp
         src/command_line.cpp
         src/cmake_build_backend.hpp
         src/cmake_integration.hpp
@@ -49,6 +63,9 @@ frost_add_library(app LAYER app
         src/project_open_broker.hpp
         src/project_properties_dialog.cpp
         src/project_properties_dialog.hpp
+        src/project_run_dialogs.cpp
+        src/project_tool_dialogs.cpp
+        src/project_unit_tests.cpp
         src/project_properties_xml.cpp
         src/diagnostics_qt.cpp
         src/document_editor.cpp
@@ -62,6 +79,14 @@ frost_add_library(app LAYER app
         src/startup.cpp
         src/welcome_screen.cpp
         src/workbench.cpp
+        src/git_clone.hpp
+        src/workbench_actions.cpp
+        src/workbench_attach.cpp
+        src/workbench_clone.cpp
+        src/workbench_prompts.cpp
+        src/workbench_run.cpp
+        src/workbench_tool_windows.cpp
+        src/workbench_update.cpp
         src/language_bridge.hpp
         src/stable_lsp_requester.hpp
         src/workbench_documents.cpp
@@ -81,6 +106,11 @@ frost_add_library(app LAYER app
         src/workbench_project_edit.cpp
         src/unity_context.hpp
         src/workbench_project.cpp
+        src/workbench_project_helpers.hpp
+        src/workbench_new_project.cpp
+        src/workbench_project_sources.cpp
+        src/workbench_file_ops.cpp
+        src/workbench_clangd.cpp
         src/workbench_navigation_bar.cpp
         src/workbench_terminal.cpp
         src/workbench_find.cpp
@@ -91,7 +121,8 @@ frost_add_library(app LAYER app
     THIRD_PARTY Qt6::Widgets Qt6::Network)
 target_compile_definitions(frost_app PRIVATE
     FROST_UPDATE_PUBLIC_KEY_HEX="${FROST_UPDATE_PUBLIC_KEY_HEX}"
-    FROST_UPDATE_BUILD_NUMBER="${FROST_UPDATE_BUILD_NUMBER}")
+    FROST_UPDATE_BUILD_NUMBER="${FROST_UPDATE_BUILD_NUMBER}"
+    ${frost_automation_definitions})
 set_target_properties(frost_app PROPERTIES AUTOMOC ON)
 if(WIN32)
     # The DPI-awareness APIs in selftest.cpp and the dialog guard in startup.cpp (user32).
@@ -112,6 +143,7 @@ if(NOT WIN32)
     if(FROST_ENABLE_SPAWN_LOG)
         target_compile_definitions(frost PRIVATE $<$<CONFIG:Debug>:FROST_SPAWN_LOG=1>)
     endif()
+    target_compile_definitions(frost PRIVATE ${frost_automation_definitions})
     return()
 endif()
 
@@ -141,6 +173,7 @@ target_link_libraries(frost_app_shared PRIVATE shell32 user32)
 if(FROST_ENABLE_SPAWN_LOG)
     target_compile_definitions(frost_app_shared PRIVATE $<$<CONFIG:Debug>:FROST_SPAWN_LOG=1>)
 endif()
+target_compile_definitions(frost_app_shared PRIVATE ${frost_automation_definitions})
 
 # frost.exe, the launcher. The version resource carries the project version; the manifest
 # comes from the root CMakeLists.txt, and the application icon comes from resources/icons/frost.

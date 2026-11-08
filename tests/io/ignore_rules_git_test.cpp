@@ -155,9 +155,8 @@ class GitOracle : public ::testing::Test {
 protected:
     void SetUp() override {
         auto installed = gitExecutable();
-        if (!installed) {
-            GTEST_SKIP() << "git is not installed";
-        }
+        // git is a prerequisite of the build and the oracle of these tests: missing, they fail (FND-6).
+        ASSERT_TRUE(installed.has_value()) << "git is required as the oracle of these tests";
         m_git = *installed;
         ASSERT_FALSE(m_scratch.path().empty());
         m_home = native(m_scratch.path(), "home");

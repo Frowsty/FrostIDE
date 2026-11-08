@@ -77,6 +77,19 @@ struct CMakeSource {
     friend bool operator==(const CMakeSource&, const CMakeSource&) = default;
 };
 
+/*
+ * One include directory of a compile group as the build's command line names it (CMK-4): the File
+ * API's path made absolute against the source directory but not normalised ("glslang/.." stays),
+ * with '/' separators, because the generator writes it to the command line that way (with native
+ * separators); `includes` holds the normalised form for display and lookups.
+ */
+struct CMakeIncludeDirectory {
+    std::string path{};
+    bool system = false; // isSystem: CMake passes it as a system include (-isystem, -external:I).
+
+    friend bool operator==(const CMakeIncludeDirectory&, const CMakeIncludeDirectory&) = default;
+};
+
 // The flags one group of a target's sources is compiled with.
 struct CMakeCompileGroup {
     std::string language{};                    // "C", "CXX", "RC", ...
@@ -85,6 +98,8 @@ struct CMakeCompileGroup {
     std::vector<std::string> defines{};        // "NAME" or "NAME=VALUE".
     std::vector<std::string> flags{};          // compileCommandFragments, each as written.
     std::string languageStandard{};            // "17" (languageStandard.standard), or "".
+    // `includes` as the command line spells them, same order (CMakeIncludeDirectory).
+    std::vector<CMakeIncludeDirectory> includeDirectories{};
 
     friend bool operator==(const CMakeCompileGroup&, const CMakeCompileGroup&) = default;
 };

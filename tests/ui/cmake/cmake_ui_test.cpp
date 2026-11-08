@@ -3,8 +3,9 @@
 // Offscreen tests of frost::ui_cmake (ADR 0046): CMakeTreeModel over a CMake view model (rows,
 // parents, roles, keys, reset), CMakeController and CMakeToolWindow driven by service events from
 // another thread with a fake backend (profiles, output, the error banner, Reload, Stop, a refused
-// profile switch, events after the controller is gone), and the real CMakeService behind
-// CMakeServiceBackend over a MemFs folder with a recorded File API reply (untrusted, so nothing runs).
+// profile switch, events after the controller is gone, the progress row and the Presets tab), and
+// the real CMakeService behind CMakeServiceBackend over a MemFs folder with a recorded File API
+// reply (untrusted, so nothing runs).
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/core/clock.hpp"
@@ -24,8 +25,10 @@
 #include <QFont>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QToolButton>
 #include <QTreeView>
+#include <QTreeWidget>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -145,7 +148,9 @@ public:
     void cancel() override { ++cancels; }
     std::vector<std::string> presetFiles() const override { return {at("CMakePresets.json")}; }
     std::optional<std::string> presetsError() const override { return std::nullopt; }
+    project::CMakePresetListing presetListing() const override { return listing; }
 
+    project::CMakePresetListing listing;
     int reloads = 0;
     int cancels = 0;
     std::vector<std::size_t> selected;
@@ -224,6 +229,74 @@ TEST(CMakeToolWindow, FollowsTheServiceEvents) {
     std::thread late([&] { callbacks.onConfigureOutput(build::BuildOutputKind::Stdout, "late"); });
     late.join();
     QApplication::processEvents();
+}
+
+/*
+ * CMK-15: the progress row follows the service's progress events (newest sequence wins, so a
+ * late older event is ignored), shows the elapsed seconds and an indeterminate bar, and Stop
+ * follows the activity's cancellable flag; the Presets tab lists the backend's presets per kind.
+ */
+TEST(CMakeToolWindow, ShowsProgressAndPresets) {
+    FakeBackend backend;
+    backend.listing.configure = {{"windows-debug", "Windows Debug"}, {"linux"}};
+    backend.listing.build = {{"windows-debug"}};
+    backend.listing.workflow = {{"ci", "CI"}};
+    auto controller = std::make_unique<CMakeController>();
+    controller->setBackend(&backend);
+    const build::CMakeServiceCallbacks callbacks = controller->callbacks();
+    CMakeToolWindow window(*controller);
+    window.resize(500, 300);
+    EXPECT_FALSE(window.progressRow()->isVisibleTo(&window));
+
+    const auto since = std::chrono::steady_clock::now() - 3s;
+    std::thread service([&] {
+        callbacks.onProfilesChanged({project::CMakeProfile{.name = "windows-debug"}}, 0);
+        callbacks.onStateChanged(build::BuildState::Running);
+        callbacks.onProgress({.activity = build::CMakeActivity::Configuring,
+                              .profile = "windows-debug",
+                              .since = since,
+                              .cancellable = true,
+                              .sequence = 2});
+        // An older report delivered late (a direct delivery racing the queue) changes nothing.
+        callbacks.onProgress({.activity = build::CMakeActivity::Preparing, .profile = "windows-debug", .sequence = 1});
+    });
+    service.join();
+    ASSERT_TRUE(pumpUntil([&] { return controller->progress().sequence == 2 && controller->busy(); }));
+    QApplication::processEvents();
+    EXPECT_EQ(controller->progress().activity, build::CMakeActivity::Configuring);
+    EXPECT_TRUE(window.progressRow()->isVisibleTo(&window));
+    const QString label = window.progressLabel()->text();
+    EXPECT_TRUE(label.startsWith(QStringLiteral("Configuring windows-debug ("))) << label.toStdString();
+    EXPECT_TRUE(label.endsWith(QStringLiteral(" s)"))) << label.toStdString();
+    EXPECT_FALSE(label.contains(QStringLiteral("(0 s)"))) << label.toStdString(); // Began 3 s ago.
+    EXPECT_EQ(window.progressBar()->minimum(), 0);
+    EXPECT_EQ(window.progressBar()->maximum(), 0); // Indeterminate.
+    EXPECT_TRUE(window.stopButton()->isEnabled());
+
+    // Reading the reply cannot be stopped.
+    callbacks.onProgress({.activity = build::CMakeActivity::ReadingModel, .profile = "windows-debug", .sequence = 3});
+    ASSERT_TRUE(pumpUntil([&] { return controller->progress().sequence == 3; }));
+    EXPECT_TRUE(window.progressLabel()->text().startsWith(QStringLiteral("Reading the CMake project model")));
+    EXPECT_FALSE(window.stopButton()->isEnabled());
+
+    callbacks.onProgress({.activity = build::CMakeActivity::Idle, .sequence = 4});
+    callbacks.onStateChanged(build::BuildState::Idle);
+    ASSERT_TRUE(pumpUntil([&] { return controller->progress().sequence == 4 && !controller->busy(); }));
+    EXPECT_FALSE(window.progressRow()->isVisibleTo(&window));
+    EXPECT_TRUE(controller->progressText().isEmpty());
+
+    // The Presets tab: the listed kinds only, in cmake's order, with display names.
+    QTreeWidget* presets = window.presets();
+    ASSERT_EQ(presets->topLevelItemCount(), 3);
+    EXPECT_EQ(presets->topLevelItem(0)->text(0), QStringLiteral("Configure presets"));
+    ASSERT_EQ(presets->topLevelItem(0)->childCount(), 2);
+    EXPECT_EQ(presets->topLevelItem(0)->child(0)->text(0), QStringLiteral("windows-debug"));
+    EXPECT_EQ(presets->topLevelItem(0)->child(0)->text(1), QStringLiteral("Windows Debug"));
+    EXPECT_EQ(presets->topLevelItem(0)->child(1)->text(0), QStringLiteral("linux"));
+    EXPECT_EQ(presets->topLevelItem(1)->text(0), QStringLiteral("Build presets"));
+    EXPECT_EQ(presets->topLevelItem(2)->text(0), QStringLiteral("Workflow presets"));
+    EXPECT_EQ(presets->topLevelItem(2)->child(0)->text(1), QStringLiteral("CI"));
+    controller->setBackend(nullptr);
 }
 
 TEST(CMakeToolWindow, BindsToTheRealService) {

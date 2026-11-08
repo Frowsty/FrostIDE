@@ -63,6 +63,7 @@
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "automation_endpoint.hpp"
 #include "engine_request_helper.hpp"
 #include "project_open_broker.hpp"
 #include <QAbstractEventDispatcher>
@@ -425,6 +426,7 @@ frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
         options.sessionDirectory = under("sessions");
         options.projectEditStateDirectory = under("project-edits");
         options.cmakeStatePath = under("cmake-profiles.txt");
+        options.directoryRolesPath = under("directory-roles.txt");
     }
     if (auto state = frost::build::BuildService::defaultStatePath(); state) {
         options.buildStatePath = std::move(*state);
@@ -772,7 +774,24 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             // for other instances' journals, so never before the first frame).
             QTimer::singleShot(0, &window, [&workbench] { static_cast<void>(workbench.offerRecovery()); });
         });
+#ifdef FROST_AUTOMATION_ENDPOINT
+        // Debug test builds only (FND-7a, ADR 0080): the automation endpoint, when the launcher names
+        // a connection file. It is destroyed before the workbench it drives.
+        std::unique_ptr<frost::app::AutomationEndpoint> automation;
+        if (const QString connection = qEnvironmentVariable("FROST_AUTOMATION_CONNECTION"); !connection.isEmpty()) {
+            auto started = frost::app::AutomationEndpoint::start(workbench, connection.toStdString());
+            if (started) {
+                automation = std::move(*started);
+                frost::log::info("app", "automation endpoint: {}", automation->serverName());
+            } else {
+                frost::log::warn("app", "automation endpoint disabled: {}", started.error().message());
+            }
+        }
+#endif
         status = QApplication::exec();
+#ifdef FROST_AUTOMATION_ENDPOINT
+        automation.reset();
+#endif
         // Autosave and the hot-exit journal while the window's documents are still open.
         workbench.shutdown();
         // The watchdog and its hooks go before the window and QApplication (declared after it).

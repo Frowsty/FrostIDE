@@ -1,0 +1,1 @@
+{"version": 6, "configurePresets": [{"name": "a", "condition": {"type": "equals", "lhs": "$env{X", "rhs": "x"}}]}

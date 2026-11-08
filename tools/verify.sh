@@ -20,9 +20,14 @@
 #   --corpus      additionally the corpus tier (ADR 0077 decision 7, ADR 0078): tools/corpora.py
 #                 verify must find every pinned corpus of tests/corpus/corpora.lock.json under
 #                 ~/FrostBuilds/corpora (ext4; a missing or changed corpus fails, it is never
-#                 skipped), then the Debug tree's tests labelled `corpus` run with a 3600 s
+#                 skipped; `python tools/corpora.py wsl-fetch` on Windows provisions it), then
+#                 `corpora.py engine --configure` must reuse or configure the pinned engine's
+#                 linux-debug (FND-6b), then the Debug tree's tests labelled `corpus` run with a 3600 s
 #                 per-test limit; no such test ("corpus no-tests") or a skipped one fails
 # The PowerShell spellings -Quick, -Full, -Tidy, -TsanQuick and -Corpus are accepted too.
+#
+# After each test leg, `tools/frost_lint.py skips` lists every skipped test with its reason from
+# ctest's log; a skip whose reason names a pinned tool fails the run (FND-6).
 #
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
 # configuration and run in the --full configurations. Tests labelled `corpus` run only in the
@@ -273,6 +278,16 @@ run_config() {
         summary+=("$label no-results"); status=1; return
     fi
     summary+=("$label $counts")
+    # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
+    # fails the run ("<label> skips FAILED (...)"), environment skips are only listed.
+    local audit audit_rc=0
+    audit="$(python3 -I tools/frost_lint.py skips --log "build/$configure/Testing/Temporary/LastTest.log" 2>&1)" ||
+        audit_rc=$?
+    echo "$audit"
+    if ((audit_rc != 0)); then
+        summary+=("$label $(grep -E '^skips ' <<< "$audit" | tail -1 || echo "skips FAILED (exit $audit_rc)")")
+        status=1
+    fi
 }
 
 # The TSan quick leg (PLAN.md 6.4 step 3; ADR 0027 decision 5), with --tsan-quick only (decision
@@ -310,6 +325,12 @@ run_corpus() {
     echo "=== corpus: verify"
     if ! python3 -I tools/corpora.py --repo "$MIRROR" verify 2>&1; then
         summary+=("corpus FAILED (corpus missing or not at its pin; tools/corpora.py fetch)"); status=1; return
+    fi
+    # The one configured engine per pinned sha and preset (FND-6b): reused, or configured (never
+    # built) under the build lock; a failure fails the tier.
+    echo "=== corpus: engine"
+    if ! python3 -I tools/corpora.py --repo "$MIRROR" engine --configure 2>&1; then
+        summary+=("corpus FAILED (pinned engine not configured; tools/corpora.py engine --configure)"); status=1; return
     fi
     if [[ $debug_built -ne 1 ]]; then summary+=("corpus not-run (debug build failed)"); status=1; return; fi
     echo "=== corpus: test (linux-clang-debug)"

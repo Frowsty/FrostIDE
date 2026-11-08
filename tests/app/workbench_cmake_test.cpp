@@ -249,7 +249,9 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     ASSERT_TRUE(waitFor(
         [&] {
             const auto location = rig.workbench->clangd()->compileCommands();
-            return location && location->directory == dir.join("cmake-build-debug");
+            // CPP-3: the IDE's own directory for the configuration, holding its database.
+            return location && location->origin == dir.join("cmake-build-debug") &&
+                   location->directory != location->origin;
         },
         60s));
     auto* tree = rig.window->findChild<QTreeView*>(QStringLiteral("cmakeTargets"));
@@ -358,7 +360,8 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
         [&] {
             const auto* clangd = rig.workbench->clangd();
             const auto location = clangd ? clangd->compileCommands() : std::nullopt;
-            return location && location->directory == dir.join("cmake-build-release");
+            return location && location->origin == dir.join("cmake-build-release") &&
+                   location->directory != location->origin;
         },
         120s))
         << "profile=" << profiles->currentText().toStdString()
@@ -406,8 +409,7 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
 TEST(WorkbenchCMake, DebugUsesConfiguredWrapperAndRetainedTarget) {
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
-    if (!lldb)
-        GTEST_SKIP() << "pinned lldb-dap is unavailable";
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
     WorkDir dir("cmake-wrapper-debug");
     std::string compiler = FROST_TEST_C_COMPILER;
     std::ranges::replace(compiler, '\\', '/');
@@ -454,8 +456,7 @@ TEST(WorkbenchCMake, DebugUsesConfiguredWrapperAndRetainedTarget) {
 TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
-    if (!lldb)
-        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
     WorkDir dir("cmake-debug-app");
     std::string compiler = FROST_TEST_C_COMPILER;
     std::ranges::replace(compiler, '\\', '/');

@@ -7,8 +7,10 @@
 // through FROST_SPAWN_LOG_DIR (src/app, built with FROST_ENABLE_SPAWN_LOG); the product UI never
 // shows it.
 /*
- * The file. <directory>/spawn-<UTC yyyymmddThhmmss.mmm>-<pid>.jsonl, created (with the directory)
- * by open(). Each record is one line of UTF-8 JSON with an "event":
+ * The file. <directory>/spawn-<UTC yyyymmddThhmmss.mmm>-<pid>-<session>.jsonl, created (with the
+ * directory) by open(); <session> counts the sessions this process opened from 1, so two opened in
+ * one millisecond get two files. Each record is one line of well-formed UTF-8 JSON (a byte of a path
+ * or argument that is not well-formed UTF-8 is written as U+FFFD) with an "event":
  *   {"event":"start","id":1,"time":"2026-11-07T20:01:02.345Z","executable":"C:\\...\\clangd.exe",
  *    "sha256":"<64 hex digits>","argv":["<executable>","--log=error"],"cwd":"","pid":4242,
  *    "async":true}
@@ -22,10 +24,12 @@
  *   {"event":"exit","id":1,"time":...,"exitCode":0,"signal":0}
  *     The first time the process's exit status is observed through it (wait, communicate, exited).
  *     A process that is never waited for has no exit record.
- * Ids count launches from 1 in this session. Times come from the given IClock's systemNow().
+ * Ids count launches from 1 in this session. Times come from the given IClock's systemNow(); a start
+ * or launch-failed record's time is taken before the launch.
  *
  * Hashing. The SHA-256 (FIPS 180-4) of the executable's bytes, read through the IFileSystem
- * before the launch, is cached by path, size and modification time, so each image is read once
+ * after a successful launch (the image the process runs; Windows keeps it locked while it runs), is
+ * cached by path, size and modification time, so each image is read once
  * while it stays unchanged. O(file size) for the first launch of an image, O(1) afterwards. The
  * hashing runs on the launching thread (a large image such as clangd costs seconds in a Debug
  * build), which is acceptable only because the log is a test instrument.

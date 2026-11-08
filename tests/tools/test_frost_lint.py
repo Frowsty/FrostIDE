@@ -499,6 +499,92 @@ class DevPathTest(TempDirTestCase):
                          [])
 
 
+class ToolSkipTest(TempDirTestCase):
+    """The tool-skip rule (FND-6): a missing pinned tool fails a test, it never skips it."""
+
+    SKIP = "self." + "skipTest"  # Assembled, so this file's own skips are what the rule reads.
+
+    def _lines(self, rel: str, body: str) -> list[int]:
+        comment = "#" if rel.endswith(".py") else "//"
+        _write(self.tmp / rel, f"{comment} SPDX-License-Identifier: Apache-2.0\n{comment} Skips.\n" + body + "\n")
+        return [v.line for v in frost_lint.lint(self.tmp, [rel]) if v.rule == "tool-skip"]
+
+    def test_skips_naming_a_pinned_tool_fail(self) -> None:
+        for body in ('if (!found)\n    GTEST_SKIP() << "clangd is unavailable";',
+                     'GTEST_SKIP() << "the pinned lldb-dap is not installed at \'" << path\n'
+                     '             << "\'; build it";',
+                     'GTEST_SKIP() << "git is not installed";',
+                     'QSKIP("needs the pinned LuaLS");'):
+            with self.subTest(body=body):
+                self.assertEqual(self._lines("tests/lang/a_test.cpp", body), [3 if body.startswith("GTEST") or
+                                                                              body.startswith("QSKIP") else 4])
+        self.assertEqual(self._lines("tests/tools/test_a.py", f'{self.SKIP}("ninja not available")'), [3])
+        self.assertEqual(self._lines("tests/tools/test_b.py",
+                                     '@unittest.skipUnless(shutil.which("cmake"),\n    "cmake is not on PATH")'),
+                         [3])
+
+    def test_environment_skips_and_other_places_pass(self) -> None:
+        for body in ('GTEST_SKIP() << "directory symbolic links unavailable: " << error.message();',
+                     'GTEST_SKIP() << "MSBuild evaluation is Windows-only";',
+                     'GTEST_SKIP() << "no Direct3D 11 device";',
+                     '// GTEST_SKIP() << "clangd is unavailable"; would be wrong here',
+                     'ASSERT_TRUE(found) << "the pinned clangd is required";'):
+            with self.subTest(body=body):
+                self.assertEqual(self._lines("tests/lang/b_test.cpp", body), [])
+        self.assertEqual(self._lines("tests/tools/test_c.py",
+                                     '@unittest.skipIf(sys.platform == "win32", "bash and build-lldb.sh run in WSL")'),
+                         [])
+        # Only tests/** is checked: the product itself may say "clangd is unavailable".
+        self.assertEqual(self._lines("src/lang/src/c.cpp", 'GTEST_SKIP() << "clangd is unavailable";'), [])
+
+
+class SkipAuditTest(TempDirTestCase):
+    """frost_lint.py skips (FND-6): the skipped tests of a ctest log and their reasons."""
+
+    @staticmethod
+    def _block(index: int, name: str, output: str, reason: str) -> str:
+        return (f"{index}/9 Testing: {name}\n{index}/9 Test: {name}\nCommand: \"x.exe\"\nOutput:\n"
+                f"----------------------------------------------------------\n{output}<end of output>\n"
+                f"Test time =   0.02 sec\n----------------------------------------------------------\n"
+                f"{reason}\"{name}\" end time: Nov 07 20:21\n----------------------------------------------------------\n\n")
+
+    def _log(self, *blocks: str) -> str:
+        path = self.tmp / "LastTest.log"
+        path.write_text("Start testing\n" + "".join(blocks), encoding="utf-8", newline="\r\n")
+        return str(path)
+
+    GTEST_SKIPPED = ("[ RUN      ] A.B\nE:\\x\\a_test.cpp(148): Skipped\n{reason}\n\n[  SKIPPED ] A.B (4 ms)\n"
+                     "[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] A.B\n")
+    BY_REGEX = "Test Pass Reason:\nSkip regular expression found in output. Regex=[\\[  SKIPPED \\]]\n"
+
+    def test_reasons_are_listed_and_environment_skips_pass(self) -> None:
+        log = self._log(
+            self._block(1, "A.B", self.GTEST_SKIPPED.format(reason="symbolic links unavailable: no privilege"),
+                        self.BY_REGEX),
+            self._block(2, "A.Passed", "[       OK ] A.Passed (1 ms)\n", "Test Passed.\n"),
+            self._block(3, "tools.x", "test_y (test_x.T.test_y) ... skipped 'Windows PowerShell 5.1'\n",
+                        "Test Pass Reason:\nSkip return code found. Return code=77\n"))
+        result = run_tool("frost_lint.py", "skips", "--log", log)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertIn("skipped (environment): A.B: symbolic links unavailable: no privilege", lines)
+        self.assertIn("skipped (environment): tools.x: Windows PowerShell 5.1", lines)
+        self.assertEqual(lines[-1], "skips ok (2 skipped, none for a missing pinned tool)")
+
+    def test_a_skip_for_a_missing_pinned_tool_fails(self) -> None:
+        log = self._log(self._block(1, "A.B", self.GTEST_SKIPPED.format(reason="clangd is unavailable"),
+                                    self.BY_REGEX))
+        result = run_tool("frost_lint.py", "skips", "--log", log)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("skipped (MISSING TOOL): A.B: clangd is unavailable", result.stdout)
+        self.assertEqual(result.stdout.splitlines()[-1], "skips FAILED (1 of 1 skipped for a missing pinned tool)")
+
+    def test_an_unreadable_log_is_not_run(self) -> None:
+        result = run_tool("frost_lint.py", "skips", "--log", str(self.tmp / "missing.log"))
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(result.stdout.splitlines()[-1].startswith("skips not-run (cannot read "))
+
+
 class RatchetTest(TempDirTestCase):
     """The source-to-test line ratchet (ADR 0078 decision 6) on scratch repositories."""
 

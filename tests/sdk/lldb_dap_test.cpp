@@ -230,10 +230,11 @@ class LldbDapE2E : public ::testing::Test {
 protected:
     void SetUp() override {
         m_lldbDap = pinnedLldbDap();
+        // A missing pinned tool fails the test, never skips it (FND-6).
         if (m_lldbDap.empty() || !frost::io::realFileSystem().exists(m_lldbDap).value_or(false)) {
-            GTEST_SKIP() << "the pinned lldb-dap is not installed at '" << m_lldbDap
-                         << "'; build it with tools/build-lldb.ps1 (Windows) or tools/build-lldb.sh (WSL), or "
-                            "run the bootstrap (ADR 0049)";
+            FAIL() << "the pinned lldb-dap is not installed at '" << m_lldbDap
+                   << "'; build it with tools/build-lldb.ps1 (Windows) or tools/build-lldb.sh (WSL), or "
+                      "run the bootstrap (ADR 0049)";
         }
         frost::test::disableCrashDialogs(); // lldb-dap inherits the error mode: no WER box if it dies.
     }

@@ -1,0 +1,1 @@
+{"version": 6, "configurePresets": [{"name": "a", "inherits": "b"}, {"name": "b", "inherits": "a"}]}

@@ -3,12 +3,13 @@
 // Functional tests of the Find in Files engine (frost/search/find_in_files.hpp; ADR 0045) on the
 // real file system: plain, case-sensitive, whole-word and regex queries over a small tree with
 // UTF-8, UTF-8 BOM, UTF-16LE (with and without a BOM) and windows-1252 files and a binary file;
-// file masks and the Directory scope's default excludes; the Solution and Project scopes over the
-// tiny MSBuild fixture; an open document's unsaved text; cancellation; the 10,000-match limit; and
-// the file mask parser.
+// file masks and the Directory scope's default excludes; the project's directory roles (UX-23);
+// the Solution and Project scopes over the tiny MSBuild fixture; an open document's unsaved text;
+// cancellation; the 10,000-match limit; and the file mask parser.
 
 #include "frost/core/clock.hpp"
 #include "frost/document/save_manager.hpp"
+#include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/search/file_mask.hpp"
 #include "frost/search/find_in_files.hpp"
@@ -301,6 +302,54 @@ TEST(FindInFiles, OpenDocumentsAreSearchedInTheirUnsavedText) {
     auto target = resolveScope(openScope, nullptr, {file, file});
     ASSERT_TRUE(target);
     EXPECT_EQ(target->files, std::vector<std::string>{file});
+}
+
+// The project's directory roles (UX-23) replace the name excludes inside their root: generated
+// folders (build/, a folder with a CMakeCache.txt) are never listed, a source folder named Debug or
+// bin is searched, and a Directory scope chosen inside a generated folder searches that folder.
+TEST(FindInFiles, DirectoryRolesDecideWhichFoldersAreWalked) {
+    Tree tree("search-roles");
+    tree.write("src/main.cpp", "needle\n");
+    tree.write("Renderer/Debug/stats.cpp", "needle\n");
+    tree.write("bin/tool.cpp", "needle\n");
+    tree.write("build/dev/gen.cpp", "needle\n");
+    tree.write("manual/CMakeCache.txt", "needle\n");
+    tree.write("vendor/lib.cpp", "needle\n");
+    document::LoadService loader{io::realFileSystem(), loadOptions()};
+    const std::vector<project::DirectoryRoleOverride> overrides{
+        {io::joinPath(tree.root(), "vendor").value(), project::DirectoryRole::Excluded}};
+    auto roles = project::DirectoryRoles::load(io::realFileSystem(), tree.root(), overrides);
+    ASSERT_TRUE(roles.has_value()) << roles.error().describe();
+    const auto found = [](const FindRun& run) {
+        std::vector<std::string> names;
+        for (const FileMatches& file : run.files)
+            names.emplace_back(io::fileName(file.path));
+        std::ranges::sort(names);
+        return names;
+    };
+
+    FindRequest request = directoryRequest(tree.root(), "needle");
+    request.target.roles = *roles;
+    FindRun run = runFind(loader, std::move(request));
+    ASSERT_TRUE(run.summary) << run.summary.error().describe();
+    EXPECT_EQ(found(run), (std::vector<std::string>{"main.cpp", "stats.cpp", "tool.cpp"}));
+    EXPECT_EQ(run.summary->filesInScope, 3U);
+    // The root, src, Renderer, Renderer/Debug and bin; never build, manual or vendor.
+    EXPECT_EQ(run.summary->directoriesListed, 5U);
+
+    // An explicit Directory scope inside build/ searches it (and nothing else).
+    FindRequest inside = directoryRequest(io::joinPath(tree.root(), "build").value(), "needle");
+    inside.target.ignoreRoot = tree.root();
+    inside.target.roles = *roles;
+    FindRun insideRun = runFind(loader, std::move(inside));
+    ASSERT_TRUE(insideRun.summary) << insideRun.summary.error().describe();
+    EXPECT_EQ(found(insideRun), (std::vector<std::string>{"gen.cpp"}));
+
+    // Without roles the name excludes still apply (bin/ is skipped, as before).
+    FindRun plain = runFind(loader, directoryRequest(tree.root(), "needle"));
+    ASSERT_TRUE(plain.summary);
+    EXPECT_EQ(plain.matchesIn("tool.cpp"), 0U);
+    EXPECT_EQ(plain.matchesIn("gen.cpp"), 0U);
 }
 
 TEST(FindInFiles, CancelStopsEarly) {

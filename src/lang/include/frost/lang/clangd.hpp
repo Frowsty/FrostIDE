@@ -192,6 +192,10 @@ struct ClangdServiceOptions {
     // Called for each $/progress notification, on a reactor or worker thread (marshal to the GUI
     // yourself); null: ignored. Must stay callable until stop() finished.
     std::function<void(const ClangdProgress&)> onProgress;
+    // Called with every line clangd writes to its log (stderr, at launch.logLevel), on a worker
+    // thread, before it is kept in recentStderr(); null: ignored. Must stay callable until stop()
+    // finished and must be quick.
+    std::function<void(std::string_view line)> onLog;
 };
 
 class ClangdService final : public ILspRequester {
@@ -249,6 +253,11 @@ public:
     // The LSP version of `path`'s latest text (1 when opened, one more per change sent), or nullopt
     // when it is not open; what an editor host reports as IEditorLanguageHost::documentVersion.
     [[nodiscard]] std::optional<std::int64_t> documentVersion(std::string_view path) const;
+
+    // A notification to the running clangd (CPP-3: workspace/didChangeConfiguration with
+    // compilationDatabaseChanges). Never waits on clangd. Errors: Busy (not Running), and those of
+    // LspClient::notify.
+    [[nodiscard]] Result<void> notify(std::string method, Json params);
 
     // A request to the running clangd (completion, definition, ... for the next slice). Errors:
     // Busy (not Running), and those of LspClient::request.

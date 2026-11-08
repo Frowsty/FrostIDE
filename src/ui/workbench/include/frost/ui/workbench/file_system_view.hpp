@@ -6,6 +6,7 @@
 // that opens the file.
 #pragma once
 
+#include "frost/project/directory_roles.hpp"
 #include "frost/ui/nav/project_files.hpp"
 
 #include <QColor>
@@ -76,6 +77,10 @@ public:
     void setFileColorProvider(FileColorProvider provider);
     void refreshFileColors();
     void setCanPasteProvider(std::function<bool()> provider) { m_canPaste = std::move(provider); }
+    // The decision for a folder (directory roles, UX-23), for the "Mark Directory as" submenu of a
+    // folder below the root; empty: no such submenu.
+    using DirectoryRoleProvider = std::function<project::DirectoryRoleDecision(std::string_view directory)>;
+    void setDirectoryRoleProvider(DirectoryRoleProvider provider) { m_directoryRoles = std::move(provider); }
 
     [[nodiscard]] QTreeView* tree() const noexcept { return m_tree; }
     // Index in the displayed tree, invalid when absent or filtered out. GUI thread only.
@@ -98,6 +103,8 @@ signals:
     void addPathsToProjectRequested(const QStringList& paths);
     void addExistingFilesToProjectRequested(const QString& directory);
     void addExistingFolderToProjectRequested(const QString& directory);
+    // "Mark Directory as": `role` is a project::DirectoryRole value, or -1 to drop the override.
+    void directoryRoleRequested(const QString& directory, int role);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -121,6 +128,7 @@ private:
     bool m_displayCurrent = true;
     FileColorProvider m_fileColors;
     std::function<bool()> m_canPaste;
+    DirectoryRoleProvider m_directoryRoles;
     QTreeView* m_tree;
     ProjectTreeModel* m_model;
     QLineEdit* m_search;

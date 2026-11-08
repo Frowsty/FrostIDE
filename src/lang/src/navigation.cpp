@@ -13,6 +13,14 @@
 namespace frost::lang {
 namespace {
 
+// Whether every location's line is a forward type declaration (an unreadable line is not one).
+[[nodiscard]] bool allForwardTypeDeclarations(const std::vector<Location>& locations, const LineSource& lines) {
+    return !locations.empty() && std::ranges::all_of(locations, [&](const Location& location) {
+        const std::optional<std::string> line = lines(location.path, location.range.start.line);
+        return line && isForwardTypeDeclaration(*line);
+    });
+}
+
 [[nodiscard]] bool anyContains(const std::vector<Location>& locations, std::string_view path, LspPosition position) {
     return std::ranges::any_of(locations,
                                [&](const Location& location) { return locationContains(location, path, position); });
@@ -44,14 +52,87 @@ sched::Task<Result<std::vector<Location>>> requestLocations(ILspRequester& serve
     co_return parseLocations(*result);
 }
 
+bool isForwardTypeDeclaration(std::string_view line) noexcept {
+    const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f'; };
+    const auto isWord = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    };
+    // Drop a trailing // comment, then the spaces around the declaration.
+    if (const std::size_t comment = line.find("//"); comment != std::string_view::npos) {
+        line = line.substr(0, comment);
+    }
+    while (!line.empty() && isSpace(line.front())) {
+        line.remove_prefix(1);
+    }
+    while (!line.empty() && isSpace(line.back())) {
+        line.remove_suffix(1);
+    }
+    if (!line.ends_with(';')) {
+        return false;
+    }
+    line.remove_suffix(1);
+    const auto takeKeyword = [&](std::string_view keyword) {
+        if (line.starts_with(keyword) && (line.size() == keyword.size() || !isWord(line[keyword.size()]))) {
+            line.remove_prefix(keyword.size());
+            while (!line.empty() && isSpace(line.front())) {
+                line.remove_prefix(1);
+            }
+            return true;
+        }
+        return false;
+    };
+    // A one-line template head ("template <typename T> class X;").
+    if (takeKeyword("template")) {
+        if (!line.starts_with('<')) {
+            return false;
+        }
+        int depth = 0;
+        std::size_t at = 0;
+        for (; at < line.size(); ++at) {
+            depth += line[at] == '<' ? 1 : line[at] == '>' ? -1 : 0;
+            if (depth == 0) {
+                break;
+            }
+        }
+        if (at == line.size()) {
+            return false;
+        }
+        line.remove_prefix(at + 1);
+        while (!line.empty() && isSpace(line.front())) {
+            line.remove_prefix(1);
+        }
+    }
+    (void)takeKeyword("friend");
+    if (takeKeyword("enum")) {
+        (void)(takeKeyword("class") || takeKeyword("struct"));
+    } else if (!(takeKeyword("class") || takeKeyword("struct") || takeKeyword("union"))) {
+        return false;
+    }
+    // The rest: the name with export macros, attributes or an enum base; no body, initialiser,
+    // parameter list or second declaration.
+    return !line.empty() && line.find_first_of("{}()=;,") == std::string_view::npos;
+}
+
 sched::Task<Result<GotoResult>> gotoDeclarationOrUsages(ILspRequester& server, std::string path, LspPosition position,
-                                                        std::stop_token token) {
+                                                        std::stop_token token, LineSource lines) {
     auto declarations = co_await requestLocations(server, NavigationTarget::Declaration, path, position, token);
     if (!declarations && declarations.error().code() == ErrorCode::Cancelled) {
         co_return std::unexpected(std::move(declarations.error()));
     }
     if (declarations && !declarations->empty()) {
         if (!anyContains(*declarations, path, position)) {
+            // Only a forward declaration of a type: the type's definition, when the server has one
+            // elsewhere (header comment).
+            if (lines && allForwardTypeDeclarations(*declarations, lines)) {
+                auto definitions =
+                    co_await requestLocations(server, NavigationTarget::Definition, path, position, token);
+                if (!definitions && definitions.error().code() == ErrorCode::Cancelled) {
+                    co_return std::unexpected(std::move(definitions.error()));
+                }
+                if (definitions && !definitions->empty() && !anyContains(*definitions, path, position)) {
+                    co_return GotoResult{.locations = std::move(*definitions), .showUsages = false};
+                }
+            }
             co_return GotoResult{.locations = std::move(*declarations), .showUsages = false};
         }
         // Caret is already on the symbol's declaration: run find usages.

@@ -1,0 +1,45 @@
+{
+  "version": 6,
+  "include": ["presets/base.json"],
+  "configurePresets": [
+    {
+      "name": "child",
+      "inherits": ["first", "second"],
+      "displayName": "Child",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "ORACLE_PLAIN": "plain",
+        "ORACLE_TYPED": {"type": "STRING", "value": "${presetName}-${generator}"},
+        "ORACLE_BOOL": true,
+        "ORACLE_BOOL_FALSE": false,
+        "ORACLE_SOURCE": "${sourceDir}",
+        "ORACLE_SOURCE_PARENT": "${sourceParentDir}",
+        "ORACLE_SOURCE_NAME": "${sourceDirName}",
+        "ORACLE_FILE_DIR": "${fileDir}",
+        "ORACLE_HOST": "${hostSystemName}",
+        "ORACLE_SEPARATOR": "a${pathListSep}b",
+        "ORACLE_DOLLAR": "${dollar}{x}",
+        "ORACLE_ENV": "$env{ORACLE_ENV_A}",
+        "ORACLE_ENV_CHAIN": "$env{ORACLE_ENV_B}",
+        "ORACLE_PENV": "$penv{FROST_ORACLE_FLAVOUR}",
+        "ORACLE_UNSET_ENV": "[$env{FROST_ORACLE_NOT_SET}]",
+        "ORACLE_PATH": {"type": "PATH", "value": "${sourceDir}/sub/../x"},
+        "ORACLE_OVERRIDDEN": "child",
+        "ORACLE_REMOVED": null
+      },
+      "environment": {
+        "ORACLE_ENV_A": "a-$penv{FROST_ORACLE_FLAVOUR}",
+        "ORACLE_ENV_B": "$env{ORACLE_ENV_A}-b",
+        "ORACLE_ENV_GONE": null,
+        "ORACLE_ENV_FROM_PARENT": "$penv{FROST_ORACLE_FLAVOUR}"
+      }
+    },
+    {
+      "name": "grandchild",
+      "inherits": "child",
+      "binaryDir": "${sourceDir}/out/own-${presetName}",
+      "cacheVariables": {"ORACLE_PLAIN": "grand", "ORACLE_REMOVED": "back"},
+      "environment": {"ORACLE_ENV_A": "grand-a"}
+    }
+  ]
+}

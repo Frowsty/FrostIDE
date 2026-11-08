@@ -244,8 +244,15 @@ TEST_F(WorkbenchTest, FileSystemViewListsSpeedSearchesOpensAndRefreshes) {
     FileSystemView* view = app.workbench->fileSystemView();
     ASSERT_NE(view, nullptr);
     EXPECT_EQ(qobject_cast<QStandardItemModel*>(view->tree()->model()), nullptr);
-    // .gitignore'd debug.log, the default-excluded build/ and the skipped .git/ are not listed.
-    EXPECT_EQ(view->visibleNames(), (QStringList{"proj", "src", ".gitignore", "README.md"}));
+    // .gitignore'd debug.log and the skipped .git/ are not listed, nor is anything below build/. Where
+    // "/proj" is a native absolute root (POSIX) the directory roles load (UX-23): build/ is Generated,
+    // listed (so it can be marked) but never descended. On Windows this POSIX-style MemFs root gets no
+    // roles, so the default excludes hide build/ itself.
+    const QStringList expectedNames = io::kNativePathStyle == io::PathStyle::Posix
+                                          ? QStringList{"proj", "build", "src", ".gitignore", "README.md"}
+                                          : QStringList{"proj", "src", ".gitignore", "README.md"};
+    EXPECT_EQ(view->visibleNames(), expectedNames);
+    EXPECT_FALSE(view->visibleNames().contains(QStringLiteral("out.o")));
     EXPECT_EQ(view->setSpeedSearch(QStringLiteral("util")), 1);
     EXPECT_EQ(view->selectedPath(), "/proj/src/util.cpp");
     EXPECT_EQ(view->visibleNames(), (QStringList{"proj", "src", "util.cpp"}));

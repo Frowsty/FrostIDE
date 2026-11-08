@@ -1,0 +1,5 @@
+{
+  "version": 6,
+  "configurePresets": [{"name": "from-a-user-include", "binaryDir": "${sourceDir}/out/user-include", "generator": "Ninja"}],
+  "workflowPresets": [{"name": "user-flow", "steps": [{"type": "configure", "name": "from-a-user-include"}]}]
+}
