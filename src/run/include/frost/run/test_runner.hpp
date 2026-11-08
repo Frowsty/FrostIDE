@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// TestRunner (RUN-7, PLAN.md Appendix C R2): discovers and runs a CMake build directory's tests with
+// the real ctest, and lists a Google Test program's cases, through io::IProcessLauncher. Every test,
+// outcome, duration and message it reports was parsed from those processes' output
+// (ctest_parsers.hpp, gtest_parsers.hpp); when ctest fails without a report, the run reports the
+// tool error and no results. Qt-free.
+//
+/*
+ * Command lines (ctest 3.21+; the CTestSetup comes from the CMake model, ctestSetupFor):
+ *
+ *   discover:  ctest --test-dir <build> [-C <config>] [filters] -N --show-only=json-v1
+ *   run:       ctest --test-dir <build> [-C <config>] [filters] [-j <n>] [--timeout <s>]
+ *                    [--stop-on-failure] --no-tests=error --output-junit <report>
+ *                    [--tests-from-file <list> | -R ^(<escaped names>)$]
+ *   list:      <program> --gtest_list_tests   (in the test's working directory)
+ *
+ * A run of some tests names them exactly: --tests-from-file with ctest 3.29+ (one name per line),
+ * else an anchored -R of the names with every regular-expression character escaped. Each run
+ * writes its report and the Google Test reports (GTEST_OUTPUT=json:<dir>/ in ctest's environment,
+ * which every Google Test program it starts inherits) under <build>/Testing/Temporary/, ctest's own
+ * scratch directory, in files named frostide-<pid>-<n>-*, and removes them once read.
+ *
+ * Outcome of a run (TestRunReport):
+ *   - the report was written: its results (with the Google Test reports attached), whatever ctest's
+ *     exit code (8 means "some tests failed", not a tool error);
+ *   - stopped (cancel()): the tree is ended (ctest and every test it started); the results are the
+ *     tests ctest's progress lines had reported as finished (interim), and stopped is set;
+ *   - otherwise: `error` says how ctest failed (its exit code and the end of its output, or "wrote
+ *     no output"), and there are no results.
+ * While a run goes on, onTestStarted and onTestFinished report ctest's progress lines (interim
+ * results); onFinished's report replaces them.
+ *
+ * One job (discover, run or list) at a time: another fails with Busy. Callbacks run on the
+ * runner's threads, never two at a time, and onFinished/done is the job's last; they may call
+ * busy() and cancel(), not start a job or destroy the runner (the UI posts to its own thread).
+ * The launcher and file system must outlive the runner; the destructor cancels the job and waits
+ * for it. The trust gate is the caller's: ctest runs the project's CTestTestfile.cmake scripts and
+ * test programs, so only a trusted folder's setup may be passed.
+ */
+#pragma once
+
+#include "frost/core/clock.hpp"
+#include "frost/core/error.hpp"
+#include "frost/io/process.hpp"
+#include "frost/project/cmake_file_api.hpp"
+#include "frost/project/cmake_presets.hpp"
+#include "frost/project/cmake_profile.hpp"
+#include "frost/run/test_model.hpp"
+
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace frost::io {
+class IFileSystem;
+} // namespace frost::io
+
+namespace frost::run {
+
+// The ctest of one configured build directory, and the test preset's selection and settings.
+struct CTestSetup {
+    std::string ctest{};          // Absolute ctest program (the one that belongs to the configuring cmake).
+    std::string ctestVersion{};   // "4.4.5"; "" when unknown (taken as current).
+    std::string buildDirectory{}; // Absolute.
+    std::string configuration{};  // -C; "" for single-configuration generators without a preset's.
+    std::string testPreset{};     // The test preset the filters came from, for display; "" without one.
+    std::string includeName{};    // -R
+    std::string excludeName{};    // -E
+    std::string includeLabel{};   // -L
+    std::string excludeLabel{};   // -LE
+    int jobs = 0;                 // -j; 0 leaves it to ctest.
+    std::optional<int> timeout{}; // --timeout, seconds.
+    bool stopOnFailure = false;   // --stop-on-failure.
+    // Applied on top of this process's environment (nullopt unsets).
+    std::vector<std::pair<std::string, std::optional<std::string>>> environment{};
+
+    friend bool operator==(const CTestSetup&, const CTestSetup&) = default;
+};
+
+/*
+ * The setup for `model`'s build directory as `profile` configures it: ctest is the model cache's
+ * CMAKE_CTEST_COMMAND (else the ctest beside its CMAKE_COMMAND), -C the multi-config generator's
+ * configuration, and `preset` (a test preset of the profile's configure preset, or null) adds its
+ * configuration, filters, jobs, timeout, stop-on-failure and environment on top of the profile's.
+ * Errors: NotFound (the cache names no ctest), InvalidArgument (a relative path), Unsupported
+ * (cmake older than 3.21, which has no --output-junit). Pure.
+ */
+[[nodiscard]] Result<CTestSetup> ctestSetupFor(const project::CMakeProject& model, const project::CMakeProfile& profile,
+                                               const project::CMakeTestPreset* preset);
+
+// The test preset ctestSetupFor should use for `profile`: the visible, enabled test preset of the
+// profile's configure preset named like its build or configure preset, else the first such one;
+// null without one.
+[[nodiscard]] const project::CMakeTestPreset* testPresetFor(const project::CMakePresets& presets,
+                                                            const project::CMakeProfile& profile);
+
+// The ctest arguments for discovery (header comment). Pure.
+[[nodiscard]] std::vector<std::string> ctestDiscoveryArguments(const CTestSetup& setup);
+// An anchored ctest regular expression matching exactly `names` (header comment). Pure.
+[[nodiscard]] std::string ctestExactNameRegex(const std::vector<std::string>& names);
+
+// How a run ended (header comment, "Outcome of a run").
+struct TestRunReport {
+    std::optional<Error> error{};
+    bool stopped = false;
+    std::optional<int> exitCode{}; // ctest's, when it ran to the end.
+    std::string commandLine{};     // As started, for display.
+    std::vector<TestResult> results{};
+};
+
+struct TestRunHandlers {
+    std::function<void(const std::string& name)> onTestStarted{};
+    std::function<void(const TestResult& interim)> onTestFinished{};
+    // ctest's console output, as it arrives (UTF-8 chunks).
+    std::function<void(std::string_view text)> onOutput{};
+    std::function<void(const TestRunReport& report)> onFinished{};
+};
+
+struct TestRunnerOptions {
+    IClock* clock = nullptr; // Null: systemClock().
+};
+
+class TestRunner {
+public:
+    [[nodiscard]] static std::unique_ptr<TestRunner> create(io::IProcessLauncher& launcher, io::IFileSystem& fs,
+                                                            TestRunnerOptions options = {});
+    ~TestRunner();
+    TestRunner(const TestRunner&) = delete ("owns a thread and a process tree");
+    TestRunner& operator=(const TestRunner&) = delete ("owns a thread and a process tree");
+
+    /*
+     * Lists the tests (header comment). `done` gets them, or the tool error: the launcher's, IoError
+     * (ctest exited non-zero; the message holds its exit code and the end of its output), Corrupt
+     * (output that is no test list), Cancelled (cancel()). Errors here: Busy, InvalidArgument (a
+     * setup without an absolute ctest or build directory).
+     */
+    [[nodiscard]] Result<void> discover(const CTestSetup& setup,
+                                        std::function<void(Result<std::vector<DiscoveredTest>>)> done);
+
+    /*
+     * Runs `names` (every test of the setup when empty) of `tests`, the list discover() returned for
+     * this setup (it maps progress lines and Google Test reports to tests). Errors here: Busy,
+     * InvalidArgument; how the run went is the report's.
+     */
+    [[nodiscard]] Result<void> run(const CTestSetup& setup, std::vector<DiscoveredTest> tests,
+                                   std::vector<std::string> names, TestRunHandlers handlers);
+
+    /*
+     * Lists the Google Test cases of `test`'s program (`--gtest_list_tests`, in its working directory,
+     * with the setup's environment). `done` gets the cases or the error (as discover()'s, Corrupt
+     * for output that is no case list). Errors here: Busy, InvalidArgument (a test without a program).
+     */
+    [[nodiscard]] Result<void> listGTestCases(const CTestSetup& setup, const DiscoveredTest& test,
+                                              std::function<void(Result<std::vector<GTestCase>>)> done);
+
+    // Ends the current job's process tree; the job then finishes as stopped/Cancelled. Idempotent.
+    void cancel();
+    // Whether a job is running (until its last callback has returned).
+    [[nodiscard]] bool busy() const;
+    // Blocks until no job runs or `timeout` passes; returns whether it got there. Not from a callback.
+    [[nodiscard]] bool waitForIdle(IClock::Duration timeout) const;
+
+    struct State;
+
+private:
+    explicit TestRunner(std::shared_ptr<State> state) noexcept;
+
+    std::shared_ptr<State> m_state;
+};
+
+} // namespace frost::run

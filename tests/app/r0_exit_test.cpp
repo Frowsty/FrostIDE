@@ -302,13 +302,12 @@ TEST(R0ToolAblation, WithoutClangdCMakeAndLuaLsTheIdeSaysUnavailableAndShowsNoRe
     rig.window->toolWindows().show(std::string(frost::app::kUnitTestsToolWindow));
     auto* tests = rig.window->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
     ASSERT_NE(tests, nullptr);
-    std::vector<QString> statuses;
-    for (QTreeWidgetItemIterator it(tests); *it; ++it)
-        if (!(*it)->text(1).isEmpty())
-            statuses.push_back((*it)->text(1));
-    EXPECT_FALSE(statuses.empty()) << "the source scan lists WidgetSuite.StartsEmpty";
-    for (const QString& status : statuses)
-        EXPECT_EQ(status, QStringLiteral("Discovered, not run")) << "a test outcome without a test runner";
+    // Tests come from ctest (RUN-7), which a folder that never configured does not have: no test,
+    // no status, and the window says why.
+    EXPECT_EQ(tests->topLevelItemCount(), 0) << "a test list without ctest";
+    auto* testsSummary = rig.window->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
+    ASSERT_NE(testsSummary, nullptr);
+    EXPECT_TRUE(testsSummary->text().contains(QStringLiteral("not configured"))) << testsSummary->text().toStdString();
     for (const char* name : {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton"}) {
         auto* run = rig.window->findChild<QPushButton*>(QString::fromLatin1(name));
         ASSERT_NE(run, nullptr) << name;

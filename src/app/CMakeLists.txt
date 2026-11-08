@@ -66,6 +66,8 @@ frost_add_library(app LAYER app
         src/project_run_dialogs.cpp
         src/project_tool_dialogs.cpp
         src/project_unit_tests.cpp
+        src/unit_tests_window.cpp
+        src/unit_tests_window.hpp
         src/project_properties_xml.cpp
         src/diagnostics_qt.cpp
         src/document_editor.cpp

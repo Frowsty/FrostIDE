@@ -9,6 +9,7 @@
 #   app_workbench_*       the workbench composition (W1): offscreen functional tests, and the
 #                         real MSBuild and clangd suites (see the end of this file);
 #   app_r0_exit_tests     the R0 exit criteria over the real tools (r0_exit_test.cpp);
+#   app_unit_tests_window_tests  the Unit Tests window (RUN-7) over the real ctest;
 #   app_corpus_tests      the corpus tier on the pinned FrostEngine clone (label corpus, verify
 #                         -Corpus only).
 #
@@ -238,9 +239,9 @@ if(NOT _frost_engine_sha MATCHES "^[0-9a-f]+$")
     message(FATAL_ERROR "${_frost_corpora_lock_file} pins no frostengine corpus")
 endif()
 frost_add_test(app_corpus_tests QT
-    SOURCES corpus_test.cpp corpus_dirs_lua_test.cpp
+    SOURCES corpus_test.cpp corpus_dirs_lua_test.cpp corpus_unit_tests_test.cpp
     DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs frost::search frost::ui_nav
-         frost::project frost::document
+         frost::project frost::document frost::ui_run
     LABELS integration corpus)
 target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}
@@ -263,3 +264,16 @@ target_compile_definitions(app_automation_endpoint_tests PRIVATE ${_frost_workbe
 if(FROST_ENABLE_AUTOMATION_ENDPOINT)
     target_compile_definitions(app_automation_endpoint_tests PRIVATE $<$<CONFIG:Debug>:FROST_AUTOMATION_ENDPOINT=1>)
 endif()
+
+# The Unit Tests window (RUN-7) over a trusted copy of tests/run/fixtures/ctest_project that the
+# workbench configures with the pinned cmake and Ninja; its ctest is the oracle, and a stub ctest
+# (tests/run's run_ctest_stub) gives the tool-error case (label integration, tag cmake).
+frost_add_test(app_unit_tests_window_tests QT
+    SOURCES unit_tests_window_test.cpp
+    DEPS frost::app frost::build frost::io frost::ui_run
+    LABELS integration cmake)
+target_include_directories(app_unit_tests_window_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_unit_tests_window_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_RUN_FIXTURES="${FROST_SOURCE_DIR}/tests/run/fixtures"
+    FROST_RUN_CTEST_STUB="$<TARGET_FILE:run_ctest_stub>")
+add_dependencies(app_unit_tests_window_tests run_ctest_stub)

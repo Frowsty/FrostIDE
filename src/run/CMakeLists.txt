@@ -6,9 +6,18 @@
 # trees. It runs programs through frost::build's RunSession, so it sits one rank above build
 # (cmake/FrostLayers.cmake); the run UI (RUN-3), the generated run types (RUN-2), the test runner
 # (RUN-7) and the debugger build on it.
+#
+# The test runner (RUN-7): the test model, the parsers of ctest's and Google Test's own output (the
+# only sources of test results, frost-lint's truth rule) and TestRunner, which runs ctest and test
+# programs through RunSession. pugixml (ADR 0033) reads ctest's JUnit report, privately.
 
 frost_add_library(run LAYER run
     SOURCES
         src/run_configuration.cpp
         src/run_manager.cpp
+        src/test_model.cpp
+        src/ctest_parsers.cpp
+        src/gtest_parsers.cpp
+        src/test_runner.cpp
     DEPS frost::build frost::settings frost::rpc frost::io frost::core)
+target_link_libraries(frost_run PRIVATE pugixml::pugixml)
