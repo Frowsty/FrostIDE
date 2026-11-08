@@ -346,4 +346,60 @@ TEST(WorkbenchFind, DirectoryRolesDecideWhatTheProjectTreeAndFindInFilesWalk) {
     ASSERT_TRUE(app::test::waitFor([&] { return !inTree("artifacts/dev/gen.cpp") && !rig.nav().scanPending(); }));
     EXPECT_FALSE(rig.nav().setDirectoryRole(dir.join("../outside"), project::DirectoryRole::Excluded).has_value());
 }
+
+/*
+ * Review blocker (UX-23): with roles present the old name excludes (node_modules/, Unity's root
+ * Library/, Temp/, Logs/, UserSettings/, MemoryCaptures/) no longer apply, so the roles must hide
+ * them. A Unity project that is not under git has no .gitignore to do it. Each folder is listed in
+ * the tree (so it can be marked) but never descended, and Find in Files never searches below it.
+ */
+TEST(WorkbenchFind, NodeModulesAndUnitysGeneratedFoldersAreNeitherListedNorSearchedWithoutAGitignore) {
+    WorkDir dir("find-unity");
+    dir.write("Assets/Scripts/Player.cs", "needle\n");
+    dir.write("ProjectSettings/ProjectVersion.txt", "m_EditorVersion: 6000.0.0f1\n");
+    dir.write("Packages/manifest.json", "{\"dependencies\":{}} needle\n");
+    const std::vector<std::string> hidden{"Library/PackageCache/com.unity.ugui/Runtime/Button.cs",
+                                          "Temp/Bee/build.cs",
+                                          "Logs/AssetImportWorker0.log",
+                                          "UserSettings/EditorUserSettings.asset",
+                                          "MemoryCaptures/capture.snap",
+                                          "node_modules/left-pad/index.js",
+                                          "Tools/web/node_modules/react/index.js"};
+    for (const std::string& file : hidden)
+        dir.write(file, "needle\n");
+    dir.write("Tools/web/app.js", "needle\n");
+    ASSERT_FALSE(io::realFileSystem().status(dir.join(".gitignore")).has_value());
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(app::test::waitFor([&] { return rig.nav().initialScanReady() && !rig.nav().scanPending(); }));
+    const auto roles = rig.nav().directoryRoles();
+    ASSERT_NE(roles, nullptr);
+    EXPECT_EQ(roles->decide(dir.join("Library")).reason, project::DirectoryRoleReason::UnityProject);
+    EXPECT_EQ(roles->decide(dir.join("node_modules")).reason, project::DirectoryRoleReason::DependencyName);
+    const auto inTree = [&](std::string_view relative) {
+        return rig.nav().projectFiles().find(dir.join(std::string(relative))).has_value();
+    };
+    EXPECT_TRUE(inTree("Assets/Scripts/Player.cs"));
+    EXPECT_TRUE(inTree("Tools/web/app.js"));
+    for (const char* folder :
+         {"Library", "Temp", "Logs", "UserSettings", "MemoryCaptures", "node_modules", "Tools/web/node_modules"})
+        EXPECT_TRUE(inTree(folder)) << folder; // Listed, so Mark Directory as can reach it.
+    for (const char* folder : {"Library/PackageCache", "Temp/Bee", "node_modules/left-pad"})
+        EXPECT_FALSE(inTree(folder)) << folder; // Never descended.
+    for (const std::string& file : hidden)
+        EXPECT_FALSE(inTree(file)) << file;
+
+    rig.show();
+    auto* popup = feature(rig)->showPopup(false);
+    popup->queryField()->setText(QStringLiteral("needle"));
+    popup->searchNow();
+    popup->session()->wait();
+    EXPECT_FALSE(popup->session()->error());
+    std::set<std::string> files;
+    for (const auto& file : popup->session()->files())
+        files.insert(file.path);
+    popup->closePopup(ui::Popup::CloseReason::Cancelled);
+    EXPECT_EQ(files, (std::set<std::string>{dir.join("Assets/Scripts/Player.cs"), dir.join("Packages/manifest.json"),
+                                            dir.join("Tools/web/app.js")}));
+}
 } // namespace

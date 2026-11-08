@@ -19,6 +19,7 @@
  *   4. By name at any depth, ASCII case exact: build, out, .cache and cmake-build-* are Generated.
  *      The exact case matters: FrostEngine tracks source folders named Build (its game export
  *      module), which a case-folding rule would hide.
+ *   4b. node_modules (npm's dependency folder), by name at any depth, exact case: Generated.
  *   5. A folder below the root holding a CMakeCache.txt (a CMake binary directory not named by a
  *      preset): Generated.
  *   6. MSBuild output folders: bin, obj, ipch, x64, x86, ARM64, Debug and Release (ASCII case
@@ -26,15 +27,22 @@
  *      solution or project file (.sln, .slnx, .vcxproj, .vcxitems, .csproj, .vbproj, .fsproj).
  *      FrostEngine tracks a source folder Frost/src/Frost/Renderer/Debug; a name-only rule would
  *      hide it from search.
+ *   6b. Unity's generated project folders: Library, Temp, Logs, UserSettings, MemoryCaptures and
+ *      obj (ASCII case ignored) are Generated only when their parent folder is a Unity project,
+ *      i.e. holds both an Assets and a ProjectSettings folder. Unity writes no .gitignore, so
+ *      without this rule its Library (PackageCache, Artifacts: tens of thousands of files) would
+ *      be listed and searched. A C++ project's own Library or Logs source folder stays Source.
  *   7. Otherwise Source.
  * The root itself is Source unless overridden. A folder's effective role (roleOf) is the first
  * non-traversed decision on the way down from the root, else the deepest non-default decision
  * (a Library folder's subfolders are Library).
  *
  * Paths are absolute in the file system's native syntax; separators '/' and '\\' are both accepted
- * and, on Windows paths (a drive letter or UNC root), ASCII case is ignored when comparing. Rules 5
- * and 6 read the file system (one status() or one listing per folder) and are cached per folder for
+ * and, on Windows paths (a drive letter or UNC root), ASCII case is ignored when comparing. Rules 5,
+ * 6 and 6b read the file system (one status() or one listing per folder) and are cached per folder for
  * the object's lifetime; build a new object (load()) when the project's CMake state changes.
+ * Rule 6b likewise costs two status() calls per parent folder, cached, and only for folders that
+ * carry one of its names.
  *
  * Thread safety: a DirectoryRoles is shared immutable state plus an internally locked cache; every
  * member may be called from any thread (scanTree's descend runs on scheduler threads, the watcher's
@@ -77,8 +85,10 @@ enum class DirectoryRoleReason : std::uint8_t {
     Override,       // Rule 2.
     CMakePreset,    // Rule 3.
     BuildName,      // Rule 4.
+    DependencyName, // Rule 4b.
     CMakeCache,     // Rule 5.
     MSBuildOutput,  // Rule 6.
+    UnityProject,   // Rule 6b.
 };
 
 struct DirectoryRoleDecision {

@@ -26,11 +26,16 @@ constexpr std::array<std::string_view, 4> kStateNames{".git", ".svn", ".hg", ".v
 // Rule 4: exact case.
 constexpr std::array<std::string_view, 3> kBuildNames{"build", "out", ".cache"};
 constexpr std::string_view kCMakeBuildPrefix = "cmake-build-";
+// Rule 4b: exact case.
+constexpr std::string_view kDependencyName = "node_modules";
 // Rule 6: ASCII case ignored, lower case here.
 constexpr std::array<std::string_view, 8> kMSBuildOutputNames{"bin", "obj",   "ipch",  "x64",
                                                               "x86", "arm64", "debug", "release"};
 constexpr std::array<std::string_view, 7> kMSBuildProjectExtensions{".sln",    ".slnx",   ".vcxproj", ".vcxitems",
                                                                     ".csproj", ".vbproj", ".fsproj"};
+// Rule 6b: ASCII case ignored, lower case here (Unity's generated folders beside Assets/).
+constexpr std::array<std::string_view, 6> kUnityGeneratedNames{"library",      "temp",           "logs",
+                                                               "usersettings", "memorycaptures", "obj"};
 // The decision cache is dropped when it grows past this (a watcher may see many new folders).
 constexpr std::size_t kMaxCachedDecisions = 1U << 16;
 
@@ -127,6 +132,8 @@ struct DirectoryRoles::State {
     // Rules 5 and 6 by folder key; parents' "holds an MSBuild project" by folder key.
     mutable std::unordered_map<std::string, DirectoryRoleDecision> decisions FROST_GUARDED_BY(mutex);
     mutable std::unordered_map<std::string, bool> msbuildParents FROST_GUARDED_BY(mutex);
+    // Parents' "is a Unity project" (rule 6b) by folder key.
+    mutable std::unordered_map<std::string, bool> unityParents FROST_GUARDED_BY(mutex);
 
     // True when `key` lies strictly below the root.
     [[nodiscard]] bool below(std::string_view key) const noexcept {
@@ -158,7 +165,31 @@ struct DirectoryRoles::State {
         return holds;
     }
 
-    // Rules 5 and 6 (the file-system rules), cached.
+    // Rule 6b: the parent of `directory` holds both an Assets and a ProjectSettings folder.
+    [[nodiscard]] bool parentIsUnityProject(std::string_view directory) const {
+        const std::string_view parent = io::parentPath(directory);
+        const std::string key = pathKey(parent);
+        {
+            LockGuard lock(mutex);
+            if (const auto it = unityParents.find(key); it != unityParents.end())
+                return it->second;
+        }
+        const auto isFolder = [&](std::string_view name) {
+            auto child = io::joinPath(parent, name);
+            if (!child)
+                return false;
+            auto status = fs->status(*child);
+            return status && status->type == io::FileType::Directory;
+        };
+        const bool unity = isFolder("Assets") && isFolder("ProjectSettings");
+        LockGuard lock(mutex);
+        if (unityParents.size() >= kMaxCachedDecisions)
+            unityParents.clear();
+        unityParents.emplace(key, unity);
+        return unity;
+    }
+
+    // Rules 5, 6 and 6b (the file-system rules), cached.
     [[nodiscard]] DirectoryRoleDecision probe(std::string_view directory, const std::string& key) const {
         {
             LockGuard lock(mutex);
@@ -177,6 +208,13 @@ struct DirectoryRoles::State {
                 kMSBuildOutputNames, [&](std::string_view output) { return equalsIgnoringCase(name, output); });
             if (outputName && parentHoldsMSBuildProject(directory))
                 decision = {DirectoryRole::Generated, DirectoryRoleReason::MSBuildOutput};
+        }
+        if (decision.reason == DirectoryRoleReason::Default) {
+            const std::string_view name = lastComponent(directory);
+            const bool unityName = std::ranges::any_of(
+                kUnityGeneratedNames, [&](std::string_view generated) { return equalsIgnoringCase(name, generated); });
+            if (unityName && parentIsUnityProject(directory))
+                decision = {DirectoryRole::Generated, DirectoryRoleReason::UnityProject};
         }
         LockGuard lock(mutex);
         if (decisions.size() >= kMaxCachedDecisions)
@@ -204,6 +242,8 @@ struct DirectoryRoles::State {
             return {DirectoryRole::Generated, DirectoryRoleReason::CMakePreset};
         if (std::ranges::find(kBuildNames, name) != kBuildNames.end() || name.starts_with(kCMakeBuildPrefix))
             return {DirectoryRole::Generated, DirectoryRoleReason::BuildName};
+        if (name == kDependencyName)
+            return {DirectoryRole::Generated, DirectoryRoleReason::DependencyName};
         return probe(directory, key);
     }
 };

@@ -3,7 +3,8 @@
 // Tests for the directory roles (frost/project/directory_roles.hpp, UX-23): each rule of the
 // header comment on an in-memory tree (version-control folders, overrides, CMake preset binary
 // directories from a real CMakePresets.json, the exact-case build names, CMakeCache.txt, MSBuild
-// output folders only beside a project file), the effective role down a path, the watcher's
+// output folders only beside a project file, node_modules, Unity's generated folders only beside
+// Assets and ProjectSettings), the effective role down a path, the watcher's
 // belowUntraversed filter, and the override store's round trip through a real file.
 #include "frost/io/file_system.hpp"
 #include "frost/project/directory_roles.hpp"
@@ -113,6 +114,55 @@ TEST(DirectoryRoles, MSBuildOutputFoldersAreGeneratedOnlyBesideAProjectFile) {
                   (DirectoryRoleDecision{DirectoryRole::Generated, DirectoryRoleReason::MSBuildOutput}))
             << generated;
     EXPECT_EQ(roles->decide(MemTree::path("Lib/Debug")).role, DirectoryRole::Source);
+}
+
+// The old name excludes (io::defaultProjectExcludes) hid node_modules and Unity's root folders;
+// with roles present those excludes are not applied, so the roles must hide them (review blocker).
+TEST(DirectoryRoles, NodeModulesAndAUnityProjectsGeneratedFoldersAreGenerated) {
+    MemTree tree;
+    tree.write("node_modules/left-pad/index.js", "");
+    tree.write("web/app/node_modules/react/index.js", "");
+    tree.write("web/app/Node_Modules/notes.md", ""); // Not npm's spelling: a source folder.
+    // A Unity project below the root (Unity writes no .gitignore).
+    tree.write("Game/Assets/Player.cs", "");
+    tree.write("Game/ProjectSettings/ProjectVersion.txt", "");
+    for (const char* generated : {"Library/PackageCache/a.cs", "Temp/b.tmp", "Logs/c.log", "UserSettings/d.asset",
+                                  "MemoryCaptures/e.snap", "obj/Debug/f.dll"})
+        tree.write(std::string("Game/") + generated, "");
+    // A C++ project's own Library and Logs folders: no Assets/ProjectSettings beside them.
+    tree.write("Engine/Library/Core.cpp", "");
+    tree.write("Engine/Logs/Logger.cpp", "");
+    tree.write("Engine/Assets/icon.png", ""); // Assets alone is not a Unity project.
+    const auto roles = loadRoles(tree);
+    ASSERT_NE(roles, nullptr);
+    const auto decide = [&](std::string_view relative) { return roles->decide(MemTree::path(relative)); };
+    EXPECT_EQ(decide("node_modules"),
+              (DirectoryRoleDecision{DirectoryRole::Generated, DirectoryRoleReason::DependencyName}));
+    EXPECT_EQ(decide("web/app/node_modules").role, DirectoryRole::Generated);
+    EXPECT_EQ(decide("web/app/Node_Modules").role, DirectoryRole::Source);
+    for (const char* generated : {"Library", "Temp", "Logs", "UserSettings", "MemoryCaptures", "obj"})
+        EXPECT_EQ(decide(std::string("Game/") + generated),
+                  (DirectoryRoleDecision{DirectoryRole::Generated, DirectoryRoleReason::UnityProject}))
+            << generated;
+    EXPECT_EQ(decide("Game/Assets").role, DirectoryRole::Source);
+    EXPECT_EQ(decide("Game/ProjectSettings").role, DirectoryRole::Source);
+    EXPECT_EQ(decide("Engine/Library").role, DirectoryRole::Source);
+    EXPECT_EQ(decide("Engine/Logs").role, DirectoryRole::Source);
+    EXPECT_TRUE(roles->belowUntraversed(MemTree::path("Game/Library/PackageCache/a.cs")));
+    EXPECT_TRUE(roles->belowUntraversed(MemTree::path("node_modules/left-pad/index.js")));
+    EXPECT_FALSE(roles->belowUntraversed(MemTree::path("Engine/Library/Core.cpp")));
+
+    // The Unity project at the root itself; an override still wins.
+    MemTree unity;
+    unity.write("Assets/Player.cs", "");
+    unity.write("ProjectSettings/ProjectVersion.txt", "");
+    unity.write("Library/ArtifactDB", "");
+    unity.write("temp/x.tmp", ""); // ASCII case ignored, as the old [Tt]emp exclude.
+    const auto unityRoles = loadRoles(unity, {{MemTree::path("Logs"), DirectoryRole::Source}});
+    ASSERT_NE(unityRoles, nullptr);
+    EXPECT_EQ(unityRoles->decide(MemTree::path("Library")).reason, DirectoryRoleReason::UnityProject);
+    EXPECT_EQ(unityRoles->decide(MemTree::path("temp")).role, DirectoryRole::Generated);
+    EXPECT_EQ(unityRoles->decide(MemTree::path("Logs")).role, DirectoryRole::Source);
 }
 
 TEST(DirectoryRoles, OverridesWinExceptOverVersionControlAndRolesFollowThePath) {
