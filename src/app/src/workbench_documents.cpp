@@ -49,17 +49,16 @@ QString displayName(std::string_view path) { return QFileInfo(qs(path)).fileName
  * CMake project, whose targets the Run action runs instead whenever one is open): the
  * loaded C++ project that builds the file (a project item with that path), run as that project
  * whatever the startup project is; none or several such projects give no run and say why. With a
- * CMake project, Run builds and runs the selected target, so the marker runs only when the
- * configured model has exactly one executable target and that target builds the file (it is then
- * the selected one); otherwise choosing the owning target requires run configurations (RUN-1).
+ * CMake project: the executable target of the configured model that builds the file, run as its run
+ * configuration (RUN-2); none or several such targets give no run and say why.
  * Nothing is guessed: `unavailable` says why when neither `project` nor `cmakeTarget` is set.
  * O(solution nodes) or O(CMake sources).
  */
 struct EntryPointRun {
     std::optional<project::ProjectId> project;
-    bool cmakeTarget = false;
-    QString label;       // The marker's tooltip when it runs something.
-    QString unavailable; // Why it runs nothing.
+    std::string cmakeTarget; // The executable CMake target's name, or "".
+    QString label;           // The marker's tooltip when it runs something.
+    QString unavailable;     // Why it runs nothing.
 };
 
 EntryPointRun entryPointRun(const project::SolutionModel* solution, const project::CMakeProject* cmake, bool cmakeOpen,
@@ -95,24 +94,27 @@ EntryPointRun entryPointRun(const project::SolutionModel* solution, const projec
             result.unavailable = text("Configure the CMake project first.");
             return result;
         }
-        std::vector<const project::CMakeTarget*> executables;
-        for (const project::CMakeTarget& target : cmake->targets) {
-            if (target.type == project::CMakeTargetType::Executable)
-                executables.push_back(&target);
-        }
         const auto builds = [&key](const project::CMakeTarget& target) {
             return std::ranges::any_of(target.sources, [&key](const project::CMakeSource& source) {
                 return lang::documentKey(source.path) == key;
             });
         };
-        if (executables.size() == 1 && builds(*executables.front())) {
-            result.cmakeTarget = true;
-            result.label = text("Run '%1'").arg(qs(executables.front()->name));
+        std::vector<const project::CMakeTarget*> owners;
+        for (const project::CMakeTarget& target : cmake->targets) {
+            if (target.type == project::CMakeTargetType::Executable && builds(target))
+                owners.push_back(&target);
+        }
+        if (owners.size() == 1) {
+            result.cmakeTarget = owners.front()->name;
+            result.label = text("Run '%1'").arg(qs(owners.front()->name));
+        } else if (owners.empty()) {
+            result.unavailable =
+                text("No executable CMake target builds %1, so there is nothing to run.").arg(displayName(path));
         } else {
             result.unavailable =
-                text("Running the CMake target that builds %1 requires run configurations (RUN-1); Run (Shift+F10) "
-                     "runs the selected target.")
-                    .arg(displayName(path));
+                text("%1 is built by %2 executable CMake targets; run one of them from the Run toolbar.")
+                    .arg(displayName(path))
+                    .arg(owners.size());
         }
         return result;
     }
@@ -236,14 +238,21 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             const auto model = m_cmake ? m_cmake->service().model() : nullptr;
             const EntryPointRun run =
                 entryPointRun(m_solution.get(), model.get(), m_cmake != nullptr, targetView->path());
-            if (!run.project && !run.cmakeTarget) {
+            if (!run.project && run.cmakeTarget.empty()) {
                 notify(text("Run"), run.unavailable, ui::NotificationKind::Warning);
                 return;
             }
             if (!m_runController)
                 return;
-            if (auto started = m_runController->run(run.project);
-                !started && started.error().code() != ErrorCode::Cancelled)
+            // A CMake target runs as its run configuration (RUN-2), with the user's edits.
+            std::string configuration;
+            for (const run::RunConfiguration& candidate : m_runController->configurations().all())
+                if (!run.cmakeTarget.empty() && candidate.type == run::RunType::CMakeTarget &&
+                    candidate.target == run.cmakeTarget)
+                    configuration = candidate.id;
+            auto started = configuration.empty() ? m_runController->run(run.project)
+                                                 : m_runController->runConfiguration(configuration);
+            if (!started && started.error().code() != ErrorCode::Cancelled)
                 notify(text("Run"), qs(started.error().message()), ui::NotificationKind::Error);
             return;
         }
@@ -757,7 +766,7 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
                 run = entryPointRun(m_solution.get(), model.get(), m_cmake != nullptr, view.path());
             }
             // The tooltip says what a click runs, or why it runs nothing.
-            const QString tip = run->project || run->cmakeTarget ? run->label : run->unavailable;
+            const QString tip = run->project || !run->cmakeTarget.empty() ? run->label : run->unavailable;
             markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(entry.line - 1)},
                                              ui::MarkerSeverity::RunTest, tip.toStdString()});
         }

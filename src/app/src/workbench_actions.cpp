@@ -153,99 +153,20 @@ void Workbench::registerActions() {
                 });
         },
         [this] { return m_window != nullptr && m_solution != nullptr; });
+    // RUN-3: the Run/Debug Configurations dialog over the workspace's run configurations.
     add(
-        "run.editConfigurations", "Edit Run/Debug Configurations...",
-        [this] {
-            if (!m_window || !m_solution || !m_runService)
-                return;
-            std::string projPath;
-            if (m_explorer) {
-                if (const auto projId = m_explorer->currentProject())
-                    projPath = m_solution->project(*projId).path;
-            }
-            std::string activeCfg = "Debug|x64";
-            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-                activeCfg = m_build->configurations()[*idx].name();
-            showEditRunConfigurationsDialog(
-                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
-                [this](bool ext) {
-                    if (m_runService)
-                        (void)m_runService->setUseExternalConsole(ext);
-                },
-                [this] { refreshSolutionExplorerForFsChange(); },
-                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
-        },
-        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+        "run.editConfigurations", "Edit Run/Debug Configurations...", [this] { editRunConfigurations(); },
+        [this] { return m_window != nullptr && hasProject() && m_runController != nullptr; });
     add(
-        "run.runCompound", "Run Compound Configuration...",
-        [this] {
-            if (!m_window || !m_solution || !m_runService)
-                return;
-            std::string projPath;
-            if (m_explorer) {
-                if (const auto projId = m_explorer->currentProject())
-                    projPath = m_solution->project(*projId).path;
-            }
-            std::string activeCfg = "Debug|x64";
-            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-                activeCfg = m_build->configurations()[*idx].name();
-            showEditRunConfigurationsDialog(
-                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
-                [this](bool ext) {
-                    if (m_runService)
-                        (void)m_runService->setUseExternalConsole(ext);
-                },
-                [this] { refreshSolutionExplorerForFsChange(); },
-                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
-        },
+        "run.runCompound", "Run Compound Configuration...", [this] { editRunConfigurations(); },
         // Disabled until compound run configurations exist (RUN-5); see launchCompoundConfiguration.
         [] { return false; });
     add(
-        "run.selectConfiguration", "Select Run Configuration...",
-        [this] {
-            if (!m_window || !m_solution || !m_runService)
-                return;
-            std::string projPath;
-            if (m_explorer) {
-                if (const auto projId = m_explorer->currentProject())
-                    projPath = m_solution->project(*projId).path;
-            }
-            std::string activeCfg = "Debug|x64";
-            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-                activeCfg = m_build->configurations()[*idx].name();
-            showEditRunConfigurationsDialog(
-                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
-                [this](bool ext) {
-                    if (m_runService)
-                        (void)m_runService->setUseExternalConsole(ext);
-                },
-                [this] { refreshSolutionExplorerForFsChange(); },
-                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
-        },
-        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+        "run.selectConfiguration", "Select Run Configuration...", [this] { editRunConfigurations(); },
+        [this] { return m_window != nullptr && hasProject() && m_runController != nullptr; });
     add(
-        "run.selectDebugConfiguration", "Select Debug Configuration...",
-        [this] {
-            if (!m_window || !m_solution || !m_runService)
-                return;
-            std::string projPath;
-            if (m_explorer) {
-                if (const auto projId = m_explorer->currentProject())
-                    projPath = m_solution->project(*projId).path;
-            }
-            std::string activeCfg = "Debug|x64";
-            if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-                activeCfg = m_build->configurations()[*idx].name();
-            showEditRunConfigurationsDialog(
-                m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
-                [this](bool ext) {
-                    if (m_runService)
-                        (void)m_runService->setUseExternalConsole(ext);
-                },
-                [this] { refreshSolutionExplorerForFsChange(); },
-                [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
-        },
-        [this] { return m_window != nullptr && m_solution != nullptr && m_runService != nullptr; });
+        "run.selectDebugConfiguration", "Select Debug Configuration...", [this] { editRunConfigurations(); },
+        [this] { return m_window != nullptr && hasProject() && m_runController != nullptr; });
     add(
         "project.manageNuGetPackages", "Manage NuGet Packages...",
         [this] {

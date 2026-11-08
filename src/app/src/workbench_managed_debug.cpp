@@ -378,10 +378,10 @@ void Workbench::startManagedDebug() {
                 m_window->refreshActions();
         },
         [this](build::OutputStream stream, std::string_view line) {
-            if (m_runConsole)
-                m_runConsole->appendOutput(stream == build::OutputStream::Stdout ? build::RunOutputKind::Stdout
-                                                                                 : build::RunOutputKind::Stderr,
-                                           std::string(line) + "\n");
+            if (ui::RunConsole* console = runConsole())
+                console->appendOutput(stream == build::OutputStream::Stdout ? build::RunOutputKind::Stdout
+                                                                            : build::RunOutputKind::Stderr,
+                                      std::string(line) + "\n");
         });
     if (!started)
         notify(QStringLiteral("Debug .NET"), QString::fromStdString(started.error().message()),

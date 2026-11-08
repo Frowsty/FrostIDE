@@ -167,6 +167,21 @@ target_compile_definitions(app_workbench_cmake_tests PRIVATE ${_frost_workbench_
     FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
     FROST_TEST_CMAKE="${CMAKE_COMMAND}")
 
+# Run configurations (RUN-2/RUN-3): the CMake executables of a real File API reply (oracle: the
+# reply JSON) and their edits reaching the built program, a native configuration run from the
+# toolbar whose Stop ends its run_tree_child tree (checked with OS process handles), and the trust
+# gate. Real cmake, Ninja and the C compiler, so tag cmake.
+frost_add_test(app_workbench_run_tests QT
+    SOURCES workbench_run_test.cpp
+    DEPS frost::app frost::build frost::run frost::rpc frost::io
+    LABELS integration cmake)
+target_include_directories(app_workbench_run_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_run_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}"
+    FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>"
+    FROST_RUN_TREE_CHILD="$<TARGET_FILE:run_tree_child>")
+add_dependencies(app_workbench_run_tests io_test_child run_tree_child)
+
 # Attach to Process and its trust prompt (R0 follow-up 1): the pinned lldb-dap attaches to a real
 # child; no clangd and no cmake run, so the suite carries no tag.
 frost_add_test(app_workbench_attach_tests QT

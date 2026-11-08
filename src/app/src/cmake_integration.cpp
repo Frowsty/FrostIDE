@@ -8,12 +8,14 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/run/run_types.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/settings/store.hpp"
 #include "frost/ui/cmake/cmake_tool_window.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/run_console.hpp"
+#include "frost/ui/run_tool_window.hpp"
 #include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
@@ -47,18 +49,6 @@ namespace {
 constexpr std::string_view kTargets = "cmakeTargets";
 constexpr std::string_view kCMake = "cmake";
 
-// The run configuration id of a CMake target: "cmake." and the name, characters outside the id's set
-// (run_configuration.hpp) as '_', at most 128 characters.
-std::string runConfigurationId(std::string_view targetName) {
-    std::string id = "cmake.";
-    for (const char c : targetName) {
-        const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
-                             c == '_' || c == '-';
-        id += allowed ? c : '_';
-    }
-    id.resize(std::min<std::size_t>(id.size(), 128));
-    return id;
-}
 } // namespace
 
 struct CMakeIntegration::RunRelay {
@@ -77,11 +67,11 @@ struct CMakeIntegration::RunRelay {
 CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& launcher, project::TrustStore& trust,
                                    settings::SettingsStore& settingsStore, ui::BuildController& buildController,
                                    build::BuildService& sharedAdmission, ui::ShellWindow& window,
-                                   ui::RunConsole& console, run::RunManager& runs, std::string statePath,
+                                   ui::RunToolWindow& runWindow, run::RunManager& runs, std::string statePath,
                                    std::function<void()> runStateChanged,
                                    std::function<void(const std::string&)> openFile, std::function<void()> modelChanged)
     : m_build(buildController), m_sharedAdmission(sharedAdmission), m_window(window), m_trust(trust),
-      m_settings(settingsStore), m_console(console), m_runs(runs), m_runStateChanged(std::move(runStateChanged)),
+      m_settings(settingsStore), m_runWindow(runWindow), m_runs(runs), m_runStateChanged(std::move(runStateChanged)),
       m_controller(std::make_unique<ui::cmake::CMakeController>()), m_runRelay(std::make_shared<RunRelay>()) {
     {
         LockGuard lock(m_runRelay->mutex);
@@ -131,10 +121,12 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         m_solutionActionVisible = m_solutionAction->isVisible();
         m_solutionAction->setVisible(false);
     }
-    if (m_runAction) {
+    // RUN-3: the toolbar's configuration combo (runConfigurations) stays: it lists the run
+    // configurations, one per executable target among them (RUN-2), so it replaces this
+    // integration's own target combo, which stays hidden and keeps the target choice in step with
+    // the CMake Targets window.
+    if (m_runAction)
         m_runActionVisible = m_runAction->isVisible();
-        m_runAction->setVisible(false);
-    }
     m_profiles = new QComboBox(&toolbar);
     m_profiles->setObjectName(QStringLiteral("cmakeToolbarProfiles"));
     m_profiles->setToolTip(tr("CMake profile"));
@@ -145,6 +137,7 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     m_targets->setToolTip(tr("CMake Run/Debug target"));
     m_targets->setPlaceholderText(tr("No executable target"));
     m_targetAction = toolbar.insertWidget(before, m_targets);
+    m_targetAction->setVisible(false);
     m_wrapperAction = new QAction(tr("Build Wrapper…"), &toolbar);
     m_wrapperAction->setObjectName(QStringLiteral("cmakeBuildWrapperAction"));
     toolbar.insertAction(before, m_wrapperAction);
@@ -249,11 +242,11 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         QAction* buildAction = menu.addAction(tr("Build Target"));
         if (menu.exec(m_tree->viewport()->mapToGlobal(point)) == buildAction) {
             if (!m_build.buildAdmitted()) {
-                m_console.appendOutput(build::RunOutputKind::System, "a Lua debug launch is pending");
+                console().appendOutput(build::RunOutputKind::System, "a Lua debug launch is pending");
                 return;
             }
             if (auto result = m_service->build(build::BuildAction::Build, selected, {}, model); !result)
-                m_console.appendOutput(build::RunOutputKind::System, result.error().message());
+                console().appendOutput(build::RunOutputKind::System, result.error().message());
         }
     });
     connect(m_controller->treeModel(), &QAbstractItemModel::modelAboutToBeReset, this, [this] {
@@ -457,6 +450,32 @@ void CMakeIntegration::refreshRunTarget() {
     m_arguments->setEnabled(profile && target && model && targetsCurrent() &&
                             m_displayProfileGeneration == m_service->profileGeneration());
     m_arguments->setText(entry == m_argumentPreferences.end() ? QString() : QString::fromStdString(entry->arguments));
+    if (m_runTargetObserver)
+        m_runTargetObserver(target && model ? model->targets[*target].name : std::string());
+}
+
+ui::RunConsole& CMakeIntegration::console() { return m_console ? *m_console : *m_runWindow.currentConsole(); }
+
+void CMakeIntegration::finishConsole(const build::RunOutcome& outcome) {
+    // Only the run's own tab ends; a closed tab has nothing left to show.
+    if (m_console)
+        m_console->finish(outcome);
+}
+
+std::string CMakeIntegration::runTargetName() const {
+    const auto model = m_controller->model();
+    const auto target = model ? runTarget(*model) : std::nullopt;
+    return target ? model->targets[*target].name : std::string();
+}
+
+void CMakeIntegration::selectRunTarget(const std::string& name) {
+    if (!m_targets || name.empty() || runTargetName() == name)
+        return;
+    const int index = m_targets->findData(QString::fromStdString(name));
+    if (index < 0)
+        return;
+    m_targets->setCurrentIndex(index);
+    emit m_targets->activated(index); // The combo's own choice: tree selection and the preference.
 }
 
 void CMakeIntegration::rememberTreeTarget() {
@@ -692,7 +711,19 @@ Result<build::RunId> CMakeIntegration::run() {
     const std::uint64_t generation = ++m_runGeneration;
     m_pending = true;
     m_stopRequested = false;
-    m_console.beginRun(QString::fromStdString(model->targets[*target].name));
+    {
+        // RUN-3: the target's tab in the Run tool window (a rerun reuses it once it has finished).
+        ui::RunTabHandlers handlers;
+        handlers.stop = [this] { stop(); };
+        handlers.rerun = [this] {
+            if (auto again = rerun(); !again)
+                console().appendOutput(build::RunOutputKind::System, again.error().message() + "\n");
+        };
+        handlers.input = [this](const QString& line) { input(line); };
+        const std::string& name = model->targets[*target].name;
+        m_console = m_runWindow.openRun(QStringLiteral("cmake:") + QString::fromStdString(name),
+                                        QString::fromStdString(name), std::move(handlers));
+    }
     m_window.toolWindows().show(ui::tool_windows::kRun, false);
     m_runStateChanged();
     const auto relay = m_runRelay;
@@ -708,7 +739,7 @@ Result<build::RunId> CMakeIntegration::run() {
         m_runStateChanged();
         build::RunOutcome outcome;
         outcome.error = started.error();
-        m_console.finish(outcome);
+        finishConsole(outcome);
         return std::unexpected(std::move(started.error()));
     }
     return build::RunId{1};
@@ -730,7 +761,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     if (m_stopRequested) {
         failDebug(Error(ErrorCode::Cancelled, "debug build cancelled"));
         failed.stopped = true;
-        m_console.finish(failed);
+        finishConsole(failed);
         m_runStateChanged();
         maybeRerun();
         return;
@@ -739,7 +770,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         failed.error = outcome.error;
         failed.buildFailed = true;
         failDebug(outcome.error.value_or(Error(ErrorCode::IoError, "CMake build failed")));
-        m_console.finish(failed);
+        finishConsole(failed);
         m_runStateChanged();
         maybeRerun();
         return;
@@ -747,7 +778,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     if (m_service->profileGeneration() != m_profileGeneration) {
         failed.error = Error(ErrorCode::Cancelled, "the CMake profile changed while building the target");
         failDebug(*failed.error);
-        m_console.finish(failed);
+        finishConsole(failed);
         m_runStateChanged();
         return;
     }
@@ -760,7 +791,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         currentModel->targets[*currentTarget].id != m_runTarget) {
         failed.error = Error(ErrorCode::Cancelled, "the project, trust or target changed while building");
         failDebug(*failed.error);
-        m_console.finish(failed);
+        finishConsole(failed);
         m_runStateChanged();
         return;
     }
@@ -774,44 +805,45 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     if (!target || target->artifacts.empty() || !m_trust.isTrusted(m_service->sourceDirectory())) {
         failed.error = Error(ErrorCode::NotFound, "the built target has no executable artifact or trust was revoked");
         failDebug(*failed.error);
-        m_console.finish(failed);
+        finishConsole(failed);
         m_runStateChanged();
         return;
     }
-    io::ProcessSpec spec;
-    if constexpr (io::kNativePathStyle == io::PathStyle::Windows) {
-        auto executable = std::ranges::find_if(target->artifacts, [](const std::string& path) {
-            std::string name = std::string(io::fileName(path));
-            std::ranges::transform(name, name.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return name.size() >= 4 && name.substr(name.size() - 4) == ".exe";
-        });
-        if (executable == target->artifacts.end()) {
-            executable = std::ranges::find_if(target->artifacts, [](const std::string& path) {
-                std::string name = std::string(io::fileName(path));
-                std::ranges::transform(name, name.begin(),
-                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                return !name.ends_with(".pdb");
-            });
-        }
-        if (executable == target->artifacts.end()) {
-            failed.error = Error(ErrorCode::NotFound, "the CMake target has no executable artifact");
-            failDebug(*failed.error);
-            m_console.finish(failed);
-            m_runStateChanged();
-            return;
-        }
-        spec.executable = *executable;
-    } else {
-        spec.executable = target->artifacts.front();
+    auto program = run::cmakeTargetProgram(*target);
+    if (!program) {
+        failed.error = program.error();
+        failDebug(*failed.error);
+        finishConsole(failed);
+        m_runStateChanged();
+        return;
     }
-    spec.workingDirectory = m_service->sourceDirectory();
+    /*
+     * The target is built, so the program starts through the RunManager (RUN-1) as the target's
+     * cmake-target configuration (RUN-2), whose program is the built artifact and which has no
+     * before-launch step left; the workbench lays the user's edits (Run/Debug Configurations, RUN-3)
+     * over it. The build stays here, before the RunManager's run, because its admission, trust and
+     * profile checks above belong to this integration.
+     */
+    run::RunConfiguration configuration;
+    configuration.id = run::runConfigurationIdFor(run::kCMakeIdPrefix, target->name);
+    configuration.name = target->name;
+    configuration.type = run::RunType::CMakeTarget;
+    configuration.target = target->name;
+    configuration.program = *program;
+    configuration.arguments = m_runArguments;
+    configuration.workingDirectory = m_service->sourceDirectory();
+    if (m_launchConfigurator)
+        configuration = m_launchConfigurator(std::move(configuration));
     if (m_debugDone) {
         debug::DebugTarget debugTarget;
-        debugTarget.name = target->name;
-        debugTarget.program = spec.executable;
-        debugTarget.workingDirectory = spec.workingDirectory;
-        debugTarget.arguments = m_runArguments;
+        debugTarget.name = configuration.name;
+        debugTarget.program = configuration.program;
+        debugTarget.workingDirectory = configuration.workingDirectory;
+        debugTarget.arguments = configuration.arguments;
+        // lldb-dap sets variables over the inherited environment; a removal cannot be passed on.
+        for (const run::EnvironmentEntry& entry : configuration.environment)
+            if (entry.value)
+                debugTarget.environment.emplace_back(entry.name, *entry.value);
         debugTarget.trustRoots = {m_service->sourceDirectory()};
         auto done = std::move(m_debugDone);
         m_debugDone = {};
@@ -819,28 +851,17 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         done(std::move(debugTarget));
         return;
     }
-    /*
-     * The target is built, so the program starts through the RunManager (RUN-1) as a cmake-target
-     * configuration whose program is the built artifact and which has no before-launch step left.
-     * TODO(M4): RUN-2 moves the build itself into the RunManager's before-launch step.
-     */
-    run::RunConfiguration configuration;
-    configuration.id = runConfigurationId(target->name);
-    configuration.name = target->name;
-    configuration.type = run::RunType::CMakeTarget;
-    configuration.target = target->name;
-    configuration.program = spec.executable;
-    configuration.arguments = m_runArguments;
-    configuration.workingDirectory = spec.workingDirectory;
     auto relay = m_runRelay;
     run::RunHandlers handlers;
     handlers.onOutput = [relay](run::OutputStream stream, std::string_view text) {
         relay->post([stream, text = std::string(text)](CMakeIntegration& self) {
             if (self.m_shutdown)
                 return;
-            self.m_console.appendOutput(stream == run::OutputStream::Stdout ? build::RunOutputKind::Stdout
-                                                                            : build::RunOutputKind::Stderr,
-                                        text);
+            if (!self.m_console)
+                return; // The tab was closed.
+            self.m_console->appendOutput(stream == run::OutputStream::Stdout ? build::RunOutputKind::Stdout
+                                                                             : build::RunOutputKind::Stderr,
+                                         text);
         });
     };
     handlers.onFinished = [relay](const run::RunResult& result) {
@@ -849,12 +870,13 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     auto started = m_runs.start(configuration, std::move(handlers));
     if (!started) {
         failed.error = started.error();
-        m_console.finish(failed);
+        finishConsole(failed);
     } else {
         m_runId = *started;
         m_runAdmission = std::move(admission);
         m_running = true;
-        m_console.setRunning(true, true); // stdin is a pipe (RunManager); input before the launch is dropped.
+        if (m_console)
+            m_console->setRunning(true, true); // stdin is a pipe (RunManager); input before the launch is dropped.
     }
     m_runStateChanged();
 }
@@ -870,7 +892,7 @@ void CMakeIntegration::runFinished(const run::RunResult& result) {
     finished.exitCode = result.exitCode;
     finished.stopped = result.stopped;
     finished.duration = result.duration;
-    m_console.finish(finished);
+    finishConsole(finished);
     m_runStateChanged();
     maybeRerun();
 }
@@ -917,7 +939,7 @@ void CMakeIntegration::maybeRerun() {
     if (auto started = run(); !started) {
         build::RunOutcome failed;
         failed.error = started.error();
-        m_console.finish(failed);
+        finishConsole(failed);
     }
 }
 

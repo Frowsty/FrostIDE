@@ -41,7 +41,9 @@
 #   ui_native_tests              the windows platform plugin's palette and fonts (Windows), with
 #                                RESOURCE_LOCK frost_desktop (see below);
 #   ui_run_tests                 frost::ui_run: the Run console, its controller over a RunService on a
-#                                MemFs with the scripted launcher, and the run actions (offscreen);
+#                                MemFs with the scripted launcher, the run actions, the Run tool window
+#                                v2's tabs, Run/Debug Configurations and a native configuration through
+#                                a RunManager (offscreen);
 #   ui_lang_tests                the language-feature widgets, LanguageController (ADR 0041) and
 #                                EditorInsightBinding (ADR 0047) offscreen, against tests/lang's
 #                                scripted language server;
@@ -268,8 +270,8 @@ target_compile_definitions(ui_toolwindows_tests PRIVATE
 
 if(TARGET frost::ui_run)
     frost_add_test(ui_run_tests QT
-        SOURCES run/run_console_test.cpp
-        DEPS frost::ui_run frost::build frost::input frost::io)
+        SOURCES run/run_console_test.cpp run/run_tool_window_test.cpp
+        DEPS frost::ui_run frost::run frost::build frost::input frost::io)
     _frost_ui_test_wiring(ui_run_tests)
 endif()
 

@@ -151,19 +151,6 @@ using ReadProcLink = std::function<std::string(const std::string& linkPath)>;
 void showAttachToProcessDialog(QWidget* parent,
                                std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach);
 
-/*
- * Run/Debug Configurations. The external-console choice is applied through
- * `onExternalConsoleChanged` and the compound launch through `onLaunchCompound`. The debugger
- * command, arguments, working directory and environment are shown read-only, as read from the
- * project's .vcxproj.user (else its .vcxproj) for `activeConfigPlatform`; editing them requires
- * run configurations (RUN-1), so the dialog never writes a project file and `onSaved` is unused.
- */
-void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
-                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
-                                     std::function<void()> onSaved,
-                                     std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound = {});
-
 // Read-only list of the projects `projectPath` references as loaded in `solution`. Adding or
 // removing references requires SLN-6, so nothing is written and `fs` and `onSaved` are unused.
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,

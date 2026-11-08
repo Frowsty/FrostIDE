@@ -56,6 +56,12 @@ public:
     // Ends the run: input and Stop off, Rerun on, the closing line (runFinishedLine) appended.
     void finish(const build::RunOutcome& outcome, const QString& summary = {});
 
+    // Whether a run began (beginRun) and has not finished (finish) yet. RUN-3: the Run tool window
+    // reuses only a tab whose run is not active.
+    [[nodiscard]] bool active() const noexcept { return m_active; }
+    // Whether beginRun was ever called (a fresh console is the Run tool window's empty first tab).
+    [[nodiscard]] bool used() const noexcept { return m_used; }
+
     // The output as plain text (tests and copy).
     [[nodiscard]] QString text() const;
     // The widgets, for the controller's tests and the tool window's toolbar.
@@ -72,6 +78,8 @@ signals:
     void rerunRequested();
     // The user pressed Enter in the input line; `line` has no line break (the controller adds "\n").
     void inputSubmitted(const QString& line);
+    // beginRun or finish changed active() (the Run tool window's tab titles follow it).
+    void activeChanged(bool active);
 
 private:
     void appendText(build::RunOutputKind kind, const QString& text);
@@ -85,6 +93,8 @@ private:
     bool m_pendingCr[3] = {false, false, false};
     // Whether the output does not end in a line break (so the closing line starts a new one).
     bool m_openLine = false;
+    bool m_active = false;
+    bool m_used = false;
 };
 
 } // namespace frost::ui

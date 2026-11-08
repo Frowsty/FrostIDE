@@ -153,6 +153,9 @@ void RunConsole::beginRun(const QString& title) {
     m_input->setEnabled(false);
     m_stop->setEnabled(true); // A run in its build can be stopped too.
     m_rerun->setEnabled(true);
+    m_used = true;
+    m_active = true;
+    emit activeChanged(true);
 }
 
 void RunConsole::setRunning(bool running, bool acceptsInput) {
@@ -180,6 +183,11 @@ void RunConsole::finish(const build::RunOutcome& outcome, const QString& summary
     QString line = summary.isEmpty() ? runFinishedLine(outcome) : summary;
     appendText(build::RunOutputKind::System,
                (m_openLine ? QStringLiteral("\n\n") : QStringLiteral("\n")) + line + QLatin1Char('\n'));
+    const bool wasActive = m_active;
+    m_active = false;
+    if (wasActive) {
+        emit activeChanged(false);
+    }
 }
 
 QString RunConsole::text() const { return m_output->toPlainText(); }

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Tests for frost::run (RUN-1):
+# Tests for frost::run (RUN-1, RUN-2):
 #   run_unit_tests         RunConfiguration validation, the JSON store over a MemFs workspace,
-#                          launchPlanFor and displayCommandLine, and the RunManager rules that start no
+#                          launchPlanFor and displayCommandLine, the RunManager rules that start no
 #                          process (refusals, Busy, Prepare, a failed or cancelled before-launch step),
+#                          and the generated types (CMake executables, MSBuild applications over a
+#                          MemFs solution, native) with RunConfigurationSet's merge and store rules,
 #                          label "unit";
 #   run_process_tests      RunManager with real processes (io_test_child; output, exit code, argv,
 #                          environment, working directory, input, Busy, Stop, a resolving before-launch
@@ -13,8 +15,8 @@
 #   run_tree_child         the helper program that builds that tree (not a test itself).
 
 frost_add_test(run_unit_tests
-    SOURCES run_configuration_test.cpp
-    DEPS frost::run frost::rpc frost::io frost::core)
+    SOURCES run_configuration_test.cpp run_types_test.cpp
+    DEPS frost::run frost::project frost::rpc frost::io frost::core)
 target_include_directories(run_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
 # A plain console program built with the test flags; only the OS and the C runtime (no frost code),
