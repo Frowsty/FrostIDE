@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 // Find in Files through the actual Workbench, editor and filesystem.
+#include "frost/project/directory_roles.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/find/find_item_roles.hpp"
 #include "frost/ui/find/find_popup.hpp"
 #include "frost/ui/find/find_tool_window.hpp"
+#include "frost/ui/workbench/file_system_view.hpp"
 
 #include "workbench_rig.hpp"
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QPushButton>
 #include <QTimer>
 #include <QToolButton>
 #include <gtest/gtest.h>
+
+#include <memory>
+#include <set>
+#include <string>
 
 namespace {
 using namespace frost;
@@ -263,5 +270,136 @@ TEST(WorkbenchFind, TransferredSearchIsCancelledBeforeShutdown) {
     ASSERT_TRUE(window->session()->running());
     rig.workbench->shutdown();
     EXPECT_FALSE(window->hasOccurrences());
+}
+// UX-23 through the workbench: the project tree and Find in Files follow the project's directory
+// roles. Build output (a build/ folder, a CMake preset's binary folder, a folder holding a
+// CMakeCache.txt, .cache/) is neither listed nor searched; a source folder named Debug is. "Mark
+// Directory as" in the File System view changes both and keeps the override.
+TEST(WorkbenchFind, DirectoryRolesDecideWhatTheProjectTreeAndFindInFilesWalk) {
+    WorkDir dir("find-roles");
+    dir.write("CMakePresets.json",
+              R"({"version":6,"configurePresets":[{"name":"dev","binaryDir":"${sourceDir}/artifacts/dev"}]})");
+    dir.write("src/main.cpp", "needle\n");
+    dir.write("Renderer/Debug/stats.cpp", "needle\n");
+    dir.write("vendor/lib.cpp", "needle\n");
+    dir.write("build/gen.cpp", "needle\n");
+    dir.write("artifacts/dev/gen.cpp", "needle\n");
+    dir.write("manual/CMakeCache.txt", "needle\n");
+    dir.write(".cache/cpm/dep.cpp", "needle\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(app::test::waitFor([&] { return rig.nav().initialScanReady() && !rig.nav().scanPending(); }));
+    ASSERT_NE(rig.nav().directoryRoles(), nullptr);
+    const auto inTree = [&](std::string_view relative) {
+        return rig.nav().projectFiles().find(dir.join(std::string(relative))).has_value();
+    };
+    EXPECT_TRUE(inTree("Renderer/Debug/stats.cpp"));
+    EXPECT_TRUE(inTree("vendor/lib.cpp"));
+    EXPECT_FALSE(inTree("build/gen.cpp"));
+    EXPECT_FALSE(inTree("artifacts/dev/gen.cpp"));
+    EXPECT_TRUE(inTree("artifacts/dev")); // Listed (so it can be marked again), never descended.
+    EXPECT_FALSE(inTree("manual/CMakeCache.txt"));
+    EXPECT_FALSE(inTree(".cache/cpm/dep.cpp"));
+
+    rig.show();
+    const auto searchedFiles = [&] {
+        auto* popup = feature(rig)->showPopup(false);
+        popup->queryField()->setText(QStringLiteral("needle"));
+        popup->searchNow();
+        popup->session()->wait();
+        EXPECT_FALSE(popup->session()->error());
+        std::set<std::string> files;
+        for (const auto& file : popup->session()->files())
+            files.insert(file.path);
+        popup->closePopup(ui::Popup::CloseReason::Cancelled);
+        return files;
+    };
+    EXPECT_EQ(searchedFiles(), (std::set<std::string>{dir.join("Renderer/Debug/stats.cpp"), dir.join("src/main.cpp"),
+                                                      dir.join("vendor/lib.cpp")}));
+
+    // Mark Directory as > Excluded on vendor/, from the File System view's menu.
+    ui::FileSystemView* view = rig.nav().fileSystemView();
+    ASSERT_NE(view, nullptr);
+    QModelIndex vendor;
+    ASSERT_TRUE(app::test::waitFor([&] { return (vendor = view->indexOfPath(dir.join("vendor"))).isValid(); }));
+    {
+        std::unique_ptr<QMenu> menu(view->createContextMenu(vendor));
+        auto* source = menu->findChild<QAction*>(QStringLiteral("markDirectorySource"));
+        auto* excluded = menu->findChild<QAction*>(QStringLiteral("markDirectoryExcluded"));
+        auto* reset = menu->findChild<QAction*>(QStringLiteral("markDirectoryDefault"));
+        ASSERT_NE(source, nullptr);
+        ASSERT_NE(excluded, nullptr);
+        ASSERT_NE(reset, nullptr);
+        EXPECT_TRUE(source->isChecked());
+        EXPECT_FALSE(reset->isEnabled()); // No override yet.
+        excluded->trigger();
+    }
+    ASSERT_TRUE(app::test::waitFor([&] { return !inTree("vendor/lib.cpp") && !rig.nav().scanPending(); }));
+    EXPECT_EQ(rig.nav().directoryRoles()->decide(dir.join("vendor")).reason, project::DirectoryRoleReason::Override);
+    EXPECT_EQ(searchedFiles(), (std::set<std::string>{dir.join("Renderer/Debug/stats.cpp"), dir.join("src/main.cpp")}));
+
+    // Marking the preset's build folder as sources walks it again; Default drops the override.
+    ASSERT_TRUE(rig.nav().setDirectoryRole(dir.join("artifacts/dev"), project::DirectoryRole::Source).has_value());
+    ASSERT_TRUE(app::test::waitFor([&] { return inTree("artifacts/dev/gen.cpp") && !rig.nav().scanPending(); }));
+    EXPECT_TRUE(searchedFiles().contains(dir.join("artifacts/dev/gen.cpp")));
+    ASSERT_TRUE(rig.nav().setDirectoryRole(dir.join("artifacts/dev"), std::nullopt).has_value());
+    ASSERT_TRUE(app::test::waitFor([&] { return !inTree("artifacts/dev/gen.cpp") && !rig.nav().scanPending(); }));
+    EXPECT_FALSE(rig.nav().setDirectoryRole(dir.join("../outside"), project::DirectoryRole::Excluded).has_value());
+}
+
+/*
+ * Review blocker (UX-23): with roles present the old name excludes (node_modules/, Unity's root
+ * Library/, Temp/, Logs/, UserSettings/, MemoryCaptures/) no longer apply, so the roles must hide
+ * them. A Unity project that is not under git has no .gitignore to do it. Each folder is listed in
+ * the tree (so it can be marked) but never descended, and Find in Files never searches below it.
+ */
+TEST(WorkbenchFind, NodeModulesAndUnitysGeneratedFoldersAreNeitherListedNorSearchedWithoutAGitignore) {
+    WorkDir dir("find-unity");
+    dir.write("Assets/Scripts/Player.cs", "needle\n");
+    dir.write("ProjectSettings/ProjectVersion.txt", "m_EditorVersion: 6000.0.0f1\n");
+    dir.write("Packages/manifest.json", "{\"dependencies\":{}} needle\n");
+    const std::vector<std::string> hidden{"Library/PackageCache/com.unity.ugui/Runtime/Button.cs",
+                                          "Temp/Bee/build.cs",
+                                          "Logs/AssetImportWorker0.log",
+                                          "UserSettings/EditorUserSettings.asset",
+                                          "MemoryCaptures/capture.snap",
+                                          "node_modules/left-pad/index.js",
+                                          "Tools/web/node_modules/react/index.js"};
+    for (const std::string& file : hidden)
+        dir.write(file, "needle\n");
+    dir.write("Tools/web/app.js", "needle\n");
+    ASSERT_FALSE(io::realFileSystem().status(dir.join(".gitignore")).has_value());
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(app::test::waitFor([&] { return rig.nav().initialScanReady() && !rig.nav().scanPending(); }));
+    const auto roles = rig.nav().directoryRoles();
+    ASSERT_NE(roles, nullptr);
+    EXPECT_EQ(roles->decide(dir.join("Library")).reason, project::DirectoryRoleReason::UnityProject);
+    EXPECT_EQ(roles->decide(dir.join("node_modules")).reason, project::DirectoryRoleReason::DependencyName);
+    const auto inTree = [&](std::string_view relative) {
+        return rig.nav().projectFiles().find(dir.join(std::string(relative))).has_value();
+    };
+    EXPECT_TRUE(inTree("Assets/Scripts/Player.cs"));
+    EXPECT_TRUE(inTree("Tools/web/app.js"));
+    for (const char* folder :
+         {"Library", "Temp", "Logs", "UserSettings", "MemoryCaptures", "node_modules", "Tools/web/node_modules"})
+        EXPECT_TRUE(inTree(folder)) << folder; // Listed, so Mark Directory as can reach it.
+    for (const char* folder : {"Library/PackageCache", "Temp/Bee", "node_modules/left-pad"})
+        EXPECT_FALSE(inTree(folder)) << folder; // Never descended.
+    for (const std::string& file : hidden)
+        EXPECT_FALSE(inTree(file)) << file;
+
+    rig.show();
+    auto* popup = feature(rig)->showPopup(false);
+    popup->queryField()->setText(QStringLiteral("needle"));
+    popup->searchNow();
+    popup->session()->wait();
+    EXPECT_FALSE(popup->session()->error());
+    std::set<std::string> files;
+    for (const auto& file : popup->session()->files())
+        files.insert(file.path);
+    popup->closePopup(ui::Popup::CloseReason::Cancelled);
+    EXPECT_EQ(files, (std::set<std::string>{dir.join("Assets/Scripts/Player.cs"), dir.join("Packages/manifest.json"),
+                                            dir.join("Tools/web/app.js")}));
 }
 } // namespace

@@ -14,6 +14,7 @@ frost_add_test(project_unit_tests
         cmake_file_api_test.cpp
         cmake_presets_test.cpp
         cmake_profile_test.cpp
+        directory_roles_test.cpp
         paths_test.cpp
         sln_reader_test.cpp
         slnx_reader_test.cpp

@@ -426,6 +426,7 @@ frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
         options.sessionDirectory = under("sessions");
         options.projectEditStateDirectory = under("project-edits");
         options.cmakeStatePath = under("cmake-profiles.txt");
+        options.directoryRolesPath = under("directory-roles.txt");
     }
     if (auto state = frost::build::BuildService::defaultStatePath(); state) {
         options.buildStatePath = std::move(*state);

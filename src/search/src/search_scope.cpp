@@ -118,6 +118,7 @@ Result<ScopeTarget> resolveScope(const SearchScope& scope, const project::Soluti
         target.directory = scope.directory;
         target.excludes = scope.excludes;
         target.ignoreRoot = scope.ignoreRoot;
+        target.roles = scope.roles;
         return target;
     }
     case ScopeKind::OpenFiles: {

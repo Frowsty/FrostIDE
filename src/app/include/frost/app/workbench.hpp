@@ -85,6 +85,7 @@
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
+#include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/latest_wins.hpp"
@@ -351,6 +352,9 @@ struct WorkbenchOptions {
     std::string buildStatePath;
     // The CMake service's selected profiles (absolute); "" persists nothing.
     std::string cmakeStatePath;
+    // The "Mark Directory as" overrides (absolute; project::DirectoryRoleStore, UX-23); "" keeps them
+    // in memory for this run only.
+    std::string directoryRolesPath;
     // The run service's persisted startup projects (absolute); "" persists nothing.
     std::string runStatePath;
     // Where LuaLS writes its log and meta files (absolute; --logpath/--metapath, ADR 0079); "" uses
@@ -756,6 +760,8 @@ private:
     std::shared_ptr<lang::GeneratedCommandsRetirement> m_commandsRetirement;
     std::unique_ptr<io::Reactor> m_reactor;
     std::unique_ptr<io::RealFileWatcher> m_watcher;
+    // Directory role overrides (UX-23); outlives the navigation workbench that reads them.
+    std::unique_ptr<project::DirectoryRoleStore> m_directoryRoleStore;
 
     StoreShellSettings m_shellSettings;
     StoreKeymapSettings m_keymapSettings;

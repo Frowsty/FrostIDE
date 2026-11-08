@@ -8,7 +8,8 @@
  * Period: max(pollInterval, min(20 x the last scan's duration, 60 s)), so a slow tree (a network share)
  * costs at most about 5% of a Background thread. Scans are scanTree walks (tree_scan.hpp) on
  * Lane::Background, one task per directory, without ignore rules or skipped names; they follow
- * WatchOptions (recursive, excluded) and do not follow directory symlinks.
+ * WatchOptions (recursive, excluded, excludedBelow) and do not follow directory symlinks. status().watchedFiles is
+ * the number of regular files in the last snapshot.
  * Polling reports Created, Removed, Modified of non-directories (size or mtime), type changes, and
  * Modified of a watched directory (the root included) whose mtime changed: an entry that appeared and
  * vanished between two scans is invisible to the diff, but a consumer's lagged re-read may have seen
@@ -57,6 +58,7 @@ struct ScanResult {
     Snapshot snapshot;
     IClock::SystemTime rootMtime{};
     std::size_t unreadable = 0;
+    std::size_t files = 0; // Regular files in `snapshot`.
 };
 
 // Forwards a stop request into another stop source.
@@ -126,6 +128,9 @@ sched::Task<Result<ScanResult>> PollingState::scan(std::stop_token token) {
     for (ScanEntry& entry : scanned->entries) {
         // Entries scanTree did not stat (links, other files, directories not descended) have size 0 and
         // no mtime; regular files and descended directories have both from status().
+        if (entry.type == FileType::Regular) {
+            ++result.files;
+        }
         result.snapshot.emplace(std::move(entry.path),
                                 SnapshotEntry{entry.type, entry.status.size, entry.status.mtime});
     }
@@ -234,6 +239,7 @@ sched::Task<void> PollingState::run(std::shared_ptr<PollingState> self, bool sca
         } else {
             self->m_rootMtime = first->rootMtime;
             self->m_snapshot = std::move(first->snapshot);
+            self->m_queue->updateStatus([&](WatchStatus& status) { status.watchedFiles = first->files; });
         }
     }
     for (;;) {
@@ -253,7 +259,10 @@ sched::Task<void> PollingState::run(std::shared_ptr<PollingState> self, bool sca
         const std::vector<RawEvent> events = self->diff(*next);
         self->m_rootMtime = next->rootMtime;
         self->m_snapshot = std::move(next->snapshot);
-        self->m_queue->updateStatus([&](WatchStatus& status) { status.unreadableDirectories = next->unreadable; });
+        self->m_queue->updateStatus([&](WatchStatus& status) {
+            status.unreadableDirectories = next->unreadable;
+            status.watchedFiles = next->files;
+        });
         if (!events.empty()) {
             static_cast<void>(self->m_queue->push(events));
         }
@@ -276,7 +285,10 @@ sched::Task<Result<NativeOutcome>> startPollingWatch(std::shared_ptr<RealFileWat
     }
     state->m_rootMtime = first->rootMtime;
     state->m_snapshot = std::move(first->snapshot);
-    queue->updateStatus([&](WatchStatus& status) { status.unreadableDirectories = first->unreadable; });
+    queue->updateStatus([&](WatchStatus& status) {
+        status.unreadableDirectories = first->unreadable;
+        status.watchedFiles = first->files;
+    });
     owner->scheduler.spawn(sched::Lane::Background, PollingState::run(state, /*scanFirst=*/false)).detach();
     co_return NativeOutcome{std::move(state), {}};
 }

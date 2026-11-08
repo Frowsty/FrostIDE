@@ -11,7 +11,11 @@
  * Paths compare with ASCII case ignored on Windows, as the model's lookups do.
  * Directory initially excludes the names in SearchScope::excludes at any depth (ASCII case
  * ignored); .gitignore and .ignore rules can re-include them. Directory walks skip version-control
- * directories, like the project tree.
+ * directories, like the project tree. With SearchScope::roles (the open project's directory roles,
+ * UX-23, frost/project/directory_roles.hpp) a directory at or below the roles' root is walked as the
+ * roles say instead: Generated and Excluded folders are never listed and `excludes` does not apply
+ * (a name-only list hid tracked sources such as FrostEngine's Renderer/Debug); a directory outside
+ * that root keeps `excludes`.
  * Thread safety: resolveScope only reads its arguments (a loaded model is immutable); any thread.
  */
 #pragma once
@@ -20,12 +24,14 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace frost::project {
+class DirectoryRoles;
 class SolutionModel;
 } // namespace frost::project
 
@@ -55,6 +61,8 @@ struct SearchScope {
     std::string currentFile;
     // Optional enclosing project root: apply ancestor ignore files to a nested directory.
     std::string ignoreRoot;
+    // Directory: the open project's directory roles (header comment); null: `excludes` only.
+    std::shared_ptr<const project::DirectoryRoles> roles;
 };
 
 // What a search walks: either `files` in this order, or the tree below `directory`.
@@ -63,6 +71,7 @@ struct ScopeTarget {
     std::optional<std::string> directory;
     std::vector<std::string> excludes; // With `directory`.
     std::string ignoreRoot;
+    std::shared_ptr<const project::DirectoryRoles> roles; // With `directory`; may be null.
 };
 
 /*

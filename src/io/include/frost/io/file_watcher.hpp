@@ -62,10 +62,12 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace frost::io {
@@ -129,6 +131,15 @@ struct WatchOptions {
     // watched); the directory's own creation, removal and renames are reported. The real Windows watcher
     // matches them ordinal case-insensitively; MemFsWatcher matches as MemFs does (case-sensitively).
     std::vector<std::string> excluded{};
+    /*
+     * More exclusions the caller decides (the project's directory roles, UX-23): true when `path`
+     * (absolute, in the root's path style, strictly below the root) lies strictly below a directory
+     * whose entries are never reported, with the same effect as `excluded` (Linux and polling: such
+     * directories are never watched or listed). Asked for every OS event and, on Linux and with
+     * polling, for every directory the watcher would watch, on reactor and scheduler threads,
+     * possibly concurrently: keep it cheap and thread-safe. Empty: no extra exclusions.
+     */
+    std::function<bool(std::string_view path)> excludedBelow{};
     IClock::Duration pollInterval = std::chrono::seconds(2); // Minimum polling period (>= 100 ms).
     bool forcePolling = false;
     // false: names containing the writeFileAtomic temp marker (".frost-tmp-") are filtered, matching the
@@ -149,6 +160,9 @@ struct WatchStatus {
     std::size_t pendingPaths = 0;          // Paths waiting in the coalescer.
     std::size_t pendingSetup = 0;          // Linux: new-directory setup tasks still running.
     std::size_t unreadableDirectories = 0; // Directories skipped with PermissionDenied.
+    // Polling: the regular files of the last snapshot (what the watch compares between scans); 0 in
+    // the native modes, which keep no per-file state.
+    std::size_t watchedFiles = 0;
 };
 
 /*

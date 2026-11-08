@@ -17,6 +17,7 @@
 #include "frost/input/find_action.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/file_watcher.hpp"
+#include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
@@ -118,6 +119,9 @@ struct WorkbenchServices {
     io::IFileWatcher* watcher = nullptr;
     // Session restore per project; null: none.
     nav::SessionStore* sessions = nullptr;
+    // The persisted directory role overrides ("Mark Directory as", UX-23); null: the defaults only
+    // and the menu is hidden.
+    project::DirectoryRoleStore* directoryRoles = nullptr;
     // Fed by focus loss, input and a timer; null: no autosave.
     document::AutosaveController* autosave = nullptr;
     // settings.openApplicationFile's target; empty: the action is disabled.
@@ -198,6 +202,22 @@ public:
     [[nodiscard]] bool scanPending() const noexcept { return m_scanPending; }
     // True once a full scan for the current project has been published.
     [[nodiscard]] bool initialScanReady() const noexcept { return !m_root.empty() && m_scanPublished; }
+    /*
+     * The open project's directory roles (frost/project/directory_roles.hpp, UX-23): the project
+     * scan (the tree and Go to File), the file watcher and Find in Files traverse only the folders
+     * they mark Source or Library. Built when a project opens (reads its CMake presets and the
+     * overrides) and again when CMakePresets.json, CMakeUserPresets.json or a CMakeCache.txt
+     * changes or an override is set; null without a project. Shared, immutable apart from its
+     * internal cache; safe to use on any thread.
+     */
+    [[nodiscard]] std::shared_ptr<const project::DirectoryRoles> directoryRoles() const noexcept { return m_roles; }
+    /*
+     * Sets (or with nullopt removes) the user's role for the project folder `directory` and saves
+     * it in the directory role store, then rebuilds the roles, restarts the watcher and rescans.
+     * Errors: InvalidArgument (no project, no store, or a folder outside the project), the store's.
+     */
+    [[nodiscard]] Result<void> setDirectoryRole(const std::string& directory,
+                                                std::optional<project::DirectoryRole> role);
 
     // --- Opening and navigation ---
 
@@ -363,6 +383,8 @@ private:
     void pollInitialFiles();
     void startWatching();
     void stopWatching();
+    // Rebuilds m_roles for m_root (directoryRoles()); does not rescan or restart the watcher.
+    void loadDirectoryRoles();
     void onEditorStatus(IEditorView* editor);
     void onCurrentEditorChanged(IEditorView* editor);
     void openSettingsFile(const std::string& path);
@@ -388,6 +410,7 @@ private:
     input::FindActionModel m_findActions;
     std::string m_root;
     std::string m_solution;
+    std::shared_ptr<const project::DirectoryRoles> m_roles;
     std::shared_ptr<const nav::ProjectFiles> m_files = std::make_shared<nav::ProjectFiles>();
     nav::NavigationHistory m_history;
     nav::RecentFiles m_recentFiles;

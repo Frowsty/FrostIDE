@@ -819,6 +819,35 @@ QMenu* FileSystemView::createContextMenu(const QModelIndex& index, QWidget* pare
         connect(pasteAct, &QAction::triggered, this,
                 [this, directory] { emit pasteIntoDirectoryRequested(directory); });
     }
+    if (index.isValid() && isDirectory && m_directoryRoles && toUtf8(targetPath) != m_model->files()->root()) {
+        // Mark Directory as (UX-23): the folder's role decides whether the project tree, search and
+        // the watcher walk it; the current role is checked, Default drops the user's override.
+        menu->addSeparator();
+        QMenu* roles = menu->addMenu(text("Mark Directory as"));
+        roles->setObjectName(QStringLiteral("markDirectoryAs"));
+        const project::DirectoryRoleDecision current = m_directoryRoles(toUtf8(targetPath));
+        const auto addRole = [&](project::DirectoryRole role, const QString& label, const QString& name) {
+            QAction* action = roles->addAction(label);
+            action->setObjectName(name);
+            action->setCheckable(true);
+            action->setChecked(current.role == role);
+            const int value = static_cast<int>(role);
+            connect(action, &QAction::triggered, this,
+                    [this, targetPath, value] { emit directoryRoleRequested(targetPath, value); });
+        };
+        addRole(project::DirectoryRole::Source, text("Sources"), QStringLiteral("markDirectorySource"));
+        addRole(project::DirectoryRole::Library, text("Library (searched, third-party)"),
+                QStringLiteral("markDirectoryLibrary"));
+        addRole(project::DirectoryRole::Generated, text("Generated (build output, not searched)"),
+                QStringLiteral("markDirectoryGenerated"));
+        addRole(project::DirectoryRole::Excluded, text("Excluded (not searched)"),
+                QStringLiteral("markDirectoryExcluded"));
+        roles->addSeparator();
+        QAction* reset = roles->addAction(text("Default"));
+        reset->setObjectName(QStringLiteral("markDirectoryDefault"));
+        reset->setEnabled(current.reason == project::DirectoryRoleReason::Override);
+        connect(reset, &QAction::triggered, this, [this, targetPath] { emit directoryRoleRequested(targetPath, -1); });
+    }
     menu->addSeparator();
     QAction* copy = menu->addAction(text("Copy Path"));
     copy->setObjectName(QStringLiteral("copyPath"));
