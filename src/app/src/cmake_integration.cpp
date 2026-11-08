@@ -14,6 +14,7 @@
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/run_console.hpp"
+#include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/shell_window.hpp"
@@ -283,6 +284,7 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
         if (!busy)
             maybeRerun();
     });
+    connect(m_controller.get(), &ui::cmake::CMakeController::progressChanged, this, [this] { refreshConfigureTask(); });
     refreshRunTarget();
     refreshProfiles();
     windows.setContent(kTargets, targets);
@@ -297,6 +299,9 @@ CMakeIntegration::~CMakeIntegration() {
     }
     m_session.reset();
     m_runAdmission.reset();
+    m_configureStop.reset();
+    if (m_configureTask)
+        m_configureTask->finish();
     auto& toolbar = m_window.mainToolbar();
     if (m_profileAction)
         toolbar.removeAction(m_profileAction);
@@ -317,6 +322,34 @@ CMakeIntegration::~CMakeIntegration() {
     m_window.toolWindows().setContent(kTargets, new QWidget());
     m_window.toolWindows().setContent(kCMake, new QWidget());
     m_controller->setBackend(nullptr);
+}
+
+/*
+ * CMK-15: the CMake service's activity in the status bar's processes indicator. One task spans a
+ * stretch of activity (configure, generate, reply read, build) and shows the controller's text as
+ * its detail; cancelling it is Stop. A change of cancellability (a reply read cannot be stopped)
+ * starts a new task, as a task's cancellability is fixed. The trust wait shows its own dialog.
+ */
+void CMakeIntegration::refreshConfigureTask() {
+    const build::CMakeProgress& progress = m_controller->progress();
+    const bool shown =
+        progress.activity != build::CMakeActivity::Idle && progress.activity != build::CMakeActivity::WaitingForTrust;
+    if (m_configureTask && (!shown || m_configureTask->state().cancellable != progress.cancellable)) {
+        m_configureStop.reset();
+        m_configureTask->finish();
+        m_configureTask.reset();
+    }
+    if (!shown)
+        return;
+    if (!m_configureTask) {
+        m_configureTask = m_window.backgroundTasks().start(tr("CMake"), progress.cancellable);
+        if (progress.cancellable) {
+            // Runs on the thread that cancels (the indicator's, the GUI thread).
+            m_configureStop.emplace(m_configureTask->stopToken(),
+                                    std::function<void()>([this] { m_controller->cancel(); }));
+        }
+    }
+    m_configureTask->setDetail(m_controller->progressText());
 }
 
 Result<void> CMakeIntegration::debug(std::function<void(Result<debug::DebugTarget>)> done) {

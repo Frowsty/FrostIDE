@@ -1,0 +1,7 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {"name": "deep", "binaryDir": "${sourceDir}/out/deep", "generator": "Ninja"},
+    {"name": "deep-child", "inherits": ["deep"], "displayName": "Read once, through inc/more.json"}
+  ]
+}

@@ -105,9 +105,10 @@ TEST(CMakeProfiles, FromTheFixturePresets) {
     for (const CMakeProfile& profile : profiles) {
         names.push_back(profile.name);
     }
-    // Visible, enabled presets in file order (not windows-only on this Linux host), the user's last.
-    EXPECT_EQ(names, (std::vector<std::string>{"debug", "release", "any", "match", "mine"}));
-    const CMakeProfile& debug = profiles[0];
+    // Visible, enabled presets in CMake's order (not windows-only on this Linux host): the user
+    // file's first, then the project file's (CMakePresetsOracle checks the order against cmake).
+    EXPECT_EQ(names, (std::vector<std::string>{"mine", "debug", "release", "any", "match"}));
+    const CMakeProfile& debug = profiles[1];
     EXPECT_EQ(debug.source, CMakeProfileSource::Preset);
     EXPECT_EQ(debug.displayName, "Debug (Ninja)");
     EXPECT_EQ(debug.buildType, "Debug");
@@ -118,8 +119,8 @@ TEST(CMakeProfiles, FromTheFixturePresets) {
     EXPECT_TRUE(debug.usable());
     EXPECT_TRUE(std::ranges::none_of(debug.cacheVariables,
                                      [](const CMakeCacheVariable& v) { return v.name == "CMAKE_BUILD_TYPE"; }));
-    EXPECT_EQ(profiles[1].buildConfiguration, "Release");
-    ASSERT_TRUE(profiles[1].buildEnvironment.has_value());
+    EXPECT_EQ(profiles[2].buildConfiguration, "Release");
+    ASSERT_TRUE(profiles[2].buildEnvironment.has_value());
 
     // A preset whose binaryDir leaves the folder is unusable.
     CMakeConfigurePreset outside;
@@ -221,6 +222,86 @@ TEST(CMakeProfiles, InheritedExternalToolsetAndArchitectureAreNotPassedToCMake) 
         cmakeConfigureArguments(cmakeProfileFromPreset(MemTree::root(), *vs, nullptr), MemTree::root(), {}).value();
     EXPECT_NE(std::ranges::find(vsArguments, "-T"), vsArguments.end());
     EXPECT_NE(std::ranges::find(vsArguments, "-A"), vsArguments.end());
+}
+
+/*
+ * CMK-1: a configure preset with several build presets gives one profile per build preset (named
+ * and labelled after it), so choosing the profile chooses what `cmake --build` builds; one with a
+ * single build preset keeps the configure preset's name. A build preset named like another
+ * profile is renamed, and hidden or disabled build presets give no profile.
+ */
+TEST(CMakeProfiles, SeveralBuildPresetsGiveOneProfileEach) {
+    MemTree tree;
+    tree.write("CMakePresets.json", R"({"version": 6,
+      "configurePresets": [
+        {"name": "multi", "displayName": "Multi", "generator": "Ninja Multi-Config", "binaryDir": "${sourceDir}/out/multi"},
+        {"name": "single", "generator": "Ninja", "binaryDir": "${sourceDir}/out/single"},
+        {"name": "multi-release", "generator": "Ninja", "binaryDir": "${sourceDir}/out/clash"}
+      ],
+      "buildPresets": [
+        {"name": "multi-debug", "configurePreset": "multi", "configuration": "Debug", "displayName": "Multi Debug"},
+        {"name": "multi-release", "configurePreset": "multi", "configuration": "Release", "targets": ["app"],
+         "jobs": 3, "cleanFirst": true, "verbose": true, "nativeToolOptions": ["-k", "0"]},
+        {"name": "multi-hidden", "configurePreset": "multi", "hidden": true},
+        {"name": "multi-off", "configurePreset": "multi", "condition": false},
+        {"name": "single-build", "configurePreset": "single", "targets": "lib"}
+      ]})");
+    auto loaded = loadCMakePresets(tree.fs, MemTree::root());
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    ASSERT_TRUE(loaded->has_value());
+    const auto profiles = cmakeProfilesFor(MemTree::root(), *loaded, {}, CMakeProfileSource::ApplicationSettings);
+    std::vector<std::string> names;
+    for (const CMakeProfile& profile : profiles) {
+        names.push_back(profile.name);
+    }
+    EXPECT_EQ(names, (std::vector<std::string>{"multi-debug", "multi-release (multi)", "single", "multi-release"}));
+    ASSERT_EQ(profiles.size(), 4U);
+    EXPECT_EQ(profiles[0].displayName, "Multi Debug");
+    EXPECT_EQ(profiles[0].buildPreset, "multi-debug");
+    EXPECT_EQ(profiles[0].configurePreset, "multi");
+    EXPECT_EQ(profiles[0].effectiveConfiguration(), "Debug");
+    EXPECT_EQ(profiles[1].displayName, "Multi: multi-release");
+    EXPECT_EQ(profiles[1].buildPreset, "multi-release");
+    EXPECT_EQ(profiles[1].buildDirectory, profiles[0].buildDirectory); // One configure preset, one build tree.
+    EXPECT_EQ(profiles[1].effectiveConfiguration(), "Release");
+    // Every build preset field reaches `cmake --build` (cmakeBuildArguments).
+    EXPECT_EQ(cmakeBuildArguments(profiles[1], {}, false),
+              (std::vector<std::string>{"--build", profiles[1].buildDirectory, "--config", "Release", "--target", "app",
+                                        "-j", "3", "--clean-first", "--verbose", "--", "-k", "0"}));
+    // Clean neither cleans first nor passes the native options.
+    EXPECT_EQ(cmakeBuildArguments(profiles[1], {}, true),
+              (std::vector<std::string>{"--build", profiles[1].buildDirectory, "--config", "Release", "--target",
+                                        "clean", "-j", "3", "--verbose"}));
+    EXPECT_EQ(profiles[2].buildPreset, "single-build");
+    EXPECT_EQ(profiles[2].buildTargets, std::vector<std::string>{"lib"});
+    EXPECT_EQ(profiles[3].configurePreset, "multi-release");
+    EXPECT_TRUE(profiles[3].buildPreset.empty());
+}
+
+// warnings, errors and debug reach the configure command line as cmake --preset passes them.
+TEST(CMakeProfiles, PresetWarningsErrorsAndDebugBecomeSwitches) {
+    MemTree tree;
+    tree.write("CMakePresets.json", R"({"version": 6, "configurePresets": [
+      {"name": "base", "hidden": true, "generator": "Ninja", "warnings": {"dev": false, "uninitialized": true}},
+      {"name": "loud", "inherits": "base", "binaryDir": "${sourceDir}/out",
+       "warnings": {"deprecated": true, "unusedCli": false, "systemVars": true},
+       "errors": {"dev": true, "deprecated": false}, "debug": {"output": true, "tryCompile": true, "find": true}}
+    ]})");
+    auto loaded = loadCMakePresets(tree.fs, MemTree::root());
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    ASSERT_TRUE(loaded->has_value());
+    const auto* loud = (*loaded)->findConfigurePreset("loud");
+    ASSERT_NE(loud, nullptr);
+    // Members are inherited one by one: dev and uninitialized come from base.
+    EXPECT_EQ(loud->extraArguments,
+              (std::vector<std::string>{"-Wno-dev", "-Wdeprecated", "--warn-uninitialized", "--no-warn-unused-cli",
+                                        "--check-system-vars", "-Werror=dev", "-Wno-error=deprecated", "--debug-output",
+                                        "--debug-trycompile", "--debug-find"}));
+    const auto arguments =
+        cmakeConfigureArguments(cmakeProfileFromPreset(MemTree::root(), *loud, nullptr), MemTree::root(), {}).value();
+    EXPECT_NE(std::ranges::find(arguments, "-Werror=dev"), arguments.end());
+    EXPECT_NE(std::ranges::find(arguments, "--debug-find"), arguments.end());
+    EXPECT_EQ(arguments.back(), "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON");
 }
 
 } // namespace

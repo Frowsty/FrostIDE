@@ -15,7 +15,9 @@
  *
  * Opening (openFolder). Reads the presets (cmake_presets.hpp) and builds the profiles
  * (cmake_profile.hpp) from them or from CMakeServiceOptions::profileRecords; the active profile is
- * the persisted one (stateFilePath) or the first usable one. The active profile's existing File
+ * the persisted one (stateFilePath; a persisted configure preset name picks that preset's first
+ * profile, so a folder keeps its choice when one of its presets gains build presets) or the first
+ * usable one. The active profile's existing File
  * API reply, if any, is read next on the service's thread (it is several MB of JSON for a large
  * project, too slow for the caller's GUI thread: the R0 stall criterion) and published through
  * onModelChanged, so the target tree shows before anything runs (restricted mode, PLAN.md section
@@ -54,6 +56,23 @@
  * blocks ("CMake Error at CMakeLists.txt:12"), resolved against the source directory; build output
  * with the compiler parser (cl, clang-cl, MSBuild's format, then GCC/Clang's GNU format), resolved
  * against the build directory, where Ninja runs the compilers.
+ *
+ * Stale replies (CMK-1). A reply is the model only while it describes what the profile would
+ * configure now:
+ *   - a reply whose codemodel names another source directory (a build directory configured from
+ *     another tree, or copied) is not read as this folder's model: the profile counts as never
+ *     configured;
+ *   - the reply read after a successful configure must be a new one (its index file is not the
+ *     index that was current before cmake ran); otherwise the configure fails with "cmake wrote no
+ *     new File API reply" and nothing is published;
+ *   - a configure that fails or is cancelled keeps the last model but marks it stale (modelStale()),
+ *     so the next build configures first;
+ *   - an existing reply read at open or on a profile switch is stale when one of its project inputs
+ *     (or a presets file) was modified after its index file was written (the inputs changed while
+ *     FrostIDE was not watching);
+ *   - when the profiles are recomputed (a presets file changed, setProfileRecords) and the active
+ *     profile now has another build directory, generator or configuration, or is gone, the old
+ *     model is dropped and the new active profile's reply is read, as on a switch.
  *
  * Reconfigure on change. filesChanged() (the workbench's fan-out of its recursive watch, ADR 0020)
  * or follow() (pumping one watch) receive file-watcher batches. A change to a watched file (the
@@ -110,6 +129,44 @@ enum class CMakeStep : std::uint8_t { Configure, Clean, Build };
 
 // "Configure", "Clean" or "Build".
 [[nodiscard]] std::string_view toString(CMakeStep step) noexcept;
+
+/*
+ * What the folder is doing, for the progress display (CMK-15): the CMake tool window and the
+ * status bar show it with an elapsed time and a Stop button. CMake prints no percentage while it
+ * configures, so the phases are what can be told apart truthfully from the job's state and
+ * cmake's own output: Configuring until cmake prints "-- Configuring done", then Generating until
+ * it exits, then ReadingModel while the File API reply is read (also for the reply read of an
+ * open or a profile switch).
+ */
+enum class CMakeActivity : std::uint8_t {
+    Idle,
+    ReadingModel,    // A File API reply is being read (service thread).
+    WaitingForTrust, // NeedsTrust.
+    Preparing,       // Save All, finding cmake and ninja, capturing the MSVC environment.
+    Configuring,     // cmake's configure step.
+    Generating,      // cmake's generate step (after "-- Configuring done").
+    Cleaning,        // cmake --build --target clean.
+    Building,        // cmake --build.
+    Cancelling,      // cancel() was called; the process tree is ending.
+};
+
+// "Idle", "Reading the CMake project model", "Waiting for trust", "Preparing", "Configuring",
+// "Generating", "Cleaning", "Building" or "Cancelling".
+[[nodiscard]] std::string_view toString(CMakeActivity activity) noexcept;
+
+struct CMakeProgress {
+    CMakeActivity activity = CMakeActivity::Idle;
+    std::string profile{}; // The profile it concerns; "" when Idle.
+    // When `activity` began (steady clock), for the elapsed time.
+    std::chrono::steady_clock::time_point since{};
+    // Whether cancel() can stop it now (a configure or build that is preparing or running).
+    bool cancellable = false;
+    // Grows with each change; a receiver keeps the value with the greatest one (onProgress may
+    // deliver an older value after a newer one).
+    std::uint64_t sequence = 0;
+
+    friend bool operator==(const CMakeProgress&, const CMakeProgress&) = default;
+};
 
 // What a build job builds.
 struct CMakeBuildRequest {
@@ -179,6 +236,8 @@ struct CMakeServiceCallbacks {
     std::function<void(BuildOutputKind, std::string_view, std::function<bool()>)> onOutputFenced{};
     std::function<void(const BuildDiagnostic&, std::function<bool()>)> onDiagnosticFenced{};
     std::function<void(const CMakeBuildOutcome&, std::function<bool()>)> onFinishedFenced{};
+    // The activity changed (CMakeProgress); in event order with the other callbacks.
+    std::function<void(const CMakeProgress& progress)> onProgress{};
 };
 
 struct CMakeServiceOptions {
@@ -267,6 +326,9 @@ public:
     [[nodiscard]] std::optional<std::string> presetsError() const;
     // The presets files read (CMakePresets::files, absolute); empty without presets.
     [[nodiscard]] std::vector<std::string> presetFiles() const;
+    // What `cmake --list-presets=all` lists for the folder (CMakePresets::listing); empty without
+    // presets or when they could not be read.
+    [[nodiscard]] project::CMakePresetListing presetListing() const;
 
     // The current model; nullptr before the first reply.
     [[nodiscard]] std::shared_ptr<const project::CMakeProject> model() const;
@@ -321,6 +383,8 @@ public:
      * that react to the active build directory (clangd's restart) treat it like a running job.
      */
     [[nodiscard]] bool modelLoading() const;
+    // The current activity (CMakeProgress); onProgress reports each change.
+    [[nodiscard]] CMakeProgress progress() const;
     [[nodiscard]] std::optional<CMakeStep> currentStep() const;
     [[nodiscard]] std::vector<std::string> untrustedRoots() const;
     [[nodiscard]] std::optional<CMakeBuildOutcome> lastOutcome() const;

@@ -23,6 +23,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <optional>
 #include <string>
@@ -90,6 +91,62 @@ struct Events {
     }
 };
 
+/*
+ * The scripted launcher, seen through a cmake that rewrites its File API reply: each configure
+ * launch (cmake -S ...) whose build directory already holds a reply adds a newer index file (a
+ * copy of the newest), as real cmake writes a fresh index-*.json at the end of every configure
+ * (CMK-1: the service refuses a reply that is not newer than the configure). Launch records and
+ * scripts stay with the inner launcher.
+ */
+class ReplyRewritingLauncher final : public io::IProcessLauncher {
+public:
+    ReplyRewritingLauncher(io::IProcessLauncher& inner, io::IFileSystem& fs) : m_inner(inner), m_fs(fs) {}
+
+    Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+        rewrite(spec);
+        return m_inner.launch(spec);
+    }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                           const io::AsyncContext& context) override {
+        rewrite(spec);
+        return m_inner.launchAsync(spec, context);
+    }
+
+private:
+    void rewrite(const io::ProcessSpec& spec) {
+        const auto build = std::ranges::find(spec.arguments, "-B");
+        if (spec.arguments.empty() || spec.arguments.front() != "-S" || build == spec.arguments.end() ||
+            build + 1 == spec.arguments.end()) {
+            return;
+        }
+        auto replyDir = project::cmakeFileApiReplyDirectory(*(build + 1));
+        auto entries =
+            replyDir ? m_fs.listDirectory(*replyDir) : Result<std::vector<io::DirEntry>>(std::vector<io::DirEntry>{});
+        if (!entries) {
+            return;
+        }
+        std::string newest;
+        for (const io::DirEntry& entry : *entries) {
+            if (entry.name.starts_with("index-") && entry.name > newest) {
+                newest = entry.name;
+            }
+        }
+        if (newest.empty()) {
+            return;
+        }
+        auto text = m_fs.readFile(io::joinPath(*replyDir, newest).value());
+        const int serial = ++m_serial;
+        const std::string fresh = std::format("index-2099-01-01T00-00-00-{:04}.json", serial);
+        if (text) {
+            static_cast<void>(m_fs.writeFileAtomic(io::joinPath(*replyDir, fresh).value(), *text));
+        }
+    }
+
+    io::IProcessLauncher& m_inner;
+    io::IFileSystem& m_fs;
+    std::atomic<int> m_serial{0};
+};
+
 class CMakeServiceTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -117,7 +174,8 @@ protected:
     }
 
     void start(CMakeServiceOptions serviceOptions) {
-        service = CMakeService::create(tree.fs, launcher, *trustStore, std::move(serviceOptions), events.callbacks());
+        service =
+            CMakeService::create(tree.fs, cmakeLauncher, *trustStore, std::move(serviceOptions), events.callbacks());
     }
     void start() { start(options()); }
 
@@ -145,6 +203,7 @@ protected:
 
     MemTree tree;
     io::ScriptedProcessLauncher launcher;
+    ReplyRewritingLauncher cmakeLauncher{launcher, tree.fs}; // What the services launch through.
     std::unique_ptr<project::TrustStore> trustStore;
     Events events;
     std::unique_ptr<CMakeService> service;
@@ -222,7 +281,7 @@ TEST_F(CMakeServiceTest, OwnedConfigureKeepsAdmissionUntilRunningProcessIsCancel
     };
     ASSERT_TRUE(trustStore->trust(folder()));
     expectFirstConfigure({.neverExits = true});
-    auto local = CMakeService::create(tree.fs, launcher, *trustStore, std::move(opts), events.callbacks());
+    auto local = CMakeService::create(tree.fs, cmakeLauncher, *trustStore, std::move(opts), events.callbacks());
     ASSERT_TRUE(local->openFolder(folder()));
     ASSERT_TRUE(local->configureOwned(*owner));
     const auto deadline = std::chrono::steady_clock::now() + kWait;
@@ -404,7 +463,7 @@ TEST_F(CMakeServiceTest, OpenAndProfileSwitchReadTheReplyOnTheServiceThread) {
     CMakeServiceOptions opts = options();
     opts.profileRecords = {project::CMakeProfileRecord{.name = "Debug"},
                            project::CMakeProfileRecord{.name = "Release", .buildType = "Release"}};
-    service = CMakeService::create(fs, launcher, *trustStore, std::move(opts), events.callbacks());
+    service = CMakeService::create(fs, cmakeLauncher, *trustStore, std::move(opts), events.callbacks());
     ASSERT_TRUE(service->openFolder(folder()).has_value()); // Untrusted: no configure.
     ASSERT_TRUE(fs.waitForHeldRead(kWait)) << "the existing reply was never read";
     EXPECT_EQ(service->model(), nullptr) << "a model was published before its reply was read";
@@ -458,7 +517,7 @@ TEST_F(CMakeServiceTest, AProfileSwitchDecidesItsConfigureBeforeTheReplyIsRead) 
     opts.profileRecords = {project::CMakeProfileRecord{.name = "Debug"},
                            project::CMakeProfileRecord{.name = "Release", .buildType = "Release"},
                            project::CMakeProfileRecord{.name = "Fresh", .buildType = "RelWithDebInfo"}};
-    service = CMakeService::create(fs, launcher, *trustStore, std::move(opts), events.callbacks());
+    service = CMakeService::create(fs, cmakeLauncher, *trustStore, std::move(opts), events.callbacks());
     ASSERT_TRUE(service->openFolder(folder()).has_value()); // Untrusted: the open configures nothing.
     EXPECT_TRUE(service->modelLoading());
     fs.release();
@@ -726,7 +785,7 @@ TEST_F(CMakeServiceTest, WrapperOutputFenceSurvivesCompletionButNotSupersession)
         LockGuard lock(fencesMutex);
         fences.push_back(std::move(fence));
     };
-    service = CMakeService::create(tree.fs, launcher, *trustStore, std::move(opts), std::move(callbacks));
+    service = CMakeService::create(tree.fs, cmakeLauncher, *trustStore, std::move(opts), std::move(callbacks));
     ASSERT_TRUE(service->openFolder(folder()));
     waitIdle();
     launcher.expect({.expectExecutable = python, .stdoutBytes = "first output\n"});
@@ -1036,6 +1095,200 @@ TEST_F(CMakeServiceTest, ProfilesFromSettingsArePersisted) {
     ASSERT_TRUE(service->closeFolder().has_value());
     EXPECT_EQ(service->activeBuildDirectory(), "");
     EXPECT_EQ(service->configure().error().code(), ErrorCode::InvalidArgument);
+}
+
+// CMK-1, stale replies: a build directory whose reply describes another source tree is not this
+// folder's model (it counts as never configured).
+TEST_F(CMakeServiceTest, AReplyOfAnotherSourceTreeIsNotTheModel) {
+    frost::test::installCMakeReply(tree.fs, FROST_CMAKE_REPLY_FIXTURE_DIR, MemTree::path("elsewhere"), buildDir(),
+                                   MemTree::path("other"));
+    start();
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    EXPECT_EQ(service->model(), nullptr) << "a reply of another source tree was published";
+
+    installReply(); // The same directory, configured from this folder: shown.
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_EQ(service->model()->sourceDirectory, folder());
+}
+
+/*
+ * CMK-1, stale replies: a configure that cmake reports as successful but that left the old reply
+ * in place publishes nothing ("no new File API reply"); a failed configure keeps the last model
+ * but marks it stale, so the next build configures first.
+ */
+TEST_F(CMakeServiceTest, AConfigureWithoutANewReplyOrThatFailsLeavesTheModelStale) {
+    ASSERT_TRUE(trustStore->trust(folder()).has_value());
+    installReply();
+    CMakeServiceOptions opts = options();
+    opts.configureOnOpen = false;
+    service = CMakeService::create(tree.fs, launcher, *trustStore, opts, events.callbacks()); // Writes no reply.
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    const auto shown = service->model();
+    ASSERT_NE(shown, nullptr);
+    EXPECT_FALSE(service->modelStale());
+
+    expectFirstConfigure();
+    ASSERT_TRUE(service->configure().has_value());
+    waitIdle();
+    auto outcome = service->lastConfigure();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_FALSE(outcome->succeeded());
+    ASSERT_TRUE(outcome->error.has_value());
+    EXPECT_NE(outcome->error->message().find("no new File API reply"), std::string::npos) << outcome->error->describe();
+    EXPECT_FALSE(outcome->modelLoaded);
+    EXPECT_EQ(service->model(), shown);
+    EXPECT_TRUE(service->modelStale());
+
+    // A failing configure (exit 1) keeps the model, stale; Build then configures before building.
+    service.reset();
+    start(opts); // Through the reply-writing launcher, so a successful configure is fresh again.
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    expectFirstConfigure({.exitCode = 1, .stderrBytes = "CMake Error at CMakeLists.txt:2 (message):\n  Broken.\n\n"});
+    ASSERT_TRUE(service->configure().has_value());
+    waitIdle();
+    ASSERT_TRUE(service->lastConfigure().has_value());
+    EXPECT_FALSE(service->lastConfigure()->succeeded());
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_TRUE(service->modelStale());
+    const std::size_t before = launcher.launches().size();
+    launcher.expect({.expectExecutable = cmake()}); // The configure step.
+    launcher.expect({.expectExecutable = cmake()}); // The build step.
+    ASSERT_TRUE(service->build(BuildAction::Build).has_value());
+    waitIdle();
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), before + 2);
+    EXPECT_EQ(launches[before].spec.arguments.front(), "-S");
+    EXPECT_EQ(launches[before + 1].spec.arguments.front(), "--build");
+    EXPECT_FALSE(service->modelStale());
+}
+
+// CMK-1, stale replies: a reply older than one of its CMake inputs (edited while FrostIDE was not
+// watching) is shown, but stale.
+TEST_F(CMakeServiceTest, AReplyOlderThanItsInputsIsStale) {
+    installReply();
+    tree.clock.advance(5s);
+    tree.write("tiny/cmake/warnings.cmake", "# edited after the reply was written\n");
+    start();
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_TRUE(service->modelStale());
+
+    installReply(); // Written after the edit: current.
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_FALSE(service->modelStale());
+}
+
+/*
+ * CMK-1, preset-switch state: when a presets file changes the active profile's build directory,
+ * the old directory's model is dropped and the new one's reply is read, instead of the old
+ * targets staying on screen under the new profile.
+ */
+TEST_F(CMakeServiceTest, APresetsChangeThatMovesTheBuildDirectoryDropsTheOldModel) {
+    tree.write("tiny/CMakePresets.json", R"({"version": 6, "configurePresets": [
+        {"name": "dev", "generator": "Ninja", "binaryDir": "${sourceDir}/cmake-build-debug"}]})");
+    installReply();
+    start();
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    ASSERT_EQ(service->activeProfile()->name, "dev");
+    ASSERT_NE(service->model(), nullptr);
+
+    tree.write("tiny/CMakePresets.json", R"({"version": 6, "configurePresets": [
+        {"name": "dev", "generator": "Ninja", "binaryDir": "${sourceDir}/out/dev"}]})");
+    service->filesChanged({.changes = {io::FileChange{.kind = io::FileChangeKind::Modified,
+                                                      .path = MemTree::path("tiny/CMakePresets.json")}},
+                           .sequence = 1});
+    ASSERT_TRUE(service->waitForIdle(kWait));
+    EXPECT_EQ(service->activeBuildDirectory(), MemTree::path("tiny/out/dev"));
+    EXPECT_EQ(service->model(), nullptr) << "the old build directory's model survived the presets change";
+    EXPECT_TRUE(launcher.launches().empty()); // Untrusted: the reload configures nothing.
+}
+
+/*
+ * CMK-1: profiles of build presets. A folder whose persisted profile is a configure preset name
+ * (from before the preset had several build presets) opens on that preset's first profile, and
+ * switching between profiles of one configure preset reads the reply in the build preset's
+ * configuration.
+ */
+TEST_F(CMakeServiceTest, BuildPresetProfilesKeepAPersistedConfigurePresetAndReadTheirConfiguration) {
+    tree.write("tiny/CMakePresets.json", R"({"version": 6,
+      "configurePresets": [{"name": "multi", "generator": "Ninja Multi-Config", "binaryDir": "${sourceDir}/cmake-build-debug"}],
+      "buildPresets": [{"name": "multi-debug", "configurePreset": "multi", "configuration": "Debug"},
+                       {"name": "multi-release", "configurePreset": "multi", "configuration": "Release"}]})");
+    tree.write("data/cmake-profiles.txt", "# FrostIDE CMake profiles v1\n" + folder() + "\tmulti\n");
+    installReply();
+    start();
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    ASSERT_EQ(service->profiles().size(), 2U);
+    EXPECT_EQ(service->activeProfile()->name, "multi-debug");
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_EQ(service->model()->configuration, "Debug");
+    ASSERT_TRUE(service->setActiveProfile("multi-release").has_value());
+    waitIdle();
+    EXPECT_EQ(service->activeBuildDirectory(), buildDir());
+    // The synthetic reply has only Debug: the read falls back to its first configuration.
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_EQ(service->activeProfile()->buildPreset, "multi-release");
+    EXPECT_EQ(service->activeProfile()->effectiveConfiguration(), "Release");
+}
+
+/*
+ * CMK-15: the progress a configure reports, from the job's state and cmake's own phase marker:
+ * Preparing (tools), Configuring, Generating (after "-- Configuring done"), ReadingModel (the
+ * reply), then Idle; each change has a greater sequence number.
+ */
+TEST_F(CMakeServiceTest, AConfigureReportsItsPhases) {
+    ASSERT_TRUE(trustStore->trust(folder()).has_value());
+    installReply();
+    std::vector<CMakeProgress> seen;
+    Mutex seenMutex;
+    CMakeServiceCallbacks callbacks = events.callbacks();
+    callbacks.onProgress = [&](const CMakeProgress& progress) {
+        LockGuard lock(seenMutex);
+        seen.push_back(progress);
+    };
+    CMakeServiceOptions opts = options();
+    opts.configureOnOpen = false;
+    service = CMakeService::create(tree.fs, cmakeLauncher, *trustStore, opts, std::move(callbacks));
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    waitIdle();
+    expectFirstConfigure({.stdoutBytes = "-- The C compiler identification is Clang\n-- Configuring done (0.1s)\n"
+                                         "-- Generating done (0.0s)\n"});
+    ASSERT_TRUE(service->configure().has_value());
+    waitIdle();
+    ASSERT_TRUE(service->lastConfigure().has_value());
+    EXPECT_TRUE(service->lastConfigure()->succeeded());
+    EXPECT_EQ(service->progress().activity, CMakeActivity::Idle);
+
+    LockGuard lock(seenMutex);
+    std::vector<CMakeActivity> activities;
+    for (std::size_t i = 0; i < seen.size(); ++i) {
+        if (i > 0) {
+            EXPECT_GT(seen[i].sequence, seen[i - 1].sequence);
+        }
+        if (activities.empty() || activities.back() != seen[i].activity) {
+            activities.push_back(seen[i].activity);
+        }
+    }
+    // The open's own reply read comes first.
+    EXPECT_EQ(activities,
+              (std::vector<CMakeActivity>{CMakeActivity::ReadingModel, CMakeActivity::Idle, CMakeActivity::Preparing,
+                                          CMakeActivity::Configuring, CMakeActivity::Generating,
+                                          CMakeActivity::ReadingModel, CMakeActivity::Idle}));
+    const auto configuring = std::ranges::find(seen, CMakeActivity::Configuring, &CMakeProgress::activity);
+    ASSERT_NE(configuring, seen.end());
+    EXPECT_TRUE(configuring->cancellable);
+    EXPECT_EQ(configuring->profile, "Debug");
 }
 
 } // namespace

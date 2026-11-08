@@ -78,6 +78,11 @@ enum class CompileCommandsSource : std::uint8_t {
     Synthesized, // Written by FrostIDE from a Visual Studio solution's static model.
     Generator,   // Written by FrostIDE from a command list the user's generator produced.
     Evaluated,   // Written by FrostIDE from MSBuild's evaluation of the projects (ADR 0041).
+    // CPP-3: the compile_commands.json CMake wrote for a configuration, copied into the IDE's own
+    // directory for it (cmake_compile_commands.hpp).
+    CMakeCopy,
+    // CMK-4: written by FrostIDE from the CMake File API codemodel (generators that write none).
+    CMakeCodeModel,
 };
 
 [[nodiscard]] std::string_view toString(CompileCommandsSource source) noexcept;
@@ -133,6 +138,9 @@ struct CompileCommandsLocation {
     std::string file;      // <directory>/compile_commands.json.
     CompileCommandsSource source = CompileCommandsSource::Existing;
     std::shared_ptr<GeneratedCommandsLease> generatedLease{};
+    // Where the commands came from when `directory` holds a copy or a synthesis (CPP-3): the CMake
+    // build directory of the configuration; "" otherwise.
+    std::string origin{};
 };
 
 // The seam ClangdService asks before each (re)start.

@@ -53,6 +53,19 @@ std::string resolvePath(std::string_view base, std::string_view path) {
     return normalized ? *normalized : joined;
 }
 
+// A File API path made absolute against `base` without normalising it (CMakeIncludeDirectory).
+std::string absoluteAsWritten(std::string_view base, std::string_view path) {
+    if (path.empty())
+        return std::string(base);
+    if (io::isAbsolutePath(path))
+        return std::string(path);
+    std::string joined(base);
+    if (!joined.empty() && joined.back() != '/' && joined.back() != '\\')
+        joined += '/';
+    joined += path;
+    return joined;
+}
+
 CMakeTargetType targetType(std::string_view type) noexcept {
     if (type == "EXECUTABLE") {
         return CMakeTargetType::Executable;
@@ -209,11 +222,15 @@ void readTarget(const JsonNode& json, const std::string& sourceDir, const std::s
             compile.language = group.stringAt("language");
             if (const JsonNode* includes = group.find("includes"); includes != nullptr && includes->isArray()) {
                 for (const JsonNode& include : includes->items) {
-                    std::string path = resolvePath(sourceDir, include.stringAt("path"));
-                    if (include.boolAt("isSystem")) {
+                    const std::string written = include.stringAt("path");
+                    std::string path = resolvePath(sourceDir, written);
+                    const bool system = include.boolAt("isSystem");
+                    if (system) {
                         compile.systemIncludes.push_back(path);
                     }
                     compile.includes.push_back(std::move(path));
+                    compile.includeDirectories.push_back(
+                        CMakeIncludeDirectory{.path = absoluteAsWritten(sourceDir, written), .system = system});
                 }
             }
             if (const JsonNode* defines = group.find("defines"); defines != nullptr && defines->isArray()) {

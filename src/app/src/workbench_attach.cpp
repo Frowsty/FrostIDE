@@ -205,9 +205,11 @@ void Workbench::attach(ui::ShellWindow& window) {
     if (auto registered = ui::registerDebugToolWindow(m_window->toolWindows(), m_registry, *m_debug); !registered)
         log::warn(kLog, "debug tool window: {}", registered.error().describe());
     attachLanguage();
+    attachResolveContext(); // CPP-3.
     connect(&window.tabs(), &ui::EditorTabs::currentEditorChanged, this, [this](ui::IEditorView*) {
         m_language->editorChanged();
         updateLanguageTarget();
+        updateResolveContext();
     });
     attachTerminal();
     attachFind();

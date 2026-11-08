@@ -1,0 +1,37 @@
+{
+  "version": 6,
+  "vendor": {"example.com/ide/1.0": {"theme": "dark", "nested": [1, 2, {"x": null}]}},
+  "include": ["inc/more.json", "inc/deeper.json"],
+  "configurePresets": [
+    {"name": "alpha", "displayName": "Alpha", "binaryDir": "${sourceDir}/out/${presetName}", "generator": "Ninja",
+     "vendor": {"example.com/ide/1.0": {"pinned": true}}},
+    {"name": "hid", "hidden": true, "binaryDir": "${sourceDir}/out/hid"},
+    {"name": "off", "inherits": "hid", "condition": false},
+    {"name": "beta-with-a-longer-name", "inherits": "alpha", "description": "a description is not listed"},
+    {"name": "gamma", "inherits": "alpha", "displayName": "Gamma ${presetName} is not expanded"}
+  ],
+  "buildPresets": [
+    {"name": "alpha-debug", "configurePreset": "alpha", "displayName": "Alpha Debug", "configuration": "Debug"},
+    {"name": "alpha-release", "configurePreset": "alpha", "configuration": "Release", "targets": ["all"]},
+    {"name": "of-a-disabled-configure", "configurePreset": "off"},
+    {"name": "hidden-build", "configurePreset": "alpha", "hidden": true},
+    {"name": "false-build", "configurePreset": "alpha", "condition": {"type": "notEquals", "lhs": "x", "rhs": "x"}},
+    {"name": "inherited-build", "inherits": "alpha-debug", "vendor": {"example.com/ide/1.0": {}}}
+  ],
+  "testPresets": [
+    {"name": "alpha-test", "configurePreset": "alpha", "displayName": "Alpha tests",
+     "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error"}},
+    {"name": "test-of-a-disabled-configure", "configurePreset": "off"},
+    {"name": "hidden-test", "configurePreset": "alpha", "hidden": true}
+  ],
+  "packagePresets": [
+    {"name": "alpha-zip", "configurePreset": "alpha", "generators": ["ZIP"], "displayName": "Zip it"},
+    {"name": "alpha-tgz", "configurePreset": "alpha", "generators": ["TGZ"]}
+  ],
+  "workflowPresets": [
+    {"name": "alpha-flow", "displayName": "Alpha flow",
+     "steps": [{"type": "configure", "name": "alpha"}, {"type": "build", "name": "alpha-debug"},
+               {"type": "test", "name": "alpha-test"}, {"type": "package", "name": "alpha-zip"}]},
+    {"name": "short-flow", "steps": [{"type": "configure", "name": "alpha"}]}
+  ]
+}

@@ -104,6 +104,9 @@ build::CMakeServiceCallbacks CMakeController::callbacks() {
                                      std::optional<std::size_t> active) {
         bridge->post([profiles, active](CMakeController& self) { self.applyProfiles(profiles, active); });
     };
+    out.onProgress = [bridge](const build::CMakeProgress& progress) {
+        bridge->post([progress](CMakeController& self) { self.applyProgress(progress); });
+    };
     return out;
 }
 
@@ -149,6 +152,8 @@ void CMakeController::applyProfiles(const std::vector<project::CMakeProfile>& pr
     }
     m_activeProfile = active ? static_cast<int>(*active) : -1;
     m_configureProblem.clear(); // A new profile has not failed yet.
+    // The profiles change whenever the presets are (re)read, so the listing is read with them.
+    m_presetListing = m_backend != nullptr ? m_backend->presetListing() : project::CMakePresetListing{};
     QString problem;
     if (m_activeProfile >= 0 && !m_profileProblems[static_cast<std::size_t>(m_activeProfile)].empty()) {
         problem = toQString(m_profileProblems[static_cast<std::size_t>(m_activeProfile)]);
@@ -195,6 +200,32 @@ void CMakeController::setBusy(bool busy) {
     }
     m_busy = busy;
     emit busyChanged(m_busy);
+}
+
+void CMakeController::applyProgress(const build::CMakeProgress& progress) {
+    // Queued posts arrive in order, but the service's direct deliveries (its reply reads) race the
+    // queued ones: the greatest sequence number is the newest state.
+    if (progress.sequence <= m_progress.sequence) { // The service numbers from 1.
+        return;
+    }
+    m_progress = progress;
+    emit progressChanged();
+}
+
+QString CMakeController::progressText() const {
+    const QString profile = toQString(m_progress.profile);
+    switch (m_progress.activity) {
+    case build::CMakeActivity::Idle: return {};
+    case build::CMakeActivity::ReadingModel: return qtr(kContext, "Reading the CMake project model");
+    case build::CMakeActivity::WaitingForTrust: return qtr(kContext, "Waiting for the folder to be trusted");
+    case build::CMakeActivity::Preparing: return qtr(kContext, "Preparing to configure %1").arg(profile);
+    case build::CMakeActivity::Configuring: return qtr(kContext, "Configuring %1").arg(profile);
+    case build::CMakeActivity::Generating: return qtr(kContext, "Generating %1").arg(profile);
+    case build::CMakeActivity::Cleaning: return qtr(kContext, "Cleaning %1").arg(profile);
+    case build::CMakeActivity::Building: return qtr(kContext, "Building %1").arg(profile);
+    case build::CMakeActivity::Cancelling: return qtr(kContext, "Cancelling");
+    }
+    return {};
 }
 
 } // namespace frost::ui::cmake

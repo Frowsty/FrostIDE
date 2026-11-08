@@ -11,6 +11,13 @@
 // it again; a grant made straight in the trust store, which configures a never-configured folder
 // as the prompt does, a trusted parent folder that the watch never saves as a root of the project's
 // own, and a revocation during a long build, which restricts clangd at once (R0 follow-up 15).
+// CPP-3: clangd reads the IDE's own directory for each configuration (a copy of CMake's database,
+// under the profile's cache), so a preset switch restarts it once onto the other directory and a
+// switch back finds that configuration's background-index shards there (clangd's verbose log
+// shows the index loaded from disk), none of them in the build tree; and the resolve context of a
+// header that two targets list: choosing a target makes the running clangd reparse the header with
+// that target's defines (its diagnostics follow, checked against `clangd --check` on the owned
+// database), without a restart.
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/io/file_system.hpp"
@@ -19,10 +26,14 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/ui/lang/resolve_context.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
+#include "support/clangd_check.hpp"
 #include "workbench_rig.hpp"
+#include <QAction>
 #include <QApplication>
+#include <QMenu>
 #include <QPushButton>
 #include <QScopeGuard>
 
@@ -194,15 +205,16 @@ RigOptions clangdOptions(CountingLauncher& launcher) {
     return options;
 }
 
-// Waits until clangd runs on `buildDir`'s database, then lets queued model and state events
-// arrive, so a restart they would cause is counted too.
+// Waits until clangd runs on `buildDir`'s database (CPP-3: in the IDE's own directory for that
+// configuration, which holds a copy of it, never the build directory itself), then lets queued
+// model and state events arrive, so a restart they would cause is counted too.
 bool clangdSettledOn(WorkbenchRig& rig, const std::string& buildDir) {
     const bool running = waitFor(
         [&] {
             const auto* clangd = rig.workbench->clangd();
             const auto location = clangd ? clangd->compileCommands() : std::nullopt;
             return clangd && clangd->state() == frost::lang::ClangdState::Running && location &&
-                   location->directory == buildDir && rig.workbench->cmakeService() &&
+                   location->origin == buildDir && location->directory != buildDir && rig.workbench->cmakeService() &&
                    rig.workbench->cmakeService()->state() == frost::build::BuildState::Idle;
         },
         240s);
@@ -476,6 +488,205 @@ TEST(WorkbenchClangdSpawn, RevokingTrustDuringALongBuildRestrictsClangdAtOnce) {
     (void)waitFor([] { return false; }, 2s); // The build's end and two watch ticks: no late restart.
     EXPECT_EQ(launcher.clangdStarts(), 2) << "clangd restarted again after the build";
     EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
+}
+
+// Every clangd log line the workbench passes on (WorkbenchOptions::clangdLog), thread-safe.
+class ClangdLog {
+public:
+    void add(std::string_view line) {
+        const std::scoped_lock lock(m_mutex);
+        m_lines.emplace_back(line);
+    }
+    void clear() {
+        const std::scoped_lock lock(m_mutex);
+        m_lines.clear();
+    }
+    [[nodiscard]] bool contains(std::string_view text) const {
+        const std::scoped_lock lock(m_mutex);
+        return std::ranges::any_of(m_lines,
+                                   [&](const std::string& line) { return line.find(text) != std::string::npos; });
+    }
+    [[nodiscard]] std::string matching(std::string_view text) const {
+        const std::scoped_lock lock(m_mutex);
+        std::string out;
+        for (const std::string& line : m_lines)
+            if (line.find(text) != std::string::npos)
+                out += line + "\n";
+        return out;
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    std::vector<std::string> m_lines;
+};
+
+// Whether clangd's background index wrote a shard into `directory`/.cache/clangd/index.
+bool hasShards(const std::string& directory) {
+    std::error_code error;
+    const std::filesystem::path index = std::filesystem::path(directory) / ".cache" / "clangd" / "index";
+    for (const auto& entry : std::filesystem::directory_iterator(index, error))
+        if (entry.path().extension() == ".idx")
+            return true;
+    return false;
+}
+
+/*
+ * CPP-3's first acceptance: a preset switch restarts clangd once and the clangd log shows shards
+ * loaded. Debug's clangd indexes main.c into Debug's own directory; the switch to Release restarts
+ * clangd once onto Release's directory, which indexes too; the switch back restarts it once onto
+ * Debug's directory again, and clangd's own verbose log says it rebuilt its index "after loading
+ * index from disk" (clangd's BackgroundIndexRebuilder logs that only when it loaded shards).
+ * Both directories are under the profile's compile-commands cache and hold copies of CMake's
+ * databases; no build directory gets a .cache.
+ */
+TEST(WorkbenchClangdSpawn, APresetSwitchRestartsClangdOnceAndSwitchingBackLoadsThatConfigurationsShards) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
+    WorkDir dir("cmake-clangd-owned-shards");
+    writeProject(dir);
+    const std::string debugDir = dir.join("cmake-build-debug");
+    const std::string releaseDir = dir.join("cmake-build-release");
+    const std::string cache = dir.join("data/compile-commands");
+    CountingLauncher launcher;
+    ClangdLog log;
+    RigOptions options = clangdOptions(launcher);
+    options.workbench.clangdLogLevel = "verbose";
+    options.workbench.clangdLog = [&log](std::string_view line) { log.add(line); };
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on Debug's database";
+    ASSERT_EQ(launcher.clangdStarts(), 1);
+    auto& fs = frost::io::realFileSystem();
+    const auto debug = rig.workbench->clangd()->compileCommands();
+    ASSERT_TRUE(debug.has_value());
+    EXPECT_TRUE(debug->directory.starts_with(cache)) << debug->directory << " is not under " << cache;
+    EXPECT_EQ(debug->source, frost::lang::CompileCommandsSource::CMakeCopy);
+    EXPECT_EQ(fs.readFile(debug->file).value_or("owned"),
+              fs.readFile(debugDir + "/compile_commands.json").value_or(""));
+    // clangd loads the database, and indexes it, for the first open document.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.c")).has_value());
+    ASSERT_TRUE(waitFor([&] { return hasShards(debug->directory); }, 240s)) << "no shard in " << debug->directory;
+
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    ASSERT_TRUE(service->setActiveProfile(std::string_view("Release")).has_value());
+    ASSERT_TRUE(clangdSettledOn(rig, releaseDir)) << "clangd did not follow the Release profile";
+    EXPECT_EQ(launcher.clangdStarts(), 2) << "the switch to Release did not restart clangd exactly once";
+    const auto release = rig.workbench->clangd()->compileCommands();
+    ASSERT_TRUE(release.has_value());
+    EXPECT_NE(release->directory, debug->directory) << "one directory per configuration";
+    EXPECT_TRUE(release->directory.starts_with(cache)) << release->directory;
+    ASSERT_TRUE(waitFor([&] { return hasShards(release->directory); }, 240s)) << "no shard in " << release->directory;
+
+    log.clear();
+    ASSERT_TRUE(service->setActiveProfile(std::string_view("Debug")).has_value());
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd did not follow the Debug profile back";
+    EXPECT_EQ(launcher.clangdStarts(), 3) << "the switch back did not restart clangd exactly once";
+    EXPECT_EQ(rig.workbench->clangd()->compileCommands()->directory, debug->directory);
+    EXPECT_TRUE(waitFor([&] { return log.contains("after loading index from disk"); }, 120s))
+        << "clangd's log shows no index loaded from disk; its BackgroundIndex lines:\n"
+        << log.matching("BackgroundIndex");
+    EXPECT_FALSE(fs.exists(debugDir + "/.cache").value_or(true)) << "clangd wrote into the build tree";
+    EXPECT_FALSE(fs.exists(releaseDir + "/.cache").value_or(true)) << "clangd wrote into the build tree";
+}
+
+// The resolve-context fixture: two C++ libraries list shared.h with different defines (the
+// compiler is the build's own C++ compiler).
+void writeContextsProject(WorkDir& dir) {
+    std::string compiler = FROST_TEST_CXX_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.21)\n"
+                                "set(CMAKE_CXX_COMPILER \"" +
+                                    compiler +
+                                    "\" CACHE FILEPATH \"\" FORCE)\n"
+                                    "project(Contexts CXX)\n"
+                                    "add_library(alpha STATIC alpha.cpp shared.h)\n"
+                                    "target_compile_definitions(alpha PRIVATE CONTEXT_ALPHA=1)\n"
+                                    "add_library(beta STATIC beta.cpp shared.h)\n"
+                                    "target_compile_definitions(beta PRIVATE CONTEXT_BETA=1)\n");
+    dir.write("shared.h", "#pragma once\n#if defined(CONTEXT_ALPHA)\n#error \"compiled for alpha\"\n"
+                          "#elif defined(CONTEXT_BETA)\n#error \"compiled for beta\"\n#endif\n");
+    dir.write("alpha.cpp", "int alpha() { return CONTEXT_ALPHA; }\n");
+    dir.write("beta.cpp", "int beta() { return CONTEXT_BETA; }\n");
+    dir.write("CMakePresets.json", R"({"version":3,"configurePresets":[
+        {"name":"Debug","generator":"Ninja","binaryDir":"${sourceDir}/cmake-build-debug"}]})");
+}
+
+// Whether the live diagnostics clangd published for `file` mention `text`.
+bool liveDiagnosticsMention(WorkbenchRig& rig, const std::string& file, std::string_view text) {
+    auto* clangd = rig.workbench->clangd();
+    const auto set = clangd ? clangd->diagnostics().forFile(file) : std::nullopt;
+    return set && std::ranges::any_of(set->diagnostics, [&](const frost::lang::LiveDiagnostic& d) {
+               return d.message.find(text) != std::string::npos;
+           });
+}
+
+/*
+ * CPP-3's second acceptance: a header resolve-context choice changes its diagnostics. shared.h is
+ * listed by alpha and beta, so the status bar's selector offers both (and Automatic, where clangd
+ * infers the command). Choosing beta from its menu makes the running clangd reparse the header with
+ * beta's defines: its live diagnostics name beta; choosing alpha names alpha. The oracle for each
+ * choice is `clangd --check` on the owned database the choice rewrote (the chosen command comes
+ * first), which must report the same #error. No choice restarts clangd.
+ */
+TEST(WorkbenchClangdSpawn, AHeaderResolveContextChoiceChangesItsDiagnostics) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
+    WorkDir dir("cmake-clangd-resolve-context");
+    writeContextsProject(dir);
+    const std::string buildDir = dir.join("cmake-build-debug");
+    const std::string header = dir.join("shared.h");
+    CountingLauncher launcher;
+    WorkbenchRig rig(dir, clangdOptions(launcher));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(clangdSettledOn(rig, buildDir)) << "clangd never ran on the configured database";
+    ASSERT_TRUE(rig.workbench->openPath(header).has_value());
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->clangd()->diagnostics().forFile(header).has_value(); }, 120s))
+        << "clangd published nothing for the header";
+
+    auto* selector = rig.window->findChild<frost::ui::lang::ResolveContextButton*>(QStringLiteral("resolveContext"));
+    ASSERT_NE(selector, nullptr) << "the status bar has no resolve-context selector";
+    ASSERT_TRUE(waitFor([&] { return !selector->isHidden(); }, 10s))
+        << "the selector stays hidden for a header two targets list";
+    EXPECT_EQ(selector->targets(), (QStringList{QStringLiteral("alpha"), QStringLiteral("beta")}));
+    EXPECT_EQ(selector->current(), -1) << "automatic until the user chooses";
+    const std::string owned = rig.workbench->clangd()->compileCommands()->directory;
+
+    for (const char* target : {"beta", "alpha"}) {
+        SCOPED_TRACE(target);
+        const std::string expected = std::string("compiled for ") + target;
+        const std::string other =
+            std::string("compiled for ") + (std::string_view(target) == "beta" ? "alpha" : "beta");
+        QAction* action = nullptr;
+        for (QAction* candidate : selector->menu()->actions())
+            if (candidate->text() == QString::fromUtf8(target))
+                action = candidate;
+        ASSERT_NE(action, nullptr) << "the menu has no " << target;
+        action->trigger(); // As a click on the menu item.
+        ASSERT_TRUE(waitFor([&] { return liveDiagnosticsMention(rig, header, expected); }, 120s))
+            << "the header's diagnostics never named " << target;
+        EXPECT_FALSE(liveDiagnosticsMention(rig, header, other));
+        EXPECT_EQ(selector->text(), QStringLiteral("Context: ") + QString::fromUtf8(target));
+        // The oracle: clangd itself on the owned database the choice rewrote.
+        ASSERT_TRUE(waitFor(
+            [&] {
+                const auto text = frost::io::realFileSystem().readFile(owned + "/compile_commands.json");
+                const std::size_t at = text ? text->find("shared.h") : std::string::npos;
+                return at != std::string::npos && at < text->find("alpha.cpp") && at < text->find("beta.cpp");
+            },
+            60s))
+            << "the owned database does not lead with the chosen context";
+        auto check = frost::test::runClangdCheck(found->path, header, owned);
+        ASSERT_TRUE(check.has_value()) << check.error().describe();
+        EXPECT_EQ(check->origin, "from CDB") << check->log;
+        EXPECT_TRUE(std::ranges::any_of(check->errors, [&](const std::string& e) {
+            return e.find(expected) != std::string::npos;
+        })) << check->log;
+    }
+    EXPECT_EQ(launcher.clangdStarts(), 1) << "a resolve-context choice restarted clangd";
 }
 
 } // namespace

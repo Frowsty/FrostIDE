@@ -187,11 +187,14 @@ CMakeProfile cmakeProfileFromPreset(std::string_view sourceDir, const CMakeConfi
             profile.cacheVariables.push_back(variable);
         }
     }
+    profile.configureArguments = preset.extraArguments;
     if (buildPreset != nullptr) {
         profile.buildPreset = buildPreset->name;
         profile.buildConfiguration = buildPreset->configuration;
         profile.buildTargets = buildPreset->targets;
         profile.buildJobs = buildPreset->jobs.value_or(0);
+        profile.buildCleanFirst = buildPreset->cleanFirst;
+        profile.buildVerbose = buildPreset->verbose;
         profile.buildToolOptions = buildPreset->nativeToolOptions;
         profile.buildEnvironment = buildPreset->environment;
     }
@@ -271,7 +274,29 @@ std::vector<CMakeProfile> cmakeProfilesFor(std::string_view sourceDir, const std
                 continue;
             }
             const auto builds = presets->buildPresetsFor(preset.name);
-            profiles.push_back(cmakeProfileFromPreset(sourceDir, preset, builds.empty() ? nullptr : builds.front()));
+            if (builds.size() <= 1) {
+                profiles.push_back(
+                    cmakeProfileFromPreset(sourceDir, preset, builds.empty() ? nullptr : builds.front()));
+                continue;
+            }
+            // Several build presets: one profile each (header comment, "Choice").
+            for (const CMakeBuildPreset* build : builds) {
+                CMakeProfile profile = cmakeProfileFromPreset(sourceDir, preset, build);
+                profile.name = build->name;
+                profile.displayName = build->displayName.empty() ? std::format("{}: {}", preset.label(), build->name)
+                                                                 : build->displayName;
+                profiles.push_back(std::move(profile));
+            }
+        }
+        // Names stay unique: a build-preset profile that meets a configure-preset profile's name
+        // takes "<build preset> (<configure preset>)".
+        for (std::size_t i = 0; i < profiles.size(); ++i) {
+            for (std::size_t j = 0; j < i; ++j) {
+                if (profiles[j].name == profiles[i].name) {
+                    CMakeProfile& renamed = profiles[i].name != profiles[i].configurePreset ? profiles[i] : profiles[j];
+                    renamed.name = std::format("{} ({})", renamed.buildPreset, renamed.configurePreset);
+                }
+            }
         }
     }
     if (profiles.empty()) {
@@ -311,6 +336,7 @@ Result<std::vector<std::string>> cmakeConfigureArguments(const CMakeProfile& pro
     if (!profile.installDir.empty()) {
         arguments.push_back(defineSwitch("CMAKE_INSTALL_PREFIX", "PATH", profile.installDir));
     }
+    arguments.insert(arguments.end(), profile.configureArguments.begin(), profile.configureArguments.end());
     if (!makeProgram.empty() && isNinjaGenerator(profile.generator) &&
         !hasCacheVariable(profile, "CMAKE_MAKE_PROGRAM")) {
         arguments.push_back(defineSwitch("CMAKE_MAKE_PROGRAM", "FILEPATH", makeProgram));
@@ -344,6 +370,12 @@ std::vector<std::string> cmakeBuildArguments(const CMakeProfile& profile, std::s
     const int effectiveJobs = jobs > 0 ? jobs : profile.buildJobs;
     if (effectiveJobs > 0) {
         arguments.insert(arguments.end(), {"-j", std::to_string(effectiveJobs)});
+    }
+    if (!clean && profile.buildCleanFirst) {
+        arguments.emplace_back("--clean-first");
+    }
+    if (profile.buildVerbose) {
+        arguments.emplace_back("--verbose");
     }
     if (!clean && !profile.buildToolOptions.empty()) {
         arguments.push_back("--");

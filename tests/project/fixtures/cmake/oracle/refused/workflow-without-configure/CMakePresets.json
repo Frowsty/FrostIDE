@@ -1,0 +1,3 @@
+{"version": 6, "configurePresets": [{"name": "a", "generator": "Ninja", "binaryDir": "${sourceDir}/out"}],
+ "buildPresets": [{"name": "b", "configurePreset": "a"}],
+ "workflowPresets": [{"name": "w", "steps": [{"type": "build", "name": "b"}]}]}

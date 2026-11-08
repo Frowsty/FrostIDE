@@ -126,6 +126,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             return;
         }
         log::write(levelOf(line), kLogCategory, "{}", line);
+        if (options.onLog)
+            options.onLog(line);
         LockGuard lock(mutex);
         stderrLines.emplace_back(line);
         while (stderrLines.size() > kStderrLines) {
@@ -737,6 +739,17 @@ std::uint64_t ClangdService::addInactiveRegionsListener(InactiveRegionsListener 
 void ClangdService::removeInactiveRegionsListener(std::uint64_t id) {
     LockGuard lock(m_shared->mutex);
     m_shared->inactiveListeners.erase(id);
+}
+
+Result<void> ClangdService::notify(std::string method, Json params) {
+    std::shared_ptr<LspClient> client;
+    {
+        LockGuard lock(m_shared->mutex);
+        client = m_shared->runningClient();
+    }
+    if (!client)
+        return fail(ErrorCode::Busy, method + ": clangd is not running");
+    return client->notify(std::move(method), std::move(params));
 }
 
 sched::Task<Result<Json>> ClangdService::request(std::string method, Json params, std::stop_token token) {

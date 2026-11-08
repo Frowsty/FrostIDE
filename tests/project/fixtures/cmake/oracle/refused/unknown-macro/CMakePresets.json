@@ -1,0 +1,1 @@
+{"version": 6, "configurePresets": [{"name": "a", "binaryDir": "${sourceDir}/out", "cacheVariables": {"A": "${unknownMacro}"}}]}

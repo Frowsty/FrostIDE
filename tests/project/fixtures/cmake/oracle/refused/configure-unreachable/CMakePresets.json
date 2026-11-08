@@ -1,0 +1,2 @@
+{"version": 6, "include": ["inc.json"],
+ "configurePresets": [{"name": "root", "generator": "Ninja", "binaryDir": "${sourceDir}/out"}]}
