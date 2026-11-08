@@ -46,17 +46,82 @@ namespace {
 
 } // namespace
 
-Capabilities parseCapabilities(const rpc::Json& body) {
-    return Capabilities{
-        .supportsConfigurationDoneRequest = flag(body, "supportsConfigurationDoneRequest"),
-        .supportsFunctionBreakpoints = flag(body, "supportsFunctionBreakpoints"),
-        .supportsCancelRequest = flag(body, "supportsCancelRequest"),
-        .supportsTerminateRequest = flag(body, "supportsTerminateRequest"),
-        .supportsEvaluateForHovers = flag(body, "supportsEvaluateForHovers"),
-        .supportsDelayedStackTraceLoading = flag(body, "supportsDelayedStackTraceLoading"),
-        .supportsExceptionInfoRequest = flag(body, "supportsExceptionInfoRequest"),
-        .supportsSteppingGranularity = flag(body, "supportsSteppingGranularity"),
-    };
+namespace {
+
+// Sets `target` from body[key] when the body has a boolean there (the capabilities event names only
+// what changed).
+void mergeFlag(bool& target, const rpc::Json& body, std::string_view key) {
+    if (const std::optional<bool> value = body.boolAt(key)) {
+        target = *value;
+    }
+}
+
+[[nodiscard]] std::vector<ExceptionFilter> parseExceptionFilters(const rpc::Json& list) {
+    std::vector<ExceptionFilter> out;
+    for (const rpc::Json& item : list.items()) {
+        ExceptionFilter filter{.filter = text(item, "filter"),
+                               .label = text(item, "label"),
+                               .description = text(item, "description"),
+                               .defaultOn = flag(item, "default"),
+                               .supportsCondition = flag(item, "supportsCondition")};
+        if (!filter.filter.empty()) {
+            if (filter.label.empty()) {
+                filter.label = filter.filter;
+            }
+            out.push_back(std::move(filter));
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+Capabilities parseCapabilities(const rpc::Json& body) { return mergeCapabilities(Capabilities{}, body); }
+
+Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
+    // The capabilities event wraps them in "capabilities"; the initialize response is the object itself.
+    const rpc::Json* inner = body.find("capabilities");
+    const rpc::Json& source = inner != nullptr && inner->isObject() ? *inner : body;
+    mergeFlag(caps.supportsConfigurationDoneRequest, source, "supportsConfigurationDoneRequest");
+    mergeFlag(caps.supportsFunctionBreakpoints, source, "supportsFunctionBreakpoints");
+    mergeFlag(caps.supportsCancelRequest, source, "supportsCancelRequest");
+    mergeFlag(caps.supportsTerminateRequest, source, "supportsTerminateRequest");
+    mergeFlag(caps.supportsEvaluateForHovers, source, "supportsEvaluateForHovers");
+    mergeFlag(caps.supportsDelayedStackTraceLoading, source, "supportsDelayedStackTraceLoading");
+    mergeFlag(caps.supportsExceptionInfoRequest, source, "supportsExceptionInfoRequest");
+    mergeFlag(caps.supportsSteppingGranularity, source, "supportsSteppingGranularity");
+    mergeFlag(caps.supportsConditionalBreakpoints, source, "supportsConditionalBreakpoints");
+    mergeFlag(caps.supportsHitConditionalBreakpoints, source, "supportsHitConditionalBreakpoints");
+    mergeFlag(caps.supportsLogPoints, source, "supportsLogPoints");
+    mergeFlag(caps.supportsSetVariable, source, "supportsSetVariable");
+    mergeFlag(caps.supportsRestartRequest, source, "supportsRestartRequest");
+    mergeFlag(caps.supportsDisassembleRequest, source, "supportsDisassembleRequest");
+    if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");
+        filters != nullptr && filters->isArray()) {
+        caps.exceptionBreakpointFilters = parseExceptionFilters(*filters);
+    }
+    return caps;
+}
+
+rpc::Json setFunctionBreakpointsArguments(const std::vector<FunctionBreakpoint>& breakpoints) {
+    rpc::Json list = rpc::Json::array();
+    for (const FunctionBreakpoint& breakpoint : breakpoints) {
+        rpc::Json item = rpc::Json::object().set("name", breakpoint.name);
+        if (!breakpoint.condition.empty()) {
+            item.set("condition", breakpoint.condition);
+        }
+        if (!breakpoint.hitCondition.empty()) {
+            item.set("hitCondition", breakpoint.hitCondition);
+        }
+        list.push(std::move(item));
+    }
+    return rpc::Json::object().set("breakpoints", std::move(list));
+}
+
+ProcessEvent parseProcessEvent(const rpc::Json& body) {
+    return ProcessEvent{.name = text(body, "name"),
+                        .systemProcessId = integer(body, "systemProcessId"),
+                        .startMethod = text(body, "startMethod")};
 }
 
 Source parseSource(const rpc::Json& json) {

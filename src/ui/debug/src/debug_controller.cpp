@@ -316,10 +316,13 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
         resolvedTarget.program, "lldb-dap",
         [this, resolvedTarget, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
             return debug::startDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
-                                            m_breakpoints.sessionLines(), std::move(callbacks));
+                                            m_breakpoints.sessionLines(), std::move(callbacks),
+                                            m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters());
         });
-    if (started)
+    if (started) {
         m_lastCoreClrSession = false;
+        m_nativeSession = true;
+    }
     return started;
 }
 
@@ -337,12 +340,20 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
         target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, displayAdapter,
         [this, target, factory = std::move(factory), arguments = std::move(attachArguments),
          adapterId](debug::DebugSessionCallbacks callbacks) mutable {
-            return debug::attachDebugSession(*m_options.trust, target, std::move(factory), std::move(arguments),
-                                             m_breakpoints.sessionLines(), std::move(callbacks), std::move(adapterId));
+            auto session = debug::attachDebugSession(*m_options.trust, target, std::move(factory), std::move(arguments),
+                                                     m_breakpoints.sessionLines(), std::move(callbacks), adapterId);
+            if (session && adapterId == "lldb-dap") {
+                // Recorded now and sent when the adapter is configured (DebugSession).
+                (*session)->setFunctionBreakpoints(m_breakpoints.sessionFunctions());
+                (*session)->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
+            }
+            return session;
         },
         true);
-    if (started)
+    if (started) {
         m_lastCoreClrSession = (adapterId == "coreclr");
+        m_nativeSession = adapterId == "lldb-dap";
+    }
     return started;
 }
 
@@ -478,6 +489,10 @@ Result<void> DebugController::startSession(std::string title, std::string progra
                 relay->post(generation,
                             [generation](DebugController* self) { emit self->adapterTerminated(generation); });
             },
+        .onCapabilities =
+            [relay, generation](const debug::dap::Capabilities& capabilities) {
+                relay->post(generation, [capabilities](DebugController* self) { self->onCapabilities(capabilities); });
+            },
     };
     m_breakpoints.resetStatus(debug::BreakpointStatus::Pending);
     auto session = starter(std::move(callbacks));
@@ -529,6 +544,7 @@ void DebugController::onState(debug::DebugState state) {
         m_frames = {};
         m_frame.reset();
         m_currentFrameVariables.clear();
+        m_frameScopeReferences.clear();
         m_hoverCache.clear();
         clearLoadedSource();
         showExecutionPoint();
@@ -573,6 +589,7 @@ void DebugController::onFrames(std::int64_t threadId, debug::FrameList frames) {
 
 void DebugController::onFrameSelected(std::int64_t threadId, const debug::DebugFrame& frame) {
     m_currentFrameVariables.clear();
+    m_frameScopeReferences.clear();
     m_hoverCache.clear();
     if (m_coreClrFrameAllowed && !m_coreClrFrameAllowed(frame)) {
         m_frame.reset();
@@ -681,6 +698,7 @@ void DebugController::endSession() {
     m_frames = {};
     m_frame.reset();
     m_currentFrameVariables.clear();
+    m_frameScopeReferences.clear();
     m_hoverCache.clear();
     m_coreClrFrameAllowed = {};
     m_coreClrAllowedSources.clear();
@@ -688,6 +706,7 @@ void DebugController::endSession() {
     m_coreClrPathRequests.clear();
     ++m_coreClrValidationEpoch;
     m_coreClrSession = false;
+    m_nativeSession = false;
     clearLoadedSource();
     std::unique_ptr<debug::DebugSession> ended = std::move(m_session);
     ended.reset(); // Joins the client's threads (the adapter has exited or was killed).
@@ -826,6 +845,7 @@ void DebugController::shutdown() {
     m_stop.reset();
     m_frame.reset();
     m_currentFrameVariables.clear();
+    m_frameScopeReferences.clear();
     m_hoverCache.clear();
     clearLoadedSource();
     showExecutionPoint();
@@ -915,8 +935,19 @@ void DebugController::scopes(std::int64_t frameId, ScopesDone done) {
     }
     const std::shared_ptr<Relay> relay = m_relay;
     const std::uint64_t generation = m_generation;
-    m_session->scopes(frameId, [relay, generation, done = std::move(done)](Result<debug::ScopeList> list) {
-        relay->post(generation, [done, list = std::move(list)](DebugController*) { done(list); });
+    m_session->scopes(frameId, [relay, generation, frameId, done = std::move(done)](Result<debug::ScopeList> list) {
+        relay->post(generation, [done, frameId, list = std::move(list)](DebugController* self) {
+            if (list && self->m_frame && self->m_frame->id == frameId) {
+                // Inline values and hovers use these scopes' own variables only (refreshInlineDebuggerValues).
+                self->m_frameScopeReferences.clear();
+                for (const debug::dap::Scope& scope : *list) {
+                    if (!scope.expensive && scope.variablesReference > 0) {
+                        self->m_frameScopeReferences.push_back(scope.variablesReference);
+                    }
+                }
+            }
+            done(list);
+        });
     });
 }
 
@@ -927,9 +958,10 @@ void DebugController::variables(std::int64_t reference, std::int64_t start, std:
     const std::shared_ptr<Relay> relay = m_relay;
     const std::uint64_t generation = m_generation;
     m_session->variables(
-        reference, start, count, [relay, generation, done = std::move(done)](Result<debug::VariableList> list) {
-            relay->post(generation, [done, list = std::move(list)](DebugController* self) {
-                if (list && self->paused()) {
+        reference, start, count,
+        [relay, generation, reference, done = std::move(done)](Result<debug::VariableList> list) {
+            relay->post(generation, [done, reference, list = std::move(list)](DebugController* self) {
+                if (list && self->paused() && std::ranges::contains(self->m_frameScopeReferences, reference)) {
                     for (const debug::dap::Variable& var : *list) {
                         if (var.name.empty() || var.value.empty()) {
                             continue;
@@ -1009,17 +1041,26 @@ void DebugController::setVariableValue(std::int64_t variablesReference, const QS
         });
 }
 
-void DebugController::setExceptionBreakpoints(const std::vector<std::string>& filters) {
-    if (!m_session) {
-        return;
+bool DebugController::setExceptionFilterEnabled(std::string_view filter, bool enabled) {
+    return m_breakpoints.setExceptionFilterEnabled(filter, enabled);
+}
+
+Result<debug::BreakpointId> DebugController::addFunctionBreakpoint(const QString& name) {
+    return m_breakpoints.addFunction(name.trimmed().toStdString());
+}
+
+void DebugController::onCapabilities(const debug::dap::Capabilities& capabilities) {
+    if (!m_session || !m_nativeSession) {
+        return; // The list is lldb-dap's (debug::BreakpointManager, "Function breakpoints and exception filters").
     }
-    const std::shared_ptr<Relay> relay = m_relay;
-    const std::uint64_t generation = m_generation;
-    m_session->setExceptionBreakpoints(filters, [relay, generation](Result<void> res) {
-        relay->post(generation, [res = std::move(res)](DebugController* self) mutable {
-            static_cast<void>(self->report(std::move(res), QStringLiteral("Exception Breakpoints")));
-        });
-    });
+    const bool msvc = m_session->msvcExceptions();
+    m_breakpoints.setAvailableExceptionFilters(capabilities.exceptionBreakpointFilters,
+                                               [msvc](std::string_view filter) {
+                                                   if (!msvc) {
+                                                       return std::string();
+                                                   }
+                                                   return debug::msvcUnsupportedFilter(filter).value_or(std::string());
+                                               });
 }
 
 void DebugController::disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done) {
@@ -1203,6 +1244,16 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
             m_session->setBreakpoints(std::string(path), m_breakpoints.sessionLines(path));
         }
         save();
+    } else if (change == debug::BreakpointManager::Change::Functions) {
+        if (m_session && m_nativeSession) {
+            m_session->setFunctionBreakpoints(m_breakpoints.sessionFunctions());
+        }
+        save();
+    } else if (change == debug::BreakpointManager::Change::Exceptions) {
+        if (m_session && m_nativeSession) {
+            m_session->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
+        }
+        save();
     }
     emit breakpointsChanged();
 }
@@ -1278,7 +1329,6 @@ void DebugController::refreshInlineDebuggerValues() {
         const std::uint32_t firstLine = stoppedLine > 40 ? stoppedLine - 40 : 0;
         const std::uint32_t lastLine = std::min<std::uint32_t>(stoppedLine + 2, lineCount - 1);
         std::vector<EditorInlineValue> inlineValues;
-        bool stoppedLineHasValues = false;
         for (std::uint32_t l = firstLine; l <= lastLine; ++l) {
             const auto info = snapshot.lineInfo(LineIndex{l});
             if (!info || info->content.empty()) {
@@ -1303,36 +1353,9 @@ void DebugController::refreshInlineDebuggerValues() {
                 }
             }
             if (!combined.empty()) {
-                if (l == stoppedLine) {
-                    stoppedLineHasValues = true;
-                }
                 inlineValues.push_back(EditorInlineValue{
                     .line = LineIndex{l},
                     .text = std::move(combined),
-                    .tooltip = "Inline debugger variable values",
-                });
-            }
-        }
-        if (!stoppedLineHasValues) {
-            std::string summary;
-            std::size_t count = 0;
-            for (const debug::dap::Variable& var : m_currentFrameVariables) {
-                if (!summary.empty()) {
-                    summary += "  ";
-                }
-                std::string val = var.value;
-                if (val.size() > 48) {
-                    val = val.substr(0, 45) + "...";
-                }
-                summary += var.name + " = " + val;
-                if (++count >= 3) {
-                    break;
-                }
-            }
-            if (!summary.empty()) {
-                inlineValues.push_back(EditorInlineValue{
-                    .line = LineIndex{stoppedLine},
-                    .text = std::move(summary),
                     .tooltip = "Inline debugger variable values",
                 });
             }

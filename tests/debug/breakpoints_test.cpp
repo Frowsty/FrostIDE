@@ -224,5 +224,99 @@ TEST_F(BreakpointPersistence, KeepsOtherMembersSkipsBadEntriesAndRemovesAnEmptyL
     ASSERT_TRUE(empty.load(fs, fresh).has_value()) << "a missing file is an empty list";
 }
 
+// lldb-dap 23's exception filters (its initialize answer).
+std::vector<dap::ExceptionFilter> lldbFilters() {
+    return {dap::ExceptionFilter{.filter = "cpp_catch", .label = "C++ Catch"},
+            dap::ExceptionFilter{.filter = "cpp_throw", .label = "C++ Throw"}};
+}
+
+TEST(BreakpointManager, FunctionBreakpointsShareIdsEnablingMutingAndStatus) {
+    BreakpointManager manager;
+    std::vector<BreakpointManager::Change> changes;
+    manager.subscribe([&](std::string_view, BreakpointManager::Change change) { changes.push_back(change); });
+    auto id = manager.addFunction("  frost_target ");
+    ASSERT_TRUE(id.has_value());
+    EXPECT_EQ(manager.addFunction("frost_target").value(), *id) << "one breakpoint per name";
+    EXPECT_FALSE(manager.addFunction("").has_value());
+    EXPECT_FALSE(manager.addFunction("a\nb").has_value());
+    const auto line = manager.add(workPath("App/main.cpp"), 3).value();
+    EXPECT_NE(line, *id);
+    EXPECT_EQ(manager.findFunction(*id)->name, "frost_target");
+    ASSERT_TRUE(manager.setProperties(*id, "value > 1", "2", {}));
+    EXPECT_FALSE(manager.setProperties(*id, {}, {}, "a log message")) << "DAP function breakpoints have none";
+    EXPECT_EQ(manager.sessionFunctions(),
+              (std::vector<FunctionBreakpointLine>{
+                  {.id = *id, .name = "frost_target", .condition = "value > 1", .hitCondition = "2"}}));
+    changes.clear();
+    manager.setStatus(*id, false, "no function named frost_target");
+    EXPECT_EQ(manager.findFunction(*id)->status, BreakpointStatus::Unverified);
+    EXPECT_EQ(changes, std::vector<BreakpointManager::Change>{BreakpointManager::Change::Status})
+        << "a status is not a change to send again";
+    manager.setEnabled(*id, false);
+    EXPECT_TRUE(manager.sessionFunctions().empty());
+    manager.setEnabled(*id, true);
+    manager.setMuted(true);
+    EXPECT_TRUE(manager.sessionFunctions().empty());
+    manager.setMuted(false);
+    ASSERT_TRUE(manager.remove(*id));
+    EXPECT_TRUE(manager.functionBreakpoints().empty());
+    EXPECT_EQ(manager.size(), 1U);
+}
+
+TEST(BreakpointManager, ExceptionFiltersAreTheAdaptersAndKeepWhatWasEnabled) {
+    BreakpointManager manager;
+    EXPECT_TRUE(manager.exceptionFilters().empty()) << "none until an adapter lists them";
+    EXPECT_FALSE(manager.setExceptionFilterEnabled("cpp_throw", true));
+    const auto msvc = [](std::string_view filter) { return msvcUnsupportedFilter(filter).value_or(std::string()); };
+    manager.setAvailableExceptionFilters(lldbFilters(), msvc);
+    ASSERT_EQ(manager.exceptionFilters().size(), 2U);
+    EXPECT_FALSE(manager.exceptionFilters()[0].unavailable.empty()) << "cpp_catch under the MSVC ABI";
+    EXPECT_FALSE(manager.setExceptionFilterEnabled("cpp_catch", true));
+    EXPECT_TRUE(manager.setExceptionFilterEnabled("cpp_throw", true));
+    EXPECT_EQ(manager.sessionExceptionFilters(), std::vector<std::string>{"cpp_throw"});
+    manager.setAvailableExceptionFilters(lldbFilters());
+    EXPECT_TRUE(manager.exceptionFilters()[1].enabled) << "kept across sessions";
+    EXPECT_TRUE(manager.setExceptionFilterEnabled("cpp_catch", true));
+    EXPECT_EQ(manager.sessionExceptionFilters(), (std::vector<std::string>{"cpp_catch", "cpp_throw"}));
+    manager.setMuted(true);
+    EXPECT_TRUE(manager.sessionExceptionFilters().empty());
+    manager.setMuted(false);
+    manager.setAvailableExceptionFilters({dap::ExceptionFilter{.filter = "cpp_throw", .label = "C++ Throw"}});
+    EXPECT_EQ(manager.exceptionFilters().size(), 1U) << "a filter the adapter no longer lists goes";
+}
+
+TEST_F(BreakpointPersistence, FunctionBreakpointsAndExceptionFiltersRoundTrip) {
+    BreakpointManager manager;
+    const auto id = manager.addFunction("frost_target").value();
+    ASSERT_TRUE(manager.setProperties(id, "value > 1", {}, {}));
+    const auto off = manager.addFunction("frost_other").value();
+    manager.setEnabled(off, false);
+    manager.setAvailableExceptionFilters(lldbFilters());
+    ASSERT_TRUE(manager.setExceptionFilterEnabled("cpp_throw", true));
+    ASSERT_TRUE(manager.save(fs, root).has_value());
+    const std::string bytes = read();
+    EXPECT_NE(bytes.find("{\"name\": \"frost_target\", \"condition\": \"value > 1\"}"), std::string::npos) << bytes;
+    EXPECT_NE(bytes.find("{\"name\": \"frost_other\", \"enabled\": false}"), std::string::npos) << bytes;
+    EXPECT_NE(bytes.find("{\"filter\": \"cpp_throw\", \"label\": \"C++ Throw\", \"enabled\": true}"), std::string::npos)
+        << bytes;
+
+    BreakpointManager loaded;
+    ASSERT_TRUE(loaded.load(fs, root).has_value());
+    const auto functions = loaded.functionBreakpoints();
+    ASSERT_EQ(functions.size(), 2U);
+    EXPECT_EQ(functions[0].name, "frost_target");
+    EXPECT_EQ(functions[0].condition, "value > 1");
+    EXPECT_FALSE(functions[1].enabled);
+    EXPECT_EQ(loaded.exceptionFilters(), manager.exceptionFilters());
+    EXPECT_EQ(loaded.sessionExceptionFilters(), std::vector<std::string>{"cpp_throw"});
+
+    loaded.clear();
+    loaded.setAvailableExceptionFilters({});
+    ASSERT_TRUE(loaded.save(fs, root).has_value());
+    const std::string cleared = read();
+    EXPECT_EQ(cleared.find("functionBreakpoints"), std::string::npos) << cleared;
+    EXPECT_EQ(cleared.find("exceptionBreakpoints"), std::string::npos) << cleared;
+}
+
 } // namespace
 } // namespace frost::debug

@@ -224,7 +224,11 @@ public:
     void submitConsoleInput(const QString& line);
     void setVariableValue(std::int64_t variablesReference, const QString& name, const QString& value,
                           EvaluateDone done = {});
-    void setExceptionBreakpoints(const std::vector<std::string>& filters);
+    // Turns one of the adapter's exception filters on or off (BreakpointManager); a running lldb-dap
+    // session gets the new set. False when the filter is unknown or unavailable.
+    bool setExceptionFilterEnabled(std::string_view filter, bool enabled);
+    // Adds a function breakpoint by name. Errors: InvalidArgument (empty, or more than one line).
+    [[nodiscard]] Result<debug::BreakpointId> addFunctionBreakpoint(const QString& name);
     void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done);
     void readMemory(const QString& memoryReference, int count, ReadMemoryDone done);
 
@@ -260,6 +264,8 @@ private:
     void onFrameSelected(std::int64_t threadId, const debug::DebugFrame& frame);
     void onOutput(const std::string& category, const std::string& text);
     void onBreakpoints(const std::vector<debug::BreakpointResult>& results);
+    // lldb-dap's capabilities: its exception filters go to the BreakpointManager.
+    void onCapabilities(const debug::dap::Capabilities& capabilities);
     void onEnded(std::uint64_t generation, const debug::DebugOutcome& outcome);
     void onRunFinished(const build::RunOutcome& outcome, const std::optional<build::DebugLaunch>& launch);
 
@@ -313,7 +319,11 @@ private:
     std::optional<std::int64_t> m_thread;
     debug::FrameList m_frames;
     std::optional<debug::DebugFrame> m_frame;
+    // The selected frame's own (top-level, cheap scope) variables for inline values and hovers; a
+    // child's members never count, as they would name an unrelated identifier on a line.
     std::vector<debug::dap::Variable> m_currentFrameVariables;
+    std::vector<std::int64_t> m_frameScopeReferences; // The scopes those come from.
+    bool m_nativeSession = false;                     // The session is lldb-dap's (launch or attach).
     std::map<std::string, std::string, std::less<>> m_hoverCache;
     QTimer m_killTimer;
 
