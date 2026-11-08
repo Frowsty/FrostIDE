@@ -365,6 +365,8 @@ TEST(Workbench, ExplicitCMakeIdentitySurvivesRestoreAndRecent) {
     }
     {
         WorkbenchRig second(dir);
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         ASSERT_TRUE(second.workbench->restoreLastProject());
         EXPECT_EQ(second.workbench->solution(), nullptr);
         EXPECT_EQ(second.workbench->projectRoot(), dir.path());
@@ -1357,6 +1359,8 @@ TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
     }
     {
         WorkbenchRig second(dir, options);
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         EXPECT_TRUE(second.workbench->restoreLastProject());
         EXPECT_TRUE(second.workbench->hasProject());
         ASSERT_EQ(second.window->tabs().count(), 1);
@@ -2966,7 +2970,10 @@ TEST(Workbench, ConfirmExitAsksBeforeTheIdeWindowClosesOnlyWhenEnabled) {
     EXPECT_FALSE(rig.window->isVisible());
 }
 
-TEST(Workbench, ReopenLastProjectOffStartsInTheLauncher) {
+TEST(Workbench, StartupShowsTheLauncherUnlessReopenLastProjectIsOn) {
+    /* The user's design: FrostIDE starts in the stripped-down launcher (open, recent and new project),
+       even when a project was open last time. general.reopenLastProject is an opt-in, off by default
+       (it once defaulted on, and then every start skipped the launcher). */
     WorkDir dir("reopen-off");
     dir.write("proj/main.cpp", "int main() { return 0; }\n");
     {
@@ -2974,8 +2981,18 @@ TEST(Workbench, ReopenLastProjectOffStartsInTheLauncher) {
         ASSERT_TRUE(first.workbench->openPath(dir.join("proj")));
     }
     {
+        WorkbenchRig fresh(dir); // Default settings: the launcher, not the last project.
+        EXPECT_FALSE(fresh.settings->snapshot()->get(frost::settings::key::generalReopenLastProject));
+        EXPECT_FALSE(fresh.workbench->showStartupWindow());
+        EXPECT_FALSE(fresh.workbench->hasProject());
+        ASSERT_NE(fresh.workbench->launcherWindow(), nullptr);
+        EXPECT_TRUE(fresh.workbench->launcherWindow()->isVisible());
+        EXPECT_FALSE(fresh.window->isVisible());
+    }
+    {
         WorkbenchRig second(dir);
-        ASSERT_TRUE(second.settings->snapshot()->get(frost::settings::key::generalReopenLastProject));
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         EXPECT_TRUE(second.workbench->showStartupWindow()); // On: startup reopens it in the IDE window.
         EXPECT_EQ(second.workbench->projectRoot(), dir.join("proj"));
         EXPECT_TRUE(second.window->isVisible());
