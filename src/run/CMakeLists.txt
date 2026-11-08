@@ -8,6 +8,12 @@
 # it. RUN-2 adds the generated types (run_types: CMake targets from the File API codemodel, MSBuild
 # Application projects, native programs) and RunConfigurationSet, which lays the user's stored
 # edits over them.
+#
+# The test runner (RUN-7): the test model, the parsers of ctest's and Google Test's own output (the
+# only sources of test results, frost-lint's truth rule) and TestRunner, which runs ctest and test
+# programs through RunSession. pugixml (ADR 0033) reads ctest's JUnit report, privately.
+# RUN-8 adds doctest: its case lists and XML reports (doctest_parsers.cpp, also with pugixml), and
+# the runner jobs that list and run a ctest test's doctest cases directly.
 
 frost_add_library(run LAYER run
     SOURCES
@@ -15,4 +21,10 @@ frost_add_library(run LAYER run
         src/run_configuration_set.cpp
         src/run_manager.cpp
         src/run_types.cpp
+        src/test_model.cpp
+        src/ctest_parsers.cpp
+        src/gtest_parsers.cpp
+        src/doctest_parsers.cpp
+        src/test_runner.cpp
     DEPS frost::build frost::settings frost::project frost::rpc frost::io frost::core)
+target_link_libraries(frost_run PRIVATE pugixml::pugixml)

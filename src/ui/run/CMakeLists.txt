@@ -7,6 +7,7 @@
 # targets through the CMake integration; the stop-and-rerun prompt), RunConfigurationsDialog (Run >
 # Edit Configurations...) and the run actions in frost::input's registry. The services themselves
 # are Qt-free (frost::build, frost::run).
+# TestResultsTree (RUN-7) is the Unit Tests window's results tree over frost::run's test model.
 
 frost_add_library(ui_run LAYER ui
     SOURCES
@@ -15,6 +16,7 @@ frost_add_library(ui_run LAYER ui
         src/run_console.cpp
         src/run_controller.cpp
         src/run_tool_window.cpp
+        src/test_results_tree.cpp
     DEPS frost::run frost::build frost::input frost::io frost::core
     THIRD_PARTY Qt6::Widgets)
 # The Q_OBJECT classes live in public headers; moc runs on them through AUTOMOC.
@@ -22,5 +24,6 @@ target_sources(frost_ui_run PRIVATE
     include/frost/ui/run_configurations_dialog.hpp
     include/frost/ui/run_console.hpp
     include/frost/ui/run_controller.hpp
-    include/frost/ui/run_tool_window.hpp)
+    include/frost/ui/run_tool_window.hpp
+    include/frost/ui/test_results_tree.hpp)
 set_target_properties(frost_ui_run PROPERTIES AUTOMOC ON)

@@ -1,0 +1,55 @@
+===============================================================================
+E:\fixture\doctest\capture.cpp(12):
+TEST SUITE: Math
+TEST CASE:  compares, with a comma
+
+E:\fixture\doctest\capture.cpp(14): ERROR: CHECK( a == 2 ) is NOT correct!
+  values: CHECK( 1 == 2 )
+
+===============================================================================
+E:\fixture\doctest\capture.cpp(17):
+TEST SUITE: Math
+TEST CASE:  requires
+
+E:\fixture\doctest\capture.cpp(18): FATAL ERROR: REQUIRE( 2 * 2 == 5 ) is NOT correct!
+  values: REQUIRE( 4 == 5 )
+
+===============================================================================
+E:\fixture\doctest\capture.cpp(20):
+TEST SUITE: Math
+TEST CASE:  has subcases
+  second
+
+E:\fixture\doctest\capture.cpp(24): ERROR: CHECK( 7 == 8 ) is NOT correct!
+  values: CHECK( 7 == 8 )
+  logged: the value is 7
+
+===============================================================================
+E:\fixture\doctest\capture.cpp(27):
+TEST SUITE: Math
+TEST CASE:  throws
+
+E:\fixture\doctest\capture.cpp(27): ERROR: test case THREW exception: boom
+
+===============================================================================
+E:\fixture\doctest\capture.cpp(30):
+TEST SUITE: Math
+TEST CASE:  messages
+
+E:\fixture\doctest\capture.cpp(31): MESSAGE: just a note
+
+E:\fixture\doctest\capture.cpp(32): ERROR: a failure message
+
+===============================================================================
+E:\fixture\doctest\capture.cpp(37):
+TEST SUITE: Math
+TEST CASE:  may fail
+
+E:\fixture\doctest\capture.cpp(38): ERROR: CHECK( false ) is NOT correct!
+  values: CHECK( false )
+
+Allowed to fail so marking it as not failed
+===============================================================================
+[doctest] test cases: 7 | 2 passed | 5 failed | 5 skipped
+[doctest] assertions: 8 | 3 passed | 5 failed |
+[doctest] Status: FAILURE!

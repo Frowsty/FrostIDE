@@ -32,6 +32,7 @@
 #include "project_edit_process.hpp"
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
+#include "unit_tests_window.hpp"
 #include "unity_control.hpp"
 #include <QDir>
 #include <QFile>
@@ -401,12 +402,15 @@ void Workbench::attachToolWindows() {
     unitTestsSpec.side = ui::ToolWindowSide::Bottom;
     unitTestsSpec.iconId = std::string(ui::icons::kRunRun);
     unitTestsSpec.createContent = [this]() -> QWidget* {
-        return createUnitTestsToolWindowWidget(
-            m_window, m_services.fs, [this]() -> const project::SolutionModel* { return m_solution.get(); },
-            [this]() -> std::string { return m_projectRoot; },
-            [this](const std::string& path, int line) { openLocation(qs(path), line, 1); });
-        // No "Debug Selected Test" callback: it started the whole program under the debugger, not
-        // the test. Debugging one test is RUN-10's.
+        // ctest's tests of the open CMake folder (RUN-7); debugging one test is RUN-10's.
+        UnitTestsWindowContext context;
+        context.launcher = &m_services.launcher;
+        context.fs = &m_services.fs;
+        context.trust = &m_services.trust;
+        context.cmake = [this]() -> build::CMakeService* { return m_cmake ? &m_cmake->service() : nullptr; };
+        context.solutionOpen = [this] { return m_solution != nullptr; };
+        context.openLocation = [this](const std::string& path, int line) { openLocation(qs(path), line, 1); };
+        return createUnitTestsToolWindowWidget(m_window, std::move(context));
     };
     if (auto added = windows.add(std::move(unitTestsSpec)); !added) {
         log::warn(kLog, "unit tests tool window: {}", added.error().describe());

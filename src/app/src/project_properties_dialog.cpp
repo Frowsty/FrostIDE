@@ -8,7 +8,8 @@
  * settings (RUN-1). The other dialogs of project_properties_dialog.hpp live beside it (FND-12a):
  * Attach to Process and Run/Debug Configurations in project_run_dialogs.cpp; project references,
  * NuGet (LTR-7), the ASM/IL viewer (CPP-3, LTR-3) and Local History in project_tool_dialogs.cpp;
- * the Unit Tests window (RUN-7) in project_unit_tests.cpp.
+ * the source-text test and entry-point recognisers in project_unit_tests.cpp; the Unit Tests
+ * window (RUN-7) in unit_tests_window.cpp.
  */
 
 #include "project_properties_dialog.hpp"

@@ -1,0 +1,12 @@
+===============================================================================
+E:\fixture\doctest\capture.cpp:17:
+TEST SUITE: Math
+TEST CASE:  requires
+
+E:\fixture\doctest\capture.cpp:18: FATAL ERROR: REQUIRE( 2 * 2 == 5 ) is NOT correct!
+  values: REQUIRE( 4 == 5 )
+
+===============================================================================
+[doctest] test cases: 1 | 0 passed | 1 failed | 11 skipped
+[doctest] assertions: 1 | 0 passed | 1 failed |
+[doctest] Status: FAILURE!

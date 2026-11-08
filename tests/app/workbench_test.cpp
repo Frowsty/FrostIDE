@@ -2201,26 +2201,20 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     refreshBtn->click();
     auto* tree = unitTestsWidget->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
     ASSERT_NE(tree, nullptr);
-    EXPECT_GE(tree->topLevelItemCount(), 1);
-
-    // There is no test runner yet (RUN-7): Run All is disabled, clicking it does nothing, and the
-    // window shows discoveries without any outcome or pass/fail count.
+    // Tests are ctest's (RUN-7): a Visual Studio solution has no CTest directory, so the window lists
+    // nothing (the TEST() in math_tests.cpp is not a ctest test), says why and runs nothing.
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
     auto* runAllBtn = unitTestsWidget->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
     ASSERT_NE(runAllBtn, nullptr);
     EXPECT_FALSE(runAllBtn->isEnabled());
-    EXPECT_TRUE(runAllBtn->toolTip().contains(QStringLiteral("RUN-7")));
+    EXPECT_TRUE(runAllBtn->toolTip().contains(QStringLiteral("ctest"))) << runAllBtn->toolTip().toStdString();
     runAllBtn->click();
-
     auto* summaryLbl = unitTestsWidget->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
     ASSERT_NE(summaryLbl, nullptr);
+    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("solution"))) << summaryLbl->text().toStdString();
     EXPECT_FALSE(summaryLbl->text().contains(QStringLiteral("Passed")));
     EXPECT_FALSE(summaryLbl->text().contains(QStringLiteral("Failed")));
-    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("RUN-7")));
-
-    // The location list holds the declaration, not a stack trace.
-    auto* stackLinks = unitTestsWidget->findChild<QListWidget*>(QStringLiteral("unitTestsStackTraceLinks"));
-    ASSERT_NE(stackLinks, nullptr);
-    EXPECT_GT(stackLinks->count(), 0);
+    EXPECT_FALSE(rig.workbench->runController()->running());
 
     // 7. Search Everywhere (Classes / Symbols / All) exercises Workbench::queryWorkspaceSymbols
     // asynchronously on the worker thread pool without use-after-free.
@@ -2631,13 +2625,16 @@ TEST(Workbench, SolutionExplorerProjectEditsNotifyRefusalAndChangeNothing) {
     EXPECT_EQ(tinySolutionFiles(dir), before);
 }
 
-TEST(Workbench, UnitTestsWindowListsDiscoveredTestsAndStartsNothing) {
-    WorkDir dir("unit-tests-discovery");
+/*
+ * A folder that is not a CMake folder lists no test and starts nothing (RUN-7: tests are ctest's).
+ * It replaces UnitTestsWindowListsDiscoveredTestsAndStartsNothing (harm register, D32), which
+ * asserted the R0 source-text scan's "Discovered, not run" rows; the window over the real ctest is
+ * tests/app/unit_tests_window_test.cpp.
+ */
+TEST(Workbench, UnitTestsWindowWithoutACMakeFolderListsNothingAndStartsNothing) {
+    WorkDir dir("unit-tests-no-cmake");
     dir.write("Tests/math_tests.cpp", "TEST(MathSuite, AddsNumbers) {\n"
                                       "    EXPECT_EQ(2 + 2, 4);\n"
-                                      "}\n"
-                                      "TEST_F(MathFixture, FailsIntentionally) {\n"
-                                      "    EXPECT_TRUE(false);\n"
                                       "}\n");
     CountingLauncher launcher;
     RigOptions options;
@@ -2651,49 +2648,31 @@ TEST(Workbench, UnitTestsWindowListsDiscoveredTestsAndStartsNothing) {
     rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
     QWidget* window = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
     ASSERT_NE(window, nullptr);
+    const int launchesBefore = launcher.launches.load();
     auto* refresh = window->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
     ASSERT_NE(refresh, nullptr);
     refresh->click();
     auto* tree = window->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
     ASSERT_NE(tree, nullptr);
-    EXPECT_EQ(tree->columnCount(), 2); // Name and status; no duration column.
-
-    const auto leaves = [tree] {
-        std::vector<QTreeWidgetItem*> found;
-        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
-            if ((*it)->data(0, Qt::UserRole).toInt() >= 0)
-                found.push_back(*it);
-        }
-        return found;
-    };
-    ASSERT_EQ(leaves().size(), 2U);
+    EXPECT_EQ(tree->columnCount(), 3); // Name, status, duration.
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
     auto* summary = window->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
     ASSERT_NE(summary, nullptr);
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("2 test(s) discovered"))) << summary->text().toStdString();
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("Open a CMake folder"))) << summary->text().toStdString();
 
-    const int launchesBefore = launcher.launches.load();
-    for (const char* name :
-         {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton",
-          "unitTestsRepeatUntilFailureButton", "unitTestsDebugSelectedButton", "unitTestsStopButton"}) {
+    for (const char* name : {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton",
+                             "unitTestsDebugSelectedButton", "unitTestsStopButton"}) {
         auto* button = window->findChild<QPushButton*>(QLatin1String(name));
         ASSERT_NE(button, nullptr) << name;
         EXPECT_FALSE(button->isEnabled()) << name;
-        EXPECT_TRUE(button->toolTip().contains(QStringLiteral("RUN-7"))) << name;
         button->click();
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
     EXPECT_EQ(launcher.launches.load(), launchesBefore);
-
-    // Nothing ran, so no test shows an outcome, even the one whose body fails.
-    for (QTreeWidgetItem* leaf : leaves())
-        EXPECT_EQ(leaf->text(1), QStringLiteral("Discovered, not run")) << leaf->text(0).toStdString();
-    EXPECT_FALSE(summary->text().contains(QStringLiteral("Passed")));
-    EXPECT_FALSE(summary->text().contains(QStringLiteral("Failed")));
     auto* details = window->findChild<QPlainTextEdit*>(QStringLiteral("unitTestsOutputView"));
     ASSERT_NE(details, nullptr);
-    EXPECT_TRUE(details->toPlainText().contains(QStringLiteral("not run")));
     EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("[       OK ]")));
-    EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("FAILED")));
+    EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("Passed")));
 }
 
 TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<doctest binary="capture" version="2.5.3">
+  <Options order_by="file" rand_seed="0" first="0" last="4294967295" abort_after="0" subcase_filter_levels="2147483647" case_sensitive="false" no_throw="false" no_skip="false"/>
+  <TestSuite name="Math">
+    <TestCase name="adds" filename="E:\fixture\doctest\capture.cpp" line="9">
+      <OverallResultsAsserts successes="1" failures="0" test_case_success="true" duration="3.4e-05"/>
+    </TestCase>
+    <TestCase name="compares, with a comma" filename="E:\fixture\doctest\capture.cpp" line="12">
+      <Expression success="false" type="CHECK" filename="E:\fixture\doctest\capture.cpp" line="14">
+        <Original>
+          a == 2
+        </Original>
+        <Expanded>
+          1 == 2
+        </Expanded>
+      </Expression>
+      <OverallResultsAsserts successes="1" failures="1" test_case_success="false" duration="0.00021"/>
+    </TestCase>
+    <TestCase name="requires" filename="E:\fixture\doctest\capture.cpp" line="17">
+      <Expression success="false" type="REQUIRE" filename="E:\fixture\doctest\capture.cpp" line="18">
+        <Original>
+          2 * 2 == 5
+        </Original>
+        <Expanded>
+          4 == 5
+        </Expanded>
+      </Expression>
+      <OverallResultsAsserts successes="0" failures="1" test_case_success="false" duration="0.000146"/>
+    </TestCase>
+    <TestCase name="has subcases" filename="E:\fixture\doctest\capture.cpp" line="20">
+      <SubCase name="first" filename="E:\fixture\doctest\capture.cpp" line="21">
+      </SubCase>
+      <SubCase name="second" filename="E:\fixture\doctest\capture.cpp" line="22">
+        <Expression success="false" type="CHECK" filename="E:\fixture\doctest\capture.cpp" line="24">
+          <Original>
+            7 == 8
+          </Original>
+          <Expanded>
+            7 == 8
+          </Expanded>
+          <Info>
+            the value is 7
+          </Info>
+        </Expression>
+      </SubCase>
+      <OverallResultsAsserts successes="1" failures="1" test_case_success="false" duration="0.000151"/>
+    </TestCase>
+    <TestCase name="throws" filename="E:\fixture\doctest\capture.cpp" line="27">
+      <Exception crash="false">
+        boom
+      </Exception>
+      <OverallResultsAsserts successes="0" failures="0" test_case_success="false" duration="6e-05"/>
+    </TestCase>
+    <TestCase name="messages" filename="E:\fixture\doctest\capture.cpp" line="30">
+      <Message type="WARNING" filename="E:\fixture\doctest\capture.cpp" line="31">
+        <Text>
+          just a note
+        </Text>
+      </Message>
+      <Message type="ERROR" filename="E:\fixture\doctest\capture.cpp" line="32">
+        <Text>
+          a failure message
+        </Text>
+      </Message>
+      <OverallResultsAsserts successes="0" failures="1" test_case_success="false" duration="8.5e-05"/>
+    </TestCase>
+    <TestCase name="may fail" filename="E:\fixture\doctest\capture.cpp" line="37" may_fail="true">
+      <Expression success="false" type="CHECK" filename="E:\fixture\doctest\capture.cpp" line="38">
+        <Original>
+          false
+        </Original>
+        <Expanded>
+          false
+        </Expanded>
+      </Expression>
+      <OverallResultsAsserts successes="0" failures="1" test_case_success="true" duration="6.5e-05"/>
+    </TestCase>
+  </TestSuite>
+  <OverallResultsAsserts successes="3" failures="5"/>
+  <OverallResultsTestCases successes="2" failures="5"/>
+</doctest>
