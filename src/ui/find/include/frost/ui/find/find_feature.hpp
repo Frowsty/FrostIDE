@@ -26,6 +26,7 @@
 #include <QString>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,6 +61,9 @@ struct FindFeatureServices {
     // Where the Directory scope starts when the user has not picked a folder (the solution's or
     // the opened folder's directory).
     std::function<std::string()> defaultDirectory;
+    // The open project's directory roles (UX-23): the Directory scope walks the project as they say.
+    // Empty or null: the scope's name excludes only.
+    std::function<std::shared_ptr<const project::DirectoryRoles>()> directoryRoles;
     // Opens a match in the editor. Empty: activating a match only closes the popup.
     std::function<void(const FindLocation& location)> openLocation;
     // Called after Replace in Files edited an open document (one undo step).

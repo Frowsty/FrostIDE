@@ -14,6 +14,7 @@
 #include "watch_queue.hpp"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -227,6 +228,26 @@ TEST_F(QueueTest, FiltersExclusionsDepthAndTempNames) {
     EXPECT_EQ(queue->push(created("/w/buildx/a")), 1U);
     EXPECT_EQ(queue->push(created("/w/.f.frost-tmp-1-2")), 0U);
     EXPECT_EQ(queue->push(created("/other/a")), 0U);
+}
+
+// WatchOptions::excludedBelow (the project's directory roles, UX-23): the caller's rule filters
+// like `excluded`, is asked only about paths strictly below the root, and leaves the folder itself.
+TEST_F(QueueTest, TheCallersExclusionRuleFiltersLikeExcluded) {
+    std::vector<std::string> asked;
+    WatchOptions options;
+    options.excludedBelow = [&asked](std::string_view path) {
+        asked.emplace_back(path);
+        return path.starts_with("/w/out/") || path.find("/.cache/") != std::string_view::npos;
+    };
+    make(options);
+    EXPECT_EQ(queue->push(created("/w/out")), 1U);
+    EXPECT_EQ(queue->push(created("/w/out/a.o")), 0U);
+    EXPECT_EQ(queue->push(created("/w/src/.cache/x")), 0U);
+    EXPECT_EQ(queue->push(created("/w/src/main.cpp")), 1U);
+    EXPECT_EQ(queue->push(created("/other/out/a.o")), 0U);
+    EXPECT_FALSE(queue->accepts("/w/out/b.o"));
+    EXPECT_TRUE(std::ranges::none_of(
+        asked, [](const std::string& path) { return path == "/w" || path.starts_with("/other"); }));
 }
 
 TEST_F(QueueTest, NonRecursiveWatchesSeeOnlyChildren) {

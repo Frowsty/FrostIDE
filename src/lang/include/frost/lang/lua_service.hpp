@@ -47,7 +47,8 @@ struct LuaSearch {
 
 // Client defaults; .luarc.json has priority in LuaLS. FrostEngine generates and owns its API files:
 // `frostEngine` adds the engine's script path (Assets/Scripts/?.lua) and library (.frost/lua-api)
-// and disables the io, os, package and debug builtins; FEC-10a will read them from the engine instead.
+// and disables the io, os, package and debug builtins. frostEngineLuaDefaults (frost_engine_lua.hpp,
+// FEC-10a) adds what the engine's own files declare: its globals, Lua version and generated folders.
 [[nodiscard]] Json luaDefaults(std::string runtimeVersion = "Lua 5.4", bool frostEngine = false);
 // Returns a copy of the requested Lua section, or null for an unknown section, O(size).
 [[nodiscard]] Json luaConfigurationSection(const Json& configuration, std::string_view section);

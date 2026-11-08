@@ -83,6 +83,7 @@ void Workbench::attach(ui::ShellWindow& window) {
     nav.scheduler = m_pool.get();
     nav.watcher = m_watcher.get();
     nav.sessions = m_sessions.get();
+    nav.directoryRoles = m_directoryRoleStore.get();
     nav.autosave = m_autosave.get();
     nav.applicationSettingsFile = m_options.applicationSettingsFile;
     nav.closeProjectHook = [this] { static_cast<void>(closeProject()); };

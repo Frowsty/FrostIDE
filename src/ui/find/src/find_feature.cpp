@@ -166,6 +166,7 @@ FindSettings FindFeature::initialSettings(bool replace) const {
     if (!settings.directoryExplicit) {
         settings.scope.directory = settings.scope.ignoreRoot;
     }
+    settings.scope.roles = m_services.directoryRoles ? m_services.directoryRoles() : nullptr;
     if (settings.scopeExplicit && settings.preferredScope) {
         settings.scope.kind = *settings.preferredScope;
     }

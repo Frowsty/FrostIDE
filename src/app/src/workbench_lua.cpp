@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Workbench integration for trusted LuaLS projects and Lua document diagnostics: the pinned LuaLS
 // (ADR 0079) launched through IProcessLauncher with its log and meta under the user profile, the
-// FrostEngine defaults for a .frostproj workspace, and a visible notice when LuaLS is missing.
+// FrostEngine defaults for a FrostEngine project or engine checkout (globals, version and library
+// read from the engine's own files, FEC-10a), and a visible notice when LuaLS is missing.
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
@@ -78,7 +80,9 @@ void Workbench::startLua(const std::string& root) {
     lang::LuaSearch search = m_options.luaSearch ? *m_options.luaSearch : lang::defaultLuaSearch();
     search.configuredPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
     auto found = lang::findLuaLanguageServer(m_services.fs, search);
-    const bool frostEngine = lang::isFrostEngineLuaWorkspace(m_services.fs, root);
+    // Reads the engine's generated scripting reference (about 1 MB) and a few directory listings.
+    const lang::FrostEngineLuaProfile engine = lang::discoverFrostEngineLua(m_services.fs, root);
+    const bool frostEngine = engine.frostEngine;
     if (!found) {
         log::info("workbench", "LuaLS unavailable: {}", found.error().describe());
         m_luaUnavailable = found.error().message();
@@ -120,9 +124,18 @@ void Workbench::startLua(const std::string& root) {
     options.workspaceRoot = root;
     options.arguments = std::move(*arguments);
     options.trusted = true;
-    // A FrostEngine project (a .frostproj in the root) gets the engine's defaults; the engine's
-    // .luarc.json still has priority in LuaLS and names its generated definitions.
-    options.configuration = lang::luaDefaults(m_luaRuntimeVersion, frostEngine);
+    // A FrostEngine project or engine checkout gets the engine's defaults: the globals and Lua version
+    // its generated scripting reference declares, and its generated definitions folders. A project's
+    // .luarc.json still has priority in LuaLS, key by key.
+    if (frostEngine) {
+        if (engine.problem.empty())
+            log::info("workbench", "LuaLS FrostEngine defaults: {} globals and {} from {}", engine.api.globals.size(),
+                      engine.api.runtimeVersion.empty() ? m_luaRuntimeVersion : engine.api.runtimeVersion,
+                      engine.reference);
+        else
+            log::warn("workbench", "LuaLS FrostEngine defaults without engine globals: {}", engine.problem);
+    }
+    options.configuration = lang::frostEngineLuaDefaults(m_luaRuntimeVersion, engine);
     options.onLifecycle = [self = QPointer<Workbench>(this)] {
         if (self)
             QMetaObject::invokeMethod(

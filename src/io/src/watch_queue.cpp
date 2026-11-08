@@ -110,7 +110,9 @@ bool WatchQueue::excludedBelow(std::string_view path) const {
             return true;
         }
     }
-    return false;
+    // The caller's own rule (WatchOptions::excludedBelow) sees only paths strictly below the root.
+    return m_config.options.excludedBelow && path.size() > m_config.root.size() &&
+           isAtOrBelow(path, m_config.root, m_config.separator) && m_config.options.excludedBelow(path);
 }
 
 bool WatchQueue::accepts(std::string_view path) const {

@@ -162,6 +162,8 @@ struct FindSummary {
     std::size_t skippedUnreadable = 0;
     // The first kMaxReportedSkips skipped files, in file order.
     std::vector<SkippedFile> skipped;
+    // Directory targets: the folders the walk listed, the root included (TreeScan::directoriesListed).
+    std::size_t directoriesListed = 0;
     bool limitReached = false; // Stopped at limits.maxMatches: "too many results".
     bool cancelled = false;    // Stopped by the token; the batches so far are valid.
 };

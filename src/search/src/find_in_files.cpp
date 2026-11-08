@@ -9,6 +9,7 @@
 #include "frost/document/save_manager.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/tree_scan.hpp"
+#include "frost/project/directory_roles.hpp"
 #include "frost/search/file_mask.hpp"
 #include "frost/storage/fingerprint.hpp"
 #include "frost/text/encoding_detection.hpp"
@@ -257,10 +258,15 @@ sched::Task<Result<FindSummary>> findInFiles(sched::IScheduler& scheduler, const
         scan.readGitignore = true;
         scan.extraIgnoreFiles = {".ignore"};
         scan.skipNames = io::defaultProjectSkipNames();
-        scan.ignore = scan.ignore.pushed(directoryExcludes(request.target.excludes));
         scan.lane = limits.lane;
         scan.parallelism = limits.parallelism;
         const std::string selected = *request.target.directory;
+        // The project's directory roles decide inside their root; the name excludes elsewhere.
+        std::shared_ptr<const project::DirectoryRoles> roles = request.target.roles;
+        if (roles && !withinDirectory(selected, roles->root()))
+            roles.reset();
+        if (!roles)
+            scan.ignore = scan.ignore.pushed(directoryExcludes(request.target.excludes));
         const std::string root =
             !request.target.ignoreRoot.empty() && withinDirectory(selected, request.target.ignoreRoot)
                 ? request.target.ignoreRoot
@@ -273,8 +279,11 @@ sched::Task<Result<FindSummary>> findInFiles(sched::IScheduler& scheduler, const
             if (status->type != io::FileType::Directory)
                 co_return fail(ErrorCode::InvalidArgument, std::format("'{}' is not a directory", selected));
         }
-        scan.descend = [selected](std::string_view directory) {
-            return withinDirectory(directory, selected) || withinDirectory(selected, directory);
+        // The selected folder and its ancestors are always walked (a Directory scope chosen inside
+        // a generated folder searches it); the roles decide only below the selected folder.
+        scan.descend = [selected, roles](std::string_view directory) {
+            return withinDirectory(selected, directory) ||
+                   (withinDirectory(directory, selected) && (!roles || roles->traversed(directory)));
         };
         auto tree = co_await io::scanTree(loader.fileSystem(), scheduler, root, std::move(scan), token);
         if (!tree) {
@@ -284,6 +293,7 @@ sched::Task<Result<FindSummary>> findInFiles(sched::IScheduler& scheduler, const
             }
             co_return std::unexpected(std::move(tree.error()));
         }
+        summary.directoriesListed = tree->directoriesListed;
         for (io::ScanEntry& entry : tree->entries) {
             if (entry.type == io::FileType::Regular && withinDirectory(entry.path, selected)) {
                 files.push_back(std::move(entry.path));

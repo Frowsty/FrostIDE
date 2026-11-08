@@ -163,6 +163,14 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     if (!m_options.sessionDirectory.empty()) {
         m_sessions = std::make_unique<ui::nav::SessionStore>(m_services.fs, m_options.sessionDirectory);
     }
+    if (!m_options.directoryRolesPath.empty()) {
+        if (auto store = project::DirectoryRoleStore::open(m_services.fs, m_options.directoryRolesPath); store)
+            m_directoryRoleStore = std::move(*store);
+        else
+            log::warn(kLog, "directory roles: {}", store.error().describe());
+    }
+    if (!m_directoryRoleStore)
+        m_directoryRoleStore = project::DirectoryRoleStore::inMemory(m_services.fs);
     if (m_options.watchFiles) {
         // One I/O reactor for the watcher and clangd's pipes (frost/io/reactor.hpp's exit order).
         if (Result<std::unique_ptr<io::Reactor>> reactor = io::Reactor::create(io::ReactorOptions{1, "frost-io"});

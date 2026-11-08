@@ -8,6 +8,7 @@
 #include "frost/core/log.hpp"
 #include "frost/input/keymap.hpp"
 #include "frost/io/path.hpp"
+#include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/sched/sim_executor.hpp"
 #include "frost/search/fuzzy_path.hpp"
@@ -42,6 +43,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <format>
 #include <iterator>
 #include <mutex>
 #include <set>
@@ -470,7 +472,8 @@ sched::Task<nav::ProjectFiles> prepareInitialFiles(std::string root,
 sched::Task<Result<std::shared_ptr<const nav::ProjectFiles>>>
 prepareProjectFiles(io::IFileSystem& fs, sched::IScheduler& scheduler, std::string root,
                     std::shared_ptr<const std::vector<std::string>> solutionFiles,
-                    std::shared_ptr<const nav::ProjectFiles> previous, std::stop_token token) {
+                    std::shared_ptr<const nav::ProjectFiles> previous, std::stop_token token,
+                    std::shared_ptr<const project::DirectoryRoles> roles) {
     // Locals die on this worker; coroutine parameters survive until the GUI joins the frame.
     auto baseline = std::move(previous);
     nav::ProjectFiles files(root);
@@ -481,7 +484,7 @@ prepareProjectFiles(io::IFileSystem& fs, sched::IScheduler& scheduler, std::stri
     }
     solutionFiles.reset();
     {
-        auto scan = co_await nav::scanProject(fs, scheduler, std::move(root), token);
+        auto scan = co_await nav::scanProject(fs, scheduler, std::move(root), token, std::move(roles));
         if (!scan) {
             files = nav::ProjectFiles();
             co_return std::unexpected(std::move(scan.error()));
@@ -514,8 +517,15 @@ prepareProjectFiles(io::IFileSystem& fs, sched::IScheduler& scheduler, std::stri
 }
 
 sched::Task<Result<void>> pumpWatch(io::IFileWatcher& watcher, std::string root, std::shared_ptr<WatchMailbox> mailbox,
-                                    std::stop_token token) {
-    auto watch = co_await watcher.watch(std::move(root), io::WatchOptions{}, token);
+                                    std::shared_ptr<const project::DirectoryRoles> roles, std::stop_token token) {
+    io::WatchOptions options;
+    // Nothing below a Generated or Excluded folder (build trees, download caches, .git) is watched
+    // or reported (UX-23); on Linux those folders get no inotify watches at all.
+    if (roles)
+        options.excludedBelow = [roles = std::move(roles)](std::string_view path) {
+            return roles->belowUntraversed(path);
+        };
+    auto watch = co_await watcher.watch(std::move(root), std::move(options), token);
     if (!watch) {
         co_return std::unexpected(std::move(watch.error()));
     }
@@ -771,6 +781,17 @@ void Workbench::addToolWindow() {
             [this](const QString& path) { promptAndRenamePath(toUtf8(path)); });
     connect(view, &FileSystemView::deleteRequested, this,
             [this](const QString& path) { promptAndDeletePath(toUtf8(path)); });
+    if (m_services.directoryRoles != nullptr) {
+        view->setDirectoryRoleProvider([this](std::string_view directory) {
+            return m_roles ? m_roles->decide(directory) : project::DirectoryRoleDecision{};
+        });
+        connect(view, &FileSystemView::directoryRoleRequested, this, [this](const QString& directory, int role) {
+            const std::optional<project::DirectoryRole> chosen =
+                role < 0 ? std::nullopt : std::optional(static_cast<project::DirectoryRole>(role));
+            if (auto set = setDirectoryRole(toUtf8(directory), chosen); !set)
+                notifyError(text("Cannot mark %1").arg(nativePath(toUtf8(directory))), set.error());
+        });
+    }
     ToolWindowSpec spec;
     spec.id = std::string(kFileSystemToolWindow);
     spec.title = text("File System");
@@ -904,6 +925,7 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     m_todoRescanQueued = false;
     m_scanPublished = false;
     m_root = std::move(root);
+    loadDirectoryRoles();
     auto oldSolutionFiles = std::move(m_solutionFiles);
     m_solutionFiles = std::make_shared<const std::vector<std::string>>(std::move(solutionFiles));
     auto oldFiles = m_files;
@@ -947,6 +969,7 @@ bool Workbench::closeProject() {
     m_todoRescanQueued = false;
     m_scanPublished = false;
     m_root.clear();
+    m_roles.reset();
     m_solution.clear();
     m_lastEditPlace.reset();
     m_bookmarks.clear();
@@ -973,7 +996,7 @@ void Workbench::refresh() {
     if (m_services.scheduler == nullptr) {
         sched::SimExecutor sim;
         auto scan = sim.spawn(sched::Lane::Background,
-                              prepareProjectFiles(m_services.fs, sim, m_root, m_solutionFiles, m_files, {}))
+                              prepareProjectFiles(m_services.fs, sim, m_root, m_solutionFiles, m_files, {}, m_roles))
                         .join();
         applyScan(std::move(scan));
         return;
@@ -984,9 +1007,9 @@ void Workbench::refresh() {
     }
     m_scanStop = std::stop_source();
     m_scanGeneration = m_projectGeneration;
-    m_scan.emplace(m_services.scheduler->spawn(sched::Lane::Background,
-                                               prepareProjectFiles(m_services.fs, *m_services.scheduler, m_root,
-                                                                   m_solutionFiles, m_files, m_scanStop.get_token())));
+    m_scan.emplace(m_services.scheduler->spawn(
+        sched::Lane::Background, prepareProjectFiles(m_services.fs, *m_services.scheduler, m_root, m_solutionFiles,
+                                                     m_files, m_scanStop.get_token(), m_roles)));
     m_scanPending = true;
     m_scanTimer->start();
 }
@@ -1089,8 +1112,43 @@ void Workbench::startWatching() {
     }
     m_watch = std::make_unique<WatchState>();
     m_watch->mailbox->target = this;
-    m_watch->handle.emplace(m_services.scheduler->spawn(
-        sched::Lane::Background, pumpWatch(*m_services.watcher, m_root, m_watch->mailbox, m_watch->stop.get_token())));
+    m_watch->handle.emplace(
+        m_services.scheduler->spawn(sched::Lane::Background, pumpWatch(*m_services.watcher, m_root, m_watch->mailbox,
+                                                                       m_roles, m_watch->stop.get_token())));
+}
+
+void Workbench::loadDirectoryRoles() {
+    m_roles.reset();
+    if (m_root.empty())
+        return;
+    std::vector<project::DirectoryRoleOverride> overrides;
+    if (m_services.directoryRoles != nullptr)
+        overrides = m_services.directoryRoles->overridesFor(m_root);
+    auto roles = project::DirectoryRoles::load(m_services.fs, m_root, std::move(overrides));
+    if (!roles) {
+        // The project tree falls back to the default excludes (projectScanOptions without roles).
+        log::warn("ui", "no directory roles for {}: {}", m_root, roles.error().describe());
+        return;
+    }
+    if (!(*roles)->presetsProblem().empty())
+        log::info("ui", "directory roles without CMake preset build folders: {}", (*roles)->presetsProblem());
+    m_roles = std::move(*roles);
+}
+
+Result<void> Workbench::setDirectoryRole(const std::string& directory, std::optional<project::DirectoryRole> role) {
+    if (m_root.empty() || m_services.directoryRoles == nullptr)
+        return fail(ErrorCode::InvalidArgument, "no project with a directory role store is open");
+    if (!isUnder(m_root, directory))
+        return fail(ErrorCode::InvalidArgument, std::format("'{}' is not in the project", directory));
+    if (auto saved = m_services.directoryRoles->set(directory, role); !saved)
+        return saved;
+    loadDirectoryRoles();
+    if (m_watch) {
+        stopWatching();
+        startWatching();
+    }
+    refresh();
+    return {};
 }
 
 void Workbench::stopWatching() {
@@ -2072,6 +2130,20 @@ void Workbench::applyFileChanges(const io::FileChangeBatch& batch) {
     }
     // The listener (handleExternalChange) reports each change the manager finds.
     static_cast<void>(m_services.saveManager.applyChanges(batch));
+    // The CMake state the directory roles read (rules 3 and 5): rebuild them and the watch.
+    const bool rolesChanged =
+        !m_root.empty() && std::ranges::any_of(batch.changes, [this](const io::FileChange& change) {
+            const std::string_view name = nav::baseName(change.path);
+            return name == "CMakeCache.txt" || ((name == "CMakePresets.json" || name == "CMakeUserPresets.json") &&
+                                                nav::parentOf(change.path) == m_root);
+        });
+    if (rolesChanged) {
+        loadDirectoryRoles();
+        if (m_watch) {
+            stopWatching();
+            startWatching();
+        }
+    }
     bool projectChanged = false;
     for (const io::FileChange& change : batch.changes) {
         if (isUnder(m_root, change.path) && !nav::relativeTo(m_root, change.path).starts_with(".git/")) {

@@ -76,6 +76,29 @@ TEST(PollingWatcher, CreateRewriteAndDelete) {
     watch->reset();
 }
 
+// status().watchedFiles counts the snapshot's regular files; a folder the caller's rule excludes
+// (WatchOptions::excludedBelow) is never listed, so its files are not among them.
+TEST(PollingWatcher, WatchedFilesCountTheSnapshotWithoutExcludedFolders) {
+    frost::test::ScratchDir scratch("poll-count");
+    frost::test::writePlain(nativeJoin(scratch.path(), "a.cpp"), "a");
+    frost::test::makeDirectory(nativeJoin(scratch.path(), "src"));
+    frost::test::writePlain(nativeJoin(nativeJoin(scratch.path(), "src"), "b.cpp"), "b");
+    const std::string build = nativeJoin(scratch.path(), "build");
+    frost::test::makeDirectory(build);
+    for (int i = 0; i < 5; ++i)
+        frost::test::writePlain(nativeJoin(build, std::to_string(i) + ".o"), "o");
+    WatchOptions options = polling();
+    options.excludedBelow = [build](std::string_view path) {
+        return path.size() > build.size() && path.starts_with(build) &&
+               (path[build.size()] == '/' || path[build.size()] == '\\');
+    };
+    WatchEnv env;
+    auto watch = env.watch(scratch.path(), options);
+    ASSERT_TRUE(watch) << watch.error().describe();
+    EXPECT_EQ((*watch)->status().watchedFiles, 2U);
+    watch->reset();
+}
+
 TEST(PollingWatcher, ConvergesWithTheMirror) {
     frost::test::ScratchDir scratch("poll-mirror");
     WatchEnv env;

@@ -4,6 +4,7 @@
 
 #include "frost/ui/nav/project_files.hpp"
 
+#include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/ui/nav/paths.hpp"
 
@@ -24,9 +25,16 @@ namespace {
 
 } // namespace
 
-io::ScanOptions projectScanOptions() {
+io::ScanOptions projectScanOptions(std::shared_ptr<const project::DirectoryRoles> roles) {
     io::ScanOptions options;
-    options.ignore = io::IgnoreStack().pushed(io::defaultProjectExcludes());
+    if (roles) {
+        // Budget: B23. One status() per new folder at most (rules 5 and 6), cached in the roles.
+        options.descend = [roles = std::move(roles)](std::string_view directory) {
+            return roles->traversed(directory);
+        };
+    } else {
+        options.ignore = io::IgnoreStack().pushed(io::defaultProjectExcludes());
+    }
     options.readGitignore = true;
     options.extraIgnoreFiles = {".ignore"};
     options.skipNames = io::defaultProjectSkipNames();
@@ -35,8 +43,9 @@ io::ScanOptions projectScanOptions() {
 }
 
 sched::Task<Result<io::TreeScan>> scanProject(io::IFileSystem& fs, sched::IScheduler& scheduler, std::string root,
-                                              std::stop_token token) {
-    return io::scanTree(fs, scheduler, std::move(root), projectScanOptions(), std::move(token));
+                                              std::stop_token token,
+                                              std::shared_ptr<const project::DirectoryRoles> roles) {
+    return io::scanTree(fs, scheduler, std::move(root), projectScanOptions(std::move(roles)), std::move(token));
 }
 
 std::vector<std::string> solutionFiles(const project::SolutionModel& solution) {
