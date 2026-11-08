@@ -13,7 +13,13 @@
         "windows": "windows-debug",
         "linux": "linux-debug"
       },
-      "purpose": "R0 exit (FND-9a): opening the engine folder records no GUI stall above 250 ms, starts exactly one clangd and negotiates positionEncodings; later the R1/R2 journeys (j1_cmake) and FEC-10a's generated Lua API."
+      "purpose": "R0 exit (FND-9a): opening the engine folder records no GUI stall above 250 ms, starts exactly one clangd and negotiates positionEncodings; later the R1/R2 journeys (j1_cmake) and FEC-10a's generated Lua API.",
+      "cacheVariables": {
+        "linux": {
+          "FROST_WARNINGS_AS_ERRORS": "OFF"
+        }
+      },
+      "cacheVariablesReason": "linux: the pin does not compile with the pinned clang 23 under -Werror (-Wunused-lambda-capture in Frost/src/Frost/Renderer/RHI/GraphicsDevice.cpp), so j2_run could not build FrostEditor; the engine's own switch keeps its warnings as warnings (2026-11-08)."
     }
   ]
 }

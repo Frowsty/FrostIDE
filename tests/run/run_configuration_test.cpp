@@ -254,8 +254,16 @@ TEST(RunLaunchPlan, UsesTheProgramsFolderWithoutAWorkingDirectory) {
     configuration.environment = {{"K", "V"}};
     auto plan = launchPlanFor(configuration);
     ASSERT_TRUE(plan.has_value()) << plan.error().describe();
+#ifdef _WIN32
     EXPECT_EQ(plan->program, native("bin/app.exe"));
     EXPECT_EQ(plan->workingDirectory, native("bin"));
+#else
+    /* POSIX normalisation drops "." but keeps "..": "tools/.." is the parent of wherever the tools
+       symlink points, not lexically "bin". The kernel resolves the program and the folder the same
+       way, so the folder is still the one that holds the program. */
+    EXPECT_EQ(plan->program, native("bin/tools/../app.exe"));
+    EXPECT_EQ(plan->workingDirectory, native("bin/tools/.."));
+#endif
     EXPECT_EQ(plan->arguments, configuration.arguments);
     EXPECT_EQ(plan->environment, configuration.environment);
 

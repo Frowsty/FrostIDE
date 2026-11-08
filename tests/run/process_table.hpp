@@ -153,8 +153,27 @@ struct OsProcess {
         if (!(rest >> state >> parent) || state == 'Z' || state == 'X') {
             continue;
         }
-        table.push_back({static_cast<io::ProcessId>(std::stoul(name)), static_cast<io::ProcessId>(parent),
-                         lowerAscii(stat.substr(open + 1, close - open - 1))});
+        /*
+         * The kernel truncates comm to 15 bytes (TASK_COMM_LEN 16), so a long image name such as
+         * "run7-tree-<steady-clock ticks>" never matched. When comm is exactly such a truncated prefix
+         * of the executable's file name (readlink of /proc/<pid>/exe, readable for our own processes),
+         * the full name is used; otherwise comm stays (a script's comm is its own name, its exe the
+         * interpreter's).
+         */
+        std::string image = stat.substr(open + 1, close - open - 1);
+        if (image.size() == 15) {
+            std::error_code linkError;
+            std::string exe = std::filesystem::read_symlink(item.path() / "exe", linkError).filename().string();
+            constexpr std::string_view deleted = " (deleted)";
+            if (exe.ends_with(deleted)) {
+                exe.resize(exe.size() - deleted.size());
+            }
+            if (!linkError && exe.size() > image.size() && exe.starts_with(image)) {
+                image = std::move(exe);
+            }
+        }
+        table.push_back(
+            {static_cast<io::ProcessId>(std::stoul(name)), static_cast<io::ProcessId>(parent), lowerAscii(image)});
     }
     return table;
 #endif

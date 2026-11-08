@@ -75,16 +75,17 @@
 #endif
 #endif
 
+#ifndef FROST_DIFF_SANITIZED
 namespace {
 
-// The allocation counter behind DiffPerf.PeakMemory: live and peak bytes while enabled.
+// The allocation counter behind DiffPerf.PeakMemory: live and peak bytes while enabled. Only the
+// unsanitized build counts (sanitizers own operator new), so only it declares the counter.
 std::atomic<bool> gCounting{false};
 std::atomic<std::int64_t> gLive{0};
 std::atomic<std::int64_t> gPeak{0};
 
 } // namespace
 
-#ifndef FROST_DIFF_SANITIZED
 // A size header in front of each block lets delete subtract what new added. 16 bytes keeps the
 // default new alignment.
 void* operator new(std::size_t size) {

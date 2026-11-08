@@ -223,6 +223,31 @@ TEST(CorpusFrostEngine, TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCa
     ASSERT_TRUE(service->lastConfigure()->succeeded())
         << (service->lastConfigure()->error ? service->lastConfigure()->error->describe() : "failed");
 
+    const auto model = service->model(); // Kept: the index is into this model's targets.
+    const auto frostTests = std::ranges::find(model->targets, "FrostTests", &frost::project::CMakeTarget::name);
+    ASSERT_NE(frostTests, model->targets.end());
+    const std::size_t frostTestsIndex = static_cast<std::size_t>(frostTests - model->targets.begin());
+    const auto buildFrostTests = [&]() -> bool {
+        auto done = std::make_shared<std::promise<bool>>();
+        auto future = done->get_future();
+        auto started = service->build(frost::build::BuildAction::Build, frostTestsIndex,
+                                      [done](const frost::build::CMakeBuildOutcome& outcome) {
+                                          done->set_value(outcome.result.success && !outcome.error);
+                                      });
+        EXPECT_TRUE(started.has_value()) << (started ? "" : started.error().describe());
+        if (!started)
+            return false;
+        // The service reports on its own thread; the GUI thread keeps serving events meanwhile.
+        const bool finished = waitFor([&] { return future.wait_for(0s) == std::future_status::ready; }, 90min);
+        EXPECT_TRUE(finished) << "the FrostTests build never ended";
+        return finished && future.get() && waitFor(idle, 5min);
+    };
+    /* corpora.py engine only configures ("the corpus tests build single small targets"), so a fresh
+       tree lists FrostTests.NotBuilt and no doctest suite. Build it first; on a tree where it is
+       current this is Ninja's no-op. Before this, the test passed only where an earlier run had
+       left FrostTests built, and a fresh Linux tree waited out the 30 min listing limit. */
+    ASSERT_TRUE(buildFrostTests()) << "FrostTests did not build in the configured engine tree";
+
     rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
     QWidget* window = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
     ASSERT_NE(window, nullptr);
@@ -232,6 +257,18 @@ TEST(CorpusFrostEngine, TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCa
     auto* refresh = window->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
     ASSERT_TRUE(tree && summary && runSelected && refresh);
     const auto listedDoctest = [&] { return summary->text().contains(QStringLiteral(" doctest case(s) in ")); };
+    // ctest's listing comes first; without a doctest suite in it the window never lists cases, so
+    // fail then with the listing's own words instead of waiting out the doctest limit.
+    ASSERT_TRUE(
+        waitFor([&] { return summary->text().contains(QStringLiteral(" test(s) listed by ctest in ")); }, 10min))
+        << summary->text().toStdString();
+    ASSERT_TRUE(std::ranges::any_of(tree->testNames(),
+                                    [&](const std::string& name) {
+                                        const auto* test = tree->test(name);
+                                        return test && frost::run::isDoctestCommand(test->command);
+                                    }))
+        << "ctest lists no doctest suite after the FrostTests build (FrostTests.NotBuilt: "
+        << (tree->test("FrostTests.NotBuilt") != nullptr) << "): " << summary->text().toStdString();
     ASSERT_TRUE(waitFor(listedDoctest, 30min)) << summary->text().toStdString();
 
     // The doctest suites ctest lists (FrostEngine's FrostTests.<suite> tests).
@@ -336,25 +373,6 @@ TEST(CorpusFrostEngine, TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCa
     EXPECT_EQ(result->cases.size(), verdicts.size());
 
     // 3. An injected failing case in one of the suite's sources.
-    const auto model = service->model(); // Kept: the index is into this model's targets.
-    const auto frostTests = std::ranges::find(model->targets, "FrostTests", &frost::project::CMakeTarget::name);
-    ASSERT_NE(frostTests, model->targets.end());
-    const std::size_t frostTestsIndex = static_cast<std::size_t>(frostTests - model->targets.begin());
-    const auto buildFrostTests = [&]() -> bool {
-        auto done = std::make_shared<std::promise<bool>>();
-        auto future = done->get_future();
-        auto started = service->build(frost::build::BuildAction::Build, frostTestsIndex,
-                                      [done](const frost::build::CMakeBuildOutcome& outcome) {
-                                          done->set_value(outcome.result.success && !outcome.error);
-                                      });
-        EXPECT_TRUE(started.has_value()) << (started ? "" : started.error().describe());
-        if (!started)
-            return false;
-        // The service reports on its own thread; the GUI thread keeps serving events meanwhile.
-        const bool finished = waitFor([&] { return future.wait_for(0s) == std::future_status::ready; }, 90min);
-        EXPECT_TRUE(finished) << "the FrostTests build never ended";
-        return finished && future.get() && waitFor(idle, 5min);
-    };
     const std::string source = tree->doctestCases(suite.name)->front().location->file;
     const std::string sourcePath = frost::io::normalizePath(source).value_or(source);
     auto original = frost::io::realFileSystem().readFile(sourcePath);
