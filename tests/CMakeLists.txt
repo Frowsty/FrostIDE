@@ -60,6 +60,8 @@ frost_add_test_directory(tools)
 if(FROST_BUILD_UI)
     frost_add_test_directory(ui)
     frost_add_test_directory(app)
+    # The automated journeys (FND-7a): label corpus, so only the -Corpus tier runs them.
+    frost_add_test_directory(journeys)
 endif()
 
 # Every test directory must come in through frost_add_test_directory, or its tests would have

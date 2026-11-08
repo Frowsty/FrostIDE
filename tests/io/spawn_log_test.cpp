@@ -3,7 +3,9 @@
 // Tests for frost/io/spawn_log.hpp (FND-8): SHA-256 against the FIPS 180-2 example vectors, and the
 // SpawnLogLauncher over a MemFs and the ScriptedProcessLauncher: one session file of JSON lines with
 // the start (absolute executable, its digest, argv, cwd, pid), the launch failures and the exit
-// records, the digest cache keyed by size and modification time, and blocking and async launches.
+// records, the digest cache keyed by size and modification time, blocking and async launches, and
+// the evidence format (FND-7a): one file per session, the start time taken before the launch and the
+// digest after it, and ill-formed UTF-8 written as U+FFFD.
 
 #include "frost/core/clock.hpp"
 #include "frost/io/mem_fs.hpp"
@@ -11,6 +13,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/io/spawn_log.hpp"
+#include "frost/io/utf.hpp"
 #include "frost/sched/sim_executor.hpp"
 
 #include <gtest/gtest.h>
@@ -19,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -395,6 +399,77 @@ TEST_F(SpawnLogTest, EscapesControlCharactersInArguments) {
     EXPECT_EQ(*all[0].find("argv")->items()[1].asString(), special.arguments[0]);
     EXPECT_EQ(all[0].find("rawArguments"), nullptr);
     EXPECT_EQ(all[0].find("async")->asBool(), false);
+}
+
+// The evidence format (FND-7a, R0-close follow-up 6): bytes that are not UTF-8 keep the line valid JSON.
+TEST_F(SpawnLogTest, WritesIllFormedUtf8AsReplacementCharacters) {
+    ProcessSpec special = spec();
+    special.arguments = {std::string("caf\xC3\xA9 \xFF\xFE end")};
+    scripted.expect(ScriptedProcess{});
+    // A launcher may refuse such an argument (Windows needs UTF-16); the record is written either way.
+    (void)log->launch(special);
+    const std::string raw = fs.readFile(log->path()).value();
+    EXPECT_TRUE(frost::io::isValidUtf8(raw)) << "the session file is UTF-8";
+    const auto all = records(fs, *log);
+    ASSERT_EQ(all.size(), 1U);
+    EXPECT_EQ(*all[0].find("argv")->items()[1].asString(), "caf\xC3\xA9 \xEF\xBF\xBD\xEF\xBF\xBD end");
+}
+
+// Two sessions opened in one millisecond by one process get two files.
+TEST_F(SpawnLogTest, SessionsOpenedInOneMillisecondGetTheirOwnFiles) {
+    auto second = SpawnLogLauncher::open(scripted, fs, clock, at("logs/spawn"));
+    ASSERT_TRUE(second.has_value()) << second.error().describe();
+    EXPECT_NE((*second)->path(), log->path());
+    scripted.expect(ScriptedProcess{});
+    ASSERT_TRUE((*second)->launch(spec()).has_value());
+    EXPECT_EQ(records(fs, *log).size(), 0U) << "the first session's file is untouched";
+    EXPECT_EQ(records(fs, **second).size(), 1U);
+}
+
+/*
+ * A launch that takes 3 s and replaces the image while it starts (a build finishing as the tool
+ * launches): the start record's time is the moment the launch began, and its digest is of the image
+ * the process runs, read after the launch.
+ */
+TEST(SpawnLog, TakesTheStartTimeBeforeAndTheDigestAfterTheLaunch) {
+    frost::ManualClock clock{
+        frost::IClock::SteadyTime{},
+        frost::IClock::SystemTime{std::chrono::sys_days{std::chrono::year{2026} / 11 / 8}.time_since_epoch()}};
+    frost::io::MemFs fs{clock};
+    const std::string tool = kRoot + (kWindows ? "\\bin\\tool.exe" : "/bin/tool");
+    ASSERT_TRUE(fs.createDirectories(kRoot + (kWindows ? "\\bin" : "/bin")).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(tool, "the old image").has_value());
+    ScriptedProcessLauncher scripted;
+    class SlowLauncher final : public frost::io::IProcessLauncher {
+    public:
+        SlowLauncher(ScriptedProcessLauncher& inner, frost::ManualClock& clock, frost::io::MemFs& fs, std::string tool)
+            : m_inner(inner), m_clock(clock), m_fs(fs), m_tool(std::move(tool)) {}
+        frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const ProcessSpec& spec) override {
+            m_clock.advance(3s);
+            EXPECT_TRUE(m_fs.writeFileAtomic(m_tool, "the new image").has_value());
+            return m_inner.launch(spec);
+        }
+        frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+        launchAsync(const ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+            return m_inner.launchAsync(spec, context);
+        }
+
+    private:
+        ScriptedProcessLauncher& m_inner;
+        frost::ManualClock& m_clock;
+        frost::io::MemFs& m_fs;
+        std::string m_tool;
+    } slow(scripted, clock, fs, tool);
+    auto log = SpawnLogLauncher::open(slow, fs, clock, kRoot + (kWindows ? "\\logs" : "/logs"));
+    ASSERT_TRUE(log.has_value()) << log.error().describe();
+    ProcessSpec spec;
+    spec.executable = tool;
+    scripted.expect(ScriptedProcess{});
+    ASSERT_TRUE((*log)->launch(spec).has_value());
+    const auto all = records(fs, **log);
+    ASSERT_EQ(all.size(), 1U);
+    EXPECT_EQ(text(all[0], "time"), "2026-11-08T00:00:00.000Z") << "the time the launch began";
+    EXPECT_EQ(text(all[0], "sha256"), frost::io::sha256Hex("the new image")) << "the image that runs";
 }
 
 TEST(SpawnLog, NeedsAnAbsoluteDirectory) {

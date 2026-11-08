@@ -200,8 +200,7 @@ TEST(WorkbenchClangd, ClosingProjectCancelsHeldMsBuildEvaluation) {
     if constexpr (frost::io::kNativePathStyle != frost::io::PathStyle::Windows)
         GTEST_SKIP() << "MSBuild evaluation is Windows-only";
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
-    if (!found)
-        GTEST_SKIP() << "clangd is unavailable";
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required (FND-6): " << found.error().describe();
     WorkDir dir("clangd-held-evaluation", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
     const auto msbuild = dir.join("held-msbuild.exe");
@@ -573,8 +572,7 @@ private:
 
 TEST(WorkbenchClangd, RealClangdUsesFirstProjectWhileSecondIsHeld) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
-    if (!found)
-        GTEST_SKIP() << "clangd is unavailable";
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required (FND-6): " << found.error().describe();
     WorkDir dir("project-stream-real-clangd", "tiny_sln");
     const auto source = dir.join("Lib/generated.cpp");
     dir.write("Lib/generated.cpp", "#ifndef STREAMED_DEFINE\n#error missing streamed define\n#endif\n"
@@ -663,8 +661,7 @@ private:
 
 TEST(WorkbenchClangd, ClosingProjectTerminatesRealHeldEvaluation) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
-    if (!found)
-        GTEST_SKIP() << "clangd is unavailable";
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required (FND-6): " << found.error().describe();
     WorkDir dir("clangd-real-held-evaluation", "tiny_sln");
     const auto msbuild = frost::io::normalizePath(FROST_HELD_MSBUILD);
     ASSERT_TRUE(msbuild);

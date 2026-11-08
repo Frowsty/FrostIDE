@@ -73,3 +73,25 @@ foreach(suite IN LISTS _frost_tool_suites)
         # FROST_TEST_CONFIG and FROST_CTEST let test_verify_support check this tree's test labels.
         ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;FROST_QT_ROOT=;FROST_CORPUS_ROOT=;FROST_CORPORA_ROOT=;FROST_PERF_ROOT=;FROST_CHANGED_FILES=;FROST_VERIFY_BASE=;FROST_MIRROR=;FROST_TEST_TREE=${CMAKE_BINARY_DIR};FROST_TEST_CONFIG=$<CONFIG>;FROST_CTEST=${CMAKE_CTEST_COMMAND}")
 endforeach()
+
+# The automation endpoint is in Debug test builds only (FND-7a, ADR 0080): the image that holds it
+# (frost_app.dll on Windows, frost on Linux) is probed for its strings in every configuration.
+if(FROST_BUILD_UI)
+    if(WIN32)
+        set(_frost_endpoint_image $<TARGET_FILE:frost_app_shared>)
+    else()
+        set(_frost_endpoint_image $<TARGET_FILE:frost>)
+    endif()
+    if(FROST_ENABLE_AUTOMATION_ENDPOINT)
+        set(_frost_endpoint_enabled ON)
+    else()
+        set(_frost_endpoint_enabled OFF)
+    endif()
+    add_test(NAME tools.automation_release_probe
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_automation_release_probe.py
+                "${_frost_endpoint_image}" $<CONFIG> ${_frost_endpoint_enabled} -v)
+    set_tests_properties(tools.automation_release_probe PROPERTIES
+        LABELS unit
+        TIMEOUT 120
+        ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()

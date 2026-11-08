@@ -30,6 +30,7 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "support/crash_dialogs.hpp"
+#include "support/engine_lock.hpp"
 #include "workbench_rig.hpp"
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -279,6 +280,11 @@ TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneCla
     frost::test::disableCrashDialogs(); // clangd and the compilers inherit the error mode.
     const std::string corpus = checkedCorpus();
     ASSERT_FALSE(corpus.empty());
+    // The clone is configured in place: hold its build lock, as tools/corpora.py and the journeys do.
+    const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
+    const frost::test::EngineBuildLock buildLock(qEnvironmentVariable("FROST_CORPORA_ROOT").toStdString() +
+                                                 "/frostengine-" + sha.substr(0, 12) + ".build.lock");
+    ASSERT_TRUE(buildLock.held()) << "the corpus build lock stayed taken (tools/corpora.py BuildLock)";
     auto& fs = frost::io::realFileSystem();
     auto found = frost::lang::findClangd(fs, frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();

@@ -181,8 +181,8 @@ if ($ast.ParamBlock) { foreach ($p in $ast.ParamBlock.Parameters) { "param: $($p
             self.assertIn("--interactive-debug-mode 0", line)
         # And ctest's mode 0 really does hand SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX (0x3) on.
         ctest = os.environ.get("FROST_CTEST") or shutil.which("ctest")
-        if not ctest:
-            self.skipTest("ctest is not on PATH")
+        if not ctest:  # The pinned CMake's ctest is required: a failure, never a skip (FND-6).
+            self.fail("the pinned ctest is not on PATH (tools/env.ps1)")
         probe = self.tmp / "mode.py"
         probe.write_text("import ctypes\nprint(f'errormode={ctypes.windll.kernel32.GetErrorMode():#x}')\n",
                          encoding="utf-8")
