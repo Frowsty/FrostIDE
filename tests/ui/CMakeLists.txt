@@ -285,6 +285,7 @@ if(TARGET frost_ui_lang)
     frost_add_test(ui_lang_tests QT
         SOURCES
             lang/editor_insight_binding_test.cpp
+            lang/lang_widgets_internal_test.cpp
             lang/lang_widgets_test.cpp
             lang/language_controller_test.cpp
         DEPS frost::ui_lang frost::ui_editor frost::lang frost::build frost::input frost::text frost::sched frost::io

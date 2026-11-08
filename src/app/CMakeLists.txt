@@ -49,6 +49,9 @@ frost_add_library(app LAYER app
         src/project_open_broker.hpp
         src/project_properties_dialog.cpp
         src/project_properties_dialog.hpp
+        src/project_run_dialogs.cpp
+        src/project_tool_dialogs.cpp
+        src/project_unit_tests.cpp
         src/project_properties_xml.cpp
         src/diagnostics_qt.cpp
         src/document_editor.cpp
@@ -62,6 +65,14 @@ frost_add_library(app LAYER app
         src/startup.cpp
         src/welcome_screen.cpp
         src/workbench.cpp
+        src/git_clone.hpp
+        src/workbench_actions.cpp
+        src/workbench_attach.cpp
+        src/workbench_clone.cpp
+        src/workbench_prompts.cpp
+        src/workbench_run.cpp
+        src/workbench_tool_windows.cpp
+        src/workbench_update.cpp
         src/language_bridge.hpp
         src/stable_lsp_requester.hpp
         src/workbench_documents.cpp
@@ -81,6 +92,11 @@ frost_add_library(app LAYER app
         src/workbench_project_edit.cpp
         src/unity_context.hpp
         src/workbench_project.cpp
+        src/workbench_project_helpers.hpp
+        src/workbench_new_project.cpp
+        src/workbench_project_sources.cpp
+        src/workbench_file_ops.cpp
+        src/workbench_clangd.cpp
         src/workbench_navigation_bar.cpp
         src/workbench_terminal.cpp
         src/workbench_find.cpp

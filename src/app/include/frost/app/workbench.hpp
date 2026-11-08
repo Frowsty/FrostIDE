@@ -294,7 +294,7 @@ public:
     [[nodiscard]] std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) override;
     [[nodiscard]] std::string chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) override;
     [[nodiscard]] bool confirmDelete(QWidget* parent, const QString& name, bool folder) override;
-    // A modal preview of the changed lines with Apply and Cancel (workbench_project.cpp).
+    // A modal preview of the changed lines with Apply and Cancel (workbench_project_sources.cpp).
     [[nodiscard]] bool confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath, const std::string& before,
                                              const std::string& after) override;
     [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,

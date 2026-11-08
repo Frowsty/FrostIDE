@@ -11,7 +11,13 @@ frost_add_library(ui_lang LAYER ui
     SOURCES
         src/editor_insight_binding.cpp
         src/lang_widgets.cpp
+        src/lang_widgets_internal.hpp
+        src/lang_widgets_panels.cpp
+        src/lang_widgets_popups.cpp
         src/language_controller.cpp
+        src/language_controller_completion.cpp
+        src/language_controller_editing.cpp
+        src/language_controller_navigation.cpp
         src/language_controller_codegen.cpp
         src/language_controller_hierarchy.cpp
         src/language_controller_refactor.cpp

@@ -277,11 +277,11 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     # over the source text and labels every one "Discovered, not run"; no outcome is shown. RUN-7
     # replaces it with ctest -N / --gtest_list_tests. Five sites, one per recogniser: C# test
     # attributes and Main, C++ gtest, Catch2 and main.
-    SiteAllowance("src/app/src/project_properties_dialog.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
+    SiteAllowance("src/app/src/project_unit_tests.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
                   "source-text discovery shown as 'Discovered, not run' until RUN-7", count=5),
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
-    SiteAllowance("src/app/src/workbench_project.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+    SiteAllowance("src/app/src/workbench_clangd.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
                   "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = d.message;"),
     # Reviewed real site: the author lens shows git blame's author (VcsService through authorForLine).
     SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
