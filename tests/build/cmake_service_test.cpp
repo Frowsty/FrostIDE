@@ -21,6 +21,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -296,6 +298,133 @@ TEST_F(CMakeServiceTest, CancelDuringProbeRetainsAdmissionUntilProbeReturns) {
     ASSERT_TRUE(successor);
     shared->releaseExternalLaunch(*successor);
     local.reset();
+}
+
+/*
+ * A file system over another that holds every read of a File API reply (a path below
+ * .cmake/api/v1/reply) until release(), and records the threads those reads ran on. The R0 exit
+ * criterion's stall came from openFolder reading the reply on its caller's (the GUI) thread.
+ */
+class HeldReplyFs final : public io::IFileSystem {
+public:
+    explicit HeldReplyFs(io::IFileSystem& inner) : m_inner(inner) {}
+
+    Result<std::string> readFile(std::string_view path) override {
+        hold(path);
+        return m_inner.readFile(path);
+    }
+    Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return m_inner.writeFileAtomic(path, data);
+    }
+    Result<void> writeFileAtomicWithMtime(std::string_view path, std::string_view data,
+                                          std::filesystem::file_time_type mtime) override {
+        return m_inner.writeFileAtomicWithMtime(path, data, mtime);
+    }
+    Result<io::SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                          const io::SafeWriteOptions& options) override {
+        return m_inner.safeWrite(path, data, options);
+    }
+    Result<io::FileStatus> status(std::string_view path) override { return m_inner.status(path); }
+    Result<std::vector<io::DirEntry>> listDirectory(std::string_view path) override {
+        hold(path);
+        return m_inner.listDirectory(path);
+    }
+    Result<io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        hold(path);
+        return m_inner.listDirectoryWithDiagnostics(path);
+    }
+    Result<void> createDirectories(std::string_view path) override { return m_inner.createDirectories(path); }
+    Result<void> removeFile(std::string_view path) override { return m_inner.removeFile(path); }
+    Result<void> removeDirectory(std::string_view path) override { return m_inner.removeDirectory(path); }
+    Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
+    Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
+
+    // Lets the held reads, and every later one, go on.
+    void release() {
+        {
+            LockGuard lock(m_mutex);
+            m_released = true;
+        }
+        m_changed.notify_all();
+    }
+    // Waits until a reply read is held, or `timeout` passes.
+    bool waitForHeldRead(std::chrono::milliseconds timeout) {
+        UniqueLock lock(m_mutex);
+        return m_changed.wait_for(lock.native(), timeout,
+                                  [this]() FROST_NO_THREAD_SAFETY_ANALYSIS { return m_held > 0; });
+    }
+    // Whether any reply read ran on `thread`, and how many ran.
+    bool readOn(std::thread::id thread) const {
+        LockGuard lock(m_mutex);
+        return std::ranges::find(m_threads, thread) != m_threads.end();
+    }
+    std::size_t reads() const {
+        LockGuard lock(m_mutex);
+        return m_threads.size();
+    }
+
+private:
+    static bool isReply(std::string_view path) {
+        return path.find(kWindows ? "\\v1\\reply" : "/v1/reply") != std::string_view::npos;
+    }
+    void hold(std::string_view path) {
+        if (!isReply(path))
+            return;
+        UniqueLock lock(m_mutex);
+        m_threads.push_back(std::this_thread::get_id());
+        ++m_held;
+        m_changed.notify_all();
+        m_changed.wait(lock.native(), [this]() FROST_NO_THREAD_SAFETY_ANALYSIS { return m_released; });
+        --m_held;
+    }
+
+    io::IFileSystem& m_inner;
+    mutable Mutex m_mutex;
+    std::condition_variable m_changed;
+    std::vector<std::thread::id> m_threads FROST_GUARDED_BY(m_mutex);
+    int m_held FROST_GUARDED_BY(m_mutex) = 0;
+    bool m_released FROST_GUARDED_BY(m_mutex) = false;
+};
+
+/*
+ * R0 exit criterion (no GUI stall above 250 ms opening FrostEngine; FND-9a): the File API reply of
+ * a large project is several MB of JSON, so openFolder and setActiveProfile return without reading
+ * it, and the service's thread reads it and publishes the model (onModelChanged), in queue order.
+ * The reads are held here: both calls return while a read is held, the model is published only
+ * once the read goes on, and no reply read ever runs on the calling thread.
+ */
+TEST_F(CMakeServiceTest, OpenAndProfileSwitchReadTheReplyOnTheServiceThread) {
+    installReply();
+    HeldReplyFs fs(tree.fs);
+    CMakeServiceOptions opts = options();
+    opts.profileRecords = {project::CMakeProfileRecord{.name = "Debug"},
+                           project::CMakeProfileRecord{.name = "Release", .buildType = "Release"}};
+    service = CMakeService::create(fs, launcher, *trustStore, std::move(opts), events.callbacks());
+    ASSERT_TRUE(service->openFolder(folder()).has_value()); // Untrusted: no configure.
+    ASSERT_TRUE(fs.waitForHeldRead(kWait)) << "the existing reply was never read";
+    EXPECT_EQ(service->model(), nullptr) << "a model was published before its reply was read";
+    {
+        LockGuard lock(events.mutex);
+        EXPECT_EQ(events.models, 0);
+    }
+    // A profile switch also returns while the reads are held: Release (no reply), then Debug again.
+    ASSERT_TRUE(service->setActiveProfile("Release").has_value());
+    ASSERT_TRUE(service->setActiveProfile("Debug").has_value());
+    EXPECT_EQ(service->model(), nullptr);
+    fs.release();
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_EQ(service->model()->targets.size(), 4U);
+    EXPECT_EQ(service->activeProfile()->name, "Debug");
+    EXPECT_GE(fs.reads(), 1U);
+    EXPECT_FALSE(fs.readOn(std::this_thread::get_id())) << "a reply was read on the calling thread";
+    {
+        // The open's read and the Release read find the profile switched since they were queued and
+        // publish nothing; the last switch's read publishes Debug's model, once.
+        LockGuard lock(events.mutex);
+        EXPECT_EQ(events.models, 1);
+    }
+    EXPECT_TRUE(launcher.launches().empty()); // Untrusted: neither the open nor the switches ran anything.
 }
 
 TEST_F(CMakeServiceTest, NothingRunsBeforeTrust) {

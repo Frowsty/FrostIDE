@@ -16,9 +16,11 @@
  * Opening (openFolder). Reads the presets (cmake_presets.hpp) and builds the profiles
  * (cmake_profile.hpp) from them or from CMakeServiceOptions::profileRecords; the active profile is
  * the persisted one (stateFilePath) or the first usable one. The active profile's existing File
- * API reply, if any, is read at once, so the target tree shows before anything runs (restricted
- * mode, PLAN.md section 3.5). If the folder is trusted and configureOnOpen is set, a configure
- * starts in the background.
+ * API reply, if any, is read next on the service's thread (it is several MB of JSON for a large
+ * project, too slow for the caller's GUI thread: the R0 stall criterion) and published through
+ * onModelChanged, so the target tree shows before anything runs (restricted mode, PLAN.md section
+ * 3.5). If the folder is trusted and configureOnOpen is set, a configure starts in the background,
+ * after that read.
  *
  * Trust. Configure runs the project's CMake code and a build its build steps, so both pass the
  * gate first: the folder (the source directory) must be trusted (TrustStore); its profiles' build
@@ -227,9 +229,11 @@ public:
 
     /*
      * Opens the CMake folder `sourceDir` (absolute, holding CMakeLists.txt), as the header comment
-     * says. Blocking reads (presets, an existing reply). A presets file that does not parse leaves
-     * the settings profiles and is reported by presetsError(). Errors: InvalidArgument (not
-     * absolute), NotFound (no CMakeLists.txt), Busy (a job is running).
+     * says. Reads the presets (blocking, small files). The active profile's existing reply is read
+     * on the service's thread: model() is nullptr until onModelChanged publishes it (waitForIdle
+     * waits for that too). A presets file that does not parse leaves the settings profiles and is
+     * reported by presetsError(). Errors: InvalidArgument (not absolute), NotFound (no
+     * CMakeLists.txt), Busy (a job is running).
      */
     [[nodiscard]] Result<void> openFolder(std::string_view sourceDir);
     // Closes the folder and clears the model and diagnostics. Errors: Busy.
@@ -240,9 +244,11 @@ public:
     [[nodiscard]] std::optional<std::size_t> activeProfileIndex() const;
     [[nodiscard]] std::optional<project::CMakeProfile> activeProfile() const;
     /*
-     * Makes profiles()[index] active, persists it, reads that profile's existing reply (or clears
-     * the model) and, when the folder is trusted and configureOnOpen is set, configures it if it has
-     * no reply. Errors: InvalidArgument (no folder), OutOfRange, Busy, the state file's errors.
+     * Makes profiles()[index] active, persists it and clears the model; that profile's existing
+     * reply is then read on the service's thread and published through onModelChanged (nullptr
+     * without one), and when the folder is trusted and configureOnOpen is set, a profile without a
+     * reply configures. Errors: InvalidArgument (no folder), OutOfRange, Busy, the state file's
+     * errors.
      */
     [[nodiscard]] Result<void> setActiveProfile(std::size_t index);
     [[nodiscard]] Result<void> setActiveProfile(std::string_view name); // NotFound for an unknown name.

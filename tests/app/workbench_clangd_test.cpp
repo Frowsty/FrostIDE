@@ -25,12 +25,14 @@
 
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
+#include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QSet>
+#include <QTemporaryDir>
 #include <QTreeView>
 
 #include <algorithm>
@@ -883,10 +885,11 @@ public:
  */
 std::optional<bool> clangdCheckUsesFallback(const std::string& clangd, const std::string& file,
                                             const std::optional<frost::lang::CompileCommandsLocation>& location,
-                                            std::string& why) {
+                                            std::string& why, bool enableConfig = false) {
     frost::io::ProcessSpec spec;
     spec.executable = clangd;
-    spec.arguments = {"--check=" + file, "--log=info", "--enable-config=false"};
+    // With `enableConfig`, as a trusted workbench clangd runs: .clangd and the user's config apply.
+    spec.arguments = {"--check=" + file, "--log=info", enableConfig ? "--enable-config" : "--enable-config=false"};
     if (location)
         spec.arguments.push_back("--compile-commands-dir=" + location->directory);
     spec.workingDirectory = std::string(frost::io::parentPath(file));
@@ -913,11 +916,11 @@ std::optional<bool> clangdCheckUsesFallback(const std::string& clangd, const std
 // Readiness for `path` agrees with `clangd --check` about fallback flags (the database is read on
 // a worker, so a NoCompileCommand answer may take a moment; a database command must stay Unknown).
 ::testing::AssertionResult fallbackAgreesWithClangd(WorkbenchRig& rig, const std::string& clangd,
-                                                    const std::string& path) {
+                                                    const std::string& path, bool enableConfig = false) {
     using Readiness = frost::ui::lang::ServerReadiness;
     std::string why;
     const std::optional<bool> fallback =
-        clangdCheckUsesFallback(clangd, path, rig.workbench->clangd()->compileCommands(), why);
+        clangdCheckUsesFallback(clangd, path, rig.workbench->clangd()->compileCommands(), why, enableConfig);
     if (!fallback)
         return ::testing::AssertionFailure() << path << ": " << why;
     const auto said = [&] { return rig.workbench->languageReadiness(path) == Readiness::NoCompileCommand; };
@@ -1071,6 +1074,71 @@ TEST(WorkbenchClangd, FallbackFlagsFollowClangdsOwnDatabaseSearch) {
     ASSERT_FALSE(rig.workbench->clangd()->compileCommands().has_value()) << "clangd got a --compile-commands-dir";
     for (const char* file : {"top.cpp", "nested/src/inner.cpp", "nested/src/other.cpp", "flags/sub/flagged.cpp"})
         EXPECT_TRUE(fallbackAgreesWithClangd(rig, found->path, dir.join(file)));
+}
+
+/* Truth rule (cross review of R0-close): a trusted clangd runs with its config enabled, and a
+ * `CompileFlags: CompilationDatabase:` directive in a .clangd moves its database search to a folder
+ * the readiness model never looks in. The oracle is `clangd --check` with config enabled, as the
+ * workbench's trusted clangd runs: it finds a database command for the file under the directive,
+ * so readiness must not claim "no compile command" there (it claimed it before). Without config
+ * the same file falls back, which shows the directive is what decides. A trusted file without a
+ * directive above it still gets the fallback claim, when the oracle agrees. The project lives in
+ * the system's temporary folder: below the build tree, clangd's own search would find the build's
+ * compile_commands.json above every file, and the directive would decide nothing. */
+TEST(WorkbenchClangd, ACompilationDatabaseDirectiveInATrustedDotClangdIsNotClaimedAsFallback) {
+    frost::test::disableCrashDialogs();
+    auto& fs = frost::io::realFileSystem();
+    auto found = frost::lang::findClangd(fs, frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << found.error().describe();
+    using Readiness = frost::ui::lang::ServerReadiness;
+
+    WorkDir profile("clangd-readiness-config");
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid()) << temp.errorString().toStdString();
+    const std::string root = frost::io::normalizePath(QDir::toNativeSeparators(temp.path()).toStdString()).value_or("");
+    ASSERT_FALSE(root.empty());
+    const auto join = [&](std::string_view relative) {
+        return frost::io::normalizePath(frost::io::joinPath(root, relative).value_or("")).value_or("");
+    };
+    const auto write = [&](std::string_view relative, std::string_view bytes) {
+        const std::string file = join(relative);
+        ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(file)).has_value()) << file;
+        ASSERT_TRUE(fs.writeFileAtomic(file, bytes).has_value()) << file;
+    };
+    const std::string configured = join("configured/main.cpp");
+    const std::string plain = join("plain/lone.cpp");
+    write("configured/main.cpp", "int main() { return 0; }\n");
+    write("plain/lone.cpp", "int lone() { return 1; }\n");
+    // The directive's relative folder is resolved against the .clangd's own folder.
+    write("configured/.clangd", "CompileFlags:\n  CompilationDatabase: cdb\n");
+    const std::vector<frost::lang::CompileCommand> commands = {frost::lang::CompileCommand{
+        .directory = join("configured"), .file = configured, .arguments = {"clang++", "-std=c++20", "-c", configured}}};
+    ASSERT_TRUE(frost::lang::writeCompileCommands(fs, join("configured/cdb"), commands));
+
+    // The two oracles for the configured file: config decides between a command and the fallback.
+    std::string why;
+    const std::optional<bool> withConfig = clangdCheckUsesFallback(found->path, configured, std::nullopt, why, true);
+    ASSERT_TRUE(withConfig.has_value()) << why;
+    ASSERT_FALSE(*withConfig) << "clangd --check ignored the .clangd CompilationDatabase directive";
+    const std::optional<bool> withoutConfig = clangdCheckUsesFallback(found->path, configured, std::nullopt, why);
+    ASSERT_TRUE(withoutConfig.has_value()) << why;
+    ASSERT_TRUE(*withoutConfig) << "without config clangd still found a database; the directive decides nothing";
+
+    RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    WorkbenchRig rig(profile, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(root));
+    ASSERT_TRUE(rig.workbench->openPath(root).has_value());
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return rig.workbench->clangd() && rig.workbench->clangd()->state() == frost::lang::ClangdState::Running;
+        },
+        kPatience));
+    ASSERT_FALSE(rig.workbench->clangd()->compileCommands().has_value()) << "clangd got a --compile-commands-dir";
+    EXPECT_TRUE(fallbackAgreesWithClangd(rig, found->path, configured, true));
+    EXPECT_NE(rig.workbench->languageReadiness(configured), Readiness::NoCompileCommand);
+    EXPECT_TRUE(fallbackAgreesWithClangd(rig, found->path, plain, true));
 }
 
 } // namespace

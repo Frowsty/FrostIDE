@@ -40,9 +40,12 @@
  * SIGTTIN; an inherited terminal stdin becomes the null device, see
  * Stdio::Inherit). terminate() then ends every process still in the container,
  * and destroying the IProcess ends whatever is still running in it. On Windows
- * that is the whole tree (descendants cannot break away from the job). On POSIX
- * it is the child's process group: a descendant that starts its own session or
- * group (setsid/setpgid, as daemons do) leaves it and is not ended. Without
+ * that is the whole tree (descendants cannot break away from the job). On Linux
+ * it is the child's session: its process group, then every other live process of
+ * the session found in /proc, so a descendant in a group of its own (setpgid, as
+ * ninja does for each command) is ended too; only one that starts its own session
+ * (setsid, as daemons do) leaves it. Other POSIX systems end the process group
+ * only. Without
  * killOnClose only the child itself is terminated, destroying the IProcess
  * leaves it running, and on POSIX it shares this process's session and terminal.
  * TODO(M3): supervision with restart and backoff (PLAN.md section 3.1; the M3 supervisor).

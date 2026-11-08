@@ -343,6 +343,51 @@ std::shared_ptr<const CompileDatabaseState> readCompileDatabase(io::IFileSystem&
     return state;
 }
 
+/*
+ * Whether clangd's own config could point it at a compilation database the readiness model does not
+ * search (clangdUsesFallbackFlags): a `CompileFlags: CompilationDatabase:` directive in a .clangd in
+ * one of `path`'s folders, or in the user's clangd config.yaml (%LOCALAPPDATA%\clangd on Windows,
+ * $XDG_CONFIG_HOME/clangd or ~/.config/clangd on Linux). Only a config file that names the key can
+ * hold the directive; one that exists but cannot be read counts as naming it. Only asked when
+ * clangd runs with its config enabled (trusted). GUI thread: a stat per folder level, and reads of
+ * the (small) config files that exist.
+ */
+bool clangdConfigMayMoveTheDatabase(io::IFileSystem& fs, std::string_view path) {
+    const auto names = [&fs](const std::string& file) {
+        auto found = fs.exists(file);
+        if (!found)
+            return true; // Cannot tell.
+        if (!*found)
+            return false;
+        auto bytes = fs.readFile(file);
+        return !bytes || bytes->find("CompilationDatabase") != std::string::npos;
+    };
+    std::string user;
+    if constexpr (io::kNativePathStyle == io::PathStyle::Windows) {
+        if (const QString local = qEnvironmentVariable("LOCALAPPDATA"); !local.isEmpty())
+            user = local.toStdString() + "/clangd/config.yaml"; // normalizePath makes it native.
+    } else if (const QString xdg = qEnvironmentVariable("XDG_CONFIG_HOME"); !xdg.isEmpty()) {
+        user = xdg.toStdString() + "/clangd/config.yaml";
+    } else if (const QString home = qEnvironmentVariable("HOME"); !home.isEmpty()) {
+        user = home.toStdString() + "/.config/clangd/config.yaml";
+    }
+    if (!user.empty()) {
+        auto file = io::normalizePath(user);
+        if (!file || names(*file))
+            return true;
+    }
+    auto normalized = io::normalizePath(path);
+    if (!normalized)
+        return true;
+    for (std::string_view directory = io::parentPath(*normalized); !directory.empty();
+         directory = io::parentPath(directory)) {
+        auto config = io::joinPath(directory, ".clangd");
+        if (!config || names(*config))
+            return true;
+    }
+    return false;
+}
+
 sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string database, io::FileStatus status,
                                           std::function<void(std::shared_ptr<const CompileDatabaseState>)> done) {
     done(readCompileDatabase(*fs, std::move(database), status));
@@ -367,6 +412,10 @@ ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
 std::optional<bool> Workbench::clangdUsesFallbackFlags(std::string_view path) {
     using Kind = CompileDatabaseState::Kind;
     if (!m_clangd)
+        return std::nullopt;
+    // A trusted clangd reads .clangd and the user's config, whose CompilationDatabase directive
+    // moves its database search where this model does not follow: claim nothing then (truth rule).
+    if (m_clangdTrusted && clangdConfigMayMoveTheDatabase(m_services.fs, path))
         return std::nullopt;
     // <directory>/<name> when it exists, "" when it does not, nullopt when that cannot be told.
     const auto existing = [&](std::string_view directory, std::string_view name) -> std::optional<std::string> {

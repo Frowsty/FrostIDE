@@ -62,6 +62,8 @@ using detail::UniqueFd;
 constexpr std::size_t kChunkBytes = 64 * 1024;
 // How long communicate() waits for a terminated process to exit before returning Timeout.
 constexpr auto kReapGrace = std::chrono::seconds(5);
+// The most /proc sweeps killSessionTree makes (process_internal.hpp).
+constexpr int kSessionSweeps = 8;
 
 // poll() timeout in milliseconds: rounded up, at most detail::maxWaitSliceMs() (2^30 ms by default, which
 // fits an int); callers loop until their deadline.
@@ -197,8 +199,9 @@ public:
         m_out.reset();
         m_err.reset();
         if (m_ownGroup && !m_released.load()) {
-            // The zombie (or live) leader keeps the group id reserved, so this reaches only our group.
-            ::kill(-m_pid, SIGKILL);
+            // The zombie (or live) leader keeps the group and session ids reserved, so this reaches
+            // only our tree.
+            detail::killSessionTree(m_pid);
             reap(0);
         } else {
             /*
@@ -348,6 +351,9 @@ public:
         const pid_t target = m_ownGroup ? -m_pid : m_pid;
         if (::kill(target, SIGKILL) != 0 && errno != ESRCH) {
             return std::unexpected(errnoError(errno, "kill"));
+        }
+        if (m_ownGroup) {
+            detail::killSessionTree(m_pid); // The descendants that left the group (ninja's commands).
         }
         return {};
     }
@@ -847,5 +853,55 @@ constinit PosixProcessLauncher g_realLauncher;
 } // namespace
 
 IProcessLauncher& realProcessLauncher() noexcept { return g_realLauncher; }
+
+namespace detail {
+
+void killSessionTree(pid_t leader) {
+    static_cast<void>(::kill(-leader, SIGKILL));
+#ifdef __linux__
+    const pid_t self = ::getpid();
+    std::vector<pid_t> signalled;
+    for (int sweep = 0; sweep < kSessionSweeps; ++sweep) {
+        DIR* dir = ::opendir("/proc");
+        if (dir == nullptr) {
+            return;
+        }
+        bool foundNew = false;
+        while (const dirent* entry = ::readdir(dir)) {
+            const std::string_view name(entry->d_name);
+            pid_t pid = 0;
+            const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), pid);
+            if (error != std::errc{} || end != name.data() + name.size() || pid <= 0 || pid == self) {
+                continue;
+            }
+            // /proc/<pid>/stat: "pid (comm) state ppid pgrp session ..."; comm may hold parentheses.
+            const std::string stat = readProcFile(std::format("/proc/{}/stat", pid));
+            const std::size_t close = stat.rfind(')');
+            if (close == std::string::npos) {
+                continue; // Gone meanwhile.
+            }
+            char state = '?';
+            long parent = 0;
+            long group = 0;
+            long session = 0;
+            if (std::sscanf(stat.c_str() + close + 1, " %c %ld %ld %ld", &state, &parent, &group, &session) != 4 ||
+                state == 'Z' || state == 'X' || session != static_cast<long>(leader)) {
+                continue;
+            }
+            static_cast<void>(::kill(pid, SIGKILL));
+            if (std::ranges::find(signalled, pid) == signalled.end()) {
+                signalled.push_back(pid);
+                foundNew = true;
+            }
+        }
+        ::closedir(dir);
+        if (!foundNew) {
+            return; // Every live member was signalled before: they are dying, none was forked since.
+        }
+    }
+#endif
+}
+
+} // namespace detail
 
 } // namespace frost::io

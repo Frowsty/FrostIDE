@@ -28,6 +28,9 @@
 //   grandchild wait|exit  starts a copy of itself as "sleep 60000" that shares these standard
 //                      handles, prints "grandchild <pid>", then sleeps 60 s (wait) or exits 0
 //                      (exit), leaving the grandchild behind holding stdout open
+//   grandchild-own-group wait|exit  the same, but on POSIX the grandchild starts in a process
+//                      group of its own (setpgid, as ninja starts every command), so only a
+//                      session-wide kill reaches it; on Windows the same as grandchild
 //   session            POSIX: "session leader" or "not session leader", then "tty" if
 //                      /dev/tty (the controlling terminal) opens, "no tty" for ENXIO
 //   fd-write N TEXT    POSIX: writes TEXT to descriptor N, then prints "wrote" ("write error
@@ -170,7 +173,8 @@ std::string toUtf8(const wchar_t* wide) {
 
 // Starts "<this program> sleep 60000" with this process's standard handles and returns
 // its process id, or 0 on failure. Deliberately not through frost::io (see the header).
-unsigned long spawnSleepingCopy() {
+// POSIX `ownGroup`: the copy leads a new process group (posix_spawn sets it before exec).
+unsigned long spawnSleepingCopy([[maybe_unused]] bool ownGroup = false) {
 #ifdef _WIN32
     std::wstring self(32768, L'\0');
     const DWORD length = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
@@ -203,8 +207,19 @@ unsigned long spawnSleepingCopy() {
     std::string sleepMode = "sleep";
     std::string duration = "60000";
     char* argv[] = {self, sleepMode.data(), duration.data(), nullptr};
+    posix_spawnattr_t attributes;
+    if (posix_spawnattr_init(&attributes) != 0) {
+        return 0;
+    }
+    if (ownGroup && (posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP) != 0 ||
+                     posix_spawnattr_setpgroup(&attributes, 0) != 0)) {
+        posix_spawnattr_destroy(&attributes);
+        return 0;
+    }
     pid_t pid = 0;
-    if (posix_spawn(&pid, self, nullptr, nullptr, argv, environ) != 0) {
+    const int spawned = posix_spawn(&pid, self, nullptr, &attributes, argv, environ);
+    posix_spawnattr_destroy(&attributes);
+    if (spawned != 0) {
         return 0;
     }
     return static_cast<unsigned long>(pid);
@@ -491,8 +506,9 @@ int run(const std::vector<std::string>& args) {
         return 0;
     }
 #endif
-    if (mode == "grandchild" && args.size() == 3 && (args[2] == "wait" || args[2] == "exit")) {
-        const unsigned long pid = spawnSleepingCopy();
+    if ((mode == "grandchild" || mode == "grandchild-own-group") && args.size() == 3 &&
+        (args[2] == "wait" || args[2] == "exit")) {
+        const unsigned long pid = spawnSleepingCopy(mode == "grandchild-own-group");
         if (pid == 0) {
             line("spawn failed");
             return 3;

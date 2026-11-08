@@ -42,6 +42,44 @@ what is next, blockers and open questions for the user.
   - Follow-up 14 needed no integration change: the acceptance branch still saw
     `WorkbenchStructure.ClangdRestartChangesEncodingAndRefreshes` fail, but it lacked the language slice's fix (the
     structure fixture aborted on a delete-pending hold file under load); the merged tree has it.
+- **Cross review of the combined tree** (not approved: three blockers and a truth-rule violation, all fixed in
+  `r0/close`, each with a test that fails on the old code):
+  - **The 250 ms open stall** (the R0 exit criterion). `CMakeService::openFolder` and `setActiveProfile` read the
+    existing File API reply on the caller's (GUI) thread; they now queue the read on the service's thread
+    (`State::loadReply`), which publishes the model in queue order, before any job the call starts, and publishes
+    nothing when the folder or profile changed meanwhile. Contract change in `cmake_service.hpp`: `model()` is
+    nullptr until `onModelChanged` publishes the reply (`waitForIdle` waits for it); a profile switch's admission
+    lease covers its read. With that fixed, the corpus test found a second stall of 352 ms: `CMakeController`
+    built the CMake tree (`CMakeViewModel::build`) on the GUI thread. The tree is now built in the controller's
+    `onModelChanged` on the service's thread. Tests: `CMakeServiceTest.OpenAndProfileSwitchReadTheReplyOnTheServiceThread`
+    (holds every reply read; both calls return while it is held, nothing is read on the calling thread) and the
+    corpus test below.
+  - **The clone stall** had no test. `CorpusFrostEngine.CloningARealRepositoryRecordsNoStallOver250msAndOpensTheClone`
+    clones the pinned FrostEngine clone (its whole history, about 70 MB packed, 6000 files) over git's `file://`
+    transport (the pack protocol, not hard links) through `Workbench::cloneRepository` with the git the product
+    resolves, under the product's StallWatchdog, until the clone has opened as a project.
+  - **Cancel Build on Linux leaked the build's commands.** The POSIX launcher SIGKILLed only the child's process
+    group, but Ninja starts every command in a group of its own and a SIGKILLed Ninja cannot pass the signal on,
+    so compilers and custom commands kept running, reparented to init (the cross review found
+    `WorkbenchClangdSpawn.RevokingTrustDuringALongBuildRestrictsClangdAtOnce`'s `cmake -E sleep 120` left behind
+    after every WSL run). `terminate()`, the destructor and the async release now end the child's whole session
+    (`killSessionTree`: the group, then every live process of the session from `/proc`, repeated while new ones
+    appear); only a descendant that calls `setsid` escapes, as `process.hpp` now says. Tests:
+    `RealProcessLauncher.TerminateEndsADescendantInAProcessGroupOfItsOwn`,
+    `RealProcessLauncher.DestroyingTheProcessEndsADescendantInAProcessGroupOfItsOwn`,
+    `AsyncProcess.TerminateAndReleaseEndADescendantInAProcessGroupOfItsOwn` (an `io_test_child` grandchild in its
+    own group) and `CMakeRealBuild.CancellingABuildEndsTheCommandsNinjaStarted` (the real cmake and Ninja; the
+    cancelled command line must never reach its last step, and the same build uncancelled does). All four fail on
+    the old code in WSL and pass on both legs.
+  - **Truth rule: readiness and a `.clangd` CompilationDatabase directive.** A trusted clangd runs with its config
+    enabled, and a `CompileFlags: CompilationDatabase:` directive moves its database search where the readiness
+    model does not look, so "no compile command" could be claimed for a file clangd has a command for. Readiness
+    now claims nothing for a trusted clangd when a `.clangd` in the file's folders, or the user's clangd
+    `config.yaml`, names `CompilationDatabase` (or cannot be read). Test:
+    `WorkbenchClangd.ACompilationDatabaseDirectiveInATrustedDotClangdIsNotClaimedAsFallback` (oracle: `clangd
+    --check` with config enabled; without config the same file falls back, so the directive decides).
+  - Nits: the readiness prefetch reads the database under the spelling `clangdUsesFallbackFlags` looks it up by;
+    `updatePathInVcxproj`'s folder match reads the separator from the key, not from the unnormalised path.
 - **What changed for the user.**
   - Project files are no longer rewritten by regexes on rename, move or delete: the file operation proceeds and a
     warning names the `.vcxproj`/`.csproj` files that still list the path (SLN-6). CMakeLists.txt source edits on
@@ -59,13 +97,19 @@ what is next, blockers and open questions for the user.
   - Debug attach has its own trust wording and never cancels a build waiting for trust; with no project open,
     "Attach Once" trusts the program's folder for that attach only (never saved).
   - Language readiness: "Indexing" follows clangd's own progress; "no compile command" is claimed only when
-    clangd itself would use its fallback command (its own compile_commands.json / compile_flags.txt search);
+    clangd itself would use its fallback command (its own compile_commands.json / compile_flags.txt search;
+    nothing is claimed when a trusted `.clangd` or the user's clangd config names a `CompilationDatabase`);
     language-server metadata sources open read-only from `<profile>/caches/metadata`; a C# metadata result with
     no cache names LTR-6.
   - A CMake profile switch restarts clangd once, after the configure. Trust granted or revoked in Settings follows
     the store without writing to it (a parent grant stays on the parent; a revocation is never undone), runs the
     configure a never-configured folder was waiting for, and restricts clangd at once during a long build.
   - A missing clangd shows "C++ language server unavailable" (once per project) instead of only logging.
+  - Opening a configured CMake folder or switching its profile no longer freezes the window while the File API
+    reply is read and the CMake tree is built (about half a second for FrostEngine); the tree appears when both
+    are done.
+  - Cancel Build (and every other cancel or close of a contained process) on Linux ends the commands Ninja
+    started, not only Ninja.
   - Staging: `tools/stage.sh` stages Linux with the bundled LuaLS; `stage.ps1` checks every input before touching
     the destination and removes (or empties) a partial stage after any error. Debug test builds can record every
     child process in a spawn log (`FROST_SPAWN_LOG_DIR`), which the staged-LuaLS exit test uses.
@@ -77,14 +121,17 @@ what is next, blockers and open questions for the user.
     label, where a missing corpus or a skip fails.
 - **R0 exit acceptance** (PLAN.md section 7, R0): tool ablation (`R0ToolAblation.*`), Go to Definition into a
   library leaving the workspace unchanged (`R0Navigation.*`), untrusted CMake and `.frostproj` folders starting no
-  process before the trust grant (`R0Trust.*`, driven through `Workbench::openPath`: the automation endpoint,
-  FND-7a, does not exist yet), engine helpers beside a running pinned LuaLS (`R0Engine.*`, follow-up 13), the
-  staged LuaLS test on both legs (`tools.staged_luals`) and the stage failure tests. **Not met:** "no GUI stall
-  above 250 ms opening the FrostEngine clone". `CorpusFrostEngine.OpeningThePinnedClone...` measured 552 ms and
-  529 ms (Debug), from `CMakeService::openFolder` reading the existing CMake File API reply on the GUI thread
-  (`State::readReply` -> `readCMakeFileApiReply` -> `parseJson`; `selectProfile` does the same). Its one-clangd
-  and positionEncoding checks pass. The test stays strict, so R0 cannot be signed off until the reply is read on
-  a worker (a `src/build` contract change with its own review).
+  process before the trust grant (`R0Trust.*`), engine helpers beside a running pinned LuaLS (`R0Engine.*`,
+  follow-up 13), the staged LuaLS test on both legs (`tools.staged_luals`) and the stage failure tests.
+  - **Stall criterion: met on the Windows leg (Debug).** The corpus tier on Windows (`ctest -L corpus`, Debug, the
+    slower build): opening the FrostEngine clone recorded one stall over 50 ms, the longest 59 ms (destroying the
+    previous CMake tree on the GUI thread), against 552 ms and 529 ms before; it still starts exactly one clangd
+    and negotiates `positionEncoding` utf-8. Cloning it recorded no stall over 50 ms. Not measured: the WSL leg
+    (no WSL corpus clone yet, owner FND-6b) and a Release build (Debug is the slower configuration; owner CMK-15).
+  - **Deviation: the trust criterion's automation endpoint.** The criterion says "through the automation
+    endpoint", which does not exist yet (FND-7a, R1). `R0Trust.*` drive `Workbench::openPath`, the call the
+    endpoint will make; what the criterion protects (nothing runs before trust, no silent grant) is tested, the
+    endpoint route is deferred to FND-7a.
 - **Tests replaced or removed (D32).**
   - `Workbench.RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs` became
     `RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuildProjects`. Its part 2 asserted the harmful
@@ -109,36 +156,37 @@ what is next, blockers and open questions for the user.
   | Missing clangd only logged while C++ features stay silent | removed (notice) |
   | Readiness claimed "no compile command" for files clangd parses (branch-internal) | removed before merge |
 
-- **Open follow-ups** (from the slice reports and reviews; none blocks the merge, the first blocks R0 sign-off):
-  1. Move the CMake File API reply read in `CMakeService::openFolder` and `selectProfile` off the GUI thread (the
-     250 ms corpus stall, above); measure Release too.
-  2. `verify.ps1 -Corpus` and `verify.sh --corpus` have not been run end to end; WSL has no corpus clone yet
-     (`python3 tools/corpora.py fetch` in WSL). `corpora.py fetch` prunes older pins unless `--keep-old`.
-  3. Project: FileSystemView "Add Existing Folder/Files to Project" still opens a picker and then refuses
-     (SLN-6); `writeCMakeListsWithPreview` writes the previewed text without re-reading the file after the modal
-     preview (an external change made meanwhile is overwritten); `updatePathInVcxproj`'s C# folder notice misses
-     `Include="Sub/x.cs"` when the folder has no separator and has no separator-boundary check, and its `names`
-     lambda indexes the unnormalised path; run-marker tooltips are not refreshed when the solution or CMake model
-     loads; a misplaced test comment above `RenamingOrMovingAnAssetMovesItsFmetaSidecar`; the `moveWithSidecar`
-     rollback has no test; deleting an asset leaves its `.fmeta`, and folder `.fmeta` files do not move;
-     `project_open_broker.cpp`, `main.cpp` and the `--project` routing still accept only `.frostproj`.
-  4. Attach to Process on Linux: under the default Yama policy (`ptrace_scope = 1`) attaching to a process that
-     did not opt in fails with lldb-dap's "Trying to resume but the async thread is dead". The product should
-     read `/proc/sys/kernel/yama/ptrace_scope` and say why (and how: `PR_SET_PTRACER`, the sysctl, or
-     CAP_SYS_PTRACE) instead of showing that message.
-  5. Language: readiness ignores a `CompileFlags: CompilationDatabase` directive in a trusted `.clangd` or the user
-     config (should claim nothing then); `openReadOnlyLocation` makes only the current view read-only;
-     `fallbackAgreesWithClangd` waits only 3 s for a late false claim; the spawn tests' fixed 2 s "no late restart"
-     waits remain.
-  6. Tooling: spawn-log session names can collide within one millisecond; its start time is taken after launch
-     and the image is hashed before it; non-UTF-8 path bytes make the JSONL invalid; `stage.ps1` copies the
-     managed folders through wildcard paths; the commit-msg hook does not require both legs' records; the
-     fabricated-result lint misses `return {...}`. Recorded deviations: lldb-dap never searches PATH; the Linux
-     stage loads Qt through the SDK RUNPATH (TODO(M5)); the spawn log hashes the whole image in memory;
-     `FROST_ENABLE_SPAWN_LOG` is on in every Debug build with tests.
-  7. Acceptance: the clangd-unavailable notice also fires for Lua-only and `.frostproj` folders and its per-root
-     guard is never cleared; `R0Trust` CMake asserts at least one cmake launch after the grant, not exactly one;
-     the absence checks use fixed settle windows.
+- **Open follow-ups** (from the slice reports and the reviews, each with its owning epic; none blocks the merge):
+  1. The corpus tier has not run in WSL: there is no WSL corpus clone yet (`python3 tools/corpora.py fetch` in
+     WSL), and `verify.ps1 -Corpus` / `verify.sh --corpus` have not run end to end (the Windows corpus tests ran
+     through `ctest -L corpus`). `corpora.py fetch` prunes older pins unless `--keep-old`. Owner: FND-6b.
+  2. Project (owners in brackets): FileSystemView "Add Existing Folder/Files to Project" still opens a picker and
+     then refuses (SLN-6); `writeCMakeListsWithPreview` writes the previewed text without re-reading the file
+     after the modal preview, so an external change made meanwhile is overwritten (CMK-10); the
+     `updatePathInVcxproj` C# folder notice misses `Include="Sub/x.cs"` when the folder has no separator and has
+     no separator-boundary check (SLN-6); run-marker tooltips are not refreshed when the solution or CMake model
+     loads (RUN-1); a misplaced test comment above `RenamingOrMovingAnAssetMovesItsFmetaSidecar`, no test of the
+     `moveWithSidecar` rollback, deleting an asset leaves its `.fmeta`, folder `.fmeta` files do not move
+     (FEC-9a); FrostEngine detection still differs in `project_open_broker.cpp`, `main.cpp` and the `--project`
+     routing, which accept only `.frostproj`, not `.feproject` (FEC-3); the other property pages still write
+     project files by regex (SLN-8, harm register).
+  3. Attach to Process on Linux: under the default Yama policy (`ptrace_scope = 1`) attaching to a process that
+     did not opt in fails with lldb-dap's "Trying to resume but the async thread is dead", in the product, not
+     only in the test. It should read `/proc/sys/kernel/yama/ptrace_scope` and say why and how
+     (`PR_SET_PTRACER`, the sysctl, CAP_SYS_PTRACE). Owner: DBG-1.
+  4. Language: `openReadOnlyLocation` makes only the current view read-only (LTR-6).
+  5. Absence checks with fixed settle windows (they synchronise nothing, but under load they can miss a late
+     event): `fallbackAgreesWithClangd` 3 s, `R0Trust` 3 s, `R0ToolAblation` 1.5-2 s, the spawn tests' 2 s "no
+     late restart", the new cancel test's 10 s. Owner: FND-6 (event-based probes in the real-tool harness).
+  6. Tooling: spawn-log session names can collide within one millisecond, its start time is taken after launch and
+     the image is hashed before it, non-UTF-8 path bytes make the JSONL invalid (FND-7a, evidence format);
+     `stage.ps1` copies the managed folders through wildcard paths (FND-17); the commit-msg hook does not require
+     both legs' records (FND-2); the fabricated-result lint misses `return {...}` (FND-5). Recorded deviations:
+     lldb-dap never searches PATH; the Linux stage loads Qt through the SDK RUNPATH (TODO(M5)); the spawn log
+     hashes the whole image in memory; `FROST_ENABLE_SPAWN_LOG` is on in every Debug build with tests.
+  7. Acceptance: the "C++ language server unavailable" notice also fires for Lua-only and `.frostproj` folders and
+     its per-root guard is never cleared (CPP-1); `R0Trust` CMake asserts at least one cmake launch after the
+     grant, not exactly one (FND-8).
 - **Verification.** The combined tree is verified with `tools\verify.ps1 -Quick` on both legs (Windows and WSL);
   the real summary line is the `Verified:` footer of the `r0/close` head commit, which records this tree. Not
   merged to `main` and not pushed yet.

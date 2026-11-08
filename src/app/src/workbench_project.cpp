@@ -2093,8 +2093,10 @@ void Workbench::updatePathInVcxproj(const std::string& oldPath, const std::strin
         const std::string key = lang::documentKey(path);
         if (!directory)
             return key == oldKey;
+        // The separator after the folder's key, read from the key itself (documentKey may not keep
+        // the spelling's length, so an index into `path` could land elsewhere).
         return key.size() > oldKey.size() && key.starts_with(oldKey) &&
-               (path[oldPath.size()] == '/' || path[oldPath.size()] == '\\');
+               (key[oldKey.size()] == '/' || key[oldKey.size()] == '\\');
     };
     QStringList stale;
     for (const project::ProjectInfo& proj : m_solution->projects()) {
@@ -2840,10 +2842,14 @@ void Workbench::startClangd(const std::string& root) {
                         return;
                     if (self->m_language)
                         self->m_language->structureChanged();
-                    // Reads the new server's database for languageReadiness before anyone asks.
+                    // Reads the new server's database for languageReadiness before anyone asks, under
+                    // the spelling clangdUsesFallbackFlags looks it up by (normalised <dir>/name).
                     if (self->m_clangd && self->m_clangd->state() == lang::ClangdState::Running)
-                        if (const auto location = self->m_clangd->compileCommands())
-                            (void)self->compileDatabaseState(location->file);
+                        if (const auto location = self->m_clangd->compileCommands()) {
+                            auto joined = io::joinPath(location->directory, "compile_commands.json");
+                            if (auto file = joined ? io::normalizePath(*joined) : joined)
+                                (void)self->compileDatabaseState(*file);
+                        }
                 },
                 Qt::QueuedConnection);
     };

@@ -261,6 +261,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     std::optional<Job> job FROST_GUARDED_BY(mutex);
     std::uint64_t lastJobId FROST_GUARDED_BY(mutex) = 0;
     std::uint64_t profileGeneration FROST_GUARDED_BY(mutex) = 0;
+    // Changes when the reply the model comes from changes (open, close, profile switch), so a
+    // queued loadReply of an earlier folder or profile publishes nothing.
+    std::uint64_t replyGeneration FROST_GUARDED_BY(mutex) = 0;
     DiagnosticIndex diagnostics FROST_GUARDED_BY(mutex);
     std::optional<CMakeConfigureOutcome> lastConfigure FROST_GUARDED_BY(mutex);
     std::optional<CMakeBuildOutcome> lastBuild FROST_GUARDED_BY(mutex);
@@ -475,6 +478,40 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             return nullptr;
         }
         return std::make_shared<const project::CMakeProject>(std::move(**reply));
+    }
+
+    /*
+     * Service thread: reads `profile`'s existing reply and publishes it as the model, then calls
+     * onModelChanged with it (or nullptr). The read is blocking (the File API reply of a large
+     * project is several MB of JSON: about 500 ms for FrostEngine in Debug), which is why
+     * openFolder and setActiveProfile queue it here instead of reading on their caller's (the GUI)
+     * thread (R0 exit criterion, FND-9a). It runs in queue order, before any job those calls start,
+     * and publishes nothing when the folder or profile changed since it was queued (`generation`)
+     * or a configure published a model first. With `configureIfMissing` (a profile switch), an
+     * idle, trusted folder whose profile has no reply configures it (configureOnOpen). `lease`
+     * keeps the profile switch's admission until the read ends.
+     */
+    void loadReply(std::uint64_t generation, const project::CMakeProfile& profile, bool configureIfMissing,
+                   const std::shared_ptr<AdmissionLease>& lease) {
+        static_cast<void>(lease);
+        auto reply = readReply(profile);
+        {
+            LockGuard lock(mutex);
+            if (replyGeneration != generation || configuredOnce || model) {
+                return;
+            }
+            model = reply;
+            stale = false;
+            recomputeWatchedLocked();
+            if (configureIfMissing && !reply && options.configureOnOpen) {
+                static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
+            }
+        }
+        // Directly, not through emit: this task holds the place in the event order where the model
+        // of the open or switch belongs (before the events of the job it may have started).
+        if (callbacks.onModelChanged) {
+            callbacks.onModelChanged(reply);
+        }
     }
 
     std::optional<std::string> persistedProfile(const std::string& folder) {
@@ -1311,10 +1348,6 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
     }
     std::vector<project::CMakeProfile> profiles = project::cmakeProfilesFor(*folder, presets, records, recordSource);
     const std::optional<std::size_t> active = State::chooseProfile(profiles, s.persistedProfile(*folder));
-    std::shared_ptr<const project::CMakeProject> model;
-    if (active) {
-        model = s.readReply(profiles[*active]);
-    }
 
     LockGuard lock(s.mutex);
     if (s.state != BuildState::Idle) {
@@ -1326,7 +1359,8 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
     s.presetsProblem = std::move(problem);
     s.profiles = std::move(profiles);
     s.active = active;
-    s.model = model;
+    const std::uint64_t load = ++s.replyGeneration;
+    s.model = nullptr; // Until loadReply publishes the existing reply, on the service thread.
     s.stale = false;
     s.configuredOnce = false;
     s.presetsTouched = false;
@@ -1337,7 +1371,11 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
     s.recomputeWatchedLocked();
     s.emitDiagnosticsCleared();
     s.emitProfilesLocked();
-    s.emitModel(model);
+    if (active) {
+        s.post([state = &s, load, profile = s.profiles[*active]] { state->loadReply(load, profile, false, nullptr); });
+    } else {
+        s.emitModel(nullptr);
+    }
     if (s.options.configureOnOpen) {
         static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
     }
@@ -1355,6 +1393,7 @@ Result<void> CMakeService::closeFolder() {
     }
     s.sourceDir.clear();
     ++s.profileGeneration;
+    ++s.replyGeneration;
     s.presets.reset();
     s.presetsProblem.reset();
     s.profiles.clear();
@@ -1392,21 +1431,15 @@ std::optional<project::CMakeProfile> CMakeService::activeProfile() const {
 
 Result<void> CMakeService::setActiveProfile(std::size_t index) {
     State& s = *m_state;
-    bool admissionReserved = false;
+    // The admission covers the switch through its reply read on the service thread (loadReply).
+    std::shared_ptr<State::AdmissionLease> lease;
     if (s.options.reserveProjectCode && s.options.releaseProjectCode) {
         auto reserved = s.options.reserveProjectCode();
         if (!reserved)
             return std::unexpected(std::move(reserved.error()));
-        admissionReserved = true;
+        lease = std::make_shared<State::AdmissionLease>();
+        lease->release = s.options.releaseProjectCode;
     }
-    struct Release {
-        State& state;
-        bool active;
-        ~Release() {
-            if (active)
-                state.options.releaseProjectCode();
-        }
-    } release{s, admissionReserved};
     project::CMakeProfile profile;
     std::string folder;
     {
@@ -1426,24 +1459,15 @@ Result<void> CMakeService::setActiveProfile(std::size_t index) {
         }
         profile = s.profiles[index];
         folder = s.sourceDir;
-    }
-    auto model = s.readReply(profile);
-    {
-        LockGuard lock(s.mutex);
-        if (s.sourceDir != folder || index >= s.profiles.size() || s.state != BuildState::Idle) {
-            return fail(ErrorCode::Busy, "the folder changed while the profile was being switched");
-        }
         s.active = index;
         ++s.profileGeneration;
-        s.model = model;
+        const std::uint64_t load = ++s.replyGeneration;
+        s.model = nullptr; // Until loadReply publishes this profile's reply.
         s.stale = false;
         s.configuredOnce = false;
         s.recomputeWatchedLocked();
         s.emitProfilesLocked();
-        s.emitModel(model);
-        if (s.options.configureOnOpen && !model) {
-            static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
-        }
+        s.post([state = &s, load, profile, lease = std::move(lease)] { state->loadReply(load, profile, true, lease); });
     }
     return s.persist(folder, profile.name);
 }

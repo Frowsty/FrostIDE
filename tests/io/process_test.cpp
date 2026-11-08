@@ -1051,6 +1051,43 @@ TEST(RealProcessLauncher, DestroyingTheProcessEndsTheWholeTree) {
     grandchild.kill();
 }
 
+/* A descendant that left the child's process group, as ninja starts every build command
+ * (setpgid), is still ended: on Windows by the job, on Linux by the session sweep. Before the sweep
+ * a cancelled `cmake --build` left such commands running, reparented to init. */
+TEST(RealProcessLauncher, TerminateEndsADescendantInAProcessGroupOfItsOwn) {
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild-own-group", "wait"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+#ifndef _WIN32
+    ASSERT_EQ(::getpgid(static_cast<pid_t>(pid)), static_cast<pid_t>(pid)) << "the grandchild is not in its own group";
+#endif
+    EXPECT_FALSE(grandchild.exitsWithin(0ms));
+    ASSERT_TRUE((*process)->terminate().has_value());
+    EXPECT_EQ((*process)->wait(30s).value().exitCode, frost::io::kTerminatedExitCode);
+    EXPECT_TRUE(grandchild.exitsWithin(30s)) << "terminate() left the grandchild in its own group running";
+    grandchild.kill();
+}
+
+TEST(RealProcessLauncher, DestroyingTheProcessEndsADescendantInAProcessGroupOfItsOwn) {
+    auto process = frost::io::realProcessLauncher().launch(childSpec({"grandchild-own-group", "exit"}));
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const frost::io::ProcessId pid = readGrandchildPid(**process);
+    ASSERT_NE(pid, 0u);
+    const ProcessWatch grandchild(pid);
+    ASSERT_TRUE(grandchild.valid());
+#ifndef _WIN32
+    ASSERT_EQ(::getpgid(static_cast<pid_t>(pid)), static_cast<pid_t>(pid)) << "the grandchild is not in its own group";
+#endif
+    EXPECT_EQ((*process)->wait(30s).value().exitCode, 0);
+    EXPECT_FALSE(grandchild.exitsWithin(200ms));
+    process->reset();
+    EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the destructor left the grandchild in its own group running";
+    grandchild.kill();
+}
+
 TEST(RealProcessLauncher, WithoutKillOnCloseTheChildOutlivesItsProcessObject) {
     ProcessSpec spec = childSpec({"sleep", "60000"});
     spec.killOnClose = false;

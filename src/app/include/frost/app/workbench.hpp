@@ -677,7 +677,9 @@ private:
      * --compile-commands-dir clangd takes the nearest folder, from the file's own upward, holding a
      * compile_commands.json it can load, a build/compile_commands.json or a compile_flags.txt.
      * nullopt (nothing claimed) while a database is being read, when one cannot be read, and for
-     * cases the model does not cover. GUI thread; at most three stats per folder level.
+     * cases the model does not cover: among them a trusted clangd (config enabled) whose .clangd or
+     * user config.yaml may name a CompilationDatabase. GUI thread; at most four stats per folder
+     * level, and reads of the config files that exist.
      */
     [[nodiscard]] std::optional<bool> clangdUsesFallbackFlags(std::string_view path);
     // What `database` (a compile_commands.json) holds, when read and unchanged since; otherwise

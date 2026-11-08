@@ -6,6 +6,9 @@
 // project, with the real cmake, ninja, MSVC environment (Windows) and the pinned clangd, must record
 // no GUI stall above 250 ms (the interim stall policy of FND-2), start exactly one clangd process
 // and negotiate the LSP 3.17 position encoding (clangd answers capabilities.positionEncoding).
+// Cloning a real repository (that clone's whole history, over git's file:// transport, with the git
+// the product resolves) through the workbench's Clone, until the clone is open, must record no GUI
+// stall above 250 ms either (FND-9a's acceptance).
 //
 // A missing corpus, or one that is not at its pin, fails the test: the tier never skips. Stalls are
 // measured with the product's own StallWatchdog and StallHooks on this GUI thread (the hooks the
@@ -30,10 +33,12 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTimer>
+#include <QUrl>
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <iostream>
@@ -126,19 +131,133 @@ std::string ms(frost::IClock::Duration duration) {
     return std::format("{} ms", std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
 }
 
+/*
+ * The product's stall instrumentation on this GUI thread, as the frost program installs it
+ * (StallWatchdog with this thread's sampler, StallHooks, the ScopedUiIdle hook), writing freeze
+ * reports into <work root>/<freezesName> (emptied first and kept after the test, so a stall can be
+ * read back). stop() ends the measurement and keeps its statistics. The verdict (no stall over
+ * kStallLimit) is checked when the meter is destroyed after a measurement, also when a later step
+ * of the test failed: what was measured until then still counts.
+ */
+class StallMeter {
+public:
+    StallMeter(frost::io::IFileSystem& fs, std::string what, const std::string& freezesName)
+        : m_what(std::move(what)),
+          m_freezes(frost::io::normalizePath(std::string(FROST_APP_WORK_ROOT) + "/" + freezesName).value_or("")) {
+        frost::test::removeTree(fs, m_freezes); // Only this run's reports.
+        if (!fs.createDirectories(m_freezes).has_value()) {
+            ADD_FAILURE() << "cannot create " << m_freezes;
+            return;
+        }
+        auto sampler = frost::diag::createSamplerForCurrentThread();
+        if (!sampler) {
+            ADD_FAILURE() << sampler.error().describe();
+            return;
+        }
+        frost::diag::StallWatchdog::Options watch;
+        watch.freezesDirectory = m_freezes;
+        watch.version = "corpus-test";
+        auto started =
+            frost::diag::StallWatchdog::start(std::move(watch), std::move(*sampler), fs, frost::systemClock());
+        if (!started) {
+            ADD_FAILURE() << started.error().describe();
+            return;
+        }
+        m_watchdog = std::move(*started);
+        m_hooks = std::make_unique<frost::app::StallHooks>(*QCoreApplication::instance(), *m_watchdog);
+        frost::diag::StallWatchdog::install(m_watchdog.get()); // ScopedUiIdle sections count as idle.
+    }
+    StallMeter(const StallMeter&) = delete ("owns the installed watchdog");
+    StallMeter& operator=(const StallMeter&) = delete ("owns the installed watchdog");
+    ~StallMeter() {
+        stop();
+        if (!m_measured)
+            return;
+        std::cout << std::format("[corpus] GUI stalls over {} while {}: {}, longest {}, unreliable {}, reports {} "
+                                 "(dropped {})\n",
+                                 ms(frost::diag::kStallThreshold), m_what, m_stats.stalls, ms(m_stats.longest),
+                                 m_stats.unreliable, m_stats.reportsWritten, m_stats.reportsDropped);
+        EXPECT_LE(m_stats.longest, kStallLimit)
+            << "a GUI stall of " << ms(m_stats.longest) << " while " << m_what
+            << "; the latest freeze report: " << (m_report ? m_report->path : std::string("none"));
+    }
+
+    [[nodiscard]] bool running() const { return m_watchdog != nullptr; }
+
+    // Ends the measurement (call it before a rig's shutdown, which is not part of what is measured).
+    void stop() {
+        if (!m_watchdog)
+            return;
+        frost::diag::StallWatchdog::install(nullptr);
+        m_hooks.reset();
+        m_watchdog->stop();
+        m_stats = m_watchdog->stats();
+        m_report = m_watchdog->lastReport();
+        m_measured = true;
+        m_watchdog.reset();
+    }
+
+private:
+    std::string m_what;
+    std::string m_freezes;
+    std::unique_ptr<frost::diag::StallWatchdog> m_watchdog;
+    std::unique_ptr<frost::app::StallHooks> m_hooks;
+    frost::diag::StallStats m_stats;
+    std::optional<frost::diag::StallWatchdog::ReportInfo> m_report;
+    bool m_measured = false;
+};
+
+// git writes its object files read-only, which Windows refuses to delete: makes the tree at `root`
+// writable when destroyed, before the WorkDir holding it removes it.
+struct WritableOnExit {
+    std::string root;
+    ~WritableOnExit() {
+        auto path = frost::io::toStdPath(root);
+        if (!path || root.empty())
+            return;
+        std::error_code error;
+        for (auto it = std::filesystem::recursive_directory_iterator(*path, error);
+             !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+            std::error_code ignored;
+            if (!it->is_symlink(ignored))
+                std::filesystem::permissions(it->path(), std::filesystem::perms::owner_write,
+                                             std::filesystem::perm_options::add, ignored);
+        }
+    }
+};
+
+// The pinned corpus, checked: present, a git clone, detached at its pin. "" (with a failure added)
+// otherwise: the corpus tier fails instead of skipping.
+std::string checkedCorpus() {
+    const std::string corpus = corpusDirectory();
+    if (corpus.empty()) {
+        ADD_FAILURE() << "FROST_CORPORA_ROOT is not set; run the corpus tier through tools\\verify.ps1 -Corpus or "
+                         "tools/verify.sh --corpus, which set it from tools/corpora.py root";
+        return {};
+    }
+    auto& fs = frost::io::realFileSystem();
+    if (!fs.exists(corpus + "/CMakePresets.json").value_or(false)) {
+        ADD_FAILURE() << "the pinned FrostEngine corpus is missing at " << corpus
+                      << " (python tools/corpora.py fetch); the corpus tier fails instead of skipping";
+        return {};
+    }
+    const auto head = fs.readFile(corpus + "/.git/HEAD");
+    if (!head) {
+        ADD_FAILURE() << corpus << " is not a git clone";
+        return {};
+    }
+    if (head->substr(0, 40) != std::string(FROST_CORPUS_FROSTENGINE_SHA)) {
+        ADD_FAILURE() << corpus << " is not detached at its pin (python tools/corpora.py verify)";
+        return {};
+    }
+    return corpus;
+}
+
 TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneClangdAndNegotiatesPositionEncoding) {
     frost::test::disableCrashDialogs(); // clangd and the compilers inherit the error mode.
-    const std::string corpus = corpusDirectory();
-    ASSERT_FALSE(corpus.empty()) << "FROST_CORPORA_ROOT is not set; run the corpus tier through tools\verify.ps1 "
-                                    "-Corpus or tools/verify.sh --corpus, which set it from tools/corpora.py root";
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
     auto& fs = frost::io::realFileSystem();
-    ASSERT_TRUE(fs.exists(corpus + "/CMakePresets.json").value_or(false))
-        << "the pinned FrostEngine corpus is missing at " << corpus
-        << " (python tools/corpora.py fetch); the corpus tier fails instead of skipping";
-    const auto head = fs.readFile(corpus + "/.git/HEAD");
-    ASSERT_TRUE(head.has_value()) << corpus << " is not a git clone";
-    ASSERT_EQ(head->substr(0, 40), std::string(FROST_CORPUS_FROSTENGINE_SHA))
-        << corpus << " is not detached at its pin (python tools/corpora.py verify)";
     auto found = frost::lang::findClangd(fs, frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
 
@@ -147,64 +266,14 @@ TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneCla
     options.workbench.clangd = true;
     options.launcher = &launcher;
     WorkDir profileDir("corpus-frostengine-profile");
-    // Freeze reports outlive the test (the work directory is removed), so a stall can be read back.
-    const std::string freezes =
-        frost::io::normalizePath(std::string(FROST_APP_WORK_ROOT) + "/corpus-freezes").value_or("");
-    frost::test::removeTree(fs, freezes); // Only this run's reports.
-    ASSERT_TRUE(fs.createDirectories(freezes).has_value()) << freezes;
-    frost::diag::StallStats stats;
-    std::optional<frost::diag::StallWatchdog::ReportInfo> report;
-    bool measured = false;
-    // The stall verdict, also when a later step fails: what was measured until then still counts.
-    struct StallVerdict {
-        const frost::diag::StallStats& stats;
-        const std::optional<frost::diag::StallWatchdog::ReportInfo>& report;
-        const bool& measured;
-        ~StallVerdict() {
-            if (!measured)
-                return;
-            std::cout << std::format("[corpus] GUI stalls over {} while opening FrostEngine: {}, longest {}, "
-                                     "unreliable {}, reports {} (dropped {})\n",
-                                     ms(frost::diag::kStallThreshold), stats.stalls, ms(stats.longest),
-                                     stats.unreliable, stats.reportsWritten, stats.reportsDropped);
-            EXPECT_LE(stats.longest, kStallLimit)
-                << "a GUI stall of " << ms(stats.longest) << " while opening the corpus; the latest freeze report: "
-                << (report ? report->path : std::string("none"));
-        }
-    } verdict{stats, report, measured};
     {
         WorkbenchRig rig(profileDir, options);
         ASSERT_TRUE(rig.trust->trust(corpus).has_value());
         rig.show();
 
-        // The product's stall instrumentation on this GUI thread, as the frost program installs it,
-        // started after the window exists (start-up is B1's business, not this criterion's).
-        auto sampler = frost::diag::createSamplerForCurrentThread();
-        ASSERT_TRUE(sampler.has_value()) << sampler.error().describe();
-        frost::diag::StallWatchdog::Options watch;
-        watch.freezesDirectory = freezes;
-        watch.version = "corpus-test";
-        auto started =
-            frost::diag::StallWatchdog::start(std::move(watch), std::move(*sampler), fs, frost::systemClock());
-        ASSERT_TRUE(started.has_value()) << started.error().describe();
-        std::unique_ptr<frost::diag::StallWatchdog> watchdog = std::move(*started);
-        auto hooks = std::make_unique<frost::app::StallHooks>(*QCoreApplication::instance(), *watchdog);
-        frost::diag::StallWatchdog::install(watchdog.get()); // ScopedUiIdle sections count as idle.
-        const auto stopWatching = [&] {
-            if (!watchdog)
-                return;
-            frost::diag::StallWatchdog::install(nullptr);
-            hooks.reset();
-            watchdog->stop();
-            stats = watchdog->stats();
-            report = watchdog->lastReport();
-            measured = true;
-            watchdog.reset();
-        };
-        struct StopAtExit {
-            std::function<void()> stop;
-            ~StopAtExit() { stop(); }
-        } stopAtExit{stopWatching};
+        // Started after the window exists (start-up is B1's business, not this criterion's).
+        StallMeter meter(fs, "opening FrostEngine", "corpus-freezes");
+        ASSERT_TRUE(meter.running());
 
         // Arm the detector (its first aboutToBlock), then open the folder from inside the loop.
         static_cast<void>(runUntil([] { return false; }, 200ms));
@@ -269,7 +338,53 @@ TEST(CorpusFrostEngine, OpeningThePinnedCloneRecordsNoStallOver250msStartsOneCla
             << "the client did not adopt the encoding clangd answered";
         EXPECT_EQ(*encoding->asString(), "utf-8") << "FrostIDE offers utf-8 first; clangd 23 supports it";
 
-        stopWatching(); // Before the rig's shutdown, which is not part of the open.
+        meter.stop(); // Before the rig's shutdown, which is not part of the open.
+    }
+}
+
+/*
+ * FND-9a: cloning a real repository records no GUI stall above 250 ms. The repository is the pinned
+ * corpus clone (FrostEngine's history, about 70 MB packed and 6000 files), cloned over git's file://
+ * transport, which runs the pack protocol a network clone runs (upload-pack, index-pack, checkout)
+ * instead of hard-linking objects; the git is the one the product resolves (vcs::findGit). The
+ * measurement runs from Clone until the clone has opened as a project (an untrusted CMake folder:
+ * nothing runs, the trust prompt shows) and the queued open events have settled.
+ */
+TEST(CorpusFrostEngine, CloningARealRepositoryRecordsNoStallOver250msAndOpensTheClone) {
+    frost::test::disableCrashDialogs(); // git and its helpers inherit the error mode.
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    auto& fs = frost::io::realFileSystem();
+    QString url = QUrl::fromLocalFile(QString::fromStdString(corpus)).toString(QUrl::FullyEncoded);
+    ASSERT_TRUE(url.startsWith(QStringLiteral("file://"))) << url.toStdString();
+
+    WorkDir dir("corpus-clone");
+    const std::string target = dir.join("FrostEngine");
+    const WritableOnExit writable{target};
+    {
+        WorkbenchRig rig(dir);
+        rig.show();
+        StallMeter meter(fs, "cloning FrostEngine", "corpus-clone-freezes");
+        ASSERT_TRUE(meter.running());
+        static_cast<void>(runUntil([] { return false; }, 200ms)); // Arms the detector.
+        frost::Result<void> started = frost::fail(frost::ErrorCode::Cancelled, "not started");
+        QTimer::singleShot(0, [&] { started = rig.workbench->cloneRepository(url.toStdString(), target); });
+        ASSERT_TRUE(runUntil([&] { return rig.workbench->cloneRunning() || !started.has_value(); }, 60s));
+        ASSERT_TRUE(started.has_value()) << started.error().describe();
+        ASSERT_TRUE(runUntil([&] { return !rig.workbench->cloneRunning(); }, 20min)) << "the clone never ended";
+        const auto& log = rig.window->notifications().log();
+        ASSERT_EQ(rig.workbench->projectRoot(), target)
+            << "the clone did not open; the last notification: "
+            << (log.empty() ? std::string("none") : log.back().notification.text.toStdString());
+        // git's own checkout, compared with the source's tracked files at the pin.
+        EXPECT_EQ(fs.readFile(target + "/CMakePresets.json").value_or("<missing>"),
+                  fs.readFile(corpus + "/CMakePresets.json").value_or("<missing in the corpus>"));
+        const auto head = fs.readFile(target + "/.git/HEAD");
+        ASSERT_TRUE(head.has_value());
+        EXPECT_TRUE(head->starts_with("ref: ") || head->starts_with(FROST_CORPUS_FROSTENGINE_SHA)) << *head;
+        // The open's queued model, explorer and trust-prompt events, for a while longer.
+        static_cast<void>(runUntil([] { return false; }, 5s));
+        meter.stop(); // Before the rig's shutdown, which is not part of the clone.
     }
 }
 

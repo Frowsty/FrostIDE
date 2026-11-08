@@ -72,6 +72,18 @@ struct SpawnedChild {
 [[nodiscard]] bool reapIfExited(pid_t pid) noexcept;
 // Reaps `pid`, waiting for it to exit (waitpid without WNOHANG). Only for a child just sent SIGKILL.
 void reapAfterKill(pid_t pid) noexcept;
+/*
+ * Ends the whole tree of a killOnClose child (process_posix.cpp): SIGKILL to its process group,
+ * then, on Linux, to every live process of its session from /proc. The session sweep reaches the
+ * descendants that left the group: ninja starts every command in a process group of its own and a
+ * SIGKILLed ninja cannot pass the signal on, so a cancelled `cmake --build` used to leave its
+ * compilers and custom commands running. The sweep repeats while it finds processes it has not
+ * signalled yet (a sibling may fork while /proc is read), at most kSessionSweeps times. Only a
+ * descendant that calls setsid escapes. Precondition: `leader` is this process's unreaped child,
+ * spawned as a session leader (POSIX_SPAWN_SETSID), so its pid, and with it the session id, cannot
+ * have been reused. Any thread; one /proc scan per sweep.
+ */
+void killSessionTree(pid_t leader);
 #endif
 
 } // namespace frost::io::detail
