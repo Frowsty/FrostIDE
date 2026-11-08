@@ -103,8 +103,38 @@ std::string_view toString(ToolOrigin origin) noexcept {
     case ToolOrigin::Settings: return "settings";
     case ToolOrigin::VisualStudio: return "Visual Studio";
     case ToolOrigin::Path: return "PATH";
+    case ToolOrigin::Sdk: return "pinned SDK";
     }
     return "not found";
+}
+
+std::string_view pinnedCMakeVersion() noexcept { return FROST_PINNED_CMAKE_VERSION; }
+
+std::string_view pinnedNinjaVersion() noexcept { return FROST_PINNED_NINJA_VERSION; }
+
+namespace {
+
+// <sdkDirectory>/<relative>, normalised (native separators).
+Result<std::string> underSdk(std::string_view sdkDirectory, std::string_view relative) {
+    if (!io::isAbsolutePath(sdkDirectory)) {
+        return fail(ErrorCode::InvalidArgument, std::format("the SDK directory '{}' is not absolute", sdkDirectory));
+    }
+    auto joined = io::joinPath(sdkDirectory, relative);
+    if (!joined) {
+        return std::unexpected(std::move(joined.error()));
+    }
+    return io::normalizePath(*joined);
+}
+
+} // namespace
+
+Result<std::string> sdkCMakePath(std::string_view sdkDirectory) {
+    return underSdk(sdkDirectory,
+                    std::format("cmake-{}/bin/{}", pinnedCMakeVersion(), kWindows ? "cmake.exe" : "cmake"));
+}
+
+Result<std::string> sdkNinjaPath(std::string_view sdkDirectory) {
+    return underSdk(sdkDirectory, std::format("ninja-{}/{}", pinnedNinjaVersion(), kWindows ? "ninja.exe" : "ninja"));
 }
 
 Result<std::string> vsBundledCMakePath(std::string_view installationPath) {
@@ -180,6 +210,19 @@ Result<CMakeTools> findCMakeTools(io::IFileSystem& fs, const CMakeToolOptions& o
         }
         tools.ninja = std::move(*configured);
         tools.ninjaOrigin = ToolOrigin::Settings;
+    }
+    // The pinned SDK (header comment, step 2).
+    if (!options.sdkDirectory.empty()) {
+        if (auto pinned = sdkCMakePath(options.sdkDirectory);
+            tools.cmake.empty() && pinned && isRegularFile(fs, *pinned)) {
+            tools.cmake = std::move(*pinned);
+            tools.cmakeOrigin = ToolOrigin::Sdk;
+        }
+        if (auto pinned = sdkNinjaPath(options.sdkDirectory);
+            tools.ninja.empty() && pinned && isRegularFile(fs, *pinned)) {
+            tools.ninja = std::move(*pinned);
+            tools.ninjaOrigin = ToolOrigin::Sdk;
+        }
     }
     if constexpr (kWindows) {
         for (const VsInstance& instance : options.vsInstances) {

@@ -96,6 +96,41 @@ class OracleParsingTest(unittest.TestCase):
         self.assertTrue(j1_cmake.is_under(path, path.parent))
         self.assertFalse(j1_cmake.is_under(path.parent, path))
 
+    def test_the_preset_oracle_compares_every_preset_variable_and_the_generator(self) -> None:
+        # The cache `cmake --preset` writes before the project runs (shape of a real one, FrostEngine's
+        # windows-debug) against a configure command line from the spawn log.
+        cache = j1_cmake.parse_cache(
+            "# This is the CMakeCache file.\n// comment\nCMAKE_BUILD_TYPE:UNINITIALIZED=Debug\n"
+            "CMAKE_CXX_COMPILER:UNINITIALIZED=cl\nCPM_SOURCE_CACHE:UNINITIALIZED=E:/c/.cache/cpm\n"
+            "CMAKE_EXPORT_COMPILE_COMMANDS:UNINITIALIZED=ON\nCMAKE_COMMAND:INTERNAL=F:/tools/cmake.exe\n"
+            "CMAKE_GENERATOR:INTERNAL=Ninja\nCMAKE_GENERATOR_TOOLSET:INTERNAL=\nCMAKE_GENERATOR_PLATFORM:INTERNAL=\n")
+        self.assertEqual(cache["CMAKE_BUILD_TYPE"], ("UNINITIALIZED", "Debug"))
+        self.assertEqual(cache["CMAKE_GENERATOR"], ("INTERNAL", "Ninja"))
+        argv = ["cmake.exe", "-S", "E:\\c", "-B", "E:\\c\\build\\windows-debug", "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_MAKE_PROGRAM:FILEPATH=F:\\tools\\ninja.exe", "-D",
+                "CMAKE_CXX_COMPILER=cl", "-DCPM_SOURCE_CACHE=E:/c/.cache/cpm", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
+        switches = j1_cmake.configure_switches(argv)
+        self.assertEqual(switches["binaryDir"], "E:\\c\\build\\windows-debug")
+        self.assertEqual(switches["-DCMAKE_MAKE_PROGRAM"], "F:\\tools\\ninja.exe")
+        self.assertEqual(switches["-DCMAKE_CXX_COMPILER"], "cl")
+        self.assertEqual(j1_cmake.preset_differences(cache, switches), {})
+        # A preset variable left out, a different value, another generator or a toolset are differences;
+        # extra switches (the pinned Ninja) are not.
+        missing = j1_cmake.preset_differences(cache, j1_cmake.configure_switches(argv[:-2] + argv[-1:]))
+        self.assertEqual(list(missing), ["-DCPM_SOURCE_CACHE"])
+        changed = j1_cmake.configure_switches([a.replace("=Debug", "=Release") for a in argv])
+        self.assertEqual(j1_cmake.preset_differences(cache, changed)["-DCMAKE_BUILD_TYPE"],
+                         {"cmake --preset": "Debug", "FrostIDE": "Release"})
+        other = j1_cmake.configure_switches([("Unix Makefiles" if a == "Ninja" else a) for a in argv] + ["-T", "v143"])
+        self.assertEqual(set(j1_cmake.preset_differences(cache, other)), {"generator", "toolset"})
+
+    def test_ninja_edges_drop_the_counters_and_the_housekeeping_and_sort(self) -> None:
+        output = ("[1/3] Re-checking globbed directories...\n[2/3] Linking CXX executable bin\\Child.exe\n"
+                  "ninja: no work to do.\n[3/3] Building CXX object Main.cpp.obj   \n[1/1] Re-running CMake...\n")
+        self.assertEqual(j1_cmake.ninja_edges(output),
+                         ["Building CXX object Main.cpp.obj", "Linking CXX executable bin\\Child.exe"])
+        self.assertEqual(j1_cmake.ninja_edges("ninja: no work to do.\n"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

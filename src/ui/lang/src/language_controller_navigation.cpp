@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <format>
+#include <memory>
 #include <utility>
 
 namespace frost::ui::lang {
@@ -276,7 +277,11 @@ struct GotoOutcome {
 sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, io::IFileSystem& fs,
                                                      std::string cacheDir, bool askMetadata, std::string path,
                                                      fl::LspPosition position, std::stop_token token) {
-    auto result = co_await fl::gotoDeclarationOrUsages(server, path, position, token);
+    // The declarations' lines from disk, to pass over a forward type declaration (navigation.hpp).
+    auto lineSource = std::make_shared<fl::FileLineSource>(fs, nullptr);
+    auto result = co_await fl::gotoDeclarationOrUsages(
+        server, path, position, token,
+        [lineSource](std::string_view file, std::uint32_t line) { return lineSource->line(file, line); });
     if (!result) {
         co_return std::unexpected(std::move(result.error()));
     }

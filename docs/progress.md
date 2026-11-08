@@ -3,6 +3,191 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-08: R1 integration (DD-1a: FrostEngine C++ on CMake presets and Lua basics)
+
+- **Merged into `r1/integration`** with `--no-ff`, in this order, on top of FND-12a (f767505, the god-file
+  split, already on the branch): `r1/fnd-6-7a-harness` (FND-6, FND-6b, FND-7a), `r1/cmk-4-cpp-3` (which carries
+  `r1/cmk-1-2-15`: CMK-1, CMK-2, CMK-15, then CMK-4 and CPP-3) and `r1/ux-23-fec-10a` (UX-23, FEC-10a). Each slice
+  was implemented in its own worktree and reviewed by an independent agent that re-ran its tests; the two
+  review blockers (harness: two tests that failed on Linux; directory roles: node_modules and Unity's folders
+  walked again) were fixed on their branches (5318184, 03dcccc) before the merge. Two textual conflicts, both
+  registrations (the app corpus/endpoint test definitions in `tests/app/CMakeLists.txt` and the label registry
+  in `tests/tools/test_verify_support.py`), resolved by keeping both sides.
+- **Integration fixes** (cross-slice; each with a test):
+  - **The IDE configured FrostEngine with Visual Studio's bundled cmake and Ninja**, not the pinned ones, so
+    j1's "pinned cmake and Ninja" step failed and the shared corpus build tree's `CMakeCache.txt` named Visual
+    Studio's tools while `corpora.py engine` still called it ready (harness review follow-up). The CMake tool
+    search now has a pinned-SDK step after the settings and before Visual Studio, the rule the clangd, LuaLS
+    and lldb-dap searches already follow: `<FROST_SDK>/cmake-<pinned>/bin/cmake` and
+    `<FROST_SDK>/ninja-<pinned>/ninja`, versions from `sdk/sdk.lock.json` (`cmake_toolchain.hpp`; origin
+    "pinned SDK"; without FROST_SDK nothing changes for users). Test:
+    `CMakeTools.ThePinnedSdkComesAfterTheSettingsAndBeforeVisualStudioAndPath`. `corpora.py engine_problem` now
+    also compares the cache's `CMAKE_COMMAND` and `CMAKE_MAKE_PROGRAM` with the pinned tools (the `engine`
+    command, `engine --configure`, which now passes `-DCMAKE_MAKE_PROGRAM=<pinned ninja>` because a cached make
+    program survives a reconfigure, and j1's setup), and the engine stamp's time is UTC (FND-6b follow-up).
+    Test: `EngineTest.test_engine_problem_names_a_cache_of_other_tools_when_given_the_pinned_ones`. The corpus
+    tree was reconfigured with the pinned tools.
+  - **Ctrl+B on a forward-declared class went to the forward declaration.** j1's Frost-Runtime step (caret on
+    `GameContent` in `RuntimeApp.cpp`) landed on `class GameContent;` in `LoadTest/BotRuntime.h` while clangd's
+    definition is `Runtime/GameContent.h:55`: clangd's `textDocument/declaration` answers with the first
+    (forward) declaration, deterministically without an index (checked with a plain LSP client). FrostEngine
+    forward-declares most classes, so Ctrl+B/F12 on a type name was mostly useless. Go to Declaration or Usages
+    now passes over a declaration that is only a forward type declaration (`class X;`, `struct API X;`,
+    `enum class E : int;`, `friend class X;`, one-line template heads) for the definition clangd reports, as
+    Rider and CLion go to the class itself; a function's prototype is still preferred (navigation.hpp). Tests:
+    `NavigationModel.RecognisesForwardTypeDeclarations`,
+    `NavigationModel.AForwardTypeDeclarationGivesWayToTheDefinition`, and j1's three Go to Definition steps.
+  - **Linux-only failures of the combined tree** (each slice passed alone; the first combined WSL run found
+    them): `cmakeCompilerFrontend` named the front end through `io::fileName`, which needs a native absolute
+    path, so a Windows reply's `E:/llvm/bin/clang-cl.exe` read on Linux gave GNU flags; it now takes the last
+    component after either separator (`CMakeCompileDatabase.NamesTheFrontEndFromTheCompiler`,
+    `ClangClCommandsUseImsvcAndEndTheOptions`). `Workbench::setDirectoryRole` accepted `<root>/../outside` on
+    Linux (the check compared the spelling); it now normalises and refuses a path that still holds `..`
+    (POSIX normalisation keeps it) (`WorkbenchFind.DirectoryRolesDecideWhatTheProjectTreeAndFindInFilesWalk`).
+    `WorkbenchTest.FileSystemViewListsSpeedSearchesOpensAndRefreshes` (written before UX-23) expected build/
+    hidden; with roles (loaded where `/proj` is a native root, i.e. on Linux) build/ is Generated, so listed
+    but never descended: the test now expects that on POSIX and still asserts nothing below build/ is listed.
+  - **j1's two literal `--preset` steps** (written by the harness slice against the intended behaviour of
+    CMK-2) contradicted CMK-1/CMK-2's reviewed design, documented in `cmake_profile.hpp` ("Command lines"):
+    FrostIDE resolves presets itself and runs the result (so what it shows and checks is exactly what runs,
+    with any cmake 3.21+). Both steps now check the property with cmake as the oracle instead of the spelling
+    of the command line: the configure's switches (spawn log) must apply every cache variable, the generator,
+    toolset and platform that cmake's own `cmake --preset windows-debug` writes (oracle: the cache cmake writes
+    into a scratch build directory for the preset before an initial-cache script stops it), and a build from
+    the clean tree with `cmake --build --preset windows-debug --target FrostTestDetachedChild` must run the same
+    Ninja edges as the build's own command line (a Ninja dry run cannot show them: FrostEngine's
+    CONFIGURE_DEPENDS globs stop it at the regeneration edge). Tests: the two j1 steps and
+    `OracleParsingTest.test_the_preset_oracle_compares_every_preset_variable_and_the_generator`,
+    `test_ninja_edges_drop_the_counters_and_the_housekeeping_and_sort`. **Question for the user:** the R1 exit
+    text says "`cmake --build --preset` reports errors"; FrostIDE builds the build preset's resolved command
+    (proven equal by the oracle above), not the literal `--preset` switch. Keep this, or run `cmake --preset`?
+- **What changed for the user.**
+  - CMake presets are complete (CMK-2): configure, build, test, package and workflow presets with includes,
+    conditions, inheritance, macros and user presets, listed exactly as `cmake --list-presets=all` lists them
+    (user-file presets first), with a Presets tab in the CMake tool window; files cmake refuses are refused.
+    Test, package and workflow presets are listed but not runnable yet (R2+ epics).
+  - A configure preset with several build presets gives one profile per build preset, which builds what that
+    build preset builds (CMK-1). Stale File API replies (another source tree, no new reply, a failed configure,
+    a reply older than its inputs, a moved build directory) no longer pass for the model.
+  - Configure progress (CMK-15): the CMake tool window shows the phase, elapsed time, an indeterminate bar and
+    Stop; the status bar shows a cancellable "CMake" task. Reconfiguring FrostEngine records no GUI stall over
+    250 ms.
+  - clangd reads an IDE-owned compile-commands directory per configuration under the profile cache (CPP-3),
+    never the build tree, so its index shards stay per configuration: a preset switch restarts clangd once and
+    switching back loads that configuration's shards. Visual Studio generators get a database synthesized from
+    the File API codemodel (CMK-4). A header listed by two or more targets gets a resolve-context selector in
+    the status bar; choosing a target switches the header's diagnostics to that target's flags without a restart.
+  - With the pinned SDK on FROST_SDK, the IDE runs the pinned cmake and Ninja ahead of Visual Studio's bundled
+    ones.
+  - Ctrl+B / F12 on a forward-declared class goes to the class definition.
+  - Directory roles (UX-23): build trees (presets' binary dirs, folders with a CMakeCache.txt, build/, out/,
+    .cache/, cmake-build-*), node_modules and a Unity project's generated folders are Generated, VCS folders
+    Excluded; the project tree, Go to File, Find in Files and the file watcher never descend into them (on Linux
+    no inotify watches there). "Mark Directory as" in the File System view overrides a role. MSBuild output
+    names are Generated only beside a project file, so FrostEngine's tracked `Renderer/Debug` sources are
+    searched again.
+  - FrostEngine Lua (FEC-10a): LuaLS gets the engine's globals and runtime version from `Docs/ScriptingAPI.md`
+    and projects' `.frost/lua-api` folders as libraries: no undefined-global for engine globals, a misspelled
+    global still flagged.
+  - Tooling: real-tool tests fail instead of skipping when a pinned tool is missing, and verify audits every
+    skip (FND-6); `corpora.py engine [--configure]` keeps one configured engine per pin and preset under a build
+    lock, `wsl-fetch` provisions the WSL clone, `-Corpus` fails on a missing engine (FND-6b); a Debug-only
+    automation endpoint (ADR 0080, absent from Release, symbol probe) drives the j1_cmake journey with JSON
+    evidence (FND-7a).
+- **Tests replaced or removed (D32).** No test was removed.
+  - Replaced as asserting behaviour cmake does not have: `CMakePresets.EvaluatesEveryConditionType`
+    `{"vendor", true}` became `{"vendor", false}` (cmake 4.4 ignores a preset that uses `$vendor{}`; backed by
+    the real-cmake `oracle/conditions` fixture). The order of `CMakePresets.ReadsTheFixtureFolder` and
+    `CMakeProfiles.FromTheFixturePresets` changed to user presets first, cmake's order (backed by the
+    `CMakePresetsOracle` listing test).
+  - j1's "the configure ran cmake --preset" and "the build ran cmake --build --preset" (spawn-log spelling,
+    never on `main`) became the two oracle steps above.
+  - FND-6: the tool-missing `GTEST_SKIP`s (lldb_session, lldb_dap, ignore_rules_git, workbench_cmake x2,
+    workbench_msbuild x2, workbench_clangd x3) and `skipTest`s (test_verify_support, test_verify_scripts) became
+    failures (stricter).
+  - Adapted without weakening: the clangd database waits (`clangdSettledOn`, two in `workbench_cmake_test`, the
+    corpus wait) now require origin == build directory and directory != build directory; `cmake_service_test`
+    uses a launcher that writes the File API reply real cmake writes (the service now refuses a configure that
+    writes none).
+- **Harm register changes.**
+
+  | Harm | Status |
+  |---|---|
+  | `EvaluatesEveryConditionType` asserted a `$vendor{}` preset as enabled (CMK-2) | removed (oracle-backed) |
+  | Shared corpus build tree reconfigured with Visual Studio's cmake/Ninja while reported ready (FND-6b) | removed (pinned-SDK step; engine_problem checks the tools) |
+
+- **R1 exit criteria** (PLAN.md section 7, R1):
+  1. j1_cmake through the automation endpoint on the pinned clone (Windows, windows-debug): **met**,
+     `journeys.j1_cmake` 16/16 steps (presets equal `cmake --list-presets=all`; configure; the pinned cmake and
+     Ninja; the configure applies what `cmake --preset` applies; clangd runs on the IDE-owned database; Go to
+     Definition in Frost, Frost-Runtime and Frost-Services equals clangd's own `textDocument/definition`; a
+     seeded error in FrostTestDetachedChild shows in Problems at its line and opens it; the fix rebuilds; Clean;
+     the build runs the same Ninja edges as `cmake --build --preset`). See the deviation question above.
+  2. The same journey on WSL ext4 with linux-debug: **met**, `journeys.j1_cmake` 16/16 steps on the WSL clone
+     (`/home/frosty/FrostBuilds/corpora/frostengine-8237e1ecfeb9`, linux-debug, pinned cmake, Ninja and clang;
+     evidence `build/linux-clang/journey-evidence/j1_cmake-linux-20261108T093845.json` in the ext4 mirror).
+  3. A preset switch changes the CDB directory and restarts clangd once with shards loaded: **met** on a fixture
+     with the real cmake, Ninja and clangd
+     (`WorkbenchClangdSpawn.APresetSwitchRestartsClangdOnceAndSwitchingBackLoadsThatConfigurationsShards`); not
+     exercised on the FrostEngine corpus (follow-up, FND-7a).
+  4. A header used by two targets offers a resolve context and diagnostics follow it: **met**
+     (`WorkbenchClangdSpawn.AHeaderResolveContextChoiceChangesItsDiagnostics`, real clangd).
+  5. Find in Files and the watcher never traverse build/ or .cache/, counts equal git ls-files: **met**
+     (`CorpusFrostEngine.FindInFilesTheProjectTreeAndTheWatcherCoverExactlyWhatGitListsAndNeverEnterBuildFolders`:
+     6073 = 6073).
+  6. FrostEngine .lua: no undefined-global for engine globals, a misspelled one flagged: **met**
+     (`CorpusFrostEngine.LuaLsReportsNoUndefinedGlobalForEngineGlobalsAndStillFlagsAMisspelledOne`, LuaLS
+     3.19.1).
+  7. -Corpus counts a missing pinned engine as a failure: **met**
+     (`EngineTest.test_the_engine_command_reports_a_missing_engine_as_a_failure`, the corpus-tier checks in
+     `test_corpora.py`); the lint against `D:\dev\FrostEngine-AI-Claude` in tests: **met** (R0-close,
+     `test_frost_lint.py`, confirmed).
+- **Corpus tier** (`ctest -L '^corpus$'`, FrostEngine at 8237e1ec, engine configured with the pinned tools on
+  both legs): Windows 8/8 (the seven `CorpusFrostEngine` tests and `journeys.j1_cmake`, 16/16 steps, evidence
+  `build/win-clangcl/journey-evidence/j1_cmake-windows-20261108T094408.json`); WSL 8/8 through
+  `tools/verify.sh --quick --corpus` (j1 16/16 on linux-debug). No corpus test skipped; both clones git-clean
+  afterwards; no clangd, LuaLS, cmake, Ninja or ctest left running.
+- **Open follow-ups** (owning epic in brackets; none blocks the merge):
+  1. [CPP-3] The owned database copy is refreshed only when the IDE publishes a new CMake model; a cmake re-run
+     outside the IDE, or a regeneration during a Ninja build, leaves clangd on a stale copy (watch the build
+     tree's compile_commands.json or refresh after builds, with a test).
+  2. [CPP-3] `chooseResolveContext` builds the overlay command without checking that the model describes the
+     active configuration (guard it like `updateResolveContext`); `ResolveContextButton` has no ui-level test;
+     `resolve-contexts.json` is never pruned. Layout wording: `<cache root>/compile-commands/cmake-<name>[-<config>]-<fnv>`
+     where the cache root is the workspace's `compileCommandsCache` folder.
+  3. [CMK-2] The presets reader reads past unknown fields, which cmake refuses ("Invalid extra field"); add a
+     refused-oracle fixture. [CMK-1] A reply whose codemodel source directory differs by spelling (subst drive,
+     junction, 8.3) hides the model; the "no new reply" check assumes a fresh index file per configure; jobs,
+     configuration, cleanFirst, verbose and native options of build presets have no real-cmake comparison yet
+     (j1 compares the edges of one target).
+  4. [CMK-15] A CMake activity started before the tool window exists or while it is hidden drives only the
+     status-bar task; check that the progress row catches up.
+  5. [FND-7a] j1 seeds the compile error in the shared clone in place (under the build lock, restored in every
+     outcome); consider an overlay. `AutomationEndpoint` never drops disconnected clients. Extend j1 with a
+     preset switch on the corpus (exit criterion 3) and the WSL run.
+  6. [FND-6] `frost_lint.py skips` exits 0 with "skips not-run" when LastTest.log cannot be read, so the audit
+     passes silently; verify.sh's `grep ... | tail -1 || echo` fallback never runs; R0-close follow-up 5 (fixed
+     settle windows in R0Trust, R0ToolAblation, fallbackAgreesWithClangd, the spawn tests, the cancel test) is
+     still open. The managed/.NET, Unity, R2a and WorkbenchEngine skips are counted as environment skips (to be
+     decided).
+  7. [UX-23] Open documents below Generated or Excluded folders (configure_file headers under build/, CPM
+     sources under .cache/) get no external-change reloads (saves stay guarded); `.git` is Excluded, so Git
+     status follows external commits and checkouts through the 1.5 s poll instead of watcher events; bin/obj/
+     Debug/Release folders without an MSBuild project are traversed; `directory-roles.txt` has no ADR; Windows
+     still receives events below build/ and filters them (buffer overflow under a large build is possible); the
+     Library role has no scope filter or tree marker.
+  8. [FEC-10a] `discoverFrostEngineLua` runs on the GUI thread (reads the ~1 MB ScriptingAPI.md; the corpus open
+     stall test still passes) and lists build/; no test drives `Workbench::startLua` end to end on the corpus.
+     [FEC-10b] The corpus has no `.frost/lua-api` stubs, so `workspace.library` is covered by unit tests only.
+  9. [CMake test-runner epics, R2+] Test, package and workflow presets are listed but not runnable.
+  10. Deferred by the round's plan: Release-build stall measurements (CMK-15), macOS, full FrostEngine builds.
+- **Verification.** The combined tree is verified with `tools\verify.ps1 -Quick -Jobs 8 -TestJobs 8` on both
+  legs; the real summary line is the `Verified:` footer of the `r1/integration` head commit, which records this
+  tree. Not merged to `main` and not pushed.
+- **Next:** the independent review of the combined tree, then the merge to `main` (D23) and the R1 sign-off
+  (exit criteria above); then R2 per PLAN.md section 7. **Blockers:** none. **Questions for the user:** the
+  literal `cmake --build --preset` deviation above.
+
 ## 2026-11-07: R0-close (R0 exit acceptance and the 16 R0 follow-ups)
 
 - **Merged into `r0/close`** with `--no-ff`, in this order, each implemented in its own worktree and approved by

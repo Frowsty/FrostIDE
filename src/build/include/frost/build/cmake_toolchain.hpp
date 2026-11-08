@@ -7,10 +7,16 @@
 /*
  * Tool discovery (findCMakeTools), first match wins for each tool:
  *   1. the settings (tools.cmake.path, tools.ninja.path: application-scope `executes` keys);
- *   2. the CMake and Ninja that Visual Studio bundles, in the instances vswhere listed (newest
+ *   2. the pinned SDK (CMakeToolOptions::sdkDirectory, which the workbench takes from FROST_SDK;
+ *      tools/env.ps1 and ~/sdk/env.sh set it for development and tests):
+ *      <sdk>/cmake-<pinned>/bin/cmake[.exe] and <sdk>/ninja-<pinned>/ninja[.exe], the versions
+ *      sdk/sdk.lock.json pins (pinnedCMakeVersion, pinnedNinjaVersion). The same rule as the
+ *      clangd, LuaLS and lldb-dap searches, so tests and journeys run the pinned tools (R1, CMK-1)
+ *      rather than whatever Visual Studio bundles;
+ *   3. the CMake and Ninja that Visual Studio bundles, in the instances vswhere listed (newest
  *      first): <installationPath>\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
  *      and ...\CMake\Ninja\ninja.exe;
- *   3. the absolute directories of the PATH variable, in order ("cmake.exe" / "cmake"). Relative
+ *   4. the absolute directories of the PATH variable, in order ("cmake.exe" / "cmake"). Relative
  *      entries are skipped: the current or project directory is never searched (PLAN.md 3.5).
  * Each candidate must be a regular file. The result is absolute; children start through
  * IProcessLauncher only.
@@ -62,9 +68,9 @@ class IFileSystem;
 namespace frost::build {
 
 // Where a tool was found.
-enum class ToolOrigin : std::uint8_t { NotFound, Settings, VisualStudio, Path };
+enum class ToolOrigin : std::uint8_t { NotFound, Settings, VisualStudio, Path, Sdk };
 
-// "not found", "settings", "Visual Studio" or "PATH".
+// "not found", "settings", "Visual Studio", "PATH" or "pinned SDK".
 [[nodiscard]] std::string_view toString(ToolOrigin origin) noexcept;
 
 struct CMakeToolOptions {
@@ -72,6 +78,7 @@ struct CMakeToolOptions {
     std::string ninjaPath{};               // tools.ninja.path; "" detects.
     std::vector<VsInstance> vsInstances{}; // vswhere's instances, newest first; empty skips step 2.
     std::string pathVariable{};            // The PATH value to search; "" searches nothing.
+    std::string sdkDirectory{};            // The pinned SDK root (step 2); "" skips that step.
 };
 
 struct CMakeTools {
@@ -80,6 +87,15 @@ struct CMakeTools {
     std::string ninja{}; // Absolute; "" when not found (only Ninja generators need it).
     ToolOrigin ninjaOrigin = ToolOrigin::NotFound;
 };
+
+// The cmake and Ninja versions sdk/sdk.lock.json pins for this platform ("4.4.5", "1.13.2").
+[[nodiscard]] std::string_view pinnedCMakeVersion() noexcept;
+[[nodiscard]] std::string_view pinnedNinjaVersion() noexcept;
+
+// The pinned SDK's tools under `sdkDirectory` (header comment, step 2), whether or not they exist.
+// Errors: InvalidArgument (not an absolute path).
+[[nodiscard]] Result<std::string> sdkCMakePath(std::string_view sdkDirectory);
+[[nodiscard]] Result<std::string> sdkNinjaPath(std::string_view sdkDirectory);
 
 // The bundled tools of a Visual Studio installation (header comment). Errors: InvalidArgument.
 [[nodiscard]] Result<std::string> vsBundledCMakePath(std::string_view installationPath);

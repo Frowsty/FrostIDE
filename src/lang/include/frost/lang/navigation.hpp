@@ -7,7 +7,12 @@
 /*
  * Ctrl+B follows Rider's "go to declaration or usages": the declaration (or definition when the
  * server has no separate declaration), unless the caret is already on it, in which case it runs
- * find usages. Ctrl+Alt+B ("go to implementation") queries textDocument/implementation and falls
+ * find usages. A type's declaration that is only a forward declaration ("class GameContent;",
+ * which clangd reports as the declaration of a class declared that way before its definition) is
+ * passed over for the definition the server reports, as Rider and CLion go to the class itself
+ * (R1: FrostEngine forward-declares most classes). Both locations come from the server; the
+ * forward declaration is recognised from its line (isForwardTypeDeclaration), read through the
+ * caller's LineSource. Ctrl+Alt+B ("go to implementation") queries textDocument/implementation and falls
  * back to textDocument/definition for non-virtual functions and methods.
  *
  * Usage lines. groupUsages reads each usage's line through a LineSource, so open documents are
@@ -60,8 +65,20 @@ struct GotoResult {
     bool showUsages = false;         // The caret is on the declaration itself: run find usages.
 };
 
+// One line of a file for the usages list: its text without the break, or nullopt when the file or
+// line cannot be read.
+using LineSource = std::function<std::optional<std::string>(std::string_view path, std::uint32_t line)>;
+
+// Whether `line` is only a forward declaration of a class, struct, union or enum ("class X;",
+// "struct FROST_API X;", "enum class E : int;", "friend class X;", "template <typename T> class X;"),
+// a // comment after it allowed.
+[[nodiscard]] bool isForwardTypeDeclaration(std::string_view line) noexcept;
+
+// Ctrl+B (header comment). `lines` reads the declarations' lines to recognise forward type
+// declarations; without it the declaration is taken as it is.
 [[nodiscard]] sched::Task<Result<GotoResult>> gotoDeclarationOrUsages(ILspRequester& server, std::string path,
-                                                                      LspPosition position, std::stop_token token = {});
+                                                                      LspPosition position, std::stop_token token = {},
+                                                                      LineSource lines = {});
 
 // Where Ctrl+Alt+B ("Go to Implementation") goes: textDocument/implementation (excluding the
 // current caret position), falling back to textDocument/definition for functions and methods
@@ -79,10 +96,6 @@ requestSwitchSourceHeader(ILspRequester& server, std::string path, std::stop_tok
                                                                            LspPosition position,
                                                                            bool includeDeclaration = true,
                                                                            std::stop_token token = {});
-
-// One line of a file for the usages list: its text without the break, or nullopt when the file or
-// line cannot be read.
-using LineSource = std::function<std::optional<std::string>(std::string_view path, std::uint32_t line)>;
 
 // Lines from open documents (`openDocument` returns a snapshot for open paths) and, for other
 // files, from `fs` (each file read once). Not thread-safe; `fs` must outlive it.

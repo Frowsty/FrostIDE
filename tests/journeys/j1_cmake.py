@@ -9,7 +9,11 @@
 #   2. the presets FrostIDE lists equal `cmake --list-presets=all`'s configure presets (and the build
 #      presets the profiles pair with are among its build presets) [needs CMK-2];
 #   3. configure the platform's preset (windows-debug, linux-debug in WSL): cmake's exit code and the
-#      File API model, and the build directory the preset names;
+#      File API model, and the build directory the preset names. FrostIDE resolves presets itself and
+#      runs the result (cmake_profile.hpp, "Command lines"), so the configure's command line (spawn
+#      log) must apply what cmake's own `cmake --preset` applies: the oracle is the cache that
+#      `cmake --preset <p> -B <scratch> -C <a script that stops>` writes before the project runs
+#      (every preset cache variable, the generator, toolset and platform);
 #   4. open a source file: clangd runs, on the IDE-owned compilation database for that configuration
 #      (a directory FrostIDE owns, outside the corpus tree, holding the file) [needs CPP-3];
 #   5. Go to Definition in three modules (Frost, Frost-Runtime, Frost-Services) lands where the same
@@ -18,7 +22,11 @@
 #   6. a seeded compile error in one small target (FrostTestDetachedChild: one source, no library
 #      dependencies) is built through the preset; Problems shows it at the seeded line and its
 #      activation opens that line;
-#   7. the fix rebuilds clean (no error left); Clean succeeds.
+#   7. the fix rebuilds clean (no error left); Clean succeeds. Then the build preset oracle: from the
+#      clean tree, `cmake --build --preset <build preset> --target <target>` builds the target, the
+#      tree is cleaned again and the build's own command line (spawn log) builds it; both must run
+#      the same Ninja edges. (A dry run cannot show them: the engine's CONFIGURE_DEPENDS globs make
+#      Ninja's dry run stop at the regeneration edge.) The tree is left clean.
 # Steps marked [needs ...] test the intended behaviour of a parallel R1 epic and fail until it lands.
 #
 # The evidence (one JSON file per run, under --evidence): the corpus (id, sha, path, preset), the
@@ -371,6 +379,99 @@ class ClangdOracle:
 # --- Oracles run here ----------------------------------------------------------------------------
 
 
+ORACLE_STOP = "frost journey oracle: stop before the project"
+
+
+def preset_cache(cmake: str, root: Path, preset: str, scratch: Path) -> dict[str, tuple[str, str]]:
+    """What `cmake --preset <preset>` puts in the cache before the project runs, as {name: (type,
+    value)}: cmake resolves the preset into a scratch build directory and an initial-cache script
+    stops it before the project's own code (header comment, step 3)."""
+    scratch.mkdir(parents=True, exist_ok=True)
+    stop = scratch / "stop.cmake"
+    stop.write_text(f'message(FATAL_ERROR "{ORACLE_STOP}")\n', encoding="utf-8")
+    build = scratch / "build"
+    result = subprocess.run([cmake, "--preset", preset, "-B", str(build), "-C", str(stop)], cwd=str(root),
+                            capture_output=True, text=True, errors="replace", timeout=600, check=False)
+    if ORACLE_STOP not in result.stdout + result.stderr:
+        raise RuntimeError(f"cmake --preset {preset} did not reach the stop script ({result.returncode}): "
+                           f"{(result.stdout + result.stderr)[-600:]}")
+    return parse_cache((build / "CMakeCache.txt").read_text(encoding="utf-8", errors="replace"))
+
+
+def parse_cache(text: str) -> dict[str, tuple[str, str]]:
+    out = {}
+    for line in text.splitlines():
+        match = re.match(r"^([^#/][^:=]*):([A-Z]+)=(.*)$", line)
+        if match:
+            out[match.group(1)] = (match.group(2), match.group(3))
+    return out
+
+
+def configure_switches(argv: list[str]) -> dict[str, str]:
+    """A configure command line's -D values by name and its -G, -T, -A and -B as "generator",
+    "toolset", "platform" and "binaryDir" (both "-DX=v" and "-D X=v" forms)."""
+    out: dict[str, str] = {}
+    flags = {"-G": "generator", "-T": "toolset", "-A": "platform", "-B": "binaryDir"}
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in flags and i + 1 < len(argv):
+            out[flags[arg]] = argv[i + 1]
+            i += 2
+            continue
+        define = None
+        if arg == "-D" and i + 1 < len(argv):
+            define, i = argv[i + 1], i + 1
+        elif arg.startswith("-D"):
+            define = arg[2:]
+        if define and "=" in define:
+            name, value = define.split("=", 1)
+            out["-D" + name.split(":", 1)[0]] = value
+        i += 1
+    return out
+
+
+def preset_differences(oracle: dict[str, tuple[str, str]], switches: dict[str, str]) -> dict[str, Any]:
+    """What the configure's switches do not apply of cmake's own preset resolution: every preset
+    cache variable (UNINITIALIZED entries, and a typed toolchain file or install prefix), the
+    generator, toolset and platform."""
+    wanted: dict[str, str] = {}
+    for name, (kind, value) in oracle.items():
+        if kind == "UNINITIALIZED" or name in ("CMAKE_TOOLCHAIN_FILE", "CMAKE_INSTALL_PREFIX"):
+            wanted["-D" + name] = value
+    for key, entry in (("generator", "CMAKE_GENERATOR"), ("toolset", "CMAKE_GENERATOR_TOOLSET"),
+                       ("platform", "CMAKE_GENERATOR_PLATFORM")):
+        wanted[key] = oracle.get(entry, ("", ""))[1]
+    return {key: {"cmake --preset": value, "FrostIDE": switches.get(key, "")} for key, value in wanted.items()
+            if switches.get(key, "") != value}
+
+
+# Ninja's own steps around a build, which run whatever is built (the glob check, a regeneration).
+NINJA_HOUSEKEEPING = ("Re-checking globbed directories...", "Re-running CMake...")
+
+
+def ninja_edges(output: str) -> list[str]:
+    """The edges a Ninja build ran ("[3/7] Building CXX object ..."), without the counters and
+    Ninja's own housekeeping, sorted (the order varies with parallelism)."""
+    edges = []
+    for line in output.splitlines():
+        match = re.match(r"^\[\d+/\d+\]\s*(.+?)\s*$", line)
+        if match and match.group(1) not in NINJA_HOUSEKEEPING:
+            edges.append(match.group(1))
+    return sorted(edges)
+
+
+def build_edges(argv: list[str], cwd: str, env: dict[str, str]) -> list[str]:
+    """Runs a `cmake --build ...` command line and returns the Ninja edges it ran (ninja_edges).
+    Raises RuntimeError when it fails."""
+    result = subprocess.run(argv, cwd=cwd or None, env=env, capture_output=True, text=True, errors="replace",
+                            timeout=BUILD_SECONDS, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"{' '.join(argv)} exited with {result.returncode}: {result.stdout[-600:]}"
+                           f"{result.stderr[-400:]}")
+    return ninja_edges(result.stdout)
+
+
 def listed_presets(cmake: str, root: Path) -> dict[str, list[str]]:
     """`cmake --list-presets=all` in `root`: {"configure": [...], "build": [...], ...} (quoted names)."""
     run = subprocess.run([cmake, "--list-presets=all"], cwd=str(root), capture_output=True, text=True,
@@ -466,17 +567,18 @@ class Journey:
                                         "preset": preset}
         frost = Path(args.frost)
         self.evidence.data["frost"] = {"image": str(frost), "sha256": sha256_file(frost) if frost.is_file() else None}
-        problem = corpora.problem_or_none(entry, root) or corpora.engine_problem(
-            corpus, entry, preset)
-        if problem:
-            self.evidence.step("setup", ok=False, note=f"the pinned engine is not ready: {problem} "
-                                                       f"(tools/corpora.py fetch; engine --configure)")
-            return 1
         try:
             cmake = corpora.pinned_tool("cmake", REPO)
             ninja = corpora.pinned_tool("ninja", REPO)
         except RuntimeError as error:
             self.evidence.step("setup", ok=False, note=str(error))
+            return 1
+        # The engine must be configured with the pinned cmake and Ninja too (FND-6b).
+        problem = corpora.problem_or_none(entry, root) or corpora.engine_problem(
+            corpus, entry, preset, {"cmake": cmake, "ninja": ninja})
+        if problem:
+            self.evidence.step("setup", ok=False, note=f"the pinned engine is not ready: {problem} "
+                                                       f"(tools/corpora.py fetch; engine --configure)")
             return 1
 
         with corpora.BuildLock(corpora.build_lock_path(root, entry)):
@@ -615,14 +717,24 @@ class Journey:
         self.run_step("the configure ran the pinned cmake and Ninja (spawn log)", configure_used_pinned_tools,
                       needs="CMK-1")
 
-        def configure_used_preset() -> tuple[bool, Any, Any, str]:
+        def configure_applied_preset() -> tuple[bool, Any, Any, str]:
             runs = [r.get("argv", []) for r in spawn_records(self.spawn_dir) if r.get("event") == "start"
                     and Path(r.get("executable", "")).stem.lower() == "cmake" and "--build" not in r.get("argv", [])
                     and "--version" not in r.get("argv", [])]
-            ok = any(argv[1:3] == ["--preset", preset] or f"--preset={preset}" in argv for argv in runs)
-            return ok, f"cmake --preset {preset}", runs, "" if ok else "the configure did not run cmake --preset"
+            if not runs:
+                return False, None, None, "the spawn log has no configure"
+            oracle = preset_cache(cmake, corpus, preset, self.tmp / "preset-oracle")
+            switches = configure_switches(runs[-1])
+            differences = preset_differences(oracle, switches)
+            binary = switches.get("binaryDir", "")
+            ok = not differences and bool(binary) and same_path(binary, build_dir)
+            return (ok, {"cmake --preset": {k: v for k, v in oracle.items() if v[0] == "UNINITIALIZED"},
+                         "binaryDir": str(build_dir)},
+                    {"argv": runs[-1], "differences": differences},
+                    "" if ok else "the configure does not apply what cmake --preset applies")
 
-        self.run_step(f"the configure ran cmake --preset {preset} (spawn log)", configure_used_preset, needs="CMK-2")
+        self.run_step(f"the configure applies what cmake --preset {preset} applies (cmake's own resolution)",
+                      configure_applied_preset, needs="CMK-2")
 
         first_module, first_file, _ = NAVIGATION[0]
         source = corpus / first_file
@@ -726,14 +838,6 @@ class Journey:
 
         built = self.run_step("a seeded compile error shows in Problems at its line", build_seeded)
 
-        def build_used_preset() -> tuple[bool, Any, Any, str]:
-            builds = [r.get("argv", []) for r in spawn_records(self.spawn_dir) if r.get("event") == "start"
-                      and "--build" in r.get("argv", [])]
-            ok = any("--preset" in argv or any(a.startswith("--preset=") for a in argv) for argv in builds)
-            return ok, "cmake --build --preset <build preset> --target " + SEED_TARGET, builds, ""
-
-        self.run_step("the build ran cmake --build --preset (spawn log)", build_used_preset, needs="CMK-2")
-
         def activate() -> tuple[bool, Any, Any, str]:
             if getattr(self, "seeded_index", None) is None:
                 return False, None, None, "no problem at the seeded line to activate"
@@ -772,6 +876,41 @@ class Journey:
             return ok, {"action": "Clean", "succeeded": True}, last, ""
 
         self.run_step("clean", clean)
+
+        def build_runs_the_build_preset() -> tuple[bool, Any, Any, str]:
+            # From the clean tree (the Clean above) every edge of the target is due in both builds.
+            listed = ep.call("cmake.profiles")
+            active = next((p for p in listed["profiles"] if p["name"] == listed.get("active")), {})
+            build_preset = active.get("buildPreset") or ""
+            if not build_preset:
+                return False, "a build preset", active, "the active profile has no build preset"
+            builds = [r for r in spawn_records(self.spawn_dir) if r.get("event") == "start"
+                      and "--build" in r.get("argv", []) and SEED_TARGET in r.get("argv", [])]
+            if not builds:
+                return False, None, None, f"the spawn log has no build of {SEED_TARGET}"
+            ours = builds[-1]
+            cleans = [r for r in spawn_records(self.spawn_dir) if r.get("event") == "start"
+                      and "--build" in r.get("argv", []) and "clean" in r.get("argv", [])]
+            if not cleans:
+                return False, None, None, "the spawn log has no Clean"
+            # The compiler's environment: the MSVC developer environment on Windows, as FrostIDE's.
+            env = corpora.msvc_environment(REPO) if WINDOWS else dict(os.environ)
+            cmake = ours["executable"]
+            oracle = build_edges([cmake, "--build", "--preset", build_preset, "--target", SEED_TARGET], str(corpus),
+                                 env)
+            build_edges(cleans[-1]["argv"], cleans[-1].get("cwd", ""), env)
+            try:
+                observed = build_edges(ours["argv"], ours.get("cwd", ""), env)
+            finally:
+                build_edges(cleans[-1]["argv"], cleans[-1].get("cwd", ""), env)
+            ok = bool(oracle) and observed == oracle
+            return (ok, {"command": f"cmake --build --preset {build_preset} --target {SEED_TARGET}",
+                         "edges": oracle},
+                    {"argv": ours["argv"], "edges": observed},
+                    "" if ok else "the build does not run what cmake --build --preset runs")
+
+        self.run_step("the build runs what cmake --build --preset runs (the same Ninja edges)",
+                      build_runs_the_build_preset, needs="CMK-2")
 
     def _quit(self) -> None:
         if self.endpoint is None or self.frost_process is None:

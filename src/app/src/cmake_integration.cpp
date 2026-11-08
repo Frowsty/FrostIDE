@@ -87,6 +87,9 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     options.stateFilePath = std::move(statePath);
     options.cmakePath = snapshot->get(settings::key::toolsCmakePath);
     options.ninjaPath = snapshot->get(settings::key::toolsNinjaPath);
+    // The pinned SDK's cmake and Ninja come before Visual Studio's (cmake_toolchain.hpp, step 2), as
+    // the clangd, LuaLS and lldb-dap searches take FROST_SDK's (R1, CMK-1).
+    options.sdkDirectory = qEnvironmentVariable("FROST_SDK").toStdString();
     options.profileRecords = build::cmakeProfileRecords(snapshot->get(settings::key::cmakeProfiles));
     options.buildWrappers = build::cmakeBuildWrappers(snapshot->get(settings::key::cmakeBuildWrappers));
     m_service = build::CMakeService::create(

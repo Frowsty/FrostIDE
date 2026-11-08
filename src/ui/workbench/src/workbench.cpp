@@ -1138,9 +1138,21 @@ void Workbench::loadDirectoryRoles() {
 Result<void> Workbench::setDirectoryRole(const std::string& directory, std::optional<project::DirectoryRole> role) {
     if (m_root.empty() || m_services.directoryRoles == nullptr)
         return fail(ErrorCode::InvalidArgument, "no project with a directory role store is open");
-    if (!isUnder(m_root, directory))
+    // Normalised first, so "<root>/../outside" is judged where it points, not by its spelling. POSIX
+    // normalisation keeps ".." (a symlink makes it ambiguous), so a path still holding one is refused.
+    auto normalized = io::normalizePath(directory);
+    const auto hasDotDot = [](std::string_view path) {
+        for (std::size_t at = path.find(".."); at != std::string_view::npos; at = path.find("..", at + 1)) {
+            const bool starts = at == 0 || path[at - 1] == '/' || path[at - 1] == '\\';
+            const bool ends = at + 2 == path.size() || path[at + 2] == '/' || path[at + 2] == '\\';
+            if (starts && ends)
+                return true;
+        }
+        return false;
+    };
+    if (!normalized || hasDotDot(*normalized) || !isUnder(m_root, *normalized))
         return fail(ErrorCode::InvalidArgument, std::format("'{}' is not in the project", directory));
-    if (auto saved = m_services.directoryRoles->set(directory, role); !saved)
+    if (auto saved = m_services.directoryRoles->set(*normalized, role); !saved)
         return saved;
     loadDirectoryRoles();
     if (m_watch) {

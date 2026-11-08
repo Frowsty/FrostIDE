@@ -250,6 +250,7 @@ struct CMakeServiceOptions {
     std::string cmakePath{};            // tools.cmake.path; "" detects (cmake_toolchain.hpp).
     std::string ninjaPath{};            // tools.ninja.path; "" detects.
     std::string pathVariable{};         // The PATH searched for tools; "" uses this process's.
+    std::string sdkDirectory{};         // The pinned SDK, searched before Visual Studio (FROST_SDK); "" skips it.
     bool useVisualStudio = true;        // Windows: vswhere for the bundled tools and the MSVC environment.
     bool captureMsvcEnvironment = true; // Windows: vcvarsall for non-Visual Studio generators.
     std::string vsInstanceId{};         // The instance for vcvarsall; "" takes the newest with C++ tools.

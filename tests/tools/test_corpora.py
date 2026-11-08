@@ -279,6 +279,35 @@ class EngineTest(TempDirTestCase):
         (other / corpora.ENGINE_STAMP).unlink()
         self.assertIn("configured outside", corpora.engine_problem(self.corpus, self.entry, "old"))
 
+    def test_engine_problem_names_a_cache_of_other_tools_when_given_the_pinned_ones(self) -> None:
+        # A tree configured with another cmake or Ninja (Visual Studio's bundled ones) is not the
+        # pinned engine; without `tools` the check is the old one.
+        build = self._configured("win-dbg")
+        tools_dir = self.tmp / "sdk"
+        tools_dir.mkdir()
+        pinned = {"cmake": str(tools_dir / "cmake.exe"), "ninja": str(tools_dir / "ninja.exe")}
+        other = self.tmp / "vs"
+        other.mkdir()
+        for folder in (tools_dir, other):
+            (folder / "cmake.exe").write_bytes(b"x")
+            (folder / "ninja.exe").write_bytes(b"x")
+        cache = build / "CMakeCache.txt"
+        home = cache.read_text(encoding="utf-8")
+        self.assertIn("CMAKE_COMMAND=(none)", corpora.engine_problem(self.corpus, self.entry, "win-dbg", pinned))
+        cache.write_text(home + f"CMAKE_COMMAND:INTERNAL={(other / 'cmake.exe').as_posix()}\n"
+                                f"CMAKE_MAKE_PROGRAM:FILEPATH={(tools_dir / 'ninja.exe').as_posix()}\n",
+                         encoding="utf-8")
+        self.assertIn("not the pinned cmake", corpora.engine_problem(self.corpus, self.entry, "win-dbg", pinned))
+        self.assertIsNone(corpora.engine_problem(self.corpus, self.entry, "win-dbg"))
+        cache.write_text(home + f"CMAKE_COMMAND:INTERNAL={(tools_dir / 'cmake.exe').as_posix()}\n"
+                                f"CMAKE_MAKE_PROGRAM:FILEPATH={(other / 'ninja.exe').as_posix()}\n",
+                         encoding="utf-8")
+        self.assertIn("not the pinned ninja", corpora.engine_problem(self.corpus, self.entry, "win-dbg", pinned))
+        cache.write_text(home + f"CMAKE_COMMAND:INTERNAL={(tools_dir / 'cmake.exe').as_posix()}\n"
+                                f"CMAKE_MAKE_PROGRAM:FILEPATH={(tools_dir / 'ninja.exe').as_posix()}\n",
+                         encoding="utf-8")
+        self.assertIsNone(corpora.engine_problem(self.corpus, self.entry, "win-dbg", pinned))
+
     def test_the_engine_command_reports_a_missing_engine_as_a_failure(self) -> None:
         # A lock whose corpus is absent: engine fails (the -Corpus tier's "pinned engine missing").
         entry = {"id": "engine", "name": "fixture", "url": "file:///absent", "branch": "main", "sha": "ab" * 20,

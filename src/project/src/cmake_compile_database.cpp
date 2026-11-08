@@ -165,7 +165,12 @@ std::optional<std::vector<std::string>> commandFor(const CMakeProject& project, 
 CMakeCompilerFrontend cmakeCompilerFrontend(const CMakeToolchain& toolchain) noexcept {
     if (toolchain.compilerId == "MSVC")
         return CMakeCompilerFrontend::Msvc;
-    std::string name = lowered(io::fileName(toolchain.compilerPath));
+    // The last component after either separator: a reply's compiler path is that of the machine that
+    // configured it, so a Windows path is read on Linux too (and fileName needs a native absolute path).
+    std::string_view path = toolchain.compilerPath;
+    if (const std::size_t slash = path.find_last_of("/\\"); slash != std::string_view::npos)
+        path.remove_prefix(slash + 1);
+    std::string name = lowered(path);
     if (name.ends_with(".exe"))
         name.resize(name.size() - 4);
     if (name == "clang-cl" || name == "icx-cl" || name.ends_with("-clang-cl"))

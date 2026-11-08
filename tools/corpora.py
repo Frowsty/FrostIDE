@@ -369,16 +369,36 @@ def _same_dir(a: str, b: Path) -> bool:
     return os.path.normcase(left) == os.path.normcase(right)
 
 
-def engine_problem(directory: Path, entry: dict, preset: str) -> str | None:
-    """Why <directory>/build/<preset> is not the configured engine of the pin, or None when it is."""
+def _same_file(a: str, b: str) -> bool:
+    """Whether two spellings name one file (8.3 short names and separators included)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(os.path.normpath(a.replace("/", os.sep))) == \
+            os.path.normcase(os.path.normpath(b.replace("/", os.sep)))
+
+
+def engine_problem(directory: Path, entry: dict, preset: str, tools: dict[str, str] | None = None) -> str | None:
+    """Why <directory>/build/<preset> is not the configured engine of the pin, or None when it is.
+    With `tools` ({"cmake": path, "ninja": path}, the pinned ones), a build tree whose cache names
+    another cmake (CMAKE_COMMAND) or make program (CMAKE_MAKE_PROGRAM) is not the pin's either: a
+    configure with Visual Studio's bundled tools would otherwise pass for the pinned engine."""
     build = directory / "build" / preset
     cache = build / "CMakeCache.txt"
     if not cache.is_file():
         return f"missing: {build} is not configured (run: python tools/corpora.py engine --configure)"
-    home = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$", cache.read_text(encoding="utf-8", errors="replace"),
-                     re.M)
+    text = cache.read_text(encoding="utf-8", errors="replace")
+    home = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$", text, re.M)
     if not home or not _same_dir(home.group(1).strip(), directory):
         return f"{cache} was configured for another source directory ({home.group(1) if home else 'none'})"
+    for name, variable in (("cmake", "CMAKE_COMMAND"), ("ninja", "CMAKE_MAKE_PROGRAM")):
+        if tools is None or name not in tools:
+            continue
+        cached = re.search(rf"^{variable}:[A-Z]+=(.*)$", text, re.M)
+        value = cached.group(1).strip() if cached else ""
+        if not value or not _same_file(value, tools[name]):
+            return (f"{cache} names {variable}={value or '(none)'}, not the pinned {name} {tools[name]} "
+                    f"(run: python tools/corpora.py engine --configure)")
     commands = build / "compile_commands.json"
     if not commands.is_file() or commands.stat().st_size < 3:
         return f"{build} has no compile_commands.json"
@@ -437,10 +457,11 @@ def configure_engine(repo: Path, root: Path, entry: dict, preset: str) -> str:
     already the pin's (header comment, engine). Returns a status line; raises RuntimeError."""
     directory = corpus_dir(root, entry)
     with BuildLock(build_lock_path(root, entry)):
-        if engine_problem(directory, entry, preset) is None:
-            return f"{entry['id']}: {preset} reused, configured in {directory / 'build' / preset}"
         cmake = pinned_tool("cmake", repo)
         ninja = pinned_tool("ninja", repo)
+        tools = {"cmake": cmake, "ninja": ninja}
+        if engine_problem(directory, entry, preset, tools) is None:
+            return f"{entry['id']}: {preset} reused, configured in {directory / 'build' / preset}"
         env = msvc_environment(repo) if WINDOWS else dict(os.environ)
         # The pinned cmake and ninja first: the Visual Studio environment brings its own. Windows
         # spells the variable "Path"; one entry, whatever its case.
@@ -454,7 +475,10 @@ def configure_engine(repo: Path, root: Path, entry: dict, preset: str) -> str:
         log = root / f"{entry['id']}-{entry['sha'][:12]}.{preset}.configure.log"
         started = time.monotonic()
         with open(log, "wb") as out:
-            result = subprocess.run([cmake, "--preset", preset], cwd=directory, env=env, stdout=out,
+            # CMAKE_MAKE_PROGRAM is a cache entry, so a tree configured with another Ninja keeps it
+            # unless the pinned one is named.
+            result = subprocess.run([cmake, "--preset", preset, f"-DCMAKE_MAKE_PROGRAM={ninja}"], cwd=directory,
+                                    env=env, stdout=out,
                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=3600, check=False)
         if result.returncode != 0:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
@@ -463,10 +487,10 @@ def configure_engine(repo: Path, root: Path, entry: dict, preset: str) -> str:
         build = directory / "build" / preset
         version = subprocess.run([cmake, "--version"], capture_output=True, text=True, check=False).stdout
         (build / ENGINE_STAMP).write_text(json.dumps({
-            "sha": entry["sha"], "preset": preset, "configured": datetime.datetime.now().isoformat(timespec="seconds"),
+            "sha": entry["sha"], "preset": preset, "configured": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
             "cmake": version.splitlines()[0] if version else "", "seconds": round(time.monotonic() - started, 1),
         }, indent=2) + "\n", encoding="utf-8")
-        problem_now = engine_problem(directory, entry, preset)
+        problem_now = engine_problem(directory, entry, preset, tools)
         if problem_now is not None:
             raise RuntimeError(f"{entry['id']}: configured, but {problem_now}")
         shared = copy_new_packages(cpm, root / CPM_CACHE_NAME)
@@ -630,7 +654,11 @@ def main(argv: list[str] | None = None) -> int:
                 except (RuntimeError, TimeoutError, subprocess.TimeoutExpired, OSError) as error:
                     why = str(error)
             elif why is None:
-                why = engine_problem(corpus_dir(root, entry), entry, preset)
+                try:
+                    tools = {"cmake": pinned_tool("cmake", args.repo), "ninja": pinned_tool("ninja", args.repo)}
+                    why = engine_problem(corpus_dir(root, entry), entry, preset, tools)
+                except RuntimeError as error:
+                    why = str(error)
             if why is None:
                 print(f"{corpus_id}: {preset} ok in {corpus_dir(root, entry) / 'build' / preset}")
             else:

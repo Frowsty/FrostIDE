@@ -17,7 +17,10 @@
 #include "lang/feature_server.hpp"
 #include <gtest/gtest.h>
 
+#include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -95,6 +98,84 @@ TEST(HoverModel, ReadsMarkupAndMarkedStrings) {
     ASSERT_TRUE(marked.has_value());
     EXPECT_EQ(marked->contents.text, "```cpp\nint add(int)\n```\n\nAdds.");
     EXPECT_FALSE(frost::lang::parseHover(Json::object().set("contents", "")).has_value());
+}
+
+TEST(NavigationModel, RecognisesForwardTypeDeclarations) {
+    using frost::lang::isForwardTypeDeclaration;
+    for (const char* line : {"class GameContent;", "\t\tclass GameContent;", "struct ThinClientCounters;  // later",
+                             "union U;", "enum class Mode : int;", "enum E : unsigned;", "struct FROST_API Exported;",
+                             "friend class Friend;", "template <typename T, int N> class Array;", "class A;\r"}) {
+        EXPECT_TRUE(isForwardTypeDeclaration(line)) << line;
+    }
+    for (const char* line :
+         {"class GameContent", "class GameContent {", "class GameContent {};", "struct X x = {};", "struct X f();",
+          "class A; class B;", "int classic;", "classy x;", "using Alias = class A;", "namespace N { class A; }",
+          "template <typename T> void f();", "template <typename T class Broken;", ";", "class;", "", "// class A;"}) {
+        EXPECT_FALSE(isForwardTypeDeclaration(line)) << line;
+    }
+}
+
+// Ctrl+B on a class that a header forward-declares before its definition: clangd's declaration is
+// the forward declaration ("class GameContent;" in BotRuntime.h for FrostEngine's RuntimeApp.cpp),
+// so the definition the server reports is taken instead. A real declaration (a function's
+// prototype) still wins, and without a line source nothing changes.
+TEST(NavigationModel, AForwardTypeDeclarationGivesWayToTheDefinition) {
+    FeatureServer server;
+    const std::string source = workPath("a.cpp");
+    const std::string forward = workPath("forward.h");
+    const std::string header = workPath("content.h");
+    std::map<std::string, std::vector<std::string>> files{
+        {forward, {"#pragma once", "namespace Frost {", "\tclass GameContent;", "}"}},
+        {header, {"#pragma once", "namespace Frost {", "\tclass GameContent", "\t{", "\t};", "}"}}};
+    std::vector<std::string> asked;
+    const frost::lang::LineSource lines = [&](std::string_view path, std::uint32_t line) -> std::optional<std::string> {
+        for (const auto& [file, text] : files) {
+            if (frost::lang::documentKey(file) == frost::lang::documentKey(path) && line < text.size()) {
+                return text[line];
+            }
+        }
+        return std::nullopt;
+    };
+    server.on("textDocument/declaration", [&](const Json&) {
+        asked.emplace_back("declaration");
+        return Json::array({location(forward, 2, 7, 18)});
+    });
+    server.on("textDocument/definition", [&](const Json&) {
+        asked.emplace_back("definition");
+        return Json::array({location(header, 2, 7, 18)});
+    });
+    auto use = server.run(frost::lang::gotoDeclarationOrUsages(server.client(), source, LspPosition{20, 5}, {}, lines));
+    ASSERT_TRUE(use.has_value()) << use.error().describe();
+    ASSERT_EQ(use->locations.size(), 1u);
+    EXPECT_EQ(frost::lang::documentKey(use->locations[0].path), frost::lang::documentKey(header));
+    EXPECT_EQ(use->locations[0].range.start.line, 2u);
+    EXPECT_EQ(asked, (std::vector<std::string>{"declaration", "definition"}));
+
+    // Without a line source: the declaration, as before.
+    auto plain = server.run(frost::lang::gotoDeclarationOrUsages(server.client(), source, LspPosition{20, 5}));
+    ASSERT_TRUE(plain.has_value());
+    ASSERT_EQ(plain->locations.size(), 1u);
+    EXPECT_EQ(frost::lang::documentKey(plain->locations[0].path), frost::lang::documentKey(forward));
+
+    // A declaration that is not a forward type declaration (a prototype) is kept, and the
+    // definition is not asked for.
+    files[forward][2] = "\tvoid Open(const char* path);";
+    asked.clear();
+    auto prototype =
+        server.run(frost::lang::gotoDeclarationOrUsages(server.client(), source, LspPosition{20, 5}, {}, lines));
+    ASSERT_TRUE(prototype.has_value());
+    ASSERT_EQ(prototype->locations.size(), 1u);
+    EXPECT_EQ(frost::lang::documentKey(prototype->locations[0].path), frost::lang::documentKey(forward));
+    EXPECT_EQ(asked, (std::vector<std::string>{"declaration"}));
+
+    // A forward declaration whose type has no definition the server knows: the forward declaration.
+    files[forward][2] = "\tclass GameContent;";
+    server.on("textDocument/definition", [&](const Json&) { return Json::array({location(forward, 2, 7, 18)}); });
+    auto onlyForward =
+        server.run(frost::lang::gotoDeclarationOrUsages(server.client(), source, LspPosition{20, 5}, {}, lines));
+    ASSERT_TRUE(onlyForward.has_value());
+    ASSERT_EQ(onlyForward->locations.size(), 1u);
+    EXPECT_EQ(frost::lang::documentKey(onlyForward->locations[0].path), frost::lang::documentKey(forward));
 }
 
 TEST(NavigationModel, GoToDeclarationOrUsages) {

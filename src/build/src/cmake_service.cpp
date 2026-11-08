@@ -1031,7 +1031,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                                          .ninjaPath = options.ninjaPath,
                                          .vsInstances = *cachedInstances,
                                          .pathVariable = options.pathVariable.empty() ? processPathVariable()
-                                                                                      : options.pathVariable};
+                                                                                      : options.pathVariable,
+                                         .sdkDirectory = options.sdkDirectory};
             auto found = findCMakeTools(fs, toolOptions);
             if (!found) {
                 LockGuard lock(mutex);
